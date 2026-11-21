@@ -15,7 +15,8 @@ import "server-only";
 // or live, or the division holds any held or flagged board. A round over for days drops off.
 //
 // `needs_decision` (owner O2, 2026-11-17): `listNeedsOrganiserExternalPlay` and `listFlaggedExternalPlay` are THE source of held and flagged
-// boards - for the division page's queue and for this read. No query of `fixture_external_play` or `fixture_play_flags` for "held" or
+// boards - for the division page's queue and for this read. They are asked through `QueueReads` (external-play/queue-reads.ts): `getMatchDay`
+// gives this read and the desk's per-board attentions ONE of them, so a poll asks each lister once per division (MD-R23). No query of `fixture_external_play` or `fixture_play_flags` for "held" or
 // "flagged" is written here (online-queue-one-source.test.ts reads this file and the page and refuses one). They give the ids; the boards are
 // built by `loadBoardsByIds`, the arbiter's own composition (presence, camera and `joinable` ride every board - MD-R1). A cancelled board
 // reaches the list only while it has an open flag (owner O1): the flagged lister's rule, and `loadBoardsByIds` holds the same line.
@@ -40,10 +41,10 @@ import { roundOpensOfDivisions } from "@/server/external-play/round-open";
 import type { NeedsReason } from "@/server/external-play/types";
 import { divisionDays, type DivisionDay } from "./match-day-call";
 import { listDivisions, type DivisionRow } from "./divisions";
-import { listFlaggedExternalPlay, loadArbiterRound, loadBoardsByIds } from "./external-play/arbiter";
+import { loadArbiterRound, loadBoardsByIds } from "./external-play/arbiter";
 import { onlineChessOffered } from "./external-play/online-chess-flag";
 import { listOpenRounds } from "./external-play/open-round-view";
-import { listNeedsOrganiserExternalPlay } from "./external-play/queue";
+import { directQueueReads, type QueueReads } from "./external-play/queue-reads";
 
 type StageRow = { id: string; division_id: string; name: string; seq: number; kind: string };
 
@@ -55,6 +56,9 @@ export async function readOnlineRounds(
   now: Date,
   /** The competition's live divisions when the caller already reads them (`getMatchDay` does, beside this): one list per poll, not two. */
   listed?: Promise<readonly DivisionRow[]> | readonly DivisionRow[],
+  /** The two queue listers as the caller reads them (`QueueReads`): `getMatchDay` hands the desk's attentions and this read ONE shared
+   *  object, so a poll asks each lister once per division. Absent: this read asks them itself. */
+  queue: QueueReads = directQueueReads(auth),
 ): Promise<MatchDayOnlineRound[]> {
   const divisions = (await (listed ?? listDivisions(auth, competitionId))).filter((d) => divisionPlaysOnline(d));
   if (divisions.length === 0) return [];
@@ -93,6 +97,7 @@ export async function readOnlineRounds(
         stages: stages.filter((s) => s.division_id === d.id),
         opens,
         pairNext,
+        queue,
       }),
     ),
   );
@@ -108,6 +113,7 @@ type DivisionCtx = {
   opens: Awaited<ReturnType<typeof roundOpensOfDivisions>>;
   /** Each Swiss stage's next round to pair (`nextUnseatedSwissRound`); a stage of any other kind is not in it. */
   pairNext: ReadonlyMap<string, number | null>;
+  queue: QueueReads;
 };
 
 /** The latest opened round of each of the division's stages (stage order), from the one read of every open. "Latest" is
@@ -137,8 +143,8 @@ async function rowsOfDivision(auth: AuthCtx, d: DivisionRow, ctx: DivisionCtx): 
   const latest = latestOpened(ctx);
   const [views, held, flagged, rounds] = await Promise.all([
     listOpenRounds(auth, d.id, { now: ctx.now }),
-    listNeedsOrganiserExternalPlay(auth, d.id),
-    listFlaggedExternalPlay(auth, d.id),
+    ctx.queue.listNeedsOrganiserExternalPlay(d.id),
+    ctx.queue.listFlaggedExternalPlay(d.id),
     Promise.all(latest.map((l) => loadArbiterRound(auth, d.id, { round: { stageId: l.stage.id, roundNo: l.roundNo }, now: ctx.now, flags: "count" }))),
   ]);
   const reasonOf = new Map<string, NeedsReason>(held.map((h) => [h.fixtureId, h.reason]));

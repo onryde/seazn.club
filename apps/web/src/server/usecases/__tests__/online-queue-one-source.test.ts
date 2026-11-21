@@ -19,7 +19,22 @@ const CONSUMERS = [
   "app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx",
   "server/usecases/match-day-online.ts",
   "server/usecases/competition-desk.ts",
+  // Match Day's two readers share ONE read of the pair per poll (MD-R23, `sharedQueueReads`): they call the listers through it, and it is
+  // the one place that calls them for both.
+  "server/usecases/external-play/queue-reads.ts",
 ] as const;
+/** Match Day's poll reads the listers through `queue-reads` (one read per division per poll), so neither calls them directly. */
+const SHARED_READERS = ["server/usecases/match-day-online.ts", "server/usecases/competition-desk.ts"] as const;
+
+/** Whether `source` (comments already gone) calls `lister` otherwise than as a method of the shared reads - the bare
+ *  `listFlaggedExternalPlay(auth, id)` or through a module (`arbiter.listFlaggedExternalPlay(auth, id)`), a read of its own - rather than
+ *  `reads.listFlaggedExternalPlay(id)` / `ctx.queue.listFlaggedExternalPlay(id)`. */
+export function callsListerDirectly(source: string, lister: string): boolean {
+  for (const m of source.matchAll(new RegExp(`([\\w.]*)\\b${lister}\\(`, "g"))) {
+    if (!/(^|\.)(queue|reads)\.$/.test(m[1]!)) return true;
+  }
+  return false;
+}
 const LISTERS = ["listNeedsOrganiserExternalPlay", "listFlaggedExternalPlay"] as const;
 /** The words a held / flagged query names. */
 const SECOND_QUERY_WORDS = ["fixture_play_flags", "needs_organiser"] as const;
@@ -178,6 +193,39 @@ describe("owner O2: one source for the held and the flagged boards", () => {
       }
     }
     expect(checked, "consumer x lister pairs checked").toBe(CONSUMERS.length * LISTERS.length);
+  });
+
+  it("the detector for a direct lister call finds the bare call and passes the method of the shared reads (proved before it is trusted)", () => {
+    expect(callsListerDirectly("const x = await listFlaggedExternalPlay(auth, id);", "listFlaggedExternalPlay")).toBe(true);
+    expect(callsListerDirectly("Promise.all([listFlaggedExternalPlay(auth, id)])", "listFlaggedExternalPlay")).toBe(true);
+    expect(callsListerDirectly("const x = await ctx.queue.listFlaggedExternalPlay(id);", "listFlaggedExternalPlay")).toBe(false);
+    expect(callsListerDirectly("reads.listFlaggedExternalPlay(divisionId)", "listFlaggedExternalPlay")).toBe(false);
+    expect(callsListerDirectly("import { listFlaggedExternalPlay } from './arbiter';", "listFlaggedExternalPlay")).toBe(false);
+    // A call through a module is as direct as a bare one; a method of anything but the shared reads is not the shared read.
+    expect(callsListerDirectly("(await import('./arbiter')).listFlaggedExternalPlay(auth, id)", "listFlaggedExternalPlay")).toBe(true);
+    expect(callsListerDirectly("arbiter.listFlaggedExternalPlay(auth, id)", "listFlaggedExternalPlay")).toBe(true);
+    expect(callsListerDirectly("other.listFlaggedExternalPlay(id)", "listFlaggedExternalPlay")).toBe(true);
+    // One direct call among shared ones is found.
+    expect(callsListerDirectly("a = reads.listFlaggedExternalPlay(x); b = listFlaggedExternalPlay(auth, y);", "listFlaggedExternalPlay")).toBe(true);
+    expect(callsListerDirectly("a = reads.listFlaggedExternalPlay(x); b = ctx.queue.listFlaggedExternalPlay(y);", "listFlaggedExternalPlay")).toBe(false);
+  });
+
+  it("MD-R23: Match Day's two readers ask the listers through the shared reads, never directly - a direct call is a second read of the same poll", () => {
+    expect(SHARED_READERS.length, "readers named").toBe(2);
+    let checked = 0;
+    for (const file of SHARED_READERS) {
+      const source = withoutComments(readFileSync(join(SRC, file), "utf8"));
+      expect(source, `${file} takes the reads from queue-reads`).toMatch(/external-play\/queue-reads"/);
+      for (const lister of LISTERS) {
+        expect(new RegExp(`\\.${lister}\\(`).test(source), `${file} calls ${lister} on the shared reads`).toBe(true);
+        expect(callsListerDirectly(source, lister), `${file} does not call ${lister} directly`).toBe(false);
+        checked++;
+      }
+    }
+    expect(checked, "reader x lister pairs checked").toBe(SHARED_READERS.length * LISTERS.length);
+    // And the one module that does call them, for both, calls each.
+    const reads = withoutComments(readFileSync(join(SRC, "server/usecases/external-play/queue-reads.ts"), "utf8"));
+    for (const lister of LISTERS) expect(callsListerDirectly(reads, lister), `queue-reads.ts calls ${lister}`).toBe(true);
   });
 
   it("no file of Match Day's own code holds a SQL template naming fixture_play_flags or needs_organiser", () => {

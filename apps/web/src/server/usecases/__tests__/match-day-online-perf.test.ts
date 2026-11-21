@@ -34,18 +34,27 @@ beforeEach(() => {
  *  statements a board); 00f2bf740e made them ride the board rows query. A ceiling at the old estimate could not have noticed that fix
  *  being undone (409 < 500), so the ceilings now sit just over what this run MEASURES after it:
  *
- *    poll, 4 boards: 125     poll, 32 boards: 217     slope: 3.29 per extra board     board read: 8 at 4 and 8 at 32
+ *    poll, 4 boards: 106     poll, 32 boards: 180     slope: 2.64 per extra board     board read: 8 at 4 and 8 at 32
  *
  *  (The first two figures were 131 / 313 / 6.5 until the final review's M2: the OPENED round's boards that have no bridge row yet - the ones
  *  still checking in - were also read by `listOpenRounds`' per-board fold read for their colour, about six statements each; they ride the
- *  rows now, which took 96 statements off the 32-board poll.)
+ *  rows now, which took 96 statements off the 32-board poll. Then 125 / 217 / 3.29 until the lister share (gaps wave A, A1): the desk's
+ *  per-board attentions and the online rounds each asked the held and the flagged lister, and the flagged one builds every flagged board
+ *  (two side reads and a camera-policy read each, 8 boards at 32); `getMatchDay` now hands both ONE `sharedQueueReads`, which took 37
+ *  statements off the 32-board poll and 19 off the 4-board one.)
  *
- *  - `POLL_CEILING_32` 230 = 217 + 13 (about 6%): a new fixed read or two in the poll fits, a per-board one does not (that is the slope's
- *    job, below); the pre-fix poll, 409, is 179 over it, and the pre-M2 313 is 83 over.
- *  - `SLOPE_CEILING` 3.8 = 3.29 + 0.5: one more statement for every second board fits; the pre-fix 9.7 and the pre-M2 6.5 are both over it.
- *  - `BOARD_READ_CEILING` 12 = 8 + 4: a board read is ONE board's own rows. */
-const POLL_CEILING_32 = 230;
-const SLOPE_CEILING = 3.8;
+ *  - `POLL_CEILING_32` 190 = 180 + 10 (about 6%): a new fixed read or two in the poll fits, a per-board one does not (that is the slope's
+ *    job, below); the pre-share poll, 217, is 27 over it, the pre-M2 313 is 123 over and the pre-fix 409 is 219 over.
+ *  - `SLOPE_CEILING` 3.1 = 2.64 + 0.46: one more statement for every second board fits; the pre-share 3.29, the pre-M2 6.5 and the pre-fix
+ *    9.7 are all over it.
+ *  - `BOARD_READ_CEILING` 12 = 8 + 4: a board read is ONE board's own rows.
+ *
+ *  What the 180 still holds (read from the statement texts, 32 boards): 80 are the sides' names, two per board (`loadSides`, one per
+ *  board and side: 64 for the round's 32 boards and 16 for the 8 flagged boards the lister builds again), 9 the camera policy (one for the
+ *  round, one per flagged board), and the rest fixed reads. The flagged lister's second build of a board the round already composed is
+ *  not a read two consumers share (the lister's `FlaggedBoard` is built without seats or a clock, the round's with both), so it stays. */
+const POLL_CEILING_32 = 190;
+const SLOPE_CEILING = 3.1;
 const BOARD_READ_CEILING = 12;
 /** A round that is PAIRED BUT NOT OPENED (the round between two Swiss rounds, or tomorrow's): its boards have no game, so no bridge row says who
  *  has White and the colour is the pairing card's, read from the board's fold. Read board by board (`whiteSideOf`: an owner-session mint plus a
@@ -53,7 +62,7 @@ const BOARD_READ_CEILING = 12;
  *  above opens its round - and a Swiss night pays it between every two rounds, on every poll (final review, M2). Read with the board rows
  *  (`match_states.state->>'colorOfHome'`, the way the arbiter's rows do) it costs nothing per board:
  *
- *    paired round, no bridge row on any board: 82 statements at 4 boards and 82 at 32 (slope 0.00); before the change, 6.00 per board.
+ *    paired round, no bridge row on any board: 75 statements at 4 boards and 75 at 32 (slope 0.00; 82 / 82 before the lister share, A1); before the change, 6.00 per board.
  *
  *  `PAIRED_SLOPE_CEILING` 1 leaves room for a statement per board and sits well under the old per-board price (a revert reads 6). */
 const PAIRED_SLOPE_CEILING = 1;

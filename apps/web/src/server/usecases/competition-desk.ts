@@ -17,6 +17,7 @@ import { holdReasonForReader } from "@/lib/arbiter-view";
 import { latestOpenedRoundNos, mayPress } from "@/lib/match-day/online";
 import { isLinkHold } from "@/server/external-play/types";
 import { onlineChessOffered } from "./external-play/online-chess-flag";
+import type { QueueReads } from "./external-play/queue-reads";
 import { frozenCompetitionIds } from "./entitlement-freeze";
 import { resolveModule } from "@/server/engine-db";
 import { resolveVenueTz } from "@/lib/tz";
@@ -366,24 +367,25 @@ async function onlineBoardAttentions(
   divisionIds: readonly string[],
   /** Each stage's latest opened round (`latestOpenedRoundNos` of the opened-round read): the one round of a stage a re-open can name. */
   latestRound: ReadonlyMap<string, number>,
+  /** The two listers as this read asks them: `getMatchDay` shares one `QueueReads` with its online read (MD-R23); absent, this read asks
+   *  them itself. */
+  queue?: QueueReads,
 ): Promise<Map<string, Attention[]>> {
   const out = new Map<string, Attention[]>();
   // Ruling MD-R18 (flag retired, Task 10): Match Day always draws its online rows now, so a row's button always lands on a Match Day with an
   // online block - the board and round panels read `?board=` / `?round=` from it. The division page's Held | Flagged queue carries the same
   // boards too, each with its own "Open in Match Day" (owner O2).
   if (divisionIds.length === 0) return out;
-  // A dynamic import: the arbiter loader pulls the video stack, which every other read of the desk has no use for.
-  const [{ listNeedsOrganiserExternalPlay }, { listFlaggedExternalPlay }] = await Promise.all([
-    import("./external-play/queue"),
-    import("./external-play/arbiter"),
-  ]);
+  // A dynamic import: the arbiter loader pulls the video stack, which every other read of the desk has no use for. A caller that shares its
+  // listers (`getMatchDay`) has loaded it already.
+  const reads = queue ?? (await import("./external-play/queue-reads")).directQueueReads(auth);
   const editor = isEditorRole(auth.role);
   const read = await Promise.all(
     divisionIds.map(async (divisionId) => {
       try {
         const [held, flagged] = await Promise.all([
-          listNeedsOrganiserExternalPlay(auth, divisionId),
-          listFlaggedExternalPlay(auth, divisionId),
+          reads.listNeedsOrganiserExternalPlay(divisionId),
+          reads.listFlaggedExternalPlay(divisionId),
         ]);
         return { divisionId, held: held.filter((h) => !h.seated), flagged: flagged.boards };
       } catch (err) {
@@ -448,6 +450,9 @@ export async function getCompetitionDesk(
   auth: AuthCtx,
   competitionId: string,
   now: Date = new Date(),
+  /** `queue`: the two queue listers as THIS read asks them. `getMatchDay` shares one with its online read, so the poll asks each lister
+   *  once per online division (MD-R23); every other reader (the competition page, the org home) omits it and the desk asks for itself. */
+  opts: { queue?: QueueReads } = {},
 ): Promise<CompetitionDesk> {
   const [divisions, stats, disciplineEntitled] = await Promise.all([
     listDivisions(auth, competitionId),
@@ -708,7 +713,7 @@ export async function getCompetitionDesk(
   );
   const openedRounds = await roundOpensOfDivisions(sql, [...onlineIds]);
   // Match Day online (T4): the per-board attentions of those divisions, appended to each one's list below.
-  const boardAttentions = await onlineBoardAttentions(auth, competitionId, [...onlineIds], latestOpenedRoundNos(openedRounds.keys()));
+  const boardAttentions = await onlineBoardAttentions(auth, competitionId, [...onlineIds], latestOpenedRoundNos(openedRounds.keys()), opts.queue);
 
   const nowIso = now.toISOString();
   const out = new Map<string, DeskDivision>();

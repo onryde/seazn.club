@@ -38,6 +38,11 @@ vi.mock("../external-play/queue", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../external-play/queue")>();
   return { ...actual, listNeedsOrganiserExternalPlay: vi.fn(actual.listNeedsOrganiserExternalPlay) };
 });
+// The flagged lister, wrapped so a test can count how often one poll asks it (MD-R23, A1); every call is the real one.
+vi.mock("../external-play/arbiter", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../external-play/arbiter")>();
+  return { ...actual, listFlaggedExternalPlay: vi.fn(actual.listFlaggedExternalPlay) };
+});
 // The online read, wrapped so a test can make it throw (MD-R9) and see what `getMatchDay` does about it.
 vi.mock("../match-day-online", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../match-day-online")>();
@@ -61,7 +66,7 @@ import { MatchDayView } from "@/server/api-v1/schemas";
 import { createApiKey } from "../api-keys";
 import { forgetOnlineChessFlagCache, onlineChessOffered } from "../external-play/online-chess-flag";
 import { closeExternalPlayFlags } from "../external-play/flags";
-import { loadArbiterRound, loadBoardsByIds } from "../external-play/arbiter";
+import { listFlaggedExternalPlay, loadArbiterRound, loadBoardsByIds } from "../external-play/arbiter";
 import { listNeedsOrganiserExternalPlay } from "../external-play/queue";
 import { log } from "@/server/logger";
 import { listOpenRounds } from "../external-play/open-round-view";
@@ -732,6 +737,90 @@ describe.runIf(HAS_DB)("getMatchDay - the view places the rounds and lists each 
     listed.mockClear();
     expect(await readOnlineRounds(day.auth, day.comp.id, now)).toHaveLength(1);
     expect(listed.mock.calls.length, "called alone, it lists once itself").toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// MD-R23 (A1, owner "fix all gaps" 2026-11-21): the desk's per-board attentions and the online rounds ask the SAME two listers the SAME
+// question within one poll, so a poll reads each of them once per online division, not once per reader. The listers are the source (owner
+// O2); only the read is shared.
+describe.runIf(HAS_DB)("getMatchDay - each queue lister is read ONCE per online division per poll, whoever asks (MD-R23, A1)", () => {
+  /** Two online divisions of one competition on a match day, each with a held board, a live flagged board and a board still checking in. */
+  async function twoDivisionsWithABoardEach() {
+    const day = await seedDay();
+    const divisions: { divisionId: string; held: SeedRoundBoard; flagged: SeedRoundBoard }[] = [];
+    for (const name of ["Rapid A", "Rapid B"]) {
+      const d = await seedOnlineDivisionIn(day.auth, day.comp.id, { name, fixtures: 3 });
+      await openStamp({ stageId: d.stageId, orgId: day.orgId, ownerUserId: day.auth.userId! }, 1, t0at(-5));
+      const [held, flagged] = d.boards as [SeedRoundBoard, SeedRoundBoard, SeedRoundBoard];
+      await bridgeRow(held.fixtureId, day.orgId, { status: "needs_organiser", reason: "mismatch", moves: 4 });
+      await bridgeRow(flagged.fixtureId, day.orgId, { status: "live", moves: 8 });
+      await setFixtureStatus(flagged.fixtureId, "in_play");
+      await openFlag(day.orgId, flagged.fixtureId);
+      divisions.push({ divisionId: d.divisionId, held, flagged });
+    }
+    return { day, divisions };
+  }
+  const asked = () => ({ held: vi.mocked(listNeedsOrganiserExternalPlay), flagged: vi.mocked(listFlaggedExternalPlay) });
+  const divisionsAsked = (calls: readonly (readonly unknown[])[]): string[] => calls.map((c) => c[1] as string).sort();
+
+  it("one poll asks each lister once per online division - and the desk's Needs-you rows AND the online rounds both carry what the one answer held", async () => {
+    const { day, divisions } = await twoDivisionsWithABoardEach();
+    asked().held.mockClear();
+    asked().flagged.mockClear();
+
+    const view = await getMatchDay(day.auth, day.comp.id, new Date(T0));
+
+    const ids = divisions.map((d) => d.divisionId).sort();
+    expect(ids, "premise: two online divisions").toHaveLength(2);
+    expect(divisionsAsked(asked().held.mock.calls), "the held lister: one read per division").toEqual(ids);
+    expect(divisionsAsked(asked().flagged.mock.calls), "the flagged lister: one read per division").toEqual(ids);
+    // Anti-vacuity: BOTH consumers used the shared answer. The desk's rows (the first reader or the second, whichever it was) ...
+    const rows = view.needs_you.filter((i) => i.kind === "board_held" || i.kind === "board_flagged");
+    expect(rows.map((i) => `${i.kind}:${i.fixture_id}`).sort(), "the desk raised a row per held and per flagged board").toEqual(
+      divisions.flatMap((d) => [`board_held:${d.held.fixtureId}`, `board_flagged:${d.flagged.fixtureId}`]).sort(),
+    );
+    // ... and the online rounds' decision ids, which came out of the same two answers (a held board is `on_hold` in its round, the flagged one
+    // carries its open flag).
+    expect(view.online_rounds).toHaveLength(2);
+    for (const d of divisions) {
+      const row = view.online_rounds.find((r) => r.division_id === d.divisionId)!;
+      expect(boardOf(row, d.held.fixtureId).state.kind, "the held board reads on hold in its round").toBe("on_hold");
+      expect(boardOf(row, d.flagged.fixtureId).flagCount, "the flagged board carries its open flag").toBe(1);
+    }
+  });
+
+  it("the share lasts ONE poll: a second poll reads again, and a flag settled between the two is gone from the second (the sequence)", async () => {
+    const { day, divisions } = await twoDivisionsWithABoardEach();
+    const now = new Date(T0);
+    const first = await getMatchDay(day.auth, day.comp.id, now);
+    expect(first.needs_you.filter((i) => i.kind === "board_flagged"), "premise: both flagged boards are Needs-you rows").toHaveLength(2);
+    const target = divisions[0]!;
+    const [flag] = await sql<{ id: string }[]>`select id from fixture_play_flags where fixture_id = ${target.flagged.fixtureId} and closed_at is null`;
+    await closeExternalPlayFlags(day.auth, target.flagged.fixtureId, [flag!.id]);
+    asked().held.mockClear();
+    asked().flagged.mockClear();
+
+    const second = await getMatchDay(day.auth, day.comp.id, now);
+
+    expect(asked().held, "the second poll read the held lister again: 2 divisions").toHaveBeenCalledTimes(2);
+    expect(asked().flagged, "and the flagged lister again").toHaveBeenCalledTimes(2);
+    expect(second.needs_you.filter((i) => i.kind === "board_flagged").map((i) => i.fixture_id), "the settled flag left the desk's rows").toEqual([divisions[1]!.flagged.fixtureId]);
+    expect(boardOf(second.online_rounds.find((r) => r.division_id === target.divisionId)!, target.flagged.fixtureId).flagCount, "and the round's board").toBe(0);
+  });
+
+  it("a reader with no sibling in its poll still reads for itself: the desk alone asks each lister once per division, and a second call asks again", async () => {
+    const { day } = await twoDivisionsWithABoardEach();
+    const { getCompetitionDesk } = await import("../competition-desk");
+    asked().held.mockClear();
+    asked().flagged.mockClear();
+
+    await getCompetitionDesk(day.auth, day.comp.id, new Date(T0));
+    expect(asked().held, "one read per online division").toHaveBeenCalledTimes(2);
+    expect(asked().flagged).toHaveBeenCalledTimes(2);
+    await getCompetitionDesk(day.auth, day.comp.id, new Date(T0));
+    expect(asked().held, "a second desk read is a second read (nothing is kept between calls)").toHaveBeenCalledTimes(4);
+    expect(asked().flagged).toHaveBeenCalledTimes(4);
   });
 });
 

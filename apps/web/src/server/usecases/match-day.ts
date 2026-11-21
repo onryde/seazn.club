@@ -65,6 +65,7 @@ import { readRounds, roundOf } from "./match-day-rounds";
 import { courtStreamsForDay } from "./court-streams";
 import { openStreamStates } from "./stream-sessions";
 import { readOnlineRounds } from "./match-day-online";
+import { sharedQueueReads } from "./external-play/queue-reads";
 import { roundOpensToday, type RoundOpenToday } from "@/server/external-play/round-open";
 import { kickoffsOf } from "@/server/engine-db/kickoff";
 import { servingSideOf, sportReadsServe } from "@/server/engine-db/serving";
@@ -895,16 +896,19 @@ export async function getMatchDay(
   ];
   // The divisions are listed once and shared with the online read (it filters them to the online chess ones).
   const divisionsRead = listDivisions(auth, competitionId);
+  // The two queue listers are asked once per online division for the whole poll: the desk's per-board attentions and the online rounds
+  // read the same held and flagged boards, so they share the one answer (MD-R23). One object per poll, never kept past it.
+  const queue = sharedQueueReads(auth);
   const [streams, desk, divisions, courtStreams, onlineRounds] = await Promise.all([
     openStreamStates(auth, ids),
-    getCompetitionDesk(auth, competitionId, now),
+    getCompetitionDesk(auth, competitionId, now, { queue }),
     divisionsRead,
     courtStreamsForDay(auth.orgId, board.courts.map((c) => c.court_id), ids, now),
     // Match Day's online chess rounds (the Arbiter page's replacement; always read since Task 10 retired the flag that kept this off). Sealed
     // tables, so it reads on its own connections, here and never inside the tenant transaction above. ISOLATED (ruling MD-R9): the day
     // screen is the organiser's lifeline, so chess failing must not take the courts down with it - the throw is logged loud and this poll
     // answers without the online rounds (`null`: told apart from an EMPTY answer by `playingNoCourtAfterOnline`).
-    readOnlineRounds(auth, competitionId, now, divisionsRead).catch((err: unknown): MatchDayOnlineRound[] | null => {
+    readOnlineRounds(auth, competitionId, now, divisionsRead, queue).catch((err: unknown): MatchDayOnlineRound[] | null => {
       log.error({ err, competitionId }, "match-day: the online rounds could not be read; this poll answers without them");
       return null;
     }),
