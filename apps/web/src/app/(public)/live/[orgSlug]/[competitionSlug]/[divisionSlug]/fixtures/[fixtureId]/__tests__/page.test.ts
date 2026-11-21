@@ -9,7 +9,7 @@
 // generateMetadata is a plain async function (no render) — the cheapest,
 // highest-confidence way to prove the fix, and it computes home/away with
 // the exact same formula the default export's page body duplicates.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { isValidElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MatchCentreDoc, type MatchCentreDocT } from "@/server/public-site/match-centre-schema";
@@ -58,6 +58,12 @@ vi.mock("@/lib/entitlements", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/entitlements")>()),
   hasFeature: (...a: unknown[]) => sponsorReads.hasFeature(...a),
 }));
+
+// Seazn-hosted video (Task 15) — which player the page mounts is `seaznVideoPlan`'s call (server/video/seazn-video-plan.ts, swept
+// against a real database in its own test, and through the real loader in `page-seazn-video.test.ts`). This file's fixtures carry ids
+// that are not uuids, so the plan is stood in for here and answers `external`, the page as it always was, unless a case says otherwise.
+const seaznPlan = vi.hoisted(() => ({ answer: vi.fn<(fixtureId: string) => Promise<"seazn" | "external">>(async () => "external") }));
+vi.mock("@/server/video/seazn-video-plan", () => ({ seaznVideoPlan: (id: string) => seaznPlan.answer(id) }));
 
 // Task 14d — the page itself no longer reads `searchParams` (the ISR
 // contract, public-isr-contract.test.ts, forbids it); the `?tab=` deep link
@@ -936,5 +942,119 @@ describe("FixturePage — the match's sponsor board (R4 S10, D15 + R8)", () => {
     expect(h).not.toContain(`href="/s/`);
     // Positive pair: the page itself rendered (its headline and match centre), so this is the board being absent.
     expect(h).toContain('data-testid="mc-court-card"');
+  });
+});
+
+// Seazn-hosted video, Phase 1 Task 15 (spec §5.1): the match page's `replay` slot. A fixture whose plan is `seazn` gets the Seazn island
+// and NOTHING of YouTube's (not the player, not its facade, not a thumbnail request); every other fixture keeps today's slot. The island
+// draws nothing on the server (it asks the video route after hydration, because this page is ISR), so the mount is read off the element
+// tree the page returns, through the `replay` prop of the match centre it is handed to. What the island does once it is there is its own
+// file's (seazn-video-island.test.tsx) and the browser's (e2e/public-fixture.spec.ts).
+describe("FixturePage — the Seazn player slot (Task 15)", () => {
+  const YT_PARTS = [
+    { partNo: 1, url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", madeForKids: false },
+    { partNo: 2, url: "https://www.youtube.com/watch?v=9bZkp7q19f0", madeForKids: false },
+  ];
+  /** Every element of `type` in the tree, looking through children AND every other prop that holds elements (the match centre takes
+   *  the replay as a prop, not a child). */
+  function findAll(node: unknown, type: unknown, out: { props: Record<string, unknown> }[] = []) {
+    if (Array.isArray(node)) {
+      for (const c of node) findAll(c, type, out);
+      return out;
+    }
+    if (!isValidElement(node)) return out;
+    if (node.type === type) out.push(node as unknown as { props: Record<string, unknown> });
+    for (const value of Object.values(node.props as Record<string, unknown>)) findAll(value, type, out);
+    return out;
+  }
+  const withParts = async (locale = "en") => {
+    const data = baseData(locale);
+    getPublicFixture.mockResolvedValue({ ...data, parts: YT_PARTS });
+    useSearchParams.mockReturnValue(new URLSearchParams());
+    const { default: FixturePage } = await import("../page");
+    return FixturePage({
+      params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open", fixtureId: "f1" }),
+    });
+  };
+  const youtubeMarkup = (h: string) => ({
+    player: h.includes('data-testid="replay-embed"'),
+    facade: h.includes('data-testid="replay-facade"'),
+    thumbnail: h.includes("i.ytimg.com"),
+    embedHost: h.includes("youtube-nocookie.com"),
+  });
+
+  afterEach(() => seaznPlan.answer.mockResolvedValue("external"));
+
+  it("EMPTY CASE FIRST: an `external` fixture with no YouTube parts mounts neither player, and the plan was asked for THIS fixture", async () => {
+    const { SeaznVideoIsland } = await import("@/components/public-site/match-centre/seazn-video-island");
+    const { ReplayEmbed } = await import("@/components/public-site/match-centre/replay-embed");
+    const tree = await render();
+    expect(findAll(tree, SeaznVideoIsland)).toHaveLength(0);
+    expect(findAll(tree, ReplayEmbed)).toHaveLength(0);
+    expect(seaznPlan.answer).toHaveBeenLastCalledWith("f1");
+  });
+
+  it("a YouTube fixture (plan external) renders the ReplayEmbed with its parts and no Seazn region at all", async () => {
+    const { SeaznVideoIsland } = await import("@/components/public-site/match-centre/seazn-video-island");
+    const { ReplayEmbed } = await import("@/components/public-site/match-centre/replay-embed");
+    const tree = await withParts();
+    expect(findAll(tree, SeaznVideoIsland)).toHaveLength(0);
+    const embeds = findAll(tree, ReplayEmbed);
+    expect(embeds, "the YouTube slot is mounted").toHaveLength(1);
+    expect((embeds[0]!.props.parts as unknown[]).length, "with its parts").toBe(YT_PARTS.length);
+    const h = renderToStaticMarkup(tree);
+    expect(youtubeMarkup(h).player, "positive pair: the YouTube player is in the markup").toBe(true);
+    expect(h).not.toContain('data-testid="seazn-video"');
+    expect(h).not.toContain('data-testid="seazn-player"');
+  });
+
+  it("a Seazn fixture (plan seazn) mounts the island for THIS fixture and none of YouTube's markup — even when YouTube parts exist", async () => {
+    seaznPlan.answer.mockResolvedValue("seazn");
+    const { SeaznVideoIsland } = await import("@/components/public-site/match-centre/seazn-video-island");
+    const { ReplayEmbed } = await import("@/components/public-site/match-centre/replay-embed");
+    const tree = await withParts();
+    const islands = findAll(tree, SeaznVideoIsland);
+    expect(islands, "the Seazn island is mounted").toHaveLength(1);
+    expect(islands[0]!.props.fixtureId).toBe("f1");
+    expect(islands[0]!.props.endpoint, "the match page reads the public route").toBeUndefined();
+    expect(findAll(tree, ReplayEmbed), "the YouTube slot is not mounted").toHaveLength(0);
+    const h = renderToStaticMarkup(tree);
+    expect(youtubeMarkup(h)).toEqual({ player: false, facade: false, thumbnail: false, embedHost: false });
+    expect(h, "the page itself rendered").toContain('data-testid="mc-court-card"');
+  });
+
+  it("the island's strings are the page's own, in the org's locale (es: the Spanish live, unavailable and part)", async () => {
+    seaznPlan.answer.mockResolvedValue("seazn");
+    const { SeaznVideoIsland } = await import("@/components/public-site/match-centre/seazn-video-island");
+    const { seaznVideoLabels } = await import("@/components/public-site/match-centre/seazn-video-labels");
+    const tree = await withParts("es");
+    const [island] = findAll(tree, SeaznVideoIsland);
+    expect(island, "premise: the island is mounted").toBeDefined();
+    const labels = island!.props.labels as ReturnType<typeof seaznVideoLabels>;
+    expect(labels).toEqual(seaznVideoLabels(publicEs));
+    expect(labels.live).toBe(publicEs["seaznVideo.live"]);
+    expect(labels.live, "not the English").not.toBe(publicEn["seaznVideo.live"]);
+  });
+
+  it("a plan that cannot be read leaves the page exactly as it was (the YouTube slot), logs by error class, and does not throw", async () => {
+    const { log } = await import("@/server/logger");
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    const { ReplayEmbed } = await import("@/components/public-site/match-centre/replay-embed");
+    const { SeaznVideoIsland } = await import("@/components/public-site/match-centre/seazn-video-island");
+    seaznPlan.answer.mockRejectedValue(new Error("connection terminated: postgres://user:secret@host/db"));
+    const tree = await withParts();
+    expect(findAll(tree, ReplayEmbed), "the YouTube slot is still there").toHaveLength(1);
+    expect(findAll(tree, SeaznVideoIsland)).toHaveLength(0);
+    const logged = warn.mock.calls.filter(([fields]) => (fields as { fixtureId?: string }).fixtureId === "f1");
+    expect(logged, "one warning for this fixture").toHaveLength(1);
+    expect(JSON.stringify(logged), "the error's class, never its message").not.toContain("secret");
+    expect((logged[0]![0] as { err: string }).err).toBe("Error");
+    warn.mockRestore();
+  });
+
+  it("a Seazn fixture's own stream link (the club's pill) still shows: only the replay slot moved", async () => {
+    seaznPlan.answer.mockResolvedValue("seazn");
+    const h = renderToStaticMarkup(await render({ status: "decided", stream_url: "https://www.twitch.tv/seaznclub" }));
+    expect(h).toContain('data-testid="public-stream-link"');
   });
 });

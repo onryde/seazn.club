@@ -27,7 +27,10 @@ import "server-only";
 //
 // The flags are not read (controller ruling 2026-11-20): SEAZN_HOSTED_LIVE gates new Seazn streams, never playback of one that
 // exists. The relay is asked only when there is something to sign, so a relay-disabled deployment answers a fixture with no
-// Seazn video without touching it (and refuses by name, `RelayDriversDisabled`, when there is one).
+// Seazn video without touching it. With one, `relayDrivers()` hands back the disabled pair, whose every method rejects with
+// `RelayDriversDisabled`: a LIVE to sign is the one thing refused by name (it is signed outside the per-part settle, so the answer
+// is that error), while each replay part's mint is settled on its own, so a part is dropped and logged like any other that cannot
+// be signed, and the answer is `{ live: null, replay: [] }`.
 //
 // Secrets: a signed URL is the answer itself and goes nowhere else — never logged, never in an error. The privileged `sql`
 // client: fixture_stream_* and seazn_locked_videos are FORCE RLS with no policy (V410, V540), the stream pattern (parts.ts).

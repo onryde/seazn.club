@@ -12,13 +12,14 @@
 //   - GET /public/orgs/{org}/competitions/{slug}/players/{id}/matches   use-live-player-matches.ts
 //   - GET /public/orgs/{org}/live               org-live-chips.tsx
 //   - GET /public/fixtures/{id}/board           watch-panel.tsx (T16, an online chess board's view-only state)
+//   - GET /public/fixtures/{id}/video           seazn-video-island.tsx (Seazn-hosted video, Task 15: a read at once, then
+//                                               before each signed address's token lapses, never slower than every 30 s
+//                                               while there is a live or recording to refresh, and a retry per failure)
 // Not polled: /public/fixtures/{id}/realtime-token is fetched once per
 // subscription (use-live-fixture.ts, use-fixture-stream.ts), never on a timer,
-// so it stays on the 60 bucket. /public/fixtures/{id}/video (Seazn-hosted
-// video, Task 14) has no client caller yet; the island that fetches it on a
-// timer (Task 15) moves it to the poll bucket, by the ruling above.
+// so it stays on the 60 bucket.
 //
-// NOT_POLLED lists EVERY other route that calls `publicRateLimit` (14 of them,
+// NOT_POLLED lists EVERY other route that calls `publicRateLimit` (13 of them,
 // review r2-m2), so moving any one of them to the poll bucket fails here.
 // register, register/join and by-ref/withdraw keep their own `rateLimit`
 // buckets and are out of scope.
@@ -151,6 +152,7 @@ const POLLED: Array<[string, Call]> = [
   ],
   ["orgs/{org}/live", (ip) => orgLive(from(ip), params({ orgSlug: "o" }))],
   ["fixtures/{id}/board", (ip) => board(from(ip), params({ id: "f1" }))],
+  ["fixtures/{id}/video", (ip) => video(from(ip), params({ id: "f1" }))],
 ];
 // A third element names the route's OWN tighter per-IP bucket, spent on top of
 // the 60 (bot hardening 2026-09-25); registrations/__tests__/route-rate-limits
@@ -161,7 +163,6 @@ const NOT_POLLED: Array<[string, Call, string?]> = [
   ["competitions/{slug}", (ip) => competition(from(ip), params({ orgSlug: "o", slug: "c" }))],
   ["discovery", (ip) => discovery(from(ip))],
   ["fixtures/{id}/realtime-token", (ip) => realtimeToken(from(ip), params({ id: "f1" }))],
-  ["fixtures/{id}/video", (ip) => video(from(ip), params({ id: "f1" }))],
   ["divisions/{div}/entrants", (ip) => entrants(from(ip), params(division))],
   ["divisions/{div}/schedule", (ip) => schedule(from(ip), params(division))],
   ["divisions/{div}/stats", (ip) => stats(from(ip), params(division))],
@@ -191,19 +192,29 @@ describe("the polled public endpoints: their own per-IP bucket, 300 a minute", (
     expect(statuses[300], "the 301st").toBe(429);
   });
 
-  it("all six share ONE poll bucket per IP (one page polling two of them is one budget)", async () => {
+  it("all seven share ONE poll bucket per IP (one page polling two of them is one budget)", async () => {
     const ip = "203.0.113.8";
-    expect(POLLED, "premise: 300 splits evenly across the polled routes").toHaveLength(6);
-    for (const [, call] of POLLED) expect(await send(call, ip, 300 / POLLED.length)).not.toContain(429);
+    expect(POLLED, "premise: the polled routes are the seven named above").toHaveLength(7);
+    // 300 does not split evenly across seven, so the requests go round-robin; every route is hit, and the 300 are one budget.
+    const hits = new Map<string, number>();
+    const statuses: number[] = [];
+    for (let i = 0; i < 300; i++) {
+      const [route, call] = POLLED[i % POLLED.length]!;
+      hits.set(route, (hits.get(route) ?? 0) + 1);
+      statuses.push((await call(ip)).status);
+    }
+    expect(statuses, "the first 300, across routes").not.toContain(429);
+    expect([...hits.keys()].sort(), "anti-vacuity: every polled route took part").toEqual(POLLED.map(([route]) => route).sort());
+    expect(Math.min(...hits.values()), "and none was a bystander").toBeGreaterThan(0);
     expect(counters.get(`rl:pubv1poll:${ip}`)).toBe(300);
     expect((await POLLED[0]![1](ip)).status, "the 301st, across routes").toBe(429);
   });
 });
 
 describe("every other public endpoint: still 60 a minute", () => {
-  it("premise: NOT_POLLED names all 14 `publicRateLimit` routes, once each", () => {
-    expect(NOT_POLLED).toHaveLength(14);
-    expect(new Set(NOT_POLLED.map(([route]) => route)).size).toBe(14);
+  it("premise: NOT_POLLED names all 13 `publicRateLimit` routes, once each", () => {
+    expect(NOT_POLLED).toHaveLength(13);
+    expect(new Set(NOT_POLLED.map(([route]) => route)).size).toBe(13);
   });
 
   it.each(NOT_POLLED)("%s serves 60 from one IP, refuses the 61st, and never touches the poll bucket", async (_route, call, own) => {

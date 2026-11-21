@@ -852,5 +852,8 @@
   "forfeit.sentence.doubleWalkoverNext": "Aucun des deux ne s'est présenté — défaite pour les deux. Tour suivant : {next} qualifié par forfait",
   "forfeit.sentence.abandoned": "Arrêté ({reason}) — {result}",
   "forfeit.sentence.abandonedBare": "Arrêté ({reason})",
-  "division.catchUp": "Rattrapage"
+  "division.catchUp": "Rattrapage",
+  "seaznVideo.live": "En direct",
+  "seaznVideo.unavailable": "La vidéo ne peut pas être lue pour le moment",
+  "seaznVideo.part": "Partie {n}"
 }

@@ -852,5 +852,8 @@
   "forfeit.sentence.doubleWalkoverNext": "Neither side turned up — both lose. Next round: walkover for {next}",
   "forfeit.sentence.abandoned": "Abandoned ({reason}) — {result}",
   "forfeit.sentence.abandonedBare": "Abandoned ({reason})",
-  "division.catchUp": "Catch-up"
+  "division.catchUp": "Catch-up",
+  "seaznVideo.live": "Live",
+  "seaznVideo.unavailable": "The video can't play right now",
+  "seaznVideo.part": "Part {n}"
 }

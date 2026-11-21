@@ -852,5 +852,8 @@
   "forfeit.sentence.doubleWalkoverNext": "Ninguno de los dos se presentó — ambos pierden. Próxima ronda: {next} pasa por incomparecencia",
   "forfeit.sentence.abandoned": "Suspendido ({reason}) — {result}",
   "forfeit.sentence.abandonedBare": "Suspendido ({reason})",
-  "division.catchUp": "Recuperación"
+  "division.catchUp": "Recuperación",
+  "seaznVideo.live": "En vivo",
+  "seaznVideo.unavailable": "El vídeo no se puede reproducir ahora",
+  "seaznVideo.part": "Parte {n}"
 }

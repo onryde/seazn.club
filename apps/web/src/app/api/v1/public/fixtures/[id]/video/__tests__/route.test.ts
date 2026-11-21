@@ -3,8 +3,8 @@
 //   - it answers the read's video for the PATH's fixture, in the v1 envelope;
 //   - `Cache-Control: private, no-store`, on every answer: the body holds signed playback URLs, and an edge or a browser that
 //     kept one would serve it past its token's life (and to someone else, at the edge);
-//   - the public per-IP limit its sibling realtime-token spends (60 a minute, `pubv1`), checked BEFORE the read, so a refused
-//     request signs nothing.
+//   - the public per-IP POLL limit (300 a minute, `pubv1poll`; Task 15 moved it off the 60 its sibling realtime-token spends, because
+//     the match page's island reads it on a timer), checked BEFORE the read, so a refused request signs nothing.
 // The read itself is a spy (its own DB suite, server/video/__tests__/seazn-video.test.ts, proves the answer); the limiter is the
 // REAL one over an in-memory INCR, as app/api/v1/public/__tests__/poll-rate-limit.test.ts drives it.
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -60,14 +60,14 @@ describe("GET /api/v1/public/fixtures/{id}/video", () => {
     expect(empty.headers.get("cache-control")).toBe("private, no-store");
   });
 
-  it("spends the public 60-a-minute bucket like realtime-token: 60 from one IP are served, the 61st is 429 and reads nothing", async () => {
+  it("spends the public POLL bucket, not realtime-token's 60: 300 from one IP are served, the 301st is 429 and reads nothing", async () => {
     const ip = "198.51.100.40";
     const statuses: number[] = [];
-    for (let i = 0; i < 61; i++) statuses.push((await call(ip)).status);
-    expect(statuses.slice(0, 60).filter((s) => s !== 200), "the first 60").toEqual([]);
-    expect(statuses[60], "the 61st").toBe(429);
-    expect(read.fn, "the refused request never reached the read").toHaveBeenCalledTimes(60);
-    expect(Object.fromEntries(counters), "the 60 bucket, never the poll bucket").toEqual({ [`rl:pubv1:${ip}`]: 61 });
+    for (let i = 0; i < 301; i++) statuses.push((await call(ip)).status);
+    expect(statuses.slice(0, 300).filter((s) => s !== 200), "the first 300 (past the 60 of the other bucket)").toEqual([]);
+    expect(statuses[300], "the 301st").toBe(429);
+    expect(read.fn, "the refused request never reached the read").toHaveBeenCalledTimes(300);
+    expect(Object.fromEntries(counters), "the poll bucket, never the 60 bucket").toEqual({ [`rl:pubv1poll:${ip}`]: 301 });
   });
 
   it("a read that fails is an error, never a cached or partial video", async () => {
