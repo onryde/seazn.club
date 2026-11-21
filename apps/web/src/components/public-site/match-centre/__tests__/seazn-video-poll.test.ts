@@ -1,8 +1,8 @@
 // Seazn-hosted video, Phase 1 Task 15: the island's read loop (`startVideoPoll`), the part `apps/web`'s node-only vitest cannot see
 // through a component (no DOM, so an effect never runs): the island's timer, driven here through its REAL schedule
 // (`nextVideoFetchMs`) with vitest's fake timers and fake clock, no network. What must hold:
-//   - it reads at once, then at the schedule's delay (30 s with nothing to show; the token's refresh point when live), and a new
-//     answer moves the next read with it;
+//   - it reads at once, then at the schedule's delay (30 s with nothing to show, and 30 s while live too: Task 19, so a Stop reaches
+//     an open page within one poll), and a new answer moves the next read with it;
 //   - a replay of embeds alone sets NO timer, and a read the island asks for (a viewer picks an expired part) still happens;
 //   - a failed read keeps the last answer on screen and tries again in 30 s, and a later good answer replaces it;
 //   - a stop ends everything: no timer, the read in flight is aborted, and its late answer is never delivered.
@@ -72,25 +72,25 @@ describe("startVideoPoll: the schedule", () => {
     poll.stop();
   });
 
-  it("live: the next read is the token's refresh point (55 min for a 60 min token), and each new answer moves it", async () => {
-    // Each answer is built when it is read, so its expiry is an hour from THAT moment.
+  it("live: the next read is the 30 s floor, not the token's refresh point (55 min), so a Stop reaches an open page within one poll", async () => {
+    // Task 19 (the Task 15 review's r3): the live answer stops being live when the organiser stops; the page must learn it on the
+    // next read. Each answer is built when it is read, so its token is always an hour long: the refresh point is never what waits.
+    const answers = [liveFor(60 * MIN), liveFor(60 * MIN), EMPTY];
     let reads = 0;
-    const fetchVideo = vi.fn(async () => {
-      reads++;
-      return liveFor(60 * MIN);
-    });
-    const poll = startVideoPoll({ fetchVideo, onVideo: () => {} });
+    const seen: PublicFixtureVideo[] = [];
+    const fetchVideo = vi.fn(async () => answers[Math.min(reads++, answers.length - 1)]!);
+    const poll = startVideoPoll({ fetchVideo, onVideo: (v) => seen.push(v) });
     await flush();
     expect(reads).toBe(1);
-    await vi.advanceTimersByTimeAsync(60 * MIN - REFRESH_MS - 1);
-    expect(reads, "one tick before the refresh point").toBe(1);
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(reads, "one tick before the floor").toBe(1);
     await vi.advanceTimersByTimeAsync(1);
-    expect(reads, "at the refresh point").toBe(2);
-    // The second answer's token is a fresh hour: the third read is another 55 min on, not sooner.
-    await vi.advanceTimersByTimeAsync(60 * MIN - REFRESH_MS - 1);
-    expect(reads).toBe(2);
-    await vi.advanceTimersByTimeAsync(1);
+    expect(reads, "at the floor, 55 min before the token's refresh point").toBe(2);
+    expect(60 * MIN - REFRESH_MS, "premise: the refresh point is far past the floor").toBeGreaterThan(30_000);
+    // The organiser stops: the third read answers no live, and that answer is delivered one floor later.
+    await vi.advanceTimersByTimeAsync(30_000);
     expect(reads).toBe(3);
+    expect(seen.map((v) => v.live !== null), "live, live, then the stop").toEqual([true, true, false]);
     poll.stop();
   });
 
@@ -124,8 +124,8 @@ describe("startVideoPoll: a failed read", () => {
     const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: (v) => seen.push(v) });
     await flush();
     expect(seen).toHaveLength(1);
-    // The live schedule says 55 min; a failure is only ever the 30 s retry from the read that failed. Fail the SECOND read.
-    await vi.advanceTimersByTimeAsync(60 * MIN - REFRESH_MS);
+    // The live schedule says 30 s; a failure is the 30 s retry from the read that failed. Fail the SECOND read.
+    await vi.advanceTimersByTimeAsync(30_000);
     expect(r.calls, "the second read happened (and failed)").toHaveLength(2);
     expect(seen, "a failure delivers nothing, so the page keeps what it had").toHaveLength(1);
     await vi.advanceTimersByTimeAsync(29_999);
@@ -197,7 +197,8 @@ describe("startVideoPoll: refreshSoon (a lapsed token, or a viewer's pick of an 
   });
 
   it("waits out the floor when the last read was just now (a flood of errors cannot flood the route)", async () => {
-    const r = route(liveFor(60 * MIN), liveFor(60 * MIN));
+    // Embeds alone set no timer of their own, so the only read here is the ask's (a live answer's own 30 s read would hide it).
+    const r = route(embedOnly, embedOnly);
     const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {} });
     await flush();
     await vi.advanceTimersByTimeAsync(10_000);
@@ -258,9 +259,11 @@ describe("startVideoPoll: rebuild (a player that gave up is rebuilt by the next 
     const rec = record();
     const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: rec.onVideo });
     await flush();
-    await vi.advanceTimersByTimeAsync(31_000);
+    // The ask comes 10 s in, before the live answer's own read: the floor is counted from the first read, so the answer to the ask
+    // is the read at 30 s.
+    await vi.advanceTimersByTimeAsync(10_000);
     poll.refreshSoon();
-    await flush();
+    await vi.advanceTimersByTimeAsync(20_000);
     expect(r.calls, "the failed player's ask read the route").toHaveLength(2);
     expect(rec.seen.map((a) => a.rebuild), "first read, then the answer to the ask").toEqual([false, true]);
     // The schedule's own next point (derived from it, not typed): the read after the rebuild answer is an ordinary one.
@@ -307,7 +310,7 @@ describe("startVideoPoll: rebuild (a player that gave up is rebuilt by the next 
     const rec = record();
     const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: rec.onVideo });
     await flush();
-    await vi.advanceTimersByTimeAsync(31_000);
+    await vi.advanceTimersByTimeAsync(10_000);
     poll.refreshSoon();
     poll.stop();
     await vi.advanceTimersByTimeAsync(60_000);

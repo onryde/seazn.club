@@ -1,7 +1,9 @@
 // Seazn-hosted video, Phase 1 Task 15: WHEN the match page's island asks the video route again (`nextVideoFetchMs`). Pure: a
 // clock in, a delay out. The rules are the plan's (Review Focus 3 and the 2026-11-21 recommendation):
 //   - no video yet, or none to show (warming, or ended with no recording signed yet): look again in 30 s;
-//   - live: before the token's life runs out, `SEAZN_TOKEN_REFRESH_BEFORE_SECONDS` ahead of `expiresAt`, never sooner than 30 s;
+//   - live: at the 30 s floor, whatever the token's life (Task 19, the Task 15 review's r3: a Stop must reach a page that is open,
+//     within one poll, not ~55 minutes later at the token's refresh point; a re-read at 30 s also always lands inside the token's
+//     refresh window, so it carries the refresh too);
 //   - replay only, and every part is the replay host's embed (Task 25): NO timer (a swap of its `src` would restart it);
 //   - replay only with an `hls` part (the interim Cloudflare recording): the live rule over those parts' earliest `expiresAt`.
 // The expected values are the rule's arithmetic from the declared window, never read off the function under test.
@@ -31,14 +33,20 @@ describe("nextVideoFetchMs: nothing to show yet", () => {
 });
 
 describe("nextVideoFetchMs: live", () => {
-  it("an expiry 60 min away is re-read the refresh window early: 55 min", () => {
+  // r3 (Task 15 review, Task 19): the live answer is re-read at the floor, so a page that is open when the organiser stops learns it
+  // within one poll. The expiries below are the ones the old rule (the token's refresh point) answered 55 and 25 min for.
+  it("an expiry 60 min away is re-read at the 30 s floor, not at the token's refresh point (55 min)", () => {
     const wait = nextVideoFetchMs({ live: live(60 * MIN), replay: [] }, NOW);
-    expect(wait).toBe(60 * MIN - REFRESH_MS);
-    expect(wait, "Review Focus 3: 55 minutes").toBe(55 * MIN);
+    expect(wait).toBe(SEAZN_VIDEO_POLL_FLOOR_MS);
+    expect(wait, "the refresh point is where a stopped live used to linger").not.toBe(60 * MIN - REFRESH_MS);
   });
 
-  it("the delay follows the clock (a differential): an expiry 30 min away gives 25 min, not 55", () => {
-    expect(nextVideoFetchMs({ live: live(30 * MIN), replay: [] }, NOW)).toBe(30 * MIN - REFRESH_MS);
+  it("the delay does not follow the token: an expiry 30 min away is also the 30 s floor", () => {
+    expect(nextVideoFetchMs({ live: live(30 * MIN), replay: [] }, NOW)).toBe(SEAZN_VIDEO_POLL_FLOOR_MS);
+  });
+
+  it("a 30 s re-read always lands inside the token's refresh window, so the floor carries the refresh as well", () => {
+    expect(SEAZN_VIDEO_POLL_FLOOR_MS, "premise: the floor is shorter than the window the server re-mints in").toBeLessThan(REFRESH_MS);
   });
 
   it("an expiry closer than the refresh window (2 min), exactly on it, already past, or not a date: the 30 s floor", () => {
@@ -48,8 +56,8 @@ describe("nextVideoFetchMs: live", () => {
     expect(nextVideoFetchMs({ live: { src: "https://host.invalid/t/manifest/video.m3u8", expiresAt: "not a date" }, replay: [] }, NOW), "NaN must not become the delay").toBe(30_000);
   });
 
-  it("the live token sets the delay even when earlier recordings are listed beside it (only the live source plays)", () => {
-    expect(nextVideoFetchMs({ live: live(60 * MIN), replay: [part(1, 10 * MIN)] }, NOW)).toBe(60 * MIN - REFRESH_MS);
+  it("recordings listed beside a live source set no delay of their own (only the live source plays): the floor", () => {
+    expect(nextVideoFetchMs({ live: live(60 * MIN), replay: [part(1, 10 * MIN)] }, NOW)).toBe(SEAZN_VIDEO_POLL_FLOOR_MS);
   });
 });
 

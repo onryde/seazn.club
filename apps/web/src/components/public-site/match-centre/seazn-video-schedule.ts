@@ -5,6 +5,12 @@
 // plays lapses: nothing here assumes a playing Cloudflare HLS survives its token's expiry. The window is the server's own,
 // `SEAZN_TOKEN_REFRESH_BEFORE_SECONDS` (the same one `cf-playback.ts` stops reusing a cached token at, so a re-read at this moment
 // always gets a new token), and no read comes sooner than `SEAZN_VIDEO_POLL_FLOOR_MS` so a clock that is wrong cannot hammer the route.
+//
+// LIVE is re-read at the floor (Task 19; the Task 15 review's r3). At the token's refresh point (~55 min) a page that is open when
+// the organiser stops would keep a dead player under a "Live" label for up to an hour; at the floor it learns within one poll, and
+// turns to the recording as soon as one is signed. The floor is shorter than the refresh window, so each re-read also carries the
+// refresh, and a same-token answer is a no-op to the player (seazn-playback.ts). The route is on the poll bucket and signs from
+// the server's token cache, so a read every 30 s per live viewer is the cost of the match centre's own poll, not of a mint.
 import { SEAZN_TOKEN_REFRESH_BEFORE_SECONDS } from "@/server/relay/config";
 import type { PublicFixtureVideo } from "@/server/api-v1/schemas";
 
@@ -21,13 +27,14 @@ function refreshInMs(expiresAt: string, now: Date): number {
 
 /** Milliseconds until the island reads the route again, or `null` when no timer is owed.
  *   - no answer yet, or nothing to show (warming; ended with no recording signed yet): the floor;
- *   - `live`: the live token's own refresh point (the recordings listed beside it do not play, so they set no timer);
+ *   - `live`: the floor, so a Stop reaches an open page within one poll (the recordings listed beside it do not play, so they set no
+ *     timer of their own);
  *   - replay only: the earliest refresh point over the `hls` parts (the interim Cloudflare recording, whose token lapses like the
  *     live one); a part the replay host plays in its own iframe (`embed`, Task 25) is not on the timer, because swapping an iframe's
  *     `src` restarts it, so a replay of embeds alone owes none. That page re-reads when the viewer picks a part that has expired. */
 export function nextVideoFetchMs(video: PublicFixtureVideo | null, now: Date): number | null {
   if (video === null) return SEAZN_VIDEO_POLL_FLOOR_MS;
-  if (video.live !== null) return refreshInMs(video.live.expiresAt, now);
+  if (video.live !== null) return SEAZN_VIDEO_POLL_FLOOR_MS;
   if (video.replay.length === 0) return SEAZN_VIDEO_POLL_FLOOR_MS;
   const hls = video.replay.filter((p) => p.player === "hls");
   if (hls.length === 0) return null;
