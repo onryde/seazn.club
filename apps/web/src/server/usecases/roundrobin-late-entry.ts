@@ -45,7 +45,6 @@ import { afterScheduleWrite } from "./schedule/after-write";
 import {
   afterGenerateCommit,
   divisionHasStarted,
-  lockSwissBoardAppends,
   rebuildStageInTx,
   refoldStageTable,
   type GenerateWrite,
@@ -333,10 +332,13 @@ async function placeInRootTable(
   if (stage.status === "complete") throw roundRobinRefusal("RR_LATE_ENTRY_STAGE_COMPLETE");
   if (!(await tableDrawnAndOffered(tx, divisionId, stages, stage))) return null;
 
-  // The append lock of every line of the stage (`fixture:<id>`, the key each score append takes), before `started` is read: a
-  // scorer starting a bye-slot round either commits first (and the read sees it) or waits on the finished write.
-  const ids = await tx<{ id: string }[]>`select id from fixtures where stage_id = ${stage.id}`;
-  await lockSwissBoardAppends(tx, ids.map((r) => r.id));
+  // Before `started` is read, the format freeze's key EXCLUSIVE (`division-config:<division>`): a line's first event takes it
+  // SHARED before it freezes and starts the line (`append-event.ts`), so a scorer starting a bye-slot round either commits first
+  // (and the read sees it) or waits for this add to commit — the same guarantee a format save takes it for. W5 stress fix F2: ONE
+  // key, where this took the append lock of every line of the stage (`fixture:<id>`) and a 10,296-line league ran Postgres out
+  // of lock slots. Global order `division:` -> stage seats -> `fixture:` -> `division-config:` -> rows: the caller holds
+  // `division:`, and nothing after this takes a stage-seat or fixture lock.
+  await tx`select pg_advisory_xact_lock(hashtext(${"division-config:" + divisionId}))`;
   const place = await readTableLatePlace(tx, stage, entrantId, opts.poolKey);
   const decision = decideRoundRobinLateEntry(place.input);
   if (decision.case === "refused") throw roundRobinRefusal(decision.code);

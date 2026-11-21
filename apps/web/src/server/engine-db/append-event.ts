@@ -371,7 +371,11 @@ export async function appendEventInTx(
     // now, as the division below is, and the check and the answer use the one that stands. Only the version: the
     // match's own override cannot move meanwhile (its writer needs the `fixture:` lock this append holds).
     const [now] = await tx<{ rules_version: number }[]>`select rules_version from fixtures where id = ${fixtureId}`;
-    fixture.rules_version = now!.rules_version;
+    // W5 stress fix F2: a league or group late add holds this key EXCLUSIVE too (`roundrobin-late-entry.ts`), and when it
+    // redraws the stage (Rebuild by add) it deletes this line while the event waits here. Refused as a line already gone
+    // before the fixture lock is (above), never a crash on the missing row.
+    if (!now) throw new EngineError("INVALID_EVENT", `fixture ${fixtureId} not found`, { fixtureId });
+    fixture.rules_version = now.rules_version;
   }
 
   const [division] = await tx<DivisionRow[]>`
