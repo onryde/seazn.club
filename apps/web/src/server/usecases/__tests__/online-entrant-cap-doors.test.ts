@@ -29,6 +29,7 @@ import {
   ONLINE_PLAY_TOO_MANY_ENTRANTS,
 } from "@/lib/online-chess";
 import { PROMOTE_PLAN_LIMIT_CODE } from "@/lib/registration-promote";
+import { logOnlineCapBreach } from "@/server/external-play/online-entrant-cap";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { CreateEntrant } from "@/server/api-v1/schemas";
 import { createCompetition } from "../competitions";
@@ -1170,5 +1171,89 @@ describe.skipIf(!HAS_DB)("a withdrawal AFTER Start still promotes at the online 
     expect(await statusOfReg(holder), "premise: the registration did withdraw").toBe("withdrawn");
     expect(await statusOfReg(w), "no place was freed: W stays waitlisted").toBe("waitlisted");
     expect(await heldOf(r.division.id)).toBe(MAX);
+  });
+});
+
+describe.skipIf(!HAS_DB)("the breach log ignores a withdrawal in flight (fix round 4)", () => {
+  // After Start a withdrawn registration's entrant stays live until the table withdrawal runs, after commit; an auto-approval promotion
+  // materialises inline in the meantime, so the count is momentarily one over although the place is leaving. That is not a breach.
+  const breachLines = (error: { mock: { calls: unknown[][] } }) => error.mock.calls.filter(([, msg]) => /over its entrant cap/.test(String(msg)));
+  const checkBreach = async (divisionId: string): Promise<void> => {
+    await sql.begin((tx) => logOnlineCapBreach(tx, divisionId));
+  };
+
+  it("a started auto-approval division at the cap: the registrant withdraws, the waitlisted one is confirmed inline, and no breach is logged", async () => {
+    const r = await regRig("pro", "online", "auto");
+    const [holder] = await r.holders(1);
+    await fillEntrants(r.division.id, MAX - 1);
+    const w = await r.waiting();
+    await sql`update divisions set status = 'active' where id = ${r.division.id}`;
+    expect(await heldOf(r.division.id), "premise: at the cap").toBe(MAX);
+    const error = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    try {
+      await withdrawRegistration(r.auth, holder!);
+      expect(await statusOfReg(holder!), "premise: the registration withdrew").toBe("withdrawn");
+      expect(await statusOfReg(w), "premise: the promotion materialised inline (auto approval)").toBe("confirmed");
+      expect(await heldOf(r.division.id), "the leaver's place went to the waitlisted one").toBe(MAX);
+      expect(breachLines(error), "a withdrawal in flight is not a breach").toHaveLength(0);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it("the check itself: a withdrawal in flight (live entrant, withdrawn registration) is not counted; a real 129 still logs, with or without one", async () => {
+    const r = await regRig("pro", "online", "auto");
+    const [holder] = await r.holders(1);
+    await fillEntrants(r.division.id, MAX - 1);
+    const error = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    try {
+      await checkBreach(r.division.id);
+      expect(breachLines(error), "empty case: exactly at the cap logs nothing").toHaveLength(0);
+      // One more live entrant while the holder's registration is withdrawn and its entrant still live: 129 live rows, one leaving.
+      await sql`insert into entrants (division_id, kind, display_name, status) values (${r.division.id}, 'individual', 'Inflow', 'confirmed')`;
+      await sql`update registrations set status = 'withdrawn', withdrawn_at = now() where id = ${holder!}`;
+      expect(await heldOf(r.division.id), "premise: 129 rows count as held").toBe(MAX + 1);
+      await checkBreach(r.division.id);
+      expect(breachLines(error), "128 once the leaving one is out: no breach").toHaveLength(0);
+      // A real breach next to the same withdrawal in flight.
+      await sql`insert into entrants (division_id, kind, display_name, status) values (${r.division.id}, 'individual', 'Stray', 'confirmed')`;
+      await checkBreach(r.division.id);
+      const real = breachLines(error);
+      expect(real, "a real 129 still logs").toHaveLength(1);
+      expect(real[0]![0], "with the numbers net of the leaving place").toMatchObject({ divisionId: r.division.id, held: MAX + 1, limit: MAX });
+      // The withdrawal finished (its entrant departed): the registration is still withdrawn, and the departed entrant is not a place to subtract.
+      await sql`update entrants set status = 'withdrawn' where id = (select entrant_id from registrations where id = ${holder!})`;
+      error.mockClear();
+      expect(await heldOf(r.division.id), "premise: 129 live (the departed one is no place)").toBe(MAX + 1);
+      await checkBreach(r.division.id);
+      const left = breachLines(error);
+      expect(left, "nothing is left to exclude: still a breach").toHaveLength(1);
+      expect(left[0]![0], "at 129, not 128").toMatchObject({ held: MAX + 1 });
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it("only a WITHDRAWN registration is a withdrawal in flight: a live entrant behind a paid or confirmed one is a place like any other", async () => {
+    const r = await regRig("pro", "online", "auto");
+    const [holder] = await r.holders(1);
+    await fillEntrants(r.division.id, MAX - 1);
+    await sql`insert into entrants (division_id, kind, display_name, status) values (${r.division.id}, 'individual', 'Stray', 'confirmed')`;
+    expect(await heldOf(r.division.id), "premise: 129 held").toBe(MAX + 1);
+    const error = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    try {
+      for (const status of ["confirmed", "paid", "pending"]) {
+        error.mockClear();
+        await sql`update registrations set status = ${status} where id = ${holder!}`;
+        await checkBreach(r.division.id);
+        expect(breachLines(error), `a ${status} registration's entrant is not leaving: 129 is a breach`).toHaveLength(1);
+      }
+      error.mockClear();
+      await sql`update registrations set status = 'withdrawn' where id = ${holder!}`;
+      await checkBreach(r.division.id);
+      expect(breachLines(error), "the same state with the registration withdrawn: that place is leaving, 128").toHaveLength(0);
+    } finally {
+      error.mockRestore();
+    }
   });
 });

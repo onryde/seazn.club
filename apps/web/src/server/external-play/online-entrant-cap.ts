@@ -102,6 +102,17 @@ export async function countOnlineHeld(db: Db, divisionId: string): Promise<numbe
   return row!.n;
 }
 
+/** Live entrants whose registration has withdrawn: the table withdrawal that takes them out of the field is still owed (the desk's
+ *  "withdrawal did not finish" item names the ones that never ran). An entrant already departed is not one - it is not in the held count
+ *  to begin with, so counting it out would hide a real breach. */
+async function countWithdrawalsInFlight(tx: Tx, divisionId: string): Promise<number> {
+  const [row] = await tx<{ n: number }[]>`
+    select count(distinct e.id)::int as n
+      from entrants e join registrations r on r.entrant_id = e.id
+     where e.division_id = ${divisionId} and r.status = 'withdrawn' and e.status not in ${tx([...DEPARTED_STATUS_KEYS])}`;
+  return row!.n;
+}
+
 /** 1 when the entrant is still in the field (not withdrawn or disqualified), else 0: the place it holds in the count above. */
 async function liveEntrantCount(tx: Tx, entrantId: string): Promise<number> {
   const [row] = await tx<{ n: number }[]>`
@@ -158,11 +169,15 @@ export async function assertEntrantRoomIn(
 /** What a division that plays online and is full says in the log when a registration is confirmed into it past the cap. Never throws:
  *  a confirmation is often a card payment that has already moved (review I3). The cap holds upstream - a sign-up is counted from the
  *  moment it is let in (pending / paid), so confirming it moves its place from one term of the count to the other and never grows it,
- *  and every door that seats a waitlisted one asks first - so a line here means a door was missed. */
+ *  and every door that seats a waitlisted one asks first - so a line here means a door was missed. A withdrawal in flight is not one
+ *  (fix round 4): after Start the entrant of a withdrawn registration stays live until the table withdrawal runs, after commit, and an
+ *  auto-approval promotion materialises inline in between - the count is momentarily one over although that place is leaving. Those
+ *  places are counted out here (and only here: the doors keep counting them, a refusal in that window is the safe side), by the same
+ *  liveness the promotion guard uses for the leaving entrant. */
 export async function logOnlineCapBreach(tx: Tx, divisionId: string): Promise<void> {
   const [division] = await tx<{ sport_key: string; config: unknown }[]>`select sport_key, config from divisions where id = ${divisionId}`;
   if (!division || !divisionPlaysOnline(division)) return;
-  const held = await countOnlineHeld(tx, divisionId);
+  const held = (await countOnlineHeld(tx, divisionId)) - (await countWithdrawalsInFlight(tx, divisionId));
   if (held > ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION) {
     log.error(
       { divisionId, held, limit: ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION },
