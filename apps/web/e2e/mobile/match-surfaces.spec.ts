@@ -17,6 +17,7 @@ import {
   seedRosteredFixture,
   overflowingIn,
   matchRoomPathBySql,
+  seedVenueWithCourts,
   withDb,
 } from "../helpers";
 import { longName, roundGameSql, seedOnlineRound, seedSeatInvite, uiEn } from "../match-room-kit";
@@ -744,6 +745,10 @@ test("match day online block: boards are rows of the list; a row opens its panel
   await roundGameSql(held, { moves: ["e2e4", "e7e5"], hold: "mismatch" });
   await holdNoShowSql(noShow.fixtureId);
   await cancelFlaggedSql(r.orgId, flagged.fixtureId);
+  // B11 (review): the order is pinned against a court that is THERE. An org starts with no courts, so without this the online block was the only block on the
+  // page at most widths and "it comes last" held of any order; with one free court the list has a court block and the online block beside it, in a fixed order.
+  const seededCourts = await seedVenueWithCourts(request, ["Court 1"], { orgId: r.orgId });
+  expect(seededCourts.courts, "premise: the court the order pin needs was made").toHaveLength(1);
 
   const matchDay = `/o/${r.slugs.org}/c/${r.slugs.comp}/match-day`;
   await page.goto(matchDay, { waitUntil: "load" });
@@ -752,8 +757,24 @@ test("match day online block: boards are rows of the list; a row opens its panel
   await expect(block.getByTestId("md-round-row"), "one round row").toHaveCount(1);
   const rows = block.getByTestId("md-board-row");
   await expect(rows, "a row for each board").toHaveCount(r.boards.length);
-  // The three blocks' order (spec §5.2): the online block is the LAST of the list column, and it is inside it.
+  // The three blocks' order (spec §5.2): the online block is the LAST of the list column, and it is inside it. Pinned three ways, so an order flip reds each:
+  // it is the list's last child; every court row comes BEFORE it in the document; and at least one court row exists (a rule over an empty set holds of any order).
   await expect(page.getByTestId("md-list").getByTestId("md-online"), "the block is in the list column").toHaveCount(1);
+  const order = await page.getByTestId("md-list").evaluate((list) => {
+    const online = list.querySelector('[data-testid="md-online"]')!;
+    const courtRows = [...list.querySelectorAll('[data-testid="md-court-row"]')];
+    const kids = [...list.children];
+    return {
+      onlineIsLastChild: kids[kids.length - 1] === online,
+      kids: kids.length,
+      courtRows: courtRows.length,
+      courtsBeforeOnline: courtRows.filter((row) => (row.compareDocumentPosition(online) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).length,
+    };
+  });
+  expect(order.courtRows, "anti-vacuity: the list has the court row the order is pinned against").toBeGreaterThan(0);
+  expect(order.kids, "and the online block has a sibling block before it").toBeGreaterThan(1);
+  expect(order.onlineIsLastChild, "the online block is the LAST block of the list column").toBe(true);
+  expect(order.courtsBeforeOnline, "and every court row is before it in the document").toBe(order.courtRows);
   const ids = await rows.evaluateAll((els) => els.map((e) => e.getAttribute("data-fixture-id")));
   expect(new Set(ids), "each seeded board is one row, once").toEqual(new Set(r.boards.map((b) => b.fixtureId)));
 

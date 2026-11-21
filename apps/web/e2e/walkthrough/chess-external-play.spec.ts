@@ -385,6 +385,11 @@ type PremintReport = {
   failures: unknown[];
 };
 
+/** Every pass the pre-mint helper below has run in this file, in order, with the wall clock each answered at (fix round 1, B13 diagnostics: the "round 2 waits"
+ *  test read 0 of 4 pre-minted shell rooms once and, with only the room count in its message, could not be told from a job that never ran). */
+const premintPasses: { at: string; report: PremintReport }[] = [];
+const premintLog = () => JSON.stringify(premintPasses);
+
 /** One pass of the pre-mint cron (`/api/cron/external-play-premint`, check-in capacity plan 2), as the Worker fires it. Like the sweep it
  *  retries a pass that found another holding the lock (`skipped`: it looked at nothing). The pass paces its vendor calls a second apart, so it
  *  is given its own clock. It answers `disabled: 1` unless the server runs with EXTERNAL_PLAY_PREMINT=1: an environment fault, named as one. */
@@ -397,6 +402,7 @@ async function premintPass(page: Page): Promise<PremintReport> {
       report.disabled,
       `the pre-mint job is OFF on the server under test: start it with EXTERNAL_PLAY_PREMINT=1 and EXTERNAL_PLAY_PRESENCE_PROOF=1 (docs/runbooks/e2e-local.md). Report ${JSON.stringify(report)}`,
     ).toBe(0);
+    premintPasses.push({ at: new Date().toISOString(), report });
     if (report.skipped === 0) return report;
     await page.waitForTimeout(1_000);
   }
@@ -725,6 +731,14 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     const pass1 = await premintPass(page);
     const note1 = `pass 1 reported ${JSON.stringify(pass1)}`;
     expect(pass1.failed, `${note1}: no room failed`).toBe(0);
+    // A deferral is how the job says "I did not make these rooms" (a frozen competition, the vendor down for the pass, the wall budget spent): on this stack none of
+    // those is in play, so a pass that deferred anything left a room unmade and the counts below would read short for THAT reason - say so first. The job is GLOBAL,
+    // so the one honest cause on a healthy stack is a database already carrying other runs' unopened camera-on rounds: its 45 s budget paces ~45 rooms a pass and
+    // the rest of the scan (this spec's own boards among them, being the newest) is deferred - an environment fault, named as one (reference: seazn-local-env §5).
+    expect(
+      pass1.deferred,
+      `${note1}: the job deferred no room (scanned = roomsMade + failed + deferred). Deferred rows mean the pass ran out of its wall budget on a database that already holds other unopened rounds (a database that has run other suites): run this spec on a fresh one`,
+    ).toBe(0);
     // A GUARD on the server's configuration, not a test of the deferral: the server under test runs with EXTERNAL_PLAY_WINDOW_DEFER=0, which
     // never asks about windows, so 0 is forced. A server without it (other specs' rounds open beside this one) would defer the pass, and the
     // room counts below would read short for a reason that is not the job's - this fails first, and says why.
@@ -761,6 +775,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     const pass2 = await premintPass(page);
     const note2 = `pass 2 reported ${JSON.stringify(pass2)}`;
     expect(pass2.failed, `${note2}: no room failed`).toBe(0);
+    expect(pass2.deferred, `${note2}: the job deferred no room`).toBe(0);
     expect(pass2.windowsOpen, `${note2}: no check-in window deferred it (the same configuration guard as pass 1's)`).toBe(0);
     expect(await meetingRowsOf(boardIds), `${note2}: the same rooms are on file - none made, none replaced`).toEqual(rooms1);
     expect(callsOnMeetings(roomIds, mark2), `${note2}: the second pass made no vendor call for these boards`).toEqual([]);
@@ -1195,7 +1210,10 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     const shellIds = (await round2()).map((f) => f.id);
     expect(shellIds, "premise: two placeholder shells wait for round 2").toHaveLength(2);
     const preRooms = await meetingRowsOf(shellIds);
-    expect(preRooms.length, "the job made a room for each side of each shell, before round 1 was even opened").toBe(2 * shellIds.length);
+    expect(
+      preRooms.length,
+      `the job made a room for each side of each shell, before round 1 was even opened. Every pre-mint pass this file ran (oldest first): ${premintLog()}`,
+    ).toBe(2 * shellIds.length);
     for (const r of preRooms) {
       expect([r.home_entrant_id, r.away_entrant_id], `${r.fixture_id} ${r.side}: made for no pairing yet (unadopted)`).toEqual([null, null]);
     }
