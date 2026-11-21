@@ -35,8 +35,8 @@ import { createCompetition } from "../competitions";
 import { createDivision, patchDivision } from "../divisions";
 import { createEntrants, patchEntrant } from "../entrants";
 import { publicRegistrationInfo } from "../registrations/settings";
-import { confirmRegistration, confirmRegistrationWaived, putRegistrationSettings } from "../registrations";
-import { promoteFromWaitlist } from "../registration-approval";
+import { confirmRegistration, confirmRegistrationWaived, putRegistrationSettings, sweepRegistrations } from "../registrations";
+import { promoteFromWaitlist, rejectRegistration, withdrawRegistration } from "../registration-approval";
 import { submitRegistrationGroup } from "../registration-submit";
 import { SETTINGS_BASE, seedRegistration } from "./_registration-fixtures";
 import { seedOwner, seedPlayer, type SeedPlayer } from "./_external-play-seed";
@@ -56,9 +56,10 @@ afterAll(async () => {
 /** The plan sizes of the ruling, each made real the way production makes them: Community and Pro are the catalogue's own rows, and the
  *  two the catalogue has no plan for here (a plan of exactly 128 - an Event Pass's size - and an unlimited plan) are an override row, the
  *  production shape of "the plan allows this many" (a staff cap, a size pack). `cap` is what `getLimit` must read back: the premise. */
-type PlanName = "community" | "event-pass-sized" | "pro" | "unlimited";
+type PlanName = "community" | "size-pack-96" | "event-pass-sized" | "pro" | "unlimited";
 const PLANS: Record<PlanName, { plan: "community" | "pro"; override?: number | null; cap: number | null }> = {
   community: { plan: "community", cap: 64 },
+  "size-pack-96": { plan: "pro", override: 96, cap: 96 }, // a plan BELOW the online cap that is not Community: a size pack, a staff cap
   "event-pass-sized": { plan: "pro", override: 128, cap: 128 },
   pro: { plan: "pro", cap: 256 },
   unlimited: { plan: "pro", override: null, cap: null },
@@ -256,7 +257,7 @@ describe.skipIf(!HAS_DB)("door: createEntrants (the organiser adds an entrant)",
 
 // ─── The registration rig (doors 2 - 5) ──────────────────────────────────────────────────────────────────────
 
-async function regRig(plan: PlanName, kind: Exclude<Kind, "badminton">, approval: "auto" | "manual") {
+async function regRig(plan: PlanName, kind: Kind, approval: "auto" | "manual") {
   const { auth, setCompetition } = await orgOn(plan);
   const { competition, division } = await divisionOf(auth, kind, "public");
   await setCompetition(competition.id);
@@ -315,7 +316,7 @@ async function regRig(plan: PlanName, kind: Exclude<Kind, "badminton">, approval
   return { auth, competition, division, orgSlug: org!.slug, holders, pendingSignUps, withdrawHolder, waiting, statusOf };
 }
 
-async function signUp(r: Awaited<ReturnType<typeof regRig>>, kind: "online" | "otb"): Promise<string> {
+async function signUp(r: Awaited<ReturnType<typeof regRig>>, kind: Kind): Promise<string> {
   const person = kind === "online" ? await linkedPlayer(r.auth) : null;
   const res = await submitRegistrationGroup(
     { orgSlug: r.orgSlug, compSlug: r.competition.slug, ...(person ? { sessionUserId: person.userId } : {}) },
@@ -600,6 +601,13 @@ describe.skipIf(!HAS_DB)("one count at every door: direct adds and sign-ups are 
     const held = await r.holders(3);
     await sql`update registrations set status = 'paid' where id in ${sql(held)}`; // paid AND already entrants: one place each, not two
     expect(await placesOf(), "2 sign-ups + 3 entrants (their paid registrations are the same places)").toBe(MAX - 5);
+    // Every status that holds a spot (SPOT_HOLDERS) holds a place while it has no entrant: pending, paid, and a confirmed one whose
+    // entrant link is missing (an anomaly the count must not lose). The four free agents still hold nothing.
+    await sql`update registrations set status = 'paid' where id = ${pending[4]!}`;
+    await sql`update registrations set status = 'confirmed' where id = ${pending[5]!}`;
+    expect(await placesOf(), "still 2 sign-ups (one paid, one confirmed without an entrant) + 3 entrants").toBe(MAX - 5);
+    await sql`update registrations set status = 'waitlisted' where id in ${sql([pending[4]!, pending[5]!])}`;
+    expect(await placesOf(), "waitlisted sign-ups hold nothing: the 3 entrants remain").toBe(MAX - 3);
   });
 
   it("places left counts the same: 100 added + 10 pending sign-ups leaves 18, not the 28 or 246 either half alone would say", async () => {
@@ -914,5 +922,193 @@ describe.skipIf(!HAS_DB)("materialise never throws on the cap; a breach is a log
     } finally {
       error.mockRestore();
     }
+  });
+});
+
+// ─── Fix round 2 (re-review N1, N2): the cap holds through promotion and through a plan below it ───────────────────
+
+const statusOfReg = async (id: string): Promise<string> => (await sql<{ status: string }[]>`select status from registrations where id = ${id}`)[0]!.status;
+
+describe.skipIf(!HAS_DB)("a plan below 128 holds the mixed count too (re-review N2)", () => {
+  const placesOf = async (r: Awaited<ReturnType<typeof regRig>>): Promise<number | null> =>
+    (await publicRegistrationInfo(r.orgSlug, r.competition.slug)).divisions.find((d) => d.division_id === r.division.id)!.remaining;
+
+  it("plan 96, online: the empty division first, then 48 added + 47 sign-ups = 95: the 96th place is taken, the 97th is refused at every door", async () => {
+    const r = await regRig("size-pack-96", "online", "manual");
+    expect(await placesOf(r), "the empty division: the plan's 96").toBe(96);
+    expect(await signUp(r, "online"), "with room a manual-approval sign-up waits for the organiser").toBe("pending");
+    await fillEntrants(r.division.id, 48);
+    await r.pendingSignUps(46);
+    expect(await heldOf(r.division.id), "premise: 48 entrants + 47 sign-ups let in").toBe(95);
+    expect(await entrantCount(r.division.id), "premise: only 48 entrants rows - neither count alone is near 96").toBe(48);
+    expect(await placesOf(r), "places left: 96 - 95").toBe(1);
+    expect(await verdictOf(() => addOne(r.auth, "online", r.division.id)), "the 96th place").toBe("ok");
+    expect(await placesOf(r), "full").toBe(0);
+    expect(await verdictOf(() => addOne(r.auth, "online", r.division.id)), "the 97th add is the PLAN's refusal (a plan raises it)").toBe("plan");
+    expect(await signUp(r, "online"), "the 97th sign-up waits").toBe("waitlisted");
+    expect(await heldOf(r.division.id), "never past the plan").toBe(96);
+  });
+
+  it("plan 96, online: the organiser's promote is the plan's 422 once the mixed count is full; over the board the same plan counts rows only", async () => {
+    const r = await regRig("size-pack-96", "online", "manual");
+    const w = await r.waiting();
+    expect((await promoteFromWaitlist(r.auth, r.division.id, { registrationId: w }))!.status, "empty division: promoted").toBe("pending");
+    await fillEntrants(r.division.id, 60);
+    await r.pendingSignUps(35); // 60 + 35 + the promoted one = 96
+    expect(await heldOf(r.division.id), "premise: full at the plan's 96").toBe(96);
+    const w2 = await r.waiting();
+    await expect(promoteFromWaitlist(r.auth, r.division.id, { registrationId: w2 })).rejects.toMatchObject({ status: 422, code: PROMOTE_PLAN_LIMIT_CODE });
+    // Over the board the sign-ups and the added entrants are different counts, as they always were.
+    const otb = await regRig("size-pack-96", "otb", "manual");
+    await otb.pendingSignUps(50);
+    await fillEntrants(otb.division.id, 60);
+    expect(await verdictOf(() => addOne(otb.auth, "otb", otb.division.id)), "110 held over the board on a plan of 96: rows (60) decide").toBe("ok");
+  });
+});
+
+describe.skipIf(!HAS_DB)("auto-promotion never takes an online division past its cap (re-review N1)", () => {
+  /** An online manual-approval division holding `live` entrants and waiting one registrant, W (waitlisted). */
+  const rigWith = async (live: number) => {
+    const r = await regRig("pro", "online", "manual");
+    await fillEntrants(r.division.id, live);
+    return { r, w: await r.waiting() };
+  };
+  const heldNow = (r: { division: { id: string } }) => heldOf(r.division.id);
+
+  it("a legitimate withdrawal at the cap frees ONE place and promotes ONE registrant (the empty case: nothing was freed twice)", async () => {
+    const r = await regRig("pro", "online", "manual");
+    const [holder] = await r.holders(1);
+    await fillEntrants(r.division.id, MAX - 1);
+    const w = await r.waiting();
+    expect(await heldNow(r), "premise: full").toBe(MAX);
+    await withdrawRegistration(r.auth, holder!);
+    expect(await statusOfReg(w), "the freed place went to the waitlist").toBe("pending");
+    expect(await heldNow(r), "full again, never past").toBe(MAX);
+  });
+
+  it("an organiser frees a place from the TABLE (withdraws the entrant), fills it, and then the registrant withdraws: the place is not freed twice", async () => {
+    const r = await regRig("pro", "online", "manual");
+    const [holder] = await r.holders(1);
+    await fillEntrants(r.division.id, MAX - 1);
+    const w = await r.waiting();
+    const [{ entrant_id: entrantId }] = await sql<{ entrant_id: string }[]>`select entrant_id from registrations where id = ${holder!}`;
+    await patchEntrant(r.auth, entrantId, { status: "withdrawn" }); // the organiser withdraws E: the registration is untouched
+    expect(await heldNow(r), "premise: 127").toBe(MAX - 1);
+    await addOne(r.auth, "online", r.division.id); // N takes the place
+    expect(await heldNow(r), "premise: 128 again").toBe(MAX);
+    await withdrawRegistration(r.auth, holder!); // the registrant of E's row now withdraws too
+    expect(await statusOfReg(holder!), "premise: the registration did withdraw").toBe("withdrawn");
+    expect(await statusOfReg(w), "no place was freed: the waitlisted one stays waitlisted").toBe("waitlisted");
+    expect(await heldNow(r), "the division stays at its cap").toBe(MAX);
+  });
+
+  it("the same sequence over the board promotes (the cap is the online division's)", async () => {
+    const r = await regRig("pro", "otb", "manual");
+    const [holder] = await r.holders(1);
+    await fillEntrants(r.division.id, MAX - 1);
+    const w = await r.waiting();
+    const [{ entrant_id: entrantId }] = await sql<{ entrant_id: string }[]>`select entrant_id from registrations where id = ${holder!}`;
+    await patchEntrant(r.auth, entrantId, { status: "withdrawn" });
+    await addOne(r.auth, "otb", r.division.id);
+    await withdrawRegistration(r.auth, holder!);
+    expect(await statusOfReg(w), "Pro's 256 has room: the waitlist is served").toBe("pending");
+  });
+
+  it("an expiry frees a place: with room the waitlist is served; with the division already full it is not", async () => {
+    const lapsedCard = async (r: Awaited<ReturnType<typeof regRig>>): Promise<string> => {
+      const { registration } = await seedRegistration(
+        r.competition.id,
+        r.division.id,
+        { fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+        { status: "pending", displayName: "Lapsed card" },
+      );
+      await sql`update registration_groups set expires_at = now() - interval '1 hour' where id = ${registration.group_id}`;
+      return registration.id;
+    };
+    const room = await rigWith(MAX - 2); // 127 held with the expiring one: 126 after it
+    const roomHolder = await lapsedCard(room.r);
+    await sweepRegistrations("https://example.test");
+    expect(await statusOfReg(roomHolder), "premise: the sweep expired it").toBe("expired");
+    expect(await statusOfReg(room.w), "room: served").toBe("pending");
+    const full = await rigWith(MAX); // 128 live + the expiring one = 129 held: 128 after it
+    const fullHolder = await lapsedCard(full.r);
+    expect(await heldNow(full.r), "premise: stored past the cap").toBe(MAX + 1);
+    await sweepRegistrations("https://example.test");
+    expect(await statusOfReg(fullHolder), "premise: the sweep expired it").toBe("expired");
+    expect(await statusOfReg(full.w), "full: the waitlist is NOT served").toBe("waitlisted");
+    expect(await heldNow(full.r)).toBe(MAX);
+  });
+
+  it("a lapsed promotion window re-offers its place: served with room, held back when the division is full", async () => {
+    const lapsing = async (r: Awaited<ReturnType<typeof regRig>>): Promise<string> => {
+      const { registration } = await seedRegistration(r.competition.id, r.division.id, FEES, { status: "pending", displayName: "Lapsing" });
+      await sql`update registrations set promoted_at = now() - interval '2 hours', promotion_expires_at = now() - interval '1 hour' where id = ${registration.id}`;
+      return registration.id;
+    };
+    const room = await rigWith(MAX - 2);
+    const roomLapsed = await lapsing(room.r);
+    await sweepRegistrations("https://example.test");
+    expect(await statusOfReg(roomLapsed), "premise: the lapsing pass put it back").toBe("waitlisted");
+    expect(await statusOfReg(room.w), "room: the next in line is served").toBe("pending");
+    const full = await rigWith(MAX);
+    const fullLapsed = await lapsing(full.r);
+    await sweepRegistrations("https://example.test");
+    expect(await statusOfReg(fullLapsed), "premise: the lapsing pass put it back").toBe("waitlisted");
+    expect(await statusOfReg(full.w), "full: nobody is served").toBe("waitlisted");
+    expect(await heldNow(full.r)).toBe(MAX);
+  });
+
+  it("a rejection frees a place: served with room, held back when the division is full", async () => {
+    const room = await rigWith(MAX - 2);
+    const [roomPending] = await room.r.pendingSignUps(1);
+    await rejectRegistration(room.r.auth, roomPending!);
+    expect(await statusOfReg(room.w), "room: served").toBe("pending");
+    const full = await rigWith(MAX);
+    const [fullPending] = await full.r.pendingSignUps(1);
+    expect(await heldNow(full.r), "premise: stored past the cap").toBe(MAX + 1);
+    await rejectRegistration(full.r.auth, fullPending!);
+    expect(await statusOfReg(fullPending!)).toBe("rejected");
+    expect(await statusOfReg(full.w), "full: not served").toBe("waitlisted");
+    expect(await heldNow(full.r)).toBe(MAX);
+  });
+});
+
+describe.skipIf(!HAS_DB)("a division of a sport that cannot play online never queues on the division lock (re-review minor)", () => {
+  it("the public sign-up and an organiser's promote on a badminton division finish while the lock is held; on a chess division both wait (the control)", async () => {
+    const chess = await regRig("pro", "otb", "auto");
+    const chessSignUp = await holdingDivisionLock(chess.division.id, () => signUp(chess, "otb"));
+    expect(chessSignUp.waited, "control: a chess division's sign-up queues").toBe(true);
+    const chessManual = await regRig("pro", "otb", "manual");
+    const chessW = await chessManual.waiting();
+    const chessPromote = await holdingDivisionLock(chessManual.division.id, () => promoteFromWaitlist(chessManual.auth, chessManual.division.id, { registrationId: chessW }));
+    expect(chessPromote.waited, "control: a chess division's promote queues").toBe(true);
+
+    const bad = await regRig("pro", "badminton", "auto");
+    const sign = await holdingDivisionLock(bad.division.id, () => signUp(bad, "badminton"));
+    expect(sign.waited, "a badminton sign-up never waited on the division lock").toBe(false);
+    expect(sign.outcome, "and it was served").toMatchObject({ status: "fulfilled", value: "confirmed" });
+    const badManual = await regRig("pro", "badminton", "manual");
+    const badW = await badManual.waiting();
+    const promote = await holdingDivisionLock(badManual.division.id, () => promoteFromWaitlist(badManual.auth, badManual.division.id, { registrationId: badW }));
+    expect(promote.waited, "a badminton promote never waited on the division lock").toBe(false);
+    expect(promote.outcome.status).toBe("fulfilled");
+  });
+});
+
+describe.skipIf(!HAS_DB)("auto-promotion honours a plan below the online cap too (re-review N1 with N2)", () => {
+  it("plan 96: the double-freed place is not served once 96 are held; the same sequence with room is", async () => {
+    const run = async (extra: number) => {
+      const r = await regRig("size-pack-96", "online", "manual");
+      const [holder] = await r.holders(1);
+      await fillEntrants(r.division.id, 94 + extra); // 95 (+ extra) live with the holder's entrant
+      const w = await r.waiting();
+      const [{ entrant_id: entrantId }] = await sql<{ entrant_id: string }[]>`select entrant_id from registrations where id = ${holder!}`;
+      await patchEntrant(r.auth, entrantId, { status: "withdrawn" });
+      await r.pendingSignUps(1); // takes the freed place as a sign-up (an add would be one row too many for the plan's own row count)
+      await withdrawRegistration(r.auth, holder!);
+      return { status: await statusOfReg(w), held: await heldOf(r.division.id) };
+    };
+    expect(await run(0), "95 held when the registrant withdraws: the waitlist is served, to 96").toEqual({ status: "pending", held: 96 });
+    expect(await run(1), "96 held when the registrant withdraws: a place that is not there is not served").toEqual({ status: "waitlisted", held: 96 });
   });
 });

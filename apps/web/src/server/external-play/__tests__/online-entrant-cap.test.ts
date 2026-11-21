@@ -5,6 +5,8 @@
 //
 // The doors that call these (createEntrants, sign-up, promote, the online switch, ...) are driven through their real usecases in
 // usecases/__tests__/online-entrant-cap-doors.test.ts; this file is the table they all share.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { forEachSport } from "@seazn/engine/testkit";
 import { describe, expect, it } from "vitest";
 import { PaymentRequiredError } from "@/lib/errors";
@@ -144,7 +146,10 @@ describe("assertEntrantRoom: which refusal answers, and where the line falls", (
       [256, 10, 127, 2, "online"], // a batch of two on 127 held
       [128, 128, 128, 1, "online"], // the tie: both full, the online cap answers (no upgrade changes anything)
       [64, 64, 10, 1, "plan"], // Community: its own 64 rows bind, online or not
-      [64, 10, 64, 1, "ok"], // ...the online cap does not bind under a lower plan cap: the plan's rows (10) decide
+      [64, 10, 64, 1, "plan"], // ...a plan BELOW the online cap judges the places held too (re-review N2): 64 held on a plan of 64, rows (10) or not
+      [96, 40, 95, 1, "ok"], // a size pack's 96: the 96th place
+      [96, 40, 96, 1, "plan"], // ...the 97th is the PLAN's refusal, on the places held (96 added and 96 signed up is 192)
+      [96, 96, 10, 1, "plan"], // ...and its own rows still refuse on their own
     ];
     let checked = 0;
     for (const [plan, rows, held, adding, want] of table) {
@@ -159,6 +164,8 @@ describe("assertEntrantRoom: which refusal answers, and where the line falls", (
 
   it("onlineRoomLeft and assertOnlineRoom: 128 minus what is held, never below 0, and the line falls between 128 and 129", () => {
     expect([onlineRoomLeft(0), onlineRoomLeft(100), onlineRoomLeft(MAX), onlineRoomLeft(MAX + 2)], "the empty case first").toEqual([MAX, MAX - 100, 0, 0]);
+    // Under a plan cap below the online cap (re-review N2) the room is the plan's: min(plan, 128) is the cap the doors pass in.
+    expect([onlineRoomLeft(0, 96), onlineRoomLeft(95, 96), onlineRoomLeft(96, 96), onlineRoomLeft(120, 96)]).toEqual([96, 1, 0, 0]);
     expect(() => assertOnlineRoom(0)).not.toThrow();
     expect(() => assertOnlineRoom(MAX)).not.toThrow();
     expect(() => assertOnlineRoom(MAX + 1)).toThrow(expect.objectContaining({ status: 422, code: ONLINE_DIVISION_FULL }));
@@ -213,5 +220,35 @@ describe("assertOnlinePlayFits: turning online play on", () => {
     expect(err.extra).toEqual({ limit: MAX, entrants: MAX + 1 });
     expect(err.message).toContain(String(MAX + 1));
     expect(err.message).toContain(String(MAX));
+  });
+});
+
+describe("every automatic promotion site asks the cap (re-review N1: a seam that nothing forces is a seam that gets forgotten)", () => {
+  const USECASES = join(import.meta.dirname, "..", "..", "usecases");
+  // The five callers of `promoteOldestWaitlisted` outside its own module. Four are AUTOMATIC (a place was just freed: withdrawal,
+  // expiry, lapse, rejection) and must ask `onlineCapHoldsPromotion`; the fifth is the organiser's oldest-first Promote, which
+  // passes `beforePromote` (the room check of `assertOrganiserPromotionHasRoom`, itself counting held places under the lock).
+  const FILES = ["registrations/withdraw.ts", "registrations/sweep.ts", "registration-approval.ts"];
+  const code = (file: string): string[] =>
+    readFileSync(join(USECASES, file), "utf8")
+      .split("\n")
+      .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l) && !l.includes("import "));
+
+  it("each automatic site in withdraw / sweep / approval is behind the cap guard; the explicit-room one carries its own check", () => {
+    let calls = 0;
+    let guarded = 0;
+    let withRoomCheck = 0;
+    for (const file of FILES) {
+      const lines = code(file);
+      const text = lines.join("\n");
+      const here = lines.filter((l) => l.includes("promoteOldestWaitlisted(")).length;
+      const guards = (text.match(/onlineCapHoldsPromotion\(/g) ?? []).length;
+      const room = (text.match(/promoteOldestWaitlisted\([^)]*,\s*async \(picked\)/g) ?? []).length;
+      expect(here - room, `${file}: every automatic promotion has a guard call`).toBe(guards);
+      calls += here;
+      guarded += guards;
+      withRoomCheck += room;
+    }
+    expect([calls, guarded, withRoomCheck], "anti-vacuity: 5 sites = 4 guarded + 1 room-checked").toEqual([5, 4, 1]);
   });
 });

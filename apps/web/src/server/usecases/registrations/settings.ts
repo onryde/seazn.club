@@ -437,12 +437,12 @@ export async function publicRegistrationInfo(
   const now = new Date();
   const divisions: PublicDivisionInfo[] = rows.map((r) => {
     // Counted against the cap submit enforces: the plan's limit and the division's capacity by their own count, and for a division that
-    // plays online also what is left of min(plan limit, 128) by the online count (online-entrant-cap.ts) - whichever is tighter.
+    // plays online also what is left of min(plan limit, 128) by the online count (online-entrant-cap.ts; a plan below 128 counts the SAME
+    // places, re-review N2) - whichever is tighter.
     const planSide = placesLeft({ capacity: r.capacity, planLimit, formatMax: formatMaxes.get(r.division_id) ?? null, active: r.active });
-    const remaining =
-      divisionPlaysOnline(r) && onlineCapBinds(true, planLimit)
-        ? Math.min(planSide ?? Number.POSITIVE_INFINITY, onlineRoomLeft(heldById.get(r.division_id) ?? 0))
-        : planSide;
+    const remaining = divisionPlaysOnline(r)
+      ? Math.min(planSide ?? Number.POSITIVE_INFINITY, onlineRoomLeft(heldById.get(r.division_id) ?? 0, effectiveEntrantCap(true, planLimit)!))
+      : planSide;
     // A card division can't take submissions when Connect is broken OR the
     // paid entitlement is gone — closing it with an honest reason beats
     // accepting money we can't keep (spec #9, P2-10).

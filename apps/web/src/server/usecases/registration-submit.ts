@@ -61,9 +61,8 @@ import {
   seasonStartYearFrom,
   type EligibilityIssue,
 } from "./registration-eligibility";
-import { divisionPlaysOnline } from "@/server/external-play/online-play";
-import { countOnlineHeld, lockDivisionForCap, onlineCapBinds } from "@/server/external-play/online-entrant-cap";
-import { ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION } from "@/lib/online-chess";
+import { divisionPlaysOnline, supportsOnlinePlay } from "@/server/external-play/online-play";
+import { countOnlineHeld, effectiveEntrantCap, lockDivisionForCap } from "@/server/external-play/online-entrant-cap";
 import { assertUserHasLichessForOnlinePlay } from "./external-accounts";
 import { onlineChessOffered } from "./external-play/online-chess-flag";
 import { openRegistrationSeatGate, type RegistrationSeatGate } from "./online-seat-gate";
@@ -809,11 +808,19 @@ export async function submitRegistrationGroup(
     // settings lock, which this order makes a no-wait re-take), so the count under it cannot move; and whether a division plays online
     // is read HERE, under that lock, never from the pre-transaction snapshot - an organiser switching a division online between the
     // two would otherwise be admitted past the cap on a stale answer.
-    for (const id of distinctDivisionIds) await lockDivisionForCap(tx, id);
+    // Only a division of a sport that CAN play online takes the lock (`sport_key` is fixed at creation, so which ones those are needs no
+    // lock to read): a sign-up for anything else never queues behind a fixture writer for a count it does not make.
+    const sportOf = new Map(
+      (await tx<{ id: string; sport_key: string }[]>`select id, sport_key from divisions where id in ${tx(distinctDivisionIds)}`).map((r) => [r.id, r.sport_key]),
+    );
+    const onlineCapable = distinctDivisionIds.filter((id) => supportsOnlinePlay(sportOf.get(id) ?? ""));
+    for (const id of onlineCapable) await lockDivisionForCap(tx, id);
     const onlineDivisionIds = new Set<string>();
-    for (const row of await tx<{ id: string; sport_key: string; config: unknown }[]>`
-      select id, sport_key, config from divisions where id in ${tx(distinctDivisionIds)}`) {
-      if (divisionPlaysOnline(row)) onlineDivisionIds.add(row.id);
+    if (onlineCapable.length > 0) {
+      for (const row of await tx<{ id: string; sport_key: string; config: unknown }[]>`
+        select id, sport_key, config from divisions where id in ${tx(onlineCapable)}`) {
+        if (divisionPlaysOnline(row)) onlineDivisionIds.add(row.id);
+      }
     }
     const liveSettingsById = new Map<string, SubmitSettingsRow>();
     for (const id of distinctDivisionIds) {
@@ -930,9 +937,10 @@ export async function submitRegistrationGroup(
         // A division that plays online holds at most min(plan limit, 128) places (owner ruling 2026-11-21; online-entrant-cap.ts), counted
         // as every online-cap door counts - live entrants plus sign-ups let in, `countOnlineHeld` - under the `division:` lock taken
         // above, with this cart's own earlier entries already in. Past it the entry waits, exactly as it does past the plan's limit.
-        // Asked only where the online cap binds (a plan below it is the hardCap above).
-        if (!waitlisted && onlineDivisionIds.has(p.input.division_id) && onlineCapBinds(true, planLimit)) {
-          waitlisted = (await countOnlineHeld(tx, p.input.division_id)) >= ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION;
+        // Whatever the plan: a plan below the online cap (a size pack's 96) judges the SAME count against ITS limit, so direct adds
+        // and sign-ups share one allowance (re-review N2); `hardCap` above is the registrations-only count.
+        if (!waitlisted && onlineDivisionIds.has(p.input.division_id)) {
+          waitlisted = (await countOnlineHeld(tx, p.input.division_id)) >= effectiveEntrantCap(true, planLimit)!;
         }
       }
       // On a TEAM division `fee_cents` is the price of a team. Someone
