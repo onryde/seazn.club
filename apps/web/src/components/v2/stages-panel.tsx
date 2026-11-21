@@ -2470,7 +2470,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           tz={tz}
           names={entrantNames}
           load={() => apiV1<AdjustmentsRead>(`/api/v1/stages/${adjusting.id}/adjustments`)}
-          apply={async (input) => {
+          adjust={async (input) => {
             try {
               await apiV1(`/api/v1/stages/${adjusting.id}/adjustments`, { method: "POST", json: input });
               router.refresh();

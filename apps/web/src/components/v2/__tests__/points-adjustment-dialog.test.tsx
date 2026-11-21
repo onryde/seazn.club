@@ -76,7 +76,7 @@ describe("Apply waits for the server's three checks", () => {
         tz: "Europe/London",
         names: {},
         load: () => new Promise<AdjustmentsRead>(() => {}),
-        apply: async (): Promise<DialogAnswer> => ({ ok: true }),
+        adjust: async (): Promise<DialogAnswer> => ({ ok: true }),
         undo: async (): Promise<DialogAnswer> => ({ ok: true }),
         onClose: () => {},
       }),
@@ -110,7 +110,7 @@ describe("B3 N-3: typing past the bound says so inline, at the bound it does not
       tz: "Europe/London",
       names: {},
       load: () => new Promise<AdjustmentsRead>(() => {}),
-      apply: async (): Promise<DialogAnswer> => ({ ok: true }),
+      adjust: async (): Promise<DialogAnswer> => ({ ok: true }),
       undo: async (): Promise<DialogAnswer> => ({ ok: true }),
       onClose: () => {},
     });

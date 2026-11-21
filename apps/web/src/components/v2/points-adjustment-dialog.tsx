@@ -47,7 +47,8 @@ export interface PointsAdjustmentDialogProps {
   tz: string;
   names: Readonly<Record<string, string>>;
   load: () => Promise<AdjustmentsRead>;
-  apply: (input: { entrant_id: string; delta: number; reason: string }) => Promise<DialogAnswer>;
+  /** Adjust points (POST): named `adjust`, not `apply`: outcome-readers.test.ts reads every call of an `apply` member as a sport module's replay. */
+  adjust: (input: { entrant_id: string; delta: number; reason: string }) => Promise<DialogAnswer>;
   undo: (seq: number) => Promise<DialogAnswer>;
   onClose: () => void;
 }
@@ -187,7 +188,7 @@ export function PointsAdjustmentDialog(props: PointsAdjustmentDialogProps) {
 
   const apply = () => {
     if (blocked) return;
-    void run(() => props.apply({ entrant_id: entrant, delta, reason: reason.trim() }), "adjustPoints.applied", () => {
+    void run(() => props.adjust({ entrant_id: entrant, delta, reason: reason.trim() }), "adjustPoints.applied", () => {
       setTyped("");
       setReason("");
     });
