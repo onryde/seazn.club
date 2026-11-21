@@ -40,6 +40,10 @@ vi.mock("@/server/public-site/table-withdrawals", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/public-site/table-withdrawals")>()),
   loadTableWithdrawals: async () => [],
 }));
+// W5 app PR B C5 (X-ADJ-4): the page's points-adjustment read (`loadPointsAdjustments`) is SQL - a real database's job
+// (points-adjustment-surfaces-db). Unmocked, this file read "DATABASE_URL is not set" in the unit job. It answers no
+// adjustments: the footnote is not what this file tests.
+vi.mock("@/server/public-site/points-adjustments", () => ({ loadPointsAdjustments: async () => [] }));
 // W5 app PR B Task 4 (710563897a) added the best-Nth basis read (`loadBestNthBases`, SQL over `stage_seed_proposals`) to the page,
 // and this file reached the database with its fixture division id ("d1": not a uuid) - red since then. No proposal here: none.
 vi.mock("@/server/public-site/bestnth-basis", () => ({ loadBestNthBases: async () => new Map() }));
