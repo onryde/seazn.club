@@ -27,7 +27,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { DEADLINE_AFTER_MS, LINE_DEADLINE_GRACE_MS } from "../src/server/external-play/window";
 import { TAG, apiJson, expectNoHorizontalScroll, invalidateOrgEntitlements, setEntitlementOverrideSql, setOrgPlanBySql, withDb } from "./helpers";
 import { dismissConsent, freshOrg } from "./directory-kit";
-import { backdateOpenSql, openAnswerOf, openRoundSent } from "./match-day-online-kit";
+import { backdateOpenSql, inviteRowCount, openAnswerOf, openRoundSent, watchOpenRoundPosts } from "./match-day-online-kit";
 import { fill, seedOnlineRound, seedSeatInvite, uiEn, type SeededRound } from "./match-room-kit";
 
 // ── budget (class 20): a derived ceiling, never one flat number ──────────────────────────────────────────────────────────────────
@@ -94,10 +94,21 @@ test.describe("Match Day online - the round panel", () => {
     const dialog = page.getByTestId("md-round-confirm");
     await expect(dialog, "the confirmation is asked for, not sent").toBeVisible();
     const sent = openRoundSent(page, r.stageId);
-    await page.getByTestId("md-round-confirm-confirm").click();
+    // C20a (the old Arbiter column's double click, ported by B8): TWO clicks on the confirmation are ONE request, one open stamped, and one invite row
+    // per player's address - the runner's in-flight flag and the dialog's busy state keep the second tap off the network.
+    const posts = watchOpenRoundPosts(page, r.stageId);
+    await page.getByTestId("md-round-confirm-confirm").dblclick();
     const answer = await openAnswerOf(await sent);
     expect(answer.opened, "the round opened").toBe(true);
     await expect(panel(page), "the panel moves to check-in on the shell's own read").toHaveAttribute("data-state", "checkin", { timeout: 30_000 });
+    const seatCount = r.boards.flatMap((b) => [b.home, b.away]).length;
+    expect(seatCount, "premise: two boards seat four players").toBe(4);
+    expect(posts.roundNos(), "two clicks, one request").toEqual([1]);
+    expect(
+      await withDb(async (sql) => (await sql`select 1 from stage_round_opens where stage_id = ${r.stageId} and round_no = 1`).length),
+      "one open, stamped once",
+    ).toBe(1);
+    expect(await inviteRowCount(r.boards.map((b) => b.fixtureId)), "one invite row per player's address, none doubled").toBe(seatCount);
     expect(await page.evaluate(() => (window as unknown as { __noReload?: boolean }).__noReload), "no reload: the same document").toBe(true);
 
     // 2. checking in: both boards wait; Resend and +5 on a row, +5 to the round

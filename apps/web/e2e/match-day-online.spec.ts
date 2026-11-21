@@ -31,9 +31,12 @@ import {
   inviteRowCount,
   openRoundPanel,
   openRoundSent,
+  putPresence,
+  putPreMinted,
   recordedOpenNotices,
   recordOpenNotices,
   refreshNow,
+  stampCheckIn,
   watchOpenRoundPosts,
 } from "./match-day-online-kit";
 import { fill, longName, roundGameSql, seedOnlineRound, seedSeatInvite, uiEn, type RoundBoard, type SeededRound } from "./match-room-kit";
@@ -62,45 +65,6 @@ async function seedRound(request: Parameters<typeof seedOnlineRound>[0], names: 
 /** Both players of a board have ARRIVED: the room, the player on file in it, a counted check-in and a presence row (the loader's `joinable`). */
 async function arrive(r: SeededRound, board: RoundBoard, sides: readonly ("home" | "away")[] = ["home", "away"]): Promise<void> {
   for (const side of sides) await putArrival(board.fixtureId, r.orgId, side, board[side].personId);
-}
-
-/** A room whose player has NOT arrived: the meeting row and the player's participant row, and nothing else (what a claim refused for its
- *  camera leaves). No check-in, no presence row. Returns the meeting id and the participant id. */
-async function putPreMinted(fixtureId: string, orgId: string, side: "home" | "away", personId: string): Promise<{ meetingId: string; participantId: string }> {
-  return withDb(async (sql) => {
-    const meetingId = `e2e-mtg-${side}-${randomUUID().slice(0, 8)}`;
-    const room = await sql`
-      insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, home_entrant_id, away_entrant_id)
-      select f.id, ${side}, ${orgId}, ${meetingId}, f.home_entrant_id, f.away_entrant_id
-        from fixtures f where f.id = ${fixtureId}`;
-    expect(room.count, `pre-minted room ${side} for ${fixtureId}`).toBe(1);
-    const participantId = `e2e-pp-${side}-${randomUUID().slice(0, 8)}`;
-    const player = await sql`
-      insert into fixture_video_participants (fixture_id, side, person_id, preset, participant_id)
-      values (${fixtureId}, ${side}, ${personId}, 'player', ${participantId})`;
-    expect(player.count, `the ${side} player on file for ${fixtureId}`).toBe(1);
-    return { meetingId, participantId };
-  });
-}
-
-/** The arrival SIGNALS, one at a time, for a side `putPreMinted` made: the counted check-in (the flag-off join's proof) and the presence row
- *  (the flag-on join's proof). */
-async function stampCheckIn(fixtureId: string, orgId: string, personId: string): Promise<void> {
-  await withDb(async (sql) => {
-    const res = await sql`
-      insert into fixture_availability (fixture_id, person_id, org_id, status, checked_in_at)
-      values (${fixtureId}, ${personId}, ${orgId}, 'in', now())
-      on conflict (fixture_id, person_id) do update set checked_in_at = now()`;
-    expect(res.count, "the check-in").toBe(1);
-  });
-}
-async function putPresence(fixtureId: string, side: "home" | "away", personId: string, room: { meetingId: string; participantId: string }): Promise<void> {
-  await withDb(async (sql) => {
-    const res = await sql`
-      insert into fixture_video_presence (meeting_id, peer_id, fixture_id, side, participant_id, custom_participant_id, joined_at, source)
-      values (${room.meetingId}, ${`e2e-peer-${side}-${randomUUID().slice(0, 8)}`}, ${fixtureId}, ${side}, ${room.participantId}, ${personId}, now(), 'webhook')`;
-    expect(res.count, "the presence row").toBe(1);
-  });
 }
 
 /** A board's two flags, in their producers' note formats: out-of-band play and a camera gap. */
@@ -685,6 +649,8 @@ test.describe("Match Day online - the Arbiter Panel's sequences", () => {
       await expect(listLine, "one line in the list").toHaveCount(1);
       await expect(listLine).toHaveText(ownLine);
       await expect(listLine, "and it is on screen, not folded away").toBeVisible();
+      // The panel is asserted UP before it is asserted to repeat nothing: a count of 0 under a locator whose parent has not mounted is true of any page.
+      await expect(focus(p), "premise: the default focus (the other board's round) is on screen").toHaveAttribute("data-online", "round", { timeout: 30_000 });
       await expect(focus(p).getByTestId("md-own-hidden"), "the panel repeats nothing").toHaveCount(0);
       // By address too: a board the viewer plays on is never opened (not as another board either).
       await p.goto(boardPanelUrl(r, b1.fixtureId));
@@ -706,15 +672,81 @@ test.describe("Match Day online - the Arbiter Panel's sequences", () => {
   });
 
   // ── no page for anyone else (old L943) ────────────────────────────────────────────────────────────────────────────────────────
+  // ── B13: a failed rounds read beside a fresh Needs-you row ───────────────────────────────────────────────────────────────────
+  test("B13: the rounds read FAILS while a fresh Needs-you row names a board the held rounds never listed: the page says it could not read the rounds (never 'left the list'), keeps the press, and opens the board on the poll that lists it", async ({ page, request }) => {
+    test.setTimeout(240_000);
+    const r = await seedRound(request, ["Ana Petrova", "Bo Lindqvist", "Chen Wei", "Dara Okafor"]);
+    const [b1, b2] = r.boards as [RoundBoard, RoundBoard];
+    // Board 1 is held: a REAL Needs-you row from the real server. Only the rounds read is faked, and only in what it answers - the poll's own JSON.
+    await roundGameSql(b1, { moves: LINE.slice(0, 6), hold: "mismatch" });
+    await page.setViewportSize({ width: 1280, height: 900 });
+    type Poll = { needs_you: { key: string; fixture_id?: string; title: string; action: { label: string } }[]; online_rounds: { round: { boards: { fixtureId: string }[] } | null }[]; online_failed?: boolean; boards_unread?: string[] };
+    let mode: "real" | "answered_without_b2" | "rounds_failed" = "real";
+    let realRow: Poll["needs_you"][number] | null = null;
+    let polls = 0;
+    await page.route(/\/api\/v1\/competitions\/[^/]+\/match-day$/, async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const answered = await route.fetch();
+      const body = (await answered.json()) as { ok: boolean; data: Poll };
+      const view = body.data;
+      polls += 1;
+      realRow = view.needs_you.find((n) => n.fixture_id === b1.fixtureId) ?? realRow;
+      if (mode === "answered_without_b2") {
+        for (const rd of view.online_rounds) if (rd.round !== null) rd.round.boards = rd.round.boards.filter((b) => b.fixtureId !== b2.fixtureId);
+      }
+      if (mode === "rounds_failed") {
+        // What the server sends when the online lister threw (gaps A2): no rounds, the failure marker, nothing unread - and the day's fresh Needs-you rows.
+        view.online_rounds = [];
+        view.online_failed = true;
+        view.boards_unread = [];
+        view.needs_you = [...view.needs_you, { ...realRow!, key: `${realRow!.key}:b13`, fixture_id: b2.fixtureId, title: "B13 board two" }];
+      }
+      await route.fulfill({ response: answered, json: body });
+    });
+    await page.goto(r.matchDayPath);
+    await expect(rowOf(page, b2), "premise: both boards are listed on the first read").toHaveCount(1, { timeout: 30_000 });
+
+    // A poll that ANSWERS without board 2: the held rounds are now rounds that never listed it.
+    mode = "answered_without_b2";
+    await refreshNow(page);
+    await expect(rowOf(page, b2), "premise: an answered poll without it takes it off the list").toHaveCount(0, { timeout: 30_000 });
+    expect(realRow, "premise: the real server raised board 1's held row").not.toBeNull();
+
+    // The next poll's rounds read fails and carries a fresh row for board 2: press it.
+    mode = "rounds_failed";
+    await refreshNow(page);
+    await page.getByTestId("md-needs-you-toggle").click();
+    const fresh = page.getByTestId("md-needs-you").locator("[data-attention]").filter({ hasText: "B13 board two" });
+    await expect(fresh, "the fresh row for board 2").toHaveCount(1, { timeout: 30_000 });
+    await fresh.getByRole("link", { name: realRow!.action.label, exact: true }).first().click();
+    await expect(page.getByTestId("md-reading"), "it says the rounds could not be read").toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("md-reading")).toContainText(uiEn["matchDay.focus.reading"]!);
+    await expect(page.getByTestId("md-lost"), "and does NOT claim it left the list").toHaveCount(0);
+    await expect(boardFocus(page), "no panel for a board the page cannot find").toHaveCount(0);
+    expect(await noSidewaysScroll(page, [1280, 768, 320])).toBe(3);
+
+    // The next poll answers for real and lists board 2: the press resolves by itself, no second click.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    mode = "real";
+    await refreshNow(page);
+    await expect(boardFocus(page), "the held press opened the board").toHaveAttribute("data-fixture-id", b2.fixtureId, { timeout: 30_000 });
+    await expect(page.getByTestId("md-reading"), "and the notice is gone").toHaveCount(0);
+    expect(polls, "anti-vacuity: the three phases each read the poll").toBeGreaterThanOrEqual(3);
+  });
+
   test("no Match Day for anyone else: signed out it is the sign-in; a competition with no online division has no online block", async ({ browser, page, request }) => {
     test.setTimeout(180_000);
     const r = await seedRound(request, ["Ana Petrova", "Bo Lindqvist", "Chen Wei", "Dara Okafor"]);
     const cold = await coldContext(browser);
     try {
       const anon = await cold.newPage();
-      await anon.goto(r.matchDayPath);
+      const res = await anon.goto(r.matchDayPath);
+      // The sign-in redirect, told from a 404 (a 404 keeps the address it was asked at, and so does a page that rendered): the path is /login, the
+      // answer is the sign-in's own 200, and its form is on screen - and the Match Day's online block is not.
+      expect(new URL(anon.url()).pathname, "signed out lands on the sign-in").toBe("/login");
+      expect(res?.status(), "the sign-in page answered, not a 404").toBe(200);
+      await expect(anon.locator('input[type="email"], input[name="email"]').first(), "the sign-in form is on screen").toBeVisible({ timeout: 30_000 });
       await expect(anon.getByTestId("md-online")).toHaveCount(0);
-      expect(new URL(anon.url()).pathname, "signed out lands on the sign-in, not on the page").not.toBe(r.matchDayPath);
     } finally {
       await cold.close();
     }
@@ -915,7 +947,7 @@ test.describe("Match Day online - the Arbiter Panel's sequences", () => {
   }
 
   // ── a side whose player has not arrived (old L1225, "a pre-minted room") ─────────────────────────────────────────────────────
-  test("a side whose player has not arrived (a pre-minted room): its tile says so and NO join is POSTed across two polls; the join opens on the poll after the arrival signal; a NOT_STARTED refusal is asked again on the next poll; a closed room says it is closed", async ({ page, request }) => {
+  test("a side whose player has not arrived (its room is pre-minted: the meeting and the player on file, no check-in, no presence): its tile says so and NO join is POSTed across two polls; the join opens on the poll after the arrival signal; a NOT_STARTED refusal is asked again on the next poll; a closed room says it is closed", async ({ page, request }) => {
     test.setTimeout(240_000);
     const r = await seedRound(request, ["Ana Petrova", "Bo Lindqvist", "Chen Wei", "Dara Okafor"]);
     const [b1, b2] = r.boards as [RoundBoard, RoundBoard];

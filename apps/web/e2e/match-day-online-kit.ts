@@ -3,10 +3,53 @@
 // refuses a spec file that imports another spec file, so the helpers shared by match-day-online.spec.ts, the round and board panel specs,
 // online-chess-desk.spec.ts, e2e/mobile/match-surfaces.spec.ts and the chess walkthrough live here. Nothing in this file is a test.
 import { expect, type Locator, type Page, type Response } from "@playwright/test";
+import { randomUUID } from "node:crypto";
 import { LIVE_POLL_MS } from "../src/components/v2/desk/band-poll";
 import { INVITE_WORD_KEYS, type SeatInviteWord } from "../src/lib/invite-status";
 import { withDb } from "./helpers";
 import { fill, uiEn, type RoundBoard } from "./match-room-kit";
+
+// ─── seeds: a pre-minted room and the arrival signals (moved from match-day-online.spec.ts, B8) ──────────────────────────────────────
+
+/** A PRE-MINTED ROOM (ruling MD-R4: main's shape stays): the meeting row and the player's participant row - what a claim refused for its camera leaves -
+ *  and nothing else. No check-in, no presence row, so the side is NOT arrived: it is the proof of arrival that is missing, not the room. Returns the
+ *  meeting id and the participant id. */
+export async function putPreMinted(fixtureId: string, orgId: string, side: "home" | "away", personId: string): Promise<{ meetingId: string; participantId: string }> {
+  return withDb(async (sql) => {
+    const meetingId = `e2e-mtg-${side}-${randomUUID().slice(0, 8)}`;
+    const room = await sql`
+      insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, home_entrant_id, away_entrant_id)
+      select f.id, ${side}, ${orgId}, ${meetingId}, f.home_entrant_id, f.away_entrant_id
+        from fixtures f where f.id = ${fixtureId}`;
+    expect(room.count, `pre-minted room ${side} for ${fixtureId}`).toBe(1);
+    const participantId = `e2e-pp-${side}-${randomUUID().slice(0, 8)}`;
+    const player = await sql`
+      insert into fixture_video_participants (fixture_id, side, person_id, preset, participant_id)
+      values (${fixtureId}, ${side}, ${personId}, 'player', ${participantId})`;
+    expect(player.count, `the ${side} player on file for ${fixtureId}`).toBe(1);
+    return { meetingId, participantId };
+  });
+}
+
+/** The arrival SIGNALS, one at a time, for a side `putPreMinted` made: the counted check-in (the flag-off join's proof) and the presence row
+ *  (the flag-on join's proof). */
+export async function stampCheckIn(fixtureId: string, orgId: string, personId: string): Promise<void> {
+  await withDb(async (sql) => {
+    const res = await sql`
+      insert into fixture_availability (fixture_id, person_id, org_id, status, checked_in_at)
+      values (${fixtureId}, ${personId}, ${orgId}, 'in', now())
+      on conflict (fixture_id, person_id) do update set checked_in_at = now()`;
+    expect(res.count, "the check-in").toBe(1);
+  });
+}
+export async function putPresence(fixtureId: string, side: "home" | "away", personId: string, room: { meetingId: string; participantId: string }): Promise<void> {
+  await withDb(async (sql) => {
+    const res = await sql`
+      insert into fixture_video_presence (meeting_id, peer_id, fixture_id, side, participant_id, custom_participant_id, joined_at, source)
+      values (${room.meetingId}, ${`e2e-peer-${side}-${randomUUID().slice(0, 8)}`}, ${fixtureId}, ${side}, ${room.participantId}, ${personId}, now(), 'webhook')`;
+    expect(res.count, "the presence row").toBe(1);
+  });
+}
 
 // ─── locators and readers (moved from online-chess-desk.spec.ts, Task 12) ──────────────────────────────────────────────────────
 
