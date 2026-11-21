@@ -152,36 +152,10 @@ type FlagRow = {
   note: string | null;
 };
 
-/** What the Arbiter page's `?fixture=` asked for (I3): that board's round, or a plain "not
- *  here" — never a different board. The page is gone and no production caller is left (Match Day resolves `?board=` through
- *  `resolveOnlineFocus`); the rule stays pinned by its tests.
- *  - `round`: the board is this club's, in THIS division, paired, not
- *    cancelled, in a round that was opened — an earlier round included;
- *  - `own`: all of that, but the viewer plays on it (C1, D7);
- *  - `unavailable`: anything else — an unknown or malformed id, another
- *    club's or division's board, a round never opened, a cancelled board. */
-export type ArbiterRequest = { kind: "round"; stageId: string; roundNo: number } | { kind: "unavailable" } | { kind: "own" };
-
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export async function arbiterRequestedRound(auth: AuthCtx, divisionId: string, fixtureId: string): Promise<ArbiterRequest> {
-  // A query-string value: a malformed id is "not here", never a 500 from
-  // Postgres' uuid cast.
-  if (!UUID.test(fixtureId)) return { kind: "unavailable" };
-  const [row] = await sql<{ stageId: string; roundNo: number }[]>`
-    select f.stage_id as "stageId", f.round_no as "roundNo"
-      from fixtures f
-     where f.id = ${fixtureId} and f.org_id = ${auth.orgId} and f.division_id = ${divisionId}
-       and f.home_entrant_id is not null and f.away_entrant_id is not null
-       and f.status <> 'cancelled'
-       and exists (select 1 from stage_round_opens o where o.stage_id = f.stage_id and o.round_no = f.round_no)`;
-  if (!row) return { kind: "unavailable" };
-  if (auth.userId !== null && (await isSeatedOn(auth.userId, fixtureId))) return { kind: "own" };
-  return { kind: "round", stageId: row.stageId, roundNo: row.roundNo };
-}
-
 /** The division's most recently OPENED round (D12) — or, with `round`, that
- *  opened round of this division (I3's `?fixture=`) — its boards in board
+ *  opened round of this division (Match Day pins each stage's latest) — its boards in board
  *  order (fixtures.seq_in_round — the room's boardNo), each with its state,
  *  clocks and flags. null ⇒ no such round has been opened: the panel's empty
  *  state, never a refusal. */

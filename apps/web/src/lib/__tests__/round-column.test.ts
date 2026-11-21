@@ -27,7 +27,6 @@ import {
   nextRoundViews,
   openWindowBoards,
   playingTally,
-  reviewTarget,
   roundColumnPhase,
   viewOfRound,
 } from "../round-column";
@@ -720,40 +719,6 @@ describe("countedHeld", () => {
     const ids = new Set([...countedHeld(rows).map((r) => r.fixtureId), ...boards.map((b) => b.fixtureId)]);
     expect(ids.size, "anti-vacuity: a non-trivial mix, not a trivial 0 or 1").toBeGreaterThan(2);
     expect(attentionCount(rows, boards)).toBe(ids.size);
-  });
-});
-
-// ---- reviewTarget ---------------------------------------------------------------------------------------------
-
-describe("reviewTarget", () => {
-  const plain = { seated: false, cancelled: false };
-
-  it("round null: link (the empty case: there is no round to select in)", () => {
-    expect(reviewTarget("fx-x", null, plain)).toEqual({ kind: "link" });
-  });
-
-  it("a round with no boards (every board your own): link", () => {
-    expect(reviewTarget("fx-x", round([], { ownBoards: 2 }), plain)).toEqual({ kind: "link" });
-  });
-
-  it("fixture in round.boards: select", () => {
-    const b = board();
-    expect(reviewTarget(b.fixtureId, round([board(), b]), plain)).toEqual({ kind: "select" });
-  });
-
-  it("not in the round: link", () => {
-    expect(reviewTarget("elsewhere", round([board(), board()]), plain)).toEqual({ kind: "link" });
-  });
-
-  it("seated: none, even for a fixture that is in the round (seated outranks select)", () => {
-    const b = board();
-    expect(reviewTarget(b.fixtureId, round([b]), { seated: true, cancelled: false })).toEqual({ kind: "none" });
-    expect(reviewTarget("elsewhere", round([b]), { seated: true, cancelled: false })).toEqual({ kind: "none" });
-  });
-
-  it("cancelled: none (cancelled outranks link), also with no round", () => {
-    expect(reviewTarget("elsewhere", round([board()]), { seated: false, cancelled: true })).toEqual({ kind: "none" });
-    expect(reviewTarget("elsewhere", null, { seated: false, cancelled: true })).toEqual({ kind: "none" });
   });
 });
 

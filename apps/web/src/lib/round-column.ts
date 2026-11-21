@@ -152,17 +152,6 @@ export function attentionCount(held: readonly NeedsOrganiserExternalPlayRow[], f
   return ids.size;
 }
 
-/** Where a card's "Review board" goes: `select` the board in place (it is in the round on screen), `link` to the board's own page
- *  (any other board; no production caller is left since the Arbiter page was retired - Match Day opens a board by `?board=`), or `none` (a board the organiser sits on, or a cancelled one, which can never be
- *  selected). `none` outranks the other two. */
-export type ReviewTarget = { kind: "select" } | { kind: "link" } | { kind: "none" };
-
-export function reviewTarget(fixtureId: string, round: ArbiterRound | null, card: { seated: boolean; cancelled: boolean }): ReviewTarget {
-  if (card.seated || card.cancelled) return { kind: "none" };
-  if (round !== null && round.boards.some((b) => b.fixtureId === fixtureId)) return { kind: "select" };
-  return { kind: "link" };
-}
-
 // ---- the Fixtures-tab entry card (§8, C7) ---------------------------------------------------------------------
 
 /** Attention and phase are separate facts (desk _RULES: "must never be collapsed into one enum"). `phase` is "checkin" when
