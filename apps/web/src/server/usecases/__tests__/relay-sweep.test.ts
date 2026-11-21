@@ -1815,4 +1815,47 @@ describe.skipIf(!HAS_DB)("Seazn-hosted video Task 18: the sweep holds Seazn prog
     for (const v of [programmeVideo, ...foreign.map((f) => f.videoId)]) expect(left).toContain(v);
     for (const f of foreign) if (f.inputId) expect(r.ingest.deletedInputs).not.toContain(f.inputId);
   });
+
+  it("review m3: a 4-day-old Seazn CAMERA recording that reaches retention (step 1c already marked its row) IS deleted — only the programme is held (mutant: drop the `role = 'programme'` predicate → red)", async () => {
+    const { r, camera, programmeVideo } = await endedComposed({ seazn: true, programmeAge: "old" });
+    const cameraVideo = `vc-old-${randomUUID().slice(0, 8)}`;
+    r.ingest.addVideo({ videoId: cameraVideo, inputId: camera, createdAt: pastPromise().toISOString(), inProgress: false });
+    // 1c skips a marked camera row, so the recording meets step 4 (a 1c listing that failed earlier leaves the same shape).
+    await sql`update fixture_stream_inputs set recordings_deleted_at = now() where session_id = ${r.sessionId} and role = 'camera'`;
+    const res = await sweep(r);
+    expect(res).toMatchObject({ cameraRecordingsDeleted: 0, videosDeleted: 1, seaznHeld: 1, seaznHeldPastPromise: 1, inputsDeleted: 1, inputsDeferred: 1 });
+    expect(r.ingest.deletedVideos, "the camera's recording goes; the programme's is held").toEqual([cameraVideo]);
+    expect(r.ingest.deletedInputs).toEqual([camera]);
+    expect(await listedIds(r)).toContain(programmeVideo);
+  });
+
+  it("review m2: an alert that FAILS does not stop the pass's other alerts — the failure is reported, the other recording is alerted and marked, and the next pass alerts only the unmarked one", async () => {
+    const { r, programme, programmeVideo } = await endedComposed({ seazn: true, programmeAge: "old" });
+    const second = `vp2-${randomUUID().slice(0, 8)}`;
+    r.ingest.addVideo({ videoId: second, inputId: programme, createdAt: pastPromise().toISOString(), inProgress: false });
+    const both = [programmeVideo, second];
+    const isHeldAlert = (e: unknown) => e instanceof Error && e.message === HELD_MESSAGE;
+    const alertedIds = () => heldReports().filter(([e]) => isHeldAlert(e)).map(([, c]) => (c as { extra: { cfVideoId: string } }).extra.cfVideoId);
+    let thrown = 0;
+    sentry.captureError.mockClear();
+    sentry.captureError.mockImplementation((e: unknown) => { if (isHeldAlert(e) && thrown === 0) { thrown++; throw new Error("sentry transport down"); } });
+    try {
+      const res = await sweep(r);
+      expect(thrown, "anti-vacuity: the first alert DID fail").toBe(1);
+      expect(res).toMatchObject({ seaznHeld: 2, seaznHeldPastPromise: 2, videosDeleted: 0 });
+      expect([...alertedIds()].sort(), "both recordings were alerted — the failure did not end the loop").toEqual([...both].sort());
+      const failed = alertedIds()[0]!;
+      const ok = both.find((v) => v !== failed)!;
+      expect(heldReports().filter(([e]) => (e as Error).message === "sentry transport down"), "the failure is reported").toHaveLength(1);
+      expect(await alertRows(failed), "the failed alert left no mark").toEqual([]);
+      expect(await alertRows(ok), "the other one is marked").toEqual([{ session_id: r.sessionId }]);
+      sentry.captureError.mockClear();
+      r.tick(DAY_MS);
+      await sweep(r);
+      expect(alertedIds(), "the next pass alerts the unmarked one only").toEqual([failed]);
+      expect(await alertRows(failed)).toHaveLength(1);
+    } finally {
+      sentry.captureError.mockImplementation(() => undefined);
+    }
+  });
 });

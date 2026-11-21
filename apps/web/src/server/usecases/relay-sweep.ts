@@ -536,7 +536,9 @@ export async function sweepStreamSessions(
   // is the mover's or the Bunny webhook's once a playable copy exists (Tasks 24, 27), or Cloudflare's own at 30 days. The
   // hold only REMOVES from the owned set — it can never add a video to a delete. Its input stays named by a listed video, so
   // C2's rule below defers it. Keyed by the programme row's uid and by the session's own output uid (provision.ts: the
-  // programme on a composed session, kept after the input row lets go of its id). Unscoped, as ownership is.
+  // programme on a composed session, kept after the input row lets go of its id). The second arm is DEFENSIVE (review m3):
+  // today an input row keeps its uid while any recording names it, so the first arm already covers it. Unscoped, as
+  // ownership is.
   const heldBy = new Map(namedInputs.length === 0 ? [] : (await sql<{ uid: string; session_id: string }[]>`
     select i.ingest_input_id as uid, s.id as session_id from fixture_stream_inputs i
       join fixture_stream_sessions s on s.id = i.session_id
@@ -597,18 +599,25 @@ export async function sweepStreamSessions(
   const pastPromise = retentionPlan(heldVideos, [], now).deleteVideos;
   out.seaznHeldPastPromise = pastPromise.length;
   if (pastPromise.length > 0) {
+    let alerted: Set<string> | null = null;
     try {
-      const alerted = new Set((await sql<{ id: string }[]>`
+      alerted = new Set((await sql<{ id: string }[]>`
         select cf_video_id as id from seazn_held_alerts where cf_video_id in ${sql(pastPromise)}`).map((r) => r.id));
-      for (const videoId of pastPromise) {
-        if (alerted.has(videoId)) continue;
-        const sessionId = heldBy.get(heldVideos.find((v) => v.videoId === videoId)!.inputId!)!;
-        captureError(new Error("relay sweep: a Seazn recording past 3 days has not reached Bunny"), { route: "relay.sweep.seazn_held", extra: { sessionId, cfVideoId: videoId } });
-        await sql`insert into seazn_held_alerts (cf_video_id, session_id) values (${videoId}, ${sessionId}) on conflict (cf_video_id) do nothing`;
-      }
     } catch (err) {
       captureError(err, { route: "relay.sweep.seazn_held" });
-      log.error({ err: String(err) }, "relay sweep: a Seazn held-recording alert could not be recorded — the next pass retries it");
+      log.error({ err: String(err) }, "relay sweep: the Seazn held-recording alert marks could not be read — no alert this pass; the next pass retries");
+    }
+    // Per recording (Task 18 review m2): one alert that fails never stops the rest of this pass's alerts.
+    for (const videoId of alerted ? pastPromise : []) {
+      if (alerted!.has(videoId)) continue;
+      const sessionId = heldBy.get(heldVideos.find((v) => v.videoId === videoId)!.inputId!)!;
+      try {
+        captureError(new Error("relay sweep: a Seazn recording past 3 days has not reached Bunny"), { route: "relay.sweep.seazn_held", extra: { sessionId, cfVideoId: videoId } });
+        await sql`insert into seazn_held_alerts (cf_video_id, session_id) values (${videoId}, ${sessionId}) on conflict (cf_video_id) do nothing`;
+      } catch (err) {
+        captureError(err, { route: "relay.sweep.seazn_held", extra: { sessionId, cfVideoId: videoId } });
+        log.error({ sid: sessionId, videoId, err: String(err) }, "relay sweep: a Seazn held-recording alert could not be recorded — the next pass retries it");
+      }
     }
   }
 
