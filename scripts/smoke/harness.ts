@@ -1685,6 +1685,9 @@ export async function cleanup(tag: string): Promise<void> {
     await sql`delete from court_hours where org_id in (${doomedOrgs})`;
     await sql`delete from courts where org_id in (${doomedOrgs})`;
     await sql`delete from venues where org_id in (${doomedOrgs})`;
+    // seazn_held_alerts.session_id is ON DELETE RESTRICT (V540): a held-recording alert would block the sessions cascade.
+    await sql`delete from seazn_held_alerts
+              where session_id in (select id from fixture_stream_sessions where org_id in (${doomedOrgs}))`;
     const orgs = await sql`
       delete from organizations
       where created_by in (select id from users where email = any(${emails}))`;
