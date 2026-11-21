@@ -8448,7 +8448,7 @@
   "matchDay.online.versus": "contra",
   "matchDay.online.needsDecision": "Necesitan una decisión · rondas anteriores",
   "matchDay.online.needsDecisionPlain": "Necesitan una decisión",
-  "matchDay.online.ownHidden": "Los tableros en los que juegas no aparecen aquí: otro organizador se encarga de ellos.",
+  "matchDay.online.ownHidden": "Los tableros en los que juegas no aparecen aquí.",
   "matchDay.online.word.closes": "cierra a las {time}",
   "matchDay.online.word.here": "{here} de {seats} presentes",
   "matchDay.online.word.playing": "{playing} de {total} jugando",

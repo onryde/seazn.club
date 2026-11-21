@@ -1,5 +1,5 @@
 // The check-in extension's client half (spec 2026-10-09 §3.2.2): the words and the requests the two screens that offer it share -
-// the arbiter panel (a "+5 min" per board, a "+5 min to the round" at the top) and the organiser's Open round control (the same
+// Match Day's panels (a "+5 min" per board, a "+5 min to the round" at the top) and the organiser's Open round control (the same
 // round button). The RULE is the server's (`extendRefusal`): a screen offers a press only on what the server's own reading said
 // it would accept (`ArbiterBoard.checkin`, `round.extendableBoards`) and never decides it again here.
 //
@@ -26,7 +26,7 @@ import {
 type Vars = Record<string, string | number>;
 
 /** What the copy needs from either screen's translator: the plain lookup, the plural lookup and the time of day (`null` before mount).
- *  The arbiter panel hands its `Fmt`, whose times are the VENUE's zone, named when the viewer's own offset differs (Task 16 D1); the
+ *  Match Day hands its `Fmt`, whose times are the VENUE's zone, named when the viewer's own offset differs (Task 16 D1); the
  *  Open round control hands `useMsg` and the venue clock. */
 export type ExtendCopy = {
   t: (key: string, vars?: Vars) => string;
@@ -90,13 +90,13 @@ export function boardExtendOffer(
   return { refusal, offered: refusal === null };
 }
 
-/** How many of a round's boards a round-wide press would reach at `nowMs` (the arbiter panel lists every board with its check-in). */
+/** How many of a round's boards a round-wide press would reach at `nowMs` (Match Day's round panel lists every board with its check-in). */
 export function liveExtendableBoards(boards: readonly { checkin: CheckinExtendState | null }[], nowMs: number | null, snapshotCount: number): number {
   if (nowMs === null) return snapshotCount;
   return boards.filter((b) => b.checkin !== null && liveExtendRefusal(b.checkin, nowMs) === null).length;
 }
 
-/** Why the round has no "+5 min to the round" on the arbiter panel at `nowMs`: the panel lists every board with its check-in, so each
+/** Why the round has no "+5 min to the round" on Match Day's round panel at `nowMs`: the panel lists every board with its check-in, so each
  *  is asked in turn (the snapshot's own word before the viewer's clock is known, the clock's after). Null while any board would accept
  *  a press, and when no board has a reason to give (`roundWhy`). */
 export function roundExtendWhy(boards: readonly { checkin: CheckinExtendState | null }[], nowMs: number | null): RoundWhy | null {
@@ -137,7 +137,7 @@ export function extendFailureText(code: string, c: ExtendCopy): string {
 // ── the round-wide press ────────────────────────────────────────────────────────────────────────────────────────────────────
 export type RoundExtendNotice = { kind: "answered"; result: CheckinExtendRoundResult } | { kind: "failed"; code: string };
 
-/** The round press as the arbiter panel keeps it (the Open round control keeps the same two facts in its own reducer, which also
+/** The round press as Match Day's round panel keeps it (the Open round control keeps the same two facts in its own reducer, which also
  *  holds the Open and the Resend to one request at a time). */
 export type RoundExtendState = { busy: boolean; notice: RoundExtendNotice | null };
 export type RoundExtendAction =
@@ -172,7 +172,7 @@ export async function requestRoundExtend(
   return (await post(extendRoundPath(stageId), { roundNo })) as CheckinExtendRoundResult;
 }
 
-/** The round press behind the arbiter panel's button, one at a time. The reducer refuses a second press too, but a double tap
+/** The round press behind Match Day's round-panel button, one at a time. The reducer refuses a second press too, but a double tap
  *  lands before the re-render that disables the button - this flag keeps the second request off the network. */
 export function roundExtendRunner(deps: {
   dispatch: (a: RoundExtendAction) => void;

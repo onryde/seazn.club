@@ -679,19 +679,19 @@ test.describe("Match Day online - the Arbiter Panel's sequences", () => {
       await expect(p.getByTestId("md-board-row"), "only the board they do not play on").toHaveCount(1, { timeout: 30_000 });
       await expect(rowOf(p, b2)).toHaveCount(1);
       await expect(rowOf(p, b1), "never the board they play on: not watchable, not offered").toHaveCount(0);
-      // Design 6.4: the board is unlisted AND one line says so - in the list where the board would be, and on the round's own panel (the default focus).
+      // Design 6.4: the board is unlisted AND one line says so - in the list where the board would be (the List column only: no panel repeats it).
       const ownLine = uiEn["matchDay.online.ownHidden"]!;
       const listLine = p.getByTestId("md-online").getByTestId("md-own-hidden");
       await expect(listLine, "one line in the list").toHaveCount(1);
       await expect(listLine).toHaveText(ownLine);
       await expect(listLine, "and it is on screen, not folded away").toBeVisible();
-      await expect(focus(p).getByTestId("md-own-hidden"), "and one on the round's panel").toHaveText(ownLine);
+      await expect(focus(p).getByTestId("md-own-hidden"), "the panel repeats nothing").toHaveCount(0);
       // By address too: a board the viewer plays on is never opened (not as another board either).
       await p.goto(boardPanelUrl(r, b1.fixtureId));
       await expect(p.getByTestId("md-board-row")).toHaveCount(1, { timeout: 30_000 });
       await expect(boardFocus(p), "the address of their own board opens nothing").toHaveCount(0);
       await expect(focus(p), "the default focus answers instead").toHaveAttribute("data-online", "round");
-      await expect(p.getByTestId("md-own-hidden"), "the line is still there by address (list + panel)").toHaveCount(2);
+      await expect(p.getByTestId("md-own-hidden"), "the line is still there by address (the list's)").toHaveCount(1);
       expect(await noSidewaysScroll(p, [320, 768, 1280])).toBe(3);
     } finally {
       await own.close();

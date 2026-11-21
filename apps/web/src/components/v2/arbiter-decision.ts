@@ -1,4 +1,4 @@
-// T15 — the arbiter panel's decision actions as one reducer (canvas "Your
+// T15 — Match Day's board-panel decision actions as one reducer (canvas "Your
 // decision · Board N" and the outage card). The rules it keeps are stated
 // with their tests in __tests__/arbiter-decision.test.ts: one request at a
 // time; nothing acts without a board on screen; a completion lands only if

@@ -8448,7 +8448,7 @@
   "matchDay.online.versus": "tegen",
   "matchDay.online.needsDecision": "Beslissing nodig · eerdere rondes",
   "matchDay.online.needsDecisionPlain": "Beslissing nodig",
-  "matchDay.online.ownHidden": "Borden waarop je zelf speelt worden hier niet getoond: een andere organisator ziet erop toe.",
+  "matchDay.online.ownHidden": "Borden waarop je zelf speelt worden hier niet getoond.",
   "matchDay.online.word.closes": "sluit om {time}",
   "matchDay.online.word.here": "{here} van {seats} aanwezig",
   "matchDay.online.word.playing": "{playing} van {total} bezig",

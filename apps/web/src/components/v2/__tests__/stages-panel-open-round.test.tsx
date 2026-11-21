@@ -32,7 +32,7 @@ const CHIPS = ["run-sheet-connection-chip", "run-sheet-off-seazn-chip"] as const
 /** The opening tag of the element carrying this testid. */
 const tagOf = (h: string, testId: string) => h.match(new RegExp(`<[a-z]+[^>]*data-testid="${testId}"[^>]*>`))?.[0] ?? null;
 
-describe("the stage cards after the round moved to the Arbiter Panel", () => {
+describe("the stage cards after the round moved to Match Day", () => {
   it("the cards render and carry no Open round control", () => {
     const h = renderToStaticMarkup(<StagesPanel {...PROPS} />);
     expect(h).toContain('data-testid="stage-progress"');
