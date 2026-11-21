@@ -683,6 +683,7 @@
   "division.champion": "Kampioen: {name}",
   "division.resultsGrid": "Uitslagenraster",
   "division.resultsGrid.corner": "Thuis \\ Uit",
+  "division.resultsGrid.noScript": "Het uitslagenraster heeft JavaScript nodig. Alle uitslagen staan ook onder Programma.",
   "division.bracketEmpty": "Deze divisie heeft geen knock-outschema.",
   "division.standingsEmpty": "Nog geen stand",
   "division.entrantsEmpty": "Nog geen deelnemers",

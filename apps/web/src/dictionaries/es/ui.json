@@ -1281,6 +1281,7 @@
   "div.detail.tiebreak.pinned": "Fijado al empezar la fase el {date}: los cambios posteriores de la configuración no mueven esta tabla.",
   "div.detail.tiebreak.live": "Aún sin fijar: sigue la configuración hasta que empiece la fase.",
   "div.detail.resultsGrid": "Cuadrícula de resultados",
+  "div.detail.resultsGrid.noScript": "La cuadrícula de resultados necesita JavaScript. Todos los resultados también aparecen en Partidos.",
   "div.detail.embed.private": "Esta competición es privada, por lo que no hay nada que insertar. Configúrala como no listada o pública en la configuración de la competición primero.",
   "comp.settings.title": "Ajustes — {name}",
   "comp.schedule.title": "Calendario de la competición — {name}",

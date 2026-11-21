@@ -1281,6 +1281,7 @@
   "div.detail.tiebreak.pinned": "Vastgezet bij de start van de fase op {date}: latere wijzigingen in de instellingen verplaatsen deze stand niet.",
   "div.detail.tiebreak.live": "Nog niet vastgezet: volgt de instellingen tot de fase start.",
   "div.detail.resultsGrid": "Resultatenrooster",
+  "div.detail.resultsGrid.noScript": "Het resultatenrooster heeft JavaScript nodig. Alle uitslagen staan ook onder Wedstrijden.",
   "div.detail.embed.private": "Deze competitie is privé, dus er is niets om in te sluiten. Stel deze eerst in op niet-vermeld of openbaar in de competitie-instellingen.",
   "comp.settings.title": "Instellingen — {name}",
   "comp.schedule.title": "Wedstrijdschema — {name}",

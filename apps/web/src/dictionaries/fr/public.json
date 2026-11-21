@@ -683,6 +683,7 @@
   "division.champion": "Champion : {name}",
   "division.resultsGrid": "Grille des résultats",
   "division.resultsGrid.corner": "Domicile \\ Extérieur",
+  "division.resultsGrid.noScript": "La grille des résultats nécessite JavaScript. Tous les résultats figurent aussi dans Calendrier.",
   "division.bracketEmpty": "Cette division n'a pas de tableau à élimination directe.",
   "division.standingsEmpty": "Pas encore de classement",
   "division.entrantsEmpty": "Pas encore de participants",

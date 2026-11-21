@@ -373,6 +373,7 @@ export default async function DivisionHomePage({ params }: Props) {
                         <ResultsGridDisclosure
                           data={grid}
                           label={t(dict, "division.resultsGrid")}
+                          noScript={t(dict, "division.resultsGrid.noScript")}
                           // `min-h-11 py-3.5` is the 44px tap floor (W2 contact sheet img-135, owner approved): the toggle was
                           // plain text, 16px tall at 320. The padding rather than a `flex` is deliberate — a `<summary>` is
                           // `display: list-item`, and changing its display takes the disclosure triangle with it.

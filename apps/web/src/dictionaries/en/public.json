@@ -683,6 +683,7 @@
   "division.champion": "Champion: {name}",
   "division.resultsGrid": "Results grid",
   "division.resultsGrid.corner": "Home \\ Away",
+  "division.resultsGrid.noScript": "The results grid needs JavaScript. Every result is also listed under Schedule.",
   "division.bracketEmpty": "No bracket stage in this division.",
   "division.standingsEmpty": "No standings yet",
   "division.entrantsEmpty": "No entrants yet",

@@ -683,6 +683,7 @@
   "division.champion": "Campeón: {name}",
   "division.resultsGrid": "Cuadrícula de resultados",
   "division.resultsGrid.corner": "Local \\ Visitante",
+  "division.resultsGrid.noScript": "La cuadrícula de resultados necesita JavaScript. Todos los resultados también aparecen en Calendario.",
   "division.bracketEmpty": "Esta división no tiene fase de eliminatorias.",
   "division.standingsEmpty": "Aún no hay clasificación",
   "division.entrantsEmpty": "Aún no hay participantes",

@@ -7,7 +7,7 @@
 //
 // Client-safe imports only: everything that needs the dictionary or the forfeit ledger was resolved into strings server-side.
 import Link from "next/link";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { EntityLogo } from "@/components/ui/entity-logo";
 import { ForfeitTagChip } from "./forfeit-tag-chip";
 
@@ -135,12 +135,38 @@ export function ResultsGrid({ data, caption }: { data: ResultsGridData; caption?
 
 /** The grid behind its disclosure: nothing of the table is in the page until the organiser or spectator opens it, and once
  *  drawn it stays drawn (closing hides it, as any <details> does). The summary is the page's own, unchanged: its label and
- *  classes come from the page (the public page's carries the 44px tap floor). */
-export function ResultsGridDisclosure({ data, label, summaryClassName }: { data: ResultsGridData; label: string; summaryClassName: string }) {
+ *  classes come from the page (the public page's carries the 44px tap floor).
+ *
+ *  B4 review I-3: a <details> opens natively, before React is in the page, and React attaches its `toggle` listener only at
+ *  hydration (`toggle` is not an event React replays) - so a tap in the window between first paint and hydration, which on these
+ *  multi-megabyte pages is long on a phone, opened a disclosure React never heard of, empty until closed and opened again. The
+ *  ref callback reads the element's own `open` at the moment React takes it over (hydration's commit, before the first paint
+ *  React makes), so an open that happened before is drawn then; `onToggle` covers every open after. A ref callback, not a mount
+ *  effect: it runs in the same commit with the element in hand, and it is not the effect-sets-state pattern the lint warns on.
+ *  Stable (`useCallback`), so it runs once, at mount, and never again on a re-render. */
+export function ResultsGridDisclosure({
+  data,
+  label,
+  summaryClassName,
+  noScript,
+}: {
+  data: ResultsGridData;
+  label: string;
+  summaryClassName: string;
+  /** B4 review m-11: what the disclosure says with scripts off (it still opens natively, and the table is drawn by script): that
+   *  the grid needs JavaScript, and which tab lists the same results. The page's own sentence, in its language. */
+  noScript: string;
+}) {
   const [drawn, setDrawn] = useState(false);
+  const openedBeforeHydration = useCallback((el: HTMLDetailsElement | null) => {
+    if (el?.open) setDrawn(true);
+  }, []);
   return (
-    <details data-results-grid onToggle={(e) => (e.currentTarget.open ? setDrawn(true) : undefined)}>
+    <details ref={openedBeforeHydration} data-results-grid onToggle={(e) => (e.currentTarget.open ? setDrawn(true) : undefined)}>
       <summary className={summaryClassName}>{label}</summary>
+      <noscript>
+        <p className="mt-2 text-xs">{noScript}</p>
+      </noscript>
       {drawn ? (
         <div className="mt-2">
           <ResultsGrid data={data} />

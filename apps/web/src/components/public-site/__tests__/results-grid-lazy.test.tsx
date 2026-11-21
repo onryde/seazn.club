@@ -54,18 +54,19 @@ describe("resultsGridData: the page sends the grid's makings, sized by the fixtu
     expect(renderToStaticMarkup(createElement(ResultsMatrix, { ...base, entrantIds: ["e1"] }))).toBe("");
   });
 
-  it("the open grid draws what ResultsMatrix draws, cell for cell", () => {
-    const base = input(8);
-    const direct = renderToStaticMarkup(createElement(ResultsMatrix, base));
-    const fromData = renderToStaticMarkup(createElement(ResultsGrid, { data: resultsGridData(base)! }));
-    expect(fromData).toBe(direct);
-    expect(direct.match(/<td/g), "8 x 8 cells").toHaveLength(64);
+  // B4 review m-6: this asserted the open grid equal to `ResultsMatrix`'s markup, which is now `ResultsGrid(resultsGridData(...))`
+  // itself - equal by construction. The markup's own pins are results-matrix.test.tsx and forfeit-tag-surfaces.test.tsx; what is
+  // left here is the one fact this file owns: the browser draws the whole square from the makings.
+  it("the open grid draws the full square from the makings: n x n cells, one row per entrant", () => {
+    const html = renderToStaticMarkup(createElement(ResultsGrid, { data: resultsGridData(input(8))! }));
+    expect(html.match(/<td/g), "8 x 8 cells").toHaveLength(64);
+    expect(html.match(/<th scope="row"/g), "one row per entrant").toHaveLength(8);
   });
 });
 
 describe("ResultsGridDisclosure: the table is drawn only once the disclosure opens", () => {
   const SUMMARY = "min-h-11 cursor-pointer py-3.5 text-xs font-medium text-ink-muted hover:text-ink";
-  const props = (n: number) => ({ data: resultsGridData(input(n))!, label: en["division.resultsGrid"], summaryClassName: SUMMARY });
+  const props = (n: number) => ({ data: resultsGridData(input(n))!, label: en["division.resultsGrid"], summaryClassName: SUMMARY, noScript: en["division.resultsGrid.noScript"] });
 
   it("closed: the page carries the summary, with its classes, and not one cell", () => {
     const html = renderToStaticMarkup(createElement(ResultsGridDisclosure, props(200)));
@@ -74,6 +75,18 @@ describe("ResultsGridDisclosure: the table is drawn only once the disclosure ope
     expect(html).not.toContain("data-results-matrix");
     // The 200-entrant grid would be 40,000 cells; closed, the disclosure is a few hundred bytes.
     expect(html.length).toBeLessThan(1_000);
+  });
+
+  // B4 review m-11: with scripts off a <details> still opens (natively), and it opened to nothing and said nothing. The page's own
+  // sentence (from its dictionary, every locale - i18n:check) is inside the disclosure, behind <noscript>, so only a reader the
+  // table never reaches sees it, and it names where the same results are.
+  it("with scripts off, the open disclosure says the grid needs JavaScript and where the results are (inside it, behind noscript)", () => {
+    const html = renderToStaticMarkup(createElement(ResultsGridDisclosure, props(8)));
+    const inside = html.slice(html.indexOf("<details"), html.indexOf("</details>"));
+    const from = inside.indexOf("<noscript>");
+    expect(from, "a noscript inside the disclosure").toBeGreaterThan(-1);
+    expect(inside.slice(from, inside.indexOf("</noscript>")), "the page's sentence, in it").toContain(en["division.resultsGrid.noScript"]);
+    expect(html.indexOf("<noscript>"), "after the summary, so it is what the opened disclosure shows").toBeGreaterThan(html.indexOf("</summary>"));
   });
 
   it("opening draws the full grid; closing keeps it drawn; a toggle that reports closed draws nothing", () => {
@@ -87,5 +100,24 @@ describe("ResultsGridDisclosure: the table is drawn only once the disclosure ope
     expect(grids(), "opened").toBe(1);
     (propsOf(details()).onToggle as (e: unknown) => void)({ currentTarget: { open: false } });
     expect(grids(), "closed again: still drawn, hidden by the details").toBe(1);
+  });
+
+  // B4 review I-3: a tap before hydration opens the <details> natively, and its `toggle` fires before React listens. React hands
+  // the element to the ref at hydration's commit; an element that is already open is drawn then. The browser proof is the e2e
+  // (e2e/results-grid-open.spec.ts, held scripts); this pins the island's half: what the ref does with each element it is handed.
+  it("an element already open when React takes it over is drawn; a closed one, or none, is not (the tap before hydration)", () => {
+    let checked = 0;
+    for (const [handed, want] of [[{ open: true }, 1], [{ open: false }, 0], [null, 0]] as const) {
+      const island = renderIsland(ResultsGridDisclosure, props(8));
+      const details = () => island.tree().find((n) => n.type === "details") as ReactElement;
+      const grids = () => island.tree().filter((n) => n.type === ResultsGrid).length;
+      const ref = propsOf(details()).ref as ((el: unknown) => void) | undefined;
+      expect(typeof ref, "the disclosure hands its element to a ref callback").toBe("function");
+      ref!(handed);
+      expect(grids(), `handed ${JSON.stringify(handed)}`).toBe(want);
+      if (want === 1) expect(propsOf(details()).ref, "the ref is stable across a re-render (it runs once, at mount)").toBe(ref);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: open, closed and no element").toBe(3);
   });
 });

@@ -1280,6 +1280,7 @@ export default async function DivisionPage({
                             <ResultsGridDisclosure
                               data={grid}
                               label={t(dict, "div.detail.resultsGrid")}
+                              noScript={t(dict, "div.detail.resultsGrid.noScript")}
                               summaryClassName="cursor-pointer text-xs font-medium text-slate-500 hover:text-slate-700"
                             />
                           );
