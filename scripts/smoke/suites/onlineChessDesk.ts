@@ -122,7 +122,7 @@ export async function onlineChessDeskSuite(): Promise<void> {
 
 /**
  * The 128-entrant cap of an online chess division (review of the cap, 2026-11-21), through the REAL v1 route. The organiser's plan
- * is lifted to 1,000 entrants a division so the PLAN is not what refuses: an online division takes 128, the 129th is a 422
+ * is lifted to 1,000 entrants a division (and 50 active competitions: the suite's owner has built three by here) so the PLAN is not what refuses: an online division takes 128, the 129th is a 422
  * ONLINE_DIVISION_FULL carrying the limit, and an over-the-board division of the same size on the same plan takes all 129 - so the
  * refusal is the online cap's own. (The sign-up, promote, Reinstate and online-switch doors, the lock and the race are
  * usecases/__tests__/online-entrant-cap-doors.test.ts.)
@@ -133,10 +133,13 @@ async function onlineEntrantCap(owner: Session): Promise<void> {
   check("online entrant cap: the organiser's org", orgId !== "");
   if (orgId === "") return;
   await insertEntitlementOverride(owner, orgId, "entrants.per_division.max", 1000);
-  const comp = v1data<{ id: string }>(
-    await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `OCD cap ${tag}`, visibility: "private" }),
-  );
-  check("online entrant cap: a competition to build in", !!comp?.id);
+  // The suite's owner has already built three competitions by here (the public and private fixtures above and the division pages' own), and the Community plan's
+  // active-competition limit refuses the next one with 402 competitions.max_active (CI run 44950609964; read off the row's message). Lifted the way
+  // publicQuotaDegrade lifts it: what this row asks is the online cap, so no OTHER plan limit may be what answers.
+  await insertEntitlementOverride(owner, orgId, "competitions.max_active", 50);
+  const compMade = await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `OCD cap ${tag}`, visibility: "private" });
+  const comp = v1data<{ id: string }>(compMade);
+  check(`online entrant cap: a competition to build in (got ${compMade.status} ${compMade.json.error?.code ?? ""} ${compMade.json.error?.feature_key ?? ""})`, !!comp?.id);
   if (!comp?.id) return;
   const divisionIn = (name: string, online: boolean) =>
     v1(owner, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
