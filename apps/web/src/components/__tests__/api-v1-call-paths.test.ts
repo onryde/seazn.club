@@ -100,7 +100,7 @@ const HAND_CHECKED_DYNAMIC: Record<string, number> = {
   // and the round column's queue cards that used to carry them are deleted.
   // `openRoundRunner({ post: (path, body) => apiV1(path, …) })` — open-round-state.ts posts only
   // `/api/v1/stages/${stageId}/open-round` and `/api/v1/fixtures/${id}/external-play/resend` (both POST routes that exist). ONE
-  // dynamic call. It moved out of open-round-control.tsx into the `useOpenRound` hook (arbiter round column, Task 4), which Match Day's
+  // dynamic call. It moved out of open-round-control.tsx into the `useOpenRoundWith` hook (arbiter round column, Task 4), which Match Day's
   // round panel uses; the control is deleted (Task 10), and with it the round "+5" that once shared this `post` - the round's
   // `extendRoundPath` is posted by Match Day's round panel (counted under match-day/round-focus.tsx below).
   "src/components/v2/desk/use-open-round.ts": 1,

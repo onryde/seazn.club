@@ -1,7 +1,7 @@
 // T16 (D12), retargeted by phase 2 (Task 10): the Open round presses and the WORDS of their answers.
 //
 // The Open round control that used to mount on each stage card is deleted; the Arbiter Panel's round column presses the same
-// thing through `useOpenRound` (reducer + runner, open-round-state.ts) and words each answer with `openNoticeText` /
+// thing through `useOpenRoundWith` (reducer + runner, open-round-state.ts) and words each answer with `openNoticeText` /
 // `resendNoticeText` (open-round-control.tsx, kept exactly for that). So this suite drives the REAL chain a person triggers, hook
 // -> reducer -> runner -> the notice the state holds -> the helper that words it, with the network doubled at `apiV1`:
 // Open round asks first and sends nothing; the answer - the server's own count of PLAYERS invited, the boards it skipped, or a
@@ -20,8 +20,8 @@ import type { OpenRoundPairing, OpenRoundView } from "@/lib/open-round";
 import { DEADLINE_AFTER_MS } from "@/server/external-play/window";
 import { emptyExtendTally } from "@/lib/checkin-extend";
 
-const router = vi.hoisted(() => ({ refresh: vi.fn() }));
-vi.mock("next/navigation", () => ({ useRouter: () => router }));
+/** The shell's quiet day read, handed to the hook as its refresh (`useOpenRoundWith`: the router-bound form had no caller and went, B8). */
+const shellRefresh = vi.hoisted(() => vi.fn());
 
 type Call = { url: string; json?: unknown; resolve: (v: unknown) => void; reject: (e: unknown) => void };
 const net = vi.hoisted(() => ({ calls: [] as Call[] }));
@@ -38,7 +38,7 @@ const EN: Dict = JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "..",
 import { ApiV1Error } from "@/lib/client-v1";
 import { openNoticeText, resendNoticeText } from "../open-round-control";
 import { initialOpenRoundUi } from "../open-round-state";
-import { useOpenRound, type OpenRoundHandle } from "../use-open-round";
+import { useOpenRoundWith, type OpenRoundHandle } from "../use-open-round";
 
 const en = EN as unknown as Record<string, string>;
 const pl = (key: string, n: number) => en[`${key}.${n === 1 ? "one" : "other"}`]!.replace("{count}", String(n));
@@ -87,7 +87,7 @@ const INVITED = ROUND({
 
 /** The probe hands the whole handle out as a prop, so a test reads and calls exactly what the column reads and calls. */
 function Probe({ view }: { view: OpenRoundView | null }) {
-  return createElement("probe", { handle: useOpenRound(view) });
+  return createElement("probe", { handle: useOpenRoundWith(view, shellRefresh) });
 }
 const mount = (view: OpenRoundView) => {
   const ui = renderIsland(Probe, { view });
@@ -126,7 +126,7 @@ async function resendAnswered(fixtureId: string, answer: unknown, ok: boolean) {
 
 beforeEach(() => {
   net.calls.length = 0;
-  router.refresh.mockReset();
+  shellRefresh.mockReset();
 });
 
 describe("Open round - ask, then one request", () => {
@@ -180,7 +180,7 @@ describe("Open round - ask, then one request", () => {
     const { ui, handle } = await openAnswered({ opened: true, invited: 4, retrying: 0, skipped: [] }, true);
     ui.rerender({ view: INVITED });
     expect(openLines(handle(), INVITED)).toEqual([pl("externalPlay.openRound.invited", 4)]);
-    expect(router.refresh, "the answer refreshed the page once").toHaveBeenCalledTimes(1);
+    expect(shellRefresh, "the answer refreshed the page once").toHaveBeenCalledTimes(1);
   });
 });
 
@@ -195,7 +195,7 @@ describe("Resend - on its own pairing", () => {
     await flush();
     expect(resendLine(handle())).toEqual({ fixtureId: "f2", text: pl("runsheet.round.resent", 2) });
     expect(handle().state.busy).toBeNull();
-    expect(router.refresh).toHaveBeenCalledTimes(1);
+    expect(shellRefresh).toHaveBeenCalledTimes(1);
   });
 
   it("each refusal reads in words on the row (the window, a hold, a game, a change, the flag), and a send that reached nobody says so", async () => {
