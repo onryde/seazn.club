@@ -485,3 +485,40 @@ describe("courtMinAppVersion — the oldest app build a court code serves (court
     }
   });
 });
+
+describe("Seazn-hosted flags and settings (Task 8)", () => {
+  const live = (v?: string) => config.seaznHostedLive(v === undefined ? {} : { SEAZN_HOSTED_LIVE: v });
+  it("LIVE: unset and blank are false, true/false are case-insensitive", () => {
+    expect(config.seaznHostedLive({})).toBe(false);
+    expect(live("")).toBe(false);
+    expect(live("TRUE")).toBe(true);
+    expect(live(" true ")).toBe(true);
+    expect(live("False")).toBe(false);
+  });
+  it("every flag throws naming its variable on a value that is not true/false", () => {
+    expect(() => live("yes")).toThrow(/SEAZN_HOSTED_LIVE/);
+    expect(() => config.seaznHostedReplay({ SEAZN_HOSTED_REPLAY: "1", SEAZN_HOSTED_LIVE: "true" })).toThrow(/SEAZN_HOSTED_REPLAY/);
+    expect(() => config.seaznHostedCost({ SEAZN_HOSTED_COST: "on" })).toThrow(/SEAZN_HOSTED_COST/);
+  });
+  it("COST is independent of LIVE", () => {
+    expect(config.seaznHostedCost({})).toBe(false);
+    expect(config.seaznHostedCost({ SEAZN_HOSTED_COST: "True" })).toBe(true);
+  });
+  it("REPLAY is true only when LIVE is true too", () => {
+    expect(config.seaznHostedReplay({ SEAZN_HOSTED_REPLAY: "true" })).toBe(false);
+    expect(config.seaznHostedReplay({ SEAZN_HOSTED_REPLAY: "true", SEAZN_HOSTED_LIVE: "false" })).toBe(false);
+    expect(config.seaznHostedReplay({ SEAZN_HOSTED_REPLAY: "true", SEAZN_HOSTED_LIVE: "true" })).toBe(true);
+    expect(config.seaznHostedReplay({ SEAZN_HOSTED_REPLAY: "false", SEAZN_HOSTED_LIVE: "true" })).toBe(false);
+  });
+  it("seaznVideoOrigins: null when unset, trimmed and de-duplicated, bare hostnames only", () => {
+    expect(config.seaznVideoOrigins({})).toBeNull();
+    expect(config.seaznVideoOrigins({ SEAZN_VIDEO_ORIGINS: " seazn.club,www.seazn.club,seazn.club" })).toEqual(["seazn.club", "www.seazn.club"]);
+    for (const bad of ["https://seazn.club", "seazn.club/path", "seazn.club,http://x.test"]) {
+      expect(() => config.seaznVideoOrigins({ SEAZN_VIDEO_ORIGINS: bad })).toThrow(/SEAZN_VIDEO_ORIGINS/);
+    }
+  });
+  it("token constants are pinned", () => {
+    expect(config.SEAZN_LIVE_TOKEN_TTL_SECONDS).toBe(3600);
+    expect(config.SEAZN_TOKEN_REFRESH_BEFORE_SECONDS).toBe(300);
+  });
+});

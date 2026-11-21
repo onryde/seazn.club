@@ -341,6 +341,44 @@ export function srtEnabled(env: Record<string, string | undefined> = process.env
   if (v === "false") return false;
   throw new Error(`STREAM_SRT_ENABLED must be "true" or "false" (unset = true), got ${JSON.stringify(env.STREAM_SRT_ENABLED)}`);
 }
+/** Seazn-hosted video (Phase 1-3 flags). Off by default, read at the request and never cached, like STREAM_SRT_ENABLED,
+ *  but unset = false and the value is matched case-insensitively. Anything but true/false throws, naming the variable.
+ *  LIVE gates new picks and starts only, never playback of what already exists. */
+function seaznFlag(name: "SEAZN_HOSTED_LIVE" | "SEAZN_HOSTED_REPLAY" | "SEAZN_HOSTED_COST", env: Record<string, string | undefined>): boolean {
+  const v = env[name]?.trim().toLowerCase();
+  if (!v || v === "false") return false;
+  if (v === "true") return true;
+  throw new Error(`${name} must be "true" or "false" (unset = false), got ${JSON.stringify(env[name])}`);
+}
+export function seaznHostedLive(env: Record<string, string | undefined> = process.env): boolean {
+  return seaznFlag("SEAZN_HOSTED_LIVE", env);
+}
+/** Phase 2 needs Phase 1: true only when LIVE is on too. A malformed REPLAY value still throws while LIVE is off. */
+export function seaznHostedReplay(env: Record<string, string | undefined> = process.env): boolean {
+  const replay = seaznFlag("SEAZN_HOSTED_REPLAY", env);
+  return replay && seaznHostedLive(env);
+}
+export function seaznHostedCost(env: Record<string, string | undefined> = process.env): boolean {
+  return seaznFlag("SEAZN_HOSTED_COST", env);
+}
+/** SEAZN_VIDEO_ORIGINS: comma-separated bare hostnames (the Cloudflare `allowedOrigins` for Seazn playback), trimmed and
+ *  de-duplicated in first-seen order. Null when unset or blank. An entry with a scheme, port or path throws. */
+export function seaznVideoOrigins(env: Record<string, string | undefined> = process.env): string[] | null {
+  const raw = env.SEAZN_VIDEO_ORIGINS?.trim();
+  if (!raw) return null;
+  const out: string[] = [];
+  for (const part of raw.split(",")) {
+    const h = part.trim();
+    if (!h) continue;
+    if (!HOST_RE.test(h)) throw new Error(`SEAZN_VIDEO_ORIGINS entries must be bare hostnames (no scheme, port or path), got ${JSON.stringify(h)}`);
+    if (!out.includes(h)) out.push(h);
+  }
+  return out.length ? out : null;
+}
+/** A Seazn live playback token lives 1 h (its short life is the only protection of live playback, far under Cloudflare's
+ *  24 h cap); the server re-mints it, and the client island re-reads it, this many seconds before expiry. */
+export const SEAZN_LIVE_TOKEN_TTL_SECONDS = 3600;
+export const SEAZN_TOKEN_REFRESH_BEFORE_SECONDS = 300;
 /** C9: simulcast outputs bill as delivery; Cloudflare caps 5 per input. */
 export const MAX_OUTPUTS_PER_INPUT = 5;
 
