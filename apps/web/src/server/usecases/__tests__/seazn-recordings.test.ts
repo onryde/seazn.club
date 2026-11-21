@@ -1,9 +1,11 @@
 // Seazn-hosted video, Phase 1 Task 13 (G5, C3, C6, C7): the stream tick's `seazn` pass, `lockSeaznRecordings`. Cloudflare
 // records a signed input's recording UNSIGNED (C3), so every recording of a Seazn session's programme input is made to need a
-// token (`requireSignedVideo`) the first time a pass lists it, and a `seazn_locked_videos` row marks it done. C7 is only partly
-// measured — nothing showed a lock survives to `ready` — so a recording already locked is locked AGAIN when its listing reads
-// unsigned, and an input is marked finished (`recordings_locked_at`) only once every recording has been seen in a finished
-// state, signed, after its session has ended and the finalisation grace has run.
+// token (`requireSignedVideo`) and a `seazn_locked_videos` row marks it done. Controller ruling (review m1): a recording is
+// NEVER edited while it is still recording (`live-inprogress`), whatever it reads — nobody has measured whether live HLS
+// survives the edit (C7) — so the lock comes the first pass after it stops. C7 also never showed a lock surviving to `ready`,
+// so a locked recording is locked AGAIN when its listing reads unsigned, and an input is marked finished
+// (`recordings_locked_at`) only once every recording has been seen finished and signed, after its session has ended past the
+// finalisation grace, on a listing that was not a full page (review m2).
 //
 // Every session comes from a REAL producer: the organiser's Go live (`createSession`), the Machine's playing beat, and Stop.
 // The recordings are the fake's (`addVideo` under the programme input's own uid, the shape Cloudflare's listing has). Each pass
@@ -112,27 +114,38 @@ const lockRows = async (inputRowId: string) =>
   (await sql<{ cf_video_id: string }[]>`select cf_video_id from seazn_locked_videos where input_row_id = ${inputRowId} order by cf_video_id`).map((r) => r.cf_video_id);
 const vid = (tag: string) => `v-${tag}-${randomUUID()}`;
 /** One pass, as the tick runs it, scoped to these orgs. */
-const pass = (r: Rig, orgIds: string[], o: { now?: number; budgetMs?: number; wallClock?: () => number } = {}) =>
-  lockSeaznRecordings(r.deps, { now: new Date(o.now ?? r.clock.now), budgetMs: o.budgetMs ?? BUDGET, orgIds, ...(o.wallClock ? { wallClock: o.wallClock } : {}) });
+const pass = (r: Rig, orgIds: string[], o: { now?: number; budgetMs?: number; wallClock?: () => number; deps?: SessionDeps } = {}) =>
+  lockSeaznRecordings(o.deps ?? r.deps, { now: new Date(o.now ?? r.clock.now), budgetMs: o.budgetMs ?? BUDGET, orgIds, ...(o.wallClock ? { wallClock: o.wallClock } : {}) });
 const ZERO = { locked: 0, relocked: 0, refused: 0, failed: 0, deferred: 0 };
 
 describe.skipIf(!HAS_DB)("lockSeaznRecordings — the stream tick's Seazn pass", () => {
-  it("a LIVE Seazn session's in-progress recording is locked in ONE pass (videoAccess true, one row naming its programme input); a second pass makes no second lock call", async () => {
+  it("m1: a recording that is STILL RECORDING is never edited — neither one reading signed (C7's measured state) nor one reading unsigned; each is locked in ONE pass once it stops, and a second pass makes no second call", async () => {
     const r = await rig();
     const sid = await live(r, r.fixtureIds[0], r.seazn);
     const prog = await inputOf(sid, "programme");
-    const v = vid("live");
-    r.ingest.addVideo({ videoId: v, inputId: prog.uid, createdAt: new Date(r.clock.now).toISOString(), inProgress: true });
-    expect(r.ingest.videoAccess(v), "PREMISE: Cloudflare recorded it unsigned (C3)").toBe(false);
+    const at = new Date(r.clock.now).toISOString();
+    const [signedLive, unsignedLive] = [vid("live-signed"), vid("live-unsigned")];
+    r.ingest.addVideo({ videoId: signedLive, inputId: prog.uid, createdAt: at, inProgress: true, signed: true });
+    r.ingest.addVideo({ videoId: unsignedLive, inputId: prog.uid, createdAt: at, inProgress: true });
+    expect([r.ingest.videoAccess(signedLive), r.ingest.videoAccess(unsignedLive)], "PREMISE: one reads signed, one unsigned (C3)").toEqual([true, false]);
 
-    expect(await pass(r, [r.auth.orgId])).toEqual({ ...ZERO, locked: 1 });
-    expect(r.ingest.videoAccess(v)).toBe(true);
-    expect(await lockRows(prog.id)).toEqual([v]);
-    expect(r.ingest.signedVideoCalls).toEqual([v]);
+    expect(await pass(r, [r.auth.orgId]), "live-inprogress: nothing asked").toEqual(ZERO);
+    r.clock.now += 60 * SEC;
+    expect(await pass(r, [r.auth.orgId]), "a minute on, still recording: still nothing").toEqual(ZERO);
+    expect(r.ingest.signedVideoCalls, "no edit of a recording mid-stream").toEqual([]);
+    expect(await lockRows(prog.id)).toEqual([]);
+
+    // Both stop: Cloudflare is still processing them (`inprogress`), but they are no longer live.
+    r.ingest.updateVideo(signedLive, { inProgress: false, state: "inprogress" });
+    r.ingest.updateVideo(unsignedLive, { inProgress: false, state: "inprogress" });
+    expect(await pass(r, [r.auth.orgId])).toEqual({ ...ZERO, locked: 2 });
+    expect([r.ingest.videoAccess(signedLive), r.ingest.videoAccess(unsignedLive)]).toEqual([true, true]);
+    expect([...r.ingest.signedVideoCalls].sort()).toEqual([signedLive, unsignedLive].sort());
+    expect(await lockRows(prog.id)).toEqual([signedLive, unsignedLive].sort());
 
     r.clock.now += 60 * SEC;
     expect(await pass(r, [r.auth.orgId]), "the second pass: listed, already locked, reads signed").toEqual(ZERO);
-    expect(r.ingest.signedVideoCalls, "no second lock call").toEqual([v]);
+    expect(r.ingest.signedVideoCalls, "no second lock call").toHaveLength(2);
     expect((await inputOf(sid, "programme")).locked_at, "still live: never marked finished").toBeNull();
   });
 
@@ -146,9 +159,10 @@ describe.skipIf(!HAS_DB)("lockSeaznRecordings — the stream tick's Seazn pass",
     const camA = await inputOf(sidA, "camera");
     const at = new Date(a.clock.now).toISOString();
     const [mine, theirs, camera] = [vid("mine"), vid("other-org"), vid("camera")];
-    a.ingest.addVideo({ videoId: mine, inputId: progA.uid, createdAt: at, inProgress: true });
-    a.ingest.addVideo({ videoId: theirs, inputId: progB.uid, createdAt: at, inProgress: true });
-    a.ingest.addVideo({ videoId: camera, inputId: camA.uid, createdAt: at, inProgress: true });
+    // Finished recordings (a recording still recording is never edited at all: m1), so only C6 decides which are touched.
+    a.ingest.addVideo({ videoId: mine, inputId: progA.uid, createdAt: at, inProgress: false });
+    a.ingest.addVideo({ videoId: theirs, inputId: progB.uid, createdAt: at, inProgress: false });
+    a.ingest.addVideo({ videoId: camera, inputId: camA.uid, createdAt: at, inProgress: false });
     a.ingest.seedInputListing(progA.uid, [theirs, camera]);
     expect((await a.ingest.listInputVideos(progA.uid)).map((v) => v.videoId), "PREMISE: A's listing answers all three").toEqual([mine, theirs, camera]);
 
@@ -195,14 +209,14 @@ describe.skipIf(!HAS_DB)("lockSeaznRecordings — the stream tick's Seazn pass",
     expect(await pass(r, [r.auth.orgId], { now: ended + grace + SEC }), "past the grace, but still live-inprogress at Cloudflare").toEqual(ZERO);
     expect((await inputOf(sid, "programme")).locked_at).toBeNull();
 
-    r.ingest.updateVideo(v, { inProgress: false, state: "ready" });   // finished, and still reading signed
-    expect(await pass(r, [r.auth.orgId], { now: ended + grace - SEC }), "within the grace").toEqual(ZERO);
+    r.ingest.updateVideo(v, { inProgress: false, state: "ready" });   // finished (unsigned, C3): locked now, inside the grace
+    expect(await pass(r, [r.auth.orgId], { now: ended + grace - SEC }), "within the grace: locked, not marked").toEqual({ ...ZERO, locked: 1 });
     expect((await inputOf(sid, "programme")).locked_at).toBeNull();
 
     const markAt = ended + grace + SEC;
     expect(await pass(r, [r.auth.orgId], { now: markAt })).toEqual(ZERO);
     expect((await inputOf(sid, "programme")).locked_at?.getTime()).toBe(markAt);
-    expect(r.ingest.signedVideoCalls, "it read signed at ready: one lock, ever").toEqual([v]);
+    expect(r.ingest.signedVideoCalls, "it read signed at the mark: one lock, ever").toEqual([v]);
 
     const listed = vi.spyOn(r.ingest, "listInputVideos");
     await pass(r, [r.auth.orgId], { now: markAt + 60 * SEC });
@@ -222,12 +236,12 @@ describe.skipIf(!HAS_DB)("lockSeaznRecordings — the stream tick's Seazn pass",
     expect((await inputOf(sid, "programme")).locked_at, "a live input can still record again").toBeNull();
   });
 
-  it("C7 partial: a recording locked while live that reads UNSIGNED once ready is locked again, and only then is its input marked", async () => {
+  it("C7 partial: a recording locked while Cloudflare still processed it that reads UNSIGNED once ready is locked again, and only then is its input marked", async () => {
     const r = await rig();
     const sid = await live(r, r.fixtureIds[0], r.seazn);
     const prog = await inputOf(sid, "programme");
     const v = vid("ready");
-    r.ingest.addVideo({ videoId: v, inputId: prog.uid, createdAt: new Date(r.clock.now).toISOString(), inProgress: true });
+    r.ingest.addVideo({ videoId: v, inputId: prog.uid, createdAt: new Date(r.clock.now).toISOString(), inProgress: false, state: "inprogress" });
     expect(await pass(r, [r.auth.orgId])).toEqual({ ...ZERO, locked: 1 });
     const ended = await stopAndSettle(r, r.fixtureIds[0], sid);
     r.ingest.updateVideo(v, { inProgress: false, state: "ready", signed: false });   // C3: Cloudflare finished it unsigned
@@ -241,15 +255,13 @@ describe.skipIf(!HAS_DB)("lockSeaznRecordings — the stream tick's Seazn pass",
     expect((await inputOf(sid, "programme")).locked_at?.getTime(), "the re-lock's echo confirms it").toBe(markAt);
   });
 
-  it("a listing that does not SAY whether a locked recording is signed (`requireSignedURLs` absent: null) costs no call while it records, and one re-lock once it is ready — the mark rests on that echo", async () => {
+  it("a listing that does not SAY whether a locked recording is signed (`requireSignedURLs` absent: null) is never taken as signed: once ready it is locked again, and the mark rests on that echo", async () => {
     const r = await rig();
     const sid = await live(r, r.fixtureIds[0], r.seazn);
     const prog = await inputOf(sid, "programme");
     const v = vid("unsaid");
-    r.ingest.addVideo({ videoId: v, inputId: prog.uid, createdAt: new Date(r.clock.now).toISOString(), inProgress: true });
+    r.ingest.addVideo({ videoId: v, inputId: prog.uid, createdAt: new Date(r.clock.now).toISOString(), inProgress: false, state: "inprogress" });
     expect(await pass(r, [r.auth.orgId])).toEqual({ ...ZERO, locked: 1 });
-    r.ingest.updateVideo(v, { signed: null });
-    expect(await pass(r, [r.auth.orgId]), "recording, unsaid: nothing asked").toEqual(ZERO);
     expect(r.ingest.signedVideoCalls).toEqual([v]);
     const ended = await stopAndSettle(r, r.fixtureIds[0], sid);
     r.ingest.updateVideo(v, { inProgress: false, state: "ready", signed: null });
@@ -284,7 +296,7 @@ describe.skipIf(!HAS_DB)("lockSeaznRecordings — the stream tick's Seazn pass",
     const sid = await live(r, r.fixtureIds[0], r.seazn);
     const prog = await inputOf(sid, "programme");
     const v = vid("flags-off");
-    r.ingest.addVideo({ videoId: v, inputId: prog.uid, createdAt: new Date(r.clock.now).toISOString(), inProgress: true });
+    r.ingest.addVideo({ videoId: v, inputId: prog.uid, createdAt: new Date(r.clock.now).toISOString(), inProgress: false });
     vi.stubEnv("SEAZN_HOSTED_LIVE", "false");
     vi.stubEnv("SEAZN_HOSTED_REPLAY", "false");
     expect(await pass(r, [r.auth.orgId])).toEqual({ ...ZERO, locked: 1 });
@@ -311,7 +323,7 @@ describe.skipIf(!HAS_DB)("lockSeaznRecordings — the stream tick's Seazn pass",
     const sid = await live(r, r.fixtureIds[0], r.seazn);
     const prog = await inputOf(sid, "programme");
     const v = vid("budget");
-    r.ingest.addVideo({ videoId: v, inputId: prog.uid, createdAt: new Date(r.clock.now).toISOString(), inProgress: true });
+    r.ingest.addVideo({ videoId: v, inputId: prog.uid, createdAt: new Date(r.clock.now).toISOString(), inProgress: false });
     const listed = vi.spyOn(r.ingest, "listInputVideos");
     const still = () => 1_000_000;   // a wall clock that never moves: the budget is exactly what is passed
     expect(await pass(r, [r.auth.orgId], { budgetMs: 1_999, wallClock: still })).toEqual({ ...ZERO, deferred: 1 });
@@ -319,6 +331,73 @@ describe.skipIf(!HAS_DB)("lockSeaznRecordings — the stream tick's Seazn pass",
     expect(r.ingest.videoAccess(v)).toBe(false);
     expect(await pass(r, [r.auth.orgId], { budgetMs: 2_000, wallClock: still })).toEqual({ ...ZERO, locked: 1 });
     expect(r.ingest.videoAccess(v)).toBe(true);
+  });
+
+  it("m4: the floor is checked again before EACH lock — a listing that spends the slice leaves its recording unlocked and the input deferred, unmarked", async () => {
+    const r = await rig();
+    const sid = await live(r, r.fixtureIds[0], r.seazn);
+    const prog = await inputOf(sid, "programme");
+    const v = vid("slow-list");
+    r.ingest.addVideo({ videoId: v, inputId: prog.uid, createdAt: new Date(r.clock.now).toISOString(), inProgress: false });
+    const ended = await stopAndSettle(r, r.fixtureIds[0], sid);
+    let wall = 0;
+    const list = r.ingest.listInputVideos.bind(r.ingest);
+    vi.spyOn(r.ingest, "listInputVideos").mockImplementation(async (...a) => {
+      const out = await list(...a);
+      wall = 6_001;   // the listing took 6 s of an 8 s slice: 1 999 ms left, under the 2 s floor
+      return out;
+    });
+    const markAt = ended + FINALISATION_GRACE_SECONDS * SEC + SEC;
+    expect(await pass(r, [r.auth.orgId], { now: markAt, budgetMs: 8_000, wallClock: () => wall })).toEqual({ ...ZERO, deferred: 1 });
+    expect(r.ingest.signedVideoCalls, "no lock started under the floor").toEqual([]);
+    expect(r.ingest.videoAccess(v)).toBe(false);
+    expect((await inputOf(sid, "programme")).locked_at, "a deferred input is not marked").toBeNull();
+    // The pair: 6 s spent leaves exactly the floor, and the lock goes ahead.
+    wall = 0;
+    vi.mocked(r.ingest.listInputVideos).mockImplementation(async (...a) => { const out = await list(...a); wall = 6_000; return out; });
+    expect(await pass(r, [r.auth.orgId], { now: markAt, budgetMs: 8_000, wallClock: () => wall })).toEqual({ ...ZERO, locked: 1 });
+    expect((await inputOf(sid, "programme")).locked_at?.getTime()).toBe(markAt);
+  });
+
+  it("m2: a listing that comes back a FULL page may be missing recordings — what it listed is locked, but the input is never marked; a short page marks it", async () => {
+    const r = await rig();
+    const sid = await live(r, r.fixtureIds[0], r.seazn);
+    const prog = await inputOf(sid, "programme");
+    const at = new Date(r.clock.now).toISOString();
+    const [one, two] = [vid("page-1"), vid("page-2")];
+    r.ingest.addVideo({ videoId: one, inputId: prog.uid, createdAt: at, inProgress: false });
+    r.ingest.addVideo({ videoId: two, inputId: prog.uid, createdAt: at, inProgress: false });
+    const ended = await stopAndSettle(r, r.fixtureIds[0], sid);
+    // The page limit lowered to 2 (relay-sweep.test's recipe): this listing is exactly a full page.
+    const small = Object.assign(Object.create(r.ingest) as FakeIngest, { capabilities: { ...r.ingest.capabilities, listVideosPageLimit: 2 } });
+    const smallDeps: SessionDeps = { ...r.deps, drivers: { ...r.deps.drivers, ingest: small } };
+    const markAt = ended + FINALISATION_GRACE_SECONDS * SEC + SEC;
+    expect(await pass(r, [r.auth.orgId], { now: markAt, deps: smallDeps })).toEqual({ ...ZERO, locked: 2 });
+    expect([r.ingest.videoAccess(one), r.ingest.videoAccess(two)]).toEqual([true, true]);
+    expect((await inputOf(sid, "programme")).locked_at, "a full page is never the whole set").toBeNull();
+    expect(await pass(r, [r.auth.orgId], { now: markAt + 60 * SEC, deps: smallDeps }), "still a full page: still unmarked").toEqual(ZERO);
+    expect((await inputOf(sid, "programme")).locked_at).toBeNull();
+    // The pair: the same two recordings under the real page limit are a short page, and the input is marked.
+    expect(await pass(r, [r.auth.orgId], { now: markAt + 120 * SEC })).toEqual(ZERO);
+    expect((await inputOf(sid, "programme")).locked_at?.getTime()).toBe(markAt + 120 * SEC);
+  });
+
+  it("m3: a recording whose lock answers 404 (`absent`: Cloudflare no longer holds it) counts toward the mark without a lock or a row", async () => {
+    const r = await rig();
+    const sid = await live(r, r.fixtureIds[0], r.seazn);
+    const prog = await inputOf(sid, "programme");
+    const at = new Date(r.clock.now).toISOString();
+    const [gone, kept] = [vid("gone"), vid("kept")];
+    r.ingest.addVideo({ videoId: gone, inputId: prog.uid, createdAt: at, inProgress: false });
+    r.ingest.addVideo({ videoId: kept, inputId: prog.uid, createdAt: at, inProgress: false });
+    const ended = await stopAndSettle(r, r.fixtureIds[0], sid);
+    const lock = vi.spyOn(r.ingest, "requireSignedVideo");
+    lock.mockResolvedValueOnce("absent");   // the first recording listed was deleted between the listing and the edit
+    const markAt = ended + FINALISATION_GRACE_SECONDS * SEC + SEC;
+    expect(await pass(r, [r.auth.orgId], { now: markAt })).toEqual({ ...ZERO, locked: 1 });
+    expect(lock.mock.calls.map(([id]) => id)).toEqual([gone, kept]);
+    expect(await lockRows(prog.id), "no row for the absent one").toEqual([kept]);
+    expect((await inputOf(sid, "programme")).locked_at?.getTime(), "the absent one did not hold the mark back").toBe(markAt);
   });
 
   it("refuses an empty orgIds (an `in ()` read as no filter would list every org) and a budget that is not a finite number of ms, by name, before any call", async () => {

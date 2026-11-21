@@ -132,6 +132,32 @@ describe("signDownload (C5, Phase 2's mover)", () => {
     expect(mint).toHaveBeenCalledTimes(2);
   });
 
+  it("m5: a cached download token is reused only when it lives at least as long as the caller asks — the Bunny fetch's 6 h ask 10 min after a 6 h mint gets a NEW 6 h token; a 5 min ask reuses it", async () => {
+    const { deps, mint } = rig();
+    const SIX_H = 6 * 3600;
+    const tokenIn = (url: string) => /\/([^/]+)\/downloads\/default\.mp4$/.exec(url)![1]!;
+    const first = await signDownload(deps, "v-rec", T0, SIX_H);
+    expect(tokenIn(first)).toBe(`fake.v-rec.${T0.getTime() / 1000 + SIX_H}.dl`);
+    const again = await signDownload(deps, "v-rec", at(10 * MIN), SIX_H);
+    expect(mint, "5 h 50 min left is less than the 6 h asked").toHaveBeenCalledTimes(2);
+    expect(tokenIn(again)).toBe(`fake.v-rec.${at(10 * MIN).getTime() / 1000 + SIX_H}.dl`);
+    const short = await signDownload(deps, "v-rec", at(20 * MIN), 300);
+    expect(mint, "a 5 min ask is covered by the token minted 10 min ago").toHaveBeenCalledTimes(2);
+    expect(short).toBe(again);
+  });
+
+  it("m5: an asked life that is not a whole number of seconds between 1 and Cloudflare's 24 h cap is refused by name, before any mint", async () => {
+    const { deps, mint } = rig();
+    for (const bad of [0, -1, Number.NaN, 1.5, 24 * 3600 + 1]) {
+      await expect(signDownload(deps, "v-rec", T0, bad), String(bad)).rejects.toThrow(/signDownload: ttlSeconds/);
+    }
+    expect(mint).not.toHaveBeenCalled();
+    // The pair: both ends of the range are accepted.
+    await signDownload(deps, "v-a", T0, 1);
+    await signDownload(deps, "v-b", T0, 24 * 3600);
+    expect(mint).toHaveBeenCalledTimes(2);
+  });
+
   it("the other order: a viewer's live token cached for a uid is never handed out as its download token", async () => {
     const { deps, mint } = rig();
     await signRecordingPlayback(deps, "v-rec", T0);

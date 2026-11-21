@@ -44,7 +44,12 @@ async function tokenFor(deps: PlaybackDeps, uid: string, downloadable: boolean, 
   const key = `${downloadable ? "download" : "play"}:${uid}`;
   const nowMs = now.getTime();
   const hit = deps.tokenCache.get(key);
-  if (hit && hit.expiresAtMs - nowMs > SEAZN_TOKEN_REFRESH_BEFORE_SECONDS * 1000) return { token: await hit.token, expiresAtMs: hit.expiresAtMs };
+  // A viewer's token is reused while more than the refresh window is left (the player re-asks before it runs out). A download
+  // token is reused only when it lives at least as long as THIS caller asked (review m5): the replay host's fetch can queue for
+  // hours, and a token that expires sooner than asked would fail inside it.
+  const left = hit ? hit.expiresAtMs - nowMs : 0;
+  const reusable = downloadable ? left >= ttlSeconds * 1000 : left > SEAZN_TOKEN_REFRESH_BEFORE_SECONDS * 1000;
+  if (hit && reusable) return { token: await hit.token, expiresAtMs: hit.expiresAtMs };
   prune(deps.tokenCache, nowMs);
   // Whole seconds: the `exp` Cloudflare is sent, so the expiry handed out is the one the token carries.
   const expiresAtMs = (Math.floor(nowMs / 1000) + ttlSeconds) * 1000;
@@ -78,9 +83,15 @@ export function signRecordingPlayback(deps: PlaybackDeps, videoUid: string, now:
   return signedManifest(deps, videoUid, now);
 }
 
-/** Phase 2's mover (C5): a recording's MP4 download URL for the replay host to fetch, on a `downloadable` token of `ttlSeconds`.
- *  Server-to-host only: never handed to a viewer. */
+/** Cloudflare's own ceiling on a token's `exp`: 24 hours from issuing (OpenAPI, "Create signed URL tokens for videos"). */
+const MAX_TOKEN_TTL_SECONDS = 24 * 3600;
+
+/** Phase 2's mover (C5): a recording's MP4 download URL for the replay host to fetch, on a `downloadable` token that lives at
+ *  least `ttlSeconds` (a whole number, 1 s to Cloudflare's 24 h). Server-to-host only: never handed to a viewer. */
 export async function signDownload(deps: PlaybackDeps, videoUid: string, now: Date, ttlSeconds: number): Promise<string> {
+  if (!Number.isInteger(ttlSeconds) || ttlSeconds < 1 || ttlSeconds > MAX_TOKEN_TTL_SECONDS) {
+    throw new Error(`signDownload: ttlSeconds must be a whole number of seconds from 1 to ${MAX_TOKEN_TTL_SECONDS}, got ${ttlSeconds}`);
+  }
   const host = hostOrThrow();
   const { token } = await tokenFor(deps, videoUid, true, now, ttlSeconds);
   return `https://${host}/${token}/downloads/default.mp4`;

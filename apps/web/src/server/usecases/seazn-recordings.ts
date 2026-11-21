@@ -4,11 +4,15 @@ import "server-only";
 //
 // Task 12 signs a Seazn session's programme input, but Cloudflare records a signed input's recording UNSIGNED (C3: the finished
 // recording read `requireSignedURLs: false` and played with no token). So every recording of a Seazn programme input is made to
-// need a token here, the first pass that lists it — about a minute after it appears, which the plan accepts — and a
-// `seazn_locked_videos` row (V540) records that it was. C7 measured the lock holding on an in-progress recording, but nothing has
-// measured it surviving to `ready`, so a recording already locked is locked AGAIN when its listing reads unsigned, and an input
-// is marked finished (`recordings_locked_at`) only once its session has ended past the finalisation grace and every recording
-// has been seen finished AND signed. A marked input is never listed again.
+// need a token here, and a `seazn_locked_videos` row (V540) records that it was.
+//
+// NEVER WHILE IT RECORDS (controller ruling 2026-11-21, review m1): nobody has measured whether live HLS survives this edit (C7
+// measured the flag's echo, not the stream), so a `live-inprogress` recording is not touched, whatever it reads — C7 found one
+// already reading signed, and one reading unsigned is left until it stops. It is locked the first pass after it stops recording,
+// and checked again once `ready`: C7 never showed a lock surviving to `ready`, so a locked recording whose listing reads unsigned
+// (or does not say) is locked AGAIN. An input is marked finished (`recordings_locked_at`) only once its session has ended past
+// the finalisation grace and every recording has been seen finished AND signed, on a listing short of a full page (review m2: a
+// full page may be missing recordings). A marked input is never listed again.
 //
 // C6 (the Global Constraint): Cloudflare's filtered listing has been seen answering recordings of OTHER inputs, so every listed
 // recording must name this input itself (its own `liveInput`) before anything is done to it; one that does not — or names none —
@@ -33,7 +37,7 @@ export const SEAZN_PASS_CALL_FLOOR_MS = 2_000;
 
 /** The pass's answer, read by the cron Worker as `data.seazn` (`failed` is its one failure counter, R3).
  *  - `locked`: recordings made to need a token for the first time this pass;
- *  - `relocked`: recordings already locked whose listing read unsigned again, locked again (C7's unmeasured half);
+ *  - `relocked`: recordings already locked whose listing read unsigned again, or did not say, locked again (C7's unmeasured half);
  *  - `refused`: listed under an input but naming another, or none (C6) — never touched;
  *  - `failed`: a lock that threw — retried next pass;
  *  - `deferred`: inputs the slice did not reach. */
@@ -44,6 +48,8 @@ export interface SeaznPassResult { locked: number; relocked: number; refused: nu
 const RECORDING_STATES: readonly SessionState[] = ["live", "ending", ...TERMINAL_STATES];
 /** A recording Cloudflare has finished with: what it is now, it stays. */
 const FINISHED = new Set(["ready", "error"]);
+/** Cloudflare's state for a recording that is still being recorded: never edited (m1). */
+const RECORDING = "live-inprogress";
 
 interface SeaznInput { id: string; session_id: string; org_id: string; uid: string; state: SessionState; end_ref: Date }
 
@@ -87,6 +93,9 @@ export async function lockSeaznRecordings(
     }
     // C6: only this input's own recordings. The rest are counted and left alone, by id only.
     const own = listed.filter((v) => v.inputId === input.uid);
+    // A FULL page means "there may be more" (relay-sweep.ts's camera step, A13): what it listed is locked, but no mark is written.
+    const truncated = listed.length >= ingest.capabilities.listVideosPageLimit;
+    if (truncated) log.warn({ sid: input.session_id, listed: listed.length }, "seazn pass: a programme input's listing came back a full page — the tail may be missing; not marked this pass");
     const foreign = listed.filter((v) => v.inputId !== input.uid);
     if (foreign.length > 0) {
       out.refused += foreign.length;
@@ -98,11 +107,11 @@ export async function lockSeaznRecordings(
     let confirmed = 0;   // own recordings seen locked this pass (or gone)
     let stopped = false;
     for (const v of own) {
-      const finished = FINISHED.has(v.state);
+      if (v.state === RECORDING) continue;   // m1: never edited mid-stream; it is not finished, so it also holds the mark back
       const known = lockedBefore.has(v.videoId);
-      // Already locked and reading signed: nothing to ask. Reading UNSIGNED: locked again (C7). Not saying (`null`): asked again
-      // only once it is finished, so the mark rests on an echo, not a guess, without a call a minute while it records.
-      if (known && (v.signed === true || (v.signed === null && !finished))) { if (v.signed === true) confirmed++; continue; }
+      // Already locked and reading signed: nothing to ask. Reading unsigned, or not saying (`null`): locked again (C7), so the
+      // mark rests on an echo, never a guess.
+      if (known && v.signed === true) { confirmed++; continue; }
       if (!canCall()) { stopped = true; break; }
       try {
         const res = await ingest.requireSignedVideo(v.videoId);
@@ -111,7 +120,7 @@ export async function lockSeaznRecordings(
           out.locked++;
         } else if (res === "set") {
           out.relocked++;
-          log.warn({ sid: input.session_id, videoId: v.videoId, state: v.state, signed: v.signed }, "seazn pass: a locked recording read unsigned — locked again (C7)");
+          log.warn({ sid: input.session_id, videoId: v.videoId, state: v.state, signed: v.signed }, "seazn pass: a locked recording read unsigned, or did not say — locked again (C7)");
         }
         confirmed++;   // "set" echoed true; "absent" is a recording Cloudflare no longer holds
       } catch (err) {
@@ -121,10 +130,11 @@ export async function lockSeaznRecordings(
     }
     if (stopped) { out.deferred += inputs.length - n; break; }
 
-    // The mark: the session has ended past the grace (no recording can still appear or finish), and every own recording is
-    // finished and was seen locked this pass. Refused recordings are not this input's, so they never hold the mark back.
+    // The mark: the session has ended past the grace (no recording can still appear or finish), the listing was short of a page,
+    // and every own recording is finished and was seen locked this pass. Refused recordings are not this input's, so they never
+    // hold the mark back.
     const settled = TERMINAL_STATES.includes(input.state) && nowMs - new Date(input.end_ref).getTime() > FINALISATION_GRACE_SECONDS * 1000;
-    if (settled && confirmed === own.length && own.every((v) => FINISHED.has(v.state))) {
+    if (settled && !truncated && confirmed === own.length && own.every((v) => FINISHED.has(v.state))) {
       await sql`update fixture_stream_inputs set recordings_locked_at = coalesce(recordings_locked_at, ${opts.now}) where id = ${input.id}`;
     }
   }
