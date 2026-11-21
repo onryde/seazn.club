@@ -32800,7 +32800,7 @@
         "tags": [
           "stages"
         ],
-        "x-required-scope": "none",
+        "x-required-scope": "manage",
         "parameters": [
           {
             "name": "id",
@@ -33145,7 +33145,7 @@
         "tags": [
           "stages"
         ],
-        "x-required-scope": "none",
+        "x-required-scope": "read",
         "parameters": [
           {
             "name": "id",
@@ -33511,7 +33511,7 @@
         "tags": [
           "stages"
         ],
-        "x-required-scope": "none",
+        "x-required-scope": "manage",
         "parameters": [
           {
             "name": "id",
