@@ -694,13 +694,16 @@ describe.runIf(HAS_DB)("getMatchDay - the view places the rounds and lists each 
       const down = await getMatchDay(day.auth, day.comp.id, now);
 
       expect(vi.mocked(readOnlineRounds), "premise: the forced throw was reached").toHaveBeenCalledTimes(1);
-      // The two days differ in exactly one list, and on purpose. An EMPTY answer lists no round, so a board in play stays a no-court row (it is
-      // nowhere else). A FAILED read lists no round either, but it says nothing about the boards: they are online boards a round row would hold, and
-      // drawing every one of them under "Playing, no court" for a poll (and closing the open board panel as "no longer on this list") is a wrong
-      // screen, not a degraded one - so the failed day drops the online division's boards and keeps every other row (final review, M5).
-      const { playing_no_court: downNoCourt, ...downRest } = down;
-      const { playing_no_court: baseNoCourt, ...baseRest } = withoutOnline;
-      expect(downRest, "a failed online read leaves the day as a day with no online rounds reads, but for the no-court list: courts, needs-you, all of it").toEqual(baseRest);
+      // The two days differ in exactly two things, and on purpose. (1) An EMPTY answer lists no round, so a board in play stays a no-court row
+      // (it is nowhere else). A FAILED read lists no round either, but it says nothing about the boards: they are online boards a round row
+      // would hold, and drawing every one of them under "Playing, no court" for a poll is a wrong screen, not a degraded one - so the failed
+      // day drops the online division's boards and keeps every other row (final review, M5). (2) The failed day SAYS so: `online_failed` is
+      // true, so a page that held the last answer keeps it (the wire's marker, gaps wave A2) instead of reading `online_rounds: []` as "no round".
+      const { playing_no_court: downNoCourt, online_failed: downFailed, ...downRest } = down;
+      const { playing_no_court: baseNoCourt, online_failed: baseFailed, ...baseRest } = withoutOnline;
+      expect(downFailed, "a failed online read is marked on the view").toBe(true);
+      expect(baseFailed, "an empty ANSWER is not a failure: the baseline day carries no marker").toBe(false);
+      expect(downRest, "a failed online read leaves the day as a day with no online rounds reads, but for the no-court list and the marker: courts, needs-you, all of it").toEqual(baseRest);
       expect(baseNoCourt.map((m) => m.id).sort(), "premise: an EMPTY answer keeps the online boards as no-court rows (nothing else lists them)").toEqual([inHall, ...idsOf(online.boards)].sort());
       expect(idsOf(online.boards).length, "premise: the day has online boards in play").toBeGreaterThan(0);
       expect(downNoCourt.map((m) => m.id), "a FAILED read: no online board is a no-court row; the in-hall match, in a division that does not play online, stays").toEqual([inHall]);
@@ -711,6 +714,7 @@ describe.runIf(HAS_DB)("getMatchDay - the view places the rounds and lists each 
 
       const up = await getMatchDay(day.auth, day.comp.id, now);
       expect(up.online_rounds, "the next poll reads the rounds again").toHaveLength(1);
+      expect(up.online_failed, "and the marker is gone with the failure").toBe(false);
       expect(logged, "and logs nothing more").toHaveBeenCalledTimes(1);
     } finally {
       logged.mockRestore();
@@ -1003,6 +1007,37 @@ describe.runIf(HAS_DB)("readOnlineRounds - the hold reason follows the board (M2
 // consumer, and it strips what it does not declare. What must reach the wire: the hold reason, and each side's presence, camera, joinable.
 describe.runIf(HAS_DB)("the wire: online_rounds through the v1 poll route's schema", () => {
   const real = (minutes: number): Date => new Date(Date.now() + minutes * MIN);
+
+  it("a FAILED online read reaches the wire as online_failed: true (the schema declares it, so the parse keeps it), an answered read as false", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 1 });
+    // The route reads the REAL clock, so the round is opened by the product's own open at a real instant (as the test above does).
+    expect(await openRound({ stageId: r.stageId, roundNo: 1, actorUserId: r.ownerUserId }, { now: real(-2) }), "premise: the real open").toMatchObject({ opened: true });
+    const secret = (await createApiKey(r.owner, { name: "match day online failed", scopes: ["read"] })).secret;
+    const poll = async () => {
+      const res = await matchDayRoute(
+        new Request(`https://test.local/api/v1/competitions/${r.competitionId}/match-day`, { headers: { authorization: `Bearer ${secret}` } }),
+        { params: Promise.resolve({ id: r.competitionId }) },
+      );
+      expect(res.status).toBe(200);
+      return ((await res.json()) as { data: unknown }).data as { online_failed?: unknown; online_rounds: unknown[] };
+    };
+    const logged = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    try {
+      vi.mocked(readOnlineRounds).mockRejectedValueOnce(new Error("boom: the online read is down"));
+      const down = await poll();
+      expect(down.online_failed, "the JSON the poll sends says the read failed").toBe(true);
+      expect(down.online_rounds, "and carries no rounds").toEqual([]);
+      expect(isMatchDayView(down), "still a view the client accepts").toBe(true);
+      expect(MatchDayView.parse(down).online_failed, "the schema keeps the marker (a plain z.object strips an undeclared key)").toBe(true);
+
+      const up = await poll();
+      expect(up.online_failed, "an answered read is false, never a missing key").toBe(false);
+      expect(up.online_rounds, "premise: the round is read").toHaveLength(1);
+      expect(MatchDayView.parse(up).online_failed).toBe(false);
+    } finally {
+      logged.mockRestore();
+    }
+  });
 
   it("a link-held board (real open) and a board with live presence and camera: presence, camera and joinable survive the parse, and a key reads the board held without WHY (MD-R21)", async () => {
     const r = await seedOnlineChessRound({ fixtures: 2 });

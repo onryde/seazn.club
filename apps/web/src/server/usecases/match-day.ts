@@ -440,9 +440,10 @@ function playingNoCourtOf(rows: readonly FixtureRow[], liveDivisions: ReadonlySe
  *   - the read ANSWERED (`rounds` is the list, possibly empty): a board some round row lists is that row's, so it is dropped here; one no
  *     row lists (an earlier round's live game, say) is in play and nowhere else, so it stays a no-court row;
  *   - the read FAILED (`rounds` is null, ruling MD-R9: the day is answered without the online block): nothing says which boards are listed,
- *     and every online board in play would otherwise be drawn as a no-court row for the poll - and the board panel open on one of them
- *     closed as "no longer on this list" (final review, M5). So it fails CLOSED on the division's own statement of "plays online"
- *     (`divisionPlaysOnline`, the one the online read filters by), never on the listed ids it does not have. */
+ *     and every online board in play would otherwise be drawn as a no-court row for the poll (final review, M5). So it fails CLOSED on the
+ *     division's own statement of "plays online" (`divisionPlaysOnline`, the one the online read filters by), never on the listed ids it
+ *     does not have. That is this list only: the view still carries `online_rounds: []` for the poll, and what keeps the panel open on a
+ *     board is the page, which reads `online_failed` and holds the rounds it had (`viewAfterPoll`, gaps wave A2). */
 export function playingNoCourtAfterOnline(
   rows: readonly FixtureRow[],
   rounds: readonly MatchDayOnlineRound[] | null,
@@ -981,6 +982,8 @@ export async function getMatchDay(
     fixtures_today: fixturesToday,
     venues_today: board.venuesToday,
     online_rounds: onlineRounds ?? [],
+    // `null` is a FAILED read (the catch above); `[]` is an answer. The page keeps its last rounds only on the first.
+    online_failed: onlineRounds === null,
   };
 }
 

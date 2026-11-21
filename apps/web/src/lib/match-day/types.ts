@@ -299,4 +299,9 @@ export interface MatchDayView {
   /** The competition's online chess rounds (one per division, stage and round to show), after the courts in the list; empty when it
    *  has none. Read by `readOnlineRounds` (server/usecases/match-day-online.ts). */
   online_rounds: MatchDayOnlineRound[];
+  /** True when THIS poll's online read failed (ruling MD-R9 answers the day without it, so the courts never go down with chess): then
+   *  `online_rounds` is `[]` because nothing was read, NOT because the competition has no online round. A page that already holds an
+   *  answer keeps it (`viewAfterPoll`), so the board panel open on a game does not close and its cameras do not leave for a database
+   *  hiccup. False on every poll whose online read answered, an empty answer included. */
+  online_failed: boolean;
 }

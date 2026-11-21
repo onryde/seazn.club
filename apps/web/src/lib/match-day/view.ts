@@ -554,6 +554,15 @@ export function isMatchDayView(v: unknown): v is MatchDayView {
   );
 }
 
+/** What the page holds after a poll (gaps wave A2). A poll whose ONLINE read failed (`online_failed`, ruling MD-R9: the courts are answered
+ *  whole) carries `online_rounds: []` because nothing was read, not because no round exists - so taking it whole would close the board
+ *  panel open on a game as "left the list", drop a phone to the list and make the cameras leave and join again, for a database hiccup.
+ *  The page keeps the rounds it had and takes everything else from the poll; the marker stays on, so the page can say the read failed.
+ *  An ANSWERED poll is taken whole, an empty answer included: a round that ended leaves. */
+export function viewAfterPoll(prev: MatchDayView, next: MatchDayView): MatchDayView {
+  return next.online_failed ? { ...next, online_rounds: prev.online_rounds } : next;
+}
+
 /** The same guard for a candidates answer. */
 export function isCandidateList(v: unknown): v is MatchDayCandidate[] {
   return Array.isArray(v);

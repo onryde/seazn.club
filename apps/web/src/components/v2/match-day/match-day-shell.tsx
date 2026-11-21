@@ -65,6 +65,7 @@ import {
   sharedNoun,
   venueOptions,
   venueParamOf,
+  viewAfterPoll,
   withVenueParam,
   type Opened,
 } from "@/lib/match-day/view";
@@ -177,7 +178,9 @@ export function MatchDayShell({
   const [codeOpen, setCodeOpen] = useState(false);
 
   // One read of the day for the poll, the Refresh button and a court's tail countdown reaching 0 (use-day-refresh.ts).
-  const { refresh, busy: refreshing, failed: refreshFailed, lastOkAt } = useDayRefresh(competitionId, setView);
+  // A poll whose online read failed keeps the online rounds the page holds (`viewAfterPoll`): the board panel open on a game stays open.
+  const takeView = useCallback((next: MatchDayView) => setView((prev) => viewAfterPoll(prev, next)), []);
+  const { refresh, busy: refreshing, failed: refreshFailed, lastOkAt } = useDayRefresh(competitionId, takeView);
   const refreshNow = useCallback(() => void refresh({ manual: true }), [refresh]);
   /** A press in the round panel changed the day: the quiet read, with a stable identity (the panel's runners are built over it). */
   const refreshQuiet = useCallback(() => void refresh(), [refresh]);

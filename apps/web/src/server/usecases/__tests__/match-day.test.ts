@@ -931,6 +931,7 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
       fixtures_today: 0,
       venues_today: [],
       online_rounds: [],
+      online_failed: false,
     });
   });
 

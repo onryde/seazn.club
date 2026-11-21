@@ -81,6 +81,7 @@ import { MatchDayShell, type MatchDayShellProps } from "../match-day-shell";
 import { OnlineList } from "../online-list";
 import { BoardFocus } from "../board-focus";
 import { RoundFocus } from "../round-focus";
+import { RefreshLine } from "../refresh-line";
 import { arbiterRound, checkinRound, earlier, held, live, onlineView, pairedRound, present, round, withState } from "./_online-fixtures";
 
 const court = (id: string, name: string): MatchDayCourt => ({
@@ -121,7 +122,8 @@ function parts(tree: ReactElement[]) {
   const list = tree.find((e) => e.type === OnlineList);
   const boardPanel = tree.find((e) => e.type === BoardFocus);
   const roundPanel = tree.find((e) => e.type === RoundFocus);
-  const listBox = tree.find((e) => propsOf(e)["data-testid"] === "md-list")!;
+  // Absent when the page lists nothing at all (an empty day shows its own empty state instead of the list).
+  const listBox = tree.find((e) => propsOf(e)["data-testid"] === "md-list");
   const lost = tree.find((e) => propsOf(e)["data-testid"] === "md-lost");
   const rounds = list === undefined ? [] : (propsOf(list).rounds as MatchDayOnlineRound[]);
   return {
@@ -132,7 +134,7 @@ function parts(tree: ReactElement[]) {
     board: boardPanel === undefined ? null : propsOf(boardPanel),
     round: roundPanel === undefined ? null : propsOf(roundPanel),
     court: tree.find((e) => e.type === CourtFocus) === undefined ? null : propsOf(tree.find((e) => e.type === CourtFocus)!),
-    listHiddenOnPhone: String(propsOf(listBox).className).split(/\s+/).includes("max-md:hidden"),
+    listHiddenOnPhone: listBox === undefined ? false : String(propsOf(listBox).className).split(/\s+/).includes("max-md:hidden"),
     lost: lost === undefined ? null : JSON.stringify(propsOf(lost).children),
     selected: list === undefined ? null : propsOf(list).selected,
   };
@@ -240,6 +242,54 @@ describe("a board opened from the list: full-screen on a phone, kept through the
     expect(p.listHiddenOnPhone).toBe(false);
     expect(p.boardRows).toBe(3);
     expect(net.calls).toHaveLength(2);
+  });
+});
+
+describe("a poll whose ONLINE read failed (online_failed) keeps the last online answer: no 'left the list', the board panel and the phone stay (gaps wave A2)", () => {
+  it("a board open on a game: the failed poll's empty online_rounds changes nothing the page shows of it; the line says the read failed; the next answered poll updates it", async () => {
+    const island = renderIsland(MatchDayShell, props(night({ now: at(0) })));
+    (parts(island.tree()).list!.onOpenBoard as (id: string) => void)("b-2");
+    const before = parts(island.tree());
+    expect(before.board, "premise: the board is open").toMatchObject({ hiddenOnPhone: false });
+    expect(before.boardRows, "premise: the list holds its three boards").toBe(3);
+    const leavesBefore = sdk.leaves.length;
+
+    // A poll the server answered WITHOUT the online block: no rounds, because nothing was read.
+    net.next = { ...night({ now: at(1) }), online_rounds: [], online_failed: true };
+    poll.tick!();
+    await settle();
+    const down = parts(island.tree());
+    expect(down.lost, "the open board did NOT leave the list").toBeNull();
+    expect((down.board!.row as { fixtureId: string; state: unknown }).fixtureId).toBe("b-2");
+    expect(down.board, "the phone stays on the board").toMatchObject({ hiddenOnPhone: false });
+    expect(down.listHiddenOnPhone).toBe(true);
+    expect(down.boardRows, "the list still holds the boards it had").toBe(3);
+    expect(sdk.leaves.length, "no camera left because of the failed read").toBe(leavesBefore);
+    const line = island.tree().find((e) => e.type === RefreshLine)!;
+    expect(propsOf(line).failed, "the refresh line says the read failed, not 'updated 0 s ago'").toBe(true);
+
+    // The next poll answers: the game moved on, and the line clears.
+    net.next = night({ liveMove: 31, now: at(2) });
+    poll.tick!();
+    await settle();
+    const up = parts(island.tree());
+    expect((up.board!.row as { state: unknown }).state).toEqual({ kind: "live", moveNo: 31 });
+    expect(up.lost).toBeNull();
+    expect(propsOf(island.tree().find((e) => e.type === RefreshLine)!).failed).toBe(false);
+  });
+
+  it("an ANSWERED poll that really lists no round is taken as the answer - the keep is for failures only", async () => {
+    const island = renderIsland(MatchDayShell, props(night({ now: at(0) })));
+    (parts(island.tree()).list!.onOpenBoard as (id: string) => void)("b-2");
+    expect(parts(island.tree()).boardRows, "premise: the page lists three boards").toBe(3);
+    net.next = { ...night({ now: at(1) }), online_rounds: [], online_failed: false };
+    poll.tick!();
+    await settle();
+    const p = parts(island.tree());
+    expect(p.rounds, "the page lists no round: the read answered that there is none").toHaveLength(0);
+    expect(p.boardRows).toBe(0);
+    expect(p.board, "no board panel on a board nobody lists").toBeNull();
+    expect(propsOf(island.tree().find((e) => e.type === RefreshLine)!).failed, "and the line does not say the read failed").toBe(false);
   });
 });
 
