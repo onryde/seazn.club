@@ -5,9 +5,6 @@
 // marker. `environment: "node"`: markup only; the browser half is the e2e X-QS-1 and the 320/768/1280 screens.
 //
 // Expected words are R24 pick 17 A's, typed from the mock - never read back from the dictionary the builder resolves.
-//
-// single-sport (generic): the table draws whatever statuses the builder hands it; which sport produced them is the builder's
-// concern, swept in qualification-view.test.ts.
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -19,6 +16,7 @@ import { plural, t, type TKey } from "@/lib/i18n-runtime";
 import { buildQualificationView, divisionAwardAddsToLedger, divisionPointsBounds, type QualFixture } from "@/server/public-site/qualification-view";
 import { StandingsTable } from "../standings-table";
 
+// single-sport: the table draws whatever statuses the builder hands it, whichever sport produced them; the builder is swept per sport in qualification-view-frozen.test.ts (the cut-line tie, every sport) and qualification-view.test.ts (the live race the freeze switches off).
 const GENERIC = builtinModules.find((m) => m.key === "generic")!;
 const CFG = { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false };
 const IDS = ["a", "b", "c", "d"];
