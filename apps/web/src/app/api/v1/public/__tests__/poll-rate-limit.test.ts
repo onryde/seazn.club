@@ -14,9 +14,11 @@
 //   - GET /public/fixtures/{id}/board           watch-panel.tsx (T16, an online chess board's view-only state)
 // Not polled: /public/fixtures/{id}/realtime-token is fetched once per
 // subscription (use-live-fixture.ts, use-fixture-stream.ts), never on a timer,
-// so it stays on the 60 bucket.
+// so it stays on the 60 bucket. /public/fixtures/{id}/video (Seazn-hosted
+// video, Task 14) has no client caller yet; the island that fetches it on a
+// timer (Task 15) moves it to the poll bucket, by the ruling above.
 //
-// NOT_POLLED lists EVERY other route that calls `publicRateLimit` (13 of them,
+// NOT_POLLED lists EVERY other route that calls `publicRateLimit` (14 of them,
 // review r2-m2), so moving any one of them to the poll bucket fails here.
 // register, register/join and by-ref/withdraw keep their own `rateLimit`
 // buckets and are out of scope.
@@ -59,6 +61,7 @@ const usecase = vi.hoisted(() => ({
   fixtureRealtimeEligible: vi.fn(async () => true),
   publicFixtureBoard: vi.fn(async () => ({ roundOpened: false, externalPlay: null })),
   mintPublicFixtureToken: vi.fn(async () => "token"),
+  seaznFixtureVideo: vi.fn(async () => ({ live: null, replay: [] })),
 }));
 vi.mock("@/server/usecases/public", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/usecases/public")>()),
@@ -95,6 +98,7 @@ vi.mock("@/server/public-site/data", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/public-site/data")>()),
   fixtureRealtimeEligible: usecase.fixtureRealtimeEligible,
 }));
+vi.mock("@/server/video/seazn-video", () => ({ seaznFixtureVideo: usecase.seaznFixtureVideo }));
 vi.mock("@/lib/realtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/realtime")>()),
   mintPublicFixtureToken: usecase.mintPublicFixtureToken,
@@ -111,6 +115,7 @@ import { GET as standings } from "../orgs/[orgSlug]/competitions/[slug]/division
 import { GET as competition } from "../orgs/[orgSlug]/competitions/[slug]/route";
 import { GET as discovery } from "../discovery/route";
 import { GET as realtimeToken } from "../fixtures/[id]/realtime-token/route";
+import { GET as video } from "../fixtures/[id]/video/route";
 import { GET as entrants } from "../orgs/[orgSlug]/competitions/[slug]/divisions/[divisionSlug]/entrants/route";
 import { GET as schedule } from "../orgs/[orgSlug]/competitions/[slug]/divisions/[divisionSlug]/schedule/route";
 import { GET as stats } from "../orgs/[orgSlug]/competitions/[slug]/divisions/[divisionSlug]/stats/route";
@@ -156,6 +161,7 @@ const NOT_POLLED: Array<[string, Call, string?]> = [
   ["competitions/{slug}", (ip) => competition(from(ip), params({ orgSlug: "o", slug: "c" }))],
   ["discovery", (ip) => discovery(from(ip))],
   ["fixtures/{id}/realtime-token", (ip) => realtimeToken(from(ip), params({ id: "f1" }))],
+  ["fixtures/{id}/video", (ip) => video(from(ip), params({ id: "f1" }))],
   ["divisions/{div}/entrants", (ip) => entrants(from(ip), params(division))],
   ["divisions/{div}/schedule", (ip) => schedule(from(ip), params(division))],
   ["divisions/{div}/stats", (ip) => stats(from(ip), params(division))],
@@ -195,9 +201,9 @@ describe("the polled public endpoints: their own per-IP bucket, 300 a minute", (
 });
 
 describe("every other public endpoint: still 60 a minute", () => {
-  it("premise: NOT_POLLED names all 13 `publicRateLimit` routes, once each", () => {
-    expect(NOT_POLLED).toHaveLength(13);
-    expect(new Set(NOT_POLLED.map(([route]) => route)).size).toBe(13);
+  it("premise: NOT_POLLED names all 14 `publicRateLimit` routes, once each", () => {
+    expect(NOT_POLLED).toHaveLength(14);
+    expect(new Set(NOT_POLLED.map(([route]) => route)).size).toBe(14);
   });
 
   it.each(NOT_POLLED)("%s serves 60 from one IP, refuses the 61st, and never touches the poll bucket", async (_route, call, own) => {

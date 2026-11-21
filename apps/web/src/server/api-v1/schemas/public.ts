@@ -1,4 +1,4 @@
-// /api/v1 contracts — public fixture summary (GET /public/fixtures/{id}) and PublicOrgLive.
+// /api/v1 contracts — public fixture summary (GET /public/fixtures/{id}), PublicOrgLive and PublicFixtureVideo.
 // One module of the schemas/ folder; ./index.ts is the map and the public surface. Pure zod (loads bare under
 // `node --experimental-strip-types`): relative imports carry an explicit `.ts`, types come in through `import type`.
 import { z } from "zod";
@@ -101,3 +101,21 @@ export const PublicOrgLive = z.object({
   ),
 });
 export type PublicOrgLiveT = z.infer<typeof PublicOrgLive>;
+
+// ---------------------------------------------------------------------------
+// Public — GET /public/fixtures/{id}/video (Seazn-hosted video, Task 14)
+// ---------------------------------------------------------------------------
+
+/** A signed playback URL and when its token stops working. The token is a PATH segment of `src` (Cloudflare's
+ *  `https://<customer host>/<token>/manifest/video.m3u8`), never a query, and the route answers it `private, no-store`. */
+const SignedPlayback = z.object({ src: z.url(), expiresAt: z.string().datetime() });
+
+/** What the match page's player reads (server/video/seazn-video.ts): the live, while the fixture's latest session is a Seazn
+ *  session on air, and the replay parts, numbered from 1. `hls` is a signed HLS manifest (the interim Cloudflare recording,
+ *  recommendation 2026-11-21); `embed` is the replay host's player (Task 25). A fixture with no Seazn video, or one the
+ *  public cannot see, answers `{ live: null, replay: [] }`. */
+export const PublicFixtureVideo = z.object({
+  live: SignedPlayback.nullable(),
+  replay: z.array(SignedPlayback.extend({ partNo: z.number().int().min(1), player: z.enum(["hls", "embed"]) })),
+});
+export type PublicFixtureVideo = z.infer<typeof PublicFixtureVideo>;

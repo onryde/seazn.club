@@ -90,6 +90,13 @@
 // fetch instrumentation drops only a URL's query, so the path reaches the outgoing request's breadcrumb and span. Every
 // `bcdn_token=` value becomes `[token]`; `expires`, `token_path` and the file name stay (none of them signs anything).
 //
+// A Seazn-hosted video's signed Cloudflare playback URL rides its PATH too (Task 14; probes C1, C5): the match page's player
+// fetches `https://<customer host>/<token>/manifest/video.m3u8` and every playlist and segment under it from the viewer's browser,
+// and the replay mover's download is `…/<token>/downloads/default.mp4`. Whoever holds the URL plays the video until the token
+// expires (C2: the token is the only protection). The path segment right after a Cloudflare Stream customer host
+// (`*.cloudflarestream.com/`, plain or URL-encoded) becomes `[token]`, whatever its shape: on an unsigned input it is the uid,
+// which plays as well as a token does. The host and the rest of the path stay.
+//
 // A sampled TRANSACTION carries the request's query string a second time, in its span data, WITH its `?` and beside a URL
 // that has none: `http.query` in `contexts.trace.data` and an outgoing request's breadcrumb (@sentry/opentelemetry
 // `getRequestSpanData`), `url.query` in a span's data (@sentry/core `getHttpSpanDetailsFromUrlObject`). Where the event, or
@@ -159,6 +166,12 @@ const ENCODED_JOIN_CODE = new RegExp(`(%(?:25)*(?:3[Ff]|26)(?:${JOIN_CODE_NAMES}
 /** The replay host's CDN token (probe B5), a path segment `bcdn_token=<token>&expires=…`: the value up to the next `&`, `/`,
  *  `?`, `#`, quote, angle bracket or space. Any value, not only the token's own 43 characters. */
 const BUNNY_CDN_TOKEN = /(bcdn_token=)[^&/?#\s"'<>]+/g;
+/** A Cloudflare Stream customer host (`customer-<code>.cloudflarestream.com`, an optional port) and the first segment of its
+ *  path: the playback token (C1), or an unsigned input's uid. The segment runs to the next `/`, `?`, `#`, quote, angle bracket
+ *  or space; a JWT's dots are inside it. The host must end there (`….cloudflarestream.com.other.example/` is not it). */
+const STREAM_PLAYBACK_PATH = /(\.cloudflarestream\.com(?::\d+)?\/)[^/?#\s"'<>]+/g;
+/** The same URL-ENCODED inside another URL (a `next=`, a referrer carried as a parameter), at any depth, either hex case. */
+const ENCODED_STREAM_PLAYBACK_PATH = /(\.cloudflarestream\.com(?:%(?:25)*3[Aa]\d+)?%(?:25)*2[Ff])[^%&/?#\s"'<>]+/g;
 /** A capture code in a phone route's path: everything up to the next `/`, `?`, `#`, quote, angle bracket or space. */
 const CAPTURE_PATH = /(\/capture\/codes\/)[^/?#\s"'<>]+/g;
 /** The same path URL-ENCODED inside another URL, at any encoding depth, either hex case. */
@@ -284,6 +297,7 @@ const MAYBE_TOKEN = new RegExp(
     "\\/capture\\/codes\\/",
     "capture%(?:25)*2[Ff]codes%",
     "bcdn_token=",
+    "\\.cloudflarestream\\.com",
     `(?:${JOIN_CODE_NAMES})=`,
     `(?:${JOIN_CODE_NAMES})%`,
     "(?:^|[?&])t=",
@@ -307,12 +321,16 @@ export function scrubTokenQuery(query: string): string {
  *  `join_code=` / `join=` query value (plain or encoded) becomes `[code]`, the secret after a
  *  `SECRET_PATH_ROUTES` route root (`/claim/`, `/join/`, `/checkin/`, …; plain or encoded) becomes `[token]`, and a
  *  one-time sign-in token in the `token=` query value of a one-time route (plain or encoded) becomes `[token]`, a replay CDN
- *  token after `bcdn_token=` becomes `[token]`, and a bare quick match home token `qm_…` left anywhere else becomes `qm_[token]`. */
+ *  token after `bcdn_token=` becomes `[token]`, the playback token after a Cloudflare Stream customer host (plain or encoded)
+ *  becomes `[token]`, and a bare quick match home token `qm_…` left anywhere else becomes `qm_[token]`. */
 export function scrubScoreUrl(value: string): string {
   if (!MAYBE_TOKEN.test(value)) return value;
   return value
     // First, for the same reason as the room JWT below: a CDN token is random base64url too, and a `dl_` run inside it would be half-eaten.
     .replace(BUNNY_CDN_TOKEN, "$1[token]")
+    // Early, for the same reason: a Cloudflare playback token is a JWT, and a `dl_` run inside it would be half-eaten.
+    .replace(STREAM_PLAYBACK_PATH, "$1[token]")
+    .replace(ENCODED_STREAM_PLAYBACK_PATH, "$1[token]")
     // First: a room JWT is random base64url and can contain a `dl_` run, which BARE_TOKEN would half-eat and so break the JWT shape (C43).
     .replace(ROOM_TOKEN_QUERY, "$1[token]")
     .replace(ENCODED_ROOM_TOKEN, "$1[token]")
