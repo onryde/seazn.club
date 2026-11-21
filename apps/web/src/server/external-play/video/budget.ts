@@ -1,17 +1,26 @@
 import "server-only";
 // The platform-wide RealtimeKit call budget (T17B fix 2, D21; review I2).
 //
-// RealtimeKit's REST API allows 1,200 calls per five minutes for the WHOLE account. Past it EVERY call is refused
-// for five minutes — a seat, the sweep's teardown, an arbiter's join, for every club at once. So the account's
-// budget is a platform resource, and every call (realtimekit.ts `cfEnvelope`, the one place that makes one) spends
-// from a token bucket first. Over budget the call is NOT made: it is deferred (`RealtimeKitDeferred`), and each
-// caller decides what a deferral means — never "no camera", never an outage.
+// RealtimeKit's REST API has its own limit: 3,500 requests per five minutes for the WHOLE account (Cloudflare's
+// RealtimeKit "Limits" page, developers.cloudflare.com/realtime/realtimekit/platform/limits/). It is the limit this file
+// guards, and it is NOT Cloudflare's global API limit of 1,200 per five minutes per USER: that one was measured not to bind
+// RealtimeKit calls (2026-11-21, one staging token: 1,300 and then 3,700 list reads inside a single five-minute window,
+// zero 429s). Other Cloudflare API callers - relay/ingest-cf.ts, the Stream live inputs - ARE on the global limit, and are
+// not metered here: that is a separate resource, and a RealtimeKit call neither spends from it nor is spent from by it.
 //
-// WHY A BUCKET. A bucket of capacity B refilled at r per second can pass at most B + r*W calls in ANY window W (the
-// burst plus the window's refill) — a sliding-window bound, which a per-minute counter does not give (it passes
-// twice the limit across a minute boundary). The ceiling is 900, 75% of the vendor's limit: the margin is for the
-// calls this process does not meter (none today) and the vendor's own window not being ours. It is split as a burst
-// of 300 (a round of boards opening at once must not queue behind a trickle) plus 2 per second.
+// Past the limit EVERY RealtimeKit call is refused for five minutes - a seat, the sweep's teardown, an arbiter's join, for
+// every club at once. So the account's budget is a platform resource, and every call (realtimekit.ts `cfEnvelope`, the one
+// place that makes one) spends from a token bucket first. Over budget the call is NOT made: it is deferred
+// (`RealtimeKitDeferred`), and each caller decides what a deferral means - never "no camera", never an outage.
+//
+// WHY A BUCKET. A bucket of capacity B refilled at r per second can pass at most B + r*W calls in ANY window W (the burst
+// plus the window's refill) - a sliding-window bound, which a per-minute counter does not give (it passes twice the limit
+// across a minute boundary). The ceiling is 2,625, 75% of the vendor's limit: the margin is for the calls this process
+// does not meter (none today) and the vendor's own window not being ours. It is split as a burst of 825 (a round of boards
+// opening at once must not queue behind a trickle) plus 6 per second. The split keeps the shape the ceiling always had - a
+// bit under a third as burst, the rest as refill (the old 900 was 300 + 2 a second; scaled by the same 3,500 / 1,200 it would
+// be 875 + 5.83 a second) - rounded so the refill is a whole number of tokens a second: the bucket's exact B + r*W = ceiling
+// then holds in floating point, and the line's hand-counted waits (seat-line.ts) divide by a whole rate.
 //
 // WHY POSTGRES. Fly runs more than one web machine and the limit is the account's, so the bucket must be shared; and
 // the repo's other limiter (lib/rate-limit.ts) is Redis-only and INERT wherever Redis is not configured — local dev,
@@ -25,13 +34,13 @@ import "server-only";
 import type postgres from "postgres";
 import { sql } from "@/lib/db";
 
-/** The vendor's published limit: RealtimeKit REST calls per account per five minutes. */
-export const RTK_VENDOR_LIMIT_PER_WINDOW = 1_200;
+/** The vendor's published limit: RealtimeKit REST calls per account per five minutes (the "Limits" page cited above). */
+export const RTK_VENDOR_LIMIT_PER_WINDOW = 3_500;
 export const RTK_BUDGET_WINDOW_MS = 5 * 60_000;
 /** What this process lets through in ANY five-minute window: 75% of the vendor's limit. */
-export const RTK_CALLS_PER_WINDOW = 900;
+export const RTK_CALLS_PER_WINDOW = 2_625;
 /** The bucket's capacity. B + r*W = RTK_CALLS_PER_WINDOW, so the burst is spent out of the same ceiling. */
-export const RTK_BUDGET_BURST = 300;
+export const RTK_BUDGET_BURST = 825;
 /** Tokens per second: what is left of the ceiling after the burst, over the window. */
 export const RTK_BUDGET_REFILL_PER_S = (RTK_CALLS_PER_WINDOW - RTK_BUDGET_BURST) / (RTK_BUDGET_WINDOW_MS / 1_000);
 

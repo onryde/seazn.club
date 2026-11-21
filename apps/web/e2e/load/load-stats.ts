@@ -8,11 +8,11 @@
  *  D22). Database: the production connection budget (60). */
 export const LOAD_LIMITS = {
   windowMs: 5 * 60_000,
-  rtkVendor: 1_200,
-  rtkCeiling: 900,
+  rtkVendor: 3_500,
+  rtkCeiling: 2_625,
   /** The call budget's bucket (video/budget.ts RTK_BUDGET_BURST / RTK_BUDGET_REFILL_PER_S): capacity and tokens per second. */
-  rtkBurst: 300,
-  rtkRefillPerS: 2,
+  rtkBurst: 825,
+  rtkRefillPerS: 6,
   lichessCreateWindowMs: 10 * 60_000,
   lichessCreatesPer10Min: 500,
   dbConnectionBudget: 60,

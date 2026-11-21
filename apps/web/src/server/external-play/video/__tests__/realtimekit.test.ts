@@ -1897,7 +1897,7 @@ describe("listMeetingSessions", () => {
 });
 
 // ─── D21: the platform-wide call budget (T17B fix 2, review I2) ──────────────────────────────────────────────
-// The vendor allows 1,200 calls per five minutes for the whole account and refuses EVERY call for five minutes past
+// The vendor allows 3,500 calls per five minutes for the whole account and refuses EVERY call for five minutes past
 // it. Every request this adapter makes spends a token first (budget.ts); over budget the request is NOT made and the
 // caller is told `deferred` — a RealtimeKitError subtype every caller can still catch as "video, not now", and one
 // that a caller can tell from an outage and from a camera that is off.

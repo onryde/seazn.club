@@ -1,13 +1,14 @@
 // T17B fix 2, D21 — the platform-wide RealtimeKit call budget (video/budget.ts, V457 `realtimekit_call_budget`).
 //
-// The vendor allows 1,200 REST calls per five minutes for the WHOLE account; past it every call, for every club, is
-// refused for five minutes. The bucket is how we stay under it — so what these tests pin is the property the vendor
-// cares about, not the bucket's internals: in ANY five-minute window no more than the ceiling is ever let through,
+// The vendor allows 3,500 REST calls per five minutes for the WHOLE account (RealtimeKit's documented limit; the global
+// 1,200-per-user Cloudflare API limit was measured NOT to bind these calls, 2026-11-21); past it every call, for every
+// club, is refused for five minutes. The bucket is how we stay under it — so what these tests pin is the property the
+// vendor cares about, not the bucket's internals: in ANY five-minute window no more than the ceiling is ever let through,
 // however hard it is hammered, whatever the clock does, however many machines ask at once.
 //
-// The ceiling and the vendor's limit are the constants the code declares and the ruling states (900 of 1,200); every
-// expectation below is derived from them or from the bucket's own algebra, never from a number typed beside the
-// assertion. The time axis is the statement's `at` seam, so a twenty-minute hammering runs in seconds.
+// The vendor's limit is the one literal below, from the vendor's own page; the ceiling is the ruling's 75% OF it, and every
+// other expectation is derived from the constants the code declares or from the bucket's own algebra, never from a number
+// typed beside the assertion. The time axis is the statement's `at` seam, so a twenty-minute hammering runs in seconds.
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
@@ -40,13 +41,17 @@ afterAll(async () => {
 
 describe("the constants (the ruling, not the algebra of the implementation)", () => {
   it("the ceiling is under the vendor's limit, and the bucket's burst and refill add up to exactly the ceiling over a window", () => {
-    expect(RTK_VENDOR_LIMIT_PER_WINDOW, "the vendor's published limit").toBe(1_200);
+    expect(RTK_VENDOR_LIMIT_PER_WINDOW, "RealtimeKit's documented REST limit per account per five minutes").toBe(3_500);
     expect(RTK_BUDGET_WINDOW_MS).toBe(5 * 60_000);
     expect(RTK_CALLS_PER_WINDOW).toBeLessThan(RTK_VENDOR_LIMIT_PER_WINDOW);
+    expect(RTK_CALLS_PER_WINDOW, "the ceiling is 75% of the vendor's limit").toBe(0.75 * RTK_VENDOR_LIMIT_PER_WINDOW);
     // A bucket of capacity B refilled at r per second can pass at most B + r*W in any window W — the burst PLUS a
-    // window's refill. Sizing the capacity at the whole ceiling would pass twice it (1,800 in five minutes).
+    // window's refill. Sizing the capacity at the whole ceiling would pass twice it.
     expect(RTK_BUDGET_BURST + RTK_BUDGET_REFILL_PER_S * (RTK_BUDGET_WINDOW_MS / 1_000)).toBe(RTK_CALLS_PER_WINDOW);
     expect(RTK_BUDGET_BURST).toBeLessThan(RTK_CALLS_PER_WINDOW);
+    // A whole number of tokens a second: the exact-sum assertion above and the hand-counted tables that read the rate
+    // (seat-line-wire.test.ts) are then not at the mercy of a non-terminating fraction.
+    expect(Number.isInteger(RTK_BUDGET_REFILL_PER_S), "the refill is a whole number of tokens a second").toBe(true);
   });
 
   it("the key names the vendor host AND the account: another fixture vendor, or another account, is another bucket", () => {

@@ -248,35 +248,37 @@ describe.skipIf(!DB)("the pool and the estimate follow the stamped prices", () =
     expect(a.kind).toBe("queued");
     if (a.kind !== "queued") throw new Error("unreachable");
     expect(a.line.position, "behind the three").toBe(4);
-    // Hand: places ahead (9+1) + (8+1) + (21+3) = 43; its own need 8; pool 4 -> 47 tokens at 2 a second = 23.5 s; the fourth place polls
-    // at the near cadence, 3 s: 26.5, rounded up.
-    expect(RTK_BUDGET_REFILL_PER_S, "premise: the refill the hand count uses").toBe(2);
+    // Hand: places ahead (9+1) + (8+1) + (21+3) = 43; its own need 8; pool 4 -> 47 tokens at 6 a second = 7.83 s; the fourth place polls
+    // at the near cadence, 3 s: 10.83, rounded up.
+    expect(RTK_BUDGET_REFILL_PER_S, "premise: the refill the hand count uses").toBe(6);
     expect(LINE_POLL_MS, "premise: the near cadence the hand count uses").toBe(3_000);
-    expect(a.line.etaS).toBe(27);
-    // The wrong answers' constants: the old position pricing (3 x 24 + 21 - 4 = 89 tokens -> 44.5 + 3 = 48) and a flat 'none' price
-    // for every place (3 x 9 + 8 - 4 = 31 -> 15.5 + 3 = 19) both differ.
-    expect(Math.ceil((3 * 24 + 21 - 4) / 2 + 3), "premise: the old pricing says 48").toBe(48);
-    expect(Math.ceil((3 * 9 + 8 - 4) / 2 + 3), "premise: pricing every place as the cheapest says 19").toBe(19);
+    expect(a.line.etaS).toBe(11);
+    // The wrong answers' constants: the old position pricing (3 x 24 + 21 - 4 = 89 tokens -> 14.83 + 3 = 17.83 -> 18) and a flat 'none' price
+    // for every place (3 x 9 + 8 - 4 = 31 -> 5.17 + 3 = 8.17 -> 9) both differ.
+    expect(Math.ceil((3 * 24 + 21 - 4) / 6 + 3), "premise: the old pricing says 18").toBe(18);
+    expect(Math.ceil((3 * 9 + 8 - 4) / 6 + 3), "premise: pricing every place as the cheapest says 9").toBe(9);
   });
 
   it("a WAITING stay ahead with a null stamp is promised at the unpriced maximum, column by column: both null 21 + 3, only the recheck null 9 + 3, only the reservation null 21 + 1 - and a fully stamped one 9 + 1 for contrast", async () => {
     // The estimate's `aheadReserved` coalesces each column on its own (`readStanding`'s ahead sum): a row from before the stamp, or one
     // with a single column null, must not drop out of the sum (a NULL addend makes the whole row's term NULL, and `sum` skips it).
     expect([LINE_RESERVATION_MAX, LINE_FALLBACK_READ_CALLS], "premise: the unpriced maximum and the unpriced re-verify the hand count uses").toEqual([21, 3]);
-    expect(RTK_BUDGET_REFILL_PER_S, "premise: the refill the hand count uses").toBe(2);
+    expect(RTK_BUDGET_REFILL_PER_S, "premise: the refill the hand count uses").toBe(6);
     expect(LINE_POLL_MS, "premise: the near cadence the hand count uses").toBe(3_000);
-    // etaS = ceil((promised ahead + own need 8 - pool 4) / 2 + 3 s). The fourth claim is a `room` stay (need 8, flag on), not completing.
+    // etaS = ceil((promised ahead + own need 8 - pool 0) / 6 + 3 s). The fourth claim is a `room` stay (need 8, flag on), not completing.
+    // The pool is 0 (the bucket pinned at exactly the admitted stay's reservation) so the four cases land on four different whole
+    // seconds at 6 tokens a second: a pool of 4 put the two-token differences between them inside one second.
     const CASES = [
-      { label: "both columns null", stamp: [null, null], promised: 24, etaS: 17 }, // (24 + 8 - 4) / 2 + 3 = 17
-      { label: "only recheck_cost null", stamp: [9, null], promised: 12, etaS: 11 }, // (12 + 8 - 4) / 2 + 3 = 11
-      { label: "only reservation null", stamp: [null, 1], promised: 22, etaS: 16 }, // (22 + 8 - 4) / 2 + 3 = 16
-      { label: "fully stamped (contrast)", stamp: [9, 1], promised: 10, etaS: 10 }, // (10 + 8 - 4) / 2 + 3 = 10
+      { label: "both columns null", stamp: [null, null], promised: 24, etaS: 9 }, // (24 + 8) / 6 + 3 = 8.33 -> 9
+      { label: "only recheck_cost null", stamp: [9, null], promised: 12, etaS: 7 }, // (12 + 8) / 6 + 3 = 6.33 -> 7
+      { label: "only reservation null", stamp: [null, 1], promised: 22, etaS: 8 }, // (22 + 8) / 6 + 3 = 8 exactly
+      { label: "fully stamped (contrast)", stamp: [9, 1], promised: 10, etaS: 6 }, // (10 + 8) / 6 + 3 = 6 exactly
     ] as const;
     let checked = 0;
     for (const c of CASES) {
       const key = scene();
       await holdReservation(key, sceneAt(0)); // an admitted, unstamped stay reserving 21: the line is active
-      await pin(key, 25); // pool = 25 - 21 = 4: the claim below is held
+      await pin(key, 21); // pool = 21 - 21 = 0: the claim below is held
       const ahead = await seedBoard();
       await putStay({
         fixtureId: ahead.fixtureId,

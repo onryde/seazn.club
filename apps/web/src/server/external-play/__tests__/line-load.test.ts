@@ -339,9 +339,14 @@ describe("the pool, the drained phase, the admission pace", () => {
 
 describe("B-slow's bound (§5.6.8), built from the run's own calls", () => {
   const run = { callsRun: 1_100, players: 60, warmupS: 10, maxInFlightDrained: 2, burst: RTK_BUDGET_BURST, refillPerS: RTK_BUDGET_REFILL_PER_S, pollMs: LINE_POLL_MS, maxBackoffMs: 8_000 };
+  // §5.6.8's worked figures (a bound of "about 434 to 478 s" at 10 s, "340 to 384 s" at 5 s) were drawn for the bucket the spec was written
+  // against: a burst of 300 and 2 tokens a second. `slowBound` is a pure function of the bucket it is handed, so the worked examples hand
+  // it THAT bucket - they are hand-counted figures for the spec's bucket, and do not follow the live constants (which moved when the
+  // vendor's limit did). The live bucket gets the same formula in its own case below, written from the constants.
+  const worked = { ...run, burst: 300, refillPerS: 2 };
 
   it("at 10 s with 1,100 calls: s = 18, lag (reservation + recheck) = (2 x 24 + (24 - 18.33)) / 2, bound = (1,100 - 300) / 2 + s + 3 + lag; the sum model is 600 s and discriminates", () => {
-    const got = slowBound(run);
+    const got = slowBound(worked);
     const dBar = 1_100 / 60;
     expect(got.perPlayer).toBeCloseTo(dBar, 10);
     expect(got.s).toBe(18);
@@ -357,11 +362,18 @@ describe("B-slow's bound (§5.6.8), built from the run's own calls", () => {
 
   it("at 5 s the sum model (300 s) is BELOW the bound: it does not discriminate, and the run says so (it proves the cost model, not the window)", () => {
     // 60 players at the table's 15 calls for a 5 s camera: about 900 calls; the spec's model puts the bound at 340 to 384 s.
-    const got = slowBound({ ...run, callsRun: 900, warmupS: 5 });
+    const got = slowBound({ ...worked, callsRun: 900, warmupS: 5 });
     expect(got.sumModel).toBe(300);
     expect(got.bound).toBeGreaterThan(340);
     expect(got.bound).toBeLessThan(384);
     expect(got.discriminates).toBe(false);
+  });
+
+  it("the same bound on the product's LIVE bucket: (calls - burst) / refill + s + the poll + lag - and a bigger bucket waits less than the spec's did", () => {
+    const got = slowBound(run);
+    expect(got.bound).toBeCloseTo((1_100 - RTK_BUDGET_BURST) / RTK_BUDGET_REFILL_PER_S + got.s + 3 + got.lag, 10);
+    expect(RTK_BUDGET_BURST, "premise: the live burst is not the spec's 300, so the two bounds can differ").not.toBe(300);
+    expect(got.bound, "the live bucket covers more of the run from its burst").toBeLessThan(slowBound(worked).bound);
   });
 
   it("a larger run or more in flight raises the bound; more players with the same calls lowers D-bar and so raises the lag's second term", () => {
@@ -387,7 +399,7 @@ describe("B-slow's bound (§5.6.8), built from the run's own calls", () => {
     expect(() => slowBound({ ...run, players: 0 })).toThrow(RangeError);
   });
 
-  it("the netting trigger: the MEAN interval above 1.5 x D-bar / refill is owed (13.75 s at 18.33 calls a player); at it, or with no intervals, it is not", () => {
+  it("the netting trigger: the MEAN interval above 1.5 x D-bar / refill is owed (at 18.33 calls a player); at it, or with no intervals, it is not", () => {
     const dBar = 1_100 / 60;
     const limit = (1.5 * dBar) / RTK_BUDGET_REFILL_PER_S;
     expect(nettingOwed(limit + 0.01, dBar, RTK_BUDGET_REFILL_PER_S)).toBe(true);
@@ -475,7 +487,9 @@ describe("which pass bars a capacity scenario owes, by the shape of its run (har
 });
 
 describe("B-dry's arrival spread is derived: demand exceeds the bucket's supply by a margin made of the product's own constants", () => {
-  const PLAYERS = 60; // 30 boards, as B
+  // A big run: 128 players, 64 boards. The old 60 (30 boards, as B) no longer exceed the bucket's burst, so there is nothing for
+  // B-dry to run dry at that size.
+  const PLAYERS = 128;
   const c = LINE_LOAD.instantCallsPerPlayer;
   const supply = (spreadS: number) => RTK_BUDGET_BURST + RTK_BUDGET_REFILL_PER_S * spreadS;
   const input = { players: PLAYERS, perPlayerCalls: c, burst: RTK_BUDGET_BURST, refillPerS: RTK_BUDGET_REFILL_PER_S, marginCalls: DRY_MARGIN_CALLS };
@@ -491,11 +505,16 @@ describe("B-dry's arrival spread is derived: demand exceeds the bucket's supply 
     expect(w!, "a real spread, not a burst").toBeGreaterThan(0);
   });
 
-  it("B's own spread (60 s) is short of tokens by far less than the margin, which is why B alone cannot promise a dry bucket", () => {
+  it("B's own spread (60 s) leaves the supply short of the demand by less than the margin, which is why B alone cannot promise a dry bucket", () => {
     const bShort = PLAYERS * c - supply(60);
-    expect(bShort, "B is barely short (knife-edge), not wet").toBeGreaterThan(0);
-    expect(bShort, "and by less than the margin").toBeLessThan(DRY_MARGIN_CALLS);
+    expect(bShort, "B's 60 s spread: demand exceeds supply by LESS than the margin (here it does not exceed it at all)").toBeLessThan(DRY_MARGIN_CALLS);
     expect(dryArrivalSpreadS(input)!, "so B-dry's spread is shorter than B's").toBeLessThan(60);
+  });
+
+  it("the old thirty boards cannot run the live bucket dry: 60 players' demand is not above burst + margin, so the harness's B-dry leg needs a bigger run and says so", () => {
+    expect(60 * c, "premise: 60 players' calls fit inside the burst plus the margin").toBeLessThanOrEqual(RTK_BUDGET_BURST + DRY_MARGIN_CALLS);
+    expect(dryArrivalSpreadS({ ...input, players: 60 }), "no spread exists").toBeNull();
+    expect(dryArrivalSpreadS(input), "the full division does have one").not.toBeNull();
   });
 
   it("monotone and honest: more players need a longer spread; a demand the burst alone covers (plus the margin) has none, and the run refuses it", () => {
