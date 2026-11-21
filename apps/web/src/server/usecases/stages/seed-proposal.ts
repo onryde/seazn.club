@@ -726,6 +726,17 @@ export async function confirmSeedProposal(
         throw new HttpError(409, `slot ${slot} is already filled`, "SEEDING_FIXTURES_ALREADY_FILLED");
       }
     }
+    // W5 B4 (B3 re-review N-1): every seat filled is one the slate offers - what `seated` below records (V538 publishes it and
+    // every table freezes on it). An edit is held to the proposal's slots above; a tie pick is not (its slots are applied as
+    // named), so a pick naming a REAL empty seat of this stage that no proposal slot owns - the bye line's free side - passed every
+    // check above and seated someone `seated` could not name. Refused by the edit's code, before anything is filled.
+    const slateSlots = new Set(slate.map((q) => q.destinationSlot));
+    const unoffered = finalSlots.flatMap(([slot]) => (slateSlots.has(slot) ? [] : [slot]));
+    if (unoffered.length > 0) {
+      throw new HttpError(422, `a tie pick references a slot this proposal doesn't have: ${unoffered[0]}`, "SEEDING_EDIT_UNKNOWN_SLOT", {
+        slots: unoffered,
+      });
+    }
 
     // Step 4 — single transaction: fill through fillSlot, mark confirmed.
     const filledFixtureIds = new Set<string>();
@@ -842,9 +853,11 @@ export async function confirmSeedProposal(
     // W5 B3 fix (review I-1): the row records who it SEATED (`seated`), not only the slate it proposed - a tie pick or an edit
     // may seat someone the slate ranked below the cut, and who went through is what V538 publishes and every table freezes on.
     const seatOf = new Map(slate.map((q) => [q.destinationSlot, q] as const));
-    const seated = finalSlots.flatMap(([slot, entrantId]) => {
+    const seated = finalSlots.map(([slot, entrantId]) => {
       const seat = seatOf.get(slot);
-      return seat === undefined ? [] : [{ entrantId, rank: seat.rank, source: { stageId: seat.source.stageId } }];
+      // Unreachable: a slot the slate does not offer is refused above (SEEDING_EDIT_UNKNOWN_SLOT). Never a silent drop (N-1).
+      if (seat === undefined) throw new Error(`confirmSeedProposal: seat ${slot} is not on the slate`);
+      return { entrantId, rank: seat.rank, source: { stageId: seat.source.stageId } };
     });
     await tx`
       update stage_seed_proposals

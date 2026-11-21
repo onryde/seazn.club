@@ -2,9 +2,10 @@
 // STORED delta the server and the engine read (a half-point rule stores half-points), the phrase it echoes is the footnote's, and
 // Apply waits for the server's three checks (a member, a non-zero amount, a reason). The wiring (load → apply → the table re-folds →
 // the footnote) is the e2e's (`X-ADJ-4`) and points-adjustments.test.ts's on Postgres.
-import { createElement } from "react";
+import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import en from "@/dictionaries/en/ui.json";
 import type { MessageKey } from "@/lib/messages";
 import { t, type TKey } from "@/lib/i18n-runtime";
@@ -85,5 +86,56 @@ describe("Apply waits for the server's three checks", () => {
       expect(html, id).toMatch(new RegExp(`data-testid="${id}"[^>]*disabled=""|disabled=""[^>]*data-testid="${id}"`));
     }
     expect(html).toContain(en["adjustPoints.reasonHint"]);
+  });
+});
+
+// W5 B4 (B3 re-review N-3): the inline range message had no unit witness - only the app-b e2e (X-ADJ-4) pinned it, and deleting it
+// survived this suite (M12b). Driven here through the amount field's own onChange, the way a browser types. The bound is B3 ruling 4's
+// (an adjustment moves at most 999 either way), typed from the ruling; the copy is the dictionary's entry with it put in.
+describe("B3 N-3: typing past the bound says so inline, at the bound it does not", () => {
+  const BOUND = 999;
+  // The mount effect's focus discipline reads `document` (vitest here is node, no DOM): the least of it - no focused element, a
+  // key listener nobody fires. The range line is what this block tests.
+  beforeEach(() => {
+    vi.stubGlobal("document", { activeElement: null, addEventListener: () => {}, removeEventListener: () => {} });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+  const island = () =>
+    renderIsland(PointsAdjustmentDialog, {
+      msg,
+      locale: "en",
+      stageName: "Group stage",
+      tz: "Europe/London",
+      names: {},
+      load: () => new Promise<AdjustmentsRead>(() => {}),
+      apply: async (): Promise<DialogAnswer> => ({ ok: true }),
+      undo: async (): Promise<DialogAnswer> => ({ ok: true }),
+      onClose: () => {},
+    });
+  const byTestId = (tree: ReactElement[], id: string) => tree.find((n) => propsOf(n)["data-testid"] === id);
+  const type = (dialog: ReturnType<typeof island>, value: string) => {
+    const field = byTestId(dialog.tree(), "adjust-points-delta")!;
+    (propsOf(field).onChange as (e: { target: { value: string } }) => void)({ target: { value } });
+  };
+  const want = en["roundrobin.refusal.RR_ADJUST_OUT_OF_RANGE"].replace("{max}", String(BOUND));
+
+  it("±999 is inside the bound: no message; 1000 and −1000 are past it: the dictionary's sentence, as an alert", () => {
+    const dialog = island();
+    let checked = 0;
+    for (const [typed, past] of [["999", false], ["-999", false], ["1000", true], ["-1000", true], ["5", false]] as const) {
+      type(dialog, typed);
+      const line = byTestId(dialog.tree(), "adjust-points-range");
+      if (past) {
+        expect(line, `${typed}: the range line renders`).toBeDefined();
+        expect(textOf(line!), typed).toBe(want);
+        expect(propsOf(line!).role).toBe("alert");
+      } else {
+        expect(line, `${typed}: no range line`).toBeUndefined();
+      }
+      checked++;
+    }
+    expect(checked).toBe(5);
   });
 });

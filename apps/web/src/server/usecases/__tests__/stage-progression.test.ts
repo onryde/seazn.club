@@ -441,6 +441,39 @@ describe.skipIf(!HAS_DB)("D4a/P5 — confirm validation (double-assignment, fore
     expect((err as { code?: string }).code).toBe("SEEDING_SLOT_FOREIGN_FIXTURE");
   });
 
+  it("W5 B4 (B3 re-review N-1): a tie pick naming a real empty seat of THIS stage that no proposal slot owns is refused by name, nothing written", async () => {
+    // tiePicks used to apply with no `bySlot.has` guard (edits had one): a pick naming the bye line's empty side - a real seat of
+    // this stage, not one the proposal offers - passed every later check, seated a pool loser against seed 1, and the confirmed
+    // row's `seated` (V538) silently dropped her. Now refused like an unknown edit, before anything is filled.
+    const { auth, groupStageId, koStageId, entrantBySeed } = await setupGroupsToKnockoutWithBye();
+    await generateStageFixtures(auth, koStageId);
+    await generateStageFixtures(auth, groupStageId);
+    await decideAllGroupFixtures(auth, groupStageId, entrantBySeed);
+    const result = await completeStage(auth, groupStageId);
+    const [proposal] = await sql<{ id: string; computed: { qualifiers: { destinationSlot: string }[] } }[]>`
+      select id, computed from stage_seed_proposals where id = ${result.seed_proposal!.id}`;
+    const offered = new Set(proposal.computed.qualifiers.map((q) => q.destinationSlot));
+    // The bye line's free side: the one seat of this stage labelled a bye (three qualifiers in a four-slot bracket). Which wire slot
+    // the bye SEED is offered on varies (its own line or the final it feeds), so the seat is found by its label, never by position.
+    const sides = await sql<{ slot: string }[]>`
+      select f.id || ':home' as slot from fixtures f where f.stage_id = ${koStageId} and f.home_slot_label ->> 'key' = 'bracket.slot.bye'
+      union all
+      select f.id || ':away' from fixtures f where f.stage_id = ${koStageId} and f.away_slot_label ->> 'key' = 'bracket.slot.bye'`;
+    const unoffered = sides.map((r) => r.slot).filter((slot) => !offered.has(slot));
+    expect(unoffered, "the bye line's free side: one seat, offered by no proposal slot").toHaveLength(1);
+    // Seed 6 is a pool loser (lower seed always wins): in the division, in the field, on no seat of the slate.
+    const err = await confirmSeedProposal(auth, koStageId, {
+      proposalId: proposal.id,
+      tiePicks: [{ slots: unoffered, order: [entrantBySeed.get(6)!] }],
+    }).catch((e: unknown) => e);
+    expect((err as { code?: string }).code).toBe("SEEDING_EDIT_UNKNOWN_SLOT");
+    const seatedAfter = await sql<{ n: number }[]>`
+      select count(*)::int as n from fixtures where stage_id = ${koStageId} and (home_entrant_id is not null or away_entrant_id is not null)`;
+    expect(seatedAfter[0]!.n, "nothing filled").toBe(0);
+    const [row] = await sql<{ status: string }[]>`select status from stage_seed_proposals where id = ${proposal.id}`;
+    expect(row!.status, "the draft stands").toBe("draft");
+  });
+
   it("422 SEEDING_ENTRANT_FOREIGN when an edit names an entrant outside the division", async () => {
     const { auth, groupStageId, koStageId, entrantBySeed } = await setupGroupsToKnockout("rank_order");
     await generateStageFixtures(auth, koStageId);
