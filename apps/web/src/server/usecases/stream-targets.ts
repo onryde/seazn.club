@@ -183,8 +183,9 @@ function labelOf(raw: string): string {
 export async function patchStreamTarget(auth: AuthCtx, orgId: string, targetId: string, body: PatchStreamTarget): Promise<StreamTarget> {
   if (auth.orgId !== orgId) throw new HttpError(404, "organization not found");
   if (body.label !== undefined) {
-    const label = labelOf(body.label);
+    // Task 10 review m1: the Seazn row is refused first, so even a blank name on it answers seazn_destination_fixed.
     if (await isSeazn(sql, orgId, targetId)) throw seaznFixedRefusal();
+    const label = labelOf(body.label);
     // `youtube_connection_id is null`: an API-backed row is never renamed from here (plan P9) — the write itself carries
     // the guard, and a miss is told apart below (an API row is 422, an absent/archived/foreign one is the plain 404).
     const renamed = await sql<{ id: string }[]>`

@@ -8,7 +8,7 @@ import "server-only";
 // R1 (§17.1): the V430/V431 tables are FORCE RLS with no policy, so every read and write here is on the non-tenant `sql`.
 import { sql } from "@/lib/db";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
-import { DESTINATION_NOT_ALLOWED, TARGET_UNREADABLE } from "@/lib/stream-destinations";
+import { DESTINATION_NOT_ALLOWED, SEAZN_UNAVAILABLE, SEAZN_VIDEO_UNCONFIGURED, TARGET_UNREADABLE } from "@/lib/stream-destinations";
 import { isYoutubeRefusalCode, YOUTUBE_REFUSAL_REMEDY } from "@/lib/youtube";
 import { log } from "@/server/logger";
 import { AUTO_START_RETRY_SECONDS, PHONE_SILENT_FLOOR_SECONDS, tunable } from "@/server/relay/config";
@@ -43,7 +43,12 @@ export function autoStartRefusalOf(err: unknown): AutoStartRefusal | "already_ru
     case DESTINATION_NOT_ALLOWED:
     case TARGET_UNREADABLE: return "no_destination";
     case "storage_exhausted":
-    case "ingest_unavailable": return "unavailable";
+    case "ingest_unavailable":
+    // Seazn-hosted video (Task 11): a Seazn destination makes the start composed whatever `startModeFor` resolved, so the
+    // composed gate CAN answer it now, and the Seazn destination's own two refusals are the deployment's — retried, not fixed.
+    case "composed_unavailable":
+    case SEAZN_UNAVAILABLE:
+    case SEAZN_VIDEO_UNCONFIGURED: return "unavailable";
     case "active_session": return "already_running";
     // An assumption made a guard: an automatic start passes phone: "present" because the arriving beat IS the current
     // phone's, so W5 cannot answer it — neither of its answers (owner ruling 2026-10-09 split it in two). Refused by name,
@@ -51,11 +56,6 @@ export function autoStartRefusalOf(err: unknown): AutoStartRefusal | "already_ru
     case "phone_not_paired":
     case "phone_not_responding":
       throw new Error(`maybeAutoStart: startBroadcast answered ${err.code} to an automatic start, which passes phone: "present"`);
-    // R2001, the same kind of guard (R2006): an automatic start passes the mode `startModeFor` resolved against the SAME
-    // `composedUnavailable()` startBroadcast asks — composed only when that says the deployment can run it — so the
-    // composed gate cannot answer it.
-    case "composed_unavailable":
-      throw new Error(`maybeAutoStart: startBroadcast answered ${err.code} to an automatic start, whose mode was resolved against composedUnavailable()`);
   }
   // admit's target_not_found (the destination vanished between the read and the row lock) has no code.
   if (err.status === 404 && err.code === undefined && err.message === "stream target not found") return "no_destination";

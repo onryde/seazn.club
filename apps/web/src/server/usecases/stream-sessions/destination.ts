@@ -36,6 +36,15 @@ export async function targetConnectionId(tx: Tx, orgId: string, targetId: string
   return t?.connection_id ?? null;
 }
 
+/** Seazn-hosted video (Task 11): is `targetId` this org's ACTIVE `seazn` destination (V540)? Another org's target, an archived
+ *  or a missing one answers false, so admission carries on and `admit` answers it 404 as before (no oracle). A row's kind is
+ *  fixed when it is made (no code updates it), so a read before the admission's row lock answers as one under it would. */
+export async function isSeaznTarget(exec: Tx | typeof sql, orgId: string, targetId: string): Promise<boolean> {
+  const [t] = await exec<{ seazn: boolean }[]>`
+    select kind = 'seazn' as seazn from org_stream_targets where id = ${targetId} and org_id = ${orgId} and archived_at is null`;
+  return t?.seazn === true;
+}
+
 /** Ruling F / design §12.6: on completed, when fixtures.stream_url is null and
  *  the destination is YouTube with a watch URL, write it through the ONE
  *  stream-link path. Never overwrites a club's own link. */

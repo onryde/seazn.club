@@ -27,6 +27,7 @@ export interface Row {
   start_cause: Session["startCause"];   // capture QR v2 §5.3 (V430)
   warming_at: string | null;            // A8 (V430): the warming timeout's anchor
   ingest_read_failed: boolean;          // V430 (B7 re-review, the outage gap): the latest CLAIMED status read threw
+  destination_kind: string | null;      // admission's copy of the target's kind; 'seazn' (V540) is Session.destination "seazn"
 }
 /** A FUNCTION, not a module-scope fragment: building a `sql` fragment opens the pooled client, and `next build`
  *  evaluates this module (through the daily sweep's cron route) to collect route config in a process with no
@@ -37,7 +38,7 @@ export const cols = () => sql`id, fixture_id, org_id, mode, state, desired_state
   runner_retries, runner_attempts, runner_state, runner_name, runner_stop_requested_at,
   runner_exit_code, runner_oom_killed, runner_requested_stop, created_by, created_at, output_uid, start_cause, warming_at,
   ingest_read_failed, runner_crash_count, runner_crash_beats, runner_crash_exits, runner_crash_exit_at, runner_crash_restart_seen,
-  runner_restart_count, runner_restart_beats, runner_restart_exits, runner_restart_exit_at`;
+  runner_restart_count, runner_restart_beats, runner_restart_exits, runner_restart_exit_at, destination_kind`;
 
 export const d = (s: string | null): Date | null => (s ? new Date(s) : null);
 
@@ -67,6 +68,9 @@ export function toSession(r: Row): Session {
     // Capture QR v2 §5.3. A8: dropping warming_at here (or from cols()) is silent to tsc — it reads undefined → null and
     // the warming timeout quietly falls back to createdAt; "A8: warming_at round-trips" is the witness.
     startCause: r.start_cause, warmingAt: d(r.warming_at),
+    // Task 11 (from Task 12): only 'seazn' is Seazn; every other kind — and a row written before admission copied the kind —
+    // is an external destination, whose `provisioned` adds the one output as before.
+    destination: r.destination_kind === "seazn" ? "seazn" : "external",
     runner: {
       // C3: ONE authority for the attempt — the persisted `runner_attempts` (create calls MADE).
       // Deriving it as `runner_retries + (state === "none" ? 0 : 1)` disagrees with the row after an

@@ -49,6 +49,9 @@ export const SEAZN_TARGET_FIXED = "seazn_destination_fixed";
 /** 422 when a pick or a start names the Seazn destination while SEAZN_HOSTED_LIVE is off: the row is hidden from every list
  *  then, and a saved pick of it resolves to no destination, never to another one. */
 export const SEAZN_UNAVAILABLE = "seazn_unavailable";
+/** 503 when a start names the Seazn destination with SEAZN_HOSTED_LIVE on, on a live relay, and SEAZN_VIDEO_ORIGINS unset: the
+ *  deployment cannot sign its playback (G5), so nothing starts. Refused before any provider call. */
+export const SEAZN_VIDEO_UNCONFIGURED = "seazn_video_unconfigured";
 
 /**
  * The fixture's saved destination CHOICE (`fixture_stream_settings.target_chosen`, V431 / plan R-1), as the ONE server reader

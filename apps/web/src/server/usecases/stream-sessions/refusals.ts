@@ -3,6 +3,7 @@ import "server-only";
 import { sql } from "@/lib/db";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
+import { SEAZN_UNAVAILABLE, SEAZN_VIDEO_UNCONFIGURED } from "@/lib/stream-destinations";
 import { admit } from "@/server/relay/domain/session";
 import {
   TargetSecretUnreadableError,
@@ -32,6 +33,14 @@ export function refuse(refusal: Exclude<ReturnType<typeof admit>, { ok: true }>,
     case "phone_not_responding": throw new HttpError(409, "the phone paired on this match's stream code is not responding", "phone_not_responding");
   }
 }
+
+/** Seazn-hosted video (Task 11): a start on the Seazn destination while SEAZN_HOSTED_LIVE is off. The same code and words as
+ *  the pick's own refusal (stream-codes.ts `writeStreamSettings`), so the organiser reads one answer for both. */
+export const seaznUnavailable = (): HttpError => new HttpError(422, "Seazn hosted video is not available", SEAZN_UNAVAILABLE);
+/** Task 11: LIVE is on, but a live relay has no SEAZN_VIDEO_ORIGINS to sign its playback with (G5) — the deployment's fault,
+ *  the ingest's 503 family. No signing key is checked: Cloudflare live signing needs none (C1). */
+export const seaznVideoUnconfigured = (): HttpError =>
+  new HttpError(503, "Seazn hosted video is not configured on this deployment", SEAZN_VIDEO_UNCONFIGURED);
 
 /** B2: a saved key that will not open (a KEK change, a damaged byte) is the organiser's to fix — a typed 422 naming the
  *  remedy, logged with the fixture, target and kind only. Any other error (a missing RELAY_KEK is one: secret-columns

@@ -56,9 +56,12 @@ export async function targetHolderFor(targetId: string, orgId: string, fixtureId
  *  own pooled key, and its exclusivity is the key's (§5.4); another fixture's leftover there is neither destroyed nor
  *  retried from this admission, and refuses nothing. The fixture's OWN sessions stay in scope either way (the other arm).
  *  Decided by the TARGET's source (`youtube_connection_id`), in the caller's org. A target that is not this org's, or is
- *  gone, is not API-backed as far as this fragment can tell, so it keeps today's behaviour (`admit` answers it 404). */
+ *  gone, is not API-backed as far as this fragment can tell, so it keeps today's behaviour (`admit` answers it 404).
+ *  Seazn-hosted video (Task 11): the org's `seazn` destination is not pasted either. Every match on it publishes to its own
+ *  programme input, so another fixture's Seazn session is never touched from here; this fixture's own arm still destroys its
+ *  previous composed Machine. */
 const pastedTarget = (orgId: string, targetId: string) => sql`not exists (
-  select 1 from org_stream_targets x where x.id = ${targetId} and x.org_id = ${orgId} and x.youtube_connection_id is not null)`;
+  select 1 from org_stream_targets x where x.id = ${targetId} and x.org_id = ${orgId} and (x.youtube_connection_id is not null or x.kind = 'seazn'))`;
 
 /** 2C-post m5 (Task 2C-post review m5; post-2C-post plan sync). The fixture's one-active index releases the moment a session
  *  goes terminal — since F-A a stop whose Machine never auto-destroyed completes at grace + slack — whether or not that

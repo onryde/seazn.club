@@ -11,6 +11,9 @@ import {
   MAX_DURATION_MINUTES,
   PHONE_SILENT_FLOOR_SECONDS,
   overlayDelayDefaultMs,
+  relayDriverMode,
+  seaznHostedLive,
+  seaznVideoOrigins,
   tunable,
 } from "@/server/relay/config";
 import {
@@ -41,11 +44,11 @@ import { codeEnded } from "@/server/api-v1/capture-http";
 import { assertCompetitionNotFrozen } from "../entitlement-freeze";
 import { type SessionDeps, youtubeOf } from "./deps";
 import { fixtureContext, activeSessionIdFor } from "./lookups";
-import { targetConnectionId } from "./destination";
+import { isSeaznTarget, targetConnectionId } from "./destination";
 import { applyExpiry } from "./expiry";
 import { storageUsageForColumns, storageHeadroomMinutes } from "./storage";
 import { targetHolderFor, tearDownPriorMachines, releasePriorOutputs, targetInUse } from "./holders";
-import { refuse, unreadableRefusal, refuseUnreadableTarget, pooledKeyRefusal } from "./refusals";
+import { refuse, unreadableRefusal, refuseUnreadableTarget, pooledKeyRefusal, seaznUnavailable, seaznVideoUnconfigured } from "./refusals";
 import { provisionSession } from "./provision";
 import { endOtherCourtSessions } from "../court-stream-sessions";
 
@@ -246,7 +249,12 @@ export async function startBroadcast(
   const { orgId, competitionId } = await fixtureContext(fixtureId);
   if (orgId !== actor.orgId) throw new HttpError(404, "fixture not found");
   const actorUserId = actor.userId;
-  const body = { mode: opts.mode, targetId: opts.targetId, themeId: opts.themeId ?? null, overlayDelayMs: opts.overlayDelayMs };
+  // Seazn-hosted video (Task 11): the destination's kind is read FIRST. The Seazn destination has no output of its own — the
+  // match publishes to a programme input we play back — so it runs composed whatever mode the caller resolved (the phone's
+  // and the automatic start read the fixture's stored `stream_mode`; refusing passthrough would strand them). Coerced here,
+  // before `composedRunnerDown`, so the composed gate below judges the mode that will actually run.
+  const seazn = await isSeaznTarget(sql, orgId, opts.targetId);
+  const body = { mode: seazn ? "composed" as const : opts.mode, targetId: opts.targetId, themeId: opts.themeId ?? null, overlayDelayMs: opts.overlayDelayMs };
   // R2001: can this deployment run a composed session at all (drivers.ts `composedUnavailable()`, the ONE authority the
   // organiser UI reads too)? Read ONCE, here, and handed to every `admit` below. Asked only for a composed start — a
   // passthrough start reads no new fact and its path is unchanged.
@@ -290,6 +298,13 @@ export async function startBroadcast(
     log.warn({ fixtureId, orgId }, "stream session: the relay is disabled on this deployment — start refused");
     throw new HttpError(503, "the streaming ingest is unavailable", "ingest_unavailable");
   }
+  // Task 11: with SEAZN_HOSTED_LIVE off the Seazn destination does not exist for this deployment (no list or pick offers it),
+  // so a start that names it anyway — a direct `targetId`, a pick saved while the flag was on — is refused by the pick's own
+  // 422, before the mode is weighed and before anything is read, written or asked of a provider.
+  if (seazn && !seaznHostedLive()) {
+    log.warn({ fixtureId, orgId }, "stream session: the Seazn destination is not available on this deployment — start refused");
+    throw seaznUnavailable();
+  }
   // R2001: a composed start on a deployment with no compositor runner is refused HERE — admission's FIRST gate, asked
   // alone (`admitMode`) because nothing later on the ladder can change its answer. No session row, input, credit or
   // runner is created: it comes before the expiry, the destination teardown, the monthly grant, the storage read, the
@@ -299,6 +314,13 @@ export async function startBroadcast(
   if (!byMode.ok) {
     log.warn({ fixtureId, orgId }, "stream session: composed mode is unavailable on this deployment — start refused");
     refuse(byMode, 0);
+  }
+  // Task 11 (G5): Seazn playback is signed for the deployment's own hosts. A live relay with no SEAZN_VIDEO_ORIGINS cannot make
+  // that input, so the start is refused here — after the composed gate (which keeps answering first, by name), before any
+  // provider call. A fake relay needs none: its inputs are never played back.
+  if (seazn && relayDriverMode() === "live" && seaznVideoOrigins() === null) {
+    log.warn({ fixtureId, orgId }, "stream session: SEAZN_VIDEO_ORIGINS is not set on this live deployment — Seazn start refused");
+    throw seaznVideoUnconfigured();
   }
   // B: the fixture's own stuck session is expired here, not on a tick.
   const existing = await activeSessionIdFor(fixtureId);
@@ -383,7 +405,9 @@ export async function startBroadcast(
   // this org's ACTIVE row (an archived or foreign id falls through to `admit`'s 404, never an oracle), only when `admit`
   // would otherwise pass (F-A5, see `refuseUnreadableTarget`), and the read inside the admission transaction stays the
   // authority for everything that row lock protects.
-  const probed = await refuseUnreadableTarget(orgId, fixtureId, body.targetId, (activeSessionId) => admit({
+  // Task 11: the Seazn destination has no saved key to probe and no YouTube connection to prepare a broadcast on (G1), so it
+  // skips the probe and with it the prepare below (`probed` false ⇒ `prepared` null). `admit` still weighs it in the admission.
+  const probed = !seazn && await refuseUnreadableTarget(orgId, fixtureId, body.targetId, (activeSessionId) => admit({
     overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg: true, phone: opts.phone, mode: body.mode, composedUnavailable: composedRunnerDown,
     headroomMinutes: reservationMinutes(body.mode, MAX_DURATION_MINUTES), maxDurationMinutes: MAX_DURATION_MINUTES,   // storage not weighed yet: it cannot refuse here (R2004: in either mode)
     activeSessionId: activeSessionId ?? priorMachineSessionId,
@@ -456,7 +480,9 @@ export async function startBroadcast(
     if ((connectionId !== null) !== (prepared !== null)) throw new PreparedMismatchError(connectionId !== null, fixtureId, body.targetId);
     if (connectionId !== null && prepared !== null) {
       await readPooledKey(tx, orgId, prepared.keyId).catch((err: unknown) => { throw pooledKeyRefusal(err, fixtureId, body.targetId, connectionId); });
-    } else {
+    } else if (!seazn) {
+      // Task 11: skipped ONLY for the Seazn destination (V540's one_source check: it holds no key and no connection, so there
+      // is nothing to open or re-check). A pasted destination is re-checked here exactly as before.
       const saved = await readTargetSecret(tx, orgId, body.targetId).catch((err: unknown) => { throw unreadableRefusal(err, fixtureId, body.targetId); });
       const destination = checkDestination(saved.url);
       if (!destination.ok) {

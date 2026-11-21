@@ -16,7 +16,7 @@ import { sql, type Tx } from "@/lib/db";
 import { hasFeature } from "@/lib/entitlements";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { DEVICE_LINK_MINT_LIMIT, rateLimit } from "@/lib/rate-limit";
-import { DESTINATION_NOT_ALLOWED, TARGET_UNREADABLE } from "@/lib/stream-destinations";
+import { DESTINATION_NOT_ALLOWED, SEAZN_UNAVAILABLE, SEAZN_VIDEO_UNCONFIGURED, TARGET_UNREADABLE } from "@/lib/stream-destinations";
 import { isYoutubeRefusalCode, YOUTUBE_REFUSAL_REMEDY } from "@/lib/youtube";
 import { captureError } from "@/lib/sentry";
 import { OVERLAY_KEY_PARAM } from "@/lib/realtime-purpose";
@@ -820,18 +820,19 @@ export function phoneStartRefusal(err: unknown): CaptureRefusalError | { already
     case DESTINATION_NOT_ALLOWED: return noDestination("the picked destination is no longer allowed");
     case TARGET_UNREADABLE: return noDestination("the picked destination's saved key cannot be read");
     case "storage_exhausted":
-    case "ingest_unavailable": return new CaptureRefusalError(503, "unavailable", `the stream cannot start: ${err.code}`);
+    case "ingest_unavailable":
+    // Seazn-hosted video (Task 11): a Seazn pre-pick makes the start composed whatever `startModeFor` resolved, so the
+    // composed gate CAN answer a phone start now; it and an unconfigured Seazn are the deployment's, and the phone tries again.
+    case "composed_unavailable":
+    case SEAZN_VIDEO_UNCONFIGURED: return new CaptureRefusalError(503, "unavailable", `the stream cannot start: ${err.code}`);
+    // Seazn is off on this deployment: the organiser picks another destination.
+    case SEAZN_UNAVAILABLE: return noDestination("the picked destination is Seazn, which is not available");
     // An assumption made a guard: a phone start passes phone: "present" because the caller IS the current phone (T12,
     // checked first), so W5 cannot answer it — neither of its answers (owner ruling 2026-10-09 split it in two). Refused by
     // name, never mapped to an answer the phone would act on: both are the organiser console's, never the phone's.
     case "phone_not_paired":
     case "phone_not_responding":
       throw new Error(`postStart: startBroadcast answered ${err.code} to a phone start, which passes phone: "present"`);
-    // R2001, the same kind of guard (R2006): a phone start passes the mode `startModeFor` resolved against the SAME
-    // `composedUnavailable()` startBroadcast asks — composed only when that says the deployment can run it — so the
-    // composed gate cannot answer it.
-    case "composed_unavailable":
-      throw new Error(`postStart: startBroadcast answered ${err.code} to a phone start, whose mode was resolved against composedUnavailable()`);
   }
   // admit's target_not_found (the pre-pick vanished between the read and the row lock) has no code.
   if (err.status === 404 && err.code === undefined && err.message === "stream target not found") return noDestination("the picked destination is gone");
