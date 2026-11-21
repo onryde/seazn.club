@@ -509,7 +509,7 @@ export function BoardPanelView(p: BoardPanelViewProps) {
           />
           {may.finish && outageOffered(board, cameras !== null && anyUnavailable(board, cameras.views)) && (
             <OutageCard
-              gameOnFile={board.canResync}
+              started={board.cameraReport !== null}
               busy={decision.busy !== null}
               overriding={decision.busy?.kind === "override"}
               onOverride={p.on.override}

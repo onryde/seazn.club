@@ -359,7 +359,7 @@ export function ArbiterScreen(p: ArbiterScreenProps) {
               />
               {showsOutageCard(board, p.video) && (
                 <OutageCard
-                  gameOnFile={board.canResync}
+                  started={board.cameraReport !== null}
                   busy={p.decision.busy !== null}
                   overriding={p.decision.busy?.kind === "override"}
                   onOverride={p.on.override}

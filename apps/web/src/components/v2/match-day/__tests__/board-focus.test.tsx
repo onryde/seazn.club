@@ -526,28 +526,37 @@ describe("BoardPanelView: who is offered which decision", () => {
     expect(count(html(notHere, { answer: answerOf(notHere, { hold_reason: "clock_flag_unsettled" }), joins: joinsFor(notHere, { home: WATCHING, away: UNAVAILABLE }) }), "arbiter-outage"), "a stale answer for a side that is not watchable does not count").toBe(0);
   });
 
-  it("(MD-R37) the outage card's words follow the GAME: a board with a game on file offers to let it CARRY ON (camera evidence stops here), one with none offers to let it START - the whole state table, never both sets of words", () => {
-    // `canResync` is the loader's own "a game is on file at Lichess and the board is not over" - set per state as the loader sets it.
-    const STATES: { label: string; state: ArbiterBoard["state"]; gameOnFile: boolean }[] = [
-      { label: "checking in: no game yet", state: { kind: "checking_in" }, gameOnFile: false },
-      { label: "starting: a game exists, nobody has moved", state: { kind: "starting" }, gameOnFile: true },
-      { label: "live", state: { kind: "live", moveNo: 7 }, gameOnFile: true },
-      { label: "held with a game on file", state: { kind: "on_hold" }, gameOnFile: true },
-      { label: "held with no game (a link hold)", state: { kind: "on_hold" }, gameOnFile: false },
+  it("(MD-R37/R38) the outage card's words follow the FIRST MOVE (started_at, exposed as cameraReport !== null), not a game on file: moved = CARRY ON (camera evidence stops here), not yet = START - the whole state table, never both sets of words", () => {
+    // `moved` is the rulebook's fact (the game has started only when a first move was played, reconcile.ts started_at); `gameOnFile` is the loader's
+    // `canResync`. They differ in exactly the rows that matter: a game exists at Lichess and nobody has moved (starting; a held no-show).
+    const STATES: { label: string; state: ArbiterBoard["state"]; gameOnFile: boolean; moved: boolean }[] = [
+      { label: "checking in: no game yet", state: { kind: "checking_in" }, gameOnFile: false, moved: false },
+      { label: "starting: a game exists, nobody has moved", state: { kind: "starting" }, gameOnFile: true, moved: false },
+      { label: "live: a move was played", state: { kind: "live", moveNo: 7 }, gameOnFile: true, moved: true },
+      { label: "held with a game on file and moves played", state: { kind: "on_hold" }, gameOnFile: true, moved: true },
+      { label: "held no-show: a game on file, 0 moves", state: { kind: "on_hold" }, gameOnFile: true, moved: false },
+      { label: "held with no game (a link hold)", state: { kind: "on_hold" }, gameOnFile: false, moved: false },
     ];
     const started = [t("arbiter.outage.bodyStarted"), t("arbiter.outage.ctaStarted")];
     const before = [t("arbiter.outage.body"), t("arbiter.outage.cta")];
     expect(new Set([...started, ...before]).size, "the two sets of words are different words").toBe(4);
     let checked = 0;
-    for (const { label, state, gameOnFile } of STATES) {
-      const b = withState(state, { ...deciding, state, canResync: gameOnFile, seats: null, checkin: null });
+    let moved = 0;
+    for (const { label, state, gameOnFile, moved: played } of STATES) {
+      const b = withState(state, { ...deciding, state, canResync: gameOnFile, cameraReport: played ? "pending" : null, seats: null, checkin: null });
       const h = html(b, { answer: answerOf(b, state.kind === "on_hold" ? { hold_reason: "clock_flag_unsettled" } : {}), reader: EDITOR, joins: joinsFor(b, { home: UNAVAILABLE, away: UNAVAILABLE }) });
       expect(count(h, "arbiter-outage"), `${label}: the card is offered`).toBe(1);
-      for (const w of gameOnFile ? started : before) expect(has(h, w), `${label}: has "${w}"`).toBe(true);
-      for (const w of gameOnFile ? before : started) expect(has(h, w), `${label}: lacks "${w}"`).toBe(false);
+      for (const w of played ? started : before) expect(has(h, w), `${label}: has "${w}"`).toBe(true);
+      for (const w of played ? before : started) expect(has(h, w), `${label}: lacks "${w}"`).toBe(false);
       checked += 1;
+      if (played) moved += 1;
     }
     expect(checked, "every state was read").toBe(STATES.length);
+    expect(moved, "some rows are moved and some are not: the table can tell the two sets apart").toBeGreaterThan(0);
+    expect(moved).toBeLessThan(STATES.length);
+    // The settled report is a started game too (the report is only ever written once a move was played).
+    const settled = withState({ kind: "live", moveNo: 7 }, { ...deciding, state: { kind: "live", moveNo: 7 }, canResync: true, cameraReport: "settled", seats: null, checkin: null });
+    expect(has(html(settled, { answer: answerOf(settled), reader: EDITOR, joins: joinsFor(settled, { home: UNAVAILABLE, away: UNAVAILABLE }) }), started[1]!), "a settled camera report: started").toBe(true);
   });
 
   it("a board that is not held: the go-on press is the flag's, and a finished board's is 'mark as reviewed' (words by state)", () => {

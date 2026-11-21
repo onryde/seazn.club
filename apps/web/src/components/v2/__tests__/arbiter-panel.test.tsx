@@ -1706,7 +1706,7 @@ describe("the outage card", () => {
             const expected = cameraPolicy === "required" && playable && !videoOverridden && video.kind === "unavailable";
             expect(showsOutageCard(b, video), JSON.stringify({ cameraPolicy, videoOverridden, playable, v: video.kind })).toBe(expected);
             const markup = html(props({ round: { ...ROUND, boards: [b] }, decision: initialArbiterDecision("f3"), video }));
-            // The card itself (its words are the next two tests'): f3 has a game on file, so it carries the carry-on words, not the start ones.
+            // The card itself (its words are the next two tests'): f3 has had a move, so it carries the carry-on words, not the start ones.
             expect(markup.includes('data-testid="arbiter-outage"'), JSON.stringify({ cameraPolicy, videoOverridden, playable, v: video.kind })).toBe(expected);
             cells++;
             if (expected) shown++;
@@ -1715,18 +1715,28 @@ describe("the outage card", () => {
     expect(shown, "exactly one cell of the table").toBe(1);
   });
 
-  it("the card's words are the canvas's while NO game is on file: it is about seating, and the button lets the board START without video", () => {
+  it("the card's words are the canvas's while the game has NOT STARTED: it is about seating, and the button lets the board START without video - no game at all, AND a game on file with no move played (MD-R38)", () => {
     const f3 = ROUND.boards[2]!;
-    const t = text(html(props({ round: { ...ROUND, boards: [{ ...f3, canResync: false, state: { kind: "checking_in" }, clock: null }] }, video: { kind: "unavailable" } })));
-    expect(t).toContain("Only during a video outage");
-    expect(t).toContain("Video is unavailable right now");
-    expect(t).toContain("Players can't take a seat while a camera is required. You can let this board start without video. This is written to the audit log.");
-    expect(t).toContain("Let this board play without video");
-    expect(t, "not the carry-on words").not.toContain("camera evidence stops here");
+    const cases: [string, Partial<ArbiterBoard>][] = [
+      ["no game yet", { canResync: false, state: { kind: "checking_in" }, clock: null, cameraReport: null }],
+      ["a game on file, nobody has moved (starting)", { canResync: true, state: { kind: "starting" }, cameraReport: null }],
+      ["a held no-show: a game on file, 0 moves", { canResync: true, state: { kind: "on_hold" }, cameraReport: null }],
+    ];
+    let checked = 0;
+    for (const [label, over] of cases) {
+      const t = text(html(props({ round: { ...ROUND, boards: [{ ...f3, ...over }] }, video: { kind: "unavailable" } })));
+      expect(t, `${label}: the card is there`).toContain("Only during a video outage");
+      expect(t, label).toContain("Video is unavailable right now");
+      expect(t, label).toContain("Players can't take a seat while a camera is required. You can let this board start without video. This is written to the audit log.");
+      expect(t, label).toContain("Let this board play without video");
+      expect(t, `${label}: not the carry-on words`).not.toContain("camera evidence stops here");
+      checked += 1;
+    }
+    expect(checked).toBe(cases.length);
   });
 
-  it("MD-R37: once a game is on file (f3 is live) the same card says CARRY ON without video and that camera evidence stops here - the seating sentence is gone", () => {
-    expect(ROUND.boards[2]!.canResync, "premise: f3 has a game on file").toBe(true);
+  it("MD-R37/R38: once a first move was played (f3 is live, its camera report pending) the same card says CARRY ON without video and that camera evidence stops here - the seating sentence is gone", () => {
+    expect(ROUND.boards[2]!.cameraReport, "premise: f3 has had a move (a camera report exists only from started_at)").not.toBeNull();
     const t = text(html(props({ video: { kind: "unavailable" } })));
     expect(t).toContain("Only during a video outage");
     expect(t).toContain("This game is already under way. You can let this board carry on without video; camera evidence stops here. This is written to the audit log.");
