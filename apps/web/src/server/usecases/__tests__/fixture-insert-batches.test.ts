@@ -271,6 +271,120 @@ describe.skipIf(!HAS_DB)("F1: insertFixtureRows", () => {
   });
 });
 
+// W5 B4 (stress F8): Start spent ~95% of its time inside the fixtures insert. The V263 trigger `assign_fixture_no` reads
+// `max(fixture_no)` of the division for EVERY row, and under the app's role (`withTenant`: app_user, the tenant policy's org
+// filter on fixtures) that read grew with the rows already written, so a 4,950-line league spent 9.6 s numbering (the same rows
+// numbered in advance: 0.8 s). `insertFixtureRows` now numbers the rows itself, once per call, exactly as the trigger would:
+// the trigger's own key (`fixture_no:<division>`), then the division's max, then max+1 onward in row order. The trigger skips a
+// row that arrives numbered (`if new.fixture_no is null`), and stays for every single-row writer.
+
+/** Unnumbered line rows (the production callers' shape: the trigger, or now the helper, numbers them). */
+function unnumberedRows(stageId: string, divisionId: string, count: number, tag: string) {
+  return Array.from({ length: count }, (_, i) => ({
+    id: randomUUID(),
+    stage_id: stageId,
+    division_id: divisionId,
+    round_no: 1,
+    seq_in_round: i + 1,
+    ext_key: `f8-${tag}-${String(i + 1).padStart(5, "0")}`,
+    status: "scheduled",
+  }));
+}
+
+describe.skipIf(!HAS_DB)("F8: insertFixtureRows numbers the lines once per call", () => {
+  it("numbers as the trigger does: max+1 onward in row order, across a chunk boundary; a second call continues", { timeout: 120_000 }, async () => {
+    const rig = await emptyStage();
+    // Three lines numbered by the TRIGGER itself, one statement each (V263: the division's max + 1): the rule's own witness.
+    for (const row of unnumberedRows(rig.stageId, rig.divisionId, 3, "pre")) await withTenant(rig.auth.orgId, (tx) => tx`insert into fixtures ${tx(row as never)}`);
+    const pre = await sql<{ fixture_no: number }[]>`select fixture_no from fixtures where stage_id = ${rig.stageId} order by fixture_no`;
+    expect(pre.map((r) => r.fixture_no), "premise: the trigger numbers a fresh division 1, 2, 3").toEqual([1, 2, 3]);
+
+    const size = rowsPerInsert(7);
+    const first = unnumberedRows(rig.stageId, rig.divisionId, size + 2, "a");
+    const second = unnumberedRows(rig.stageId, rig.divisionId, 4, "b");
+    let sent = 0;
+    await withTenant(rig.auth.orgId, async (tx) => {
+      const before = statementCount();
+      await insertFixtureRows(tx, first);
+      sent = statementCount() - before;
+    });
+    await withTenant(rig.auth.orgId, (tx) => insertFixtureRows(tx, second));
+    const noOf = new Map((await sql<{ id: string; fixture_no: number }[]>`select id, fixture_no from fixtures where stage_id = ${rig.stageId}`).map((r) => [r.id, r.fixture_no]));
+    const expected = [...first, ...second].map((_, i) => 3 + i + 1);
+    const got = [...first, ...second].map((r) => noOf.get(r.id));
+    expect(got.length, "anti-vacuity: rows checked").toBe(size + 6);
+    expect(got, "max+1 onward, in the order the rows were handed over").toEqual(expected);
+    expect(sent, "the rows' own chunks, plus the lock and the one max() read").toBe(2 + 2);
+  });
+
+  it("reads the division's fixtures once per call, not once per line (the per-row max() made Start quadratic)", { timeout: 120_000 }, async () => {
+    const rig = await emptyStage();
+    const rows = unnumberedRows(rig.stageId, rig.divisionId, 600, "scan");
+    const scans = (tx: Parameters<Parameters<typeof withTenant>[1]>[0]) =>
+      tx<{ n: number }[]>`select (coalesce(idx_scan, 0) + coalesce(seq_scan, 0))::int as n from pg_stat_xact_user_tables where relid = 'fixtures'::regclass`;
+    const delta = await withTenant(rig.auth.orgId, async (tx) => {
+      const [before] = await scans(tx);
+      await insertFixtureRows(tx, rows);
+      const [after] = await scans(tx);
+      return after!.n - before!.n;
+    });
+    expect((await linesOf(rig.stageId)).length, "anti-vacuity: every line landed").toBe(600);
+    expect(delta, "one read of the division's numbers for 600 lines").toBe(1);
+  });
+
+  it("rows of two divisions in one call are refused before any statement is sent (one division's numbering per call)", async () => {
+    const a = await emptyStage();
+    const b = await emptyStage();
+    const rows = [...unnumberedRows(a.stageId, a.divisionId, 1, "x"), ...unnumberedRows(b.stageId, b.divisionId, 1, "y")];
+    let sent = -1;
+    const err = await withTenant(a.auth.orgId, async (tx) => {
+      const before = statementCount();
+      try {
+        await insertFixtureRows(tx, rows);
+      } finally {
+        sent = statementCount() - before;
+      }
+    }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(String(err)).toMatch(/insertFixtureRows: .*two divisions/);
+    expect(sent, "nothing sent").toBe(0);
+  });
+
+  it("a row with no division is refused before any statement is sent (nothing to number it under)", async () => {
+    const rig = await emptyStage();
+    const rows = unnumberedRows(rig.stageId, rig.divisionId, 2, "nodiv").map((r) => Object.fromEntries(Object.entries(r).filter(([k]) => k !== "division_id")));
+    let sent = -1;
+    const err = await withTenant(rig.auth.orgId, async (tx) => {
+      const before = statementCount();
+      try {
+        await insertFixtureRows(tx, rows);
+      } finally {
+        sent = statementCount() - before;
+      }
+    }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(String(err)).toMatch(/insertFixtureRows: a row names no division/);
+    expect(sent, "nothing sent").toBe(0);
+  });
+
+  it("rows a caller numbered itself keep their numbers (no lock, no read)", async () => {
+    const rig = await emptyStage();
+    let sent = 0;
+    await withTenant(rig.auth.orgId, async (tx) => {
+      const before = statementCount();
+      await insertFixtureRows(tx, shellRows(rig.stageId, rig.divisionId, 3));
+      sent = statementCount() - before;
+    });
+    const nos = (await sql<{ fixture_no: number }[]>`select fixture_no from fixtures where stage_id = ${rig.stageId} order by fixture_no`).map((r) => r.fixture_no);
+    expect(nos).toEqual([100_000, 100_001, 100_002]);
+    expect(sent, "one statement: the insert alone").toBe(1);
+  });
+});
+
 describe.skipIf(!HAS_DB)("F1: no driver message reaches a 500's body", () => {
   async function bodyOf(err: unknown) {
     const res = await v1(async () => {

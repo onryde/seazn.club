@@ -38,17 +38,42 @@ function isFragment(v: unknown): boolean {
  * Insert `rows` into `fixtures` in batches of `rowsPerInsert(columns)`, in order, on the caller's transaction. The columns are
  * the FIRST row's keys, as the driver's own `tx(rows)` reads them, and are passed to every batch, so each batch writes the
  * same column list. A row value that would bind more than one parameter is refused before any statement is sent.
+ *
+ * W5 B4 (stress F8): rows that arrive unnumbered are numbered HERE, once per call, exactly as the V263 trigger
+ * (`assign_fixture_no`) numbers them one row at a time: under the trigger's own advisory key (`fixture_no:<division>`), the
+ * division's max, then max+1 onward in row order. The trigger skips a row that arrives numbered. Its per-row `max()` ran under
+ * the app's role with the tenant policy's org filter, and that read grew with the rows already written: a 4,950-line Start spent
+ * 9.6 s of its 10.4 s numbering lines (the same insert, numbered in advance: 0.8 s). One call writes one division's lines (every
+ * caller inserts one stage's), and rows of two divisions are refused before anything is sent. Rows a caller numbered itself
+ * (the first row carries `fixture_no`) go in as they are.
  */
 export async function insertFixtureRows(tx: Tx, rows: readonly Record<string, unknown>[]): Promise<void> {
   if (rows.length === 0) return;
-  const columns = Object.keys(rows[0]!);
+  const numbered = Object.hasOwn(rows[0]!, "fixture_no");
+  const columns = numbered ? Object.keys(rows[0]!) : [...Object.keys(rows[0]!), "fixture_no"];
   for (const row of rows) {
     for (const c of columns) {
       if (isFragment(row[c])) throw new Error(`insertFixtureRows: column ${c} holds an SQL fragment, which binds more than one parameter`);
     }
   }
+  const out = numbered ? rows : await numberRows(tx, rows);
   const size = rowsPerInsert(columns.length);
-  for (let i = 0; i < rows.length; i += size) {
-    await tx`insert into fixtures ${tx(rows.slice(i, i + size) as never, columns)}`;
+  for (let i = 0; i < out.length; i += size) {
+    await tx`insert into fixtures ${tx(out.slice(i, i + size) as never, columns)}`;
   }
+}
+
+/** The rows with `fixture_no` max+1 onward, read once under the trigger's own key; refused before any statement when they name
+ *  no division or two. */
+async function numberRows(tx: Tx, rows: readonly Record<string, unknown>[]): Promise<Record<string, unknown>[]> {
+  const division = rows[0]!.division_id;
+  if (typeof division !== "string") throw new Error("insertFixtureRows: a row names no division, so its line cannot be numbered");
+  const other = rows.find((r) => r.division_id !== division);
+  if (other !== undefined) {
+    throw new Error(`insertFixtureRows: rows of two divisions (${division}, ${String(other.division_id)}) in one call; one division's lines are numbered per call`);
+  }
+  // The trigger's own key and order (V263): lock first, then read, so a concurrent writer's committed lines are counted.
+  await tx`select pg_advisory_xact_lock(hashtext('fixture_no:' || ${division}::uuid::text))`;
+  const [{ max }] = await tx<{ max: number }[]>`select coalesce(max(fixture_no), 0)::int as max from fixtures where division_id = ${division}`;
+  return rows.map((r, i) => ({ ...r, fixture_no: max + i + 1 }));
 }

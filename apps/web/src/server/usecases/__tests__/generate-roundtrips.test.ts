@@ -121,8 +121,10 @@ describe.skipIf(!HAS_DB)("fixture generation round-trip budget", () => {
     // Batched path uses ~25 statements incl. transaction chrome and the
     // fire-and-forget revalidate lookup; per-row inserts/feed-updates would
     // add ~60 more. Headroom, not exactness — the point is the order of
-    // magnitude.
-    expect(used).toBeLessThanOrEqual(40);
+    // magnitude. W5 B4 (F8): +2 for the insert numbering its lines once per
+    // call (the trigger's lock, then one read of the division's numbers),
+    // where the trigger read them once per line inside the insert.
+    expect(used).toBeLessThanOrEqual(42);
   });
 
   it("americano generation resolves pair entrants in bulk, not per match", async () => {
