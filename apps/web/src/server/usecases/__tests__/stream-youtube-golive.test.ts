@@ -568,7 +568,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T11 — Go live streams into the prepa
     expect(err2).not.toBeInstanceOf(HttpError);
     expect((err2 as Error).message).toMatch(/pasted destination reached the session insert with a prepared broadcast/);
     expect(await sessionsOn(b)).toBe(0);
-    expect(vi.mocked(abandonPrepared), "what was handed over is abandoned").toHaveBeenCalledWith(stray, w.fake);
+    expect(vi.mocked(abandonPrepared), "what was handed over is abandoned").toHaveBeenCalledWith(stray, w.fake, { startCause: "organiser", now: expect.any(Date) });
 
     // Positive pair: the same fixture, prepare left alone → admitted.
     const { sessionId } = await goLive(w, a);
