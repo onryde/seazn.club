@@ -4,13 +4,17 @@
 //
 //   1. connect through the real save (pickYoutubeChannel = saveConnectionFromGrant + recordChannelCreatedAt) -> channel_created_at stored
 //   2. the REAL safety route handler warns for that 5-day-old channel, reading the STORED date (the fake is then told a different one)
-//   3. an AUTOMATIC start the fake refuses `youtube_limit_reached` opens the backoff; the next automatic start is refused the same code
-//      from the window with the fake's call count UNCHANGED
-//   4. the organiser's Go live inside the window asks YouTube, succeeds and clears the backoff
+//   3. the AUTOMATIC start, through its real caller (a phone beat -> postBeat -> maybeAutoStart -> startBroadcast, cause "automatic"):
+//      two beats YouTube refuses `youtube_limit_reached` open and double the backoff; the third beat, inside the window, is refused from
+//      it with the fake's call count UNCHANGED
+//   4. the organiser's Go live, through its real caller (createSession, cause "organiser"), inside the window asks YouTube, succeeds and
+//      clears the backoff
 //   5. the description the fake recorded for that broadcast carries the fact lines (sport . round, competition, venue, date and time)
 //
-// Reading of the brief's "refused twice, the second without a port call": the first refusal is YouTube's (one port call); the second comes
-// from Task 1's backoff window, which is what makes a port call unnecessary. That is how the code documents it, and what is asserted.
+// Phase 0 review m5: the cause is set by each CALLER, never handed to prepare here, so a caller that sends the wrong cause turns this red
+// (an automatic start sent as "organiser" would ask YouTube in step 3; a Go live sent as "automatic" would be refused in step 4).
+// Three beats, not two: the base window (60 s) equals the retry spacing (AUTO_START_RETRY_SECONDS) and ends at its own instant, so the
+// window bites from the second refusal in a row (lib/youtube.ts, accepted at Task 1).
 //
 // Sport: generic only - the seam under test (connection, backoff, description facts) never reads a sport rule; the fact line's sport label
 // is derived from the dictionary for the division's own sport_key.
@@ -35,47 +39,60 @@ vi.mock("@/lib/sentry", () => ({ captureError: vi.fn() }));
 
 import en from "@/dictionaries/en/ui.json";
 import { sql } from "@/lib/db";
-import { HttpError } from "@/lib/errors";
 import { YOUTUBE_AUTO_BACKOFF_BASE_SECONDS, YOUTUBE_YOUNG_CHANNEL_DAYS } from "@/lib/youtube";
 import { GET as safetyRoute } from "@/app/api/v1/orgs/[id]/youtube-connections/[connectionId]/safety/route";
-import { divisionRig } from "@/server/usecases/__tests__/_rig";
+import { CaptureBeat } from "@/server/api-v1/capture-schemas";
+import { AUTO_START_RETRY_SECONDS } from "@/server/relay/config";
+import { postBeat } from "@/server/usecases/capture-phone";
+import { saveStreamSettings } from "@/server/usecases/stream-codes";
+import { createSession } from "@/server/usecases/stream-sessions";
+import { captureRig, phoneId, type CaptureRig } from "@/server/usecases/__tests__/_capture-rig";
 import { setYoutubeDriverForTest } from "@/server/youtube/driver";
 import { FakeYouTube } from "@/server/youtube/fake";
-import { prepareYoutubeBroadcast } from "@/server/youtube/prepare";
 import { pickYoutubeChannel } from "@/server/youtube/connections";
-import type { StartCause } from "@/server/relay/domain/session";
-import { channelId, grant, org } from "./_connect-rig";
+import { channelId, grant, type Org } from "./_connect-rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const DAY = 86_400_000;
+const SEC = 1000;
 
-const KEKS = ["YOUTUBE_TOKEN_KEK", "RELAY_KEK"] as const;
-const savedKeks = Object.fromEntries(KEKS.map((k) => [k, process.env[k]]));
-beforeAll(() => { for (const k of KEKS) process.env[k] = randomBytes(32).toString("hex"); });
+// The capture rig's environment (as stream-auto.test.ts sets it): the KEKs fresh, the relay's own switches at their defaults.
+const ENV_KEYS = ["YOUTUBE_TOKEN_KEK", "RELAY_KEK", "AUTH_SECRET", "OAUTH_BASE_URL", "NEXT_PUBLIC_BASE_URL", "STREAM_PLAYBACK_HOST", "STREAM_SRT_ENABLED", "RELAY_DRIVERS"] as const;
+const savedEnv = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
+beforeAll(() => {
+  for (const k of ENV_KEYS) delete process.env[k];
+  process.env.YOUTUBE_TOKEN_KEK = randomBytes(32).toString("hex");
+  process.env.RELAY_KEK = randomBytes(32).toString("hex");
+  process.env.AUTH_SECRET = "channel-safety-seam-secret";
+});
 afterAll(() => {
-  for (const k of KEKS) {
-    if (savedKeks[k] === undefined) delete process.env[k];
-    else process.env[k] = savedKeks[k];
+  for (const k of ENV_KEYS) {
+    if (savedEnv[k] === undefined) delete process.env[k];
+    else process.env[k] = savedEnv[k];
   }
 });
 afterEach(() => setYoutubeDriverForTest(null));
 
-async function refusal(p: Promise<unknown>): Promise<HttpError> {
-  try {
-    await p;
-  } catch (err) {
-    if (err instanceof HttpError) return err;
-    throw err;
-  }
-  throw new Error("expected a refusal, got an answer");
+/** One AUTOMATIC phone's beat at the rig's clock, through the real postBeat (which calls maybeAutoStart). */
+async function beat(r: CaptureRig, phone: string, over: Record<string, unknown> = {}) {
+  return postBeat(r.code, r.tok, CaptureBeat.parse({
+    code: r.code, slot: 0, phone, claim: null, device: null, sid: null, at: r.now().toISOString(), state: "paired",
+    cause: null, notReady: null, startFailed: null, stopped: null, mode: "automatic", transport: null, bitrateKbps: null,
+    delivery: "unknown", deliveredLagS: null, audioOk: null, battery: null, thermal: null, dataUsedMB: null,
+    appVersion: "channel-safety-seam/1", ...over,
+  }), r.deps, r.now());
 }
 
 describe.skipIf(!HAS_DB)("Phase 0 channel safety: one journey through every seam", () => {
-  it("connect -> safety warns -> automatic refusal backs off -> Go live clears it -> the description carries the facts", async () => {
-    const o = await org();
+  it("connect -> safety warns -> automatic refusals back off -> Go live clears it -> the description carries the facts", async () => {
+    const r = await captureRig({ credits: 3 });
+    const o: Org = { auth: r.auth, orgId: r.auth.orgId, userId: r.auth.userId! };
+    // The rig's organiser is a fresh user: a member of the org, so the session door of the safety route admits them.
+    await sql`insert into org_members (org_id, user_id, role) values (${o.orgId}, ${o.userId}, 'owner')`;
     authState.userId = o.userId;
-    const fake = new FakeYouTube();
+    const fake = new FakeYouTube({ now: r.now });
     setYoutubeDriverForTest(fake);
+    r.deps.youtube = fake;
     const ch = { id: channelId(), title: "Seam FC" };
     const fiveDaysAgo = new Date(Date.now() - 5 * DAY);
     expect(5, "PREMISE: five days is inside the young window").toBeLessThan(YOUTUBE_YOUNG_CHANNEL_DAYS);
@@ -105,43 +122,50 @@ describe.skipIf(!HAS_DB)("Phase 0 channel safety: one journey through every seam
       .not.toContain("channelCreatedAt");
     expect(fake.calls.slice(callsBeforeSafety).map((c) => c.method), "the route's facts are read at YouTube").toContain("recentBroadcasts");
 
-    // ── the match: a division of three fixtures, one with a venue and a start time ──────────────────────────────────────
-    const d = await divisionRig(o.auth, { entrants: 3 });
-    const [fAuto, fHuman, fAfter] = d.fixtureIds as [string, string, string];
+    // ── the match: the rig's fixture, with a venue and a start time, streaming automatically to the connected channel ────────
+    const fx = r.fixtureId;
     const startsAt = "2026-12-05T14:30:00Z";
     await sql`update organizations set default_locale = 'en', timezone = 'Europe/London' where id = ${o.orgId}`;
-    await sql`update fixtures set scheduled_at = ${startsAt}, venue = 'Hall 2' where id = ${fHuman}`;
-    const targetId = saved.targetId;
-    const T0 = new Date();
-    const prep = (fixtureId: string, now: Date, startCause: StartCause) =>
-      prepareYoutubeBroadcast({ orgId: o.orgId, fixtureId, targetId, now, startCause }, fake);
+    await sql`update fixtures set scheduled_at = ${startsAt}, venue = 'Hall 2', status = 'in_play' where id = ${fx}`;
+    const phone = phoneId("a");
+    await beat(r, phone, { claim: "new", mode: "operator" });
+    await saveStreamSettings(r.auth, fx, { autoStream: true, targetId: saved.targetId });
     const backoff = async () => (await sql<{ auto_backoff_count: number; auto_retry_after: Date | null; auto_backoff_code: string | null }[]>`
       select auto_backoff_count, auto_retry_after, auto_backoff_code from org_youtube_connections where id = ${saved.connectionId}`)[0]!;
+    const refusalStored = async () => (await sql<{ auto_start_refusal: string | null; auto_start_attempted_at: Date | null }[]>`
+      select auto_start_refusal, auto_start_attempted_at from fixture_stream_settings where fixture_id = ${fx}`)[0]!;
     const inserts = () => fake.calls.filter((c) => c.method === "insertBroadcast").length;
 
-    // ── 3. an automatic start YouTube refuses opens the backoff (Task 1); the next is refused from the window, no port call ─
+    // ── 3. the automatic start (Task 1), through its real caller: YouTube refuses twice, the window opens and doubles; the third beat
+    //       is refused from the window with NO call to YouTube ──────────────────────────────────────────────────────────────────
+    const T0 = r.now();
     fake.failNext("insertBroadcast", "youtube_limit_reached");
-    const first = await refusal(prep(fAuto, T0, "automatic"));
-    expect([first.code, first.status]).toEqual(["youtube_limit_reached", 429]);
+    await beat(r, phone);
     expect(inserts(), "the first refusal was YouTube's: one call").toBe(1);
+    expect((await refusalStored()).auto_start_refusal, "the automatic start ran and was refused").toBe("unavailable");
     expect(await backoff()).toMatchObject({
       auto_backoff_count: 1, auto_backoff_code: "youtube_limit_reached",
-      auto_retry_after: new Date(T0.getTime() + YOUTUBE_AUTO_BACKOFF_BASE_SECONDS * 1000),
+      auto_retry_after: new Date(T0.getTime() + YOUTUBE_AUTO_BACKOFF_BASE_SECONDS * SEC),
     });
+    r.tick(AUTO_START_RETRY_SECONDS * SEC);
+    fake.failNext("insertBroadcast", "youtube_limit_reached");
+    await beat(r, phone);
+    expect(inserts(), "at the spacing the base window has closed: YouTube asked again").toBe(2);
+    expect((await backoff()).auto_backoff_count, "the second refusal in a row doubles the window").toBe(2);
     const callsBefore = fake.calls.length;
-    const second = await refusal(prep(fAuto, new Date(T0.getTime() + 10_000), "automatic"));
-    expect([second.code, second.status]).toEqual(["youtube_limit_reached", 429]);
-    expect(fake.calls.length, "the second refusal came from the window: no call to YouTube").toBe(callsBefore);
+    r.tick(AUTO_START_RETRY_SECONDS * SEC);
+    await beat(r, phone);
+    expect((await refusalStored()).auto_start_attempted_at?.getTime(), "PREMISE: the third beat made an attempt").toBe(r.now().getTime());
+    expect(fake.calls.length, "the third refusal came from the window: no call to YouTube").toBe(callsBefore);
 
-    // ── 4. the organiser's Go live inside the window asks YouTube, proceeds and clears the backoff ─────────────────────────
-    const human = await prep(fHuman, new Date(T0.getTime() + 20_000), "organiser");
-    expect(human).not.toBeNull();
+    // ── 4. the organiser's Go live inside the window, through its real caller, asks YouTube, proceeds and clears the backoff ──────────
+    r.tick(10 * SEC);
+    const { sessionId } = await createSession(r.auth, fx, { mode: "passthrough", targetId: saved.targetId }, r.deps);
     expect(fake.calls.length, "a person's tap is not held by the window").toBeGreaterThan(callsBefore);
     expect(await backoff()).toEqual({ auto_backoff_count: 0, auto_retry_after: null, auto_backoff_code: null });
-    // and the automatic start asks YouTube again (the window no longer exists)
-    const insertsBefore = inserts();
-    expect(await prep(fAfter, new Date(T0.getTime() + 21_000), "automatic")).not.toBeNull();
-    expect(inserts()).toBe(insertsBefore + 1);
+    const [human] = await sql<{ broadcastId: string }[]>`
+      select youtube_broadcast_id as "broadcastId" from fixture_stream_sessions where id = ${sessionId}`;
+    expect(human?.broadcastId, "the Go live streams into a prepared broadcast").toBeTruthy();
 
     // ── 5. the description the fake recorded carries the facts (Task 5), in the order the dictionary words them ──────────
     const [row] = await sql<{ yt: string }[]>`
@@ -149,7 +173,7 @@ describe.skipIf(!HAS_DB)("Phase 0 channel safety: one journey through every seam
     const recorded = fake.inspectBroadcast(row!.yt)!.description;
     const [{ comp, sportKey, roundNo }] = await sql<{ comp: string; sportKey: string; roundNo: number }[]>`
       select c.name as comp, d.sport_key as "sportKey", f.round_no as "roundNo"
-        from fixtures f join divisions d on d.id = f.division_id join competitions c on c.id = d.competition_id where f.id = ${fHuman}`;
+        from fixtures f join divisions d on d.id = f.division_id join competitions c on c.id = d.competition_id where f.id = ${fx}`;
     const lines = recorded.split("\n\n")[0]!.split("\n");
     expect(lines).toHaveLength(4);
     expect(lines[0]).toBe(`${(en as Record<string, string>)[`sport.${sportKey}`]} · ${en["schedule.round"].replace("{n}", String(roundNo))}`);
