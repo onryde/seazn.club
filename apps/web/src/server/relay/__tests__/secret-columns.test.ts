@@ -144,7 +144,7 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
     expect(again.id).toBe(r.targetId);
     expect(again).toMatchObject({ kind: "youtube", label: "x", watchUrl: null });   // the STORED row answers, not the arguments
     const rows = await sql<{ id: string; kind: string; label: string; watch_url: string | null }[]>`
-      select id, kind, label, watch_url from org_stream_targets where org_id = ${r.orgId}`;
+      select id, kind, label, watch_url from org_stream_targets where org_id = ${r.orgId} and kind <> 'seazn'`;   // external only: V540's seazn row is every org's
     expect(rows).toEqual([{ id: r.targetId, kind: "youtube", label: "x", watch_url: null }]);
     expect(await sql.begin((tx) => readTargetSecret(tx, r.orgId, r.targetId))).toEqual(r.target);   // first spelling kept
     const other = await sql.begin((tx) =>
@@ -197,11 +197,11 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
 
   it("A19: an undialable destination is refused BEFORE anything is written — no fingerprint means no row", async () => {
     const r = await rig();
-    const before = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_targets where org_id = ${r.orgId}`;
+    const before = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_targets where org_id = ${r.orgId} and kind <> 'seazn'`;
     await expect(sql.begin((tx) =>
       insertStreamTarget(tx, { orgId: r.orgId, kind: "custom_rtmp", label: "x", watchUrl: null, rtmp: { url: "rtmps://127.0.0.1/app", streamKey: secret65() } }),
     )).rejects.toThrow();
-    const after = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_targets where org_id = ${r.orgId}`;
+    const after = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_targets where org_id = ${r.orgId} and kind <> 'seazn'`;
     expect(before[0]!.n).toBe(1);
     expect(after[0]!.n).toBe(1);
   });
@@ -717,7 +717,7 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
       const [bad] = await sql<{ id: string }[]>`
         insert into org_stream_targets (org_id, kind, label, rtmp_enc) values (${r.orgId}, 'youtube', 'stale', ${Buffer.from("sealed-under-another-kek")}) returning id`;
       // The precondition: there ARE active rows to open, or a KEK fault could never be reached and "rejects" would be vacuous.
-      const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_targets where org_id = ${r.orgId} and archived_at is null`;
+      const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_targets where org_id = ${r.orgId} and kind <> 'seazn' and archived_at is null`;
       expect(n).toBe(2);
       let checked = 0;
       for (const f of KEK_FAULTS) {
@@ -740,7 +740,7 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
       const [bad] = await sql<{ id: string }[]>`
         insert into org_stream_targets (org_id, kind, label, rtmp_enc) values (${r.orgId}, 'youtube', 'stale', ${Buffer.from("sealed-under-another-kek")}) returning id`;
       expect(await sql.begin((tx) => archiveStreamTarget(tx, r.orgId, r.targetId)), "PREMISE: the readable row is gone").toBe(true);
-      const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_targets where org_id = ${r.orgId} and archived_at is null`;
+      const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_targets where org_id = ${r.orgId} and kind <> 'seazn' and archived_at is null`;
       expect(n, "PREMISE: the unopenable row is the only active one").toBe(1);
       let checked = 0;
       for (const f of KEK_FAULTS) {

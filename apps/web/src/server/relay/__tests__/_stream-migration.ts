@@ -15,17 +15,18 @@ const file = ALL_DELTAS.find((f) => /^V\d+__stream_sessions\.sql$/.test(f));
 export const MIGRATION: string = file ? readFileSync(join(DELTAS, file), "utf8") : "";
 
 // ---- The fold (capture QR v2 T3, A4) ---------------------------------------------------------
-// V410 and EVERY later delta whose name says stream, capture or youtube, in VERSION order (numeric,
+// V410 and EVERY later delta whose name says stream, capture, youtube or seazn, in VERSION order (numeric,
 // so a V1000 would sort after V999 — a string sort would not). `youtube` joined with V479
 // (YouTube Connect): its four tables take the stream pattern (enable + force RLS, no policy, no
 // grant) and it alters org_stream_targets and fixture_stream_sessions, so the scans over this fold
-// must read it. A later delta can re-declare a CHECK
+// must read it. `seazn` joined with V540 (Seazn-hosted video) for the same reason: two stream-pattern
+// tables, and it alters org_stream_targets, fixture_stream_inputs and fixture_stream_sessions. A later delta can re-declare a CHECK
 // list (V430 drops V410's inline end_reason check and re-adds it under the same name), so a list
 // read from V410 alone answers yesterday's question.
 const FOLD_FROM = file ? version(file) : Number.POSITIVE_INFINITY;
 /** The folded files' names, in version order — exported so a test can pin V410 and V430 BY NAME. */
 export const STREAM_DELTA_FILES: readonly string[] = ALL_DELTAS
-  .filter((f) => version(f) >= FOLD_FROM && (f === file || /stream|capture|youtube/.test(f)))
+  .filter((f) => version(f) >= FOLD_FROM && (f === file || /stream|capture|youtube|seazn/.test(f)))
   .sort((a, b) => version(a) - version(b));
 /** Anti-vacuity: how many delta files the fold read. Zero means the fold proved nothing. */
 export const STREAM_DELTA_COUNT: number = STREAM_DELTA_FILES.length;
@@ -37,7 +38,7 @@ export const STREAM_DELTAS: string = STREAM_DELTA_TEXTS.join("\n");
 /** SQL, not prose: every `--` comment is stripped (no folded file has `--` inside a string literal). */
 export const stripSqlComments = (sqlText: string): string => sqlText.replace(/--.*$/gm, "");
 
-/** Every table the fold creates — V410's eight, V430's four, V437's two, V479's four. */
+/** Every table the fold creates — V410's eight, V430's four, V437's two, V479's four, V525's one, V540's two. */
 export const STREAM_TABLES: string[] = [...stripSqlComments(STREAM_DELTAS).matchAll(/^create table (\w+)/gm)].map((m) => m[1]!);
 
 const quoted = (list: string): string[] => [...list.matchAll(/'([^']+)'/g)].map((x) => x[1]!);

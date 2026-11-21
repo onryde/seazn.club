@@ -53,7 +53,8 @@ interface ConnRow {
 const connRows = (orgId: string) => sql<ConnRow[]>`select * from org_youtube_connections where org_id = ${orgId} order by created_at, id`;
 const connRow = async (id: string): Promise<ConnRow> => (await sql<ConnRow[]>`select * from org_youtube_connections where id = ${id}`)[0]!;
 interface TargetRow { id: string; org_id: string; kind: string; label: string; youtube_connection_id: string | null; dest_fingerprint: string | null; watch_url: string | null; archived_at: Date | null }
-const targetRows = (orgId: string) => sql<TargetRow[]>`select id, org_id, kind, label, youtube_connection_id, dest_fingerprint, watch_url, archived_at from org_stream_targets where org_id = ${orgId} order by created_at, id`;
+// External destinations only: since V540 every org also holds its one `seazn` row (made by trigger), which no connect touches.
+const targetRows = (orgId: string) => sql<TargetRow[]>`select id, org_id, kind, label, youtube_connection_id, dest_fingerprint, watch_url, archived_at from org_stream_targets where org_id = ${orgId} and kind <> 'seazn' order by created_at, id`;
 const pendingCount = async (orgId: string): Promise<number> =>
   (await sql<{ n: number }[]>`select count(*)::int as n from youtube_connect_pending where org_id = ${orgId}`)[0]!.n;
 /** Is a token still sealed on this pending row? (the only trace of a grant a refused save must leave untouched) */

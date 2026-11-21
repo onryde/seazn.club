@@ -5809,7 +5809,7 @@ describe.skipIf(!HAS_DB)("the DESTINATION lifecycle as a SEQUENCE — two orgs, 
             }
           }
           const table = await sql<{ id: string; org_id: string; archived: boolean }[]>`
-            select id, org_id, archived_at is not null as archived from org_stream_targets where org_id in ${sql(orgIds)}`;
+            select id, org_id, archived_at is not null as archived from org_stream_targets where org_id in ${sql(orgIds)} and kind <> 'seazn'`;
           expect(table.map((x) => ({ id: x.id, org: x.org_id, archived: x.archived })).sort(byId), `${after}: the table's owners and archived flags`)
             .toEqual(targets.map((tg) => ({ id: tg.id, org: orgIds[tg.org], archived: tg.archived })).sort(byId));
           tally.tableRowsChecked += table.length;

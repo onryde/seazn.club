@@ -1948,7 +1948,7 @@ describe.skipIf(!HAS_DB)("R2008: a COMPOSED live stream whose camera is gone for
     const first = await composedLive();
     await stopSession(first.auth, first.fixtureId, first.sessionId, first.deps);
     await settled(first);
-    const [{ id: targetId }] = await sql<{ id: string }[]>`select id from org_stream_targets where org_id = ${first.orgId} limit 1`;
+    const [{ id: targetId }] = await sql<{ id: string }[]>`select id from org_stream_targets where org_id = ${first.orgId} and kind <> 'seazn' limit 1`;
     first.tick(MIN);
     const { sessionId } = await createSession(first.auth, first.fixtureId, { mode: "composed", targetId }, first.deps);
     const token = first.runner.created.find((x) => x.sessionId === sessionId)!.jobToken;

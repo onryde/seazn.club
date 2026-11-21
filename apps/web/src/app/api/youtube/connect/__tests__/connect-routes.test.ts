@@ -1331,7 +1331,7 @@ describe.skipIf(!HAS_DB)("the callback's save is the REAL one: what a landing le
   const connRow = async (id: string) => (await sql<Record<string, unknown>[]>`select * from org_youtube_connections where id = ${id}`)[0]!;
   const targetRows = (orgId: string) =>
     sql<{ id: string; kind: string; label: string; youtube_connection_id: string; dest_fingerprint: string; watch_url: string | null; archived_at: Date | null }[]>`
-      select id, kind, label, youtube_connection_id, dest_fingerprint, watch_url, archived_at from org_stream_targets where org_id = ${orgId} order by created_at, id`;
+      select id, kind, label, youtube_connection_id, dest_fingerprint, watch_url, archived_at from org_stream_targets where org_id = ${orgId} and kind <> 'seazn' order by created_at, id`;   // external only: V540's seazn row is every org's
   const ownerCtx = (r: Rig) => ({ orgId: r.orgId, via: "session" as const, userId: r.userId, role: "owner" as const, keyId: null });
 
   it("(a) connected: the connection holds the start's choices and consent and the grant's token; its destination row is kind youtube, labelled with the channel's title, fingerprinted by the channel, with NO key of its own and NO watch link; the grant is not revoked; the Streaming page lists it", async () => {

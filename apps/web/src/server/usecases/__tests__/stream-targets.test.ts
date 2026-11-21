@@ -122,7 +122,7 @@ describe.skipIf(!HAS_DB)("stream targets — the usecase", () => {
     const blank = await createStreamTarget(auth, auth.orgId, { ...base, label: "blank", watchUrl: "", streamKey: "k-blank" });
     expect(blank.watchUrl).toBeNull();
     const stored = await sql<{ id: string; watch_url: string | null }[]>`
-      select id, watch_url from org_stream_targets where org_id = ${auth.orgId} order by created_at`;
+      select id, watch_url from org_stream_targets where org_id = ${auth.orgId} and kind <> 'seazn' order by created_at`;
     expect(stored).toEqual([{ id: omitted.id, watch_url: null }, { id: blank.id, watch_url: null }]);
   });
 
@@ -253,7 +253,7 @@ describe.skipIf(!HAS_DB)("stream targets — the usecase", () => {
     // The FIRST envelope is the one kept: the platform's preset url and the first key.
     expect(await sql.begin((tx) => readTargetSecret(tx, auth.orgId, tw.id))).toEqual({ url: STREAM_PLATFORM_PRESETS.twitch, streamKey: kTw });
     const rows = await sql<{ id: string; fp: string | null }[]>`
-      select id, dest_fingerprint as fp from org_stream_targets where org_id = ${auth.orgId} order by created_at`;
+      select id, dest_fingerprint as fp from org_stream_targets where org_id = ${auth.orgId} and kind <> 'seazn' order by created_at`;
     expect(rows.map((r) => r.id)).toEqual([tw.id, yt.id]);
     expect(rows.every((r) => /^[0-9a-f]{64}$/.test(r.fp ?? ""))).toBe(true);
     expect(await listStreamTargets(auth, auth.orgId), "the list still holds the FIRST names").toEqual([StreamTarget.parse(tw), StreamTarget.parse(yt)]);
@@ -292,7 +292,7 @@ describe.skipIf(!HAS_DB)("stream targets — the usecase", () => {
       rounds++;
     }
     expect(rounds).toBe(3);
-    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_targets where org_id = ${auth.orgId}`;
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_targets where org_id = ${auth.orgId} and kind <> 'seazn'`;
     expect(n).toBe(1);
   });
 
