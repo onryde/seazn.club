@@ -12,7 +12,7 @@
 //
 // ONE SPORT, on purpose (TEST-STRATEGY rule 6): a stream code never reads the fixture's sport — nothing in the module
 // joins `sports` — so every rig rides `_rig`'s generic division.
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Spies on the two crypto calls the rules are about, pass-through by default: `timingSafeEqual` (C1's one compare per
 // resolve) and `randomInt` (the code draw, so the collision-retry case can force a draw).
@@ -36,11 +36,12 @@ import { createHash, randomBytes, randomInt, randomUUID, timingSafeEqual } from 
 import { sql, statementCount } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
+import { SEAZN_UNAVAILABLE } from "@/lib/stream-destinations";
 import { CaptureQrV2 } from "@/lib/capture-qr";
 import { CaptureRefusalError } from "@/server/api-v1/capture-http";
 import { CODE_GRACE_AFTER_FINISH_MINUTES } from "@/server/relay/config";
 import { insertStreamCode, wipeStreamCodeTok } from "@/server/relay/secret-columns";
-import { rigTarget, sessionOnTarget } from "@/server/relay/__tests__/_session-rig";
+import { rigApiTarget, rigTarget, sessionOnTarget } from "@/server/relay/__tests__/_session-rig";
 import { createStreamTarget } from "../stream-targets";
 import { deltaText, stripSqlComments } from "@/server/relay/__tests__/_stream-migration";
 import { ensureStreamCode, fixtureStreamTarget, markAutoStartBlocked, reissueStreamCode, resolveStreamCode, saveStreamSettings, writeStreamSettings } from "../stream-codes";
@@ -981,5 +982,60 @@ describe.skipIf(!HAS_DB)("stream settings — a row records whether the organise
         expect(await blockedOf(r.fixtureId)).toEqual({ auto_start_blocked_at: at, auto_stream: false, target_chosen: false, target_id: null });
       });
     });
+  });
+});
+
+// Seazn-hosted video (V540, task 10): the fixture's default destination and the settings write know the org's `seazn` row.
+// The flag is toggled through the env var the config reader reads on every call (unset = off).
+describe.skipIf(!HAS_DB)("stream settings — the Seazn destination (V540, task 10)", () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+  const pickOf = (r: Awaited<ReturnType<typeof rig>>) => fixtureStreamTarget(sql, { orgId: r.auth.orgId, fixtureId: r.fixtureId });
+  async function withKeys() {
+    const r = await rig();
+    const old = await createStreamTarget(r.auth, r.auth.orgId, { kind: "youtube", label: "Old key", streamKey: `k-${randomUUID().slice(0, 8)}` });
+    const next = await createStreamTarget(r.auth, r.auth.orgId, { kind: "twitch", label: "Next key", streamKey: `k-${randomUUID().slice(0, 8)}` });
+    // Both pasted keys are OLDER than the org's Seazn row, so a default of Seazn is the rule's doing, not creation order.
+    await sql`update org_stream_targets set created_at = now() - interval '5 hours' where id = ${old.id}`;
+    await sql`update org_stream_targets set created_at = now() - interval '4 hours' where id = ${next.id}`;
+    const [seazn] = await sql<{ id: string; label: string }[]>`select id, label from org_stream_targets where org_id = ${r.auth.orgId} and kind = 'seazn'`;
+    return { r, old, next, seazn: seazn! };
+  }
+
+  it("LIVE on: with no saved pick the default is Seazn; with LIVE off it is the oldest pasted key (the regression)", async () => {
+    const { r, old, seazn } = await withKeys();
+    vi.stubEnv("SEAZN_HOSTED_LIVE", "true");
+    expect(await pickOf(r)).toEqual({ id: seazn.id, label: seazn.label, source: "default" });
+    vi.stubEnv("SEAZN_HOSTED_LIVE", "false");
+    expect(await pickOf(r)).toMatchObject({ id: old.id, label: "Old key", source: "default" });
+    // An org with only the Seazn row and LIVE off has no destination at all (the empty case), not Seazn.
+    const bare = await rig();
+    expect(await pickOf(bare)).toBeNull();
+    vi.stubEnv("SEAZN_HOSTED_LIVE", "true");
+    expect(await pickOf(bare)).toMatchObject({ source: "default" });
+  });
+
+  it("LIVE on: a saved Seazn pick resolves saved; the SAME saved pick with LIVE off resolves NONE, never an external destination — even with a YouTube connection", async () => {
+    const { r, seazn } = await withKeys();
+    await rigApiTarget(r.auth.orgId, "Club channel");
+    vi.stubEnv("SEAZN_HOSTED_LIVE", "true");
+    await sql.begin((tx) => writeStreamSettings(tx, { orgId: r.auth.orgId, fixtureId: r.fixtureId, targetId: seazn.id, updatedBy: r.auth.userId }));
+    expect(await pickOf(r)).toMatchObject({ id: seazn.id, source: "saved" });
+    vi.stubEnv("SEAZN_HOSTED_LIVE", "false");
+    const [row] = await sql<{ target_chosen: boolean; target_id: string }[]>`select target_chosen, target_id from fixture_stream_settings where fixture_id = ${r.fixtureId}`;
+    expect(row).toEqual({ target_chosen: true, target_id: seazn.id });   // the premise: the pick is still stored
+    expect(await pickOf(r)).toBeNull();
+  });
+
+  it("writeStreamSettings names the Seazn target: LIVE off is 422 seazn_unavailable and writes nothing; an external target still saves (positive pair)", async () => {
+    const { r, old, seazn } = await withKeys();
+    await expect(sql.begin((tx) => writeStreamSettings(tx, { orgId: r.auth.orgId, fixtureId: r.fixtureId, targetId: seazn.id, updatedBy: null })))
+      .rejects.toMatchObject({ status: 422, code: SEAZN_UNAVAILABLE });
+    expect(SEAZN_UNAVAILABLE).toBe("seazn_unavailable");
+    expect(await sql`select 1 from fixture_stream_settings where fixture_id = ${r.fixtureId}`).toHaveLength(0);
+    await sql.begin((tx) => writeStreamSettings(tx, { orgId: r.auth.orgId, fixtureId: r.fixtureId, targetId: old.id, updatedBy: null }));
+    expect(await pickOf(r)).toMatchObject({ id: old.id, source: "saved" });
+    // The organiser's PUT goes through the same writer.
+    await expect(saveStreamSettings(r.auth, r.fixtureId, { targetId: seazn.id })).rejects.toMatchObject({ status: 422, code: SEAZN_UNAVAILABLE });
+    expect(await pickOf(r)).toMatchObject({ id: old.id, source: "saved" });
   });
 });

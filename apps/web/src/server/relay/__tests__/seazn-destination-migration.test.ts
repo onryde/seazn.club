@@ -160,10 +160,11 @@ describe.skipIf(!HAS_DB)("V540__seazn_destination.sql — the Seazn destination 
        where p.proname = 'ensure_seazn_target' and p.pronamespace = current_schema()::regnamespace`;
     expect(fn?.definer).toBe(true);
     expect(fn?.config?.some((c) => /^search_path=.*pg_temp/.test(c))).toBe(true);
-    // The definer function is off the execute list (review m4): neither app_user nor PUBLIC holds EXECUTE on it.
+    // The definer function is off the execute list (review m4): neither app_user nor PUBLIC holds EXECUTE on it. A NULL proacl is
+    // the default grant, which includes PUBLIC, so it reads TRUE here (never coalesced to the safe answer).
     const [priv] = await sql<{ app_user: boolean; public_x: boolean }[]>`
       select has_function_privilege('app_user', p.oid, 'execute') as app_user,
-             coalesce(exists (select 1 from aclexplode(p.proacl) a where a.grantee = 0 and a.privilege_type = 'EXECUTE'), true) as public_x
+             (p.proacl is null or exists (select 1 from aclexplode(p.proacl) a where a.grantee = 0 and a.privilege_type = 'EXECUTE')) as public_x
         from pg_proc p where p.proname = 'ensure_seazn_target' and p.pronamespace = current_schema()::regnamespace`;
     expect(priv).toEqual({ app_user: false, public_x: false });
   });

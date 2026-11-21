@@ -43,7 +43,7 @@ describe("relay wire enums equal their declarations", () => {
     ["StreamEndReason ↔ fixture_stream_sessions.end_reason (folded)", S.StreamEndReason.options, lastCheckList("fixture_stream_sessions", "end_reason")],
     ["StreamSessionCurrent.startCause ↔ fixture_stream_sessions.start_cause (V430)", S.StreamSessionCurrent.shape.startCause.options, lastCheckList("fixture_stream_sessions", "start_cause")],
     ["StreamIngest.protocol ↔ fixture_stream_sessions.ingest_protocol", S.StreamIngest.shape.protocol.unwrap().options, checkList("fixture_stream_sessions", "ingest_protocol")],
-    ["StreamTargetKind ↔ org_stream_targets.kind", S.StreamTargetKind.options, checkList("org_stream_targets", "kind")],
+    ["StreamTargetKind ↔ org_stream_targets.kind (folded; V540 added seazn)", S.StreamTargetKind.options, lastCheckList("org_stream_targets", "kind")],
     // YouTube live status (V522, owner direction 2026-11-14): the stored words. The wire enum is these PLUS `pasted_key`, which is never stored.
     ["YOUTUBE_LIVE_WORDS ↔ fixture_stream_sessions.youtube_status (V522, folded)", YOUTUBE_LIVE_WORDS, lastCheckList("fixture_stream_sessions", "youtube_status")],
   ];

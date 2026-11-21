@@ -16,7 +16,7 @@
 // rtmpUrl refusals this file used to drive through createStreamTarget are unreachable through create now; each URL is
 // pinned per rule by lib/__tests__/stream-destinations.test.ts (the refusal table, plus the cases moved there in T2a).
 import { randomBytes, randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 // The route test drives the REAL handler over the REAL session door: only
 // `requireUser` (who is signed in) is faked; `requireOrgAuth`'s own role lookup
@@ -38,7 +38,7 @@ vi.mock("next/headers", () => ({
 
 import { sql } from "@/lib/db";
 import {
-  DESTINATION_LABEL_EMPTY, STREAM_KEY_EMPTY, STREAM_PLATFORMS, STREAM_PLATFORM_PRESETS, TARGET_UNREADABLE, checkDestination,
+  DESTINATION_LABEL_EMPTY, SEAZN_TARGET_FIXED, STREAM_KEY_EMPTY, STREAM_PLATFORMS, STREAM_PLATFORM_PRESETS, TARGET_UNREADABLE, checkDestination,
 } from "@/lib/stream-destinations";
 import { CreateStreamTarget, PatchStreamTarget, StreamTarget, StreamTargetKind, StreamTargetSaved } from "@/server/api-v1/schemas";
 import { ACTIVE_STATES, TERMINAL_STATES, holdStateOf } from "@/server/relay/domain/session";
@@ -225,11 +225,11 @@ describe.skipIf(!HAS_DB)("stream targets — the usecase", () => {
     expect(checked, "platforms checked").toBeGreaterThan(0);
     expect(checked).toBe(STREAM_PLATFORMS.length);
     // Legacy kinds are no longer CREATABLE (D6), but a stored one keeps listing until removed: seeded raw, in enum order.
-    const legacy = StreamTargetKind.options.filter((k) => !(STREAM_PLATFORMS as readonly string[]).includes(k));
+    const legacy = StreamTargetKind.options.filter((k) => k !== "seazn" && !(STREAM_PLATFORMS as readonly string[]).includes(k));   // seazn is the org's own row (V540), not a stored legacy kind
     expect(legacy.length, "legacy kinds").toBeGreaterThan(0);
     for (const kind of legacy) await rigTarget(auth.orgId, `stored ${kind}`, kind);
     expect((await listStreamTargets(auth, auth.orgId)).map((t) => t.kind)).toEqual([...STREAM_PLATFORMS, ...legacy]);
-    expect(STREAM_PLATFORMS.length + legacy.length).toBe(StreamTargetKind.options.length);
+    expect(STREAM_PLATFORMS.length + legacy.length + 1, "+ the org's own Seazn row, hidden while LIVE is off").toBe(StreamTargetKind.options.length);
   });
 
   // A19 + A19b (owner 2026-09-28). One destination — one url (in its identity form) + one stream key — is ONE row
@@ -311,7 +311,7 @@ describe.skipIf(!HAS_DB)("stream targets — the usecase", () => {
   });
 
   it("D6: the create schema refuses every kind outside STREAM_PLATFORMS and an rtmpUrl field; a stored legacy kind still LISTS", async () => {
-    const legacy = StreamTargetKind.options.filter((k) => !(STREAM_PLATFORMS as readonly string[]).includes(k));
+    const legacy = StreamTargetKind.options.filter((k) => k !== "seazn" && !(STREAM_PLATFORMS as readonly string[]).includes(k));   // seazn is the org's own row (V540), not a stored legacy kind
     expect(legacy.length).toBeGreaterThan(0);
     for (const kind of legacy) {
       expect(CreateStreamTarget.safeParse({ kind, label: "x", streamKey: "k" }).success, kind).toBe(false);
@@ -452,7 +452,7 @@ describe.skipIf(!HAS_DB)("rename, replace key, remove (spec §5.2, D2)", () => {
   });
 
   it("I2: replace key on a LEGACY-kind row whose envelope will not open is a 422 telling the organiser to remove it (M4: never to add it again) — never a 500 — and nothing is re-sealed; every legacy kind", async () => {
-    const legacy = StreamTargetKind.options.filter((k) => !(STREAM_PLATFORMS as readonly string[]).includes(k));
+    const legacy = StreamTargetKind.options.filter((k) => k !== "seazn" && !(STREAM_PLATFORMS as readonly string[]).includes(k));   // seazn is the org's own row (V540), not a stored legacy kind
     expect(legacy.length).toBeGreaterThan(0);
     let checked = 0;
     for (const kind of legacy) {
@@ -776,5 +776,83 @@ describe.skipIf(!HAS_DB)("/api/v1/orgs/{id}/stream-targets — the route", () =>
     // The accepted twin: the same organiser, body and doors on the WELL-FORMED id.
     expect((await post(auth.orgId, good)).status).toBe(201);
     expect((await get(auth.orgId)).status).toBe(200);
+  });
+});
+
+// Seazn-hosted video (V540, task 10): every org holds ONE `seazn` destination row. It is listed first when SEAZN_HOSTED_LIVE is
+// on, left out when off, and never renamed, re-keyed or removed. The flag is toggled through the env var the config reader
+// reads on every call (relay/config.ts seaznHostedLive: unset = off).
+describe.skipIf(!HAS_DB)("the Seazn destination in the list, rename, replace key and remove (V540, task 10)", () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+  const seaznRow = async (orgId: string) => {
+    const [r] = await sql<{ id: string; label: string; archived_at: Date | null }[]>`
+      select id, label, archived_at from org_stream_targets where org_id = ${orgId} and kind = 'seazn'`;
+    return r!;
+  };
+  /** Two pasted destinations OLDER than the org's Seazn row, so "Seazn first" is the rule's doing and not creation order. */
+  async function orgWithTwoOlderKeys() {
+    const { auth } = await seedOrg();
+    const a = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "Older A", streamKey: key() });
+    const b = await createStreamTarget(auth, auth.orgId, { kind: "twitch", label: "Older B", streamKey: key() });
+    await sql`update org_stream_targets set created_at = now() - interval '5 hours' where id = ${a.id}`;
+    await sql`update org_stream_targets set created_at = now() - interval '4 hours' where id = ${b.id}`;
+    return { auth, a, b, seazn: await seaznRow(auth.orgId) };
+  }
+
+  it("LIVE on: the Seazn row is listed FIRST, with no keyHint, no inUse and no youtube; the older pasted keys follow oldest-first", async () => {
+    const { auth, a, b, seazn } = await orgWithTwoOlderKeys();
+    vi.stubEnv("SEAZN_HOSTED_LIVE", "true");
+    const list = await listStreamTargets(auth, auth.orgId);
+    expect(list.map((t) => t.id)).toEqual([seazn.id, a.id, b.id]);
+    expect(list[0]).toMatchObject({ kind: "seazn", label: seazn.label, keyHint: null, inUse: null, youtube: null });
+    expect(StreamTarget.parse(list[0])).toEqual(list[0]);   // the wire schema admits the new kind
+    expect(list[1]!.keyHint, "positive pair: a pasted row still carries its hint").not.toBeNull();
+  });
+
+  it("LIVE off (the default): the Seazn row is not listed, and the list is the old one, oldest first", async () => {
+    const { auth, a, b } = await orgWithTwoOlderKeys();
+    expect(process.env.SEAZN_HOSTED_LIVE ?? "").not.toBe("true");
+    expect((await listStreamTargets(auth, auth.orgId)).map((t) => t.id)).toEqual([a.id, b.id]);
+    vi.stubEnv("SEAZN_HOSTED_LIVE", "false");
+    expect((await listStreamTargets(auth, auth.orgId)).map((t) => t.id)).toEqual([a.id, b.id]);
+    // An org with nothing pasted lists NOTHING (the Streaming page's empty state), not a lone Seazn row.
+    const { auth: bare } = await seedOrg();
+    expect(await listStreamTargets(bare, bare.orgId)).toEqual([]);
+    vi.stubEnv("SEAZN_HOSTED_LIVE", "true");
+    expect((await listStreamTargets(bare, bare.orgId)).map((t) => t.kind)).toEqual(["seazn"]);
+  });
+
+  it("rename, replace key and remove on the Seazn row are 422 seazn_destination_fixed with the row unchanged — LIVE on or off, even from the PATCH key path", async () => {
+    const { auth, seazn } = await orgWithTwoOlderKeys();
+    let checked = 0;
+    for (const live of ["true", "false"]) {
+      vi.stubEnv("SEAZN_HOSTED_LIVE", live);
+      for (const [name, call] of [
+        ["rename", () => patchStreamTarget(auth, auth.orgId, seazn.id, { label: "Renamed" })],
+        ["replace key", () => patchStreamTarget(auth, auth.orgId, seazn.id, { streamKey: key() })],
+        ["remove", () => removeStreamTarget(auth, auth.orgId, seazn.id)],
+      ] as const) {
+        await expect(call(), `${name}, LIVE ${live}`).rejects.toMatchObject({ status: 422, code: SEAZN_TARGET_FIXED });
+        checked++;
+      }
+    }
+    expect(checked).toBe(6);
+    expect(SEAZN_TARGET_FIXED).toBe("seazn_destination_fixed");
+    expect(await seaznRow(auth.orgId)).toEqual(seazn);
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_targets where org_id = ${auth.orgId} and kind = 'seazn'`;
+    expect(n).toBe(1);
+  });
+
+  it("the twin: a pasted row beside it still renames and removes, and another org's Seazn id is the plain 404", async () => {
+    const { auth, a } = await orgWithTwoOlderKeys();
+    const other = await orgWithTwoOlderKeys();
+    expect((await patchStreamTarget(auth, auth.orgId, a.id, { label: "Fine" })).label).toBe("Fine");
+    await expect(patchStreamTarget(auth, auth.orgId, other.seazn.id, { label: "Nope" })).rejects.toMatchObject({ status: 404 });
+    await expect(removeStreamTarget(auth, auth.orgId, other.seazn.id)).rejects.toMatchObject({ status: 404 });
+    expect(await removeStreamTarget(auth, auth.orgId, a.id)).toEqual({ removed: true });
+  });
+
+  it("create refuses the kind 'seazn': it is not a platform an organiser adds", () => {
+    expect(CreateStreamTarget.safeParse({ kind: "seazn", label: "x", streamKey: "k" }).success).toBe(false);
   });
 });

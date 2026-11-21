@@ -45,7 +45,9 @@ const key = (id: string, label: string, kind: StreamTarget["kind"] = "youtube"):
 describe("destinationRow: what one destination reads as", () => {
   it("a pasted key: the platform's own key line, for EVERY stored kind — and never a health badge (nothing is known about a key's health)", () => {
     let checked = 0;
-    for (const kind of StreamTargetKind.options) {
+    // "seazn" is the org's own row (V540), not a pasted key: how the picker reads it is a later task's UI design.
+    const pasted = StreamTargetKind.options.filter((k) => k !== "seazn");
+    for (const kind of pasted) {
       const row = destinationRow(msg, key("k", `Dest ${kind}`, kind));
       const expected =
         kind === "custom_rtmp" ? "Custom stream key"
@@ -58,7 +60,7 @@ describe("destinationRow: what one destination reads as", () => {
       expect(row.health, `${kind}: a key has no health to claim`).toBeNull();
       checked++;
     }
-    expect(checked, "every stored kind").toBe(StreamTargetKind.options.length);
+    expect(checked, "every pasted kind").toBe(pasted.length);
     expect(checked).toBeGreaterThan(4);
   });
 

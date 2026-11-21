@@ -31,7 +31,7 @@ const savedKek = process.env.RELAY_KEK;
 const savedMin = process.env.COURT_MIN_APP_VERSION;
 beforeAll(() => { process.env.RELAY_KEK = randomBytes(32).toString("hex"); });
 beforeEach(() => { process.env.COURT_MIN_APP_VERSION = "1.0.14-1200"; vi.mocked(insertCourtStreamCode).mockClear(); });
-afterEach(() => { vi.restoreAllMocks(); });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 afterAll(async () => {
   if (savedKek === undefined) delete process.env.RELAY_KEK; else process.env.RELAY_KEK = savedKek;
   if (savedMin === undefined) delete process.env.COURT_MIN_APP_VERSION; else process.env.COURT_MIN_APP_VERSION = savedMin;
@@ -83,6 +83,21 @@ describe.skipIf(!HAS_DB)("court streams (desk)", () => {
     const pasted = await rigTarget(day.orgId, "Pasted");
     const f = await failure(linkCourtStream(day.auth, day.comp.id, { courtId: day.courts.c2, targetId: pasted }, at(0)));
     expect([f.status, f.code]).toEqual([422, "court_destination_not_youtube"]);
+    expect(await counts(day.orgId)).toEqual({ links: 0, codes: 0 });
+  });
+
+  it("refuses the Seazn destination with the same YouTube-only 422, LIVE on or off, nothing written (V540)", async () => {
+    const [seazn] = await sql<{ id: string }[]>`select id from org_stream_targets where org_id = ${day.orgId} and kind = 'seazn'`;
+    expect(seazn, "the org has its Seazn row").toBeDefined();
+    let checked = 0;
+    for (const live of ["true", "false"]) {
+      vi.stubEnv("SEAZN_HOSTED_LIVE", live);
+      const f = await failure(linkCourtStream(day.auth, day.comp.id, { courtId: day.courts.c2, targetId: seazn!.id }, at(0)));
+      expect([f.status, f.code], `LIVE ${live}`).toEqual([422, "court_destination_not_youtube"]);
+      checked++;
+    }
+    vi.unstubAllEnvs();
+    expect(checked).toBe(2);
     expect(await counts(day.orgId)).toEqual({ links: 0, codes: 0 });
   });
 

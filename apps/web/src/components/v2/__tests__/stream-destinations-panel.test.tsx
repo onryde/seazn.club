@@ -172,7 +172,8 @@ async function schemaRefusal(body: unknown): Promise<unknown> {
   throw new Error("the schema accepted the body");
 }
 
-const LEGACY_KINDS = StreamTargetKind.options.filter((k) => !isStreamPlatform(k));
+// "seazn" is the org's own row (V540), not a stored legacy kind; how the panel shows it is a later task's design.
+const LEGACY_KINDS = StreamTargetKind.options.filter((k) => k !== "seazn" && !isStreamPlatform(k));
 
 // ─── the whole panel as markup ────────────────────────────────────────────────────────────────────────────────────────
 describe("the Streaming page (spec §4)", () => {
