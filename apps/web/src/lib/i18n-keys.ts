@@ -4249,6 +4249,7 @@ export type DictionaryKey =
   | "matchDay.filter.all"
   | "matchDay.filter.label"
   | "matchDay.focus.left"
+  | "matchDay.focus.leftUnnamed"
   | "matchDay.focus.noScore"
   | "matchDay.focus.openMatch"
   | "matchDay.focus.openPad"

@@ -34,15 +34,29 @@ beforeEach(() => {
  *  statements a board); 00f2bf740e made them ride the board rows query. A ceiling at the old estimate could not have noticed that fix
  *  being undone (409 < 500), so the ceilings now sit just over what this run MEASURES after it:
  *
- *    poll, 4 boards: 131     poll, 32 boards: 313     slope: 6.5 per extra board     board read: 8 at 4 and 8 at 32
+ *    poll, 4 boards: 125     poll, 32 boards: 217     slope: 3.29 per extra board     board read: 8 at 4 and 8 at 32
  *
- *  - `POLL_CEILING_32` 330 = 313 + 17 (about 5%): a new fixed read or two in the poll fits, a per-board one does not (that is the slope's
- *    job, below); the pre-fix poll, 409, is 79 over it.
- *  - `SLOPE_CEILING` 7 = 6.5 + 0.5: one more statement for every second board fits; the pre-fix 9.7 is 2.7 over it.
+ *  (The first two figures were 131 / 313 / 6.5 until the final review's M2: the OPENED round's boards that have no bridge row yet - the ones
+ *  still checking in - were also read by `listOpenRounds`' per-board fold read for their colour, about six statements each; they ride the
+ *  rows now, which took 96 statements off the 32-board poll.)
+ *
+ *  - `POLL_CEILING_32` 230 = 217 + 13 (about 6%): a new fixed read or two in the poll fits, a per-board one does not (that is the slope's
+ *    job, below); the pre-fix poll, 409, is 179 over it, and the pre-M2 313 is 83 over.
+ *  - `SLOPE_CEILING` 3.8 = 3.29 + 0.5: one more statement for every second board fits; the pre-fix 9.7 and the pre-M2 6.5 are both over it.
  *  - `BOARD_READ_CEILING` 12 = 8 + 4: a board read is ONE board's own rows. */
-const POLL_CEILING_32 = 330;
-const SLOPE_CEILING = 7;
+const POLL_CEILING_32 = 230;
+const SLOPE_CEILING = 3.8;
 const BOARD_READ_CEILING = 12;
+/** A round that is PAIRED BUT NOT OPENED (the round between two Swiss rounds, or tomorrow's): its boards have no game, so no bridge row says who
+ *  has White and the colour is the pairing card's, read from the board's fold. Read board by board (`whiteSideOf`: an owner-session mint plus a
+ *  fold-read transaction, about six statements a board) it added a fixed price per board that no opened round ever shows - the busy-night seed
+ *  above opens its round - and a Swiss night pays it between every two rounds, on every poll (final review, M2). Read with the board rows
+ *  (`match_states.state->>'colorOfHome'`, the way the arbiter's rows do) it costs nothing per board:
+ *
+ *    paired round, no bridge row on any board: 82 statements at 4 boards and 82 at 32 (slope 0.00); before the change, 6.00 per board.
+ *
+ *  `PAIRED_SLOPE_CEILING` 1 leaves room for a statement per board and sits well under the old per-board price (a revert reads 6). */
+const PAIRED_SLOPE_CEILING = 1;
 
 /** One round of `n` boards in the mix a busy club night shows: a quarter live with both players on camera, an eighth held for the
  *  organiser, an eighth live and flagged, the rest still checking in (half of them with one player in). The states are derived from `n`,
@@ -131,5 +145,28 @@ describe.runIf(HAS_DB)("MD-R23: statements per Match Day poll and per board read
     expect(b32.count, "a board read stays at or under its measured ceiling").toBeLessThanOrEqual(BOARD_READ_CEILING);
     // Shape: a board read is ONE board, so it must not grow with the round (the loader reads the board's own rows, not the round's).
     expect(b32.count - b4.count, "a board read is the same size whatever the round").toBeLessThanOrEqual(2);
+  }, 600_000);
+
+  it("a PAIRED, NOT OPENED round of 32 boards costs the poll no more per board than a few statements: its colours ride the board rows, not a fold read each (M2)", async () => {
+    // seedOnlineChessRound pairs the boards and starts the division; no `openStamp` - the round is paired, not opened, and no board has a bridge row.
+    const small = await seedOnlineChessRound({ fixtures: 4 });
+    const big = await seedOnlineChessRound({ fixtures: 32 });
+    const poll = async (r: SeedOnlineChessRoundResult) => statementsOf(() => getMatchDay(r.owner, r.competitionId, NOW));
+    await poll(small);
+    await poll(big);
+    const p4 = await poll(small);
+    const p32 = await poll(big);
+
+    // Anti-vacuity: the polls read what was seeded - a round in the "before" phase carrying its pairings - and nothing is opened.
+    const before = (v: Awaited<ReturnType<typeof getMatchDay>>) => v.online_rounds.filter((x) => x.phase === "before");
+    expect(before(p4.result), "premise: one paired-not-opened round (4 boards)").toHaveLength(1);
+    expect(before(p32.result), "premise: one paired-not-opened round (32 boards)").toHaveLength(1);
+    expect(before(p4.result)[0]!.view?.pairings.length, "the 4-board round's pairings are on the wire").toBe(4);
+    expect(before(p32.result)[0]!.view?.pairings.length, "the 32-board round's pairings are on the wire").toBe(32);
+    expect(p4.count, "the counter is live").toBeGreaterThan(0);
+
+    const slope = (p32.count - p4.count) / (32 - 4);
+    console.log(`[MD-R23/M2] paired round poll: ${p4.count} statements at 4 boards, ${p32.count} at 32 (${slope.toFixed(2)} per extra board); ceiling ${PAIRED_SLOPE_CEILING}`);
+    expect(slope, "a paired board adds no per-board colour read").toBeLessThanOrEqual(PAIRED_SLOPE_CEILING);
   }, 600_000);
 });

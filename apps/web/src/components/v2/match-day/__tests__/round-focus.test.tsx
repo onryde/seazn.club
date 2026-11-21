@@ -193,7 +193,7 @@ describe("RoundFocus: before - paired, waiting to be opened", () => {
     expect(blockProps().state.confirming, "empty case: not asked").toBe(false);
     expect(blockProps().panel).toEqual({ ctaTestId: "md-round-open-cta", confirmTestId: "md-round-confirm" });
     const confirming = underEnglish(
-      <OpenRoundBlockView view={view} state={{ confirming: true, busy: null, notice: null, rowNotice: null }} tz="Europe/London" showStage={false} on={{ ask: noop, cancel: noop, open: noop }} panel={{ ctaTestId: "md-round-open-cta", confirmTestId: "md-round-confirm" }} />,
+      <OpenRoundBlockView view={view} mayPress state={{ confirming: true, busy: null, notice: null, rowNotice: null }} tz="Europe/London" showStage={false} on={{ ask: noop, cancel: noop, open: noop }} panel={{ ctaTestId: "md-round-open-cta", confirmTestId: "md-round-confirm" }} />,
     );
     expect(count(confirming, "md-round-confirm"), "the dialog carries the panel's id").toBe(1);
     expect(count(confirming, "arbiter-column-confirm"), "and not the column's").toBe(0);
@@ -449,7 +449,7 @@ describe("RoundFocus: Open round - the row's own stage and round, answered throu
     block().on.open();
     net.calls[0]!.reject(new ApiV1Error("frozen", 402, "PAYMENT_REQUIRED", { feature_key: "competitions.max_active" }));
     await flush();
-    const h = underEnglish(<OpenRoundBlockView view={VIEW()} state={block().state as never} tz="Europe/London" showStage={false} on={{ ask: noop, cancel: noop, open: noop }} panel={{ ctaTestId: "md-round-open-cta", confirmTestId: "md-round-confirm" }} />);
+    const h = underEnglish(<OpenRoundBlockView view={VIEW()} mayPress state={block().state as never} tz="Europe/London" showStage={false} on={{ ask: noop, cancel: noop, open: noop }} panel={{ ctaTestId: "md-round-open-cta", confirmTestId: "md-round-confirm" }} />);
     expect(textIn(h, "arbiter-column-open-notice")).toContain(esc(en["runsheet.round.err.frozen"]!));
     expect(h).not.toContain(esc(en["runsheet.round.err.failed"]!));
   });

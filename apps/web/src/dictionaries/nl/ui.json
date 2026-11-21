@@ -8254,6 +8254,7 @@
   "matchDay.refusal.other": "Dat lukte niet. Probeer het opnieuw.",
   "matchDay.focus.noScore": "Nog geen score genoteerd",
   "matchDay.focus.left": "{court} staat niet meer in deze lijst.",
+  "matchDay.focus.leftUnnamed": "Wat je hebt geopend staat niet meer in deze lijst.",
   "matchDay.focus.pick": "Kies er een uit de lijst.",
   "matchDay.notice.dismiss": "Sluiten",
   "matchDay.needsYou.count.one": "{count} vraagt om jou",

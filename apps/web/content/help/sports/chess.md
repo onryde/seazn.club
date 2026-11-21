@@ -36,15 +36,17 @@ One tap decides the game, so a wrong tap matters. Press **Take back** on the rib
 
 ## Online chess: adding time to check-in
 
-On a division that plays its chess online, players check in before each game. If a board is slow to fill, the arbiter can give it more time from the arbiter panel: on the board itself, or for the whole round from the round column.
+On a division that plays its chess online, players check in before each game. If a board is slow to fill, you can give it more time from [Match Day](/help/scheduling/match-day): on the board's own panel, on its row in the round panel's waiting list, or for the whole round from the round panel.
 
-- **+5 min** on a board adds five minutes to that board's check-in. **+5 min to the round** does the same for every board of the round that is eligible at that moment.
-- It works **only while check-in is open** — from the moment a board's check-in opens until its deadline. Before it opens, or once it has closed, there is nothing to add to, and the panel says so ("Can't extend check-in: it hasn't opened yet", "Can't extend check-in: it has closed").
-- Each board can be extended **up to three times**. After that the panel says "Can't extend check-in: no extensions left" for that board.
-- The round button **skips** boards whose check-in has not opened yet or has already closed, boards whose game has started, and boards with no extensions left. It also skips any board you are playing on yourself. It tells you how many it extended and why it left the rest.
-- When the round has nothing left to extend, the round button gives way to a short reason. If every board gives the same one it says so ("Can't extend check-in: it has closed", "Can't extend check-in: a game has started", and so on); if the boards differ it says "No board can be extended right now".
+- **+5 min (3 left)** adds five minutes to that board's check-in. The number is how many extensions the board has left, and **Check-in closes** under it shows the deadline. After a press the panel answers, for example **Added 5 minutes to board 3.**, and gives the new closing time.
+- **+5 min to the round** is in the round panel while the round is checking in. It does the same for every board of the round that is eligible at that moment.
+- **Waiting on 2 boards** is the round panel's list of boards in an open check-in that still have a player to check in. Each row has its own **+5 min** button, and the answer shows under that row.
+- It works only while check-in is open, from the moment a board's check-in opens until its deadline. Before it opens, or once it has closed, there is no button, and Match Day draws nothing in its place.
+- Each board can be extended up to three times. After the last one the button is gone.
+- The round button skips boards whose check-in has not opened yet or has already closed, boards whose game has started, and boards with no extensions left. It also skips any board you are playing on yourself. After a press the panel says how many boards it extended and why it left the rest, for example **Added 5 minutes to 6 boards.** and **2 boards skipped: game started**. When no board of the round can take more time, the round button is gone and the last answer stays on screen.
+- Only organisers who can run the day get these buttons. A Viewer sees the round and its boards but no button, and a competition that went read-only after a [downgrade](/help/billing/downgrade) shows none either.
 - Players don't need to do anything: the check-in countdown on their board updates to the new deadline.
-- **Every use is logged.** Each board extended gets a row in the online-chess audit log — the same log that records a video override — with who pressed it, which board and the new deadline.
+- Every use is logged. Each board extended gets a row in the online-chess audit log, the same log that records a video override, with who pressed it, which board and the new deadline.
 
 ## The league table
 

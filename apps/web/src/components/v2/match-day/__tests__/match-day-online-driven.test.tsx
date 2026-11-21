@@ -384,6 +384,47 @@ describe("MD-R30: a 402 seen by the round panel lifts every press that starts pl
   });
 });
 
+describe("the 'left the list' notice for what was never on the list (final review, M6)", () => {
+  const EN = en as Record<string, string>;
+
+  it("a board id no row lists, and a round key no row lists: the notice is the generic sentence - never the fixture id or the stage:round key - and a listed board that leaves is still named", async () => {
+    // Anti-vacuity: the three cases are all read through the same `parts().lost`, and each is asserted to HAVE a notice.
+    let checked = 0;
+    const unlistedBoard = "9b2f0c1e-77aa-4b1d-8c55-0d5d1d3a4f10";
+    const unlistedRound = "6c1d2e3f-0000-4000-8000-000000000001:7";
+
+    const board = renderIsland(MatchDayShell, props(night()));
+    (parts(board.tree()).list!.onOpenBoard as (id: string) => void)(unlistedBoard);
+    const b = parts(board.tree());
+    expect(b.board, "no panel for a board the list does not hold").toBeNull();
+    expect(b.lost, "the page says so").not.toBeNull();
+    expect(b.lost).toContain(EN["matchDay.focus.leftUnnamed"]);
+    expect(b.lost, "never the raw fixture id").not.toContain(unlistedBoard);
+    checked += 1;
+
+    const rnd = renderIsland(MatchDayShell, props(night()));
+    (parts(rnd.tree()).list!.onOpenRound as (key: string) => void)(unlistedRound);
+    const r = parts(rnd.tree());
+    expect(r.round, "no panel for a round the list does not hold").toBeNull();
+    expect(r.lost, "the page says so").not.toBeNull();
+    expect(r.lost).toContain(EN["matchDay.focus.leftUnnamed"]);
+    expect(r.lost, "never the stage id or the key").not.toContain("6c1d2e3f");
+    checked += 1;
+
+    // The pair: a board that WAS listed and left keeps its name (the generic sentence is for what has none).
+    const named = renderIsland(MatchDayShell, props(night()));
+    (parts(named.tree()).list!.onOpenBoard as (id: string) => void)("b-2");
+    net.next = night({ dropLive: true, now: at(1) });
+    poll.tick!();
+    await settle();
+    const n = parts(named.tree());
+    expect(n.lost).toContain("Board 2 · Okafor v Haas");
+    expect(n.lost, "named, so no generic sentence").not.toContain(EN["matchDay.focus.leftUnnamed"]);
+    checked += 1;
+    expect(checked, "anti-vacuity: three cases read").toBe(3);
+  });
+});
+
 describe("Needs you opens boards and rounds in place (the desk's own rows, §9)", () => {
   const row = (kind: NeedsYouItem["kind"]): NeedsYouItem => ({ key: kind, kind, severity: "red", title: `${kind} title`, sub: `${kind} sub`, action: { label: `${kind} action`, href: `/x/${kind}` } });
   const withNeeds = () => ({ ...night(), needs_you: [row("no_scorer")] });

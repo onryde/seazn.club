@@ -8254,6 +8254,7 @@
   "matchDay.refusal.other": "That didn't work. Try again.",
   "matchDay.focus.noScore": "No score recorded yet",
   "matchDay.focus.left": "{court} is no longer on this list.",
+  "matchDay.focus.leftUnnamed": "What you opened is no longer on this list.",
   "matchDay.focus.pick": "Pick one from the list.",
   "matchDay.notice.dismiss": "Dismiss",
   "matchDay.needsYou.count.one": "{count} needs you",

@@ -17,8 +17,8 @@
 // flags and why it is held, and no press. Every handler checks the same rule the view does, so a stale view cannot send what the page
 // would not draw.
 //
-// The decisions are the Arbiter Panel's, MOVED to `board-decision.tsx` (its reducer `arbiter-decision.ts`, its runner `decisionRunner`, its
-// cards `arbiter-flag-cards.tsx` stay where the surviving surfaces import them), test ids unchanged. The cameras (Task 9, board-cameras.tsx)
+// The decisions began as the retired Arbiter page's and live in `board-decision.tsx` (their reducer is `arbiter-decision.ts`, their runner
+// `decisionRunner`, the flag cards `arbiter-flag-cards.tsx`), test ids unchanged. The cameras (Task 9, board-cameras.tsx)
 // are the shell's joins (`joins`: what `useArbiterJoins` answered for this board's two meetings) drawn as two tiles at the top of the right
 // column, beside the board and not instead of it; below lg, where the panel is one column, a Cameras / Board switch picks which of the two shows.
 import { useCallback, useEffect, useId, useMemo, useReducer, useState, type ReactNode } from "react";

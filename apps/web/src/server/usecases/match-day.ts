@@ -47,6 +47,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { defaultMatchMinutes, getCompetitionDesk } from "./competition-desk";
 import { resolveCandidateCourts } from "./court-candidates";
 import { listDivisions } from "./divisions";
+import { divisionPlaysOnline } from "@/server/external-play/online-play";
 import {
   callableCourtsByFixture,
   dayTable,
@@ -432,6 +433,26 @@ function playingNoCourtOf(rows: readonly FixtureRow[], liveDivisions: ReadonlySe
   return rows
     .filter((r) => r.status === IN_PLAY && r.court_id === null && liveDivisions.has(r.division_id))
     .sort((a, b) => kickoffKey(a) - kickoffKey(b) || a.fixture_no - b.fixture_no || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+/** "Playing, no court" once the online block is read (design 5.2: a board is listed once, under its round). Two answers, told apart:
+ *   - the read ANSWERED (`rounds` is the list, possibly empty): a board some round row lists is that row's, so it is dropped here; one no
+ *     row lists (an earlier round's live game, say) is in play and nowhere else, so it stays a no-court row;
+ *   - the read FAILED (`rounds` is null, ruling MD-R9: the day is answered without the online block): nothing says which boards are listed,
+ *     and every online board in play would otherwise be drawn as a no-court row for the poll - and the board panel open on one of them
+ *     closed as "no longer on this list" (final review, M5). So it fails CLOSED on the division's own statement of "plays online"
+ *     (`divisionPlaysOnline`, the one the online read filters by), never on the listed ids it does not have. */
+export function playingNoCourtAfterOnline(
+  rows: readonly FixtureRow[],
+  rounds: readonly MatchDayOnlineRound[] | null,
+  divisions: readonly { id: string; sport_key: string; config: unknown }[],
+): FixtureRow[] {
+  if (rounds === null) {
+    const online = new Set(divisions.filter((d) => divisionPlaysOnline(d)).map((d) => d.id));
+    return rows.filter((r) => !online.has(r.division_id));
+  }
+  const listed = new Set(rounds.flatMap((r) => [...(r.round?.boards ?? []), ...r.needs_decision].map((b) => b.fixtureId)));
+  return rows.filter((r) => !listed.has(r.id));
 }
 
 /** The board: everything the view and the candidates read, in one tenant transaction. Exported for the Match Day code's
@@ -882,16 +903,15 @@ export async function getMatchDay(
     // Match Day's online chess rounds (the Arbiter page's replacement; always read since Task 10 retired the flag that kept this off). Sealed
     // tables, so it reads on its own connections, here and never inside the tenant transaction above. ISOLATED (ruling MD-R9): the day
     // screen is the organiser's lifeline, so chess failing must not take the courts down with it - the throw is logged loud and this poll
-    // answers without the online rounds.
-    readOnlineRounds(auth, competitionId, now, divisionsRead).catch((err: unknown): MatchDayOnlineRound[] => {
+    // answers without the online rounds (`null`: told apart from an EMPTY answer by `playingNoCourtAfterOnline`).
+    readOnlineRounds(auth, competitionId, now, divisionsRead).catch((err: unknown): MatchDayOnlineRound[] | null => {
       log.error({ err, competitionId }, "match-day: the online rounds could not be read; this poll answers without them");
-      return [];
+      return null;
     }),
   ]);
   // A board is listed once, under its round (design 5.2): an online board in play on no court is no no-court row. Dropped here, after
   // `readBoard` and never inside it (the code read and the call preview read the same board and keep their own lists).
-  const onlineListed = new Set(onlineRounds.flatMap((r) => [...(r.round?.boards ?? []), ...r.needs_decision].map((b) => b.fixtureId)));
-  const playingNoCourt = board.playingNoCourt.filter((r) => !onlineListed.has(r.id));
+  const playingNoCourt = playingNoCourtAfterOnline(board.playingNoCourt, onlineRounds, divisions);
   const switches = courtStreams.switches;
   const needs = needsYouItems(
     dict,
@@ -956,7 +976,7 @@ export async function getMatchDay(
     results_owed: needsYouHome(fixturesToday) === "match_day" ? resultsOwedOf(desk) : 0,
     fixtures_today: fixturesToday,
     venues_today: board.venuesToday,
-    online_rounds: onlineRounds,
+    online_rounds: onlineRounds ?? [],
   };
 }
 
