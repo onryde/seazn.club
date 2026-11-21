@@ -22,6 +22,11 @@ vi.mock("@/lib/stream-destinations", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/lib/stream-destinations")>();
   return { ...real, checkDestination: vi.fn(real.checkDestination) };
 });
+// The backoff control's own witness (Task 11 review m6): what the automatic start's window answered — a PASS-THROUGH spy.
+vi.mock("@/server/youtube/auto-backoff", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/server/youtube/auto-backoff")>();
+  return { ...real, autoBackoffRefusalCode: vi.fn(real.autoBackoffRefusalCode) };
+});
 
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
@@ -33,6 +38,8 @@ import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import type { RelayDrivers } from "@/server/relay/drivers";
 import { readPooledKey, readTargetSecret } from "@/server/relay/secret-columns";
 import { pairPresentPhone, rigUser } from "@/server/relay/__tests__/_session-rig";
+import { log } from "@/server/logger";
+import { autoBackoffRefusalCode } from "@/server/youtube/auto-backoff";
 import { FakeYouTube } from "@/server/youtube/fake";
 import { prepareYoutubeBroadcast } from "@/server/youtube/prepare";
 import { connect } from "@/server/youtube/__tests__/_connect-rig";
@@ -227,6 +234,28 @@ describe.skipIf(!HAS_DB)("Seazn destination — admission", () => {
     expect((await sessionRow(sessionId)).destination_kind).toBe("seazn");
   });
 
+  it("review m1: a MALFORMED SEAZN_VIDEO_ORIGINS (a scheme on an entry) on a live relay is the same 503 seazn_video_unconfigured — never an unmapped 500 — with zero provider calls, no row, and the value never logged", async () => {
+    const r = await rig();
+    const [f1] = r.fixtureIds;
+    const malformed = "https://seazn-malformed-origin.example";
+    vi.stubEnv("RELAY_DRIVERS", "live");
+    vi.stubEnv("SEAZN_VIDEO_ORIGINS", malformed);
+    setRelayDriversForTest({ ingest: r.ingest, runner: r.runner });
+    const logged: unknown[] = [];
+    const spies = (["error", "warn", "info"] as const).map((lvl) => vi.spyOn(log, lvl).mockImplementation(((...a: unknown[]) => { logged.push(a); }) as never));
+    try {
+      const err = await refusalOf(goLive(r, f1, { mode: "composed", targetId: r.seazn }));
+      expect(err).toBeInstanceOf(HttpError);
+      expect({ status: (err as HttpError).status, code: (err as HttpError).code }).toEqual({ status: 503, code: SEAZN_VIDEO_UNCONFIGURED });
+      expect(r.calls, "no provider call").toEqual([]);
+      expect(await sessionsOn(f1), "no session row").toBe(0);
+      expect(logged.length, "PREMISE: the config fault was logged").toBeGreaterThan(0);
+      expect(JSON.stringify(logged), "the env value is never echoed").not.toContain("seazn-malformed-origin");
+    } finally {
+      for (const sp of spies) sp.mockRestore();
+    }
+  });
+
   it("a Seazn restart: this fixture's previous composed session left its Machine up — admission destroys it; ANOTHER fixture's ended Seazn session's Machine (still publishing to its own programme input) is left alone", async () => {
     const r = await rig();
     const [f1, f2] = r.fixtureIds;
@@ -270,6 +299,22 @@ describe.skipIf(!HAS_DB)("Seazn destination — admission", () => {
     expect(readTargetSecret).not.toHaveBeenCalled();
   });
 
+  it("review m6: ANOTHER org's Seazn target id answers the plain 404 on create — LIVE on or off (no 422 oracle), nothing created at the provider, no row", async () => {
+    const r = await rig();
+    const other = await rig();
+    const [f1] = r.fixtureIds;
+    for (const live of ["true", "false"]) {
+      vi.stubEnv("SEAZN_HOSTED_LIVE", live);
+      const err = await refusalOf(goLive(r, f1, { mode: "passthrough", targetId: other.seazn }));
+      expect(err, `LIVE ${live}`).toBeInstanceOf(HttpError);
+      expect((err as HttpError).status, `LIVE ${live}`).toBe(404);
+    }
+    // As for any target that is not the org's: admission's storage READ runs before `admit` answers 404 — nothing is created.
+    expect(r.calls.length, "PREMISE: the two starts reached admission").toBeGreaterThan(0);
+    expect(r.calls.filter((c) => c !== "ingest.storageUsage"), "no input, output or Machine").toEqual([]);
+    expect(await sessionsOn(f1), "no session row").toBe(0);
+  });
+
   it("Phase 0 ceiling never reaches Seazn: a fixture with 10 broadcasts this hour is refused youtube_limit_reached on its YouTube target (the control), and admitted on Seazn — an 11th and, after a Stop, a 12th — with no new youtube_broadcasts row", async () => {
     const r = await rig();
     const [f1] = r.fixtureIds;
@@ -300,21 +345,32 @@ describe.skipIf(!HAS_DB)("Seazn destination — admission", () => {
     expect(fake.calls.filter((c) => c.method === "insertBroadcast").length, "no YouTube call").toBe(insertsBefore);
   });
 
-  it("ten Stop/Go live cycles of one fixture on Seazn inside the hour, then an 11th: admitted (Seazn sessions are not YouTube broadcasts)", async () => {
+  it("ten Stop/Go live cycles of one fixture on Seazn inside the hour, then an 11th: admitted and LIVE; and the org's connected YouTube target, whose per-fixture ceiling would bite had Seazn counted, still starts on that fixture", async () => {
     const r = await rig();
     const [f1] = r.fixtureIds;
+    // Review m5: a real YouTube connection on the org, so the Phase 0 ceiling is armed for this fixture.
+    const yt = await connect({ auth: r.auth, orgId: r.auth.orgId, userId: r.auth.userId });
+    const fake = new FakeYouTube();
+    const deps = { ...r.deps, youtube: fake };
     let cycles = 0;
     for (let i = 0; i < 10; i++) {
-      const { sessionId } = await goLive(r, f1, { mode: "composed", targetId: r.seazn });
+      const { sessionId } = await goLive(r, f1, { mode: "composed", targetId: r.seazn }, deps);
       await stopAndSettle(r, f1, sessionId);
       r.tick(60 * SEC);
       cycles++;
     }
     expect(cycles).toBe(10);
-    const eleventh = (await goLive(r, f1, { mode: "composed", targetId: r.seazn })).sessionId;
-    expect((await sessionRow(eleventh)).state).not.toBe("failed");
+    const eleventh = (await goLive(r, f1, { mode: "composed", targetId: r.seazn }, deps)).sessionId;
+    await machinePlays(r, eleventh);
+    expect(await sessionRow(eleventh)).toMatchObject({ state: "live", destination_kind: "seazn", youtube_broadcast_id: null });
     expect(await sessionsOn(f1)).toBe(11);
-    expect(await broadcastsOf(r.auth.orgId)).toBe(0);
+    expect(await broadcastsOf(r.auth.orgId), "no Seazn start made a youtube_broadcasts row").toBe(0);
+    expect(fake.calls, "YouTube was never asked during the Seazn cycles").toEqual([]);
+    // The ceiling's teeth: eleven sessions on this fixture inside the hour, and its YouTube target still starts (not youtube_limit_reached).
+    await stopAndSettle(r, f1, eleventh);
+    const ytStart = (await goLive(r, f1, { mode: "passthrough", targetId: yt.targetId }, deps)).sessionId;
+    expect(await sessionRow(ytStart)).toMatchObject({ api_backed: true, destination_kind: "youtube" });
+    expect(fake.calls.filter((c) => c.method === "insertBroadcast"), "one broadcast prepared at YouTube").toHaveLength(1);
   });
 });
 
@@ -371,7 +427,10 @@ describe.skipIf(!HAS_DB)("Seazn destination — the phone's and the automatic st
 
     // The control: the same automatic start on the YouTube target is refused by the window, asking YouTube nothing.
     await saveStreamSettings(r.auth, r.fixtureId, { autoStream: true, targetId: yt.targetId });
+    vi.mocked(autoBackoffRefusalCode).mockClear();
     await beat(r, phone);
+    // Review m6: the refusal is the BACKOFF window's own — it answered the code the channel was backed off with.
+    expect(vi.mocked(autoBackoffRefusalCode).mock.results.map((x) => x.value), "the window refused with its stored code").toContain("youtube_limit_reached");
     const [refused] = await sql<{ auto_start_refusal: string | null }[]>`select auto_start_refusal from fixture_stream_settings where fixture_id = ${r.fixtureId}`;
     expect(refused!.auto_start_refusal, "the automatic start ran and was refused").toBe("unavailable");
     expect(await sessions()).toHaveLength(0);

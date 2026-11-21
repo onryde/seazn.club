@@ -218,6 +218,21 @@ export async function createSession(
   return started;
 }
 
+/** Task 11 review m1: can this deployment sign Seazn playback? Unset is false; so is a MALFORMED SEAZN_VIDEO_ORIGINS — a
+ *  config fault answered as the same 503 `seazn_video_unconfigured`, never an unmapped 500 on every Seazn start. The parse
+ *  error quotes the env value, so it is never logged: only which fault it was. */
+function seaznOriginsSet(fixtureId: string, orgId: string): boolean {
+  let origins: string[] | null;
+  try {
+    origins = seaznVideoOrigins();
+  } catch {
+    log.error({ fixtureId, orgId }, "stream session: SEAZN_VIDEO_ORIGINS is malformed (an entry is not a bare hostname) — Seazn start refused");
+    return false;
+  }
+  if (origins === null) log.warn({ fixtureId, orgId }, "stream session: SEAZN_VIDEO_ORIGINS is not set on this live deployment — Seazn start refused");
+  return origins !== null;
+}
+
 /** Capture QR v2 §5.3 / §6.7 (T6): the ONE start path. The organiser's Go live (`createSession`), the phone operator's
  *  start and the automatic start all come through here, so admission, the destination doors, the storage read, the
  *  insert and provisioning are the same code for all three (A23); only the actor, `startCause` and `phone` differ.
@@ -318,10 +333,7 @@ export async function startBroadcast(
   // Task 11 (G5): Seazn playback is signed for the deployment's own hosts. A live relay with no SEAZN_VIDEO_ORIGINS cannot make
   // that input, so the start is refused here — after the composed gate (which keeps answering first, by name), before any
   // provider call. A fake relay needs none: its inputs are never played back.
-  if (seazn && relayDriverMode() === "live" && seaznVideoOrigins() === null) {
-    log.warn({ fixtureId, orgId }, "stream session: SEAZN_VIDEO_ORIGINS is not set on this live deployment — Seazn start refused");
-    throw seaznVideoUnconfigured();
-  }
+  if (seazn && relayDriverMode() === "live" && !seaznOriginsSet(fixtureId, orgId)) throw seaznVideoUnconfigured();
   // B: the fixture's own stuck session is expired here, not on a tick.
   const existing = await activeSessionIdFor(fixtureId);
   if (existing) await applyExpiry(existing, deps);
