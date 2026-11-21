@@ -261,6 +261,7 @@ describe("B4 — a match on no court, opened, ended; Needs you's Find a court; a
     stream: null,
     scorer_attention: null,
     live_video: null,
+    live_seazn: false,
     format_line: null,
     court_stream: false,
     own_stream_code: false,

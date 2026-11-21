@@ -57,13 +57,15 @@ const SHA256: Record<string, string> = {
   "capture-record.v1.json": "213f766043b7682f198cc98da13e93995b6602e46533ecf60c78bf562aebd6f8",
   // MD-1 Task 3 (capture S4 Match Day design §5, §9.3): a Match Day code's day read.
   // Task 8e (2026-11-13): + can_call, additive.
-  "capture-matchday-day.v1.json": "283a252050a42618752803baead43e18df6822a9e23588f80e04e5ebecd46332",
+  // Task 17 (Seazn-hosted video, 2026-11-21): + live_seazn on every row, additive and required.
+  "capture-matchday-day.v1.json": "e1cf16d557bfb7b8a90497df22c2c4e44172ba0f555d91b592a8463b2dc60330",
   // MD-1 Task 4 (capture S4 Match Day design §6, §9.4): a Match Day code's open.
   "capture-matchday-open.v1.json": "760028bf99e5cf74ee033f5613fa43477677cef318ecdf739c0b62e2fc21c0c0",
   // MD-1 Task 6 (capture S4 Match Day design §7, §9.5): a Match Day code's approval review, its approve and its answers.
   "capture-matchday-approval.v1.json": "279ff1488a1108b3667f9e2f11f559579382f83b238d91da65440c810189f69c",
   // Task 8e (owner 2026-11-13): a Match Day code calls a match to a court — the candidates, the preview, the call, the Undo.
-  "capture-matchday-call.v1.json": "7399e140267a75443b6576e493ef446c84f89922c20f02e8d4b08854f87df1c8",
+  // Task 17: its candidates are rows too, so each reads live_seazn null.
+  "capture-matchday-call.v1.json": "0f195d93e2f8cda7cdbaf2c0b84e3f1f3e132e9371c5821201ff86d4f07af796",
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -310,7 +312,7 @@ const DIRS: Record<string, { file: string; routes: Route[]; count: number }> = {
   "capture-start.v1": { file: START, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureStartOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 18 },
   "capture-scoring-link.v1": { file: SCORING, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureScoringLinkOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 20 },
   [RECORD_DIR]: { file: RECORD, routes: [["line-", S.CaptureRecordLine, ""], ["ok-", S.CaptureRecordOk, "#/$defs/ok"], ["", S.CaptureRecordRefusal, "#/$defs/refusal"]], count: 63 },
-  [MD_DAY_DIR]: { file: MD_DAY, routes: [["refusal-", S.CaptureMatchdayRefusal, "#/$defs/refusal"], ["", S.CaptureMatchdayDay, ""]], count: 13 },
+  [MD_DAY_DIR]: { file: MD_DAY, routes: [["refusal-", S.CaptureMatchdayRefusal, "#/$defs/refusal"], ["", S.CaptureMatchdayDay, ""]], count: 15 },
   [MD_OPEN_DIR]: { file: MD_OPEN, routes: [["refusal-", S.CaptureMatchdayRefusal, "#/$defs/refusal"], ["", S.CaptureMatchdayOpen, ""]], count: 10 },
   [MD_APPROVAL_DIR]: {
     file: MD_APPROVAL,
@@ -416,7 +418,7 @@ const RECORD_NEAR_MISS: Record<string, "S2" | "S3" | "S4" | "S5"> = {
 /** Every name capture-schemas.ts exports at runtime: the 23 before the record, then the record's own (its seven
  *  twins in RECORD_TWINS, its refusal words, its ref pattern and its two limits). */
 const CAPTURE_SCHEMAS_EXPORTS = [
-  "CAPTURE_AUTO_REFUSALS", "CaptureAutoRefusal", "CAPTURE_CODE_RE", "CAPTURE_COURT_NAME_MAX", "CAPTURE_POOL_RE", "CAPTURE_SCORING_LINK_URL_RE", "CAPTURE_STAGE_LABEL_MAX", "CaptureBeat",
+  "CAPTURE_AUTO_REFUSALS", "CaptureAutoRefusal", "CAPTURE_CODE_RE", "CAPTURE_COURT_NAME_MAX", "CAPTURE_MATCHDAY_WATCH_URL_RE", "CAPTURE_POOL_RE", "CAPTURE_SCORING_LINK_URL_RE", "CAPTURE_STAGE_LABEL_MAX", "CaptureBeat",
   "CaptureBeatAnswer", "CaptureCause", "CaptureCourt", "CaptureCred", "CaptureDescriptor", "CaptureEndReason", "CaptureNotReady",
   "CapturePhoneState", "CaptureNext", "CaptureRefusal", "CaptureRefusalCode", "CaptureScoringLinkOk", "CaptureSession", "CaptureStage",
   "CaptureStageRole", "CaptureStartBody", "CaptureStartFailed", "CaptureStartOk", "CaptureStartedBy", "CaptureWaiting",
@@ -626,7 +628,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       expect(checked, `${dir}: fixtures checked`).toBe(count);
       total += checked;
     }
-    expect(total).toBe(12 + 58 + 50 + 18 + 20 + 63 + 13 + 10 + 17 + 26);
+    expect(total).toBe(12 + 58 + 50 + 18 + 20 + 63 + 15 + 10 + 17 + 26);
     expect(byFile, "fixtures checked against the published bytes").toBe(total);
     // Every ZOD_ONLY entry names a fixture that exists and was swept (a stale entry would excuse nothing, silently).
     expect(zodOnlySeen, "ZOD_ONLY fixtures swept").toBe(Object.keys(ZOD_ONLY).length);
@@ -1722,7 +1724,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     expect(names.length, "premise: capture-schemas.ts exports").toBeGreaterThan(0);
     // The full list, not a name pattern (review fix 8): a twin named, say, CaptureLogLine trips it too.
     expect([...names].sort()).toEqual([...CAPTURE_SCHEMAS_EXPORTS].sort());
-    expect(CAPTURE_SCHEMAS_EXPORTS).toHaveLength(25 + 3 + 11 + 6 + 1 + 3 + 9);
+    expect(CAPTURE_SCHEMAS_EXPORTS).toHaveLength(26 + 3 + 11 + 6 + 1 + 3 + 9);
     // Every record-named export that is a SHAPE (a zod object or string) is a twin the parity test compares, by
     // identity — an enum is checked by its options instead, a constant by the contract's prose.
     const twins = new Map(RECORD_TWINS.map(([pointer, twin, name]) => [name, { pointer, twin }]));
@@ -1771,7 +1773,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     for (const values of rowStatus) expect(values).toEqual(["finished", "in_play", "upcoming"]);
     // Every valid answer the directory holds is admitted by the published bytes, and none carries a credential.
     const valids = readdirSync(resolve(FIXTURES, MD_DAY_DIR)).filter((f) => /^valid-/.test(f)).map((f) => f.slice(0, -5));
-    expect(valids.sort()).toEqual(["valid-approvals", "valid-competition", "valid-courts"]);
+    expect(valids.sort()).toEqual(["valid-approvals", "valid-competition", "valid-courts", "valid-live-seazn"]);
     for (const name of valids) {
       expect(fileAdmits(MD_DAY, "", fixture(MD_DAY_DIR, name)), name).toBe(true);
       const text = rawFixture(MD_DAY_DIR, name);
@@ -1792,6 +1794,81 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       expect(enumOf(code), file).toEqual([...PLAN_MD_WORDS].sort());
       expect(fileAdmits(file, "#/$defs/refusal", fixture(dir, name)), name).toBe(false);
     }
+  });
+
+  it("Seazn-hosted video (Task 17): every row's live_seazn is {watch_url} on the public match page's https address or null — required, strict, and never a query or a token", () => {
+    const fileAdmits = fileValidator();
+    const file = contract(MD_DAY);
+    // The plan's pattern, typed from the owner's ruling (option A) — never read off the code: an https origin (host, optional port),
+    // /live/{org}/{competition}/{division}/fixtures/{uuid-shaped, 36 chars}, nothing after it.
+    const AGREED = "^https://[a-z0-9.-]+(?::\\d+)?/live/[^/?#]+/[^/?#]+/[^/?#]+/fixtures/[0-9a-fA-F-]{36}$";
+    const ID = "3a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+    expect(CS.CAPTURE_MATCHDAY_WATCH_URL_RE.source).toBe(new RegExp(AGREED).source);
+    const table: [string, boolean][] = [
+      [`https://seazn.club/live/safe-club/safe-open/mens/fixtures/${ID}`, true],
+      [`https://stg.seazn.club:8443/live/a/b/c/fixtures/${ID}`, true],
+      [`http://seazn.club/live/a/b/c/fixtures/${ID}`, false], // not https
+      [`https://seazn.club/live/a/b/c/fixtures/${ID}?token=x`, false], // a query
+      [`https://seazn.club/live/a/b/c/fixtures/${ID}#t=5`, false], // a fragment
+      [`https://seazn.club/live/a/b/c/fixtures/${ID}/`, false], // a trailing slash
+      [`https://seazn.club/live/a/b/c/fixtures/${ID.slice(1)}`, false], // 35 characters
+      [`https://seazn.club/live/a/b/c/fixtures/${ID}0`, false], // 37 characters
+      [`https://seazn.club/live/a/b/fixtures/${ID}`, false], // a segment short
+      [`https://seazn.club/live/a/b/c/d/fixtures/${ID}`, false], // a segment over
+      [`https://user@seazn.club/live/a/b/c/fixtures/${ID}`, false], // userinfo
+      [`https://Seazn.Club/live/a/b/c/fixtures/${ID}`, false], // an upper-case host
+      [`https://seazn.club/score/a/b/c/fixtures/${ID}`, false], // not the public page
+      [`/live/a/b/c/fixtures/${ID}`, false], // not absolute
+    ];
+    for (const [url, admitted] of table) expect(CS.CAPTURE_MATCHDAY_WATCH_URL_RE.test(url), url).toBe(admitted);
+    expect(table.filter(([, admitted]) => admitted)).toHaveLength(2);
+    expect(table.filter(([, admitted]) => !admitted)).toHaveLength(12);
+    // The published file carries the same pattern on every row node (now, next, finished, no_court, online).
+    const walk = (node: unknown, path: string[]): Json[] => {
+      if (node === null || typeof node !== "object") return [];
+      const n = node as Json;
+      if (path.length === 0) return [n];
+      const into = [...((n.anyOf as Json[] | undefined) ?? []), ...(n.items === undefined ? [] : [n.items as Json])].flatMap((b) => walk(b, path));
+      const next = (n.properties as Json | undefined)?.[path[0]!];
+      return [...into, ...(next === undefined ? [] : walk(next, path.slice(1)))];
+    };
+    const patterns = (["courts.now", "courts.next", "courts.finished", "no_court", "online"] as const).flatMap((at) =>
+      walk(rootOf(file), [...at.split("."), "live_seazn", "watch_url"]).map((n) => n.pattern));
+    expect(patterns, "one per row node").toHaveLength(5);
+    for (const pattern of patterns) expect(pattern).toBe(CS.CAPTURE_MATCHDAY_WATCH_URL_RE.source);
+    // The valid answer carries two links and a null on the row between them; both validators admit it, and nothing in it is a token.
+    const valid = fixture(MD_DAY_DIR, "valid-live-seazn");
+    const rows = [...(valid.courts as Json[]).flatMap((c) => [c.now as Json, ...(c.next as Json[]), ...(c.finished as Json[])]), ...(valid.no_court as Json[])];
+    const links = rows.map((r) => r.live_seazn as { watch_url: string } | null);
+    expect(links.filter((l) => l !== null), "anti-vacuity: two links").toHaveLength(2);
+    expect(links.filter((l) => l === null), "and a null beside them").toHaveLength(1);
+    for (const l of links) if (l !== null) expect(CS.CAPTURE_MATCHDAY_WATCH_URL_RE.test(l.watch_url), l.watch_url).toBe(true);
+    expect(fileAdmits(MD_DAY, "", valid)).toBe(true);
+    expect(CS.CaptureMatchdayDay.safeParse(valid).success).toBe(true);
+    expect(rawFixture(MD_DAY_DIR, "valid-live-seazn")).not.toMatch(/[?]|token|playback/i);
+    // A link with a query is refused by BOTH validators.
+    const query = fixture(MD_DAY_DIR, "invalid-live-seazn-query");
+    expect(JSON.stringify(query)).toContain("?token=");
+    expect(fileAdmits(MD_DAY, "", query)).toBe(false);
+    expect(CS.CaptureMatchdayDay.safeParse(query).success).toBe(false);
+    // Required and strict, row by row: a row with no live_seazn, and a link carrying a second key, are each refused.
+    const without = structuredClone(valid) as Json;
+    delete ((without.courts as Json[])[0]!.now as Json).live_seazn;
+    expect(fileAdmits(MD_DAY, "", without), "the field is required").toBe(false);
+    expect(CS.CaptureMatchdayDay.safeParse(without).success).toBe(false);
+    const extra = structuredClone(valid) as Json;
+    (((extra.courts as Json[])[0]!.now as Json).live_seazn as Json).token = "t";
+    expect(fileAdmits(MD_DAY, "", extra), "the link is strict").toBe(false);
+    expect(CS.CaptureMatchdayDay.safeParse(extra).success).toBe(false);
+    // A match offered to call is a row too (capture-matchday-call.v1): each candidate's match carries the field, and it is null.
+    const call = fixture(MD_CALL_DIR, "valid");
+    const seen = (call.candidates as Json[]).map((c) => (c.match as Json).live_seazn);
+    expect(seen, "anti-vacuity: three candidates, each null").toEqual([null, null, null]);
+    expect(fileAdmits(MD_CALL, "", call)).toBe(true);
+    const bare = structuredClone(call) as Json;
+    delete (((bare.candidates as Json[])[0]!.match) as Json).live_seazn;
+    expect(fileAdmits(MD_CALL, "", bare), "the candidate's field is required too").toBe(false);
+    expect(CS.CaptureMatchdayCandidates.safeParse(bare).success).toBe(false);
   });
 
   it("the open's answer validates against capture-matchday-open.v1.json: a link on the scoring pad's pattern, finished bare, and a refusal never a 200 (MD-1 Task 4)", () => {

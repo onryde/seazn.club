@@ -4,25 +4,32 @@
 // match page's player (`ReplayEmbed`: a click-to-play facade on the video's thumbnail, the privacy-enhanced YouTube player on a
 // tap, "Open on YouTube" under it), and the sport's score under the picture.
 //
+// A match on air to Seazn (Seazn-hosted video, Task 17) is the same panel with its own badge ("Live on Seazn") and the Seazn island
+// in the picture's place: the SAME island the public match page plays, pointed at the ORGANISER's video route (`endpoint="org"`,
+// any member of the organisation, a private competition included). The board never carries the address, so the island asks the route
+// itself after it hydrates, signs in through its own session and keeps the token fresh; the first paint is the badge and the score.
+// It is keyed by the match, so the court's next match gets a fresh player rather than the last one's address.
+//
 // Under, not over: the player's own terms put nothing on top of the embedded player or its controls (replay-embed.tsx), and a
 // composed stream already carries the overlay's scorebug in its picture. The score line is Match Day's own rule (`scoreLine`):
 // the sets or games won, tennis's games in the set, and the live points for a set sport, the sport's own headline otherwise — every sport.
 //
-// Only reached when `streamPreviewOf` found an embeddable video; any other live stream (a pasted key, a made-for-kids broadcast)
+// Only reached when `streamPreviewOf` found something to play; any other live stream (a pasted key, a made-for-kids broadcast)
 // keeps the C1 scoreboard with its corner badge. There is never an empty video box (§5).
 import Link from "@/components/ui/console-link";
 import { ReplayEmbed } from "@/components/public-site/match-centre/replay-embed";
+import { SeaznVideoIsland } from "@/components/public-site/match-centre/seazn-video-island";
+import { seaznVideoLabels } from "@/components/public-site/match-centre/seazn-video-labels";
 import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import { servingSide } from "@/lib/public-site";
 import type { MatchDayFixture } from "@/lib/match-day/types";
-import { scoreLine } from "@/lib/match-day/view";
+import { scoreLine, type StreamPreview } from "@/lib/match-day/view";
 import { levelWords, liveLabel } from "@/lib/score/levels";
-import type { PublicReplayPart } from "@/lib/youtube";
 
 export function CourtStreamPreview({
   fixture,
-  part,
+  preview,
   label,
   streamHref,
   dict,
@@ -30,8 +37,8 @@ export function CourtStreamPreview({
   readOnly = false,
 }: {
   fixture: MatchDayFixture;
-  /** The video, from `streamPreviewOf` — already proven embeddable. */
-  part: PublicReplayPart;
+  /** What plays, from `streamPreviewOf`: a YouTube video already proven embeddable, or the match's Seazn live. */
+  preview: StreamPreview;
   /** The preview's accessible name: "Live stream on Court 3", or for a match on no court (B4) "Live stream: Ana v Ben". */
   label: string;
   /** A view-only reader (B4): the stream plays, but "Stream settings" — an organiser's door — is not offered. */
@@ -39,6 +46,7 @@ export function CourtStreamPreview({
   /** The match's console page with its stream panel open. */
   streamHref: string;
   dict: Dict;
+  /** The public dictionary's slice (`matchDayScoreDict`): the score's words, and the Seazn island's own labels. */
   scoreDict: Dict;
 }) {
   const line = scoreLine(fixture);
@@ -55,7 +63,7 @@ export function CourtStreamPreview({
       <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 px-4 pt-3 sm:px-5 sm:pt-4">
         <span data-md-stream="live" className="inline-flex items-center gap-2 py-1 text-sm font-semibold">
           <span aria-hidden className="animate-live-pulse h-2 w-2 rounded-full bg-red-500" />
-          {t(dict, "stream.youtube.link.live")}
+          {preview.kind === "seazn" ? t(dict, "matchDay.preview.liveSeazn") : t(dict, "stream.youtube.link.live")}
         </span>
         {!readOnly && (
           <Link
@@ -67,7 +75,11 @@ export function CourtStreamPreview({
         )}
       </div>
       <div className="min-w-0 px-4 sm:px-5">
-        <ReplayEmbed parts={[part]} labels={{ region: label, playerTitle: label, className: "mt-2" }} />
+        {preview.kind === "seazn" ? (
+          <SeaznVideoIsland key={fixture.id} fixtureId={fixture.id} endpoint="org" labels={seaznVideoLabels(scoreDict)} />
+        ) : (
+          <ReplayEmbed parts={[preview.part]} labels={{ region: label, playerTitle: label, className: "mt-2" }} />
+        )}
       </div>
       {line !== null && (
         <div

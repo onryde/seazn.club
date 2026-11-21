@@ -197,7 +197,7 @@ export function CourtFocus({
           {preview !== null ? (
             <CourtStreamPreview
               fixture={f}
-              part={preview}
+              preview={preview}
               label={t(dict, "matchDay.preview.label", { court: court.court_name })}
               streamHref={`${fixtureHref(ctx, f)}?stream=open`}
               dict={dict}
@@ -298,7 +298,7 @@ export function NoCourtFocus({
       {preview !== null ? (
         <CourtStreamPreview
           fixture={f}
-          part={preview}
+          preview={preview}
           label={t(dict, "matchDay.noCourt.preview", { match })}
           streamHref={streamHref}
           dict={dict}

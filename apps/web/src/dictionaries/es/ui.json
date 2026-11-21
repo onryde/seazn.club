@@ -8316,6 +8316,7 @@
   "matchDay.scorer.no_scorer": "Sin anotador",
   "matchDay.scorer.not_recording": "Nada registrado aún",
   "matchDay.preview.label": "Retransmisión en directo en {court}",
+  "matchDay.preview.liveSeazn": "En directo en Seazn",
   "matchDay.stream.settings": "Ajustes de la retransmisión",
   "matchDay.header.noCourt.court.one": "{count} partido sin pista",
   "matchDay.header.noCourt.court.other": "{count} partidos sin pista",

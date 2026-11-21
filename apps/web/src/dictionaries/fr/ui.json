@@ -8316,6 +8316,7 @@
   "matchDay.scorer.no_scorer": "Sans marqueur",
   "matchDay.scorer.not_recording": "Rien d'enregistré",
   "matchDay.preview.label": "Diffusion en direct sur {court}",
+  "matchDay.preview.liveSeazn": "En direct sur Seazn",
   "matchDay.stream.settings": "Réglages de la diffusion",
   "matchDay.header.noCourt.court.one": "{count} match sans terrain",
   "matchDay.header.noCourt.court.other": "{count} matchs sans terrain",

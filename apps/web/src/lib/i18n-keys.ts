@@ -4421,6 +4421,7 @@ export type DictionaryKey =
   | "matchDay.online.word.playing"
   | "matchDay.online.word.starting"
   | "matchDay.preview.label"
+  | "matchDay.preview.liveSeazn"
   | "matchDay.queue.empty"
   | "matchDay.queue.estimate"
   | "matchDay.queue.planned"

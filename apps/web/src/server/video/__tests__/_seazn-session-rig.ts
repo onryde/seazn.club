@@ -44,12 +44,46 @@ export function installSeaznEnv(tag: string): void {
   });
 }
 
+const FLAG_KEYS = ["SEAZN_HOSTED_LIVE", "SEAZN_VIDEO_ORIGINS", "RELAY_DRIVERS", "STREAM_PLAYBACK_HOST"] as const;
+
+/** `installSeaznEnv`'s environment for ONE `describe` of a file that has env of its own (Task 17: match-day.test.ts and
+ *  match-day-code-view.test.ts stub `OAUTH_BASE_URL` and the device-link KEK at file level, which `installSeaznEnv`'s
+ *  `unstubAllEnvs` after every test would drop). Plain `process.env` writes in the describe's `beforeAll`, put back in its `afterAll`;
+ *  nothing is stubbed through vitest, so a file-level stub is never touched. Call it INSIDE the describe. */
+export function installSeaznEnvForDescribe(tag: string): void {
+  const keys = [...ENV_KEYS, ...FLAG_KEYS] as const;
+  const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+  beforeAll(() => {
+    process.env.RELAY_KEK = randomBytes(32).toString("hex");
+    process.env.YOUTUBE_TOKEN_KEK = randomBytes(32).toString("hex");
+    process.env.RELAY_IMAGE = `registry.fly.io/seazn-relay:${tag}`;
+    process.env.AUTH_SECRET ??= `${tag}-secret`;
+    process.env.SEAZN_HOSTED_LIVE = "true";
+    process.env.SEAZN_VIDEO_ORIGINS = "seazn.club";
+    process.env.RELAY_DRIVERS = "";
+    process.env.STREAM_PLAYBACK_HOST = "";
+  });
+  afterAll(() => {
+    for (const k of keys) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+    setRelayDriversForTest(null);
+  });
+}
+
 /** An org with two started fixtures (status `scheduled`, no session), the relay entitlements, credits, a phone on each fixture, a pasted
  *  YouTube key and its Seazn row (V540's trigger). */
 export async function seaznRig() {
   const seeded = await seedOrg();
   const auth = { ...seeded.auth, userId: await rigUser() };
   const { fixtureIds } = await startedDivisionWithFixture(auth, { fixtures: 2 });
+  return seaznRigFor(auth, fixtureIds as [string, string]);
+}
+
+/** The same rig for an org and fixtures the CALLER made (Match Day's board seeds its own competition, courts and in-play matches;
+ *  Task 17): the relay entitlements, credits, a paired phone on each fixture, a pasted YouTube key and the org's Seazn row. */
+export async function seaznRigFor<F extends readonly string[]>(auth: Awaited<ReturnType<typeof seedOrg>>["auth"], fixtureIds: F) {
   await override(auth.orgId, "streaming.overlay", true);
   await override(auth.orgId, "streaming.relay", true);
   for (const f of fixtureIds) await pairPresentPhone(f);
@@ -62,9 +96,10 @@ export async function seaznRig() {
   ingest.storage = { totalStorageMinutes: 0, totalStorageMinutesLimit: ROOMY_STORAGE_MINUTES, videoCount: 0 };
   const runner = new FakeRunner();
   const deps: SessionDeps = { drivers: { ingest, runner }, now: () => new Date(clock.now), appUrl: "http://app.test" };
-  return { auth, fixtureIds: fixtureIds as [string, string], pasted: pasted.id, seazn: seazn!.id, runner, deps };
+  return { auth, fixtureIds, pasted: pasted.id, seazn: seazn!.id, runner, deps };
 }
-export type SeaznRig = Awaited<ReturnType<typeof seaznRig>>;
+/** What `goLive` / `live` / `stopAndSettle` need of a rig: the org, the Machine fake and the deps (any fixture list). */
+export type SeaznRig = Awaited<ReturnType<typeof seaznRigFor<readonly string[]>>>;
 
 export const stateOf = async (sid: string) => (await sql<{ state: string }[]>`select state from fixture_stream_sessions where id = ${sid}`)[0]!.state;
 export const kindOf = async (sid: string) =>

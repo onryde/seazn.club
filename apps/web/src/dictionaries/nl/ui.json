@@ -8316,6 +8316,7 @@
   "matchDay.scorer.no_scorer": "Geen scorer",
   "matchDay.scorer.not_recording": "Nog niets geregistreerd",
   "matchDay.preview.label": "Livestream op {court}",
+  "matchDay.preview.liveSeazn": "Live op Seazn",
   "matchDay.stream.settings": "Streaminstellingen",
   "matchDay.header.noCourt.court.one": "{count} wedstrijd zonder baan",
   "matchDay.header.noCourt.court.other": "{count} wedstrijden zonder baan",

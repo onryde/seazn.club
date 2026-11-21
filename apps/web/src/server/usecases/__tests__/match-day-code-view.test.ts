@@ -7,6 +7,26 @@
 // pad the phone opens (§5 "Several sports in one competition need no special handling").
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomBytes, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import Ajv2020 from "ajv/dist/2020";
+import addFormats from "ajv-formats";
+
+// Task 17: the phone's Watch live link is decorative on a polled read, so a throw from its reader must not take the day read down.
+const watchFault = vi.hoisted(() => ({ fail: false, hits: 0 }));
+vi.mock("@/server/video/seazn-live", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/server/video/seazn-live")>();
+  return {
+    ...real,
+    seaznWatchUrls: async (...args: Parameters<typeof real.seaznWatchUrls>) => {
+      if (watchFault.fail) {
+        watchFault.hits++;
+        throw new Error("seazn watch fault (test)");
+      }
+      return real.seaznWatchUrls(...args);
+    },
+  };
+});
 
 vi.mock("next/headers", () => ({
   cookies: async () => ({ get: () => undefined, set: () => {}, delete: () => {} }),
@@ -14,6 +34,7 @@ vi.mock("next/headers", () => ({
 }));
 
 import { sql } from "@/lib/db";
+import { log } from "@/server/logger";
 import { CaptureMatchdayDay } from "@/server/api-v1/capture-schemas";
 import { mintMatchDayCode, revokeMatchDayCode, resolveMatchDayCode, type MatchDayCodeRow, type MatchDayScope } from "../match-day-codes";
 import { getMatchDayForCode } from "../match-day-code-view";
@@ -26,6 +47,8 @@ import { ensureDeviceLink } from "../device-links";
 import { at, iso, place, seedDay, setStatus, T0, type Day } from "./_match-day-seed";
 import { seedOnlineDivisionIn } from "./_match-day-online-seed";
 import { GET } from "@/app/api/v1/match-day-code/route";
+import { rigUser } from "@/server/relay/__tests__/_session-rig";
+import { installSeaznEnvForDescribe, goLive, live, seaznRigFor, stopAndSettle } from "@/server/video/__tests__/_seazn-session-rig";
 
 vi.stubEnv("DEVICE_LINK_KEK", randomBytes(32).toString("hex"));
 vi.stubEnv("OAUTH_BASE_URL", "https://md.test.seazn.club");
@@ -129,6 +152,7 @@ describe.skipIf(!HAS_DB)("the day read for a Match Day code", () => {
       status: "in_play",
       scheduled_at: iso(0),
       summary: null,
+      live_seazn: null,
     });
     expect(one!.next.map((r) => [r.fixture_id, r.status, r.scheduled_at])).toEqual([[f[1], "upcoming", iso(60)]]);
     expect(one!.finished.map((r) => [r.fixture_id, r.status])).toEqual([[f[2], "finished"]]);
@@ -528,6 +552,192 @@ describe.skipIf(!HAS_DB)("the day read for a Match Day code", () => {
       await sql`update stages set status = 'complete' where id = ${leagueId}`;
       const { code } = await codeFor(day, { kind: "venue", venueId: day.venues.hallA }, true);
       expect((await getMatchDayForCode(code, NOW)).approvals).toEqual([]);
+    });
+  });
+
+  // Seazn-hosted video, Task 17 (owner ruling option A): a playing match on air to Seazn carries the PUBLIC match page's address for the
+  // phone's "Watch live" — never a playback URL or a token. Every session below is a REAL one (the organiser's Go live, the Machine's
+  // playing beat, Stop); the expected address is built from the slugs read back from the rows and the stubbed origin, never from `routes`.
+  describe("live_seazn: the phone's Watch live link (Seazn-hosted video, Task 17)", () => {
+    installSeaznEnvForDescribe("match-day-code-seazn-test");
+    const ORIGIN = "https://md.test.seazn.club";
+    // The day's division is started, as a division with a match in play is (the seed leaves it in setup, whose public page is redacted).
+    // f2 is finished (a finished match cannot be streamed): it needs no phone.
+    const rigFor = async () => {
+      await sql`update divisions set status = 'active' where id = ${day.comp.divisionId}`;
+      return seaznRigFor({ ...day.auth, userId: await rigUser() }, [f[0]!, f[1]!, f[3]!, f[4]!]);
+    };
+    const rowsOf = (view: Awaited<ReturnType<typeof getMatchDayForCode>>) => [
+      ...view.courts.flatMap((c) => [...(c.now ? [c.now] : []), ...c.next, ...c.finished]),
+      ...view.no_court,
+    ];
+    const linkOf = (view: Awaited<ReturnType<typeof getMatchDayForCode>>, id: string) => {
+      const row = rowsOf(view).find((r) => r.fixture_id === id);
+      if (!row) throw new Error(`${id} is not listed`);
+      return row.live_seazn;
+    };
+    const slugsOf = async (id: string) => {
+      const [r] = await sql<{ org: string; comp: string; div: string }[]>`
+        select o.slug as org, c.slug as comp, d.slug as div
+          from fixtures x join divisions d on d.id = x.division_id join competitions c on c.id = d.competition_id join organizations o on o.id = c.org_id
+         where x.id = ${id}`;
+      return r!;
+    };
+    const watchUrl = async (id: string, origin = ORIGIN) => {
+      const s = await slugsOf(id);
+      return `${origin}/live/${s.org}/${s.comp}/${s.div}/fixtures/${id}`;
+    };
+
+    it("EMPTY CASE FIRST: with no session anywhere every listed row reads live_seazn null, and the answer is a valid contract answer", async () => {
+      const { code } = await codeFor(day, { kind: "competition" });
+      const view = await getMatchDayForCode(code, NOW);
+      const rows = rowsOf(view);
+      expect(rows.length, "anti-vacuity: the day lists its five matches").toBe(5);
+      expect(rows.map((r) => r.live_seazn)).toEqual([null, null, null, null, null]);
+      expect(CaptureMatchdayDay.safeParse(view).success).toBe(true);
+    });
+
+    it("the sequence of one playing match: warming → no link; on air → the public page's address (no query, no fragment, no playback address); stopped → no link", async () => {
+      const r = await rigFor();
+      const { code } = await codeFor(day, { kind: "competition" });
+      const sid = await goLive(r, f[0]!, r.seazn);
+      expect(linkOf(await getMatchDayForCode(code, NOW), f[0]!), "warming: the Machine has not played yet").toBeNull();
+      await stopAndSettle(r, f[0]!, sid);
+      const again = await live(r, f[0]!, r.seazn);
+      const view = await getMatchDayForCode(code, NOW);
+      expect(linkOf(view, f[0]!)).toEqual({ watch_url: await watchUrl(f[0]!) });
+      const url = linkOf(view, f[0]!)!.watch_url;
+      expect(url).not.toMatch(/[?#]/);
+      const text = JSON.stringify(view);
+      expect(text).not.toContain("playback.fake.invalid");
+      expect(text).not.toContain("manifest");
+      expect(text, "no query anywhere in the answer").not.toContain("?");
+      expect(CaptureMatchdayDay.safeParse(view).success, "the answer with a link still matches its contract twin").toBe(true);
+      expect(rowsOf(view).filter((x) => x.live_seazn !== null).map((x) => x.fixture_id), "only the one on air").toEqual([f[0]]);
+      await stopAndSettle(r, f[0]!, again);
+      expect(linkOf(await getMatchDayForCode(code, NOW), f[0]!), "stopped").toBeNull();
+    });
+
+    it("only a PLAYING match carries one: a queued match and a finished one with a live Seazn session of their own, and a match on a pasted key, read null", async () => {
+      const r = await rigFor();
+      const { code } = await codeFor(day, { kind: "competition" });
+      await live(r, f[1]!, r.seazn); // queued behind f0 on Court 1
+      await live(r, f[3]!, r.seazn); // planned on Court 3
+      const finishedLive = await live(r, f[0]!, r.seazn);
+      expect(finishedLive).toBeTruthy();
+      expect(linkOf(await getMatchDayForCode(code, NOW), f[0]!), "PREMISE: while it plays, the link is there").not.toBeNull();
+      await finishAt(f[0]!, -5);
+      const view = await getMatchDayForCode(code, NOW);
+      const listed = rowsOf(view);
+      expect(listed.find((x) => x.fixture_id === f[0])!.status, "PREMISE: the match is now finished").toBe("finished");
+      expect(listed.find((x) => x.fixture_id === f[1])!.status, "PREMISE: f1 is queued").toBe("upcoming");
+      expect(listed.map((x) => [x.fixture_id, x.live_seazn]).sort()).toEqual(f.slice(0, 5).map((id) => [id, null]).sort());
+      // A pasted-key (YouTube) session on a playing match: the phone's link is Seazn's only.
+      await setStatus(f[4]!, "in_play");
+      await live(r, f[4]!, r.pasted);
+      expect(linkOf(await getMatchDayForCode(code, NOW), f[4]!)).toBeNull();
+    });
+
+    it("a playing match on NO court is on air too: its no_court row carries the link", async () => {
+      const r = await rigFor();
+      const { code } = await codeFor(day, { kind: "competition" });
+      await setStatus(f[4]!, "in_play");
+      await live(r, f[4]!, r.seazn);
+      const view = await getMatchDayForCode(code, NOW);
+      expect(view.no_court.map((x) => [x.fixture_id, x.status, x.live_seazn])).toEqual([[f[4], "in_play", { watch_url: await watchUrl(f[4]!) }]]);
+    });
+
+    it("a narrowed code lists its own courts' matches only, and a link only where its row is listed: a venue code for Hall B (Court 3) lists no link for Court 1's live match", async () => {
+      const r = await rigFor();
+      await live(r, f[0]!, r.seazn);
+      const hallB = await codeFor(day, { kind: "venue", venueId: day.venues.hallB });
+      const view = await getMatchDayForCode(hallB.code, NOW);
+      expect(rowsOf(view).map((x) => x.fixture_id), "Hall B lists Court 3's match only").toEqual([f[3]]);
+      expect(rowsOf(view).map((x) => x.live_seazn)).toEqual([null]);
+      expect(JSON.stringify(view)).not.toContain(f[0]!);
+      const hallA = await codeFor(day, { kind: "venue", venueId: day.venues.hallA });
+      expect(linkOf(await getMatchDayForCode(hallA.code, NOW), f[0]!), "the positive pair: Hall A lists it with its link").toEqual({ watch_url: await watchUrl(f[0]!) });
+    });
+
+    it("an UNLISTED competition's page is readable, a PRIVATE one's is not: the link goes, though the match is still on air; a division back in setup has none either", async () => {
+      const r = await rigFor();
+      await live(r, f[0]!, r.seazn);
+      const { code } = await codeFor(day, { kind: "competition" });
+      await sql`update competitions set visibility = 'unlisted' where id = ${day.comp.id}`;
+      expect(linkOf(await getMatchDayForCode(code, NOW), f[0]!), "unlisted").toEqual({ watch_url: await watchUrl(f[0]!) });
+      await sql`update competitions set visibility = 'private' where id = ${day.comp.id}`;
+      const view = await getMatchDayForCode(code, NOW);
+      expect(linkOf(view, f[0]!), "private").toBeNull();
+      expect(rowsOf(view).find((x) => x.fixture_id === f[0])!.status, "PREMISE: the match is still listed, still playing").toBe("in_play");
+      await sql`update competitions set visibility = 'public' where id = ${day.comp.id}`;
+      expect(linkOf(await getMatchDayForCode(code, NOW), f[0]!), "back to public").not.toBeNull();
+      await sql`update divisions set status = 'setup' where id = ${day.comp.divisionId}`;
+      expect(linkOf(await getMatchDayForCode(code, NOW), f[0]!), "a division back in setup has no public page").toBeNull();
+    });
+
+    it("an origin that is not https gives no link at all (the contract's pattern is an https address): the local dev server reads null, the same match on staging's https origin a link", async () => {
+      const r = await rigFor();
+      await live(r, f[0]!, r.seazn);
+      const { code } = await codeFor(day, { kind: "competition" });
+      vi.stubEnv("OAUTH_BASE_URL", "http://localhost:3000");
+      vi.stubEnv("NEXT_PUBLIC_BASE_URL", "");
+      try {
+        const view = await getMatchDayForCode(code, NOW);
+        expect(linkOf(view, f[0]!)).toBeNull();
+        expect(CaptureMatchdayDay.safeParse(view).success, "the answer is still a contract answer, linkless").toBe(true);
+        vi.stubEnv("OAUTH_BASE_URL", "https://stg.seazn.club");
+        expect(linkOf(await getMatchDayForCode(code, NOW), f[0]!)).toEqual({ watch_url: await watchUrl(f[0]!, "https://stg.seazn.club") });
+      } finally {
+        vi.stubEnv("OAUTH_BASE_URL", ORIGIN);
+      }
+    });
+
+    it("a link read that throws leaves the day read answering: every row as before but live_seazn null, and the fault logged (never a 500 for the phone's list)", async () => {
+      const r = await rigFor();
+      await live(r, f[0]!, r.seazn);
+      const { code } = await codeFor(day, { kind: "competition" });
+      const before = await getMatchDayForCode(code, NOW);
+      expect(linkOf(before, f[0]!), "PREMISE: the link reads before the fault").not.toBeNull();
+      const warn = vi.spyOn(log, "warn");
+      watchFault.fail = true;
+      watchFault.hits = 0;
+      try {
+        const view = await getMatchDayForCode(code, NOW);
+        expect(watchFault.hits, "the faulty reader was asked").toBe(1);
+        expect(rowsOf(view).map((x) => x.live_seazn)).toEqual([null, null, null, null, null]);
+        expect(CaptureMatchdayDay.safeParse(view).success).toBe(true);
+        const bare = (v: typeof view) => JSON.stringify(rowsOf(v).map((x) => ({ ...x, live_seazn: null })));
+        expect(bare(view), "nothing else moved").toBe(bare(before));
+        expect(warn).toHaveBeenCalledWith(expect.objectContaining({ err: expect.any(Error), fixtureIds: [f[0]] }), expect.stringContaining("Seazn watch link read failed"));
+      } finally {
+        watchFault.fail = false;
+        warn.mockRestore();
+      }
+    });
+
+    it("over the route: GET with a live Seazn match answers the link inside the v1 envelope, the wire parses, and carries no query and no playback address", async () => {
+      const r = await rigFor();
+      await live(r, f[0]!, r.seazn);
+      const { token } = await codeFor(day, { kind: "competition" });
+      vi.useFakeTimers({ toFake: ["Date"], now: NOW });
+      const res = await GET(new Request("https://test.local/api/v1/match-day-code", { headers: { authorization: `Bearer ${token}` } }));
+      const wire = await res.text();
+      expect(res.status).toBe(200);
+      const body = JSON.parse(wire);
+      expect(CaptureMatchdayDay.safeParse(body.data).success).toBe(true);
+      expect(body.data.courts[0].now.live_seazn).toEqual({ watch_url: await watchUrl(f[0]!) });
+      // The PUBLISHED bytes admit it too (ajv 2020-12, formats asserted): the file the capture app vendors is the contract, not the twin.
+      const published = JSON.parse(readFileSync(resolve(import.meta.dirname, "../../../../../../docs/contracts/capture-matchday-day.v1.json"), "utf8")) as Record<string, unknown>;
+      const ajv = new Ajv2020({ strict: true, allErrors: true });
+      addFormats(ajv);
+      const admits = ajv.compile(published);
+      expect(admits(body.data), `the day read the use case built validates against capture-matchday-day.v1.json: ${JSON.stringify(admits.errors)}`).toBe(true);
+      // Anti-vacuity: the same validator refuses the same body with a query on the link, so "admits" above is a real verdict.
+      const tampered = structuredClone(body.data) as { courts: { now: { live_seazn: { watch_url: string } } }[] };
+      tampered.courts[0]!.now.live_seazn.watch_url += "?t=1";
+      expect(admits(tampered), "a link with a query is refused by the published file").toBe(false);
+      expect(wire).not.toContain("playback.fake.invalid");
+      expect(wire).not.toContain("?");
     });
   });
 

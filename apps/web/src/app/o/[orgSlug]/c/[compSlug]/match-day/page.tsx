@@ -27,6 +27,7 @@ import { getDictionary } from "@/lib/i18n";
 import { pickDictPrefixes } from "@/lib/i18n-subset";
 import { MatchDayShell } from "@/components/v2/match-day/match-day-shell";
 import { matchDayForReader } from "@/lib/match-day/view";
+import { matchDayScoreDict } from "@/lib/match-day/score-dict";
 import { frozenNamesFor, NO_FROZEN_NAMES } from "@/lib/match-day/frozen-names";
 
 export default async function MatchDayPage({
@@ -79,7 +80,8 @@ export default async function MatchDayPage({
         // (`NeedsYou`, reused; its rows arrive translated), the scorer QR's heading (the console's own "Remote scoring") and the
         // preview's "Live on YouTube" (the fixture page's words for the same stream).
         dict={pickDictPrefixes(ui, ["matchDay.", "desk.needsYou.title", "dlink.title", "stream.youtube.link.live", "stream.auto.refus"])}
-        scoreDict={pickDictPrefixes(pub, ["matchCentre.", "forfeit."])}
+        // The public dictionary's slice the score and the preview read: the score's words, and the Seazn island's labels (`matchDayScoreDict`).
+        scoreDict={matchDayScoreDict(pub)}
         viewerPlan={viewerPlanFrom(planKey)}
         readOnly={!page.canEdit}
         frozen={competition.frozen === true}

@@ -815,12 +815,19 @@ export function courtScorerAttention(court: Pick<MatchDayCourt, "state" | "curre
  *  court, and one court's choice never moves another's. */
 export const scorerMemoryKey = (memoryKey: string): string => `seazn.matchDay.scorer.${memoryKey}`;
 
-/** The playing court's stream preview (§6.2 "Playing, stream live"; §8 Phase 1): the YouTube video its live stream goes into, as
- *  a replay part the public page's player plays — only when the stream is live, the address is provably a video, and the
- *  broadcast may be embedded (`mayEmbedReplay`: positively not made for kids; DP III.E.4.j). Otherwise null, and the court shows
- *  its scoreboard (C1) — never an empty video box (§5). */
-export function streamPreviewOf(f: Pick<MatchDayFixture, "stream" | "live_video">): PublicReplayPart | null {
-  if (f.stream !== "live" || f.live_video === null) return null;
+/** What a playing court's preview plays (§6.2 "Playing, stream live"): a YouTube video as the public page's replay player plays it, or
+ *  the match's Seazn live, which the preview's island reads from the organiser's own video route (so it carries no address). */
+export type StreamPreview = { kind: "youtube"; part: PublicReplayPart } | { kind: "seazn" };
+
+/** The playing court's stream preview (§6.2 "Playing, stream live"; §8 Phase 1; Seazn-hosted video Task 17), only while the stream is
+ *  live. A match on air to Seazn plays that (it wins if a YouTube video is also named: the board's one live is Seazn's, and its
+ *  island reads the organiser's own route). Otherwise the YouTube video its live stream goes into, as a replay part the public
+ *  page's player plays — when the address is provably a video and the broadcast may be embedded (`mayEmbedReplay`: positively not
+ *  made for kids; DP III.E.4.j). Anything else is null, and the court shows its scoreboard (C1) — never an empty video box (§5). */
+export function streamPreviewOf(f: Pick<MatchDayFixture, "stream" | "live_video" | "live_seazn">): StreamPreview | null {
+  if (f.stream !== "live") return null;
+  if (f.live_seazn) return { kind: "seazn" };
+  if (f.live_video === null) return null;
   const part: PublicReplayPart = { partNo: 1, url: f.live_video.url, madeForKids: f.live_video.made_for_kids };
-  return mayEmbedReplay(part) && youtubeVideoId(part.url) !== null ? part : null;
+  return mayEmbedReplay(part) && youtubeVideoId(part.url) !== null ? { kind: "youtube", part } : null;
 }

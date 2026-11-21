@@ -303,6 +303,14 @@ describe.skipIf(!HAS_DB)("calling a match to a court through a Match Day code (T
       expect(CaptureMatchdayCandidates.safeParse(offered).success).toBe(true);
     });
 
+    it("Seazn-hosted video (Task 17): every match offered to call reads live_seazn null — the phone's Watch live link belongs to the day read's playing rows, never to a candidate", async () => {
+      const { code } = await codeFor(day, { kind: "competition" }, true);
+      const offered = await candidatesForCode(code, day.courts.c2, NOW);
+      expect(offered.candidates.length, "anti-vacuity: the court has candidates").toBeGreaterThan(0);
+      expect(offered.candidates.map((c) => c.match.live_seazn)).toEqual(offered.candidates.map(() => null));
+      expect(CaptureMatchdayCandidates.safeParse(offered).success).toBe(true);
+    });
+
     it("a desk call still records the organiser and no code", async () => {
       const { callFixtureToCourt } = await import("../match-day-call");
       await callFixtureToCourt(day.auth, A, day.courts.c2, NOW);

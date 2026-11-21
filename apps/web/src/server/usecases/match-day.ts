@@ -72,6 +72,7 @@ import { kickoffsOf } from "@/server/engine-db/kickoff";
 import { servingSideOf, sportReadsServe } from "@/server/engine-db/serving";
 import { log } from "@/server/logger";
 import { liveSessionVideos } from "@/server/youtube/parts";
+import { liveSeaznFixtureIds } from "@/server/video/seazn-live";
 
 type Tx = postgres.TransactionSql;
 type Serving = MatchDayFixture["serving"];
@@ -769,14 +770,24 @@ export async function findCourtForDivision(
   });
 }
 
+/** The matches playing now, on a court or on none: a playing court's `current` and every playing-no-court match. The ids the board's
+ *  extras (a live stream's video, Seazn live, the format line) are read for, and the ones the phone's day read asks about too. */
+export function playingFixtureIds(board: Pick<Board, "courts" | "playingNoCourt">): string[] {
+  return [
+    ...board.courts.flatMap((c) => (c.state === "playing" && c.current !== null ? [c.current.id] : [])),
+    ...board.playingNoCourt.map((r) => r.id),
+  ];
+}
+
 /** What only a playing court's match carries: who serves (S1), the desk's scorer attention, and its live stream's video (A4). */
 interface PlayingExtras {
   serving: Serving;
   scorer_attention: MatchDayFixture["scorer_attention"];
   live_video: MatchDayFixture["live_video"];
+  live_seazn: MatchDayFixture["live_seazn"];
   format_line: MatchDayFixture["format_line"];
 }
-const NO_EXTRAS: PlayingExtras = { serving: null, scorer_attention: null, live_video: null, format_line: null };
+const NO_EXTRAS: PlayingExtras = { serving: null, scorer_attention: null, live_video: null, live_seazn: false, format_line: null };
 /** The match's Stream switch and own-code flag (court stream §5.5), by match; a match with no settings row reads off. */
 type Switches = ReadonlyMap<string, { on: boolean; ownCode: boolean }>;
 const NO_SWITCHES: Switches = new Map();
@@ -809,6 +820,7 @@ function fixtureView(
     stream: streams[r.id] ?? null,
     scorer_attention: extras.scorer_attention,
     live_video: extras.live_video,
+    live_seazn: extras.live_seazn,
     format_line: extras.format_line,
     court_stream: switches.get(r.id)?.on ?? false,
     own_stream_code: switches.get(r.id)?.ownCode ?? false,
@@ -954,18 +966,19 @@ export async function getMatchDay(
   // competition page's (`needsYouHome`, the one rule both surfaces ask), and Match Day carries none of it, its owed count included.
   const atHome = needsYouAt("match_day", fixturesToday, needs);
   // The preview's video (A4, §6.2): asked for the playing matches whose stream is live — on a court or on none — and only those.
-  const liveIds = [
-    ...board.courts.flatMap((c) => (c.state === "playing" && c.current !== null ? [c.current.id] : [])),
-    ...board.playingNoCourt.map((r) => r.id),
-  ].filter((id) => streams[id] === "live");
-  const playingIds = [
-    ...board.courts.flatMap((c) => (c.state === "playing" && c.current !== null ? [c.current.id] : [])),
-    ...board.playingNoCourt.map((r) => r.id),
-  ];
+  const playingIds = playingFixtureIds(board);
+  const liveIds = playingIds.filter((id) => streams[id] === "live");
   // The playing matches' formats (C2), in the public line's words: the fixture page's own reader, in the reader's language.
   // Decorative on a polled read (fix round 1, M5): a line that cannot be read is logged and left out, never a 500 for the board.
-  const [videos, formatLines] = await Promise.all([
+  // Which of them are on air to Seazn (Task 17): a Seazn session has no YouTube broadcast, so `videos` never names it; its preview is
+  // the organiser's own video route, and the board says only THAT it is on air. Decorative like the format line: a read that cannot be
+  // made is logged and left false (the preview falls back to the scoreboard), never a 500 for the board.
+  const [videos, seaznOnAir, formatLines] = await Promise.all([
     liveSessionVideos(auth.orgId, liveIds),
+    liveSeaznFixtureIds(auth.orgId, playingIds).catch((err: unknown) => {
+      log.warn({ err, competitionId, fixtureIds: playingIds }, "match-day: Seazn live read failed; live_seazn left false");
+      return new Set<string>() as ReadonlySet<string>;
+    }),
     getDictionary(locale, "public")
       .then((publicDict) => fixtureFormatLines(auth, playingIds, publicDict))
       .catch((err: unknown) => {
@@ -980,6 +993,7 @@ export async function getMatchDay(
       scorer_attention: scorerAttention.get(fixtureId) ?? null,
       // Fails closed, as `mayEmbedReplay` does: only a broadcast positively NOT made for kids reads false.
       live_video: video === undefined ? null : { url: video.url, made_for_kids: video.madeForKids !== false },
+      live_seazn: seaznOnAir.has(fixtureId),
       format_line: formatLines.get(fixtureId) ?? null,
     };
   };

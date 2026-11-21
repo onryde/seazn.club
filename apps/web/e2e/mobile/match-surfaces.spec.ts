@@ -10,6 +10,7 @@ import {
   TAG,
   apiJson,
   activeOrg,
+  competitionPath,
   expectNoHorizontalScroll,
   addEntrantsViaApi,
   createStageAndGenerate,
@@ -24,6 +25,7 @@ import { longName, roundGameSql, seedOnlineRound, seedSeatInvite, uiEn } from ".
 import { backdateOpenSql, cancelFlaggedSql, holdNoShowSql } from "../match-day-online-kit";
 import { putArrival } from "../match-day-kit";
 import { DEADLINE_AFTER_MS, LINE_DEADLINE_GRACE_MS } from "../../src/server/external-play/window";
+import { finishSeaznMatch, goLive, seedSeaznSession, signedAddressPattern, stubFakePlaybackHost } from "../helpers/seazn-video-seed";
 import { ARMAGEDDON_RESULTS } from "@seazn/engine/sports/boardgame";
 import { consentedAnonymousState, dismissCookieBanner } from "../scorepad-a11y-kit";
 import { openMatchActions } from "../helpers/match-actions";
@@ -1159,4 +1161,98 @@ test("match day board panel, cameras: the switch, the folded held cameras and 43
   await assertTapFloor(page.getByTestId("arbiter-decision").getByRole("button", { name: uiEn["arbiter.decide.settle"] }), "Settle the result now");
 
   console.log(`[match day cameras ${width}px] live (switch, 2 tiles, 43-char names) + held (folded, unfolded, reason after the cameras)`);
+});
+
+// Seazn-hosted video, Task 17 (the Match Day preview on a phone). A match in play on NO court (so no venue, courts or schedule are
+// needed), in the organisation's own PRIVATE competition (the public match page would answer nothing for it: the organiser's video route
+// is what plays), on air to Seazn, read in SPANISH: the preview, its badge and the player's own labels are the locale's words and never a
+// key name (the m6 gap: the page's public-dictionary slice once lacked the player's keys). The session is a seeded row (helpers/
+// seazn-video-seed.ts); the board, the focused panel, the island, the organiser's route and its signer are real. Not serial.
+test("Match Day Seazn preview (Task 17): a private competition's live match plays in the preview at this width, in Spanish, with no sideways scroll and a 44px settings door", async ({
+  page,
+  request,
+  baseURL,
+}) => {
+  test.setTimeout(180_000);
+  const vp = projectViewport();
+  expect(vp, "a width project declares its viewport").not.toBeNull();
+  const nonce = Math.random().toString(36).slice(2, 7);
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Seazn preview ${projectTag()} ${nonce} ${TAG}`,
+    visibility: "private",
+  });
+  expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: `Cup ${nonce}`,
+    sport_key: "generic",
+    variant_key: "score",
+  });
+  expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+  const home = `Gus ${nonce}`;
+  const away = `Hal ${nonce}`;
+  expect((await addEntrantsViaApi(request, div.data!.id, [home, away])).status).toBeLessThan(300);
+  await createStageAndGenerate(request, div.data!.id);
+  // No court at all: the division asks for a court tag no court has, so the match plays on none (an empty list means EVERY court).
+  await withDb((sql) => sql`update divisions set required_court_tags = ${`{seazn-none-${nonce}}`}::text[] where id = ${div.data!.id}`);
+  expect((await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST")).status).toBeLessThan(300);
+  const [fx] = await withDb((sql) => sql<{ id: string }[]>`select id from fixtures where division_id = ${div.data!.id}`);
+  expect(fx, "premise: the division seats one match").toBeTruthy();
+  const kickoff = await apiJson(request, `/api/v1/fixtures/${fx!.id}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
+  expect(kickoff.status, `core.start: ${JSON.stringify(kickoff.error)}`).toBeLessThan(300);
+
+  const org = await activeOrg(page);
+  const session = await seedSeaznSession(org.id, fx!.id);
+  await goLive(session);
+  await stubFakePlaybackHost(page);
+  try {
+    // The dictionaries the page serves, read as files — never typed here and never read back from the page under test.
+    const dictOf = (file: "ui" | "public") =>
+      JSON.parse(readFileSync(fileURLToPath(new URL(`../../src/dictionaries/es/${file}.json`, import.meta.url)), "utf8")) as Record<string, string>;
+    const ui = dictOf("ui");
+    const pub = dictOf("public");
+    const badge = ui["matchDay.preview.liveSeazn"]!;
+    expect(badge, "premise: the Spanish badge is a sentence, not the key").toContain("Seazn");
+    await page.context().addCookies([{ name: "seazn_locale", value: "es", url: baseURL! }]);
+    await page.goto(await competitionPath(request, comp.data!.id, "/match-day"), { waitUntil: "load" });
+
+    const row = page.locator(`[data-testid="md-no-court-row"][data-fixture-id="${fx!.id}"]`);
+    await expect(row).toBeVisible();
+    await row.click();
+    const focus = page.getByTestId("md-focus");
+    await expect(focus).toHaveAttribute("data-no-court", "true");
+    const preview = focus.getByTestId("md-stream-preview");
+    await expect(preview).toBeVisible();
+    await expect(preview.locator('[data-md-stream="live"]')).toHaveText(badge);
+    const player = preview.getByTestId("seazn-player");
+    await expect(player).toBeVisible({ timeout: 30_000 });
+    await expect(player).toHaveClass(/ph-no-capture/);
+    const video = player.locator("video");
+    await expect(video).toHaveAttribute("data-src", signedAddressPattern(session.programmeUid));
+    // The player's own words are Spanish dictionary values, never the keys the slice used to leave out.
+    await expect(video).toHaveAttribute("aria-label", pub["seaznVideo.live"]!);
+    await expect(preview).not.toContainText(/seaznVideo\.|overlay\.replay|matchDay\./);
+
+    // The geometry: the preview and the player sit inside the viewport (a clipped box is not a scrolling one), and nothing scrolls sideways.
+    const inside = await preview.evaluate((el) => {
+      const w = document.documentElement.clientWidth;
+      const box = (n: Element) => {
+        const b = n.getBoundingClientRect();
+        return { left: b.left, right: b.right, width: b.width };
+      };
+      return { vw: w, preview: box(el), player: box(el.querySelector('[data-testid="seazn-player"]')!) };
+    });
+    expect(inside.preview.left, "the preview starts inside the viewport").toBeGreaterThanOrEqual(0);
+    expect(inside.preview.right, "and ends inside it").toBeLessThanOrEqual(inside.vw + 0.5);
+    expect(inside.player.left).toBeGreaterThanOrEqual(0);
+    expect(inside.player.right).toBeLessThanOrEqual(inside.vw + 0.5);
+    expect(inside.player.width, "a usable picture").toBeGreaterThan(Math.min(200, vp!.width - 48));
+    await expectNoHorizontalScroll(page);
+    // The settings door keeps the tap floor (min-h-11 below lg).
+    const settings = preview.getByRole("link", { name: ui["matchDay.stream.settings"]! });
+    await expect(settings).toBeVisible();
+    expect((await settings.boundingBox())!.height, "Stream settings is a 44px target").toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX - 0.5);
+  } finally {
+    await finishSeaznMatch(session);
+  }
 });

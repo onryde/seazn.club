@@ -21,6 +21,7 @@ import { dismissConsent, freshOrg } from "./directory-kit";
 import { captureQrV2Text, type CaptureQrV2 } from "../src/lib/capture-qr";
 import { disposeFakePhones, fakeCapturePhone, newPhoneRequest } from "./helpers/fake-capture-phone";
 import { middayZoneFor, withinToday } from "./midday-zone";
+import { finishSeaznMatch, goLive, seedSeaznSession, signedAddressPattern, stubFakePlaybackHost } from "./helpers/seazn-video-seed";
 
 /**
  * Match Day, task A3 (spec docs/superpowers/specs/2026-10-31-match-day-design.md §6, §7): the court list and the focused
@@ -385,6 +386,65 @@ test.describe("Match Day — desktop", () => {
     await expect(page.getByTestId("md-list")).toBeVisible();
     await expect(page.getByTestId("md-focus")).toBeVisible();
     await expectNoHorizontalScroll(page);
+  });
+
+  // Seazn-hosted video, Task 17. A court whose match is on air to Seazn plays it in the preview, through the ORGANISER's video route.
+  // The session is a seeded row (helpers/seazn-video-seed.ts says why and where the producer is proved); everything after it is real: the
+  // board's `live_seazn`, the focused court, the island, `GET /fixtures/{id}/video` and its (fake-driver) signer, and the player. Only
+  // Cloudflare's host is stood in for. The match is in play for real (seedMatchDay's core.start).
+  test("Task 17: a court on air to Seazn plays it in the preview — the Seazn player, the badge and the score under it; the polled board carries a flag and no address; back to the scoreboard when it ends; no sideways scroll at 1280 or 768", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(120_000);
+    const seed = await seedMatchDay(request, "Seazn");
+    const org = await activeOrg(page);
+    const session = await seedSeaznSession(org.id, seed.anaBen);
+    await goLive(session);
+    await stubFakePlaybackHost(page);
+    try {
+      // The polled read model: a boolean, never the address (nor a token) — and the YouTube field keeps its shape.
+      const board = await apiJson<{ courts: { court_name: string; current: { id: string; live_seazn: boolean; live_video: unknown } | null }[] }>(
+        request,
+        `/api/v1/competitions/${seed.competitionId}/match-day`,
+      );
+      expect(board.status).toBe(200);
+      const playing = board.data!.courts.find((c) => c.court_name === seed.court1)!.current!;
+      expect(playing.id).toBe(seed.anaBen);
+      expect(playing.live_seazn, "the board says the match is on air to Seazn").toBe(true);
+      expect(playing.live_video, "and still no YouTube video").toBeNull();
+      expect(JSON.stringify(board.data), "no playback address anywhere on the polled board").not.toContain("playback.fake.invalid");
+
+      await page.goto(await competitionPath(request, seed.competitionId, "/match-day"), { waitUntil: "load" });
+      const preview = page.getByTestId("md-stream-preview");
+      await expect(preview).toBeVisible();
+      await expect(preview.locator("[data-md-stream=\"live\"]")).toHaveText("Live on Seazn");
+      await expect(page.getByTestId("md-scoreboard")).toHaveCount(0);
+      // The island asks the organiser's route after it hydrates and plays what it is given: the REAL signer's address, for THIS match's
+      // programme input, on the player's own `data-src` (never in a query, never in the markup the server sent).
+      const player = preview.getByTestId("seazn-player");
+      await expect(player).toBeVisible({ timeout: 30_000 });
+      await expect(player).toHaveClass(/ph-no-capture/);
+      await expect(player.locator("video")).toHaveAttribute("data-src", signedAddressPattern(session.programmeUid));
+      await expect(player.locator("video")).toHaveAttribute("aria-label", "Live");
+      await expect(preview.getByTestId("md-preview-score")).toBeVisible();
+      await expect(preview.getByRole("link", { name: "Stream settings" })).toBeVisible();
+      await expectNoHorizontalScroll(page);
+
+      await page.setViewportSize({ width: 768, height: 1024 });
+      await expect(page.getByTestId("md-list")).toBeVisible();
+      await expect(player).toBeVisible();
+      await expectNoHorizontalScroll(page);
+      await page.setViewportSize({ width: 1280, height: 800 });
+
+      // It ends: the board drops the flag on its next poll and the court is the scoreboard again, never an empty video box.
+      await finishSeaznMatch(session);
+      await expect(page.getByTestId("md-scoreboard")).toBeVisible({ timeout: 45_000 });
+      await expect(page.getByTestId("md-stream-preview")).toHaveCount(0);
+      await expect(page.getByTestId("seazn-player")).toHaveCount(0);
+    } finally {
+      await finishSeaznMatch(session);
+    }
   });
 
   test("A4: Needs you opens with the owed result first; the unscored court is marked; its scorer QR mints; at 1280 and 768", async ({

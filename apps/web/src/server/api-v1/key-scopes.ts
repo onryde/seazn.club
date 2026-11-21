@@ -410,6 +410,9 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "PUT /fixtures/:id/court-stream",
   // Capture QR v2 (T9, §9): the panel's phone read model names the paired phone and the destination — the panel's, never a key's.
   "GET /fixtures/:id/stream-phone",
+  // Seazn-hosted video (Task 17): the organiser's read of a fixture's video answers SIGNED playback addresses — bearer credentials for the
+  // picture, so the signed-in member's own door (Match Day's preview), never a key's: a key that leaked would hand out a viewable stream.
+  "GET /fixtures/:id/video",
   // Capture QR v2 (T8a–T8c, §6.3): the phone's routes. Their Bearer is the stream code's tok — no cookie, never a key.
   "GET /capture/codes/:code",
   "POST /capture/codes/:code/beats",

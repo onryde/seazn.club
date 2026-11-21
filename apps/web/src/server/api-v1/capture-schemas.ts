@@ -359,6 +359,11 @@ export const CaptureMatchdayRefusalCode = z.enum([
 export type CaptureMatchdayRefusalCode = z.infer<typeof CaptureMatchdayRefusalCode>;
 /** An instant the server writes with `toISOString()`: UTC, milliseconds, `Z`. */
 const MdInstant = z.iso.datetime();
+/** Seazn-hosted video (Task 17, owner ruling option A): a playing match that is on air to Seazn carries the PUBLIC match page's address,
+ *  which the phone opens in the system browser ("Watch live"). The pattern is the agreed contract: an https origin (a host, optionally a
+ *  port), `/live/{org}/{competition}/{division}/fixtures/{uuid}`, and NOTHING after it — no query, no fragment. The page's player signs
+ *  its own short-lived address; the phone is never handed a playback URL or a token. */
+export const CAPTURE_MATCHDAY_WATCH_URL_RE = new RegExp("^https://[a-z0-9.-]+(?::\\d+)?/live/[^/?#]+/[^/?#]+/[^/?#]+/fixtures/[0-9a-fA-F-]{36}$");
 /** One match as the list shows it. */
 export const CaptureMatchdayRow = z.strictObject({
   fixture_id: z.uuid(),
@@ -377,6 +382,10 @@ export const CaptureMatchdayRow = z.strictObject({
   /** The short score as the Match Day desk shows it in a row (`compactScore`, lib/match-day/view.ts): "1–1 · 14–9" while a set
    *  sport plays, "2–0" once finished, the sport's own headline otherwise. Never the engine's full headline. */
   summary: z.string().nullable(),
+  /** Seazn-hosted video (Task 17): while this match is on air to Seazn and its public page is readable, the page's address for "Watch live";
+   *  else null — a YouTube live, a stream not yet on air or already over, a private competition and an origin that is not https all read null.
+   *  Required (the phone reads it on every row, so an old server's missing field is a refusal, not a silent "no link"). */
+  live_seazn: z.strictObject({ watch_url: z.string().regex(CAPTURE_MATCHDAY_WATCH_URL_RE) }).nullable(),
 });
 export const CaptureMatchdayApproval = z.strictObject({
   kind: z.enum(["swiss", "draw"]),

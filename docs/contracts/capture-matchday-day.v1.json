@@ -227,6 +227,28 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "live_seazn": {
+                    "description": "Seazn-hosted video (Task 17): while the match is playing, on air to Seazn and its public page is readable, {watch_url}; null otherwise (a YouTube or other live, a stream not yet on air or already over, a queued or finished match, a private competition, a server whose origin is not https) and ALWAYS null on a match offered to call (capture-matchday-call.v1). Required: a missing field is a refusal, not \"no link\".",
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "watch_url": {
+                            "description": "The match's PUBLIC page on the server's https origin, /live/{org}/{competition}/{division}/fixtures/{match id}, with no query and no fragment. Open it in the system browser (\"Watch live\"): the page's own player signs its short-lived address for whoever opens it. It is never a playback address or a token; the phone is not given one.",
+                            "type": "string",
+                            "pattern": "^https:\\/\\/[a-z0-9.-]+(?::\\d+)?\\/live\\/[^/?#]+\\/[^/?#]+\\/[^/?#]+\\/fixtures\\/[0-9a-fA-F-]{36}$"
+                          }
+                        },
+                        "required": [
+                          "watch_url"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 },
                 "required": [
@@ -241,7 +263,8 @@
                   "away_slot",
                   "status",
                   "scheduled_at",
-                  "summary"
+                  "summary",
+                  "live_seazn"
                 ],
                 "additionalProperties": false
               },
@@ -371,6 +394,28 @@
                       "type": "null"
                     }
                   ]
+                },
+                "live_seazn": {
+                  "description": "Seazn-hosted video (Task 17): while the match is playing, on air to Seazn and its public page is readable, {watch_url}; null otherwise (a YouTube or other live, a stream not yet on air or already over, a queued or finished match, a private competition, a server whose origin is not https) and ALWAYS null on a match offered to call (capture-matchday-call.v1). Required: a missing field is a refusal, not \"no link\".",
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "watch_url": {
+                          "description": "The match's PUBLIC page on the server's https origin, /live/{org}/{competition}/{division}/fixtures/{match id}, with no query and no fragment. Open it in the system browser (\"Watch live\"): the page's own player signs its short-lived address for whoever opens it. It is never a playback address or a token; the phone is not given one.",
+                          "type": "string",
+                          "pattern": "^https:\\/\\/[a-z0-9.-]+(?::\\d+)?\\/live\\/[^/?#]+\\/[^/?#]+\\/[^/?#]+\\/fixtures\\/[0-9a-fA-F-]{36}$"
+                        }
+                      },
+                      "required": [
+                        "watch_url"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "required": [
@@ -385,7 +430,8 @@
                 "away_slot",
                 "status",
                 "scheduled_at",
-                "summary"
+                "summary",
+                "live_seazn"
               ],
               "additionalProperties": false
             }
@@ -511,6 +557,28 @@
                       "type": "null"
                     }
                   ]
+                },
+                "live_seazn": {
+                  "description": "Seazn-hosted video (Task 17): while the match is playing, on air to Seazn and its public page is readable, {watch_url}; null otherwise (a YouTube or other live, a stream not yet on air or already over, a queued or finished match, a private competition, a server whose origin is not https) and ALWAYS null on a match offered to call (capture-matchday-call.v1). Required: a missing field is a refusal, not \"no link\".",
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "watch_url": {
+                          "description": "The match's PUBLIC page on the server's https origin, /live/{org}/{competition}/{division}/fixtures/{match id}, with no query and no fragment. Open it in the system browser (\"Watch live\"): the page's own player signs its short-lived address for whoever opens it. It is never a playback address or a token; the phone is not given one.",
+                          "type": "string",
+                          "pattern": "^https:\\/\\/[a-z0-9.-]+(?::\\d+)?\\/live\\/[^/?#]+\\/[^/?#]+\\/[^/?#]+\\/fixtures\\/[0-9a-fA-F-]{36}$"
+                        }
+                      },
+                      "required": [
+                        "watch_url"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "required": [
@@ -525,7 +593,8 @@
                 "away_slot",
                 "status",
                 "scheduled_at",
-                "summary"
+                "summary",
+                "live_seazn"
               ],
               "additionalProperties": false
             }
@@ -664,6 +733,28 @@
                 "type": "null"
               }
             ]
+          },
+          "live_seazn": {
+            "description": "Seazn-hosted video (Task 17): while the match is playing, on air to Seazn and its public page is readable, {watch_url}; null otherwise (a YouTube or other live, a stream not yet on air or already over, a queued or finished match, a private competition, a server whose origin is not https) and ALWAYS null on a match offered to call (capture-matchday-call.v1). Required: a missing field is a refusal, not \"no link\".",
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "watch_url": {
+                    "description": "The match's PUBLIC page on the server's https origin, /live/{org}/{competition}/{division}/fixtures/{match id}, with no query and no fragment. Open it in the system browser (\"Watch live\"): the page's own player signs its short-lived address for whoever opens it. It is never a playback address or a token; the phone is not given one.",
+                    "type": "string",
+                    "pattern": "^https:\\/\\/[a-z0-9.-]+(?::\\d+)?\\/live\\/[^/?#]+\\/[^/?#]+\\/[^/?#]+\\/fixtures\\/[0-9a-fA-F-]{36}$"
+                  }
+                },
+                "required": [
+                  "watch_url"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -678,7 +769,8 @@
           "away_slot",
           "status",
           "scheduled_at",
-          "summary"
+          "summary",
+          "live_seazn"
         ],
         "additionalProperties": false
       }
@@ -804,6 +896,28 @@
                 "type": "null"
               }
             ]
+          },
+          "live_seazn": {
+            "description": "Seazn-hosted video (Task 17): while the match is playing, on air to Seazn and its public page is readable, {watch_url}; null otherwise (a YouTube or other live, a stream not yet on air or already over, a queued or finished match, a private competition, a server whose origin is not https) and ALWAYS null on a match offered to call (capture-matchday-call.v1). Required: a missing field is a refusal, not \"no link\".",
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "watch_url": {
+                    "description": "The match's PUBLIC page on the server's https origin, /live/{org}/{competition}/{division}/fixtures/{match id}, with no query and no fragment. Open it in the system browser (\"Watch live\"): the page's own player signs its short-lived address for whoever opens it. It is never a playback address or a token; the phone is not given one.",
+                    "type": "string",
+                    "pattern": "^https:\\/\\/[a-z0-9.-]+(?::\\d+)?\\/live\\/[^/?#]+\\/[^/?#]+\\/[^/?#]+\\/fixtures\\/[0-9a-fA-F-]{36}$"
+                  }
+                },
+                "required": [
+                  "watch_url"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -818,7 +932,8 @@
           "away_slot",
           "status",
           "scheduled_at",
-          "summary"
+          "summary",
+          "live_seazn"
         ],
         "additionalProperties": false
       }

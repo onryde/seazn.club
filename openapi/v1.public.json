@@ -3226,6 +3226,9 @@
                                           }
                                         ]
                                       },
+                                      "live_seazn": {
+                                        "type": "boolean"
+                                      },
                                       "format_line": {
                                         "anyOf": [
                                           {
@@ -3264,6 +3267,7 @@
                                       "stream",
                                       "scorer_attention",
                                       "live_video",
+                                      "live_seazn",
                                       "format_line",
                                       "court_stream",
                                       "own_stream_code"
@@ -3530,6 +3534,9 @@
                                         }
                                       ]
                                     },
+                                    "live_seazn": {
+                                      "type": "boolean"
+                                    },
                                     "format_line": {
                                       "anyOf": [
                                         {
@@ -3578,6 +3585,7 @@
                                     "stream",
                                     "scorer_attention",
                                     "live_video",
+                                    "live_seazn",
                                     "format_line",
                                     "court_stream",
                                     "own_stream_code",
@@ -3973,6 +3981,9 @@
                                   }
                                 ]
                               },
+                              "live_seazn": {
+                                "type": "boolean"
+                              },
                               "format_line": {
                                 "anyOf": [
                                   {
@@ -4011,6 +4022,7 @@
                               "stream",
                               "scorer_attention",
                               "live_video",
+                              "live_seazn",
                               "format_line",
                               "court_stream",
                               "own_stream_code"
@@ -4344,6 +4356,7 @@
                             "url": null,
                             "made_for_kids": null
                           },
+                          "live_seazn": true,
                           "format_line": "example",
                           "court_stream": true,
                           "own_stream_code": true
@@ -4383,6 +4396,7 @@
                               "url": null,
                               "made_for_kids": null
                             },
+                            "live_seazn": true,
                             "format_line": "example",
                             "court_stream": true,
                             "own_stream_code": true,
@@ -4442,6 +4456,7 @@
                           "url": "example",
                           "made_for_kids": true
                         },
+                        "live_seazn": true,
                         "format_line": "example",
                         "court_stream": true,
                         "own_stream_code": true
@@ -4921,6 +4936,9 @@
                                   }
                                 ]
                               },
+                              "live_seazn": {
+                                "type": "boolean"
+                              },
                               "format_line": {
                                 "anyOf": [
                                   {
@@ -4959,6 +4977,7 @@
                               "stream",
                               "scorer_attention",
                               "live_video",
+                              "live_seazn",
                               "format_line",
                               "court_stream",
                               "own_stream_code"
@@ -5104,6 +5123,7 @@
                           "url": "example",
                           "made_for_kids": true
                         },
+                        "live_seazn": true,
                         "format_line": "example",
                         "court_stream": true,
                         "own_stream_code": true

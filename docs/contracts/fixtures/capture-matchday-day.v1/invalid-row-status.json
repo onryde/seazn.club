@@ -31,6 +31,7 @@
         "away_slot": null,
         "status": "decided",
         "scheduled_at": "2026-11-07T10:00:00.000Z",
+        "live_seazn": null,
         "summary": "1–1 · 14–9"
       },
       "next": [
@@ -46,6 +47,7 @@
           "away_slot": null,
           "status": "upcoming",
           "scheduled_at": "2026-11-07T09:40:00.000Z",
+          "live_seazn": null,
           "summary": null
         }
       ],
@@ -62,6 +64,7 @@
           "away_slot": null,
           "status": "finished",
           "scheduled_at": "2026-11-07T08:00:00.000Z",
+          "live_seazn": null,
           "summary": "2–0"
         }
       ]
@@ -85,6 +88,7 @@
           "away_slot": null,
           "status": "upcoming",
           "scheduled_at": "2026-11-07T09:20:00.000Z",
+          "live_seazn": null,
           "summary": null
         }
       ],
@@ -104,6 +108,7 @@
       "away_slot": null,
       "status": "upcoming",
       "scheduled_at": null,
+      "live_seazn": null,
       "summary": null
     }
   ],

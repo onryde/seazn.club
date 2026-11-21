@@ -55,6 +55,8 @@ const MD_ROW: Record<string, string> = {
   status: "upcoming (not started), in_play, or finished (decided, finalized, held, abandoned, forfeited or cancelled).",
   scheduled_at: "The match's planned start as a UTC instant; null when it has none.",
   summary: "The short score as the Match Day desk shows it in a row: a set sport's sets won, then the games and live points of the set in play (\"1–1 · 14–9\"; tennis \"1–0 · 3–2 · 40–30\", \"TB 3–2\"), the sport's own headline otherwise; the same form once finished (\"2–0\"). Never the full headline with every set's score. null before any.",
+  live_seazn: "Seazn-hosted video (Task 17): while the match is playing, on air to Seazn and its public page is readable, {watch_url}; null otherwise (a YouTube or other live, a stream not yet on air or already over, a queued or finished match, a private competition, a server whose origin is not https) and ALWAYS null on a match offered to call (capture-matchday-call.v1). Required: a missing field is a refusal, not \"no link\".",
+  "live_seazn.watch_url": "The match's PUBLIC page on the server's https origin, /live/{org}/{competition}/{division}/fixtures/{match id}, with no query and no fragment. Open it in the system browser (\"Watch live\"): the page's own player signs its short-lived address for whoever opens it. It is never a playback address or a token; the phone is not given one.",
 };
 
 // ---------------------------------------------------------------------------------------------------------------

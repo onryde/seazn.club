@@ -14,18 +14,25 @@
 // The two moments an organiser's Go live passes through are two calls: `seedSeaznMatch` leaves the session WARMING (the route answers
 // no live: the island is mounted and draws nothing), and `goLive` is the Machine's beat (state `live`, with the programme input's uid
 // the route signs). `finishSeaznMatch` completes the row, so a shared org is never left with a live session.
+//
+// Task 17 (Match Day): the same row on a fixture the CALLER already made (`seedSeaznSession`: Match Day's seed places and starts its own
+// matches, in the courts it names), so the spec drives the board's own court and the organiser's own video route, not a public page.
 import { expect, type Page } from "@playwright/test";
 import { randomBytes } from "node:crypto";
 import { activeOrg, addEntrantsViaApi, apiJson, createStageAndGenerate, setOrgPlanBySql, withDb } from "../helpers";
 import { routes } from "../../src/lib/routes";
 
-export interface SeaznMatch {
-  orgId: string;
-  fixtureId: string;
+/** A Seazn session row and the uid its programme input will carry once live (`goLive`). */
+export interface SeaznSession {
   sessionId: string;
-  publicPath: string;
   /** The programme input's uid the signer is given (written by `goLive`); it is the middle of the signed address. */
   programmeUid: string;
+}
+
+export interface SeaznMatch extends SeaznSession {
+  orgId: string;
+  fixtureId: string;
+  publicPath: string;
 }
 
 /** The address the fake driver signs for a programme uid: `https://<fake host>/fake.<uid>.<exp seconds>/manifest/video.m3u8`
@@ -59,32 +66,38 @@ export async function seedSeaznMatch(page: Page, o: { name: string; ensurePro?: 
   expect((await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST")).status).toBeLessThan(300);
   const fixtureId = fixtureIds[0]!;
 
-  const sessionId = await withDb(async (sql) => {
-    const [target] = await sql<{ id: string }[]>`select id from org_stream_targets where org_id = ${org.id} and kind = 'seazn'`;
-    expect(target, "premise: the org has its Seazn destination (V540)").toBeTruthy();
-    const [owner] = await sql<{ user_id: string }[]>`select user_id from org_members where org_id = ${org.id} and role = 'owner' limit 1`;
-    expect(owner, "premise: the org has an owner").toBeTruthy();
-    const [s] = await sql<{ id: string }[]>`
-      insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by, sport_key, competition_id, division_id, entitlement_via_override, destination_kind)
-      select f.id, ${org.id}, 'composed', 'warming', ${target!.id}, ${owner!.user_id}, d.sport_key, d.competition_id, f.division_id, true, 'seazn'
-        from fixtures f join divisions d on d.id = f.division_id where f.id = ${fixtureId}
-      returning id`;
-    expect(s, "premise: the session row was written").toBeTruthy();
-    return s!.id;
-  });
+  const session = await seedSeaznSession(org.id, fixtureId);
   const match: SeaznMatch = {
     orgId: org.id,
     fixtureId,
-    sessionId,
+    ...session,
     publicPath: routes.publicFixture(org.slug, comp.data!.slug, div.data!.slug, fixtureId),
-    programmeUid: `e2e-programme-${randomBytes(6).toString("hex")}`,
   };
   if (o.live) await goLive(match);
   return match;
 }
 
+/** A WARMING Seazn session on a fixture that already exists (the org's own Seazn destination, V540), for `goLive` to bring on air. The
+ *  row is the producer's output; the producer is proved in vitest (see above). */
+export async function seedSeaznSession(orgId: string, fixtureId: string): Promise<SeaznSession> {
+  const sessionId = await withDb(async (sql) => {
+    const [target] = await sql<{ id: string }[]>`select id from org_stream_targets where org_id = ${orgId} and kind = 'seazn'`;
+    expect(target, "premise: the org has its Seazn destination (V540)").toBeTruthy();
+    const [owner] = await sql<{ user_id: string }[]>`select user_id from org_members where org_id = ${orgId} and role = 'owner' limit 1`;
+    expect(owner, "premise: the org has an owner").toBeTruthy();
+    const [s] = await sql<{ id: string }[]>`
+      insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by, sport_key, competition_id, division_id, entitlement_via_override, destination_kind)
+      select f.id, ${orgId}, 'composed', 'warming', ${target!.id}, ${owner!.user_id}, d.sport_key, d.competition_id, f.division_id, true, 'seazn'
+        from fixtures f join divisions d on d.id = f.division_id where f.id = ${fixtureId}
+      returning id`;
+    expect(s, "premise: the session row was written").toBeTruthy();
+    return s!.id;
+  });
+  return { sessionId, programmeUid: `e2e-programme-${randomBytes(6).toString("hex")}` };
+}
+
 /** The Machine's playing beat: the session is live and its programme input has the uid the route signs. */
-export async function goLive(m: SeaznMatch): Promise<void> {
+export async function goLive(m: SeaznSession): Promise<void> {
   await withDb(async (sql) => {
     await sql`insert into fixture_stream_inputs (session_id, slot, role, ingest_input_id) values (${m.sessionId}, 0, 'programme', ${m.programmeUid})`;
     await sql`update fixture_stream_sessions set state = 'live', started_at = now() where id = ${m.sessionId}`;
@@ -92,7 +105,7 @@ export async function goLive(m: SeaznMatch): Promise<void> {
 }
 
 /** The session ends (a shared org must not keep a live Seazn session). Safe to call twice. */
-export async function finishSeaznMatch(m: SeaznMatch): Promise<void> {
+export async function finishSeaznMatch(m: SeaznSession): Promise<void> {
   await withDb((sql) => sql`
     update fixture_stream_sessions set state = 'completed', end_reason = 'stopped', ended_at = now()
      where id = ${m.sessionId} and state not in ('completed', 'failed')`);

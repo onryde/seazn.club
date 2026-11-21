@@ -107,6 +107,14 @@ describe("matchKeyRoute", () => {
     expect(checked).toBe(4);
   });
 
+  it("Seazn-hosted video (Task 17): the organiser's video read answers signed playback addresses, so it is an explicit NEVER_KEY_ROUTES entry and an org API key finds no key rule for it — while the PUBLIC route beside it is untouched", () => {
+    expect(NEVER_KEY_ROUTES).toContain("GET /fixtures/:id/video");
+    const id = "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b";
+    expect(matchKeyRoute("GET", `/api/v1/fixtures/${id}/video`)).toBeNull();
+    // The positive pair: the sibling organiser read that IS key-reachable still matches, so a null above is not "nothing matches".
+    expect(matchKeyRoute("GET", `/api/v1/fixtures/${id}`), "the fixture read itself").not.toBeNull();
+  });
+
   it("maps the scoring doors to the score scope with a pin", () => {
     const events = matchKeyRoute("POST", "/api/v1/fixtures/11111111-1111-1111-1111-111111111111/events");
     expect(events).toMatchObject({ scope: "score", pin: "fixture" });
