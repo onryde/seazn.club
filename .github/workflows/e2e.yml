@@ -595,31 +595,32 @@ jobs:
           # slash, as `parallel 1/4` above already does.
           #
           # THREE THINGS THAT WENT FROM 1x TO 3x with the first split, and are
-          # 5x now (the fifth leg, "sponsor", joined 2026-11-12), because every
-          # leg carries `project: walkthrough` and the conditions below key on
-          # that. Read these before diagnosing a red as a product defect:
+          # 7x now (capture, stream, sponsor - joined 2026-11-12 - and "rest"
+          # sharded four ways since 2026-11-19), because every leg carries
+          # `project: walkthrough` and the conditions below key on that. Read
+          # these before diagnosing a red as a product defect:
           #
-          #   * `stripe:sync` runs five times concurrently against one
+          #   * `stripe:sync` runs seven times concurrently against one
           #     Stripe test account. It MUST — the step writes price ids into
           #     each leg's own Postgres — and its own comment below traces
           #     what the concurrency does and what is left unverified.
-          #   * five `stripe listen` forwarders run against that same account.
+          #   * seven `stripe listen` forwarders run against that same account.
           #     Each posts to its own server with its own minted secret, so the
-          #     leg holding a money spec is served correctly; the other four
+          #     leg holding a money spec is served correctly; the other six
           #     also receive that leg's events and post them to a server whose
           #     database has none of those rows. Noise, not a failure — but it is
           #     where to look first if a money spec reds naming an id nothing in
           #     its own DB owns.
           #   * the "Connect walkthrough not configured" `::warning::` is now
-          #     emitted up to five times for one missing secret. Cosmetic; do
-          #     not read five warnings as five problems.
+          #     emitted up to seven times for one missing secret. Cosmetic; do
+          #     not read seven warnings as seven problems.
           #
           # The Event Pass money-path check below was BROKEN by the first split
           # and is repaired in the same commit — see its own comment. It is the
           # pattern to look for when adding a leg: any step that reads the
           # Playwright JSON report sees only ITS OWN leg's tests. It keys on the
           # FILE, so it is correct for this cut too: event-pass.spec.ts lands in
-          # "rest" (one of its three shards) and the other legs report a notice.
+          # "rest" (one of its four shards) and the other legs report a notice.
           - group: walkthrough capture
             slug: walkthrough-capture
             project: walkthrough
@@ -982,16 +983,17 @@ jobs:
       # which syncs then runs against its own ephemeral Postgres for the
       # identical reason.
       #
-      # RUNS ON ALL THREE WALKTHROUGH SHARDS, DELIBERATELY (2026-09-22 split).
-      # Review asked for it to be gated to one shard. It must not be: the
+      # RUNS ON ALL SEVEN WALKTHROUGH LEGS, DELIBERATELY (2026-09-22 split;
+      # three legs then, seven since "rest" went to four shards 2026-11-19).
+      # Review asked for it to be gated to one leg. It must not be: the
       # script's second half is a WRITE TO THIS JOB'S OWN DATABASE —
       # `applyPlanPrices` sets `plans.stripe_price_id_monthly/annual`
       # (scripts/stripe-sync.ts), and `services:` are per matrix leg, so each
-      # shard has its own Postgres with its own empty `plans`. Gating the step
-      # to shard 1 would leave shards 2 and 3 with NULL price ids and red the
+      # leg has its own Postgres with its own empty `plans`. Gating the step
+      # to one leg would leave every other leg with NULL price ids and red the
       # money specs deterministically — trading a probabilistic hazard for a
       # certain break. There is no ordering primitive that helps either: the
-      # three shards are sibling matrix legs with no `needs:` between them.
+      # seven legs are sibling matrix legs with no `needs:` between them.
       #
       # What the concurrency actually costs, traced through the script rather
       # than assumed. In the STEADY state (`scripts/stripe-sync.ts:3` "a price

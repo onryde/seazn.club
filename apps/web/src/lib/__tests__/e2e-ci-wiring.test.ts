@@ -23,7 +23,7 @@
 //  3. A spec added to `SERIAL_SPECS` but never removed from the parallel
 //     project's ignore list — or vice versa — is either run twice against
 //     shared org state or not at all.
-//  4. The walkthrough project is dispatched as FIVE legs — `capture`, `stream`
+//  4. The walkthrough project is dispatched as SEVEN legs — `capture`, `stream`
 //     and `sponsor` carve-outs plus `rest` sharded four ways — by the same
 //     catch-all construction (E2E_WALKTHROUGH_SLICE). The same three failure modes apply
 //     to it: a typo in a carve-out, a "rest" that stops being a catch-all, and
@@ -969,8 +969,8 @@ describe("e2e CI wiring", () => {
     expect(yml, "the matrix must pass its project through to Playwright").toContain("--project=${{ matrix.project }}");
     // The four "rest" legs shard between themselves; the heavy leg does not.
     // Read per matrix leg rather than as a bare substring: the walkthrough
-    // legs carry `--shard=N/3`, so a bare `toContain("--shard=1/3")` would be
-    // satisfied by them and a rest leg deleted or re-cut would go unseen.
+    // rest legs carry `--shard=N/4` too, so a bare `toContain("--shard=1/4")` would
+    // be satisfied by them and a rest leg deleted or re-cut would go unseen.
     const legs = yml
       .split(/\n\s*- group: /)
       .slice(1)
