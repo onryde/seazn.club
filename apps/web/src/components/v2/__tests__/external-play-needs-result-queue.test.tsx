@@ -319,6 +319,39 @@ describe("the flagged list", () => {
     expect(testIds(render({}), "external-play-open-match-day"), "the empty case draws nothing").toBe(0);
   });
 
+  // B2: a board can be BOTH held and flagged (a game on hold with an open camera flag) and so sits in both lists. Each list's card keeps its own
+  // controls, but "Open in Match Day" is one way into one board: the held card carries it and the flagged card of the same board does not.
+  it("(B2) a board that is both held and flagged has ONE 'Open in Match Day' link, on its held card; every other board still has its own", () => {
+    const states: [string, FlaggedBoard["state"]][] = [
+      ["live", { kind: "live" } as FlaggedBoard["state"]],
+      ["finished", { kind: "result", score: "1–0", noResult: false }],
+      ["cancelled", { kind: "cancelled" }],
+    ];
+    let checked = 0;
+    for (const [label, state] of states) {
+      const both = flaggedBoard({ fixtureId: "both", state, ...(state.kind === "cancelled" ? { canSettle: false, canResync: false, playable: false } : {}) });
+      const h = render({
+        held: [held({ fixtureId: "both", reason: "aborted" }), held({ fixtureId: "held-only", reason: "aborted" })],
+        flagged: [both, flaggedBoard({ fixtureId: "flag-only", state })],
+      });
+      // Both lists draw the board (the flagged card keeps its flags and its press), so the missing link is not a missing card.
+      expect(h, `${label}: the held card of the shared board`).toContain(`id="external-play-queue-row-both"`);
+      expect(h, `${label}: and its flagged card`).toContain(`id="external-play-flagged-both"`);
+      const at = h.indexOf('id="external-play-flagged-both"');
+      const flaggedCard = h.slice(h.lastIndexOf("<li", at), h.indexOf("</li>", at) + 5);
+      expect(testIds(flaggedCard, "external-play-go-on"), `${label}: the flagged card keeps its press`).toBe(1);
+      expect(testIds(flaggedCard, "external-play-open-match-day"), `${label}: the flagged card of the shared board carries no link of its own`).toBe(0);
+      expect(card(h, "both"), `${label}: the held card does`).toContain(`href="${HREF("both")}"`);
+      expect(h.split(`href="${HREF("both")}"`).length - 1, `${label}: one link to the shared board in the whole queue`).toBe(1);
+      // The others keep theirs: one per board, three boards, three links.
+      expect(card(h, "held-only"), `${label}: a held-only board`).toContain(`href="${HREF("held-only")}"`);
+      expect(card(h, "flag-only"), `${label}: a flagged-only board`).toContain(`href="${HREF("flag-only")}"`);
+      expect(testIds(h, "external-play-open-match-day"), `${label}: one link per board (3 boards, 4 cards)`).toBe(3);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: three states").toBe(3);
+  });
+
   it("a finished game's flags are reviewed, not let go on: the button says 'Mark as reviewed' and the state is the score", () => {
     const h = render({ flagged: [flaggedBoard({ fixtureId: "fx-1", state: { kind: "result", score: "1–0", noResult: false } })] });
     expect(text(h)).toContain("Round 3 · Board 3 · 1–0");

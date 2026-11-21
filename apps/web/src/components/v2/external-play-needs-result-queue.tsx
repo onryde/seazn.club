@@ -123,7 +123,8 @@ export function ExternalPlayNeedsResultQueue({ held, flagged, ownFlagged, venueT
     dispatch({ type: "select", boardId: fixtureId });
   };
 
-  const rowIds = new Set([...held.map((r) => r.fixtureId), ...flagged.map((b) => b.fixtureId)]);
+  const heldIds = new Set(held.map((r) => r.fixtureId));
+  const rowIds = new Set([...heldIds, ...flagged.map((b) => b.fixtureId)]);
   const notice = decision.notice;
   // The row it answers has left the list (settled, or its flags closed): the
   // answer shows here instead of vanishing with it.
@@ -299,9 +300,12 @@ export function ExternalPlayNeedsResultQueue({ held, flagged, ownFlagged, venueT
                       </button>
                     </div>
                     {rowNotice(b.fixtureId, decision, over, f)}
-                    <Link href={routes.competitionMatchDayBoard(orgSlug, compSlug, b.fixtureId)} data-testid="external-play-open-match-day" className={OPEN_IN_MATCH_DAY}>
-                      {f.t("externalPlay.queue.openInMatchDay")}
-                    </Link>
+                    {/* One way into a board: a board that is also held has its link on the held card (B2). */}
+                    {!heldIds.has(b.fixtureId) && (
+                      <Link href={routes.competitionMatchDayBoard(orgSlug, compSlug, b.fixtureId)} data-testid="external-play-open-match-day" className={OPEN_IN_MATCH_DAY}>
+                        {f.t("externalPlay.queue.openInMatchDay")}
+                      </Link>
+                    )}
                   </li>
                 );
               })}
