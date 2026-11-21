@@ -118,7 +118,7 @@ export {
   StreamPlatform, CreateStreamTarget, StreamTargetHolder, YoutubePrivacy, YoutubeConnectionView, StreamTarget,
   StreamTargetSaveOutcome, StreamTargetSaved, PatchStreamTarget, StreamTargetRemoved, PickYoutubeChannel,
   YoutubeConnectionSaved, YoutubePendingChannels, YoutubeConnectionSettings, YOUTUBE_REVOKE_OUTCOMES,
-  YoutubeDisconnected, RelayAiring, RelayHeartbeat, RelayHeartbeatReply, RelayPhaseReply, RelayPhaseEndpoint,
+  YoutubeDisconnected, YoutubeChannelSafety, RelayAiring, RelayHeartbeat, RelayHeartbeatReply, RelayPhaseReply, RelayPhaseEndpoint,
   RelayJobInput, RelayJobOutput, RelayJobSession,
 } from "./streaming.ts";
 export {

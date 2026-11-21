@@ -150,6 +150,13 @@ export const YOUTUBE_CALL_BOUND_MS = 10_000;
  *  is NOT the channel's list, so it is never answered as one. */
 export const LIST_BUDGET_SPENT = "budgetSpent";
 
+/** One of the channel's broadcasts as `recentBroadcasts` answers it: when it actually started, and when it actually ended (null while
+ *  it is still live). The channel-safety warning (channel-safety.ts) reads it. */
+export interface BroadcastSpan {
+  startedAt: Date;
+  endedAt: Date | null;
+}
+
 export interface YouTubePort {
   readonly mode: "fake" | "live";
   authorizeUrl(a: { state: string; codeChallenge: string; redirectUri: string }): string;
@@ -157,6 +164,14 @@ export interface YouTubePort {
   /** `invalid_grant` → YouTubeError `youtube_reconnect_needed`. */
   accessToken(refreshToken: string): Promise<string>;
   listMyChannels(at: string): Promise<{ id: string; title: string }[]>;
+  /** READ-ONLY (channels.list part=snippet, mine=true; 1 quota unit): when the channel `channelId` was created - `snippet.publishedAt` of
+   *  the grant's channel with that id. Null when the grant lists no such channel, or YouTube gave no readable date. */
+  channelCreatedAt(at: string, channelId: string): Promise<Date | null>;
+  /** READ-ONLY (liveBroadcasts.list part=snippet,status, mine=true, broadcastType=all; 1 quota unit a page): the token's channel's
+   *  broadcasts that actually STARTED at or after `since` (`snippet.actualStartTime`), newest first, with their actual end (null while
+   *  live). A broadcast that never started is not listed. Every item is filtered by `since` (Google promises no order); at most 3 pages
+   *  are read: a warning's input, so a partial list is an answer, not a refusal. */
+  recentBroadcasts(at: string, since: Date): Promise<BroadcastSpan[]>;
   liveEnabled(at: string): Promise<"enabled" | "not_enabled" | "blocked">;
   insertStream(at: string, a: { title: string }): Promise<{ streamId: string; ingest: { url: string; streamKey: string } }>;
   /** A stream that is already absent resolves. */

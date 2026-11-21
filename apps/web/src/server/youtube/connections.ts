@@ -11,16 +11,18 @@ import "server-only";
 import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import {
-  YOUTUBE_CONSENT_VERSION, YOUTUBE_LIVE_STATE_FRESH_MINUTES, YOUTUBE_LIVE_STATE_OF_REFUSAL, YOUTUBE_PRIVACIES, isYoutubeLiveStateRefusal,
-  type YoutubeLiveStateRefusal, type YoutubePrivacy,
+  YOUTUBE_AUTO_BACKOFF_BASE_SECONDS, YOUTUBE_AUTO_BACKOFF_MAX_SECONDS, YOUTUBE_CONSENT_VERSION, YOUTUBE_LIVE_STATE_FRESH_MINUTES,
+  YOUTUBE_LIVE_STATE_OF_REFUSAL, YOUTUBE_PRIVACIES, isYoutubeLiveStateRefusal,
+  type YoutubeLiveStateRefusal, type YoutubePrivacy, type YoutubeRefusalCode,
 } from "@/lib/youtube";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type {
   PickYoutubeChannel, YoutubeConnectionSaved, YoutubeConnectionSettings, YoutubeConnectionView, YoutubePendingChannels,
 } from "@/server/api-v1/schemas";
+import { log } from "@/server/logger";
 import { fingerprintYoutubeChannel } from "@/server/relay/crypto";
-import type { YouTubePort } from "./port";
-import { insertConnectionWithToken, replaceConnectionToken, takePendingToken } from "./token-store";
+import { YouTubeError, type YouTubePort } from "./port";
+import { insertConnectionWithToken, openToken, replaceConnectionToken, takePendingToken } from "./token-store";
 
 /** The sentence a connect refused because the channel is live in another organisation says (spec §5.2). */
 export const OTHER_ORG_MESSAGE = "This channel is connected to another organisation on Seazn";
@@ -205,7 +207,28 @@ export async function pickYoutubeChannel(
 ): Promise<YoutubeConnectionSaved> {
   if (auth.orgId !== orgId) throw new HttpError(404, "organization not found");
   if (auth.userId === null) throw pendingNotFound();
-  return saveConnectionFromGrant({ pendingId: b.pendingId, channelId: b.channelId, userId: auth.userId, orgId }, port);
+  const saved = await saveConnectionFromGrant({ pendingId: b.pendingId, channelId: b.channelId, userId: auth.userId, orgId }, port);
+  if (!saved.existing) await recordChannelCreatedAt(port, orgId, saved.connectionId);
+  return saved;
+}
+
+/** A NEW connection learns when its channel was created (V539 `channel_created_at`; the channel-safety warning reads it): the token,
+ *  an access token, channels.list's `snippet.publishedAt`, one UPDATE. Called by both connect paths (the OAuth callback and the pick)
+ *  AFTER the save's transaction has committed, so no lock is held across the Google calls. BEST EFFORT: any failure (a refused or
+ *  unreadable token, YouTube down, no date) leaves the column null and is logged as a code only - it never throws, so it never fails
+ *  the connect. */
+export async function recordChannelCreatedAt(port: YouTubePort, orgId: string, connectionId: string): Promise<void> {
+  try {
+    const [row] = await sql<{ channel_id: string | null }[]>`
+      select channel_id from org_youtube_connections where id = ${connectionId} and org_id = ${orgId}`;
+    const token = row?.channel_id ? await openToken(sql, orgId, connectionId) : null;
+    if (!row?.channel_id || token === null) return;
+    const createdAt = await port.channelCreatedAt(await port.accessToken(token), row.channel_id);
+    await sql`update org_youtube_connections set channel_created_at = ${createdAt} where id = ${connectionId} and org_id = ${orgId}`;
+  } catch (err) {
+    const failure = err instanceof YouTubeError ? err.code : err instanceof Error ? err.name : "unknown";
+    log.warn({ orgId, connectionId, failure }, "youtube connect: the channel's creation date could not be read; stored none");
+  }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
@@ -258,6 +281,31 @@ export function freshLiveRefusal(
   if (!isYoutubeLiveStateRefusal(code)) return null;
   const state = liveStateOf({ status: "connected", last_health_at: r.last_health_at, last_error_code: code, status_since: r.status_since });
   return state === YOUTUBE_LIVE_STATE_OF_REFUSAL[code] ? code : null;
+}
+
+/** A refusal in YOUTUBE_AUTO_BACKOFF_CODES on this connection (prepare.ts `failRow`, `accessTokenFor`): one more in a row, and the next
+ *  automatic start waits `backoffSeconds` (auto-backoff.ts) of the new count from `now`. ONE statement, so two refusals at once
+ *  cannot compute a window from a stale count: the exponent is the OLD count (`backoffSeconds(old + 1)`), the same table in SQL.
+ *  The backoff's pure decisions live in auto-backoff.ts; this file keeps only its two writes. `code` is kept so a backed-off refusal
+ *  carries YouTube's own answer. This org's row only. Never touches the live-state record. */
+export async function recordAutoBackoff(
+  exec: Tx | typeof sql, orgId: string, connectionId: string, now: Date, code?: YoutubeRefusalCode,
+): Promise<void> {
+  await exec`
+    update org_youtube_connections
+       set auto_backoff_count = auto_backoff_count + 1,
+           auto_retry_after = ${now}::timestamptz + make_interval(secs => least(
+             ${YOUTUBE_AUTO_BACKOFF_BASE_SECONDS}::double precision * power(2, least(auto_backoff_count, 30)),
+             ${YOUTUBE_AUTO_BACKOFF_MAX_SECONDS}::double precision)),
+           auto_backoff_code = ${code ?? null}
+     where id = ${connectionId} and org_id = ${orgId}`;
+}
+
+/** A person's successful prepare, or an automatic start whose session has started (prepare.ts): the channel answered, so the automatic start's window, its count and its code go. */
+export async function clearAutoBackoff(exec: Tx | typeof sql, orgId: string, connectionId: string): Promise<void> {
+  await exec`
+    update org_youtube_connections set auto_backoff_count = 0, auto_retry_after = null, auto_backoff_code = null
+     where id = ${connectionId} and org_id = ${orgId} and (auto_backoff_count <> 0 or auto_retry_after is not null)`;
 }
 
 function toView(r: ConnectionViewRow): YoutubeConnectionView {

@@ -50,6 +50,17 @@ export function resolveVenueTz(
   return DEFAULT_TZ;
 }
 
+/** The same venue-lane precedence as `resolveVenueTz`, but null instead of UTC when neither zone is valid: a caller that would
+ *  rather print nothing than a guessed clock (a broadcast description's time line) asks this. */
+export function venueTzOrNull(
+  divisionTz: string | null | undefined,
+  orgTz: string | null | undefined,
+): string | null {
+  if (isValidIana(divisionTz)) return divisionTz;
+  if (isValidIana(orgTz)) return orgTz;
+  return null;
+}
+
 // Queries that must bucket/format in-database mirror this precedence inline as
 // `coalesce(ss.tz, o.timezone, 'UTC')` (a raw string helper cannot be spliced
 // into postgres.js tagged templates — it would be sent as a bind parameter).

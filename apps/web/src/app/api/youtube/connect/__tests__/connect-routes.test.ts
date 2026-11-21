@@ -1471,3 +1471,53 @@ describe.skipIf(!HAS_DB)("the callback's save is the REAL one: what a landing le
     expect((await connRow(first.connectionId)).default_privacy, "none of it changed the saved settings").toBe("public");
   });
 });
+
+// =====================================================================================================================================
+// Phase 0, YouTube channel safety, Task 3: a NEW connection made through the callback stores its channel's creation date (V539
+// `channel_created_at`, channels.list `snippet.publishedAt`), read after the save commits. Best effort: a refused read stores null and the
+// connect still lands `connected`.
+describe.skipIf(!HAS_DB)("GET /api/youtube/connect/callback — the channel's creation date (V539)", () => {
+  const createdAtOf = async (orgId: string) =>
+    (await sql<{ channel_created_at: Date | null }[]>`select channel_created_at from org_youtube_connections where org_id = ${orgId}`).map((x) => x.channel_created_at);
+
+  it("a new connection stores the channel's creation date", async () => {
+    const r = await rig();
+    const f = await begin(r);
+    const ch = { id: channelId(), title: "Dated FC" };
+    fake.setChannels([ch], f.state);
+    const created = new Date("2024-02-03T04:05:06.000Z");
+    fake.setChannelCreatedAt(ch.id, created);
+    const { res } = await finish(f);
+    expect(landed(res)).toEqual(LANDS("connected"));
+    expect((await createdAtOf(r.orgId)).map((d) => d?.toISOString() ?? null)).toEqual([created.toISOString()]);
+    expect(callsOf("channelCreatedAt")).toBe(1);
+  });
+
+  it("a reconnect of the org's existing connection reads nothing and keeps the stored date", async () => {
+    const r = await rig();
+    const live = await liveConnection(r);
+    const kept = new Date("2023-01-02T03:04:05.000Z");
+    await sql`update org_youtube_connections set channel_created_at = ${kept} where id = ${live.connectionId}`;
+    const f = await begin(r);
+    fake.setChannels([{ id: live.channel, title: "Seeded FC" }], f.state);
+    fake.setChannelCreatedAt(live.channel, new Date("2026-11-19T00:00:00.000Z"));   // a read now would store THIS
+    const { res } = await finish(f);
+    expect(landed(res)).toEqual(LANDS("already_connected"));
+    expect(callsOf("channelCreatedAt"), "a reconnect makes no channelCreatedAt call").toBe(0);
+    expect((await createdAtOf(r.orgId)).map((d) => d?.toISOString() ?? null)).toEqual([kept.toISOString()]);
+  });
+
+  it("a refused read stores null and the connect still lands connected", async () => {
+    const r = await rig();
+    const f = await begin(r);
+    const ch = { id: channelId(), title: "Undated FC" };
+    fake.setChannels([ch], f.state);
+    fake.setChannelCreatedAt(ch.id, new Date("2024-02-03T04:05:06.000Z"));
+    fake.failNext("channelCreatedAt", "youtube_unavailable");
+    const { res } = await finish(f);
+    expect(landed(res)).toEqual(LANDS("connected"));
+    expect(await createdAtOf(r.orgId)).toEqual([null]);
+    expect(await connectionCount(r.orgId)).toBe(1);
+    expect(callsOf("revoke"), "a connection was made: nothing to revoke").toBe(0);
+  });
+});

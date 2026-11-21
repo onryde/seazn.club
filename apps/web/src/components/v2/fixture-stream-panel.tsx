@@ -28,6 +28,7 @@ import { useConfirm } from "@/components/ui/confirm-provider";
 import { fetchRelayCheckoutClientSecret } from "@/lib/billing-checkout-client";
 import { captureQrV2Text, type CaptureQrV2 } from "@/lib/capture-qr";
 import { apiV1 } from "@/lib/client-v1";
+import { ChannelSafetyNotice, fetchChannelSafety, needsChannelCheck } from "@/components/v2/stream-channel-safety";
 import { loadCheckoutSheet } from "./stream-checkout-sheet-loader";
 import { FixtureDestinationPicker } from "./fixture-destination-picker";
 import { platformName } from "./stream-platform-mark";
@@ -816,6 +817,10 @@ export function PhoneTab({
   }
   const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null);
   const [createError, setCreateError] = useState<CreateError | null>(null);
+  // Phase 0 (channel safety): the pre-Go-live notice is up; the next Go live tap ("Go live anyway") proceeds with no second check.
+  const [safetyNotice, setSafetyNotice] = useState(false);
+  // A ref, not state: a second tap landing before `busy` has flushed must not ask again (one tap = one read, 1 quota unit each).
+  const safetyInFlight = useRef(false);
   // The purchase: the chooser, its one Checkout Session, the embedded sheet and a plan refusal (C22 / D12) — the ONE
   // copy the flag-off credits section uses too (B8 re-review item 2).
   const { checkoutError, setCheckoutError, checkoutSecret, planGate, setPlanGate, showBuy, setShowBuy, onBuy, onTileIntent, sheet } =
@@ -1157,6 +1162,31 @@ export function PhoneTab({
     // choice archived, say) it sends any listed destination; the server streams to the court's channel regardless.
     const chosen = selectedTargetId ?? (court !== null && targets.status === "ok" ? (targets.list[0]?.id ?? null) : null);
     if (!chosen) return;
+    // Phase 0 (channel safety): ONE check per Go live tap, for a YouTube Connect destination only, and never for a court-streamed match
+    // (its stream goes to the court link's channel, a connection this panel does not hold, so the picked row says nothing about it). The
+    // notice is non-blocking: while it is up, the next tap is "Go live anyway" and goes straight through. A failed read goes live.
+    const checked = targets.status === "ok" ? targets.list.find((t) => t.id === chosen) : undefined;
+    if (!safetyNotice && court === null && needsChannelCheck(checked)) {
+      if (safetyInFlight.current) return;
+      safetyInFlight.current = true;
+      setBusy(true);
+      let verdict: Awaited<ReturnType<typeof fetchChannelSafety>>;
+      try {
+        verdict = await fetchChannelSafety(orgId, checked!.youtube!.connectionId);
+      } finally {
+        safetyInFlight.current = false;
+      }
+      if (verdict?.warn) {
+        setSafetyNotice(true);
+        setBusy(false);
+        return;
+      }
+    }
+    setSafetyNotice(false);
+    await startLive(chosen);
+  };
+
+  const startLive = async (chosen: string) => {
     setBusy(true);
     setCreateError(null);
     try {
@@ -1272,6 +1302,7 @@ export function PhoneTab({
           pickedHere.current = true;
           selectedRef.current = id;
           setSelectedTargetId(id);
+          setSafetyNotice(false);
           setCreateError((e) => (e && (e.code === TARGET_REMOVED || e.code === "target_in_use" || youtubeRefusalOf(e.code) !== null) ? null : e));
           setPickFailed(false);
           // §6.7.3: the picker writes the fixture's pre-pick on change — what the phone's own start streams to. A PICK is
@@ -1293,6 +1324,8 @@ export function PhoneTab({
         pickerOpenSignal={pickerOpenSignal}
         onRetryTargets={() => setTargetsTry((n) => n + 1)}
         onGoLive={() => void onGoLive()}
+        safetyNotice={safetyNotice}
+        onDismissSafety={() => setSafetyNotice(false)}
         onStop={() => {
           setCreateError(null);
           void session.stop();
@@ -1730,6 +1763,9 @@ export interface PhoneTabBodyProps {
   /** Re-read the destination list after a failed read. */
   onRetryTargets: () => void;
   onGoLive: () => void;
+  /** Phase 0 (channel safety): the pre-Go-live notice is up. "Go live anyway" is `onGoLive` again (the panel skips the check while it is up). */
+  safetyNotice: boolean;
+  onDismissSafety: () => void;
   onStop: () => void;
   onCancel: () => void;
   onBuy: (pack: StreamPackSize) => void;
@@ -2491,6 +2527,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
                   <span className="min-w-0">{msg("stream.mode.unavailable")}</span>
                 </p>
               )}
+              {!refusalBlock && p.safetyNotice && <ChannelSafetyNotice busy={p.busy} onGoAnyway={p.onGoLive} onCancel={p.onDismissSafety} />}
               {refusalBlock ?? (
                 <button
                   type="button"

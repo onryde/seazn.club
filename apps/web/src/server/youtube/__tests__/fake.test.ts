@@ -636,6 +636,8 @@ describe("failNext", () => {
       exchangeCode: () => f.exchangeCode({ code: "c", codeVerifier: "v", redirectUri: REDIRECT }),
       accessToken: () => f.accessToken("1//rt-sweep"),
       listMyChannels: () => f.listMyChannels(at),
+      channelCreatedAt: () => f.channelCreatedAt(at, "UCx"),
+      recentBroadcasts: () => f.recentBroadcasts(at, new Date(0)),
       liveEnabled: () => f.liveEnabled(at),
       insertStream: () => f.insertStream(at, { title: "k" }),
       deleteStream: () => f.deleteStream(at, streamId),
@@ -657,7 +659,7 @@ describe("failNext", () => {
       expect((err as YouTubeError).code, method).toBe("youtube_limit_reached");
       checked++;
     }
-    expect(checked, "all 16 methods swept").toBe(16);
+    expect(checked, "all 18 methods swept").toBe(18);
     // Single-shot, proven on the same sweep: a SECOND call of each method is not the injected refusal. Some of these still
     // refuse for their own reasons (the stream was deleted above, so bind says not_found) — never with the injected code.
     let second = 0;
@@ -667,7 +669,7 @@ describe("failNext", () => {
       else expect((err as Error).message, `${method}: the second call went through`).toBe("resolved");
       second++;
     }
-    expect(second, "all 16 methods re-called").toBe(16);
+    expect(second, "all 18 methods re-called").toBe(18);
   });
 
   it("a method name that is not on the port is refused at injection (a typo must not become a failure that never fires)", () => {

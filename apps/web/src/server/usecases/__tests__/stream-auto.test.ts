@@ -17,7 +17,7 @@ import { sql, type Tx } from "@/lib/db";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { DESTINATION_NOT_ALLOWED, TARGET_UNREADABLE } from "@/lib/stream-destinations";
 import { autoDestinationOf, autoRefusalStrip } from "@/lib/stream-session-view";
-import { YOUTUBE_LIVE_STATE_FRESH_MINUTES, YOUTUBE_REFUSAL_CODES, type YoutubeRefusalCode } from "@/lib/youtube";
+import { YOUTUBE_AUTO_BACKOFF_BASE_SECONDS, YOUTUBE_LIVE_STATE_FRESH_MINUTES, YOUTUBE_REFUSAL_CODES, type YoutubeRefusalCode } from "@/lib/youtube";
 import { CaptureBeat, CaptureBeatAnswer } from "@/server/api-v1/capture-schemas";
 import { rigUser, sessionOnTarget, spendMonthlyStreamGrant, pairPresentPhone } from "@/server/relay/__tests__/_session-rig";
 import { AUTO_START_RETRY_SECONDS, WARMING_TIMEOUT_MINUTES } from "@/server/relay/config";
@@ -644,7 +644,7 @@ describe.skipIf(!HAS_DB)("automatic start — a channel refused for its live sta
     expect(await settingsOf(silent.r.fixtureId)).toMatchObject({ auto_start_refusal: "unavailable" });
     expect((await connectionViews(silent.r.auth.orgId)).get(silent.yt.connectionId)!.liveState, "nothing was learnt about live state").toBe("unknown");
     const s = await stripNow(silent.r);
-    expect(messageOf(s.strip!)).toBe("Automatic start couldn't begin: The stream couldn't start right now. Try again in a minute.");
+    expect(messageOf(s.strip!)).toBe("Automatic start couldn't begin: The stream couldn't start right now. Automatic start will try again later; you can also go live by hand.");
   });
 
   // F1 (B4 fix round 2), through the REAL producer: Seazn's own refusal, met AFTER a clean prepare, is stored as the very same word as
@@ -663,7 +663,7 @@ describe.skipIf(!HAS_DB)("automatic start — a channel refused for its live sta
     const read = await stripNow(full.r);
     expect(read.phone.auto?.refusal).toBe("unavailable");
     expect(read.reason).toBe("stream.auto.refusal.retry");
-    expect(messageOf(read.strip!)).toBe("Automatic start couldn't begin: The stream couldn't start right now. Try again in a minute.");
+    expect(messageOf(read.strip!)).toBe("Automatic start couldn't begin: The stream couldn't start right now. Automatic start will try again later; you can also go live by hand.");
     expect(messageOf(read.strip!)).not.toMatch(/youtube/i);
 
     const silent = await apiAutoRig();
@@ -703,6 +703,68 @@ describe.skipIf(!HAS_DB)("automatic start — a channel refused for its live sta
     expect(done.auto_start_refusal).toBeNull();
     expect(done.auto_started_at).not.toBeNull();
     expect((await connectionViews(r.auth.orgId)).get(yt.connectionId)!.liveState, "a started stream is a clean check").toBe("enabled");
+  });
+
+  // Phase 0 review I1: a fault of Seazn's own AFTER a clean prepare (here the storage refusal) abandons the broadcast the automatic
+  // start just created — so it opens the channel's backoff, and the clean prepare no longer resets the count, or every beat at the
+  // retry spacing would create and delete another broadcast on the customer's channel.
+  const backoffOf = async (connectionId: string) => (await sql<{ auto_backoff_count: number; auto_retry_after: Date | null; auto_backoff_code: string | null }[]>`
+    select auto_backoff_count, auto_retry_after, auto_backoff_code from org_youtube_connections where id = ${connectionId}`)[0]!;
+  const made = (f: FakeYouTube) => ({
+    inserts: f.calls.filter((c) => c.method === "insertBroadcast").length,
+    deletes: f.calls.filter((c) => c.method === "deleteBroadcast").length,
+  });
+
+  it("I1 SEQUENCE — storage full: the automatic start's abandoned broadcast opens the backoff (youtube_unavailable); the window grows instead of resetting, so a beat inside it creates nothing at YouTube", async () => {
+    const { r, phone, yt, fake } = await apiAutoRig();
+    const roomy = r.ingest.storage;
+    r.ingest.storage = { totalStorageMinutes: 1000, totalStorageMinutesLimit: 1000, videoCount: 0 };   // admit refuses storage_exhausted
+    const t0 = r.now();
+
+    // Beat 1: one broadcast created, then abandoned (deleted); the window opens for the base 60 s.
+    await beat(r, phone);
+    expect(made(fake), "PREMISE: prepare ran clean, then the abandon deleted its broadcast").toEqual({ inserts: 1, deletes: 1 });
+    expect(await settingsOf(r.fixtureId)).toMatchObject({ auto_start_refusal: "unavailable", auto_started_at: null });
+    expect(await backoffOf(yt.connectionId)).toEqual({
+      auto_backoff_count: 1, auto_backoff_code: "youtube_unavailable", auto_retry_after: new Date(t0.getTime() + YOUTUBE_AUTO_BACKOFF_BASE_SECONDS * SEC),
+    });
+
+    // Beat 2, at the retry spacing: the base window has just closed (it ends at its own instant), so YouTube is asked once more —
+    // and the second abandon DOUBLES the window, because the clean prepare did not reset the count.
+    expect(AUTO_START_RETRY_SECONDS, "PREMISE: the retry spacing is the base window").toBe(YOUTUBE_AUTO_BACKOFF_BASE_SECONDS);
+    r.tick(AUTO_START_RETRY_SECONDS * SEC);
+    await beat(r, phone);
+    expect(made(fake)).toEqual({ inserts: 2, deletes: 2 });
+    expect(await backoffOf(yt.connectionId)).toEqual({
+      auto_backoff_count: 2, auto_backoff_code: "youtube_unavailable", auto_retry_after: new Date(r.now().getTime() + 2 * YOUTUBE_AUTO_BACKOFF_BASE_SECONDS * SEC),
+    });
+
+    // Beat 3, at the next spacing: inside the window — refused with no call to YouTube, no broadcast created or deleted.
+    const callsBefore = fake.calls.length;
+    r.tick(AUTO_START_RETRY_SECONDS * SEC);
+    await beat(r, phone);
+    expect((await settingsOf(r.fixtureId))!.auto_start_attempted_at?.getTime(), "the attempt was made (claimed)").toBe(r.now().getTime());
+    expect(await settingsOf(r.fixtureId)).toMatchObject({ auto_start_refusal: "unavailable", auto_started_at: null });
+    expect(fake.calls.length, "the window answered: YouTube was asked nothing").toBe(callsBefore);
+    expect(made(fake)).toEqual({ inserts: 2, deletes: 2 });
+    expect(await sessionsOf(r.fixtureId)).toHaveLength(0);
+
+    // Beat 4, storage freed, once the doubled window has closed: the start goes through, and only THEN is the window cleared.
+    r.ingest.storage = roomy;
+    r.tick(AUTO_START_RETRY_SECONDS * SEC);
+    await beat(r, phone);
+    expect(await autoSessionsOf(r.fixtureId)).toHaveLength(1);
+    expect(made(fake)).toEqual({ inserts: 3, deletes: 2 });
+    expect(await backoffOf(yt.connectionId), "a started automatic start clears the window").toEqual({ auto_backoff_count: 0, auto_retry_after: null, auto_backoff_code: null });
+  });
+
+  it("I1 regression — the organiser's Go live abandoned on the same storage refusal opens NO backoff (a person's tap is not the automatic start)", async () => {
+    const { r, yt, fake } = await apiAutoRig();
+    r.ingest.storage = { totalStorageMinutes: 1000, totalStorageMinutesLimit: 1000, videoCount: 0 };
+    const err = await createSession(r.auth, r.fixtureId, { mode: "passthrough", targetId: yt.targetId }, r.deps).then(() => null, (e: unknown) => e);
+    expect((err as HttpError | null)?.code, "PREMISE: refused by storage after a clean prepare").toBe("storage_exhausted");
+    expect(made(fake), "PREMISE: the broadcast was created, then abandoned").toEqual({ inserts: 1, deletes: 1 });
+    expect(await backoffOf(yt.connectionId)).toEqual({ auto_backoff_count: 0, auto_retry_after: null, auto_backoff_code: null });
   });
 });
 

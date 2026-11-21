@@ -52,6 +52,48 @@ export const isYoutubeLiveStateRefusal = (c: unknown): c is YoutubeLiveStateRefu
  *  never consults the record and always asks YouTube. Judged on the time the refusal was recorded (`last_health_at`). */
 export const YOUTUBE_LIVE_STATE_FRESH_MINUTES = 10;
 
+/** The AUTOMATIC start's backoff on a channel (Phase 0, YouTube channel safety; V538): after a refusal in YOUTUBE_AUTO_BACKOFF_CODES
+ *  the next automatic start waits BASE seconds, doubling with each refusal in a row, never more than MAX (server/youtube/auto-backoff.ts
+ *  `backoffSeconds`). Inside the window an automatic start is refused with the stored code and no call to YouTube. A person's tap
+ *  never reads it. A person's successful prepare clears it; an automatic start's clears it once its session has started (an automatic
+ *  start abandoned after a clean prepare reopens it as youtube_unavailable: Phase 0 review I1). */
+// Equal to AUTO_START_RETRY_SECONDS (relay/config.ts), so the first refusal's window ends exactly at the next scheduled retry: the backoff bites from the second refusal in a row (accepted).
+export const YOUTUBE_AUTO_BACKOFF_BASE_SECONDS = 60;
+export const YOUTUBE_AUTO_BACKOFF_MAX_SECONDS = 1800;
+/** The refusals that open the window: YouTube's rate limit and its being unavailable (at the token exchange or on a new broadcast),
+ *  and `youtube_channel_busy` ONLY when the pool's grow lost its slot after a YouTube insertStream (prepare.ts `growPool`). The
+ *  pick-time busy (no free key and ten live) is deliberately NOT backed off: it is decided in Seazn's database with no YouTube call to
+ *  spare. Not the channel-state refusals (YOUTUBE_LIVE_STATE_OF_REFUSAL has its own record), not a dead grant (the connection moves to
+ *  reconnect_needed), and not a fault of Seazn's own. V538's `auto_backoff_code` check lists the same three. */
+export const YOUTUBE_AUTO_BACKOFF_CODES: readonly YoutubeRefusalCode[] = [
+  "youtube_limit_reached",
+  "youtube_channel_busy",
+  "youtube_unavailable",
+];
+
+/** The per-fixture runaway ceiling (Phase 0): at most this many NEW broadcasts (youtube_broadcasts rows) per fixture in any 60 minutes.
+ *  Seazn's own guard in prepare.ts, checked before any call to YouTube; far above a person's Stop/Go live restarts, it stops only a
+ *  loop. Refused with `youtube_limit_reached`, which never opens the automatic start's backoff (no YouTube call was made). */
+export const YOUTUBE_MAX_BROADCASTS_PER_FIXTURE_PER_HOUR = 10;
+
+/** The channel-safety warning on Go live (Phase 0, YouTube channel safety; server/youtube/channel-safety.ts `channelSafetyWarning`).
+ *  YouTube treats a young channel, or one that has run several short live streams lately, as a risk. A channel created fewer than
+ *  YOUNG_CHANNEL_DAYS ago is young; a broadcast that ENDED within SHORT_BROADCAST_MINUTES of its start is short (one still live is not);
+ *  the warning shows when the channel is young or at least SHORT_BROADCAST_WARN_COUNT short broadcasts started within the last
+ *  SHORT_BROADCAST_WINDOW_HOURS. A warning only: it never blocks a Go live. */
+export const YOUTUBE_YOUNG_CHANNEL_DAYS = 30;
+export const YOUTUBE_SHORT_BROADCAST_MINUTES = 10;
+export const YOUTUBE_SHORT_BROADCAST_WARN_COUNT = 2;
+export const YOUTUBE_SHORT_BROADCAST_WINDOW_HOURS = 24;
+/** The safety read's budget per connection (Phase 0 review I2): each read spends Seazn's shared YouTube quota (liveBroadcasts.list, and
+ *  channels.list when no date is stored), so past MAX reads in WINDOW seconds the answer is "no warning" with no call to YouTube. A
+ *  person taps Go live far less often; this stops a loop. A rate-limit config (lib/rate-limit.ts `rateLimit`), kept here with Phase 0's
+ *  other numbers. */
+export const YOUTUBE_SAFETY_CHECK_LIMIT = { max: 6, windowSeconds: 60 } as const;
+/** How long the Go live tap waits for that read (Phase 0 review m6) before it gives up and goes live (fail open): the read is a token
+ *  exchange plus up to four YouTube calls, and a slow YouTube must not hold a mid-match restart. */
+export const YOUTUBE_SAFETY_CLIENT_TIMEOUT_MS = 3000;
+
 /** Is this a link to YouTube itself? A replay URL is the club's own `stream_url` when it set one (nothing overwrites it), so the
  *  YouTube mark may sit on a link only if the link really goes to YouTube: https on youtube.com (any subdomain) or youtu.be. */
 export function isYoutubeUrl(url: string): boolean {

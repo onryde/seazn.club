@@ -39,7 +39,7 @@ import { createHash } from "node:crypto";
 // What it does not model: a daily stream-creation cap (unpublished) and a stream's own title rules.
 import { YOUTUBE_SCOPE, type YoutubePrivacy } from "@/lib/youtube";
 import {
-  LIFE_CYCLES, LIST_BUDGET_SPENT, STREAM_HEALTHS, STREAM_STATUSES, YOUTUBE_ERROR_CODES, YouTubeError, lifeOfCycle, type BroadcastLife, type BroadcastLifeInfo, type LifeCycle,
+  LIFE_CYCLES, LIST_BUDGET_SPENT, STREAM_HEALTHS, STREAM_STATUSES, YOUTUBE_ERROR_CODES, YouTubeError, lifeOfCycle, type BroadcastLife, type BroadcastLifeInfo, type BroadcastSpan, type LifeCycle,
   type StreamHealth, type StreamListing, type StreamStatus, type StreamStatusInfo, type VideoFacts, type YoutubeErrorCode, type YouTubePort,
 } from "./port";
 
@@ -73,7 +73,7 @@ const FAKE_AUTHORIZE_PATH = "/api/youtube/connect/fake-authorize";
 type PortMethod = Exclude<keyof YouTubePort, "mode">;
 // A Record, not an array: tsc refuses a port method added to the interface and forgotten here.
 const PORT_METHODS: Record<PortMethod, true> = {
-  authorizeUrl: true, exchangeCode: true, accessToken: true, listMyChannels: true, liveEnabled: true, insertStream: true,
+  authorizeUrl: true, exchangeCode: true, accessToken: true, listMyChannels: true, channelCreatedAt: true, recentBroadcasts: true, liveEnabled: true, insertStream: true,
   deleteStream: true, listStreams: true, insertBroadcast: true, bind: true, broadcastLife: true, streamStatus: true, complete: true, deleteBroadcast: true,
   existingVideos: true, revoke: true,
 };
@@ -157,6 +157,10 @@ export class FakeYouTube implements YouTubePort {
   private deleteRefusals = new Map<string, number>();
   /** OAuth state → what `authorizeUrl` was asked for. */
   private pending = new Map<string, Pending>();
+  /** channel id → when YouTube says it was created (`setChannelCreatedAt`); a channel never seeded has no date. */
+  private createdAtOf = new Map<string, Date>();
+  /** channel id → broadcasts it ran BEFORE this fake existed (`addBroadcastHistory`), beside the ones the fake runs itself. */
+  private history = new Map<string, BroadcastSpan[]>();
   private codes = new Map<string, { challenge: string; redirectUri: string; scope: string; channels: Channel[] | null; sub: string | null | undefined; used: boolean }>();
 
   constructor(o: { channels?: Channel[]; now?: () => Date } = {}) {
@@ -256,6 +260,21 @@ export class FakeYouTube implements YouTubePort {
     if (found === 0) throw new YouTubeError("youtube_not_found", "unknownChannel");
   }
 
+  /** YouTube says the channel was created at `createdAt` (channels.list `snippet.publishedAt`): `channelCreatedAt` answers it from now on.
+   *  `null` takes it away (no date). A channel never seeded has no date. */
+  setChannelCreatedAt(channelId: string, createdAt: Date | null): void {
+    if (createdAt === null) this.createdAtOf.delete(channelId);
+    else this.createdAtOf.set(channelId, new Date(createdAt.getTime()));
+  }
+
+  /** A broadcast the channel ran in the past, outside this fake (`endedAt` null: still live): `recentBroadcasts` lists it beside the
+   *  broadcasts the fake ran itself. */
+  addBroadcastHistory(channelId: string, b: BroadcastSpan): void {
+    const list = this.history.get(channelId) ?? [];
+    list.push({ startedAt: new Date(b.startedAt.getTime()), endedAt: copyOf(b.endedAt) });
+    this.history.set(channelId, list);
+  }
+
   /** `true`: every `bind` leaves its broadcast live at once, as if video had arrived (an e2e server has no ingest to watch).
    *  Without a scope it is the default for every channel; a scoped value wins for that channel. */
   setAutoVideo(on: boolean, scope?: FakeScope): void {
@@ -346,6 +365,8 @@ export class FakeYouTube implements YouTubePort {
     this.deleteRefusals = new Map();
     this.pending = new Map();
     this.codes = new Map();
+    this.createdAtOf = new Map();
+    this.history = new Map();
     this.calls.length = 0;
   }
 
@@ -495,6 +516,29 @@ export class FakeYouTube implements YouTubePort {
     this.enter("listMyChannels", this.channelOfAccess(at));
     const who = this.who(at);
     return this.grantOf(who.refreshToken).channels.map((c) => ({ ...c }));
+  }
+
+  /** channels.list(mine) `snippet.publishedAt` of the grant's channel `channelId`: the seeded date, or null (not one of the grant's
+   *  channels, or never seeded). */
+  async channelCreatedAt(at: string, channelId: string): Promise<Date | null> {
+    this.enter("channelCreatedAt", this.channelOfAccess(at));
+    const who = this.who(at);
+    if (!this.grantOf(who.refreshToken).channels.some((c) => c.id === channelId)) return null;
+    return copyOf(this.createdAtOf.get(channelId) ?? null);
+  }
+
+  /** The token's channel's broadcasts that started at or after `since`, newest first: the seeded history, and every broadcast the fake
+   *  itself took live (its actual start and end). One page; no other channel's. */
+  async recentBroadcasts(at: string, since: Date): Promise<BroadcastSpan[]> {
+    this.enter("recentBroadcasts", this.channelOfAccess(at));
+    const who = this.who(at);
+    const own = [...this.broadcasts.values()]
+      .filter((b) => b.channelId === who.channelId && b.actualStart !== null)
+      .map((b) => ({ startedAt: b.actualStart!, endedAt: b.actualEnd }));
+    return [...(this.history.get(who.channelId) ?? []), ...own]
+      .filter((b) => b.startedAt.getTime() >= since.getTime())
+      .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime())
+      .map((b) => ({ startedAt: new Date(b.startedAt.getTime()), endedAt: copyOf(b.endedAt) }));
   }
 
   async liveEnabled(at: string): Promise<LiveState> {

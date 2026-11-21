@@ -527,6 +527,16 @@ export const YoutubeDisconnected = z.object({
 });
 export type YoutubeDisconnected = z.infer<typeof YoutubeDisconnected>;
 
+/** GET /orgs/{id}/youtube-connections/{connectionId}/safety - the channel-safety facts behind the Go live notice (Phase 0): `young` (the channel
+ *  is newer than the young-channel threshold), `shortRecent` (short broadcasts started in the last day), `warn` (young, or enough short ones).
+ *  A warning only. A check that could not read YouTube answers `warn: false` (HTTP 200): the notice never stands in the way of a Go live. */
+export const YoutubeChannelSafety = z.object({
+  warn: z.boolean(),
+  young: z.boolean(),
+  shortRecent: z.number().int(),
+});
+export type YoutubeChannelSafety = z.infer<typeof YoutubeChannelSafety>;
+
 /** R4 sponsors on stream, S8 (spec 2026-10-27 §3.6; plan P6): one proof-of-play item on the beat — the overlay page's
  *  `seazn:sponsor:start|end` console line (lib/overlay-compositor.ts `sponsorLine`, at most 512 bytes), tagged by the
  *  compositor with `kind` from the line's name. STRICT per item: a key the page never writes is refused, and since the

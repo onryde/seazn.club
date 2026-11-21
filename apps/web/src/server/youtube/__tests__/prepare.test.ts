@@ -261,6 +261,8 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — a new broadcast (spec §6.
        where f.id = ${w.fixtures[0]!}`;
     let checked = 0;
     let witnessed = 0;   // locale words that differ from English, so their absence is a real witness
+    const [{ sportKey }] = await sql<{ sportKey: string }[]>`
+      select d.sport_key as "sportKey" from fixtures f join divisions d on d.id = f.division_id where f.id = ${w.fixtures[0]!}`;
     let poweredChecked = 0;   // locales whose description carries the localised "Powered by Seazn Club · origin" paragraph
     let poweredWitnessed = 0;   // of those, the non-en ones whose words differ from English (so the English words' absence is a witness)
     // es first (the brief's case); fr's schedule.vs ("contre") is the one locale whose vs differs from en's "vs".
@@ -271,22 +273,25 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — a new broadcast (spec §6.
       const [{ home }] = await sql<{ home: string }[]>`
         select e.display_name as home from fixtures f join entrants e on e.id = f.home_entrant_id where f.id = ${f}`;
       const p = await must(prep(w, f));
+      const [{ roundNo }] = await sql<{ roundNo: number }[]>`select round_no as "roundNo" from fixtures where id = ${f}`;
       const yt = w.fake.inspectBroadcast((await row(p.broadcastId)).yt_broadcast_id!)!;
       const d = dicts[locale]!;
       expect(yt.title, locale).toBe(`${home} ${d["schedule.vs"]} ${d["schedule.tbd"]} · Open · ${comp}`);
-      expect(yt.description.startsWith(`${d["streaming.youtube.broadcast.descriptionLine"]} `), locale).toBe(true);
-      // Second paragraph (owner request 2026-10-29): "Powered by Seazn Club · <origin>" (no trailing slash, owner 2026-10-30), in the org's locale, and last.
-      const poweredBy = d["streaming.youtube.broadcast.poweredBy"]!;
+      // Phase 0 T5: the facts block opens the description (sport · round, competition), then the match-link paragraph, then the footer.
+      expect(yt.description.startsWith(`${d[`sport.${sportKey}`]} · ${d["schedule.round"]!.replace("{n}", String(roundNo))}\n${comp}\n\n`), locale).toBe(true);
+      expect(yt.description, locale).toContain(`${d["streaming.youtube.broadcast.descriptionLine"]} ${origin}/live/`);
+      // Last paragraph (owner request 2026-10-29): "Scored live with Seazn Club · <origin>" (no trailing slash, owner 2026-10-30), in the org's locale, and last.
+      const poweredBy = d["streaming.youtube.broadcast.scoredLive"]!;
       expect(poweredBy, `${locale} has the key`).toBeTruthy();
       expect(yt.description.endsWith(`\n\n${poweredBy} · ${origin}`), locale).toBe(true);
       expect(yt.description, `${locale} site link has no trailing slash (owner 2026-10-30)`).not.toMatch(/\/$/);
       const paragraphs = yt.description.split("\n\n");
-      expect(paragraphs, `${locale} paragraphs`).toHaveLength(2);
-      expect(paragraphs[0], `${locale} first paragraph still carries the match URL`).toContain(`${origin}/live/`);
+      expect(paragraphs, `${locale} paragraphs`).toHaveLength(3);
+      expect(paragraphs[1], `${locale} middle paragraph is the match URL`).toContain(`${origin}/live/`);
       poweredChecked++;
       if (locale !== "en") {
-        expect(poweredBy, `${locale} words differ from en`).not.toBe(en["streaming.youtube.broadcast.poweredBy"]);
-        expect(yt.description, `${locale} has no en powered-by words`).not.toContain(en["streaming.youtube.broadcast.poweredBy"]);
+        expect(poweredBy, `${locale} words differ from en`).not.toBe(en["streaming.youtube.broadcast.scoredLive"]);
+        expect(yt.description, `${locale} has no en powered-by words`).not.toContain(en["streaming.youtube.broadcast.scoredLive"]);
         poweredWitnessed++;
         for (const key of ["schedule.vs", "schedule.tbd"]) {
           if (d[key] === en[key as keyof typeof en]) continue;
@@ -312,7 +317,7 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — a new broadcast (spec §6.
     const [priv, unlisted, pub, archived] = w.fixtures as [string, string, string, string];
     const origin = siteOrigin();
     const line = en["streaming.youtube.broadcast.descriptionLine"];
-    const powered = `${en["streaming.youtube.broadcast.poweredBy"]} · ${origin}`;
+    const powered = `${en["streaming.youtube.broadcast.scoredLive"]} · ${origin}`;
     const setVisibility = (fixtureId: string, visibility: string) =>
       sql`update competitions set visibility = ${visibility} where id = (select d.competition_id from fixtures f join divisions d on d.id = f.division_id where f.id = ${fixtureId})`;
     const describe_ = async (fixtureId: string, visibility: string): Promise<string> => {
@@ -322,25 +327,133 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — a new broadcast (spec §6.
     };
 
     const dPrivate = await describe_(priv, "private");
-    expect(dPrivate, "private: the powered-by paragraph only").toBe(powered);
+    expect(dPrivate.endsWith(`\n\n${powered}`), "private: the facts and the footer").toBe(true);
+    expect(dPrivate.split("\n\n"), "private: facts + footer, no link paragraph").toHaveLength(2);
     expect(dPrivate).not.toContain(line);
     expect(dPrivate).not.toContain("/live/");
 
     const dUnlisted = await describe_(unlisted, "unlisted");
-    expect(dUnlisted.startsWith(`${line} ${origin}/live/`), "link-only stays linked").toBe(true);
+    expect(dUnlisted, "link-only stays linked").toContain(`${line} ${origin}/live/`);
     expect(dUnlisted).toContain(`/fixtures/${unlisted}`);
     expect(dUnlisted.endsWith(`\n\n${powered}`)).toBe(true);
 
     const dPublic = await describe_(pub, "public");
-    expect(dPublic.startsWith(`${line} ${origin}/live/`), "public is linked").toBe(true);
+    expect(dPublic, "public is linked").toContain(`${line} ${origin}/live/`);
     expect(dPublic).toContain(`/fixtures/${pub}`);
     expect(dPublic.endsWith(`\n\n${powered}`)).toBe(true);
 
     // A public competition whose division is archived: the page reads public_divisions_v, which drops it, so it 404s too.
     await sql`update divisions set archived_at = now() where id = (select division_id from fixtures where id = ${archived})`;
     const dArchived = await describe_(archived, "public");
-    expect(dArchived, "archived division: the powered-by paragraph only").toBe(powered);
+    expect(dArchived.split("\n\n"), "archived division: facts + footer, no link paragraph").toHaveLength(2);
+    expect(dArchived.endsWith(`\n\n${powered}`)).toBe(true);
     expect(dArchived).not.toContain(line);
+  });
+
+  it("T5 (Phase 0): the description's facts come from the fixture — venue and a start time in the VENUE's zone, per locale (checked === 4); no timezone → no time line; no venue → no venue line", async () => {
+    const w = await world(4);
+    const origin = siteOrigin();
+    // 2026-12-05 14:30 UTC. London is GMT in December (14:30); Tokyo is UTC+9 (23:30), the case where the zone changes the answer.
+    const startsAt = "2026-12-05T14:30:00Z";
+    const dateWords: Record<string, { date: string; time: RegExp }> = {
+      en: { date: "Saturday, December 5, 2026", time: /2:30\sPM/ },
+      es: { date: "sábado, 5 de diciembre de 2026", time: /14:30/ },
+      fr: { date: "samedi 5 décembre 2026", time: /14:30/ },
+      nl: { date: "zaterdag 5 december 2026", time: /14:30/ },
+    };
+    const dicts: Record<string, Record<string, string>> = { en, es, fr, nl };
+    const descOf = async (f: string): Promise<string> =>
+      w.fake.inspectBroadcast((await row((await must(prep(w, f))).broadcastId)).yt_broadcast_id!)!.description;
+    const [{ comp }] = await sql<{ comp: string }[]>`
+      select c.name as comp from fixtures f join divisions d on d.id = f.division_id join competitions c on c.id = d.competition_id
+       where f.id = ${w.fixtures[0]!}`;
+    const [{ sportKey }] = await sql<{ sportKey: string }[]>`
+      select d.sport_key as "sportKey" from fixtures f join divisions d on d.id = f.division_id where f.id = ${w.fixtures[0]!}`;
+    let checked = 0;
+    for (const [i, locale] of (["en", "es", "fr", "nl"] as const).entries()) {
+      const f = w.fixtures[i]!;
+      await sql`update organizations set default_locale = ${locale}, timezone = 'Europe/London' where id = ${w.orgId}`;
+      await sql`update fixtures set scheduled_at = ${startsAt}, venue = 'Hall 2' where id = ${f}`;
+      const [{ roundNo }] = await sql<{ roundNo: number }[]>`select round_no as "roundNo" from fixtures where id = ${f}`;
+      const d = await descOf(f);
+      const lines = d.split("\n\n")[0]!.split("\n");
+      expect(lines, locale).toHaveLength(4);   // sport · round, competition, venue, date and time
+      expect(lines[0], locale).toBe(`${dicts[locale]![`sport.${sportKey}`]} · ${dicts[locale]!["schedule.round"]!.replace("{n}", String(roundNo))}`);
+      expect(lines[1], locale).toBe(comp);
+      expect(lines[2], locale).toBe("Hall 2");
+      expect(lines[3], locale).toContain(dateWords[locale]!.date);
+      expect(lines[3], locale).toMatch(dateWords[locale]!.time);
+      expect(d.endsWith(`\n\n${dicts[locale]!["streaming.youtube.broadcast.scoredLive"]} · ${origin}`), locale).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(4);
+
+    // The venue zone decides the clock: the same instant in Tokyo reads 23:30, not 14:30. (A fresh world: a fixture's broadcast is
+    // reused, so its description is only written once.)
+    const w2 = await world(2);
+    const descOf2 = async (f: string): Promise<string[]> =>
+      w2.fake.inspectBroadcast((await row((await must(prep(w2, f))).broadcastId)).yt_broadcast_id!)!.description.split("\n\n")[0]!.split("\n");
+    const [tokyoFx, bareFx] = w2.fixtures as [string, string];
+    await sql`update organizations set default_locale = 'nl', timezone = 'Europe/London' where id = ${w2.orgId}`;
+    await sql`update fixtures set scheduled_at = ${startsAt}, venue = 'Hall 2' where id in ${sql([tokyoFx, bareFx])}`;
+    await sql`insert into schedule_settings (division_id, tz) select division_id, 'Asia/Tokyo' from fixtures where id = ${tokyoFx}
+              on conflict (division_id) do update set tz = excluded.tz`;
+    const tokyo = (await descOf2(tokyoFx))[3]!;
+    expect(tokyo).toMatch(/23:30/);
+    expect(tokyo).not.toMatch(/14:30/);
+
+    // No timezone anywhere (org null, no division override) → the time line is left out, never guessed in UTC; no venue → no venue line.
+    await sql`delete from schedule_settings where division_id = (select division_id from fixtures where id = ${bareFx})`;
+    await sql`update organizations set timezone = null where id = ${w2.orgId}`;
+    await sql`update fixtures set venue = null where id = ${bareFx}`;
+    const bare = await descOf2(bareFx);
+    expect(bare).toHaveLength(2);   // sport · round, competition only
+    expect(bare.join("\n")).not.toMatch(/2026/);
+  });
+
+  it("T5 fix (M1): the VENUE line follows the public redaction — absent for a setup division and for a competition whose page does not open, present when linkable and started; the date/time stays", async () => {
+    const startsAt = "2026-12-05T14:30:00Z";
+    const set = async (w: World) => {
+      await sql`update organizations set timezone = 'Europe/London' where id = ${w.orgId}`;
+      await sql`update fixtures set scheduled_at = ${startsAt}, venue = 'Hall 2' where id = ${w.fixtures[0]!}`;
+    };
+    const lines = async (w: World): Promise<string[]> =>
+      w.fake.inspectBroadcast((await row((await must(prep(w, w.fixtures[0]!))).broadcastId)).yt_broadcast_id!)!.description.split("\n\n")[0]!.split("\n");
+
+    const open = await world(1);
+    await set(open);
+    await sql`update competitions set visibility = 'public' where id = (select d.competition_id from fixtures f join divisions d on d.id = f.division_id where f.id = ${open.fixtures[0]!})`;
+    await sql`update divisions set status = 'active' where id = (select division_id from fixtures where id = ${open.fixtures[0]!})`;
+    const shown = await lines(open);
+    expect(shown, "linkable and started: venue present").toContain("Hall 2");
+    expect(shown).toHaveLength(4);
+
+    const setup = await world(1);
+    await set(setup);
+    await sql`update divisions set status = 'setup' where id = (select division_id from fixtures where id = ${setup.fixtures[0]!})`;
+    const inSetup = await lines(setup);
+    expect(inSetup, "setup division: no venue").not.toContain("Hall 2");
+    expect(inSetup[inSetup.length - 1], "setup division: the time stays").toMatch(/2026/);
+
+    const priv = await world(1);
+    await set(priv);
+    await sql`update competitions set visibility = 'private' where id = (select d.competition_id from fixtures f join divisions d on d.id = f.division_id where f.id = ${priv.fixtures[0]!})`;
+    const hidden = await lines(priv);
+    expect(hidden, "private competition: no venue").not.toContain("Hall 2");
+    expect(hidden[hidden.length - 1], "private competition: the time stays").toMatch(/2026/);
+  });
+
+  it("T5 fix (M2): a junk division timezone falls through to a valid org timezone and the time still prints (never UTC-by-guess)", async () => {
+    const w = await world(1);
+    const f = w.fixtures[0]!;
+    await sql`update organizations set timezone = 'Europe/London' where id = ${w.orgId}`;
+    await sql`update fixtures set scheduled_at = '2026-06-05T14:30:00Z' where id = ${f}`;
+    await sql`insert into schedule_settings (division_id, tz) select division_id, 'Not/AZone' from fixtures where id = ${f}
+              on conflict (division_id) do update set tz = excluded.tz`;
+    const last = w.fake.inspectBroadcast((await row((await must(prep(w, f))).broadcastId)).yt_broadcast_id!)!.description
+      .split("\n\n")[0]!.split("\n").pop()!;
+    expect(last).toMatch(/15:30|3:30\sPM/);   // June: London is BST (UTC+1), so 14:30 UTC reads 15:30
+    expect(last).not.toMatch(/14:30|2:30\sPM/);
   });
 
   it("S2 (owner 2026-10-29): the Powered-by paragraph is shown for EVERY org — a dashboard.branding org (which removed the public footer's badge) gets it too, before and after a plan change; an unbranded org beside it still gets it (checked === 4)", async () => {
@@ -352,15 +465,15 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — a new broadcast (spec §6.
       (await sql<{ branded: boolean }[]>`select org_has_feature(${orgId}, 'dashboard.branding') as branded`)[0]!.branded;
     const origin = siteOrigin();
     const line = en["streaming.youtube.broadcast.descriptionLine"];
-    const powered = `\n\n${en["streaming.youtube.broadcast.poweredBy"]} · ${origin}`;
+    const powered = `\n\n${en["streaming.youtube.broadcast.scoredLive"]} · ${origin}`;
     let checked = 0;
     const expectBoth = async (w: World, f: string, wantBranded: boolean, why: string) => {
       expect(await branded(w.orgId), `${why}: the premise (dashboard.branding)`).toBe(wantBranded);
       const p = await must(prep(w, f));
       const d = w.fake.inspectBroadcast((await row(p.broadcastId)).yt_broadcast_id!)!.description;
-      expect(d.startsWith(`${line} ${origin}/live/`), why).toBe(true);
+      expect(d, why).toContain(`${line} ${origin}/live/`);
       expect(d.endsWith(powered), why).toBe(true);
-      expect(d.split("\n\n"), why).toHaveLength(2);
+      expect(d.split("\n\n"), why).toHaveLength(3);
       checked++;
     };
 
@@ -788,15 +901,17 @@ describe.skipIf(!HAS_DB)("the key pool's reuse guard (post-T3 amendment): a key 
 
 describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — refusals (spec §6.2 D6 table, R3)", () => {
   it("each port refusal at each step leaves no 'created'/'bound' row and deletes what YouTube got (checked === 20)", async () => {
-    const w = await world();
-    const f = w.fixtures[0]!;
+    // One fixture per step: a step's six cases make six broadcast rows, and the per-fixture ceiling (Phase 0, 10 an hour) would refuse the 11th.
+    const w = await world(4);
+    const f = w.fixtures[3]!;   // the last step's fixture, for the positive pair below
     // Ordered so each step is REACHED: insertStream runs only while the pool is empty, so its cases come before the first
     // insertBroadcast case pools a key; insertBroadcast and bind then use that free key.
     const steps = ["accessToken", "insertStream", "insertBroadcast", "bind"] as const;
     let checked = 0;
     let flipped = 0;
     let liveRecorded = 0;
-    for (const step of steps) {
+    for (const [stepIndex, step] of steps.entries()) {
+      const f = w.fixtures[stepIndex]!;
       for (const code of YOUTUBE_CODES) {
         const calledBefore = callsOf(w.fake, step);
         const rowsBefore = (await rowsOf(f)).length;
