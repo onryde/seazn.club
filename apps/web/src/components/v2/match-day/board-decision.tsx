@@ -215,19 +215,21 @@ export function outageOffered(b: Pick<ArbiterBoard, "cameraPolicy" | "playable" 
   return b.cameraPolicy === "required" && b.playable && !b.videoOverridden && unavailable;
 }
 
-/** The words of the outage card, by whether a GAME IS ON FILE (`ArbiterBoard.canResync`: the loader's "a game is on file at Lichess and the board
- *  is not over"). Before one, the card is about SEATING ("players can't take a seat ... let this board start without video"); once there is one,
- *  the players are seated and playing, and the override means "carry on without video; camera evidence stops here" (MD-R37). The decision and
- *  its gate are the same either way: only the sentence and the button say which. */
-export function outageWords(gameOnFile: boolean): { body: "arbiter.outage.body" | "arbiter.outage.bodyStarted"; cta: "arbiter.outage.cta" | "arbiter.outage.ctaStarted" } {
-  return gameOnFile ? { body: "arbiter.outage.bodyStarted", cta: "arbiter.outage.ctaStarted" } : { body: "arbiter.outage.body", cta: "arbiter.outage.cta" };
+/** The words of the outage card, by whether the game HAS STARTED: a first move was played (`started_at`, reconcile.ts; the loader exposes it as
+ *  `ArbiterBoard.cameraReport !== null`, which inside this card - required, not let go - is exactly "started_at is set"). NOT `canResync`: a game
+ *  can be on file at Lichess with nobody having moved (a game that is starting, a held no-show), and there the card is still about SEATING
+ *  ("players can't take a seat ... let this board start without video"). Once a move was played the players were seated and playing, and the
+ *  override means "carry on without video; camera evidence stops here" (MD-R37/R38). The decision and its gate are the same either way: only the
+ *  sentence and the button say which. */
+export function outageWords(started: boolean): { body: "arbiter.outage.body" | "arbiter.outage.bodyStarted"; cta: "arbiter.outage.cta" | "arbiter.outage.ctaStarted" } {
+  return started ? { body: "arbiter.outage.bodyStarted", cta: "arbiter.outage.ctaStarted" } : { body: "arbiter.outage.body", cta: "arbiter.outage.cta" };
 }
 
 /** "Let this board play without video": the decision that unblocks a board whose camera the vendor cannot give, written to the audit log
  *  (D11). A decision that FINISHES nothing and STARTS nothing the freeze guards: the video override is scoring-side (owner O4 lists it with
  *  the decisions that stay offered), so its gate is `finish`. `children` is anything the card carries under the button. */
 export function OutageCard({
-  gameOnFile,
+  started,
   busy,
   overriding,
   onOverride,
@@ -236,8 +238,8 @@ export function OutageCard({
   className,
   children,
 }: {
-  /** The board's `canResync`: which sentence and which button (`outageWords`). */
-  gameOnFile: boolean;
+  /** The board's `cameraReport !== null` (a first move was played): which sentence and which button (`outageWords`). */
+  started: boolean;
   busy: boolean;
   overriding: boolean;
   onOverride(): void;
@@ -246,9 +248,9 @@ export function OutageCard({
   className: string;
   children?: ReactNode;
 }) {
-  const words = outageWords(gameOnFile);
+  const words = outageWords(started);
   return (
-    <section aria-labelledby={headingId} data-testid="arbiter-outage" data-game={gameOnFile ? "on-file" : "none"} className={className}>
+    <section aria-labelledby={headingId} data-testid="arbiter-outage" data-started={started ? "true" : "false"} className={className}>
       <span className="text-[11px] font-semibold tracking-[0.06em] uppercase">{f.t("arbiter.outage.eyebrow")}</span>
       <h2 id={headingId} className="m-0 text-[15px] font-semibold">
         {f.t("arbiter.outage.title")}

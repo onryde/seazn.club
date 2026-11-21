@@ -488,7 +488,7 @@ test.describe("Match Day online - the cameras in the board panel (Task 9)", () =
     // The vendor being down is not retried by the ladder (only a busy vendor is): two seconds later, still two POSTs.
     await page.waitForTimeout(2_000);
     expect(posts, "no ladder for an unavailable vendor").toHaveLength(2);
-    // The board is at move 6: a game is on file, so the card says CARRY ON without video and that camera evidence stops here (MD-R37).
+    // The board is at move 6: a move was played, so the card says CARRY ON without video and that camera evidence stops here (MD-R37).
     await expect(outage).toContainText(uiEn["arbiter.outage.bodyStarted"]!);
     await expect(outage).not.toContainText(uiEn["arbiter.outage.body"]!);
     await outage.getByRole("button", { name: uiEn["arbiter.outage.ctaStarted"] }).click();
@@ -578,7 +578,7 @@ test.describe("Match Day online - the cameras in the board panel (Task 9)", () =
     expect(seen(), "two seconds later: no extra ask").toHaveLength(6);
   });
 
-  test("(MD-R37) the outage card on a board with NO game yet (both players arrived, the vendor down) offers to let it START without video - the seating sentence; the live board of the first test says CARRY ON", async ({ page }) => {
+  test("(MD-R37) the outage card on a board where nothing has been played (both players arrived, the vendor down) offers to let it START without video - the seating sentence; the live board of the first test says CARRY ON", async ({ page }) => {
     test.setTimeout(budget(1, 2));
     const day = await seedDay(page, `mdc6${TAG}`.slice(0, 14), { stage: "swiss", camera: "required" });
     const pre = day.round.boards[0]!;
@@ -589,7 +589,7 @@ test.describe("Match Day online - the cameras in the board panel (Task 9)", () =
     await expect(page.getByTestId("md-board-position"), "premise: no game is on file, so no board is drawn").toHaveCount(0);
     const outage = page.getByTestId("arbiter-outage");
     await expect(outage, "the real route answered VIDEO_UNAVAILABLE for the arrived players").toBeVisible({ timeout: 30_000 });
-    await expect(outage).toHaveAttribute("data-game", "none");
+    await expect(outage).toHaveAttribute("data-started", "false");
     await expect(outage).toContainText(uiEn["arbiter.outage.body"]!);
     await expect(outage).not.toContainText(uiEn["arbiter.outage.bodyStarted"]!);
     await expect(outage.getByRole("button", { name: uiEn["arbiter.outage.cta"] })).toBeVisible();
