@@ -361,7 +361,9 @@ export function BoardPanelView(p: BoardPanelViewProps) {
         className={`grid min-w-0 gap-4${twoCol ? " lg:grid-cols-[minmax(0,min(420px,42%))_1fr] lg:grid-rows-[auto_1fr] lg:items-start lg:gap-y-2" : ""}`}
       >
         <div data-testid="md-board-head" className={`flex min-w-0 flex-col gap-4${twoCol ? " lg:col-start-2 lg:row-start-1" : ""}`}>
-          <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
+          {/* From xl the row never wraps as a whole: the state word gives way (its count drops to a second line inside it) so the
+              cameras' press and Open match keep the state word's row (MD-R36) - CI's fonts ran the Dutch row ~15px past the column. */}
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 xl:flex-nowrap">
             <p data-testid="md-online-state" className={`min-w-0 text-sm font-semibold [overflow-wrap:anywhere] ${WORD_TONE[word.tone]}`}>
               {word.text}
               {word.sub !== null && <span className="ml-2 font-medium text-slate-600">{word.sub}</span>}
