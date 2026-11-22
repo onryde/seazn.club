@@ -12,9 +12,10 @@
 // Single-sport reason: no sport is involved; this is route configuration.
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/pricing-matrix-server", () => ({ loadPricingMatrix: async () => ({}) }));
+const matrix = vi.hoisted(() => ({ load: vi.fn(async () => ({})) }));
+vi.mock("@/lib/pricing-matrix-server", () => ({ loadPricingMatrix: matrix.load }));
 vi.mock("next/font/google", () => ({ Barlow_Condensed: () => ({ variable: "--mk-font-display", className: "" }) }));
 
 import * as layoutRoute from "../layout";
@@ -75,5 +76,45 @@ describe("help route configuration", () => {
 
   it("the article route still serves what it did not prerender (token articles, moved pages)", () => {
     expect((articleRoute as Config).dynamicParams, "false would 404 every token article and redirect source").not.toBe(false);
+  });
+});
+
+// The format pages read the plan table for their "Paid plan" badge. `next build` has no database, so at build an
+// unreadable table renders no badge (the page must still prerender). At runtime the same failure must THROW: Next then
+// keeps serving the last good page instead of caching a badge-less one for every visitor at the edge.
+describe("format pages: an unreadable plan table", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    matrix.load.mockReset();
+    matrix.load.mockImplementation(async () => ({}));
+  });
+  const pages: [string, () => Promise<unknown>][] = [
+    ["formats/page.tsx", () => galleryRoute.default()],
+    ["formats/[family]/page.tsx", () => familyRoute.default({ params: Promise.resolve({ family: "league" }) })],
+  ];
+
+  it("at build (NEXT_PHASE = phase-production-build): the page renders without the badge", async () => {
+    vi.stubEnv("NEXT_PHASE", "phase-production-build");
+    matrix.load.mockRejectedValue(new Error("DATABASE_URL is not set"));
+    let checked = 0;
+    for (const [name, render] of pages) {
+      await expect(render(), name).resolves.toBeTruthy();
+      checked++;
+    }
+    expect(matrix.load).toHaveBeenCalledTimes(2);
+    expect(checked).toBe(2);
+  });
+
+  it("at runtime (any other phase, or none): the failure propagates", async () => {
+    let checked = 0;
+    for (const phase of ["", "phase-production-server"]) {
+      vi.stubEnv("NEXT_PHASE", phase);
+      matrix.load.mockRejectedValue(new Error("connection refused"));
+      for (const [name, render] of pages) {
+        await expect(render(), `${name} (${phase || "unset"})`).rejects.toThrow("connection refused");
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
   });
 });

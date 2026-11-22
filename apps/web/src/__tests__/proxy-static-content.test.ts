@@ -18,7 +18,7 @@ import { SESSION_HINT_COOKIE } from "@/lib/session-hint";
 
 afterEach(() => vi.unstubAllEnvs());
 
-const STATIC = ["/help", "/help/registration/waitlist", "/help/formats/league", "/blog", "/blog/how-standings-points-work", "/blog/rss.xml"];
+const STATIC = ["/help", "/help/", "/help/registration/waitlist", "/help/formats/league", "/blog", "/blog/", "/blog/how-standings-points-work", "/blog/rss.xml"];
 /** Not static content: lookalikes first, then one of every other route class. */
 const LOOKALIKES = ["/helpdesk", "/blogs", "/help-centre", "/helps/x", "/blogx/y", "/x/help", "/x/blog"];
 const OTHERS = ["/live/a/b", "/embed/x", "/dashboard", "/"];
@@ -105,15 +105,37 @@ describe("static content: one response for every visitor", () => {
     vi.stubEnv("NEXT_PUBLIC_REVSHARE_ENABLED", "0");
     vi.stubEnv("NEXT_PUBLIC_POSTHOG_API_HOST", "");
     expect(directive(cspOf(proxy(req("/blog"))).value, "script-src")).toBe("script-src 'self' 'unsafe-inline'");
+    expect(directive(cspOf(proxy(req("/blog"))).value, "connect-src"), "revshare off: not in connect-src").not.toContain("revshare");
     vi.stubEnv("NEXT_PUBLIC_REVSHARE_ENABLED", "1");
     vi.stubEnv("NEXT_PUBLIC_POSTHOG_API_HOST", "https://e.example.test");
     expect(directive(cspOf(proxy(req("/help"))).value, "script-src")).toBe(
       "script-src 'self' 'unsafe-inline' https://www.revshare.so https://e.example.test",
     );
+    // tracking.js posts to https://www.revshare.so/api/tracking/* (click, ip hash): the fixed policy lets it connect.
+    const connect = directive(cspOf(proxy(req("/blog/how-standings-points-work"))).value, "connect-src")!.split(" ");
+    expect(connect).toContain("https://www.revshare.so");
+    expect(connect.filter((o) => o === "https://www.revshare.so"), "listed once").toHaveLength(1);
+    // The app's nonce policy is not this task's: its connect-src is unchanged.
+    expect(directive(cspOf(proxy(req("/dashboard"))).value, "connect-src")).not.toContain("revshare");
   });
 });
 
 describe("everything else keeps what it had", () => {
+  it("the games host: /help and /blog there are game slugs (rewritten under /games), never the static-content carve-out", () => {
+    vi.stubEnv("CSP_MODE", "enforce");
+    let checked = 0;
+    for (const host of ["games.seazn.club", "games.localhost:3000"]) {
+      for (const path of ["/help", "/blog"]) {
+        const res = proxy(new NextRequest(`http://localhost:3000${path}`, { headers: { host, cookie: "seazn_session=tok" } }));
+        expect(res.headers.get("x-middleware-rewrite") ?? "", `${host}${path}: still the games rewrite`).toContain(`/games${path}`);
+        expect(directive(cspOf(res).value, "script-src"), `${host}${path}`).toMatch(/'nonce-[^']+' 'strict-dynamic'/);
+        expect(res.headers.get("x-middleware-request-x-nonce"), `${host}${path}`).toBeTruthy();
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
+  });
+
   it("lookalikes and app pages: a fresh nonce in the policy and forwarded to the render, and the hint still synced", () => {
     vi.stubEnv("CSP_MODE", "enforce");
     let checked = 0;

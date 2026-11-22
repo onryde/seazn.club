@@ -4,6 +4,7 @@ import { ArrowRight } from "lucide-react";
 import { FORMAT_FAMILIES, FormatDiagram } from "@/config/format-gallery";
 import { HelpBreadcrumb, HelpShell } from "@/components/help/help-shell";
 import { familyNeedsPaidPlan } from "@/lib/format-plan-badge";
+import { PHASE_PRODUCTION_BUILD } from "next/constants";
 import { loadPricingMatrix } from "@/lib/pricing-matrix-server";
 
 // Prerendered and cached at the edge (layout.tsx): a request-time read fails the build. 300 s: the badge reads the plan table.
@@ -17,8 +18,12 @@ export const metadata: Metadata = {
 };
 
 export default async function FormatGalleryPage() {
-  // The badge reads the live plan table; an unreadable table shows no badge rather than a guess.
-  const matrix = await loadPricingMatrix().catch(() => ({}) as Awaited<ReturnType<typeof loadPricingMatrix>>);
+  // The badge reads the live plan table. At build there is no database, so an unreadable table shows no badge rather
+  // than a guess; at runtime the failure throws, so Next keeps the last good page instead of caching a badge-less one.
+  const matrix = await loadPricingMatrix().catch((e: unknown) => {
+    if (process.env.NEXT_PHASE === PHASE_PRODUCTION_BUILD) return {} as Awaited<ReturnType<typeof loadPricingMatrix>>;
+    throw e;
+  });
   return (
     <HelpShell currentHref="/help/formats">
       <HelpBreadcrumb trail={[{ href: "/help#formats", label: "Formats" }]} />

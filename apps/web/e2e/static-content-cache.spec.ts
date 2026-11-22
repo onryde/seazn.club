@@ -53,6 +53,27 @@ test.describe("the edge response", () => {
       expect(cspOf(session.headers()), `${path}: the same policy for every visitor`).toBe(cspOf(anon.headers()));
       checked++;
     }
+    // A flight (RSC) request for the HTML URL never gets a cacheable flight payload under that URL: Cloudflare ignores
+    // Vary, so it would be served to the next visitor as the page. Next checks the `_rsc` hash and redirects instead
+    // (`experimental.validateRSCRequestHeaders`, set explicitly in next.config.js).
+    for (const path of ["/help", POST]) {
+      const flight = await ctx.get(path, { maxRedirects: 0, headers: { rsc: "1" } });
+      expect(flight.status(), `${path} rsc:1 without _rsc`).toBe(307);
+      // To `?_rsc=<hash>` (`?_rsc` alone when the request carries no router headers): a cache key of its own.
+      expect(flight.headers()["location"] ?? "", `${path}: redirected to a hashed URL`).toMatch(/[?&]_rsc(=|$)/);
+      expect(flight.headers()["content-type"] ?? "", `${path}: no flight body`).not.toContain("text/x-component");
+      expect(flight.headers()["cache-control"] ?? "", `${path}: the redirect is not stored`).not.toMatch(/s-maxage/);
+    }
+    // A miss is a real 404 with no Set-Cookie. Its Cache-Control is NOT asserted here: the help article route sends its
+    // 404 with `s-maxage=300`, and the writeHead guard that should rewrite it (server/public-site/error-no-store.ts, unit
+    // tested, now covering /help and /blog) was measured inert on a standalone build for /live too (task-5-report.md,
+    // fix round 1). The edge rule's "400-599: no store" is what keeps a 404 out of Cloudflare.
+    for (const path of ["/help/no-such-page", "/blog/no-such-post"]) {
+      const miss = await ctx.get(path, { maxRedirects: 0, headers: { cookie: "seazn_session=e2e-probe" } });
+      expect(miss.status(), path).toBe(404);
+      expect(miss.headers()["set-cookie"], `${path}: no Set-Cookie on a 404 either`).toBeUndefined();
+      test.info().annotations.push({ type: "404 cache-control", description: `${path}: ${miss.headers()["cache-control"] ?? "(none)"}` });
+    }
     // The control: an app page keeps a fresh nonce per request and is not stored.
     const a = cspOf((await ctx.get("/login")).headers());
     const b = cspOf((await ctx.get("/login")).headers());

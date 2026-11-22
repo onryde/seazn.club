@@ -15,7 +15,7 @@
 // `ServerResponse.prototype.writeHead` — the call every node response makes,
 // explicitly or through `end()` — and, for a status of 400 or more on a
 // cacheable public path (the proxy's own `isCacheablePublicPath`: /live,
-// /embed), replaces any Cache-Control with the value Next itself sends for an
+// /embed; and its `isStaticContentPath`: /help, /blog), replaces any Cache-Control with the value Next itself sends for an
 // uncacheable response. Every other response is untouched: found pages, a
 // redirect, and every /api path keep exactly what they had.
 //
@@ -24,7 +24,7 @@
 // cached as missing (cache-found.ts), and the writes that make a page appear
 // expire its tags in their own request (#954), which drops that entry.
 import type { OutgoingHttpHeaders, ServerResponse } from "node:http";
-import { isCacheablePublicPath } from "@/proxy";
+import { isCacheablePublicPath, isStaticContentPath } from "@/proxy";
 
 /** Exactly what Next sends for a response nobody may store (getCacheControlHeader, revalidate 0). */
 export const ERROR_NO_STORE = "private, no-cache, no-store, max-age=0, must-revalidate";
@@ -35,7 +35,9 @@ const INSTALLED = Symbol.for("seazn.publicErrorNoStore");
 export function mustNotStore(url: string | undefined, status: number): boolean {
   if (!(status >= 400) || !url) return false;
   const query = url.indexOf("?");
-  return isCacheablePublicPath(query === -1 ? url : url.slice(0, query));
+  const path = query === -1 ? url : url.slice(0, query);
+  // /help and /blog are edge-cached too (Blog P2 Task 5): a help 404 otherwise leaves with the article route's s-maxage.
+  return isCacheablePublicPath(path) || isStaticContentPath(path);
 }
 
 const isCacheControl = (name: unknown) => typeof name === "string" && name.toLowerCase() === "cache-control";

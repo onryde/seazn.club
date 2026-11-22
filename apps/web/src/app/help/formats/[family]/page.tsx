@@ -5,6 +5,7 @@ import { previewDivisionFixtures } from "@/server/usecases/stages";
 import { FormatPreviewView } from "@/components/format-preview-view";
 import { HelpBreadcrumb, HelpShell } from "@/components/help/help-shell";
 import { familyNeedsPaidPlan } from "@/lib/format-plan-badge";
+import { PHASE_PRODUCTION_BUILD } from "next/constants";
 import { loadPricingMatrix } from "@/lib/pricing-matrix-server";
 
 // Prerendered and cached at the edge (layout.tsx): a request-time read fails the build. 300 s: the badge reads the plan table.
@@ -32,8 +33,12 @@ export default async function FormatExplainerPage({ params }: Props) {
   // The example is the REAL generated draw over a canned 8-entrant set — not
   // an illustration, the actual generator output.
   const phases = previewDivisionFixtures(f.cannedStages, 8);
-  // The badge reads the live plan table; an unreadable table shows no badge rather than a guess.
-  const matrix = await loadPricingMatrix().catch(() => ({}) as Awaited<ReturnType<typeof loadPricingMatrix>>);
+  // The badge reads the live plan table. At build there is no database, so an unreadable table shows no badge rather
+  // than a guess; at runtime the failure throws, so Next keeps the last good page instead of caching a badge-less one.
+  const matrix = await loadPricingMatrix().catch((e: unknown) => {
+    if (process.env.NEXT_PHASE === PHASE_PRODUCTION_BUILD) return {} as Awaited<ReturnType<typeof loadPricingMatrix>>;
+    throw e;
+  });
 
   return (
     <HelpShell currentHref="/help/formats">

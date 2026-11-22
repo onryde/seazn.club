@@ -40,12 +40,15 @@ export function isStaticContentPath(pathname: string): boolean {
   return STATIC_CONTENT_TREE.test(pathname);
 }
 
+/** revshare's tracking.js (app/layout.tsx) posts to its own API (`/api/tracking/click`, `/api/tracking/get-ip-hash`). */
+const REVSHARE_ORIGIN = "https://www.revshare.so";
+
 /** The external script origins the root layout loads on every page, as ` <origin>` script-src suffixes, for the fixed
  *  (nonce-free) policy, which has no 'strict-dynamic' to trust them through: revshare's tracking.js when it is on
  *  (app/layout.tsx), and PostHog's own origin, from which posthog-js loads its lazy extensions (instrumentation-client.ts;
  *  "" when events ride the same-origin /ingest rewrite). Both are fixed per deployment, so the header stays byte-stable. */
 function rootLayoutScriptOrigins(): string {
-  return `${revshareEnabled() ? " https://www.revshare.so" : ""}${posthogApiOrigin()}`;
+  return `${revshareEnabled() ? ` ${REVSHARE_ORIGIN}` : ""}${posthogApiOrigin()}`;
 }
 
 /** The `/overlay` tree (`/overlay` or `/overlay/…`, never `/overlayx…`): the stream overlay a club adds to OBS, and the
@@ -117,7 +120,8 @@ export function cspHeader(
     // Core SDK talks to *.realtime.cloudflare.com, signalling over wss
     // (Cloudflare's RealtimeKit network allowlist; proxy-csp-realtimekit.test.ts).
     // R2005: the compositor's loopback phase channel, on `/overlay` only (overlayLoopbackOrigin).
-    `connect-src 'self' https://api.stripe.com https://*.supabase.co wss://*.supabase.co https://*.realtime.cloudflare.com wss://*.realtime.cloudflare.com https://*.ingest.sentry.io https://*.sentry.io${posthogApiOrigin()}${overlayLoopbackOrigin(opts.pathname ?? "")}`,
+    // The fixed policy (nonce null) also lets revshare's tracking.js reach its API when revshare is on.
+    `connect-src 'self' https://api.stripe.com https://*.supabase.co wss://*.supabase.co https://*.realtime.cloudflare.com wss://*.realtime.cloudflare.com https://*.ingest.sentry.io https://*.sentry.io${posthogApiOrigin()}${overlayLoopbackOrigin(opts.pathname ?? "")}${nonce === null && revshareEnabled() ? ` ${REVSHARE_ORIGIN}` : ""}`,
     // Embedded Checkout renders inside a Stripe-hosted iframe; the Turnstile widget (components/turnstile-widget.tsx) is a challenges.cloudflare.com
     // iframe. The public match page's replay player (YouTube Connect T16) is YouTube's
     // privacy-enhanced embed, loaded only after a tap: `youtube-nocookie.com` and its www host, and no `youtube.com` origin.
@@ -230,7 +234,9 @@ function proxyCore(request: NextRequest): NextResponse {
   }
 
   // Page requests: attach a per-request nonce + CSP — or, on the static-content trees, the fixed policy and no nonce.
-  const staticContent = isStaticContentPath(request.nextUrl.pathname);
+  // On a games.* host, /help and /blog are game slugs (gamesHostRewrite serves /games/help), not the help or blog tree.
+  const isGamesHost = requestHostname(request).startsWith("games.");
+  const staticContent = !isGamesHost && isStaticContentPath(request.nextUrl.pathname);
   const cacheable = staticContent || isCacheablePublicPath(request.nextUrl.pathname);
   const nonce = staticContent ? null : Buffer.from(crypto.randomUUID()).toString("base64");
   const csp = cspHeader(nonce, { forceReportOnly: cacheable && !staticContent, pathname: request.nextUrl.pathname });
@@ -271,7 +277,6 @@ function proxyCore(request: NextRequest): NextResponse {
   // The games.* subdomain owns "/" (and single-segment slugs) for its own tree
   // via gamesHostRewrite below — the marketing [lang] rewrite must NOT claim
   // "/" first on that host, or games.seazn.club/ lands on the marketing home.
-  const isGamesHost = requestHostname(request).startsWith("games.");
   if (
     !isGamesHost &&
     (MARKETING_UNPREFIXED.has(mp) || MARKETING_PREFIXED.some((pre) => mp.startsWith(pre)))

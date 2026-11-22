@@ -21,7 +21,15 @@
 import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// The format pages read the plan table and, since Blog P2 Task 5 (fix round 1), rethrow a failed read outside
+// `next build`. This sweep reads copy, not figures: with a database it reads the real table as before; without one it
+// gets the empty table the pages used to fall back to.
+vi.mock("@/lib/pricing-matrix-server", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/pricing-matrix-server")>();
+  return { loadPricingMatrix: () => (process.env.DATABASE_URL ? real.loadPricingMatrix() : Promise.resolve({})) };
+});
 import { LEAK_ALLOW, LEAK_RULES, findLeaks, scanCopy, type LeakRule } from "@/lib/copy-leaks";
 import { allHelpArticles, helpPlainText, renderHelpMarkdown } from "@/server/help-content";
 import { FORMAT_FAMILIES } from "@/config/format-gallery";

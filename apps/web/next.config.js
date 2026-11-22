@@ -74,6 +74,13 @@ const nextConfig = {
     // Do not load every page's JS at boot: idle RSS 266 -> 145 MB measured
     // (docs: guides/memory-usage). Pinned by next-config-memory.test.ts.
     preloadEntriesOnStart: false,
+    // An RSC (flight) request is the page's own URL plus an `rsc: 1` header. /help and /blog are cached at
+    // Cloudflare's edge, which ignores `Vary`, so a flight payload answered with `s-maxage` under the page URL would be
+    // served to the next visitor as the page. With this on, Next answers an RSC request whose `_rsc` query is not the
+    // hash of its headers with a 307 to the hashed URL (a cache key of its own). Next 16.3.6 defaults it to true,
+    // earlier 16.x only under test, canary and local dev: set explicitly so an upgrade cannot drop it.
+    // Pinned by src/lib/__tests__/rsc-header-validation-config.test.ts.
+    validateRSCRequestHeaders: true,
   },
   // Monorepo: trace from the workspace root so hoisted node_modules land in
   // .next/standalone (Next docs: config/output caveats).
