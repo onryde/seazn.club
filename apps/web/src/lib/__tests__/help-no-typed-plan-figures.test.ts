@@ -80,9 +80,7 @@ describe("typedPlanFigureLines: hand-written cases", () => {
 
 /** page -> why it still types a plan figure. Read every hit line before adding or removing one. */
 const FEE = "fee percent per plan: a billing/registration content task converts it to {{plan:registration.fee_percent:<plan>}}";
-const PRICE = "plan price: not token-able yet (this task renders int_value features only, no prices)";
 const KNOWN: Record<string, string> = {
-  "billing/groups": `${PRICE} ($14.99, $6.99, $128.99, $63.99, $384.95, $644.95) + ${FEE} + an illustrative 60%-off coupon`,
   "getting-started/create-your-organisation": FEE,
 };
 

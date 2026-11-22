@@ -317,15 +317,18 @@ describe("billing help articles say what the resolver enforces", () => {
     }));
     expect(riderRateFaults(claimed)).toEqual([]);
 
-    // …and the two figures the sentence spells out are the seed's own usd
-    // riders, so a price move cannot leave a stale dollar amount on the page.
+    // Task 14b: groups.md used to spell out the usd riders ("$6.99/month"),
+    // pinned here to the seed. Typed plan figures are banned in help now and a
+    // price cannot be a token, so the page states the rate's SHAPE (judged
+    // above against every tier) and sends the reader to the live prices. What
+    // this pins instead: no typed amount in any currency comes back, the link
+    // is there, and every plan still has the rider tier the shape is judged on.
     for (const plan of stripePlans.plans) {
       const rider = plan.prices.monthly.tiers.find((t) => t.up_to === "inf");
       expect(rider, `${plan.key} has no monthly rider tier`).toBeDefined();
-      expect(plainProse(groupsPage), `${plan.key}'s usd rider`).toContain(
-        `$${rider!.unit_amount / 100}/month`,
-      );
     }
+    expect(plainProse(groupsPage), "groups.md types a price again").not.toMatch(/[$€£₹]\s?\d/);
+    expect(groupsPage, "groups.md must send the reader to the live prices").toContain("(/pricing)");
   });
 
   // Fix round 1, critical 2: round 1 shipped "a late entrant pays the same 5%
@@ -2061,6 +2064,8 @@ describe("every surface a reader sees is covered, not just the paragraphs", () =
 // ─────────────────────────────────────────────────────────────────────────────
 const addOns = helpArticle("add-ons");
 const groups = helpArticle("groups");
+/** Task 14b split groups.md by job: what joining costs now lives here. */
+const addOrg = helpArticle("add-an-organisation");
 
 /** Every inventory-gated help article, by slug. Shared by the axis describe and
  *  the rate measurements below so the two cannot disagree about what is gated. */
@@ -2924,8 +2929,12 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
     );
 
     // …and the copy says the true thing, in both the article and the dialog.
-    expect(groups).toMatch(/added to your next invoice, not charged to your card there and then/i);
-    expect(groups).not.toMatch(/and charged now/i);
+    // Task 14b: the attach-cost copy moved from groups.md to add-an-organisation.md.
+    expect(addOrg).toMatch(/Nothing is charged to your card when an organisation joins\./);
+    expect(addOrg).toMatch(/prorated to the rest of the current period and added to your next invoice/i);
+    for (const page of [groups, addOrg]) {
+      expect(page).not.toMatch(/charged now|charged to your card (straight away|at once|immediately)/i);
+    }
     const ui = JSON.parse(readFileSync("src/dictionaries/en/ui.json", "utf8")) as Record<string, string>;
     for (const key of ["billing.group.attach.confirmCharge", "billing.group.attach.confirmChargeAmount"]) {
       expect(ui[key], key).toMatch(/added to your next invoice/);
@@ -2969,8 +2978,9 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
     // …and the FREE body carries the renewal bound it was missing (N3): the
     // item quantity still rises, so the renewal invoice bills the seat.
     expect(ui["billing.group.attach.confirmFree"]).toMatch(/from your next renewal onwards/i);
-    // groups.md already said the trial thing; the two must agree.
-    expect(groups).toMatch(/rides the same trial to the same end date and costs nothing now/i);
+    // groups.md already said the trial thing; the two must agree. Task 14b: the
+    // sentence moved with the attach copy to add-an-organisation.md.
+    expect(addOrg).toMatch(/rides your trial to the same end date\. Nothing is charged/i);
 
     // THE THREE BODIES MUST STAY DISCRIMINABLE, and the e2e negatives assert
     // that by string. This is where those strings are kept honest.

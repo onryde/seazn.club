@@ -499,124 +499,67 @@ export const APPROVED_ADD_ONS_INVENTORY: string[] = [
  * membership was being decided by a regex that catches almost nothing. Gating
  * the two articles on the axis is what makes the axis mean something.
  *
- * WHAT THIS ARTICLE ASSERTS, AND WHAT DECIDES IT:
- *  - the extra-organisation rate, five times — `stripe-plans.json`'s graduated
- *    tiers via `riderClaimShape`; only "no more than half" is true in all
- *    twenty plan x interval x currency combinations.
- *  - WHEN THE ATTACH CHARGE LANDS. `attachOrgToGroup` bills entirely through
- *    `syncGroupQuantity`, whose only Stripe mutation is
- *    `subscriptions.update` with `create_prorations`
- *    (`billing-groups.ts:327-330`) — the NEXT invoice, not the card, and the
- *    same behaviour the add-on paths have. Round 2 said "charged now" on six
- *    surfaces here on the strength of a stale comment.
- *  - the dunning window — real, but it is the next INVOICE that can fail;
- *    nothing is attempted against the card at attach.
- *  - "Removing never refunds, and adding never takes money from your card there
- *    and then" (`## No refunds, and the freed slot`). ROUND 5: this said
- *    "adding ALWAYS CHARGES IMMEDIATELY", false three ways — prorations book to
- *    the next invoice (`billing-groups.ts:327-330`), a freed-slot attach raises
- *    no proration at all (`previewAttachCharge:122`, `raising` requires
- *    `active > quantity_paid`), and a trial attach charges nothing (`:123`,
- *    `:320`). It also contradicted line 41 of this same article, which round 3
- *    had corrected.
+ * WHAT THIS ARTICLE ASSERTS, AND WHAT DECIDES IT (re-approved in Task 14b,
+ * when the 3,300-word page was split by job; adding, removing and handing over
+ * now live in add-an-organisation.md, remove-an-organisation.md and
+ * hand-over-a-bill.md, which make NO half-rate claim and so are off the axis):
+ *  - the extra-organisation rate, once ("What it costs") — `stripe-plans.json`'s
+ *    graduated tiers via `riderClaimShape`; only "no more than half" is true in
+ *    all twenty plan x interval x currency combinations. No price is typed: the
+ *    page links /pricing and says the attach dialog shows the amount
+ *    (`previewAttachCharge`, `billing-groups.ts:129`).
+ *  - the organisation caps and the fee ladder — `{{plan:…}}` tokens, read from
+ *    plan_entitlements at render.
+ *  - the fee lock — first-wins stamp in
+ *    `registrations/checkout-completion.ts:465`.
+ *  - who pays and what the payer can open — `page-auth.ts:199-245`
+ *    (`requireBillingPage`), the guest owner's `billing.billedBy.named`
+ *    (`o/[orgSlug]/settings/billing/page.tsx:403-410`).
+ *  - the every-organisation-suspended answer — `groupOrgLimit`
+ *    (`lib/billing-group.ts:183-221`); its two claims are also pinned by
+ *    `server/__tests__/help-groups-suspension.test.ts`.
+ *  - the payer deleting their account — `app/api/users/me/route.ts:104-121`.
+ *  - the Event Pass credit — `pass-credit.ts:297-330` (most recent pass of the
+ *    buying org, 30 days, once per group).
  *
- *    THE GATE FROZE IT FAITHFULLY FOR TWO ROUNDS. That is not a failure of the
- *    gate; it is the gate's contract, and this wave's thesis in one line: an
- *    inventory proves a wording was DELIBERATE, never that it was TRUE. Only
- *    reading the sentence against `billing-groups.ts` found it, which is the
- *    step the fixture exists to force and which nobody had performed on this
- *    paragraph.
- *  - the freed slot, the fee lock, payouts, the detach modes — see the
- *    per-section notes in `server/usecases/billing-groups.ts`.
+ *    THE GATE PROVES DELIBERATE, NEVER TRUE. Every surface above was re-read
+ *    against the file named beside it before these digests were taken.
  */
 export const APPROVED_GROUPS_INVENTORY: string[] = [
-  "6dfdc975fd75c021",
-  "56e3282cee657350",
-  "889eb9bb8adb1b8f",
-  "0b3f064c075f4830",
-  "2c08e52c75400e40",
-  "d9d2fda79e6acad3",
-  "650ab572d939bca6",
+  "70406cfe0fe3385a",
+  "9b34a88bcf6b26d7",
+  "82ad58f71300bb0b",
+  "100fc02796b81b33",
+  "66adfe014ecc487d",
+  "5598a40b219f6f07",
+  "960ffcbe3004ff7a",
+  "3bf48466197914f2",
+  "4614431269bdad76",
+  "32ab7fcccdf14c08",
+  "9e428b3ee9865afa",
   "f78e9f343b9dc2e8",
   "d2190ce79f9684a3",
-  "0feb98b86f880f7c",
-  "beaab221487f9585",
-  "5be7274033911d5c",
-  "a1d537317da5529d",
-  "d5ddc1b7a27ed12b",
-  "e12f4df63f6cc9ea",
-  "03db06a1af2d3405",
-  "8cca87480a6deb54",
-  "696c2fcc2ecfec40",
-  "a052c3f07ce2508c",
-  "0efcbcbfd21cd2d3",
-  "f3e48e76dfb4c932",
-  "71f2718498988d98",
-  "19f8dbd797ab2df3",
-  "86457c10b518c75c",
-  "670d6537399af0cb",
-  "44b8772e6777bd12",
-  "8d62189b191b015f",
-  "bb6e0a58fdb569a4",
-  "93cbb9e0a733ea84",
-  "a082daadd09b8b31",
-  "76f844d7c521260b",
-  "99dafbaddeddd281",
-  "ce62fde77df9f3cb",
-  "af77535948d286c5",
-  "791c29feee358ae2",
-  "3b9f1b1cb23117b0",
-  "afe3dfcd35264bc9",
-  "45ac520e121a63aa",
-  "845db4ff8eae0223",
-  "3812af4fc53ba873",
-  "7e50122fa44a6f4b",
-  "f1eec393ae73101f",
-  "e20498cfa56931d3",
-  "858c8b7b0159c14f",
-  "af0c83ae6240326a",
-  "eb9b66040aaa25d8",
-  "5b365c93cb4a5637",
-  "7104f26a03ffde1e",
-  "537d992c53d3e378",
-  "cc5546e9475093dd",
-  "68ae3680386824c4",
-  "1687f37c2560ab80",
-  "2a82d5d161253e15",
-  "79756849efc57255",
-  "25eb5c468a8a54a2",
-  "9eb0591ae278ad76",
-  "37e0ccd2e5e57b16",
-  "80a8c63adbf7acf6",
-  "aa38f07aed66bd26",
-  "3b68d1b4c3fc4888",
-  "cbfceb3121b039d5",
-  "14babe148d741a28",
-  "c1952e825277a576",
-  "5a31bc0dd92a9d01",
-  "529f239aa64eaa4e",
-  "ef90d0b1078b0b3d",
-  "7a89a4a943513245",
-  "19438b187f04e834",
-  "84701e090fcbf515",
+  "66c3e5bf1cd62bf3",
+  "050378df2e0b9f83",
+  "fb6784c7c8704d6b",
+  "ad0fc64be53f1daf",
   "ddc8366bdf93737f",
-  "44a3cac6b1327242",
-  "29c9a5af721c8abb",
-  "a04e4219f607e695",
+  "6b8ffd79cfadc635",
+  "28aee6c7e00e1c33",
+  "15317f9c60cde9f8",
+  "f5599c0a037f5c56",
+  "63a4368110cb3fad",
+  "6870f62c36ba5d08",
+  "1f2344a2d5e86df6",
+  "c671cb1822c10f6c",
   "2b57b36732a3e9fb",
-  "16727d4791a0a08b",
-  "c5c32d350da1d6b1",
+  "9ad2895503dafd61",
   "09c784bdca897d29",
-  "3d324adb3ee0b927",
-  "636714ad25e8f991",
-  "1415f62ed176347a",
-  "a83851ffc59ddfeb",
-  "290e525981e1463d",
-  "364b1c1d4b1409c9",
-  "8d2ecf6ae325690e",
-  "7dde35de16939fb2",
-  "2f102e765460c832",
-  "3b281af0174847e4"
+  "b9d586c7d2527beb",
+  "6c9da5b6c3f7231a",
+  "bdc4e8f0561e135c",
+  "408f592f5e3fed13",
+  "50ae94f06b03dedc",
 ];
 
 /**
