@@ -10,6 +10,10 @@
 import { useEffect, useRef, useState } from "react";
 import { createPlayback, type Playback } from "./seazn-playback";
 
+/** The player's frame: 16:9 with a 200 px floor, dark. One authority for the box, so the island's reserved box (Phase 1 visual D1)
+ *  is the player's box and the swap moves nothing. */
+export const SEAZN_PLAYER_FRAME = "relative aspect-video min-h-[200px] w-full overflow-hidden rounded-xl bg-black";
+
 export interface SeaznPlayerProps {
   /** The signed HLS manifest address. A new value for the same session is a token refresh. */
   src: string;
@@ -64,7 +68,7 @@ export function SeaznPlayer({ src, title, unavailable, liveLabel, onFatal }: Sea
   return (
     <div
       data-testid="seazn-player"
-      className="ph-no-capture relative aspect-video min-h-[200px] w-full overflow-hidden rounded-xl bg-black"
+      className={`ph-no-capture ${SEAZN_PLAYER_FRAME}`}
     >
       <video
         ref={videoRef}

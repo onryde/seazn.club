@@ -1721,6 +1721,8 @@ describe("Task 17 — a playing court on air to Seazn plays it in the preview (t
     expect(props.fixtureId).toBe(f.id);
     expect(props.endpoint).toBe("org");
     expect(props.initial, "no server-side answer: the island reads the route itself").toBeUndefined();
+    // Phase 1 visual D1: the court is on air to Seazn, so the player's box is held until the first read (no shift when it arrives).
+    expect(props.reserve, "the box is reserved").toBe(true);
     expect(props.labels).toEqual(seaznVideoLabels(publicEn as Dict));
     expect(islands[0]!.key, "keyed by the match").toBe(f.id);
     const other = islandsOf(previewTree({ ...f, id: "f-2" }))[0]!;

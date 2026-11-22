@@ -92,7 +92,13 @@ describe.skipIf(!HAS_DB)("the public match page's replay slot, through the real 
       expect(island, `LIVE ${flag}: the island is mounted`).toHaveLength(1);
       expect(island[0]!.props.fixtureId).toBe(f);
       expect(youtube, `LIVE ${flag}: and the YouTube slot is not`).toHaveLength(0);
-      expect(renderToStaticMarkup(tree)).not.toContain("replay-embed");
+      const markup = renderToStaticMarkup(tree);
+      expect(markup).not.toContain("replay-embed");
+      // Phase 1 visual D1: the page's own server markup holds the player's box (16:9, 200 px floor), empty, before any read.
+      expect(island[0]!.props.reserve, `LIVE ${flag}: the plan reserves the box`).toBe(true);
+      const box = /<section data-testid="seazn-video-reserved"[^>]*>\s*<div data-testid="seazn-video-frame" class="([^"]*)"><\/div>\s*<\/section>/.exec(markup);
+      expect(box, `LIVE ${flag}: the reserved box is in the page's server markup, empty`).not.toBeNull();
+      for (const c of ["aspect-video", "min-h-[200px]", "w-full", "bg-black"]) expect(box![1]!.split(" "), c).toContain(c);
     }
   });
 
@@ -142,9 +148,13 @@ describe.skipIf(!HAS_DB)("the public match page's replay slot, through the real 
     orgs.push(r.auth.orgId);
     const f = r.fixtureIds[0];
     expect(await defaultPick(r, f), "PREMISE: the default is Seazn").toBe(r.seazn);
-    const on = slots(await pageTree(f));
+    const onTree = await pageTree(f);
+    const on = slots(onTree);
     expect(on.island, "LIVE on: the island").toHaveLength(1);
     expect(on.youtube).toHaveLength(0);
+    // Phase 1 visual D1: before kick-off "nothing yet" is the expected answer, so no box is held (it would collapse on every load).
+    expect(on.island[0]!.props.reserve, "no Seazn session yet: no box").toBe(false);
+    expect(renderToStaticMarkup(onTree)).not.toContain("seazn-video-reserved");
     liveOff();
     const off = slots(await pageTree(f));
     expect(off.island, "LIVE off: no island").toHaveLength(0);

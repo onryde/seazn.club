@@ -79,7 +79,9 @@ function Identity({ t, row }: { t: StreamTarget; row: DestinationRow }) {
       <PlatformMark kind={t.kind} size="md" />
       <span className="min-w-0 flex-1 text-left">
         <span data-testid="stream-target-name" title={row.name} className="block truncate text-sm font-semibold text-slate-900">{row.name}</span>
-        <span data-testid="stream-target-kind" className="block truncate text-xs text-slate-600">{row.kind}</span>
+        {/* Phase 1 visual D2: the Seazn helper wraps (es/fr/nl are cut at 320, and the cut part is what it does); every other kind
+            line keeps one truncated line. */}
+        <span data-testid="stream-target-kind" className={`block text-xs text-slate-600${t.kind === "seazn" ? "" : " truncate"}`}>{row.kind}</span>
         {row.health && (
           <span className="mt-1 flex">
             <HealthBadge health={row.health} />

@@ -508,7 +508,8 @@ export function SeaznRow({ t }: { t: StreamTarget }) {
         <PlatformMark kind="seazn" size="md" />
         <div className="min-w-0 flex-1">
           <p className="truncate font-semibold text-slate-900">{msg("stream.dest.kind.seazn")}</p>
-          <p data-testid="stream-dest-subline" className="truncate text-xs text-slate-500">{msg("stream.dest.seazn.sub")}</p>
+          {/* Phase 1 visual D2: wraps (es/fr/nl are cut at 320, and the cut part is what it does) — no truncate, no clamp. */}
+          <p data-testid="stream-dest-subline" className="text-xs text-slate-500">{msg("stream.dest.seazn.sub")}</p>
         </div>
       </div>
     </li>

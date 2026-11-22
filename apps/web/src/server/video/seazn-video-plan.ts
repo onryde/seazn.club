@@ -22,13 +22,17 @@ import "server-only";
 // on it. The island stops reading an empty answer from then on (seazn-video-schedule.ts). Null while it has no finish time (it is
 // not over): the island then only backs off, it never stops.
 //
+// A `seazn` plan also says whether the page holds the player's box before the island's first read (`reserve`, Phase 1 visual D1):
+// yes where a player is expected now (arm 1: a Seazn session, so its live or its recording), no before kick-off (arm 3), where
+// "nothing yet" is the expected answer for hours and a held box would collapse on every load.
+//
 // The privileged `sql` client: fixture_stream_* are FORCE RLS with no policy (V410), the pattern seazn-video.ts reads them with.
 import { sql } from "@/lib/db";
 import type { FixtureStatusValue } from "@/lib/fixture-status";
 import { CODE_GRACE_AFTER_FINISH_MINUTES, seaznHostedLive, tunable } from "@/server/relay/config";
 import { fixtureStreamTarget } from "@/server/usecases/stream-codes";
 
-export type SeaznVideoPlan = { player: "external" } | { player: "seazn"; settledAt: Date | null };
+export type SeaznVideoPlan = { player: "external" } | { player: "seazn"; settledAt: Date | null; reserve: boolean };
 const EXTERNAL: SeaznVideoPlan = { player: "external" };
 
 /** A fixture id is a uuid; anything else names no fixture, and is answered before it reaches a query (22P02 would be a 500). */
@@ -58,7 +62,7 @@ export async function seaznVideoPlan(fixtureId: string): Promise<SeaznVideoPlan>
       from fixtures f
      where f.id = ${fixtureId}`;
   if (facts === undefined) return EXTERNAL;
-  if (facts.has_seazn_session) return { player: "seazn", settledAt: settledAtOf(facts) };
+  if (facts.has_seazn_session) return { player: "seazn", settledAt: settledAtOf(facts), reserve: true };
   if (facts.has_session || isOver(facts.status)) return EXTERNAL;
   if (!seaznHostedLive()) return EXTERNAL;
   // The fixture's own pick: the same resolver the panel's picker and the phone's start read, so the player appears exactly when
@@ -66,5 +70,5 @@ export async function seaznVideoPlan(fixtureId: string): Promise<SeaznVideoPlan>
   const pick = await fixtureStreamTarget(sql, { orgId: facts.org_id, fixtureId });
   if (pick === null) return EXTERNAL;
   const [target] = await sql<{ kind: string }[]>`select kind from org_stream_targets where id = ${pick.id}`;
-  return target?.kind === "seazn" ? { player: "seazn", settledAt: null } : EXTERNAL;
+  return target?.kind === "seazn" ? { player: "seazn", settledAt: null, reserve: false } : EXTERNAL;
 }

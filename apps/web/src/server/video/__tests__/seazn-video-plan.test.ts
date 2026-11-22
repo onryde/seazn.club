@@ -47,6 +47,12 @@ const settledAtOf = async (fixtureId: string) => {
   if (plan.player !== "seazn") throw new Error(`PREMISE: the plan is seazn, not ${plan.player}`);
   return plan.settledAt;
 };
+/** Whether the page holds the player's box before the first read (Phase 1 visual D1). */
+const reserveOf = async (fixtureId: string) => {
+  const plan = await seaznVideoPlan(fixtureId);
+  if (plan.player !== "seazn") throw new Error(`PREMISE: the plan is seazn, not ${plan.player}`);
+  return plan.reserve;
+};
 const setFinished = (fixtureId: string, at: Date | null) => sql`update fixtures set finished_at = ${at} where id = ${fixtureId}`;
 /** The default the fixture would stream to, read the way the panel and the phone read it: the resolver's pick. */
 const defaultPick = async (r: Rig, fixtureId: string) => (await fixtureStreamTarget(sql, { orgId: r.auth.orgId, fixtureId }))?.id ?? null;
@@ -117,6 +123,22 @@ describe.skipIf(!HAS_DB)("seaznVideoPlan: which player the match page mounts", (
     await setStatus(byStatus, "decided");
     expect(await defaultPick(r, byStatus), "PREMISE: its default pick is Seazn too").toBe(r.seazn);
     expect(await playerOf(byStatus), "the decided arm").toBe("external");
+  });
+
+  // Phase 1 visual D1: the box is held where a player is expected now — a fixture with a Seazn session (its live, or its recording) —
+  // and NOT before kick-off, where "nothing yet" is the expected answer for hours and a held box would collapse on every load.
+  it("review D1: EMPTY CASE FIRST — an unstarted Seazn fixture reserves no box; once it has a Seazn session it does, live and after it is decided", async () => {
+    const r = await rig();
+    const f = r.fixtureIds[0];
+    expect(await playerOf(f), "PREMISE: the unstarted arm").toBe("seazn");
+    expect(await reserveOf(f), "before kick-off: no box").toBe(false);
+    const sid = await live(r, f, r.seazn);
+    expect(await reserveOf(f), "live on Seazn").toBe(true);
+    await stopAndSettle(r, f, sid);
+    await setStatus(f, "decided");
+    expect(await reserveOf(f), "decided, its recording to play").toBe(true);
+    liveOff();
+    expect(await reserveOf(f), "LIVE off: the session's player and its box both stay").toBe(true);
   });
 
   it("an UNSTARTED fixture (no session, not over): seazn when its default is Seazn and LIVE is on; external with LIVE off, where the default is the pasted key", async () => {

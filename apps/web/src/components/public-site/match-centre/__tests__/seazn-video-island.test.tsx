@@ -21,7 +21,7 @@ import publicNl from "@/dictionaries/nl/public.json";
 import { PublicFixtureVideo } from "@/server/api-v1/schemas";
 import { SeaznVideoIsland, asPublicFixtureVideo, fetchSeaznVideo, nextPartIndex, playerKey, seaznVideoUrl } from "../seazn-video-island";
 import { seaznVideoLabels } from "../seazn-video-labels";
-import { renderIsland } from "@/components/__tests__/_hook-harness";
+import { renderIsland, type walk } from "@/components/__tests__/_hook-harness";
 
 const NOW = Date.parse("2026-11-21T12:00:00.000Z");
 const labels = seaznVideoLabels(publicEn);
@@ -47,6 +47,75 @@ describe("the island: nothing to show", () => {
 
   it("a replay made only of the replay host's embeds renders nothing until Task 25 gives it a player", () => {
     expect(html(answer({ replay: [part(1, "embed"), part(2, "embed")] }))).toBe("");
+  });
+});
+
+// Phase 1 visual pass D1 (CLS up to 0.094): the island used to draw nothing until its first read answered, then pushed the page down by
+// the player's height. Where a player is expected (`reserve`: the fixture has a Seazn session, or Match Day's court is on air to Seazn),
+// the server render now holds the player's own box: the same region, the same 16:9 frame with its 200 px floor, dark and empty, no
+// spinner and no words. An answer with nothing to show collapses it (the island's design for "nothing": no box at all).
+describe("review D1: the player's box is reserved from the server render", () => {
+  const reserved = (extra: { initial?: PublicFixtureVideo } = {}) =>
+    renderToStaticMarkup(<SeaznVideoIsland fixtureId="f1" labels={labels} reserve {...extra} />);
+  const classOf = (out: string, testId: string): string => {
+    const m = new RegExp(`data-testid="${testId}"[^>]*?class="([^"]*)"`).exec(out) ?? new RegExp(`class="([^"]*)"[^>]*?data-testid="${testId}"`).exec(out);
+    if (!m) throw new Error(`no ${testId} in the markup — every probe on it would pass vacuously`);
+    return m[1]!;
+  };
+  const tokens = (c: string) => c.split(/\s+/).filter(Boolean).sort();
+
+  it("EMPTY CASE FIRST: not reserved, no answer yet renders nothing (the pre-kick-off page keeps no box)", () => {
+    expect(html(null)).toBe("");
+  });
+
+  it("reserved, no answer yet: one empty dark box at the player's 16:9 with its 200 px floor, hidden from assistive tech, with no text", () => {
+    const out = reserved();
+    expect(count(out, /data-testid="seazn-video-reserved"/g), "one reserved box").toBe(1);
+    const frame = tokens(classOf(out, "seazn-video-frame"));
+    for (const c of ["aspect-video", "min-h-[200px]", "w-full", "bg-black"]) expect(frame, c).toContain(c);
+    expect(out).toMatch(/data-testid="seazn-video-reserved"[^>]*aria-hidden="true"|aria-hidden="true"[^>]*data-testid="seazn-video-reserved"/);
+    expect(out.replace(/<[^>]*>/g, ""), "no spinner text, no words").toBe("");
+    expect(out).not.toMatch(/<video\b|data-src=/);
+  });
+
+  it("the reserved box IS the player's box: the region and the frame carry exactly the classes the live player's do, so the swap moves nothing", () => {
+    const box = reserved();
+    const live = html(answer({ live: signed("live") }));
+    expect(tokens(classOf(box, "seazn-video-reserved"))).toEqual(tokens(classOf(live, "seazn-video")));
+    // The player's frame also carries `ph-no-capture` (the address is a credential); the reserved frame has no address to hide.
+    expect(tokens(classOf(box, "seazn-video-frame"))).toEqual(tokens(classOf(live, "seazn-player")).filter((c) => c !== "ph-no-capture"));
+  });
+
+  it("an answer already in hand draws the player, never the reserved box", () => {
+    const out = reserved({ initial: answer({ live: signed("live") }) });
+    expect(out).not.toContain('data-testid="seazn-video-reserved"');
+    expect(count(out, /data-testid="seazn-player"/g)).toBe(1);
+  });
+
+  it("mounted: the reserved box stands until the first read answers; an empty answer collapses it, a live one replaces it with the player", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const routeOf = (data: unknown) => vi.fn(async () => new Response(JSON.stringify({ ok: true, data }), { status: 200, headers: { "content-type": "application/json" } }));
+    // The island's output is its stage ELEMENT; its server markup is what the box looks like at that moment.
+    const ids = (island: { tree: () => ReturnType<typeof walk> }) =>
+      [...renderToStaticMarkup(island.tree()[0]!).matchAll(/data-testid="([^"]+)"/g)].map((m) => m[1]!);
+    try {
+      vi.stubGlobal("fetch", routeOf({ live: null, replay: [] }));
+      const empty = renderIsland(SeaznVideoIsland, { fixtureId: "f1", labels, reserve: true });
+      expect(ids(empty), "before the first answer").toContain("seazn-video-reserved");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ids(empty), "nothing to show: collapsed").toEqual([]);
+      empty.unmount();
+      vi.stubGlobal("fetch", routeOf({ live: signed("live"), replay: [] }));
+      const live = renderIsland(SeaznVideoIsland, { fixtureId: "f1", labels, reserve: true });
+      expect(ids(live)).toContain("seazn-video-reserved");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ids(live), "the player in the same place").toEqual(expect.arrayContaining(["seazn-video", "seazn-player"]));
+      expect(ids(live)).not.toContain("seazn-video-reserved");
+      live.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

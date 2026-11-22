@@ -675,6 +675,36 @@ describe("the Seazn destination (Task 16)", () => {
     expect(attr(mark!, "data-platform-mark")).toBe("seazn");
   });
 
+  // Phase 1 visual D2: at 320 the Seazn helper ("Se reproduce en la página d…") was cut in es/fr/nl, on the trigger and in the list,
+  // and the cut part is the part that says what it does. It wraps instead: no `truncate`, no line clamp; its column keeps `min-w-0`.
+  // Every other row's kind line keeps its one-line truncation (the trigger and the rows read the same, so the change is Seazn's alone).
+  it("review D2: the Seazn helper wraps on the closed trigger and in the open list — no truncate, no line clamp, inside a min-w-0 column; a pasted key's still truncates", () => {
+    const classes = (el: ReactElement) => String(attr(el, "className") ?? "").split(/\s+/);
+    const p = mount({ targets: [seazn(), ...TARGETS], selectedId: "t-seazn" });
+    const onTrigger = byTestId(deep(p.trigger()), "stream-target-kind")!;
+    (attr(p.trigger(), "onClick") as () => void)();
+    const optionKinds = p.options().map((o) => byTestId(deep(o), "stream-target-kind")!);
+    expect(optionKinds.length, "anti-vacuity: every row has a kind line").toBe(TARGETS.length + 1);
+    const seaznKinds = [onTrigger, optionKinds[0]!];
+    let checked = 0;
+    for (const kind of seaznKinds) {
+      expect(textOf(kind), "PREMISE: the Seazn helper").toBe("Plays on this match's page");
+      expect(classes(kind)).not.toContain("truncate");
+      expect(classes(kind).some((c) => c.startsWith("line-clamp")), "no line clamp").toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // The column it sits in: min-w-0, so the wrap is inside the row, never past it.
+    const holdsKind = (el: ReactElement) =>
+      ([] as ReactNode[]).concat((el.props as { children?: ReactNode }).children).some((c) => isValidElement(c) && attr(c, "data-testid") === "stream-target-kind");
+    const column = deep(p.trigger()).find(holdsKind);
+    expect(column, "PREMISE: the helper's own column").toBeDefined();
+    expect(classes(column!), "the column keeps min-w-0").toContain("min-w-0");
+    // The control: the pasted key on the same list keeps its one-line truncation.
+    const keyRow = p.options().find((o) => attr(o, "data-target-id") === "t-key")!;
+    expect(classes(byTestId(deep(keyRow), "stream-target-kind")!)).toContain("truncate");
+  });
+
   it("a pasted key picked on the same list stays picked: the picker shows the pick it is given, not Seazn (the reload answer is the server's)", () => {
     const p = mount({ targets: [seazn(), ...TARGETS], selectedId: "t-key" });
     expect(attr(p.trigger(), "data-value")).toBe("t-key");

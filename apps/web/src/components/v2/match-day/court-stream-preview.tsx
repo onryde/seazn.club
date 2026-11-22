@@ -7,7 +7,8 @@
 // A match on air to Seazn (Seazn-hosted video, Task 17) is the same panel with its own badge ("Live on Seazn") and the Seazn island
 // in the picture's place: the SAME island the public match page plays, pointed at the ORGANISER's video route (`endpoint="org"`,
 // any member of the organisation, a private competition included). The board never carries the address, so the island asks the route
-// itself after it hydrates, signs in through its own session and keeps the token fresh; the first paint is the badge and the score.
+// itself after it hydrates, signs in through its own session and keeps the token fresh; the first paint is the badge, the player's
+// box held empty until the first read (Phase 1 visual D1: its arrival moves nothing) and the score.
 // It is keyed by the match, so the court's next match gets a fresh player rather than the last one's address.
 //
 // Under, not over: the player's own terms put nothing on top of the embedded player or its controls (replay-embed.tsx), and a
@@ -15,7 +16,8 @@
 // the sets or games won, tennis's games in the set, and the live points for a set sport, the sport's own headline otherwise — every sport.
 //
 // Only reached when `streamPreviewOf` found something to play; any other live stream (a pasted key, a made-for-kids broadcast)
-// keeps the C1 scoreboard with its corner badge. There is never an empty video box (§5).
+// keeps the C1 scoreboard with its corner badge. There is never an empty video box (§5) beyond the Seazn player's held box before
+// its first read.
 import Link from "@/components/ui/console-link";
 import { ReplayEmbed } from "@/components/public-site/match-centre/replay-embed";
 import { SeaznVideoIsland } from "@/components/public-site/match-centre/seazn-video-island";
@@ -76,7 +78,8 @@ export function CourtStreamPreview({
       </div>
       <div className="min-w-0 px-4 sm:px-5">
         {preview.kind === "seazn" ? (
-          <SeaznVideoIsland key={fixture.id} fixtureId={fixture.id} endpoint="org" labels={seaznVideoLabels(scoreDict)} />
+          // On air to Seazn: the player's box is held until the first read (Phase 1 visual D1), so its arrival moves nothing.
+          <SeaznVideoIsland key={fixture.id} fixtureId={fixture.id} endpoint="org" labels={seaznVideoLabels(scoreDict)} reserve />
         ) : (
           <ReplayEmbed parts={[preview.part]} labels={{ region: label, playerTitle: label, className: "mt-2" }} />
         )}

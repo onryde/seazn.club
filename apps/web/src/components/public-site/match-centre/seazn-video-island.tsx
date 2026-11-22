@@ -18,7 +18,7 @@ import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } f
 import { api } from "@/lib/client";
 import { interpolate } from "@/lib/i18n-runtime";
 import type { PublicFixtureVideo } from "@/server/api-v1/schemas";
-import { SeaznPlayer } from "./seazn-player";
+import { SEAZN_PLAYER_FRAME, SeaznPlayer } from "./seazn-player";
 import type { SeaznVideoLabels } from "./seazn-video-labels";
 import { startVideoPoll, type VideoPoll } from "./seazn-video-poll";
 
@@ -79,8 +79,15 @@ interface StageProps {
 }
 
 /** Everything the island draws for one answer. */
-function SeaznVideoStage({ video, epoch, labels, onFatal }: StageProps) {
-  if (video === null) return null;
+function SeaznVideoStage({ video, epoch, labels, onFatal, reserve }: StageProps & { reserve: boolean }) {
+  if (video === null) {
+    // Phase 1 visual D1: no answer yet, and a player is expected — the player's own box, empty and dark, so its arrival moves nothing.
+    return reserve ? (
+      <section data-testid="seazn-video-reserved" aria-hidden="true" className={REGION}>
+        <div data-testid="seazn-video-frame" className={SEAZN_PLAYER_FRAME} />
+      </section>
+    ) : null;
+  }
   if (video.live !== null) {
     return (
       <section data-testid="seazn-video" aria-label={labels.live} className={REGION}>
@@ -168,9 +175,12 @@ export interface SeaznVideoIslandProps {
   /** When the fixture is settled (ISO; the page's plan, seazn-video-plan.ts): an empty answer from then on stops the reads (Phase 1
    *  review I2). Absent or null: the reads only back off. */
   settledAt?: string | null;
+  /** A player is expected (Phase 1 visual D1): until the first answer, hold the player's box. An answer with nothing to show
+   *  collapses it. Absent: nothing is drawn before an answer (a fixture with no Seazn session yet). */
+  reserve?: boolean;
 }
 
-export function SeaznVideoIsland({ fixtureId, endpoint = "public", labels, initial, settledAt = null }: SeaznVideoIslandProps) {
+export function SeaznVideoIsland({ fixtureId, endpoint = "public", labels, initial, settledAt = null, reserve = false }: SeaznVideoIslandProps) {
   const [video, setVideo] = useState<PublicFixtureVideo | null>(initial ?? null);
   const [epoch, setEpoch] = useState(0);
   const pollRef = useRef<VideoPoll | null>(null);
@@ -195,5 +205,5 @@ export function SeaznVideoIsland({ fixtureId, endpoint = "public", labels, initi
   }, [fixtureId, endpoint, settledAtMs]);
 
   const refresh = useCallback(() => pollRef.current?.refreshSoon(), []);
-  return <SeaznVideoStage video={video} epoch={epoch} labels={labels} onFatal={refresh} />;
+  return <SeaznVideoStage video={video} epoch={epoch} labels={labels} onFatal={refresh} reserve={reserve} />;
 }

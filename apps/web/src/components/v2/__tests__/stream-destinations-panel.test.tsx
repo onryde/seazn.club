@@ -924,6 +924,14 @@ describe("the Seazn row is fixed (Task 16)", () => {
     expect(row).toMatch(/data-platform-mark="seazn"/);
     expect(row).toContain(">Seazn<");
     expect(row).toMatch(/data-testid="stream-dest-subline"[^>]*>Plays on this match&#x27;s page</);
+    // Phase 1 visual D2: the helper wraps at 320 in es/nl instead of being cut — no truncate, no line clamp, in a min-w-0 column.
+    const sub = /<div class="([^"]*)"><p[^>]*>Seazn<\/p><p data-testid="stream-dest-subline" class="([^"]*)"/.exec(row);
+    expect(sub, "the Seazn row's name and helper, in their column").not.toBeNull();
+    expect(sub![2]!.split(" ")).not.toContain("truncate");
+    expect(sub![2]!.split(" ").some((c) => c.startsWith("line-clamp")), "no line clamp").toBe(false);
+    expect(sub![1]!.split(" "), "the column keeps min-w-0").toContain("min-w-0");
+    // The control: a pasted key's subline on the same page keeps its one-line truncation.
+    expect(/data-target-id="t1"[\s\S]*?data-testid="stream-dest-subline" class="([^"]*)"/.exec(html)![1]!.split(" ")).toContain("truncate");
     expect(row).not.toMatch(/stream key|key ends/i);
     let checked = 0;
     for (const id of ACTION_IDS) {
