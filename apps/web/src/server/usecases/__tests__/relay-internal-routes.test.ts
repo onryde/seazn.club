@@ -2232,7 +2232,7 @@ describe.skipIf(!HAS_DB)("R2004: a composed session's facts — Input A to read,
 });
 
 // ---------------------------------------------------------------------------------------------------------------
-// Owed 37 (compositor PR onryde/seazn.club.compositor#27): the compositor sends its FINAL beat on a lane of its own, so a
+// Owed 37 (compositor PR seazn-club/seazn.club.compositor#27): the compositor sends its FINAL beat on a lane of its own, so a
 // periodic beat it sent BEFORE the final can be received — and committed — AFTER it. A late beat must never overwrite
 // the stored final: not `last_heartbeat` (the exit's record), not `heartbeat_at` (it anchors the stale window, so a
 // late beat delays `lost`), not the egress count (it would move backwards). The late beat is still a SAMPLE. What

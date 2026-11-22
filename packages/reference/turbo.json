@@ -3,10 +3,10 @@
   "extends": ["//"],
   "tasks": {
     // The lint is type-aware (recommendedTypeChecked) over `@seazn/engine/core`
-    // types (the alias key; the package's name is @onryde/seazn-engine), so its
+    // types (the alias key; the package's name is @seazn-club/seazn-engine), so its
     // cache key must move with the engine as typecheck's does (review M-4). Since
     // engine split 2b the engine is a registry package, not a workspace one, so
-    // there is no @onryde/seazn-engine#build task for `^build` to reach: turbo
+    // there is no @seazn-club/seazn-engine#build task for `^build` to reach: turbo
     // keys the engine through this package's external-dependency hash, i.e. the
     // version pnpm-lock.yaml resolves. `^build` stays for any workspace
     // dependency this package gains.

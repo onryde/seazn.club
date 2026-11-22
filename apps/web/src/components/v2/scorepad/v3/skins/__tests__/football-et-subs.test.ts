@@ -1,4 +1,4 @@
-// Engine 7.0.0 (onryde/seazn.club.engine#41, F-R3) and the controller's ruling 154, on the web pad.
+// Engine 7.0.0 (seazn-club/seazn.club.engine#41, F-R3) and the controller's ruling 154, on the web pad.
 //
 // 1. THE CAPS IN EXTRA TIME. Law 3 (IFAB Laws of the Game 2025/26, 3.2): a competition may allow five substitutions in three
 //    opportunities, and where it plays extra time, one more substitution and one more opportunity in it. The engine models the

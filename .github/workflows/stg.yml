@@ -35,7 +35,7 @@ jobs:
   deploy-stg:
     name: Deploy (stg)
     runs-on: ubuntu-latest
-    # packages: read lets GITHUB_TOKEN fetch @onryde/seazn-engine (consumed as
+    # packages: read lets GITHUB_TOKEN fetch @seazn-club/seazn-engine (consumed as
     # @seazn/engine) from GitHub Packages inside the image build below.
     permissions:
       contents: read
@@ -59,7 +59,7 @@ jobs:
           node-version: 26
           cache: pnpm
           registry-url: https://npm.pkg.github.com
-          scope: '@onryde'
+          scope: '@seazn-club'
       # stripe-sync.ts and sync-sports.ts import postgres, stripe and
       # @seazn/engine/sports from the repo ROOT, so those three are root
       # PRODUCTION dependencies — --prod honours the section, unlike npm ci
@@ -197,7 +197,7 @@ jobs:
   deploy-cron-worker-stg:
     name: Deploy cron Worker (staging)
     runs-on: ubuntu-latest
-    # packages: read lets GITHUB_TOKEN fetch @onryde/seazn-engine for the install below (the filtered install does
+    # packages: read lets GITHUB_TOKEN fetch @seazn-club/seazn-engine for the install below (the filtered install does
     # not need the engine today; every install authenticates, so a cron Worker that imports it never reds on main).
     permissions:
       contents: read
@@ -215,7 +215,7 @@ jobs:
           node-version: 26
           cache: pnpm
           registry-url: https://npm.pkg.github.com
-          scope: '@onryde'
+          scope: '@seazn-club'
       - run: pnpm install --frozen-lockfile --filter @seazn/cron-worker...
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}

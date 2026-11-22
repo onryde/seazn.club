@@ -139,7 +139,7 @@ describe("workspace wiring (trap 2: a new package is invisible to the root chain
     // 0.0.0-pr snapshot). Which release is the engine-release bump's business, so no version is typed here; consistency with the
     // other five consumers rides the root manifest, the reference (scripts/__tests__/registry-install.test.ts sweeps all six).
     const spec = ref.devDependencies?.["@seazn/engine"];
-    expect(spec, "packages/reference names the engine alias").toMatch(/^npm:@onryde\/seazn-engine@\^\d+\.\d+\.\d+$/);
+    expect(spec, "packages/reference names the engine alias").toMatch(/^npm:@seazn-club\/seazn-engine@\^\d+\.\d+\.\d+$/);
     expect(spec, "packages/reference carries the root manifest's specifier").toBe((JSON.parse(read("package.json")) as Manifest).dependencies?.["@seazn/engine"]);
     let shared = 0;
     for (const [name, range] of Object.entries(ref.devDependencies ?? {})) {
@@ -160,6 +160,6 @@ describe("workspace wiring (trap 2: a new package is invisible to the root chain
     expect(pkg.scripts["reference:boundary"]).toBe("node --experimental-strip-types --import ./scripts/lib/crash-exit.ts scripts/reference-boundary.ts");
   });
   // Engine split 2b (reverse inventory row 21): the two tests that held turbo's lint and typecheck of packages/reference and
-  // packages/scheduler to an `@onryde/seazn-engine#` task hashing the engine's sources left with the engine workspace. A registry
+  // packages/scheduler to an `@seazn-club/seazn-engine#` task hashing the engine's sources left with the engine workspace. A registry
   // dependency has no turbo task; turbo keys it through the lockfile instead (`hashOfExternalDependencies`).
 });

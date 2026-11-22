@@ -279,7 +279,7 @@ describe("DECLARING is R27's two paths, verbatim from _RULES.md", () => {
   });
 });
 
-// Engine split 2b, Task A2 (plan Review Focus 5): the engine is the registry package @onryde/seazn-engine now, so no PR touches
+// Engine split 2b, Task A2 (plan Review Focus 5): the engine is the registry package @seazn-club/seazn-engine now, so no PR touches
 // packages/engine/** and an engine bump reaches this repo only as a version change in pnpm-lock.yaml. Such a lock diff is an
 // engine change for R27 and owes a declaration; a lock diff that leaves the engine's version alone does not.
 const LOCK = "pnpm-lock.yaml";
@@ -288,26 +288,26 @@ const LOCK_HEAD = "diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml\nindex 1111111..
  *  package entry and its snapshot key move; the specifier is a context line. Shapes copied from the committed lock. */
 function engineBump(from: string, to: string): string {
   const peers = "(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)";
-  return `${LOCK_HEAD}@@ -25,7 +25,7 @@ importers:\n       '@seazn/engine':\n         specifier: npm:@onryde/seazn-engine@^1.0.0\n`
-    + `-        version: '@onryde/seazn-engine@${from}${peers}'\n+        version: '@onryde/seazn-engine@${to}${peers}'\n`
-    + `@@ -1233,2 +1233,2 @@ packages:\n-  '@onryde/seazn-engine@${from}':\n-    resolution: {integrity: sha512-aaaa, tarball: https://npm.pkg.github.com/download/@onryde/seazn-engine/${from}/4bed0ef3}\n`
-    + `+  '@onryde/seazn-engine@${to}':\n+    resolution: {integrity: sha512-bbbb, tarball: https://npm.pkg.github.com/download/@onryde/seazn-engine/${to}/9c1d2e3f}\n`
-    + `@@ -6766,1 +6766,1 @@ snapshots:\n-  '@onryde/seazn-engine@${from}${peers}':\n+  '@onryde/seazn-engine@${to}${peers}':\n`;
+  return `${LOCK_HEAD}@@ -25,7 +25,7 @@ importers:\n       '@seazn/engine':\n         specifier: npm:@seazn-club/seazn-engine@^1.0.0\n`
+    + `-        version: '@seazn-club/seazn-engine@${from}${peers}'\n+        version: '@seazn-club/seazn-engine@${to}${peers}'\n`
+    + `@@ -1233,2 +1233,2 @@ packages:\n-  '@seazn-club/seazn-engine@${from}':\n-    resolution: {integrity: sha512-aaaa, tarball: https://npm.pkg.github.com/download/@seazn-club/seazn-engine/${from}/4bed0ef3}\n`
+    + `+  '@seazn-club/seazn-engine@${to}':\n+    resolution: {integrity: sha512-bbbb, tarball: https://npm.pkg.github.com/download/@seazn-club/seazn-engine/${to}/9c1d2e3f}\n`
+    + `@@ -6766,1 +6766,1 @@ snapshots:\n-  '@seazn-club/seazn-engine@${from}${peers}':\n+  '@seazn-club/seazn-engine@${to}${peers}':\n`;
 }
 /** A lock diff that moves zod alone, the engine's lines untouched (one is context). */
 const ZOD_ONLY = `${LOCK_HEAD}@@ -5946,2 +5946,2 @@ packages:\n-  zod@4.4.3:\n-    resolution: {integrity: sha512-cccc}\n+  zod@4.4.4:\n+    resolution: {integrity: sha512-dddd}\n`
-  + "@@ -6766,3 +6766,3 @@ snapshots:\n   '@onryde/seazn-engine@1.0.0(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)':\n     dependencies:\n-      zod: 4.4.3\n+      zod: 4.4.4\n";
+  + "@@ -6766,3 +6766,3 @@ snapshots:\n   '@seazn-club/seazn-engine@1.0.0(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)':\n     dependencies:\n-      zod: 4.4.3\n+      zod: 4.4.4\n";
 /** The engine's version unchanged; a peer moved, so the lines naming the engine are rewritten with the same engine version. */
 const PEER_ONLY = `${LOCK_HEAD}@@ -27,2 +27,2 @@ importers:\n`
-  + "-        version: '@onryde/seazn-engine@1.0.0(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)'\n+        version: '@onryde/seazn-engine@1.0.0(fast-check@3.23.2)(vitest@4.1.12)(zod@4.4.3)'\n";
+  + "-        version: '@seazn-club/seazn-engine@1.0.0(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)'\n+        version: '@seazn-club/seazn-engine@1.0.0(fast-check@3.23.2)(vitest@4.1.12)(zod@4.4.3)'\n";
 /** This PR's own lock diff: the workspace link leaves and the registry package arrives. */
 const ARRIVAL = `${LOCK_HEAD}@@ -25,3 +25,3 @@ importers:\n       '@seazn/engine':\n-        specifier: workspace:*\n-        version: link:packages/engine\n`
-  + "+        specifier: npm:@onryde/seazn-engine@^1.0.0\n+        version: '@onryde/seazn-engine@1.0.0(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)'\n";
+  + "+        specifier: npm:@seazn-club/seazn-engine@^1.0.0\n+        version: '@seazn-club/seazn-engine@1.0.0(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)'\n";
 
-describe("pr-rows treats an @onryde/seazn-engine version change in pnpm-lock.yaml as engine-touching (engine split 2b, A2; Review Focus 5)", () => {
+describe("pr-rows treats an @seazn-club/seazn-engine version change in pnpm-lock.yaml as engine-touching (engine split 2b, A2; Review Focus 5)", () => {
   const WEB = "apps/web/src/components/x.tsx";
 
-  it("a lock diff moving @onryde/seazn-engine 1.0.0 → 1.1.0 requires declared rows: undeclared is exit 1, naming the lock and both versions", () => {
+  it("a lock diff moving @seazn-club/seazn-engine 1.0.0 → 1.1.0 requires declared rows: undeclared is exit 1, naming the lock and both versions", () => {
     const d = decide({ body: "bumps the engine", changed: [LOCK], lockDiff: engineBump("1.0.0", "1.1.0") });
     expect(d.exit).toBe(1);
     const why = "why" in d ? d.why : "";

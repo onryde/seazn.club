@@ -266,7 +266,7 @@ describe("W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 1
 
 // Review I-3: the proofs live in apps/web, e2e and tools, so a PR that touches none of the engine must still
 // run this checker. The `gates` job is not path-filtered.
-// Engine split 2b: the engine checker's step left ci.yml with the engine (A2; it runs in onryde/seazn.club.engine's CI), so the
+// Engine split 2b: the engine checker's step left ci.yml with the engine (A2; it runs in seazn-club/seazn.club.engine's CI), so the
 // step these tests pin is the root checker's, the one rules checker step left here.
 describe("the checker runs on every pull request: CI wiring (review I-3)", () => {
   const lines = readFileSync(join(REPO, ".github/workflows/ci.yml"), "utf8").split("\n");

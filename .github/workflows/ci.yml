@@ -28,7 +28,7 @@ env:
 
 # Least privilege for GITHUB_TOKEN (CodeQL actions/missing-workflow-permissions).
 # Every job only reads the repo and its packages; a job needing more declares its own block. `packages: read`: every
-# install fetches @seazn/engine (`npm:@onryde/seazn-engine`) from GitHub Packages (engine split 2b). A job-level block
+# install fetches @seazn/engine (`npm:@seazn-club/seazn-engine`) from GitHub Packages (engine split 2b). A job-level block
 # REPLACES this one, so a job with its own block that installs repeats `packages: read`
 # (scripts/__tests__/registry-auth-workflows.test.ts).
 permissions:
@@ -153,7 +153,7 @@ jobs:
           node-version: 26
           cache: pnpm
           registry-url: https://npm.pkg.github.com
-          scope: '@onryde'
+          scope: '@seazn-club'
       - run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}
@@ -200,22 +200,22 @@ jobs:
       - run: node node_modules/typescript-native/bin/tsc -p tsconfig.tools-tests.json
       # Engine split 2b: @seazn/engine is the registry package, so no manifest may point it back at a local tree (a `link:` or
       # `file:` spec installs green against stale source, AGENTS.md class 14), under either name and in any key shape: a dependency,
-      # a version-selected override (`@onryde/seazn-engine@1.0.0`) or a parent>child override, in package.json or
+      # a version-selected override (`@seazn-club/seazn-engine@1.0.0`) or a parent>child override, in package.json or
       # pnpm-workspace.yaml. Each of the six consumers pins the alias.
       # One grep each (D37); scripts/__tests__/registry-install.test.ts pins the alias spec itself.
       - name: Registry engine guards (engine split 2b)
         run: |
           set -euo pipefail
-          if git grep -nE "(@seazn/engine|@onryde/seazn-engine)(@[^\"': ]*)?[\"']?: *[\"']?(link|file):" -- '*package.json' pnpm-workspace.yaml; then
-            echo "::error::the engine (@seazn/engine or @onryde/seazn-engine) is a link:/file: dependency or override above. It is the registry package npm:@onryde/seazn-engine; point it at a local tree in your own checkout only, never in a commit."
+          if git grep -nE "(@seazn/engine|@seazn-club/seazn-engine)(@[^\"': ]*)?[\"']?: *[\"']?(link|file):" -- '*package.json' pnpm-workspace.yaml; then
+            echo "::error::the engine (@seazn/engine or @seazn-club/seazn-engine) is a link:/file: dependency or override above. It is the registry package npm:@seazn-club/seazn-engine; point it at a local tree in your own checkout only, never in a commit."
             exit 1
           fi
-          n="$({ git grep -h -c 'npm:@onryde/seazn-engine@' -- '*package.json' || true; } | awk '{ s += $1 } END { print s + 0 }')"
+          n="$({ git grep -h -c 'npm:@seazn-club/seazn-engine@' -- '*package.json' || true; } | awk '{ s += $1 } END { print s + 0 }')"
           if [ "$n" -ne 6 ]; then
-            echo "::error::$n manifests pin npm:@onryde/seazn-engine@, want 6 (root, apps/web, packages/reference, packages/scheduler, tools/bench, tools/matrix)."
+            echo "::error::$n manifests pin npm:@seazn-club/seazn-engine@, want 6 (root, apps/web, packages/reference, packages/scheduler, tools/bench, tools/matrix)."
             exit 1
           fi
-          echo "registry engine guards: no link:/file: engine dependency; $n manifests pin npm:@onryde/seazn-engine@"
+          echo "registry engine guards: no link:/file: engine dependency; $n manifests pin npm:@seazn-club/seazn-engine@"
       # v3/03 §6: retired plan tier must never reappear in UI copy.
       - name: Plan-scrub grep gate (PROMPT-32)
         run: bash scripts/check-plan-scrub.sh
@@ -415,7 +415,7 @@ jobs:
 
       # The monorepo's half of the engine rules reference checker (engine-split 1d-5): the proof and enforced-at paths that are NOT the
       # engine's (apps/web, e2e, tools, packages/reference), the W2b rows' text against the W2b spec, and this step's CI wiring. Its engine
-      # half left with the engine (engine split 2b) and runs in onryde/seazn.club.engine's own CI. Red on zero tests, a failed test or
+      # half left with the engine (engine split 2b) and runs in seazn-club/seazn.club.engine's own CI. Red on zero tests, a failed test or
       # suite, a skip or todo, and any file but the one asked for (scripts/__tests__/rules-reference.test.ts pins it).
       - name: Root rules reference checker (DB-free)
         run: |
@@ -495,7 +495,7 @@ jobs:
           node-version: 26
           cache: pnpm
           registry-url: https://npm.pkg.github.com
-          scope: '@onryde'
+          scope: '@seazn-club'
       - run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}
@@ -625,7 +625,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
-    # packages: read lets GITHUB_TOKEN fetch @onryde/seazn-engine (consumed as
+    # packages: read lets GITHUB_TOKEN fetch @seazn-club/seazn-engine (consumed as
     # @seazn/engine) from GitHub Packages inside the image's install RUN.
     permissions:
       contents: read
@@ -869,7 +869,7 @@ jobs:
           node-version: 26
           cache: pnpm
           registry-url: https://npm.pkg.github.com
-          scope: '@onryde'
+          scope: '@seazn-club'
       - run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}
@@ -1248,7 +1248,7 @@ jobs:
           node-version: 26
           cache: pnpm
           registry-url: https://npm.pkg.github.com
-          scope: '@onryde'
+          scope: '@seazn-club'
       - run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}
@@ -1426,7 +1426,7 @@ jobs:
           node-version: 26
           cache: pnpm
           registry-url: https://npm.pkg.github.com
-          scope: '@onryde'
+          scope: '@seazn-club'
       - run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}
@@ -1651,7 +1651,7 @@ jobs:
           node-version: 26
           cache: pnpm
           registry-url: https://npm.pkg.github.com
-          scope: '@onryde'
+          scope: '@seazn-club'
       - run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}
@@ -1905,7 +1905,7 @@ jobs:
           node-version: 26
           cache: pnpm
           registry-url: https://npm.pkg.github.com
-          scope: '@onryde'
+          scope: '@seazn-club'
       - run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}
@@ -2582,7 +2582,7 @@ jobs:
           node-version: 26
           cache: pnpm
           registry-url: https://npm.pkg.github.com
-          scope: '@onryde'
+          scope: '@seazn-club'
       - run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}
@@ -2679,7 +2679,7 @@ jobs:
   # R27 (W1d D13): a PR touching the engine or usecases/stages/ declares its matrix
   # rows; the sample runs them + a fixed 33 against the committed baseline.
   # Since engine split 2b the engine is a registry package, so "touching the
-  # engine" is a version change of @onryde/seazn-engine in pnpm-lock.yaml
+  # engine" is a version change of @seazn-club/seazn-engine in pnpm-lock.yaml
   # (tools/matrix/ci/pr-rows.ts reads the lock's own diff).
   # The sample itself is matrix-truth.yml's `pr-sample` scope (a called
   # workflow, so the visibility guard and the shard recipe live in ONE file).
@@ -2720,7 +2720,7 @@ jobs:
           node-version: 26
           cache: pnpm
           registry-url: https://npm.pkg.github.com
-          scope: '@onryde'
+          scope: '@seazn-club'
       - run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}
@@ -2742,7 +2742,7 @@ jobs:
           # THREE dots (I1, T9-FIX1): the merge-base against the head, i.e. what THIS PR changed. Two dots diffs against
           # the base TIP, so a PR behind main would list main's own commits as its changes (fetch-depth: 0 has them).
           git diff --name-only --no-renames "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed.txt"
-          # Engine split 2b (Review Focus 5): an engine bump arrives as an @onryde/seazn-engine version change in the lock, never as
+          # Engine split 2b (Review Focus 5): an engine bump arrives as an @seazn-club/seazn-engine version change in the lock, never as
           # a packages/engine/ path, so pr-rows reads the lock's own diff over the same three-dot range.
           git diff --no-renames "$BASE_SHA...$HEAD_SHA" -- pnpm-lock.yaml > "$RUNNER_TEMP/lock.diff"
           node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/ci/pr-rows.ts --body-file "$RUNNER_TEMP/body.txt" --changed-file "$RUNNER_TEMP/changed.txt" --lock-diff-file "$RUNNER_TEMP/lock.diff" >> "$GITHUB_OUTPUT"
@@ -2759,7 +2759,7 @@ jobs:
     needs: matrix-rows
     # T9-FORK: a fork PR never reaches vars.MATRIX_RUNNER (the called workflow's jobs carry the same condition).
     if: needs.matrix-rows.outputs.run == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    # packages: read: the called workflow installs @onryde/seazn-engine, and a called workflow's token cannot exceed its caller's.
+    # packages: read: the called workflow installs @seazn-club/seazn-engine, and a called workflow's token cannot exceed its caller's.
     permissions:
       contents: read
       actions: read

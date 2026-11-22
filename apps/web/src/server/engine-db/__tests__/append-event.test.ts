@@ -613,7 +613,7 @@ describe("no logger outside the sanctioned funnel (R3.5 Task K, K6/K7)", () => {
     expect(offenders).toEqual([]);
   });
   // K7 (no sport module imports a logger) read packages/engine/src/sports and moved with the engine (engine split 2b E1): it is
-  // onryde/seazn.club.engine's test/append-event.test.ts.
+  // seazn-club/seazn.club.engine's test/append-event.test.ts.
 });
 
 // W2e T32 fix round 2 (item 3) — the API behaviour `docs/api-v1-breaking-changes.md` (2026-10-29) promises, at the funnel

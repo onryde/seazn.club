@@ -351,7 +351,7 @@ describe("gh.ts: the thin wrapper", () => {
   });
 
   it("REPO_SHAPE takes owner/name only", () => {
-    for (const ok of ["acme/seazn", "onryde/seazn.club", "a-b/c_d"]) expect(REPO_SHAPE.test(ok), ok).toBe(true);
+    for (const ok of ["acme/seazn", "seazn-club/seazn.club", "a-b/c_d"]) expect(REPO_SHAPE.test(ok), ok).toBe(true);
     for (const no of ["", "a", "a/b/c", "a b/c", "a/b\n", "a/b?x"]) expect(REPO_SHAPE.test(no), JSON.stringify(no)).toBe(false);
   });
 

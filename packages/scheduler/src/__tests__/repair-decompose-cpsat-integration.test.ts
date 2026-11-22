@@ -7,7 +7,7 @@
 // and — the whole reason C9 exists — that a dependency edge with exactly one
 // end swept into a component as a caller-frozen non-violator is CORRECTLY
 // enforced by the real wire once both ends are movable `fixtures` entries.
-// SKIPPED by default: see onryde/seazn.club.placement's README, "Local
+// SKIPPED by default: see seazn-club/seazn.club.placement's README, "Local
 // dev", to start a real service and run this for real.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { isBlockingConflict, repairDecomposedCpsat, validateAssignments } from "@seazn/engine/scheduling";

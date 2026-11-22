@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 // Engine-split 2b (owner ruling 2026-10-30, option A): the engine left this repository, so the four tests below that scanned
 // `apps/web/src`, `packages/engine/src` and `tools/matrix/lib` together are SPLIT. This file holds each one's APP half, under the
 // original id and title, running the same assertion logic over the app's two roots; the engine half runs the same logic over the
-// engine's `src` in onryde/seazn.club.engine (`test/outcome-readers.test.ts`, titled " (engine half)"). What is split is the DATA,
+// engine's `src` in seazn-club/seazn.club.engine (`test/outcome-readers.test.ts`, titled " (engine half)"). What is split is the DATA,
 // never the logic: `ALLOWED`, the reader list and `NOT_A_LEDGER_REPLAY` keep exactly the source's apps/web and tools/matrix rows;
 // every threshold is the source's, except the I-1 floor, which is split between the halves (engine >= 1, app >= 2, source >= 3).
 // The golden-corpus settle allowance and its scan's teeth read only the engine and moved whole (E1).

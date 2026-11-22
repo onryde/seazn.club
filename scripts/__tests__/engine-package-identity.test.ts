@@ -1,4 +1,4 @@
-// D19: published as @onryde/seazn-engine, consumed as @seazn/engine. Pins both halves so nobody "fixes" one.
+// D19: published as @seazn-club/seazn-engine, consumed as @seazn/engine. Pins both halves so nobody "fixes" one.
 //
 // The scan is a function of a repo root, so the real tree is judged once and the SHAPES of failure are judged on scratch trees
 // (a stale spec under a glob the typed list never had, behind a correct sibling field, in a peer or optional field).
@@ -8,10 +8,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const ROOT = path.resolve(import.meta.dirname, "../..");
-const SCOPED = "@onryde/seazn-engine";
+const SCOPED = "@seazn-club/seazn-engine";
 const ALIAS = "@seazn/engine";
 /** Engine split 2b (A1): the registry alias at a caret range on one full release, as scripts/__tests__/registry-install.test.ts pins. Which release is the engine-release bump's business. */
-const SPEC_SHAPE = /^npm:@onryde\/seazn-engine@\^\d+\.\d+\.\d+$/;
+const SPEC_SHAPE = /^npm:@seazn-club\/seazn-engine@\^\d+\.\d+\.\d+$/;
 const WANT_SHAPE = `a caret range on the registry alias (npm:${SCOPED}@^X.Y.Z)`;
 /** The scratch repos' own release: deliberately not the one the real tree is on, so a scan that judged the VALUE would fail here. */
 const SPEC = `npm:${SCOPED}@^7.8.9`;

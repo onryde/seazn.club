@@ -181,9 +181,9 @@ export default defineConfig({
     // "validateAssignments")`, the scheduler's `solveBuild`) — a namespace node owns is frozen ESM, so the spy throws
     // "Cannot redefine property" — and `vi.resetModules()` must hand a re-import a FRESH engine registry, which it
     // cannot do for a module node has cached (module-client.test.ts: the duplicate boot). The matcher runs on the
-    // RESOLVED path: `@seazn/engine` is an alias for the registry package (npm:@onryde/seazn-engine, engine split 2b),
-    // so the path names `@onryde/seazn-engine` and never `@seazn/engine` — that is the pattern that must be here.
-    server: { deps: { inline: [/@onryde\/seazn-engine/, /@seazn\/scheduler/] } },
+    // RESOLVED path: `@seazn/engine` is an alias for the registry package (npm:@seazn-club/seazn-engine, engine split 2b),
+    // so the path names `@seazn-club/seazn-engine` and never `@seazn/engine` — that is the pattern that must be here.
+    server: { deps: { inline: [/@seazn-club\/seazn-engine/, /@seazn\/scheduler/] } },
     coverage: {
       provider: "v8",
       // The v1 engine (pairing/standings/engine) was deleted at the PROMPT-15

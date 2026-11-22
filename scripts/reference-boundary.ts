@@ -85,7 +85,7 @@ const GLOBAL_OBJECTS: ReadonlySet<string> = new Set(["globalThis", "global"]);
 
 /**
  * The engine's real directory; a missing one is refused, never read as "nothing is the engine". Since engine split 2b the
- * engine is the registry package @onryde/seazn-engine, linked under the alias key: the default is the copy the REFERENCE
+ * engine is the registry package @seazn-club/seazn-engine, linked under the alias key: the default is the copy the REFERENCE
  * package resolves (its own `node_modules/@seazn/engine`), realpathed into pnpm's store, since that is the code the oracle
  * would load.
  */

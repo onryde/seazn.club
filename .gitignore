@@ -70,7 +70,7 @@ scripts/.seed-demo-state.json
 # Turborepo
 .turbo
 
-# The placement service moved to onryde/seazn.club.placement (engine-split phase 2a). Checkouts that ever ran it natively
+# The placement service moved to seazn-club/seazn.club.placement (engine-split phase 2a). Checkouts that ever ran it natively
 # still hold an untracked services/placement/venv (hundreds of MB); the tree's own .gitignore went with the deletion, so
 # without this line `git status` lists that venv as untracked forever.
 /services/placement/

@@ -55,7 +55,7 @@ jobs:
   deploy-prod:
     name: Deploy (production)
     runs-on: ubuntu-latest
-    # packages: read lets GITHUB_TOKEN fetch @onryde/seazn-engine (consumed as
+    # packages: read lets GITHUB_TOKEN fetch @seazn-club/seazn-engine (consumed as
     # @seazn/engine) from GitHub Packages inside the image build below.
     permissions:
       contents: read
@@ -78,10 +78,10 @@ jobs:
           node-version: 26
           cache: pnpm
           registry-url: https://npm.pkg.github.com
-          scope: '@onryde'
+          scope: '@seazn-club'
 
       # The release-time FOLD_EPOCH report that ran here moved with the engine (engine split 2b, plan false premise 6): the
-      # engine repo's release workflow (onryde/seazn.club.engine, .github/workflows/release.yml) writes it into each engine
+      # engine repo's release workflow (seazn-club/seazn.club.engine, .github/workflows/release.yml) writes it into each engine
       # version's GitHub Release, which is where an engine bump that raises an epoch is decided.
 
       # See stg.yml's identical step for why --prod and why it's transitive
@@ -205,7 +205,7 @@ jobs:
   deploy-cron-worker-prod:
     name: Deploy cron Worker (production)
     runs-on: ubuntu-latest
-    # packages: read lets GITHUB_TOKEN fetch @onryde/seazn-engine for the install below (the filtered install does
+    # packages: read lets GITHUB_TOKEN fetch @seazn-club/seazn-engine for the install below (the filtered install does
     # not need the engine today; every install authenticates, so a cron Worker that imports it never reds on main).
     permissions:
       contents: read
@@ -223,7 +223,7 @@ jobs:
           node-version: 26
           cache: pnpm
           registry-url: https://npm.pkg.github.com
-          scope: '@onryde'
+          scope: '@seazn-club'
       - run: pnpm install --frozen-lockfile --filter @seazn/cron-worker...
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}

@@ -189,7 +189,8 @@ describe("no deployed app skips the bot check", () => {
 // either a recipe that names a skipping ENV_NAME or a reviewed prose mention. A new recipe that is neither fails.
 // ---------------------------------------------------------------------------------------------------------------------------
 const RECIPE_FILES = [
-  "README.md",
+  // README.md left this list 2026-11-22: main emptied it (16fed895d8), so it boots nothing. It stays in RECIPE_ROOTS, so a
+  // README that boots a server again fails discovery until it is listed here with its ENV_NAME.
   "docs/runbooks/e2e-local.md",
   "docs/runbooks/pad-gallery.md",
   "apps/web/e2e/global-setup.ts",

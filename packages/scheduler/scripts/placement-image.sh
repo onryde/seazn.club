@@ -4,7 +4,7 @@
 #
 # The placement service lives in its own repo, which publishes one immutable image per commit:
 #
-#     ghcr.io/onryde/seazn-placement:<40-hex placement commit sha>
+#     ghcr.io/seazn-club/seazn-placement:<40-hex placement commit sha>
 #
 # packages/scheduler/VENDORED.json holds that sha (`imageTag`), the only thing in it. `vendor:proto` writes it from the same
 # `git rev-parse HEAD` as the proto it vendors. Nothing in CI checks it against the placement repo: a placement contract change is
@@ -37,7 +37,7 @@
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
-IMAGE_REPO="ghcr.io/onryde/seazn-placement"
+IMAGE_REPO="ghcr.io/seazn-club/seazn-placement"
 LOCAL_TAG="placement-service:ci"
 
 fail() {

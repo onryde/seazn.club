@@ -25,7 +25,7 @@
     // apps/web is the only package with a build; `^build` keeps the ordering
     // correct if one of its workspace dependencies ever gains one. The engine is
     // not a workspace package (engine split 2b): consumers install the registry
-    // package, `"@seazn/engine": "npm:@onryde/seazn-engine@^1.0.0"`, so it has no
+    // package, `"@seazn/engine": "npm:@seazn-club/seazn-engine@^1.0.0"`, so it has no
     // turbo task. turbo hashes a package's external dependencies as resolved in
     // pnpm-lock.yaml (`hashOfExternalDependencies` in `--dry=json`), so an engine
     // version change in the lock is what invalidates the web build and every

@@ -1,4 +1,4 @@
-// Engine split 2b, Task A2 (plan Review Focus 1): @seazn/engine is `npm:@onryde/seazn-engine@^1.0.0`, served by GitHub
+// Engine split 2b, Task A2 (plan Review Focus 1): @seazn/engine is `npm:@seazn-club/seazn-engine@^1.0.0`, served by GitHub
 // Packages, so a `pnpm install` with no registry credential is a 401 on the first engine tarball. stg.yml and prod.yml run
 // only after a merge or a tag, and e2e.yml only on a push to main or a dispatch, so an install left without one is first
 // seen red on main. This sweep reads every workflow and holds every install step to the three things the credential needs:
@@ -22,7 +22,7 @@ import { describe, expect, it } from "vitest";
 const ROOT = path.resolve(import.meta.dirname, "../..");
 const DIR = path.join(ROOT, ".github/workflows");
 const REGISTRY = "https://npm.pkg.github.com";
-const SCOPE = "@onryde";
+const SCOPE = "@seazn-club";
 /** The job's own GITHUB_TOKEN, by either of its two spellings. */
 const TOKENS: ReadonlySet<string> = new Set(["${{ secrets.GITHUB_TOKEN }}", "${{ github.token }}"]);
 /** A command that installs: pnpm or npm, any words, then `install`, `i`, `ci` or `add` as a word of its own. */

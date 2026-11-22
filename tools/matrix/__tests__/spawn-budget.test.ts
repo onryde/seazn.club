@@ -51,7 +51,7 @@ describe("spawn budget (final batch FB-6)", () => {
     // Engine split 2b: two files are no longer spawning files.
     // scripts/__tests__/main-module.test.ts had one spawn, FB-10 (the engine
     // boundary gate run through a symlink). That test moved to
-    // onryde/seazn.club.engine with the gate. workspace-wiring's two spawns
+    // seazn-club/seazn.club.engine with the gate. workspace-wiring's two spawns
     // were turbo dry runs keyed on the engine WORKSPACE. They were retired
     // because a registry package has no turbo task (ledgers/2b.json, `narrowed`).
     const covered: readonly [string, string, number][] = [

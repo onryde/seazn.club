@@ -48,7 +48,7 @@ describe("isMainModule — the entry-script check the matrix CLIs and the repo g
     expect(isMainModule(metaUrl, join(dir, "missing.mjs"))).toBe(false);
   });
   // Final batch FB-10 (the engine boundary gate started through a symlinked path) moved with the gate (engine split 2b E1): it is
-  // onryde/seazn.club.engine's test/main-module.test.ts.
+  // seazn-club/seazn.club.engine's test/main-module.test.ts.
 });
 
 // engine-split 1d-2 kept a byte-identity pin on the engine's copy of this helper (packages/engine/scripts/lib/main-module.ts), marked
