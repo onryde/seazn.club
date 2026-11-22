@@ -33,6 +33,7 @@ const props = (): Parameters<typeof LaunchActions>[0] => ({
   status: "scheduled",
   canEdit: true,
   fixtures: [],
+  fixturesExist: false,
   entrantNames: {},
   stages: [{ kind: "group", progression: null, config: {} }],
   competitionStatus: "published",

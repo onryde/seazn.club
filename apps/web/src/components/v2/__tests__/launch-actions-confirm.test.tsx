@@ -90,6 +90,8 @@ const baseProps = (over: Partial<LaunchProps> = {}): LaunchProps => ({
   status: "scheduled",
   canEdit: true,
   fixtures: FIXTURES,
+  // The page's own rule before Start (`fixtures.length > 0`), so a scene's list and its boolean never disagree.
+  fixturesExist: (over.fixtures ?? FIXTURES).length > 0,
   entrantNames: { e1: "Alpha", e2: "Bravo" },
   stages: stagesOf("league"),
   competitionStatus: "published",

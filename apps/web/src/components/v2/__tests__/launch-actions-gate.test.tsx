@@ -115,6 +115,7 @@ const baseProps = (): LaunchProps => ({
   status: "scheduled",
   canEdit: true,
   fixtures: FIXTURES,
+  fixturesExist: true,
   entrantNames: { e1: "Alpha", e2: "Bravo" },
   stages: [{ kind: "league", progression: null, config: {} }],
   competitionStatus: "published",

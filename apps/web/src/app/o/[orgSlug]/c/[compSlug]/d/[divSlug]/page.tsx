@@ -899,7 +899,11 @@ export default async function DivisionPage({
               // Starting publishes the schedule, so it can be refused on
               // conflicts; these two let the refusal sheet name the matches it
               // is about. Both are already loaded above for the tabs.
-              fixtures={fixtures}
+              // W5 follow-ups B1 (perf P1): the list only while Start is offered
+              // (`divisionScoringClosed`). Once started, the sheet cannot open, and
+              // the whole list was ~5 MB of flight on every tab at the caps.
+              fixtures={divisionScoringClosed(division.status) ? fixtures : []}
+              fixturesExist={fixtures.length > 0}
               entrantNames={entrantNames}
               // Whether starting really closes the entrant list — open-format
               // stages (ladder/americano) and a root Swiss keep it open, so the

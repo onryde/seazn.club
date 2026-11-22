@@ -70,6 +70,7 @@ const props: LaunchProps = {
   status: "setup",
   canEdit: true,
   fixtures: [],
+  fixturesExist: false,
   entrantNames: {},
   stages: [{ kind: "swiss", progression: null, config: { rounds: 5 } }],
   competitionStatus: "published",
