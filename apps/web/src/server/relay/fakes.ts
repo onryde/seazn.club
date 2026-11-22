@@ -343,6 +343,14 @@ export class FakeIngest implements IngestProvider {
   /** Phase 1 review I3: the deletion each requireSignedVideo call sent, in step with `signedVideoCalls`. */
   readonly signedVideoDeleteAts: Date[] = [];
 
+  /** Seazn Task 24: every createDownload call's video id, in order — a repeat and an unknown id included. */
+  readonly downloadCalls: string[] = [];
+  private readonly downloadScripts = new Map<string, ("ready" | "inprogress")[]>();
+  /** Seazn Task 24: the next createDownload answers for a video, in order; once spent, a held video answers `ready`. */
+  scriptDownload(videoId: string, results: ("ready" | "inprogress")[]): void {
+    this.downloadScripts.set(videoId, [...results]);
+  }
+
   scriptDeleteVideo(videoId: string, results: DeleteVideoResult[]): void {
     this.deleteScripts.set(videoId, [...results]);
   }
@@ -393,6 +401,15 @@ export class FakeIngest implements IngestProvider {
     if (!v) return "absent";
     v.signed = true;
     return "set";
+  }
+
+  /** Seazn Task 24 (C4): Cloudflare's `POST /stream/{uid}/downloads`. A video the fake does not hold (never added, or deleted) is
+   *  Cloudflare's 404 — a throw naming the id; a held one follows its script, then answers `ready`. */
+  async createDownload(videoId: string): Promise<"ready" | "inprogress"> {
+    this.record("createDownload", "POST", `/${videoId}/downloads`, [videoId], videoId);
+    this.downloadCalls.push(videoId);
+    if (!this.videos.some((v) => v.videoId === videoId)) throw new Error(`fake ingest: create download: no video ${videoId}`);
+    return this.downloadScripts.get(videoId)?.shift() ?? "ready";
   }
 }
 

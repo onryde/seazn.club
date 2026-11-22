@@ -133,6 +133,18 @@ function cfReply(c: Call): Reply {
     return { status: 500, body: { success: false, errors: [{ code: 10000, message: `could not mint, last was ${MINTED}` }], result: { token: MINTED } } };
   if (c.init.method === "POST" && /\/stream\/in_notoken\/token$/.test(c.url)) return { status: 200, body: { success: true, result: {} } };
   if (c.init.method === "POST" && /\/stream\/[^/]+\/token$/.test(c.url)) return { status: 200, body: { success: true, result: { token: MINTED } } };
+  // Seazn Task 24 (C4): "Create downloads" — `POST /stream/{uid}/downloads`, result `{ default: { status, url, percentComplete } }`
+  // (OpenAPI, read 2026-11-22: status "ready" | "inprogress" | "error"). `v_dl_busy` is still being made, `v_dl_error` failed,
+  // `v_dl_empty` a 200 with no `default`, `v_gone` a video Cloudflare does not hold, `v_boom` a provider fault; any other is ready.
+  if (c.init.method === "POST" && /\/stream\/v_dl_busy\/downloads$/.test(c.url))
+    return { status: 200, body: { success: true, result: { default: { status: "inprogress", percentComplete: 40, url: "https://customer-x.cloudflarestream.com/v_dl_busy/downloads/default.mp4" } } } };
+  if (c.init.method === "POST" && /\/stream\/v_dl_error\/downloads$/.test(c.url))
+    return { status: 200, body: { success: true, result: { default: { status: "error", percentComplete: 0 } } } };
+  if (c.init.method === "POST" && /\/stream\/v_dl_empty\/downloads$/.test(c.url)) return { status: 200, body: { success: true, result: {} } };
+  if (c.init.method === "POST" && /\/stream\/v_gone\/downloads$/.test(c.url)) return { status: 404, body: { success: false, errors: [{ code: 10003, message: "video not found" }] } };
+  if (c.init.method === "POST" && /\/stream\/v_boom\/downloads$/.test(c.url)) return { status: 500, body: { success: false, errors: [{ code: 10000, message: "internal error for tok" }] } };
+  if (c.init.method === "POST" && /\/stream\/[^/]+\/downloads$/.test(c.url))
+    return { status: 200, body: { success: true, result: { default: { status: "ready", percentComplete: 100, url: `https://customer-x.cloudflarestream.com/${c.url.split("/").at(-2)}/downloads/default.mp4` } } } };
   // Seazn Task 13 (C3): "Edit video details" — `POST /stream/{uid}`, echoing the video it now holds. A healthy Cloudflare echoes
   // what was sent (C7 measured `requireSignedURLs: true` echoed on an in-progress recording). `v_unsigned_echo` is the silent
   // acceptance (a 200 that did not apply it), `v_gone` a video Cloudflare does not hold, `v_boom` a provider fault.
@@ -1182,6 +1194,7 @@ describe("fake/real provider-call parity (Task 3 review G1, m4)", () => {
     await real.deleteInput(realCreds.inputId);
     await real.playbackToken(realCreds.inputId, { expiresAt: BEFORE });   // Seazn Task 13: appended, so the indexes above hold
     await real.requireSignedVideo("v_done", { deleteAt: DELETE_AT });
+    await real.createDownload("v_done");   // Seazn Task 24: appended, so the indexes above hold
 
     const fakePort = new FakeRecorder();
     const fake = new FakeIngest({ recorder: fakePort });
@@ -1199,6 +1212,8 @@ describe("fake/real provider-call parity (Task 3 review G1, m4)", () => {
     await fake.deleteInput(fakeCreds.inputId);
     await fake.playbackToken(fakeCreds.inputId, { expiresAt: BEFORE });
     await fake.requireSignedVideo("v_done", { deleteAt: DELETE_AT });
+    fake.addVideo({ videoId: "v_done", inputId: null, createdAt: "2026-09-01T00:00:00Z", inProgress: false });   // deleted above; a control, no call
+    await fake.createDownload("v_done");
 
     await new Promise((r) => setImmediate(r));
     const realShapes = shapes(realPort.calls, { input: realCreds.inputId, video: "v_done", output: realOut });
@@ -1207,7 +1222,7 @@ describe("fake/real provider-call parity (Task 3 review G1, m4)", () => {
     // and the templates really are Cloudflare's account-scoped Stream paths.
     expect(realShapes.map((s) => s.operation)).toEqual([
       "createLiveInput", "inputStatus", "addOutput", "outputState", "removeOutput", "setInputEnabled", "storageUsage", "listVideos", "listInputVideos", "deleteVideo", "deleteInput",
-      "playbackToken", "requireSignedVideo",
+      "playbackToken", "requireSignedVideo", "createDownload",
     ]);
     expect(realShapes[1]!.template).toBe("/client/v4/accounts/{id}/stream/live_inputs/{id}");
     expect(realShapes[4]!.template).toBe("/client/v4/accounts/{id}/stream/live_inputs/{id}/outputs/{id}");   // C1: the output, never the input
@@ -1222,7 +1237,9 @@ describe("fake/real provider-call parity (Task 3 review G1, m4)", () => {
     // m4: the subject id per operation. The adapter is the authority — the
     // object the call is ABOUT — and the fake agrees on all thirteen (C1: the removal is about the OUTPUT; the switch, the INPUT;
     // Task 13: the token, the uid it signs; the lock, the VIDEO).
-    expect(realShapes.map((s) => s.subject)).toEqual(["input", "input", "input", "input", "output", "input", "none", "none", "input", "video", "input", "input", "video"]);
+    // Seazn Task 24: the download is made on the video's own `/downloads` path, about the VIDEO.
+    expect([realShapes[13]!.method, realShapes[13]!.template]).toEqual(["POST", "/client/v4/accounts/{id}/stream/{id}/downloads"]);
+    expect(realShapes.map((s) => s.subject)).toEqual(["input", "input", "input", "input", "output", "input", "none", "none", "input", "video", "input", "input", "video", "video"]);
     expect(fakeShapes).toEqual(realShapes);
   });
 });
@@ -1388,6 +1405,32 @@ describe("Seazn Task 13: playback tokens and the recording lock", () => {
     await settle();
     expect(port.calls.map((c) => [c.operation, c.subjectId])).toEqual([
       ["requireSignedVideo", "v_cam_done"], ["requireSignedVideo", "v_unsigned_echo"], ["requireSignedVideo", "v_gone"], ["requireSignedVideo", "v_boom"],
+    ]);
+  });
+
+  it("Task 24: createDownload POSTs /stream/{videoId}/downloads with no body and answers `default.status` — ready or inprogress; an `error` status, a 200 with no `default`, a 404 and a 500 each throw, the account token redacted; the download URL in the answer is never handed back", async () => {
+    const { rec, cf, port } = build();
+    expect(await cf.createDownload("v_done")).toBe("ready");
+    expect([rec.calls[0]!.init.method, rec.calls[0]!.url, rec.calls[0]!.init.body]).toEqual(["POST", `${CLOUDFLARE_STREAM_BASE}/acct/stream/v_done/downloads`, undefined]);
+    expect(await cf.createDownload("v_dl_busy")).toBe("inprogress");
+    const errs: string[] = [];
+    for (const uid of ["v_dl_error", "v_dl_empty", "v_gone", "v_boom"]) {
+      const e = await cf.createDownload(uid).then(() => null, (x: unknown) => x as Error);
+      expect(e, uid).toBeInstanceOf(Error);
+      errs.push(e!.message);
+    }
+    expect(errs[0]).toMatch(/^cloudflare create download: the download failed \(status error\)/);
+    expect(errs[1]).toMatch(/^cloudflare create download: the 200 carried no default download \(HTTP 200\)/);
+    expect(errs[2]).toMatch(/^cloudflare create download: HTTP 404 code 10003/);
+    expect(errs[3]).toMatch(/^cloudflare create download: HTTP 500 code 10000/);
+    for (const m of errs) {
+      expect(m).not.toContain(API);
+      expect(m, "no download URL in a message").not.toMatch(/cloudflarestream\.com|default\.mp4/);
+    }
+    await settle();
+    expect(port.calls.map((c) => [c.operation, c.subjectId])).toEqual([
+      ["createDownload", "v_done"], ["createDownload", "v_dl_busy"], ["createDownload", "v_dl_error"], ["createDownload", "v_dl_empty"],
+      ["createDownload", "v_gone"], ["createDownload", "v_boom"],
     ]);
   });
 

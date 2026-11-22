@@ -688,4 +688,19 @@ export class CloudflareIngest implements IngestProvider {
     }
     return "set";
   }
+
+  /** Seazn Task 24 (C4): "Create downloads" — `POST /accounts/{account_id}/stream/{identifier}/downloads`, no body (OpenAPI, read
+   *  2026-11-22: "Creates a download for a video when a video is ready to view"; result `{ default: { status, url, percentComplete
+   *  } }`, status `ready` | `inprogress` | `error`). Asking again for a download that exists answers its current status, so the
+   *  mover calls this until `ready`. The answer's `url` is unsigned and never read: the mover signs its own. An `error` status, a
+   *  200 with no `default`, and any refusal (a 404 included: a video Cloudflare no longer holds) throw. */
+  async createDownload(videoId: string): Promise<"ready" | "inprogress"> {
+    const r = await this.call<{ default?: { status?: string } }>("POST", `/${encodeURIComponent(videoId)}/downloads`, undefined,
+      { operation: "createDownload", ids: [videoId], subjectId: videoId });
+    if (!r.json.success) this.fail("create download", r);
+    const status = r.json.result?.default?.status;
+    if (status === "ready" || status === "inprogress") return status;
+    if (status === undefined) throw new Error(this.red(`cloudflare create download: the 200 carried no default download (HTTP ${r.status})`));
+    throw new Error(this.red(`cloudflare create download: the download failed (status ${String(status).slice(0, 20)})`));
+  }
 }

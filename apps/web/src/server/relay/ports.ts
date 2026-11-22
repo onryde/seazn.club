@@ -136,6 +136,11 @@ export interface IngestProvider {
    *  provider whatever the edit does to the deletion its input stamped (never measured); an echo without it is warned, not
    *  refused (the token rule held). */
   requireSignedVideo(videoId: string, o: { deleteAt: Date }): Promise<"set" | "absent">;
+  /** Seazn Task 24 (C4): make ONE video's MP4 download, or ask after it — `ready` once it can be fetched, `inprogress` while the
+   *  provider is still making it (ask again later). A download that failed, a video the provider does not hold, and a fault all
+   *  throw. The download goes with the video when the video is deleted. The uid is a replay row's own `cf_video_id` (C6), and the
+   *  download URL the provider answers is never handed back: the mover signs its own (cf-playback.ts `signDownload`). */
+  createDownload(videoId: string): Promise<"ready" | "inprogress">;
 }
 export type RunnerSpec = {
   sessionId: string; attempt: number; jobToken: string; appUrl: string;   // attempt → the Machine NAME (domain/runner.ts machineNameFor)

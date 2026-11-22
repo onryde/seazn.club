@@ -100,6 +100,22 @@ describe("FakeIngest", () => {
     expect((await fake.listInputVideos("in-2")).map((v) => v.videoId), "the seed changes only the input it names").toEqual(["v-theirs"]);
   });
 
+  // Seazn Task 24: the fake's `createDownload` — ready by default for a video it holds, a scripted sequence when a test needs the
+  // download to take a while, and Cloudflare's 404 (a throw) for a video it does not hold. Every call is kept, in order.
+  it("Seazn Task 24: createDownload answers ready for a held video, follows a script (inprogress then ready), throws for an unknown one, and keeps every call", async () => {
+    const fake = new FakeIngest();
+    fake.addVideo({ videoId: "v-a", inputId: "in-1", createdAt: "2026-09-01T00:00:00Z", inProgress: false });
+    fake.addVideo({ videoId: "v-b", inputId: "in-1", createdAt: "2026-09-01T00:00:00Z", inProgress: false });
+    expect(await fake.createDownload("v-a")).toBe("ready");
+    fake.scriptDownload("v-b", ["inprogress", "inprogress"]);
+    expect([await fake.createDownload("v-b"), await fake.createDownload("v-b"), await fake.createDownload("v-b")], "the script, then ready").toEqual(["inprogress", "inprogress", "ready"]);
+    await expect(fake.createDownload("v-never")).rejects.toThrow(/v-never/);
+    expect(fake.downloadCalls).toEqual(["v-a", "v-b", "v-b", "v-b", "v-never"]);
+    // The download goes with the video: a deleted video has none to make.
+    await fake.deleteVideo("v-a");
+    await expect(fake.createDownload("v-a")).rejects.toThrow(/v-a/);
+  });
+
   // Seazn Task 19: the walkthrough's stand-in for Cloudflare finishing a recording of an input. A test control like addVideo:
   // it adds a FINISHED, UNSIGNED recording (C3's measured default) of the named input and records no provider call.
   it("Seazn Task 19: addRecording adds a finished, unsigned recording of a known input, each with its own id, and refuses an unknown input", async () => {
