@@ -97,6 +97,7 @@ import { withdrawalNotesFor } from "@/lib/table-withdrawal-note";
 import { adjustmentNotesFor } from "@/lib/points-adjustment-note";
 import { loadPointsAdjustments } from "./points-adjustments";
 import { cachedIfFound } from "./cache-found";
+import { compressEntry, inflateEntry } from "./cache-entry";
 import { divisionQualification, qualificationFixtures } from "./division-qualification";
 import { buildLeaderBoards, type LeaderDivisionConsent } from "./leaders";
 import { readLeaderRows } from "./public-leaders";
@@ -1348,7 +1349,13 @@ export async function getPublicCompetitionHub(
   //
   // The build refuses when its shell does (gone between the read above and
   // this one); that refusal is never stored (cache-found.ts).
-  return cachedIfFound(() => loadCompetitionHub(orgSlug, compSlug), ["pub-hub-v5", shell.competition.id], {
+  //
+  // W5 follow-ups B5: stored compressed (`cache-entry.ts`) - at the caps the raw document is over Next's 2 MB item limit and
+  // was never stored. The entry inflates to the parsed JSON of the document, what a HIT always handed back.
+  const entry = await cachedIfFound(async () => {
+    const doc = await loadCompetitionHub(orgSlug, compSlug);
+    return doc === null ? null : compressEntry(doc);
+  }, ["pub-hub-v5", shell.competition.id], {
     tags: [
       orgTag(orgSlug),
       competitionTag(shell.competition.id),
@@ -1356,4 +1363,5 @@ export async function getPublicCompetitionHub(
     ],
     revalidate: REVALIDATE_FAST,
   });
+  return entry === null ? null : inflateEntry(entry);
 }
