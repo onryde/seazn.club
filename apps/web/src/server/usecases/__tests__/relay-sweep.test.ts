@@ -1902,6 +1902,76 @@ describe.skipIf(!HAS_DB)("Seazn-hosted video Task 18: the sweep holds Seazn prog
     expect(await listedIds(r)).toContain(programmeVideo);
   });
 
+  // Seazn-hosted video Task 24 (carries from Task 23 and Phase 1 re-review N5). The day-3 alert means "this recording has not
+  // reached the replay host": a recording whose replay row is `playable` (moved and checked; its Cloudflare copy goes 60 min
+  // later) or `deleted` (the organiser removed the replay) is handled, and never alerts. Every other row state, and no row, still
+  // alerts. The rows are written by SQL: the mover's own path is seazn-replays.test.ts's; this is the sweep's read of them.
+  const replayRow = (r: Rig, videoId: string, part: number, state: string) => sql`
+    insert into fixture_video_replays (org_id, session_id, fixture_id, cf_video_id, recorded_at, part_no, state, bunny_video_id, verified_at)
+    values (${r.orgId}, ${r.sessionId}, ${r.fixtureId}, ${videoId}, now(), ${part}, ${state},
+            ${state === "playable" || state === "encoding" ? `g-${videoId}` : null}, ${state === "playable" ? new Date() : null})`;
+  it("Task 24 carry: a recording whose replay is playable or organiser-deleted is handled — not alerted, not marked; one whose replay is encoding, failed or absent still alerts", async () => {
+    const { r, programme, programmeVideo } = await endedComposed({ seazn: true, programmeAge: "old" });
+    const tag = randomUUID().slice(0, 8);
+    const rows = [
+      { videoId: programmeVideo, state: "playable", alerts: false },
+      { videoId: `vpd-${tag}`, state: "deleted", alerts: false },
+      { videoId: `vpe-${tag}`, state: "encoding", alerts: true },
+      { videoId: `vpf-${tag}`, state: "failed", alerts: true },
+      { videoId: `vpn-${tag}`, state: null, alerts: true },
+    ];
+    for (const [i, x] of rows.entries()) {
+      if (x.videoId !== programmeVideo) r.ingest.addVideo({ videoId: x.videoId, inputId: programme, createdAt: pastPromise().toISOString(), inProgress: false });
+      if (x.state !== null) await replayRow(r, x.videoId, i + 1, x.state);
+    }
+    replayOn();
+    sentry.captureError.mockClear();
+    const res = await sweep(r);
+    expect(res, "every one is still held, and past the promise").toMatchObject({ seaznHeld: rows.length, seaznHeldPastPromise: rows.length, videosDeleted: 0 });
+    const alerted = heldReports().map(([, c]) => (c as { extra: { cfVideoId: string } }).extra.cfVideoId).sort();
+    expect(alerted).toEqual(rows.filter((x) => x.alerts).map((x) => x.videoId).sort());
+    let checked = 0;
+    for (const x of rows) {
+      expect(await alertRows(x.videoId), `${x.state}: marked iff alerted`).toHaveLength(x.alerts ? 1 : 0);
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
+
+  // Phase 1 re-review N5: the day Phase 2 turns on, every recording already past the promise is alerted at once — one Sentry
+  // event per recording would be a flood. Up to HELD_ALERT_EACH_MAX (5, typed here) unmarked recordings alert one by one, as
+  // before; past that the pass sends ONE summary naming the count and the first 10 ids, and marks every one of them.
+  it.each([
+    { n: 5, events: 5 },
+    { n: 6, events: 1 },
+    { n: 12, events: 1 },
+  ])("review N5: $n unmarked recordings past the promise send $events alert event(s); every one is marked, and a second pass sends nothing", async ({ n, events }) => {
+    const { r, programme, programmeVideo } = await endedComposed({ seazn: true, programmeAge: "old" });
+    const tag = randomUUID().slice(0, 8);
+    const ids = [programmeVideo, ...Array.from({ length: n - 1 }, (_, k) => `vpx${k}-${tag}`)];
+    for (const v of ids.slice(1)) r.ingest.addVideo({ videoId: v, inputId: programme, createdAt: pastPromise().toISOString(), inProgress: false });
+    replayOn();
+    sentry.captureError.mockClear();
+    const res = await sweep(r);
+    expect(res).toMatchObject({ seaznHeld: n, seaznHeldPastPromise: n, videosDeleted: 0 });
+    expect(heldReports(), "the alert events").toHaveLength(events);
+    if (events === 1) {
+      const [err, ctx] = heldReports()[0]!;
+      expect((err as Error).message).toBe(`relay sweep: ${n} Seazn recordings past 3 days have not reached Bunny`);
+      const extra = (ctx as { extra: { count: number; cfVideoIds: string[] } }).extra;
+      expect(extra.count).toBe(n);
+      expect(extra.cfVideoIds, "the first 10 ids, at most").toHaveLength(Math.min(n, 10));
+      for (const v of extra.cfVideoIds) expect(ids).toContain(v);
+    }
+    let marked = 0;
+    for (const v of ids) marked += (await alertRows(v)).length;
+    expect(marked, "every recording is marked").toBe(n);
+    sentry.captureError.mockClear();
+    r.tick(DAY_MS);
+    await sweep(r);
+    expect(heldReports(), "a second pass: nothing").toEqual([]);
+  });
+
   it("review m2: an alert that FAILS does not stop the pass's other alerts — the failure is reported, the other recording is alerted and marked, and the next pass alerts only the unmarked one", async () => {
     const { r, programme, programmeVideo } = await endedComposed({ seazn: true, programmeAge: "old" });
     const second = `vp2-${randomUUID().slice(0, 8)}`;

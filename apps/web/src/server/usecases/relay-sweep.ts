@@ -106,6 +106,11 @@ export class SweepScopeEmpty extends Error {
   }
 }
 
+/** Phase 1 re-review N5 (Task 24): the most unmarked held recordings a pass alerts one by one; past it, one summary naming the
+ *  count and the first HELD_ALERT_SUMMARY_IDS ids. */
+const HELD_ALERT_EACH_MAX = 5;
+const HELD_ALERT_SUMMARY_IDS = 10;
+
 /** The per-session advisory key two concurrent sweeps contend on. Namespaced so it can never collide with the org money
  *  lock (`stream-credits-org:<id>`, stream-credits.ts lockOrg). Exported for the lock test. */
 export const sweepSessionLockKey = (sessionId: string) => `relay-sweep-session:${sessionId}`;
@@ -606,33 +611,57 @@ export async function sweepStreamSessions(
     }
   }
   // Seazn Task 18: a held recording past the promise is alerted ONCE per recording, ever — the seazn_held_alerts row (V541)
-  // is the memory. Phase 1 has no replay table, so "no playable replay" holds for every recording (Task 23 adds the table;
-  // the replay check belongs with it). After the deletes, so an alert fault can never cost the pass its retention.
+  // is the memory. After the deletes, so an alert fault can never cost the pass its retention.
   // Phase 1 review I3: so the alert is armed only with SEAZN_HOSTED_REPLAY on (Phase 2, which needs LIVE): with Phase 1 alone
   // every Seazn recording would alert at day 3. The count is kept either way, and nothing is marked while it is off, so turning
   // Phase 2 on alerts what is already past the promise, once. Re-review N3: the flag is read tolerantly (`replayAlertArmed`), so
   // a malformed value cannot abort the rest of the pass.
+  // Task 24 (the Task 23 carry): a recording whose replay row (V542) is `playable` — moved and checked, its Cloudflare copy
+  // deleted 60 min later — or `deleted` (the organiser removed the replay) is HANDLED: it never alerts. Every other state, and
+  // no row, still alerts: the alert means "has not reached Bunny".
+  // Phase 1 re-review N5: the day Phase 2 turns on, every recording already past the promise alerts at once. Up to
+  // HELD_ALERT_EACH_MAX unmarked ones alert one by one; past that the pass sends ONE summary (the count and the first
+  // HELD_ALERT_SUMMARY_IDS ids) and marks them all, so a backlog is one Sentry event, not one per recording.
   const pastPromise = retentionPlan(heldVideos, [], now).deleteVideos;
   out.seaznHeldPastPromise = pastPromise.length;
   if (pastPromise.length > 0 && replayAlertArmed()) {
-    let alerted: Set<string> | null = null;
+    let skip: Set<string> | null = null;
     try {
-      alerted = new Set((await sql<{ id: string }[]>`
-        select cf_video_id as id from seazn_held_alerts where cf_video_id in ${sql(pastPromise)}`).map((r) => r.id));
+      skip = new Set((await sql<{ id: string }[]>`
+        select cf_video_id as id from seazn_held_alerts where cf_video_id in ${sql(pastPromise)}
+        union
+        select cf_video_id as id from fixture_video_replays where cf_video_id in ${sql(pastPromise)} and state in ('playable', 'deleted')`).map((r) => r.id));
     } catch (err) {
       captureError(err, { route: "relay.sweep.seazn_held" });
       log.error({ err: String(err) }, "relay sweep: the Seazn held-recording alert marks could not be read — no alert this pass; the next pass retries");
     }
-    // Per recording (Task 18 review m2): one alert that fails never stops the rest of this pass's alerts.
-    for (const videoId of alerted ? pastPromise : []) {
-      if (alerted!.has(videoId)) continue;
-      const sessionId = heldBy.get(heldVideos.find((v) => v.videoId === videoId)!.inputId!)!;
+    const due = skip === null ? [] : pastPromise.filter((id) => !skip!.has(id));
+    const sessionOf = (videoId: string) => heldBy.get(heldVideos.find((v) => v.videoId === videoId)!.inputId!)!;
+    const mark = async (videoId: string, sessionId: string) => {
+      await sql`insert into seazn_held_alerts (cf_video_id, session_id) values (${videoId}, ${sessionId}) on conflict (cf_video_id) do nothing`;
+    };
+    if (due.length > HELD_ALERT_EACH_MAX) {
+      // One summary; a summary that fails marks nothing, so the next pass sends it again.
       try {
-        captureError(new Error("relay sweep: a Seazn recording past 3 days has not reached Bunny"), { route: "relay.sweep.seazn_held", extra: { sessionId, cfVideoId: videoId } });
-        await sql`insert into seazn_held_alerts (cf_video_id, session_id) values (${videoId}, ${sessionId}) on conflict (cf_video_id) do nothing`;
+        captureError(new Error(`relay sweep: ${due.length} Seazn recordings past 3 days have not reached Bunny`), {
+          route: "relay.sweep.seazn_held", extra: { count: due.length, cfVideoIds: due.slice(0, HELD_ALERT_SUMMARY_IDS) },
+        });
+        for (const videoId of due) await mark(videoId, sessionOf(videoId));
       } catch (err) {
-        captureError(err, { route: "relay.sweep.seazn_held", extra: { sessionId, cfVideoId: videoId } });
-        log.error({ sid: sessionId, videoId, err: String(err) }, "relay sweep: a Seazn held-recording alert could not be recorded — the next pass retries it");
+        captureError(err, { route: "relay.sweep.seazn_held", extra: { count: due.length } });
+        log.error({ count: due.length, err: String(err) }, "relay sweep: the Seazn held-recording summary could not be sent or recorded — the next pass retries it");
+      }
+    } else {
+      // Per recording (Task 18 review m2): one alert that fails never stops the rest of this pass's alerts.
+      for (const videoId of due) {
+        const sessionId = sessionOf(videoId);
+        try {
+          captureError(new Error("relay sweep: a Seazn recording past 3 days has not reached Bunny"), { route: "relay.sweep.seazn_held", extra: { sessionId, cfVideoId: videoId } });
+          await mark(videoId, sessionId);
+        } catch (err) {
+          captureError(err, { route: "relay.sweep.seazn_held", extra: { sessionId, cfVideoId: videoId } });
+          log.error({ sid: sessionId, videoId, err: String(err) }, "relay sweep: a Seazn held-recording alert could not be recorded — the next pass retries it");
+        }
       }
     }
   }
