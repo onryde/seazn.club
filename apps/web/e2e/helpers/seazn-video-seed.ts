@@ -12,7 +12,7 @@
 // player in a browser. The signed address is therefore the server's own (`https://playback.fake.invalid/fake.<uid>.<exp>/manifest/...`).
 //
 // The two moments an organiser's Go live passes through are two calls: `seedSeaznMatch` leaves the session WARMING (the route answers
-// no live: the island is mounted and draws nothing), and `goLive` is the Machine's beat (state `live`, with the programme input's uid
+// no live: the island holds the player's box with its one quiet line, re-capture R2), and `goLive` is the Machine's beat (state `live`, with the programme input's uid
 // the route signs). `finishSeaznMatch` completes the row, so a shared org is never left with a live session.
 //
 // Task 17 (Match Day): the same row on a fixture the CALLER already made (`seedSeaznSession`: Match Day's seed places and starts its own
@@ -109,6 +109,22 @@ export async function finishSeaznMatch(m: SeaznSession): Promise<void> {
   await withDb((sql) => sql`
     update fixture_stream_sessions set state = 'completed', end_reason = 'stopped', ended_at = now()
      where id = ${m.sessionId} and state not in ('completed', 'failed')`);
+}
+
+/** `n` recordings locked under the session's programme input, the row the stream tick's Seazn pass writes (V540: uid, input, lock time),
+ *  in lock order, the first the oldest. The pass itself is proved in vitest (seazn-recordings.test.ts) and by the walkthrough's own tick
+ *  (walkthrough/seazn-hosted.spec.ts step 7); what the specs that use this prove is what the PAGE does once a recording exists. The route
+ *  lists only a TERMINAL session's recordings, so `finishSeaznMatch` first. Returns the video ids. */
+export async function lockRecordings(m: SeaznSession, n: number): Promise<string[]> {
+  return withDb(async (sql) => {
+    const [input] = await sql<{ id: string }[]>`select id from fixture_stream_inputs where session_id = ${m.sessionId} and role = 'programme'`;
+    expect(input, "premise: the session has its programme input (`goLive` writes it)").toBeTruthy();
+    const ids = Array.from({ length: n }, (_, i) => `e2e-recording-${randomBytes(6).toString("hex")}-${i + 1}`);
+    for (const [i, videoId] of ids.entries()) {
+      await sql`insert into seazn_locked_videos (cf_video_id, input_row_id, locked_at) values (${videoId}, ${input!.id}, now() - ${(n - i) * 60_000} * interval '1 millisecond')`;
+    }
+    return ids;
+  });
 }
 
 /** A manifest the player will accept: one 10 s VOD segment, so hls.js parses it and, with loading held until the viewer presses play,

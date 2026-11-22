@@ -24,6 +24,7 @@ import { PublicFixtureVideo } from "@/server/api-v1/schemas";
 import { SeaznVideoIsland, asPublicFixtureVideo, fetchSeaznVideo, nextPartIndex, playerKey, seaznVideoUrl } from "../seazn-video-island";
 import { seaznVideoLabels } from "../seazn-video-labels";
 import { SEAZN_VIDEO_HOLD_MS } from "../seazn-video-hold";
+import { FINALISATION_GRACE_SECONDS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS, RUNNER_STOP_GRACE_SECONDS, STREAM_TICK_PERIOD_SECONDS } from "@/server/relay/config";
 import { SEAZN_VIDEO_POLL_FLOOR_MS } from "../seazn-video-schedule";
 import { renderIsland, type walk } from "@/components/__tests__/_hook-harness";
 
@@ -457,7 +458,7 @@ describe("re-capture R2: the box holds through a wait, in the server markup", ()
     expect(out).not.toMatch(/<video\b|data-src=/);
   });
 
-  it("the starting box IS the player's box: same region classes, same frame (16:9, 200 px floor, dark) — so the swap to the player moves nothing", () => {
+  it("the starting box carries the player's own region and frame class sets (16:9, 200 px floor, dark); that they place the same in a browser is the probe's (e2e/public-fixture.spec.ts)", () => {
     const box = waiting();
     const live = html(answer({ live: signed("live") }));
     expect(tokens(classOf(box, "seazn-video-starting"))).toEqual(tokens(classOf(live, "seazn-video")));
@@ -524,7 +525,7 @@ describe("re-capture R1: the picker's row is held in the box when the plan knows
     expect(count(reserved([1, 2, 3, 4]), /<span /g), "four parts, four pills").toBe(4);
   });
 
-  it("the held row IS the picker's row: its class set and each pill's class equal the real tablist's, so the real one takes its place with no shift", () => {
+  it("the held row carries the picker's own class sets: its row and each pill's class equal the real tablist's (that the real one then takes its place with no shift is the browser probe's, e2e/public-fixture.spec.ts)", () => {
     const real = html(answer({ replay: [part(1), part(3)] }));
     const realRow = /<div [^>]*role="tablist"[^>]*>/.exec(real)![0];
     const heldRow = row(reserved([1, 3]))!;
@@ -681,7 +682,8 @@ describe("re-capture R2: the mounted island holds its box across reads, and lets
       vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { release = resolve; })));
       const island = mount({ reserve: true, holdUntil: new Date(NOW - 10 * MIN).toISOString() });
       await vi.advanceTimersByTimeAsync(5_000);
-      expect(ids(island), "no answer yet: the page's own box stands (the plan's word is old, the answer is not in)").toContain("seazn-video-starting");
+      expect(ids(island), "no answer yet: the page's reserved box stands (the plan's word is old, the answer is not in) — without the line it promised").toContain("seazn-video-reserved");
+      expect(ids(island)).not.toContain("seazn-video-starting");
       release(new Response(JSON.stringify({ ok: true, data: { live: signed("live"), replay: [] } }), { status: 200, headers: { "content-type": "application/json" } }));
       await vi.advanceTimersByTimeAsync(0);
       expect(ids(island), "live: the player, in the box").toEqual(expect.arrayContaining(["seazn-video", "seazn-player"]));
@@ -712,6 +714,55 @@ describe("re-capture R2: the mounted island holds its box across reads, and lets
       await vi.advanceTimersByTimeAsync(1);
       expect(boxed(bare), "and nothing outlives it").toBe(false);
       bare.unmount();
+    });
+  });
+
+  it("review m3: an OLD cached page on a route that never answers (every read fails): the line it promised goes at once, and the reserved box stays for the first answer — nothing says 'shortly' for ever", async () => {
+    await clock(async () => {
+      vi.stubGlobal("fetch", route([new Error("offline")]));
+      const island = mount({ reserve: true, holdUntil: new Date(NOW - 10 * MIN).toISOString() });
+      expect(ids(island), "server markup: the page drew the line").toContain("seazn-video-starting");
+      await vi.advanceTimersByTimeAsync(10 * MIN);
+      expect(ids(island), "ten minutes of failed reads: no promise on screen").not.toContain("seazn-video-starting");
+      expect(ids(island), "the reserved box stands, as D1 drew it").toContain("seazn-video-reserved");
+      island.unmount();
+    });
+  });
+
+  it("review I1: a recording locked one stream-tick LATE (stg ticks every 5 min): the box never goes missing from the Stop to the recording, and the recording plays in it", async () => {
+    await clock(async () => {
+      // The real path from the Stop, from the engine's own declarations (not from the hold's constants): the runner's stop grace ends the
+      // session, Cloudflare finishes the recording a hold later, and the next tick firing, up to a whole period on, locks it.
+      const LOCK_AFTER_STOP_MS = (RUNNER_STOP_GRACE_SECONDS + INGEST_TIMEOUT_SECONDS + HOLD_SLACK_SECONDS + STREAM_TICK_PERIOD_SECONDS) * 1000;
+      expect(LOCK_AFTER_STOP_MS, "PREMISE: the lock lands after the old window (the grace plus one read) ended — the case that used to collapse the box")
+        .toBeGreaterThan(FINALISATION_GRACE_SECONDS * 1000 + SEAZN_VIDEO_POLL_FLOOR_MS);
+      const t0 = Date.now();
+      const respond = (data: object) => new Response(JSON.stringify({ ok: true, data }), { status: 200, headers: { "content-type": "application/json" } });
+      vi.stubGlobal("fetch", vi.fn(async () => {
+        const sinceStop = Date.now() - t0;
+        if (sinceStop === 0) return respond({ live: signed("live"), replay: [] });   // the read the Stop follows
+        return respond(sinceStop < LOCK_AFTER_STOP_MS ? EMPTY : { live: null, replay: [part(1)] });
+      }));
+      const island = mount({ reserve: true });   // a cold page: the reads back off to the ceiling, the slowest the lock can be noticed at
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ids(island), "PREMISE: on air at the last read before the Stop").toContain("seazn-player");
+      const seen: { box: boolean; player: boolean }[] = [];
+      const slices = Math.ceil((LOCK_AFTER_STOP_MS + 3 * MIN) / 5_000);
+      for (let i = 0; i < slices; i++) {
+        await vi.advanceTimersByTimeAsync(5_000);
+        seen.push({ box: boxed(island), player: ids(island).includes("seazn-player") });
+      }
+      expect(seen.length, "anti-vacuity: the whole path was watched, in 5 s slices").toBe(slices);
+      expect(seen.filter((x) => !x.box), "the box never went missing (no collapse, so no re-expand)").toEqual([]);
+      const stopped = seen.findIndex((x) => !x.player);
+      expect(stopped, "the Stop reached the open page (the live player went) ...").toBeGreaterThanOrEqual(0);
+      const firstPlayer = seen.findIndex((x, i) => i > stopped && x.player);
+      expect(firstPlayer, "... and the recording then played").toBeGreaterThan(stopped);
+      expect((firstPlayer + 1) * 5_000, "not before it was locked").toBeGreaterThanOrEqual(LOCK_AFTER_STOP_MS);
+      expect(firstPlayer - stopped, "anti-vacuity: a long stretch of empty answers sat between them, far past the old window").toBeGreaterThan(LOCK_AFTER_STOP_MS / 5_000 - 20);
+      expect(seen.slice(stopped, firstPlayer).every((x) => !x.player && x.box), "between the Stop and the recording: the box, with no player").toBe(true);
+      expect(seen.slice(firstPlayer).every((x) => x.player), "and the recording stayed").toBe(true);
+      island.unmount();
     });
   });
 

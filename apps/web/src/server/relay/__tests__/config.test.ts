@@ -664,3 +664,42 @@ describe("REPLAY_EMBED_TOKEN_TTL_SECONDS (Task 21)", () => {
     expect(config.REPLAY_EMBED_TOKEN_TTL_SECONDS).toBe(3600);
   });
 });
+
+// Phase 1 visual re-capture R2, review I1: the match page waits for a stopped session's recording as long as the REAL path takes, and
+// the slowest link on it is the stream tick's own period (the tick's Seazn pass locks the recording). The period is read back off the
+// Worker's deployed triggers, never typed here: a change to prod's or stg's cron moves this pin.
+describe("STREAM_TICK_PERIOD_SECONDS and SEAZN_RECORDING_LOCK_BY_SECONDS (review I1)", () => {
+  type Wrangler = { env: Record<string, { triggers: { crons: string[] } }> };
+  const wrangler = JSON.parse(readFileSync(resolve(import.meta.dirname, "../../../../../cron-worker/wrangler.json"), "utf8")) as Wrangler;
+  // The period of a cron that fires every minute or every n minutes (`*` or `*` + `/n` in the minute field, every other field `*`); null for
+  // any other (the hourly trigger, which fires on one fixed minute).
+  const periodSeconds = (cron: string): number | null => {
+    const [minute, ...rest] = cron.trim().split(/\s+/);
+    if (rest.length !== 4 || rest.some((f) => f !== "*")) return null;
+    if (minute === "*") return 60;
+    const every = /^\*\/(\d+)$/.exec(minute!);
+    return every === null ? null : Number(every[1]) * 60;
+  };
+
+  it("the cron reader itself: every minute, every n minutes, and the ones that are not a period", () => {
+    const cases: [string, number | null][] = [["* * * * *", 60], ["*/5 * * * *", 300], ["*/10 * * * *", 600], ["17 * * * *", null], ["0 */2 * * *", null], ["*/5 * * *", null]];
+    for (const [cron, want] of cases) expect(periodSeconds(cron), cron).toBe(want);
+    expect(cases.length, "cases checked").toBe(6);
+  });
+
+  it("is the SLOWEST of the periods the Worker is deployed with: each env has exactly one fast trigger, and the constant is the larger", () => {
+    const periods = Object.entries(wrangler.env).map(([env, e]) => {
+      const fast = e.triggers.crons.map(periodSeconds).filter((p): p is number => p !== null);
+      expect(fast, `${env}: exactly one fast trigger`).toHaveLength(1);
+      return fast[0]!;
+    });
+    expect(periods.length, "anti-vacuity: both deployments were read").toBe(2);
+    expect(config.STREAM_TICK_PERIOD_SECONDS).toBe(Math.max(...periods));
+    for (const p of periods) expect(config.STREAM_TICK_PERIOD_SECONDS, "no deployment ticks slower than the constant").toBeGreaterThanOrEqual(p);
+  });
+
+  it("the lock lands within the finalisation grace plus one whole tick period of the end: Cloudflare's own hold and a tick period both fit inside it", () => {
+    expect(config.SEAZN_RECORDING_LOCK_BY_SECONDS).toBeGreaterThanOrEqual(config.INGEST_TIMEOUT_SECONDS + config.HOLD_SLACK_SECONDS + config.STREAM_TICK_PERIOD_SECONDS);
+    expect(config.SEAZN_RECORDING_LOCK_BY_SECONDS, "a whole period beyond the grace the recording is finished by").toBeGreaterThanOrEqual(config.FINALISATION_GRACE_SECONDS + config.STREAM_TICK_PERIOD_SECONDS);
+  });
+});

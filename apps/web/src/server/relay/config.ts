@@ -40,6 +40,15 @@ export const FINALISATION_PROCESSING_SLACK_SECONDS = 120;
  *  passthrough phones prefer SRT), so the allowance is a cautious one for it too. Usage is read live at every admission and at
  *  the sweep, so there is no polling gap to cover, and the camera (A) stays reserved after this window regardless. */
 export const FINALISATION_GRACE_SECONDS = INGEST_TIMEOUT_SECONDS + HOLD_SLACK_SECONDS + FINALISATION_PROCESSING_SLACK_SECONDS;
+/** The SLOWEST period of the stream tick, in seconds: the cron Worker's fast trigger fires every minute on prod and every 5 minutes on
+ *  stg (apps/cron-worker/wrangler.json; stg stays on the 5-minute trigger so it can sleep, owner Q1 = b). The tick's Seazn pass is what
+ *  LOCKS a finished recording, at its first firing after Cloudflare finishes it, so on the slowest deployment a recording waits up to
+ *  this long for its lock. config.test.ts reads it back off wrangler.json, so a change to either trigger moves that pin. */
+export const STREAM_TICK_PERIOD_SECONDS = 5 * 60;
+/** The latest, counted from a Seazn session's END, that its recording can be locked and so offered to a viewer (Phase 1 visual
+ *  re-capture R2, review I1): Cloudflare finishes it within `FINALISATION_GRACE_SECONDS`, and the first tick firing after that locks it,
+ *  up to one period on. The match page's wait after a Stop is this long, plus one read (seazn-video-hold.ts). */
+export const SEAZN_RECORDING_LOCK_BY_SECONDS = FINALISATION_GRACE_SECONDS + STREAM_TICK_PERIOD_SECONDS;
 
 /** C1: Cloudflare rejects 1 and 7 with HTTP 400 code 10060; the valid range is
  *  30–1096 days. The product's 3-day promise is OUR sweep (RECORDING_RETENTION_DAYS). */

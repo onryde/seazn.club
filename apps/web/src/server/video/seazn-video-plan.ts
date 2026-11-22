@@ -22,16 +22,21 @@ import "server-only";
 // on it. The island stops reading an empty answer from then on (seazn-video-schedule.ts). Null while it has no finish time (it is
 // not over): the island then only backs off, it never stops.
 //
-// A `seazn` plan also says whether the page holds the player's box before the island's first read (`reserve`, Phase 1 visual D1):
-// yes where a player is expected now (arm 1: a Seazn session, so its live or its recording), no before kick-off (arm 3), where
-// "nothing yet" is the expected answer for hours and a held box would collapse on every load.
+// A `seazn` plan also says whether the page holds the player's box before the island's first read (`reserve`, Phase 1 visual D1, narrowed
+// by review m2): yes where a player is EXPECTED: the fixture's latest session is a Seazn session still in flight (its live, or on its way
+// to one or to its recording), a wait is on (below), or the route will offer a recording (`replayParts`). No before kick-off (arm 3),
+// where "nothing yet" is the expected answer for hours, and none where the last Seazn session ended with nothing to play (a failed Go
+// live, a stop that recorded nothing, a recording Cloudflare has deleted): the route answers the empty video on every load there, so a held
+// box would collapse every time. A Go live that comes later on that open page is caught by the island's loop, as it is before kick-off.
 //
 // A `seazn` plan also says whether a WAIT is on (`holdUntil`, Phase 1 visual re-capture R2): the island holds its box, with one quiet
 // line, through answers with nothing to play until then (seazn-video-hold.ts). It is on while the fixture's LATEST session (the video
-// route's own meaning of "the session") is a Seazn session that is not yet live or is being stopped (requested through ending: the
-// whole ladder, bounded by `MAX_ANCHOR_DRIFT_SECONDS`, from this render), or that COMPLETED a moment ago and its recording can still be
-// locked (`FINALISATION_GRACE_SECONDS` from its end, the grace the tick's Seazn pass waits out). Never while it is live (its answer is
-// the player), nor for a failed session (it never recorded), nor once a session of another kind follows.
+// route's own meaning of "the session") is a Seazn session that is not yet live (requested, provisioning, warming: the ladder,
+// `MAX_ANCHOR_DRIFT_SECONDS` from the session's CREATION), is being stopped (`ending`: the ending backstop from `ending_at`, then the
+// recording's path), or COMPLETED a moment ago (the recording's path from its `ended_at`: `SEAZN_RECORDING_SHOWN_BY_MS`, which is
+// Cloudflare's finish, the stream tick that locks it, and one read). Every one is counted from the SESSION's own time, never from the
+// render (review m1), so a page drawn late does not promise a video for longer than the session could take. Never while it is live (its
+// answer is the player), nor for a failed session (it never recorded), nor once a session of another kind follows.
 //
 // And the replay's part numbers (`replayParts`, re-capture R1): the numbers the video route will offer as parts, as of this render
 // (`seaznReplayPartNos`, the route's own numbering), so the island holds the picker's row before its first read when there are two or
@@ -46,8 +51,9 @@ import "server-only";
 // The privileged `sql` client: fixture_stream_* are FORCE RLS with no policy (V410), the pattern seazn-video.ts reads them with.
 import { sql } from "@/lib/db";
 import type { FixtureStatusValue } from "@/lib/fixture-status";
-import { CODE_GRACE_AFTER_FINISH_MINUTES, FINALISATION_GRACE_SECONDS, MAX_ANCHOR_DRIFT_SECONDS, MAX_DURATION_MINUTES, seaznHostedLive, tunable } from "@/server/relay/config";
-import { TERMINAL_STATES, type SessionState, isActive } from "@/server/relay/domain/session";
+import { SEAZN_RECORDING_SHOWN_BY_MS } from "@/components/public-site/match-centre/seazn-video-hold";
+import { CODE_GRACE_AFTER_FINISH_MINUTES, ENDING_TIMEOUT_SECONDS, MAX_ANCHOR_DRIFT_SECONDS, MAX_DURATION_MINUTES, seaznHostedLive, tunable } from "@/server/relay/config";
+import { TERMINAL_STATES, type SessionState, isTerminal } from "@/server/relay/domain/session";
 import { fixtureStreamTarget } from "@/server/usecases/stream-codes";
 import { seaznReplayPartNos } from "./seazn-video";
 
@@ -67,9 +73,9 @@ const NOT_OVER: readonly FixtureStatusValue[] = ["scheduled", "in_play"];
 interface FixtureFacts {
   org_id: string; status: string; finished_at: Date | null; scheduled_at: Date | null;
   has_seazn_session: boolean; has_session: boolean; has_active_seazn_session: boolean;
-  /** The fixture's LATEST session (by creation, the video route's own reading): its kind and state, and its end (its creation while it
-   *  has none); all null with no session. */
-  latest_kind: string | null; latest_state: string | null; latest_end: Date | null;
+  /** The fixture's LATEST session (by creation, the video route's own reading): its kind and state and the three times the wait is counted
+   *  from (its creation, the instant it began ending, its end); all null with no session. */
+  latest_kind: string | null; latest_state: string | null; latest_created: Date | null; latest_ending: Date | null; latest_ended: Date | null;
 }
 
 /** N1: the island's hints, as of `now`. */
@@ -81,16 +87,31 @@ function hintsOf(facts: FixtureFacts, now: Date): { kickoffAt: Date | null; acti
   };
 }
 
-/** Re-capture R2: until when an empty answer is a wait, as of `now` (see the header). Null: none. */
+/** Re-capture R2: until when an empty answer is a wait, from the latest session's OWN times (see the header; review I1 and m1). Null: none. */
 function holdOf(facts: FixtureFacts, now: Date): Date | null {
-  if (facts.latest_kind !== "seazn" || facts.latest_state === null) return null;
-  const state = facts.latest_state as SessionState;
-  if (state === "live") return null;
-  if (isActive(state)) return new Date(now.getTime() + MAX_ANCHOR_DRIFT_SECONDS * 1000);
-  if (state !== "completed" || facts.latest_end === null) return null;
-  const closes = new Date(facts.latest_end).getTime() + FINALISATION_GRACE_SECONDS * 1000;
+  if (facts.latest_kind !== "seazn" || facts.latest_state === null || facts.latest_created === null) return null;
+  const ms = (d: Date | string): number => new Date(d).getTime();
+  const created = ms(facts.latest_created);
+  let closes: number;
+  switch (facts.latest_state as SessionState) {
+    case "requested": case "provisioning": case "warming":
+      closes = created + MAX_ANCHOR_DRIFT_SECONDS * 1000;
+      break;
+    case "ending":
+      closes = (facts.latest_ending === null ? created : ms(facts.latest_ending)) + ENDING_TIMEOUT_SECONDS * 1000 + SEAZN_RECORDING_SHOWN_BY_MS;
+      break;
+    case "completed":
+      closes = (facts.latest_ended === null ? created : ms(facts.latest_ended)) + SEAZN_RECORDING_SHOWN_BY_MS;
+      break;
+    default:
+      return null;   // live: its answer is the player; failed: it never recorded
+  }
   return closes > now.getTime() ? new Date(closes) : null;
 }
+
+/** Review m2: whether a Seazn player is EXPECTED when the page is drawn, so its box is held before the first read (see the header). */
+const expectsPlayer = (facts: FixtureFacts, holdUntil: Date | null, replayParts: number[]): boolean =>
+  (facts.latest_kind === "seazn" && facts.latest_state !== null && !isTerminal(facts.latest_state as SessionState)) || holdUntil !== null || replayParts.length > 0;
 
 const isOver = (status: string): boolean => !(NOT_OVER as readonly string[]).includes(status);
 
@@ -111,16 +132,17 @@ export async function seaznVideoPlan(fixtureId: string, now: Date = new Date()):
            exists (select 1 from fixture_stream_sessions s where s.fixture_id = f.id) as has_session,
            exists (select 1 from fixture_stream_sessions s
                     where s.fixture_id = f.id and s.destination_kind = 'seazn' and s.state not in ${sql([...TERMINAL_STATES])}) as has_active_seazn_session,
-           l.destination_kind as latest_kind, l.state as latest_state, coalesce(l.ended_at, l.created_at) as latest_end
+           l.destination_kind as latest_kind, l.state as latest_state, l.created_at as latest_created, l.ending_at as latest_ending, l.ended_at as latest_ended
       from fixtures f
-      left join lateral (select s.destination_kind, s.state, s.ended_at, s.created_at from fixture_stream_sessions s
+      left join lateral (select s.destination_kind, s.state, s.ending_at, s.ended_at, s.created_at from fixture_stream_sessions s
                           where s.fixture_id = f.id order by s.created_at desc, s.id desc limit 1) l on true
      where f.id = ${fixtureId}`;
   if (facts === undefined) return EXTERNAL;
   if (facts.has_seazn_session) {
     const live = facts.latest_kind === "seazn" && facts.latest_state === "live";
     const replayParts = live ? [] : await seaznReplayPartNos(fixtureId, now);
-    return { player: "seazn", settledAt: settledAtOf(facts), reserve: true, holdUntil: holdOf(facts, now), replayParts, ...hintsOf(facts, now) };
+    const holdUntil = holdOf(facts, now);
+    return { player: "seazn", settledAt: settledAtOf(facts), reserve: expectsPlayer(facts, holdUntil, replayParts), holdUntil, replayParts, ...hintsOf(facts, now) };
   }
   if (facts.has_session || isOver(facts.status)) return EXTERNAL;
   if (!seaznHostedLive()) return EXTERNAL;

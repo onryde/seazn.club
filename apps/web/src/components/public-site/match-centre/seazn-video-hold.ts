@@ -2,24 +2,36 @@
 // island owns the state and the timer (seazn-video-island.tsx); this file is the rules.
 //
 // D1 reserved the player's box before the first read, and collapsed it on any answer with nothing to play. Two states answer exactly
-// that, and the player arrives in both a poll later: a session still WARMING, and one just STOPPED whose recording is not locked yet
-// (the stream tick's Seazn pass locks it; for `FINALISATION_GRACE_SECONDS` after the end a recording can still appear). Collapsing in
-// either and re-expanding when the player came moved the page twice. So while a WAIT is on, the box stays, with one quiet line, and
-// goes only when the wait runs out: once, and not again for the empty answers that follow.
+// that, and the player arrives in both a poll later: a session still WARMING, and one just STOPPED whose recording is not locked yet.
+// Collapsing in either and re-expanding when the player came moved the page twice. So while a WAIT is on, the box stays, with one quiet
+// line, and goes only when the wait runs out: once, and not again for the empty answers that follow.
+//
+// How long a stopped session's recording takes to reach a viewer (review I1) is the REAL path, not the storage grace alone: Cloudflare
+// finishes it a hold after the input goes (`FINALISATION_GRACE_SECONDS` is the generous bound), the stream tick's Seazn pass then locks it
+// at its next firing (up to `STREAM_TICK_PERIOD_SECONDS` on the slowest deployment: stg ticks every 5 minutes), and the island's own
+// next read carries it (at most the schedule's ceiling later). A wait shorter than that collapses the box and re-expands it.
 //
 // Where the wait comes from:
-//   - the PAGE, as it was drawn (`holdUntil`, seazn-video-plan.ts): a session of the fixture warming or ended a moment ago;
+//   - the PAGE, as it was drawn (`holdUntil`, seazn-video-plan.ts): a session of the fixture warming or ended a moment ago, counted from
+//     the SESSION's own times, not from the render;
 //   - the island itself: an answer that HAD a player starts one (`holdAfterAnswer`), because the Stop that ends a live comes a poll
-//     before the page sees it and its recording is locked up to the grace after the Stop. The empty answers that follow only run it down.
+//     before the page sees it, then takes up to the ending backstop to end, and its recording follows the path above. The empty answers
+//     that follow only run it down.
 // What it never does: read the route more often, or less. The schedule (seazn-video-schedule.ts) is untouched.
 import type { PublicFixtureVideo } from "@/server/api-v1/schemas";
-import { FINALISATION_GRACE_SECONDS } from "@/server/relay/config";
-import { SEAZN_VIDEO_POLL_FLOOR_MS } from "./seazn-video-schedule";
+import { ENDING_TIMEOUT_SECONDS, SEAZN_RECORDING_LOCK_BY_SECONDS } from "@/server/relay/config";
+import { SEAZN_VIDEO_POLL_CEILING_MS, SEAZN_VIDEO_POLL_FLOOR_MS } from "./seazn-video-schedule";
 
-/** How long an empty answer is a wait once a player was on screen: the recording's whole lock window after the Stop
- *  (`FINALISATION_GRACE_SECONDS`, the grace the tick's Seazn pass waits out before it calls a session's recordings settled), plus one
- *  read, because the page may learn of the Stop up to one poll after it happened. */
-export const SEAZN_VIDEO_HOLD_MS = FINALISATION_GRACE_SECONDS * 1000 + SEAZN_VIDEO_POLL_FLOOR_MS;
+/** How long after a Seazn session's END its recording can still reach a viewer (ms): the lock lands within
+ *  `SEAZN_RECORDING_LOCK_BY_SECONDS` of the end, and the island's next read is at most one backoff ceiling after that. The page's plan
+ *  counts a completed session's wait from its `ended_at` with this (seazn-video-plan.ts). */
+export const SEAZN_RECORDING_SHOWN_BY_MS = SEAZN_RECORDING_LOCK_BY_SECONDS * 1000 + SEAZN_VIDEO_POLL_CEILING_MS;
+
+/** How long an empty answer is a wait once a player was on screen, from that read: the Stop comes up to one live poll (the floor) after
+ *  it, the session takes up to `ENDING_TIMEOUT_SECONDS` (the ending backstop's bound) to end, and the recording reaches a viewer
+ *  `SEAZN_RECORDING_SHOWN_BY_MS` after that. Over-holding costs a longer quiet frame for a Stop that recorded nothing; under-holding
+ *  is the collapse and re-expand this module exists to prevent. */
+export const SEAZN_VIDEO_HOLD_MS = SEAZN_VIDEO_POLL_FLOOR_MS + ENDING_TIMEOUT_SECONDS * 1000 + SEAZN_RECORDING_SHOWN_BY_MS;
 
 /** Whether the stage draws a player for this answer: a live, or at least one `hls` part. (`embed` parts have no rendering until
  *  Task 25, so an answer of those alone is nothing to the stage; seazn-video-schedule's `isEmptyVideo` is the LOOP's word, which counts
@@ -39,11 +51,8 @@ export function parseHold(iso: string | null | undefined): number | null {
   return Number.isFinite(ms) ? ms : null;
 }
 
-/** Milliseconds until the box lets go of a wait ending at `until`, or null when no release is to be armed. Before the first answer a
- *  wait that has ALREADY run out is not armed: it is the plan's word from a render that an old cached page can outlive, and the first
- *  answer decides (a live one lands in the box, an empty one lets it go). After an answer, an ended wait lets go at once. */
-export function holdWait(until: number, nowMs: number, answered: boolean): number | null {
-  const wait = until - nowMs;
-  if (!answered && wait <= 0) return null;
-  return Math.max(0, wait);
-}
+/** Milliseconds until the box lets go of a wait ending at `until`: the time left, and 0 for one that has already run out. That includes
+ *  the plan's wait on an old cached page whose render the wait outlived, before any answer: the release then drops only the LINE (the
+ *  page reserves the box whenever it holds a wait), so the first answer still decides the box, and a route that never answers cannot
+ *  keep "shortly" on screen for ever (review m3). */
+export const holdWait = (until: number, nowMs: number): number => Math.max(0, until - nowMs);

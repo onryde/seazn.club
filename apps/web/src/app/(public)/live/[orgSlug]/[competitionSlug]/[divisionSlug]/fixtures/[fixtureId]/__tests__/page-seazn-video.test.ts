@@ -31,7 +31,8 @@ import { ReplayEmbed } from "@/components/public-site/match-centre/replay-embed"
 import { SeaznVideoIsland } from "@/components/public-site/match-centre/seazn-video-island";
 import { fixtureStreamTarget } from "@/server/usecases/stream-codes";
 import publicEn from "@/dictionaries/en/public.json";
-import { FINALISATION_GRACE_SECONDS, MAX_DURATION_MINUTES } from "@/server/relay/config";
+import { SEAZN_VIDEO_POLL_CEILING_MS } from "@/components/public-site/match-centre/seazn-video-schedule";
+import { FINALISATION_GRACE_SECONDS, MAX_DURATION_MINUTES, STREAM_TICK_PERIOD_SECONDS } from "@/server/relay/config";
 import { seaznVideoPlan } from "@/server/video/seazn-video-plan";
 import { type SeaznRig, goLive, installSeaznEnv, live, seaznRig, seedLockedRecording, stopAndSettle } from "@/server/video/__tests__/_seazn-session-rig";
 import { connect } from "@/server/youtube/__tests__/_connect-rig";
@@ -87,8 +88,9 @@ describe.skipIf(!HAS_DB)("the public match page's replay slot, through the real 
     const sid = await live(r, f, r.seazn);
     await stopAndSettle(r, f, sid);
     await setStatus(f, "decided");
-    // Ended an hour ago, past the recording's lock window and with nothing locked: no wait is on, so the box is D1's plain empty one (what
-    // an ended session with nothing to play settles to). A session that has just stopped is the starting box: the next cases.
+    // Ended an hour ago, past the recording's whole path to a viewer and with nothing locked: no wait is on and no player is expected, so
+    // the page reserves NO box (review m2: the route answers the empty video on every load, a held box would collapse every time). A
+    // session that has just stopped is the starting box: the next cases.
     await sql`update fixture_stream_sessions set ended_at = now() - interval '1 hour' where id = ${sid}`;
     for (const flag of ["true", "false"] as const) {
       vi.stubEnv("SEAZN_HOSTED_LIVE", flag);
@@ -99,11 +101,11 @@ describe.skipIf(!HAS_DB)("the public match page's replay slot, through the real 
       expect(youtube, `LIVE ${flag}: and the YouTube slot is not`).toHaveLength(0);
       const markup = renderToStaticMarkup(tree);
       expect(markup).not.toContain("replay-embed");
-      // Phase 1 visual D1: the page's own server markup holds the player's box (16:9, 200 px floor), empty, before any read.
-      expect(island[0]!.props.reserve, `LIVE ${flag}: the plan reserves the box`).toBe(true);
-      const box = /<section data-testid="seazn-video-reserved"[^>]*>\s*<div data-testid="seazn-video-frame" class="([^"]*)"><\/div>\s*<\/section>/.exec(markup);
-      expect(box, `LIVE ${flag}: the reserved box is in the page's server markup, empty`).not.toBeNull();
-      for (const c of ["aspect-video", "min-h-[200px]", "w-full", "bg-black"]) expect(box![1]!.split(" "), c).toContain(c);
+      // Review m2: nothing to play, nothing expected: no box in the page's server markup, and the island is told nothing is held.
+      expect(island[0]!.props.reserve, `LIVE ${flag}: the plan reserves no box`).toBe(false);
+      expect(island[0]!.props.holdUntil, `LIVE ${flag}: and holds no wait`).toBeNull();
+      expect(island[0]!.props.replayParts, `LIVE ${flag}: and lists no part`).toEqual([]);
+      expect(markup, `LIVE ${flag}: no box of the island's in the server markup`).not.toMatch(/seazn-video-(reserved|starting|frame)/);
     }
   });
 
@@ -150,7 +152,7 @@ describe.skipIf(!HAS_DB)("the public match page's replay slot, through the real 
 
   // Phase 1 visual re-capture R2 (warming and just-stopped made the page shift 0.0856): the page's own server markup holds the starting box
   // — the player's box with one quiet line — where the plan says a wait is on, through the REAL loader and the REAL plan.
-  it("re-capture R2: a session warming, and one just stopped with nothing locked, are the starting box in the server markup, in the page's own words — and one stopped long ago is the plain empty box", async () => {
+  it("re-capture R2: a session warming, and one just stopped with nothing locked, are the starting box in the server markup, in the page's own words — and one stopped long ago holds no box", async () => {
     const r = await seaznRig();
     orgs.push(r.auth.orgId);
     const [warming, stopped] = r.fixtureIds;
@@ -170,13 +172,14 @@ describe.skipIf(!HAS_DB)("the public match page's replay slot, through the real 
       checked++;
     }
     expect(checked).toBe(2);
-    // The window closes: ended past the lock window, the same fixture settles to the plain empty box (terminal nothing).
-    await sql`update fixture_stream_sessions set ended_at = now() - ${(FINALISATION_GRACE_SECONDS + 60) * 1000} * interval '1 millisecond' where id = ${sid}`;
+    // The window closes: ended past the recording's whole path to a viewer, the same fixture settles to no box at all (terminal nothing,
+    // review m2): the wait is gone and no player is expected, so the page holds nothing.
+    await sql`update fixture_stream_sessions set ended_at = now() - ${(FINALISATION_GRACE_SECONDS + STREAM_TICK_PERIOD_SECONDS + SEAZN_VIDEO_POLL_CEILING_MS / 1000 + 60) * 1000} * interval '1 millisecond' where id = ${sid}`;
     const closed = await pageTree(stopped);
     expect(slots(closed).island[0]!.props.holdUntil).toBeNull();
+    expect(slots(closed).island[0]!.props.reserve).toBe(false);
     const markup = renderToStaticMarkup(closed);
-    expect(markup).toContain("seazn-video-reserved");
-    expect(markup).not.toContain("seazn-video-starting");
+    expect(markup).not.toMatch(/seazn-video-(reserved|starting|frame)/);
   });
 
   // Visual re-capture R1: a replay of two or more parts, and the Summary panel moved 56 px when its picker row mounted.

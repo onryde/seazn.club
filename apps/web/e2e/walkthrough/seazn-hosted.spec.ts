@@ -336,6 +336,12 @@ test("Seazn pre-selected → a spectator opens the page before kick-off → Go l
   //    of its kick-off, so its reads stayed on the floor (re-review N1): a viewer who keeps watching sees Go live within ONE read.
   await expect.poll(addressIs(player, first.programme.uid), { message: "the open page's player holds the signed address for the programme input", timeout: ONE_RE_READ_MS }).toBe(true);
   await expect(region, "the region is the LIVE one").toHaveAttribute("aria-label", pub("seaznVideo.live"));
+  // Re-capture R2: where the live player sits, so the box that holds after the Stop (step 6) is held against it.
+  const placeOf = (selector: string) => viewer.page.evaluate((sel) => {
+    const r = document.querySelector(sel)!.getBoundingClientRect();
+    return { top: r.top + window.scrollY, height: r.height };
+  }, selector);
+  const livePlace = await placeOf('[data-testid="seazn-player"]');
   await expect.poll(viewer.reached(first.programme.uid), { message: "the live address reached the browser's player", timeout: CALL_MS }).toBe(true);
   await expect(region.locator("iframe"), "a Seazn stream is never an embed").toHaveCount(0);
   expect(await viewer.neverFailed(), "the live player never failed").toBe(true);
@@ -362,6 +368,14 @@ test("Seazn pre-selected → a spectator opens the page before kick-off → Go l
   // 6. THE OPEN PAGE LEARNS IT within one re-read (r3): the live player goes, the match page stays, without a reload, and not
   //    because the player failed (a failed player re-reads early).
   await expect(region, "the live player left the open page within one re-read").toHaveCount(0, { timeout: ONE_RE_READ_MS });
+  // Re-capture R2: the box does not collapse when the Stop reaches the page. It holds, with its one quiet line, in the very place the live
+  // player was, until the recording is locked (step 7) and takes its place (step 8).
+  const starting = viewer.page.getByTestId("seazn-video-starting");
+  await expect(starting, "the Stop leaves the player's box with its line, not a collapsed page").toBeVisible();
+  await expect(starting.getByRole("status")).toHaveText(pub("seaznVideo.starting"));
+  const heldPlace = await placeOf('[data-testid="seazn-video-frame"]');
+  expect(Math.abs(heldPlace.top - livePlace.top), `the held box starts where the live player did (${heldPlace.top} vs ${livePlace.top})`).toBeLessThanOrEqual(1);
+  expect(Math.abs(heldPlace.height - livePlace.height), `and is as tall (${heldPlace.height} vs ${livePlace.height})`).toBeLessThanOrEqual(1);
   await expect(matchPage(viewer.page), "the match page itself is still there").toBeVisible();
   expect(await viewer.neverFailed(), "the live player left on a scheduled read, never by failing").toBe(true);
   expect(await viewer.sameDocument(), "no reload between live and ended").toBe(true);
@@ -395,6 +409,7 @@ test("Seazn pre-selected → a spectator opens the page before kick-off → Go l
   //    Since the Stop the page has had empty answers; near kick-off they hold the floor (re-review N1), so this is one read too.
   await expect.poll(addressIs(player, videoId), { message: "the replay player holds the server's signed address for the recording", timeout: ONE_RE_READ_MS }).toBe(true);
   await expect(region, "the region is now the REPLAY one").toHaveAttribute("aria-label", pub("overlay.replay"));
+  await expect(starting, "the recording took the held box's place: the line is gone").toHaveCount(0);
   await expect.poll(viewer.reached(videoId), { message: "the recording's address reached the browser's player", timeout: CALL_MS }).toBe(true);
   await expect(viewer.page.locator('[data-testid="seazn-player"]'), "one Seazn player on the page").toHaveCount(1);
   await expect(region.locator("iframe"), "the interim replay is the Seazn player, not an embed").toHaveCount(0);

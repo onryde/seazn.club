@@ -270,15 +270,13 @@ export function SeaznVideoIsland({
     };
   }, [fixtureId, endpoint, settledAtMs, kickoffAtMs, activeUntilMs]);
 
-  // The wait ends by itself: the box lets go ONCE, when it runs out, whatever the loop is doing (it may have stopped, settled).
-  const answered = video !== null;
+  // The wait ends by itself: the box lets go ONCE, when it runs out, whatever the loop is doing (it may have stopped, settled). One the
+  // page drew that has already run out (an old cached page) lets go at once: the line goes, the reserved box stays for the first answer.
   useEffect(() => {
     if (holdUntil === null) return;
-    const wait = holdWait(holdUntil, Date.now(), answered);
-    if (wait === null) return;
-    const timer = setTimeout(() => setHoldUntil(null), wait);
+    const timer = setTimeout(() => setHoldUntil(null), holdWait(holdUntil, Date.now()));
     return () => clearTimeout(timer);
-  }, [holdUntil, answered]);
+  }, [holdUntil]);
 
   const refresh = useCallback(() => pollRef.current?.refreshSoon(), []);
   return <SeaznVideoStage video={video} epoch={epoch} labels={labels} onFatal={refresh} reserve={reserve} held={holdUntil !== null} picker={replayParts} />;

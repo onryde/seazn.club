@@ -2,13 +2,15 @@
 // warming, or just stopped with its recording not locked yet). The rules are pure and live in seazn-video-hold.ts; the island's wiring
 // (the box staying across reads, the one collapse) is seazn-video-island.test.tsx's.
 //
-// Expected values come from the engine's own declarations: the recording's lock window is `FINALISATION_GRACE_SECONDS` (the very
-// grace the stream tick's Seazn pass waits out before it calls a session's recordings settled), a read is `SEAZN_VIDEO_POLL_FLOOR_MS`.
+// Expected values come from the engine's own declarations, never from the constants under test: a recording reaches a viewer by
+// Cloudflare's own hold after the input disconnects (`INGEST_TIMEOUT_SECONDS + HOLD_SLACK_SECONDS`), then the stream tick that locks
+// it (`STREAM_TICK_PERIOD_SECONDS`, read back off the Worker's crons by config.test.ts), then one read (the schedule's ceiling); a Stop
+// is seen one live poll (the floor) late and takes at most `ENDING_TIMEOUT_SECONDS` to end the session (review I1).
 import { describe, expect, it } from "vitest";
 import { PublicFixtureVideo } from "@/server/api-v1/schemas";
-import { FINALISATION_GRACE_SECONDS } from "@/server/relay/config";
-import { SEAZN_VIDEO_HOLD_MS, holdAfterAnswer, holdWait, parseHold, showsPlayer } from "../seazn-video-hold";
-import { SEAZN_VIDEO_POLL_FLOOR_MS } from "../seazn-video-schedule";
+import { ENDING_TIMEOUT_SECONDS, FINALISATION_GRACE_SECONDS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS, STREAM_TICK_PERIOD_SECONDS } from "@/server/relay/config";
+import { SEAZN_RECORDING_SHOWN_BY_MS, SEAZN_VIDEO_HOLD_MS, holdAfterAnswer, holdWait, parseHold, showsPlayer } from "../seazn-video-hold";
+import { SEAZN_VIDEO_POLL_CEILING_MS, SEAZN_VIDEO_POLL_FLOOR_MS } from "../seazn-video-schedule";
 
 const NOW = Date.parse("2026-11-22T12:00:00.000Z");
 const signed = (name: string) => ({ src: `https://playback.fake.invalid/tok-${name}/manifest/video.m3u8`, expiresAt: new Date(NOW + 3_600_000).toISOString() });
@@ -16,9 +18,26 @@ const part = (partNo: number, player: "hls" | "embed" = "hls") => ({ partNo, pla
 const answer = (v: { live?: ReturnType<typeof signed> | null; replay?: ReturnType<typeof part>[] }): PublicFixtureVideo =>
   PublicFixtureVideo.parse({ live: v.live ?? null, replay: v.replay ?? [] });
 
+// What a viewer waits for after a Stop, from the real path: Cloudflare finishes the recording a hold after the input goes, the next tick
+// firing locks it (one whole period on the slowest deployment), and the island's next read carries it (one read at the schedule's ceiling).
+const CLOUDFLARE_HOLD_MS = (INGEST_TIMEOUT_SECONDS + HOLD_SLACK_SECONDS) * 1000;
+const TICK_MS = STREAM_TICK_PERIOD_SECONDS * 1000;
+const PATH_FROM_END_MS = CLOUDFLARE_HOLD_MS + TICK_MS + SEAZN_VIDEO_POLL_CEILING_MS;
+
+describe("SEAZN_RECORDING_SHOWN_BY_MS: how long after a session's END a recording can still arrive at a viewer (review I1)", () => {
+  it("covers Cloudflare's hold, a whole tick period (the slowest deployment's) and one read — the lock arrives one tick late and the viewer still gets it", () => {
+    expect(SEAZN_RECORDING_SHOWN_BY_MS).toBeGreaterThanOrEqual(PATH_FROM_END_MS);
+  });
+  it("premise of the finding: the old window (the grace plus one read) ended BEFORE a lock one tick late, so it would have collapsed the box and re-expanded it", () => {
+    const OLD_WINDOW_MS = FINALISATION_GRACE_SECONDS * 1000 + SEAZN_VIDEO_POLL_FLOOR_MS;
+    expect(CLOUDFLARE_HOLD_MS + TICK_MS, "the lock, one tick after Cloudflare finished").toBeGreaterThan(OLD_WINDOW_MS);
+    expect(SEAZN_RECORDING_SHOWN_BY_MS, "and the new window reaches it").toBeGreaterThan(CLOUDFLARE_HOLD_MS + TICK_MS);
+  });
+});
+
 describe("SEAZN_VIDEO_HOLD_MS: how long an empty answer is a wait after a player was on screen", () => {
-  it("covers the recording's whole lock window after a Stop, plus one read (the Stop can come a poll before the page sees it)", () => {
-    expect(SEAZN_VIDEO_HOLD_MS).toBeGreaterThanOrEqual(FINALISATION_GRACE_SECONDS * 1000 + SEAZN_VIDEO_POLL_FLOOR_MS);
+  it("covers a poll for the Stop to be seen, the whole stop (the ending backstop's bound) and then the recording's path to the viewer", () => {
+    expect(SEAZN_VIDEO_HOLD_MS).toBeGreaterThanOrEqual(SEAZN_VIDEO_POLL_FLOOR_MS + ENDING_TIMEOUT_SECONDS * 1000 + PATH_FROM_END_MS);
   });
 });
 
@@ -65,16 +84,12 @@ describe("parseHold: the plan's instant as the island reads it", () => {
 });
 
 describe("holdWait: when the box lets go", () => {
-  it("answered: a wait still to run releases when it ends; one that has run out releases at once", () => {
-    expect(holdWait(NOW + 40_000, NOW, true)).toBe(40_000);
-    expect(holdWait(NOW, NOW, true), "exactly now").toBe(0);
-    expect(holdWait(NOW - 1, NOW, true), "an answer came and nothing is being waited for any more").toBe(0);
+  it("a wait still to run releases when it ends (the route may never answer, so the answer is not waited for)", () => {
+    expect(holdWait(NOW + 40_000, NOW)).toBe(40_000);
   });
-  it("not answered yet: a wait still to run releases when it ends (the route may never answer)", () => {
-    expect(holdWait(NOW + 40_000, NOW, false)).toBe(40_000);
-  });
-  it("not answered yet, and the plan's wait ran out before the page even loaded (an old cached page): no release — the first answer decides, so a live one is never collapsed first", () => {
-    expect(holdWait(NOW - 1, NOW, false)).toBeNull();
-    expect(holdWait(NOW, NOW, false)).toBeNull();
+  it("a wait that has run out releases at once (review m3): the plan's word on an old cached page is stale, and on a route that never answers the line must still go", () => {
+    expect(holdWait(NOW, NOW), "exactly now").toBe(0);
+    expect(holdWait(NOW - 1, NOW), "a ms ago").toBe(0);
+    expect(holdWait(NOW - 10 * 60_000, NOW), "ten minutes ago").toBe(0);
   });
 });
