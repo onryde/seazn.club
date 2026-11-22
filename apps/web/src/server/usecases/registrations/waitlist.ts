@@ -139,7 +139,7 @@ export async function assertOrganiserPromotionHasRoom(
   // B4 review m-8: in the promotion's own sentence ("already has {entrants}"), never the draw's "has 100" beside "up to 100".
   if (verdict.kind === "format_max") throw formatMaxPromotionRefusal(verdict.max, verdict.active);
   if (verdict.kind === "plan_limit") throw planLimitRefusal(verdict.limit, verdict.active);
-  if (online && promotionVerdict({ capacity: null, planLimit: opts.planLimit, active: held }).kind === "plan_limit") {
+  if (online && promotionVerdict({ capacity: null, planLimit: opts.planLimit, formatMax: null, active: held }).kind === "plan_limit") {
     throw planLimitRefusal(opts.planLimit!, held);
   }
   if (verdict.kind === "over_capacity" && !opts.confirmOverCapacity) {
