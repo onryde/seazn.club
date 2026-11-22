@@ -31,6 +31,8 @@ export interface ReplayRow {
   verifiedAt: Date | null;
   cfDeletedAt: Date | null;
   bunnyCleanedAt: Date | null;
+  /** The organiser's (or the org deletion's) delete: a deleted row's retry window opens here (re-review N1). */
+  deletedAt: Date | null;
   cfDurationSeconds: number | null;
   cfHeight: number | null;
   attempts: number;
@@ -111,10 +113,14 @@ export function replayFailure(row: Pick<ReplayRow, "attempts">, now: Date): { at
 /** Where a row past every retry is parked: never due again (a date Postgres and every client read plainly). */
 export const REPLAY_PARKED_AT = new Date("9999-12-31T00:00:00.000Z");
 
-/** The one retry window (review I2, 2026-11-22): from SEAZN_REPLAY_RETRY_DAYS after the recording began — the Cloudflare copy's
- *  own life — nothing is left to move, so nothing is retried. Read by `failed`'s step and by every other state's failure. */
-export function pastRetryWindow(row: Pick<ReplayRow, "recordedAt">, now: Date): boolean {
-  return now.getTime() - row.recordedAt.getTime() >= SEAZN_REPLAY_RETRY_DAYS * DAY;
+/** The one retry window (review I2, 2026-11-22): SEAZN_REPLAY_RETRY_DAYS from its anchor, then nothing is retried. Read by
+ *  `failed`'s step and by every other state's failure. The anchor is the recording's start — the Cloudflare copy's own life, after
+ *  which nothing is left to move — EXCEPT for a deleted row (re-review N1): its cleanup removes a Bunny copy, which has no 30-day
+ *  life, and an organiser deletes a replay long after it was recorded, so its retries count from its own delete (`deleted_at`;
+ *  `state_at` when no delete time was written). */
+export function pastRetryWindow(row: Pick<ReplayRow, "state" | "recordedAt" | "deletedAt" | "stateAt">, now: Date): boolean {
+  const anchor = row.state === "deleted" ? (row.deletedAt ?? row.stateAt) : row.recordedAt;
+  return now.getTime() - anchor.getTime() >= SEAZN_REPLAY_RETRY_DAYS * DAY;
 }
 
 /** The states a failure past the window leaves as they are: a playable row's verified copy is never hidden, and an organiser's
@@ -127,7 +133,7 @@ const KEPT_WHEN_PARKED: ReadonlySet<ReplayRowState> = new Set(["playable", "dele
 export type ReplayFailureOutcome =
   | { kind: "backoff"; state: ReplayRowState; attempts: number; nextAttemptAt: Date }
   | { kind: "give_up"; state: ReplayRowState; attempts: number; nextAttemptAt: Date };
-export function replayFailureOutcome(row: Pick<ReplayRow, "state" | "attempts" | "recordedAt">, now: Date): ReplayFailureOutcome {
+export function replayFailureOutcome(row: Pick<ReplayRow, "state" | "attempts" | "recordedAt" | "deletedAt" | "stateAt">, now: Date): ReplayFailureOutcome {
   const f = replayFailure(row, now);
   if (!pastRetryWindow(row, now)) return { kind: "backoff", state: row.state, ...f };
   return { kind: "give_up", state: KEPT_WHEN_PARKED.has(row.state) ? row.state : "failed", attempts: f.attempts, nextAttemptAt: REPLAY_PARKED_AT };

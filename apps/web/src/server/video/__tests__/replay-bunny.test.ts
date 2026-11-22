@@ -210,6 +210,66 @@ describe("BunnyReplayHost: every API call gives up at the move's 4 s timeout (Ta
   });
 });
 
+// Task 24 re-review N6 (2026-11-22): the timeout covers the body too. Headers that arrived with a 200 and a body that never did are
+// a failed call — recorded as one (no status, `timeout`), never as the 200, and thrown in our own words. A body cut off by the
+// connection is the same failure, recorded `network`. A body that arrived but is not JSON stays what it was: read as absent.
+describe("BunnyReplayHost: a body that never arrives is a failed call (Task 24 re-review N6)", () => {
+  function stalledBody(signal: AbortSignal | null | undefined, cut?: () => unknown): Response {
+    return new Response(new ReadableStream({
+      start(c) {
+        if (cut) queueMicrotask(() => c.error(cut()));
+        else signal?.addEventListener("abort", () => c.error(signal.reason), { once: true });
+      },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }
+
+  it("each API call whose 200 body stalls past the 4 s timeout throws our own failure, recorded with no status and `timeout`, no key in it", async () => {
+    const deadlines: AbortController[] = [];
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => { const c = new AbortController(); deadlines.push(c); return c.signal; });
+    try {
+      let answered = 0;
+      const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => { answered++; return stalledBody(init?.signal); }) as unknown as typeof fetch;
+      const recorder = new FakeRecorder();
+      const host = new BunnyReplayHost(CONFIG, { fetchImpl, recorder, now: () => NOW, videoOrigins: () => ["seazn.club"], warn: () => undefined });
+      const calls: [string, () => Promise<unknown>][] = [
+        ["createCollection", () => host.createCollection("o1")],
+        ["fetchFromUrl", () => host.fetchFromUrl({ collectionId: "c1", title: "Final, part 1", url: "https://example.test/x.mp4" })],
+        ["video", () => host.video(GUID)],
+        ["remove", () => host.remove(GUID)],
+      ];
+      let checked = 0;
+      for (const [k, [op, call]] of calls.entries()) {
+        const pending = call().then(() => null, (e: unknown) => e as Error);
+        await vi.waitFor(() => expect(answered, `${op}: the headers arrived`).toBe(k + 1));
+        deadlines[k]!.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+        const err = await pending;
+        expect(err?.message, op).toMatch(new RegExp(`^bunny ${op}: the response did not arrive in full`));
+        for (const secret of SECRETS) expect(err?.message).not.toContain(secret);
+        checked++;
+      }
+      expect(checked, "API calls whose body stalled").toBe(4);
+      await new Promise((r) => setTimeout(r, 0));   // the record is fire-and-forget
+      expect(recorder.calls.map((c) => [c.operation, c.status, c.errorCode]), "a failure, never the 200").toEqual(calls.map(([op]) => [op, null, "timeout"]));
+    } finally {
+      timeout.mockRestore();
+    }
+  });
+
+  it("a 200 body cut off by the connection is the same failure, recorded `network`; a body that arrived but is not JSON still reads as absent (no failure recorded)", async () => {
+    const recorder = new FakeRecorder();
+    let cut = true;
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) =>
+      cut ? stalledBody(init?.signal, () => new TypeError("terminated")) : new Response("<html>gateway</html>", { status: 200 })) as unknown as typeof fetch;
+    const host = new BunnyReplayHost(CONFIG, { fetchImpl, recorder, now: () => NOW, videoOrigins: () => ["seazn.club"], warn: () => undefined });
+    expect(await errorOf(host.video(GUID))).toMatch(/^bunny video: the response did not arrive in full/);
+    cut = false;
+    const notJson = await errorOf(host.video(GUID));
+    expect(notJson, "an unreadable answer, not a failed call").not.toMatch(/did not arrive in full/);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(recorder.calls.map((c) => [c.operation, c.status, c.errorCode])).toEqual([["video", null, "network"], ["video", 200, null]]);
+  });
+});
+
 describe("BunnyReplayHost: signedEmbed (B4)", () => {
   it("answers the B4 URL for a fixed key, guid and expiry, expiring whole seconds after now, and calls nothing", () => {
     const { host, calls } = harness(() => ({ status: 500 }));

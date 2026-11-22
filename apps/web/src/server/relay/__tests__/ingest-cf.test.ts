@@ -1436,7 +1436,7 @@ describe("Seazn Task 13: playback tokens and the recording lock", () => {
 
   // Task 24 review I3 (2026-11-22): the replay move runs inside the tick's 8 s Seazn slice, so each Cloudflare call it makes names
   // a timeout (`timeoutMs`), exactly as the viewer's token mint names its own 10 s. The ms here is the test's own, not the move's.
-  it("Task 24 review I3: createDownload, deleteVideo, listInputVideos and a download token each give up at the timeout they are given — the request carries AbortSignal.timeout(ms), the abort is a thrown failure recorded `timeout`; asked without one, none of the first three carries a signal", async () => {
+  it("Task 24 review I3 (+ re-review N3): createDownload, deleteVideo, listInputVideos, a download token and the lock (requireSignedVideo) each give up at the timeout they are given — the request carries AbortSignal.timeout(ms), the abort is a thrown failure recorded `timeout`; asked without one, none of the first three carries a signal", async () => {
     const deadlines: AbortController[] = [];
     const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => { const c = new AbortController(); deadlines.push(c); return c.signal; });
     const port = new FakeRecorder();
@@ -1456,6 +1456,8 @@ describe("Seazn Task 13: playback tokens and the recording lock", () => {
         ["deleteVideo", () => cf.deleteVideo("v_done", { timeoutMs: MS })],
         ["listInputVideos", () => cf.listInputVideos("in_abc", { sessionId: "s_1", timeoutMs: MS })],
         ["playbackToken", () => cf.playbackToken("v_done", { expiresAt: AT, downloadable: true, timeoutMs: MS })],
+        // Re-review N3: the lock pass's lock, which shares the slice.
+        ["requireSignedVideo", () => cf.requireSignedVideo("v_done", { deleteAt: AT, timeoutMs: MS })],
       ];
       let checked = 0;
       for (const [k, [operation, call]] of timed.entries()) {
@@ -1469,15 +1471,15 @@ describe("Seazn Task 13: playback tokens and the recording lock", () => {
         expect(err?.message).not.toContain(API);
         checked++;
       }
-      expect(checked, "timed calls").toBe(4);
+      expect(checked, "timed calls").toBe(5);
       await settle();
       expect(port.calls.map((c) => [c.operation, c.status, c.errorCode])).toEqual(timed.map(([operation]) => [operation, null, "timeout"]));
       // Untimed (the retention sweep's own calls): no signal, and an answer as before.
       expect(await cf.createDownload("v_done")).toBe("ready");
       expect(await cf.deleteVideo("v_done")).toBe("deleted");
       expect((await cf.listInputVideos("in_abc", { sessionId: "s_1" })).length).toBeGreaterThan(0);
-      expect(inits.slice(4).map((i) => i.signal), "no signal when no timeout is asked").toEqual([undefined, undefined, undefined]);
-      expect(timeout, "only the four timed calls asked for one").toHaveBeenCalledTimes(4);
+      expect(inits.slice(5).map((i) => i.signal), "no signal when no timeout is asked").toEqual([undefined, undefined, undefined]);
+      expect(timeout, "only the five timed calls asked for one").toHaveBeenCalledTimes(5);
     } finally {
       timeout.mockRestore();
     }

@@ -212,7 +212,18 @@ export class BunnyReplayHost implements ReplayHost {
       this.record(meta.operation, method, url, meta.ids, null, meta.subjectId ?? null, started, (e as { name?: string })?.name === "TimeoutError" ? "timeout" : "network");
       throw this.error(`${meta.operation}: request failed before a response${meta.subjectId ? ` (video ${meta.subjectId})` : ""}`);
     }
-    const json = (await res.json().catch(() => undefined)) as T | undefined;
+    let json: T | undefined;
+    try {
+      json = (await res.json()) as T;
+    } catch (e) {
+      // A body that arrived but is not JSON (an empty 204, an error page) reads as absent, as before. A body that never arrived in
+      // full — the call's own timeout, or the connection cut — is a failed call (re-review N6): recorded as one, never as its status.
+      if (!(e instanceof SyntaxError)) {
+        this.record(meta.operation, method, url, meta.ids, null, meta.subjectId ?? null, started, signal.aborted || (e as { name?: string })?.name === "TimeoutError" ? "timeout" : "network");
+        throw this.error(`${meta.operation}: the response did not arrive in full${meta.subjectId ? ` (video ${meta.subjectId})` : ""}`);
+      }
+      json = undefined;
+    }
     this.record(meta.operation, method, url, meta.ids, res.status, meta.subjectId ?? meta.subjectOf?.(json) ?? null, started, null);
     return { status: res.status, ok: res.ok, json };
   }

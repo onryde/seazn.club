@@ -56,8 +56,9 @@ export type OutputState = "ok" | "connecting" | "rejected" | "unknown";
  *  2026-09-30 found removeOutput rows with a NULL session_id). Optional: a caller with no session passes nothing. */
 export interface ProviderCallMeta { sessionId?: string | null }
 /** Task 24 review I3 (2026-11-22): how long ONE call may take before the adapter gives up on it (`AbortSignal.timeout`; a thrown
- *  failure recorded as `timeout`). Taken only by the calls the replay move makes inside the tick's Seazn slice — listInputVideos,
- *  deleteVideo, createDownload and playbackToken; absent, a call keeps the platform's own bound (and a token its 10 s). */
+ *  failure recorded as `timeout`). Taken only by the calls made inside the tick's Seazn slice — the replay move's listInputVideos,
+ *  deleteVideo, createDownload and playbackToken, and the lock pass's listInputVideos and requireSignedVideo (re-review N3); absent,
+ *  a call keeps the platform's own bound (and a token its 10 s). */
 export interface CallTimeout { timeoutMs?: number }
 /** What `setInputEnabled` is told about the input beside the session: its slot and role, so an adapter that updates the input
  *  with the CREATE's own body can re-send the name the create gave it (`meta.name` is built from session, role and slot).
@@ -139,7 +140,7 @@ export interface IngestProvider {
    *  Phase 1 review I3: the same edit sets the video's own deletion to `deleteAt`, so a held recording is still deleted by the
    *  provider whatever the edit does to the deletion its input stamped (never measured); an echo without it is warned, not
    *  refused (the token rule held). */
-  requireSignedVideo(videoId: string, o: { deleteAt: Date }): Promise<"set" | "absent">;
+  requireSignedVideo(videoId: string, o: { deleteAt: Date } & CallTimeout): Promise<"set" | "absent">;
   /** Seazn Task 24 (C4): make ONE video's MP4 download, or ask after it — `ready` once it can be fetched, `inprogress` while the
    *  provider is still making it (ask again later). A download that failed, a video the provider does not hold, and a fault all
    *  throw. The download goes with the video when the video is deleted. The uid is a replay row's own `cf_video_id` (C6), and the

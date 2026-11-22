@@ -140,7 +140,8 @@ export async function lockSeaznRecordings(
       if (known && v.signed === true) { confirmed++; continue; }
       if (!canCall()) { stopped = true; break; }
       try {
-        const res = await ingest.requireSignedVideo(v.videoId, { deleteAt: seaznRecordingDeleteAt(v.createdAt, nowMs) });
+        // Re-review N3: the lock shares the slice too, so it gives up at the same 4 s as the listing.
+        const res = await ingest.requireSignedVideo(v.videoId, { deleteAt: seaznRecordingDeleteAt(v.createdAt, nowMs), timeoutMs: SEAZN_REPLAY_CALL_TIMEOUT_MS });
         if (res === "set" && !known) {
           await sql`
             insert into seazn_locked_videos (cf_video_id, input_row_id, recorded_at)

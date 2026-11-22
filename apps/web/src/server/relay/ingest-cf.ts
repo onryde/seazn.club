@@ -675,10 +675,10 @@ export class CloudflareIngest implements IngestProvider {
    *  same edit, because nobody has measured whether this POST keeps the deletion the input's `deleteRecordingAfterDays` stamped,
    *  and the sweep holds every Seazn programme recording for Phase 2. An echo with no deletion is WARNED by video id, never
    *  refused: the lock (the token rule) held, and a refusal would leave the recording unsigned and retried forever. */
-  async requireSignedVideo(videoId: string, o: { deleteAt: Date }): Promise<"set" | "absent"> {
+  async requireSignedVideo(videoId: string, o: { deleteAt: Date } & CallTimeout): Promise<"set" | "absent"> {
     const r = await this.call<{ requireSignedURLs?: boolean | null; scheduledDeletion?: string | null }>("POST", `/${encodeURIComponent(videoId)}`,
       { requireSignedURLs: true, scheduledDeletion: o.deleteAt.toISOString() },
-      { operation: "requireSignedVideo", ids: [videoId], subjectId: videoId });
+      { operation: "requireSignedVideo", ids: [videoId], subjectId: videoId, timeoutMs: o.timeoutMs });
     if (r.status === 404) return "absent";
     if (!r.json.success || !r.json.result) this.fail("require signed video", r);
     const echoed = r.json.result.requireSignedURLs;

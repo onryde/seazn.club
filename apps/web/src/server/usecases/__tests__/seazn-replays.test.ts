@@ -828,4 +828,93 @@ describe.skipIf(!HAS_DB)("Task 24 — discovery and the move, on the fakes", () 
     expect(w.ingest.deletedVideos).toEqual([cf]);
     expect(del.mock.calls, "review I3: the cleanup's delete names the move's timeout too").toEqual([[cf, { timeoutMs: 4_000 }], [cf, { timeoutMs: 4_000 }]]);
   });
+
+  // ─── Task 24 re-review (2026-11-22) ────────────────────────────────────────────────────────────────────────────────────
+  it("re-review N1: an OLD replay deleted today keeps its cleanup retries — a remove that fails backs off (not parked, copy id kept), and the next firing removes the copy and cleans the row; one deleted 30 days ago is parked as deleted", async () => {
+    const w = await world();
+    const e = await toEncoding(w, w.fixtureIds[0], [{}, {}]);
+    const [today, monthAgo] = e.ids as [string, string];
+    const [guid, oldGuid] = [e.rows[0]!.bunny_video_id!, e.rows[1]!.bunny_video_id!];
+    const T = e.t0 + 60 * DAY;   // the organiser deletes one 60 days after it was recorded; the other was deleted 30 days before that
+    const del = (cf: string, at: number) =>
+      sql`update fixture_video_replays set state = 'deleted', deleted_reason = 'organiser', deleted_at = ${new Date(at)}, next_attempt_at = ${new Date(T)} where cf_video_id = ${cf}`;
+    await del(today, T);
+    await del(monthAgo, T + MIN - 30 * DAY);   // exactly 30 days before the run below
+    const remove = vi.spyOn(w.host, "remove").mockRejectedValue(new Error("bunny remove: request failed before a response"));
+    expect(await move(w, T + MIN)).toMatchObject({ failed: 2 });
+    let row = await rowOf(today);
+    expect([row.state, row.attempts, ms(row.next_attempt_at), row.bunny_video_id, row.bunny_cleaned_at], "backed off from its delete, not parked").toEqual(["deleted", 1, T + 2 * MIN, guid, null]);
+    const old = await rowOf(monthAgo);
+    expect([old.state, ms(old.next_attempt_at), old.bunny_video_id], "30 days past its own delete: parked, still deleted, its copy still named").toEqual(["deleted", PARKED, oldGuid]);
+    remove.mockRestore();
+    await move(w, T + 2 * MIN);
+    row = await rowOf(today);
+    expect(w.host.videoIds(), "the copy the organiser deleted today is gone").not.toContain(guid);
+    expect([row.bunny_video_id, ms(row.bunny_cleaned_at)]).toEqual([null, T + 2 * MIN]);
+  });
+
+  it("re-review N2: a copy that failed its check whose remove fails keeps its reference on the failed row — never forgotten — and the retry removes it before the move starts again", async () => {
+    const w = await world();
+    const e = await toEncoding(w, w.fixtureIds[0], [{}]);
+    const cf = e.ids[0]!;
+    const firstCopy = e.rows[0]!.bunny_video_id!;
+    w.host.fail(firstCopy);
+    const remove = vi.spyOn(w.host, "remove").mockRejectedValueOnce(new Error("bunny remove: request failed before a response"));
+    const p1 = e.t0 + 15 * MIN;
+    expect(await move(w, p1)).toMatchObject({ failed: 1 });
+    let row = await rowOf(cf);
+    expect([row.state, row.bunny_video_id, row.attempts, ms(row.next_attempt_at)], "failed, still holding the copy it could not remove").toEqual(["failed", firstCopy, 1, p1 + MIN]);
+    expect(w.host.videoIds(), "PREMISE: the remove failed, so the copy is still on the host").toContain(firstCopy);
+    await move(w, p1 + MIN);   // the retry
+    row = await rowOf(cf);
+    expect(remove.mock.calls.map(([id]) => id), "the retry asked for the held copy first").toEqual([firstCopy, firstCopy]);
+    expect(w.host.videoIds(), "removed by the retry").not.toContain(firstCopy);
+    expect(row.state, "then the move started again and fetched a new copy").toBe("encoding");
+    expect(row.bunny_video_id).not.toBe(firstCopy);
+  });
+
+  it("re-review N5: a PLAYABLE row past its window whose Cloudflare delete keeps failing is parked as playable — its verified copy is never hidden", async () => {
+    const w = await world();
+    const e = await toEncoding(w, w.fixtureIds[0], [{}]);
+    const cf = e.ids[0]!;
+    const guid = e.rows[0]!.bunny_video_id!;
+    w.host.advance(guid);
+    const v = e.t0 + 15 * MIN;
+    await move(w, v);
+    const before = await rowOf(cf);
+    expect(before.state, "PREMISE: verified").toBe("playable");
+    vi.spyOn(w.ingest, "deleteVideo").mockRejectedValue(new Error("cloudflare deleteVideo: HTTP 500"));
+    const past = ms(before.recorded_at)! + 30 * DAY;
+    expect(await move(w, past)).toMatchObject({ failed: 1 });
+    const row = await rowOf(cf);
+    expect([row.state, ms(row.next_attempt_at), ms(row.verified_at), row.bunny_video_id, row.cf_deleted_at]).toEqual(["playable", PARKED, v, guid, null]);
+    expect(await move(w, past + DAY)).toEqual(NOTHING);
+  });
+
+  it("re-review N4 (review m3): a database error storing the org's first collection is logged by its step and class alone — no detail, so a connection string it echoes never reaches a log — and the row backs off", async () => {
+    const w = await world();
+    const f = w.fixtureIds[0];
+    const s0 = await endedWith(w, f, [{}]);
+    await decide(f, s0.endedAt);
+    const t0 = s0.endedAt + 15 * MIN;
+    await discover(w, t0);
+    const SECRET = "hunter2-t24";
+    const fn = `t24_refuse_${randomUUID().replaceAll("-", "")}`;
+    // This org's insert alone is refused, with a message that quotes a connection string (as a pooler's error can).
+    await sql.unsafe(`create function ${fn}() returns trigger language plpgsql as $$ begin raise exception 'could not reach postgres://seazn:${SECRET}@db.internal:5432/seazn'; end $$`);
+    await sql.unsafe(`create trigger ${fn} before insert on org_video_collections for each row when (new.org_id = '${w.auth.orgId}') execute function ${fn}()`);
+    const logs = [vi.spyOn(log, "error"), vi.spyOn(log, "warn"), vi.spyOn(log, "info")];
+    try {
+      expect(await move(w, t0)).toMatchObject({ failed: 1 });
+      const row = await rowOf(s0.ids[0]!);
+      expect([row.state, row.attempts, ms(row.next_attempt_at)]).toEqual(["downloading", 1, t0 + MIN]);
+      const lines = logs[0]!.mock.calls.filter(([o]) => replayIdOf(o) === row.id).map(([o]) => o as Record<string, unknown>);
+      expect(lines.map((o) => [o.step, o.errClass, "detail" in o]), "the step, the class, no detail").toEqual([["store_collection", "PostgresError", false]]);
+      expect(JSON.stringify(logs.flatMap((l) => l.mock.calls)), "the echoed secret reaches no log line").not.toContain(SECRET);
+    } finally {
+      for (const l of logs) l.mockRestore();
+      await sql.unsafe(`drop trigger ${fn} on org_video_collections`);
+      await sql.unsafe(`drop function ${fn}()`);
+    }
+  });
 });

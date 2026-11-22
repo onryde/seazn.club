@@ -14,111 +14,21 @@
 //
 // ONE SPORT, on purpose (TEST-STRATEGY rule 6): the pass never reads a sport rule; every rig rides `generic`.
 // Secrets: no token is minted here; ids only.
-import { randomBytes, randomUUID } from "node:crypto";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/sentry", () => ({ captureError: vi.fn() }));
 
 import { sql } from "@/lib/db";
 import { DELETE_RECORDING_AFTER_DAYS, FINALISATION_GRACE_SECONDS, MAX_DURATION_MINUTES } from "@/server/relay/config";
-import { setRelayDriversForTest } from "@/server/relay/drivers";
-import { CloudflareIngest } from "@/server/relay/ingest-cf";
-import { FakeIngest, FakeRecorder, FakeRunner } from "@/server/relay/fakes";
-import { pairPresentPhone, rigUser } from "@/server/relay/__tests__/_session-rig";
-import { grantCredits } from "../stream-credits";
-import { type SessionDeps, createSession, currentSession, heartbeat, stopSession } from "../stream-sessions";
-import { createStreamTarget } from "../stream-targets";
-import { SEAZN_PASS_LOGGED_IDS_MAX, lockSeaznRecordings } from "../seazn-recordings";
+import type { FakeIngest } from "@/server/relay/fakes";
+import type { SessionDeps } from "../stream-sessions";
+import { SEAZN_PASS_LOGGED_IDS_MAX } from "../seazn-recordings";
 import { log } from "@/server/logger";
-import { override } from "./_capture-rig";
-import { seedOrg, startedDivisionWithFixture } from "./_rig";
+import {
+  HAS_DB, SEC, ZERO, inputOf, installSeaznLockEnv, live, lockRows, pass, rig, stateOf, stopAndSettle, vid,
+} from "./_seazn-lock-rig";
 
-const HAS_DB = !!process.env.DATABASE_URL;
-const SEC = 1000;
-const ROOMY_STORAGE_MINUTES = 100_000_000;
-/** The tick's slice for this pass (plan: SEAZN_PASS_BUDGET_MS = 8 000), typed here. */
-const BUDGET = 8_000;
-
-const ENV_KEYS = ["RELAY_KEK", "YOUTUBE_TOKEN_KEK", "RELAY_IMAGE", "AUTH_SECRET"] as const;
-const savedEnv = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
-beforeAll(() => {
-  process.env.RELAY_KEK = randomBytes(32).toString("hex");
-  process.env.YOUTUBE_TOKEN_KEK = randomBytes(32).toString("hex");
-  process.env.RELAY_IMAGE = "registry.fly.io/seazn-relay:seazn-lock-test";
-  process.env.AUTH_SECRET ??= "seazn-lock-test-secret";
-});
-afterAll(() => {
-  for (const k of ENV_KEYS) {
-    if (savedEnv[k] === undefined) delete process.env[k];
-    else process.env[k] = savedEnv[k];
-  }
-});
-beforeEach(() => {
-  vi.stubEnv("SEAZN_HOSTED_LIVE", "true");
-  vi.stubEnv("SEAZN_VIDEO_ORIGINS", "seazn.club");
-});
-afterEach(() => {
-  vi.unstubAllEnvs();
-  setRelayDriversForTest(null);
-});
-
-type Clock = { now: number };
-/** An org with two started fixtures, the relay entitlements, credits, a phone on each fixture, a pasted YouTube key and its
- *  Seazn row (V541's trigger). `shared` puts a second org on the FIRST org's fake and clock, so one listing can answer both. */
-async function rig(shared?: { ingest: FakeIngest; clock: Clock; runner: FakeRunner }) {
-  const seeded = await seedOrg();
-  const auth = { ...seeded.auth, userId: await rigUser() };
-  const { fixtureIds } = await startedDivisionWithFixture(auth, { fixtures: 2 });
-  await override(auth.orgId, "streaming.overlay", true);
-  await override(auth.orgId, "streaming.relay", true);
-  for (const f of fixtureIds) await pairPresentPhone(f);
-  await grantCredits({ orgId: auth.orgId, delta: 5, createdBy: await rigUser(), note: "seazn lock", idempotencyKey: randomUUID() });
-  const pasted = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "Club", streamKey: `yt-${randomUUID()}` });
-  const [seazn] = await sql<{ id: string }[]>`select id from org_stream_targets where org_id = ${auth.orgId} and kind = 'seazn'`;
-  expect(seazn, "PREMISE: V541 gave the org its Seazn destination").toBeDefined();
-  const clock: Clock = shared?.clock ?? { now: Date.now() };
-  const recorder = new FakeRecorder();
-  const ingest = shared?.ingest ?? new FakeIngest({ clock: () => clock.now, connectAfterMs: 3000, recorder });
-  ingest.storage = { totalStorageMinutes: 0, totalStorageMinutesLimit: ROOMY_STORAGE_MINUTES, videoCount: 0 };
-  const runner = shared?.runner ?? new FakeRunner();
-  const deps: SessionDeps = { drivers: { ingest, runner }, now: () => new Date(clock.now), appUrl: "http://app.test" };
-  return { auth, fixtureIds: fixtureIds as [string, string], pasted: pasted.id, seazn: seazn!.id, ingest, runner, clock, deps, recorder };
-}
-type Rig = Awaited<ReturnType<typeof rig>>;
-
-/** Go live on `targetId` (composed), and the Machine's playing beat that takes it live. */
-async function live(r: Rig, fixtureId: string, targetId: string): Promise<string> {
-  await pairPresentPhone(fixtureId, { at: r.deps.now() });
-  const { sessionId } = await createSession(r.auth, fixtureId, { mode: "composed", targetId }, r.deps);
-  const spec = r.runner.created.find((c) => c.sessionId === sessionId);
-  expect(spec, `PREMISE: a Machine was created for ${sessionId}`).toBeDefined();
-  await heartbeat(sessionId, spec!.jobToken, { state: "playing" }, r.deps);
-  expect(await stateOf(sessionId), "PREMISE: the session is live").toBe("live");
-  return sessionId;
-}
-/** Stop, then read until the composed session has completed; answers its `ended_at`. */
-async function stopAndSettle(r: Rig, fixtureId: string, sid: string): Promise<number> {
-  await stopSession(r.auth, fixtureId, sid, r.deps);
-  for (let i = 0; i < 3 && (await stateOf(sid)) !== "completed"; i++) await currentSession(r.auth, fixtureId, r.deps);
-  expect(await stateOf(sid), "PREMISE: the stopped session completed").toBe("completed");
-  const [{ ended_at }] = await sql<{ ended_at: Date }[]>`select ended_at from fixture_stream_sessions where id = ${sid}`;
-  return ended_at.getTime();
-}
-const stateOf = async (sid: string) => (await sql<{ state: string }[]>`select state from fixture_stream_sessions where id = ${sid}`)[0]!.state;
-/** A session's input of `role`: its row id, its Cloudflare uid and its finished mark. */
-async function inputOf(sid: string, role: "programme" | "camera") {
-  const [row] = await sql<{ id: string; uid: string; locked_at: Date | null }[]>`
-    select id, ingest_input_id as uid, recordings_locked_at as locked_at from fixture_stream_inputs where session_id = ${sid} and role = ${role}`;
-  expect(row?.uid, `PREMISE: the ${role} input of ${sid} has a uid`).toBeTruthy();
-  return row!;
-}
-const lockRows = async (inputRowId: string) =>
-  (await sql<{ cf_video_id: string }[]>`select cf_video_id from seazn_locked_videos where input_row_id = ${inputRowId} order by cf_video_id`).map((r) => r.cf_video_id);
-const vid = (tag: string) => `v-${tag}-${randomUUID()}`;
-/** One pass, as the tick runs it, scoped to these orgs. */
-const pass = (r: Rig, orgIds: string[], o: { now?: number; budgetMs?: number; wallClock?: () => number; deps?: SessionDeps } = {}) =>
-  lockSeaznRecordings(o.deps ?? r.deps, { now: new Date(o.now ?? r.clock.now), budgetMs: o.budgetMs ?? BUDGET, orgIds, ...(o.wallClock ? { wallClock: o.wallClock } : {}) });
-const ZERO = { locked: 0, relocked: 0, refused: 0, failed: 0, deferred: 0 };
+installSeaznLockEnv();
 
 describe.skipIf(!HAS_DB)("lockSeaznRecordings — the stream tick's Seazn pass", () => {
   it("m1: a recording that is STILL RECORDING is never edited — neither one reading signed (C7's measured state) nor one reading unsigned; each is locked in ONE pass once it stops, and a second pass makes no second call", async () => {
@@ -398,49 +308,6 @@ describe.skipIf(!HAS_DB)("lockSeaznRecordings — the stream tick's Seazn pass",
     const markAt = ended + FINALISATION_GRACE_SECONDS * SEC + SEC;
     expect(await pass(r, [r.auth.orgId], { now: markAt })).toEqual(ZERO);
     expect((await inputOf(sid, "programme")).locked_at?.getTime()).toBe(markAt);
-  });
-
-  // Task 24 review I3 follow-up (2026-11-22): the lock pass shares the tick's 8 s Seazn slice with the replay move, so its listing
-  // gives up at the move's 4 s call timeout (the ruling's literal, typed here) instead of undici's 300 s. Driven through the REAL
-  // Cloudflare adapter on a fetch that never answers: the timeout's own signal is what ends it, the pass counts each hung listing
-  // as a failure, and no input is marked. The same inputs, listed by an answering fake, ARE marked — so the hang is what held them.
-  it("a hung listing gives up at the 4 s call timeout: each counts as one failure and no input is marked; listed by an answering provider, the same inputs are marked", async () => {
-    const r = await rig();
-    const sids: string[] = [];
-    let ended = 0;
-    for (const f of r.fixtureIds) {
-      const sid = await live(r, f, r.seazn);
-      ended = Math.max(ended, await stopAndSettle(r, f, sid));
-      sids.push(sid);
-    }
-    const markAt = ended + FINALISATION_GRACE_SECONDS * SEC + SEC;
-    const deadlines: AbortController[] = [];
-    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => { const c = new AbortController(); deadlines.push(c); return c.signal; });
-    const recorder = new FakeRecorder();
-    const fetchImpl = vi.fn((_url: string | URL | Request, init?: RequestInit) => {
-      const signal = init?.signal;
-      return new Promise<Response>((_, reject) => signal?.addEventListener("abort", () => reject(signal.reason), { once: true }));
-    }) as unknown as typeof fetch;
-    const hung = new CloudflareIngest({ fetchImpl, accountId: "acct", token: "tok-seazn-lock", recorder });
-    try {
-      const pending = pass(r, [r.auth.orgId], { now: markAt, deps: { ...r.deps, drivers: { ...r.deps.drivers, ingest: hung } } });
-      let checked = 0;
-      for (let k = 0; k < sids.length; k++) {
-        await vi.waitFor(() => expect(deadlines, `listing ${k + 1} asked for its timeout`).toHaveLength(k + 1));
-        expect(timeout).toHaveBeenLastCalledWith(4_000);
-        deadlines[k]!.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
-        checked++;
-      }
-      expect(checked, "hung listings").toBe(2);
-      expect(await pending).toEqual({ ...ZERO, failed: 2 });
-      await new Promise((res) => setTimeout(res, 0));   // the provider-call record is fire-and-forget
-      expect(recorder.calls.map((c) => [c.operation, c.errorCode])).toEqual([["listInputVideos", "timeout"], ["listInputVideos", "timeout"]]);
-      for (const sid of sids) expect((await inputOf(sid, "programme")).locked_at, `${sid}: never marked on a hung listing`).toBeNull();
-    } finally {
-      timeout.mockRestore();
-    }
-    expect(await pass(r, [r.auth.orgId], { now: markAt + 60 * SEC })).toEqual(ZERO);
-    for (const sid of sids) expect((await inputOf(sid, "programme")).locked_at?.getTime(), `${sid}: marked once listed`).toBe(markAt + 60 * SEC);
   });
 
   it("the budget: with under 2 s of it left no provider call starts and the input is deferred; 2 s left is enough", async () => {

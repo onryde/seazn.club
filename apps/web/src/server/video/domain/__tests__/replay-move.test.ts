@@ -19,7 +19,7 @@ const later = (ms: number) => new Date(NOW.getTime() + ms);
 function row(over: Partial<ReplayRow> = {}): ReplayRow {
   return {
     state: "found", stateAt: ago(MIN), recordedAt: ago(60 * MIN), bunnyVideoId: null, verifiedAt: null, cfDeletedAt: null,
-    bunnyCleanedAt: null, cfDurationSeconds: 3600, cfHeight: 1080, attempts: 0, ...over,
+    bunnyCleanedAt: null, deletedAt: null, cfDurationSeconds: 3600, cfHeight: 1080, attempts: 0, ...over,
   };
 }
 
@@ -87,11 +87,14 @@ describe("replayFailure — every state × a provider that throws gives the same
     const PARKED_AS: Record<string, string> = {
       found: "failed", downloading: "failed", fetching: "failed", encoding: "failed", failed: "failed", playable: "playable", deleted: "deleted",
     };
+    // Each state's window opens at its own anchor (re-review N1): a deleted row's at its delete, every other state's at the
+    // recording. The sweep puts both at the same instant, so each state is measured from the anchor it reads.
+    const at = (state: string, ms: number) => ({ recordedAt: ago(ms), ...(state === "deleted" ? { deletedAt: ago(ms) } : {}) });
     let checked = 0;
     for (const state of REPLAY_ROW_STATES) {
-      const inside = replayFailureOutcome(row({ state, attempts: 3, recordedAt: ago(30 * DAY - 1) }), NOW);
+      const inside = replayFailureOutcome(row({ state, attempts: 3, ...at(state, 30 * DAY - 1) }), NOW);
       expect(inside, `${state}, 1 ms inside the window`).toEqual({ kind: "backoff", state, attempts: 4, nextAttemptAt: later(8 * MIN) });
-      const past = replayFailureOutcome(row({ state, attempts: 3, recordedAt: ago(30 * DAY) }), NOW);
+      const past = replayFailureOutcome(row({ state, attempts: 3, ...at(state, 30 * DAY) }), NOW);
       expect(past, `${state}, exactly 30 days`).toEqual({ kind: "give_up", state: PARKED_AS[state], attempts: 4, nextAttemptAt: PARKED });
       checked += 2;
     }
@@ -101,6 +104,31 @@ describe("replayFailure — every state × a provider that throws gives the same
     expect(nextReplayStep(row({ state: "failed", recordedAt: ago(30 * DAY) }), NOW).kind).toBe("give_up");
     expect(nextReplayStep(row({ state: "failed", recordedAt: ago(30 * DAY - 1) }), NOW).kind).toBe("retry");
     expect(REPLAY_PARKED_AT).toEqual(PARKED);
+  });
+
+  // Re-review N1 (2026-11-22): a deleted row's Bunny copy has no 30-day life, and an organiser deletes a replay long after it was
+  // recorded. Its cleanup retries are counted from its own delete (`deleted_at`; `state_at` when that is missing), never from the
+  // recording — or an old replay deleted today would be parked on its first transient fault, its copy left on the host.
+  it("re-review N1: a DELETED row's window opens at its delete — an old replay deleted a minute ago backs off; deleted 30 days ago it is parked; with no deleted_at, its state_at is the anchor", () => {
+    const DAY = 24 * 60 * MIN;
+    const old = { state: "deleted" as const, attempts: 0, recordedAt: ago(60 * DAY) };
+    const CASES: [string, ReplayRow, string][] = [
+      ["recorded 60 d ago, deleted 1 min ago", row({ ...old, deletedAt: ago(MIN) }), "backoff"],
+      ["recorded 60 d ago, deleted 30 d - 1 ms ago", row({ ...old, deletedAt: ago(30 * DAY - 1) }), "backoff"],
+      ["recorded 60 d ago, deleted exactly 30 d ago", row({ ...old, deletedAt: ago(30 * DAY) }), "give_up"],
+      ["recorded 60 d ago, no deleted_at, state_at 1 min ago", row({ ...old, deletedAt: null, stateAt: ago(MIN) }), "backoff"],
+      ["recorded 60 d ago, no deleted_at, state_at 30 d ago", row({ ...old, deletedAt: null, stateAt: ago(30 * DAY) }), "give_up"],
+      // Every other state ignores deleted_at and state_at: the recording is its anchor.
+      ["a playable row recorded 30 d ago, with a fresh state_at", row({ state: "playable", recordedAt: ago(30 * DAY), stateAt: ago(MIN), deletedAt: ago(MIN) }), "give_up"],
+    ];
+    let checked = 0;
+    for (const [name, r, kind] of CASES) {
+      const o = replayFailureOutcome(r, NOW);
+      expect(o.kind, name).toBe(kind);
+      expect(o.state, `${name}: a deleted row stays deleted, parked or not`).toBe(r.state);
+      checked++;
+    }
+    expect(checked, "rows").toBe(6);
   });
 });
 

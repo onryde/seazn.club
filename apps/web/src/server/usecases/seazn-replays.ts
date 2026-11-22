@@ -223,13 +223,13 @@ export function replayClaimQuery(exec: typeof sql | Tx, a: { now: Date; leaseUnt
         limit ${a.limit}
         for update skip locked)
     returning id, org_id, session_id, cf_video_id, state, state_at, recorded_at, bunny_video_id, verified_at, cf_deleted_at,
-              bunny_cleaned_at, cf_duration_seconds, cf_height, attempts`;
+              bunny_cleaned_at, deleted_at, cf_duration_seconds, cf_height, attempts`;
 }
 
 interface ClaimedDbRow {
   id: string; org_id: string; session_id: string; cf_video_id: string; state: ReplayRowState; state_at: Date; recorded_at: Date;
   bunny_video_id: string | null; verified_at: Date | null; cf_deleted_at: Date | null; bunny_cleaned_at: Date | null;
-  cf_duration_seconds: number | null; cf_height: number | null; attempts: number;
+  deleted_at: Date | null; cf_duration_seconds: number | null; cf_height: number | null; attempts: number;
 }
 interface Claimed extends ReplayRow { id: string; orgId: string; sessionId: string; cfVideoId: string }
 
@@ -238,7 +238,7 @@ function claimedOf(r: ClaimedDbRow): Claimed {
   return {
     id: r.id, orgId: r.org_id, sessionId: r.session_id, cfVideoId: r.cf_video_id, state: r.state, stateAt: new Date(r.state_at),
     recordedAt: new Date(r.recorded_at), bunnyVideoId: r.bunny_video_id, verifiedAt: dateOrNull(r.verified_at),
-    cfDeletedAt: dateOrNull(r.cf_deleted_at), bunnyCleanedAt: dateOrNull(r.bunny_cleaned_at),
+    cfDeletedAt: dateOrNull(r.cf_deleted_at), bunnyCleanedAt: dateOrNull(r.bunny_cleaned_at), deletedAt: dateOrNull(r.deleted_at),
     cfDurationSeconds: r.cf_duration_seconds, cfHeight: r.cf_height, attempts: r.attempts,
   };
 }
@@ -362,6 +362,16 @@ async function fetchCopy(run: Run, row: Claimed): Promise<Outcome> {
   return "done";
 }
 
+/** A failed row forgets its copy — only AFTER the remove succeeded (re-review N2), and only while the row is still failed and
+ *  still holds that very copy. False: another actor moved the row. */
+async function forgetCopy(row: Claimed, guid: string): Promise<boolean> {
+  const done = await sql`
+    update fixture_video_replays set bunny_video_id = null where id = ${row.id} and state = 'failed' and bunny_video_id = ${guid} returning id`;
+  if (done.length !== 1) return false;
+  row.bunnyVideoId = null;
+  return true;
+}
+
 async function removeQuietly(run: Run, row: Claimed, guid: string): Promise<void> {
   try {
     await run.deps.replay.remove(guid);
@@ -422,14 +432,21 @@ const STEPS: { readonly [K in ReplayStep["kind"]]: Handler<K> } = {
         return "done";
       case "failed": {
         // Never followed by a Cloudflare delete: the move starts again after the backoff. The conditional write comes FIRST
-        // (review m2): a row another run verified meanwhile keeps its copy; only a row this write moved has its copy removed.
+        // (review m2): a row another run verified meanwhile keeps its copy; only a row this write moved has its copy removed. The
+        // row keeps the copy's id until the remove succeeds (re-review N2): a remove that fails leaves it there, for the retry.
         run.out.failed++;
         const f = replayFailure(row, run.now);
-        log.warn({ replayId: row.id, videoId: row.cfVideoId, guid, reason: o.reason, attempts: f.attempts }, "seazn replays: the host's copy failed the check — removed; the move starts again after the backoff");
-        if (!(await write(row, "encoding", { state: "failed", state_at: run.now, bunny_video_id: null, attempts: f.attempts, next_attempt_at: f.nextAttemptAt }))) return dropped(row, "encoding");
+        log.warn({ replayId: row.id, videoId: row.cfVideoId, guid, reason: o.reason, attempts: f.attempts }, "seazn replays: the host's copy failed the check — it is removed, and the move starts again after the backoff");
+        if (!(await write(row, "encoding", { state: "failed", state_at: run.now, attempts: f.attempts, next_attempt_at: f.nextAttemptAt }))) return dropped(row, "encoding");
         row.state = "failed";
-        row.bunnyVideoId = null;
-        await removeQuietly(run, row, guid);
+        try {
+          await run.deps.replay.remove(guid);
+        } catch (err) {
+          // Already counted as failed; the row still holds the copy, so the retry removes it before anything else.
+          log.error({ replayId: row.id, guid, errClass: errClass(err), detail: detail(err) }, "seazn replays: a failed copy could not be removed — kept on the row; the retry removes it first");
+          return "done";
+        }
+        await forgetCopy(row, guid);
         return "done";
       }
       case "lost":
@@ -456,6 +473,17 @@ const STEPS: { readonly [K in ReplayStep["kind"]]: Handler<K> } = {
     return "done";
   },
   retry: async (run, row) => {
+    if (row.bunnyVideoId !== null) {
+      // A copy that failed its check and whose remove failed then (re-review N2): removed before the move starts again, so the
+      // row never leaves `failed` still holding it.
+      if (!run.canCall()) return defer(run, row);
+      try {
+        await run.deps.replay.remove(row.bunnyVideoId);
+      } catch (err) {
+        return failure(run, row, "remove_failed_copy", err);
+      }
+      if (!(await forgetCopy(row, row.bunnyVideoId))) return dropped(row, "failed");
+    }
     if (!(await write(row, "failed", { state: "found", state_at: run.now, next_attempt_at: run.now }))) return dropped(row, "failed");
     moved(run, row, { state: "found" });
     return "again";
