@@ -18,14 +18,15 @@ import { expect, test, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { expectNoHorizontalScroll, overflowingIn } from "../helpers";
 import { dismissCookieBanner } from "../scorepad-a11y-kit";
+import { helpPageWithPosts } from "../blog-help-pages";
 import { projectViewport } from "./_shared";
 
 test.use({ storageState: { cookies: [], origins: [] } });
 
 /** A long article with six level-2 headings and a table (content/help/registration/card-payments.md). */
 const LONG = "/help/registration/card-payments";
-/** A page a blog post names in its `help:` key, so it carries the "Read how it works" list (blog P2 Task 6). */
-const WITH_POSTS = "/help/divisions/settings";
+/** A page a blog post names in its `help:` key, so it carries the "Read how it works" list (blog P2 Task 6); read from the posts. */
+const WITH_POSTS = helpPageWithPosts();
 const PAGES = ["/help", LONG, "/help/scoring/basics", "/help/formats", "/help/formats/knockout", WITH_POSTS] as const;
 
 /**

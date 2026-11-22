@@ -22,6 +22,9 @@ export type BlogTopic = (typeof BLOG_TOPICS)[number];
 export const BLOG_DESCRIPTION_MIN = 50;
 export const BLOG_DESCRIPTION_MAX = 160;
 
+/** A help page lists at most this many posts under "Read how it works". The content layer refuses a fourth on one page. */
+export const BLOG_HELP_MAX = 3;
+
 /** Every post is signed with this, never a person (owner, 2026-11-19). */
 export const BLOG_AUTHOR = "Seazn" as const;
 

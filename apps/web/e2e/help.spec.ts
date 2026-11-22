@@ -7,6 +7,7 @@ import { expect, test, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { expectNoHorizontalScroll } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
+import { helpPageWithPosts, helpPageWithoutPosts } from "./blog-help-pages";
 
 test.use({ storageState: { cookies: [], origins: [] } });
 
@@ -14,8 +15,8 @@ test.use({ storageState: { cookies: [], origins: [] } });
 const LONG = "/help/registration/card-payments";
 /** An h3 of content/help/billing/groups.md: in the search index, never on the help home's own page. */
 const INDEX_ONLY = "What happens to your invoices when the bill changes hands";
-/** A page a blog post names in its `help:` key, so it carries the "Read how it works" list (blog P2 Task 6). */
-const WITH_POSTS = "/help/divisions/settings";
+/** A page a blog post names in its `help:` key, so it carries the "Read how it works" list (blog P2 Task 6); read from the posts. */
+const WITH_POSTS = helpPageWithPosts();
 const PAGES = ["/help", LONG, "/help/scoring/basics", "/help/formats", "/help/formats/knockout", WITH_POSTS] as const;
 
 /**
@@ -207,7 +208,7 @@ test("1280: a page a post names lists it under Read how it works, and the link o
   await expect(page).toHaveURL(new RegExp(`${href}$`));
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
   // A page no post names has no such list, and no empty heading.
-  await visit(page, "/help/registration/waitlist");
+  await visit(page, helpPageWithoutPosts());
   await expect(page.getByTestId("help-blog-links")).toHaveCount(0);
   await expect(page.getByText("Read how it works")).toHaveCount(0);
 });

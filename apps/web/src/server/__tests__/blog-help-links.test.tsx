@@ -8,6 +8,8 @@
 // a test here also pins that the two stay apart.
 //
 // Single-sport reason: no sport is involved; this is page wiring.
+import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -26,10 +28,12 @@ vi.mock("@/server/blog-content", async (importOriginal) => {
 
 import * as articleRoute from "@/app/help/[...slug]/page";
 import * as familyRoute from "@/app/help/formats/[family]/page";
+import * as formatsIndexRoute from "@/app/help/formats/page";
 import { HelpRelated } from "@/components/help/help-related";
 import { FORMAT_FAMILIES } from "@/config/format-gallery";
-import { blogUrl } from "@/lib/blog";
-import { allBlogPosts, type BlogPost } from "@/server/blog-content";
+import { BLOG_HELP_MAX, blogUrl } from "@/lib/blog";
+import { allBlogPosts, blogHelpCapProblems, type BlogPost } from "@/server/blog-content";
+import { helpBlogLinks } from "@/server/blog-help-links";
 import { allHelpArticles } from "@/server/help-content";
 import { resolveHelpRelated } from "@/server/help-related";
 import en from "@/dictionaries/en/marketing.json";
@@ -47,6 +51,7 @@ const SECTION = /<section[^>]*data-testid="help-blog-links".*?<\/section>/s;
 
 /** The page a post's `help:` key names, rendered through the real route (a format family or a help article). */
 async function renderHelp(helpSlug: string): Promise<string> {
+  if (helpSlug === "formats/overview") return renderToStaticMarkup((await formatsIndexRoute.default()) as ReactElement);
   if (helpSlug.startsWith("formats/")) {
     const family = helpSlug.slice("formats/".length);
     return renderToStaticMarkup((await familyRoute.default({ params: Promise.resolve({ family }) })) as ReactElement);
@@ -62,12 +67,12 @@ function listedSlugs(markup: string): string[] | null {
 }
 
 /** A post written here, not read from disk: same shape as a parsed one. */
-const post = (slug: string, date: string, help: string, topic: BlogPost["topic"] = "points"): BlogPost => ({
+const post = (slug: string, date: string, help: string, topic: BlogPost["topic"] = "points", updated?: string): BlogPost => ({
   ...fixturePosts[0]!,
   slug,
   title: `Question for ${slug}?`,
   date,
-  updated: undefined,
+  updated,
   help,
   topic,
 });
@@ -140,6 +145,19 @@ describe("every post is on the page its help key names, and every post on a page
   });
 });
 
+describe("the formats overview is a page a post can name", () => {
+  it("`help: formats/overview` puts the post on /help/formats (the gallery index), and a gallery with none shows nothing", async () => {
+    sw.posts = [post("overview-post", "2026-05-05", "formats/overview")];
+    expect(listedSlugs(await renderHelp("formats/overview"))).toEqual(["overview-post"]);
+    // the link text and the section sit on the index page itself
+    expect(await renderHelp("formats/overview")).toContain(`>${HEADING}</h2>`);
+    sw.posts = [];
+    const none = await renderHelp("formats/overview");
+    expect(none).not.toContain(HEADING);
+    expect(none).not.toContain("help-blog-links");
+  });
+});
+
 describe("at most three, newest first", () => {
   it("five posts name one page: the three newest are listed, in date order, the two oldest are not", async () => {
     const KEY = "sports/football";
@@ -153,6 +171,13 @@ describe("at most three, newest first", () => {
     const listed = listedSlugs(await renderHelp(KEY));
     // Typed by hand from the dates above: November, September, June.
     expect(listed).toEqual(["p-2026-11", "p-2026-09", "p-2026-06"]);
+  });
+
+  it("the order is by date, never by `updated`: an old post edited last sorts below a newer one", async () => {
+    const KEY = "sports/football";
+    // Typed by hand: "old-edited" was written first and edited last; "newer" was written in between. By date, newer is first.
+    sw.posts = [post("old-edited", "2026-01-01", KEY, "points", "2026-12-01"), post("newer", "2026-06-01", KEY)];
+    expect(listedSlugs(await renderHelp(KEY))).toEqual(["newer", "old-edited"]);
   });
 
   it("exactly three are all shown, and a same-day pair orders by slug", async () => {
@@ -187,6 +212,13 @@ describe("a help page with no posts", () => {
     sw.posts = null;
     expect(realPosts.some((p) => p.help === "registration/waitlist")).toBe(false);
     expect(await renderHelp("registration/waitlist")).not.toContain(HEADING);
+  });
+
+  it("helpBlogLinks answers null for a page no post names (never an object with an empty list)", async () => {
+    sw.posts = fixturePosts;
+    expect(await helpBlogLinks("no/such")).toBeNull();
+    expect(await helpBlogLinks("registration/waitlist")).toBeNull();
+    expect((await helpBlogLinks("sports/football"))!.posts).toHaveLength(2);
   });
 
   it("the component alone: an empty list draws nothing, and with no related, no prev and no next the footer is gone too", () => {
@@ -235,5 +267,59 @@ describe("the heading is translated", () => {
       expect(v, name).toBeTruthy();
     }
     for (const dict of [es, fr, nl]) expect((dict as Record<string, string>)["blog.help.title"]).not.toBe(HEADING);
+  });
+});
+
+describe("no more than the cap on one help page, refused when the tree is read (the build)", () => {
+  const KEY = "sports/football";
+  const four = ["2026-01-01", "2026-02-01", "2026-03-01", "2026-04-01"].map((d) => post(`cap-${d}`, d, KEY));
+
+  it("the cap is three", () => {
+    expect(BLOG_HELP_MAX).toBe(3);
+  });
+
+  it("a fourth post on one page is a problem that names the page, the count and every post; three is fine", () => {
+    expect(blogHelpCapProblems(four.slice(0, 3))).toEqual([]);
+    const problems = blogHelpCapProblems(four);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain(KEY);
+    expect(problems[0]).toContain("4 posts");
+    for (const p of four) expect(problems[0]).toContain(p.slug);
+    // three per page on two pages is fine: it counts per page
+    expect(blogHelpCapProblems([...four.slice(0, 3), ...["a", "b", "c"].map((x) => post(`other-${x}`, "2026-05-05", "sports/tennis"))])).toEqual([]);
+    expect(blogHelpCapProblems([])).toEqual([]);
+  });
+
+  it("reading a content folder with four posts on one page throws; the same folder with three reads", () => {
+    const root = mkdtempSync(join(tmpdir(), "blog-cap-"));
+    try {
+      const files = readdirSync(FIXTURES).filter((f) => f.endsWith(".md"));
+      expect(files, "premise: four fixture files").toHaveLength(4);
+      const writeAll = (names: string[]) => {
+        for (const f of readdirSync(root)) rmSync(join(root, f));
+        for (const f of names) {
+          cpSync(join(FIXTURES, f), join(root, f));
+          writeFileSync(join(root, f), readFileSync(join(root, f), "utf8").replace(/^help: .*$/m, `help: ${KEY}`));
+        }
+      };
+      writeAll(files);
+      expect(() => allBlogPosts(root)).toThrow(new RegExp(`${KEY}.*4 posts`, "s"));
+      // dropping one leaves the others' `related:` pointing at a missing post, so write three whose related still resolve
+      writeAll(files.filter((f) => f !== "what-happens-when-a-player-withdraws.md"));
+      const md = readFileSync(join(root, "who-wins-a-two-way-tie.md"), "utf8").replace(/^related: .*$/m, "related: how-swiss-pairs-round-two, what-a-draw-is-worth");
+      writeFileSync(join(root, "who-wins-a-two-way-tie.md"), md);
+      expect(allBlogPosts(root)).toHaveLength(3);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("the real tree is within the cap, and the busiest page's count is reported", () => {
+    const counts = new Map<string, number>();
+    for (const p of realPosts) counts.set(p.help, (counts.get(p.help) ?? 0) + 1);
+    expect(counts.size, "anti-vacuity: pages named").toBeGreaterThan(0);
+    const [page, busiest] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]!;
+    expect(busiest, `${page} has ${busiest} posts`).toBeLessThanOrEqual(BLOG_HELP_MAX);
+    expect(blogHelpCapProblems(realPosts)).toEqual([]);
   });
 });

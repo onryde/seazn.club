@@ -14,7 +14,7 @@ import { builtinModules } from "@seazn/engine/sports";
 import { FORMAT_FAMILIES } from "@/config/format-gallery";
 import { helpUrl } from "@/lib/help";
 import {
-  BLOG_AUTHOR, BLOG_DESCRIPTION_MAX, BLOG_DESCRIPTION_MIN, BLOG_SLUG, BLOG_TOPICS,
+  BLOG_AUTHOR, BLOG_DESCRIPTION_MAX, BLOG_DESCRIPTION_MIN, BLOG_HELP_MAX, BLOG_SLUG, BLOG_TOPICS,
   type BlogPostMeta, type BlogTopic,
 } from "@/lib/blog";
 import type { HelpSearchRow } from "@/lib/help-search";
@@ -321,6 +321,18 @@ export function blogRelatedProblems(
 /** Newest first; two posts on the same day sort by slug, so the order never depends on how the files were read. */
 export const blogNewestFirst = (a: Pick<BlogPostMeta, "date" | "slug">, b: Pick<BlogPostMeta, "date" | "slug">) => (a.date === b.date ? a.slug.localeCompare(b.slug) : a.date < b.date ? 1 : -1);
 
+/**
+ * One readable line per help page that more than BLOG_HELP_MAX posts name; empty means sound. The help page lists only
+ * the newest few, so a fourth post would be dropped from it silently: refused here, at build, instead.
+ */
+export function blogHelpCapProblems(posts: readonly Pick<BlogPostMeta, "slug" | "help">[]): string[] {
+  const byPage = new Map<string, string[]>();
+  for (const p of posts) byPage.set(p.help, [...(byPage.get(p.help) ?? []), p.slug]);
+  return [...byPage.entries()]
+    .filter(([, slugs]) => slugs.length > BLOG_HELP_MAX)
+    .map(([help, slugs]) => `help page '${help}' is named by ${slugs.length} posts (${slugs.join(", ")}); at most ${BLOG_HELP_MAX} per page: point one at another page`);
+}
+
 function loadPosts(root: string, opts: BlogParseOptions, planned?: ReadonlySet<string>): BlogPost[] {
   const posts = new Map<string, BlogPost>();
   for (const file of readdirSync(root).filter((f) => f.endsWith(".md")).sort()) {
@@ -330,6 +342,8 @@ function loadPosts(root: string, opts: BlogParseOptions, planned?: ReadonlySet<s
   }
   const problems = blogRelatedProblems(posts, planned);
   if (problems.length > 0) throw new Error(`blog related: ${problems.join("; ")}`);
+  const capped = blogHelpCapProblems([...posts.values()]);
+  if (capped.length > 0) throw new Error(`blog help: ${capped.join("; ")}`);
   return [...posts.values()].sort(blogNewestFirst);
 }
 

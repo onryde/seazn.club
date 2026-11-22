@@ -6,6 +6,8 @@ import { HelpBreadcrumb, HelpShell } from "@/components/help/help-shell";
 import { familyNeedsPaidPlan } from "@/lib/format-plan-badge";
 import { PHASE_PRODUCTION_BUILD } from "next/constants";
 import { loadPricingMatrix } from "@/lib/pricing-matrix-server";
+import { HelpRelated } from "@/components/help/help-related";
+import { helpBlogLinks } from "@/server/blog-help-links";
 
 // Prerendered and cached at the edge (layout.tsx): a request-time read fails the build. 300 s: the badge reads the plan table.
 export const dynamic = "error";
@@ -24,6 +26,7 @@ export default async function FormatGalleryPage() {
     if (process.env.NEXT_PHASE === PHASE_PRODUCTION_BUILD) return {} as Awaited<ReturnType<typeof loadPricingMatrix>>;
     throw e;
   });
+  const blogLinks = await helpBlogLinks("formats/overview");
   return (
     <HelpShell currentHref="/help/formats">
       <HelpBreadcrumb trail={[{ href: "/help#formats", label: "Formats" }]} />
@@ -65,6 +68,7 @@ export default async function FormatGalleryPage() {
           </li>
         ))}
       </ul>
+      <HelpRelated related={[]} prev={null} next={null} blogLinks={blogLinks} />
     </HelpShell>
   );
 }
