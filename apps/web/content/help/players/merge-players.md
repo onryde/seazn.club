@@ -7,13 +7,13 @@ related: players/find-duplicates, players/undo-a-merge, entrants/duplicate-playe
 
 A merge folds two records for one person into one. You keep one record and merge the other in. Nothing is deleted, and you can [undo it](/help/players/undo-a-merge). Owners and admins can merge.
 
-![The Merge two records dialog at phone width: Keep this record and Merge this one in side by side, fields with a not-equal sign where they differ, the Public visibility block, and the tickbox above the Merge records button.](/help/players/merge-dialog.webp "The merge dialog. The older record is kept by default, and Swap turns them round.")
+![The Merge two records dialog at phone width: each field shows the record you keep above the one you merge in, the Public visibility block shows Shown, Hidden and the result for name and photo, and a tickbox sits above the Merge records button.](/help/players/merge-dialog.webp "The merge dialog on a phone. A struck-through value is the one that is dropped.")
 
 ## Merge a suggested pair
 
 1. In **Possible duplicates**, choose **Review** on a pair. See [find possible duplicate players](/help/players/find-duplicates).
-2. The **Merge two records** dialog puts **Keep this record** on the left and **Merge this one in** on the right. The older record is on the left. Choose **Swap** to turn them round.
-3. Compare the fields. A not-equal sign marks a difference.
+2. The **Merge two records** dialog sets the two records against each other. On a wide screen they sit in two columns, **Keep this record** and **Merge this one in**. On a phone each field shows the record you keep above the one you merge in. The older record is the one you keep. Choose **Swap** to turn them round.
+3. Compare the fields. On a wide screen a not-equal sign marks a difference. On a phone a dropped value is struck through.
 4. Tick **I have checked both records. They are the same person.** **Merge records** stays off until you do.
 5. Choose **Merge records**. A card reads **Merged into** and the name, then **Both records are kept. [Name] now holds the whole history.** Choose **Close**, or **Undo**.
 
@@ -28,11 +28,9 @@ The merged-in record leaves your roster.
 - **The account link.** If only the merged-in record was claimed, the kept record takes the link. The dialog says so: **Only the record being merged in is linked to a player’s account. The record you keep inherits that link.** If two different logins claimed them, the merge is refused.
 - **Statistics** are counted again from the matches, so goals and cards are counted once, on the kept player. Match results are not changed.
 
-The merged-in record's photo does not move. The kept record keeps its own photo, or none.
-
 ## Public settings: the stricter one wins
 
-Under **Public visibility**, the dialog shows each setting for both records and the result. **The stricter setting wins.** If either record hides a setting, the merged record hides it, even if the record you kept showed it. A merge never makes more public than before.
+Under **Public visibility**, the dialog shows **Name** and **Photo** for both records, and the result. **The stricter setting wins.** If either record hides a setting, the merged record hides it, even if the record you kept showed it. A merge never makes more public than before.
 
 ## Merge by hand
 
@@ -43,11 +41,11 @@ You can merge any two records you know about, listed or not.
 
 If the two records give different dates of birth, the dialog says **These records give different dates of birth, so this pair is never suggested. Merge it only if you know they are the same person.** It adds a second tickbox, **I know the dates of birth differ and want to merge anyway.** Both tickboxes must be ticked. Use it for a mistyped year.
 
-A player record and an official record cannot be merged. A pair claimed by two different logins cannot either. The dialog refuses and says why.
+A player record and an official record cannot be merged, and neither can a pair claimed by two different logins.
 
 ## A merge can show a clash on a published schedule
 
-As two records, one person could be in two matches at the same time. As one person, they are on two courts at once. After a merge, the published schedules the kept player is in are checked again. A clash is listed under **Published schedules to check**, with the board, a count and a label such as **person overlap**. The merge still goes through. The clash was there before, and the scheduler could not see it.
+As two records, one person could be in two matches at the same time. As one person, they are on two courts at once. After a merge, the published schedules the kept player is in are checked again. A clash is listed under **Published schedules to check**, with the board, a count and a label such as **person overlap**. The merge still goes through.
 
 - A board whose competition has finished shows **Completed** and **This competition has finished — nothing to reschedule, but the clash is worth knowing about.**
 - A schedule that is not published yet is not checked.

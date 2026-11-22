@@ -7,7 +7,7 @@ related: players/claim-your-profile, players/rsvp-and-check-in, billing/event-pa
 
 Your numbers come from the matches you play. There is nothing to enter. Play, get scored, and the numbers appear on your **Player home**. This page covers where you see them, what is public, and your photo.
 
-![A player home at phone width: the Career card for football with one division, one variant and one match, Goals and Points; My stats for the division; and the What's public about you card with the name and photo tickboxes.](/help/players/stats-privacy.webp "Career, My stats and the privacy card on a player home.")
+![A player home at phone width: the Career card for football with one division, one variant and one match, Goals and Points; My stats for the division; a Public profile link, and the What's public about you card with the name and photo tickboxes.](/help/players/stats-privacy.webp "Career, My stats and the privacy card on a player home. The Public profile link shows once the name box is ticked.")
 
 ## Your stats
 

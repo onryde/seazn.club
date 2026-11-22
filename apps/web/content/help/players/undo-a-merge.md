@@ -7,7 +7,7 @@ related: players/merge-players, players/find-duplicates, entrants/duplicate-play
 
 A merge keeps the record you merged in. It is marked as absorbed and hidden from your roster, with a copy of everything it held. That is what makes **Undo** possible. An undo works as well next month as it does thirty seconds later.
 
-![The Recent merges panel at phone width: three entries reading a name, absorbed, and another name, one with an Undo button and two marked Undone.](/help/players/recent-merges.webp "Recent merges. Undo sits on an entry that has not been undone.")
+![The Recent merges panel at phone width: the line Undo puts both records back exactly as they were, and one entry reading Ines Okonkwo absorbed ines OKONKWO with an Undo button.](/help/players/recent-merges.webp "Recent merges. Undo sits on an entry that has not been undone.")
 
 ## Undo a merge
 
@@ -32,7 +32,7 @@ An undo restores what the merge moved. It does not remove what you did afterward
 
 - **A later edit stays.** If you renamed the kept player after the merge, the new name stays.
 - **A later team stays.** A team you added the kept player to after the merge stays on the kept record.
-- **An edit to something the merge moved is replaced.** If you changed a squad number the merge had carried over, the undo puts back the number from before the merge.
+- **An edit to something the merge moved is replaced.** If you changed a squad number the merge had carried over, the undo puts back the numbers from before the merge.
 
 ## Limits
 
@@ -40,4 +40,4 @@ An undo restores what the merge moved. It does not remove what you did afterward
 - **Newest first.** If you merged A into B and then B into C, the second merge has to be undone first. Choosing **Undo** on the first merge is refused with a message that tells you to undo the later merge first.
 
 > **Example**
-> **Leila Haddad** was on file twice. One record was claimed by a login, was captain of **Riverside Rockets** with #9, and had scored 2 goals. The other was unclaimed and had scored 1. You merge them. The kept record now shows 3 goals, the login and #9. You then change that squad number to 12 and rename the player **Leila Haddad-Noor**. You choose **Undo** on the entry. The two records are back: one with 2 goals, the login and #9, the other with 1 goal. The name **Leila Haddad-Noor** stays on the kept record, and the squad number on it is back to what it was before the merge.
+> **Leila Haddad** is on file twice. The record you keep has 1 goal. The record you merge in is linked to a login, is captain of **Riverside Rockets** with #9 and has 2 goals. You merge them. The kept record now shows 3 goals, the login and #9. You then change the squad number to 12 and rename the kept player **Leila Haddad-Noor**. You choose **Undo** on the entry. The merged-in record is back with 2 goals, its login and #9. The kept record is back with 1 goal and no squad number. It is still named **Leila Haddad-Noor**.

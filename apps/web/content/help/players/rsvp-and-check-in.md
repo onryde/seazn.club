@@ -40,7 +40,7 @@ Check-in works for a claimed player on one of the match's teams. Anyone else, in
 
 The window says the code stops working at midnight local time. That is midnight at the end of the day you create it, not the day of the match. Create it on match day. A code created on Sunday stops on Sunday night, even for a match on Monday. Local time is the division's time zone, or your organisation's if the division has none.
 
-Scanning keeps working while the match is on. When the match is finished, check-in is closed.
+A scan still counts while the match is being played. Check-in closes once the match is finalised or cancelled.
 
 > **Example**
 > **Riverside Rockets** play **Dunmore Park** tomorrow at 02:26. The lineup shows **Dana Whitfield** with **✓** and the note "Back from work at 6", and **Eli Marsh** with a dash because he has not claimed his profile. You create the code today at 00:27. It stops at midnight tonight, which is before the match, so you create it again tomorrow. Dana scans it, and a lime dot appears beside her chip. Her answer is still **In**.
