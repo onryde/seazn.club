@@ -27,7 +27,8 @@ export async function platformRevenueSuite(admin: Session, staffEmail: string): 
       });
       const firstLine = (await csv.text()).split("\n")[0];
       check(
-        "revenue CSV header",
+        // It reds rarely in CI with no detail (run 45051019151, attempt 1; green on rerun): say what came back.
+        `revenue CSV header (got ${csv.status}: ${JSON.stringify((firstLine ?? "").slice(0, 120))})`,
         csv.status === 200 &&
           firstLine ===
             "month,org,org_slug,currency,gross_minor,refunded_minor,net_minor,fee_count",
