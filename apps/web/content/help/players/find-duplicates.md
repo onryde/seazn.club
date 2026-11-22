@@ -11,7 +11,7 @@ The same player often ends up in your directory twice: typed in one season, impo
 
 ## What you see
 
-Each pair is a card with both records and a **Match strength** row of three chips: **Same name**, **Same date of birth** and **Plays for the same team**. A chip is lit when it applies. A **To review** count shows how many pairs there are. Pairs with more lit chips come first.
+Each pair is a card with both records and a **Match strength** row of three chips: **Same name**, **Same date of birth** and **Plays for the same team**. A chip is lit when it applies. A **To review** count shows how many pairs there are. The pairs are ranked by a score: a shared name counts 1, a shared date of birth 2 and a shared team 1. Pairs with the same score list the older record first.
 
 Choose **Review** to [merge the pair](/help/players/merge-players). Nothing changes until you do.
 

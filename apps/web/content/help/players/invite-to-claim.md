@@ -22,14 +22,14 @@ When the email is sent, the window says **Invite emailed to** and the address. I
 Two links can open the claim page, on purpose:
 
 - **The link in the email** signs the player in. They tap **Claim and sign in** and the profile is theirs, with no password. Opening the email proves the address is theirs. It signs them in for 72 hours after you send it. After that it behaves like the link below.
-- **The link the window shows** is for you to hand over yourself. Whoever opens it signs in first, and only the invited address can accept. A link pasted into a group chat does not move the profile to someone else.
+- **The link the window shows** is for you to hand over yourself. Whoever opens it signs in first, and only the invited address can accept. If they are already signed in as the invited address, it goes straight to **This is me — claim**. A link pasted into a group chat does not move the profile to someone else.
 
-Ask players to treat the email like a sign-in email and not forward it. The player's side is in [claim your player profile](/help/players/claim-your-profile).
+Ask players to treat the email like a sign-in email and not forward it. The player's side is in [claim your player profile](/help/players/claim-your-profile). The date of birth on a profile is for eligibility, and the **Directory** says it is never shown publicly. See [your stats, photo and privacy](/help/players/player-stats-and-photo) for what claiming makes public.
 
 ## Change or cancel an invite
 
-- **Wrong address?** Choose **Invite to claim…** again. A player has one open invite. A new invite replaces the old one, and the old link stops working.
 - **Withdraw invite** cancels the invite. The link stops working, and the row goes back to showing **Invite to claim…**.
+- **Wrong address?** Choose **Withdraw invite**, then **Invite to claim…**, and type the right address. A player has one open invite, so the old link stops working.
 
 ## Unlink a claimed player
 
@@ -43,5 +43,3 @@ Owners and admins see these buttons. A viewer sees the **Players** list without 
 
 > **Example**
 > **Dana Whitfield** has a dash in the **Account** column. You choose **Invite to claim…** and send an invite to her address. The column reads **Invite Pending**. She claims it, and the column reads **Claimed** with **Unlink** beside it. Later she changes her login. You choose **Unlink**, confirm, and her row shows **Invite to claim…** again.
-
-The date of birth on a profile is for eligibility. The **Directory** says it is never shown publicly, and it is not on the player's own home. See [your stats, photo and privacy](/help/players/player-stats-and-photo) for what claiming makes public.

@@ -12,7 +12,7 @@ A merge keeps the record you merged in. It is marked as absorbed and hidden from
 ## Undo a merge
 
 1. Open **Directory**, then the **Players** tab.
-2. Find **Recent merges**. Each entry reads a name, **absorbed**, and the other name. Newest is first.
+2. Find **Recent merges**. Owners and admins see it. Each entry reads a name, **absorbed**, and the other name. Newest is first, and the list shows the newest 50.
 3. Choose **Undo** on the entry.
 4. The window reads **Undo this merge?** and says the merged-in record comes back as its own record and the kept record returns to the settings it had before. Choose **Undo the merge**.
 
@@ -28,11 +28,12 @@ The entry then reads **Undone** and has no **Undo** button. The two records are 
 
 ## What an undo leaves alone
 
-An undo restores what the merge moved. It does not remove what you did afterwards.
+An undo puts back what the merge moved. It leaves a rename and a team you added afterwards alone.
 
 - **A later edit stays.** If you renamed the kept player after the merge, the new name stays.
 - **A later team stays.** A team you added the kept player to after the merge stays on the kept record.
 - **An edit to something the merge moved is replaced.** If you changed a squad number the merge had carried over, the undo puts back the numbers from before the merge.
+- **Public settings are replaced too.** The kept record's public name and photo settings go back to what they were before the merge. If the player turned one off after the merge, the undo turns it back on, so check the settings after an undo.
 
 ## Limits
 

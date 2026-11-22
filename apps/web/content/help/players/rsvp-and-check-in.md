@@ -36,9 +36,9 @@ Check-in works for a claimed player on one of the match's teams. Anyone else, in
 
 **Answers on the lineup.** Open the match, then **Lineup**. A chip sits beside each name: **✓** for available, **✗** for unavailable, **?** for maybe available. A dash means no answer yet, or a player who has not claimed a profile. Point at a chip to read the player's note. A small lime dot beside a chip means the player checked in at the venue.
 
-**The check-in code.** On the match page, **Check-in QR** opens **Player check-in** with a QR code and a link you can copy. Print it or pin it at the venue. The button shows while the match is waiting to start.
+**The check-in code.** On the match page, **Check-in QR** opens **Player check-in** with a QR code and a link you can copy. Print it or pin it at the venue. Owners and admins see the button, on a match that has not started, and not once the competition is frozen.
 
-The window says the code stops working at midnight local time. That is midnight at the end of the day you create it, not the day of the match. Create it on match day. A code created on Sunday stops on Sunday night, even for a match on Monday. Local time is the division's time zone, or your organisation's if the division has none.
+The window says the code stops working at midnight local time. That is midnight at the end of the day you create it, not the day of the match. Create it on match day. A code created on Sunday stops on Sunday night, even for a match on Monday. Local time is the division's time zone, or your organisation's if the division has none. If neither is set, it is UTC midnight.
 
 A scan still counts while the match is being played. Check-in closes once the match is finalised or cancelled.
 

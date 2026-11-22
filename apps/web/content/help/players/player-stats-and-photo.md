@@ -25,7 +25,7 @@ The organiser's **Stats** tab on a division lists every player with the sport's 
 - **Show my name publicly**
 - **Show my photo publicly**, which appears once you are on a team
 
-A change reaches public pages within a few minutes, not at once.
+A change can take a few minutes to reach public pages.
 
 ## Your public player card
 
@@ -46,4 +46,4 @@ Once you are on a team, a photo control sits above the tickboxes. Choose **Add p
 
 ## Under 16
 
-Until your 16th birthday an organiser manages your public name and photo settings. The tickboxes are locked, with the line **An organiser manages this until you're 16.** You cannot upload a photo.
+If the organiser has your date of birth on file and you are under 16, an organiser manages your public name and photo settings until your 16th birthday. The tickboxes are locked, with the line **An organiser manages this until you're 16.** You cannot upload a photo. Without a date of birth on file there is no lock.

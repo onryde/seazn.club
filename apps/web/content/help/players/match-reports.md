@@ -16,7 +16,7 @@ You need a claimed officiating profile. See [claim your player profile](/help/pl
 1. Open your **Player home**. The officiating section lists **Completed matches**, with the number in brackets. Open it.
 2. Choose the button on the match. It reads **File match report**. Once you have saved a draft it reads **Finish match report**. Once you have filed it reads **Match report filed**.
 
-A match is listed under **Completed matches** once it is decided, finished or abandoned. The button shows only for a match you **accepted**. A match you did not accept has no button.
+**Completed matches** lists your finished matches, cancelled ones included. Only a match that is decided, finalised or abandoned, and that you **accepted**, gets the button. A match you did not accept has no button.
 
 ## Write it
 
@@ -36,7 +36,7 @@ A filed report is final. If something needs changing, ask the organiser.
 ## What the organiser gets
 
 - **An email.** Every owner and admin of the organisation is emailed. Viewers are not.
-- **Where it shows.** On the division's **Discipline** tab, **View report** opens it. In **Schedule**, then **Officials**, a link such as **Mark Ref's report** opens it. Viewers do not see the **Discipline** tab.
+- **Where it shows.** Every report opens from **Schedule**, then **Officials**, where a link such as **Mark Ref's report** opens it. **View report** on the **Discipline** tab appears only on a suspension the report raised, so only where the sport has cards and the plan has enforced discipline. Viewers do not see the **Discipline** tab.
 - **A suggested ban.** A **Red card** or **Misconduct** incident that names a player creates a pending suspension, tagged **From match report**, when the club's plan has enforced discipline. Pro, Enterprise and an Event Pass have it. Community does not. The suspension does not need discipline rules to be switched on for the division. Nothing is banned until the organiser chooses **Confirm** or **Waive** on the **Discipline** tab.
 
 Reports are not shown on public pages.

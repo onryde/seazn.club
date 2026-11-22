@@ -23,7 +23,7 @@ The invite lasts 14 days. The link in the email signs you in for 72 hours after 
 
 After 72 hours the same link opens a different page: **Sign in or create an account to claim it — no password needed.** Choose **Email me a sign-in link** and sign in with the invited address. The page brings you back. Tap **This is me — claim** followed by your name.
 
-An organiser can also hand you a link themselves. That link always asks you to sign in first, with the invited address, and then to tap **This is me**.
+An organiser can also hand you a link themselves. That link asks you to sign in with the invited address, and then to tap **This is me**. If you are already signed in as that address, it goes straight to **This is me — claim**.
 
 > **Example**
 > The club sends Dana Whitfield an invite on Monday at 09:00. She opens the email on Wednesday at 09:00, 48 hours later, and **Claim and sign in** is on the page. Had she opened it on Thursday at 10:00, 73 hours later, the page would show **Sign in or create an account to claim it** instead. She would sign in first and then tap **This is me — claim Dana Whitfield**.
@@ -43,10 +43,10 @@ None of these changes your profile or its history.
 
 One login can claim a profile at each organisation that has you on file. **What's public about you** on your player home lists each club on its own, so your choices are per club.
 
-A referee gets a different page, **Claim your officiating profile**. A pending invite also shows on your player home under **Pending invites**, with **Accept**.
+A referee gets a different page, **Claim your officiating profile**. A pending officiating invite also shows on your player home under **Pending invites**, with **Accept**.
 
 ## What you get
 
 Your player home shows your matches and lets you answer **In**, **Maybe** or **Out**. See [RSVP and check in](/help/players/rsvp-and-check-in). Your stats, your photo and what is public are in [your stats, photo and privacy](/help/players/player-stats-and-photo).
 
-If you are under 16, an organiser manages your public name setting until you turn 16. Everything else on your player home works the same.
+If you are under 16 and the organiser has your date of birth on file, an organiser manages your public name and photo settings until you turn 16, and you cannot upload a photo. Everything else on your player home works the same.
