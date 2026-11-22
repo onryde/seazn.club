@@ -855,5 +855,6 @@
   "division.catchUp": "Recuperación",
   "seaznVideo.live": "En vivo",
   "seaznVideo.unavailable": "El vídeo no se puede reproducir ahora",
-  "seaznVideo.part": "Parte {n}"
+  "seaznVideo.part": "Parte {n}",
+  "seaznVideo.starting": "El vídeo aparecerá aquí en breve"
 }

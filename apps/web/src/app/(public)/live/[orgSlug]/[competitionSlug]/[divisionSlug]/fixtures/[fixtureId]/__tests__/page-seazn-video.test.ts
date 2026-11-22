@@ -30,9 +30,10 @@ import { sql } from "@/lib/db";
 import { ReplayEmbed } from "@/components/public-site/match-centre/replay-embed";
 import { SeaznVideoIsland } from "@/components/public-site/match-centre/seazn-video-island";
 import { fixtureStreamTarget } from "@/server/usecases/stream-codes";
-import { MAX_DURATION_MINUTES } from "@/server/relay/config";
+import publicEn from "@/dictionaries/en/public.json";
+import { FINALISATION_GRACE_SECONDS, MAX_DURATION_MINUTES } from "@/server/relay/config";
 import { seaznVideoPlan } from "@/server/video/seazn-video-plan";
-import { type SeaznRig, installSeaznEnv, live, seaznRig, stopAndSettle } from "@/server/video/__tests__/_seazn-session-rig";
+import { type SeaznRig, goLive, installSeaznEnv, live, seaznRig, seedLockedRecording, stopAndSettle } from "@/server/video/__tests__/_seazn-session-rig";
 import { connect } from "@/server/youtube/__tests__/_connect-rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -86,6 +87,9 @@ describe.skipIf(!HAS_DB)("the public match page's replay slot, through the real 
     const sid = await live(r, f, r.seazn);
     await stopAndSettle(r, f, sid);
     await setStatus(f, "decided");
+    // Ended an hour ago, past the recording's lock window and with nothing locked: no wait is on, so the box is D1's plain empty one (what
+    // an ended session with nothing to play settles to). A session that has just stopped is the starting box: the next cases.
+    await sql`update fixture_stream_sessions set ended_at = now() - interval '1 hour' where id = ${sid}`;
     for (const flag of ["true", "false"] as const) {
       vi.stubEnv("SEAZN_HOSTED_LIVE", flag);
       const tree = await pageTree(f);
@@ -142,6 +146,63 @@ describe.skipIf(!HAS_DB)("the public match page's replay slot, through the real 
     const until = Date.parse(String(hot[0]!.props.activeUntil));
     expect(until, "in play: active until the render + MAX_DURATION_MINUTES").toBeGreaterThanOrEqual(before + MAX_DURATION_MINUTES * 60_000);
     expect(until).toBeLessThanOrEqual(after + MAX_DURATION_MINUTES * 60_000);
+  });
+
+  // Phase 1 visual re-capture R2 (warming and just-stopped made the page shift 0.0856): the page's own server markup holds the starting box
+  // — the player's box with one quiet line — where the plan says a wait is on, through the REAL loader and the REAL plan.
+  it("re-capture R2: a session warming, and one just stopped with nothing locked, are the starting box in the server markup, in the page's own words — and one stopped long ago is the plain empty box", async () => {
+    const r = await seaznRig();
+    orgs.push(r.auth.orgId);
+    const [warming, stopped] = r.fixtureIds;
+    await goLive(r, warming, r.seazn);
+    const sid = await live(r, stopped, r.seazn);
+    await stopAndSettle(r, stopped, sid);
+    let checked = 0;
+    for (const [label, f] of [["warming", warming], ["just stopped", stopped]] as const) {
+      const tree = await pageTree(f);
+      const island = slots(tree).island;
+      expect(island, `${label}: the island is mounted`).toHaveLength(1);
+      expect(Date.parse(String(island[0]!.props.holdUntil)), `${label}: the plan's wait is a future instant`).toBeGreaterThan(Date.now());
+      const markup = renderToStaticMarkup(tree);
+      expect(markup, `${label}: the starting box`).toMatch(/<section data-testid="seazn-video-starting"[^>]*>/);
+      expect(markup).toContain(`>${publicEn["seaznVideo.starting"]}<`);
+      expect(markup, `${label}: and not the plain one`).not.toContain("seazn-video-reserved");
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // The window closes: ended past the lock window, the same fixture settles to the plain empty box (terminal nothing).
+    await sql`update fixture_stream_sessions set ended_at = now() - ${(FINALISATION_GRACE_SECONDS + 60) * 1000} * interval '1 millisecond' where id = ${sid}`;
+    const closed = await pageTree(stopped);
+    expect(slots(closed).island[0]!.props.holdUntil).toBeNull();
+    const markup = renderToStaticMarkup(closed);
+    expect(markup).toContain("seazn-video-reserved");
+    expect(markup).not.toContain("seazn-video-starting");
+  });
+
+  // Visual re-capture R1: a replay of two or more parts, and the Summary panel moved 56 px when its picker row mounted.
+  it("re-capture R1: a decided fixture with two or more recordings holds the picker's row in the server markup, with each part's own number; one recording holds none", async () => {
+    const r = await seaznRig();
+    orgs.push(r.auth.orgId);
+    const f = r.fixtureIds[0];
+    const first = await live(r, f, r.seazn);
+    await seedLockedRecording(first, 50);
+    await stopAndSettle(r, f, first);
+    await sql`update fixture_stream_sessions set ended_at = now() - interval '1 hour' where id = ${first}`;
+    await setStatus(f, "decided");
+    const one = await pageTree(f);
+    expect(slots(one).island[0]!.props.replayParts, "one recording").toEqual([1]);
+    expect(renderToStaticMarkup(one), "a single recording has no picker, so no row").not.toContain("seazn-video-picker-reserved");
+    const second = await live(r, f, r.seazn);
+    await seedLockedRecording(second, 20);
+    await stopAndSettle(r, f, second);
+    await sql`update fixture_stream_sessions set ended_at = now() - interval '1 hour' where id = ${second}`;
+    const two = await pageTree(f);
+    expect(slots(two).island[0]!.props.replayParts, "two recordings: the route's own numbers").toEqual([1, 2]);
+    const markup = renderToStaticMarkup(two);
+    const row = /<div data-testid="seazn-video-picker-reserved"[^>]*>(.*?)<\/div>/.exec(markup);
+    expect(row, "the picker's row is in the page's server markup").not.toBeNull();
+    expect([...row![1]!.matchAll(/<span [^>]*>(.*?)<\/span>/g)].map((m) => m[1])).toEqual(["Part 1", "Part 2"]);
+    expect(markup.indexOf("seazn-video-picker-reserved"), "above the frame").toBeLessThan(markup.indexOf("seazn-video-frame"));
   });
 
   it("a PAST YouTube fixture with no saved choice keeps its replay with its parts, though the org's default now resolves Seazn (the blocker's regression)", async () => {

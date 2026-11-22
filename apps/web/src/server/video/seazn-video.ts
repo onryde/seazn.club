@@ -79,6 +79,35 @@ const errorClass = (e: unknown): string => (e instanceof Error ? e.name : typeof
 /** A failure worth a line: a mint that was asked and failed. A refusal inside a failed mint's window asked nothing (review I1). */
 const freshFailure = (e: unknown): boolean => !(e instanceof PlaybackTokenRecentlyFailed);
 
+/** The fixture's recordings a viewer may be offered, each with its part number: every locked recording of its ENDED Seazn sessions,
+ *  numbered over ALL of them in recording order BEFORE any is left out, then those past Cloudflare's own delete dropped (a part keeps
+ *  its number as older ones go). The one authority for the numbering: `videoOf` signs these, and the match page's plan reads their
+ *  numbers (`seaznReplayPartNos`) to hold the picker's row before the first read. `orgId` scopes the organiser's read. */
+async function playableRecordings(fixtureId: string, orgId: string | null, now: Date): Promise<(LockedRecording & { partNo: number })[]> {
+  const inOrg = orgId === null ? sql`` : sql`and s.org_id = ${orgId}`;
+  const recordings = await sql<LockedRecording[]>`
+    select v.cf_video_id, s.id as session_id, s.created_at as session_created_at
+      from seazn_locked_videos v
+      join fixture_stream_inputs i on i.id = v.input_row_id
+      join fixture_stream_sessions s on s.id = i.session_id
+     where s.fixture_id = ${fixtureId} ${inOrg}
+       and s.destination_kind = 'seazn' and i.role = 'programme' and s.state in ${sql([...TERMINAL_STATES])}
+     order by s.created_at, s.id, v.recorded_at nulls last, v.locked_at, v.cf_video_id`;
+  // Numbered over every locked recording, THEN bounded by Cloudflare's own delete: a part keeps its number as older ones go.
+  const cutoff = now.getTime() - DELETE_RECORDING_AFTER_DAYS * DAY_MS;
+  return recordings
+    .map((r, i) => ({ ...r, partNo: i + 1 }))
+    .filter((r) => new Date(r.session_created_at).getTime() > cutoff);
+}
+
+/** The part numbers the PUBLIC read would offer for a fixture right now, with no signing (no relay, no token): the match page's plan
+ *  uses them to hold the replay picker's row from the server render (Phase 1 visual re-capture R1). One that cannot be signed at
+ *  answer time is left out of the answer and not of this list; the page's hint is as of its render, as every plan fact is. */
+export async function seaznReplayPartNos(fixtureId: string, now: Date): Promise<number[]> {
+  if (!UUID.test(fixtureId)) return [];
+  return (await playableRecordings(fixtureId, null, now)).map((r) => r.partNo);
+}
+
 async function videoOf(fixtureId: string, orgId: string | null, now: Date, playback: PlaybackDeps | undefined): Promise<PublicFixtureVideo> {
   const inOrg = orgId === null ? sql`` : sql`and s.org_id = ${orgId}`;
   // The programme input is the session's lowest programme slot (readFirstInput's row), read for its uid alone: nothing
@@ -91,19 +120,7 @@ async function videoOf(fixtureId: string, orgId: string | null, now: Date, playb
      where s.fixture_id = ${fixtureId} ${inOrg}
      order by s.created_at desc, s.id desc
      limit 1`;
-  const recordings = await sql<LockedRecording[]>`
-    select v.cf_video_id, s.id as session_id, s.created_at as session_created_at
-      from seazn_locked_videos v
-      join fixture_stream_inputs i on i.id = v.input_row_id
-      join fixture_stream_sessions s on s.id = i.session_id
-     where s.fixture_id = ${fixtureId} ${inOrg}
-       and s.destination_kind = 'seazn' and i.role = 'programme' and s.state in ${sql([...TERMINAL_STATES])}
-     order by s.created_at, s.id, v.recorded_at nulls last, v.locked_at, v.cf_video_id`;
-  // Numbered over every locked recording, THEN bounded by Cloudflare's own delete: a part keeps its number as older ones go.
-  const cutoff = now.getTime() - DELETE_RECORDING_AFTER_DAYS * DAY_MS;
-  const playable = recordings
-    .map((r, i) => ({ ...r, partNo: i + 1 }))
-    .filter((r) => new Date(r.session_created_at).getTime() > cutoff);
+  const playable = await playableRecordings(fixtureId, orgId, now);
 
   const onAir = latest !== undefined && latest.destination_kind === "seazn" && latest.state === "live";
   const liveUid = onAir ? latest.programme_uid : null;

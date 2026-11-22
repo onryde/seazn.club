@@ -10,6 +10,13 @@
 //     near kick-off or while the match is active, else backing off to 60 s (review N1), and stopping once the fixture is settled
 //     (review I2). So a page opened before kick-off turns to the live player without a reload. No read while the tab is hidden; one
 //     when it is shown again.
+//   - ...EXCEPT while a WAIT is on (re-capture R2: a Seazn session warming, or just stopped with its recording not locked yet): the
+//     player's own box holds, dark, with one quiet line, through every empty answer, until a player arrives or the wait runs out; so
+//     the player's arrival, a poll later, moves nothing. The wait is the page's (`holdUntil`) or starts when a player was on screen
+//     and leaves (seazn-video-hold.ts has the rules). The box goes ONCE, when the wait runs out; it is never dropped and drawn again
+//     between reads.
+//   - the box also holds the picker's row, invisible, when the page knows the replay has two or more parts (`replayParts`, re-capture
+//     R1), so the real picker takes its place with no shift.
 // `embed` parts are the replay host's own player (Task 25) and have no rendering here yet.
 //
 // WHEN to ask again is the schedule's (seazn-video-schedule.ts), the loop's is seazn-video-poll.ts, and how an address reaches the
@@ -20,6 +27,7 @@ import { api } from "@/lib/client";
 import { interpolate } from "@/lib/i18n-runtime";
 import type { PublicFixtureVideo } from "@/server/api-v1/schemas";
 import { SEAZN_PLAYER_FRAME, SeaznPlayer } from "./seazn-player";
+import { holdAfterAnswer, holdWait, parseHold, showsPlayer } from "./seazn-video-hold";
 import type { SeaznVideoLabels } from "./seazn-video-labels";
 import { startVideoPoll, type VideoPoll } from "./seazn-video-poll";
 
@@ -64,6 +72,13 @@ export function nextPartIndex(key: string, from: number, count: number): number 
 }
 
 const REGION = "ph-no-capture mt-4 border-t border-white/10 pt-4";
+/** The picker's row, and a part's pill by whether it is the selected one: one authority for their geometry, so the row the box holds
+ *  (re-capture R1) is the real one's size, to the pixel, however many parts wrap. */
+const PICKER_ROW = "mb-3 flex flex-wrap gap-2";
+const partPillClass = (selected: boolean): string =>
+  `inline-flex min-h-11 items-center rounded-full px-4 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-court-ink ${
+    selected ? "bg-accent text-accent-ink" : "border border-white/25 text-court-ink hover:bg-white/10"
+  }`;
 
 /** A player's identity. A different part is a different recording; a different `epoch` is a player that gave up and is rebuilt by the
  *  next answer (the poll's `rebuild`), so it gets a fresh element and a fresh hls.js instance even when the address is unchanged. A
@@ -79,27 +94,57 @@ interface StageProps {
   onFatal: () => void;
 }
 
-/** Everything the island draws for one answer. */
-function SeaznVideoStage({ video, epoch, labels, onFatal, reserve }: StageProps & { reserve: boolean }) {
-  if (video === null) {
-    // Phase 1 visual D1: no answer yet, and a player is expected — the player's own box, empty and dark, so its arrival moves nothing.
-    return reserve ? (
-      <section data-testid="seazn-video-reserved" aria-hidden="true" className={REGION}>
-        <div data-testid="seazn-video-frame" className={SEAZN_PLAYER_FRAME} />
-      </section>
+/** The player's box with no player in it (D1, re-capture R2 and R1): the same region and the same frame the player has, so the
+ *  player's arrival moves nothing. With a wait on it carries the one quiet line, and is not hidden from assistive tech (the line is a
+ *  status); without one it is empty and hidden, as D1 drew it. `picker` is the part numbers the page expects the picker to list (two
+ *  or more draw its row, invisible). */
+function HeldBox({ starting, labels, picker }: { starting: boolean; labels: SeaznVideoLabels; picker: readonly number[] }) {
+  const row =
+    picker.length >= 2 ? (
+      <div data-testid="seazn-video-picker-reserved" aria-hidden="true" className={`invisible ${PICKER_ROW}`}>
+        {picker.map((n, i) => (
+          <span key={n} className={partPillClass(i === 0)}>
+            {interpolate(labels.part, { n })}
+          </span>
+        ))}
+      </div>
     ) : null;
+  return starting ? (
+    <section data-testid="seazn-video-starting" className={REGION}>
+      {row}
+      <div data-testid="seazn-video-frame" className={SEAZN_PLAYER_FRAME}>
+        <p role="status" className="absolute inset-0 flex items-center justify-center px-6 text-center text-sm text-court-ink/70">
+          {labels.starting}
+        </p>
+      </div>
+    </section>
+  ) : (
+    <section data-testid="seazn-video-reserved" aria-hidden="true" className={REGION}>
+      {row}
+      <div data-testid="seazn-video-frame" className={SEAZN_PLAYER_FRAME} />
+    </section>
+  );
+}
+
+/** Everything the island draws for one answer. */
+function SeaznVideoStage({ video, epoch, labels, onFatal, reserve, held, picker }: StageProps & { reserve: boolean; held: boolean; picker: readonly number[] }) {
+  if (video !== null && showsPlayer(video)) {
+    if (video.live !== null) {
+      return (
+        <section data-testid="seazn-video" aria-label={labels.live} className={REGION}>
+          <SeaznPlayer key={playerKey("live", epoch)} src={video.live.src} title={labels.live} liveLabel={labels.live} unavailable={labels.unavailable} onFatal={onFatal} />
+        </section>
+      );
+    }
+    // Task 25 gives `embed` parts a rendering of their own; until then only the interim recording plays.
+    const parts = video.replay.filter((p) => p.player === "hls").sort((a, b) => a.partNo - b.partNo);
+    return <ReplayParts parts={parts} epoch={epoch} labels={labels} onFatal={onFatal} />;
   }
-  if (video.live !== null) {
-    return (
-      <section data-testid="seazn-video" aria-label={labels.live} className={REGION}>
-        <SeaznPlayer key={playerKey("live", epoch)} src={video.live.src} title={labels.live} liveLabel={labels.live} unavailable={labels.unavailable} onFatal={onFatal} />
-      </section>
-    );
-  }
-  // Task 25 gives `embed` parts a rendering of their own; until then only the interim recording plays.
-  const parts = video.replay.filter((p) => p.player === "hls").sort((a, b) => a.partNo - b.partNo);
-  if (parts.length === 0) return null;
-  return <ReplayParts parts={parts} epoch={epoch} labels={labels} onFatal={onFatal} />;
+  // Nothing to play. A wait on (warming, or just stopped): the box holds. Before the first answer, where a player is expected (D1):
+  // the box, empty. Otherwise it is nothing, and the island keeps looking. The picker's row is held only before the answer: an answer
+  // with no player has told us the page's hint is stale.
+  if (held || (video === null && reserve)) return <HeldBox starting={held} labels={labels} picker={video === null ? picker : []} />;
+  return null;
 }
 
 function ReplayParts({ parts, epoch, labels, onFatal }: { parts: PublicFixtureVideo["replay"]; epoch: number; labels: SeaznVideoLabels; onFatal: () => void }) {
@@ -132,7 +177,7 @@ function ReplayParts({ parts, epoch, labels, onFatal }: { parts: PublicFixtureVi
     <section data-testid="seazn-video" aria-label={labels.replay} className={REGION}>
       {multi ? (
         <>
-          <div role="tablist" aria-label={labels.replay} className="mb-3 flex flex-wrap gap-2">
+          <div role="tablist" aria-label={labels.replay} className={PICKER_ROW}>
             {parts.map((p, i) => {
               const selected = p.partNo === active.partNo;
               return (
@@ -146,9 +191,7 @@ function ReplayParts({ parts, epoch, labels, onFatal }: { parts: PublicFixtureVi
                   tabIndex={selected ? 0 : -1}
                   onClick={() => setPicked(p.partNo)}
                   onKeyDown={(e) => onTabKey(e, i)}
-                  className={`inline-flex min-h-11 items-center rounded-full px-4 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-court-ink ${
-                    selected ? "bg-accent text-accent-ink" : "border border-white/25 text-court-ink hover:bg-white/10"
-                  }`}
+                  className={partPillClass(selected)}
                 >
                   {interpolate(labels.part, { n: p.partNo })}
                 </button>
@@ -181,14 +224,24 @@ export interface SeaznVideoIslandProps {
   kickoffAt?: string | null;
   activeUntil?: string | null;
   /** A player is expected (Phase 1 visual D1): until the first answer, hold the player's box. An answer with nothing to show
-   *  collapses it. Absent: nothing is drawn before an answer (a fixture with no Seazn session yet). */
+   *  collapses it, unless a wait is on. Absent: nothing is drawn before an answer (a fixture with no Seazn session yet). */
   reserve?: boolean;
+  /** A wait is on until this instant (ISO; the page's plan, seazn-video-plan.ts; re-capture R2): a Seazn session warming, or just
+   *  stopped with its recording not locked yet, as the page was drawn. The box holds, with its line, through empty answers until
+   *  then (and implies the box without `reserve`). Absent, null or not a date: no wait. */
+  holdUntil?: string | null;
+  /** The part numbers the page expects the route to list as replay parts (re-capture R1; the plan's, empty while a live is on air, which
+   *  has no picker). Two or more: the box holds the picker's row, invisible, until the first answer. Absent, or fewer: no row. */
+  replayParts?: readonly number[];
 }
 
 export function SeaznVideoIsland({
-  fixtureId, endpoint = "public", labels, initial, settledAt = null, kickoffAt = null, activeUntil = null, reserve = false,
+  fixtureId, endpoint = "public", labels, initial, settledAt = null, kickoffAt = null, activeUntil = null, reserve = false, holdUntil: holdFromPlan = null, replayParts = [],
 }: SeaznVideoIslandProps) {
   const [video, setVideo] = useState<PublicFixtureVideo | null>(initial ?? null);
+  // The wait, as an instant (ms), or null: from the page's plan at first, then from the answers (`holdAfterAnswer`). Taken from the PROPS
+  // alone for the first render, never from the clock, so the server markup and the hydrated one agree.
+  const [holdUntil, setHoldUntil] = useState<number | null>(() => parseHold(holdFromPlan));
   const [epoch, setEpoch] = useState(0);
   const pollRef = useRef<VideoPoll | null>(null);
   // Not a date: never settled (a NaN settle time compares false, so the loop only backs off).
@@ -203,6 +256,7 @@ export function SeaznVideoIsland({
       fetchVideo: (signal) => fetchSeaznVideo(fixtureId, endpoint, signal),
       onVideo: (next, { rebuild }) => {
         setVideo(next);
+        setHoldUntil((until) => holdAfterAnswer(until, next, Date.now()));
         if (rebuild) setEpoch((e) => e + 1);
       },
       settledAtMs,
@@ -216,6 +270,16 @@ export function SeaznVideoIsland({
     };
   }, [fixtureId, endpoint, settledAtMs, kickoffAtMs, activeUntilMs]);
 
+  // The wait ends by itself: the box lets go ONCE, when it runs out, whatever the loop is doing (it may have stopped, settled).
+  const answered = video !== null;
+  useEffect(() => {
+    if (holdUntil === null) return;
+    const wait = holdWait(holdUntil, Date.now(), answered);
+    if (wait === null) return;
+    const timer = setTimeout(() => setHoldUntil(null), wait);
+    return () => clearTimeout(timer);
+  }, [holdUntil, answered]);
+
   const refresh = useCallback(() => pollRef.current?.refreshSoon(), []);
-  return <SeaznVideoStage video={video} epoch={epoch} labels={labels} onFatal={refresh} reserve={reserve} />;
+  return <SeaznVideoStage video={video} epoch={epoch} labels={labels} onFatal={refresh} reserve={reserve} held={holdUntil !== null} picker={replayParts} />;
 }

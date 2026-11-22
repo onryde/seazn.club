@@ -4,7 +4,9 @@
 // refreshed address are the next two files' (seazn-video-poll, seazn-playback); the one-element-across-a-refresh DOM fact is the
 // e2e's (public-fixture.spec.ts).
 //
-//   - nothing to show (no answer yet, warming, ended with no recording signed yet): nothing at all;
+//   - nothing to show (no answer yet, warming, ended with no recording signed yet): nothing at all, EXCEPT where the page says a wait
+//     is on (a session warming, or just stopped with its recording not locked yet): then the player's own box holds, with one quiet
+//     line, until a player arrives or the wait runs out (re-capture R2, the describes below);
 //   - `live`: one player, labelled Live, and no picker, whatever recordings are listed beside it;
 //   - no live and one `hls` part: one player and no picker; two or more: the picker "Part {n}" (the part's own number, which can
 //     skip) in order, and still ONE player (the chosen part's);
@@ -21,6 +23,8 @@ import publicNl from "@/dictionaries/nl/public.json";
 import { PublicFixtureVideo } from "@/server/api-v1/schemas";
 import { SeaznVideoIsland, asPublicFixtureVideo, fetchSeaznVideo, nextPartIndex, playerKey, seaznVideoUrl } from "../seazn-video-island";
 import { seaznVideoLabels } from "../seazn-video-labels";
+import { SEAZN_VIDEO_HOLD_MS } from "../seazn-video-hold";
+import { SEAZN_VIDEO_POLL_FLOOR_MS } from "../seazn-video-schedule";
 import { renderIsland, type walk } from "@/components/__tests__/_hook-harness";
 
 const NOW = Date.parse("2026-11-21T12:00:00.000Z");
@@ -223,6 +227,9 @@ describe("seaznVideoLabels: the page's own strings, in every locale", () => {
     expect(l.live).toBe(dict["seaznVideo.live"]);
     expect(l.unavailable).toBe(dict["seaznVideo.unavailable"]);
     expect(l.part).toBe(dict["seaznVideo.part"]);
+    expect(l.starting).toBe(dict["seaznVideo.starting"]);
+    expect(l.starting, "premise: the key exists in this locale (undefined === undefined would pass the line above)").toEqual(expect.any(String));
+    expect(l.starting.length).toBeGreaterThan(0);
     expect(l.replay).toBe(dict["overlay.replay"]);
     for (const v of Object.values(l)) expect(v, "never a bare dictionary key").not.toMatch(/^seaznVideo\.|^overlay\./);
     expect(l.part, "the part template keeps its {n}").toContain("{n}");
@@ -413,5 +420,318 @@ describe("review I2: the mounted island's loop", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// Phase 1 visual re-capture R2 (CLS 0 -> 0.0856 at 1280 on a warming session): D1 held the player's box until the first read, then an
+// answer with nothing to play collapsed it, and the player that came a poll later pushed the page down again. Where the page says a wait
+// is on (`holdUntil`: a Seazn session warming, or just stopped with its recording not locked yet), the same box now holds with one quiet
+// line, through every empty answer, until a player arrives or the wait runs out.
+describe("re-capture R2: the box holds through a wait, in the server markup", () => {
+  const MIN = 60_000;
+  const in10 = new Date(NOW + 10 * MIN).toISOString();
+  const waiting = (props: Record<string, unknown> = {}, l = labels) =>
+    renderToStaticMarkup(<SeaznVideoIsland fixtureId="f1" labels={l} reserve holdUntil={in10} {...props} />);
+  const classOf = (out: string, testId: string): string => {
+    const m = new RegExp(`data-testid="${testId}"[^>]*?class="([^"]*)"`).exec(out) ?? new RegExp(`class="([^"]*)"[^>]*?data-testid="${testId}"`).exec(out);
+    if (!m) throw new Error(`no ${testId} in the markup — every probe on it would pass vacuously`);
+    return m[1]!;
+  };
+  const tokens = (c: string) => c.split(/\s+/).filter(Boolean).sort();
+
+  it("EMPTY CASE FIRST: no wait is no line and no 'starting' frame — the reserved box stays exactly D1's empty one, and nothing at all without reserve", () => {
+    const out = renderToStaticMarkup(<SeaznVideoIsland fixtureId="f1" labels={labels} reserve />);
+    expect(out).toContain('data-testid="seazn-video-reserved"');
+    expect(out).not.toContain("seazn-video-starting");
+    expect(out.replace(/<[^>]*>/g, ""), "no words").toBe("");
+    expect(html(null), "no reserve, no wait: nothing").toBe("");
+  });
+
+  it("a wait, no answer yet: the player's box with one status line in the page's own words, readable by assistive tech", () => {
+    const out = waiting();
+    expect(count(out, /data-testid="seazn-video-starting"/g), "one box").toBe(1);
+    expect(out).not.toContain("seazn-video-reserved");
+    expect(out.replace(/<[^>]*>/g, ""), "one short line, the localized one").toBe(labels.starting);
+    expect(out).toMatch(/<p [^>]*role="status"[^>]*>/);
+    expect(out, "the line is not hidden from assistive tech").not.toContain("aria-hidden");
+    expect(out).not.toMatch(/<video\b|data-src=/);
+  });
+
+  it("the starting box IS the player's box: same region classes, same frame (16:9, 200 px floor, dark) — so the swap to the player moves nothing", () => {
+    const box = waiting();
+    const live = html(answer({ live: signed("live") }));
+    expect(tokens(classOf(box, "seazn-video-starting"))).toEqual(tokens(classOf(live, "seazn-video")));
+    const frame = tokens(classOf(box, "seazn-video-frame"));
+    expect(frame).toEqual(tokens(classOf(live, "seazn-player")).filter((c) => c !== "ph-no-capture"));
+    for (const c of ["aspect-video", "min-h-[200px]", "w-full", "bg-black"]) expect(frame, c).toContain(c);
+  });
+
+  it("a wait implies the box even without reserve (the plan says one is coming); a wait that is not a date is no wait", () => {
+    expect(waiting({ reserve: false })).toContain('data-testid="seazn-video-starting"');
+    for (const bad of ["not a date", "", null]) {
+      const out = waiting({ reserve: false, holdUntil: bad });
+      expect(out, `holdUntil ${JSON.stringify(bad)}: no box`).toBe("");
+      expect(waiting({ holdUntil: bad }), `holdUntil ${JSON.stringify(bad)}, reserved: the plain empty box`).toContain("seazn-video-reserved");
+    }
+  });
+
+  it("an answer in hand: a player wins over the wait; an empty answer under a wait is the starting box (nothing to play, still waiting)", () => {
+    const player = waiting({ initial: answer({ live: signed("live") }) });
+    expect(player).not.toContain("seazn-video-starting");
+    expect(count(player, /data-testid="seazn-player"/g)).toBe(1);
+    const empty = waiting({ initial: answer({}) });
+    expect(empty).toContain('data-testid="seazn-video-starting"');
+    expect(waiting({ initial: answer({ replay: [part(1, "embed")] }) }), "embeds alone draw no player, so the wait shows").toContain("seazn-video-starting");
+  });
+
+  it("every locale says its own line (never the English, never a bare key)", () => {
+    const dicts = { es: publicEs, fr: publicFr, nl: publicNl } as const;
+    let checked = 0;
+    for (const [loc, dict] of Object.entries(dicts)) {
+      const line = waiting({}, seaznVideoLabels(dict as Record<string, unknown>)).replace(/<[^>]*>/g, "");
+      expect(line, loc).toBe(dict["seaznVideo.starting"]);
+      expect(line, `${loc} is not the English`).not.toBe(publicEn["seaznVideo.starting"]);
+      expect(line).not.toMatch(/^seaznVideo\./);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every non-English locale").toBe(3);
+  });
+});
+
+// Visual re-capture R1: a replay of two or more parts mounts its picker row (44 px + 12 px) with the first answer, and the Summary panel
+// moved 56 px. The plan knows the parts' numbers, so the box holds that row too, invisible, with the picker's own geometry.
+describe("re-capture R1: the picker's row is held in the box when the plan knows two or more parts", () => {
+  const reserved = (replayParts: readonly number[], extra: Record<string, unknown> = {}) =>
+    renderToStaticMarkup(<SeaznVideoIsland fixtureId="f1" labels={labels} reserve replayParts={replayParts} {...extra} />);
+  const row = (out: string) => /<div [^>]*data-testid="seazn-video-picker-reserved"[^>]*>(.*?)<\/div>/.exec(out);
+  const classAttr = (tag: string): string => /class="([^"]*)"/.exec(tag)?.[1] ?? "";
+  const tokens = (c: string) => c.split(/\s+/).filter(Boolean).sort();
+
+  it("EMPTY CASE FIRST: no parts, or one, holds no row (a single recording has no picker); nor does a plain box without the hint", () => {
+    for (const parts of [[], [1], [3]]) expect(reserved(parts), `parts ${JSON.stringify(parts)}`).not.toContain("picker-reserved");
+    expect(renderToStaticMarkup(<SeaznVideoIsland fixtureId="f1" labels={labels} reserve />)).not.toContain("picker-reserved");
+  });
+
+  it("two or more parts: one row above the frame, hidden from assistive tech and from sight, with a pill per part in order, labelled with the part's own number", () => {
+    const out = reserved([1, 3]);
+    const held = row(out);
+    expect(held, "the row is in the server markup").not.toBeNull();
+    expect(held![0]).toMatch(/aria-hidden="true"/);
+    expect(classAttr(held![0]!)).toMatch(/\binvisible\b/);
+    expect([...held![1]!.matchAll(/<span [^>]*>(.*?)<\/span>/g)].map((m) => m[1]), "a pill per part, by its number").toEqual(["Part 1", "Part 3"]);
+    expect(out.indexOf("picker-reserved"), "above the frame").toBeLessThan(out.indexOf("seazn-video-frame"));
+    expect(out).not.toContain('role="tab"');
+    expect(count(reserved([1, 2, 3, 4]), /<span /g), "four parts, four pills").toBe(4);
+  });
+
+  it("the held row IS the picker's row: its class set and each pill's class equal the real tablist's, so the real one takes its place with no shift", () => {
+    const real = html(answer({ replay: [part(1), part(3)] }));
+    const realRow = /<div [^>]*role="tablist"[^>]*>/.exec(real)![0];
+    const heldRow = row(reserved([1, 3]))!;
+    expect(tokens(classAttr(heldRow[0]!)).filter((c) => c !== "invisible")).toEqual(tokens(classAttr(realRow)));
+    const realPills = [...real.matchAll(/<button [^>]*role="tab"[^>]*>/g)].map((m) => classAttr(m[0]));
+    const heldPills = [...heldRow[1]!.matchAll(/<span [^>]*>/g)].map((m) => classAttr(m[0]));
+    expect(realPills.length, "anti-vacuity: both pills were read").toBe(2);
+    expect(heldPills, "the selected first one and the other, each with its own geometry").toEqual(realPills);
+    expect(new Set(realPills).size, "the two pills differ (selected has no border): a held row that used one class for both would be wrong").toBe(2);
+  });
+
+  it("a wait holds the row too, under the line; once the answer is in hand the row is the real tablist's, not the held one", () => {
+    const out = reserved([1, 3], { holdUntil: new Date(NOW + 10 * 60_000).toISOString() });
+    expect(out).toContain("seazn-video-starting");
+    expect(row(out)).not.toBeNull();
+    const answered = reserved([1, 3], { initial: answer({ replay: [part(1), part(3)] }) });
+    expect(answered).not.toContain("picker-reserved");
+    expect(tabs(answered)).toEqual(["Part 1", "Part 3"]);
+    const nothing = reserved([1, 3], { holdUntil: new Date(NOW + 10 * 60_000).toISOString(), initial: answer({}) });
+    expect(nothing, "an answer with no parts: the hint is stale, the row is not held").not.toContain("picker-reserved");
+  });
+
+  it("no box, no row: the hint alone draws nothing", () => {
+    expect(renderToStaticMarkup(<SeaznVideoIsland fixtureId="f1" labels={labels} replayParts={[1, 2]} />)).toBe("");
+  });
+});
+
+// The wiring a node render cannot see: the island's own state over time, on vitest's fake clock, through the REAL loop. A box is
+// "present" when the stage draws any of the box's own markers.
+describe("re-capture R2: the mounted island holds its box across reads, and lets go once", () => {
+  const MIN = 60_000;
+  const BOX = ["seazn-video-reserved", "seazn-video-starting", "seazn-video"];
+  const ids = (island: { tree: () => ReturnType<typeof walk> }) => [...renderToStaticMarkup(island.tree()[0]!).matchAll(/data-testid="([^"]+)"/g)].map((m) => m[1]!);
+  const boxed = (island: { tree: () => ReturnType<typeof walk> }) => ids(island).some((id) => BOX.includes(id));
+  const EMPTY = { live: null, replay: [] };
+  /** The route answers `answers` in order, then the last one for ever; an `Error` entry is a failed read. */
+  const route = (answers: (object | Error)[]) => {
+    let i = 0;
+    return vi.fn(async () => {
+      const next = answers[Math.min(i++, answers.length - 1)]!;
+      if (next instanceof Error) throw next;
+      return new Response(JSON.stringify({ ok: true, data: next }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+  };
+  const mount = (props: Record<string, unknown>) => renderIsland(SeaznVideoIsland, { fixtureId: "f1", labels, ...props });
+  /** Advance in `step` slices up to `total`, and report, after each, whether the box was there. */
+  const watch = async (island: Parameters<typeof boxed>[0], total: number, step = 1_000) => {
+    const seen: boolean[] = [];
+    for (let t = 0; t < total; t += step) {
+      await vi.advanceTimersByTimeAsync(step);
+      seen.push(boxed(island));
+    }
+    return seen;
+  };
+  const clock = async (run: () => Promise<void>) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    try {
+      await run();
+    } finally {
+      vi.useRealTimers();
+    }
+  };
+  const hot = { activeUntil: new Date(NOW + 60 * MIN).toISOString() };
+
+  it("WARMING: empty reads while the session warms keep the box (with its line), and the live player takes the same place — the box never goes missing between", async () => {
+    await clock(async () => {
+      vi.stubGlobal("fetch", route([EMPTY, EMPTY, EMPTY, { live: signed("live"), replay: [] }]));
+      const island = mount({ reserve: true, holdUntil: new Date(NOW + 10 * MIN).toISOString(), ...hot });
+      expect(ids(island), "server markup").toContain("seazn-video-starting");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ids(island), "first read: warming").toContain("seazn-video-starting");
+      await vi.advanceTimersByTimeAsync(SEAZN_VIDEO_POLL_FLOOR_MS);
+      expect(ids(island), "second read: still warming").toContain("seazn-video-starting");
+      await vi.advanceTimersByTimeAsync(SEAZN_VIDEO_POLL_FLOOR_MS);
+      expect(ids(island), "third read: still warming").toContain("seazn-video-starting");
+      await vi.advanceTimersByTimeAsync(SEAZN_VIDEO_POLL_FLOOR_MS);
+      const live = ids(island);
+      expect(live, "fourth read: live — the player in the box").toEqual(expect.arrayContaining(["seazn-video", "seazn-player"]));
+      expect(live).not.toContain("seazn-video-starting");
+      island.unmount();
+    });
+  });
+
+  it("STOP: the live player is gone within ONE read of the stop, the box stays with its line, and the recording takes its place when it is locked", async () => {
+    await clock(async () => {
+      vi.stubGlobal("fetch", route([{ live: signed("live"), replay: [] }, EMPTY, EMPTY, { live: null, replay: [{ ...part(1) }] }]));
+      const island = mount({ reserve: true, ...hot });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ids(island), "premise: on air").toContain("seazn-player");
+      await vi.advanceTimersByTimeAsync(SEAZN_VIDEO_POLL_FLOOR_MS);
+      const stopped = ids(island);
+      expect(stopped, "one read after the Stop: no live player, no live region").not.toContain("seazn-player");
+      expect(stopped).not.toContain("seazn-video");
+      expect(stopped, "the box holds").toContain("seazn-video-starting");
+      await vi.advanceTimersByTimeAsync(SEAZN_VIDEO_POLL_FLOOR_MS);
+      expect(ids(island), "recording not locked yet: still the box").toContain("seazn-video-starting");
+      await vi.advanceTimersByTimeAsync(SEAZN_VIDEO_POLL_FLOOR_MS);
+      expect(ids(island), "locked: the recording plays in the box").toEqual(expect.arrayContaining(["seazn-video", "seazn-player"]));
+      island.unmount();
+    });
+  });
+
+  it("TERMINAL NOTHING: with no wait, the first empty answer collapses the box once (D1's rule, unchanged)", async () => {
+    await clock(async () => {
+      vi.stubGlobal("fetch", route([EMPTY]));
+      const island = mount({ reserve: true });
+      expect(boxed(island), "before the first read").toBe(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(boxed(island), "nothing to show: collapsed").toBe(false);
+      expect(await watch(island, 5 * MIN, 10_000), "and it stays collapsed over the reads that follow").not.toContain(true);
+      island.unmount();
+    });
+  });
+
+  it("the plan's wait runs out: the box goes ONCE, at that instant, and stays gone through every later empty read", async () => {
+    await clock(async () => {
+      vi.stubGlobal("fetch", route([EMPTY]));
+      const island = mount({ reserve: true, holdUntil: new Date(NOW + 5 * MIN).toISOString(), ...hot });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(boxed(island), "read 1 is empty, the wait is on").toBe(true);
+      await vi.advanceTimersByTimeAsync(5 * MIN - 1);
+      expect(boxed(island), "a ms before the wait ends: held").toBe(true);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(boxed(island), "at the instant it ends: collapsed").toBe(false);
+      const after = await watch(island, 10 * MIN, 10_000);
+      expect(after.length, "anti-vacuity: the later reads were watched").toBe(60);
+      expect(after, "never back").not.toContain(true);
+      island.unmount();
+    });
+  });
+
+  it("AFTER A STOP the wait is the recording's lock window from the last player read: held until then, gone after, and a second Go live still reaches the open page", async () => {
+    await clock(async () => {
+      vi.stubGlobal("fetch", route([{ live: signed("live"), replay: [] }, EMPTY]));
+      const island = mount({ reserve: true, ...hot });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ids(island), "premise: on air at t0").toContain("seazn-player");
+      await vi.advanceTimersByTimeAsync(SEAZN_VIDEO_HOLD_MS - 1);
+      expect(boxed(island), "a ms before the lock window closes: held").toBe(true);
+      expect(ids(island)).not.toContain("seazn-player");
+      await vi.advanceTimersByTimeAsync(1);
+      expect(boxed(island), "the window closed with no recording: the one collapse").toBe(false);
+      vi.stubGlobal("fetch", route([{ live: signed("again"), replay: [] }]));
+      await vi.advanceTimersByTimeAsync(2 * MIN);
+      expect(ids(island), "T19: a second Go live reaches the open page, collapsed or not").toEqual(expect.arrayContaining(["seazn-video", "seazn-player"]));
+      island.unmount();
+    });
+  });
+
+  it("an OLD cached page (its wait ran out before it loaded): the box is not collapsed before the first answer, so a player that is live NOW lands in it with no shift", async () => {
+    await clock(async () => {
+      let release: (r: Response) => void = () => undefined;
+      vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { release = resolve; })));
+      const island = mount({ reserve: true, holdUntil: new Date(NOW - 10 * MIN).toISOString() });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(ids(island), "no answer yet: the page's own box stands (the plan's word is old, the answer is not in)").toContain("seazn-video-starting");
+      release(new Response(JSON.stringify({ ok: true, data: { live: signed("live"), replay: [] } }), { status: 200, headers: { "content-type": "application/json" } }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ids(island), "live: the player, in the box").toEqual(expect.arrayContaining(["seazn-video", "seazn-player"]));
+      island.unmount();
+    });
+    await clock(async () => {
+      vi.stubGlobal("fetch", route([EMPTY]));
+      const island = mount({ reserve: true, holdUntil: new Date(NOW - 10 * MIN).toISOString() });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(boxed(island), "the answer is empty and the old wait is over: terminal nothing, collapsed once").toBe(false);
+      island.unmount();
+    });
+  });
+
+  it("a route that never answers: the wait still runs out — the promise of a video goes (the line), and with nothing reserved the box goes with it; a reserved box keeps D1's empty one until an answer", async () => {
+    await clock(async () => {
+      vi.stubGlobal("fetch", route([new Error("offline")]));
+      const island = mount({ reserve: true, holdUntil: new Date(NOW + 3 * MIN).toISOString() });
+      await vi.advanceTimersByTimeAsync(3 * MIN - 1);
+      expect(ids(island), "still waiting: the line").toContain("seazn-video-starting");
+      await vi.advanceTimersByTimeAsync(1);
+      expect(ids(island), "the wait is over: no promise on screen").not.toContain("seazn-video-starting");
+      expect(ids(island), "reserved, no answer yet: D1's empty box, as before this change").toContain("seazn-video-reserved");
+      island.unmount();
+      const bare = mount({ holdUntil: new Date(Date.now() + 3 * MIN).toISOString() });
+      await vi.advanceTimersByTimeAsync(3 * MIN - 1);
+      expect(boxed(bare), "not reserved: the wait alone held the box").toBe(true);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(boxed(bare), "and nothing outlives it").toBe(false);
+      bare.unmount();
+    });
+  });
+
+  it("the page's schedule is untouched by the hold: a warming page reads at 0 and 30 s then every 60 s unhot, every 30 s hot, and unmounting stops it", async () => {
+    await clock(async () => {
+      const cold = route([EMPTY]);
+      vi.stubGlobal("fetch", cold);
+      const a = mount({ reserve: true, holdUntil: new Date(NOW + 10 * MIN).toISOString() });
+      await vi.advanceTimersByTimeAsync(5 * MIN);
+      expect(cold.mock.calls.length, "cold: 0 and 30 s, then every 60 s").toBe(2 + Math.floor((5 * MIN - 30_000) / 60_000));
+      a.unmount();
+      const warm = route([EMPTY]);
+      vi.stubGlobal("fetch", warm);
+      const b = mount({ reserve: true, holdUntil: new Date(NOW + 10 * MIN).toISOString(), ...hot });
+      await vi.advanceTimersByTimeAsync(5 * MIN);
+      expect(warm.mock.calls.length, "hot: every 30 s").toBe(11);
+      b.unmount();
+      await vi.advanceTimersByTimeAsync(10 * MIN);
+      expect(warm.mock.calls.length, "no read after unmount").toBe(11);
+      expect(vi.getTimerCount(), "and no timer left behind: the box's own goes with the island").toBe(0);
+    });
   });
 });

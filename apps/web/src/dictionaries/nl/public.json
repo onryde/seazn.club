@@ -855,5 +855,6 @@
   "division.catchUp": "Inhaalronde",
   "seaznVideo.live": "Live",
   "seaznVideo.unavailable": "De video kan nu niet worden afgespeeld",
-  "seaznVideo.part": "Deel {n}"
+  "seaznVideo.part": "Deel {n}",
+  "seaznVideo.starting": "De video verschijnt hier zo meteen"
 }

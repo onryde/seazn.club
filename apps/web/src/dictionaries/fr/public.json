@@ -855,5 +855,6 @@
   "division.catchUp": "Rattrapage",
   "seaznVideo.live": "En direct",
   "seaznVideo.unavailable": "La vidéo ne peut pas être lue pour le moment",
-  "seaznVideo.part": "Partie {n}"
+  "seaznVideo.part": "Partie {n}",
+  "seaznVideo.starting": "La vidéo apparaîtra ici dans un instant"
 }

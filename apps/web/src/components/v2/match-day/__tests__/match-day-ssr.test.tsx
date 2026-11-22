@@ -1778,6 +1778,7 @@ describe("Task 17 — a playing court on air to Seazn plays it in the preview (t
         unavailable: pubFull["seaznVideo.unavailable"],
         part: pubFull["seaznVideo.part"],
         replay: pubFull["overlay.replay"],
+        starting: pubFull["seaznVideo.starting"],
       });
       for (const [field, value] of Object.entries(labels)) {
         expect(value, `${locale} ${field}`).not.toMatch(/^(seaznVideo|overlay)\./);
@@ -1794,7 +1795,7 @@ describe("Task 17 — a playing court on air to Seazn plays it in the preview (t
   });
 
   it("the page's dictionary slice carries every key the island reads (the m6 gap: matchCentre. + forfeit. alone left them to print as key names)", () => {
-    const wanted = ["seaznVideo.live", "seaznVideo.unavailable", "seaznVideo.part", "overlay.replay"];
+    const wanted = ["seaznVideo.live", "seaznVideo.unavailable", "seaznVideo.part", "seaznVideo.starting", "overlay.replay"];
     const old = pickLegacySlice(publicEn as Dict);
     for (const key of wanted) expect(old[key], `PREMISE: the old slice lacks ${key}`).toBeUndefined();
     const slice = matchDayScoreDict(publicEn as Dict);

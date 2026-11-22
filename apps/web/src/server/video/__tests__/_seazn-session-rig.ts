@@ -126,3 +126,13 @@ export async function stopAndSettle(r: SeaznRig, fixtureId: string, sid: string)
   for (let i = 0; i < 3 && (await stateOf(sid)) !== "completed"; i++) await currentSession(r.auth, fixtureId, r.deps);
   expect(await stateOf(sid), "PREMISE: the stopped session completed").toBe("completed");
 }
+
+/** A recording the Seazn pass has locked, seeded under `sid`'s PROGRAMME input at a known lock time (`minutesAgo`: the order of a
+ *  session's own recordings). The row is what the real pass writes; the pass itself is seazn-recordings.test.ts's. Returns its video id. */
+export async function seedLockedRecording(sid: string, minutesAgo: number): Promise<string> {
+  const [input] = await sql<{ id: string }[]>`select id from fixture_stream_inputs where session_id = ${sid} and role = 'programme'`;
+  expect(input, `PREMISE: ${sid} has a programme input`).toBeDefined();
+  const videoId = `v-${randomUUID()}`;
+  await sql`insert into seazn_locked_videos (cf_video_id, input_row_id, locked_at) values (${videoId}, ${input!.id}, now() - ${minutesAgo * 60_000} * interval '1 millisecond')`;
+  return videoId;
+}

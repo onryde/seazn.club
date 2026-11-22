@@ -30,10 +30,14 @@ import { sql } from "@/lib/db";
 import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { fixtureStreamTarget, saveStreamSettings } from "@/server/usecases/stream-codes";
 import { streamLinkLabelKey } from "../../../app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/stream-link";
-import { CODE_GRACE_AFTER_FINISH_MINUTES, MAX_DURATION_MINUTES, tunable } from "@/server/relay/config";
+import { CODE_GRACE_AFTER_FINISH_MINUTES, DELETE_RECORDING_AFTER_DAYS, FINALISATION_GRACE_SECONDS, MAX_ANCHOR_DRIFT_SECONDS, MAX_DURATION_MINUTES, tunable } from "@/server/relay/config";
+import { ACTIVE_STATES, TERMINAL_STATES, type SessionState } from "@/server/relay/domain/session";
 import { codeStatus } from "@/server/relay/domain/stream-code";
+import { stopSession } from "@/server/usecases/stream-sessions";
+import { createPlaybackTokenCache } from "../cf-playback";
+import { seaznFixtureVideo, seaznReplayPartNos } from "../seazn-video";
 import { seaznVideoPlan } from "../seazn-video-plan";
-import { type SeaznRig as Rig, goLive, installSeaznEnv, kindOf, live, seaznRig as rig, stateOf, stopAndSettle } from "./_seazn-session-rig";
+import { type SeaznRig as Rig, goLive, installSeaznEnv, kindOf, live, seaznRig as rig, seedLockedRecording, stateOf, stopAndSettle } from "./_seazn-session-rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 installSeaznEnv("seazn-video-plan-test");
@@ -328,5 +332,214 @@ describe.skipIf(!HAS_DB)("seaznVideoPlan: which player the match page mounts", (
     expect(settled + open, "anti-vacuity: every status was checked").toBe(FIXTURE_STATUSES.length);
     expect(settled).toBeGreaterThan(0);
     expect(open).toBeGreaterThan(0);
+  });
+});
+
+// Phase 1 visual re-capture R2 (a warming session made the page shift 0.0856): the island holds its box through a WAIT, and the page
+// says whether one is on as it is drawn (`holdUntil`). A wait is on while the fixture's LATEST session (the route's own definition of
+// "the session": `seazn-video.ts` reads the latest by creation) is a Seazn session that is not yet live (requested through ending: the
+// whole ladder is bounded by MAX_ANCHOR_DRIFT_SECONDS) or that COMPLETED a moment ago (its recording can still be locked for
+// FINALISATION_GRACE_SECONDS after the end: the tick's Seazn pass waits out that same grace). A live session has none (its answer is
+// the player), a failed one has none (it never recorded), and a later session of another kind ends it.
+describe.skipIf(!HAS_DB)("seaznVideoPlan: the wait the island holds its box through (re-capture R2)", () => {
+  const N = new Date("2026-11-22T12:00:00.000Z");
+  const seazn = async (fixtureId: string, now: Date = N) => {
+    const plan = await seaznVideoPlan(fixtureId, now);
+    if (plan.player !== "seazn") throw new Error(`PREMISE: the plan is seazn, not ${plan.player}`);
+    return plan;
+  };
+  const holdOf = async (fixtureId: string, now: Date = N) => (await seazn(fixtureId, now)).holdUntil?.toISOString() ?? null;
+  const at = (base: Date, seconds: number) => new Date(base.getTime() + seconds * 1000).toISOString();
+  const endedAt = (sid: string, when: Date) => sql`update fixture_stream_sessions set ended_at = ${when} where id = ${sid}`;
+  const LADDER = at(N, MAX_ANCHOR_DRIFT_SECONDS);
+
+  it("EMPTY CASE FIRST: an unstarted Seazn fixture (arm 3) has no wait", async () => {
+    const r = await rig();
+    expect(await holdOf(r.fixtureIds[0])).toBeNull();
+  });
+
+  it("a session on its way up (warming) holds the box for the whole ladder to live, counted from the render", async () => {
+    const r = await rig();
+    const f = r.fixtureIds[0];
+    const sid = await goLive(r, f, r.seazn);
+    expect(await stateOf(sid), "PREMISE: before the playing beat, warming").toBe("warming");
+    expect(await holdOf(f), "warming").toBe(LADDER);
+    expect(await holdOf(f, new Date(N.getTime() + 120_000)), "the render's own instant, not the session's").toBe(at(new Date(N.getTime() + 120_000), MAX_ANCHOR_DRIFT_SECONDS));
+  });
+
+  it("every state of the latest Seazn session, from the session domain's own lists: not-yet-live and ending hold the ladder, completed holds the lock window, live and failed hold none", async () => {
+    const r = await rig();
+    const f = r.fixtureIds[0];
+    const sid = await goLive(r, f, r.seazn);
+    const ended = new Date(N.getTime() - 60_000);
+    let checked = 0;
+    for (const state of [...ACTIVE_STATES, ...TERMINAL_STATES] as SessionState[]) {
+      // The state is set by hand: each one is the plan's INPUT, and the producers that write them are other tasks' tests.
+      await sql`update fixture_stream_sessions set state = ${state}, ended_at = ${TERMINAL_STATES.includes(state) ? ended : null} where id = ${sid}`.catch((e: unknown) => {
+        throw new Error(`PREMISE: could not set state ${state}: ${(e as Error).message}`);
+      });
+      const expected =
+        state === "live" || state === "failed" ? null
+        : state === "completed" ? at(ended, FINALISATION_GRACE_SECONDS)
+        : LADDER;
+      expect(await holdOf(f), `state ${state}`).toBe(expected);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every state was checked").toBe(ACTIVE_STATES.length + TERMINAL_STATES.length);
+    expect(checked).toBeGreaterThanOrEqual(7);
+  });
+
+  it("just stopped: the wait is the recording's lock window from the END — to the ms: a ms before it closes held, at it gone; a session with no end stamp counts from its creation", async () => {
+    const r = await rig();
+    const f = r.fixtureIds[0];
+    const sid = await live(r, f, r.seazn);
+    await stopAndSettle(r, f, sid);
+    const ended = new Date("2026-11-22T11:50:00.000Z");
+    await endedAt(sid, ended);
+    const closes = at(ended, FINALISATION_GRACE_SECONDS);
+    expect(await holdOf(f, new Date(ended.getTime() + 60_000)), "a minute after the Stop").toBe(closes);
+    expect(await holdOf(f, new Date(Date.parse(closes) - 1)), "a ms before the window closes").toBe(closes);
+    expect(await holdOf(f, new Date(closes)), "at the instant it closes: nothing is waited for").toBeNull();
+    expect(await holdOf(f, new Date(Date.parse(closes) + 1)), "after it").toBeNull();
+    await sql`update fixture_stream_sessions set ended_at = null, created_at = ${new Date(N.getTime() - 60_000)} where id = ${sid}`;
+    expect(await holdOf(f), "no end stamp: counted from the session's creation, a minute ago").toBe(at(new Date(N.getTime() - 60_000), FINALISATION_GRACE_SECONDS));
+  });
+
+  it("the REAL Stop: a session just stopped (ending, then completed) holds the box; the same fixture decided long ago does not", async () => {
+    const r = await rig();
+    const f = r.fixtureIds[0];
+    const sid = await live(r, f, r.seazn);
+    await stopSession(r.auth, f, sid, r.deps);
+    expect(await stateOf(sid), "PREMISE: ending").toBe("ending");
+    expect(await holdOf(f), "ending").toBe(LADDER);
+    await stopAndSettle(r, f, sid);
+    const soon = new Date(Date.now() + 30_000);
+    expect((await seazn(f, soon)).holdUntil, "completed a moment ago").toBeInstanceOf(Date);
+    const later = new Date(Date.now() + (FINALISATION_GRACE_SECONDS + 60) * 1000);
+    expect((await seazn(f, later)).holdUntil, "the lock window has closed: nothing to wait for").toBeNull();
+  });
+
+  it("only the LATEST session counts: an earlier Seazn one just stopped is not waited for once a YouTube one follows; a live Seazn one after a stopped one has none; a warming one after one holds the ladder again", async () => {
+    const r = await rig();
+    const f = r.fixtureIds[0];
+    const first = await live(r, f, r.seazn);
+    await stopAndSettle(r, f, first);
+    await endedAt(first, new Date(N.getTime() - 30_000));
+    expect(await holdOf(f), "PREMISE: the first, just stopped, holds").not.toBeNull();
+    const second = await live(r, f, r.pasted);
+    expect(await kindOf(second), "PREMISE: a YouTube session follows").not.toBe("seazn");
+    expect(await holdOf(f), "a later session of another kind: nothing for Seazn to wait for").toBeNull();
+    await stopAndSettle(r, f, second);
+    expect(await stateOf(second), "PREMISE: the YouTube session completed, a moment ago").toBe("completed");
+    expect(await holdOf(f), "completed a moment ago, but YouTube's: Seazn's recording pass has nothing to lock for it").toBeNull();
+    const third = await live(r, f, r.seazn);
+    expect(await holdOf(f), "the latest is a Seazn session, live").toBeNull();
+    await stopAndSettle(r, f, third);
+    await endedAt(third, new Date(N.getTime() - 30_000));
+    const fourth = await goLive(r, f, r.seazn);
+    expect(await stateOf(fourth), "PREMISE: warming").toBe("warming");
+    expect(await holdOf(f), "warming again").toBe(LADDER);
+  });
+});
+
+// Visual re-capture R1: a replay of two or more parts mounts its picker row (56 px with its gap) with the route's first answer, and the
+// Summary panel moved 56 px. The plan hands the island the parts' numbers as the ROUTE will number them (`seazn-video.ts` is the one
+// authority: recording order, numbered over every locked recording before any is left out), so the box holds the row from the server
+// render. While the latest session is live the route's answer is the live player, which has no picker, so none is held.
+describe.skipIf(!HAS_DB)("seaznVideoPlan: the replay's part numbers the island holds a picker row for (re-capture R1)", () => {
+  const planParts = async (fixtureId: string) => {
+    const plan = await seaznVideoPlan(fixtureId);
+    if (plan.player !== "seazn") throw new Error(`PREMISE: the plan is seazn, not ${plan.player}`);
+    return plan.replayParts;
+  };
+  /** The route's own numbering of the same rows. */
+  const routeParts = async (r: Rig, fixtureId: string) => {
+    const answer = await seaznFixtureVideo(fixtureId, new Date(), { ingest: r.deps.drivers.ingest, tokenCache: createPlaybackTokenCache() });
+    return answer.replay.map((p) => p.partNo);
+  };
+
+  it("EMPTY CASE FIRST: no recording is no parts, and so is a fixture with nothing locked but sessions; an unstarted fixture has none either", async () => {
+    const r = await rig();
+    const [f, g] = r.fixtureIds;
+    expect(await planParts(g), "arm 3").toEqual([]);
+    const sid = await live(r, f, r.seazn);
+    await stopAndSettle(r, f, sid);
+    expect(await planParts(f)).toEqual([]);
+    expect(await routeParts(r, f), "premise: the route lists none either").toEqual([]);
+  });
+
+  it("the parts of two sessions are numbered as the route numbers them, over every recording in recording order — checked against the route's own answer", async () => {
+    const r = await rig();
+    const f = r.fixtureIds[0];
+    const first = await live(r, f, r.seazn);
+    await seedLockedRecording(first, 50);
+    await stopAndSettle(r, f, first);
+    const second = await live(r, f, r.seazn);
+    await seedLockedRecording(second, 20);
+    await seedLockedRecording(second, 30);
+    await stopAndSettle(r, f, second);
+    expect(await planParts(f)).toEqual([1, 2, 3]);
+    expect(await routeParts(r, f), "the route's own numbers").toEqual([1, 2, 3]);
+  });
+
+  it("a part past Cloudflare's own delete is left out and leaves a gap, as the route leaves it (the plan reads the same rows)", async () => {
+    const r = await rig();
+    const f = r.fixtureIds[0];
+    const first = await live(r, f, r.seazn);
+    await seedLockedRecording(first, 50);
+    await stopAndSettle(r, f, first);
+    const second = await live(r, f, r.seazn);
+    await seedLockedRecording(second, 20);
+    await seedLockedRecording(second, 30);
+    await stopAndSettle(r, f, second);
+    await sql`update fixture_stream_sessions set created_at = now() - ${DELETE_RECORDING_AFTER_DAYS + 1} * interval '1 day' where id = ${first}`;
+    expect(await routeParts(r, f), "PREMISE: the route lists the two of the second session, numbered 2 and 3").toEqual([2, 3]);
+    expect(await planParts(f)).toEqual([2, 3]);
+  });
+
+  it("a recording under a session of ANOTHER kind is never a part, for the plan as for the route (even with a row locked under it)", async () => {
+    const r = await rig();
+    const f = r.fixtureIds[0];
+    const seaznSid = await live(r, f, r.seazn);
+    await seedLockedRecording(seaznSid, 40);
+    await stopAndSettle(r, f, seaznSid);
+    const yt = await live(r, f, r.pasted);
+    await seedLockedRecording(yt, 10);
+    await stopAndSettle(r, f, yt);
+    expect(await routeParts(r, f), "PREMISE: the route lists only the Seazn session's").toEqual([1]);
+    expect(await planParts(f)).toEqual([1]);
+  });
+
+  it("while the latest session is LIVE the route's answer is the live player and has no picker, so no part is held — and the parts come back once it stops", async () => {
+    const r = await rig();
+    const f = r.fixtureIds[0];
+    const first = await live(r, f, r.seazn);
+    await seedLockedRecording(first, 50);
+    await stopAndSettle(r, f, first);
+    const second = await live(r, f, r.seazn);
+    await seedLockedRecording(second, 5);
+    expect(await planParts(f), "live now").toEqual([]);
+    await stopAndSettle(r, f, second);
+    expect(await planParts(f), "stopped").toEqual([1, 2]);
+    const third = await goLive(r, f, r.seazn);
+    expect(await stateOf(third), "PREMISE: warming").toBe("warming");
+    expect(await planParts(f), "warming again: the route answers the recordings, with their picker").toEqual([1, 2]);
+  });
+
+  it("an id that is not a uuid names no fixture: no parts, and the query is never reached (22P02 would be a 500); an unknown uuid has none either", async () => {
+    await rig();
+    for (const id of ["", "not-a-uuid", "00000000-0000-0000-0000-00000000000"]) {
+      expect(await seaznReplayPartNos(id, new Date()), JSON.stringify(id)).toEqual([]);
+    }
+    expect(await seaznReplayPartNos(randomUUID(), new Date()), "a uuid no fixture has").toEqual([]);
+  });
+
+  it("the other arms hold no parts: a YouTube fixture is external, an unstarted one is seazn with none", async () => {
+    const r = await rig();
+    const [f, g] = r.fixtureIds;
+    const sid = await live(r, f, r.pasted);
+    await stopAndSettle(r, f, sid);
+    expect((await seaznVideoPlan(f)).player).toBe("external");
+    expect(await planParts(g)).toEqual([]);
   });
 });

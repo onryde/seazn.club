@@ -8937,6 +8937,7 @@ export type DictionaryKey =
   | "scoring.position.set"
   | "seaznVideo.live"
   | "seaznVideo.part"
+  | "seaznVideo.starting"
   | "seaznVideo.unavailable"
   | "section.about"
   | "section.competitions"

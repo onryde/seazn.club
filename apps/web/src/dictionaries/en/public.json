@@ -855,5 +855,6 @@
   "division.catchUp": "Catch-up",
   "seaznVideo.live": "Live",
   "seaznVideo.unavailable": "The video can't play right now",
-  "seaznVideo.part": "Part {n}"
+  "seaznVideo.part": "Part {n}",
+  "seaznVideo.starting": "The video will appear here shortly"
 }

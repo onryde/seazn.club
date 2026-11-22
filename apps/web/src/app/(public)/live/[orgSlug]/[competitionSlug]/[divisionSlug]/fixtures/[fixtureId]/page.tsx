@@ -487,6 +487,8 @@ export default async function FixturePage({ params }: Props) {
               // `settledAt` (review I2): once the fixture is settled, an empty answer stops the island's reads. `reserve` (visual D1): the
               // player's box is held from this render where a player is expected, so its arrival moves nothing. `kickoffAt` and
               // `activeUntil` (review N1): near kick-off, or while the match was active at this render, the island keeps its 30 s floor.
+              // `holdUntil` (re-capture R2): a session warming or just stopped keeps the box, with its line, through empty answers until
+              // then. `replayParts` (re-capture R1): two or more recordings keep the picker's row from this render, so no tab row arrives late.
               <SeaznVideoIsland
                 fixtureId={fixture.id}
                 labels={seaznVideoLabels(dict)}
@@ -494,6 +496,8 @@ export default async function FixturePage({ params }: Props) {
                 kickoffAt={seaznPlan.kickoffAt?.toISOString() ?? null}
                 activeUntil={seaznPlan.activeUntil?.toISOString() ?? null}
                 reserve={seaznPlan.reserve}
+                holdUntil={seaznPlan.holdUntil?.toISOString() ?? null}
+                replayParts={seaznPlan.replayParts}
               />
             ) : plan.parts.length > 0 ? (
               <ReplayEmbed parts={plan.parts} />
