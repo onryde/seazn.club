@@ -103,3 +103,53 @@ describe("Task 21: replay-ports.ts names no Bunny vocabulary and imports nothing
     expect(source).not.toMatch(ANY_IMPORT);
   });
 });
+
+// Task 24 carry (Task 23 review): server/video/** reaches its providers through the ports only. Its production files import no
+// ingest or runner adapter (runner-fly, fly-client, ingest-cf — they speak IngestProvider through relay/drivers), and the Bunny
+// adapter is built in ONE place, replay-driver.ts. The pure decisions under video/domain/ import only the replay port and the
+// relay config: no database, no logger, no driver. Tests are outside the rule (an adapter's own test imports its adapter).
+describe("Task 24: server/video/** imports a provider only through its ports", () => {
+  const VIDEO = join(SERVER, "video");
+  const production = walk(VIDEO).filter((f) => !f.split("/").includes("__tests__"));
+  /** Every specifier a file pulls in, by any import form. */
+  const specifiers = (text: string) =>
+    [...text.matchAll(/(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)["']([^"']+)["']/g)].map((m) => m[1]!);
+  const INGEST_OR_RUNNER = /\b(?:runner-fly|fly-client|ingest-cf)(?:\.[cm]?[jt]s)?$/;
+  const BUNNY = /\breplay-bunny(?:\.[cm]?[jt]s)?$/;
+  const DOMAIN_ALLOWED = new Set(["../replay-ports", "@/server/relay/config"]);
+
+  it("the walk is real: the production files are read, and the reader sees each import form", () => {
+    const names = production.map((f) => relative(VIDEO, f));
+    for (const f of ["replay-driver.ts", "replay-bunny.ts", "cf-playback.ts", "seazn-video.ts", join("domain", "replay-move.ts")]) expect(names).toContain(f);
+    expect(specifiers(`import { a } from "./x";\nexport { b } from "../y";\nawait import("z");\nrequire('w');\nimport "v";`)).toEqual(["./x", "../y", "z", "w", "v"]);
+    expect(specifiers(readFileSync(join(VIDEO, "replay-driver.ts"), "utf8")).some((s) => BUNNY.test(s)), "the positive twin: the driver builds the adapter").toBe(true);
+    expect("@/server/relay/ingest-cf").toMatch(INGEST_OR_RUNNER);
+    expect("./replay-bunny-cfg").not.toMatch(BUNNY);
+  });
+
+  it("no production file imports runner-fly, fly-client or ingest-cf; only replay-driver.ts imports replay-bunny", () => {
+    let checked = 0;
+    const offenders: string[] = [];
+    for (const f of production) {
+      const name = relative(VIDEO, f);
+      for (const s of specifiers(readFileSync(f, "utf8"))) {
+        if (INGEST_OR_RUNNER.test(s) || (BUNNY.test(s) && name !== "replay-driver.ts")) offenders.push(`${name} → ${s}`);
+      }
+      checked++;
+    }
+    expect(checked, "production files read").toBeGreaterThanOrEqual(9);
+    expect(offenders).toEqual([]);
+  });
+
+  it("video/domain/** imports only the replay port and the relay config", () => {
+    const domain = production.filter((f) => relative(VIDEO, f).startsWith(`domain${"/"}`));
+    let checked = 0;
+    const offenders: string[] = [];
+    for (const f of domain) {
+      for (const s of specifiers(readFileSync(f, "utf8"))) if (!DOMAIN_ALLOWED.has(s)) offenders.push(`${relative(VIDEO, f)} → ${s}`);
+      checked++;
+    }
+    expect(checked, "domain files read").toBeGreaterThan(0);
+    expect(offenders).toEqual([]);
+  });
+});
