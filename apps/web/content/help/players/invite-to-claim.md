@@ -1,38 +1,47 @@
 ---
-title: Inviting players to claim their profiles
-description: Email claim invites from the Directory, read the availability grid, run match-day QR check-in, and unlink an account when needed.
+title: Invite players to claim their profiles
+description: Send a claim invite from the Directory, withdraw it, and unlink an account.
 order: 2
+related: players/claim-your-profile, players/rsvp-and-check-in, scheduling/officials
 ---
 
-A claimed player sees their own matches, RSVPs availability you can act on, and manages their own consent flags. Every claimed player is one less person messaging you "when do I play?". Available on all plans.
+A claimed player sees their own matches, answers **In**, **Maybe** or **Out**, and manages what is public about them. Every claimed player is one less person asking you when they play. Inviting is free on every plan.
+
+![The Invite to claim window for a player: a line explaining the invite, an email field and the Send invite button.](/help/players/invite-window.webp "The window opens from Invite to claim… on a player's row.")
 
 ## Send an invite
 
-In **Directory → Players**, choose **Invite to claim…** next to a player and enter their email. Invites last 14 days.
+1. Open **Directory**, then the **Players** tab.
+2. On a player's row, choose **Invite to claim…**.
+3. Type the player's address under **Their email**. Choose **Send invite**.
 
-There are two different links, on purpose:
+The player gets an email with a link. Only an account signed in with that address can accept it. The player's row now shows **Invite Pending** in the **Account** column.
 
-- **The link in the email** signs the player in. They open it, tap **Claim and sign in**, and they're signed in as the invited address (an account is created if that address has none) with the profile claimed — no password and no second email. Opening the email proves the address is theirs, so nothing else is asked. Nothing happens until they tap, so a mail scanner previewing the link can't use it up. It signs people in for 72 hours after it is sent; after that it still finds the profile, but the player has to sign in first, like the copyable link below. Sending a new invite starts the 72 hours again. If the address already has an account that was never verified, claiming verifies it; from then on the player signs in with an emailed link.
-- **The copyable link and QR in your console** is for you to hand over yourself. Whoever opens it has to sign in first, and **only an account signed in with that exact address can accept it** — so a link you pasted into a group chat doesn't move the profile to someone else.
+When the email is sent, the window says **Invite emailed to** and the address. If it fails, the window says **The email didn't go out straight away. It may arrive late, or not at all — copy the link below and share it with them yourself.** It then shows a link with **Copy**. That link works for 14 days and is shown only once. The window has no QR code.
 
-Tell players to treat the invite email like a sign-in email and not forward it.
+Two links can open the claim page, on purpose:
 
-Typo in the address? Just invite again with the right one — one open invite per player, and sending a new one quietly withdraws the previous links (the emailed one and the console one both stop working). A pending invite shows as **Invite pending** with a *Withdraw invite* action.
+- **The link in the email** signs the player in. They tap **Claim and sign in** and the profile is theirs, with no password. Opening the email proves the address is theirs. It signs them in for 72 hours after you send it. After that it behaves like the link below.
+- **The link the window shows** is for you to hand over yourself. Whoever opens it signs in first, and only the invited address can accept. A link pasted into a group chat does not move the profile to someone else.
 
-## Availability in the lineup picker
+Ask players to treat the email like a sign-in email and not forward it. The player's side is in [claim your player profile](/help/players/claim-your-profile).
 
-Once players RSVP from their player home, the fixture's lineup picker shows a chip next to each name: **✓** in, **✗** out, **?** maybe — hover for their note. A dash (**—**) means no answer yet, or a player who hasn't claimed. A lime dot means they've **checked in at the venue** today.
+## Change or cancel an invite
 
-## Match-day check-in QR
+- **Wrong address?** Choose **Invite to claim…** again. A player has one open invite. A new invite replaces the old one, and the old link stops working.
+- **Withdraw invite** cancels the invite. The link stops working, and the row goes back to showing **Invite to claim…**.
 
-At the top of a fixture page (until the match starts), **Check-in QR** mints a code you can pin up at the venue. Claimed players scan it and mark themselves present; the dot appears in your lineup picker. The code stops working at midnight local time. A player who hasn't claimed yet is pointed to ask you for a claim invite — nothing breaks.
+## Unlink a claimed player
 
-## Unlinking
+A claimed player's row shows **Claimed** and **Unlink**. **Unlink** opens **Unlink this player account?** It tells you the player loses access to this profile on their player home, and that matches and results stay. Choose **Unlink** to confirm. The row goes back to **Invite to claim…**, and you can invite them again later.
 
-**Unlink** (next to a claimed player in the Directory) detaches their login: they lose the profile on their player home, but every roster, result and lineup stays. The claim history is kept for your records, and you can invite them to claim again later.
+A claimed profile has no **Invite to claim…**. **Unlink** it first.
 
-## What claiming never changes
+## Who can do this
 
-- Date of birth stays organiser-side only — it is never shown to anyone, including on the player's own home (it only drives the under-16 consent rule).
-- Unclaimed players are completely unaffected: no public card without consent, no availability chip, nothing new.
-- Claiming never publishes anyone. A public player card needs the player's own *show my name publicly* consent **and** a plan that carries public cards — **Pro**, or an [Event Pass](/help/billing/event-pass) on the competition. On Community there are no public cards; everything on this page still works.
+Owners and admins see these buttons. A viewer sees the **Players** list without them.
+
+> **Example**
+> **Dana Whitfield** has a dash in the **Account** column. You choose **Invite to claim…** and send an invite to her address. The column reads **Invite Pending**. She claims it, and the column reads **Claimed** with **Unlink** beside it. Later she changes her login. You choose **Unlink**, confirm, and her row shows **Invite to claim…** again.
+
+The date of birth on a profile is for eligibility. The **Directory** says it is never shown publicly, and it is not on the player's own home. See [your stats, photo and privacy](/help/players/player-stats-and-photo) for what claiming makes public.
