@@ -202,15 +202,15 @@ describe("rules reference (ruling 75, spec §6)", () => {
   // W5 app PR B Task 0 (preflight K1; AGENTS.md class 6): the proof check above `continue`s past every awaiting id, and this half
   // had no stale-entry check, so an entry left behind after the engine proved its row failed nothing and silently skipped every
   // proof pair on that row. The expected set is the engine's own declaration — a signed row awaits proof exactly while its
-  // `proved by` is empty — never this map; the size and the W5 ids are the controller's pins at engine 10.0.1.
-  it("AWAITING_PROOF names exactly the signed rows that still name no proving test: 40 at engine 10.0.1, the W5 ones X-QS-2, X-ADJ-4 and X-ADJ-5", () => {
+  // `proved by` is empty — never this map; the size and the W5 ids are the controller's pins at engine 10.0.3 (W5 Task 10 close-out).
+  it("AWAITING_PROOF names exactly the signed rows that still name no proving test: 37 at engine 10.0.3, none of them W5", () => {
     const unproved = allRows().filter((r) => !r.status.startsWith("⬜") && r.provedBy.length === 0).map((r) => r.id);
     expect(unproved.length, "signed rows with no proving test in the installed table (zero checked is a failure)").toBeGreaterThan(0);
     expect([...AWAITING_PROOF.keys()].sort(), "the map is the installed table's unproved signed rows").toEqual([...unproved].sort());
-    expect(AWAITING_PROOF.size, "37 W4 app PR A + 3 W5 app PR B").toBe(40);
+    expect(AWAITING_PROOF.size, "the 37 W4 app PR A rows; engine 10.0.3 proved W5 app PR B's 3").toBe(37);
     const w5 = [...AWAITING_PROOF].filter(([, by]) => by.startsWith("W5 ")).map(([id]) => id);
-    expect(w5.sort(), "the W5 ids still awaiting proof").toEqual(["X-ADJ-4", "X-ADJ-5", "X-QS-2"]);
-    expect(new Set([...AWAITING_PROOF.values()].map((by) => by.replace(/ \(.*$/, ""))), "the PRs the map still waits on").toEqual(new Set(["W4 app PR A", "W5 app PR B"]));
+    expect(w5.sort(), "the W5 ids still awaiting proof").toEqual([]);
+    expect(new Set([...AWAITING_PROOF.values()].map((by) => by.replace(/ \(.*$/, ""))), "the PRs the map still waits on").toEqual(new Set(["W4 app PR A"]));
   });
 });
 
