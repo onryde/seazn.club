@@ -3,9 +3,9 @@ import "server-only";
 // §5.1): the Seazn island, or the page's YouTube replay / link slot exactly as it was. Decided from the fixture's OWN facts, never from
 // `fixtureStreamTarget` alone (it answers `{ id, label, source }` with no kind, and it answers today's default, which moves under a
 // fixture that already streamed elsewhere):
-//   1. any session of the fixture with destination_kind = 'seazn' -> `seazn`, WHATEVER the LIVE flag is (controller ruling 2026-11-20:
-//      LIVE stops new Seazn streams, never playback of one that exists). Phase 1 reads `fixture_stream_sessions` alone; Task 25 adds
-//      the replay-rows arm once V542 exists.
+//   1. any session of the fixture with destination_kind = 'seazn', or any replay row of it the organiser has not removed
+//      (`fixture_video_replays`, Task 25) -> `seazn`, WHATEVER the LIVE and REPLAY flags are (controller ruling 2026-11-20: LIVE stops
+//      new Seazn streams, never playback of one that exists; REPLAY gates the move, never playing what it moved).
 //   2. any other session, or a fixture that is over -> `external`: a fixture that streamed elsewhere, or is decided, can never flip to
 //      Seazn because the org's default changed (the blocker: a past YouTube fixture with no saved choice would have lost its replay).
 //   3. no session and not over -> `seazn` only when LIVE is on and the fixture's resolved target (its saved choice, else the org's
@@ -72,7 +72,7 @@ const NOT_OVER: readonly FixtureStatusValue[] = ["scheduled", "in_play"];
 
 interface FixtureFacts {
   org_id: string; status: string; finished_at: Date | null; scheduled_at: Date | null;
-  has_seazn_session: boolean; has_session: boolean; has_active_seazn_session: boolean;
+  has_seazn_session: boolean; has_seazn_replay: boolean; has_session: boolean; has_active_seazn_session: boolean;
   /** The fixture's LATEST session (by creation, the video route's own reading): its kind and state and the three times the wait is counted
    *  from (its creation, the instant it began ending, its end); all null with no session. */
   latest_kind: string | null; latest_state: string | null; latest_created: Date | null; latest_ending: Date | null; latest_ended: Date | null;
@@ -129,6 +129,8 @@ export async function seaznVideoPlan(fixtureId: string, now: Date = new Date()):
   const [facts] = await sql<FixtureFacts[]>`
     select f.org_id, f.status, f.finished_at, f.scheduled_at,
            exists (select 1 from fixture_stream_sessions s where s.fixture_id = f.id and s.destination_kind = 'seazn') as has_seazn_session,
+           exists (select 1 from fixture_video_replays r
+                    where r.fixture_id = f.id and r.state <> 'deleted' and r.deleted_at is null) as has_seazn_replay,
            exists (select 1 from fixture_stream_sessions s where s.fixture_id = f.id) as has_session,
            exists (select 1 from fixture_stream_sessions s
                     where s.fixture_id = f.id and s.destination_kind = 'seazn' and s.state not in ${sql([...TERMINAL_STATES])}) as has_active_seazn_session,
@@ -138,7 +140,7 @@ export async function seaznVideoPlan(fixtureId: string, now: Date = new Date()):
                           where s.fixture_id = f.id order by s.created_at desc, s.id desc limit 1) l on true
      where f.id = ${fixtureId}`;
   if (facts === undefined) return EXTERNAL;
-  if (facts.has_seazn_session) {
+  if (facts.has_seazn_session || facts.has_seazn_replay) {
     const live = facts.latest_kind === "seazn" && facts.latest_state === "live";
     const replayParts = live ? [] : await seaznReplayPartNos(fixtureId, now);
     const holdUntil = holdOf(facts, now);
