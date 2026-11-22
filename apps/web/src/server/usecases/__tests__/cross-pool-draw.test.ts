@@ -15,7 +15,7 @@ import { PROPOSAL_STALE_REDRAWN, PROPOSAL_STALE_SUPERSEDED } from "@/lib/seeding
 import { shuffle } from "@seazn/engine/core";
 import { swissDrawSeed } from "@/lib/swiss-draw";
 import { crossPoolDraw, seedPositions, nextPowerOfTwo } from "@seazn/engine/scheduling";
-import { completeStage, computeSeedProposal, confirmSeedProposal, createStages, generateStageFixtures, getSeedProposal } from "../stages";
+import { completeStage, computeSeedProposal, confirmSeedProposal, createStages, deleteStage, divisionFormatLocked, generateStageFixtures, getSeedProposal, replaceStages } from "../stages";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
@@ -454,6 +454,49 @@ describe.skipIf(!HAS_DB)("FX-G5 on_complete: the knockout seeded at the source's
     expect(await qualifiedOf(b.koId), "never seated with pool-mates in round one (RB5-D1)").toBeNull();
     const lines = await sql<{ n: number }[]>`select count(*)::int as n from fixtures where stage_id = ${b.koId}`;
     expect(lines[0]!.n, "nothing drawn").toBe(0);
+  });
+
+  it("RB5-D4 organiser copy premises: both doors that raise the refusal sit after results - the format is locked - and the unplayed stage deletes, the groups stay", async () => {
+    // The refusal's copy (errors.json `seeding.SEEDING_POOL_SEPARATION_IMPOSSIBLE`) says three things: the format can't be changed
+    // (results are in), the stage can be deleted (nothing in it was played), and the group results stay. Each is asked of the REAL
+    // usecases, at every door that raises the refusal - Complete (on_complete) and the draft's confirm (setup) - never a forged row.
+    // The same field as the walkthrough's refusal (pool B supplies 3 of 4), at both timings.
+    const score = scored({ "1-4": [5, 0], "1-5": [5, 0], "4-5": [1, 0], "2-3": [1, 0], "2-6": [2, 1], "3-6": [3, 0] });
+    let doors = 0;
+    for (const timing of ["on_complete", "setup"] as const) {
+      const b = await build({ entrants: 6, pools: 2, kind: "knockout", take: BEST_THIRD_TAKE, score, timing });
+      const completed = await completeStage(b.auth, b.srcId).then(
+        () => null,
+        (e: unknown) => e as HttpError,
+      );
+      // The door's own refusal: on_complete answers at Complete (409, wrapped); setup completes and refuses the draft by name.
+      const refusedCode =
+        timing === "on_complete"
+          ? completed?.extra?.cause
+          : (await getSeedProposal(b.auth, b.koId))?.computed.crossPoolDraw?.refused?.code;
+      expect(refusedCode, `${timing}: the premise - this door raised the refusal`).toBe("SEEDING_POOL_SEPARATION_IMPOSSIBLE");
+      doors += 1;
+      // "The format can't be changed once results are in": the source stage is complete, so results exist, and Format refuses.
+      expect(await divisionFormatLocked(b.auth, b.divId), `${timing}: results are in`).toBe(true);
+      const rebuilt = await replaceStages(b.auth, b.divId, [{ seq: 1, kind: "group", name: "Groups", config: { legs: 1, pools: { count: 2 } } }] as never).then(
+        () => null,
+        (e: unknown) => e as HttpError,
+      );
+      expect(rebuilt?.code, `${timing}: Format cannot be changed`).toBe("FORMAT_LOCKED");
+      // "Nothing in it has been played": the knockout holds no fixture with a result (on_complete: no fixture at all).
+      const played = await sql`select id from fixtures where stage_id = ${b.koId} and status in ('in_play', 'decided', 'finalized', 'needs_decision')`;
+      expect(played, `${timing}: nothing played in the knockout`).toHaveLength(0);
+      const groupsBefore = await sql<{ n: number }[]>`select count(*)::int as n from fixtures where stage_id = ${b.srcId} and status in ('decided', 'finalized')`;
+      expect(groupsBefore[0]!.n, `${timing}: the premise - the groups have results`).toBeGreaterThan(0);
+      // "Delete the stage": the last stage with no played fixture deletes, and the groups' results stay.
+      expect(await deleteStage(b.auth, b.koId), `${timing}: the delete`).toEqual({ deleted: true });
+      expect(await sql`select id from stages where id = ${b.koId}`, `${timing}: the knockout is gone`).toHaveLength(0);
+      const [src] = await sql<{ status: string }[]>`select status from stages where id = ${b.srcId}`;
+      expect(src!.status, `${timing}: the groups stay complete`).toBe("complete");
+      const groupsAfter = await sql<{ n: number }[]>`select count(*)::int as n from fixtures where stage_id = ${b.srcId} and status in ('decided', 'finalized')`;
+      expect(groupsAfter[0]!.n, `${timing}: the group results stay`).toBe(groupsBefore[0]!.n);
+    }
+    expect(doors, "anti-vacuity: both doors were asked").toBe(2);
   });
 
   it("RB5-D1/D2: the same take seats at Complete when Group A supplies the best second and Group B the best third - A1 v B3, B1 v A2", async () => {
