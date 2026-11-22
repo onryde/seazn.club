@@ -4,6 +4,8 @@ import { FORMAT_FAMILIES, FormatDiagram, formatFamily } from "@/config/format-ga
 import { previewDivisionFixtures } from "@/server/usecases/stages";
 import { FormatPreviewView } from "@/components/format-preview-view";
 import { HelpBreadcrumb, HelpShell } from "@/components/help/help-shell";
+import { HelpRelated } from "@/components/help/help-related";
+import { helpBlogLinks } from "@/server/blog-help-links";
 import { familyNeedsPaidPlan } from "@/lib/format-plan-badge";
 import { PHASE_PRODUCTION_BUILD } from "next/constants";
 import { loadPricingMatrix } from "@/lib/pricing-matrix-server";
@@ -39,6 +41,8 @@ export default async function FormatExplainerPage({ params }: Props) {
     if (process.env.NEXT_PHASE === PHASE_PRODUCTION_BUILD) return {} as Awaited<ReturnType<typeof loadPricingMatrix>>;
     throw e;
   });
+
+  const blogLinks = await helpBlogLinks(`formats/${f.slug}`);
 
   return (
     <HelpShell currentHref="/help/formats">
@@ -94,6 +98,7 @@ export default async function FormatExplainerPage({ params }: Props) {
         fixtures are built the same way.
       </p>
       <FormatPreviewView phases={phases} />
+      <HelpRelated related={[]} prev={null} next={null} blogLinks={blogLinks} />
     </article>
     </HelpShell>
   );

@@ -657,6 +657,7 @@ export type DictionaryKey =
   | "billingLifecycle.invoiceLink"
   | "billingLifecycle.manageBilling"
   | "blog.example.swipe"
+  | "blog.help.title"
   | "blog.index.allSports"
   | "blog.index.empty"
   | "blog.index.everySport"

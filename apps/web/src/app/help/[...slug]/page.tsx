@@ -5,6 +5,7 @@ import {
 } from "@/server/help-content";
 import { helpRedirectTarget } from "@/server/help-redirects";
 import { resolveHelpRelated } from "@/server/help-related";
+import { helpBlogLinks } from "@/server/blog-help-links";
 import { loadPricingMatrix } from "@/lib/pricing-matrix-server";
 import { helpTocEntries } from "@/lib/help-toc";
 import { CompetitionProse } from "@/components/public-site/competition-prose";
@@ -64,6 +65,9 @@ export default async function HelpArticlePage({ params }: Props) {
     section: helpSectionLabel(a.section),
   }));
 
+  // The posts that name this page (blog front-matter `help:`), beside Related and never through it.
+  const blogLinks = await helpBlogLinks(article.slug);
+
   // The reading column is capped at 34rem: about 70 characters a line of the 15px body text, never more than
   // about 80 (measured in a browser: an uncapped column ran 100+ characters at 1024 and about 90 at 1280).
   // NOT `70ch`: `ch` is the width of Geist's "0", which is wide (70ch = 742px at 16px), so that cap bound nowhere.
@@ -93,6 +97,7 @@ export default async function HelpArticlePage({ params }: Props) {
           related={related}
           prev={prev}
           next={next}
+          blogLinks={blogLinks}
           className="min-w-0 max-w-[34rem] min-[1100px]:col-start-1 min-[1100px]:row-start-3"
         />
       </article>
