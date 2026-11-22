@@ -10,7 +10,10 @@ import "server-only";
 //     entrant takes her place, RB5-K1/K2, pinned by Task 9) - against the people AND the seed order the slate names: a bracket
 //     seeds by rank, so a re-ordered cut re-seeds for nothing while nothing has started. A slate DRAWN across pools (W5 B I-6) is
 //     judged on what the draw does not decide: the same people, each pool's in the same order. A departing entrant the slate names
-//     is a difference outright: the cascade asks BEFORE it settles her lines, when her status is not yet written.
+//     is a difference outright: the cascade asks BEFORE it settles her lines, when her status is not yet written. Which slate
+//     (W5 B m-1): a confirmed row keeps the slate as PROPOSED (`qualifiers`, the lot's answer to a tie) and the seats as HELD
+//     (`seated`, after the organiser's tie picks and edits). A departure asks who holds a seat; a correction asks whether the cut
+//     moved, and stands if today's cut is either one.
 //   - AFTER the start (`getTableCutDrift`): the table as its RESULTS make it - a departed entrant keeps the place she earned
 //     (`withoutDepartureBackfill`), and she is left out of both sides, so a withdrawal is no correction (RB4-V3: her seat is a
 //     walkover, not a backfill) and only a moved RESULT is named. People alone, the Swiss reading: the same four are the same four.
@@ -85,7 +88,8 @@ function samePoolOrders(today: readonly { entrantId: string; pool?: string }[], 
 /**
  * Does `slate`'s part of the cut still stand, before the destination starts? EMPTY CASE FIRST: a slate that names nobody from this
  * source has nothing a correction could take away, and stands. `departing` is an entrant the withdrawal cascade is about to settle
- * (her status is not written yet): not named, nothing about her moves the cut (the table is not re-read); named, she is a
+ * (her status is not written yet), judged against the seats as HELD (`seated`, W5 B m-1: a tie picked against the lot seats
+ * someone the proposed slate does not name): not named, nothing about her moves the cut (the table is not re-read); named, she is a
  * difference outright - unless nobody is left to take her place (the cut is EXHAUSTED: today's eligible cut is SHORTER than the
  * slate), in which case the proposal stands and her seat is the cascade's walkover (RB4-E7, R6). A correction or a Reinstate has no
  * `departing`: the cut as it reads today is compared with the slate, an exhausted one included. A source another source is not ready for cannot be judged: it
@@ -94,11 +98,13 @@ function samePoolOrders(today: readonly { entrantId: string; pool?: string }[], 
 export async function tableSlateStands(
   tx: Tx,
   dependent: BracketDependent,
-  slate: Slate & { crossPoolDraw?: unknown },
+  slate: Slate & { crossPoolDraw?: unknown; seated?: Slate["qualifiers"] },
   sourceStageId: string,
   departing?: string,
 ): Promise<boolean> {
-  const named = onSource(slate, sourceStageId);
+  // W5 B final review m-1: who the confirm SEATED (a row confirmed before `seated` existed seated its slate as proposed).
+  const held: Slate = { qualifiers: slate.seated ?? slate.qualifiers };
+  const named = onSource(departing !== undefined ? held : slate, sourceStageId);
   if (named.length === 0) return true;
   if (departing !== undefined && !named.includes(departing)) return true;
   try {
@@ -115,14 +121,20 @@ export async function tableSlateStands(
     // entrant's seat is compared on neither side (RB4-V3: it is a walkover, no correction), so what is checked is who holds each
     // OTHER seat - a dead seat that stays where it was earned moves nobody, and one a correction shifts moves everybody below it.
     const todaySeats = seats.filter((q) => !out.has(q.entrantId));
-    const slateSeats = slate.qualifiers
-      .filter((q) => q.source.stageId === sourceStageId && !out.has(q.entrantId))
-      .sort((a, b) => a.rank - b.rank);
-    // W5 B final review I-6: a slate drawn across pools (`crossPoolDraw`) holds the DRAWN seeds (`drawAcrossPools` re-numbers them),
-    // and today's cut is the undrawn fold, so seat for seat any draw that is not the identity "moved" - every 3-pool knockout, where
-    // the fold's seed 3 v 6 is C1 v C2. Judged instead on the places it was drawn from (`samePoolOrders`).
-    if (slate.crossPoolDraw !== undefined) return samePoolOrders(todaySeats, slateSeats);
-    return todaySeats.length === slateSeats.length && todaySeats.every((q, i) => q.seed === slateSeats[i]!.rank && q.entrantId === slateSeats[i]!.entrantId);
+    const isToday = (s: Slate) => {
+      const slateSeats = s.qualifiers.filter((q) => q.source.stageId === sourceStageId && !out.has(q.entrantId)).sort((a, b) => a.rank - b.rank);
+      // W5 B final review I-6: a slate drawn across pools (`crossPoolDraw`) holds the DRAWN seeds (`drawAcrossPools` re-numbers
+      // them), and today's cut is the undrawn fold, so seat for seat any draw that is not the identity "moved" - every 3-pool
+      // knockout, where the fold's seed 3 v 6 is C1 v C2. Judged instead on the places it was drawn from (`samePoolOrders`).
+      if (slate.crossPoolDraw !== undefined) return samePoolOrders(todaySeats, slateSeats);
+      return todaySeats.length === slateSeats.length && todaySeats.every((q, i) => q.seed === slateSeats[i]!.rank && q.entrantId === slateSeats[i]!.entrantId);
+    };
+    // m-1: a departure against the seats as held - the slate as proposed would let the PICK's seat go to a walkover (today's cut
+    // without her is the lot's, so it matches). A correction or a Reinstate stands on either: today's cut is the slate the
+    // organiser answered (a pick against the lot is no drift), or it is exactly who sits (the lot's entrant left and the pick is
+    // now the cut outright - reading the proposed slate alone would empty the bracket at the next correction instead).
+    if (departing !== undefined) return isToday(held);
+    return isToday(slate) || (slate.seated !== undefined && isToday(held));
   } catch (err) {
     if (err instanceof HttpError && err.code === "SEEDING_SOURCE_INCOMPLETE") return true;
     throw err;

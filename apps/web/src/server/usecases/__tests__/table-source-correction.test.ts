@@ -30,7 +30,7 @@ import { createDivision } from "../divisions";
 import { createEntrants, patchEntrant } from "../entrants";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
-import { completeStage, computeSeedProposal, createStages, generateStageFixtures, getSeedProposal, overrideStandings, refoldStageTable } from "../stages";
+import { completeStage, computeSeedProposal, confirmSeedProposal, createStages, generateStageFixtures, getSeedProposal, overrideStandings, refoldStageTable } from "../stages";
 import { getTableCutDrift } from "../table-cut-drift";
 import { cascadeAuthFor, withdrawEntrantCascade } from "../withdrawal";
 import { confirmResolvingTies } from "./_confirm-with-ties";
@@ -512,6 +512,103 @@ describe.runIf(HAS_DB)("W5 T11 a correction inside a completed league or group s
       expect(fresh.computed.crossPoolDraw?.seed, `the re-proposal drew with the stored seed ${seed}`).toBe(seed);
       expect(await newestSlate(r), `seed ${seed}: the engine's order, seat for seat`).toEqual({ status: "draft", seeds: order(seed) });
     }
+  });
+
+  // W5 B final review m-1: the organiser answered the best-third tie AGAINST the lot (GROUPS5: thirds E5 and E6 level on 3 points;
+  // the lot names one, the organiser seats the other). The confirmed row keeps both facts: `qualifiers`, the slate as proposed (the
+  // lot's), and `seated`, who the confirm actually seated (the pick). A DEPARTURE asks who holds a seat - the pick, not the lot.
+  // differential: today the departure judge reads `qualifiers` - the pick leaving is "not named" (her seat is walked over instead
+  // of the lot's entrant backfilling, RB5-K2), and the lot's entrant leaving empties a bracket she never sat in.
+  async function pickedAgainstTheLot(): Promise<{ r: Rig; lot: number; pick: number }> {
+    const r = await rig(GROUPS5, GENERIC, { confirm: false });
+    const draft = (await getSeedProposal(r.auth, r.koId))!;
+    expect(draft.computed.ties, "premise: one tie, the best third").toHaveLength(1);
+    const tie = draft.computed.ties[0]!;
+    expect(tie.entrantIds.map((id) => r.seedOf.get(id)!).sort(), "premise: the thirds E5 and E6 are level").toEqual([5, 6]);
+    const proposed = draft.computed.qualifiers.map((q) => r.seedOf.get(q.entrantId)!);
+    const lot = proposed.includes(5) ? 5 : 6;
+    const pick = lot === 5 ? 6 : 5;
+    expect(proposed, "premise: the lot seats exactly one of them").not.toContain(pick);
+    await confirmSeedProposal(r.auth, r.koId, { proposalId: draft.id, tiePicks: [{ slots: tie.slots, order: [r.idOf.get(pick)!, r.idOf.get(lot)!] }] });
+    r.confirmedId = draft.id;
+    const [row] = await sql<{ status: string; computed: { qualifiers: { entrantId: string }[]; seated?: { entrantId: string }[] } }[]>`
+      select status, computed from stage_seed_proposals where id = ${draft.id}`;
+    expect(row!.status, "premise: confirmed").toBe("confirmed");
+    expect(row!.computed.qualifiers.map((q) => r.seedOf.get(q.entrantId)!).sort(), "premise: the slate as proposed names the lot's").toEqual([1, 2, 3, 4, lot].sort());
+    expect(row!.computed.seated?.map((q) => r.seedOf.get(q.entrantId)!).sort(), "premise: the confirm seated the pick").toEqual([1, 2, 3, 4, pick].sort());
+    expect(new Set((await seats(r)).flat()), "premise: the pick holds a seat in the bracket").toContain(pick);
+    return { r, lot, pick };
+  }
+
+  let pickedChecked = 0;
+  for (const door of ["cascade", "patch"] as const) {
+    it(`m-1 the PICK (seated against the lot) leaves before the knockout starts: stale, the seats go back, the lot's entrant takes her place [${door}]`, async () => {
+      const { r, lot, pick } = await pickedAgainstTheLot();
+      if (door === "cascade") await withdrawEntrantCascade(r.auth, r.idOf.get(pick)!);
+      else await patchEntrant(r.auth, r.idOf.get(pick)!, { status: "withdrawn" });
+      expect(await statusOf(r.confirmedId), "she held a seat: the confirmed proposal went stale").toBe("stale");
+      await expectDayOne(r); // nobody was walked over her seat
+      const now = await newestSlate(r);
+      expect(now.status, "a re-proposal waits on the desk").toBe("draft");
+      expect(now.seeds.slice().sort((a, b) => a - b), "RB5-K2: the other third, the only one left, takes the seat").toEqual([1, 2, 3, 4, lot].sort());
+      pickedChecked++;
+    });
+
+    it(`m-1 the LOT's entrant (never seated) leaves: the bracket stands, the pick keeps her seat [${door}]`, async () => {
+      const { r, pick } = await pickedAgainstTheLot();
+      const before = await seats(r);
+      const lotId = (await sql<{ computed: { qualifiers: { entrantId: string }[] } }[]>`select computed from stage_seed_proposals where id = ${r.confirmedId}`)[0]!
+        .computed.qualifiers.map((q) => q.entrantId)
+        .find((id) => [5, 6].includes(r.seedOf.get(id)!))!;
+      if (door === "cascade") await withdrawEntrantCascade(r.auth, lotId);
+      else await patchEntrant(r.auth, lotId, { status: "withdrawn" });
+      expect(await statusOf(r.confirmedId), "she held no seat: still confirmed").toBe("confirmed");
+      expect(await seats(r), "no seat moved").toEqual(before);
+      expect(new Set((await seats(r)).flat()), "the pick still holds her seat").toContain(pick);
+      pickedChecked++;
+    });
+  }
+
+  it("m-1 the positive pair: a correction that moves nobody after a pick against the lot stands, and the started bracket names no drift (both read the slate as proposed)", async () => {
+    // A correction asks whether the CUT moved, so it reads `qualifiers`, the slate as proposed: the lot is still the lot, and a pick
+    // against it is no drift. Read against `seated` it would differ on every correction - and warn, once started, for no result.
+    const { r } = await pickedAgainstTheLot();
+    const before = await seats(r);
+    await correct(r, 1, 8, 1); // E1 beat E8 2-0: voided, entered again 2-0 - nobody moves
+    expect(await statusOf(r.confirmedId), "still confirmed").toBe("confirmed");
+    expect(await seats(r), "no seat moved").toEqual(before);
+    await startDestination(r);
+    expect(await getTableCutDrift(r.auth, r.srcId), "started: the pick is no drift").toBeNull();
+    pickedChecked++;
+  });
+
+  it("m-1 the SEQUENCE: the lot's entrant leaves (stands), a correction that moves nobody (stands), she is reinstated (stands) - the pick keeps her seat throughout", async () => {
+    // After she leaves, today's cut names the pick outright (the only third left): the slate as proposed (the lot's) no longer
+    // reads as today's cut, the seats as held do. A judge reading only the slate as proposed empties the bracket at the next
+    // correction instead of at the departure - the same defect one step later.
+    const { r, pick } = await pickedAgainstTheLot();
+    const before = await seats(r);
+    const lotId = (await sql<{ computed: { qualifiers: { entrantId: string }[] } }[]>`select computed from stage_seed_proposals where id = ${r.confirmedId}`)[0]!
+      .computed.qualifiers.map((q) => q.entrantId)
+      .find((id) => [5, 6].includes(r.seedOf.get(id)!))!;
+    let steps = 0;
+    for (const [label, act] of [
+      ["the lot's entrant leaves", () => withdrawEntrantCascade(r.auth, lotId)],
+      ["a correction that moves nobody", () => correct(r, 1, 8, 1)],
+      ["the lot's entrant is reinstated", () => patchEntrant(r.auth, lotId, { status: "registered" })],
+    ] as const) {
+      await act();
+      expect(await statusOf(r.confirmedId), `${label}: still confirmed`).toBe("confirmed");
+      expect(await seats(r), `${label}: no seat moved`).toEqual(before);
+      expect(new Set((await seats(r)).flat()), `${label}: the pick holds her seat`).toContain(pick);
+      steps++;
+    }
+    expect(steps, "anti-vacuity: three steps judged").toBe(3);
+    pickedChecked++;
+  });
+
+  it("m-1 anti-vacuity: both doors x both leavers, the positive pair and the sequence", () => {
+    expect(pickedChecked).toBe(6);
   });
 
   it("X-CUT-4 groups_ko best-Nth: the pool winner leaves a confirmed cut - the recompute is over the eligible thirds, and a stale proposal re-proposes", async () => {
