@@ -8,6 +8,7 @@ import { isStagingOrigin } from "@/lib/robots-policy";
 import { siteOrigin } from "@/lib/site-origin";
 import { revshareEnabled } from "@/lib/revshare-shared";
 import { BUNNY_EMBED_HOST, FAKE_REPLAY_EMBED_HOST, replayDriverIsFake, streamPlaybackHost } from "@/server/relay/config";
+import { ROUTED_DIVISION_TABS } from "@/lib/division-tabs";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
@@ -211,6 +212,30 @@ export function gamesHostRewrite(request: NextRequest): URL | null {
 
 /** Staging is the same app on another host. robots.txt (app/robots.ts) closes it, but a page already indexed
  *  stays indexed until it is served with noindex, so every staging response carries the header. */
+/** The static routes that sit where a division slug would (`/live/{org}/{comp}/{x}`, the kiosk group included) and the
+ *  org-level tree that sits where a competition would (`/live/{org}/news/{post}`). A `?tab=` on them is not a division tab.
+ *  `src/__tests__/proxy-division-tab.test.ts` sweeps `app/(public)/live` so a new static route cannot be missed here. */
+const NOT_A_DIVISION = new Set(["present", "poster", "poster.pdf", "register", "players"]);
+const NOT_A_COMPETITION = new Set(["news"]);
+const DIVISION_HOME = /^\/live\/([^/]+)\/([^/]+)\/([^/]+)\/?$/;
+
+/**
+ * W5 follow-ups B3 (perf-measure-report P3): the public division page server-renders only its ACTIVE tab, and the page is
+ * ISR - reading `searchParams` would make it dynamic. So `?tab=standings` and `?tab=entrants` on a division home are
+ * rewritten to `{division}/tab/{tab}`, an ISR document of its own; the URL the spectator sees, shares and the hub links to
+ * stays `?tab=`. Returns the rewritten URL, or null when no rewrite applies (Schedule, no `tab`, an unknown one, any other
+ * path).
+ */
+export function divisionTabRewrite(request: NextRequest): URL | null {
+  const tab = request.nextUrl.searchParams.get("tab");
+  if (tab === null || !(ROUTED_DIVISION_TABS as readonly string[]).includes(tab)) return null;
+  const m = DIVISION_HOME.exec(request.nextUrl.pathname);
+  if (m === null || NOT_A_COMPETITION.has(m[2]!) || NOT_A_DIVISION.has(m[3]!)) return null;
+  const url = request.nextUrl.clone();
+  url.pathname = `/live/${m[1]}/${m[2]}/${m[3]}/tab/${tab}`;
+  return url;
+}
+
 export function proxy(request: NextRequest): NextResponse {
   const response = proxyCore(request);
   // The configured origin, not the Host/X-Forwarded-Host header: a client can send that header, and a forged
@@ -316,7 +341,7 @@ function proxyCore(request: NextRequest): NextResponse {
     return rewritten;
   }
 
-  const rewriteUrl = gamesHostRewrite(request);
+  const rewriteUrl = gamesHostRewrite(request) ?? divisionTabRewrite(request);
   const response = rewriteUrl
     ? NextResponse.rewrite(rewriteUrl, { request: { headers: requestHeaders } })
     : NextResponse.next({ request: { headers: requestHeaders } });

@@ -41,7 +41,7 @@ import { isCatchUpRoundExtKey } from "@/lib/roundrobin-late-entry";
 // stays ONLY as the last-resort, English, fallback for a slot name
 // `slotLabels` should always carry (this file's "never throws" convention).
 
-interface Props {
+export interface ScheduleProps {
   fixtures: PublicFixture[];
   entrantNames: Record<string, string>;
   /** W3 T15 review I4: entrant id → status (the page's `entrantStatuses`) — a withdrawal cascade's walkover over a
@@ -474,7 +474,7 @@ export function Schedule({
   copy,
   locale,
   watch,
-}: Props) {
+}: ScheduleProps) {
   const [entrant, setEntrant] = useState<string>("");
   // Day view first (fixtures by date) — matches how a spectator reads a
   // timetable on the day. Round view stays a click away for bracket-style flow.

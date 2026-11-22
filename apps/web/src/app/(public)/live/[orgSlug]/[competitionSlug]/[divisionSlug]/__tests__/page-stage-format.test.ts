@@ -24,6 +24,12 @@ vi.mock("@/server/public-site/table-withdrawals", async (importOriginal) => ({
 // (`loadBestNthBases`) are SQL - a real database's job (points-adjustment-surfaces-db, bestnth-unequal-pools). Unmocked, this file
 // read "DATABASE_URL is not set" in the unit job. They answer no adjustments and no basis: neither footnote is what this file tests.
 vi.mock("@/server/public-site/points-adjustments", () => ({ loadPointsAdjustments: async () => [] }));
+// W5 follow-ups B3: the tab bar (`Tabs`) loads a panel its document does not carry through the App Router, so it holds
+// the router; this test renders the whole page to markup, outside one. No tap is made here.
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  useRouter: () => ({ replace: () => {} }),
+}));
 vi.mock("@/server/public-site/bestnth-basis", () => ({ loadBestNthBases: async () => new Map() }));
 vi.mock("@/server/public-site/data", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/public-site/data")>()),

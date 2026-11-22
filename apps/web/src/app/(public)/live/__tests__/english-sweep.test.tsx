@@ -223,6 +223,8 @@ import * as NewsPost from "../[orgSlug]/news/[postSlug]/page";
 import * as Poster from "../[orgSlug]/[competitionSlug]/poster/page";
 import * as Competition from "../[orgSlug]/[competitionSlug]/page";
 import * as Division from "../[orgSlug]/[competitionSlug]/[divisionSlug]/page";
+import * as DivisionTab from "../[orgSlug]/[competitionSlug]/[divisionSlug]/tab/[tab]/page";
+import { DIVISION_TABS } from "@/lib/division-tabs";
 import * as Fixture from "../[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/page";
 import * as Player from "../[orgSlug]/[competitionSlug]/players/[personId]/page";
 import PlayerCardLayout from "../[orgSlug]/[competitionSlug]/players/[personId]/layout";
@@ -1071,12 +1073,19 @@ async function renderDivisions(): Promise<Segment[]> {
   const out: Segment[] = [];
   for (const [name, detail] of cases) {
     stub.getPublicDivision.mockResolvedValue(detail);
-    const p = params({ orgSlug: ORG_SLUG, competitionSlug: COMP_SLUG, divisionSlug: detail.division.slug });
-    const markup = renderToStaticMarkup((await Division.default(p)) as ReactElement);
-    for (const panel of ["schedule", "standings", "entrants"]) {
-      expect(markup, `${name}: the ${panel} panel rendered`).toContain(`id="panel-${panel}"`);
+    // W5 follow-ups B3: one document per tab - the bare route carries Schedule, `tab/[tab]` (the proxy's rewrite of
+    // `?tab=`) carries Standings and Entrants. Every tab's document is swept, each with its own panel filled.
+    for (const tab of DIVISION_TABS) {
+      const doc = tab === "schedule" ? Division : DivisionTab;
+      const base = { orgSlug: ORG_SLUG, competitionSlug: COMP_SLUG, divisionSlug: detail.division.slug };
+      const p = params(tab === "schedule" ? base : { ...base, tab });
+      const markup = renderToStaticMarkup((await doc.default(p as never)) as ReactElement);
+      for (const panel of DIVISION_TABS) {
+        expect(markup, `${name} (${tab}): the ${panel} panel is in the bar`).toContain(`id="panel-${panel}"`);
+      }
+      expect(markup, `${name} (${tab}): its own panel is not empty`).not.toMatch(new RegExp(`id="panel-${tab}"[^>]*></div>`));
+      out.push(...extractSegments(markup), ...(await served(doc, p)));
     }
-    out.push(...extractSegments(markup), ...(await served(Division, p)));
   }
   return out;
 }
@@ -1444,7 +1453,7 @@ const SCENES: Scene[] = [
   },
   {
     name: "division page (schedule, standings with a results grid and a bracket, entrants; four states)",
-    files: ["[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx"],
+    files: ["[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx", "[orgSlug]/[competitionSlug]/[divisionSlug]/tab/[tab]/page.tsx"],
     minDictValues: 12,
     render: renderDivisions,
   },

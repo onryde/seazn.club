@@ -21,7 +21,9 @@ import { CompetitionProse } from "@/components/public-site/competition-prose";
 import { ShareButton } from "@/components/share-button";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { Tabs } from "@/components/public-site/tabs";
-import { Schedule } from "@/components/public-site/schedule";
+import { PackedSchedule } from "@/components/public-site/packed-schedule";
+import { packRows } from "@/lib/packed-rows";
+import { DIVISION_TABS, divisionTabOf } from "@/lib/division-tabs";
 import { publicScheduleCopy, publicSitsOutLines, publicWatchCopy } from "@/server/public-site/schedule-copy";
 import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
 import { loadDivisionWatch } from "@/server/usecases/external-play-read";
@@ -68,7 +70,8 @@ export async function generateStaticParams() {
 }
 
 type Props = {
-  params: Promise<{ orgSlug: string; competitionSlug: string; divisionSlug: string }>;
+  /** `tab` only on `tab/[tab]` - the route `?tab=standings` / `?tab=entrants` is rewritten to (W5 follow-ups B3). */
+  params: Promise<{ orgSlug: string; competitionSlug: string; divisionSlug: string; tab?: string }>;
 };
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
@@ -90,7 +93,12 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 }
 
 export default async function DivisionHomePage({ params }: Props) {
-  const { orgSlug, competitionSlug, divisionSlug } = await params;
+  const { orgSlug, competitionSlug, divisionSlug, tab: tabParam } = await params;
+  // W5 follow-ups B3: which panel THIS document carries. The bare route is Schedule; `?tab=standings` and `?tab=entrants`
+  // are rewritten by the proxy (`divisionTabRewrite`) to `tab/[tab]`, an ISR document of their own. Any other `tab` there is
+  // no page.
+  const tab = divisionTabOf(tabParam);
+  if (tab === null) notFound();
   const data = await getPublicDivision(orgSlug, competitionSlug, divisionSlug);
   if (!data) {
     const renamed = await sharedRenameTarget(orgSlug, competitionSlug, divisionSlug);
@@ -572,8 +580,12 @@ export default async function DivisionHomePage({ params }: Props) {
             were English in every locale until now: the four keys have shipped in
             en/es/fr/nl all along and nothing rendered them, so their only
             consumer was the coverage test asserting they exist. */}
+        {/* W5 follow-ups B3: only the active tab's panel is rendered (the others are null and load on a tap, `Tabs`); at
+            the caps the hidden Fixtures panel was 43k of the Standings view's 45k DOM nodes. The schedule's fixtures go
+            over packed as columns (`PackedSchedule`), the same rows. */}
         <Tabs
-          ids={["schedule", "standings", "entrants"]}
+          initial={DIVISION_TABS.indexOf(tab)}
+          ids={[...DIVISION_TABS]}
           labels={[
             t(dict, "division.tab.schedule"),
             t(dict, "division.tab.standings"),
@@ -582,9 +594,9 @@ export default async function DivisionHomePage({ params }: Props) {
           label={t(dict, "division.tabsLabel")}
         >
           {[
-            <Schedule
+            tab !== "schedule" ? null : <PackedSchedule
               key="schedule"
-              fixtures={fixtures}
+              fixtures={packRows(fixtures)}
               entrantNames={entrantNames}
               entrantStatuses={entrantStatuses}
               divisionPath={basePath}
@@ -598,8 +610,8 @@ export default async function DivisionHomePage({ params }: Props) {
               locale={orgLocale}
               {...(watch ? { watch } : {})}
             />,
-            standingsPanel,
-            entrantsPanel,
+            tab === "standings" ? standingsPanel : null,
+            tab === "entrants" ? entrantsPanel : null,
           ]}
         </Tabs>
       </div>

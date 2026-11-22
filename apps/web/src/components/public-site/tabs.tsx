@@ -23,7 +23,15 @@
 // mechanism (why not `useSearchParams`, why not `useState` + an effect, and
 // what W1's match centre still does instead) moved there with it, because that
 // is now where a reader meets it first.
+//
+// W5 follow-ups B3 (perf-measure-report P3): the division page no longer ships every panel. At the caps the hidden Fixtures
+// panel was 43k of a Standings view's 45k DOM nodes and most of its 12 MB. The page server-renders ONLY the active tab's
+// panel - `?tab=standings` / `?tab=entrants` reach their own ISR document through the proxy (`src/proxy.ts`
+// `divisionTabRewrite`) - and hands the others as `null`. A tap on a panel that is not here navigates to its URL
+// (`router.replace`, no history entry, scroll kept), which loads it from the server; a tap on one that is here only toggles,
+// as before. `initial` is the panel the server rendered, so hydration matches whichever tab the URL named.
 import { useState, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import { useTabParam } from "./use-tab-param";
 
 interface Props {
@@ -37,10 +45,14 @@ interface Props {
   labels: string[];
   /** Accessible name for the tablist (`division.tabsLabel`). */
   label: string;
-  children: ReactNode[]; // one panel per label, same order
+  /** One panel per label, same order. `null` for a panel this document does not carry: tapping it loads it (B3). */
+  children: ReactNode[];
+  /** The panel the server rendered as active (B3); 0 when omitted. */
+  initial?: number;
 }
 
-export function Tabs({ ids, labels, label, children }: Props) {
+export function Tabs({ ids, labels, label, children, initial = 0 }: Props) {
+  const router = useRouter();
   // `picked` stays null until the spectator actually taps something, and that
   // is what makes the precedence right in BOTH directions: before a tap the URL
   // wins, and after one the tap wins for good — no later re-render can drag
@@ -49,8 +61,9 @@ export function Tabs({ ids, labels, label, children }: Props) {
   const deepLinked = useTabParam();
   // `> 0` and not `>= 0`: an unknown or absent `?tab=` yields -1, which has to
   // fall through to the first tab rather than select nothing.
+  // A panel this document does not carry is never shown from the URL: the server picked `initial` for this document.
   const fromUrl = deepLinked === null ? -1 : ids.indexOf(deepLinked);
-  const active = picked ?? (fromUrl > 0 ? fromUrl : 0);
+  const active = picked ?? (fromUrl >= 0 && children[fromUrl] != null ? fromUrl : initial);
 
   function select(i: number) {
     setPicked(i);
@@ -61,7 +74,9 @@ export function Tabs({ ids, labels, label, children }: Props) {
     const url = new URL(window.location.href);
     if (i === 0) url.searchParams.delete("tab");
     else url.searchParams.set("tab", ids[i]!);
-    window.history.replaceState(null, "", url);
+    // B3: a panel this document does not carry is loaded from its own URL - `router.replace`, so still no history entry.
+    if (children[i] == null) router.replace(url.pathname + url.search + url.hash, { scroll: false });
+    else window.history.replaceState(null, "", url);
   }
 
   return (

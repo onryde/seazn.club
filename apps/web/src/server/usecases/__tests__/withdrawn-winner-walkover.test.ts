@@ -43,8 +43,10 @@ import { loadMatchCentre, type MatchCentreLoadCtx } from "@/server/public-site/m
 import { completeStage } from "../stages";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { Bracket } from "@/components/public-site/bracket";
-import { Schedule } from "@/components/public-site/schedule";
-import DivisionHomePage from "@/app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/page";
+// W5 follow-ups B3: the page hands its Schedule over packed (`PackedSchedule`: the same props, fixtures as columns).
+import { PackedSchedule } from "@/components/public-site/packed-schedule";
+// W5 follow-ups B3: the division page is one document per tab; "the page" is all three (`_every-tab.ts`).
+import { renderEveryTab } from "@/app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/__tests__/_every-tab";
 import { GET as calendarFeed } from "@/app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/calendar.ics/route";
 import { getDictionary } from "@/lib/i18n";
 import { buildDrawModel } from "@/lib/poster-draw";
@@ -214,10 +216,8 @@ async function surfacesOf(
   const pub = await publicOf(s);
   const tie = pub.detail.fixtures.find((f) => f.id === fixtureId);
   if (!tie) throw new Error(`rig: ${fixtureId} is not in the public division read`);
-  const root = await DivisionHomePage({
-    params: Promise.resolve({ orgSlug: pub.slugs.org, competitionSlug: pub.slugs.comp, divisionSlug: pub.slugs.div }),
-  });
-  const [schedule] = findElements(root, Schedule);
+  const root = await renderEveryTab({ orgSlug: pub.slugs.org, competitionSlug: pub.slugs.comp, divisionSlug: pub.slugs.div });
+  const [schedule] = findElements(root, PackedSchedule);
   const [bracket] = findElements(root, Bracket);
   if (!schedule || !bracket) throw new Error("rig: the division page built no Schedule or no Bracket");
   const hub = pub.hub.matches.find((m) => m.fixtureId === fixtureId);

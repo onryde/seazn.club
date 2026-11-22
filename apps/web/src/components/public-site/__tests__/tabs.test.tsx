@@ -26,11 +26,18 @@
 // link itself is booked to the post-mount e2e leg, alongside the Task 2
 // geometry debt; `e2e/walkthrough/spectator-public-2.spec.ts` already drives
 // `role="tab"` on this surface and is where it belongs.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Tabs } from "../tabs";
+import { DIVISION_TABS } from "@/lib/division-tabs";
+import { renderIsland } from "@/components/__tests__/_hook-harness";
+
+// W5 follow-ups B3: a tap on a panel the document does not carry loads it through the App Router. Its router is the one
+// browser seam here; the spy records where it was sent.
+const nav = vi.hoisted(() => ({ replace: vi.fn() }));
+vi.mock("next/navigation", () => ({ useRouter: () => nav }));
 
 const IDS = ["schedule", "standings", "entrants"];
 
@@ -113,7 +120,9 @@ describe("the division page's own call (source contract)", () => {
   });
 
   it("passes the URL-facing ids UNTRANSLATED — a shared link must survive the reader's locale", () => {
-    expect(src).toContain('ids={["schedule", "standings", "entrants"]}');
+    // W5 follow-ups B3: the ids live in `lib/division-tabs.ts`, shared with the proxy's `?tab=` rewrite; the page passes them.
+    expect(src).toContain("ids={[...DIVISION_TABS]}");
+    expect(DIVISION_TABS).toEqual(["schedule", "standings", "entrants"]);
   });
 
   it("resolves the dictionary from the ORG locale, never a per-visitor read", () => {
@@ -121,5 +130,59 @@ describe("the division page's own call (source contract)", () => {
     // Accept-Language read would make every cached copy wrong for somebody.
     expect(src).toContain('await getDictionary(orgLocale, "public")');
     expect(src).toContain("export const revalidate = 30");
+  });
+});
+
+// W5 follow-ups B3 (perf-measure-report P3): the division page server-renders only the ACTIVE tab's panel and hands the
+// others as null. The bar the server rendered must name that panel (so hydration matches), and a tap on a missing panel
+// must load it from its own URL, while a tap on one that is here still only toggles.
+describe("Tabs - only the active panel is in the document (B3)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    nav.replace.mockReset();
+  });
+
+  const standingsOnly = () => [null, <p key="b">STANDINGS PANEL</p>, null];
+
+  it("the server's `initial` panel is the one shown and selected; the absent panels are empty and hidden", () => {
+    const h = renderToStaticMarkup(
+      <Tabs ids={IDS} labels={ES} label="x" initial={1}>
+        {standingsOnly()}
+      </Tabs>,
+    );
+    expect(h).toMatch(/id="tab-standings"[^>]*aria-selected="true"|aria-selected="true"[^>]*id="tab-standings"/);
+    expect(h).toMatch(/<div id="panel-standings" role="tabpanel" aria-labelledby="tab-standings">/);
+    expect(h).toMatch(/<div id="panel-schedule" role="tabpanel" aria-labelledby="tab-schedule" hidden="">/);
+    expect(h).toContain("STANDINGS PANEL");
+  });
+
+  it("a tap on an absent panel loads its URL through the router; a tap on the present one only toggles; Schedule drops ?tab", () => {
+    const replaceState = vi.fn();
+    vi.stubGlobal("window", { location: { href: "https://seazn.club/live/o/c/d?tab=standings#top" }, history: { replaceState } });
+    const island = renderIsland(Tabs, { ids: IDS, labels: ES, label: "x", initial: 1, children: standingsOnly() });
+    const tab = (id: string) => island.tree().find((el) => (el.props as { id?: string }).id === `tab-${id}`)!;
+    let taps = 0;
+    (tab("entrants").props as { onClick: () => void }).onClick();
+    taps += 1;
+    expect(nav.replace).toHaveBeenCalledWith("/live/o/c/d?tab=entrants#top", { scroll: false });
+    expect(replaceState, "an absent panel is a load, not a toggle").not.toHaveBeenCalled();
+    (tab("schedule").props as { onClick: () => void }).onClick();
+    taps += 1;
+    expect(nav.replace).toHaveBeenLastCalledWith("/live/o/c/d#top", { scroll: false });
+    nav.replace.mockClear();
+    (tab("standings").props as { onClick: () => void }).onClick();
+    taps += 1;
+    expect(nav.replace, "the present panel never navigates").not.toHaveBeenCalled();
+    expect(replaceState).toHaveBeenCalledTimes(1);
+    expect(taps, "anti-vacuity").toBe(3);
+  });
+
+  it("every panel present (the empty case of B3): no tap ever navigates", () => {
+    const replaceState = vi.fn();
+    vi.stubGlobal("window", { location: { href: "https://seazn.club/live/o/c/d" }, history: { replaceState } });
+    const island = renderIsland(Tabs, { ids: IDS, labels: ES, label: "x", children: [<p key="a">A</p>, <p key="b">B</p>, <p key="c">C</p>] });
+    for (const id of IDS) ((island.tree().find((el) => (el.props as { id?: string }).id === `tab-${id}`)!.props) as { onClick: () => void }).onClick();
+    expect(nav.replace).not.toHaveBeenCalled();
+    expect(replaceState).toHaveBeenCalledTimes(3);
   });
 });

@@ -41,7 +41,8 @@ import { createEntrants, patchEntrant } from "../entrants";
 import { startDivision } from "../schedule";
 import { completeStage, confirmSeedProposal, createStages, generateStageFixtures, getSeedProposal, refoldStageTable } from "../stages";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
-import DivisionHomePage from "@/app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/page";
+// W5 follow-ups B3: the division page is one document per tab; "the page" is all three (`_every-tab.ts`).
+import { renderEveryTab } from "@/app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/__tests__/_every-tab";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -300,9 +301,7 @@ function elements(node: unknown, out: ReactElement[] = []): ReactElement[] {
 }
 
 async function renderPage(s: Scene) {
-  const root = await DivisionHomePage({
-    params: Promise.resolve({ orgSlug: s.slugs.org, competitionSlug: s.slugs.comp, divisionSlug: s.slugs.div }),
-  });
+  const root = await renderEveryTab({ orgSlug: s.slugs.org, competitionSlug: s.slugs.comp, divisionSlug: s.slugs.div });
   const all = elements(root);
   const brackets = all.filter((e) => e.type === Bracket);
   const tables = all.filter((e) => e.type === StandingsTable);
