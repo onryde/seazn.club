@@ -54,6 +54,7 @@
 // own camera report, sent by camera-session (the room's camera-report) and
 // read back from the room read (§5.6.3).
 import type RealtimeKitClient from "@cloudflare/realtimekit";
+import type { LeaveRoomState, MediaConnectionUpdate, SocketConnectionState } from "@cloudflare/realtimekit";
 import * as Sentry from "@sentry/nextjs";
 
 export type OwnCamera = {
@@ -70,7 +71,8 @@ export type OwnCamera = {
   onFault(cb: () => void): () => void;
 };
 
-export type JoinOwnCamera = (authToken: string) => Promise<OwnCamera>;
+/** `where`: the room the camera joins for, named on a connection-drop report (watchRoomDrops). */
+export type JoinOwnCamera = (authToken: string, where?: RoomWhere) => Promise<OwnCamera>;
 
 /** Consecutive failed enforcement runs before the camera fails closed —
  *  retried at once, so a remote stream is never consumed meanwhile. */
@@ -118,6 +120,66 @@ type Meeting = RealtimeKitClient;
 export type RealtimeKitSdk = { default: { init(o: { authToken: string; defaults: { audio: boolean; video: boolean } }): Promise<Meeting> } };
 type SdkModule = RealtimeKitSdk;
 
+/** The meeting a drop report names: the board and the side, as the joining surface holds them - the player's colour
+ *  (`you.colour`), the arbiter's meeting side (home / away). Ids and a side only: never a token, a peer or a name. null:
+ *  the caller did not say. */
+export type RoomWhere = { fixtureId: string | null; side: string | null };
+
+/** Connection drops, reported with what we already have (owner 2026-11-22: "we have logger and sentry"; no table, no
+ *  endpoint). For one joined meeting, on either surface:
+ *   - every `roomLeft` that is NOT our own leave is a Sentry WARNING, "realtimekit: room dropped", tagged with the
+ *     surface, the board, the side and the SDK's leave state (`{ state: LeaveRoomState }`, the event's only field in
+ *     2.0.2: a socket or media-node drop is "disconnected", a give-up "failed", and the client's own leave "left");
+ *   - the next `roomJoined` after a drop is a breadcrumb, "realtimekit: room rejoined", carrying the gap in ms from the
+ *     FIRST drop since the last join and the SDK's `reconnected`; the join's own roomJoined is no rejoin;
+ *   - the SDK's socket and media connection updates (`meta`'s socketConnectionUpdate / mediaConnectionUpdate) are
+ *     breadcrumbs, so a drop's report carries what led to it.
+ *  Returns `ours`: the loader calls it just before EVERY leave it makes (the owner's leave, a guard failing closed), so
+ *  that leave is never read as a drop. It is the flag, not the state, that decides: the SDK can leave with "left" on its
+ *  own (its picture-in-picture hang-up), and that is reported. camera-drops.test.ts drives both loaders through it. */
+export function watchRoomDrops(meeting: Pick<Meeting, "self" | "meta">, surface: "player" | "arbiter", where: RoomWhere): () => void {
+  let ours = false;
+  let droppedAt: number | null = null;
+  meeting.self.on("roomLeft", ({ state }: { state: LeaveRoomState }) => {
+    if (ours) return;
+    droppedAt ??= Date.now();
+    Sentry.captureMessage("realtimekit: room dropped", {
+      level: "warning",
+      tags: { area: "realtimekit", surface, fixtureId: where.fixtureId, side: where.side, leaveState: state },
+    });
+  });
+  meeting.self.on("roomJoined", ({ reconnected }: { reconnected: boolean }) => {
+    if (droppedAt === null) return;
+    const gapMs = Date.now() - droppedAt;
+    droppedAt = null;
+    Sentry.addBreadcrumb({
+      category: "realtimekit",
+      level: "info",
+      message: "realtimekit: room rejoined",
+      data: { surface, fixtureId: where.fixtureId, side: where.side, gapMs, reconnected },
+    });
+  });
+  meeting.meta.on("socketConnectionUpdate", (s: SocketConnectionState) => {
+    Sentry.addBreadcrumb({
+      category: "realtimekit",
+      level: "info",
+      message: "realtimekit: socket connection",
+      data: { surface, state: s.state, reconnected: s.reconnected, reconnectionAttempt: s.reconnectionAttempt },
+    });
+  });
+  meeting.meta.on("mediaConnectionUpdate", (u: MediaConnectionUpdate) => {
+    Sentry.addBreadcrumb({
+      category: "realtimekit",
+      level: "info",
+      message: "realtimekit: media connection",
+      data: { surface, transport: u.transport, state: u.state },
+    });
+  });
+  return () => {
+    ours = true;
+  };
+}
+
 /** Built over the SDK module so the join can be driven in node over a port
  *  of the SDK's subscription rules (camera-loader.test.ts). */
 export function makeJoinOwnCamera(
@@ -126,7 +188,7 @@ export function makeJoinOwnCamera(
   timing: D7Timing = {},
 ): JoinOwnCamera {
   const later = timing.later ?? realLater;
-  return async (authToken) => {
+  return async (authToken, where = { fixtureId: null, side: null }) => {
     const { default: RealtimeKitClient } = await load();
     const meeting = await RealtimeKitClient.init({ authToken, defaults: { audio: false, video: true } });
     const { self, participants } = meeting;
@@ -213,6 +275,8 @@ export function makeJoinOwnCamera(
       if (closed) return;
       void enforce();
     });
+    // Drops are reported (never acted on here); every leave below is ours.
+    const ourLeave = watchRoomDrops(meeting, "player", where);
 
     // ── fail closed ──────────────────────────────────────────────────────
     // A FAULT for the owner to heal (a fresh join), never the camera going
@@ -223,6 +287,7 @@ export function makeJoinOwnCamera(
       // A quiet retry still waiting finds the camera closed and does nothing.
       closed = true;
       report("d7_fail_closed", err);
+      ourLeave();
       // The owner hears it FIRST (it stamps our fault on the server before
       // the leave, so no stretch of the gap is unstamped); the leave runs on
       // the next microtask — still before the SDK's consumer sync, a
@@ -258,6 +323,7 @@ export function makeJoinOwnCamera(
       },
       async leave() {
         stopQuiet();
+        ourLeave();
         try {
           // After a fail-close the meeting is already being left: the same leave.
           if (leaving !== null) return await leaving;

@@ -62,7 +62,7 @@ import { canMove, cameraRetryDue, moveNotice, ownMeetingRetired, plyOf, type Roo
 import { lineOf } from "./line-view";
 import { formatCountdown, formatPromisedTime, formatTimeOfDay, useFlagFallen, useServerNow } from "./room-time";
 import { useRoom } from "./use-room";
-import { joinOwnCamera } from "./camera-loader";
+import { joinOwnCamera, type JoinOwnCamera } from "./camera-loader";
 import { deliverCameraFault, deliverCameraReport } from "./room-api";
 import { useOwnCamera } from "./use-own-camera";
 import { HANDED } from "./camera-test";
@@ -215,7 +215,15 @@ export function RoomShell({
       participantId === null ? Promise.resolve() : deliverCameraReport(fixtureId, token, { state: s, heartbeat }),
     [participantId, fixtureId, token],
   );
-  const camera = useOwnCamera(participantToken, joinOwnCamera, stamp, participantId, cameraEnds(state), report);
+  // A connection drop is reported naming this board and the player's colour (camera-loader.ts `watchRoomDrops`): the
+  // latest of both, read when the camera joins - useOwnCamera keeps the join it was first handed.
+  const side = snap.you.colour;
+  const cameraWhere = useRef({ fixtureId, side });
+  useEffect(() => {
+    cameraWhere.current = { fixtureId, side };
+  }, [fixtureId, side]);
+  const joinCamera = useCallback<JoinOwnCamera>((t) => joinOwnCamera(t, cameraWhere.current), []);
+  const camera = useOwnCamera(participantToken, joinCamera, stamp, participantId, cameraEnds(state), report);
   // D16: the pill is the opponent's OWN report, relayed by the server: a field of the snapshot, no meeting to read.
   const presence = cameraOn ? snap.opponentCamera : null;
   // T17B fix 2 (D19): move sounds, and their switch (D24: drawn in the player's own clock bar).

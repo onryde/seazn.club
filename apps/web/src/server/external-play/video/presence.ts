@@ -199,6 +199,7 @@ export async function applyPresenceEvent(db: AnySql, ev: RealtimeKitEvent, recei
             left_at        = case when fixture_video_presence.left_at is null then excluded.left_at else fixture_video_presence.left_at end,
             left_by        = case when fixture_video_presence.left_at is null then excluded.left_by else fixture_video_presence.left_by end,
             source         = 'webhook'`);
+    logStay("joined", ev.meetingId, board, ev.peerId, ev.joinedAt, null);
     return "applied";
   }
 
@@ -216,7 +217,15 @@ export async function applyPresenceEvent(db: AnySql, ev: RealtimeKitEvent, recei
           left_at        = case when fixture_video_presence.left_by = 'left' then fixture_video_presence.left_at else excluded.left_at end,
           left_by        = 'left',
           source         = 'webhook'`);
+  logStay("left", ev.meetingId, board, ev.peerId, ev.leftAt, "left");
   return "applied";
+}
+
+/** One info line per recorded join and leave, so a drop can be read off the log beside the browser's Sentry warning
+ *  (owner 2026-11-22: "we have logger and sentry"). Ids only - never the custom participant id (a person id) or a name.
+ *  `at` is the vendor's own stamp; `leftBy` is what the event says ('left' for a leave, null for a join). */
+function logStay(kind: "joined" | "left", meetingId: string, board: { fixtureId: string; side: Side }, peerId: string, at: Date, leftBy: "left" | null): void {
+  log.info({ meetingId, fixtureId: board.fixtureId, side: board.side, peerId, at: at.toISOString(), leftBy }, `presence: participant ${kind}`);
 }
 
 type Who = { meetingId: string; participantId: string; customParticipantId: string };

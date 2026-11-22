@@ -63,9 +63,10 @@ export function makeArbiterSerial(deps: ArbiterSerialDeps) {
   /** The answers whose connect has succeeded, by meeting key. */
   const kept = new Map<string, ArbiterJoinAnswer>();
 
-  /** A connect bounded by the step timeout; a late landing is left at once. Throws on failure or timeout. */
-  async function connectWith(answer: ArbiterJoinAnswer): Promise<ArbiterCameras> {
-    const connecting = deps.connect({ authToken: answer.authToken, players: answer.players });
+  /** A connect bounded by the step timeout; a late landing is left at once. Throws on failure or timeout. The board and
+   *  side ride along for the connection-drop report (camera-loader.ts `watchRoomDrops`). */
+  async function connectWith(answer: ArbiterJoinAnswer, fixtureId: string, side: ArbiterSide): Promise<ArbiterCameras> {
+    const connecting = deps.connect({ authToken: answer.authToken, players: answer.players, fixtureId, side });
     const joined = await within(connecting);
     if (joined === TIMED_OUT) {
       connecting.then((late) => void late.leave().catch(() => undefined), () => undefined);
@@ -93,7 +94,7 @@ export function makeArbiterSerial(deps: ArbiterSerialDeps) {
           let joined: ArbiterCameras | null = null;
           if (had !== undefined) {
             try {
-              joined = await connectWith(had);
+              joined = await connectWith(had, fixtureId, side);
             } catch {
               kept.delete(key); // evict, then ONE re-POST within this open
             }
@@ -102,7 +103,7 @@ export function makeArbiterSerial(deps: ArbiterSerialDeps) {
             if (closed) return;
             const fresh = await post(fixtureId, side);
             if (closed) return;
-            joined = await connectWith(fresh);
+            joined = await connectWith(fresh, fixtureId, side);
             kept.set(key, fresh);
           }
           cameras = joined;

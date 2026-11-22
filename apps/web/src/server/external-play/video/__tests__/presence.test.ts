@@ -295,6 +295,33 @@ describe.skipIf(!DB)("applyPresenceEvent", () => {
     expect((await rowOf(b.awayMeeting, q)).side).toBe("away");
   });
 
+  // Connection drops, with what we have (owner 2026-11-22): one info line per recorded join and leave, ids only. The
+  // expected values are the board's seed and the event's own stamps; leftBy is the event's kind (spec §6.2: a left is
+  // `left_by 'left'`; a joined closes nothing by itself).
+  it("logs one info line per recorded joined and left - meeting, board, side, peer, the stamp, leftBy - and none for an event we do not hold", async () => {
+    const info = vi.spyOn(log, "info");
+    try {
+      const b = await board();
+      const p = peer();
+      const ofThis = () => info.mock.calls.filter((c) => (c[0] as { meetingId?: string } | undefined)?.meetingId === b.awayMeeting);
+      await applyPresenceEvent(sql, joinedEv({ meetingId: b.awayMeeting, peerId: p, custom: b.away.personId, joinedAt: T0 }), at(SEC));
+      await applyPresenceEvent(sql, leftEv({ meetingId: b.awayMeeting, peerId: p, custom: b.away.personId, joinedAt: T0, leftAt: at(90 * SEC) }), at(91 * SEC));
+      expect(ofThis()).toEqual([
+        [{ meetingId: b.awayMeeting, fixtureId: b.fixtureId, side: "away", peerId: p, at: T0.toISOString(), leftBy: null }, "presence: participant joined"],
+        [{ meetingId: b.awayMeeting, fixtureId: b.fixtureId, side: "away", peerId: p, at: at(90 * SEC).toISOString(), leftBy: "left" }, "presence: participant left"],
+      ]);
+      // ids only: never the custom participant id (a person id) or a name
+      expect(JSON.stringify(ofThis())).not.toContain(b.away.personId);
+      // the empty case: a meeting we do not hold records nothing and logs no join
+      const stranger = `stranger-meeting-${randomUUID()}`;
+      const before = info.mock.calls.length;
+      expect(await applyPresenceEvent(sql, joinedEv({ meetingId: stranger, peerId: peer(), custom: "x", joinedAt: T0 }), at(SEC))).toBe("ignored");
+      expect(info.mock.calls.slice(before).filter((c) => (c[0] as { meetingId?: string } | undefined)?.meetingId === stranger)).toEqual([]);
+    } finally {
+      info.mockRestore();
+    }
+  });
+
   it("joined for a custom id nobody has on file: stored with a null participant and logged, never dropped", async () => {
     const b = await board();
     const p = peer();
