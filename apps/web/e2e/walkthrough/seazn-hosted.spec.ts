@@ -37,7 +37,10 @@ import { FAKE_CONNECT_MS, poolHoldProblem, releaseStreamSlot, takeWholePool } fr
 import { NAV_MS, seaznWalkClock } from "../helpers/seazn-hosted-clock";
 import { disposeFakePhones, pairPhoneOnFixture } from "../helpers/fake-capture-phone";
 import { EMPTY_JAR, expectContract, jobTokenFor, releaseStandInOrg, seedStandInOrg, type StandInOrg } from "../helpers/sponsor-relay-standin";
-import { playsHlsNatively, signedAddressPattern, stubFakePlaybackHost } from "../helpers/seazn-video-seed";
+import {
+  finishSeaznMatch, lockRecordings, playsHlsNatively, seedPlayableReplays, seedSeaznMatch, signedAddressPattern, signedEmbedPattern,
+  stubFakeEmbedHost, stubFakePlaybackHost,
+} from "../helpers/seazn-video-seed";
 import { routes } from "../../src/lib/routes";
 
 // ===========================================================================
@@ -449,4 +452,74 @@ test("Seazn pre-selected → a spectator opens the page before kick-off → Go l
   expect(broadcasts!.n, "no YouTube broadcast for the match").toBe(0);
   const kinds = await withDb((sql) => sql<{ destination_kind: string | null }[]>`select destination_kind from fixture_stream_sessions where fixture_id = ${rig.fixtureId}`);
   expect(kinds.map((k) => k.destination_kind), "the match's two sessions were both Seazn's").toEqual(["seazn", "seazn"]);
+});
+
+// ===========================================================================
+// Task 25: the Seazn replay
+// ===========================================================================
+// Once the replay move has made a playable copy of each recording, the match page offers every part in the replay host's player (an
+// embed frame, never the interim's <video>), labelled by its own number, and picking a part loads THAT part's signed embed. The move
+// itself (discovery and the copy, across a stop and a restart) is proved by Task 24's fake-clock usecase tests; this seeds its output
+// (helpers/seazn-video-seed.ts `seedPlayableReplays`: one playable row per locked recording) and drives the page. No Stop, tick or
+// grace wait in the browser. The address asserted is always the server's own (the fake replay host's signer), matched by a boolean so a
+// red never prints it; and our own route is never asked with a token. Gated as the walk is (this file runs in e2e-seazn), at 1280,
+// then the same page at 320 for the sideways-scroll and fit check.
+const REPLAY_SEED_MS = 60_000;
+test("Task 25: two playable replays read Part 1 and Part 2 in the replay host's frame, kept out of PostHog's recordings; picking Part 2 loads part 2's signed embed; no sideways scroll at 1280 or 320", async ({ page, baseURL }) => {
+  test.skip(process.env.SEAZN_HOSTED_LIVE !== "true", "needs a server and runner with SEAZN_HOSTED_LIVE=true (e2e.yml's e2e-seazn job)");
+  test.setTimeout(REPLAY_SEED_MS + NAV_MS + ONE_RE_READ_MS + 2 * NAV_MS);
+  expect(baseURL, "premise: the project names the server").toBeTruthy();
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const m = await seedSeaznMatch(page, { name: `Seazn Replay ${Date.now().toString(36)}`, live: true });
+  try {
+    await finishSeaznMatch(m);
+    const bunny = await seedPlayableReplays(m, await lockRecordings(m, 2));
+    expect(bunny, "premise: two playable parts").toHaveLength(2);
+    const host = await stubFakeEmbedHost(page);
+    // Our own requests: none may carry the host's token or its expiry (the island never puts an address in a query).
+    const ownQueries: string[] = [];
+    const ownHost = new URL(baseURL!).host;
+    page.on("request", (r) => {
+      const u = new URL(r.url());
+      if (u.host === ownHost) ownQueries.push(u.search);
+    });
+    await page.goto(m.publicPath);
+    await dismissCookieBanner(page);
+
+    const region = page.getByTestId("seazn-video");
+    const tabs = region.getByRole("tab");
+    const partLabel = (n: number) => pub("seaznVideo.part").replace("{n}", String(n));
+    await expect(tabs, "the answer lists both parts, each by its own number").toHaveText([partLabel(1), partLabel(2)], { timeout: ONE_RE_READ_MS });
+    await expect(tabs.first(), "part 1 is picked first").toHaveAttribute("aria-selected", "true");
+    const frame = region.getByTestId("seazn-replay-frame");
+    await expect(frame, "one frame").toHaveCount(1);
+    await expect(region.locator("video"), "a playable copy plays in the host's frame, never the interim player").toHaveCount(0);
+    for (const target of [region, page.getByTestId("seazn-replay-frame-box"), frame]) await expect(target).toHaveClass(/\bph-no-capture\b/);
+    const frameHolds = (bunnyId: string) =>
+      frame.evaluate((el, source) => new RegExp(source).test((el as HTMLIFrameElement).src), signedEmbedPattern(bunnyId).source);
+    await expect.poll(() => frameHolds(bunny[0]!), { message: "the frame holds part 1's signed embed, the fake host's own" }).toBe(true);
+    await expect.poll(() => host.requests.some((u) => signedEmbedPattern(bunny[0]!).test(u)), { message: "the browser loaded part 1's embed" }).toBe(true);
+
+    await tabs.nth(1).click();
+    await expect(tabs.nth(1), "part 2 is picked").toHaveAttribute("aria-selected", "true");
+    await expect.poll(() => frameHolds(bunny[1]!), { message: "the frame now holds part 2's signed embed" }).toBe(true);
+    await expect.poll(() => host.requests.some((u) => signedEmbedPattern(bunny[1]!).test(u)), { message: "the browser loaded part 2's embed" }).toBe(true);
+    await expect(frame, "still one frame").toHaveCount(1);
+    await expect(region.locator("video")).toHaveCount(0);
+    expect(ownQueries.length, "premise: the page made requests of its own").toBeGreaterThan(0);
+    expect(ownQueries.filter((q) => /token|expires/i.test(q)).length, "no request of ours carries a token or an expiry").toBe(0);
+
+    await expectNoHorizontalScroll(page);
+    for (const width of [1280, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      await expectNoHorizontalScroll(page);
+      const box = await page.getByTestId("seazn-replay-frame-box").boundingBox();
+      expect(box, `${width}: the frame's box is laid out`).not.toBeNull();
+      expect(box!.x, `${width}: inside the left edge`).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width, `${width}: inside the right edge`).toBeLessThanOrEqual(width);
+      expect(box!.height, `${width}: the stage keeps its 200 px floor`).toBeGreaterThanOrEqual(200);
+    }
+  } finally {
+    await finishSeaznMatch(m);
+  }
 });

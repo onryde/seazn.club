@@ -21,6 +21,7 @@ import { expect, type Page } from "@playwright/test";
 import { randomBytes } from "node:crypto";
 import { activeOrg, addEntrantsViaApi, apiJson, createStageAndGenerate, setOrgPlanBySql, withDb } from "../helpers";
 import { routes } from "../../src/lib/routes";
+import { FAKE_REPLAY_EMBED_HOST, FAKE_REPLAY_LENGTH_SECONDS, FAKE_REPLAY_LIBRARY_ID } from "../../src/server/video/replay-fake";
 
 /** A Seazn session row and the uid its programme input will carry once live (`goLive`). */
 export interface SeaznSession {
@@ -152,3 +153,43 @@ export async function stubFakePlaybackHost(page: Page, o: { healthy?: boolean } 
  *  depends on its build, so the specs assert both paths rather than assume one. */
 export const playsHlsNatively = (page: Page): Promise<boolean> =>
   page.evaluate(() => document.createElement("video").canPlayType("application/vnd.apple.mpegurl") !== "");
+
+/** Task 25: the replay move's PLAYABLE copy of each locked recording (`lockRecordings`), as the move leaves it (V542's
+ *  `fixture_video_replays` row: the recording's uid, a Bunny video, verified, the fake's length), parts 1..n in the order given (the
+ *  recording order). The move itself is proved in vitest (seazn-replays.test.ts and seazn-video-replays.test.ts drive discovery and
+ *  the move onto the replay fake, across a stop and a restart); what the specs that use this prove is what the PAGE does with a
+ *  playable copy. The session must have ended (`finishSeaznMatch`). Returns the Bunny video ids, part 1 first. */
+export async function seedPlayableReplays(m: SeaznMatch, recordingIds: readonly string[]): Promise<string[]> {
+  return withDb(async (sql) => {
+    const [ended] = await sql<{ state: string }[]>`select state from fixture_stream_sessions where id = ${m.sessionId}`;
+    expect(ended?.state, "premise: the session has ended (`finishSeaznMatch`)").toBe("completed");
+    const ids: string[] = [];
+    for (const [i, cfVideoId] of recordingIds.entries()) {
+      const bunnyId = `e2e-bunny-${randomBytes(6).toString("hex")}-${i + 1}`;
+      const [row] = await sql<{ id: string }[]>`
+        insert into fixture_video_replays (org_id, session_id, fixture_id, cf_video_id, recorded_at, part_no, state, bunny_video_id, verified_at, length_seconds)
+        select ${m.orgId}, ${m.sessionId}, ${m.fixtureId}, v.cf_video_id, v.locked_at, ${i + 1}, 'playable', ${bunnyId}, now(), ${FAKE_REPLAY_LENGTH_SECONDS}
+          from seazn_locked_videos v where v.cf_video_id = ${cfVideoId}
+        returning id`;
+      expect(row, `premise: recording ${i + 1} is locked (\`lockRecordings\`)`).toBeTruthy();
+      ids.push(bunnyId);
+    }
+    return ids;
+  });
+}
+
+/** The address the fake replay host signs for a Bunny video: `https://embed.fake.invalid/embed/<library>/<video>?token=<64 hex>&expires=<s>`
+ *  (replay-fake.ts `signedEmbed`, from its own declarations). */
+export const signedEmbedPattern = (bunnyId: string): RegExp =>
+  new RegExp(`^https://${FAKE_REPLAY_EMBED_HOST.replace(/\./g, "\\.")}/embed/${FAKE_REPLAY_LIBRARY_ID}/${bunnyId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\?token=[0-9a-f]{64}&expires=\\d+$`);
+
+/** Answers the fake replay host's embed page (`embed.fake.invalid` never resolves) with a blank page, and records every request made
+ *  to it. The browser's stand-in for the host ONLY: the signed address under test is the real server's. */
+export async function stubFakeEmbedHost(page: Page): Promise<{ requests: string[] }> {
+  const requests: string[] = [];
+  await page.route(new RegExp(`^https://${FAKE_REPLAY_EMBED_HOST.replace(/\./g, "\\.")}/`), async (route) => {
+    requests.push(route.request().url());
+    return route.fulfill({ status: 200, contentType: "text/html", body: "<!doctype html><title>replay</title><body style=\"margin:0;background:#000\"></body>" });
+  });
+  return { requests };
+}
