@@ -40,4 +40,4 @@ A withdrawal is not final. Choose **Reinstate** on the withdrawn row and the ent
 
 ## Entry fees
 
-Entry fees and refunds belong to registration. See [card entry fees](/help/registration/card-payments).
+Entry fees and refunds belong to registration. See [refunds and disputes](/help/registration/refunds-and-disputes).

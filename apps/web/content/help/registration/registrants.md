@@ -2,7 +2,7 @@
 title: Managing registrants
 description: See who has registered, approve or withdraw entries, mark fees paid, place solo sign-ups on teams and export the list.
 order: 2
-related: registration/open-registration, registration/waitlist, registration/reference-numbers, registration/card-payments
+related: registration/open-registration, registration/waitlist, registration/reference-numbers, registration/card-payments, registration/refunds-and-disputes
 ---
 
 The **Registrants** tab is your list of everyone who has entered your competition. Open your competition, choose **Registration**, then **Registrants**. It shows every entry across all divisions, with the player or team, the division, the **Status**, the **Payment** and when it was submitted.
@@ -27,7 +27,7 @@ From a row you can:
 - **Mark paid** when a player has paid you in cash or by bank transfer. On a division that **Auto-confirms**, the button in the confirmation reads **Mark paid & confirm** and the entry becomes confirmed. With **Manual approval** it reads **Mark paid**, the entry shows **Paid**, and it still needs your **Approve**.
 - **Send payment reminder** to email a player whose fee is still owed. You can send up to 5 in any 24 hours for one entry.
 - **Resend confirmation email** if a player lost theirs.
-- **Withdraw** an entry. It asks you to confirm, frees the place for the waiting list and applies the [refund rules](/help/registration/card-payments#refunds).
+- **Withdraw** an entry. It asks you to confirm, frees the place for the waiting list and applies the [refund rules](/help/registration/refunds-and-disputes#refunds).
 - **Promote from waitlist** on a waitlisted entry. It does not check the division's capacity. See [the waitlist](/help/registration/waitlist).
 - **Refund** a paid card entry. The entry keeps its place.
 

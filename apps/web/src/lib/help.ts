@@ -30,6 +30,7 @@ export const HELP_ARTICLE_SLUGS = [
   "registration/open-registration",
   "registration/registrants",
   "registration/card-payments",
+  "registration/refunds-and-disputes",
   "registration/reference-numbers",
   "registration/waitlist",
   "registration/youth",
