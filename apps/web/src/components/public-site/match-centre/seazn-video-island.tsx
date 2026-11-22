@@ -6,9 +6,10 @@
 //   - no live, one or more `hls` parts (the interim Cloudflare recording, signed from the moment the session's recording is locked):
 //     the parts in `partNo` order, ONE player at a time, with a picker ("Part {n}") only when there are two or more; the island keeps
 //     looking every 30 s, so a second Go live (after half-time, or a failed run) turns the page to the new live player without a reload;
-//   - nothing to show (not yet live, ended with no recording signed yet): nothing renders, and the island keeps looking (backing off,
-//     and stopping once the fixture is settled: Phase 1 review I2), so a page opened before kick-off turns to the live player without
-//     a reload. No read while the tab is hidden; one when it is shown again.
+//   - nothing to show (not yet live, ended with no recording signed yet): nothing renders, and the island keeps looking: every 30 s
+//     near kick-off or while the match is active, else backing off to 60 s (review N1), and stopping once the fixture is settled
+//     (review I2). So a page opened before kick-off turns to the live player without a reload. No read while the tab is hidden; one
+//     when it is shown again.
 // `embed` parts are the replay host's own player (Task 25) and have no rendering here yet.
 //
 // WHEN to ask again is the schedule's (seazn-video-schedule.ts), the loop's is seazn-video-poll.ts, and how an address reaches the
@@ -175,17 +176,26 @@ export interface SeaznVideoIslandProps {
   /** When the fixture is settled (ISO; the page's plan, seazn-video-plan.ts): an empty answer from then on stops the reads (Phase 1
    *  review I2). Absent or null: the reads only back off. */
   settledAt?: string | null;
+  /** Review N1, from the page's plan (ISO): the fixture's kick-off, and until when it counts as active (in play, or a Seazn session
+   *  warming or live, when the page was drawn). Either one holds the 30 s floor through empty answers. Absent or null: cold. */
+  kickoffAt?: string | null;
+  activeUntil?: string | null;
   /** A player is expected (Phase 1 visual D1): until the first answer, hold the player's box. An answer with nothing to show
    *  collapses it. Absent: nothing is drawn before an answer (a fixture with no Seazn session yet). */
   reserve?: boolean;
 }
 
-export function SeaznVideoIsland({ fixtureId, endpoint = "public", labels, initial, settledAt = null, reserve = false }: SeaznVideoIslandProps) {
+export function SeaznVideoIsland({
+  fixtureId, endpoint = "public", labels, initial, settledAt = null, kickoffAt = null, activeUntil = null, reserve = false,
+}: SeaznVideoIslandProps) {
   const [video, setVideo] = useState<PublicFixtureVideo | null>(initial ?? null);
   const [epoch, setEpoch] = useState(0);
   const pollRef = useRef<VideoPoll | null>(null);
   // Not a date: never settled (a NaN settle time compares false, so the loop only backs off).
   const settledAtMs = settledAt === null ? null : Date.parse(settledAt);
+  // Not a date: no window (the schedule reads a NaN hint as cold).
+  const kickoffAtMs = kickoffAt === null ? null : Date.parse(kickoffAt);
+  const activeUntilMs = activeUntil === null ? null : Date.parse(activeUntil);
 
   useEffect(() => {
     // The page's visibility is the document's (the loop's default): no read while the tab is hidden.
@@ -196,13 +206,15 @@ export function SeaznVideoIsland({ fixtureId, endpoint = "public", labels, initi
         if (rebuild) setEpoch((e) => e + 1);
       },
       settledAtMs,
+      kickoffAtMs,
+      activeUntilMs,
     });
     pollRef.current = poll;
     return () => {
       poll.stop();
       pollRef.current = null;
     };
-  }, [fixtureId, endpoint, settledAtMs]);
+  }, [fixtureId, endpoint, settledAtMs, kickoffAtMs, activeUntilMs]);
 
   const refresh = useCallback(() => pollRef.current?.refreshSoon(), []);
   return <SeaznVideoStage video={video} epoch={epoch} labels={labels} onFatal={refresh} reserve={reserve} />;

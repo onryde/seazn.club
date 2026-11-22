@@ -410,30 +410,80 @@ function fakePage(hidden = false) {
   return { visibility, listeners, hide: () => set(true), show: () => set(false) };
 }
 
-describe("review I2: an empty answer backs off; anything shown resets it", () => {
-  it("EMPTY CASE FIRST: empty answers in a row are read at 30 s, then 60, 120, 240, then every 5 min", async () => {
+// The fix-wave re-review's N1 (2026-11-22): the ladder is 30 s then 60 s (no 5 min: a viewer watching saw Go live that late), and a
+// HOT page (an hour either side of kick-off, or active when drawn) holds the floor. N6: a failed read climbs the same ladder.
+describe("review I2 + N1: an empty answer backs off to 60 s; anything shown resets it", () => {
+  it("EMPTY CASE FIRST: empty answers in a row are read at 30 s, then every 60 s", async () => {
     const r = timed(EMPTY);
     const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {} });
-    await vi.advanceTimersByTimeAsync(30_000 + 60_000 + 120_000 + 240_000 + 2 * 5 * MIN);
-    expect(r.at).toEqual([0, 30_000, 90_000, 210_000, 450_000, 750_000, 1_050_000]);
+    await vi.advanceTimersByTimeAsync(30_000 + 4 * 60_000);
+    expect(r.at).toEqual([0, 30_000, 90_000, 150_000, 210_000, 270_000]);
     poll.stop();
   });
 
   it("a live after the empties puts the page back on the floor, and the empty answer after it (the Stop) starts the backoff again at 30 s", async () => {
     const r = timed(EMPTY, EMPTY, EMPTY, liveFor(60 * MIN), EMPTY, EMPTY);
     const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {} });
-    await vi.advanceTimersByTimeAsync(210_000 + 30_000 + 30_000 + 60_000);
-    // 0, 30, 90 empty (next 120); 210 live (next 30); 240 empty again, the first in a row (next 30); 270 the second (next 60): 330.
-    expect(r.at).toEqual([0, 30_000, 90_000, 210_000, 240_000, 270_000, 330_000]);
+    await vi.advanceTimersByTimeAsync(150_000 + 30_000 + 30_000 + 60_000);
+    // 0, 30, 90 empty (next 60); 150 live (next 30); 180 empty again, the first in a row (next 30); 210 the second (next 60): 270.
+    expect(r.at).toEqual([0, 30_000, 90_000, 150_000, 180_000, 210_000, 270_000]);
     poll.stop();
   });
 
-  it("a failed read neither counts as empty nor resets the run: it retries at the floor and the backoff goes on where it was", async () => {
+  it("a failed read neither counts as empty nor resets the run: it retries on its own ladder and the empty backoff goes on where it was", async () => {
     const r = timed(EMPTY, EMPTY, new Error("offline"), EMPTY);
     const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {} });
-    await vi.advanceTimersByTimeAsync(90_000 + 30_000 + 120_000);
-    // 0 and 30 empty (next 60); 90 fails (retry 30); 120 empty, the third in a row (next 120): 240.
-    expect(r.at).toEqual([0, 30_000, 90_000, 120_000, 240_000]);
+    await vi.advanceTimersByTimeAsync(90_000 + 30_000 + 60_000);
+    // 0 and 30 empty (next 60); 90 fails, the first failure (retry 30); 120 empty, the third in a row (next 60): 180.
+    expect(r.at).toEqual([0, 30_000, 90_000, 120_000, 180_000]);
+    poll.stop();
+  });
+});
+
+describe("review N6: failed reads back off on the same ladder, capped at 60 s", () => {
+  it("EMPTY CASE FIRST: failures in a row retry at 30 s, then every 60 s; a good answer resets the run, so the next failure is 30 s again", async () => {
+    const boom = new Error("429");
+    const r = timed(boom, boom, boom, boom, liveFor(60 * MIN), boom, boom);
+    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {} });
+    await vi.advanceTimersByTimeAsync(30_000 + 60_000 + 60_000 + 60_000 + 30_000 + 30_000);
+    // 0, 30, 90, 150 fail (next 30, 60, 60, 60); 210 live (next 30); 240 fails, the first since (next 30); 270 the second (next 60).
+    expect(r.at).toEqual([0, 30_000, 90_000, 150_000, 210_000, 240_000, 270_000]);
+    poll.stop();
+  });
+
+  it("a hot page's failures back off too (an outage is not news): the hints never hold a failure at the floor", async () => {
+    const boom = new Error("500");
+    const r = timed(boom);
+    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {}, kickoffAtMs: T0.getTime(), activeUntilMs: T0.getTime() + 60 * MIN });
+    await vi.advanceTimersByTimeAsync(30_000 + 2 * 60_000);
+    expect(r.at).toEqual([0, 30_000, 90_000, 150_000]);
+    poll.stop();
+  });
+});
+
+describe("review N1: a hot page holds the floor through empty answers", () => {
+  it("EMPTY CASE FIRST: kick-off 10 min away — every empty answer is read again at 30 s, deep into the streak", async () => {
+    const r = timed(EMPTY);
+    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {}, kickoffAtMs: T0.getTime() + 10 * MIN });
+    await vi.advanceTimersByTimeAsync(5 * MIN);
+    expect(r.at).toEqual(Array.from({ length: 11 }, (_, i) => i * 30_000));
+    poll.stop();
+  });
+
+  it("the hour after kick-off ends: the read at its last instant is still hot (30 s), the next is cold and backs off (60 s)", async () => {
+    const r = timed(EMPTY);
+    // Kick-off 58 min ago: the window ends at T0 + 120 s.
+    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {}, kickoffAtMs: T0.getTime() - 58 * MIN });
+    await vi.advanceTimersByTimeAsync(210_000);
+    expect(r.at).toEqual([0, 30_000, 60_000, 90_000, 120_000, 150_000, 210_000]);
+    poll.stop();
+  });
+
+  it("active until 90 s from now: the floor until then, the backoff from that instant", async () => {
+    const r = timed(EMPTY);
+    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {}, activeUntilMs: T0.getTime() + 90_000 });
+    await vi.advanceTimersByTimeAsync(150_000);
+    expect(r.at).toEqual([0, 30_000, 60_000, 90_000, 150_000]);
     poll.stop();
   });
 });
@@ -463,7 +513,7 @@ describe("review I2: a settled fixture", () => {
     const r = timed(EMPTY);
     const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {}, settledAtMs: null });
     await vi.advanceTimersByTimeAsync(60 * MIN);
-    expect(r.at.length, "30, 60, 120, 240 s, then every 5 min for the rest of the hour").toBe(4 + Math.floor((60 * MIN - 450_000) / (5 * MIN)) + 1);
+    expect(r.at.length, "at 0 and 30 s, then every 60 s for the rest of the hour").toBe(2 + Math.floor((60 * MIN - 30_000) / 60_000));
     expect(vi.getTimerCount()).toBe(1);
     poll.stop();
   });
@@ -506,23 +556,23 @@ describe("review I2: a hidden page reads nothing", () => {
     const page = fakePage();
     const r = timed(EMPTY);
     const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {}, visibility: page.visibility });
-    await vi.advanceTimersByTimeAsync(210_000);
-    expect(r.at, "premise: the fourth empty answer, whose backoff is 240 s").toEqual([0, 30_000, 90_000, 210_000]);
-    // A blink 5 s after that read: the next read is the floor from it (240 s), not the backoff's 450 s, and not at once.
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(r.at, "premise: the third empty answer, whose backoff is 60 s").toEqual([0, 30_000, 90_000]);
+    // A blink 5 s after that read: the next read is the floor from it (120 s), not the backoff's 150 s, and not at once.
     await vi.advanceTimersByTimeAsync(5_000);
     page.hide();
     page.show();
     await vi.advanceTimersByTimeAsync(24_999);
-    expect(r.at, "not before the floor").toHaveLength(4);
+    expect(r.at, "not before the floor").toHaveLength(3);
     await vi.advanceTimersByTimeAsync(1);
-    expect(r.at, "at the floor from the last read").toEqual([0, 30_000, 90_000, 210_000, 240_000]);
+    expect(r.at, "at the floor from the last read").toEqual([0, 30_000, 90_000, 120_000]);
     // Now away for a minute: on return, at once.
     await vi.advanceTimersByTimeAsync(10_000);
     page.hide();
     await vi.advanceTimersByTimeAsync(MIN);
     page.show();
     await flush();
-    expect(r.at.at(-1), "at once on return").toBe(250_000 + MIN);
+    expect(r.at.at(-1), "at once on return").toBe(130_000 + MIN);
     poll.stop();
   });
 
@@ -564,15 +614,15 @@ describe("review I2: a hidden page reads nothing", () => {
       });
     });
     const poll = startVideoPoll({ fetchVideo, onVideo: () => {}, visibility: page.visibility });
-    await vi.advanceTimersByTimeAsync(210_000);
-    expect(at, "premise: the fourth read is in flight").toEqual([0, 30_000, 90_000, 210_000]);
+    await vi.advanceTimersByTimeAsync(150_000);
+    expect(at, "premise: the fourth read is in flight").toEqual([0, 30_000, 90_000, 150_000]);
     page.hide();
     page.show();
     release!(EMPTY);
     await flush();
-    // The fourth empty answer's backoff is 240 s; the page was looked at again during the read, so the next one is a floor after it.
+    // The fourth empty answer's backoff is 60 s; the page was looked at again during the read, so the next one is a floor after it.
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(at).toEqual([0, 30_000, 90_000, 210_000, 240_000]);
+    expect(at).toEqual([0, 30_000, 90_000, 150_000, 180_000]);
     poll.stop();
   });
 

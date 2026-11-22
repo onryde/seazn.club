@@ -34,7 +34,7 @@ import {
   AUTO_STOP_AFTER_RESULT_SECONDS, CLOUDFLARE_STORED_MICROS_PER_MINUTE, ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, FINALISATION_GRACE_SECONDS, MAX_DURATION_MINUTES, PHONE_BEAT_RETENTION_HOURS, PHONE_LOST_LIVE_MINUTES,
   PROVISION_TIMEOUT_SECONDS, RECORDING_RETENTION_DAYS,
   REQUESTED_TIMEOUT_SECONDS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, SAMPLE_RETENTION_DAYS, STALE_HEARTBEAT_SECONDS, WARMING_TIMEOUT_MINUTES,
-  relayEnvironment,
+  relayEnvironment, seaznHostedReplay,
 } from "@/server/relay/config";
 import { RECORDINGS_PER_SESSION } from "@/server/relay/domain/credits";
 import { machineNameFor } from "@/server/relay/domain/runner";
@@ -1788,6 +1788,49 @@ describe.skipIf(!HAS_DB)("Seazn-hosted video Task 18: the sweep holds Seazn prog
     expect(r.ingest.deletedVideos).toEqual([]);
     expect(heldReports(), "no second alert for the same recording").toHaveLength(alerts ? 1 : 0);
     expect(await alertRows(programmeVideo)).toHaveLength(alerts ? 1 : 0);
+  });
+
+  // Phase 1 re-review N3: `seaznHostedReplay` throws on a value other than true/false (config.ts), and the sweep read it bare, so one
+  // typo in the env aborted the whole pass after its deletes — no video facts, no summaries, no purges. The sweep now reads it as
+  // off, with one warning per pass; the HOLD never read it, so nothing is deleted either way.
+  const flagWarnings = (warn: { mock: { calls: unknown[][] } }) =>
+    warn.mock.calls.filter(([, msg]) => typeof msg === "string" && /held-recording alert is off this pass/.test(msg));
+  it.each([
+    { live: "true", replay: "yes" },   // the typo on REPLAY itself
+    { live: "on", replay: "true" },    // REPLAY needs LIVE, so a typo there is read too
+  ])("review N3: LIVE $live, REPLAY $replay — a malformed flag with a recording past the promise: the pass completes (video facts written), nothing alerted or marked, ONE warning", async ({ live, replay }) => {
+    const { r, programmeVideo } = await endedComposed({ seazn: true, programmeAge: "old" });
+    vi.stubEnv("SEAZN_HOSTED_LIVE", live);
+    vi.stubEnv("SEAZN_HOSTED_REPLAY", replay);
+    expect(() => seaznHostedReplay(), "PREMISE: the flag reader throws on this value").toThrow();
+    sentry.captureError.mockClear();
+    const warn = vi.spyOn(log, "warn");
+    try {
+      const res = await sweep(r);
+      expect(res).toMatchObject({ seaznHeld: 1, seaznHeldPastPromise: 1, videosDeleted: 0 });
+      const facts = await sql<{ uid: string }[]>`
+        select payload->>'videoUid' as uid from fixture_stream_events where session_id = ${r.sessionId} and type = 'recording_finalised'`;
+      expect(facts.map((x) => x.uid), "step 5 ran after the alert step: the held recording's video fact is written").toEqual([programmeVideo]);
+      expect(heldReports(), "read as off: no alert").toEqual([]);
+      expect(await alertRows(programmeVideo), "and no mark").toEqual([]);
+      expect(flagWarnings(warn), "one warning for the pass").toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("review N3: EMPTY CASE — a malformed flag with nothing past the promise is never read: no warning", async () => {
+    const { r } = await endedComposed({ seazn: true, programmeAge: "fresh" });
+    vi.stubEnv("SEAZN_HOSTED_LIVE", "true");
+    vi.stubEnv("SEAZN_HOSTED_REPLAY", "yes");
+    const warn = vi.spyOn(log, "warn");
+    try {
+      const res = await sweep(r);
+      expect(res).toMatchObject({ seaznHeld: 1, seaznHeldPastPromise: 0 });
+      expect(flagWarnings(warn)).toHaveLength(0);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("review I3: a recording held silently while Phase 2 was off IS alerted, once, on the first pass after Phase 2 turns on", async () => {

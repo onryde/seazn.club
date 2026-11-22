@@ -12,7 +12,10 @@
 import { describe, expect, it } from "vitest";
 import { SEAZN_TOKEN_REFRESH_BEFORE_SECONDS } from "@/server/relay/config";
 import type { PublicFixtureVideo } from "@/server/api-v1/schemas";
-import { SEAZN_VIDEO_POLL_CEILING_MS, SEAZN_VIDEO_POLL_FLOOR_MS, type VideoReadContext, nextVideoFetchMs as nextVideoFetchAt } from "../seazn-video-schedule";
+import {
+  SEAZN_VIDEO_KICKOFF_WINDOW_MS, SEAZN_VIDEO_POLL_CEILING_MS, SEAZN_VIDEO_POLL_FLOOR_MS, type VideoReadContext, backoffMs, isHotRead,
+  nextVideoFetchMs as nextVideoFetchAt,
+} from "../seazn-video-schedule";
 
 const NOW = new Date("2026-11-21T12:00:00.000Z");
 const MIN = 60_000;
@@ -99,16 +102,23 @@ describe("nextVideoFetchMs: replay only", () => {
 });
 
 // Phase 1 review I2: a 30 s poll forever, on every Seazn fixture page, open or forgotten. The backoff and the stop below are the fix
-// brief's rule (30 s -> 60 s -> 120 s, capped at 5 min; stop once settled), typed here from the brief, never read off the function.
-describe("review I2: nothing to show backs off", () => {
-  it("the ceiling IS the brief's 5 min", () => {
-    expect(SEAZN_VIDEO_POLL_CEILING_MS).toBe(5 * MIN);
+// brief's rule, typed here from the brief, never read off the function. The fix-wave re-review's N1 (2026-11-22) moved the ceiling to
+// 60 s (a viewer watching the page saw Go live up to 5 min late) and keeps the floor while the match is HOT: in play, within an hour
+// either side of its kick-off, or a Seazn session warming or live (the plan's `activeUntil`).
+describe("review I2 + N1: nothing to show backs off, to 60 s, unless the match is hot", () => {
+  const empty = { live: null, replay: [] };
+  it("the ceiling IS the re-review's 60 s, and the kick-off window its hour", () => {
+    expect(SEAZN_VIDEO_POLL_CEILING_MS).toBe(60_000);
+    expect(SEAZN_VIDEO_KICKOFF_WINDOW_MS).toBe(60 * MIN);
   });
 
-  it("EMPTY CASE FIRST: the first empty answer is the 30 s floor; each one in a row doubles it, to the 5 min ceiling and no further", () => {
-    const empty = { live: null, replay: [] };
+  it("EMPTY CASE FIRST: no kick-off and nothing active — the first empty answer is the 30 s floor, then 60 s, and never more", () => {
     const waits = [1, 2, 3, 4, 5, 6, 20].map((emptyStreak) => nextVideoFetchAt(empty, { ...OPEN, emptyStreak }));
-    expect(waits).toEqual([30_000, 60_000, 120_000, 240_000, 5 * MIN, 5 * MIN, 5 * MIN]);
+    expect(waits).toEqual([30_000, 60_000, 60_000, 60_000, 60_000, 60_000, 60_000]);
+  });
+
+  it("backoffMs (empty answers, and failed reads: N6) is the same ladder: 30 s, then 60 s for good; a streak of 0 is the floor", () => {
+    expect([0, 1, 2, 3, 10, 1000].map(backoffMs)).toEqual([30_000, 30_000, 60_000, 60_000, 60_000, 60_000]);
   });
 
   it("an answer that shows something is read at the floor whatever came before it: a live, and an hls replay", () => {
@@ -116,6 +126,42 @@ describe("review I2: nothing to show backs off", () => {
       expect(nextVideoFetchAt({ live: live(60 * MIN), replay: [] }, { ...OPEN, emptyStreak }), `live, streak ${emptyStreak}`).toBe(SEAZN_VIDEO_POLL_FLOOR_MS);
       expect(nextVideoFetchAt({ live: null, replay: [part(1, 60 * MIN)] }, { ...OPEN, emptyStreak }), `hls, streak ${emptyStreak}`).toBe(SEAZN_VIDEO_POLL_FLOOR_MS);
     }
+  });
+
+  it("N1: within an hour either side of kick-off an empty answer holds the floor, deep into a streak; a ms outside the hour it backs off", () => {
+    const k = (offsetMs: number): VideoReadContext => ({ ...OPEN, emptyStreak: 5, kickoffAtMs: NOW.getTime() + offsetMs });
+    let checked = 0;
+    for (const [offset, want] of [
+      [60 * MIN, 30_000], [10 * MIN, 30_000], [0, 30_000], [-10 * MIN, 30_000], [-60 * MIN, 30_000],
+      [60 * MIN + 1, 60_000], [-60 * MIN - 1, 60_000], [5 * 60 * MIN, 60_000],
+    ] as const) {
+      expect(nextVideoFetchAt(empty, k(offset)), `kick-off ${offset / MIN} min from now`).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(8);
+    expect(nextVideoFetchAt(empty, { ...OPEN, emptyStreak: 5, kickoffAtMs: Number.NaN }), "a kick-off that is not a date is no window").toBe(60_000);
+  });
+
+  it("N1: while the match is active (in play, or a Seazn session warming or live, when the page was drawn) an empty answer holds the floor, up to the plan's bound", () => {
+    const a = (offsetMs: number): VideoReadContext => ({ ...OPEN, emptyStreak: 5, activeUntilMs: NOW.getTime() + offsetMs });
+    expect(nextVideoFetchAt(empty, a(90 * MIN)), "active for 90 more minutes").toBe(30_000);
+    expect(nextVideoFetchAt(empty, a(1)), "1 ms left").toBe(30_000);
+    expect(nextVideoFetchAt(empty, a(0)), "the bound itself: no longer active").toBe(60_000);
+    expect(nextVideoFetchAt(empty, a(-MIN)), "past it").toBe(60_000);
+  });
+
+  it("N1: hot outranks settled — something may still be happening — and cold-and-settled still stops", () => {
+    const settledNow = { ...OPEN, emptyStreak: 5, settledAtMs: NOW.getTime() - MIN };
+    expect(nextVideoFetchAt(empty, settledNow), "PREMISE: cold and settled stops").toBeNull();
+    expect(nextVideoFetchAt(empty, { ...settledNow, kickoffAtMs: NOW.getTime() }), "near kick-off").toBe(30_000);
+    expect(nextVideoFetchAt(empty, { ...settledNow, activeUntilMs: NOW.getTime() + MIN }), "active").toBe(30_000);
+  });
+
+  it("isHotRead: EMPTY CASE FIRST — no kick-off and no active bound is cold; either window alone is hot", () => {
+    expect(isHotRead({ nowMs: NOW.getTime() })).toBe(false);
+    expect(isHotRead({ nowMs: NOW.getTime(), kickoffAtMs: null, activeUntilMs: null })).toBe(false);
+    expect(isHotRead({ nowMs: NOW.getTime(), kickoffAtMs: NOW.getTime() + SEAZN_VIDEO_KICKOFF_WINDOW_MS })).toBe(true);
+    expect(isHotRead({ nowMs: NOW.getTime(), activeUntilMs: NOW.getTime() + 1 })).toBe(true);
   });
 });
 
@@ -127,7 +173,7 @@ describe("review I2: a SETTLED fixture (decided, past the window a new Go live c
     expect(nextVideoFetchAt(empty, settled(-10 * MIN)), "settled 10 min ago").toBeNull();
     expect(nextVideoFetchAt(empty, settled(0)), "settled this instant").toBeNull();
     expect(nextVideoFetchAt(empty, settled(1)), "1 ms short of it: the first empty answer's floor").toBe(30_000);
-    expect(nextVideoFetchAt(empty, settled(1, 3)), "and its backoff").toBe(120_000);
+    expect(nextVideoFetchAt(empty, settled(1, 3)), "and its backoff").toBe(60_000);
   });
 
   it("a live on a settled fixture is still read at the floor (a Stop must reach the page)", () => {

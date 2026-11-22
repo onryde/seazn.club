@@ -30,6 +30,7 @@ import { sql } from "@/lib/db";
 import { ReplayEmbed } from "@/components/public-site/match-centre/replay-embed";
 import { SeaznVideoIsland } from "@/components/public-site/match-centre/seazn-video-island";
 import { fixtureStreamTarget } from "@/server/usecases/stream-codes";
+import { MAX_DURATION_MINUTES } from "@/server/relay/config";
 import { seaznVideoPlan } from "@/server/video/seazn-video-plan";
 import { type SeaznRig, installSeaznEnv, live, seaznRig, stopAndSettle } from "@/server/video/__tests__/_seazn-session-rig";
 import { connect } from "@/server/youtube/__tests__/_connect-rig";
@@ -117,6 +118,30 @@ describe.skipIf(!HAS_DB)("the public match page's replay slot, through the real 
     expect(plan.player === "seazn" ? plan.settledAt : undefined, "PREMISE: the plan settles it").toBeInstanceOf(Date);
     const decided = slots(await pageTree(f)).island;
     expect(decided[0]!.props.settledAt, "decided: the plan's own instant, as the client reads it").toBe((plan as { settledAt: Date }).settledAt.toISOString());
+  });
+
+  it("review N1: the island is handed the plan's poll hints through the REAL loader and plan — none for a decided fixture with no kick-off time; the kick-off and an active bound (MAX_DURATION_MINUTES from the render) once it is in play", async () => {
+    const r = await seaznRig();
+    orgs.push(r.auth.orgId);
+    const f = r.fixtureIds[0];
+    const sid = await live(r, f, r.seazn);
+    await stopAndSettle(r, f, sid);
+    await setStatus(f, "decided");
+    await sql`update fixtures set scheduled_at = null where id = ${f}`;
+    const cold = slots(await pageTree(f)).island;
+    expect(cold, "premise: the island is mounted").toHaveLength(1);
+    expect({ kickoffAt: cold[0]!.props.kickoffAt, activeUntil: cold[0]!.props.activeUntil }, "EMPTY CASE FIRST: nothing hot").toEqual({ kickoffAt: null, activeUntil: null });
+    const kickoff = new Date(Date.now() + 10 * 60_000);
+    kickoff.setMilliseconds(0);
+    await sql`update fixtures set scheduled_at = ${kickoff} where id = ${f}`;
+    await setStatus(f, "in_play");
+    const before = Date.now();
+    const hot = slots(await pageTree(f)).island;
+    const after = Date.now();
+    expect(hot[0]!.props.kickoffAt, "the fixture's kick-off, as an ISO instant").toBe(kickoff.toISOString());
+    const until = Date.parse(String(hot[0]!.props.activeUntil));
+    expect(until, "in play: active until the render + MAX_DURATION_MINUTES").toBeGreaterThanOrEqual(before + MAX_DURATION_MINUTES * 60_000);
+    expect(until).toBeLessThanOrEqual(after + MAX_DURATION_MINUTES * 60_000);
   });
 
   it("a PAST YouTube fixture with no saved choice keeps its replay with its parts, though the org's default now resolves Seazn (the blocker's regression)", async () => {

@@ -351,7 +351,7 @@ describe("review I2: the mounted island's loop", () => {
       vi.stubGlobal("fetch", open);
       const a = mount();
       await vi.advanceTimersByTimeAsync(30 * MIN);
-      expect(open.mock.calls.length, "not settled: read on, backing off (30, 60, 120, 240 s, then every 5 min)").toBe(4 + Math.floor((30 * MIN - 450_000) / (5 * MIN)) + 1);
+      expect(open.mock.calls.length, "not settled: read on, backing off (at 0 and 30 s, then every 60 s)").toBe(2 + Math.floor((30 * MIN - 30_000) / 60_000));
       a.unmount();
       const settled = emptyRoute();
       vi.stubGlobal("fetch", settled);
@@ -363,9 +363,30 @@ describe("review I2: the mounted island's loop", () => {
       vi.stubGlobal("fetch", notYet);
       const c = mount(new Date(Date.now() + 10 * MIN).toISOString());
       await vi.advanceTimersByTimeAsync(30 * MIN);
-      // 0, 30, 90, 210, 450 s before the settle instant (10 min on); the read at 750 s is past it and stops the loop.
-      expect(notYet.mock.calls, "settles 10 min on: reads until then, and the first empty answer past it is the last").toHaveLength(6);
+      // 0, 30, 90, 150, ... 570 s before the settle instant (10 min on): 11 reads; the read at 630 s is past it and stops the loop.
+      expect(notYet.mock.calls, "settles 10 min on: reads until then, and the first empty answer past it is the last").toHaveLength(12);
       c.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("review N1: the page's kick-off and active hints reach the loop — kick-off in 10 min, or active for an hour, holds the 30 s floor; neither backs off", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    try {
+      const readsOver5Min = async (hints: Record<string, string | null>) => {
+        const route = emptyRoute();
+        vi.stubGlobal("fetch", route);
+        const island = renderIsland(SeaznVideoIsland, { fixtureId: "f1", labels, ...hints });
+        await vi.advanceTimersByTimeAsync(5 * MIN);
+        island.unmount();
+        return route.mock.calls.length;
+      };
+      expect(await readsOver5Min({}), "EMPTY CASE FIRST: no hints — at 0 and 30 s, then every 60 s").toBe(2 + Math.floor((5 * MIN - 30_000) / 60_000));
+      expect(await readsOver5Min({ kickoffAt: new Date(NOW + 10 * MIN).toISOString() }), "kick-off in 10 min: every 30 s").toBe(11);
+      expect(await readsOver5Min({ activeUntil: new Date(NOW + 60 * MIN).toISOString() }), "active for an hour: every 30 s").toBe(11);
+      expect(await readsOver5Min({ kickoffAt: "not a date", activeUntil: null }), "a kick-off that is not a date is cold").toBe(2 + Math.floor((5 * MIN - 30_000) / 60_000));
     } finally {
       vi.useRealTimers();
     }

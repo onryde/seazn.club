@@ -233,6 +233,18 @@ async function reportCameraRefusalOnce(
   });
 }
 
+/** Phase 1 re-review N3: whether the held-recording alert is armed this pass. `seaznHostedReplay` throws on a SEAZN_HOSTED_REPLAY
+ *  (or SEAZN_HOSTED_LIVE, which it needs) other than true/false; read bare, one typo aborted the pass after its deletes, so no video
+ *  facts, summaries or purges. A bad value is read as off, with one warning per pass. The hold reads no flag. */
+function replayAlertArmed(): boolean {
+  try {
+    return seaznHostedReplay();
+  } catch (err) {
+    log.warn({ err: String(err) }, "relay sweep: SEAZN_HOSTED_REPLAY or SEAZN_HOSTED_LIVE is not true/false — the held-recording alert is off this pass");
+    return false;
+  }
+}
+
 export async function sweepStreamSessions(
   deps: SessionDeps,
   opts: { sampleRetentionDays?: number | null; orgIds?: readonly string[] } = {},
@@ -598,10 +610,11 @@ export async function sweepStreamSessions(
   // the replay check belongs with it). After the deletes, so an alert fault can never cost the pass its retention.
   // Phase 1 review I3: so the alert is armed only with SEAZN_HOSTED_REPLAY on (Phase 2, which needs LIVE): with Phase 1 alone
   // every Seazn recording would alert at day 3. The count is kept either way, and nothing is marked while it is off, so turning
-  // Phase 2 on alerts what is already past the promise, once.
+  // Phase 2 on alerts what is already past the promise, once. Re-review N3: the flag is read tolerantly (`replayAlertArmed`), so
+  // a malformed value cannot abort the rest of the pass.
   const pastPromise = retentionPlan(heldVideos, [], now).deleteVideos;
   out.seaznHeldPastPromise = pastPromise.length;
-  if (pastPromise.length > 0 && seaznHostedReplay()) {
+  if (pastPromise.length > 0 && replayAlertArmed()) {
     let alerted: Set<string> | null = null;
     try {
       alerted = new Set((await sql<{ id: string }[]>`

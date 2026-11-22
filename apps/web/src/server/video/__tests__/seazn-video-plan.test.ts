@@ -30,10 +30,10 @@ import { sql } from "@/lib/db";
 import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { fixtureStreamTarget, saveStreamSettings } from "@/server/usecases/stream-codes";
 import { streamLinkLabelKey } from "../../../app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/stream-link";
-import { CODE_GRACE_AFTER_FINISH_MINUTES, tunable } from "@/server/relay/config";
+import { CODE_GRACE_AFTER_FINISH_MINUTES, MAX_DURATION_MINUTES, tunable } from "@/server/relay/config";
 import { codeStatus } from "@/server/relay/domain/stream-code";
 import { seaznVideoPlan } from "../seazn-video-plan";
-import { type SeaznRig as Rig, installSeaznEnv, kindOf, live, seaznRig as rig, stopAndSettle } from "./_seazn-session-rig";
+import { type SeaznRig as Rig, goLive, installSeaznEnv, kindOf, live, seaznRig as rig, stateOf, stopAndSettle } from "./_seazn-session-rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 installSeaznEnv("seazn-video-plan-test");
@@ -47,6 +47,13 @@ const settledAtOf = async (fixtureId: string) => {
   if (plan.player !== "seazn") throw new Error(`PREMISE: the plan is seazn, not ${plan.player}`);
   return plan.settledAt;
 };
+/** The page's poll hints (Phase 1 re-review N1): the kick-off, and until when the fixture counts as active. */
+const hintsOf = async (fixtureId: string, now: Date) => {
+  const plan = await seaznVideoPlan(fixtureId, now);
+  if (plan.player !== "seazn") throw new Error(`PREMISE: the plan is seazn, not ${plan.player}`);
+  return { kickoffAt: plan.kickoffAt?.toISOString() ?? null, activeUntil: plan.activeUntil?.toISOString() ?? null };
+};
+const setKickoff = (fixtureId: string, at: Date | null) => sql`update fixtures set scheduled_at = ${at} where id = ${fixtureId}`;
 /** Whether the page holds the player's box before the first read (Phase 1 visual D1). */
 const reserveOf = async (fixtureId: string) => {
   const plan = await seaznVideoPlan(fixtureId);
@@ -139,6 +146,42 @@ describe.skipIf(!HAS_DB)("seaznVideoPlan: which player the match page mounts", (
     expect(await reserveOf(f), "decided, its recording to play").toBe(true);
     liveOff();
     expect(await reserveOf(f), "LIVE off: the session's player and its box both stay").toBe(true);
+  });
+
+  // Phase 1 re-review N1: the island holds its 30 s floor while the match is hot. The plan hands it the kick-off (the island checks the
+  // hour either side of it on the viewer's clock) and, when the fixture is in play or a Seazn session of it is not terminal as the page
+  // is drawn, an "active until" bound: the drawing instant + MAX_DURATION_MINUTES, the longest a session runs (relay config), so a page
+  // left open does not hold the floor for ever.
+  it("review N1: EMPTY CASE FIRST — an unstarted fixture with no kick-off time and nothing happening has neither hint; its kick-off, once set, is handed over as is", async () => {
+    const r = await rig();
+    const f = r.fixtureIds[0];
+    const now = new Date("2026-11-22T12:00:00.000Z");
+    await setKickoff(f, null);
+    expect(await hintsOf(f, now)).toEqual({ kickoffAt: null, activeUntil: null });
+    const kickoff = new Date("2026-11-22T12:20:00.000Z");
+    await setKickoff(f, kickoff);
+    expect(await hintsOf(f, now)).toEqual({ kickoffAt: kickoff.toISOString(), activeUntil: null });
+  });
+
+  it("review N1: in play, or a Seazn session warming or live, is active until the drawing instant + MAX_DURATION_MINUTES; ended and decided is not", async () => {
+    const r = await rig();
+    const f = r.fixtureIds[0];
+    const now = new Date("2026-11-22T12:00:00.000Z");
+    const bound = new Date(now.getTime() + MAX_DURATION_MINUTES * 60_000).toISOString();
+    await setStatus(f, "in_play");
+    expect((await hintsOf(f, now)).activeUntil, "in play, no session (the unstarted arm)").toBe(bound);
+    await setStatus(f, "scheduled");
+    expect((await hintsOf(f, now)).activeUntil, "PREMISE: scheduled, no session: not active").toBeNull();
+    const sid = await goLive(r, f, r.seazn);
+    expect(await stateOf(sid), "PREMISE: the session is not live yet").not.toBe("live");
+    expect((await hintsOf(f, now)).activeUntil, "a Seazn session on its way up (the session arm)").toBe(bound);
+    await stopAndSettle(r, f, sid);
+    expect((await hintsOf(f, now)).activeUntil, "its session ended, the match not in play: not active").toBeNull();
+    const sid2 = await live(r, f, r.seazn);
+    expect((await hintsOf(f, now)).activeUntil, "a second session, live").toBe(bound);
+    await stopAndSettle(r, f, sid2);
+    await setStatus(f, "decided");
+    expect((await hintsOf(f, now)).activeUntil, "ended and decided").toBeNull();
   });
 
   it("an UNSTARTED fixture (no session, not over): seazn when its default is Seazn and LIVE is on; external with LIVE off, where the default is the pasted key", async () => {

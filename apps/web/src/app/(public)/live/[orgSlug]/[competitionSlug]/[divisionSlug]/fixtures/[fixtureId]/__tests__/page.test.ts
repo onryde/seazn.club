@@ -1011,7 +1011,10 @@ describe("FixturePage — the Seazn player slot (Task 15)", () => {
   });
 
   it("a Seazn fixture (plan seazn) mounts the island for THIS fixture and none of YouTube's markup — even when YouTube parts exist", async () => {
-    seaznPlan.answer.mockResolvedValue({ player: "seazn", settledAt: null, reserve: true });
+    seaznPlan.answer.mockResolvedValue({
+      player: "seazn", settledAt: null, reserve: true,
+      kickoffAt: new Date("2026-11-22T12:00:00.000Z"), activeUntil: new Date("2026-11-22T15:00:00.000Z"),
+    });
     const { SeaznVideoIsland } = await import("@/components/public-site/match-centre/seazn-video-island");
     const { ReplayEmbed } = await import("@/components/public-site/match-centre/replay-embed");
     const tree = await withParts();
@@ -1021,6 +1024,8 @@ describe("FixturePage — the Seazn player slot (Task 15)", () => {
     expect(islands[0]!.props.endpoint, "the match page reads the public route").toBeUndefined();
     expect(islands[0]!.props.settledAt, "review I2: a plan with no settle time hands the island none").toBeNull();
     expect(islands[0]!.props.reserve, "visual D1: the plan's reserve reaches the island").toBe(true);
+    expect(islands[0]!.props.kickoffAt, "review N1: the plan's kick-off reaches the island").toBe("2026-11-22T12:00:00.000Z");
+    expect(islands[0]!.props.activeUntil, "review N1: and its active bound").toBe("2026-11-22T15:00:00.000Z");
     expect(findAll(tree, ReplayEmbed), "the YouTube slot is not mounted").toHaveLength(0);
     const h = renderToStaticMarkup(tree);
     expect(youtubeMarkup(h)).toEqual({ player: false, facade: false, thumbnail: false, embedHost: false });
@@ -1028,7 +1033,7 @@ describe("FixturePage — the Seazn player slot (Task 15)", () => {
   });
 
   it("the island's strings are the page's own, in the org's locale (es: the Spanish live, unavailable and part)", async () => {
-    seaznPlan.answer.mockResolvedValue({ player: "seazn", settledAt: null, reserve: true });
+    seaznPlan.answer.mockResolvedValue({ player: "seazn", settledAt: null, reserve: true, kickoffAt: null, activeUntil: null });
     const { SeaznVideoIsland } = await import("@/components/public-site/match-centre/seazn-video-island");
     const { seaznVideoLabels } = await import("@/components/public-site/match-centre/seazn-video-labels");
     const tree = await withParts("es");
@@ -1057,7 +1062,7 @@ describe("FixturePage — the Seazn player slot (Task 15)", () => {
   });
 
   it("a Seazn fixture's own stream link (the club's pill) still shows: only the replay slot moved", async () => {
-    seaznPlan.answer.mockResolvedValue({ player: "seazn", settledAt: null, reserve: true });
+    seaznPlan.answer.mockResolvedValue({ player: "seazn", settledAt: null, reserve: true, kickoffAt: null, activeUntil: null });
     const h = renderToStaticMarkup(await render({ status: "decided", stream_url: "https://www.twitch.tv/seaznclub" }));
     expect(h).toContain('data-testid="public-stream-link"');
   });

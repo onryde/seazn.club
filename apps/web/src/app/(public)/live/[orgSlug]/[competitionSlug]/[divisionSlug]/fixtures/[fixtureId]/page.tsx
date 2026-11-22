@@ -485,11 +485,14 @@ export default async function FixturePage({ params }: Props) {
               // The island asks the video route itself after hydration: this page is ISR (revalidate = 30), and a signed address minted
               // in its server render would be served past its token's life. Its strings are the few it needs, not the whole dictionary.
               // `settledAt` (review I2): once the fixture is settled, an empty answer stops the island's reads. `reserve` (visual D1): the
-              // player's box is held from this render where a player is expected, so its arrival moves nothing.
+              // player's box is held from this render where a player is expected, so its arrival moves nothing. `kickoffAt` and
+              // `activeUntil` (review N1): near kick-off, or while the match was active at this render, the island keeps its 30 s floor.
               <SeaznVideoIsland
                 fixtureId={fixture.id}
                 labels={seaznVideoLabels(dict)}
                 settledAt={seaznPlan.settledAt?.toISOString() ?? null}
+                kickoffAt={seaznPlan.kickoffAt?.toISOString() ?? null}
+                activeUntil={seaznPlan.activeUntil?.toISOString() ?? null}
                 reserve={seaznPlan.reserve}
               />
             ) : plan.parts.length > 0 ? (

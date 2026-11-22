@@ -15,9 +15,9 @@ export interface SeaznWalkClock {
   /** From the Go live tap until the panel reads live: the fake's connect and two organiser polls, plus slack (the pool's own). */
   LIVE_WAIT_MS: number;
   /** The island's re-read: its floor (30 s, the schedule's own constant) plus slack. A Go live, a Stop and a newly signed recording
-   *  each reach an open page on the NEXT read, so each of those waits is exactly one of these. Empty answers back off past the floor
-   *  (review I2), so the walk looks away and back before each wait that follows them: the read a page owes on being shown again is at
-   *  most a floor after its last, which keeps each wait one of these. */
+   *  each reach an open page on the NEXT read, so each of those waits is exactly one of these. Empty answers would back off past the
+   *  floor (review I2), but the walk's fixture kicks off 10 minutes after it is seeded, and within the hour either side of kick-off
+   *  the island holds the floor (re-review N1), so each wait stays one of these for a viewer who simply keeps watching. */
   ONE_RE_READ_MS: number;
   /** The Stop landing: the session reading completed (three polls-plus-slack). */
   END_MS: number;

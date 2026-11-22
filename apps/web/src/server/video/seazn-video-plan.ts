@@ -26,13 +26,22 @@ import "server-only";
 // yes where a player is expected now (arm 1: a Seazn session, so its live or its recording), no before kick-off (arm 3), where
 // "nothing yet" is the expected answer for hours and a held box would collapse on every load.
 //
+// And the island's poll hints (Phase 1 re-review N1): an empty answer holds the 30 s floor while the match is hot, else backs off to
+// 60 s. `kickoffAt` is the fixture's `scheduled_at` (the island checks the hour either side of it on the viewer's clock, so a page
+// opened early turns hot by itself). `activeUntil` is set when the fixture is in play, or a Seazn session of it is not terminal
+// (requested through ending, so warming and live), as the page is drawn: the drawing instant + MAX_DURATION_MINUTES, the longest a session runs, so a page left
+// open does not hold the floor for ever. Both are facts as of the render (the page is ISR); what starts later is caught within 60 s.
+//
 // The privileged `sql` client: fixture_stream_* are FORCE RLS with no policy (V410), the pattern seazn-video.ts reads them with.
 import { sql } from "@/lib/db";
 import type { FixtureStatusValue } from "@/lib/fixture-status";
-import { CODE_GRACE_AFTER_FINISH_MINUTES, seaznHostedLive, tunable } from "@/server/relay/config";
+import { CODE_GRACE_AFTER_FINISH_MINUTES, MAX_DURATION_MINUTES, seaznHostedLive, tunable } from "@/server/relay/config";
+import { TERMINAL_STATES } from "@/server/relay/domain/session";
 import { fixtureStreamTarget } from "@/server/usecases/stream-codes";
 
-export type SeaznVideoPlan = { player: "external" } | { player: "seazn"; settledAt: Date | null; reserve: boolean };
+export type SeaznVideoPlan =
+  | { player: "external" }
+  | { player: "seazn"; settledAt: Date | null; reserve: boolean; kickoffAt: Date | null; activeUntil: Date | null };
 const EXTERNAL: SeaznVideoPlan = { player: "external" };
 
 /** A fixture id is a uuid; anything else names no fixture, and is answered before it reaches a query (22P02 would be a 500). */
@@ -40,7 +49,19 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** The statuses of a fixture that is not over: the only ones the third arm may answer `seazn` for. */
 const NOT_OVER: readonly FixtureStatusValue[] = ["scheduled", "in_play"];
 
-interface FixtureFacts { org_id: string; status: string; finished_at: Date | null; has_seazn_session: boolean; has_session: boolean }
+interface FixtureFacts {
+  org_id: string; status: string; finished_at: Date | null; scheduled_at: Date | null;
+  has_seazn_session: boolean; has_session: boolean; has_active_seazn_session: boolean;
+}
+
+/** N1: the island's hints, as of `now`. */
+function hintsOf(facts: FixtureFacts, now: Date): { kickoffAt: Date | null; activeUntil: Date | null } {
+  const active = facts.status === "in_play" || facts.has_active_seazn_session;
+  return {
+    kickoffAt: facts.scheduled_at === null ? null : new Date(facts.scheduled_at),
+    activeUntil: active ? new Date(now.getTime() + MAX_DURATION_MINUTES * 60_000) : null,
+  };
+}
 
 const isOver = (status: string): boolean => !(NOT_OVER as readonly string[]).includes(status);
 
@@ -53,16 +74,18 @@ function settledAtOf(facts: FixtureFacts): Date | null {
   return new Date(new Date(facts.finished_at).getTime() + graceMinutes * 60_000);
 }
 
-export async function seaznVideoPlan(fixtureId: string): Promise<SeaznVideoPlan> {
+export async function seaznVideoPlan(fixtureId: string, now: Date = new Date()): Promise<SeaznVideoPlan> {
   if (!UUID.test(fixtureId)) return EXTERNAL;
   const [facts] = await sql<FixtureFacts[]>`
-    select f.org_id, f.status, f.finished_at,
+    select f.org_id, f.status, f.finished_at, f.scheduled_at,
            exists (select 1 from fixture_stream_sessions s where s.fixture_id = f.id and s.destination_kind = 'seazn') as has_seazn_session,
-           exists (select 1 from fixture_stream_sessions s where s.fixture_id = f.id) as has_session
+           exists (select 1 from fixture_stream_sessions s where s.fixture_id = f.id) as has_session,
+           exists (select 1 from fixture_stream_sessions s
+                    where s.fixture_id = f.id and s.destination_kind = 'seazn' and s.state not in ${sql([...TERMINAL_STATES])}) as has_active_seazn_session
       from fixtures f
      where f.id = ${fixtureId}`;
   if (facts === undefined) return EXTERNAL;
-  if (facts.has_seazn_session) return { player: "seazn", settledAt: settledAtOf(facts), reserve: true };
+  if (facts.has_seazn_session) return { player: "seazn", settledAt: settledAtOf(facts), reserve: true, ...hintsOf(facts, now) };
   if (facts.has_session || isOver(facts.status)) return EXTERNAL;
   if (!seaznHostedLive()) return EXTERNAL;
   // The fixture's own pick: the same resolver the panel's picker and the phone's start read, so the player appears exactly when
@@ -70,5 +93,5 @@ export async function seaznVideoPlan(fixtureId: string): Promise<SeaznVideoPlan>
   const pick = await fixtureStreamTarget(sql, { orgId: facts.org_id, fixtureId });
   if (pick === null) return EXTERNAL;
   const [target] = await sql<{ kind: string }[]>`select kind from org_stream_targets where id = ${pick.id}`;
-  return target?.kind === "seazn" ? { player: "seazn", settledAt: null, reserve: false } : EXTERNAL;
+  return target?.kind === "seazn" ? { player: "seazn", settledAt: null, reserve: false, ...hintsOf(facts, now) } : EXTERNAL;
 }

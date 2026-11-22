@@ -18,10 +18,14 @@
 // match centre's own poll, not of a mint.
 //
 // What is NOT read at the floor (Phase 1 review I2: an unbounded 30 s poll on every Seazn fixture page, open or forgotten):
-//   - NOTHING TO SHOW backs off, 30 s -> 60 s -> 120 s -> 240 s, then every 5 min (`SEAZN_VIDEO_POLL_CEILING_MS`), counted over the
-//     empty answers in a row; the first answer that shows something puts the page back on the floor. A page opened long before
-//     kick-off costs a few reads an hour, and the island's visibility resume (seazn-video-poll.ts) still turns a page the viewer is
-//     looking at to the live player within one floor.
+//   - NOTHING TO SHOW backs off: 30 s, then 60 s (`SEAZN_VIDEO_POLL_CEILING_MS`; the fix-wave re-review's N1 cut it from 5 min,
+//     because hidden tabs no longer read at all, so the only pages backing off are ones a viewer is looking at), counted over the
+//     empty answers in a row; the first answer that shows something puts the page back on the floor. A failed read takes the same
+//     ladder (N6, `backoffMs`).
+//   - EXCEPT while the match is HOT (N1, `isHotRead`): within an hour either side of its kick-off (`SEAZN_VIDEO_KICKOFF_WINDOW_MS`,
+//     by the viewer's clock, so a page opened early turns hot by itself), or while it was in play or a Seazn session of it was
+//     warming or live when the page was drawn, up to the plan's bound (`activeUntil`, seazn-video-plan.ts). A hot page holds the
+//     floor: Go live, a Stop's recording and a second Go live each reach a viewer who is watching within one read.
 //   - A SETTLED fixture (decided, and past the stream code's grace after it finished, so no new Go live can start: the page's
 //     `settledAt`, seazn-video-plan.ts) has nothing more coming: an empty answer stops the loop, and an `hls` replay is re-read only at
 //     its token's refresh point (it must be: a player whose token lapses mid-watch fails, and a rebuilt one starts again from 0).
@@ -31,11 +35,33 @@ import type { PublicFixtureVideo } from "@/server/api-v1/schemas";
 
 /** The plan's 30 s: how long a page with nothing to play waits to look again at first, and the least any re-read waits. */
 export const SEAZN_VIDEO_POLL_FLOOR_MS = 30_000;
-/** Phase 1 review I2: the longest an empty answer's backoff waits (5 min). */
-export const SEAZN_VIDEO_POLL_CEILING_MS = 5 * 60_000;
+/** The longest the backoff waits: 60 s (Phase 1 re-review N1; I2 had 5 min). */
+export const SEAZN_VIDEO_POLL_CEILING_MS = 60_000;
+/** Phase 1 re-review N1: how long either side of a fixture's kick-off its page holds the floor (an hour). */
+export const SEAZN_VIDEO_KICKOFF_WINDOW_MS = 60 * 60_000;
+
+/** The backoff after `streak` empty answers (or failed reads, N6) in a row: the floor, doubling, to the ceiling. */
+export const backoffMs = (streak: number): number => Math.min(SEAZN_VIDEO_POLL_FLOOR_MS * 2 ** Math.max(0, streak - 1), SEAZN_VIDEO_POLL_CEILING_MS);
+
+/** The page's hints (from its plan, seazn-video-plan.ts) beside the clock. Absent (Match Day's preview) is cold. */
+export interface HotHints {
+  nowMs: number;
+  /** The fixture's kick-off (ms), or null with none. */
+  kickoffAtMs?: number | null;
+  /** Until when the fixture counts as active (ms): it was in play, or a Seazn session of it warming or live, when the page was drawn. */
+  activeUntilMs?: number | null;
+}
+
+/** N1: is something likely to appear at any moment, so an empty answer must not back off? */
+export function isHotRead(at: HotHints): boolean {
+  const k = at.kickoffAtMs ?? null;
+  if (k !== null && Number.isFinite(k) && Math.abs(at.nowMs - k) <= SEAZN_VIDEO_KICKOFF_WINDOW_MS) return true;
+  const a = at.activeUntilMs ?? null;
+  return a !== null && Number.isFinite(a) && at.nowMs < a;
+}
 
 /** What the loop knows beside the answer. */
-export interface VideoReadContext {
+export interface VideoReadContext extends HotHints {
   /** The clock when the answer arrived (ms). */
   nowMs: number;
   /** When the fixture is settled (ms), from the page: decided, and past the window a new Go live can start in. Null while it is not
@@ -52,7 +78,7 @@ export const isEmptyVideo = (video: PublicFixtureVideo): boolean => video.live =
  *   - no answer yet: the floor;
  *   - `live`: the floor, so a Stop reaches an open page within one poll (the recordings listed beside it do not play, so they set no
  *     timer of their own);
- *   - nothing to show: the backoff (floor doubling per empty answer in a row, to the ceiling); a settled fixture: no timer;
+ *   - nothing to show: the floor while the match is hot (N1); else no timer once settled; else the backoff (30 s, then 60 s);
  *   - replay with an `hls` part (the interim Cloudflare recording): the floor, so a second Go live reaches an open page within one
  *     poll; once settled, the earliest `hls` token's refresh point instead (never sooner than the floor; an expiry that is not a date
  *     is the floor);
@@ -63,8 +89,9 @@ export function nextVideoFetchMs(video: PublicFixtureVideo | null, at: VideoRead
   if (video.live !== null) return SEAZN_VIDEO_POLL_FLOOR_MS;
   const settled = at.settledAtMs !== null && at.nowMs >= at.settledAtMs;
   if (video.replay.length === 0) {
+    if (isHotRead(at)) return SEAZN_VIDEO_POLL_FLOOR_MS;   // N1: hot outranks settled
     if (settled) return null;
-    return Math.min(SEAZN_VIDEO_POLL_FLOOR_MS * 2 ** Math.max(0, at.emptyStreak - 1), SEAZN_VIDEO_POLL_CEILING_MS);
+    return backoffMs(at.emptyStreak);
   }
   const hls = video.replay.filter((p) => p.player === "hls");
   if (hls.length === 0) return null;
