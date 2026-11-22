@@ -97,6 +97,18 @@ const frozen = async (divisionId: string) =>
     select name, qualify_best_nth, qualified from public_stages_v where division_id = ${divisionId} order by seq`).map((r) => [r.name, r.qualify_best_nth, r.qualified]);
 
 /** Every stage of the division, in seq order, as [name, count, perGroup, next]. */
+/** W5 follow-ups A2: a Top N (`rankRange`) take out of a stage of several pools is refused at save now (SEEDING_TOP_N_ACROSS_GROUPS)
+ *  - it never seeds. Rows saved before that guard (Add stage stored them) still stand, and the view must still read them, so these
+ *  scenes store the graph through the real door with a per-group take and then write the overall take onto the row, as such a
+ *  stage was stored. */
+async function storedBeforeTheTopNGuard(auth: AuthCtx, divisionId: string, pools: number, take: unknown[]): Promise<void> {
+  const [, ko] = await createStages(auth, divisionId, [
+    { seq: 1, kind: "group", name: "Groups", config: { pools: { count: pools } } },
+    { seq: 2, kind: "knockout", name: "KO", config: {}, progression: prog([{ kind: "topNPerGroup", n: 1 }]) },
+  ] as never);
+  await sql`update stages set progression = ${sql.json(prog(take) as never)} where id = ${ko!.id}`;
+}
+
 const cuts = async (divisionId: string) =>
   (await view(divisionId)).map((r) => [r.name, r.qualify_count, r.qualify_per_group, r.next_stage_name]);
 
@@ -173,10 +185,7 @@ describe.skipIf(!HAS_DB)("public_stages_v — qualification columns (V414)", () 
   // own top-4 line, which is not who goes through.
   it("groups (2 pools) → KO rankRange 1..4: an overall cut on a pooled stage is NOT per group", async () => {
     const d = await division();
-    await createStages(d.auth, d.divisionId, [
-      { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } } },
-      { seq: 2, kind: "knockout", name: "KO", config: {}, progression: prog([{ kind: "rankRange", from: 1, to: 4 }]) },
-    ] as never);
+    await storedBeforeTheTopNGuard(d.auth, d.divisionId, 2, [{ kind: "rankRange", from: 1, to: 4 }]);
     expect(await cuts(d.divisionId)).toEqual([
       ["Groups", 4, false, "KO"],
       ["KO", null, false, null],
@@ -220,10 +229,13 @@ describe.skipIf(!HAS_DB)("public_stages_v — qualification columns (V414)", () 
     let checked = 0;
     for (const [why, take] of shapes) {
       const d = await division();
-      await createStages(d.auth, d.divisionId, [
-        { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 3 } } },
-        { seq: 2, kind: "knockout", name: "KO", config: {}, progression: prog(take) },
-      ] as never);
+      if (take.some((t) => (t as { kind: string }).kind === "rankRange")) await storedBeforeTheTopNGuard(d.auth, d.divisionId, 3, take);
+      else {
+        await createStages(d.auth, d.divisionId, [
+          { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 3 } } },
+          { seq: 2, kind: "knockout", name: "KO", config: {}, progression: prog(take) },
+        ] as never);
+      }
       expect(await cuts(d.divisionId), why).toEqual([
         ["Groups", null, false, null],
         ["KO", null, false, null],

@@ -289,6 +289,27 @@ async function sourceConfigOf(tx: Tx, source: { id: string }): Promise<Record<st
   return row?.config ?? {};
 }
 
+/** W5 follow-ups A2 (owner "apply rec", 2026-11-22): a `rankRange` take (Top N of ONE table - the Add stage form's take) from a
+ *  source of two or more pools is refused at save, by name. The engine reads that take from the sole pool or the pool keyed ""
+ *  (`rankRangeSource`), and a group of several pools has neither, so the stage would save, its Generate would answer
+ *  STAGE_NOT_READY `no pool "overall"` for ever, and Add stage would say fixtures come when the previous stage completes. The
+ *  shape is the source's pool count (`sourceShapeOf`: the drawn pools, else the config's count, which the draw always meets), so
+ *  the answer is the same before and after the groups are drawn. A per-group take (`topNPerGroup`) is unaffected. */
+function refuseTopNAcrossGroups(progression: Pick<ProgressionSpec, "sources">, shapes: readonly SourceShape[]): void {
+  progression.sources.forEach((source, i) => {
+    const pools = shapes[i]?.poolKeys.length ?? 0;
+    if (pools < 2) return;
+    const rule = source.take.find((t) => t.kind === "rankRange");
+    if (rule === undefined || rule.kind !== "rankRange") return;
+    throw new HttpError(
+      422,
+      `a Top N take (rankRange ${rule.from}-${rule.to}) reads one table, and the source stage plays in ${pools} pools - take per group (topNPerGroup) instead`,
+      "SEEDING_TOP_N_ACROSS_GROUPS",
+      { pools, from: rule.from, to: rule.to },
+    );
+  });
+}
+
 /** Validate a progression rule at SAVE time (createStages/replaceStages,
  *  templates.ts's instantiateTemplate) — a bad `seeded_map` reference, an
  *  illegal snake-into-a-bracket-target combo (F3 round-3 review, Task 1,
@@ -331,6 +352,7 @@ export async function validateStageProgression(
   // W4 T8 (I3): a `firstLosses` take from a double-elimination source is refused HERE, at save, by name - its field has no single
   // "first loss" round, and the plate card and the propose path would only meet it later.
   refuseFirstLossesFromDoubleElim(progression as ProgressionSpec, sourceKinds);
+  refuseTopNAcrossGroups(progression, shapes);
   try {
     validateProgressionAgainstShapes(shapes, progression, target.kind);
   } catch (err) {

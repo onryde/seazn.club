@@ -3084,6 +3084,9 @@ export function addStageErrorText(err: unknown, msg: Msg, locale: Locale): strin
   // W5 B4 review I-1: a division's first stage on a field past its max entrants (FORMAT_TOO_MANY_ENTRANTS, the create door), and the
   // Generate that follows the add (FORMAT_TOO_MANY_ENTRANTS / DRAW_TOO_LARGE at the first draw), in the reader's language.
   if (err instanceof ApiV1Error && isRoundRobinRefusalCode(err.code)) return undoRefusalText(err.code, err.extra, msg, locale);
+  // W5 follow-ups A2: a Top N take after a stage of several groups is refused at the create (SEEDING_TOP_N_ACROSS_GROUPS), in the
+  // reader's language - never the "Stage added" notice for a stage that would never fill. Any other SEEDING_* code reads its copy too.
+  if (err instanceof ApiV1Error) return seedingErrorMessage(locale, err.code, err.message, err.extra as Record<string, string | number>);
   return err instanceof Error ? err.message : msg("schedule.error.failed");
 }
 

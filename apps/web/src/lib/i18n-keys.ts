@@ -8966,6 +8966,7 @@ export type DictionaryKey =
   | "seeding.SEEDING_SLOT_FOREIGN_FIXTURE"
   | "seeding.SEEDING_SOURCE_INCOMPLETE"
   | "seeding.SEEDING_TIE_UNRESOLVED"
+  | "seeding.SEEDING_TOP_N_ACROSS_GROUPS"
   | "seeding.proposalRedrawn"
   | "seeding.proposalSuperseded"
   | "settings.account.accountId"
