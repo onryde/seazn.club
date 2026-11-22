@@ -14,8 +14,8 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { AUTO_START_RETRY_SECONDS, AUTO_STOP_AFTER_RESULT_SECONDS } from "../../config";
 import {
-  AUTO_START_CONJUNCTS, AUTO_START_LATCHES, AUTO_START_REFUSALS, AUTO_STOP_CONJUNCTS, AUTO_WONT_START, autoStartVerdict, autoStopApplies,
-  autoStopVerdict, autoWontStart, type AutoStartFacts, type AutoStopFacts,
+  AUTO_START_CONJUNCTS, AUTO_START_LATCHES, AUTO_START_REFUSALS, AUTO_STOP_CONJUNCTS, AUTO_WONT_START, SEAZN_STOP_CONJUNCTS, autoStartVerdict,
+  autoStopApplies, autoStopRule, autoStopVerdict, autoWontStart, seaznStopVerdict, type AutoStartFacts, type AutoStopFacts,
 } from "../auto-stream";
 
 const ROOT = resolve(import.meta.dirname, "../../../../../../..");
@@ -318,5 +318,61 @@ describe("autoStopApplies (B7 review M-3: will §7.3 ever stop THIS session?)", 
 
   it("EMPTY: no switch, no phone mode, no result → does not apply", () => {
     expect(autoStopApplies({ autoStream: false, phoneMode: null, finishedAt: null, sessionPredatesResult: false })).toBe(false);
+  });
+});
+
+// Seazn-hosted video Task 24 (recommendation 2026-11-21, G-E): a Seazn session still live 15 min after the result is stopped in
+// EVERY mode (Stream switch off, operator phone, automatic phone), so its recordings' move always starts. The arm is §7.3's table
+// WITHOUT its two mode conjuncts; A15 still holds on it (a broadcast started after the result is the organiser's own post-match one,
+// and stopping it at once would end every post-match Seazn broadcast the moment it began). A session to any other destination is
+// judged by §7.3 alone (G1). 900 s is the ruling's 15 min, typed here.
+describe("G-E: the Seazn arm (Task 24)", () => {
+  const SEAZN_DELAY_S = 15 * 60;
+  /** The two conjuncts the arm drops: the mode ones, named from the recommendation ("in every mode"). */
+  const MODE = new Set(["switch_on", "phone_automatic"]);
+
+  it("the arm is §7.3's table minus exactly the two mode conjuncts, in the same order", () => {
+    expect(SEAZN_STOP_CONJUNCTS.map((c) => c.name)).toEqual(AUTO_STOP_CONJUNCTS.map((c) => c.name).filter((n) => !MODE.has(n)));
+    expect(SEAZN_STOP_CONJUNCTS.length).toBe(3);
+  });
+
+  it("every mode: switch off, operator phone, automatic phone, no phone — due at exactly 15 min after the result, not 1 s before", () => {
+    let checked = 0;
+    for (const autoStream of [false, true]) {
+      for (const phoneMode of ["operator", "automatic", null] as const) {
+        const f = { autoStream, phoneMode, finishedAt: ago(ms(SEAZN_DELAY_S)), sessionPredatesResult: true };
+        expect(seaznStopVerdict(f, NOW, SEAZN_DELAY_S), `${autoStream}/${phoneMode}`).toEqual({ due: true, failed: [] });
+        expect(seaznStopVerdict({ ...f, finishedAt: ago(ms(SEAZN_DELAY_S) - 1000) }, NOW, SEAZN_DELAY_S), `${autoStream}/${phoneMode} at 14:59`)
+          .toEqual({ due: false, failed: ["delay_elapsed"] });
+        checked++;
+      }
+    }
+    expect(checked).toBe(6);
+  });
+
+  it("A15 and no result hold on the arm too: a post-result session and an undecided fixture are never due", () => {
+    expect(seaznStopVerdict({ ...STOP_BASE, finishedAt: ago(ms(SEAZN_DELAY_S)), sessionPredatesResult: false }, NOW, SEAZN_DELAY_S))
+      .toEqual({ due: false, failed: ["session_predates_result"] });
+    expect(seaznStopVerdict({ ...STOP_BASE, finishedAt: null, sessionPredatesResult: false }, NOW, SEAZN_DELAY_S))
+      .toEqual({ due: false, failed: ["fixture_finished"] });
+  });
+
+  it("autoStopRule: §7.3's own rule when it applies (any destination); else `seazn` for a Seazn session; else none — swept over every mode × destination × A15", () => {
+    let checked = 0;
+    for (const autoStream of [false, true]) {
+      for (const phoneMode of ["operator", "automatic", null] as const) {
+        for (const isSeazn of [false, true]) {
+          for (const sessionPredatesResult of [false, true]) {
+            const f: AutoStopFacts = { autoStream, phoneMode, finishedAt: FINISHED_AT, sessionPredatesResult };
+            const resultRule = autoStream && phoneMode === "automatic" && sessionPredatesResult;
+            const expected = resultRule ? "result" : isSeazn && sessionPredatesResult ? "seazn" : null;
+            expect(autoStopRule(f, isSeazn), JSON.stringify({ autoStream, phoneMode, isSeazn, sessionPredatesResult })).toBe(expected);
+            checked++;
+          }
+        }
+      }
+    }
+    expect(checked).toBe(24);
+    expect(autoStopRule({ ...STOP_BASE, finishedAt: null, sessionPredatesResult: false, autoStream: false }, true), "no result yet: the line's whole point").toBe("seazn");
   });
 });

@@ -53935,6 +53935,26 @@
                                             "type": "null"
                                           }
                                         ]
+                                      },
+                                      "live_seazn": {
+                                        "anyOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "watch_url": {
+                                                "type": "string",
+                                                "pattern": "^https:\\/\\/[a-z0-9.-]+(?::\\d+)?\\/live\\/[^/?#]+\\/[^/?#]+\\/[^/?#]+\\/fixtures\\/[0-9a-fA-F-]{36}$"
+                                              }
+                                            },
+                                            "required": [
+                                              "watch_url"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
                                       }
                                     },
                                     "required": [
@@ -53949,7 +53969,8 @@
                                       "away_slot",
                                       "status",
                                       "scheduled_at",
-                                      "summary"
+                                      "summary",
+                                      "live_seazn"
                                     ],
                                     "additionalProperties": false
                                   },
@@ -54066,6 +54087,26 @@
                                           "type": "null"
                                         }
                                       ]
+                                    },
+                                    "live_seazn": {
+                                      "anyOf": [
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "watch_url": {
+                                              "type": "string",
+                                              "pattern": "^https:\\/\\/[a-z0-9.-]+(?::\\d+)?\\/live\\/[^/?#]+\\/[^/?#]+\\/[^/?#]+\\/fixtures\\/[0-9a-fA-F-]{36}$"
+                                            }
+                                          },
+                                          "required": [
+                                            "watch_url"
+                                          ],
+                                          "additionalProperties": false
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
                                     }
                                   },
                                   "required": [
@@ -54080,7 +54121,8 @@
                                     "away_slot",
                                     "status",
                                     "scheduled_at",
-                                    "summary"
+                                    "summary",
+                                    "live_seazn"
                                   ],
                                   "additionalProperties": false
                                 }
@@ -54193,6 +54235,26 @@
                                           "type": "null"
                                         }
                                       ]
+                                    },
+                                    "live_seazn": {
+                                      "anyOf": [
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "watch_url": {
+                                              "type": "string",
+                                              "pattern": "^https:\\/\\/[a-z0-9.-]+(?::\\d+)?\\/live\\/[^/?#]+\\/[^/?#]+\\/[^/?#]+\\/fixtures\\/[0-9a-fA-F-]{36}$"
+                                            }
+                                          },
+                                          "required": [
+                                            "watch_url"
+                                          ],
+                                          "additionalProperties": false
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
                                     }
                                   },
                                   "required": [
@@ -54207,7 +54269,8 @@
                                     "away_slot",
                                     "status",
                                     "scheduled_at",
-                                    "summary"
+                                    "summary",
+                                    "live_seazn"
                                   ],
                                   "additionalProperties": false
                                 }
@@ -54333,6 +54396,26 @@
                                     "type": "null"
                                   }
                                 ]
+                              },
+                              "live_seazn": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "watch_url": {
+                                        "type": "string",
+                                        "pattern": "^https:\\/\\/[a-z0-9.-]+(?::\\d+)?\\/live\\/[^/?#]+\\/[^/?#]+\\/[^/?#]+\\/fixtures\\/[0-9a-fA-F-]{36}$"
+                                      }
+                                    },
+                                    "required": [
+                                      "watch_url"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -54347,7 +54430,8 @@
                               "away_slot",
                               "status",
                               "scheduled_at",
-                              "summary"
+                              "summary",
+                              "live_seazn"
                             ],
                             "additionalProperties": false
                           }
@@ -54460,6 +54544,26 @@
                                     "type": "null"
                                   }
                                 ]
+                              },
+                              "live_seazn": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "watch_url": {
+                                        "type": "string",
+                                        "pattern": "^https:\\/\\/[a-z0-9.-]+(?::\\d+)?\\/live\\/[^/?#]+\\/[^/?#]+\\/[^/?#]+\\/fixtures\\/[0-9a-fA-F-]{36}$"
+                                      }
+                                    },
+                                    "required": [
+                                      "watch_url"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -54474,7 +54578,8 @@
                               "away_slot",
                               "status",
                               "scheduled_at",
-                              "summary"
+                              "summary",
+                              "live_seazn"
                             ],
                             "additionalProperties": false
                           }
@@ -54597,7 +54702,10 @@
                           "away_slot": "example",
                           "status": "upcoming",
                           "scheduled_at": "2026-08-01T09:00:00Z",
-                          "summary": "example"
+                          "summary": "example",
+                          "live_seazn": {
+                            "watch_url": null
+                          }
                         },
                         "next": [
                           {
@@ -54612,7 +54720,10 @@
                             "away_slot": "example",
                             "status": "upcoming",
                             "scheduled_at": "2026-08-01T09:00:00Z",
-                            "summary": "example"
+                            "summary": "example",
+                            "live_seazn": {
+                              "watch_url": null
+                            }
                           }
                         ],
                         "finished": [
@@ -54628,7 +54739,10 @@
                             "away_slot": "example",
                             "status": "upcoming",
                             "scheduled_at": "2026-08-01T09:00:00Z",
-                            "summary": "example"
+                            "summary": "example",
+                            "live_seazn": {
+                              "watch_url": null
+                            }
                           }
                         ]
                       }
@@ -54646,7 +54760,10 @@
                         "away_slot": "example",
                         "status": "upcoming",
                         "scheduled_at": "2026-08-01T09:00:00Z",
-                        "summary": "example"
+                        "summary": "example",
+                        "live_seazn": {
+                          "watch_url": "example"
+                        }
                       }
                     ],
                     "online": [
@@ -54662,7 +54779,10 @@
                         "away_slot": "example",
                         "status": "upcoming",
                         "scheduled_at": "2026-08-01T09:00:00Z",
-                        "summary": "example"
+                        "summary": "example",
+                        "live_seazn": {
+                          "watch_url": "example"
+                        }
                       }
                     ],
                     "approvals": [
@@ -56464,6 +56584,26 @@
                                         "type": "null"
                                       }
                                     ]
+                                  },
+                                  "live_seazn": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "watch_url": {
+                                            "type": "string",
+                                            "pattern": "^https:\\/\\/[a-z0-9.-]+(?::\\d+)?\\/live\\/[^/?#]+\\/[^/?#]+\\/[^/?#]+\\/fixtures\\/[0-9a-fA-F-]{36}$"
+                                          }
+                                        },
+                                        "required": [
+                                          "watch_url"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
                                   }
                                 },
                                 "required": [
@@ -56478,7 +56618,8 @@
                                   "away_slot",
                                   "status",
                                   "scheduled_at",
-                                  "summary"
+                                  "summary",
+                                  "live_seazn"
                                 ],
                                 "additionalProperties": false
                               },
@@ -56611,7 +56752,10 @@
                           "away_slot": "example",
                           "status": "upcoming",
                           "scheduled_at": "2026-08-01T09:00:00Z",
-                          "summary": "example"
+                          "summary": "example",
+                          "live_seazn": {
+                            "watch_url": "example"
+                          }
                         },
                         "source": "this_court",
                         "from_court_name": "example",
@@ -69078,6 +69222,20 @@
                                       "type": "integer",
                                       "exclusiveMinimum": 0,
                                       "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "stopRule": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "result",
+                                        "seazn"
+                                      ]
                                     },
                                     {
                                       "type": "null"

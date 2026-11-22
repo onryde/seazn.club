@@ -7384,6 +7384,8 @@
   "stream.auto.liveLine.other": "Automatisch: stopt ongeveer {count} minuten na de uitslag",
   "stream.auto.liveLineSeconds.one": "Automatisch: stopt ongeveer {count} seconde na de uitslag",
   "stream.auto.liveLineSeconds.other": "Automatisch: stopt ongeveer {count} seconden na de uitslag",
+  "stream.auto.seaznLine.one": "Stopt ongeveer {count} minuut na de uitslag, zodat de herhaling wordt bewaard",
+  "stream.auto.seaznLine.other": "Stopt ongeveer {count} minuten na de uitslag, zodat de herhaling wordt bewaard",
   "stream.auto.refused": "Automatisch starten lukte niet: {reason}",
   "stream.auto.refusal.no_destination": "deze wedstrijd heeft geen bestemming om naartoe te streamen.",
   "stream.auto.refusal.no_credit": "je hebt een tegoed nodig om live te gaan.",

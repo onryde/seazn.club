@@ -538,7 +538,7 @@ describe.skipIf(!HAS_DB)("streamPhone — `auto` (PR-2 T6, §7.1)", () => {
     await saveStreamSettings(r.auth, r.fixtureId, { targetId: r.target.id });
     // `stopApplies` is null throughout: no session is open (B7 review M-3).
     // Final review I-1: a fresh match latches nothing — `wontStart` null, the switch off and on alike.
-    const off = { enabled: false, refusal: null, wontStart: null, stopApplies: null, stopAfterSeconds: null };
+    const off = { enabled: false, refusal: null, wontStart: null, stopApplies: null, stopAfterSeconds: null, stopRule: null };
     expect((await readRig(r)).auto, "a row made by a destination pick has the switch off").toEqual(off);
     await saveStreamSettings(r.auth, r.fixtureId, { autoStream: true });
     const on = { ...off, enabled: true };
@@ -552,7 +552,7 @@ describe.skipIf(!HAS_DB)("streamPhone — `auto` (PR-2 T6, §7.1)", () => {
     expect(answer, "PREMISE: the beat started the broadcast").toMatchObject({ state: "go-live", startedBy: "automatic" });
     expect((await settingsOf(r)).auto_start_attempted_at, "PREMISE: the attempt is stamped, so a refusal read that ignored the stored code would see one").not.toBeNull();
     // B7 review M-3: the automatic start's own session — switch on, phone automatic, no result yet — will be stopped by §7.3.
-    const started = { enabled: true, refusal: null, wontStart: "already_started", stopApplies: true, stopAfterSeconds: 180 };
+    const started = { enabled: true, refusal: null, wontStart: "already_started", stopApplies: true, stopAfterSeconds: 180, stopRule: "result" };
     expect((await readRig(r)).auto).toEqual(started);
     expect((await readRig(r)).auto, "a second read").toEqual(started);
     expect((await settingsOf(r)).auto_started_at?.getTime(), "PREMISE: the latch is the column the start stamped").toBe(r.now().getTime());
@@ -574,7 +574,33 @@ describe.skipIf(!HAS_DB)("streamPhone — `auto` (PR-2 T6, §7.1)", () => {
     const after = await readRig(r);
     // B7 review M-3: the Stop closed the session (the fake ends it at once), so nothing is open for a stop to apply to.
     expect(after.session, "PREMISE: the stopped session is closed").toBeNull();
-    expect(after.auto).toEqual({ enabled: false, refusal: null, wontStart: "stopped", stopApplies: null, stopAfterSeconds: null });
+    expect(after.auto).toEqual({ enabled: false, refusal: null, wontStart: "stopped", stopApplies: null, stopAfterSeconds: null, stopRule: null });
+  });
+
+  // Seazn-hosted video Task 24 (G-E), the seam from the tick's facts to the panel's read: a Seazn session with the Stream switch OFF
+  // will still be stopped 15 min after the result, so the read says so — `seazn`, 900 s — and a pasted-key session with the switch
+  // off reads no stop at all (G1). Real Go lives (composed, on the fake runner), one org each.
+  it("Task 24 (G-E): the open Seazn session with the switch off reads stopApplies true, 900 s and stopRule `seazn`; a pasted-key one reads false and null", async () => {
+    const env = { SEAZN_HOSTED_LIVE: "true", SEAZN_VIDEO_ORIGINS: "seazn.club", RELAY_IMAGE: "registry.fly.io/seazn-relay:stream-phone-t24" } as const;
+    const before = Object.fromEntries(Object.keys(env).map((k) => [k, process.env[k]]));
+    Object.assign(process.env, env);
+    try {
+      const readOpen = async (kind: "seazn" | "pasted") => {
+        const r = await captureRig({ credits: 3 });
+        const [seazn] = await sql<{ id: string }[]>`select id from org_stream_targets where org_id = ${r.auth.orgId} and kind = 'seazn'`;
+        const targetId = kind === "seazn" ? seazn!.id : r.target.id;
+        await saveStreamSettings(r.auth, r.fixtureId, { autoStream: false });
+        await pairPresentPhone(r.fixtureId, { phone: phoneId("a"), at: r.now() });
+        await createSession(r.auth, r.fixtureId, { mode: "composed", targetId }, r.deps);
+        const v = await readRig(r);
+        expect(v.session, `PREMISE: ${kind}: a session is open`).not.toBeNull();
+        return v.auto;
+      };
+      expect(await readOpen("seazn")).toMatchObject({ enabled: false, stopApplies: true, stopAfterSeconds: 15 * 60, stopRule: "seazn" });
+      expect(await readOpen("pasted")).toMatchObject({ enabled: false, stopApplies: false, stopAfterSeconds: 180, stopRule: null });
+    } finally {
+      for (const [k, v] of Object.entries(before)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    }
   });
 
   // B7 review M-3: `stopApplies` — the panel's "stops about N minutes after the result" is a promise about the session on air,
@@ -634,7 +660,7 @@ describe.skipIf(!HAS_DB)("streamPhone — `auto` (PR-2 T6, §7.1)", () => {
       const { r, phone } = await autoRig({ credits: sc.credits ?? 3 });
       await sc.arrange(r);
       await beat(r, phone, { mode: "automatic" });
-      const want = { enabled: true, refusal: code, wontStart: null, stopApplies: null, stopAfterSeconds: null };
+      const want = { enabled: true, refusal: code, wontStart: null, stopApplies: null, stopAfterSeconds: null, stopRule: null };
       expect((await readRig(r)).auto, code).toEqual(want);
       expect((await readRig(r)).auto, `${code}: a second read`).toEqual(want);
       reached++;
@@ -659,7 +685,7 @@ describe.skipIf(!HAS_DB)("streamPhone — `auto` (PR-2 T6, §7.1)", () => {
     expect((await frozenCompetitionIds(r.auth.orgId)).has(cid), "premise: the competition is frozen").toBe(true);
     await beat(r, phone, { mode: "automatic" });
     expect((await settingsOf(r)).auto_start_refusal, "premise: the column stores the closed vocabulary's not_entitled").toBe("not_entitled");
-    const want = { enabled: true, refusal: "competition_frozen", wontStart: null, stopApplies: null, stopAfterSeconds: null };
+    const want = { enabled: true, refusal: "competition_frozen", wontStart: null, stopApplies: null, stopAfterSeconds: null, stopRule: null };
     expect((await readRig(r)).auto).toEqual(want);
     expect((await readRig(r)).auto, "a second read agrees").toEqual(want);
     // Thawed (the ceiling lifted) before the next attempt: the competition is not frozen, so the stored word is served as itself.
@@ -784,7 +810,7 @@ describe.skipIf(!HAS_DB)("streamPhone — `auto` (PR-2 T6, §7.1)", () => {
     await beat(r, phone, { mode: "automatic" });
     const done = await readRig(r);
     expect(done.auto, "started: no refusal, and the start latches (once per match)").toEqual({
-      enabled: true, refusal: null, wontStart: "already_started", stopApplies: true, stopAfterSeconds: 180,
+      enabled: true, refusal: null, wontStart: "already_started", stopApplies: true, stopAfterSeconds: 180, stopRule: "result",
     });
     expect((await settingsOf(r)).auto_started_at?.getTime(), "at the retry's instant").toBe(r.now().getTime());
     expect(done.session, "PREMISE: a session opened").not.toBeNull();

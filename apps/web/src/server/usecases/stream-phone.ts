@@ -17,7 +17,7 @@ import {
   AUTO_START_RETRY_SECONDS, CODE_GRACE_AFTER_FINISH_MINUTES, PHONE_NOT_READY_SHOW_AFTER_SECONDS, PHONE_SILENT_FLOOR_SECONDS,
   POLL_FAR_SECONDS, tunable,
 } from "@/server/relay/config";
-import { AUTO_START_REFUSALS, autoStartVerdict, autoWontStart, type PhoneMode } from "@/server/relay/domain/auto-stream";
+import { AUTO_START_REFUSALS, type AutoStopRule, autoStartVerdict, autoWontStart, type PhoneMode } from "@/server/relay/domain/auto-stream";
 import { isNotResponding, isPresent, isSilent } from "@/server/relay/domain/pairing";
 import { phoneHealthOf } from "@/server/relay/domain/phone-health";
 import { ACTIVE_STATES } from "@/server/relay/domain/session";
@@ -121,7 +121,10 @@ type SettingsFacts = {
  */
 function autoOf(
   st: SettingsFacts & { status: string },
-  c: { phoneMode: PhoneMode | null; openSession: boolean; stopApplies: boolean | null; stopAfterSeconds: number | null; competitionFrozen: boolean },
+  c: {
+    phoneMode: PhoneMode | null; openSession: boolean; stopApplies: boolean | null; stopAfterSeconds: number | null;
+    stopRule: AutoStopRule | null; competitionFrozen: boolean;
+  },
   now: Date,
 ): StreamPhone["auto"] {
   if (st.settings_id === null) return null;
@@ -145,6 +148,7 @@ function autoOf(
     wontStart: autoWontStart(verdict.failed),
     stopApplies: c.stopApplies,
     stopAfterSeconds: c.stopAfterSeconds,
+    stopRule: c.stopRule,
   };
 }
 
@@ -164,7 +168,8 @@ function autoOf(
  *    served only while `autoStartVerdict` could still pass (`autoOf`): the stored code can outlive the attempt it belonged to;
  *    `wontStart` (final review I-1) is the latch that verdict's failures name — why a switch left on will not start again;
  *    `stopApplies` (B7 review M-3) is whether §7.3 will ever stop the open session — the tick's own facts and predicate — and
- *    `stopAfterSeconds` the delay after the result that session waits (the tick's own choice: a court session's tail, else the code's);
+ *    `stopAfterSeconds` the delay after the result that session waits (the tick's own choice: a court session's tail, else the code's),
+ *    and `stopRule` (Seazn Task 24, G-E) which stop that is: §7.3's own (`result`) or a Seazn session's own (`seazn`, every mode);
  *  - `phone.health` (PR-2 T6): domain/phone-health.ts's one derivation over the stored beat — withheld while the phone is silent
  *    (its readings are stale; `not_responding` still names a held one); `phone.notReadyShown` (FP16, owner
  *    ruling R-2): the debounce of the flapping `notReady`, from the pairing's `not_ready_since`, shown only once a BEAT a
@@ -293,10 +298,11 @@ export async function streamPhone(auth: AuthCtx, fixtureId: string, deps: { now:
   const stop = openId === null || fx.settings_id === null ? null : await autoStopOf(openId);
   const stopApplies = stop === null ? null : stop.applies;
   const stopAfterSeconds = stop === null ? null : stop.delaySeconds;
+  const stopRule = stop === null ? null : stop.rule;
 
   return {
     code, phone, destination, lastTakeover,
-    auto: autoOf(fx, { phoneMode, openSession: openId !== null, stopApplies, stopAfterSeconds, competitionFrozen }, now),
+    auto: autoOf(fx, { phoneMode, openSession: openId !== null, stopApplies, stopAfterSeconds, stopRule, competitionFrozen }, now),
     legacy, finished: fx.finished_at !== null, session: openId === null ? null : { id: openId },
     court: courtLink ? { name: courtLink.courtName, targetLabel: courtLink.targetLabel } : null,
   };

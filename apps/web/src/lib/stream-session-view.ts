@@ -746,9 +746,17 @@ export function takeoverLineKey(act: TakeoverAct, withModel: boolean): MessageKe
 
 /** §7.1: Live's read-only "Automatic: stops about N minutes after the result" — only while live, and only when the SERVER
  *  says §7.3 will stop this session (`auto.stopApplies`, B7 review M-3: the switch on, the session's phone automatic — A4
- *  — and the session created before any result, A15). The tick's own facts and predicate, never re-derived here. */
+ *  — and the session created before any result, A15; or, Seazn Task 24, a Seazn session's own stop in every mode). The tick's
+ *  own facts and predicate, never re-derived here. */
 export function autoStopLine(phone: StreamPhone | null, state: PhoneTabState): boolean {
   return state === "live" && phone?.auto?.stopApplies === true;
+}
+
+/** Seazn-hosted video Task 24 (recommendation 2026-11-21, G-E): the stop Live's line names is a Seazn session's own
+ *  (`auto.stopRule === "seazn"`) — it applies in every mode, the switch off and an operator phone included, so the line names it
+ *  in its own words ("so the replay can be saved") rather than "Automatic: …". Absent or `result`: §7.3's own, as before. */
+export function autoStopIsSeazn(phone: StreamPhone | null): boolean {
+  return phone?.auto?.stopRule === "seazn";
 }
 
 /** The delay Live's line names: the OPEN session's own, as the server serves it (`auto.stopAfterSeconds` — the tick's choice, a
@@ -757,7 +765,8 @@ export function autoStopLine(phone: StreamPhone | null, state: PhoneTabState): b
 export function autoStopWait(phone: StreamPhone | null, fallbackMinutes: number): { unit: "seconds" | "minutes"; count: number } {
   const seconds = phone?.auto?.stopAfterSeconds ?? null;
   if (seconds === null) return { unit: "minutes", count: fallbackMinutes };
-  if (seconds < 60) return { unit: "seconds", count: seconds };
+  // The Seazn line has minutes only (its delay is 15 min): a shorter one reads as 1 minute, never in the "Automatic" seconds line.
+  if (seconds < 60 && !autoStopIsSeazn(phone)) return { unit: "seconds", count: seconds };
   return { unit: "minutes", count: Math.max(1, Math.round(seconds / 60)) };
 }
 

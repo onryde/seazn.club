@@ -579,6 +579,8 @@ async function checkOrganiserRead(m: Readonly<Model>, x: Real): Promise<void> {
       stopApplies,
       // The model's sessions are per-fixture code's: the code's 180 s, whatever the court's tail is (O15); null with none open.
       stopAfterSeconds: open === null ? null : AUTO_STOP_AFTER_RESULT_SECONDS,
+      // Seazn Task 24: the model's sessions are pasted-key ones, so the only stop is §7.3's own.
+      stopRule: stopApplies === true ? "result" : null,
     });
   }
   x.tally.count("organiserReadChecks");

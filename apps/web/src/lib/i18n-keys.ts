@@ -10836,6 +10836,8 @@ export type DictionaryKey =
   | "stream.auto.refusal.youtube_live_blocked"
   | "stream.auto.refusal.youtube_live_not_enabled"
   | "stream.auto.refused"
+  | "stream.auto.seaznLine.one"
+  | "stream.auto.seaznLine.other"
   | "stream.auto.startsCameraOnly"
   | "stream.auto.startsWithScore"
   | "stream.auto.switch"

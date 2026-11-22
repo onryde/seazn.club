@@ -7384,6 +7384,8 @@
   "stream.auto.liveLine.other": "Automatic: stops about {count} minutes after the result",
   "stream.auto.liveLineSeconds.one": "Automatic: stops about {count} second after the result",
   "stream.auto.liveLineSeconds.other": "Automatic: stops about {count} seconds after the result",
+  "stream.auto.seaznLine.one": "Stops about {count} minute after the result, so the replay can be saved",
+  "stream.auto.seaznLine.other": "Stops about {count} minutes after the result, so the replay can be saved",
   "stream.auto.refused": "Automatic start couldn't begin: {reason}",
   "stream.auto.refusal.no_destination": "This match has no destination to stream to.",
   "stream.auto.refusal.no_credit": "You need a match credit to go live.",

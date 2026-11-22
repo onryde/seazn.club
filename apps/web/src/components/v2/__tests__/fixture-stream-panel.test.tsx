@@ -2766,6 +2766,44 @@ describe("PhoneTabBody — PR-2: the switch, the phone's line, the refusal, the 
     expect(line(undefined)).toBe(liveLine(3));
   });
 
+  // Seazn-hosted video Task 24 (recommendation 2026-11-21, G-E): a Seazn session's own stop (`stopRule: "seazn"`) applies in every
+  // mode — the switch off, an operator phone — so "Automatic: …" would be false. It names the stop in its own words: the server's
+  // 900 s as 15 minutes, never seconds. The English is typed here from the ruling; every locale carries both plural forms.
+  it("Task 24 (G-E): a Seazn session's own stop reads the Seazn line — with the switch off and an operator phone — and §7.3's own still reads `Automatic`", () => {
+    const seaznLine = (n: number) => `Stops about ${n} ${n === 1 ? "minute" : "minutes"} after the result, so the replay can be saved`;
+    const seazn = (over: Partial<Auto>, mode: "automatic" | "operator") =>
+      readModel({ auto: auto({ stopApplies: true, stopRule: "seazn", ...over }), phone: facts({ mode, state: "publishing" }) });
+    let checked = 0;
+    for (const [name, phone] of [
+      ["the switch off, an operator phone", seazn({ enabled: false, stopAfterSeconds: 900 }, "operator")],
+      ["the switch off, an automatic phone", seazn({ enabled: false, stopAfterSeconds: 900 }, "automatic")],
+      ["the switch on, an operator phone", seazn({ stopAfterSeconds: 900 }, "operator")],
+    ] as const) {
+      expect(textAt(body({ view: LIVE, balance: 1, phone, autoStopMinutes: 3 }), "stream-auto-live"), name).toBe(seaznLine(15));
+      checked++;
+    }
+    expect(checked).toBe(3);
+    // §7.3's own rule (and an older server that serves no rule) keeps the existing line.
+    const result = readModel({ auto: auto({ stopApplies: true, stopRule: "result", stopAfterSeconds: 180 }), phone: facts({ mode: "automatic", state: "publishing" }) });
+    expect(textAt(body({ view: LIVE, balance: 1, phone: result, autoStopMinutes: 3 }), "stream-auto-live")).toBe(liveLine(3));
+    const older = readModel({ auto: auto({ stopApplies: true, stopAfterSeconds: 180 }), phone: facts({ mode: "automatic", state: "publishing" }) });
+    expect(textAt(body({ view: LIVE, balance: 1, phone: older, autoStopMinutes: 3 }), "stream-auto-live")).toBe(liveLine(3));
+    // A Seazn stop under a minute (none is made: the delay is 15 min) still reads minutes, never "Automatic: … seconds".
+    expect(textAt(body({ view: LIVE, balance: 1, phone: seazn({ stopAfterSeconds: 30 }, "operator"), autoStopMinutes: 3 }), "stream-auto-live")).toBe(seaznLine(1));
+    let locales = 0;
+    for (const locale of ["en", "es", "fr", "nl"]) {
+      const d = uiDict(locale);
+      for (const form of ["one", "other"]) {
+        const text = d[`stream.auto.seaznLine.${form}`];
+        expect(text, `${locale} ${form}`).toBeTypeOf("string");
+        expect(text!.split("{count}").length - 1, `${locale} ${form}: one {count}`).toBe(1);
+        expect(text, `${locale} ${form}: not the automatic wording`).not.toBe(d[`stream.auto.liveLine.${form}`]);
+      }
+      locales++;
+    }
+    expect(locales).toBe(4);
+  });
+
   it("T11: live, the strip is the phone-health line (Option A state 4) — the read model's readings, wired as the builder answers", () => {
     const f = facts({ state: "publishing", elapsedMs: 4_000, beat: { battery: { percent: 78, charging: true, drainPctPerHour: null }, bitrateKbps: 2400, delivery: "ok", thermal: 1, dataUsedMB: 12 } });
     const tree = body({ view: LIVE, balance: 1, phone: readModel({ phone: f }) });

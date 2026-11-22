@@ -377,6 +377,11 @@ export const StreamPhone = z
          *  local/ci). The live line names it, so it never promises a delay the tick does not use. Null with no open session; the
          *  server always serves it, so a reader that finds it absent falls back to the page's per-code minutes. */
         stopAfterSeconds: z.number().int().positive().nullable().optional(),
+        /** Seazn-hosted video Task 24 (recommendation 2026-11-21, G-E): WHICH stop `stopApplies` and `stopAfterSeconds` describe —
+         *  `result`, §7.3's own (the switch on, the session's phone automatic); `seazn`, a Seazn session's own stop 15 min after the
+         *  result in every mode, so its replay is moved. The live line names the Seazn one in its own words, because the phone may
+         *  not be automatic. Null when neither applies, or with no open session; a reader that finds it absent reads `result`. */
+        stopRule: z.enum(["result", "seazn"]).nullable().optional(),
       })
       .strict()
       .nullable(),

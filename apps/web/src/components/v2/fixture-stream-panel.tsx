@@ -75,6 +75,7 @@ import {
   autoRefusalStrip,
   AUTO_WONT_START_KEY,
   autoSwitchNote,
+  autoStopIsSeazn,
   autoStopLine,
   autoStopWait,
   elapsedLabel,
@@ -2269,6 +2270,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   // §7.1: Live's read-only line — only when the server says §7.3 will stop this session (B7 review M-3), the server's delay.
   const autoLive = state === "live" && autoStopLine(p.phone, state);
   const autoWait = autoStopWait(p.phone, p.autoStopMinutes);
+  const autoSeazn = autoStopIsSeazn(p.phone);
   // R2006 (Option C): Ready's score card — the style picker and Score timing while the score is on; one line once the
   // organiser chose Camera only; nothing where the score cannot stream (the reason sits above Go live instead).
   const scoreBlock = !p.score.available ? null : scoreMode === "composed" ? (
@@ -2600,7 +2602,9 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
             <p data-testid="stream-auto-live" className="text-xs text-slate-600">
               {autoWait.unit === "seconds"
                 ? msgPlural("stream.auto.liveLineSeconds", autoWait.count, { count: autoWait.count })
-                : msgPlural("stream.auto.liveLine", autoWait.count, { count: autoWait.count })}
+                : autoSeazn
+                  ? msgPlural("stream.auto.seaznLine", autoWait.count, { count: autoWait.count })
+                  : msgPlural("stream.auto.liveLine", autoWait.count, { count: autoWait.count })}
             </p>
           )}
           {state === "live" ? (

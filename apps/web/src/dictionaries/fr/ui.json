@@ -7384,6 +7384,8 @@
   "stream.auto.liveLine.other": "Automatique : s'arrête environ {count} minutes après le résultat",
   "stream.auto.liveLineSeconds.one": "Automatique : s'arrête environ {count} seconde après le résultat",
   "stream.auto.liveLineSeconds.other": "Automatique : s'arrête environ {count} secondes après le résultat",
+  "stream.auto.seaznLine.one": "S'arrête environ {count} minute après le résultat, pour enregistrer le replay",
+  "stream.auto.seaznLine.other": "S'arrête environ {count} minutes après le résultat, pour enregistrer le replay",
   "stream.auto.refused": "Impossible de démarrer automatiquement : {reason}",
   "stream.auto.refusal.no_destination": "ce match n'a aucune destination de diffusion.",
   "stream.auto.refusal.no_credit": "il vous faut un crédit pour passer en direct.",

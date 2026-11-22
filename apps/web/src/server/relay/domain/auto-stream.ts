@@ -130,6 +130,31 @@ export function autoStopApplies(f: AutoStopFacts): boolean {
   return AUTO_STOP_CONJUNCTS.every((c) => WAITS_FOR_THE_RESULT.has(c.name) || c.holds(f, new Date(0), 0));
 }
 
+/** Seazn-hosted video Task 24 (recommendation 2026-11-21, G-E): the Seazn arm. A Seazn session still live a fixed delay after the
+ *  result is stopped in EVERY mode — the Stream switch off, an operator phone, an automatic one — so its recordings' move to the
+ *  replay host always starts. It is §7.3's table WITHOUT its two mode conjuncts (`switch_on`, `phone_automatic`), so every other
+ *  conjunct means what it means there, A15 included: a broadcast started after the result is the organiser's own post-match one,
+ *  and the arm would otherwise stop it the moment it began. Read only for a Seazn session (G1: every other session is judged by the
+ *  table above alone). The delay is the caller's (SEAZN_REPLAY_DELAY_MINUTES). */
+const MODE_CONJUNCTS: ReadonlySet<string> = new Set(["switch_on", "phone_automatic"]);
+export const SEAZN_STOP_CONJUNCTS: readonly StopConjunct[] = AUTO_STOP_CONJUNCTS.filter((c) => !MODE_CONJUNCTS.has(c.name));
+
+/** The Seazn arm's verdict: due when every conjunct of SEAZN_STOP_CONJUNCTS holds; `failed` names each that does not. */
+export function seaznStopVerdict(f: AutoStopFacts, now: Date, delaySeconds: number): { due: boolean; failed: string[] } {
+  const failed = SEAZN_STOP_CONJUNCTS.filter((c) => !c.holds(f, now, delaySeconds)).map((c) => c.name);
+  return { due: failed.length === 0, failed };
+}
+
+/** Which rule will ever stop THIS session: §7.3's own (`result`) when it applies, on any destination — its delay is the shorter, so
+ *  it stops first; else the Seazn arm (`seazn`) for a Seazn session it applies to; else none. The panel's live line names the rule
+ *  and its delay, so it never promises a stop the tick will not make. */
+export type AutoStopRule = "result" | "seazn";
+export function autoStopRule(f: AutoStopFacts, isSeazn: boolean): AutoStopRule | null {
+  if (autoStopApplies(f)) return "result";
+  if (isSeazn && SEAZN_STOP_CONJUNCTS.every((c) => WAITS_FOR_THE_RESULT.has(c.name) || c.holds(f, new Date(0), 0))) return "seazn";
+  return null;
+}
+
 /** Due when every conjunct holds; `failed` names each one that does not, in table order. */
 export function autoStopVerdict(f: AutoStopFacts, now: Date, delaySeconds: number): { due: boolean; failed: string[] } {
   const failed = AUTO_STOP_CONJUNCTS.filter((c) => !c.holds(f, now, delaySeconds)).map((c) => c.name);
