@@ -8,11 +8,14 @@
 // module under test. Every case builds its own empty cache, so no case depends on another's order.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeIngest } from "@/server/relay/fakes";
-import { createPlaybackTokenCache, signDownload, signLivePlayback, signRecordingPlayback } from "../cf-playback";
+import { CloudflareIngest } from "@/server/relay/ingest-cf";
+import { PlaybackTokenRecentlyFailed, createPlaybackTokenCache, signDownload, signLivePlayback, signRecordingPlayback } from "../cf-playback";
 
 const MIN = 60_000;
 /** The plan's token life (Task 8: SEAZN_LIVE_TOKEN_TTL_SECONDS = 3600), typed here. */
 const TTL_MS = 3600 * 1000;
+/** Phase 1 review I1: how long a failed mint is remembered (the fix brief's 30-60 s; 60 s chosen), typed here. */
+const FAILURE_WINDOW_MS = 60_000;
 const T0 = new Date("2026-11-21T10:00:00Z");
 const at = (ms: number) => new Date(T0.getTime() + ms);
 /** Cloudflare's signed live/recording manifest: the token is one PATH segment, and there is no query string. */
@@ -72,13 +75,63 @@ describe("signLivePlayback (C1)", () => {
     expect(mint).toHaveBeenCalledTimes(1);
   });
 
-  it("a failed mint is not kept: the next call mints again, and its error reaches the caller", async () => {
+  it("review I1: a failed mint is REMEMBERED for 60 s under its key — its error reaches the caller, a call inside the window is refused by name with no second Cloudflare call, and the first call after it mints again", async () => {
     const { deps, mint } = rig();
     mint.mockRejectedValueOnce(new Error("cloudflare playback token: HTTP 503"));
     await expect(signLivePlayback(deps, "in-1", T0)).rejects.toThrow(/HTTP 503/);
-    const ok = await signLivePlayback(deps, "in-1", at(MIN));
+    for (const later of [1_000, 30_000, FAILURE_WINDOW_MS - 1]) {
+      await expect(signLivePlayback(deps, "in-1", at(later)), `${later} ms later`).rejects.toBeInstanceOf(PlaybackTokenRecentlyFailed);
+    }
+    expect(mint, "inside the window: the one mint").toHaveBeenCalledTimes(1);
+    const ok = await signLivePlayback(deps, "in-1", at(FAILURE_WINDOW_MS));
     expect(tokenOf(ok.src)).toMatch(/^fake\.in-1\./);
+    expect(mint, "the window is over: a new mint").toHaveBeenCalledTimes(2);
+    // The recovered token is cached as any other: 10 min later it is reused.
+    expect(await signLivePlayback(deps, "in-1", at(FAILURE_WINDOW_MS + 10 * MIN))).toEqual(ok);
     expect(mint).toHaveBeenCalledTimes(2);
+  });
+
+  it("review I1: the window is per KEY — another uid, and the same uid's download token, still mint; the refusal quotes no uid and no token", async () => {
+    const { deps, mint } = rig();
+    mint.mockRejectedValueOnce(new Error("cloudflare playback token: HTTP 429"));
+    await expect(signLivePlayback(deps, "in-1", T0)).rejects.toThrow(/HTTP 429/);
+    expect(tokenOf((await signLivePlayback(deps, "in-2", at(1_000))).src)).toMatch(/^fake\.in-2\./);
+    expect(await signDownload(deps, "in-1", at(1_000), 300)).toMatch(/\/fake\.in-1\.\d+\.dl\//);
+    expect(mint).toHaveBeenCalledTimes(3);
+    const refusal = await signLivePlayback(deps, "in-1", at(2_000)).then(() => null, (e: unknown) => e as Error);
+    expect(refusal).toBeInstanceOf(PlaybackTokenRecentlyFailed);
+    expect(refusal!.name).toBe("PlaybackTokenRecentlyFailed");
+    expect(refusal!.message).not.toMatch(/in-1|fake\./);
+    expect(mint).toHaveBeenCalledTimes(3);
+  });
+
+  it("review I1: viewers arriving together on a mint that fails all see ITS error, from one Cloudflare call", async () => {
+    const { deps, mint } = rig();
+    mint.mockRejectedValueOnce(new Error("cloudflare playback token: HTTP 502"));
+    const answers = await Promise.allSettled([1, 2, 3, 4].map(() => signLivePlayback(deps, "in-1", T0)));
+    expect(answers.map((a) => (a.status === "rejected" ? (a.reason as Error).message : "ok"))).toEqual(Array(4).fill("cloudflare playback token: HTTP 502"));
+    expect(mint).toHaveBeenCalledTimes(1);
+  });
+
+  it("review I1: a mint that TIMES OUT is a failed mint — the real adapter gives up at its 10 s timeout, the caller is refused, and inside the window Cloudflare is not asked again", async () => {
+    // The adapter's own timeout, driven by hand: `AbortSignal.timeout` answers a signal this test aborts, so no real 10 s passes.
+    const deadline = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => deadline.signal);
+    const fetchImpl = vi.fn((_url: string | URL | Request, init?: RequestInit) => new Promise<Response>((_, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
+    })) as unknown as typeof fetch;
+    try {
+      const deps = { ingest: new CloudflareIngest({ fetchImpl, accountId: "acct", token: "tok" }), tokenCache: createPlaybackTokenCache() };
+      const first = signLivePlayback(deps, "in-1", T0).then(() => null, (e: unknown) => e as Error);
+      await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+      expect(timeout, "the mint carries the plan's 10 s timeout").toHaveBeenCalledWith(10_000);
+      deadline.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+      expect((await first)?.message).toMatch(/^cloudflare playbackToken: request failed before a response/);
+      await expect(signLivePlayback(deps, "in-1", at(1_000))).rejects.toBeInstanceOf(PlaybackTokenRecentlyFailed);
+      expect(fetchImpl, "the timed-out mint is the only Cloudflare call").toHaveBeenCalledTimes(1);
+    } finally {
+      timeout.mockRestore();
+    }
   });
 
   it("a deployment on a real relay with no STREAM_PLAYBACK_HOST refuses by name BEFORE any mint (a guessed host would be a lie)", async () => {

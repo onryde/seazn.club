@@ -1340,6 +1340,36 @@ describe("Seazn Task 13: playback tokens and the recording lock", () => {
     expect(records.map((c) => [c.method, c.subjectId, c.status])).toEqual([["POST", "in_abc", 200], ["POST", "in_leaky", 500], ["POST", "in_notoken", 200]]);
   });
 
+  it("review I1: playbackToken gives up at its 10 s timeout — the request carries the timeout's signal, the abort is a thrown failure recorded as `timeout`; a call that is not a playback token carries no signal", async () => {
+    const deadline = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => deadline.signal);
+    const port = new FakeRecorder();
+    const inits: RequestInit[] = [];
+    const fetchImpl = vi.fn((url: string | URL | Request, init?: RequestInit) => {
+      inits.push(init ?? {});
+      if (!String(url).endsWith("/token")) return Promise.resolve(new Response(JSON.stringify(cfReply({ url: String(url), init: init ?? {} }).body), { status: 200 }));
+      return new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true }));
+    }) as unknown as typeof fetch;
+    try {
+      const cf = new CloudflareIngest({ fetchImpl, accountId: "acct", token: API, recorder: port });
+      const pending = cf.playbackToken("in_abc", { expiresAt: AT }).then(() => null, (e: unknown) => e as Error);
+      await vi.waitFor(() => expect(inits).toHaveLength(1));
+      expect(timeout).toHaveBeenCalledWith(10_000);
+      expect(inits[0]!.signal, "the token request carries the timeout's signal").toBe(deadline.signal);
+      deadline.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+      const err = await pending;
+      expect(err?.message).toMatch(/^cloudflare playbackToken: request failed before a response/);
+      expect(err?.message).not.toContain(API);
+      await settle();
+      expect(port.calls.map((c) => [c.operation, c.status, c.errorCode])).toEqual([["playbackToken", null, "timeout"]]);
+      await cf.requireSignedVideo("v_cam_done");
+      expect(inits[1]!.signal, "the lock names no timeout").toBeUndefined();
+      expect(timeout, "only the token asked for one").toHaveBeenCalledTimes(1);
+    } finally {
+      timeout.mockRestore();
+    }
+  });
+
   it("requireSignedVideo POSTs exactly { requireSignedURLs: true } to /stream/{videoId} and answers `set` only on an echo of true; a 200 echoing false is an error (C3); a 404 is `absent`; a 500 throws, redacted", async () => {
     const { rec, cf, port } = build();
     expect(await cf.requireSignedVideo("v_cam_done")).toBe("set");

@@ -29,7 +29,7 @@
 //    "not known yet" — `measured()` maps those to null on the VALUE, never on
 //    the state, because a video that ERRORED is no longer `live-inprogress`
 //    and a state-keyed rule would pass its -1 into recording_bytes.
-import { DELETE_RECORDING_AFTER_DAYS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS, OUTPUT_READ_FAILURES_BEFORE_REPORT } from "./config";
+import { DELETE_RECORDING_AFTER_DAYS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS, OUTPUT_READ_FAILURES_BEFORE_REPORT, SEAZN_TOKEN_MINT_TIMEOUT_MS } from "./config";
 // The token is ACCOUNT-owned: /user/tokens/verify says "Invalid API Token"
 // while every Stream endpoint answers 200 (C12) — nothing here calls it.
 // Ruling 13: one stream_provider_calls row per call, through the injected
@@ -237,7 +237,7 @@ export class CloudflareIngest implements IngestProvider {
     // LIVE_INPUT_RECORDING, never a mode of its own. The scan stays, because a raw
     // `fetch` beside this helper would dodge the type.
     method: "GET" | "POST" | "PUT" | "DELETE", path: string, body: unknown,
-    meta: { operation: string; ids: string[]; subjectId?: string | null; subjectOf?: (result: T | undefined) => string | null; sessionId?: string | null },
+    meta: { operation: string; ids: string[]; subjectId?: string | null; subjectOf?: (result: T | undefined) => string | null; sessionId?: string | null; timeoutMs?: number },
   ): Promise<{ status: number; json: CfEnvelope<T> }> {
     const url = `${this.base}${path}`;
     const started = Date.now();
@@ -246,15 +246,19 @@ export class CloudflareIngest implements IngestProvider {
         .then(() => this.rec.record({ provider: "cloudflare", operation: meta.operation, subjectId, sessionId: meta.sessionId ?? null,
           method, url, ids: [this.accountId, ...meta.ids], status, latencyMs: Date.now() - started, attempt: 1, requestId, errorCode }))
         .catch(() => undefined);
+    // Phase 1 review I1: a call that names a timeout gives up after it — the request and the body read alike (one signal for both).
+    // Only the viewer-driven playback token names one today; every other call keeps the platform's own behaviour.
+    const signal = meta.timeoutMs === undefined ? undefined : AbortSignal.timeout(meta.timeoutMs);
     let res: Response;
     try {
       res = await this.fetchImpl(url, {
         method,
         headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
         body: body === undefined ? undefined : JSON.stringify(body),
+        ...(signal ? { signal } : {}),
       });
     } catch (e) {
-      record(null, null, "network", meta.subjectId ?? null);
+      record(null, null, (e as { name?: string })?.name === "TimeoutError" ? "timeout" : "network", meta.subjectId ?? null);
       // Re-review N2. The ONE throw in this adapter that bypassed the floor below — and the one whose message we did
       // not write: undici rejects with `TypeError: fetch failed`, and a url-shaped failure quotes the url back. The
       // sibling driver's twin (`fly-client.ts`'s `transportFailure`) does not rethrow either; it builds its own
@@ -638,11 +642,14 @@ export class CloudflareIngest implements IngestProvider {
    *  `downloadable` is sent only when asked, so a viewer's token never opens the MP4.
    *
    *  The answer is a SECRET: the provider-call record carries no body (ports.ts ProviderCallRecord), and every message this
-   *  throws is redacted against whatever token the answer held, as well as the account token. */
+   *  throws is redacted against whatever token the answer held, as well as the account token.
+   *
+   *  Phase 1 review I1: a viewer's request waits on this call, so it gives up after SEAZN_TOKEN_MINT_TIMEOUT_MS (recorded as
+   *  `timeout`); the caller's token cache then counts it as a failed mint. */
   async playbackToken(uid: string, o: { expiresAt: Date; downloadable?: boolean }): Promise<string> {
     const exp = Math.floor(o.expiresAt.getTime() / 1000);
     const r = await this.call<{ token?: string }>("POST", `/${encodeURIComponent(uid)}/token`, o.downloadable ? { exp, downloadable: true } : { exp },
-      { operation: "playbackToken", ids: [uid], subjectId: uid });
+      { operation: "playbackToken", ids: [uid], subjectId: uid, timeoutMs: SEAZN_TOKEN_MINT_TIMEOUT_MS });
     const token = r.json.result?.token;
     const minted = typeof token === "string" ? [token] : [];
     if (!r.json.success) this.fail("playback token", r, minted);

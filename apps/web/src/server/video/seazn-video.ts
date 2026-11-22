@@ -21,6 +21,10 @@ import "server-only";
 //   LEFT OUT: a recording whose session began DELETE_RECORDING_AFTER_DAYS or more before `now` (Cloudflare deletes a recording
 //     that long after it is ready, which is never before its session began, so this never lists a deleted one), and a part
 //     whose token cannot be minted right now (logged by uid, never a token). One part never fails the answer or the live.
+// A LIVE whose token cannot be minted (Phase 1 review I1) is settled the same way: `live: null`, the parts still answer, and one
+// line names the session and the error's class. It used to fail the whole answer, so a Cloudflare outage was a 500 on every
+// viewer's poll (and a Sentry event each, v1's unhandled-error path). A failed mint is remembered for a window (cf-playback.ts),
+// and a refusal from inside that window (`PlaybackTokenRecentlyFailed`) is not logged again: one line per mint, not per viewer.
 // Only a `seazn_locked_videos` uid is ever signed: Task 13 wrote that row after checking the recording names this input itself
 // (C6) and making it need a token (C3), so an unsigned recording, a uid from a listing and a uid from the request never reach
 // a viewer. A session still live has no part yet: its live plays.
@@ -28,9 +32,8 @@ import "server-only";
 // The flags are not read (controller ruling 2026-11-20): SEAZN_HOSTED_LIVE gates new Seazn streams, never playback of one that
 // exists. The relay is asked only when there is something to sign, so a relay-disabled deployment answers a fixture with no
 // Seazn video without touching it. With one, `relayDrivers()` hands back the disabled pair, whose every method rejects with
-// `RelayDriversDisabled`: a LIVE to sign is the one thing refused by name (it is signed outside the per-part settle, so the answer
-// is that error), while each replay part's mint is settled on its own, so a part is dropped and logged like any other that cannot
-// be signed, and the answer is `{ live: null, replay: [] }`.
+// `RelayDriversDisabled`: the live and each part are left out and logged under that name, and the answer is
+// `{ live: null, replay: [] }`. A live deployment that cannot even BUILD its relay (its Cloudflare secrets missing) still throws.
 //
 // Secrets: a signed URL is the answer itself and goes nowhere else — never logged, never in an error. The privileged `sql`
 // client: fixture_stream_* and seazn_locked_videos are FORCE RLS with no policy (V410, V540), the stream pattern (parts.ts).
@@ -40,7 +43,7 @@ import { log } from "@/server/logger";
 import { DELETE_RECORDING_AFTER_DAYS } from "@/server/relay/config";
 import { relayDrivers } from "@/server/relay/drivers";
 import { TERMINAL_STATES } from "@/server/relay/domain/session";
-import { type PlaybackDeps, processPlaybackTokenCache, signLivePlayback, signRecordingPlayback } from "./cf-playback";
+import { type PlaybackDeps, PlaybackTokenRecentlyFailed, processPlaybackTokenCache, signLivePlayback, signRecordingPlayback } from "./cf-playback";
 
 export type { PublicFixtureVideo };
 
@@ -72,6 +75,8 @@ interface LockedRecording { cf_video_id: string; session_id: string; session_cre
 const DAY_MS = 86_400_000;
 /** What a rejected mint is logged as: its class alone. A message could quote a request, and a request can carry a token. */
 const errorClass = (e: unknown): string => (e instanceof Error ? e.name : typeof e);
+/** A failure worth a line: a mint that was asked and failed. A refusal inside a failed mint's window asked nothing (review I1). */
+const freshFailure = (e: unknown): boolean => !(e instanceof PlaybackTokenRecentlyFailed);
 
 async function videoOf(fixtureId: string, orgId: string | null, now: Date, playback: PlaybackDeps | undefined): Promise<PublicFixtureVideo> {
   const inOrg = orgId === null ? sql`` : sql`and s.org_id = ${orgId}`;
@@ -108,16 +113,21 @@ async function videoOf(fixtureId: string, orgId: string | null, now: Date, playb
   if (liveUid === null && playable.length === 0) return EMPTY();
 
   const deps = playback ?? { ingest: relayDrivers().ingest, tokenCache: processPlaybackTokenCache() };
-  // Each part is signed on its own: one that cannot be minted is left out of this answer, never the answer or the live.
-  const [live, signed] = await Promise.all([
-    liveUid === null ? null : signLivePlayback(deps, liveUid, now),
+  // The live and each part are signed on their own: one that cannot be minted is left out of this answer, never the answer.
+  const [liveSigned, signed] = await Promise.all([
+    liveUid === null ? null : signLivePlayback(deps, liveUid, now).then((v) => ({ ok: v }), (err: unknown) => ({ err })),
     Promise.allSettled(playable.map((r) => signRecordingPlayback(deps, r.cf_video_id, now))),
   ]);
+  let live: PublicFixtureVideo["live"] = null;
+  if (liveSigned !== null && "ok" in liveSigned) live = liveSigned.ok;
+  else if (liveSigned !== null && freshFailure(liveSigned.err)) {
+    log.warn({ sessionId: latest!.id, err: errorClass(liveSigned.err) }, "seazn video: the live could not be signed; this answer has no live");
+  }
   const replay: PublicFixtureVideo["replay"] = [];
   signed.forEach((s, i) => {
     const r = playable[i]!;
     if (s.status === "fulfilled") replay.push({ partNo: r.partNo, player: "hls", ...s.value });
-    else {
+    else if (freshFailure(s.reason)) {
       log.warn(
         { sessionId: r.session_id, cfVideoId: r.cf_video_id, err: errorClass(s.reason) },
         "seazn video: a replay part could not be signed; it is left out of this answer",

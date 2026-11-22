@@ -10,14 +10,32 @@ import "server-only";
 // by live inputs and recordings, never by viewers — and the entry is the mint IN FLIGHT, so viewers arriving together share it.
 // The cache is passed in (`deps.tokenCache`): production wires `processPlaybackTokenCache()`, and each test makes its own.
 //
+// A FAILED mint is cached too (Phase 1 review I1), under the same key, for SEAZN_TOKEN_FAILURE_CACHE_SECONDS from the moment it
+// was asked: inside that window every caller is refused with `PlaybackTokenRecentlyFailed` and Cloudflare is not asked again. Without
+// it, a Cloudflare 5xx or 429 turned every open page's poll into a mint on the account prod shares, and the 429s fed themselves.
+// The mint itself gives up after SEAZN_TOKEN_MINT_TIMEOUT_MS (the adapter's `AbortSignal.timeout`), so a hung one is a failure too.
+//
 // The URL shapes are Cloudflare's: `https://<customer host>/<token>/manifest/video.m3u8` (C1) and
 // `https://<customer host>/<token>/downloads/default.mp4` (C5). The token is a path segment, never a query string.
-import { SEAZN_LIVE_TOKEN_TTL_SECONDS, SEAZN_TOKEN_REFRESH_BEFORE_SECONDS, streamPlaybackHost } from "@/server/relay/config";
+import { SEAZN_LIVE_TOKEN_TTL_SECONDS, SEAZN_TOKEN_FAILURE_CACHE_SECONDS, SEAZN_TOKEN_REFRESH_BEFORE_SECONDS, streamPlaybackHost } from "@/server/relay/config";
 import type { IngestProvider } from "@/server/relay/ports";
 
-interface CachedToken { token: Promise<string>; expiresAtMs: number }
-/** uid + whether it opens the download → the token minted for it. A download token is never served to a viewer. */
+/** A mint, in flight or done, and when its token expires. */
+interface MintedToken { kind: "token"; token: Promise<string>; expiresAtMs: number }
+/** A mint that failed, remembered until `expiresAtMs` (the end of its window). It holds no error: the refusal is by name. */
+interface FailedMint { kind: "failed"; expiresAtMs: number }
+type CachedToken = MintedToken | FailedMint;
+/** uid + whether it opens the download → the token minted for it, or its failure. A download token is never served to a viewer. */
 export type PlaybackTokenCache = Map<string, CachedToken>;
+
+/** The answer inside a failed mint's window: no provider call was made. Callers that log a failed mint skip this one, so a failure
+ *  is logged once per mint, never once per viewer. Its message names no uid and no token. */
+export class PlaybackTokenRecentlyFailed extends Error {
+  override readonly name = "PlaybackTokenRecentlyFailed";
+  constructor() {
+    super(`a playback token for this uid failed to mint less than ${SEAZN_TOKEN_FAILURE_CACHE_SECONDS} s ago; it is not asked for again until then`);
+  }
+}
 export const createPlaybackTokenCache = (): PlaybackTokenCache => new Map();
 
 const PROCESS_CACHE: PlaybackTokenCache = createPlaybackTokenCache();
@@ -44,23 +62,29 @@ async function tokenFor(deps: PlaybackDeps, uid: string, downloadable: boolean, 
   const key = `${downloadable ? "download" : "play"}:${uid}`;
   const nowMs = now.getTime();
   const hit = deps.tokenCache.get(key);
+  // A failed mint inside its window: refused by name, and Cloudflare is not asked (review I1).
+  if (hit?.kind === "failed" && hit.expiresAtMs > nowMs) throw new PlaybackTokenRecentlyFailed();
   // A viewer's token is reused while more than the refresh window is left (the player re-asks before it runs out). A download
   // token is reused only when it lives at least as long as THIS caller asked (review m5): the replay host's fetch can queue for
   // hours, and a token that expires sooner than asked would fail inside it.
-  const left = hit ? hit.expiresAtMs - nowMs : 0;
-  const reusable = downloadable ? left >= ttlSeconds * 1000 : left > SEAZN_TOKEN_REFRESH_BEFORE_SECONDS * 1000;
-  if (hit && reusable) return { token: await hit.token, expiresAtMs: hit.expiresAtMs };
+  if (hit?.kind === "token") {
+    const left = hit.expiresAtMs - nowMs;
+    const reusable = downloadable ? left >= ttlSeconds * 1000 : left > SEAZN_TOKEN_REFRESH_BEFORE_SECONDS * 1000;
+    if (reusable) return { token: await hit.token, expiresAtMs: hit.expiresAtMs };
+  }
   prune(deps.tokenCache, nowMs);
   // Whole seconds: the `exp` Cloudflare is sent, so the expiry handed out is the one the token carries.
   const expiresAtMs = (Math.floor(nowMs / 1000) + ttlSeconds) * 1000;
-  const entry: CachedToken = {
+  const entry: MintedToken = {
+    kind: "token",
     token: deps.ingest.playbackToken(uid, { expiresAt: new Date(expiresAtMs), ...(downloadable ? { downloadable: true } : {}) }),
     expiresAtMs,
   };
   deps.tokenCache.set(key, entry);
-  // A failed mint is not kept: the next call mints again. (Every caller awaiting it still sees the failure.)
+  // A failed mint is kept AS a failure, under the same key, for the window counted from when it was asked: every caller awaiting it
+  // sees its error, and every caller inside the window is refused without a provider call. A later mint replaces it.
   entry.token.catch(() => {
-    if (deps.tokenCache.get(key) === entry) deps.tokenCache.delete(key);
+    if (deps.tokenCache.get(key) === entry) deps.tokenCache.set(key, { kind: "failed", expiresAtMs: nowMs + SEAZN_TOKEN_FAILURE_CACHE_SECONDS * 1000 });
   });
   return { token: await entry.token, expiresAtMs };
 }

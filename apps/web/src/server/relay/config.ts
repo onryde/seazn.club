@@ -379,6 +379,12 @@ export function seaznVideoOrigins(env: Record<string, string | undefined> = proc
  *  24 h cap); the server re-mints it, and the client island re-reads it, this many seconds before expiry. */
 export const SEAZN_LIVE_TOKEN_TTL_SECONDS = 3600;
 export const SEAZN_TOKEN_REFRESH_BEFORE_SECONDS = 300;
+/** Phase 1 review I1: a mint that FAILED is remembered under its own key for this long (cf-playback.ts), so a Cloudflare outage
+ *  or 429 costs one mint per uid per server process per window, never one per viewer's poll. Twice the island's 30 s floor. */
+export const SEAZN_TOKEN_FAILURE_CACHE_SECONDS = 60;
+/** Phase 1 review I1: a token mint not answered in this long is abandoned (ingest-cf.ts, `AbortSignal.timeout`) and counts as a
+ *  failed mint. Every viewer of a uid waits on the one mint in flight, so a hung one held them all. */
+export const SEAZN_TOKEN_MINT_TIMEOUT_MS = 10_000;
 
 // ---- Seazn-hosted replays (Phase 2, Task 21): the replay host and its settings -------------------------------------
 /** How long a replay's player URL (its embed) is valid for. Probe B8: an embed loaded 60 s before its expiry played on for

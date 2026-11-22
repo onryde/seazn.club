@@ -34,6 +34,10 @@ import { override } from "@/server/usecases/__tests__/_capture-rig";
 import { seedOrg, startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
 import { createPlaybackTokenCache } from "../cf-playback";
 import { seaznFixtureVideo, seaznFixtureVideoForOrg } from "../seazn-video";
+import { GET } from "@/app/api/v1/public/fixtures/[id]/video/route";
+
+/** The one line a live that cannot be signed is logged under (review I1). */
+const LIVE_UNSIGNED_LOG = "seazn video: the live could not be signed; this answer has no live";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const ROOMY_STORAGE_MINUTES = 100_000_000;
@@ -345,6 +349,64 @@ describe.skipIf(!HAS_DB)("seaznFixtureVideo — a fixture's Seazn video for the 
     }
   });
 
+  it("review I1: a LIVE whose token cannot be minted is left out, not the answer — live null, the parts intact, one log line by class; inside the failure window the next read asks Cloudflare nothing and logs nothing; after it the live is back", async () => {
+    const r = await rig();
+    const f = r.fixtureIds[0];
+    const first = await live(r, f, r.seazn);
+    await stopAndSettle(r, f, first);
+    const rec = await finishedRecording(r, first);
+    expect(await lockPass(r)).toMatchObject({ locked: 1 });
+    const second = await live(r, f, r.seazn);
+    const liveUid = (await programmeOf(second)).uid;
+    const real = FakeIngest.prototype.playbackToken;
+    r.mint.mockImplementation((uid, o) => (uid === liveUid ? Promise.reject(new Error("cloudflare playback token: HTTP 429 code 10000 refused")) : real.call(r.ingest, uid, o)));
+    const liveMints = () => r.mint.mock.calls.filter(([uid]) => uid === liveUid).length;
+    const warn = vi.spyOn(log, "warn");
+    const liveLogs = () => warn.mock.calls.filter(([, msg]) => msg === LIVE_UNSIGNED_LOG);
+    try {
+      const answer = await read(r, f);
+      expect(answer.live, "the live is left out").toBeNull();
+      expect(answer.replay.map((p) => [p.partNo, p.player, signedUid(p.src)]), "the part still answers").toEqual([[1, "hls", rec]]);
+      expect(PublicFixtureVideo.parse(answer), "still the published contract").toEqual(answer);
+      expect(liveLogs().map(([o]) => o), "one line, by session and error class").toEqual([{ sessionId: second, err: "Error" }]);
+      expect(JSON.stringify(warn.mock.calls), "no token and no error message in any log line").not.toMatch(/fake\.|refused|429/);
+      // 30 s on (the island's floor), inside the window: the same answer, no Cloudflare call, no second line.
+      r.clock.now += 30_000;
+      expect((await read(r, f)).live).toBeNull();
+      expect(liveMints(), "inside the window: the one mint").toBe(1);
+      expect(liveLogs(), "and the one line").toHaveLength(1);
+      // Cloudflare recovers; once the window is over the live is signed again.
+      r.mint.mockImplementation((uid, o) => real.call(r.ingest, uid, o));
+      r.clock.now += 30_000;
+      expect(signedUid((await read(r, f)).live!.src), "after the window").toBe(liveUid);
+      expect(liveMints()).toBe(2);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("review I1: through the PUBLIC ROUTE a live whose mint fails is a 200 with live null and the part — never the 500 every viewer's poll used to get", async () => {
+    vi.stubEnv("REDIS_URL", "");   // the route's poll limit: in-process, never a developer's Redis
+    const r = await rig();
+    const f = r.fixtureIds[0];
+    const first = await live(r, f, r.seazn);
+    await stopAndSettle(r, f, first);
+    const rec = await finishedRecording(r, first);
+    expect(await lockPass(r)).toMatchObject({ locked: 1 });
+    const second = await live(r, f, r.seazn);
+    const liveUid = (await programmeOf(second)).uid;
+    const real = FakeIngest.prototype.playbackToken;
+    r.mint.mockImplementation((uid, o) => (uid === liveUid ? Promise.reject(new Error("cloudflare playback token: HTTP 503")) : real.call(r.ingest, uid, o)));
+    setRelayDriversForTest({ ingest: r.ingest, runner: r.runner });
+    const res = await GET(new Request(`http://app.test/api/v1/public/fixtures/${f}/video`, { headers: { "x-forwarded-for": "203.0.113.77" } }), { params: Promise.resolve({ id: f }) });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; data: PublicFixtureVideo };
+    expect(body.ok).toBe(true);
+    expect(body.data.live).toBeNull();
+    expect(body.data.replay.map((p) => signedUid(p.src))).toEqual([rec]);
+    expect(r.mint.mock.calls.some(([uid]) => uid === liveUid), "PREMISE: the live mint was asked, and failed").toBe(true);
+  });
+
   it("a stop and restart: the first session completed with a locked recording and the second live gives BOTH the second's live and the first's part", async () => {
     const r = await rig();
     const f = r.fixtureIds[0];
@@ -437,7 +499,7 @@ describe.skipIf(!HAS_DB)("seaznFixtureVideo — a fixture's Seazn video for the 
     expect(r.mint).not.toHaveBeenCalled();
   });
 
-  it("production wiring: with no deps the read signs through the process relay; a relay-disabled process answers an empty fixture without touching it, and refuses BY NAME when there is something to sign", async () => {
+  it("production wiring: with no deps the read signs through the process relay; a relay-disabled process answers an empty fixture without touching it, and a live it cannot sign is left out and logged BY NAME (review I1)", async () => {
     const r = await rig();
     const f = r.fixtureIds[0];
     await live(r, f, r.seazn);
@@ -461,6 +523,12 @@ describe.skipIf(!HAS_DB)("seaznFixtureVideo — a fixture's Seazn video for the 
     setRelayDriversForTest({ ingest: r.ingest, runner: r.runner });
     await live(r, r.fixtureIds[1], r.seazn);
     setRelayDriversForTest(disabledRelayDrivers());
-    await expect(seaznFixtureVideo(r.fixtureIds[1], now)).rejects.toBeInstanceOf(RelayDriversDisabled);
+    const warn = vi.spyOn(log, "warn");
+    try {
+      expect(await seaznFixtureVideo(r.fixtureIds[1], now), "the live is left out, the answer stands").toEqual(EMPTY);
+      expect(warn.mock.calls.filter(([, msg]) => msg === LIVE_UNSIGNED_LOG).map(([o]) => (o as { err: string }).err)).toEqual([new RelayDriversDisabled().name]);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
