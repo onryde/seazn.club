@@ -510,26 +510,22 @@ describe("Seazn-hosted flags and settings (Task 8)", () => {
     expect(config.seaznHostedReplay({ SEAZN_HOSTED_REPLAY: "true", SEAZN_HOSTED_LIVE: "true" })).toBe(true);
     expect(config.seaznHostedReplay({ SEAZN_HOSTED_REPLAY: "false", SEAZN_HOSTED_LIVE: "true" })).toBe(false);
   });
-  // Task 24 review m9 (2026-11-22): the match page reads only Cloudflare until Task 25 ships its swap, and the move deletes the
-  // Cloudflare copy 60 min after its Bunny copy is verified — so REPLAY on a deployment before Task 25 takes every replay off the
-  // page. It is refused there, by name, exactly where a fake driver is refused (ENV_NAME other than local/ci, or unset under
-  // production). Task 25 deletes the refusal and this case with it.
-  it("m9: SEAZN_HOSTED_REPLAY=true is refused on a named deployment until Task 25 — stg, prod and an unnamed production server throw naming Task 25; local, ci and an unnamed non-production process honour it; off is never refused", () => {
+  // Task 24 review m9 refused REPLAY on a named deployment until Task 25 shipped the match page's swap to the replay host (the move
+  // deletes the Cloudflare copy 60 min after its Bunny copy is verified, and the page used to play only Cloudflare). Task 25 is that
+  // swap, so the refusal is lifted and this case pins the ALLOWANCE: REPLAY on is honoured wherever it is set, named deployments
+  // included, and still needs LIVE. The owner's rule stands as a deploy rule, not a code one: prod only after every phase is on stg.
+  it("Task 25 lifts the m9 refusal: SEAZN_HOSTED_REPLAY=true is honoured on stg, prod and an unnamed production server as on local and ci — true with LIVE on, false with LIVE off; off is false everywhere", () => {
     const on = { SEAZN_HOSTED_REPLAY: "true", SEAZN_HOSTED_LIVE: "true" };
     let checked = 0;
-    for (const env of [{ ...on, ENV_NAME: "stg" }, { ...on, ENV_NAME: "prod" }, { ...on, ENV_NAME: " Stg " }, { ...on, NODE_ENV: "production" }, { SEAZN_HOSTED_REPLAY: "true", ENV_NAME: "prod" }]) {
-      expect(() => config.seaznHostedReplay(env), JSON.stringify(env)).toThrow(/SEAZN_HOSTED_REPLAY=true is refused .*Task 25/);
-      checked++;
-    }
-    for (const env of [{ ...on, ENV_NAME: "local" }, { ...on, ENV_NAME: "ci" }, { ...on, NODE_ENV: "test" }, { ...on }]) {
+    for (const env of [{ ...on, ENV_NAME: "stg" }, { ...on, ENV_NAME: "prod" }, { ...on, ENV_NAME: " Stg " }, { ...on, NODE_ENV: "production" }, { ...on, ENV_NAME: "local" }, { ...on, ENV_NAME: "ci" }, { ...on, NODE_ENV: "test" }, { ...on }]) {
       expect(config.seaznHostedReplay(env), JSON.stringify(env)).toBe(true);
       checked++;
     }
-    for (const env of [{ SEAZN_HOSTED_REPLAY: "false", SEAZN_HOSTED_LIVE: "true", ENV_NAME: "prod" }, { SEAZN_HOSTED_LIVE: "true", ENV_NAME: "stg", NODE_ENV: "production" }]) {
+    for (const env of [{ SEAZN_HOSTED_REPLAY: "true", ENV_NAME: "prod" }, { SEAZN_HOSTED_REPLAY: "true", SEAZN_HOSTED_LIVE: "false", NODE_ENV: "production" }, { SEAZN_HOSTED_REPLAY: "false", SEAZN_HOSTED_LIVE: "true", ENV_NAME: "prod" }, { SEAZN_HOSTED_LIVE: "true", ENV_NAME: "stg", NODE_ENV: "production" }]) {
       expect(config.seaznHostedReplay(env), JSON.stringify(env)).toBe(false);
       checked++;
     }
-    expect(checked, "environments read").toBe(11);
+    expect(checked, "environments read").toBe(12);
   });
   it("Task 24 review I3: the move's provider-call timeout is the ruling's 4 s — under the tick's 8 s Seazn slice", () => {
     expect(config.SEAZN_REPLAY_CALL_TIMEOUT_MS).toBe(4_000);

@@ -364,20 +364,12 @@ export function seaznHostedLive(env: Record<string, string | undefined> = proces
 }
 /** Phase 2 needs Phase 1: true only when LIVE is on too. A malformed REPLAY value still throws while LIVE is off.
  *
- *  Task 24 review m9 (2026-11-22): REPLAY on is REFUSED (a throw naming Task 25) on a named deployment — wherever a fake driver is
- *  refused (`FAKE_DRIVER_ENV_NAMES`: honoured only with ENV_NAME local or ci, or unset outside production). Until Task 25 ships
- *  the match page's swap to the replay host, the page plays only the Cloudflare copy, which the move deletes 60 min after its
- *  Bunny copy is verified: REPLAY on would take every replay off the page. Task 25 deletes this refusal. */
+ *  Task 24 review m9 refused REPLAY on a named deployment until the match page could play the replay host's copy; Task 25 shipped
+ *  that swap (server/video/seazn-video.ts lists a verified copy as an `embed` part in place of the Cloudflare recording the move
+ *  later deletes), so the refusal is gone and REPLAY is honoured wherever it is set. OWNER RULE (a deploy rule, not a code one):
+ *  REPLAY goes on in prod only after every phase is on stg. */
 export function seaznHostedReplay(env: Record<string, string | undefined> = process.env): boolean {
-  const replay = seaznFlag("SEAZN_HOSTED_REPLAY", env);
-  if (replay) {
-    const name = envNameOf(env);
-    const honoured = name === null ? env.NODE_ENV !== "production" : FAKE_DRIVER_ENV_NAMES.includes(name);
-    if (!honoured) {
-      throw new Error(`SEAZN_HOSTED_REPLAY=true is refused on ${name === null ? "an unnamed production server" : `ENV_NAME=${JSON.stringify(name)}`} until Task 25 ships: the match page still plays only the Cloudflare copy, which the move deletes 60 min after its replay-host copy is verified — every replay would leave the page. Set it false (Task 25 deletes this refusal)`);
-    }
-  }
-  return replay && seaznHostedLive(env);
+  return seaznFlag("SEAZN_HOSTED_REPLAY", env) && seaznHostedLive(env);
 }
 export function seaznHostedCost(env: Record<string, string | undefined> = process.env): boolean {
   return seaznFlag("SEAZN_HOSTED_COST", env);
