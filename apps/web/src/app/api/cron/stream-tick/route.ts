@@ -26,8 +26,19 @@ import { YOUTUBE_END_BUDGET_MS, type YoutubeEndResult, endDueBroadcasts } from "
  *  `seazn` (Seazn-hosted video Task 13) is the Seazn pass's own result (usecases/seazn-recordings.ts SeaznPassResult): `locked`,
  *  `relocked`, `refused` (C6), `failed` (the counter the Worker alerts on) and `deferred`. Task 24 adds the replay move's
  *  (usecases/seazn-replays.ts SeaznReplayResult): `discovered`, `moved` and `playable`, with its refusals, failures and deferrals
- *  added to the lock's. */
-type SeaznAnswer = SeaznPassResult & Pick<SeaznReplayResult, "discovered" | "moved" | "playable">;
+ *  added to the lock's.
+ *
+ *  An interface whose own body declares the three SUMMED counters, `failed` above all: drift.test.ts (m6) judges
+ *  `data.seazn.failed` by its full path, reading the body of the type this route names for `seazn`. An intersection alias has no
+ *  body to read, and a counter only inherited from SeaznPassResult would be the lock's alone, not the answer's. */
+interface SeaznAnswer extends SeaznPassResult, Pick<SeaznReplayResult, "discovered" | "moved" | "playable"> {
+  /** The lock's refusals plus the move's. */
+  refused: number;
+  /** The lock's failures plus the move's: the counter the Worker alerts on (R3). */
+  failed: number;
+  /** The lock's deferrals plus the move's. */
+  deferred: number;
+}
 type StreamTickAnswer = (StreamTickResult | (StreamTickResult & { disabled: true })) & { youtube: YoutubeEndResult; seazn: SeaznAnswer };
 
 /** What a throw out of the WHOLE step reads as: the step could not run, which is one failure — never a reason to skip the
