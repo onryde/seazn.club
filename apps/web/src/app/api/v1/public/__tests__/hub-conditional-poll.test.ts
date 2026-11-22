@@ -45,6 +45,13 @@ describe("B4 the hub poll costs a document only when the document changed", () =
     expect(await again.text(), "no body").toBe("");
     expect(again.headers.get("ETag")).toBe(etag);
 
+    // The document is rebuilt whenever its 15 s cache entry lapses (and the page polls every 15 s), so a rebuild that says
+    // the same thing must still be a 304: the ETag names the CONTENT, never the time it was built.
+    current.doc = docAt("2026-11-22T10:00:15.000Z", "1-0");
+    const rebuilt = await GET(new Request("http://x/hub", { headers: { "If-None-Match": etag! } }), ctx);
+    expect(rebuilt.status, "rebuilt, same content: 304").toBe(304);
+    expect(rebuilt.headers.get("ETag")).toBe(etag);
+
     current.doc = docAt("2026-11-22T10:00:20.000Z", "2-0");
     const moved = await GET(new Request("http://x/hub", { headers: { "If-None-Match": etag! } }), ctx);
     expect(moved.status, "a new build: the document").toBe(200);

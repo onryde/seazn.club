@@ -1,14 +1,14 @@
 import { v1, reply } from "@/server/api-v1/http";
 import { publicCompetitionHub, publicPollRateLimit, PUBLIC_CACHE_CONTROL } from "@/server/usecases/public";
-import { hubDocEtag } from "@/lib/hub-doc-etag";
+import { hubDocEtag } from "@/server/public-site/hub-doc-etag";
 
 type Ctx = { params: Promise<{ orgSlug: string; slug: string }> };
 
 /** Spectator W2 — the competition hub document the landing page polls (R10). Same
  *  JSON the page rendered from; Redis 15 s in front, deleted on every scoring write.
  *
- *  W5 follow-ups B4: every answer names the document's build (`ETag`, `hubDocEtag`), and a poll that already holds that
- *  build (`If-None-Match`) is answered 304 with no body - the page polls every 15 s, and at a cap-sized competition the
+ *  W5 follow-ups B4: every answer names the document's content (`ETag`, `hubDocEtag`: a hash of all but `generatedAt`), and
+ *  a poll that already holds that content (`If-None-Match`) is answered 304 with no body - the page polls every 15 s, and at a cap-sized competition the
  *  document is about 5 MB, so a tick that changes nothing now costs headers only. */
 export async function GET(req: Request, { params }: Ctx) {
   return v1(async () => {
