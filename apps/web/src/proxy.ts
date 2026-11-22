@@ -6,6 +6,7 @@ import { RELAY_PHASE_PORT } from "@/lib/relay-phase";
 import { isPublicHubPath } from "@/lib/routes";
 import { isStagingOrigin } from "@/lib/robots-policy";
 import { siteOrigin } from "@/lib/site-origin";
+import { revshareEnabled } from "@/lib/revshare-shared";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
@@ -23,6 +24,28 @@ const EMBED_TREE = /^\/embed(\/|$)/;
 
 export function isCacheablePublicPath(pathname: string): boolean {
   return isPublicHubPath(pathname) || EMBED_TREE.test(pathname);
+}
+
+// Blog P2 Task 5 (owner ruling 2026-11-19: help and blog are cached at the edge together, with a fixed CSP). Both trees
+// are prerendered (`dynamic = "error"` on every page, so a request-time read fails the build) and stored by Cloudflare,
+// which hands one copy to every visitor. So a response here is the same for every visitor: no nonce (a page built
+// ahead of any request carries none, and a cached nonce would be one request's, frozen), no Set-Cookie (it would be
+// cached for everyone, and Cloudflare skips caching a response that sets one), and a policy that is byte-identical
+// from one request to the next (cspHeader(null)). `/help` and `/blog` exactly, or a path under them; never `/helpdesk`,
+// `/blogs` or `/help-centre`. Unlike the public hub's carve-out above, the mode follows CSP_MODE: the fixed policy is
+// what a prebuilt page actually does, so enforcing it blocks nothing the page runs.
+const STATIC_CONTENT_TREE = /^\/(help|blog)(\/|$)/;
+
+export function isStaticContentPath(pathname: string): boolean {
+  return STATIC_CONTENT_TREE.test(pathname);
+}
+
+/** The external script origins the root layout loads on every page, as ` <origin>` script-src suffixes, for the fixed
+ *  (nonce-free) policy, which has no 'strict-dynamic' to trust them through: revshare's tracking.js when it is on
+ *  (app/layout.tsx), and PostHog's own origin, from which posthog-js loads its lazy extensions (instrumentation-client.ts;
+ *  "" when events ride the same-origin /ingest rewrite). Both are fixed per deployment, so the header stays byte-stable. */
+function rootLayoutScriptOrigins(): string {
+  return `${revshareEnabled() ? " https://www.revshare.so" : ""}${posthogApiOrigin()}`;
 }
 
 /** The `/overlay` tree (`/overlay` or `/overlay/…`, never `/overlayx…`): the stream overlay a club adds to OBS, and the
@@ -53,7 +76,7 @@ function posthogApiOrigin(): string {
 /**
  * Build the Content-Security-Policy for a page request (doc 04 §5).
  *
- * script-src uses a per-request nonce + 'strict-dynamic'; Next.js reads the
+ * With a nonce, script-src uses the per-request nonce + 'strict-dynamic'; Next.js reads the
  * enforcing CSP header and automatically stamps the nonce onto its framework
  * and page scripts, so no per-tag wiring is needed. connect-src allows Supabase
  * (realtime websockets) and Sentry ingest; img-src allows arbitrary https for
@@ -63,9 +86,13 @@ function posthogApiOrigin(): string {
  * never break the running app — set CSP_MODE=enforce (after verifying the
  * browser console on staging) to switch to blocking. Enforcing nonce CSP forces
  * dynamic rendering (no static/CDN caching), which is why it is opt-in.
+ *
+ * With `nonce` null (the static-content trees, isStaticContentPath), script-src is the fixed `'self' 'unsafe-inline'`
+ * plus the root layout's external script origins: Next's documented policy for pages without nonces
+ * (next/dist/docs/01-app/02-guides/content-security-policy.md, "Without Nonces"). Every other directive is the same.
  */
 export function cspHeader(
-  nonce: string,
+  nonce: string | null,
   opts: { forceReportOnly?: boolean; pathname?: string } = {},
 ): { name: string; value: string } {
   const isDev = process.env.NODE_ENV === "development";
@@ -75,7 +102,9 @@ export function cspHeader(
     // Stripe.js is loaded from js.stripe.com for Embedded Checkout. Turnstile's api.js is loaded from challenges.cloudflare.com by
     // lib/turnstile-client.ts (a script this page's own nonced code appends, so 'strict-dynamic' already trusts it; the origin is the
     // declaration for a browser that ignores 'strict-dynamic').
-    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' https://js.stripe.com https://challenges.cloudflare.com${isDev ? " 'unsafe-eval'" : ""}`,
+    nonce === null
+      ? `script-src 'self' 'unsafe-inline'${rootLayoutScriptOrigins()}${isDev ? " 'unsafe-eval'" : ""}`
+      : `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' https://js.stripe.com https://challenges.cloudflare.com${isDev ? " 'unsafe-eval'" : ""}`,
     // Tailwind ships an external stylesheet; 'unsafe-inline' covers the small
     // inline styles Next injects. Styles are low-risk vs script injection.
     `style-src 'self' 'unsafe-inline'`,
@@ -200,13 +229,14 @@ function proxyCore(request: NextRequest): NextResponse {
     return NextResponse.next();
   }
 
-  // Page requests: attach a per-request nonce + CSP.
-  const cacheable = isCacheablePublicPath(request.nextUrl.pathname);
-  const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
-  const csp = cspHeader(nonce, { forceReportOnly: cacheable, pathname: request.nextUrl.pathname });
+  // Page requests: attach a per-request nonce + CSP — or, on the static-content trees, the fixed policy and no nonce.
+  const staticContent = isStaticContentPath(request.nextUrl.pathname);
+  const cacheable = staticContent || isCacheablePublicPath(request.nextUrl.pathname);
+  const nonce = staticContent ? null : Buffer.from(crypto.randomUUID()).toString("base64");
+  const csp = cspHeader(nonce, { forceReportOnly: cacheable && !staticContent, pathname: request.nextUrl.pathname });
 
   const requestHeaders = new Headers(request.headers);
-  if (!cacheable) {
+  if (!cacheable && nonce !== null) {
     // Nonce request headers make Next stamp scripts per-request; cacheable
     // trees skip them so the HTML stays byte-stable for ISR/CDN.
     requestHeaders.set("x-nonce", nonce);

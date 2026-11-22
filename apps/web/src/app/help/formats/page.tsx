@@ -6,7 +6,9 @@ import { HelpBreadcrumb, HelpShell } from "@/components/help/help-shell";
 import { familyNeedsPaidPlan } from "@/lib/format-plan-badge";
 import { loadPricingMatrix } from "@/lib/pricing-matrix-server";
 
-export const revalidate = 3600;
+// Prerendered and cached at the edge (layout.tsx): a request-time read fails the build. 300 s: the badge reads the plan table.
+export const dynamic = "error";
+export const revalidate = 300;
 
 export const metadata: Metadata = {
   title: "Format gallery",

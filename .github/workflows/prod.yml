@@ -196,6 +196,32 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_TOKEN }}
 
+      # /help and /blog are cached at Cloudflare's edge (s-maxage 300 or 3600, the pages' `revalidate`). A cached page
+      # can name JavaScript chunks this deploy no longer serves, so once the new machines are up the zone is purged. In
+      # this job, after the deploy, because toolchain.test.ts forbids `needs:` in this file. A missing secret or any
+      # answer but `"success": true` fails the job loudly; the step never skips. The token reaches curl on stdin, never
+      # on its command line. Pinned by apps/web/src/__tests__/prod-cdn-purge.test.ts.
+      - name: Purge the Cloudflare cache
+        run: |
+          if [ -z "$CF_ZONE_ID" ] || [ -z "$CF_PURGE_TOKEN" ]; then
+            echo "::error::CLOUDFLARE_ZONE_ID and CLOUDFLARE_CACHE_PURGE_TOKEN must both be set. The deploy is live, but the edge keeps serving the old /help and /blog pages until their s-maxage runs out."
+            exit 1
+          fi
+          body=$(printf 'Authorization: Bearer %s\n' "$CF_PURGE_TOKEN" | curl -sS --retry 3 --retry-all-errors --max-time 30 \
+            -X POST -H @- -H "Content-Type: application/json" --data '{"purge_everything":true}' \
+            "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/purge_cache") || {
+            echo "::error::the Cloudflare purge request did not complete"
+            exit 1
+          }
+          if [ "$(printf '%s' "$body" | jq -r '.success' 2>/dev/null)" != "true" ]; then
+            echo "::error::Cloudflare did not purge the cache: $(printf '%s' "$body" | jq -c '.errors' 2>/dev/null || printf '%s' "$body")"
+            exit 1
+          fi
+          echo "Cloudflare cache purged (purge_everything)"
+        env:
+          CF_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          CF_PURGE_TOKEN: ${{ secrets.CLOUDFLARE_CACHE_PURGE_TOKEN }}
+
       - name: Report machine count
         if: always()
         run: flyctl status --app "${{ steps.flycfg.outputs.app }}" || true

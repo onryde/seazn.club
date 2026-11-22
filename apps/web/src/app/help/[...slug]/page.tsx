@@ -12,7 +12,11 @@ import { HelpBreadcrumb, HelpShell } from "@/components/help/help-shell";
 import { HelpToc } from "@/components/help/help-toc";
 import { HelpRelated } from "@/components/help/help-related";
 
-export const revalidate = 3600;
+// Prerendered and cached at the edge (layout.tsx): a request-time read fails the build. 300 s, because an article with a
+// plan token reads the plan table, so a changed fee shows within about ten minutes (five here, five at the edge).
+// `revalidate` is per route, so a plain article shares it.
+export const dynamic = "error";
+export const revalidate = 300;
 
 type Props = { params: Promise<{ slug: string[] }> };
 
