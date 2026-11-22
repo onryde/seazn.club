@@ -178,6 +178,14 @@ async function cleanup(): Promise<void> {
                                join fixture_stream_sessions s on s.id = i.session_id
                                join organizations o on o.id = s.org_id
                               where o.created_by in (select id from users where email = any(${emails})))`;
+    // fixture_video_replays (org_id and session_id) and org_video_collections (org_id) are RESTRICT (V542): a replay the mover
+    // recorded, or the org's replay collection, would block the org delete.
+    await sql`
+      delete from fixture_video_replays
+      where org_id in (select id from organizations where created_by in (select id from users where email = any(${emails})))`;
+    await sql`
+      delete from org_video_collections
+      where org_id in (select id from organizations where created_by in (select id from users where email = any(${emails})))`;
     const orgs = await sql`
       delete from organizations
       where created_by in (select id from users where email = any(${emails}))`;
