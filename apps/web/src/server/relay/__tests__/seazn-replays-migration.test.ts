@@ -15,7 +15,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { sql, type Tx } from "@/lib/db";
 import { divisionRig, seedOrg } from "@/server/usecases/__tests__/_rig";
-import { replayClaimQuery } from "@/server/usecases/seazn-replays";
+import { replayClaimQuery, replayDiscoveryQuery } from "@/server/usecases/seazn-replays";
 import { BunnyReplayHost } from "@/server/video/replay-bunny";
 import type { ProviderCallRecord } from "../ports";
 import { recordProviderCall } from "../telemetry";
@@ -345,6 +345,29 @@ describe.skipIf(!HAS_DB)("V542__seazn_replays.sql — the replay tables are real
       checked++;
     }
     expect(checked, "claims planned").toBe(2);
+  });
+
+  // Task 24 review m4 (2026-11-22): with REPLAY on, discovery runs every minute, and the lock pass's index cannot serve it (its
+  // predicate names recordings_locked_at). Its REAL statement (`replayDiscoveryQuery`), as a generic plan with sequential scans
+  // priced out, unscoped (production's) and org-scoped: the inputs side is read through V542's discovery index, never scanned.
+  it("Task 24 review m4: discovery's REAL statement reads fixture_stream_inputs through its own partial index — unscoped and org-scoped — never a scan of the table", async () => {
+    let checked = 0;
+    for (const orgIds of [undefined, [randomUUID()]]) {
+      let plan = "";
+      await rolledBack(async (tx) => {
+        await tx`set local enable_seqscan = off`;
+        const st = await replayDiscoveryQuery(tx, { now: new Date(), orgIds }).describe();
+        expect(st.string, "PREMISE: the statement is discovery's").toMatch(/i\.replays_discovered_at is null/);
+        const rows = await tx.unsafe<{ "QUERY PLAN": string }[]>(`explain (generic_plan) ${st.string}`);
+        plan = rows.map((x) => x["QUERY PLAN"]).join("\n");
+      });
+      expect(plan, `${orgIds ? "scoped" : "unscoped"}\n${plan}`).toMatch(/fixture_stream_inputs_seazn_undiscovered_idx/);
+      expect(plan, "never a scan of the table").not.toMatch(/Seq Scan on fixture_stream_inputs/);
+      checked++;
+    }
+    expect(checked, "discoveries planned").toBe(2);
+    const [idx] = await sql<{ def: string }[]>`select pg_get_indexdef('fixture_stream_inputs_seazn_undiscovered_idx'::regclass) as def`;
+    expect(idx!.def).toMatch(/\(session_id\) WHERE \(\(role = 'programme'::text\) AND \(replays_discovered_at IS NULL\) AND \(ingest_input_id IS NOT NULL\)\)$/);
   });
 
   it("the due index holds only rows the claim reads: a SETTLED playable row (verified, Cloudflare copy deleted) and a CLEANED deleted row are outside it — the planner cannot answer either from it", async () => {

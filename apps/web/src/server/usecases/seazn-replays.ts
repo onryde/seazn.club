@@ -31,20 +31,23 @@ import { scrubScoreUrl } from "@/lib/scrub-score-url";
 import { log } from "@/server/logger";
 import {
   FINALISATION_GRACE_SECONDS, SEAZN_CLAIM_LEASE_SECONDS, SEAZN_FETCH_URL_TTL_SECONDS, SEAZN_POLL_BACKSTOP_MINUTES,
-  SEAZN_REPLAY_CLAIM_BATCH, SEAZN_REPLAY_DELAY_MINUTES, SEAZN_REPLAY_UNDECIDED_FALLBACK_HOURS, seaznHostedReplay,
+  SEAZN_REPLAY_CALL_TIMEOUT_MS, SEAZN_REPLAY_CLAIM_BATCH, SEAZN_REPLAY_DELAY_MINUTES, SEAZN_REPLAY_UNDECIDED_FALLBACK_HOURS,
+  seaznHostedReplay,
 } from "@/server/relay/config";
 import { TERMINAL_STATES } from "@/server/relay/domain/session";
 import type { IngestProvider, IngestVideo } from "@/server/relay/ports";
 import { type PlaybackTokenCache, signDownload } from "@/server/video/cf-playback";
 import {
-  type ReplayRow, type ReplayRowState, type ReplayStep, nextReplayStep, pollOutcome, replayFailure,
+  REPLAY_PARKED_AT, type ReplayRow, type ReplayRowState, type ReplayStep, nextReplayStep, pollOutcome, replayFailure,
+  replayFailureOutcome,
 } from "@/server/video/domain/replay-move";
 import type { ReplayHost } from "@/server/video/replay-ports";
 import { SEAZN_PASS_CALL_FLOOR_MS, SEAZN_PASS_LOGGED_IDS_MAX } from "./seazn-recordings";
 
 const MIN = 60_000;
-/** Where a row past every retry is parked: never due again (a date Postgres and every client read plainly). */
-const PARKED_AT = new Date("9999-12-31T00:00:00.000Z");
+/** Review I3 (2026-11-22): every Cloudflare call the move makes gives up after SEAZN_REPLAY_CALL_TIMEOUT_MS, under the tick's 8 s
+ *  Seazn slice (the replay host's adapter applies the same bound to each of its own calls). */
+const TIMED = { timeoutMs: SEAZN_REPLAY_CALL_TIMEOUT_MS } as const;
 /** The most steps one row takes in one run (a retry, then the download and the fetch). A row still moving after them is released
  *  to the next firing. */
 const MAX_STEPS_PER_ROW = 3;
@@ -97,22 +100,24 @@ export async function runSeaznReplays(deps: SeaznReplayDeps, opts: SeaznReplayOp
 
 interface DiscoveryInput { id: string; session_id: string; org_id: string; fixture_id: string; uid: string; session_created_at: Date }
 
-/** The programme inputs discovery lists now (G-A, G-F), oldest session first. */
-function discoveryQuery(now: Date, orgIds: string[] | undefined) {
-  const graceCut = new Date(now.getTime() - FINALISATION_GRACE_SECONDS * 1000);
-  const decidedCut = new Date(now.getTime() - SEAZN_REPLAY_DELAY_MINUTES * MIN);
-  const undecidedCut = new Date(now.getTime() - SEAZN_REPLAY_UNDECIDED_FALLBACK_HOURS * 60 * MIN);
-  return sql<DiscoveryInput[]>`
+/** The programme inputs discovery lists now (G-A, G-F), oldest session first. The inputs side is V542's discovery index's
+ *  predicate (review m4), so it is read through that index rather than scanned every minute (seazn-replays-migration.test.ts
+ *  explains this very statement). */
+export function replayDiscoveryQuery(exec: typeof sql | Tx, a: { now: Date; orgIds?: readonly string[] }) {
+  const graceCut = new Date(a.now.getTime() - FINALISATION_GRACE_SECONDS * 1000);
+  const decidedCut = new Date(a.now.getTime() - SEAZN_REPLAY_DELAY_MINUTES * MIN);
+  const undecidedCut = new Date(a.now.getTime() - SEAZN_REPLAY_UNDECIDED_FALLBACK_HOURS * 60 * MIN);
+  return exec<DiscoveryInput[]>`
     select i.id, i.session_id, s.org_id, s.fixture_id, i.ingest_input_id as uid, s.created_at as session_created_at
       from fixture_stream_inputs i
       join fixture_stream_sessions s on s.id = i.session_id
       join fixtures f on f.id = s.fixture_id
      where s.destination_kind = 'seazn' and i.role = 'programme' and i.ingest_input_id is not null
-       and i.replays_discovered_at is null and s.state in ${sql([...TERMINAL_STATES])}
+       and i.replays_discovered_at is null and s.state in ${exec([...TERMINAL_STATES])}
        and coalesce(s.ended_at, s.created_at) < ${graceCut}
        and ((f.finished_at is not null and f.finished_at <= ${decidedCut})
             or (f.finished_at is null and coalesce(s.ended_at, s.created_at) <= ${undecidedCut}))
-       ${orgIds ? sql`and s.org_id in ${sql(orgIds)}` : sql``}
+       ${a.orgIds ? exec`and s.org_id in ${exec([...a.orgIds])}` : exec``}
      order by s.created_at, i.id`;
 }
 
@@ -158,13 +163,13 @@ export async function discoverSeaznRecordings(deps: SeaznReplayDeps, opts: Seazn
   const started = wallClock();
   const canCall = () => opts.budgetMs - (wallClock() - started) >= SEAZN_PASS_CALL_FLOOR_MS;
   const out = zero();
-  const inputs = await discoveryQuery(opts.now, orgIds);
+  const inputs = await replayDiscoveryQuery(sql, { now: opts.now, orgIds });
   for (let n = 0; n < inputs.length; n++) {
     const input = inputs[n]!;
     if (!canCall()) { out.deferred += inputs.length - n; break; }
     let listed: IngestVideo[];
     try {
-      listed = await deps.ingest.listInputVideos(input.uid, { sessionId: input.session_id });
+      listed = await deps.ingest.listInputVideos(input.uid, { sessionId: input.session_id, ...TIMED });
     } catch (err) {
       out.failed++;
       log.error({ sid: input.session_id, errClass: errClass(err), detail: detail(err) }, "seazn replays: a programme input's recordings could not be listed — the next firing retries it");
@@ -254,13 +259,26 @@ interface Run { deps: SeaznReplayDeps; now: Date; out: SeaznReplayResult; canCal
 type Outcome = "again" | "done";
 type Handler<K extends ReplayStep["kind"]> = (run: Run, row: Claimed, step: Extract<ReplayStep, { kind: K }>) => Promise<Outcome>;
 
-/** A provider call or a check failed: the backoff, on the row as it stands. */
-async function failure(run: Run, row: Claimed, step: string, err?: unknown): Promise<Outcome> {
+/** A provider call, a check or a database step failed. Inside the row's retry window: the backoff, on the row as it stands. Past
+ *  it (review I2): the row is parked — as `failed`, or in its own state when that is playable or deleted
+ *  (`replayFailureOutcome`) — logged once, and never claimed again. A provider's error is logged through the scrubber; a database
+ *  error (`source: "db"`) by its class alone (review m3: it can echo a connection string). */
+async function failure(run: Run, row: Claimed, step: string, err?: unknown, source: "provider" | "db" = "provider"): Promise<Outcome> {
   run.out.failed++;
-  const f = replayFailure(row, run.now);
-  log.error({ replayId: row.id, videoId: row.cfVideoId, step, attempts: f.attempts, ...(err === undefined ? {} : { errClass: errClass(err), detail: detail(err) }) },
-    "seazn replays: a step failed — retried after its backoff");
-  await write(row, row.state, { attempts: f.attempts, next_attempt_at: f.nextAttemptAt });
+  const o = replayFailureOutcome(row, run.now);
+  const facts = {
+    replayId: row.id, videoId: row.cfVideoId, step, attempts: o.attempts,
+    ...(err === undefined ? {} : { errClass: errClass(err), ...(source === "provider" ? { detail: detail(err) } : {}) }),
+  };
+  if (o.kind === "give_up") {
+    log.error({ ...facts, state: row.state, parkedAs: o.state, guid: row.bunnyVideoId },
+      "seazn replays: a step still failing past the Cloudflare copy's life — given up: parked, never retried");
+    const patch: Patch = { attempts: o.attempts, next_attempt_at: o.nextAttemptAt, ...(o.state === row.state ? {} : { state: o.state, state_at: run.now }) };
+    if (await write(row, row.state, patch)) row.state = o.state;
+    return "done";
+  }
+  log.error(facts, "seazn replays: a step failed — retried after its backoff");
+  await write(row, row.state, { attempts: o.attempts, next_attempt_at: o.nextAttemptAt });
   return "done";
 }
 /** The slice ran out before this row's call: the lease is released, so the next firing takes it. */
@@ -281,30 +299,50 @@ function moved(run: Run, row: Claimed, patch: { state: ReplayRowState; bunnyVide
   run.out.moved++;
 }
 
-/** The org's one replay collection: read, or made and stored under the org's own lock, so two rows of one new org make one. */
-async function collectionFor(run: Run, orgId: string): Promise<string> {
-  const [have] = await sql<{ collection_id: string }[]>`select collection_id from org_video_collections where org_id = ${orgId}`;
-  if (have) return have.collection_id;
-  return sql.begin(async (tx: Tx) => {
-    await tx`select pg_advisory_xact_lock(hashtext(${"org-video-collection:" + orgId}))`;
-    const [again] = await tx<{ collection_id: string }[]>`select collection_id from org_video_collections where org_id = ${orgId}`;
-    if (again) return again.collection_id;
-    const id = await run.deps.replay.createCollection(orgId);
-    await tx`insert into org_video_collections (org_id, collection_id) values (${orgId}, ${id})`;
-    return id;
-  });
+/** Stores an org's first collection unless another run stored one first, and answers the one stored — ours or theirs (the
+ *  no-op update makes the statement answer the kept row either way). */
+async function keepCollection(orgId: string, made: string): Promise<string> {
+  const [kept] = await sql<{ collection_id: string }[]>`
+    insert into org_video_collections (org_id, collection_id) values (${orgId}, ${made})
+    on conflict (org_id) do update set collection_id = org_video_collections.collection_id
+    returning collection_id`;
+  return kept!.collection_id;
 }
 
-/** `downloading`, the download ready: the collection and the signed URL first, then `fetching` is written, then the one fetch. */
+/** `downloading`, the download ready: the org's collection and the signed URL first, then `fetching` is written, then the one
+ *  fetch. The org's first collection is made with NO transaction open (review I3: a provider call never holds a pooled
+ *  connection): read, made on the host, then stored only if no other run stored one first. The stored one wins; a spare made by
+ *  a race is left empty on the host and logged by its id. Each step's failure is logged by its own name, a database one by its
+ *  class alone (review m3). */
 async function fetchCopy(run: Run, row: Claimed): Promise<Outcome> {
   if (!run.canCall()) return defer(run, row);
-  let collectionId: string;
+  let collectionId: string | undefined;
+  try {
+    collectionId = (await sql<{ collection_id: string }[]>`select collection_id from org_video_collections where org_id = ${row.orgId}`)[0]?.collection_id;
+  } catch (err) {
+    return failure(run, row, "read_collection", err, "db");
+  }
+  if (collectionId === undefined) {
+    let made: string;
+    try {
+      made = await run.deps.replay.createCollection(row.orgId);
+    } catch (err) {
+      return failure(run, row, "create_collection", err);
+    }
+    try {
+      collectionId = await keepCollection(row.orgId, made);
+    } catch (err) {
+      return failure(run, row, "store_collection", err, "db");
+    }
+    if (collectionId !== made) {
+      log.warn({ orgId: row.orgId, collectionId: made, kept: collectionId }, "seazn replays: another run stored this org's first collection first — the spare one is left empty on the host");
+    }
+  }
   let url: string;
   try {
-    collectionId = await collectionFor(run, row.orgId);
-    url = await signDownload({ ingest: run.deps.ingest, tokenCache: run.deps.tokenCache }, row.cfVideoId, run.now, SEAZN_FETCH_URL_TTL_SECONDS);
+    url = await signDownload({ ingest: run.deps.ingest, tokenCache: run.deps.tokenCache }, row.cfVideoId, run.now, SEAZN_FETCH_URL_TTL_SECONDS, TIMED);
   } catch (err) {
-    return failure(run, row, "prepare_fetch", err);
+    return failure(run, row, "sign_download", err);
   }
   if (!(await write(row, "downloading", { state: "fetching", state_at: run.now }))) return dropped(row, "downloading");
   moved(run, row, { state: "fetching" });
@@ -343,7 +381,7 @@ const STEPS: { readonly [K in ReplayStep["kind"]]: Handler<K> } = {
     if (!run.canCall()) return defer(run, row);
     let status: "ready" | "inprogress";
     try {
-      status = await run.deps.ingest.createDownload(row.cfVideoId);
+      status = await run.deps.ingest.createDownload(row.cfVideoId, TIMED);
     } catch (err) {
       return failure(run, row, "create_download", err);
     }
@@ -383,19 +421,15 @@ const STEPS: { readonly [K in ReplayStep["kind"]]: Handler<K> } = {
         run.out.playable++;
         return "done";
       case "failed": {
-        // Never followed by a Cloudflare delete: the copy is removed and the move starts again after the backoff.
-        try {
-          await run.deps.replay.remove(guid);
-        } catch (err) {
-          return failure(run, row, "remove_failed_copy", err);
-        }
+        // Never followed by a Cloudflare delete: the move starts again after the backoff. The conditional write comes FIRST
+        // (review m2): a row another run verified meanwhile keeps its copy; only a row this write moved has its copy removed.
         run.out.failed++;
         const f = replayFailure(row, run.now);
         log.warn({ replayId: row.id, videoId: row.cfVideoId, guid, reason: o.reason, attempts: f.attempts }, "seazn replays: the host's copy failed the check — removed; the move starts again after the backoff");
-        if (await write(row, "encoding", { state: "failed", state_at: run.now, bunny_video_id: null, attempts: f.attempts, next_attempt_at: f.nextAttemptAt })) {
-          row.state = "failed";
-          row.bunnyVideoId = null;
-        }
+        if (!(await write(row, "encoding", { state: "failed", state_at: run.now, bunny_video_id: null, attempts: f.attempts, next_attempt_at: f.nextAttemptAt }))) return dropped(row, "encoding");
+        row.state = "failed";
+        row.bunnyVideoId = null;
+        await removeQuietly(run, row, guid);
         return "done";
       }
       case "lost":
@@ -410,7 +444,7 @@ const STEPS: { readonly [K in ReplayStep["kind"]]: Handler<K> } = {
     let res;
     try {
       // The claimed row's OWN id (checked at discovery, C6); the gate passed in nextReplayStep. Never a listing.
-      res = await run.deps.ingest.deleteVideo(row.cfVideoId);
+      res = await run.deps.ingest.deleteVideo(row.cfVideoId, TIMED);
     } catch (err) {
       return failure(run, row, "delete_cf", err);
     }
@@ -444,7 +478,7 @@ const STEPS: { readonly [K in ReplayStep["kind"]]: Handler<K> } = {
     if (step.cf === "delete") {
       let res;
       try {
-        res = await run.deps.ingest.deleteVideo(row.cfVideoId);
+        res = await run.deps.ingest.deleteVideo(row.cfVideoId, TIMED);
       } catch (err) {
         return failure(run, row, "cleanup_cf", err);
       }
@@ -464,7 +498,7 @@ const STEPS: { readonly [K in ReplayStep["kind"]]: Handler<K> } = {
   settled: async () => "done",
   give_up: async (run, row) => {
     log.warn({ replayId: row.id, videoId: row.cfVideoId, attempts: row.attempts }, "seazn replays: a move still failing past the Cloudflare copy's life — given up");
-    await write(row, "failed", { next_attempt_at: PARKED_AT });
+    await write(row, "failed", { next_attempt_at: REPLAY_PARKED_AT });
     return "done";
   },
   refuse: async (run, row, step) => {

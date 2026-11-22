@@ -13,7 +13,7 @@
 // URL), and it passes sanitise.ts's `redact` floor on its way out. A signed URL is never recorded: the CDN call is recorded
 // with its token replaced by `[signed]`, and the fetch's source URL (a signed Cloudflare download) goes only to Bunny.
 import { createHash } from "node:crypto";
-import { seaznVideoOrigins, type BunnyConfig } from "@/server/relay/config";
+import { SEAZN_REPLAY_CALL_TIMEOUT_MS, seaznVideoOrigins, type BunnyConfig } from "@/server/relay/config";
 import { NOOP_RECORDER, type ProviderCallRecorder } from "@/server/relay/ports";
 import { redact } from "@/server/relay/sanitise";
 import type { ReplayDownload, ReplayHost, ReplayState, ReplayVideo } from "./replay-ports";
@@ -191,22 +191,25 @@ export class BunnyReplayHost implements ReplayHost {
   }
 
   /** One API request, one record. The AccessKey goes in its header and nowhere else. A network failure throws a message of
-   *  our own: the fetch error's text is never quoted. */
+   *  our own: the fetch error's text is never quoted. Every request gives up after SEAZN_REPLAY_CALL_TIMEOUT_MS (Task 24 review I3:
+   *  the move calls the host inside the tick's Seazn slice) — the request and the body read alike, recorded as `timeout`. */
   private async api<T>(
     method: Method, path: string, body: unknown,
     meta: { operation: string; ids: string[]; subjectId?: string; subjectOf?: (json: T | undefined) => string | null },
   ): Promise<{ status: number; ok: boolean; json: T | undefined }> {
     const url = `${this.base}${path}`;
     const started = Date.now();
+    const signal = AbortSignal.timeout(SEAZN_REPLAY_CALL_TIMEOUT_MS);
     let res: Response;
     try {
       res = await this.fetchImpl(url, {
         method,
         headers: { AccessKey: this.config.apiKey, accept: "application/json", ...(body === undefined ? {} : { "content-type": "application/json" }) },
         body: body === undefined ? undefined : JSON.stringify(body),
+        signal,
       });
-    } catch {
-      this.record(meta.operation, method, url, meta.ids, null, meta.subjectId ?? null, started, "network");
+    } catch (e) {
+      this.record(meta.operation, method, url, meta.ids, null, meta.subjectId ?? null, started, (e as { name?: string })?.name === "TimeoutError" ? "timeout" : "network");
       throw this.error(`${meta.operation}: request failed before a response${meta.subjectId ? ` (video ${meta.subjectId})` : ""}`);
     }
     const json = (await res.json().catch(() => undefined)) as T | undefined;

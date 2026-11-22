@@ -42,7 +42,7 @@ import { NOOP_RECORDER } from "./ports";
 // second copy, and not an import of the sibling DRIVER (two adapters must stay independent of each other).
 import { redact } from "./sanitise";
 import type {
-  DeleteVideoResult, IngestCapabilities, IngestCreateSpec, IngestCredentials, IngestProvider,
+  CallTimeout, DeleteVideoResult, IngestCapabilities, IngestCreateSpec, IngestCredentials, IngestProvider,
   IngestState, IngestStatus, IngestTarget, IngestVideo, InputSwitchMeta, OutputState, ProviderCallMeta, ProviderCallRecorder, StorageUsage,
 } from "./ports";
 
@@ -253,7 +253,8 @@ export class CloudflareIngest implements IngestProvider {
           method, url, ids: [this.accountId, ...meta.ids], status, latencyMs: Date.now() - started, attempt: 1, requestId, errorCode }))
         .catch(() => undefined);
     // Phase 1 review I1: a call that names a timeout gives up after it — the request and the body read alike (one signal for both).
-    // Only the viewer-driven playback token names one today; every other call keeps the platform's own behaviour.
+    // The viewer-driven playback token names one, and so does every call the replay move makes (Task 24 review I3, `CallTimeout`);
+    // every other call keeps the platform's own behaviour.
     const signal = meta.timeoutMs === undefined ? undefined : AbortSignal.timeout(meta.timeoutMs);
     let res: Response;
     try {
@@ -625,16 +626,16 @@ export class CloudflareIngest implements IngestProvider {
    *  means "there may be more" to the sweep that reads it. Mapped exactly as `listVideos` maps, `inputId` included: it is
    *  the video's own `liveInput` — optional in the schema, so null when absent — never the id this call asked about,
    *  so the sweep's guard on it is a check and not an echo. */
-  async listInputVideos(inputId: string, meta: ProviderCallMeta = {}): Promise<IngestVideo[]> {
+  async listInputVideos(inputId: string, meta: ProviderCallMeta & CallTimeout = {}): Promise<IngestVideo[]> {
     const r = await this.call<CfVideo[]>("GET", `?live_input_id=${encodeURIComponent(inputId)}&limit=${LIST_VIDEOS_PAGE_LIMIT}`, undefined,
-      { operation: "listInputVideos", ids: [inputId], subjectId: inputId, sessionId: meta.sessionId ?? null });
+      { operation: "listInputVideos", ids: [inputId], subjectId: inputId, sessionId: meta.sessionId ?? null, timeoutMs: meta.timeoutMs });
     if (!r.json.success || !r.json.result) this.fail("list input videos", r);
     return r.json.result.map(videoOf);
   }
 
-  async deleteVideo(videoId: string): Promise<DeleteVideoResult> {
+  async deleteVideo(videoId: string, o: CallTimeout = {}): Promise<DeleteVideoResult> {
     const r = await this.call("DELETE", `/${encodeURIComponent(videoId)}`, undefined,
-      { operation: "deleteVideo", ids: [videoId], subjectId: videoId });
+      { operation: "deleteVideo", ids: [videoId], subjectId: videoId, timeoutMs: o.timeoutMs });
     if (r.status === 404) return "absent";
     if (r.status === 409 && r.json.errors?.some((e) => e.code === 10046)) return "in_progress";
     if (r.json.success || (r.status >= 200 && r.status < 300)) return "deleted";
@@ -652,10 +653,10 @@ export class CloudflareIngest implements IngestProvider {
    *
    *  Phase 1 review I1: a viewer's request waits on this call, so it gives up after SEAZN_TOKEN_MINT_TIMEOUT_MS (recorded as
    *  `timeout`); the caller's token cache then counts it as a failed mint. */
-  async playbackToken(uid: string, o: { expiresAt: Date; downloadable?: boolean }): Promise<string> {
+  async playbackToken(uid: string, o: { expiresAt: Date; downloadable?: boolean } & CallTimeout): Promise<string> {
     const exp = Math.floor(o.expiresAt.getTime() / 1000);
     const r = await this.call<{ token?: string }>("POST", `/${encodeURIComponent(uid)}/token`, o.downloadable ? { exp, downloadable: true } : { exp },
-      { operation: "playbackToken", ids: [uid], subjectId: uid, timeoutMs: SEAZN_TOKEN_MINT_TIMEOUT_MS });
+      { operation: "playbackToken", ids: [uid], subjectId: uid, timeoutMs: o.timeoutMs ?? SEAZN_TOKEN_MINT_TIMEOUT_MS });
     const token = r.json.result?.token;
     const minted = typeof token === "string" ? [token] : [];
     if (!r.json.success) this.fail("playback token", r, minted);
@@ -694,9 +695,9 @@ export class CloudflareIngest implements IngestProvider {
    *  } }`, status `ready` | `inprogress` | `error`). Asking again for a download that exists answers its current status, so the
    *  mover calls this until `ready`. The answer's `url` is unsigned and never read: the mover signs its own. An `error` status, a
    *  200 with no `default`, and any refusal (a 404 included: a video Cloudflare no longer holds) throw. */
-  async createDownload(videoId: string): Promise<"ready" | "inprogress"> {
+  async createDownload(videoId: string, o: CallTimeout = {}): Promise<"ready" | "inprogress"> {
     const r = await this.call<{ default?: { status?: string } }>("POST", `/${encodeURIComponent(videoId)}/downloads`, undefined,
-      { operation: "createDownload", ids: [videoId], subjectId: videoId });
+      { operation: "createDownload", ids: [videoId], subjectId: videoId, timeoutMs: o.timeoutMs });
     if (!r.json.success) this.fail("create download", r);
     const status = r.json.result?.default?.status;
     if (status === "ready" || status === "inprogress") return status;

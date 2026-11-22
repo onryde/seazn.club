@@ -18,7 +18,7 @@ import "server-only";
 // The URL shapes are Cloudflare's: `https://<customer host>/<token>/manifest/video.m3u8` (C1) and
 // `https://<customer host>/<token>/downloads/default.mp4` (C5). The token is a path segment, never a query string.
 import { SEAZN_LIVE_TOKEN_TTL_SECONDS, SEAZN_TOKEN_FAILURE_CACHE_SECONDS, SEAZN_TOKEN_REFRESH_BEFORE_SECONDS, streamPlaybackHost } from "@/server/relay/config";
-import type { IngestProvider } from "@/server/relay/ports";
+import type { CallTimeout, IngestProvider } from "@/server/relay/ports";
 
 /** A mint, in flight or done, and when its token expires. */
 interface MintedToken { kind: "token"; token: Promise<string>; expiresAtMs: number }
@@ -58,7 +58,7 @@ function prune(cache: PlaybackTokenCache, nowMs: number): void {
   for (const [key, entry] of cache) if (entry.expiresAtMs <= nowMs) cache.delete(key);
 }
 
-async function tokenFor(deps: PlaybackDeps, uid: string, downloadable: boolean, now: Date, ttlSeconds: number): Promise<{ token: string; expiresAtMs: number }> {
+async function tokenFor(deps: PlaybackDeps, uid: string, downloadable: boolean, now: Date, ttlSeconds: number, o: CallTimeout = {}): Promise<{ token: string; expiresAtMs: number }> {
   const key = `${downloadable ? "download" : "play"}:${uid}`;
   const nowMs = now.getTime();
   const hit = deps.tokenCache.get(key);
@@ -77,7 +77,7 @@ async function tokenFor(deps: PlaybackDeps, uid: string, downloadable: boolean, 
   const expiresAtMs = (Math.floor(nowMs / 1000) + ttlSeconds) * 1000;
   const entry: MintedToken = {
     kind: "token",
-    token: deps.ingest.playbackToken(uid, { expiresAt: new Date(expiresAtMs), ...(downloadable ? { downloadable: true } : {}) }),
+    token: deps.ingest.playbackToken(uid, { expiresAt: new Date(expiresAtMs), ...(downloadable ? { downloadable: true } : {}), ...(o.timeoutMs === undefined ? {} : { timeoutMs: o.timeoutMs }) }),
     expiresAtMs,
   };
   deps.tokenCache.set(key, entry);
@@ -111,12 +111,13 @@ export function signRecordingPlayback(deps: PlaybackDeps, videoUid: string, now:
 const MAX_TOKEN_TTL_SECONDS = 24 * 3600;
 
 /** Phase 2's mover (C5): a recording's MP4 download URL for the replay host to fetch, on a `downloadable` token that lives at
- *  least `ttlSeconds` (a whole number, 1 s to Cloudflare's 24 h). Server-to-host only: never handed to a viewer. */
-export async function signDownload(deps: PlaybackDeps, videoUid: string, now: Date, ttlSeconds: number): Promise<string> {
+ *  least `ttlSeconds` (a whole number, 1 s to Cloudflare's 24 h). Server-to-host only: never handed to a viewer. `timeoutMs` is the
+ *  mint's own (Task 24 review I3: the move's, inside the tick's slice); absent, the mint keeps its 10 s. */
+export async function signDownload(deps: PlaybackDeps, videoUid: string, now: Date, ttlSeconds: number, o: CallTimeout = {}): Promise<string> {
   if (!Number.isInteger(ttlSeconds) || ttlSeconds < 1 || ttlSeconds > MAX_TOKEN_TTL_SECONDS) {
     throw new Error(`signDownload: ttlSeconds must be a whole number of seconds from 1 to ${MAX_TOKEN_TTL_SECONDS}, got ${ttlSeconds}`);
   }
   const host = hostOrThrow();
-  const { token } = await tokenFor(deps, videoUid, true, now, ttlSeconds);
+  const { token } = await tokenFor(deps, videoUid, true, now, ttlSeconds, o);
   return `https://${host}/${token}/downloads/default.mp4`;
 }

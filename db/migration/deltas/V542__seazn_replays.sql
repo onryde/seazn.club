@@ -134,3 +134,12 @@ create index fixture_stream_inputs_seazn_unlocked_idx on fixture_stream_inputs (
 -- Written by the lock pass from the Cloudflare listing's creation (the recording's start); null when the listing's value is
 -- not a date. The interim replay orders one session's parts by it, then by locked_at, then by uid.
 alter table seazn_locked_videos add column recorded_at timestamptz null;
+
+-- ─── 9. Task 24 review m4: the replay discovery, every minute with SEAZN_HOSTED_REPLAY on ─────────────────────────────
+-- usecases/seazn-replays.ts (`replayDiscoveryQuery`) lists the programme inputs whose recordings are not yet all discovered. The
+-- index of section 7 cannot serve it (its predicate names recordings_locked_at), so without this one the table was read in full
+-- every minute. Same shape: an input leaves it once discovery marks it (replays_discovered_at set) or once the retention sweep
+-- retires it (ingest_input_id nulled); a non-Seazn programme input stays in it until it is retired. The session side is then read
+-- by its primary key.
+create index fixture_stream_inputs_seazn_undiscovered_idx on fixture_stream_inputs (session_id)
+  where role = 'programme' and replays_discovered_at is null and ingest_input_id is not null;

@@ -510,6 +510,31 @@ describe("Seazn-hosted flags and settings (Task 8)", () => {
     expect(config.seaznHostedReplay({ SEAZN_HOSTED_REPLAY: "true", SEAZN_HOSTED_LIVE: "true" })).toBe(true);
     expect(config.seaznHostedReplay({ SEAZN_HOSTED_REPLAY: "false", SEAZN_HOSTED_LIVE: "true" })).toBe(false);
   });
+  // Task 24 review m9 (2026-11-22): the match page reads only Cloudflare until Task 25 ships its swap, and the move deletes the
+  // Cloudflare copy 60 min after its Bunny copy is verified — so REPLAY on a deployment before Task 25 takes every replay off the
+  // page. It is refused there, by name, exactly where a fake driver is refused (ENV_NAME other than local/ci, or unset under
+  // production). Task 25 deletes the refusal and this case with it.
+  it("m9: SEAZN_HOSTED_REPLAY=true is refused on a named deployment until Task 25 — stg, prod and an unnamed production server throw naming Task 25; local, ci and an unnamed non-production process honour it; off is never refused", () => {
+    const on = { SEAZN_HOSTED_REPLAY: "true", SEAZN_HOSTED_LIVE: "true" };
+    let checked = 0;
+    for (const env of [{ ...on, ENV_NAME: "stg" }, { ...on, ENV_NAME: "prod" }, { ...on, ENV_NAME: " Stg " }, { ...on, NODE_ENV: "production" }, { SEAZN_HOSTED_REPLAY: "true", ENV_NAME: "prod" }]) {
+      expect(() => config.seaznHostedReplay(env), JSON.stringify(env)).toThrow(/SEAZN_HOSTED_REPLAY=true is refused .*Task 25/);
+      checked++;
+    }
+    for (const env of [{ ...on, ENV_NAME: "local" }, { ...on, ENV_NAME: "ci" }, { ...on, NODE_ENV: "test" }, { ...on }]) {
+      expect(config.seaznHostedReplay(env), JSON.stringify(env)).toBe(true);
+      checked++;
+    }
+    for (const env of [{ SEAZN_HOSTED_REPLAY: "false", SEAZN_HOSTED_LIVE: "true", ENV_NAME: "prod" }, { SEAZN_HOSTED_LIVE: "true", ENV_NAME: "stg", NODE_ENV: "production" }]) {
+      expect(config.seaznHostedReplay(env), JSON.stringify(env)).toBe(false);
+      checked++;
+    }
+    expect(checked, "environments read").toBe(11);
+  });
+  it("Task 24 review I3: the move's provider-call timeout is the ruling's 4 s — under the tick's 8 s Seazn slice", () => {
+    expect(config.SEAZN_REPLAY_CALL_TIMEOUT_MS).toBe(4_000);
+    expect(config.SEAZN_REPLAY_CALL_TIMEOUT_MS, "a hung call ends inside one slice").toBeLessThan(8_000);
+  });
   it("seaznVideoOrigins: null when unset, trimmed and de-duplicated, bare hostnames only", () => {
     expect(config.seaznVideoOrigins({})).toBeNull();
     expect(config.seaznVideoOrigins({ SEAZN_VIDEO_ORIGINS: " seazn.club,www.seazn.club,seazn.club" })).toEqual(["seazn.club", "www.seazn.club"]);

@@ -168,6 +168,48 @@ describe("BunnyReplayHost: the API calls (AccessKey header, library base URL)", 
   });
 });
 
+// Task 24 review I3 (2026-11-22): the move calls the host inside the tick's 8 s Seazn slice, and undici's own bound is 300 s. Every
+// API call therefore gives up at the move's call timeout: 4 s, the ruling's literal, typed here.
+describe("BunnyReplayHost: every API call gives up at the move's 4 s timeout (Task 24 review I3)", () => {
+  it("createCollection, fetchFromUrl, video and remove each carry AbortSignal.timeout(4000); the abort is a thrown failure of our own wording, recorded `timeout`, no key in it", async () => {
+    const deadlines: AbortController[] = [];
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => { const c = new AbortController(); deadlines.push(c); return c.signal; });
+    try {
+      const signals: (AbortSignal | null | undefined)[] = [];
+      const fetchImpl = vi.fn((_url: string | URL | Request, init?: RequestInit) => {
+        const signal = init?.signal;
+        signals.push(signal);
+        return new Promise<Response>((_, reject) => signal?.addEventListener("abort", () => reject(signal.reason), { once: true }));
+      }) as unknown as typeof fetch;
+      const recorder = new FakeRecorder();
+      const host = new BunnyReplayHost(CONFIG, { fetchImpl, recorder, now: () => NOW, videoOrigins: () => ["seazn.club"], warn: () => undefined });
+      const calls: [string, () => Promise<unknown>][] = [
+        ["createCollection", () => host.createCollection("o1")],
+        ["fetchFromUrl", () => host.fetchFromUrl({ collectionId: "c1", title: "Final, part 1", url: "https://example.test/x.mp4" })],
+        ["video", () => host.video(GUID)],
+        ["remove", () => host.remove(GUID)],
+      ];
+      let checked = 0;
+      for (const [k, [op, call]] of calls.entries()) {
+        const pending = call().then(() => null, (e: unknown) => e as Error);
+        await vi.waitFor(() => expect(signals).toHaveLength(k + 1));
+        expect(timeout, op).toHaveBeenLastCalledWith(4_000);
+        expect(signals[k], `${op}: the request carries the timeout's signal`).toBe(deadlines[k]!.signal);
+        deadlines[k]!.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+        const err = await pending;
+        expect(err?.message, op).toMatch(new RegExp(`^bunny ${op}: request failed before a response`));
+        for (const secret of SECRETS) expect(err?.message).not.toContain(secret);
+        checked++;
+      }
+      expect(checked, "API calls timed").toBe(4);
+      await new Promise((r) => setTimeout(r, 0));   // the record is fire-and-forget
+      expect(recorder.calls.map((c) => [c.operation, c.status, c.errorCode])).toEqual(calls.map(([op]) => [op, null, "timeout"]));
+    } finally {
+      timeout.mockRestore();
+    }
+  });
+});
+
 describe("BunnyReplayHost: signedEmbed (B4)", () => {
   it("answers the B4 URL for a fixed key, guid and expiry, expiring whole seconds after now, and calls nothing", () => {
     const { host, calls } = harness(() => ({ status: 500 }));

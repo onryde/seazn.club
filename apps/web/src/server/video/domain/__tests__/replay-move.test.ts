@@ -7,8 +7,8 @@
 // backoff, a 30-day retry window, ±2 s, the 240/360/480/720 rungs. No DB and no network: this file needs neither.
 import { describe, expect, it } from "vitest";
 import {
-  REPLAY_ROW_STATES, type ReplayRow, type ReplayStep, cfDeleteGate, nextReplayStep, pollOutcome, replayFailure, requiredRung,
-  verifyReplayCopy,
+  REPLAY_PARKED_AT, REPLAY_ROW_STATES, type ReplayRow, type ReplayStep, cfDeleteGate, nextReplayStep, pollOutcome, replayFailure,
+  replayFailureOutcome, requiredRung, verifyReplayCopy,
 } from "../replay-move";
 
 const MIN = 60_000;
@@ -76,20 +76,31 @@ describe("replayFailure — every state × a provider that throws gives the same
     expect(checked).toBe(8);
   });
 
-  it("swept over every state whose step makes a provider call: the failure never moves the state, only the clock", () => {
-    // The step of each state, and whether it calls a provider. A `wait`, `settled`, `refuse` or `give_up` makes no call.
-    const CALLING = new Set(["create_download", "refetch", "poll_state", "delete_cf", "retry", "cleanup"]);
-    let calling = 0;
+  // Review I2 (2026-11-22): the window `failed` has is every state's. A step that keeps failing in any other state — a broken
+  // recording's download answering `error`, a Cloudflare 404 after its own 30-day deletion, a host refusing the fetch — used to
+  // back off for ever. The expected outcomes are the ruling's, typed: inside 30 days from the recording, the state stays and only
+  // the clock moves; from 30 days, the row is parked (never due again) — the move's own states as `failed`, while a playable row
+  // keeps `playable` (its verified copy is never hidden) and a deleted one keeps `deleted` (an organiser's delete is never undone).
+  it("replayFailureOutcome, swept over every state: inside the 30-day window the state stays and the backoff applies; from 30 days the row is parked — as failed, except playable and deleted, which keep their state", () => {
+    const DAY = 24 * 60 * MIN;
+    const PARKED = new Date("9999-12-31T00:00:00.000Z");
+    const PARKED_AS: Record<string, string> = {
+      found: "failed", downloading: "failed", fetching: "failed", encoding: "failed", failed: "failed", playable: "playable", deleted: "deleted",
+    };
+    let checked = 0;
     for (const state of REPLAY_ROW_STATES) {
-      const r = row({ state, attempts: 3, ...(state === "encoding" || state === "playable" ? { bunnyVideoId: "g1" } : {}),
-        ...(state === "playable" ? { verifiedAt: ago(61 * MIN) } : {}), ...(state === "fetching" ? { stateAt: ago(31 * MIN) } : {}) });
-      const step = nextReplayStep(r, NOW);
-      if (!CALLING.has(step.kind)) continue;
-      expect(replayFailure(r, NOW), `${state} (${step.kind})`).toEqual({ attempts: 4, nextAttemptAt: later(8 * MIN) });
-      calling++;
+      const inside = replayFailureOutcome(row({ state, attempts: 3, recordedAt: ago(30 * DAY - 1) }), NOW);
+      expect(inside, `${state}, 1 ms inside the window`).toEqual({ kind: "backoff", state, attempts: 4, nextAttemptAt: later(8 * MIN) });
+      const past = replayFailureOutcome(row({ state, attempts: 3, recordedAt: ago(30 * DAY) }), NOW);
+      expect(past, `${state}, exactly 30 days`).toEqual({ kind: "give_up", state: PARKED_AS[state], attempts: 4, nextAttemptAt: PARKED });
+      checked += 2;
     }
-    // found, downloading, fetching (stale), encoding, playable (due), failed (retry), deleted (cleanup): seven.
-    expect(calling, "states whose step calls a provider").toBe(7);
+    expect(checked, "states × {inside, past}").toBe(14);
+    expect(Object.keys(PARKED_AS).sort(), "PREMISE: the table names every state").toEqual([...REPLAY_ROW_STATES].sort());
+    // The window is the one `failed`'s step reads: the same instant gives up in both.
+    expect(nextReplayStep(row({ state: "failed", recordedAt: ago(30 * DAY) }), NOW).kind).toBe("give_up");
+    expect(nextReplayStep(row({ state: "failed", recordedAt: ago(30 * DAY - 1) }), NOW).kind).toBe("retry");
+    expect(REPLAY_PARKED_AT).toEqual(PARKED);
   });
 });
 

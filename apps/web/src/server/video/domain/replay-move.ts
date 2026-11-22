@@ -85,7 +85,7 @@ const STEP_OF: { readonly [S in ReplayRowState]: (row: ReplayRow, now: Date) => 
     // V542's CHECK makes `playable` imply `verified_at`; a row without one never earns a delete.
     return gate.until === null ? { kind: "refuse", reason: "playable_unverified" } : { kind: "wait", until: gate.until };
   },
-  failed: (row, now) => (now.getTime() - row.recordedAt.getTime() < SEAZN_REPLAY_RETRY_DAYS * DAY ? { kind: "retry" } : { kind: "give_up" }),
+  failed: (row, now) => (pastRetryWindow(row, now) ? { kind: "give_up" } : { kind: "retry" }),
   deleted: (row, now) => {
     if (row.bunnyCleanedAt !== null) return { kind: "settled" };
     if (row.cfDeletedAt !== null) return { kind: "cleanup", cf: "skip" };
@@ -106,6 +106,31 @@ export function nextReplayStep(row: ReplayRow, now: Date): ReplayStep {
 export function replayFailure(row: Pick<ReplayRow, "attempts">, now: Date): { attempts: number; nextAttemptAt: Date } {
   const minutes = Math.min(2 ** row.attempts, SEAZN_REPLAY_BACKOFF_MAX_MINUTES);
   return { attempts: row.attempts + 1, nextAttemptAt: new Date(now.getTime() + minutes * MIN) };
+}
+
+/** Where a row past every retry is parked: never due again (a date Postgres and every client read plainly). */
+export const REPLAY_PARKED_AT = new Date("9999-12-31T00:00:00.000Z");
+
+/** The one retry window (review I2, 2026-11-22): from SEAZN_REPLAY_RETRY_DAYS after the recording began — the Cloudflare copy's
+ *  own life — nothing is left to move, so nothing is retried. Read by `failed`'s step and by every other state's failure. */
+export function pastRetryWindow(row: Pick<ReplayRow, "recordedAt">, now: Date): boolean {
+  return now.getTime() - row.recordedAt.getTime() >= SEAZN_REPLAY_RETRY_DAYS * DAY;
+}
+
+/** The states a failure past the window leaves as they are: a playable row's verified copy is never hidden, and an organiser's
+ *  delete is never undone. Every other state is parked as `failed`. */
+const KEPT_WHEN_PARKED: ReadonlySet<ReplayRowState> = new Set(["playable", "deleted"]);
+
+/** What a failed step leaves on its row (review I2): inside the retry window, the same state and the backoff; past it, the row is
+ *  parked at REPLAY_PARKED_AT — as `failed`, or in its own state when that is playable or deleted — so it is never claimed again,
+ *  rather than failing a provider call and logging an error every hour for ever. */
+export type ReplayFailureOutcome =
+  | { kind: "backoff"; state: ReplayRowState; attempts: number; nextAttemptAt: Date }
+  | { kind: "give_up"; state: ReplayRowState; attempts: number; nextAttemptAt: Date };
+export function replayFailureOutcome(row: Pick<ReplayRow, "state" | "attempts" | "recordedAt">, now: Date): ReplayFailureOutcome {
+  const f = replayFailure(row, now);
+  if (!pastRetryWindow(row, now)) return { kind: "backoff", state: row.state, ...f };
+  return { kind: "give_up", state: KEPT_WHEN_PARKED.has(row.state) ? row.state : "failed", attempts: f.attempts, nextAttemptAt: REPLAY_PARKED_AT };
 }
 
 /** The renditions the host makes, smallest first; it never makes one above 720 (B2). */

@@ -362,9 +362,21 @@ function seaznFlag(name: "SEAZN_HOSTED_LIVE" | "SEAZN_HOSTED_REPLAY" | "SEAZN_HO
 export function seaznHostedLive(env: Record<string, string | undefined> = process.env): boolean {
   return seaznFlag("SEAZN_HOSTED_LIVE", env);
 }
-/** Phase 2 needs Phase 1: true only when LIVE is on too. A malformed REPLAY value still throws while LIVE is off. */
+/** Phase 2 needs Phase 1: true only when LIVE is on too. A malformed REPLAY value still throws while LIVE is off.
+ *
+ *  Task 24 review m9 (2026-11-22): REPLAY on is REFUSED (a throw naming Task 25) on a named deployment — wherever a fake driver is
+ *  refused (`FAKE_DRIVER_ENV_NAMES`: honoured only with ENV_NAME local or ci, or unset outside production). Until Task 25 ships
+ *  the match page's swap to the replay host, the page plays only the Cloudflare copy, which the move deletes 60 min after its
+ *  Bunny copy is verified: REPLAY on would take every replay off the page. Task 25 deletes this refusal. */
 export function seaznHostedReplay(env: Record<string, string | undefined> = process.env): boolean {
   const replay = seaznFlag("SEAZN_HOSTED_REPLAY", env);
+  if (replay) {
+    const name = envNameOf(env);
+    const honoured = name === null ? env.NODE_ENV !== "production" : FAKE_DRIVER_ENV_NAMES.includes(name);
+    if (!honoured) {
+      throw new Error(`SEAZN_HOSTED_REPLAY=true is refused on ${name === null ? "an unnamed production server" : `ENV_NAME=${JSON.stringify(name)}`} until Task 25 ships: the match page still plays only the Cloudflare copy, which the move deletes 60 min after its replay-host copy is verified — every replay would leave the page. Set it false (Task 25 deletes this refusal)`);
+    }
+  }
   return replay && seaznHostedLive(env);
 }
 export function seaznHostedCost(env: Record<string, string | undefined> = process.env): boolean {
@@ -420,6 +432,10 @@ export const SEAZN_REPLAY_CLAIM_BATCH = 10;
 export const SEAZN_FETCH_URL_TTL_SECONDS = 6 * 3600;
 /** Plan decision: a failure waits min(2^attempts, this) minutes before the next attempt. */
 export const SEAZN_REPLAY_BACKOFF_MAX_MINUTES = 60;
+/** Task 24 review I3 (2026-11-22): every Cloudflare and replay-host call on the move's path gives up after this long
+ *  (`AbortSignal.timeout`) — under the tick's 8 s Seazn slice (`SEAZN_PASS_BUDGET_MS`), so one hung call cannot hold the tick for
+ *  undici's 300 s. A call that times out is a failure like any other: retried after its backoff. */
+export const SEAZN_REPLAY_CALL_TIMEOUT_MS = 4_000;
 /** Plan decision: a `failed` move is retried from `found` while its recording is younger than this — the Cloudflare copy's own
  *  life, after which there is nothing left to fetch. */
 export const SEAZN_REPLAY_RETRY_DAYS = DELETE_RECORDING_AFTER_DAYS;

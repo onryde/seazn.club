@@ -62,7 +62,7 @@ const decide = (fixtureId: string, at: number | null) => sql`update fixtures set
 const discover = (w: World, now: number) => discoverSeaznRecordings(w.replayDeps, { now: new Date(now), budgetMs: BUDGET, orgIds: [w.auth.orgId] });
 const move = (w: World, now: number) => moveSeaznRecordings(w.replayDeps, { now: new Date(now), budgetMs: BUDGET, orgIds: [w.auth.orgId] });
 interface Row {
-  cf_video_id: string; part_no: number; state: string; bunny_video_id: string | null; attempts: number; next_attempt_at: Date;
+  id: string; cf_video_id: string; part_no: number; state: string; bunny_video_id: string | null; attempts: number; next_attempt_at: Date;
   verified_at: Date | null; cf_deleted_at: Date | null; bunny_cleaned_at: Date | null; recorded_at: Date; session_id: string;
   cf_duration_seconds: number | null; cf_height: number | null; length_seconds: number | null;
 }
@@ -140,8 +140,11 @@ describe.skipIf(!HAS_DB)("Task 24 — discovery and the move, on the fakes", () 
     events.push(`state:${playable.state}`);
     expect([playable.state, ms(playable.verified_at), playable.length_seconds]).toEqual(["playable", v, FAKE_REPLAY_LENGTH_SECONDS]);
     expect(ms(playable.next_attempt_at), "due again at verified_at + 60 min").toBe(v + 60 * MIN);
+    // Review m5: pulled back, so the 59-min run CLAIMS the row and the gate itself — not the row's own due time — holds the delete.
+    await sql`update fixture_video_replays set next_attempt_at = ${new Date(v + 59 * MIN)} where cf_video_id = ${cf}`;
     await move(w, v + 59 * MIN);
     expect(events.filter((x) => x.startsWith("delete:")), "59 min: no delete").toEqual([]);
+    expect(ms((await rowOf(cf)).next_attempt_at), "59 min: claimed, and the gate set it due at verified_at + 60 min").toBe(v + 60 * MIN);
     expect((await rowOf(cf)).cf_deleted_at).toBeNull();
     await move(w, v + 60 * MIN);
     expect(events.filter((x) => x.startsWith("delete:")), "60 min: exactly one, of the stored id").toEqual([`delete:${cf}`]);
@@ -504,5 +507,325 @@ describe.skipIf(!HAS_DB)("Task 24 — discovery and the move, on the fakes", () 
     } finally {
       for (const l of logs) l.mockRestore();
     }
+  });
+
+  // ─── Task 24 review, round 2 (2026-11-22) ──────────────────────────────────────────────────────────────────────────────
+  const DAY = 24 * 60 * MIN;
+  const PARKED = Date.parse("9999-12-31T00:00:00.000Z");
+  const NOTHING = { discovered: 0, moved: 0, playable: 0, refused: 0, failed: 0, deferred: 0 };
+  const replayIdOf = (o: unknown) => (o as { replayId?: string } | undefined)?.replayId;
+
+  it("review I1: Cloudflare still making the MP4 — `inprogress` on two firings, then `ready`: no fetch and the row due again at once after each `inprogress`, then one fetch", async () => {
+    const w = await world();
+    const f = w.fixtureIds[0];
+    const s0 = await endedWith(w, f, [{}]);
+    await decide(f, s0.endedAt);
+    const t0 = s0.endedAt + 15 * MIN;
+    await discover(w, t0);
+    const cf = s0.ids[0]!;
+    w.ingest.scriptDownload(cf, ["inprogress", "inprogress"]);
+    const fetch = vi.spyOn(w.host, "fetchFromUrl");
+    let checked = 0;
+    for (const [k, now] of [t0, t0 + MIN].entries()) {
+      expect(await move(w, now), `firing ${k + 1}`).toMatchObject({ failed: 0, deferred: 0 });
+      const row = await rowOf(cf);
+      expect([row.state, ms(row.next_attempt_at), row.attempts, row.bunny_video_id], `firing ${k + 1}: asked again on the next firing`).toEqual(["downloading", now, 0, null]);
+      expect(w.ingest.downloadCalls, `firing ${k + 1}`).toEqual(Array(k + 1).fill(cf));
+      expect(fetch, `firing ${k + 1}: no fetch of an MP4 that is not ready`).not.toHaveBeenCalled();
+      checked++;
+    }
+    expect(checked, "inprogress firings").toBe(2);
+    await move(w, t0 + 2 * MIN);
+    expect(w.ingest.downloadCalls, "ready on the third ask").toEqual([cf, cf, cf]);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect((await rowOf(cf)).state).toBe("encoding");
+  });
+
+  it("review I1: a provider call that throws in each calling step — the download, the poll, the Cloudflare delete, the cleanup's remove — keeps the row's state and copy, counts one attempt, backs off 1 min, and logs the step", async () => {
+    const boom = (what: string) => new Error(`${what}: HTTP 500`);
+    const CASES: { step: string; arm: (w: World) => Promise<{ cf: string; now: number; state: string; guid: string | null }> }[] = [
+      { step: "create_download", arm: async (w) => {
+        const s0 = await endedWith(w, w.fixtureIds[0], [{}]);
+        await decide(w.fixtureIds[0], s0.endedAt);
+        const t0 = s0.endedAt + 15 * MIN;
+        await discover(w, t0);
+        vi.spyOn(w.ingest, "createDownload").mockRejectedValueOnce(boom("cloudflare create download"));
+        return { cf: s0.ids[0]!, now: t0, state: "downloading", guid: null };   // found → downloading is written before the call
+      } },
+      { step: "poll_state", arm: async (w) => {
+        const e = await toEncoding(w, w.fixtureIds[0], [{}]);
+        vi.spyOn(w.host, "video").mockRejectedValueOnce(boom("bunny video"));
+        return { cf: e.ids[0]!, now: e.t0 + 15 * MIN, state: "encoding", guid: e.rows[0]!.bunny_video_id };
+      } },
+      { step: "delete_cf", arm: async (w) => {
+        const e = await toEncoding(w, w.fixtureIds[0], [{}]);
+        w.host.advance(e.rows[0]!.bunny_video_id!);
+        await move(w, e.t0 + 15 * MIN);
+        vi.spyOn(w.ingest, "deleteVideo").mockRejectedValueOnce(boom("cloudflare delete video"));
+        return { cf: e.ids[0]!, now: e.t0 + 75 * MIN, state: "playable", guid: e.rows[0]!.bunny_video_id };
+      } },
+      { step: "cleanup", arm: async (w) => {
+        const e = await toEncoding(w, w.fixtureIds[0], [{}]);
+        await sql`update fixture_video_replays set state = 'deleted', deleted_reason = 'organiser', deleted_at = ${new Date(e.t0)}, next_attempt_at = ${new Date(e.t0)} where cf_video_id = ${e.ids[0]!}`;
+        vi.spyOn(w.host, "remove").mockRejectedValueOnce(boom("bunny remove"));
+        return { cf: e.ids[0]!, now: e.t0 + MIN, state: "deleted", guid: e.rows[0]!.bunny_video_id };
+      } },
+    ];
+    let checked = 0;
+    for (const c of CASES) {
+      const w = await world();
+      const a = await c.arm(w);
+      expect((await rowOf(a.cf)).attempts, `PREMISE ${c.step}: no attempt yet, so the backoff is 2^0 = 1 min`).toBe(0);
+      const errors = vi.spyOn(log, "error");
+      try {
+        expect(await move(w, a.now), c.step).toMatchObject({ failed: 1 });
+        const row = await rowOf(a.cf);
+        expect([row.state, row.attempts, ms(row.next_attempt_at), row.bunny_video_id], c.step).toEqual([a.state, 1, a.now + MIN, a.guid]);
+        expect([row.cf_deleted_at, row.bunny_cleaned_at], `${c.step}: nothing recorded as done`).toEqual([null, null]);
+        const steps = errors.mock.calls.filter(([o]) => replayIdOf(o) === row.id).map(([o]) => (o as { step?: string }).step);
+        expect(steps, c.step).toEqual([c.step]);
+      } finally {
+        errors.mockRestore();
+      }
+      checked++;
+    }
+    expect(checked, "calling steps").toBe(4);
+  });
+
+  it("review I2: a downloading row whose download keeps failing backs off inside its 30 days; from 30 days after its recording it is parked as failed — one log line — and never claimed again", async () => {
+    const w = await world();
+    const f = w.fixtureIds[0];
+    const s0 = await endedWith(w, f, [{}]);
+    await decide(f, s0.endedAt);
+    await discover(w, s0.endedAt + 15 * MIN);
+    const cf = s0.ids[0]!;
+    const { id, recorded_at } = await rowOf(cf);
+    const dl = vi.spyOn(w.ingest, "createDownload").mockRejectedValue(new Error("cloudflare create download: the download failed (status error)"));
+    const logs = [vi.spyOn(log, "error"), vi.spyOn(log, "warn")];
+    const linesOf = () => logs.flatMap((l) => l.mock.calls).filter(([o]) => replayIdOf(o) === id);
+    try {
+      const inside = ms(recorded_at)! + 30 * DAY - MIN;
+      expect(await move(w, inside)).toMatchObject({ failed: 1 });
+      let row = await rowOf(cf);
+      expect([row.state, row.attempts, ms(row.next_attempt_at)], "1 min inside the window: the backoff").toEqual(["downloading", 1, inside + MIN]);
+      expect(linesOf()).toHaveLength(1);
+      const past = inside + MIN;   // exactly 30 days after the recording, and due
+      expect(await move(w, past)).toMatchObject({ failed: 1 });
+      row = await rowOf(cf);
+      expect([row.state, row.attempts, ms(row.next_attempt_at)], "30 days: parked as failed").toEqual(["failed", 2, PARKED]);
+      expect(linesOf(), "one more line: the give-up").toHaveLength(2);
+      expect(JSON.stringify(linesOf()[1])).toMatch(/given up/);
+      for (const later of [past + DAY, past + 365 * DAY]) expect(await move(w, later)).toEqual(NOTHING);
+      expect(dl, "never asked again").toHaveBeenCalledTimes(2);
+      expect(linesOf(), "and never logged again").toHaveLength(2);
+    } finally {
+      for (const l of logs) l.mockRestore();
+    }
+  });
+
+  it("review I2: ten rows stuck failing cannot starve the claim — a fresh row behind a full batch of them moves on the very next firing, and past their window they are parked and never claimed again", async () => {
+    const w = await world();
+    const [f, g] = w.fixtureIds;
+    const stuck = await endedWith(w, f, Array.from({ length: 10 }, () => ({})));
+    const fresh = await endedWith(w, g, [{}]);
+    await decide(f, stuck.endedAt);
+    await decide(g, fresh.endedAt);
+    const T = Math.max(stuck.endedAt, fresh.endedAt) + 15 * MIN;
+    expect(await discover(w, T)).toMatchObject({ discovered: 11 });
+    // The stuck rows have been due for an hour, the fresh one since this firing: the claim's order puts all ten first.
+    await sql`update fixture_video_replays set next_attempt_at = ${new Date(T - 60 * MIN)} where cf_video_id in ${sql(stuck.ids)}`;
+    const stuckIds = new Set(stuck.ids);
+    const real = w.ingest.createDownload.bind(w.ingest);
+    const dl = vi.spyOn(w.ingest, "createDownload").mockImplementation(async (id: string) => {
+      if (stuckIds.has(id)) throw new Error("cloudflare create download: HTTP 404 code 10003");
+      return real(id);
+    });
+    const fetch = vi.spyOn(w.host, "fetchFromUrl");
+    expect(await move(w, T), "a full batch of stuck rows").toMatchObject({ failed: 10 });
+    expect((await rowOf(fresh.ids[0]!)).state, "PREMISE: the batch was full — the fresh row was not reached").toBe("found");
+    await move(w, T + MIN);
+    expect((await rowOf(fresh.ids[0]!)).state, "the next firing: the stuck rows backed off behind it").toBe("encoding");
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const end = Math.max(...(await rowsOf(f)).map((r) => ms(r.recorded_at)!)) + 30 * DAY;
+    expect(await move(w, end), "each stuck row: one last ask, then parked").toMatchObject({ failed: 10 });
+    expect((await rowsOf(f)).map((r) => [r.state, ms(r.next_attempt_at)])).toEqual(Array(10).fill(["failed", PARKED]));
+    const asked = dl.mock.calls.filter(([id]) => stuckIds.has(id)).length;
+    await move(w, end + DAY);
+    await move(w, end + 60 * DAY);
+    expect(dl.mock.calls.filter(([id]) => stuckIds.has(id)).length, "never claimed again").toBe(asked);
+  });
+
+  it("review I3: every Cloudflare call the move makes names the move's 4 s timeout — the listing, the download, the download token and the delete", async () => {
+    const w = await world();
+    const f = w.fixtureIds[0];
+    const s0 = await endedWith(w, f, [{}]);
+    await decide(f, s0.endedAt);
+    const calls = {
+      listInputVideos: vi.spyOn(w.ingest, "listInputVideos"),
+      createDownload: vi.spyOn(w.ingest, "createDownload"),
+      playbackToken: vi.spyOn(w.ingest, "playbackToken"),
+      deleteVideo: vi.spyOn(w.ingest, "deleteVideo"),
+    };
+    const t0 = s0.endedAt + 15 * MIN;
+    await discover(w, t0);
+    await move(w, t0);
+    const [row] = await rowsOf(f);
+    w.host.advance(row!.bunny_video_id!);
+    await move(w, t0 + 15 * MIN);
+    await move(w, t0 + 75 * MIN);
+    expect((await rowOf(s0.ids[0]!)).cf_deleted_at, "PREMISE: the move ran to its end").not.toBeNull();
+    let checked = 0;
+    for (const [name, spy] of Object.entries(calls)) {
+      expect(spy.mock.calls.length, `${name}: called`).toBeGreaterThan(0);
+      for (const args of spy.mock.calls) {
+        expect((args as unknown[])[1], name).toMatchObject({ timeoutMs: 4_000 });
+        checked++;
+      }
+    }
+    expect(checked, "calls checked").toBeGreaterThanOrEqual(4);
+  });
+
+  it("review I3: the org's first collection is made with no transaction open — no connection sits idle in a transaction on org_video_collections while the host is asked", async () => {
+    const w = await world();
+    const f = w.fixtureIds[0];
+    const s0 = await endedWith(w, f, [{}]);
+    await decide(f, s0.endedAt);
+    const t0 = s0.endedAt + 15 * MIN;
+    await discover(w, t0);
+    const real = w.host.createCollection.bind(w.host);
+    let open = -1;
+    vi.spyOn(w.host, "createCollection").mockImplementation(async (orgId: string) => {
+      const [{ n }] = await sql<{ n: number }[]>`
+        select count(*)::int as n from pg_stat_activity
+         where datname = current_database() and state like 'idle in transaction%' and query ilike '%select collection_id from org_video_collections%'`;
+      open = n;
+      return real(orgId);
+    });
+    await move(w, t0);
+    expect(open, "PREMISE: the host was asked").toBeGreaterThanOrEqual(0);
+    expect(open, "no transaction held across the host's call").toBe(0);
+    expect((await rowOf(s0.ids[0]!)).state).toBe("encoding");
+  });
+
+  it("review I3: two runs racing for one org's FIRST collection — both make one, the first STORED wins, the other run's copy lands in it too, and the spare is logged once by its id", async () => {
+    const w = await world();
+    const f = w.fixtureIds[0];
+    const s0 = await endedWith(w, f, [{}, {}]);
+    await decide(f, s0.endedAt);
+    const t0 = s0.endedAt + 15 * MIN;
+    await discover(w, t0);
+    const b = s0.ids[1]!;
+    // Only the first row is due; the second waits until the first run is inside the host's call.
+    await sql`update fixture_video_replays set next_attempt_at = ${new Date(t0 + 10 * MIN)} where cf_video_id = ${b}`;
+    const real = w.host.createCollection.bind(w.host);
+    let release!: () => void;
+    const gate = new Promise<void>((res) => { release = res; });
+    let entered!: () => void;
+    const inside = new Promise<void>((res) => { entered = res; });
+    const made: string[] = [];
+    vi.spyOn(w.host, "createCollection").mockImplementation(async (orgId: string) => {
+      const first = made.length === 0;
+      const id = await real(orgId);
+      made.push(id);
+      if (first) { entered(); await gate; }
+      return id;
+    });
+    const warn = vi.spyOn(log, "warn");
+    try {
+      const runA = move(w, t0);
+      await inside;
+      await sql`update fixture_video_replays set next_attempt_at = ${new Date(t0)} where cf_video_id = ${b}`;
+      await move(w, t0);   // run B: claims the second row (the first is leased), makes the second collection and stores it
+      release();
+      await runA;
+      expect(made, "each run made one").toHaveLength(2);
+      const [{ collection_id: stored }] = await sql<{ collection_id: string }[]>`select collection_id from org_video_collections where org_id = ${w.auth.orgId}`;
+      expect(stored, "the first STORED — run B's").toBe(made[1]);
+      const rows = await rowsOf(f);
+      expect(rows.map((r) => r.state)).toEqual(["encoding", "encoding"]);
+      expect(rows.map((r) => w.host.collectionOf(r.bunny_video_id!)), "both copies in the stored collection").toEqual([stored, stored]);
+      const spare = warn.mock.calls.filter(([o]) => (o as { collectionId?: string } | undefined)?.collectionId === made[0]);
+      expect(spare, "the spare logged once, by its id").toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("review m2: a poll answering `failed` for a row another run verified meanwhile removes nothing — the conditional write comes first, and the verified copy stays", async () => {
+    const w = await world();
+    const e = await toEncoding(w, w.fixtureIds[0], [{}]);
+    const cf = e.ids[0]!;
+    const guid = e.rows[0]!.bunny_video_id!;
+    const v = e.t0 + 15 * MIN;
+    const real = w.host.video.bind(w.host);
+    vi.spyOn(w.host, "video").mockImplementationOnce(async (id: string) => {
+      // Another run's poll verified the copy while this run's GET was slow; this run's answer is the stale one.
+      await sql`update fixture_video_replays set state = 'playable', verified_at = ${new Date(v)}, next_attempt_at = ${new Date(v + 60 * MIN)} where cf_video_id = ${cf}`;
+      return { ...(await real(id)), state: "failed" };
+    });
+    await move(w, v);
+    const row = await rowOf(cf);
+    expect([row.state, row.bunny_video_id], "the other run's verification stands").toEqual(["playable", guid]);
+    expect(w.host.videoIds(), "the verified copy stays on the host").toContain(guid);
+  });
+
+  it("review m6: a `fetching` row that holds a copy (a shape nothing writes) is refused by name — no fetch, poll or delete — backed off inside its window and parked as failed past it", async () => {
+    const w = await world();
+    const e = await toEncoding(w, w.fixtureIds[0], [{}]);
+    const cf = e.ids[0]!;
+    await sql`update fixture_video_replays set state = 'fetching', state_at = ${new Date(e.t0)}, next_attempt_at = ${new Date(e.t0)} where cf_video_id = ${cf}`;
+    const s = spies(w);
+    const errors = vi.spyOn(log, "error");
+    try {
+      expect(await move(w, e.t0 + MIN)).toMatchObject({ failed: 1 });
+      let row = await rowOf(cf);
+      expect([row.state, row.attempts, ms(row.next_attempt_at), row.bunny_video_id]).toEqual(["fetching", 1, e.t0 + 2 * MIN, e.rows[0]!.bunny_video_id]);
+      expect(errors.mock.calls.filter(([o]) => replayIdOf(o) === row.id).map(([o]) => (o as { reason?: string; step?: string }).reason ?? (o as { step?: string }).step))
+        .toEqual(["fetching_holds_video", "refuse:fetching_holds_video"]);
+      await move(w, ms(row.recorded_at)! + 30 * DAY);
+      row = await rowOf(cf);
+      expect([row.state, ms(row.next_attempt_at)], "past the window: parked").toEqual(["failed", PARKED]);
+      expect([s.fetch.mock.calls.length, s.poll.mock.calls.length, s.del.mock.calls.length]).toEqual([0, 0, 0]);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it("review m6: a failed row past its window is given up — parked with no provider call — and never claimed again", async () => {
+    const w = await world();
+    const e = await toEncoding(w, w.fixtureIds[0], [{}]);
+    w.host.fail(e.rows[0]!.bunny_video_id!);
+    await move(w, e.t0 + 15 * MIN);
+    let row = await rowOf(e.ids[0]!);
+    expect(row.state, "PREMISE: the copy failed its check").toBe("failed");
+    const s = spies(w);
+    const asked = w.ingest.downloadCalls.length;
+    const past = ms(row.recorded_at)! + 30 * DAY;
+    expect(await move(w, past)).toMatchObject({ failed: 0, moved: 0 });
+    row = await rowOf(e.ids[0]!);
+    expect([row.state, ms(row.next_attempt_at)]).toEqual(["failed", PARKED]);
+    expect(await move(w, past + DAY)).toEqual(NOTHING);
+    expect([w.ingest.downloadCalls.length, s.fetch.mock.calls.length, s.del.mock.calls.length], "no provider call").toEqual([asked, 0, 0]);
+  });
+
+  it("review m6: a deleted row whose Cloudflare delete answers in_progress keeps cf_deleted_at and bunny_cleaned_at null and is due again at once; the next run deletes the stored id and cleans the row", async () => {
+    const w = await world();
+    const e = await toEncoding(w, w.fixtureIds[0], [{}]);
+    const cf = e.ids[0]!;
+    w.host.advance(e.rows[0]!.bunny_video_id!);
+    const v = e.t0 + 15 * MIN;
+    await move(w, v);
+    await sql`update fixture_video_replays set state = 'deleted', deleted_reason = 'organiser', deleted_at = ${new Date(v + 5 * MIN)}, next_attempt_at = ${new Date(v + 5 * MIN)} where cf_video_id = ${cf}`;
+    await move(w, v + 10 * MIN);   // the copy goes at once; the Cloudflare copy waits for v + 60 min
+    w.ingest.scriptDeleteVideo(cf, ["in_progress"]);
+    const del = vi.spyOn(w.ingest, "deleteVideo");
+    await move(w, v + 60 * MIN);
+    let row = await rowOf(cf);
+    expect([row.cf_deleted_at, row.bunny_cleaned_at, ms(row.next_attempt_at)], "in_progress: kept, due again at once").toEqual([null, null, v + 60 * MIN]);
+    await move(w, v + 61 * MIN);
+    row = await rowOf(cf);
+    expect([ms(row.cf_deleted_at), ms(row.bunny_cleaned_at)]).toEqual([v + 61 * MIN, v + 61 * MIN]);
+    expect(w.ingest.deletedVideos).toEqual([cf]);
+    expect(del.mock.calls, "review I3: the cleanup's delete names the move's timeout too").toEqual([[cf, { timeoutMs: 4_000 }], [cf, { timeoutMs: 4_000 }]]);
   });
 });

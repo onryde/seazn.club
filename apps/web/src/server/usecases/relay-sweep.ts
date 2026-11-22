@@ -245,7 +245,7 @@ function replayAlertArmed(): boolean {
   try {
     return seaznHostedReplay();
   } catch (err) {
-    log.warn({ err: String(err) }, "relay sweep: SEAZN_HOSTED_REPLAY or SEAZN_HOSTED_LIVE is not true/false — the held-recording alert is off this pass");
+    log.warn({ err: String(err) }, "relay sweep: SEAZN_HOSTED_REPLAY or SEAZN_HOSTED_LIVE is not true/false, or REPLAY is refused on this deployment (Task 24 m9) — the held-recording alert is off this pass");
     return false;
   }
 }

@@ -1434,6 +1434,55 @@ describe("Seazn Task 13: playback tokens and the recording lock", () => {
     ]);
   });
 
+  // Task 24 review I3 (2026-11-22): the replay move runs inside the tick's 8 s Seazn slice, so each Cloudflare call it makes names
+  // a timeout (`timeoutMs`), exactly as the viewer's token mint names its own 10 s. The ms here is the test's own, not the move's.
+  it("Task 24 review I3: createDownload, deleteVideo, listInputVideos and a download token each give up at the timeout they are given — the request carries AbortSignal.timeout(ms), the abort is a thrown failure recorded `timeout`; asked without one, none of the first three carries a signal", async () => {
+    const deadlines: AbortController[] = [];
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => { const c = new AbortController(); deadlines.push(c); return c.signal; });
+    const port = new FakeRecorder();
+    const plain = recorder(cfReply);
+    const inits: RequestInit[] = [];
+    const fetchImpl = vi.fn((url: string | URL | Request, init?: RequestInit) => {
+      inits.push(init ?? {});
+      const signal = init?.signal;
+      if (!signal) return plain.fetchImpl(url, init);
+      return new Promise<Response>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    }) as unknown as typeof fetch;
+    try {
+      const cf = new CloudflareIngest({ fetchImpl, accountId: "acct", token: API, recorder: port });
+      const MS = 1234;
+      const timed: [string, () => Promise<unknown>][] = [
+        ["createDownload", () => cf.createDownload("v_done", { timeoutMs: MS })],
+        ["deleteVideo", () => cf.deleteVideo("v_done", { timeoutMs: MS })],
+        ["listInputVideos", () => cf.listInputVideos("in_abc", { sessionId: "s_1", timeoutMs: MS })],
+        ["playbackToken", () => cf.playbackToken("v_done", { expiresAt: AT, downloadable: true, timeoutMs: MS })],
+      ];
+      let checked = 0;
+      for (const [k, [operation, call]] of timed.entries()) {
+        const pending = call().then(() => null, (e: unknown) => e as Error);
+        await vi.waitFor(() => expect(inits).toHaveLength(k + 1));
+        expect(timeout, operation).toHaveBeenLastCalledWith(MS);
+        expect(inits[k]!.signal, `${operation}: the request carries the timeout's signal`).toBe(deadlines[k]!.signal);
+        deadlines[k]!.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+        const err = await pending;
+        expect(err?.message, operation).toMatch(new RegExp(`^cloudflare ${operation}: request failed before a response`));
+        expect(err?.message).not.toContain(API);
+        checked++;
+      }
+      expect(checked, "timed calls").toBe(4);
+      await settle();
+      expect(port.calls.map((c) => [c.operation, c.status, c.errorCode])).toEqual(timed.map(([operation]) => [operation, null, "timeout"]));
+      // Untimed (the retention sweep's own calls): no signal, and an answer as before.
+      expect(await cf.createDownload("v_done")).toBe("ready");
+      expect(await cf.deleteVideo("v_done")).toBe("deleted");
+      expect((await cf.listInputVideos("in_abc", { sessionId: "s_1" })).length).toBeGreaterThan(0);
+      expect(inits.slice(4).map((i) => i.signal), "no signal when no timeout is asked").toEqual([undefined, undefined, undefined]);
+      expect(timeout, "only the four timed calls asked for one").toHaveBeenCalledTimes(4);
+    } finally {
+      timeout.mockRestore();
+    }
+  });
+
   it("review I3: an echo with no scheduled deletion still locks (`set`: the token rule held) but is WARNED, by video id alone; an echo that keeps it warns nothing", async () => {
     const warn = vi.fn();
     const rec = recorder(cfReply);

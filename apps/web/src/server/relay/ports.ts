@@ -55,6 +55,10 @@ export type OutputState = "ok" | "connecting" | "rejected" | "unknown";
 /** Spec §5.7 — what a per-session provider call is FOR, so its stream_provider_calls row carries the session (staging
  *  2026-09-30 found removeOutput rows with a NULL session_id). Optional: a caller with no session passes nothing. */
 export interface ProviderCallMeta { sessionId?: string | null }
+/** Task 24 review I3 (2026-11-22): how long ONE call may take before the adapter gives up on it (`AbortSignal.timeout`; a thrown
+ *  failure recorded as `timeout`). Taken only by the calls the replay move makes inside the tick's Seazn slice — listInputVideos,
+ *  deleteVideo, createDownload and playbackToken; absent, a call keeps the platform's own bound (and a token its 10 s). */
+export interface CallTimeout { timeoutMs?: number }
 /** What `setInputEnabled` is told about the input beside the session: its slot and role, so an adapter that updates the input
  *  with the CREATE's own body can re-send the name the create gave it (`meta.name` is built from session, role and slot).
  *  `access` (Task 12) is the signing the input was CREATED with, READ from its row (`fixture_stream_inputs.access`), never from
@@ -123,12 +127,12 @@ export interface IngestProvider {
   listVideos(opts: { createdBefore: Date }): Promise<IngestVideo[]>;
   /** R2004 (owner ruling 2026-10-18, option (a)): the recordings ONE input made. The daily sweep deletes a composed
    *  session's camera recordings with it once the session has ended — never the programme's. */
-  listInputVideos(inputId: string, meta?: ProviderCallMeta): Promise<IngestVideo[]>;
-  deleteVideo(videoId: string): Promise<DeleteVideoResult>;       // 409/10046 → "in_progress"
+  listInputVideos(inputId: string, meta?: ProviderCallMeta & CallTimeout): Promise<IngestVideo[]>;
+  deleteVideo(videoId: string, o?: CallTimeout): Promise<DeleteVideoResult>;       // 409/10046 → "in_progress"
   /** Seazn Task 13 (C1, C5): a playback token for one input or video, minted by the provider (no signing key of ours), valid
    *  until `expiresAt` (whole seconds). `downloadable` asks for one that also opens the MP4 download (Phase 2's mover). The
    *  token is a SECRET until it is handed to a viewer inside a playback URL: it never reaches a record, a log or an error. */
-  playbackToken(uid: string, o: { expiresAt: Date; downloadable?: boolean }): Promise<string>;
+  playbackToken(uid: string, o: { expiresAt: Date; downloadable?: boolean } & CallTimeout): Promise<string>;
   /** Seazn Task 13 (C3): make ONE video need a signed token to play, read back from the provider's echo — `set` only when the
    *  echo says so (a 200 that does not is an error). `absent` is a video the provider does not hold (gone between the listing
    *  and this call). The uid comes from a listing item checked against its own input (C6), never from a filtered listing alone.
@@ -140,7 +144,7 @@ export interface IngestProvider {
    *  provider is still making it (ask again later). A download that failed, a video the provider does not hold, and a fault all
    *  throw. The download goes with the video when the video is deleted. The uid is a replay row's own `cf_video_id` (C6), and the
    *  download URL the provider answers is never handed back: the mover signs its own (cf-playback.ts `signDownload`). */
-  createDownload(videoId: string): Promise<"ready" | "inprogress">;
+  createDownload(videoId: string, o?: CallTimeout): Promise<"ready" | "inprogress">;
 }
 export type RunnerSpec = {
   sessionId: string; attempt: number; jobToken: string; appUrl: string;   // attempt → the Machine NAME (domain/runner.ts machineNameFor)
