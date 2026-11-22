@@ -10,7 +10,8 @@
 //   - `live`: one player, labelled Live, and no picker, whatever recordings are listed beside it;
 //   - no live and one `hls` part: one player and no picker; two or more: the picker "Part {n}" (the part's own number, which can
 //     skip) in order, and still ONE player (the chosen part's);
-//   - an `embed` part is the replay host's player (Task 25): this task renders no player for one;
+//   - an `embed` part is the replay host's player (Task 25): an <iframe> (seazn-replay-frame.tsx), never a <video>; hls and embed parts
+//     share ONE picker in partNo order and ONE player at a time, each of its own kind;
 //   - PostHog must never record a signed address: `ph-no-capture` on the `<video>` AND its wrapper, and the address appears only in
 //     the one attribute the player reads it from (never as `src` before hydration, never in a label or a title).
 // The shape of the answer comes from the route's own schema (`PublicFixtureVideo`), never typed twice.
@@ -21,7 +22,9 @@ import publicEs from "@/dictionaries/es/public.json";
 import publicFr from "@/dictionaries/fr/public.json";
 import publicNl from "@/dictionaries/nl/public.json";
 import { PublicFixtureVideo } from "@/server/api-v1/schemas";
-import { SeaznVideoIsland, asPublicFixtureVideo, fetchSeaznVideo, nextPartIndex, playerKey, seaznVideoUrl } from "../seazn-video-island";
+import { ReplayParts, SeaznVideoIsland, SeaznVideoStage, asPublicFixtureVideo, fetchSeaznVideo, nextPartIndex, playerKey, seaznVideoUrl } from "../seazn-video-island";
+import { SeaznPlayer } from "../seazn-player";
+import { SeaznReplayFrame } from "../seazn-replay-frame";
 import { seaznVideoLabels } from "../seazn-video-labels";
 import { SEAZN_VIDEO_HOLD_MS } from "../seazn-video-hold";
 import { FINALISATION_GRACE_SECONDS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS, RUNNER_STOP_GRACE_SECONDS, STREAM_TICK_PERIOD_SECONDS } from "@/server/relay/config";
@@ -50,9 +53,6 @@ describe("the island: nothing to show", () => {
     expect(html(answer({}))).toBe("");
   });
 
-  it("a replay made only of the replay host's embeds renders nothing until Task 25 gives it a player", () => {
-    expect(html(answer({ replay: [part(1, "embed"), part(2, "embed")] }))).toBe("");
-  });
 });
 
 // Phase 1 visual pass D1 (CLS up to 0.094): the island used to draw nothing until its first read answered, then pushed the page down by
@@ -179,12 +179,61 @@ describe("the island: replay parts (the interim Cloudflare recording)", () => {
     expect(out).toContain(`data-src="${part(3).src}"`);
   });
 
-  it("an embed part beside hls parts is not a player and not a tab", () => {
-    const out = html(answer({ replay: [part(1, "embed"), part(2), part(3)] }));
-    expect(tabs(out)).toEqual(["Part 2", "Part 3"]);
-    expect(count(out, /<video\b/g)).toBe(1);
-    expect(out).not.toContain(part(1).src);
-    expect(html(answer({ replay: [part(1, "embed"), part(2)] })), "one hls part left: no picker").not.toContain('role="tab"');
+});
+
+describe("the island: the replay host's copy (Task 25)", () => {
+  const iframes = (out: string) => count(out, /<iframe\b/g);
+  const videos = (out: string) => count(out, /<video\b/g);
+
+  it("one embed part: ONE <iframe> named for the replay, no <video>, no picker, and its address nowhere in the markup", () => {
+    const out = html(answer({ replay: [part(1, "embed")] }));
+    expect([iframes(out), videos(out)]).toEqual([1, 0]);
+    expect(out).toMatch(new RegExp(`<iframe\\b[^>]*title="${labels.replay}"`));
+    expect(tabs(out)).toEqual([]);
+    expect(out, "the token is set after hydration, never served").not.toContain(part(1, "embed").src);
+    expect(out).toContain('data-testid="seazn-video"');
+  });
+
+  it("live or an hls part renders the <video> player and no <iframe>", () => {
+    for (const video of [answer({ live: signed("live") }), answer({ replay: [part(1)] }), answer({ replay: [part(1), part(2)] })]) {
+      const out = html(video);
+      expect([iframes(out), videos(out)]).toEqual([0, 1]);
+    }
+  });
+
+  it("a live beside embed parts is the live player alone: no frame, no picker", () => {
+    const out = html(answer({ live: signed("live"), replay: [part(1, "embed"), part(2, "embed")] }));
+    expect([iframes(out), videos(out)]).toEqual([0, 1]);
+    expect(tabs(out)).toEqual([]);
+  });
+
+  it("embed and hls parts share ONE picker in partNo order (any arrival order, gaps kept), and the picked part plays in its own kind, one at a time", () => {
+    const embedFirst = html(answer({ replay: [part(3), part(2), part(1, "embed")] }));
+    expect(tabs(embedFirst)).toEqual(["Part 1", "Part 2", "Part 3"]);
+    expect([iframes(embedFirst), videos(embedFirst)], "Part 1 is the host's copy").toEqual([1, 0]);
+    expect(embedFirst, "the other parts' addresses are not on the page").not.toContain(part(2).src);
+    expect(embedFirst).toMatch(new RegExp(`<iframe\\b[^>]*title="Part 1"`));
+    const hlsFirst = html(answer({ replay: [part(4, "embed"), part(2)] }));
+    expect(tabs(hlsFirst)).toEqual(["Part 2", "Part 4"]);
+    expect([iframes(hlsFirst), videos(hlsFirst)], "Part 2 is the interim").toEqual([0, 1]);
+    expect(hlsFirst).toContain(`data-src="${part(2).src}"`);
+  });
+
+  it("SECURITY: the frame, its box and the region all carry ph-no-capture", () => {
+    const out = html(answer({ replay: [part(1, "embed"), part(2, "embed")] }));
+    expect(out).toMatch(/<iframe\b[^>]*class="[^"]*\bph-no-capture\b/);
+    expect(out).toMatch(/data-testid="seazn-replay-frame-box"[^>]*class="[^"]*\bph-no-capture\b/);
+    expect(out).toMatch(/<section\b[^>]*data-testid="seazn-video"[^>]*class="[^"]*\bph-no-capture\b/);
+    expect(out).not.toContain("token=");
+  });
+
+  it("the frame's box IS the player's box (CLS): the same frame classes, so a part turning from the interim to the host's copy moves nothing", () => {
+    const frameBox = /data-testid="seazn-replay-frame-box"[^>]*class="([^"]*)"/.exec(html(answer({ replay: [part(1, "embed")] })))?.[1];
+    const playerBox = /data-testid="seazn-player"[^>]*class="([^"]*)"/.exec(html(answer({ replay: [part(1)] })))?.[1];
+    expect(frameBox, "premise: the frame's box is found").toBeDefined();
+    expect(playerBox, "premise: the player's box is found").toBeDefined();
+    const tokens = (c: string) => c.split(/\s+/).filter(Boolean).sort();
+    expect(tokens(frameBox!)).toEqual(tokens(playerBox!));
   });
 });
 
@@ -343,6 +392,62 @@ describe("playerKey: what keeps a player across a token refresh and rebuilds it 
   });
 });
 
+// Task 25 carry 3, the seam from the frame to the loop: a frame holding a lapsed address asks for a fresh READ (`readSoon`), never a
+// rebuild — the island's `epoch` (every player's key) does not move, so the waiting frame is not remounted. A player that gave up
+// (`onFatal`) still rebuilds. The static markup cannot call a prop, so each link of the chain is read off the element it is handed to.
+describe("Task 25: the frame's ask reaches the loop as a read, not a rebuild", () => {
+  const MIN = 60_000;
+  const embeds = answer({ replay: [part(1, "embed"), part(2, "embed")] });
+  const route = () => vi.fn(async () => new Response(JSON.stringify({ ok: true, data: embeds }), { status: 200, headers: { "content-type": "application/json" } }));
+  type StageEl = { props: { onStale: () => void; onFatal: () => void; epoch: number } };
+
+  it("the island hands the stage an onStale that reads again (a final replay sets no timer of its own) and keeps the epoch; onFatal rebuilds", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    try {
+      const fetchMock = route();
+      vi.stubGlobal("fetch", fetchMock);
+      const island = renderIsland(SeaznVideoIsland, { fixtureId: "f1", labels, settledAt: new Date(NOW - MIN).toISOString() });
+      await vi.advanceTimersByTimeAsync(10 * MIN);
+      expect(fetchMock, "premise: a settled replay of embeds reads once").toHaveBeenCalledTimes(1);
+      const stage = () => island.tree()[0] as unknown as StageEl;
+      expect(stage().props.epoch).toBe(0);
+      stage().props.onStale();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchMock, "the frame's ask: one fresh read").toHaveBeenCalledTimes(2);
+      expect(stage().props.epoch, "a read, not a rebuild: the frame keeps its element").toBe(0);
+      await vi.advanceTimersByTimeAsync(10 * MIN);
+      stage().props.onFatal();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(stage().props.epoch, "the contrast: a player that gave up is rebuilt").toBe(1);
+      island.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the stage hands onStale and onFatal on to the parts, and the parts hand them to the frame and the player", () => {
+    const onStale = vi.fn();
+    const onFatal = vi.fn();
+    const el = SeaznVideoStage({ video: embeds, epoch: 0, labels, onFatal, onStale, reserve: false, held: false, picker: [] }) as unknown as { type: unknown; props: { onStale: unknown; onFatal: unknown } };
+    expect(el.type).toBe(ReplayParts);
+    expect([el.props.onStale, el.props.onFatal]).toEqual([onStale, onFatal]);
+    let checked = 0;
+    for (const [parts, kind, prop, fn] of [
+      [embeds.replay, SeaznReplayFrame, "onStale", onStale],
+      [answer({ replay: [part(1), part(2, "embed")] }).replay, SeaznPlayer, "onFatal", onFatal],
+    ] as const) {
+      const r = renderIsland(ReplayParts, { parts: [...parts], epoch: 0, labels, onFatal, onStale });
+      const found = r.tree().filter((e) => e.type === kind);
+      expect(found, `one ${String(prop)} target`).toHaveLength(1);
+      expect((found[0]!.props as Record<string, unknown>)[prop]).toBe(fn);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+});
+
 // Phase 1 review I2, at the island itself: the page's `settledAt` and the document's visibility reach the loop. `renderIsland` (the
 // workspace's hook harness) runs the island's mount effect, so its REAL `startVideoPoll` reads the (stubbed) route on vitest's fake
 // clock. The loop's own rules are seazn-video-poll.test.ts's; this pins only the wiring the static markup above cannot see.
@@ -482,7 +587,9 @@ describe("re-capture R2: the box holds through a wait, in the server markup", ()
     expect(count(player, /data-testid="seazn-player"/g)).toBe(1);
     const empty = waiting({ initial: answer({}) });
     expect(empty).toContain('data-testid="seazn-video-starting"');
-    expect(waiting({ initial: answer({ replay: [part(1, "embed")] }) }), "embeds alone draw no player, so the wait shows").toContain("seazn-video-starting");
+    const embeds = waiting({ initial: answer({ replay: [part(1, "embed")] }) });
+    expect(embeds, "embeds alone draw the host's player (Task 25), so the wait does not show").not.toContain("seazn-video-starting");
+    expect(count(embeds, /<iframe\b/g)).toBe(1);
   });
 
   it("every locale says its own line (never the English, never a bare key)", () => {

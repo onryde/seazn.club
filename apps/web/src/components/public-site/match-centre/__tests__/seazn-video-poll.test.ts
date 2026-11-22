@@ -4,7 +4,9 @@
 //   - it reads at once, then at the schedule's delay (30 s with nothing to show, and 30 s while live too: Task 19, so a Stop reaches
 //     an open page within one poll; and 30 s while the interim replay plays: Task 19 fix round 1, I1, so a second Go live reaches
 //     it too), and a new answer moves the next read with it;
-//   - a replay of embeds alone sets NO timer, and a read the island asks for (a viewer picks an expired part) still happens;
+//   - a replay of embeds alone (Task 25, carry 4) reads at the floor until it is FINAL (the fixture settled, nothing hot), then sets NO
+//     timer; a read the island asks for still happens: `refreshSoon` (a player gave up: the next answer rebuilds it) and `readSoon`
+//     (the replay host's frame holds an address whose token has passed: a fresh read, never a rebuild, so the frame is not remounted);
 //   - a failed read keeps the last answer on screen and tries again in 30 s, and a later good answer replaces it;
 //   - a stop ends everything: no timer, the read in flight is aborted, and its late answer is never delivered.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -26,6 +28,8 @@ const replayFor = (ms: number): PublicFixtureVideo => ({
   live: null,
   replay: [{ partNo: 1, player: "hls", src: "https://host.invalid/p1/manifest/video.m3u8", expiresAt: new Date(Date.now() + ms).toISOString() }],
 });
+/** A fixture settled a minute before T0: an answer of embeds alone is final there (carry 4). */
+const SETTLED = T0.getTime() - MIN;
 const embedOnly: PublicFixtureVideo = {
   live: null,
   replay: [{ partNo: 1, player: "embed", src: "https://embed.invalid/p1", expiresAt: new Date(T0.getTime() + 60 * MIN).toISOString() }],
@@ -133,13 +137,39 @@ describe("startVideoPoll: the schedule", () => {
     poll.stop();
   });
 
-  it("a replay of embeds alone sets no timer: a day later there is still the one read", async () => {
+  it("carry 4: a replay of embeds alone on a SETTLED fixture is final — no timer: a day later there is still the one read", async () => {
     const r = route(embedOnly);
-    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {} });
+    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {}, settledAtMs: T0.getTime() - MIN });
     await flush();
     await vi.advanceTimersByTimeAsync(24 * 60 * MIN);
     expect(r.calls).toHaveLength(1);
     expect(vi.getTimerCount(), "no timer left").toBe(0);
+    poll.stop();
+  });
+
+  it("carry 4: embeds alone on a fixture NOT settled are re-read at the floor, so a new Go live is seen within one read; the live answer then stays on the floor (a Stop is seen within one read)", async () => {
+    const live = liveFor(60 * MIN);
+    const r = route(embedOnly, embedOnly, live, live);
+    const seen: PublicFixtureVideo[] = [];
+    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: (v) => seen.push(v) });
+    await flush();
+    await vi.advanceTimersByTimeAsync(SEAZN_VIDEO_POLL_FLOOR_MS - 1);
+    expect(r.calls, "not before the floor").toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(r.calls).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(SEAZN_VIDEO_POLL_FLOOR_MS);
+    expect(seen.at(-1)?.live, "the Go live, one floor later").not.toBeNull();
+    await vi.advanceTimersByTimeAsync(SEAZN_VIDEO_POLL_FLOOR_MS);
+    expect(r.calls).toHaveLength(4);
+    poll.stop();
+  });
+
+  it("carry 4: embeds alone, settled but HOT (a session active as the page was drawn): still the floor", async () => {
+    const r = route(embedOnly);
+    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {}, settledAtMs: T0.getTime() - MIN, activeUntilMs: T0.getTime() + 10 * MIN });
+    await flush();
+    await vi.advanceTimersByTimeAsync(SEAZN_VIDEO_POLL_FLOOR_MS);
+    expect(r.calls).toHaveLength(2);
     poll.stop();
   });
 });
@@ -246,7 +276,7 @@ describe("review m8: a read that hangs", () => {
 describe("startVideoPoll: refreshSoon (a lapsed token, or a viewer's pick of an expired part)", () => {
   it("reads at once when the last read is older than the floor, even with no timer owed", async () => {
     const r = route(embedOnly, embedOnly);
-    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {} });
+    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {}, settledAtMs: SETTLED });
     await flush();
     await vi.advanceTimersByTimeAsync(31_000);
     expect(r.calls, "premise: nothing re-reads on its own").toHaveLength(1);
@@ -257,9 +287,10 @@ describe("startVideoPoll: refreshSoon (a lapsed token, or a viewer's pick of an 
   });
 
   it("waits out the floor when the last read was just now (a flood of errors cannot flood the route)", async () => {
-    // Embeds alone set no timer of their own, so the only read here is the ask's (a live answer's own 30 s read would hide it).
+    // Embeds alone on a settled fixture set no timer of their own, so the only read here is the ask's (a live answer's own 30 s read
+    // would hide it).
     const r = route(embedOnly, embedOnly);
-    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {} });
+    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {}, settledAtMs: SETTLED });
     await flush();
     await vi.advanceTimersByTimeAsync(10_000);
     poll.refreshSoon();
@@ -287,6 +318,99 @@ describe("startVideoPoll: refreshSoon (a lapsed token, or a viewer's pick of an 
     poll.refreshSoon();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(calls).toBe(1);
+  });
+});
+
+// Task 25 (carry 3): the replay host's frame holds an address whose token has passed (a part picked, or the first part, from an answer
+// read long ago on a final replay that sets no timer). It asks for a fresh read — NOT a rebuild: the frame is waiting, not dead, and
+// a rebuild would remount it (a fresh frame that asks again, for ever, on a viewer's wrong clock).
+describe("startVideoPoll: readSoon (a frame holding a lapsed address)", () => {
+  const record = () => {
+    const seen: { video: PublicFixtureVideo; rebuild: boolean }[] = [];
+    return { seen, onVideo: (video: PublicFixtureVideo, o: { rebuild: boolean }) => void seen.push({ video, rebuild: o.rebuild }) };
+  };
+
+  it("EMPTY CASE FIRST: never asked, a final replay reads once and never again", async () => {
+    const r = route(embedOnly);
+    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {}, settledAtMs: SETTLED });
+    await flush();
+    await vi.advanceTimersByTimeAsync(10 * MIN);
+    expect(r.calls).toHaveLength(1);
+    poll.stop();
+  });
+
+  it("reads at once when the last read is older than the floor, and the answer is delivered WITHOUT rebuild", async () => {
+    const r = route(embedOnly, embedOnly);
+    const rec = record();
+    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: rec.onVideo, settledAtMs: SETTLED });
+    await flush();
+    await vi.advanceTimersByTimeAsync(5 * MIN);
+    poll.readSoon();
+    await flush();
+    expect(r.calls).toHaveLength(2);
+    expect(rec.seen.map((x) => x.rebuild)).toEqual([false, false]);
+    poll.stop();
+  });
+
+  it("waits out the floor after the last read, and a burst of asks is ONE read", async () => {
+    const r = route(embedOnly, embedOnly, embedOnly);
+    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {}, settledAtMs: SETTLED });
+    await flush();
+    await vi.advanceTimersByTimeAsync(10_000);
+    poll.readSoon();
+    poll.readSoon();
+    poll.readSoon();
+    await vi.advanceTimersByTimeAsync(SEAZN_VIDEO_POLL_FLOOR_MS - 10_000 - 1);
+    expect(r.calls, "a ms short of the floor").toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(r.calls).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(10 * MIN);
+    expect(r.calls, "one read for the burst").toHaveLength(2);
+    poll.stop();
+  });
+
+  it("leaves a rebuild a player asked for in place: the next answer still rebuilds", async () => {
+    const r = route(embedOnly, embedOnly);
+    const rec = record();
+    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: rec.onVideo, settledAtMs: SETTLED });
+    await flush();
+    await vi.advanceTimersByTimeAsync(5 * MIN);
+    poll.refreshSoon();
+    poll.readSoon();
+    await flush();
+    expect(rec.seen.map((x) => x.rebuild)).toEqual([false, true]);
+    poll.stop();
+  });
+
+  it("is ignored while a read is in flight (that answer serves) and after a stop; a hidden page owes it until shown", async () => {
+    let calls = 0;
+    const fetchVideo = vi.fn(() => {
+      calls++;
+      return new Promise<PublicFixtureVideo>(() => {});
+    });
+    const poll = startVideoPoll({ fetchVideo, onVideo: () => {} });
+    await flush();
+    poll.readSoon();
+    await vi.advanceTimersByTimeAsync(MIN);
+    expect(calls, "the pending read is not doubled").toBe(1);
+    poll.stop();
+    poll.readSoon();
+    await vi.advanceTimersByTimeAsync(MIN);
+    expect(calls).toBe(1);
+
+    const page = fakePage();
+    const r = timed(embedOnly, embedOnly);
+    const hidden = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {}, visibility: page.visibility, settledAtMs: SETTLED });
+    await flush();
+    await vi.advanceTimersByTimeAsync(5 * MIN);
+    page.hide();
+    hidden.readSoon();
+    await vi.advanceTimersByTimeAsync(5 * MIN);
+    expect(r.at, "hidden: no read").toHaveLength(1);
+    page.show();
+    await flush();
+    expect(r.at, "shown: the owed read, at once (the last read is past the floor)").toHaveLength(2);
+    hidden.stop();
   });
 });
 
@@ -627,7 +751,7 @@ describe("review I2: a hidden page reads nothing", () => {
   });
 
   it("a loop the schedule stopped stays stopped when the page is shown (a settled empty fixture, and embeds alone)", async () => {
-    for (const [what, answer, settledAtMs] of [["settled, empty", EMPTY, T0.getTime() - MIN], ["embeds alone", embedOnly, null]] as const) {
+    for (const [what, answer, settledAtMs] of [["settled, empty", EMPTY, T0.getTime() - MIN], ["settled, embeds alone", embedOnly, T0.getTime() - MIN]] as const) {
       const page = fakePage();
       const r = timed(answer);
       const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {}, visibility: page.visibility, settledAtMs });

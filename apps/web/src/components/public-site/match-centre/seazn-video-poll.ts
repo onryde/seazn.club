@@ -3,9 +3,11 @@
 // whatever the page already shows when a read fails (a flaky network must not blank a playing video). Failed reads in a row retry on
 // the schedule's ladder, 30 s then every 60 s (review N6, `backoffMs`), so an outage or a 429 does not keep every page on the floor.
 //
-// `refreshSoon` is the island's ask for a read outside the schedule: a player that gave up (a fatal error: a token that lapsed anyway,
-// or a blip on the manifest request), or (Task 25) a viewer who picked a replay part whose token has expired. It never reads sooner
-// than the floor after the last read began, so an error that repeats cannot hammer the route.
+// `refreshSoon` is the island's ask for a read outside the schedule after a player gave up (a fatal error: a token that lapsed anyway,
+// or a blip on the manifest request). `readSoon` (Task 25, carry 3) is the replay host's frame asking for a fresh address because the one
+// it holds has a token that has passed (a part picked, or the first part, from an answer read long ago): the same read, WITHOUT the
+// rebuild below, so the waiting frame keeps its element and loads the fresh address. Neither reads sooner than the floor after the
+// last read began, so an ask that repeats cannot hammer the route.
 //
 // The ask is also the player's "I am dead": the NEXT answer is delivered with `rebuild: true`, whatever it holds. A token that is still
 // good was not what failed, so the same address would otherwise be a no-op to the player and leave it on "can't play" until the viewer
@@ -56,7 +58,10 @@ export interface VideoPollHooks {
 }
 export interface VideoPoll {
   stop: () => void;
+  /** A player gave up: a read soon, and its answer rebuilds the players. */
   refreshSoon: () => void;
+  /** A frame holds a lapsed address: a read soon, and its answer is an ordinary one (no rebuild). */
+  readSoon: () => void;
 }
 
 /** Phase 1 review m8: a read not answered by then is given up (aborted) and counts as a failed read, so a hung request cannot freeze
@@ -152,6 +157,11 @@ export function startVideoPoll({ fetchVideo, onVideo, settledAtMs = null, kickof
       if (stopped) return;
       // Marked even while a read is in flight: that read's answer is the first one after the failure.
       rebuildNext = true;
+      if (inFlight !== null) return;
+      schedule(floorWait());
+    },
+    readSoon() {
+      // A read in flight already brings a fresh address; a pending rebuild is left as it was. After a stop, `schedule` sets nothing.
       if (inFlight !== null) return;
       schedule(floorWait());
     },

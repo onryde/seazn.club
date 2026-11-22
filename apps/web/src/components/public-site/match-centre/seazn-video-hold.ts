@@ -33,10 +33,9 @@ export const SEAZN_RECORDING_SHOWN_BY_MS = SEAZN_RECORDING_LOCK_BY_SECONDS * 100
  *  is the collapse and re-expand this module exists to prevent. */
 export const SEAZN_VIDEO_HOLD_MS = SEAZN_VIDEO_POLL_FLOOR_MS + ENDING_TIMEOUT_SECONDS * 1000 + SEAZN_RECORDING_SHOWN_BY_MS;
 
-/** Whether the stage draws a player for this answer: a live, or at least one `hls` part. (`embed` parts have no rendering until
- *  Task 25, so an answer of those alone is nothing to the stage; seazn-video-schedule's `isEmptyVideo` is the LOOP's word, which counts
- *  them as something.) */
-export const showsPlayer = (video: PublicFixtureVideo): boolean => video.live !== null || video.replay.some((p) => p.player === "hls");
+/** Whether the stage draws a player for this answer: a live, or any part — the interim `hls` recording or the replay host's `embed`
+ *  frame (Task 25, CLS gap 3: an answer of embeds alone is a player, so it starts the wait and never shows the starting line). */
+export const showsPlayer = (video: PublicFixtureVideo): boolean => video.live !== null || video.replay.length > 0;
 
 /** The wait after an answer (ms since the epoch, or null for none): an answer with a player starts it afresh from this read; one
  *  without leaves it exactly where it was, so a run of empty answers can only run it down. */

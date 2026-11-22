@@ -249,4 +249,40 @@ describe.skipIf(!HAS_DB)("the public match page's replay slot, through the real 
     expect(off.island, "LIVE off: no island").toHaveLength(0);
     expect(off.youtube, "and no YouTube slot (it has no parts): the page as it was").toHaveLength(0);
   });
+
+  // Task 25: the replay host's copy plays whatever the flags are — REPLAY gates the move, never playing what it moved (and LIVE gates new
+  // streams). The playable row is written as the move leaves it (its producer, discovery and the move, is seazn-video-replays.test.ts's).
+  it("Task 25: LIVE OFF and REPLAY OFF — a decided fixture with an ended Seazn session and a PLAYABLE replay mounts the Seazn island (never YouTube's slot), holding its part, and the route lists it as the host's player", async () => {
+    vi.stubEnv("SEAZN_HOSTED_LIVE", "false");
+    vi.stubEnv("SEAZN_HOSTED_REPLAY", "false");
+    const r = await seaznRig();
+    orgs.push(r.auth.orgId);
+    const f = r.fixtureIds[0];
+    vi.stubEnv("SEAZN_HOSTED_LIVE", "true");
+    const sid = await live(r, f, r.seazn);
+    await stopAndSettle(r, f, sid);
+    vi.stubEnv("SEAZN_HOSTED_LIVE", "false");
+    await setStatus(f, "decided");
+    await sql`update fixture_stream_sessions set ended_at = now() - interval '1 day' where id = ${sid}`;
+    const guid = `bunny-${randomUUID()}`;
+    await sql`
+      insert into fixture_video_replays (org_id, session_id, fixture_id, cf_video_id, recorded_at, part_no, state, bunny_video_id, verified_at, length_seconds)
+      values (${r.auth.orgId}, ${sid}, ${f}, ${`v-${randomUUID()}`}, now() - interval '1 day', 1, 'playable', ${guid}, now() - interval '20 hours', 120)`;
+    const plan = await seaznVideoPlan(f);
+    expect(plan.player, "the plan: seazn").toBe("seazn");
+    const tree = await pageTree(f);
+    const { island, youtube } = slots(tree);
+    expect(island, "the Seazn island").toHaveLength(1);
+    expect(youtube, "never YouTube's slot").toHaveLength(0);
+    expect(renderToStaticMarkup(tree)).not.toContain("replay-embed");
+    expect(island[0]!.props.replayParts, "the plan holds the host's part").toEqual([1]);
+    expect(island[0]!.props.reserve, "and reserves the box for it").toBe(true);
+    const { GET } = await import("@/app/api/v1/public/fixtures/[id]/video/route");
+    const res = await GET(new Request(`http://app.test/api/v1/public/fixtures/${f}/video`), { params: Promise.resolve({ id: f }) });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: { live: unknown; replay: { partNo: number; player: string; src: string }[] } };
+    expect(body.data.live).toBeNull();
+    expect(body.data.replay.map((p) => [p.partNo, p.player])).toEqual([[1, "embed"]]);
+    expect(body.data.replay[0]!.src).toMatch(new RegExp(`^https://embed\\.fake\\.invalid/embed/1/${guid}\\?token=[0-9a-f]{64}&expires=\\d+$`));
+  });
 });

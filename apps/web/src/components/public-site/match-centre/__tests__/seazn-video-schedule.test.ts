@@ -4,7 +4,9 @@
 //   - live: at the 30 s floor, whatever the token's life (Task 19, the Task 15 review's r3: a Stop must reach a page that is open,
 //     within one poll, not ~55 minutes later at the token's refresh point; a re-read at 30 s also always lands inside the token's
 //     refresh window, so it carries the refresh too);
-//   - replay only, and every part is the replay host's embed (Task 25): NO timer (a swap of its `src` would restart it);
+//   - replay only, and every part is the replay host's embed (Task 25, carry 4): the 30 s floor until the replay is FINAL — the
+//     fixture settled and nothing hot — then no timer (the frame checked its token when it loaded, and a later answer never
+//     touches it, so the reads cost the frame nothing: they are how a second Go live and a Stop still reach an open page);
 //   - replay only with an `hls` part (the interim Cloudflare recording): the 30 s floor too, whatever the parts' tokens (Task 19 fix
 //     round 1, I1: an organiser's second Go live after the first half's interim replay must reach a page that is open, within one
 //     poll, not ~55 minutes later at the recording token's refresh point).
@@ -71,8 +73,8 @@ describe("nextVideoFetchMs: live", () => {
 });
 
 describe("nextVideoFetchMs: replay only", () => {
-  it("every part is the replay host's embed: no timer at all", () => {
-    expect(nextVideoFetchMs({ live: null, replay: [part(1, 60 * MIN, "embed"), part(2, 60 * MIN, "embed")] })).toBeNull();
+  it("carry 4: every part is the replay host's embed, and the fixture is not settled: the 30 s floor (a second Go live reaches an open page within one read)", () => {
+    expect(nextVideoFetchMs({ live: null, replay: [part(1, 60 * MIN, "embed"), part(2, 60 * MIN, "embed")] })).toBe(SEAZN_VIDEO_POLL_FLOOR_MS);
   });
 
   // I1 (Task 19 review): a page showing the interim replay must learn of a second Go live within one poll. The expiries below are
@@ -199,7 +201,18 @@ describe("review I2: a SETTLED fixture (decided, past the window a new Go live c
     expect(nextVideoFetchAt({ live: null, replay: [{ ...part(1, 60 * MIN), expiresAt: "not a date" }] }, settled(-1)), "NaN must not become the delay").toBe(30_000);
   });
 
-  it("embeds alone: still no timer", () => {
-    expect(nextVideoFetchAt({ live: null, replay: [part(1, 60 * MIN, "embed")] }, settled(-1))).toBeNull();
+  it("carry 4: embeds alone on a SETTLED, cold fixture are final — no timer; a ms before the settle, the floor", () => {
+    const embeds: PublicFixtureVideo = { live: null, replay: [part(1, 60 * MIN, "embed"), part(2, 60 * MIN, "embed")] };
+    expect(nextVideoFetchAt(embeds, settled(-1)), "settled a ms ago").toBeNull();
+    expect(nextVideoFetchAt(embeds, settled(0)), "settled at this very read").toBeNull();
+    expect(nextVideoFetchAt(embeds, settled(1)), "settled a ms from now: not yet").toBe(SEAZN_VIDEO_POLL_FLOOR_MS);
+  });
+
+  it("carry 4: hot outranks settled for embeds alone, as it does for an empty answer — a session active as the page was drawn, or kick-off within the hour, holds the floor", () => {
+    const embeds: PublicFixtureVideo = { live: null, replay: [part(1, 60 * MIN, "embed")] };
+    expect(nextVideoFetchAt(embeds, { ...settled(-1), activeUntilMs: NOW.getTime() + 1 }), "active a ms longer").toBe(SEAZN_VIDEO_POLL_FLOOR_MS);
+    expect(nextVideoFetchAt(embeds, { ...settled(-1), activeUntilMs: NOW.getTime() }), "active until now: cold").toBeNull();
+    expect(nextVideoFetchAt(embeds, { ...settled(-1), kickoffAtMs: NOW.getTime() - SEAZN_VIDEO_KICKOFF_WINDOW_MS }), "kick-off an hour ago").toBe(SEAZN_VIDEO_POLL_FLOOR_MS);
+    expect(nextVideoFetchAt(embeds, { ...settled(-1), kickoffAtMs: NOW.getTime() - SEAZN_VIDEO_KICKOFF_WINDOW_MS - 1 }), "and a ms more").toBeNull();
   });
 });

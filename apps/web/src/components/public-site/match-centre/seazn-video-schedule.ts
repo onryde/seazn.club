@@ -82,8 +82,11 @@ export const isEmptyVideo = (video: PublicFixtureVideo): boolean => video.live =
  *   - replay with an `hls` part (the interim Cloudflare recording): the floor, so a second Go live reaches an open page within one
  *     poll; once settled, the earliest `hls` token's refresh point instead (never sooner than the floor; an expiry that is not a date
  *     is the floor);
- *   - replay of `embed` parts alone (the replay host's own iframe, Task 25): no timer, because swapping an iframe's `src` restarts it.
- *     That page re-reads when the viewer picks a part that has expired. (Task 25 owes it the restart read I1 gave the `hls` replay.) */
+ *   - replay of `embed` parts alone (the replay host's own frame, Task 25, carry 4): the floor until the replay is FINAL, as an `hls`
+ *     replay is, so a second Go live (or its Stop) reaches an open page within one read; the frame loaded its address once and ignores
+ *     a later answer's (seazn-replay-frame.tsx), so the reads never restart it. FINAL: the fixture settled (no Go live can start) and
+ *     nothing hot (no session was active as the page was drawn, kick-off not within the hour): no timer. A frame holding an address
+ *     whose token has passed asks for its own read (seazn-video-poll.ts `readSoon`). */
 export function nextVideoFetchMs(video: PublicFixtureVideo | null, at: VideoReadContext): number | null {
   if (video === null) return SEAZN_VIDEO_POLL_FLOOR_MS;
   if (video.live !== null) return SEAZN_VIDEO_POLL_FLOOR_MS;
@@ -94,7 +97,7 @@ export function nextVideoFetchMs(video: PublicFixtureVideo | null, at: VideoRead
     return backoffMs(at.emptyStreak);
   }
   const hls = video.replay.filter((p) => p.player === "hls");
-  if (hls.length === 0) return null;
+  if (hls.length === 0) return settled && !isHotRead(at) ? null : SEAZN_VIDEO_POLL_FLOOR_MS;   // carry 4: final, or the floor
   if (!settled) return SEAZN_VIDEO_POLL_FLOOR_MS;
   const refreshAt = Math.min(...hls.map((p) => Date.parse(p.expiresAt))) - SEAZN_TOKEN_REFRESH_BEFORE_SECONDS * 1000;
   const wait = refreshAt - at.nowMs;

@@ -42,13 +42,14 @@ describe("SEAZN_VIDEO_HOLD_MS: how long an empty answer is a wait after a player
 });
 
 describe("showsPlayer: does the answer have something the stage draws", () => {
-  it("EMPTY CASE FIRST: the empty answer, and an answer of embeds alone (no rendering until Task 25), draw no player", () => {
+  it("EMPTY CASE FIRST: the empty answer draws no player", () => {
     expect(showsPlayer(answer({}))).toBe(false);
-    expect(showsPlayer(answer({ replay: [part(1, "embed"), part(2, "embed")] }))).toBe(false);
   });
-  it("a live, an hls part, and an hls part beside an embed each draw one", () => {
+  it("a live, an hls part, an embed part alone (the replay host's player, Task 25: CLS gap 3), and a mix each draw one", () => {
     expect(showsPlayer(answer({ live: signed("l") }))).toBe(true);
     expect(showsPlayer(answer({ replay: [part(1)] }))).toBe(true);
+    expect(showsPlayer(answer({ replay: [part(1, "embed")] }))).toBe(true);
+    expect(showsPlayer(answer({ replay: [part(1, "embed"), part(2, "embed")] }))).toBe(true);
     expect(showsPlayer(answer({ replay: [part(1, "embed"), part(2)] }))).toBe(true);
   });
 });
@@ -59,15 +60,12 @@ describe("holdAfterAnswer: the wait only ever starts on a player, and runs down 
     expect(holdAfterAnswer(NOW + 5_000, answer({}), NOW), "a running wait is not renewed by nothing").toBe(NOW + 5_000);
     expect(holdAfterAnswer(NOW - 5_000, answer({}), NOW), "an elapsed one stays elapsed").toBe(NOW - 5_000);
   });
-  it("an answer with a player (live, or a recording) starts the wait afresh from that read — also over a wait that had run out", () => {
-    for (const video of [answer({ live: signed("l") }), answer({ replay: [part(1)] })]) {
+  it("an answer with a player (live, a recording, or the replay host's copy) starts the wait afresh from that read — also over a wait that had run out", () => {
+    for (const video of [answer({ live: signed("l") }), answer({ replay: [part(1)] }), answer({ replay: [part(1, "embed")] })]) {
       for (const before of [null, NOW - 5_000, NOW + 5_000]) {
         expect(holdAfterAnswer(before, video, NOW), `from ${before}`).toBe(NOW + SEAZN_VIDEO_HOLD_MS);
       }
     }
-  });
-  it("an answer of embeds alone is nothing to draw, so it renews nothing", () => {
-    expect(holdAfterAnswer(null, answer({ replay: [part(1, "embed")] }), NOW)).toBeNull();
   });
 });
 
