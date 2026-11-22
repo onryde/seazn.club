@@ -28,7 +28,7 @@ import "server-only";
 // (a database error can echo a connection string: route.ts `endYoutube`).
 import { sql } from "@/lib/db";
 import { log } from "@/server/logger";
-import { DELETE_RECORDING_AFTER_DAYS, FINALISATION_GRACE_SECONDS, MAX_DURATION_MINUTES } from "@/server/relay/config";
+import { DELETE_RECORDING_AFTER_DAYS, FINALISATION_GRACE_SECONDS, MAX_DURATION_MINUTES, SEAZN_REPLAY_CALL_TIMEOUT_MS } from "@/server/relay/config";
 import { TERMINAL_STATES, type SessionState } from "@/server/relay/domain/session";
 import type { IngestVideo } from "@/server/relay/ports";
 import type { SessionDeps } from "./stream-sessions";
@@ -110,7 +110,8 @@ export async function lockSeaznRecordings(
     if (!canCall()) { out.deferred += inputs.length - n; break; }
     let listed: IngestVideo[];
     try {
-      listed = await ingest.listInputVideos(input.uid, { sessionId: input.session_id });
+      // Task 24 review I3 follow-up: the listing gives up at the slice's call timeout, so a hung one is a failure, never a held tick.
+      listed = await ingest.listInputVideos(input.uid, { sessionId: input.session_id, timeoutMs: SEAZN_REPLAY_CALL_TIMEOUT_MS });
     } catch (err) {
       out.failed++;
       log.error({ sid: input.session_id, errClass: err instanceof Error ? err.name : typeof err }, "seazn pass: a programme input's recordings could not be listed — the next pass retries it");

@@ -22,6 +22,7 @@ vi.mock("@/lib/sentry", () => ({ captureError: vi.fn() }));
 import { sql } from "@/lib/db";
 import { DELETE_RECORDING_AFTER_DAYS, FINALISATION_GRACE_SECONDS, MAX_DURATION_MINUTES } from "@/server/relay/config";
 import { setRelayDriversForTest } from "@/server/relay/drivers";
+import { CloudflareIngest } from "@/server/relay/ingest-cf";
 import { FakeIngest, FakeRecorder, FakeRunner } from "@/server/relay/fakes";
 import { pairPresentPhone, rigUser } from "@/server/relay/__tests__/_session-rig";
 import { grantCredits } from "../stream-credits";
@@ -397,6 +398,49 @@ describe.skipIf(!HAS_DB)("lockSeaznRecordings — the stream tick's Seazn pass",
     const markAt = ended + FINALISATION_GRACE_SECONDS * SEC + SEC;
     expect(await pass(r, [r.auth.orgId], { now: markAt })).toEqual(ZERO);
     expect((await inputOf(sid, "programme")).locked_at?.getTime()).toBe(markAt);
+  });
+
+  // Task 24 review I3 follow-up (2026-11-22): the lock pass shares the tick's 8 s Seazn slice with the replay move, so its listing
+  // gives up at the move's 4 s call timeout (the ruling's literal, typed here) instead of undici's 300 s. Driven through the REAL
+  // Cloudflare adapter on a fetch that never answers: the timeout's own signal is what ends it, the pass counts each hung listing
+  // as a failure, and no input is marked. The same inputs, listed by an answering fake, ARE marked — so the hang is what held them.
+  it("a hung listing gives up at the 4 s call timeout: each counts as one failure and no input is marked; listed by an answering provider, the same inputs are marked", async () => {
+    const r = await rig();
+    const sids: string[] = [];
+    let ended = 0;
+    for (const f of r.fixtureIds) {
+      const sid = await live(r, f, r.seazn);
+      ended = Math.max(ended, await stopAndSettle(r, f, sid));
+      sids.push(sid);
+    }
+    const markAt = ended + FINALISATION_GRACE_SECONDS * SEC + SEC;
+    const deadlines: AbortController[] = [];
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => { const c = new AbortController(); deadlines.push(c); return c.signal; });
+    const recorder = new FakeRecorder();
+    const fetchImpl = vi.fn((_url: string | URL | Request, init?: RequestInit) => {
+      const signal = init?.signal;
+      return new Promise<Response>((_, reject) => signal?.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    }) as unknown as typeof fetch;
+    const hung = new CloudflareIngest({ fetchImpl, accountId: "acct", token: "tok-seazn-lock", recorder });
+    try {
+      const pending = pass(r, [r.auth.orgId], { now: markAt, deps: { ...r.deps, drivers: { ...r.deps.drivers, ingest: hung } } });
+      let checked = 0;
+      for (let k = 0; k < sids.length; k++) {
+        await vi.waitFor(() => expect(deadlines, `listing ${k + 1} asked for its timeout`).toHaveLength(k + 1));
+        expect(timeout).toHaveBeenLastCalledWith(4_000);
+        deadlines[k]!.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+        checked++;
+      }
+      expect(checked, "hung listings").toBe(2);
+      expect(await pending).toEqual({ ...ZERO, failed: 2 });
+      await new Promise((res) => setTimeout(res, 0));   // the provider-call record is fire-and-forget
+      expect(recorder.calls.map((c) => [c.operation, c.errorCode])).toEqual([["listInputVideos", "timeout"], ["listInputVideos", "timeout"]]);
+      for (const sid of sids) expect((await inputOf(sid, "programme")).locked_at, `${sid}: never marked on a hung listing`).toBeNull();
+    } finally {
+      timeout.mockRestore();
+    }
+    expect(await pass(r, [r.auth.orgId], { now: markAt + 60 * SEC })).toEqual(ZERO);
+    for (const sid of sids) expect((await inputOf(sid, "programme")).locked_at?.getTime(), `${sid}: marked once listed`).toBe(markAt + 60 * SEC);
   });
 
   it("the budget: with under 2 s of it left no provider call starts and the input is deferred; 2 s left is enough", async () => {

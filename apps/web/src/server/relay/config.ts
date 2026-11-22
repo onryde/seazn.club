@@ -432,7 +432,8 @@ export const SEAZN_REPLAY_CLAIM_BATCH = 10;
 export const SEAZN_FETCH_URL_TTL_SECONDS = 6 * 3600;
 /** Plan decision: a failure waits min(2^attempts, this) minutes before the next attempt. */
 export const SEAZN_REPLAY_BACKOFF_MAX_MINUTES = 60;
-/** Task 24 review I3 (2026-11-22): every Cloudflare and replay-host call on the move's path gives up after this long
+/** Task 24 review I3 (2026-11-22): every Cloudflare and replay-host call on the move's path — and the lock pass's listing, which
+ *  shares the slice — gives up after this long
  *  (`AbortSignal.timeout`) — under the tick's 8 s Seazn slice (`SEAZN_PASS_BUDGET_MS`), so one hung call cannot hold the tick for
  *  undici's 300 s. A call that times out is a failure like any other: retried after its backoff. */
 export const SEAZN_REPLAY_CALL_TIMEOUT_MS = 4_000;
