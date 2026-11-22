@@ -158,8 +158,14 @@ export async function recomputeStandings(
   opts: { emptyFold?: "write" | "skip" | "drop"; cause?: SnapshotCause } = {},
 ): Promise<readonly StandingsRow[]> {
   return withTenant(orgId, async (tx) => {
+    // W5 follow-ups B7: the lock is taken BEFORE the inputs are read. Read first, a refold that loaded before a second result
+    // committed could lock after that result's own refold had written, and overwrite the newer table with its stale one (no
+    // staleness guard on the upsert): the stored table then missed a result until the stage's next write. Under the lock, each
+    // refold reads every result committed before it, and the last writer is the last reader
+    // (`engine-db/__tests__/standings-refold-race.test.ts`).
+    const [owner] = await tx<{ division_id: string }[]>`select division_id from stages where id = ${stageId}`;
+    if (owner) await tx`select pg_advisory_xact_lock(hashtext(${"division:" + owner.division_id}))`;
     const inputs = await loadStageInputs(tx, stageId);
-    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + inputs.stage.division_id}))`;
 
     // completeTableStage folds + ranks each pool; cache them all, then hand
     // back the one we were asked for. Any lots it draws are stored first and the
