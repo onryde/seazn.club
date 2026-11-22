@@ -41,13 +41,21 @@ export function SeaznReplaysCard({ replays }: { replays: readonly Replay[] | und
         {parts.map((p) => {
           const length = p.state === "playable" ? replayLength(p.lengthSeconds) : null;
           return (
-            <li key={p.id} data-testid="stream-seazn-replay" data-state={p.state} className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+            <li
+              key={p.id}
+              data-testid="stream-seazn-replay"
+              data-state={p.state}
+              className={`min-w-0 text-sm ${multi ? "grid grid-cols-[auto_minmax(0,1fr)] gap-x-3" : ""}`}
+            >
+              {/* The label column and the state column stay aligned row to row; a long state wraps under itself, never under the label. */}
               {multi && <span className="font-medium text-slate-900">{msg("stream.replay.seazn.part", { n: p.partNo })}</span>}
-              <span className={`inline-flex min-w-0 items-center gap-2 ${WORDS[p.state]}`}>
-                <span aria-hidden className={`inline-block h-2 w-2 shrink-0 rounded-full ${DOT[p.state]}`} />
-                <span className="min-w-0">{msg(STATE_KEY[p.state])}</span>
+              <span className={`flex min-w-0 items-start gap-2 ${WORDS[p.state]}`}>
+                <span aria-hidden className={`mt-1.5 inline-block h-2 w-2 shrink-0 rounded-full ${DOT[p.state]}`} />
+                <span className="min-w-0">
+                  {msg(STATE_KEY[p.state])}
+                  {length !== null && <span className="ml-2 inline-block rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] tabular-nums text-slate-700">{length}</span>}
+                </span>
               </span>
-              {length !== null && <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] tabular-nums text-slate-700">{length}</span>}
             </li>
           );
         })}
