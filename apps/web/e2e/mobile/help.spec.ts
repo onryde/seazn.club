@@ -24,7 +24,9 @@ test.use({ storageState: { cookies: [], origins: [] } });
 
 /** A long article with six level-2 headings and a table (content/help/registration/card-payments.md). */
 const LONG = "/help/registration/card-payments";
-const PAGES = ["/help", LONG, "/help/scoring/basics", "/help/formats", "/help/formats/knockout"] as const;
+/** A page a blog post names in its `help:` key, so it carries the "Read how it works" list (blog P2 Task 6). */
+const WITH_POSTS = "/help/divisions/settings";
+const PAGES = ["/help", LONG, "/help/scoring/basics", "/help/formats", "/help/formats/knockout", WITH_POSTS] as const;
 
 /**
  * axe's serious and critical findings, less ONE known gap: a wide prose table scrolls sideways but has no tab

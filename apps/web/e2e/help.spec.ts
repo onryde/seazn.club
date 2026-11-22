@@ -14,7 +14,9 @@ test.use({ storageState: { cookies: [], origins: [] } });
 const LONG = "/help/registration/card-payments";
 /** An h3 of content/help/billing/groups.md: in the search index, never on the help home's own page. */
 const INDEX_ONLY = "What happens to your invoices when the bill changes hands";
-const PAGES = ["/help", LONG, "/help/scoring/basics", "/help/formats", "/help/formats/knockout"] as const;
+/** A page a blog post names in its `help:` key, so it carries the "Read how it works" list (blog P2 Task 6). */
+const WITH_POSTS = "/help/divisions/settings";
+const PAGES = ["/help", LONG, "/help/scoring/basics", "/help/formats", "/help/formats/knockout", WITH_POSTS] as const;
 
 /**
  * axe's serious and critical findings, less ONE known gap: a wide prose table scrolls sideways but has no tab
@@ -190,4 +192,22 @@ test("1280: no horizontal scroll and no serious axe finding on the help home, ar
     checked += 1;
   }
   expect(checked, "anti-vacuity").toBe(PAGES.length);
+});
+
+test("1280: a page a post names lists it under Read how it works, and the link opens the post", async ({ page }) => {
+  await visit(page, WITH_POSTS);
+  const list = page.getByTestId("help-blog-links");
+  await expect(list.getByRole("heading", { name: "Read how it works" })).toBeVisible();
+  const links = list.getByRole("link");
+  expect(await links.count(), "anti-vacuity: the page lists a post").toBeGreaterThan(0);
+  expect(await links.count()).toBeLessThanOrEqual(3);
+  const href = await links.first().getAttribute("href");
+  expect(href).toMatch(/^\/blog\/[a-z0-9-]+$/);
+  await links.first().click();
+  await expect(page).toHaveURL(new RegExp(`${href}$`));
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  // A page no post names has no such list, and no empty heading.
+  await visit(page, "/help/registration/waitlist");
+  await expect(page.getByTestId("help-blog-links")).toHaveCount(0);
+  await expect(page.getByText("Read how it works")).toHaveCount(0);
 });
