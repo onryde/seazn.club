@@ -15,6 +15,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { sql, type Tx } from "@/lib/db";
 import { divisionRig, seedOrg } from "@/server/usecases/__tests__/_rig";
+import { replayClaimQuery } from "@/server/usecases/seazn-replays";
 import { BunnyReplayHost } from "@/server/video/replay-bunny";
 import type { ProviderCallRecord } from "../ports";
 import { recordProviderCall } from "../telemetry";
@@ -263,6 +264,18 @@ describe.skipIf(!HAS_DB)("V542__seazn_replays.sql — the replay tables are real
     expect(cols.map((x) => x.column_name)).toEqual(["fixture_id", "part_no", "bunny_video_id"]);
   });
 
+  // Task 24 carry (Task 23 review): a row the organiser removed carries `deleted_at`; the public view never lists it, whatever
+  // its state says — a delete that has written its stamp but not yet its state (or a state written back over it) stays hidden.
+  it("Task 24 carry: the public view leaves out a row with deleted_at set, even while its state still reads playable; its twin without one is listed", async () => {
+    const r = await rig(1);
+    const view = () => sql<{ part_no: number }[]>`select part_no from public_fixture_seazn_replays_v where fixture_id = ${r.fixtureId} order by part_no`;
+    await insertReplay(sql, r, { partNo: 1, state: "playable", bunny: `bn-${randomUUID()}`, verified: true });
+    const [p2] = await insertReplay(sql, r, { partNo: 2, state: "playable", bunny: `bn-${randomUUID()}`, verified: true });
+    expect((await view()).map((x) => x.part_no), "PREMISE: both playable parts are listed").toEqual([1, 2]);
+    await sql`update fixture_video_replays set deleted_at = now(), deleted_reason = 'organiser' where id = ${p2!.id}`;
+    expect((await view()).map((x) => x.part_no), "the stamped part is gone; its twin stays").toEqual([1]);
+  });
+
   it("all three tables are RLS enabled AND forced with no policy; neither they nor the view are granted to app_user", async () => {
     const rows = await sql<{ relname: string; rls: boolean; forced: boolean; policies: number }[]>`
       select c.relname, c.relrowsecurity as rls, c.relforcerowsecurity as forced,
@@ -308,6 +321,30 @@ describe.skipIf(!HAS_DB)("V542__seazn_replays.sql — the replay tables are real
     expect(checked, "claims planned").toBe(4);
     const [idx] = await sql<{ def: string }[]>`select pg_get_indexdef('fixture_video_replays_fixture_recorded_idx'::regclass) as def`;
     expect(idx!.def).toMatch(/\(fixture_id, recorded_at\)$/);
+  });
+
+  // Task 24 carry (Task 23 review): the plan check above runs the predicate TYPED from the plan; this one runs the mover's own
+  // statement (`replayClaimQuery`, the UPDATE … WHERE id IN (SELECT … FOR UPDATE SKIP LOCKED) it executes), with and without the
+  // org scope the tick passes in tests, as a generic plan (its parameters unbound), sequential scans priced out. Production's
+  // statement is the unscoped one (the tick passes no org): it must read the due index. The org-scoped one may read the org
+  // index instead (cheaper for one org) — it must read AN index, never scan the table.
+  it("Task 24 carry: the mover's REAL claim statement — unscoped, production's — is served by the due index; org-scoped, by an index", async () => {
+    let checked = 0;
+    for (const orgIds of [undefined, [randomUUID()]]) {
+      let plan = "";
+      await rolledBack(async (tx) => {
+        await tx`set local enable_seqscan = off`;
+        const st = await replayClaimQuery(tx, { now: new Date(), leaseUntil: new Date(), limit: 10, orgIds }).describe();
+        expect(st.string, "PREMISE: the statement is the claim").toMatch(/for update skip locked/);
+        const rows = await tx.unsafe<{ "QUERY PLAN": string }[]>(`explain (generic_plan) ${st.string}`);
+        plan = rows.map((x) => x["QUERY PLAN"]).join("\n");
+      });
+      if (orgIds) expect(plan, `scoped\n${plan}`).toMatch(/Index Scan using fixture_video_replays_(due|org)_idx|Bitmap Index Scan on fixture_video_replays_(due|org)_idx/);
+      else expect(plan, `unscoped\n${plan}`).toMatch(/fixture_video_replays_due_idx/);
+      expect(plan, "never a scan of the table").not.toMatch(/Seq Scan on fixture_video_replays/);
+      checked++;
+    }
+    expect(checked, "claims planned").toBe(2);
   });
 
   it("the due index holds only rows the claim reads: a SETTLED playable row (verified, Cloudflare copy deleted) and a CLEANED deleted row are outside it — the planner cannot answer either from it", async () => {

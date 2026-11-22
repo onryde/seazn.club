@@ -95,8 +95,8 @@ alter table fixture_stream_inputs add column replays_discovered_at timestamptz n
 -- ─── 5. public_fixture_seazn_replays_v ────────────────────────────────────────────────────────────────────────────────
 -- A fixture's playable Seazn replays, for the public match page. part_no is the STORED one, never renumbered: a part still
 -- processing leaves a gap. The redaction is public_fixture_youtube_parts_v's (V479/V482): a competition that is public or
--- unlisted, and a division past setup — a view cannot null a whole row, so a setup division simply has no row. NOT granted to
--- app_user (see the header).
+-- unlisted, and a division past setup — a view cannot null a whole row, so a setup division simply has no row. A row the
+-- organiser removed (`deleted_at` set) is never listed, whatever its state reads (Task 24). NOT granted to app_user (see the header).
 create view public_fixture_seazn_replays_v as
   select r.fixture_id,
          r.part_no,
@@ -106,6 +106,7 @@ create view public_fixture_seazn_replays_v as
   join divisions d    on d.id = f.division_id
   join competitions c on c.id = d.competition_id
   where r.state = 'playable'
+    and r.deleted_at is null
     and d.status <> 'setup'
     and c.visibility in ('public', 'unlisted');
 
