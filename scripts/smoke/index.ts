@@ -20,6 +20,7 @@ import { w2dTablesSuite } from "./suites/w2dTables.ts";
 import { w2eRefusalsSuite } from "./suites/w2eRefusals.ts";
 import { w3SwissASuite } from "./suites/w3SwissA.ts";
 import { w5RoundRobinASuite } from "./suites/w5RoundRobinA.ts";
+import { w5RoundRobinBSuite } from "./suites/w5RoundRobinB.ts";
 import { w3SwissBSuite } from "./suites/w3SwissB.ts";
 import { w4KnockoutASuite } from "./suites/w4KnockoutA.ts";
 import { w4KnockoutBSuite } from "./suites/w4KnockoutB.ts";
@@ -72,6 +73,7 @@ const SELECTABLE_SUITES: Record<string, (c: SubsetCtx) => Promise<void>> = {
   w4KnockoutA: () => w4KnockoutASuite(),
   w4KnockoutB: () => w4KnockoutBSuite(),
   w5RoundRobinA: () => w5RoundRobinASuite(),
+  w5RoundRobinB: () => w5RoundRobinBSuite(),
   youtubeConnect: () => youtubeConnectSuite(),
   deviceLinkFootball: () => deviceLinkFootballSuite(),
   registrationPayPage: () => registrationPayPageSuite(),

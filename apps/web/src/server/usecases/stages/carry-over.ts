@@ -5,7 +5,7 @@ import "server-only";
 import { withTenant } from "@/lib/db";
 import { EngineError } from "@seazn/engine/core";
 import { carryDeltas, placementTable, type BracketFixture, type PoolTable, type ProgressionSpec, type SourceShape, type SourceTables, type StandingsRow } from "@seazn/engine/competition";
-import { parseExtKey, bracketWinnerLoser, loadCrossGroupRules } from "@/server/engine-db/competition";
+import { parseExtKey, bracketWinnerLoser } from "@/server/engine-db/competition";
 import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "@/server/engine-db/level-seat";
 import { engineFixtureStatus as toBracketFixtureStatus } from "@/lib/fixture-engine-status";
 import { refuseCutBeyondTables } from "./cut-gate";
@@ -15,6 +15,7 @@ import { personalPointsLeaderboard } from "../americano";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
 import { cutEligiblePools, departedLoseBestNth, resolveProgressionSource, sourceShapeOf, persistCrossGroupDraws } from "../stage-seeding";
+import { bestNthSourceOf, withPoolResults } from "../pool-results";
 import { STAGE_COLS, REAL_TABLE_KINDS, BRACKET_KINDS, type Tx, type StageRow } from "./types";
 import { departedEntrantIds } from "./helpers";
 
@@ -275,6 +276,10 @@ async function tablesForCompletedStage(
       rows: s.rows,
     }));
   }
+  // W5 app PR B T0 (G4, RB5-U1): a real table's pools carry their counted results, as on the setup path (`sourcesToTables`), so
+  // best-Nth compares a larger pool's candidate without its results against the pool's bottom k; the rules come from the same load.
+  const real = REAL_TABLE_KINDS.has(stage.kind) ? await bestNthSourceOf(tx, stage.id) : undefined;
+  if (real !== undefined) pools = withPoolResults(pools, real.results);
   // W3 T15 Carry A (controller ruling 2026-11-02): a Swiss source's departed entrants leave its cut and the next eligible
   // entrant backfills — the same tables the `setup` path's proposal reads (stage-seeding.ts `sourcesToTables`); since W4
   // T13 (RB4-V6) a league's or a group's too (`CUT_SKIPS_DEPARTED_KINDS`). Every other kind is returned as it was:
@@ -288,7 +293,7 @@ async function tablesForCompletedStage(
   const bracket = BRACKET_KINDS.has(stage.kind) ? await loadBracketFixtures(tx, stage.id) : undefined;
   // W2d T12 (spec §5.9, X-TB-7): best-Nth compares groups by THIS stage's pinned cross-group order and its stored
   // cross-group draws — only a real table has them (an americano or bracket source has no cross-group comparison).
-  const crossGroup = REAL_TABLE_KINDS.has(stage.kind) ? await loadCrossGroupRules(tx, stage.id) : undefined;
+  const crossGroup = real?.crossGroup;
   return { pools, ...(bracket ? { bracket } : {}), ...(crossGroup ? { crossGroup } : {}) };
 }
 

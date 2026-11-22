@@ -689,6 +689,28 @@ export async function loadCrossGroupRules(tx: Tx, stageId: string): Promise<Cros
 }
 
 /**
+ * W5 app PR B T0 (G4; RB5-U1, X-UP-1): what best-Nth reads of a source stage, from ONE load of it — its cross-group rules
+ * (`crossGroupRulesOf`, as `loadCrossGroupRules`) and each pool's counted results as the stage's own fold makes them
+ * (`completeTableStage`'s `PoolTable.results`: the paid results of the pool's decided and walked-over fixtures), keyed by the
+ * fold's pool key — the pool's uuid, "" for a table with no pools. Since engine 10 (ruling 286) best-Nth compares a larger
+ * pool's candidate without its results against the pool's bottom k, and refuses a pool with k > 0 that hands none
+ * (STAGE_NOT_READY `pool_results_missing`).
+ *
+ * One load, because the rules' `gamePoints` reader is identity-keyed on the very result objects that load paid
+ * (`gamePointsReader`): a reduced row's Sonneborn-Berger, recomputed over results from a second load, would ask for results
+ * this reader never paid. Like `stageTablePoints`, it stores no lots draw: results do not depend on how a tie is broken.
+ */
+export async function loadBestNthSource(
+  tx: Tx,
+  stageId: string,
+): Promise<{ crossGroup: CrossGroupRules; poolResults: ReadonlyMap<string, readonly FixtureResult[]> }> {
+  const inputs = await loadStageInputs(tx, stageId);
+  const stage = toTableStage(inputs, await loadLotsDraws(tx, stageId));
+  const { tables } = completeTableStage(stage, inputs.tableFixtures);
+  return { crossGroup: crossGroupRulesOf(stage), poolResults: new Map(tables.pools.map((p) => [p.pool, p.results ?? []])) };
+}
+
+/**
  * V358 (P3 / D7 weekly digest) — one step of standings history. `rows` rolls
  * into `previous_rows` ONLY when the write actually changes the table (`is
  * distinct from`): `recomputeStandings` is idempotent and reruns on every

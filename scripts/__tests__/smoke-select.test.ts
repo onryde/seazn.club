@@ -31,6 +31,7 @@ const KNOWN = [
   "w4KnockoutA",
   "w4KnockoutB",
   "w5RoundRobinA",
+  "w5RoundRobinB",
   "youtubeConnect",
   "deviceLinkFootball",
   "registrationPayPage",
@@ -101,7 +102,7 @@ describe("SMOKE_ONLY — selectSmokeSuites (review R1)", () => {
     // session at all, nothing from SubsetCtx); w2eRefusals after that (format matrix W2e T33: its own Pro org and sign-in, nothing
     // from SubsetCtx); w3SwissA after that (format matrix W3 Swiss app-A: its own org and sign-in, nothing from SubsetCtx); w3SwissB after it (format
     // matrix W3 Swiss app-B: its own org and sign-in, nothing from SubsetCtx); w4KnockoutA after it (format matrix W4
-    // knockout app-A: its own org and sign-in, nothing from SubsetCtx); w4KnockoutB after it (app-B, same); w5RoundRobinA after it (W5 round-robin app PR A: its own org and sign-in, nothing from SubsetCtx);
+    // knockout app-A: its own org and sign-in, nothing from SubsetCtx); w4KnockoutB after it (app-B, same); w5RoundRobinA after it (W5 round-robin app PR A: its own org and sign-in, nothing from SubsetCtx); w5RoundRobinB after it (app PR B, same);
     // youtubeConnect after that (YouTube Connect T21: its own two orgs and sign-ins, nothing from SubsetCtx);
     // deviceLinkFootball after that (S2-5 plan W: its own org and sign-in, nothing from SubsetCtx); registrationPayPage after that
     // (player payment page Task 4: its own org and sign-in, nothing from SubsetCtx); quickMatch last (quick match plan 2 T11 +

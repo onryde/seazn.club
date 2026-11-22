@@ -38,6 +38,7 @@ import { w2dTablesSuite } from "./suites/w2dTables.ts";
 import { w2eRefusalsSuite } from "./suites/w2eRefusals.ts";
 import { w3SwissASuite } from "./suites/w3SwissA.ts";
 import { w5RoundRobinASuite } from "./suites/w5RoundRobinA.ts";
+import { w5RoundRobinBSuite } from "./suites/w5RoundRobinB.ts";
 import { w4KnockoutASuite } from "./suites/w4KnockoutA.ts";
 import { w4KnockoutBSuite } from "./suites/w4KnockoutB.ts";
 import { w3SwissBSuite } from "./suites/w3SwissB.ts";
@@ -1319,6 +1320,9 @@ export async function main() {
   // each pair once, X-CU-6; a five-team league stores its byes, FX-G21); the suite's own header lists each. After w4KnockoutB.
   // Own fresh owner; keyless; every read and write a v1 route.
   await suite("w5RoundRobinA", () => w5RoundRobinASuite());
+  // Format matrix W5 round-robin app PR B: counted checks for the tasks that owe one (Task 0: an unequal groups_ko proposal's 7th
+  // seat, X-UP-1); the suite's own header lists each. After w5RoundRobinA. Own fresh owner; keyless; every read and write a v1 route.
+  await suite("w5RoundRobinB", () => w5RoundRobinBSuite());
 }
 
 async function smokePlanMatrix(): Promise<void> {
