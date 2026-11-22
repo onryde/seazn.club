@@ -166,6 +166,9 @@ describe("Tabs - only the active panel is in the document (B3)", () => {
     taps += 1;
     expect(nav.replace).toHaveBeenCalledWith("/live/o/c/d?tab=entrants#top", { scroll: false });
     expect(replaceState, "an absent panel is a load, not a toggle").not.toHaveBeenCalled();
+    // Until that document arrives the panel on screen stays - never an empty one.
+    expect((tab("standings").props as { "aria-selected"?: boolean })["aria-selected"], "the shown tab stays selected").toBe(true);
+    expect((tab("entrants").props as { "aria-selected"?: boolean })["aria-selected"]).toBe(false);
     (tab("schedule").props as { onClick: () => void }).onClick();
     taps += 1;
     expect(nav.replace).toHaveBeenLastCalledWith("/live/o/c/d#top", { scroll: false });

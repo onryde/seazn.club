@@ -66,7 +66,6 @@ export function Tabs({ ids, labels, label, children, initial = 0 }: Props) {
   const active = picked ?? (fromUrl >= 0 && children[fromUrl] != null ? fromUrl : initial);
 
   function select(i: number) {
-    setPicked(i);
     // Put the choice back in the URL so what a spectator shares is what they
     // are looking at. `replaceState`, not `pushState`: a tab is not a page, and
     // stacking history entries would make Back walk the tab bar instead of
@@ -75,8 +74,13 @@ export function Tabs({ ids, labels, label, children, initial = 0 }: Props) {
     if (i === 0) url.searchParams.delete("tab");
     else url.searchParams.set("tab", ids[i]!);
     // B3: a panel this document does not carry is loaded from its own URL - `router.replace`, so still no history entry.
-    if (children[i] == null) router.replace(url.pathname + url.search + url.hash, { scroll: false });
-    else window.history.replaceState(null, "", url);
+    // The panel on screen stays until that document arrives (it opens on the tapped panel), never an empty one.
+    if (children[i] == null) {
+      router.replace(url.pathname + url.search + url.hash, { scroll: false });
+      return;
+    }
+    setPicked(i);
+    window.history.replaceState(null, "", url);
   }
 
   return (
