@@ -34,7 +34,20 @@ test.describe("the edge response", () => {
   test("every help and blog page: s-maxage at its revalidate, no Set-Cookie for any visitor, one nonce-free policy", async ({ playwright, baseURL }) => {
     const ctx = await playwright.request.newContext({ baseURL: baseURL!, storageState: { cookies: [], origins: [] } });
     let checked = 0;
+    let staleSeen = 0;
     for (const [path, sMaxage] of EDGE) {
+      // A page older than its revalidate is first served STALE while Next regenerates it, and Next 16.3.6 sends that
+      // answer with NO Cache-Control (measured, fix round 1b: the edge rule bypasses a response without one, so it is
+      // never stored). Wait for the regenerated page, so the run does not depend on how long ago the build was.
+      for (let tries = 0; ; tries++) {
+        const warm = await ctx.get(path, { maxRedirects: 0 });
+        if (warm.headers()["x-nextjs-cache"] !== "STALE") break;
+        staleSeen++;
+        expect(warm.headers()["cache-control"] ?? "", `${path}: a STALE answer is not stored`).not.toMatch(/s-maxage/);
+        expect(warm.headers()["set-cookie"], `${path}: no Set-Cookie on a STALE answer`).toBeUndefined();
+        expect(tries, `${path}: still STALE after regeneration`).toBeLessThan(20);
+        await new Promise((r) => setTimeout(r, 250));
+      }
       // A stranger, then a session with no hint: the request that gets a Set-Cookie on an app page.
       const anon = await ctx.get(path, { maxRedirects: 0 });
       const session = await ctx.get(path, { maxRedirects: 0, headers: { cookie: "seazn_session=e2e-probe" } });
@@ -64,22 +77,21 @@ test.describe("the edge response", () => {
       expect(flight.headers()["content-type"] ?? "", `${path}: no flight body`).not.toContain("text/x-component");
       expect(flight.headers()["cache-control"] ?? "", `${path}: the redirect is not stored`).not.toMatch(/s-maxage/);
     }
-    // A miss is a real 404 with no Set-Cookie. Its Cache-Control is NOT asserted here: the help article route sends its
-    // 404 with `s-maxage=300`, and the writeHead guard that should rewrite it (server/public-site/error-no-store.ts, unit
-    // tested, now covering /help and /blog) was measured inert on a standalone build for /live too (task-5-report.md,
-    // fix round 1). The edge rule's "400-599: no store" is what keeps a 404 out of Cloudflare.
+    // A miss is never stored: the help article route renders its 404 with the route's `s-maxage=300`, and the writeHead
+    // guard (server/public-site/error-no-store.ts, installed by instrumentation.ts register()) rewrites it. That needs
+    // the compiled instrumentation.js, which the standalone trace drops: Dockerfile and CI overlay `.next/server`.
     for (const path of ["/help/no-such-page", "/blog/no-such-post"]) {
       const miss = await ctx.get(path, { maxRedirects: 0, headers: { cookie: "seazn_session=e2e-probe" } });
       expect(miss.status(), path).toBe(404);
+      expect(miss.headers()["cache-control"], `${path}: a 404 is not stored`).toBe("private, no-cache, no-store, max-age=0, must-revalidate");
       expect(miss.headers()["set-cookie"], `${path}: no Set-Cookie on a 404 either`).toBeUndefined();
-      test.info().annotations.push({ type: "404 cache-control", description: `${path}: ${miss.headers()["cache-control"] ?? "(none)"}` });
     }
     // The control: an app page keeps a fresh nonce per request and is not stored.
     const a = cspOf((await ctx.get("/login")).headers());
     const b = cspOf((await ctx.get("/login")).headers());
     expect(a, "/login: a nonce policy").toMatch(/'nonce-[^']+'/);
     expect(b, "/login: a new nonce per request").not.toBe(a);
-    console.log(`[edge] help and blog pages checked: ${checked}`);
+    console.log(`[edge] help and blog pages checked: ${checked} (STALE answers waited out: ${staleSeen})`);
     expect(checked).toBe(EDGE.length);
     await ctx.dispose();
   });
