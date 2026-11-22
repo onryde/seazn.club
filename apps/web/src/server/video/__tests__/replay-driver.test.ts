@@ -3,7 +3,7 @@
 // (Task 22) and never falls back to the fake.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BUNNY_ENV_NAMES } from "@/server/relay/config";
-import { setRelayDriversForTest } from "@/server/relay/drivers";
+import { dbRecorder, setRelayDriversForTest } from "@/server/relay/drivers";
 import { log } from "@/server/logger";
 import { defaultDeps, replayOf, type SessionDeps } from "@/server/usecases/stream-sessions/deps";
 import { BunnyReplayHost } from "../replay-bunny";
@@ -84,6 +84,18 @@ describe("replayDriver", () => {
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0][0]).toEqual({ videoId: guid });
     expect(String(warn.mock.calls[0][1])).toMatch(/720p/);
+  });
+
+  it("the Bunny adapter the driver builds records every call through the database recorder (V541 admits `bunny`)", async () => {
+    const guid = "9a4e1c27-5b3d-4f08-8c6a-1e2d3f4a5b6c";
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ guid, status: 4, length: 28, availableResolutions: "360p,720p" }), { status: 200 })));
+    // The spy stands in for the insert: this file runs with no database. The row itself is seazn-replays-migration.test.ts's.
+    const record = vi.spyOn(dbRecorder, "record").mockImplementation(async () => undefined);
+    setEnv({ REPLAY_DRIVER: "bunny", ...BUNNY_ENV });
+    await replayDriver().video(guid);
+    await new Promise((done) => setImmediate(done));   // the adapter records fire-and-forget, one microtask on
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(record.mock.calls[0]![0]).toMatchObject({ provider: "bunny", operation: "video", method: "GET", subjectId: guid, status: 200 });
   });
 
   it("a misspelt REPLAY_DRIVER throws naming the variable", () => {

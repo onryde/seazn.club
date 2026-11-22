@@ -179,7 +179,7 @@ export async function effectLandedSinceEnding(exec: Exec, sessionId: string, typ
 
 export interface ProviderCallInput {
   sessionId?: string | null;
-  /** `bunny` is typed (ports.ts ProviderCallRecord) but V410's CHECK refuses it: nothing binds a Bunny record here yet. */
+  /** `bunny`: the replay host's adapter (ports.ts ProviderCallRecord); V541 admits it in the table's provider CHECK. */
   provider: "cloudflare" | "fly" | "stripe" | "bunny";
   operation: string;
   /** The input uid / machine id the call was about — a provider id, never a secret. */
