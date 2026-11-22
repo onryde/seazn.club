@@ -2380,4 +2380,49 @@ describe("e2e-seazn: the one LIVE-on job runs its two files, and proves they RAN
     expect(inSeazn, "e2e-seazn sets the flag on its server and its runner").toBe(2);
     expect(elsewhere, "jobs other than e2e-seazn that set SEAZN_HOSTED_LIVE").toEqual([]);
   });
+
+  it("the proof step wants case 11 at EVERY width the spec declares: CASE_11_WIDTHS is the length of the spec's own list", () => {
+    const proof = seazn().find((s) => /must have RUN/.test(nameOf(s)));
+    expect(proof, "the must-have-RUN step").toBeDefined();
+    const spec = readFileSync(join(E2E_DIR, "walkthrough/streaming-destinations.spec.ts"), "utf8");
+    const loop = /for \(const width of \[([^\]]*)\] as const\) \{\s*\n\s*test\(`11 @\$\{width\}/.exec(spec);
+    expect(loop, "premise: case 11 is one test per width of a literal list").not.toBeNull();
+    const widths = loop![1]!.split(",").map((w) => w.trim()).filter(Boolean);
+    expect(widths.length, "anti-vacuity: case 11 declares widths").toBeGreaterThan(0);
+    expect(Number(valueOf(proof!, "CASE_11_WIDTHS")), `the step wants ${widths.join(", ")}`).toBe(widths.length);
+    expect(proof, "and refuses any other count").toContain("ts.length !== want");
+  });
+
+  it("the job's timeout covers the walk's worst case on every attempt CI makes, plus the setup — derived, not picked (n2)", async () => {
+    const yml = stripComments(readFileSync(join(WORKFLOWS, "e2e.yml"), "utf8"));
+    const job = jobsOf(yml).find((j) => j.name === "e2e-seazn");
+    expect(job, "e2e.yml has its e2e-seazn job").toBeDefined();
+    // The job's own timeout: the one `timeout-minutes` at the job's indent (a step's would sit deeper).
+    const timeouts = [...job!.body.matchAll(/^ {4}timeout-minutes: *(\d+)\s*$/gm)].map((m) => Number(m[1]));
+    expect(timeouts, "e2e-seazn states ONE job timeout").toHaveLength(1);
+    // The connect delay the walk's runner sees (its clocks are derived from it), from the Playwright step itself.
+    const run = stepsOf(job!.body).find((s) => nameOf(s).startsWith("Run Playwright e2e"));
+    const connect = Number(valueOf(run ?? "", "FAKE_INGEST_CONNECT_AFTER_MS"));
+    expect(connect, "premise: the runner is told the server's connect delay").toBeGreaterThan(0);
+    // The retries CI runs: the config read as CI evaluates it (`retries: process.env.CI ? 1 : 0`).
+    vi.stubEnv("CI", "true");
+    let retries: number | undefined;
+    try {
+      retries = ((await configFor(undefined)) as unknown as { retries?: number }).retries;
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(retries, "premise: CI retries a failed test").toBeGreaterThan(0);
+    const { seaznWalkClock } = await import("../../../e2e/helpers/seazn-hosted-clock");
+    const { WALK_MS } = seaznWalkClock(connect);
+    expect(WALK_MS, "premise: the walk's own timeout is more than the old 30-minute job's half").toBeGreaterThan(15 * 60_000);
+    // The setup before the first test: ~106 s measured for the migrate, sport sync, build, placement image and server start
+    // (e2e.yml's e2e-parallel leg note), allowed six minutes.
+    const SETUP_ALLOWANCE_MS = 6 * 60_000;
+    const needMs = (retries! + 1) * WALK_MS + SETUP_ALLOWANCE_MS;
+    expect(
+      timeouts[0]! * 60_000,
+      `${retries! + 1} attempts × ${WALK_MS} ms + ${SETUP_ALLOWANCE_MS} ms setup = ${needMs} ms must fit the ${timeouts[0]}-minute job, or it cancels the retry and loses its trace`,
+    ).toBeGreaterThanOrEqual(needMs);
+  });
 });

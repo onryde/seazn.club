@@ -33,53 +33,18 @@ import { fileURLToPath } from "node:url";
 import { addEntrantsViaApi, apiJson, createStageAndGenerate, expectNoHorizontalScroll, withDb } from "../helpers";
 import { dismissCookieBanner } from "../scorepad-a11y-kit";
 import { offeredTargetIds, targetPicker } from "../helpers/stream-target-picker";
-import { FAKE_CONNECT_MS, POLL_WAIT_MS, POOL_SLOT_WAIT_MS, liveWaitMs, poolBudget, poolHoldProblem, releaseStreamSlot, takeWholePool } from "../helpers/stream-slot-pool";
+import { FAKE_CONNECT_MS, poolHoldProblem, releaseStreamSlot, takeWholePool } from "../helpers/stream-slot-pool";
+import { NAV_MS, seaznWalkClock } from "../helpers/seazn-hosted-clock";
 import { disposeFakePhones, pairPhoneOnFixture } from "../helpers/fake-capture-phone";
 import { EMPTY_JAR, expectContract, jobTokenFor, releaseStandInOrg, seedStandInOrg, type StandInOrg } from "../helpers/sponsor-relay-standin";
 import { playsHlsNatively, signedAddressPattern, stubFakePlaybackHost } from "../helpers/seazn-video-seed";
-import { SEAZN_VIDEO_POLL_FLOOR_MS } from "../../src/components/public-site/match-centre/seazn-video-schedule";
 import { routes } from "../../src/lib/routes";
 
 // ===========================================================================
-// Clocks — DERIVED from the constants that set the pace (AGENTS.md class 20)
+// Clocks — DERIVED from the constants that set the pace (AGENTS.md class 20): helpers/seazn-hosted-clock.ts, one term per wait in
+// step order, where the CI wiring test also reads the walk's worst case to hold e2e-seazn's job timeout to it.
 // ===========================================================================
-/** The org, the competition, its division started and its one fixture (the organiser's sign-in included). */
-const SEED_MS = 60_000;
-/** One page load (the organiser's fixture page, the spectator's match page). */
-const NAV_MS = 30_000;
-/** Pairing the fake phone: its own tab's load and the panel's pairing (helpers/fake-capture-phone.ts). */
-const PAIR_MS = 2 * NAV_MS;
-/** From the Go live tap until the panel reads live: the fake's connect and two organiser polls, plus slack (the pool's own). */
-const LIVE_WAIT_MS = liveWaitMs(FAKE_CONNECT_MS);
-/** The island's re-read: its floor (30 s, the schedule's own constant) plus slack. A Go live, a Stop and a newly signed recording each
- *  reach an open page on the NEXT read, so each of those waits is exactly one of these. */
-const ONE_RE_READ_MS = SEAZN_VIDEO_POLL_FLOOR_MS + 15_000;
-/** The Stop landing: the session reading completed (three polls-plus-slack). */
-const END_MS = 3 * POLL_WAIT_MS;
-/** One server round trip or one short poll: a dialog closing, a beat, the recording control, the stream tick, a pill. */
-const CALL_MS = POLL_WAIT_MS;
-/** stream-credits.spec.ts's key, taken only for the instant of the global tick: a wait of one pool cycle, as youtube-connect's. */
-const CREDITS_KEY_WAIT_MS = poolBudget(FAKE_CONNECT_MS).cycleMs;
-
-/** One Go live, tap to a live panel: the session row, the composed session's facts, the stand-in's first beat, the live pill. */
-const GO_LIVE_MS = CALL_MS + LIVE_WAIT_MS + CALL_MS + LIVE_WAIT_MS;
-/** One Stop, tap to an Ended panel: the dialog, the stand-in's last beat, the session completing, the Ended pill. */
-const STOP_MS = CALL_MS + CALL_MS + END_MS + CALL_MS;
-/** The stream tick under W22's exclusion: the recording control, stream-credits' key, the tick. */
-const TICK_MS = CALL_MS + CREDITS_KEY_WAIT_MS + CALL_MS;
-/** The afterEach's end of an open session: the stop, the last beat, the forced terminal. */
-const TEARDOWN_MS = 3 * CALL_MS;
-
-/** The two holds of the stream-slot pool, one term per wait in step order. A composed session reserves two matches of recording
- *  (R2004), so each Go live takes the WHOLE pool, as every composed walkthrough does (overlay-compositor.spec.ts). The pairing and
- *  the panel's reload come before the first, and the pool is given back between them — once the first session is terminal and the
- *  tick has run — so the replay check holds no slot.
- *   1. the first Go live; the open page turning live, its address reaching the player; the Stop; the open page losing the live
- *      player; the tick;
- *   2. Start another's idle pill; the second Go live; the open page turning live again, its address reaching the player; the
- *      provider-call poll; the teardown. */
-const HOLD_1_MS = GO_LIVE_MS + ONE_RE_READ_MS + CALL_MS + STOP_MS + ONE_RE_READ_MS + TICK_MS;
-const HOLD_2_MS = CALL_MS + GO_LIVE_MS + ONE_RE_READ_MS + CALL_MS + CALL_MS + TEARDOWN_MS;
+const { LIVE_WAIT_MS, ONE_RE_READ_MS, END_MS, CALL_MS, CREDITS_KEY_WAIT_MS, HOLD_1_MS, HOLD_2_MS, WALK_MS } = seaznWalkClock(FAKE_CONNECT_MS);
 const POOL_HOLD = {
   file: "seazn-hosted.spec.ts",
   holdMs: Math.max(HOLD_1_MS, HOLD_2_MS),
@@ -90,11 +55,6 @@ if (process.env.SEAZN_HOSTED_LIVE === "true") {
   const problem = poolHoldProblem(POOL_HOLD);
   if (problem) throw new Error(problem);
 }
-/** The walk, in step order: the seed; the fixture page; the spectator's page before kick-off and its first read; the pairing and the
- *  panel's reload; the first hold (and its wait for the pool); the replay showing and its address reaching the player (outside any
- *  hold); the second hold (and its wait). */
-const WALK_MS =
-  SEED_MS + NAV_MS + NAV_MS + NAV_MS + PAIR_MS + NAV_MS + POOL_SLOT_WAIT_MS + HOLD_1_MS + ONE_RE_READ_MS + CALL_MS + POOL_SLOT_WAIT_MS + HOLD_2_MS;
 
 // ===========================================================================
 // Copy, from the dictionaries themselves
@@ -449,14 +409,18 @@ test("Seazn pre-selected → a spectator opens the page before kick-off → Go l
   expect(await viewer.sameDocument(), "no reload between the replay and the second live").toBe(true);
 
   // 10. NOWHERE BUT SEAZN: no YouTube broadcast, and no output added to any input, for this match. The provider-call rows are recorded
-  //     (positive pair: the inputs both sessions made are there), so the zero is a reading, not an absent table.
-  const calls = async () => withDb((sql) => sql<{ operation: string; n: number }[]>`
-    select c.operation, count(*)::int as n from stream_provider_calls c
+  //     (positive pair: the inputs EACH session made are there — by session, since one composed provision alone makes two, its camera
+  //     and its programme), so the zero is a reading, not an absent table.
+  const calls = async () => withDb((sql) => sql<{ session_id: string; operation: string; n: number }[]>`
+    select c.session_id, c.operation, count(*)::int as n from stream_provider_calls c
       join fixture_stream_sessions s on s.id = c.session_id
-     where s.fixture_id = ${rig.fixtureId} group by c.operation`);
+     where s.fixture_id = ${rig.fixtureId} group by c.session_id, c.operation`);
   await expect
-    .poll(async () => (await calls()).find((r) => r.operation === "createLiveInput")?.n ?? 0, { message: "both sessions' provider calls are recorded", timeout: CALL_MS })
-    .toBeGreaterThanOrEqual(2);
+    .poll(async () => {
+      const rows = await calls();
+      return [first.sid, second.sid].map((sid) => rows.some((r) => r.session_id === sid && r.operation === "createLiveInput" && r.n >= 1));
+    }, { message: "each session's own createLiveInput calls are recorded (the first, then the second)", timeout: CALL_MS })
+    .toEqual([true, true]);
   expect((await calls()).filter((r) => r.operation === "addOutput"), "no addOutput call for the match").toEqual([]);
   const [broadcasts] = await withDb((sql) => sql<{ n: number }[]>`select count(*)::int as n from youtube_broadcasts where fixture_id = ${rig.fixtureId}`);
   expect(broadcasts!.n, "no YouTube broadcast for the match").toBe(0);

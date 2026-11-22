@@ -2052,12 +2052,21 @@ jobs:
     name: Playwright e2e — Seazn-hosted, LIVE on (Postgres container)
     runs-on: ${{ vars.E2E_RUNNER || 'ubuntu-latest' }}
     # See e2e-parallel's timeout note: no job here had one, so a hung
-    # Playwright run burned GitHub's 360-minute default. 30, not e2e-serial's
-    # 20: this job builds as well, and its specs take the WHOLE stream-slot
-    # pool for composed sessions (seazn-hosted.spec.ts, and case 11 at three
-    # widths), so a waiter can sit out one whole hold (POOL_SLOT_WAIT_MS, 385 s
-    # at the 10 s connect delay) once per attempt, and CI retries once.
-    timeout-minutes: 30
+    # Playwright run burned GitHub's 360-minute default. DERIVED, not picked:
+    # the Seazn walk's own worst case (seazn-hosted.spec.ts's test timeout,
+    # e2e/helpers/seazn-hosted-clock.ts `WALK_MS`: two waits for the whole
+    # stream-slot pool at 385 s, two holds, and the pages and polls between)
+    # is 1545 s, about 25.8 min, at this job's 10 s connect delay. CI retries
+    # once, so a first attempt that runs to its timeout is followed by a
+    # second: 2 x 25.8 = 51.5 min. Plus the setup — about 106 s measured for
+    # the migrate, sport sync, build, placement image and server start
+    # (e2e-parallel's leg note), allowed 6 min here — 57.5 min, so 60. Too
+    # short, and the job cancels the retry: a cancel skips the `if: failure()`
+    # report upload and loses the trace. The streaming-destinations cases run
+    # on the second worker, beside the walk. e2e-ci-wiring.test.ts recomputes
+    # this sum from the clock and the config's retries and reds if 60 falls
+    # under it.
+    timeout-minutes: 60
 
     services:
       postgres:
@@ -2395,8 +2404,9 @@ jobs:
 
       # Both files SKIP by name when the runner does not see LIVE on, and a skip is green: drop the flag from this job and it
       # would pass having walked nothing. This is the one job those cases run in, so it proves they RAN: the Seazn walk, and
-      # the Streaming page's case 11 at every width it declares — each present in the report, and not one of them skipped.
-      # The wiring itself (the flag on server and runner, the two files, no other job with LIVE) is pinned in
+      # the Streaming page's case 11 at every width it declares — CASE_11_WIDTHS of them, exactly — each present in the
+      # report, and not one of them skipped. The wiring itself (the flag on server and runner, the two files, no other job
+      # with LIVE, and CASE_11_WIDTHS equal to the spec's own width list) is pinned in
       # apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts, which runs everywhere.
       - name: Seazn walk and case 11 must have RUN, not skipped
         run: |
@@ -2410,21 +2420,26 @@ jobs:
               for (const c of s.suites ?? []) walk(c);
             };
             for (const s of r.suites ?? []) walk(s);
-            const groups = {
-              "the Seazn walk": tests.filter((t) => t.file.endsWith("seazn-hosted.spec.ts")),
-              "streaming-destinations case 11": tests.filter((t) => t.file.endsWith("streaming-destinations.spec.ts") && t.title.startsWith("11 @")),
-            };
+            const widths = Number(process.env.CASE_11_WIDTHS);
+            if (!(widths > 0)) { console.log("::error::CASE_11_WIDTHS is not a positive count"); process.exit(1); }
+            const groups = [
+              ["the Seazn walk", tests.filter((t) => t.file.endsWith("seazn-hosted.spec.ts")), null],
+              ["streaming-destinations case 11", tests.filter((t) => t.file.endsWith("streaming-destinations.spec.ts") && t.title.startsWith("11 @")), widths],
+            ];
             let bad = false;
-            for (const [name, ts] of Object.entries(groups)) {
+            for (const [name, ts, want] of groups) {
               const skipped = ts.filter((t) => t.status === "skipped");
               console.log(name + ": " + ts.length + " test(s), " + skipped.length + " skipped");
               if (ts.length === 0) { console.log("::error::" + name + " is not in the report"); bad = true; }
+              if (want !== null && ts.length !== want) { console.log("::error::" + name + ": " + ts.length + " in the report, " + want + " declared"); bad = true; }
               if (skipped.length > 0) { console.log("::error::" + name + " SKIPPED: " + skipped.map((t) => t.title).join(" | ")); bad = true; }
             }
             if (bad) process.exit(1);
           '
         env:
           REPORT: apps/web/playwright-report/results.json
+          # The widths case 11 loops over in streaming-destinations.spec.ts (pinned equal to that list by e2e-ci-wiring).
+          CASE_11_WIDTHS: "3"
 
       # A test that fails and then passes on retry leaves the job green, so an
       # `if: failure()` upload threw away the only trace and screenshot of the
