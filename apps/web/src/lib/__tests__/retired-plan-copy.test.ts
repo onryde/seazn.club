@@ -23,6 +23,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { sql } from "@/lib/db";
 import { ALL_PLAN_KEYS } from "@/lib/currency";
+import { livePlanRows } from "./_plan-catalogue";
 import { RETIRED_PLAN_KEYS, planLabel } from "@/lib/plan-label";
 import { TIPS } from "@/config/tips";
 import { allHelpArticles } from "@/server/help-content";
@@ -361,7 +362,9 @@ describe("no shipped string names a plan nobody can buy", () => {
 // against a vocabulary that has drifted from the table it claims to be.
 describe.skipIf(!HAS_DB)("the vocabulary this file scans with is the plans table", () => {
   it("derives every live plan name from a row that exists", async () => {
-    const rows = await sql<{ key: string; name: string }[]>`select key, name from plans`;
+    // Every row but a test's temporary one (`tmp_*`, the billing tests' parallel inserts; _plan-catalogue.ts): this is a
+    // reverse-direction guard, so it is held to the whole table, not filtered by the declared keys.
+    const rows = await livePlanRows(sql);
     expect(rows.length, "no plans rows at all — every scan above is vacuous").toBeGreaterThan(2);
     expect(rows.map((r) => r.key).sort()).toEqual([...ALL_PLAN_KEYS].sort());
     // `planLabel` is what the product renders; `plans.name` is what the seed

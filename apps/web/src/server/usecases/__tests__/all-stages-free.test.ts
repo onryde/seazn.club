@@ -28,6 +28,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
+import { declaredPlanKeys } from "@/lib/__tests__/_plan-catalogue";
 import { getLimit, hasFeature, invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
@@ -88,7 +89,9 @@ async function override(orgId: string, featureKey: string, value: { bool?: boole
 
 describe.skipIf(!HAS_DB)("all stages are free (owner ruling 2026-10-20, V471)", () => {
   it("the matrix: EVERY plan holds an explicit unlimited stage count and a granted carry-over row; community still lacks formats.advanced", async () => {
-    const plans = (await sql<{ key: string }[]>`select key from plans order by key`).map((p) => p.key);
+    // The declared catalogue, each key proven a `plans` row - never the raw table, which the billing tests' temporary rows
+    // reach (_plan-catalogue.ts).
+    const plans = await declaredPlanKeys(sql);
     // Empty case first: no plans would make every check below vacuous.
     expect(plans.length).toBeGreaterThan(0);
 

@@ -14,9 +14,12 @@
 // so they are preserved here rather than deleted along with their old homes.
 //
 // Deliberately absence-only. Anything with a live value belongs in the §2 pin.
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
 import { ALL_PLAN_KEYS } from "@/lib/currency";
+import { livePlanRows, TEMP_PLAN_KEY_PREFIX } from "@/lib/__tests__/_plan-catalogue";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -81,9 +84,36 @@ describe.skipIf(!HAS_DB)("retired entitlement keys and plans stay retired", () =
   // without seeding it (or seeding one the code does not know) is a failure
   // rather than a silent divergence. This is what catches a retired plan
   // coming back under a name nobody thought to add to RETIRED_PLAN_KEYS.
+  //
+  // Every row but a test's TEMPORARY one (PR #1283 review G1): six billing tests insert `tmp_*` rows in parallel on the same
+  // database, and this sweep used to red on whichever was live. Only that prefix is excluded - not a filter on the declared
+  // keys, which would make the reverse direction vacuous - and the case below holds every inserting test to the prefix.
   it("the live plans table is exactly the plan keys the code knows about", async () => {
-    const rows = await sql<{ key: string }[]>`select key from plans`;
+    const rows = await livePlanRows(sql);
     expect(rows.length, "no plans rows at all").toBeGreaterThan(0);
     expect([...rows.map((r) => r.key)].sort()).toEqual([...ALL_PLAN_KEYS].sort());
+  });
+
+  it(`every test that inserts a plans row names it with the excluded prefix "${TEMP_PLAN_KEY_PREFIX}"`, () => {
+    const src = join(__dirname, "../..");
+    const files: string[] = [];
+    const walk = (dir: string): void => {
+      for (const name of readdirSync(dir)) {
+        if (name === "node_modules") continue;
+        const p = join(dir, name);
+        if (statSync(p).isDirectory()) walk(p);
+        else if (/\.test\.tsx?$/.test(name)) files.push(p);
+      }
+    };
+    walk(src);
+    // This file names the statement in its own scan, so it is not one of the inserters.
+    const inserting = files.filter((f) => f !== __filename && /insert into plans\b/.test(readFileSync(f, "utf8")));
+    // Anti-vacuity: the billing tests that motivated the exclusion are found.
+    expect(inserting.length, "no test file inserting into plans was found").toBeGreaterThanOrEqual(6);
+    for (const f of inserting) {
+      const text = readFileSync(f, "utf8");
+      // Every key a test builds for a plans row is a template starting with the prefix (`tmp_plan_${...}`).
+      expect(text, `${f}: its temporary plan key starts with "${TEMP_PLAN_KEY_PREFIX}"`).toMatch(new RegExp("`" + TEMP_PLAN_KEY_PREFIX + "[a-z_]*\\$\\{"));
+    }
   });
 });

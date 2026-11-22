@@ -22,6 +22,7 @@ vi.mock("@/lib/admin", async (importOriginal) => ({
 
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
+import { declaredPlanKeys } from "@/lib/__tests__/_plan-catalogue";
 import { hasFeature } from "@/lib/entitlements";
 import { orgTag } from "@/server/public-site/cache-tags";
 import { seedOrg } from "@/server/usecases/__tests__/_registration-fixtures";
@@ -38,11 +39,12 @@ describe.skipIf(!HAS_DB)("an entitlement override expires the org's public pages
   it("premise, as a guard: every plan grants registration.paid, so no plan change can flip card payments", async () => {
     const rows = await sql<{ plan_key: string; granted: boolean }[]>`
       select plan_key, coalesce(bool_value, false) as granted from plan_entitlements where feature_key = 'registration.paid'`;
-    // Every plan an org can be on, from `plans` itself (final fix review m-2): a plan with no entitlement row at all resolves to deny
-    // (lib/entitlements.ts), so counting plans from plan_entitlements would never see it.
-    const plans = await sql<{ key: string }[]>`select key from plans`;
+    // Every plan an org can be on (final fix review m-2): a plan with no entitlement row at all resolves to deny
+    // (lib/entitlements.ts), so counting plans from plan_entitlements would never see it. The declared catalogue, each key proven a
+    // `plans` row - never the raw table, which the billing tests' temporary rows reach (_plan-catalogue.ts).
+    const plans = await declaredPlanKeys(sql);
     expect(plans.length, "anti-vacuity: the catalog has plans").toBeGreaterThan(0);
-    expect(rows.map((r) => r.plan_key).sort(), "every plan has a registration.paid row").toEqual(plans.map((p) => p.key).sort());
+    expect(rows.map((r) => r.plan_key).sort(), "every plan has a registration.paid row").toEqual([...plans].sort());
     for (const r of rows) expect(r.granted, `${r.plan_key} grants registration.paid`).toBe(true);
   });
 

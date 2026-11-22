@@ -49,6 +49,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import seed from "../stripe-plans.json";
 import { SUPPORTED_CURRENCIES } from "@/lib/currency";
 import { sql } from "@/lib/db";
+import { declaredPlanKeys } from "@/lib/__tests__/_plan-catalogue";
 
 interface Amount {
   unit_amount: number;
@@ -767,8 +768,11 @@ describe("the platform fee ladder — the rules themselves", () => {
 describe.skipIf(!HAS_DB)("the platform fee ladder — the live matrix", () => {
   /** Every plan key the product actually sells or grants. */
   async function liveShape(): Promise<{ shape: LadderShape; rates: FeeRates }> {
+    // The declared catalogue, each key proven a `plans` row - never the raw table, which the billing tests' temporary
+    // (public, unsold) rows reach and would read as a second free plan (_plan-catalogue.ts).
+    const declared = await declaredPlanKeys(sql);
     const planRows = await sql<{ key: string; is_public: boolean }[]>`
-      select key, is_public from plans order by key`;
+      select key, is_public from plans where key = any(${declared}) order by key`;
     const rateRows = await sql<{ plan_key: string; int_value: number | null }[]>`
       select plan_key, int_value from plan_entitlements
        where feature_key = 'registration.fee_percent'`;
