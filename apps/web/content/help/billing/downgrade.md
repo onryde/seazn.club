@@ -1,42 +1,48 @@
 ---
-title: What downgrading freezes
-description: Nothing is deleted — anything over Community limits becomes read-only until you make room.
-order: 2
+title: Downgrading to Community
+description: When your organisation moves to Community, nothing is deleted. Competitions and team members over the Community limits become read-only until you make room.
+order: 3
+related: billing/change-plan, billing/plans, billing/event-pass-ends, billing/groups
 ---
 
-Cancel Pro and your org returns to Community limits. The rule is simple: **nothing is deleted, ever.**
+Your organisation moves to Community when you cancel Pro and the period ends, when you choose **Downgrade to Community**, when a trial ends without a card, or when a failed payment stays unpaid for 14 days. See [start, switch or cancel Pro](/help/billing/change-plan).
 
-## A failed renewal has a grace period
+Nothing is deleted. What is over a Community limit becomes **read-only** until you make room.
 
-If a renewal payment fails, nothing changes straight away. Stripe retries the card for **14 days** (this is called dunning) and your org stays on Pro the whole time — so a lapsed card or a bank blip never yanks features mid-tournament. Only if those 14 days pass with no successful payment does the org fall back to Community limits, and the moment a payment does go through, Pro is restored immediately. Update your card under **Settings → Plan & Billing** to clear it sooner.
+## Competitions over the limit
 
-## The freeze
+Community allows {{plan:competitions.max_active:community}} active competitions. If you have more, the ones used least recently become read-only, and their card in your competition list shows **Read-only**. The ones used most recently stay fully editable. A competition's most recent score decides how recently it was used, or the day it was created if nothing has been scored yet.
 
-Anything over a Community limit becomes **read-only**: your most recently active competitions stay fully editable up to the limit; the rest freeze. Which ones freeze is decided once, when you go over the limit, and then stays put — scoring a frozen competition doesn't swap it for another one. A frozen competition's dashboards, standings and history all remain visible — you just can't change it until there's room.
+![A competition card in the list with the Read-only chip beside the sport, its progress bar at 0 of 6 played, the next match and the line 1 division, 4 entrants.](/help/billing/downgrade-readonly.webp "A frozen competition still shows its progress and next match.")
 
-**Matches still score.** A frozen competition's matches can still be scored and finished on the pad, so a match already under way is never stranded. Everything else waits for room: the schedule, entrants, registrations, match formats, calling matches on Match Day and starting any new stream, whether from the stream panel, a camera phone or an automatic start. A stream already running keeps going, and you can still stop it.
+The choice is made once. Scoring a read-only competition does not swap it for another one.
 
-## Making room
+In a read-only competition:
 
-- **Archive**, complete or delete competitions until you're inside the limits — frozen ones thaw automatically, one for each place you free, the most recently active first.
-- Or upgrade again; everything unfreezes instantly.
+- **Matches still score.** A match can be scored and finished on the pad, so nothing in progress is stranded.
+- **You cannot change it.** Adding entrants, editing the schedule and other changes are refused.
+- **Everything stays visible.** Its pages, standings and history are still there, for you and for the public.
 
-Pro-only features (your brand colour, branded exports, sponsor tiers above Partner, online sponsor invoices, API keys…) simply switch off rather than freezing anything — public pages fall back to the standard look with your logo still on it, exports come out as plain tables, keys stop authenticating.
+A competition with an Event Pass is not counted, so it is never frozen while its pass applies.
 
-## Entry fees keep running — the fee rate changes
+## Team members over the limit
 
-One thing that does **not** switch off: **card entry fees keep working on Community.** Your Stripe connection stays linked, existing paid entries are untouched, and divisions collecting **Card at sign-up** keep taking new registrations exactly as before — a downgrade never closes a register panel for money reasons.
+Community allows {{plan:members.max:community}} team members. If you have more, the members who joined earliest are frozen first, until the rest fit inside the limit. Owners are never frozen.
 
-What changes is the platform fee, for a competition that never took a paid card entry: on Community that's **5%**, where Pro is 2% and Enterprise 1%. See [the fee ladder](/help/billing/plans#the-platform-fee-on-entry-fees).
+A frozen member keeps their access to see everything, but their changes are refused. Nothing on screen marks them in advance. They find out when they try to save.
 
-A competition that has already taken a paid card entry keeps that platform fee **locked** at the rate it was first charged, for every entry after it, whatever your plan does next — including a downgrade to Community. A competition that takes its **first paid entry** while covered by an [Event Pass](/help/billing/event-pass) **locks in** the pass's **3%** rate the same way, and keeps it after the downgrade along with everything else the pass grants — bigger limits, branded exports, sponsor tiers and online sponsor invoices — while the rest of the org sits on Community.
+## Features that switch off
 
-## Moving to a cheaper plan gives you credit, not a bill
+Features your plan no longer includes stop working. They do not freeze anything. For example, public pages lose your brand colour and keep your logo, exports come out plain, and API keys stop working.
 
-Moving to a cheaper plan or a shorter billing period (rather than cancelling to Community) is a plan change, so it's prorated: the time you'd already paid for on the pricier plan comes back as **account credit** that pays your next invoices automatically — the confirm step shows "No charge today" and the credit added, never a fresh charge. See the [itemised table you'll see before confirming](/help/billing/plans#changing-plan-or-billing-period-mid-cycle).
+Card entry fees keep working on Community. Your Stripe connection stays linked and paid entries are untouched. What can change is the platform fee for a competition that has not taken a paid entry yet. See [the platform fee on entry fees](/help/billing/plans#the-platform-fee-on-entry-fees).
 
-## Common questions
+## Make room
 
-**Do frozen results disappear from public pages?** No — read-only means the record stands; visitors notice nothing.
+- **Archive** a competition, or mark one **completed**. The read-only competition you used most recently becomes editable again, one for each place you free.
+- **Buy an Event Pass** for a competition. It leaves the count, and if it was read-only it is editable again. See [buy an Event Pass](/help/billing/buy-an-event-pass).
+- **Remove a team member** to make room for a frozen one.
+- **Go back to Pro**, and everything is editable again.
 
-**Extra team members?** Seats over the Community limit become read-only members until the owner frees seats.
+> **Example**
+> Harbour Hockey Club has four competitions running when it moves from Pro to Community: Autumn Open, Winter Cup, Spring Ladder and Summer Slam. Only Autumn Open has a match scored. With no scores to compare, the competition created earliest among the other three counts as the least recently used, so Winter Cup becomes **Read-only**. Adding an entrant to Winter Cup is refused. Scoring its match still works, and Winter Cup stays read-only after that. Then the club archives Spring Ladder, and Winter Cup is editable again.
