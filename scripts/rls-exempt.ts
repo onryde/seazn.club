@@ -76,6 +76,13 @@ export const SUPERUSER_ONLY: ReadonlySet<string> = new Set([
   // it, in /admin (P7). Its link table capture_record_sessions has no org_id, so the guard never selects it; it is
   // enabled + forced all the same (rls-static.test.ts reads both).
   "capture_records",
+  // Seazn replays (V541, seazn-hosted Task 23): V410's pattern — RLS FORCEd, ZERO policies, no trg_set_org, no app_user
+  // grant; relay/__tests__/rls-static.test.ts and seazn-replays-migration.test.ts assert it. Its webhook dedupe table,
+  // bunny_webhook_events, has no org_id, so the guard never selects it; it is enabled + forced all the same.
+  // The org's Bunny collection id; privileged client only, zero policies.
+  "org_video_collections",
+  // One row per Seazn recording moved to Bunny (the Bunny ids Task 31 deletes); privileged client only, zero policies.
+  "fixture_video_replays",
   // Match Day codes (V509, capture S4 design §3; MD-1 Task 1): V410's pattern — RLS FORCEd, ZERO policies, no trg_set_org,
   // no app_user grant. The phone's md_ routes carry no org session (the token is their auth), so every read and write is
   // on the non-tenant `sql` client with org_id from the competition (mint) or the code row (resolve), and the desk sees a

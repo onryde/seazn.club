@@ -23,7 +23,8 @@ create table org_video_collections (
 -- ─── 2. fixture_video_replays: one row per Cloudflare recording moved to Bunny ───────────────────────────────────────
 -- part_no is assigned ONCE, at discovery (the fixture's highest part_no + 1, in recorded_at order within a batch), and never
 -- changed: a part keeps its number whatever becomes playable first. A fixture deleted later sets fixture_id null, and the
--- unique (fixture_id, part_no) treats nulls as distinct, so its parts never collide with each other.
+-- unique (fixture_id, part_no) treats nulls as distinct, so its parts never collide with each other. Parts count from 1: the
+-- public page shows "Part n", and a `coalesce(max(part_no), 0)` slip in discovery would otherwise publish a Part 0.
 -- cf_duration_seconds and cf_height are the Cloudflare listing's (IngestVideo.durationSeconds, .height), written at discovery:
 -- the length and rendition check (Task 24, recommendation 2026-11-21 G-C) compares the Bunny copy against them. verified_at is
 -- set when the copy passes it; `playable` means verified, and the Cloudflare delete waits for verified_at + 60 min (G-D).
@@ -35,7 +36,7 @@ create table fixture_video_replays (
   fixture_id          uuid null references fixtures(id) on delete set null,
   cf_video_id         text not null unique,
   recorded_at         timestamptz not null,
-  part_no             int not null,
+  part_no             int not null check (part_no >= 1),
   state               text not null check (state in ('found','downloading','fetching','encoding','playable','failed','deleted')),
   state_at            timestamptz not null default now(),
   bunny_video_id      text null,
@@ -109,15 +110,22 @@ create view public_fixture_seazn_replays_v as
     and c.visibility in ('public', 'unlisted');
 
 -- ─── 6. carry (Task 22 m8): stream_provider_calls admits the Bunny adapter's records ──────────────────────────────────
--- V410's inline CHECK, by its generated name; the new list is a superset, so every existing row still passes it.
-alter table stream_provider_calls drop constraint stream_provider_calls_provider_check;
+-- V410's inline CHECK, by its generated name; the new list is a superset, so every existing row still passes it. Dropped and
+-- re-added NOT VALID in one alter, then validated in its own statement (V530's shape): the add scans nothing, and the
+-- VALIDATE's scan of the existing rows takes only SHARE UPDATE EXCLUSIVE. Measured on PG (t23, 2026-11-22): inside ONE
+-- transaction, which is how Flyway runs this file, the add's ACCESS EXCLUSIVE is still held through that scan until commit,
+-- so the split shortens the lock only once the validate runs in a later transaction. stream_provider_calls has no retention.
 alter table stream_provider_calls
-  add constraint stream_provider_calls_provider_check check (provider in ('cloudflare','fly','stripe','bunny'));
+  drop constraint stream_provider_calls_provider_check,
+  add constraint stream_provider_calls_provider_check check (provider in ('cloudflare','fly','stripe','bunny')) not valid;
+alter table stream_provider_calls validate constraint stream_provider_calls_provider_check;
 
 -- ─── 7. carry (Task 13 m9): the stream tick's Seazn pass, every minute ───────────────────────────────────────────────
--- usecases/seazn-recordings.ts lists the programme inputs whose recordings are not yet all locked. A marked input
--- (recordings_locked_at set) leaves this index, so it holds the open inputs rather than every input ever made; the session
--- side is then read by its primary key.
+-- usecases/seazn-recordings.ts lists the programme inputs whose recordings are not yet all locked. An input leaves this index
+-- once it is marked (recordings_locked_at set) or once the retention sweep retires it (usecases/relay-sweep.ts nulls
+-- ingest_input_id), so it holds the programme inputs not yet marked and not yet retired. Only the Seazn pass marks an input:
+-- a composed non-Seazn session's programme input (YouTube, a pasted key) stays in it until the retention sweep retires it.
+-- The session side is then read by its primary key.
 create index fixture_stream_inputs_seazn_unlocked_idx on fixture_stream_inputs (session_id)
   where role = 'programme' and recordings_locked_at is null and ingest_input_id is not null;
 

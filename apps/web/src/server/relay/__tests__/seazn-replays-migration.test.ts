@@ -161,6 +161,19 @@ describe.skipIf(!HAS_DB)("V541__seazn_replays.sql — the replay tables are real
     expect(probes).toBe(6);
   });
 
+  it("part numbers start at 1: part 0 and a negative part are refused (23514 by name); part 1 lands", async () => {
+    // The public page shows the number as "Part n"; a `coalesce(max(part_no), 0)` slip in discovery would publish a Part 0.
+    const r = await rig(1);
+    let probes = 0;
+    await rolledBack(async (tx) => {
+      expect(await probe(tx, (sp) => insertReplay(sp, r, { partNo: 0 })), "part 0").toBe("23514:fixture_video_replays_part_no_check");
+      expect(await probe(tx, (sp) => insertReplay(sp, r, { partNo: -1 })), "part -1").toBe("23514:fixture_video_replays_part_no_check");
+      expect(await probe(tx, (sp) => insertReplay(sp, r, { partNo: 1 })), "part 1").toBe("landed");
+      probes = 3;
+    });
+    expect(probes).toBe(3);
+  });
+
   it("a second bunny_webhook_events row with one event_id is refused (23505); another event lands", async () => {
     const id = `evt-${randomUUID()}`;
     expect(await failure(sql`insert into bunny_webhook_events (event_id) values (${id})`), "first").toBe("landed");
@@ -368,5 +381,11 @@ describe.skipIf(!HAS_DB)("V541__seazn_replays.sql — the replay tables are real
     expect(row).toEqual({ provider: "bunny", operation: "video", method: "GET", path_template: "/library/{id}/videos/{id}", status: 200 });
     expect(await failure(recordProviderCall(sql, { ...records[0]!, provider: "ufo" as "bunny", subjectId: randomUUID() })), "an unknown provider")
       .toBe("23514:stream_provider_calls_provider_check");
+    // The swap is added NOT VALID and validated in its own statement (V530's shape); the validate must not be lost, or the
+    // catalog carries an unchecked constraint for every later reader.
+    const checks = await sql<{ validated: boolean }[]>`
+      select convalidated as validated from pg_constraint
+       where conrelid = 'stream_provider_calls'::regclass and conname = 'stream_provider_calls_provider_check'`;
+    expect(checks, "one provider CHECK, validated").toEqual([{ validated: true }]);
   });
 });
