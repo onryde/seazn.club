@@ -6,7 +6,7 @@
 // (scripts/openapi-gen.ts, bare `node --experimental-strip-types`) loads api-v1/schemas/ — so relative specifiers only, never `@/`.
 // scripts/gen-capture-contracts.ts generates the JSON from these twins; it is kept for the next v-bump.
 import { z } from "zod";
-// LIVE1: the spectator tree's root is spelled in ONE module (lib/__tests__/public-hub-links.test.ts reds anywhere else).
+// LIVE1: the spectator tree's root is spelled in ONE module.
 import { PUBLIC_HUB_ROOT } from "../../lib/public-hub-root.mjs";
 
 export const CAPTURE_CODE_RE = /^[0-9a-hjkmnp-tv-z]{12}$/;

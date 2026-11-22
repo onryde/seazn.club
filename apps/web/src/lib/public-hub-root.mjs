@@ -2,9 +2,7 @@
 // live", option A). Plain ESM so next.config.js can import it beside the TypeScript app, the same way it imports
 // ./posthog-proxy.mjs.
 //
-// Every spectator URL is built from these through `routes.*` in lib/routes.ts — never by hand. The guard
-// lib/__tests__/public-hub-links.test.ts reds on a `/live/…` or `/shared…` string anywhere else in src, proxy.ts and
-// next.config.js included.
+// Every spectator URL is built from these through `routes.*` in lib/routes.ts — never by hand.
 //
 // Option A: a bare `/live` (and `/<lang>/live`) is NOT the spectator tree. It stays the marketing wall,
 // `app/[lang]/(marketing)/live`, rewritten from `/live` by proxy.ts's MARKETING_UNPREFIXED. Only `/live/<org>/…`
