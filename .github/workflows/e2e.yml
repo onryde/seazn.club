@@ -6,8 +6,8 @@ name: E2E
 # escape hatch for a feature branch that needs a run before then; its `pr`
 # input lets you target a specific PR number instead of main.
 #
-# Split into three independent jobs — e2e-parallel / e2e-serial / e2e-mobile —
-# instead of one job chaining `playwright test --project=X && ... && ...`.
+# Split into independent jobs — e2e-parallel / e2e-serial / e2e-mobile (and
+# e2e-seazn, below) — instead of one job chaining `playwright test --project=X && ... && ...`.
 # That `&&` chain meant a `parallel` failure silently skipped `serial` and
 # `mobile` entirely: they never ran, and their absence read as "not
 # applicable" rather than "untested". Separate GitHub Actions jobs have no
@@ -93,7 +93,7 @@ name: E2E
 # means the mobile job's org is now structurally isolated from parallel's and
 # serial's too, not just from its own seven widths.
 #
-# All three jobs run against a PRODUCTION build, never `next dev`: `next dev`
+# All four jobs run against a PRODUCTION build, never `next dev`: `next dev`
 # pins its V8 heap to half the runner's RAM and restarts itself past ~80% use
 # (with transient 404s from Turbopack's on-demand compiles as it nears the
 # ceiling) — flaky under a full Playwright run. `next start` has neither the
@@ -2392,6 +2392,39 @@ jobs:
           # The same values the server was started with (see "Start server").
           FAKE_INGEST_CONNECT_AFTER_MS: "10000"
           SEAZN_HOSTED_LIVE: "true"
+
+      # Both files SKIP by name when the runner does not see LIVE on, and a skip is green: drop the flag from this job and it
+      # would pass having walked nothing. This is the one job those cases run in, so it proves they RAN: the Seazn walk, and
+      # the Streaming page's case 11 at every width it declares — each present in the report, and not one of them skipped.
+      # The wiring itself (the flag on server and runner, the two files, no other job with LIVE) is pinned in
+      # apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts, which runs everywhere.
+      - name: Seazn walk and case 11 must have RUN, not skipped
+        run: |
+          node -e '
+            const r = JSON.parse(require("fs").readFileSync(process.env.REPORT, "utf8"));
+            const tests = [];
+            const walk = (s) => {
+              for (const spec of s.specs ?? []) {
+                for (const t of spec.tests ?? []) tests.push({ file: spec.file ?? "", title: spec.title, status: t.status });
+              }
+              for (const c of s.suites ?? []) walk(c);
+            };
+            for (const s of r.suites ?? []) walk(s);
+            const groups = {
+              "the Seazn walk": tests.filter((t) => t.file.endsWith("seazn-hosted.spec.ts")),
+              "streaming-destinations case 11": tests.filter((t) => t.file.endsWith("streaming-destinations.spec.ts") && t.title.startsWith("11 @")),
+            };
+            let bad = false;
+            for (const [name, ts] of Object.entries(groups)) {
+              const skipped = ts.filter((t) => t.status === "skipped");
+              console.log(name + ": " + ts.length + " test(s), " + skipped.length + " skipped");
+              if (ts.length === 0) { console.log("::error::" + name + " is not in the report"); bad = true; }
+              if (skipped.length > 0) { console.log("::error::" + name + " SKIPPED: " + skipped.map((t) => t.title).join(" | ")); bad = true; }
+            }
+            if (bad) process.exit(1);
+          '
+        env:
+          REPORT: apps/web/playwright-report/results.json
 
       # A test that fails and then passes on retry leaves the job green, so an
       # `if: failure()` upload threw away the only trace and screenshot of the

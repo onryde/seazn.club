@@ -2,7 +2,8 @@
 // through a component (no DOM, so an effect never runs): the island's timer, driven here through its REAL schedule
 // (`nextVideoFetchMs`) with vitest's fake timers and fake clock, no network. What must hold:
 //   - it reads at once, then at the schedule's delay (30 s with nothing to show, and 30 s while live too: Task 19, so a Stop reaches
-//     an open page within one poll), and a new answer moves the next read with it;
+//     an open page within one poll; and 30 s while the interim replay plays: Task 19 fix round 1, I1, so a second Go live reaches
+//     it too), and a new answer moves the next read with it;
 //   - a replay of embeds alone sets NO timer, and a read the island asks for (a viewer picks an expired part) still happens;
 //   - a failed read keeps the last answer on screen and tries again in 30 s, and a later good answer replaces it;
 //   - a stop ends everything: no timer, the read in flight is aborted, and its late answer is never delivered.
@@ -19,6 +20,11 @@ const EMPTY: PublicFixtureVideo = { live: null, replay: [] };
 const liveFor = (ms: number): PublicFixtureVideo => ({
   live: { src: "https://host.invalid/t/manifest/video.m3u8", expiresAt: new Date(Date.now() + ms).toISOString() },
   replay: [],
+});
+/** The interim Cloudflare recording, signed for an hour from when it is read (as the route signs it). */
+const replayFor = (ms: number): PublicFixtureVideo => ({
+  live: null,
+  replay: [{ partNo: 1, player: "hls", src: "https://host.invalid/p1/manifest/video.m3u8", expiresAt: new Date(Date.now() + ms).toISOString() }],
 });
 const embedOnly: PublicFixtureVideo = {
   live: null,
@@ -91,6 +97,28 @@ describe("startVideoPoll: the schedule", () => {
     await vi.advanceTimersByTimeAsync(30_000);
     expect(reads).toBe(3);
     expect(seen.map((v) => v.live !== null), "live, live, then the stop").toEqual([true, true, false]);
+    poll.stop();
+  });
+
+  it("the interim replay: the next read is the 30 s floor, not the recording token's refresh point, so a second Go live reaches an open page within one poll", async () => {
+    // I1 (Task 19 review): the organiser stops at half-time, the tick signs part 1 and the page plays it; then the second half goes
+    // live. Each answer is built when it is read, so the recording's token is always an hour long: its refresh point never waits.
+    const answers = [replayFor(60 * MIN), replayFor(60 * MIN), liveFor(60 * MIN)];
+    let reads = 0;
+    const seen: PublicFixtureVideo[] = [];
+    const fetchVideo = vi.fn(async () => answers[Math.min(reads++, answers.length - 1)]!);
+    const poll = startVideoPoll({ fetchVideo, onVideo: (v) => seen.push(v) });
+    await flush();
+    expect(reads).toBe(1);
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(reads, "one tick before the floor").toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(reads, "at the floor, 55 min before the recording token's refresh point").toBe(2);
+    expect(60 * MIN - REFRESH_MS, "premise: the refresh point is far past the floor").toBeGreaterThan(30_000);
+    // The second Go live: the third read answers live, delivered one floor later.
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(reads).toBe(3);
+    expect(seen.map((v) => (v.live !== null ? "live" : v.replay.length > 0 ? "replay" : "none")), "replay, replay, then live").toEqual(["replay", "replay", "live"]);
     poll.stop();
   });
 
@@ -267,7 +295,7 @@ describe("startVideoPoll: rebuild (a player that gave up is rebuilt by the next 
     expect(r.calls, "the failed player's ask read the route").toHaveLength(2);
     expect(rec.seen.map((a) => a.rebuild), "first read, then the answer to the ask").toEqual([false, true]);
     // The schedule's own next point (derived from it, not typed): the read after the rebuild answer is an ordinary one.
-    const next = nextVideoFetchMs(live, new Date());
+    const next = nextVideoFetchMs(live);
     expect(next, "premise: a live answer sets a timer").not.toBeNull();
     await vi.advanceTimersByTimeAsync(next!);
     expect(r.calls).toHaveLength(3);

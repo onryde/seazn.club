@@ -1,10 +1,13 @@
 // Seazn-hosted video, Phase 1 Task 19: the whole Seazn path, walked through a REAL production server on the fake relay drivers, by an
 // organiser and a spectator in two browser contexts. What the vitest suites cannot see (AGENTS.md classes 1, 2 and 15): the organiser's
-// picker defaulting to Seazn, a real Go live through the panel, the composed session going live on the compositor's beat, the public
-// match page's island reading the REAL video route and handing the REAL (fake-driver) signed address to the player, the Stop reaching
-// that open page within ONE poll (the Task 15 review's r3), and the interim replay: once the stream tick has locked the recording
-// Cloudflare left behind, the page plays it in the same Seazn player (recommendation 2026-11-21, Task 14). Last, the database: no
-// YouTube broadcast and no `addOutput` provider call for the match — a Seazn stream goes nowhere but Seazn.
+// picker defaulting to Seazn; a spectator who opened the match page BEFORE kick-off (the island already reading the route, nothing
+// drawn); a real Go live through the panel, the composed session going live on the compositor's beat, and that open page turning to
+// the live player on the REAL (fake-driver) signed address; the Stop reaching it within ONE poll (the Task 15 review's r3); the interim
+// replay: once the stream tick has locked the recording Cloudflare left behind, the page plays it in the same Seazn player
+// (recommendation 2026-11-21, Task 14); and a SECOND Go live (Start another) reaching that same page within one poll too (the Task 19
+// review's I1). The whole way, one document, and a player that never failed (a failed player re-reads early, which would fake both
+// "within one poll" witnesses). Last, the database: no YouTube broadcast and no `addOutput` provider call for the match — a Seazn
+// stream goes nowhere but Seazn.
 //
 // WHERE IT RUNS. Only on a server and a runner that both have SEAZN_HOSTED_LIVE=true (with SEAZN_VIDEO_ORIGINS naming the server's
 // host): e2e.yml's `e2e-seazn` job. Everywhere else the flag is off, the org has no Seazn pick at all, and the case SKIPS by name — it
@@ -30,36 +33,68 @@ import { fileURLToPath } from "node:url";
 import { addEntrantsViaApi, apiJson, createStageAndGenerate, expectNoHorizontalScroll, withDb } from "../helpers";
 import { dismissCookieBanner } from "../scorepad-a11y-kit";
 import { offeredTargetIds, targetPicker } from "../helpers/stream-target-picker";
-import { FAKE_CONNECT_MS, POLL_WAIT_MS, POOL_SLOT_WAIT_MS, liveWaitMs, releaseStreamSlot, takeWholePool } from "../helpers/stream-slot-pool";
+import { FAKE_CONNECT_MS, POLL_WAIT_MS, POOL_SLOT_WAIT_MS, liveWaitMs, poolBudget, poolHoldProblem, releaseStreamSlot, takeWholePool } from "../helpers/stream-slot-pool";
 import { disposeFakePhones, pairPhoneOnFixture } from "../helpers/fake-capture-phone";
 import { EMPTY_JAR, expectContract, jobTokenFor, releaseStandInOrg, seedStandInOrg, type StandInOrg } from "../helpers/sponsor-relay-standin";
-import { signedAddressPattern, stubFakePlaybackHost } from "../helpers/seazn-video-seed";
+import { playsHlsNatively, signedAddressPattern, stubFakePlaybackHost } from "../helpers/seazn-video-seed";
 import { SEAZN_VIDEO_POLL_FLOOR_MS } from "../../src/components/public-site/match-centre/seazn-video-schedule";
 import { routes } from "../../src/lib/routes";
 
 // ===========================================================================
 // Clocks — DERIVED from the constants that set the pace (AGENTS.md class 20)
 // ===========================================================================
-/** The org, the competition, its division started and its one fixture. */
+/** The org, the competition, its division started and its one fixture (the organiser's sign-in included). */
 const SEED_MS = 60_000;
-/** One page load (the organiser's fixture page, the pairing tab, the spectator's match page). */
+/** One page load (the organiser's fixture page, the spectator's match page). */
 const NAV_MS = 30_000;
+/** Pairing the fake phone: its own tab's load and the panel's pairing (helpers/fake-capture-phone.ts). */
+const PAIR_MS = 2 * NAV_MS;
 /** From the Go live tap until the panel reads live: the fake's connect and two organiser polls, plus slack (the pool's own). */
 const LIVE_WAIT_MS = liveWaitMs(FAKE_CONNECT_MS);
-/** The island's re-read: its floor (30 s, the schedule's own constant) plus slack. A Stop, and a newly signed recording, reach an open
- *  page on the NEXT read, so each of those waits is exactly one of these. */
+/** The island's re-read: its floor (30 s, the schedule's own constant) plus slack. A Go live, a Stop and a newly signed recording each
+ *  reach an open page on the NEXT read, so each of those waits is exactly one of these. */
 const ONE_RE_READ_MS = SEAZN_VIDEO_POLL_FLOOR_MS + 15_000;
-/** The Stop landing: the tap, the compositor's last beat, and the session reading completed (three polls-plus-slack). */
+/** The Stop landing: the session reading completed (three polls-plus-slack). */
 const END_MS = 3 * POLL_WAIT_MS;
-/** One server round trip that is not a page: the recording control, the stream tick. */
+/** One server round trip or one short poll: a dialog closing, a beat, the recording control, the stream tick, a pill. */
 const CALL_MS = POLL_WAIT_MS;
+/** stream-credits.spec.ts's key, taken only for the instant of the global tick: a wait of one pool cycle, as youtube-connect's. */
+const CREDITS_KEY_WAIT_MS = poolBudget(FAKE_CONNECT_MS).cycleMs;
 
-/** This file's one hold of the stream-slot pool: from before the Go live to the teardown's stop. A composed session reserves two
- *  matches of recording (R2004), so it takes the WHOLE pool, as every composed walkthrough does (overlay-compositor.spec.ts). */
+/** One Go live, tap to a live panel: the session row, the composed session's facts, the stand-in's first beat, the live pill. */
+const GO_LIVE_MS = CALL_MS + LIVE_WAIT_MS + CALL_MS + LIVE_WAIT_MS;
+/** One Stop, tap to an Ended panel: the dialog, the stand-in's last beat, the session completing, the Ended pill. */
+const STOP_MS = CALL_MS + CALL_MS + END_MS + CALL_MS;
+/** The stream tick under W22's exclusion: the recording control, stream-credits' key, the tick. */
+const TICK_MS = CALL_MS + CREDITS_KEY_WAIT_MS + CALL_MS;
+/** The afterEach's end of an open session: the stop, the last beat, the forced terminal. */
+const TEARDOWN_MS = 3 * CALL_MS;
+
+/** The two holds of the stream-slot pool, one term per wait in step order. A composed session reserves two matches of recording
+ *  (R2004), so each Go live takes the WHOLE pool, as every composed walkthrough does (overlay-compositor.spec.ts). The pairing and
+ *  the panel's reload come before the first, and the pool is given back between them — once the first session is terminal and the
+ *  tick has run — so the replay check holds no slot.
+ *   1. the first Go live; the open page turning live, its address reaching the player; the Stop; the open page losing the live
+ *      player; the tick;
+ *   2. Start another's idle pill; the second Go live; the open page turning live again, its address reaching the player; the
+ *      provider-call poll; the teardown. */
+const HOLD_1_MS = GO_LIVE_MS + ONE_RE_READ_MS + CALL_MS + STOP_MS + ONE_RE_READ_MS + TICK_MS;
+const HOLD_2_MS = CALL_MS + GO_LIVE_MS + ONE_RE_READ_MS + CALL_MS + CALL_MS + TEARDOWN_MS;
 const POOL_HOLD = {
   file: "seazn-hosted.spec.ts",
-  holdMs: LIVE_WAIT_MS + NAV_MS + 3 * ONE_RE_READ_MS + END_MS + 2 * CALL_MS,
+  holdMs: Math.max(HOLD_1_MS, HOLD_2_MS),
 } as const;
+// The declared hold is every sibling's wait (stream-slot-pool.ts): in the one mode that runs the walk, a hold past the pool's limit
+// refuses at load — `playwright test --list` included — not after a seed and a pairing on CI.
+if (process.env.SEAZN_HOSTED_LIVE === "true") {
+  const problem = poolHoldProblem(POOL_HOLD);
+  if (problem) throw new Error(problem);
+}
+/** The walk, in step order: the seed; the fixture page; the spectator's page before kick-off and its first read; the pairing and the
+ *  panel's reload; the first hold (and its wait for the pool); the replay showing and its address reaching the player (outside any
+ *  hold); the second hold (and its wait). */
+const WALK_MS =
+  SEED_MS + NAV_MS + NAV_MS + NAV_MS + PAIR_MS + NAV_MS + POOL_SLOT_WAIT_MS + HOLD_1_MS + ONE_RE_READ_MS + CALL_MS + POOL_SLOT_WAIT_MS + HOLD_2_MS;
 
 // ===========================================================================
 // Copy, from the dictionaries themselves
@@ -166,11 +201,99 @@ const addressIs = (el: Locator, uid: string) => async (): Promise<boolean> => {
   return signedAddressPattern(uid).test((await el.getAttribute("data-src", { timeout: 1_000 }).catch(() => null)) ?? "");
 };
 
+/** The match centre itself: its court card, or — while the match's document has no tabs yet (before a point is scored) — the plain
+ *  scoreboard it falls back to (match-centre.tsx). Either way the page the island sits in. */
+const matchPage = (page: Page): Locator => page.locator('[data-testid="mc-court-card"], [data-testid="mc-fallback"]').first();
+
+/** The spectator's page, watched: the island's reads of the video route counted, and a flag set if the player EVER showed its
+ *  "unavailable" note. A player that fails asks the route again early (seazn-video-poll.ts `refreshSoon`), so without this flag a
+ *  "within one poll" witness would also pass on a broken player; with it, the only way the page could change is the scheduled read. */
+interface Viewer { page: Page; reads: () => number; neverFailed: () => Promise<boolean>; sameDocument: () => Promise<boolean>; reached: (uid: string) => () => Promise<boolean> }
+async function openViewer(browser: Browser, rig: Rig): Promise<Viewer> {
+  const ctx = await browser.newContext({ storageState: EMPTY_JAR, viewport: { width: 1280, height: 900 } });
+  viewers.push(ctx);
+  const page = await ctx.newPage();
+  const stub = await stubFakePlaybackHost(page);
+  const videoRoute = `/api/v1/public/fixtures/${rig.fixtureId}/video`;
+  let reads = 0;
+  page.on("request", (r) => {
+    if (new URL(r.url()).pathname === videoRoute) reads++;
+  });
+  await page.goto(rig.publicPath);
+  await dismissCookieBanner(page);
+  await page.evaluate(() => {
+    const w = window as unknown as { __seaznSameDocument: boolean; __seaznUnavailableSeen: boolean };
+    w.__seaznSameDocument = true;
+    w.__seaznUnavailableSeen = false;
+    const check = () => {
+      if (document.querySelector('[data-testid="seazn-player-unavailable"]')) w.__seaznUnavailableSeen = true;
+    };
+    new MutationObserver(check).observe(document.body, { childList: true, subtree: true });
+    check();
+  });
+  const native = await playsHlsNatively(page);
+  const player = page.locator('[data-testid="seazn-player"] video');
+  return {
+    page,
+    reads: () => reads,
+    neverFailed: () => page.evaluate(() => (window as unknown as { __seaznUnavailableSeen?: boolean }).__seaznUnavailableSeen === false),
+    sameDocument: () => page.evaluate(() => (window as unknown as { __seaznSameDocument?: boolean }).__seaznSameDocument === true),
+    // The address reached the browser's player, not just the attribute: hls.js asks the stand-in for the manifest at once (no media:
+    // `preload="none"`), and a browser that plays HLS itself holds it as the element's own src (public-fixture.spec.ts's two paths).
+    reached: (uid) => async () =>
+      native
+        ? signedAddressPattern(uid).test((await player.getAttribute("src", { timeout: 1_000 }).catch(() => null)) ?? "")
+        : stub.requests.some((u) => signedAddressPattern(uid).test(u)),
+  };
+}
+
+/** One Go live of the Seazn destination, by tapping it, and the compositor stand-in that makes it live: the session row (one new
+ *  one, for Seazn, composed), its facts, the first beat through the vendored contract, the keep-alive, the live pill, and the
+ *  programme input the spectator's player will be handed. */
+async function goLiveSeazn(page: Page, body: Locator, rig: Rig, open: OpenSessions): Promise<{ sid: string; token: string; programme: { id: string; uid: string }; compositor: Compositor }> {
+  const before = new Set((await withDb((sql) => sql<{ id: string }[]>`select id from fixture_stream_sessions where fixture_id = ${rig.fixtureId}`)).map((r) => r.id));
+  await body.getByTestId("stream-go-live").click();
+  let sid = "";
+  await expect
+    .poll(async () => {
+      const rows = (await withDb((sql) => sql<{ id: string; mode: string; destination_kind: string | null }[]>`
+        select id, mode, destination_kind from fixture_stream_sessions where fixture_id = ${rig.fixtureId}`)).filter((r) => !before.has(r.id));
+      sid = rows[0]?.id ?? "";
+      return rows.map((r) => [r.destination_kind, r.mode]);
+    }, { message: "the tap started one new session, for Seazn, composed", timeout: CALL_MS, intervals: [1_000] })
+    .toEqual([["seazn", "composed"]]);
+  const token = await jobTokenFor(sid);
+  let intervalMs = 0;
+  await expect
+    .poll(async () => {
+      const res = await page.request.get(`/api/internal/relay/sessions/${sid}`, { headers: { Authorization: `Bearer ${token}` } });
+      if (res.status() !== 200) return `HTTP ${res.status()}`;
+      const facts = ((await res.json()) as { data: { overlayUrl?: string; heartbeatIntervalMs?: number } }).data;
+      intervalMs = facts.heartbeatIntervalMs ?? 0;
+      return facts.overlayUrl && intervalMs > 0 ? "facts" : "facts without an overlayUrl or a cadence";
+    }, { message: "the composed session's facts never served", timeout: LIVE_WAIT_MS, intervals: [1_000] })
+    .toBe("facts");
+  const first = { state: "playing", programmePhase: "live" };
+  expectContract("heartbeat", first, "the stand-in's first beat");
+  const beat = await page.request.post(`/api/internal/relay/sessions/${sid}/heartbeat`, { headers: { Authorization: `Bearer ${token}` }, data: first });
+  expect(beat.status(), "the compositor's first beat is taken").toBe(200);
+  expectContract("heartbeatReply", ((await beat.json()) as { data: unknown }).data, "the first beat's reply");
+  const c = compositor(rig.org, sid, token);
+  open.compositors.push(c);
+  c.keepAlive(intervalMs);
+  await expect(body.getByTestId("stream-state-pill"), "the organiser's panel reads live").toHaveText(ui("stream.phone.state.live"), { timeout: LIVE_WAIT_MS });
+  const [programme] = await withDb((sql) => sql<{ id: string; uid: string }[]>`
+    select id, ingest_input_id as uid from fixture_stream_inputs where session_id = ${sid} and role = 'programme' and ingest_input_id is not null`);
+  expect(programme, "premise: the live composed session has its programme input").toBeTruthy();
+  return { sid, token, programme: programme!, compositor: c };
+}
+
 // ===========================================================================
 // Teardown: nothing this file opened outlives its test
 // ===========================================================================
+interface OpenSessions { org: StandInOrg; fixtureId: string; compositors: Compositor[] }
 const rigs: StandInOrg[] = [];
-const sessionsThisTest: { org: StandInOrg; fixtureId: string; compositor: Compositor | null }[] = [];
+const sessionsThisTest: OpenSessions[] = [];
 const viewers: BrowserContext[] = [];
 
 test.afterEach(async () => {
@@ -178,7 +301,7 @@ test.afterEach(async () => {
     for (const v of viewers.splice(0)) await v.close().catch(() => {});
     await disposeFakePhones();
     for (const s of sessionsThisTest.splice(0)) {
-      await s.compositor?.stop().catch(() => {});
+      for (const c of s.compositors) await c.stop().catch(() => {});
       const open = await withDb((sql) => sql<{ id: string }[]>`
         select id from fixture_stream_sessions where fixture_id = ${s.fixtureId} and state not in ('completed', 'failed')`);
       for (const { id } of open) {
@@ -203,18 +326,19 @@ test.afterEach(async () => {
 // ===========================================================================
 // The walk
 // ===========================================================================
-test("Seazn pre-selected → Go live → the spectator sees the live player → Stop: it leaves the open page within one read → the recording, once the tick locks it, plays as the interim replay in the same player → no YouTube broadcast and no addOutput call", async ({
+test("Seazn pre-selected → a spectator opens the page before kick-off → Go live reaches it → Stop: the live player leaves within one read → the tick's recording plays as the interim replay → a second Go live reaches the same page within one read → no YouTube broadcast and no addOutput call", async ({
   browser,
 }) => {
   test.skip(process.env.SEAZN_HOSTED_LIVE !== "true", "needs a server and runner with SEAZN_HOSTED_LIVE=true (e2e.yml's e2e-seazn job)");
   const cronSecret = process.env.CRON_SECRET?.trim();
   if (!cronSecret) throw new Error("CRON_SECRET is not set: export the value the server under test was started with (this walk posts the stream tick)");
   if (!process.env.AUTH_SECRET) throw new Error("AUTH_SECRET is not set: the compositor stand-in mints its job token with the server's own");
-  const NAVS = 4; // the organiser's sign-in, the fixture page, the pairing tab, the spectator's match page
-  test.setTimeout(SEED_MS + POOL_SLOT_WAIT_MS + POOL_HOLD.holdMs + NAVS * NAV_MS);
+  test.setTimeout(WALK_MS);
 
   const rig = await seedRig(browser);
   const page = rig.org.page;
+  const open: OpenSessions = { org: rig.org, fixtureId: rig.fixtureId, compositors: [] };
+  sessionsThisTest.push(open);
 
   // 1. SEAZN PRE-SELECTED: the organiser opens the match's Stream panel and Seazn is the first destination and the one picked.
   let body = await openPhoneTab(page, rig.fixturePath);
@@ -224,121 +348,118 @@ test("Seazn pre-selected → Go live → the spectator sees the live player → 
   await expect(targetPicker(body), "picked with no choice of the organiser's own").toHaveAttribute("data-value", rig.seaznId);
   await expect(targetPicker(body).getByTestId("stream-target-name")).toHaveText(ui("stream.dest.kind.seazn"));
 
-  // 2. GO LIVE, by tapping it. A composed Go live takes the whole pool first, and Go live needs a paired phone (W5).
-  await takeWholePool(POOL_HOLD, { creditsKeyWaitMs: 1 });
+  // 2. BEFORE KICK-OFF (the plan's arm 3: LIVE on, no session yet, the match resolving to Seazn): a signed-out spectator opens the public
+  //    match page at 1280. The island is mounted and reading the route, and draws nothing yet.
+  const viewer = await openViewer(browser, rig);
+  await expect.poll(viewer.reads, { message: "the island reads the video route before kick-off", timeout: NAV_MS }).toBeGreaterThanOrEqual(1);
+  const region = viewer.page.getByTestId("seazn-video");
+  const player = viewer.page.locator('[data-testid="seazn-player"] video');
+  await expect(region, "nothing to show before kick-off").toHaveCount(0);
+  await expect(matchPage(viewer.page), "the match page itself is there").toBeVisible();
+  await expectNoHorizontalScroll(viewer.page);
+
+  // 3. GO LIVE, by tapping it. Go live needs a paired phone (W5); a composed Go live takes the whole pool first.
   await pairPhoneOnFixture(page, rig.fixturePath);
   body = await openPhoneTab(page, rig.fixturePath);
   await expect(targetPicker(body), "still Seazn after the reload").toHaveAttribute("data-value", rig.seaznId);
-  const live = { org: rig.org, fixtureId: rig.fixtureId, compositor: null as Compositor | null };
-  sessionsThisTest.push(live);
-  await body.getByTestId("stream-go-live").click();
-  let sid = "";
-  await expect
-    .poll(async () => {
-      const rows = await withDb((sql) => sql<{ id: string; mode: string; destination_kind: string | null }[]>`
-        select id, mode, destination_kind from fixture_stream_sessions where fixture_id = ${rig.fixtureId}`);
-      sid = rows[0]?.id ?? "";
-      return rows.map((r) => [r.destination_kind, r.mode]);
-    }, { message: "the tap started one session, for Seazn, composed", timeout: POLL_WAIT_MS, intervals: [1_000] })
-    .toEqual([["seazn", "composed"]]);
+  const pool = await takeWholePool(POOL_HOLD, { creditsKeyWaitMs: CREDITS_KEY_WAIT_MS });
+  const first = await goLiveSeazn(page, body, rig, open);
 
-  // The compositor reads its session, then beats `playing` for its life.
-  const token = await jobTokenFor(sid);
-  let intervalMs = 0;
-  await expect
-    .poll(async () => {
-      const res = await page.request.get(`/api/internal/relay/sessions/${sid}`, { headers: { Authorization: `Bearer ${token}` } });
-      if (res.status() !== 200) return `HTTP ${res.status()}`;
-      const facts = ((await res.json()) as { data: { overlayUrl?: string; heartbeatIntervalMs?: number } }).data;
-      intervalMs = facts.heartbeatIntervalMs ?? 0;
-      return facts.overlayUrl && intervalMs > 0 ? "facts" : "facts without an overlayUrl or a cadence";
-    }, { message: "the composed session's facts never served", timeout: LIVE_WAIT_MS, intervals: [1_000] })
-    .toBe("facts");
-  const first = { state: "playing", programmePhase: "live" };
-  expectContract("heartbeat", first, "the stand-in's first beat");
-  const beat = await page.request.post(`/api/internal/relay/sessions/${sid}/heartbeat`, { headers: { Authorization: `Bearer ${token}` }, data: first });
-  expect(beat.status(), "the compositor's first beat is taken").toBe(200);
-  expectContract("heartbeatReply", ((await beat.json()) as { data: unknown }).data, "the first beat's reply");
-  live.compositor = compositor(rig.org, sid, token);
-  live.compositor.keepAlive(intervalMs);
-  await expect(body.getByTestId("stream-state-pill"), "the organiser's panel reads live").toHaveText(ui("stream.phone.state.live"), { timeout: LIVE_WAIT_MS });
-  const [programme] = await withDb((sql) => sql<{ id: string; uid: string }[]>`
-    select id, ingest_input_id as uid from fixture_stream_inputs where session_id = ${sid} and role = 'programme' and ingest_input_id is not null`);
-  expect(programme, "premise: the live composed session has its programme input").toBeTruthy();
-
-  // 3. THE SPECTATOR: signed out, on the public match page. The island's first read shows the live player, on the server's own
-  //    signed address for the programme input.
-  const viewerCtx = await browser.newContext({ storageState: EMPTY_JAR, viewport: { width: 1280, height: 900 } });
-  viewers.push(viewerCtx);
-  const viewer = await viewerCtx.newPage();
-  await stubFakePlaybackHost(viewer);
-  await viewer.goto(rig.publicPath);
-  await dismissCookieBanner(viewer);
-  const region = viewer.getByTestId("seazn-video");
-  const player = viewer.locator('[data-testid="seazn-player"] video');
-  await expect.poll(addressIs(player, programme!.uid), { message: "the live player holds the server's signed address for the programme input", timeout: ONE_RE_READ_MS }).toBe(true);
+  // 4. THE OPEN PAGE TURNS LIVE on its next read, without a reload: the server's own signed address for the programme input, in the
+  //    player and reaching it, on a player that has not failed.
+  await expect.poll(addressIs(player, first.programme.uid), { message: "the open page's player holds the signed address for the programme input", timeout: ONE_RE_READ_MS }).toBe(true);
   await expect(region, "the region is the LIVE one").toHaveAttribute("aria-label", pub("seaznVideo.live"));
+  await expect.poll(viewer.reached(first.programme.uid), { message: "the live address reached the browser's player", timeout: CALL_MS }).toBe(true);
   await expect(region.locator("iframe"), "a Seazn stream is never an embed").toHaveCount(0);
-  await expectNoHorizontalScroll(viewer);
-  // The page must not reload from here on: a marker on the window survives only the same document.
-  await viewer.evaluate(() => void ((window as unknown as { __seaznSameDocument: boolean }).__seaznSameDocument = true));
-  const sameDocument = () => viewer.evaluate(() => (window as unknown as { __seaznSameDocument?: boolean }).__seaznSameDocument === true);
+  expect(await viewer.neverFailed(), "the live player never failed").toBe(true);
+  expect(await viewer.sameDocument(), "no reload between kick-off and live").toBe(true);
+  await expectNoHorizontalScroll(viewer.page);
 
-  // 4. STOP, by tapping it. The compositor's keep-alive is silenced first, and its last beat (`ended`) follows the organiser's stop.
-  await live.compositor.stop();
+  // 5. STOP, by tapping it. The compositor's keep-alive is silenced first, and its last beat (`ended`) follows the organiser's stop.
+  await first.compositor.stop();
   await body.getByTestId("stream-stop").click();
   const dialog = page.getByRole("alertdialog");
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: ui("stream.phone.stop"), exact: true }).click();
-  await expect(dialog).toHaveCount(0, { timeout: POLL_WAIT_MS });
-  const last = await page.request.post(`/api/internal/relay/sessions/${sid}/heartbeat`, { headers: { Authorization: `Bearer ${token}` }, data: { state: "stopped", exitReason: "ended" } });
+  await expect(dialog).toHaveCount(0, { timeout: CALL_MS });
+  const last = await page.request.post(`/api/internal/relay/sessions/${first.sid}/heartbeat`, { headers: { Authorization: `Bearer ${first.token}` }, data: { state: "stopped", exitReason: "ended" } });
   expect([200, 410], "the compositor's last beat is taken, or the session had already ended").toContain(last.status());
   await expect
     .poll(async () => {
       await page.request.get(`/api/v1/fixtures/${rig.fixtureId}/stream-sessions/current`).catch(() => null);
-      return (await withDb((sql) => sql<{ state: string }[]>`select state from fixture_stream_sessions where id = ${sid}`))[0]?.state;
+      return (await withDb((sql) => sql<{ state: string }[]>`select state from fixture_stream_sessions where id = ${first.sid}`))[0]?.state;
     }, { message: "the stopped session completes", timeout: END_MS, intervals: [1_000] })
     .toBe("completed");
-  await expect(body.getByTestId("stream-state-pill"), "the organiser's panel reads ended").toHaveText(ui("stream.phone.state.ended"), { timeout: POLL_WAIT_MS });
+  await expect(body.getByTestId("stream-state-pill"), "the organiser's panel reads ended").toHaveText(ui("stream.phone.state.ended"), { timeout: CALL_MS });
 
-  // 5. THE OPEN PAGE LEARNS IT within one re-read (r3): the live player goes, and the match page stays, without a reload.
+  // 6. THE OPEN PAGE LEARNS IT within one re-read (r3): the live player goes, the match page stays, without a reload, and not
+  //    because the player failed (a failed player re-reads early).
   await expect(region, "the live player left the open page within one re-read").toHaveCount(0, { timeout: ONE_RE_READ_MS });
-  await expect(viewer.getByTestId("mc-court-card"), "the match page itself is still there").toBeVisible();
-  expect(await sameDocument(), "no reload between live and ended").toBe(true);
+  await expect(matchPage(viewer.page), "the match page itself is still there").toBeVisible();
+  expect(await viewer.neverFailed(), "the live player left on a scheduled read, never by failing").toBe(true);
+  expect(await viewer.sameDocument(), "no reload between live and ended").toBe(true);
 
-  // 6. THE RECORDING: Cloudflare (the fake) finishes one of the programme input, and the stream tick's Seazn pass locks it.
-  const made = await page.request.post(`/api/internal/relay/fake-ingest/${programme!.uid}`, { data: { recording: "ready" } });
+  // 7. THE RECORDING: Cloudflare (the fake) finishes one of the programme input, and the stream tick's Seazn pass locks it. The tick is
+  //    GLOBAL, so it runs only once every key is this test's — the pool since before the Go live, stream-credits' now (W22's
+  //    exclusion, capture-phone.spec.ts) — and no other org has a session open.
+  const made = await page.request.post(`/api/internal/relay/fake-ingest/${first.programme.uid}`, { data: { recording: "ready" } });
   expect(made.status(), "the fake-ingest control finished a recording (RELAY_DRIVERS=fake, ENV_NAME local or ci)").toBe(200);
   const { videoId } = ((await made.json()) as { data: { videoId: string } }).data;
   expect(videoId, "the control named the recording").toBeTruthy();
-  const tick = await page.request.post("/api/cron/stream-tick", { headers: { "x-cron-secret": cronSecret } });
-  expect(tick.status(), "the stream tick runs").toBe(200);
-  const seazn = ((await tick.json()) as { data?: { seazn?: { locked?: number } } }).data?.seazn;
-  // The counters are the whole SERVER's; this test's own witness is the locked row below.
-  expect(seazn?.locked ?? 0, "the tick's Seazn pass locked at least this recording").toBeGreaterThanOrEqual(1);
+  const creditsKey = await pool.credits();
+  try {
+    const others = await withDb((sql) => sql<{ id: string }[]>`
+      select id from fixture_stream_sessions where org_id <> ${rig.org.orgId} and state not in ('completed', 'failed')`);
+    expect(others, "the global tick can reach no other test's session").toEqual([]);
+    const tick = await page.request.post("/api/cron/stream-tick", { headers: { "x-cron-secret": cronSecret } });
+    expect(tick.status(), "the stream tick runs").toBe(200);
+    const seazn = ((await tick.json()) as { data?: { seazn?: { locked?: number } } }).data?.seazn;
+    // The counters are the whole SERVER's; this test's own witness is the locked row below.
+    expect(seazn?.locked ?? 0, "the tick's Seazn pass locked at least this recording").toBeGreaterThanOrEqual(1);
+  } finally {
+    await creditsKey.release();
+  }
   const locked = await withDb((sql) => sql<{ input_row_id: string }[]>`select input_row_id from seazn_locked_videos where cf_video_id = ${videoId}`);
-  expect(locked.map((r) => r.input_row_id), "locked once, on this session's programme input").toEqual([programme!.id]);
+  expect(locked.map((r) => r.input_row_id), "locked once, on this session's programme input").toEqual([first.programme.id]);
+  // Hold 1 ends: the session is terminal and the tick has run. The replay check below needs no slot.
+  await releaseStreamSlot();
 
-  // 7. THE INTERIM REPLAY: the open page's next read plays the recording, in the same Seazn player, still without a reload.
+  // 8. THE INTERIM REPLAY: the open page's next read plays the recording, in the same Seazn player, reaching it, still without a reload.
   await expect.poll(addressIs(player, videoId), { message: "the replay player holds the server's signed address for the recording", timeout: ONE_RE_READ_MS }).toBe(true);
   await expect(region, "the region is now the REPLAY one").toHaveAttribute("aria-label", pub("overlay.replay"));
-  await expect(viewer.locator('[data-testid="seazn-player"]'), "one Seazn player on the page").toHaveCount(1);
+  await expect.poll(viewer.reached(videoId), { message: "the recording's address reached the browser's player", timeout: CALL_MS }).toBe(true);
+  await expect(viewer.page.locator('[data-testid="seazn-player"]'), "one Seazn player on the page").toHaveCount(1);
   await expect(region.locator("iframe"), "the interim replay is the Seazn player, not an embed").toHaveCount(0);
-  expect(await sameDocument(), "no reload between ended and the replay").toBe(true);
-  await expectNoHorizontalScroll(viewer);
+  expect(await viewer.neverFailed(), "the replay player has not failed").toBe(true);
+  expect(await viewer.sameDocument(), "no reload between ended and the replay").toBe(true);
+  await expectNoHorizontalScroll(viewer.page);
 
-  // 8. NOWHERE BUT SEAZN: no YouTube broadcast, and no output added to any input, for this match. The provider-call rows are
-  //    recorded (positive pair: the inputs this session made are there), so the zero is a reading, not an absent table.
+  // 9. A SECOND GO LIVE (I1): the organiser starts another; the page that is playing the first half's recording turns to the NEW
+  //    programme input's live player on its next read — not at the recording token's refresh point, ~55 minutes on.
+  await takeWholePool(POOL_HOLD, { creditsKeyWaitMs: CREDITS_KEY_WAIT_MS });
+  await body.getByTestId("stream-again").click();
+  await expect(body.getByTestId("stream-state-pill"), "back to a fresh Go live").toHaveText(ui("stream.phone.state.idle"), { timeout: CALL_MS });
+  await expect(targetPicker(body), "the match's pick is still Seazn").toHaveAttribute("data-value", rig.seaznId);
+  const second = await goLiveSeazn(page, body, rig, open);
+  expect(second.programme.uid, "premise: a new session publishes to a new programme input").not.toBe(first.programme.uid);
+  await expect.poll(addressIs(player, second.programme.uid), { message: "the open page's player holds the NEW programme input's signed address", timeout: ONE_RE_READ_MS }).toBe(true);
+  await expect(region, "the region is the LIVE one again").toHaveAttribute("aria-label", pub("seaznVideo.live"));
+  await expect.poll(viewer.reached(second.programme.uid), { message: "the second live address reached the browser's player", timeout: CALL_MS }).toBe(true);
+  expect(await viewer.neverFailed(), "the page turned live on a scheduled read, never by a failing player").toBe(true);
+  expect(await viewer.sameDocument(), "no reload between the replay and the second live").toBe(true);
+
+  // 10. NOWHERE BUT SEAZN: no YouTube broadcast, and no output added to any input, for this match. The provider-call rows are recorded
+  //     (positive pair: the inputs both sessions made are there), so the zero is a reading, not an absent table.
   const calls = async () => withDb((sql) => sql<{ operation: string; n: number }[]>`
     select c.operation, count(*)::int as n from stream_provider_calls c
       join fixture_stream_sessions s on s.id = c.session_id
      where s.fixture_id = ${rig.fixtureId} group by c.operation`);
   await expect
-    .poll(async () => (await calls()).find((r) => r.operation === "createLiveInput")?.n ?? 0, { message: "the session's provider calls are recorded", timeout: POLL_WAIT_MS })
-    .toBeGreaterThanOrEqual(1);
+    .poll(async () => (await calls()).find((r) => r.operation === "createLiveInput")?.n ?? 0, { message: "both sessions' provider calls are recorded", timeout: CALL_MS })
+    .toBeGreaterThanOrEqual(2);
   expect((await calls()).filter((r) => r.operation === "addOutput"), "no addOutput call for the match").toEqual([]);
   const [broadcasts] = await withDb((sql) => sql<{ n: number }[]>`select count(*)::int as n from youtube_broadcasts where fixture_id = ${rig.fixtureId}`);
   expect(broadcasts!.n, "no YouTube broadcast for the match").toBe(0);
   const kinds = await withDb((sql) => sql<{ destination_kind: string | null }[]>`select destination_kind from fixture_stream_sessions where fixture_id = ${rig.fixtureId}`);
-  expect(kinds.map((k) => k.destination_kind), "the match's only session was Seazn's").toEqual(["seazn"]);
+  expect(kinds.map((k) => k.destination_kind), "the match's two sessions were both Seazn's").toEqual(["seazn", "seazn"]);
 });

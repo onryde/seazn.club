@@ -4,7 +4,8 @@
 // would be served past its token's life; the island asks the video route itself, after hydration, and keeps asking:
 //   - `live`: the live player, and no picker (recordings listed beside a live source do not play);
 //   - no live, one or more `hls` parts (the interim Cloudflare recording, signed from the moment the session's recording is locked):
-//     the parts in `partNo` order, ONE player at a time, with a picker ("Part {n}") only when there are two or more;
+//     the parts in `partNo` order, ONE player at a time, with a picker ("Part {n}") only when there are two or more; the island keeps
+//     looking every 30 s, so a second Go live (after half-time, or a failed run) turns the page to the new live player without a reload;
 //   - nothing to show (not yet live, ended with no recording signed yet): nothing renders, and the island keeps looking, so a page
 //     opened before kick-off turns to the live player without a reload.
 // `embed` parts are the replay host's own player (Task 25) and have no rendering here yet.

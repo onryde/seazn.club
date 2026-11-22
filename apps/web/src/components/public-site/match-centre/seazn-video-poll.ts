@@ -55,7 +55,7 @@ export function startVideoPoll({ fetchVideo, onVideo }: VideoPollHooks): VideoPo
       rebuildNext = false;
       onVideo(video, { rebuild });
       inFlight = null;
-      schedule(nextVideoFetchMs(video, new Date()));
+      schedule(nextVideoFetchMs(video));
     } catch {
       if (stopped || mine.signal.aborted) return;
       inFlight = null;
