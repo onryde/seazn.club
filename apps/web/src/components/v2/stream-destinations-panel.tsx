@@ -180,9 +180,11 @@ export function StreamDestinationsPanel({
   // The connected channels and the pasted-key destinations are told apart by what the row CARRIES, not by its kind.
   // The channel picker is the way in while it is open (`?youtube=pick`): the empty card's Connect YouTube would be a second one.
   const pickPending = canEdit && landing?.code === "pick" ? landing.pendingId : null;
-  const channels = targets.filter((t) => t.youtube !== null);
   // The Seazn row is neither a channel nor a pasted key (Task 16 review I1): it is drawn first, under no heading, so it never reads as a key.
+  // It is the one row told apart by its KIND, and it is left out of BOTH other lists, so one target is always one row (the database
+  // refuses a seazn row that names a connection, V541 org_stream_targets_one_source; the panel does not lean on that).
   const seaznRows = targets.filter((t) => t.kind === "seazn");
+  const channels = targets.filter((t) => t.youtube !== null && t.kind !== "seazn");
   const keys = targets.filter((t) => t.youtube === null && t.kind !== "seazn");
   // Connect YouTube is the primary way in and comes first; Add streaming key (a pasted key) is the secondary one (owner 2026-10-30).
   const connectButton = (testid: string) => (
