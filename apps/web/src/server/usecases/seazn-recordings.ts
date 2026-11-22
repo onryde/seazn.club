@@ -70,6 +70,14 @@ export function seaznRecordingDeleteAt(createdAt: string, nowMs: number): Date {
   return new Date(from + DELETE_RECORDING_AFTER_DAYS * 86_400_000 + MAX_DURATION_MINUTES * 60_000 + FINALISATION_GRACE_SECONDS * 1000);
 }
 
+/** V541 (the Task 14 carry): when the recording BEGAN, stored with its lock so the interim replay can order one session's
+ *  parts by it. Cloudflare's `created` on a live input's recording is its start. A creation that is not a date stores null:
+ *  the lock never fails on a timestamp, and the read orders such a part after the dated ones. */
+function recordedAtOf(createdAt: string): Date | null {
+  const t = Date.parse(createdAt);
+  return Number.isFinite(t) ? new Date(t) : null;
+}
+
 export async function lockSeaznRecordings(
   deps: Pick<SessionDeps, "drivers">,
   opts: { now: Date; budgetMs: number; orgIds?: readonly string[]; wallClock?: () => number },
@@ -133,7 +141,9 @@ export async function lockSeaznRecordings(
       try {
         const res = await ingest.requireSignedVideo(v.videoId, { deleteAt: seaznRecordingDeleteAt(v.createdAt, nowMs) });
         if (res === "set" && !known) {
-          await sql`insert into seazn_locked_videos (cf_video_id, input_row_id) values (${v.videoId}, ${input.id}) on conflict (cf_video_id) do nothing`;
+          await sql`
+            insert into seazn_locked_videos (cf_video_id, input_row_id, recorded_at)
+            values (${v.videoId}, ${input.id}, ${recordedAtOf(v.createdAt)}) on conflict (cf_video_id) do nothing`;
           out.locked++;
         } else if (res === "set") {
           out.relocked++;

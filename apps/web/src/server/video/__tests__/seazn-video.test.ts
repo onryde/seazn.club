@@ -1,7 +1,7 @@
 // Seazn-hosted video, Phase 1 Task 14 (spec G5, §5.1; recommendation 2026-11-21 G-B): a fixture's Seazn video, as the
 // player reads it. `live` is the fixture's LATEST session when it is a Seazn session in state `live`: its programme input's
 // signed HLS. `replay` (the interim, until Task 25's Bunny embed) is every recording Task 13 has LOCKED (`seazn_locked_videos`)
-// of the fixture's ENDED Seazn sessions, each its signed HLS, in recording order (session, then lock) and numbered by its place
+// of the fixture's ENDED Seazn sessions, each its signed HLS, in recording order (session, then the recording's start, then lock) and numbered by its place
 // among them all; one past Cloudflare's own delete, or one that cannot be signed, is left out (review I1). The public read answers
 // nothing for a fixture the public cannot see (public_fixtures_v plus a division past setup: `replayParts`' redaction); the
 // organiser's read is org-scoped and covers private competitions. The flags are not read (controller ruling 2026-11-20).
@@ -130,9 +130,9 @@ async function programmeOf(sid: string): Promise<{ id: string; uid: string }> {
   return row!;
 }
 /** A finished recording of `sid`'s programme input, made by the fake, as Cloudflare's listing would answer it. */
-async function finishedRecording(r: Rig, sid: string, videoId = `v-${randomUUID()}`): Promise<string> {
+async function finishedRecording(r: Rig, sid: string, videoId = `v-${randomUUID()}`, createdAt = new Date(r.clock.now)): Promise<string> {
   const prog = await programmeOf(sid);
-  r.ingest.addVideo({ videoId, inputId: prog.uid, createdAt: new Date(r.clock.now).toISOString(), inProgress: false });
+  r.ingest.addVideo({ videoId, inputId: prog.uid, createdAt: createdAt.toISOString(), inProgress: false });
   return videoId;
 }
 /** The real Seazn pass, scoped to this rig's org. */
@@ -258,22 +258,27 @@ describe.skipIf(!HAS_DB)("seaznFixtureVideo — a fixture's Seazn video for the 
     expect((await read(r, f)).replay.map((p) => signedUid(p.src))).toEqual([rec]);
   });
 
-  it("within ONE session, parts follow locked_at (no recording time is stored), numbered 1..n — not the uid order and not the order the rows were written", async () => {
+  it("within ONE session, parts follow when each recording BEGAN (recorded_at, V541), then locked_at, then the uid — numbered 1..n", async () => {
     const r = await rig();
     const f = r.fixtureIds[0];
     const sid = await live(r, f, r.seazn);
     await stopAndSettle(r, f, sid);
-    // Named so the uid order is the REVERSE of the order the recordings were locked in.
-    const early = await finishedRecording(r, sid, `v-z-${randomUUID()}`);
-    const late = await finishedRecording(r, sid, `v-a-${randomUUID()}`);
+    // The recording that began first is locked LAST, and its uid sorts last: only its start puts it first.
+    const early = await finishedRecording(r, sid, `v-z-${randomUUID()}`, new Date(r.clock.now - 30 * 60_000));
+    const late = await finishedRecording(r, sid, `v-a-${randomUUID()}`, new Date(r.clock.now - 10 * 60_000));
     expect(await lockPass(r)).toMatchObject({ locked: 2 });
-    await sql`update seazn_locked_videos set locked_at = now() - interval '2 minutes' where cf_video_id = ${early}`;
-    await sql`update seazn_locked_videos set locked_at = now() - interval '1 minute' where cf_video_id = ${late}`;
-    const parts = (await read(r, f)).replay;
-    expect(parts.map((p) => [p.partNo, signedUid(p.src)])).toEqual([[1, early], [2, late]]);
-    // Swap the times: the numbers follow.
-    await sql`update seazn_locked_videos set locked_at = now() - interval '3 minutes' where cf_video_id = ${late}`;
-    expect((await read(r, f)).replay.map((p) => [p.partNo, signedUid(p.src)])).toEqual([[1, late], [2, early]]);
+    await sql`update seazn_locked_videos set locked_at = now() - interval '1 minute' where cf_video_id = ${early}`;
+    await sql`update seazn_locked_videos set locked_at = now() - interval '2 minutes' where cf_video_id = ${late}`;
+    const order = async () => (await read(r, f)).replay.map((p) => [p.partNo, signedUid(p.src)]);
+    expect(await order(), "the recording's start decides").toEqual([[1, early], [2, late]]);
+    // One start instant for both: the lock decides — first the later-recorded one's (locked first), then, swapped, the other's.
+    await sql`update seazn_locked_videos set recorded_at = ${new Date(r.clock.now - 20 * 60_000)} where cf_video_id in ${sql([early, late])}`;
+    expect(await order(), "a tied start: the lock").toEqual([[1, late], [2, early]]);
+    await sql`update seazn_locked_videos set locked_at = now() - interval '3 minutes' where cf_video_id = ${early}`;
+    expect(await order(), "the lock times swapped: the numbers follow").toEqual([[1, early], [2, late]]);
+    // Start and lock both tied: the uid, so the order is still total.
+    await sql`update seazn_locked_videos set locked_at = ${new Date(r.clock.now - 60_000)} where cf_video_id in ${sql([early, late])}`;
+    expect(await order(), "start and lock tied: the uid").toEqual([[1, late], [2, early]]);
   });
 
   it("parts follow SESSION order first: the first session's recording is Part 1 even when it was locked after the second's, and its uid sorts last", async () => {

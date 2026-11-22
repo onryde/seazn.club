@@ -352,6 +352,26 @@ describe.skipIf(!HAS_DB)("lockSeaznRecordings — the stream tick's Seazn pass",
     expect(r.ingest.signedVideoDeleteAts.map((d) => d.getTime())).toEqual([expected]);
   });
 
+  it("V541 (Task 14 carry): the lock stores when the recording began (its listing's creation) as recorded_at — null when that is not a date — and a relock leaves it", async () => {
+    const r = await rig();
+    const sid = await live(r, r.fixtureIds[0], r.seazn);
+    const prog = await inputOf(sid, "programme");
+    const began = new Date(r.clock.now - 42 * 60 * SEC);
+    const [dated, undated] = [vid("dated"), vid("undated")];
+    r.ingest.addVideo({ videoId: dated, inputId: prog.uid, createdAt: began.toISOString(), inProgress: false, state: "inprogress" });
+    r.ingest.addVideo({ videoId: undated, inputId: prog.uid, createdAt: "not a date", inProgress: false, state: "inprogress" });
+    expect(await pass(r, [r.auth.orgId])).toEqual({ ...ZERO, locked: 2 });
+    const recordedAt = async () => Object.fromEntries((await sql<{ cf_video_id: string; recorded_at: Date | null }[]>`
+      select cf_video_id, recorded_at from seazn_locked_videos where input_row_id = ${prog.id}`).map((x) => [x.cf_video_id, x.recorded_at?.toISOString() ?? null]));
+    const stored = { [dated]: began.toISOString(), [undated]: null };
+    expect(await recordedAt()).toEqual(stored);
+    // The C7 relock a day later rewrites nothing: the start is the recording's, not the pass's.
+    const ended = await stopAndSettle(r, r.fixtureIds[0], sid);
+    r.ingest.updateVideo(dated, { inProgress: false, state: "ready", signed: false });
+    expect(await pass(r, [r.auth.orgId], { now: ended + 86_400 * SEC })).toMatchObject({ relocked: 1 });
+    expect(await recordedAt()).toEqual(stored);
+  });
+
   it("LIVE and REPLAY both off: a Seazn recording is still locked (the pass reads no flag)", async () => {
     const r = await rig();
     const sid = await live(r, r.fixtureIds[0], r.seazn);
