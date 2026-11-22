@@ -1905,6 +1905,26 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
     expect(md).toContain("Pro and Enterprise set no limit.");
   });
 
+  // Task 15 (help rewrite). `api/keys.md` splits by plan: a key needs Pro, and a key that writes needs Enterprise. The
+  // words are pinned to the two flags the key routes read (`api.access`, `api.write`), so a flag moving breaks the page.
+  it("the api/keys article's plan split matches api.access and api.write", async () => {
+    const md = readFileSync("content/help/api/keys.md", "utf8");
+    const flag = async (feature: string, plan: string): Promise<boolean | null> => {
+      const [row] = await sql<{ bool_value: boolean | null }[]>`
+        select bool_value from plan_entitlements where plan_key = ${plan} and feature_key = ${feature}`;
+      expect(row, `plan_entitlements has no ${plan}/${feature} row`).toBeDefined();
+      return row!.bool_value;
+    };
+    expect(await flag("api.access", "community"), "Community has no keys").toBe(false);
+    expect(await flag("api.access", "pro"), "Pro has keys").toBe(true);
+    expect(await flag("api.access", "enterprise"), "Enterprise has keys").toBe(true);
+    expect(md).toContain("Keys are a Pro feature.");
+    expect(await flag("api.write", "pro"), "Pro cannot write").toBe(false);
+    expect(await flag("api.write", "enterprise"), "Enterprise can write").toBe(true);
+    expect(md).toContain("On Pro, **Read** is the choice you can use.");
+    expect(md).toContain("On Enterprise, all three are open to you.");
+  });
+
   // `content/help/billing/plans.md` was the ONE help article with no test
   // reading it — its sibling `event-pass.md` (which it links to) has been
   // pinned above since T6. That gap is not hypothetical: plans.md is exactly

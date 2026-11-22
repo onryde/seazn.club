@@ -1,25 +1,46 @@
 ---
 title: API keys
-description: Read, score or manage — scoped keys for integrations, with an optional one-competition limit.
+description: Create a key for your own software, choose what it can do, limit it to one competition and revoke it when you are done.
 order: 1
+related: billing/plans, getting-started/create-your-organisation
 ---
 
-API keys let your own software talk to seazn.club — pull standings into your website, push live scores from a scoreboard system, automate entries. **A read-only key needs Pro; any key that can write — score or manage — needs Enterprise.**
+An API key lets your own software talk to Seazn Club: pull standings into your website, or push live scores from a scoreboard system. You make keys under **Settings**, then **Platform API**. Keys are a Pro feature. On Community the page reads **Platform API keys require an upgrade** and links to **Plan & Billing**.
 
-## Scopes
+![The Platform API page on a Pro plan: the key name box, the Read, Score and Manage choices with Score and Manage showing On request — talk to us, the Limit to one competition menu, and one Read key listed with its last-used date.](/help/api/api-keys-panel.webp "Settings, then Platform API, on a Pro plan with one Read key made and used")
 
-Every key has one scope; pick the smallest that does the job:
+## Who can see this page
 
-- **Read** — fetch competitions, fixtures, standings, registrations. Can't change anything. **Pro.**
-- **Score** — read, plus push live scores and start divisions. For scoreboard integrations. **Enterprise.**
-- **Manage** — the full write surface: create, edit and delete competitions, divisions, entrants and more. Treat it like a password. **Enterprise.**
+Owners and admins get the key form. A viewer who opens **Platform API** sees "Only owners and admins can manage API keys."
 
-You can also **limit a key to one competition** — hand it to a vendor and it physically can't touch anything else.
+## Create a key
 
-## Handling keys
+1. Type a name in the box, such as "Club website". The **Create key** button stays off until you do.
+2. Under **What can this key do?**, choose **Read**, **Score** or **Manage**. Pick the smallest that does the job.
+3. Once your organisation has a competition, **Limit to one competition** appears. Choose a competition there if the key should only work in it. The default is **All competitions (no limit)**.
+4. Press **Create key**.
 
-The secret is shown **once**, at creation — store it somewhere safe. Revoke any key you no longer use; revocation is instant. Each key shows its last-used time, so stale ones are easy to spot.
+| Scope | What it does |
+|---|---|
+| **Read** | Fetch competitions, fixtures, standings and registrations. Can't change anything. |
+| **Score** | Everything Read does, plus push live scores and start divisions — for scoreboard integrations. |
+| **Manage** | Full access: create competitions, generate fixtures, moderate registrations. Treat like a password. |
 
-## For your developers
+On Pro, **Read** is the choice you can use. **Score** and **Manage** are greyed out with **On request — talk to us**. On Enterprise, all three are open to you.
 
-Send them to the [developer docs](/developers) — full API reference, guides and a try-it console.
+A key limited to one competition lists as "Spring Open only". The page says "A limited key only works inside the chosen competition — hand it to a vendor without exposing the rest."
+
+## Copy the secret now
+
+A panel reads "Key “Club website” created — copy the secret now" and shows a secret that starts `sc_`. It says "This is the only time it will be shown. Store it somewhere safe." Press **Copy**, store the secret, then press **I've stored it — dismiss**. The list afterwards shows the key's name, its scope and "created … · last used never". The secret is not shown again.
+
+## Use it
+
+Send the secret in an `Authorization: Bearer sc_…` header. The panel says the same under the list when you have no keys yet.
+
+> **Example**
+> You make a **Read** key called "Club website". It lists as "created 22 Nov 2026 · last used never". You call the list of competitions with it, and the call is answered. The list now says "last used 22 Nov 2026". A call that tries to create a competition is refused: "This key is limited to 'read' — this endpoint needs the 'manage' scope. Create a key with the right scope in org settings."
+
+## Revoke a key
+
+Press **Revoke** beside the key. A box asks "Revoke this API key?" and says integrations using it stop working immediately and this cannot be undone. Press **Revoke key** to go ahead. The key moves under **Revoked keys**, and a call with its secret is refused with "Invalid API key". A revoked key cannot be turned back on: make a new one.
