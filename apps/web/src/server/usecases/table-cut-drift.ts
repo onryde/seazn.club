@@ -8,8 +8,9 @@ import "server-only";
 //   - BEFORE the start (`tableSlateStands`): today's cut as a RE-PROPOSAL would offer it - the proposal's own machinery
 //     (`sourcesToTables`, `departedLoseBestNth`, `resolveStoredProgression`: a departed entrant leaves the cut and the next eligible
 //     entrant takes her place, RB5-K1/K2, pinned by Task 9) - against the people AND the seed order the slate names: a bracket
-//     seeds by rank, so a re-ordered cut re-seeds for nothing while nothing has started. A departing entrant the slate names is a
-//     difference outright: the cascade asks BEFORE it settles her lines, when her status is not yet written.
+//     seeds by rank, so a re-ordered cut re-seeds for nothing while nothing has started. A slate DRAWN across pools (W5 B I-6) is
+//     judged on what the draw does not decide: the same people, each pool's in the same order. A departing entrant the slate names
+//     is a difference outright: the cascade asks BEFORE it settles her lines, when her status is not yet written.
 //   - AFTER the start (`getTableCutDrift`): the table as its RESULTS make it - a departed entrant keeps the place she earned
 //     (`withoutDepartureBackfill`), and she is left out of both sides, so a withdrawal is no correction (RB4-V3: her seat is a
 //     walkover, not a backfill) and only a moved RESULT is named. People alone, the Swiss reading: the same four are the same four.
@@ -41,13 +42,13 @@ export async function tableCutToday(
   return (await tableSeatsToday(tx, dependent, sourceStageId, opts)).map((q) => q.entrantId);
 }
 
-/** `tableCutToday` with each entrant's SEED: a seat a departed qualifier holds is a seed nobody else takes. */
+/** `tableCutToday` with each entrant's SEED (a seat a departed qualifier holds is a seed nobody else takes) and source POOL. */
 async function tableSeatsToday(
   tx: Tx,
   dependent: BracketDependent,
   sourceStageId: string,
   opts: { asResultsMake?: boolean; alsoDeparted?: string } = {},
-): Promise<{ seed: number; entrantId: string }[]> {
+): Promise<{ seed: number; entrantId: string; pool?: string }[]> {
   const asResultsMake = opts.asResultsMake === true;
   const also = new Set(opts.alsoDeparted === undefined ? [] : [opts.alsoDeparted]);
   const { shapes, tables, resolved } = await sourcesToTables(tx, dependent, dependent.progression.sources, {
@@ -61,7 +62,24 @@ async function tableSeatsToday(
   return [...today.qualifiers]
     .filter((q) => resolved[q.sourceIndex]?.id === sourceStageId)
     .sort((a, b) => a.seed - b.seed)
-    .map((q) => ({ seed: q.seed, entrantId: q.entrantId }));
+    .map((q) => ({ seed: q.seed, entrantId: q.entrantId, ...(q.pool !== undefined ? { pool: q.pool } : {}) }));
+}
+
+/** W5 B final review I-6: does a DRAWN slate (in seat order) name the cut `today` names (in fold order)? The same people, and each
+ *  pool's people in the same order - the places the cut was made of. Who sits where ACROSS the pools is the draw's: it shuffles the
+ *  entrants level across pools with the stored seed and moves later tiers apart, so a correction that changes only who is level
+ *  across the pools (or the void-then-re-enter of a level winner's result, judged at every event) moves no place. Each entrant's
+ *  pool is read from today's cut; someone the slate names that today's does not is a difference outright. */
+function samePoolOrders(today: readonly { entrantId: string; pool?: string }[], slate: readonly { entrantId: string }[]): boolean {
+  const poolOf = new Map(today.map((q) => [q.entrantId, q.pool ?? ""] as const));
+  if (today.length !== slate.length || slate.some((q) => !poolOf.has(q.entrantId))) return false;
+  const byPool = (ids: readonly string[]) => {
+    const out = new Map<string, string[]>();
+    for (const id of ids) out.set(poolOf.get(id)!, [...(out.get(poolOf.get(id)!) ?? []), id]);
+    return out;
+  };
+  const was = byPool(slate.map((q) => q.entrantId));
+  return [...byPool(today.map((q) => q.entrantId))].every(([pool, ids]) => (was.get(pool) ?? []).join() === ids.join());
 }
 
 /**
@@ -76,7 +94,7 @@ async function tableSeatsToday(
 export async function tableSlateStands(
   tx: Tx,
   dependent: BracketDependent,
-  slate: Slate,
+  slate: Slate & { crossPoolDraw?: unknown },
   sourceStageId: string,
   departing?: string,
 ): Promise<boolean> {
@@ -100,6 +118,10 @@ export async function tableSlateStands(
     const slateSeats = slate.qualifiers
       .filter((q) => q.source.stageId === sourceStageId && !out.has(q.entrantId))
       .sort((a, b) => a.rank - b.rank);
+    // W5 B final review I-6: a slate drawn across pools (`crossPoolDraw`) holds the DRAWN seeds (`drawAcrossPools` re-numbers them),
+    // and today's cut is the undrawn fold, so seat for seat any draw that is not the identity "moved" - every 3-pool knockout, where
+    // the fold's seed 3 v 6 is C1 v C2. Judged instead on the places it was drawn from (`samePoolOrders`).
+    if (slate.crossPoolDraw !== undefined) return samePoolOrders(todaySeats, slateSeats);
     return todaySeats.length === slateSeats.length && todaySeats.every((q, i) => q.seed === slateSeats[i]!.rank && q.entrantId === slateSeats[i]!.entrantId);
   } catch (err) {
     if (err instanceof HttpError && err.code === "SEEDING_SOURCE_INCOMPLETE") return true;
