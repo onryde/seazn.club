@@ -49,7 +49,7 @@
 //
 // SCOPE is `content/help/scoring/` and `content/help/sports/` only, deliberately. Elsewhere in the tree a
 // duration beside the word "undo" is legitimate and unrelated — e.g.
-// `players/duplicates.md` says a merge undo "works as well next month as it
+// `players/undo-a-merge.md` says a merge undo "works as well next month as it
 // does thirty seconds later", which is a claim about there being NO time
 // limit. Widening this scan would red that true sentence.
 //

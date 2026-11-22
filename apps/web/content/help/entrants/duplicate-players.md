@@ -2,12 +2,12 @@
 title: Merging duplicate players
 description: Merge two directory entries for the same person into one record, and undo it if you got it wrong.
 order: 3
-related: players/duplicates, entrants/kinds, entrants/team-badges-and-bulk-enrolment
+related: players/find-duplicates, players/merge-players, players/undo-a-merge, entrants/kinds, entrants/team-badges-and-bulk-enrolment
 ---
 
 The same person often ends up in the directory twice: typed in by hand one season, imported from a spreadsheet the next. A merge folds the two records into one.
 
-You rarely need to hunt for pairs yourself. **Directory → Players** has a **Possible duplicates** panel that finds them. [Reviewing possible duplicates](/help/players/duplicates) explains what it suggests. This page covers the pair you spotted yourself.
+You rarely need to hunt for pairs yourself. **Directory → Players** has a **Possible duplicates** panel that finds them. [Find possible duplicate players](/help/players/find-duplicates) explains what it suggests. This page covers the pair you spotted yourself.
 
 ## Merge a pair by hand
 

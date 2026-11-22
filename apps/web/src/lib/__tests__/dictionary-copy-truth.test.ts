@@ -3606,12 +3606,16 @@ describe("the duplicate-merge tip (#404)", () => {
   // The registry in `@/config/tips` is the source the dictionaries are written
   // from; leaving it stale is how the lie comes back on the next translation
   // pass.
-  it("is fixed at the source registry too, and points at the article that documents undo", () => {
+  it("is fixed at the source registry too, and points at the article that documents the merge and links to the undo article", () => {
     expect(retiredClaimFaults(
       [{ locale: "en", key: "TIPS.persons.merge.body", value: TIPS["persons.merge"].body }],
       RETIRED_MERGE_CLAIMS,
     )).toEqual([]);
-    expect(TIPS["persons.merge"].helpSlug).toBe("players/duplicates");
+    expect(TIPS["persons.merge"].helpSlug).toBe("players/merge-players");
+    // The merge article is where the tip sends the reader; undo is documented one link on, so the link must exist.
+    const mergeArticle = readFileSync(`content/help/${TIPS["persons.merge"].helpSlug}.md`, "utf8");
+    expect(mergeArticle).toContain("/help/players/undo-a-merge");
+    expect(readFileSync("content/help/players/undo-a-merge.md", "utf8")).toContain("**Undo**");
   });
 });
 
