@@ -184,7 +184,7 @@ export async function publicQualificationStandingsSuite(): Promise<void> {
       },
     ]),
   );
-  const doneLeague = done[0]!.id;
+  const doneLeague = done[0].id;
   await v1(free, `/api/v1/divisions/${doneDiv.id}/entrants`, "POST", field("Done"));
   const doneGen = v1data<{ fixtures: Fx[] }>(await v1(free, `/api/v1/stages/${doneLeague}/generate`, "POST"));
   await v1(free, `/api/v1/divisions/${doneDiv.id}/start`, "POST");
