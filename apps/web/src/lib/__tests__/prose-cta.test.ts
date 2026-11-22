@@ -179,9 +179,20 @@ describe("one authority: every public surface draws organiser prose through rend
     expect(builders).toEqual(["lib/prose.ts", "server/help-content.ts"]);
   });
 
-  it("the help centre's renderer draws help articles only — news posts go through renderProse like every organiser box", () => {
+  it("the help centre's renderer draws Seazn's own committed articles only (help, and the blog's posts) — news posts go through renderProse like every organiser box", () => {
     const helpUsers = files.filter(([, text]) => /\brenderHelp(?:Markdown|Article|ArticleHtml)\b/.test(text)).map(([p]) => p).sort();
-    expect(helpUsers).toEqual(["app/help/[...slug]/page.tsx", "server/help-content.ts"]);
+    // The blog renders its post bodies through the help pipeline by design (blog P2 design, "Body: Markdown through P1's
+    // pipeline"). A post is Markdown committed under content/blog, as first-party as content/help: no organiser types
+    // one. Held below, not assumed: the blog renderer's one caller hands it a post read from that tree by slug.
+    expect(helpUsers).toEqual(["app/help/[...slug]/page.tsx", "server/blog-render.ts", "server/help-content.ts"]);
+    const blogCallers = files.filter(([, text]) => /\brenderBlogPost\(/.test(text)).map(([p]) => p).sort();
+    expect(blogCallers, "the blog renderer is called by the blog post page alone").toEqual(["app/blog/[slug]/page.tsx", "server/blog-render.ts"]);
+    const blogPage = files.find(([p]) => p === "app/blog/[slug]/page.tsx")!;
+    expect(blogPage[1], "the blog post page renders a post the committed tree holds").toMatch(
+      /export default async function BlogPostPage\b[\s\S]*?\bconst post = blogPost\(slug\);[\s\S]*?\brenderBlogPost\(post\)/,
+    );
+    const blogContent = files.find(([p]) => p === "server/blog-content.ts");
+    expect(blogContent?.[1], "the posts are read from content/blog").toMatch(/BLOG_ROOT = join\(process\.cwd\(\), "content", "blog"\)/);
     const news = files.find(([p]) => p === "app/(public)/live/[orgSlug]/news/[postSlug]/page.tsx");
     expect(news, "the news post page exists where this test looks").toBeDefined();
     expect(news![1]).toMatch(/\brenderProse\(post\.bodyMd/);

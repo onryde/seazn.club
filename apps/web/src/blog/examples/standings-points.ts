@@ -1,8 +1,9 @@
 // Post #1, "How do standings points work in each sport?". For every sport in the registry, under the variant a NEW
 // division of that sport starts on (starting-variant.ts: the builder's own pick), real matches are played through the
-// engine's own event stream (the testkit's seeded walk, refolded the way the app folds it) and paid by the same rule
-// resolver the standings use (`resolveTableRules` then `payout`). So the points in the table are what a division would
-// book, not a typed number. A variant whose points differ from the starting one gets a row of its own.
+// engine's own event stream (the testkit's seeded walk, refolded by the app's own read fold, `foldFrom`) and paid by the
+// rules the standings read (the web's one table-rules loader, `tableRulesOf`, then `payout`). So the points in the table
+// are what a division would book, not a typed number. A variant whose points differ from the starting one gets a row
+// of its own.
 //
 // WHICH MATCHES, per row: Ana beats Ben (once per reachable final set score, for a set sport, because its points depend
 // on the score); Ana beats Ben after overtime or in a shoot-out, where the variant can reach them; and one match for
@@ -12,13 +13,14 @@
 // WHAT CHECKS IT. The claims below recompute every expected cell and fact from the sport module's own declarations
 // (`tablePointsRule`, `primaryTableKey`, `reachableResultKinds`, `reachableSetScores`, `reachableDecidedIn`) in code
 // that shares no formatter with `build()`, and compare the committed result to it. None reads `build()`.
-import { foldMatch } from "@seazn/engine/core";
 import type { MatchOutcome } from "@seazn/engine/core";
-import { decidedInFor, forfeitShaped, payout, pointsText, resolveTableRules, setsToWinOf, type FixtureResult } from "@seazn/engine/competition";
+import { decidedInFor, forfeitShaped, payout, pointsText, setsToWinOf, type FixtureResult } from "@seazn/engine/competition";
 import { resolvePositions } from "@seazn/engine/sport";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { buildWalk, declaredCfgs, forEachSport, lineupFromCatalog } from "@seazn/engine/testkit";
 import { sportLabel, tiebreakLabel, variantLabel } from "@/blog/labels";
+import { foldFrom } from "@/server/engine-db/fold";
+import { tableRulesOf, type LoadedTableRules } from "@/server/engine-db/table-rules";
 import { startingVariantKey } from "./starting-variant";
 import type { BlogExample, Claim, ExampleResult } from "./types";
 
@@ -66,16 +68,25 @@ function variantsOf(module: AnySportModule): { key: string; cfg: Cfg }[] {
     .map((c) => ({ key: c.name, cfg: c.cfg as Cfg }));
 }
 
-/** The rule a league table pays by, from the engine's one resolver (no stage rule, no division order, no pin). */
-function leagueRules(module: AnySportModule, cfg: Cfg) {
-  return resolveTableRules({
+/**
+ * The rules a league table pays and ranks by, read where every standings read reads them: the web's one loader
+ * (`tableRulesOf`, table-rules-single-resolver.test.ts), over the rows of a new division on this variant whose league
+ * stage has not started. So no stage rule, no division order and no pin: the loader's live layers, down to the sport's.
+ */
+function leagueRules(module: AnySportModule, cfg: Cfg): LoadedTableRules {
+  return tableRulesOf(
+    {
+      stageId: `blog-example:${module.key}`,
+      kind: "league",
+      status: "pending",
+      stageConfig: null,
+      pin: null,
+      pinnedAt: null,
+      divisionConfig: cfg,
+      divisionTiebreakers: null,
+    },
     module,
-    stageKind: "league",
-    mergedCfg: cfg,
-    stageOwn: { points: null, tiebreakers: null, crossGroup: null },
-    divisionTiebreakers: null,
-    pinned: null,
-  });
+  );
 }
 
 interface Played {
@@ -86,7 +97,8 @@ interface Played {
 
 /**
  * Plays one match to the wanted result: the first seeded walk, in seed order, whose refolded outcome `accept`
- * takes. The refold is the app's (`foldMatch`), and must agree with the walk's own last state.
+ * takes. The refold is the app's own read fold (`foldFrom`, so the outcome and the headline are the kernel's readers,
+ * outcomeOf and summaryOf, as every stored fixture's are), and it must leave the state the walk's own last step left.
  */
 function play(module: AnySportModule, cfg: Cfg, what: string, sides: [string, string], accept: (outcome: MatchOutcome, pair: FixtureResult) => boolean): Played {
   const catalog = resolvePositions(module, cfg);
@@ -95,20 +107,20 @@ function play(module: AnySportModule, cfg: Cfg, what: string, sides: [string, st
   for (let seed = 1; seed <= MAX_SEEDS; seed++) {
     const { events, states } = buildWalk(module, cfg, lineups, seed, MAX_EVENTS);
     const last = states[states.length - 1];
-    const walked = last === undefined ? null : module.outcome(last);
-    // Cheap filter first: only a decided, played match can be wanted; the refold below is the real read.
-    if (walked === null || !["win", "draw", "tie", "no_result"].includes(walked.kind)) continue;
-    const state = foldMatch(module, cfg, lineups, events);
-    const outcome = module.outcome(state);
-    if (JSON.stringify(outcome) !== JSON.stringify(walked)) {
-      throw new Error(`${module.key}: seed ${seed}: the app's fold and the walk disagree on the outcome`);
+    // An empty walk is no match (and the read fold refuses an empty ledger).
+    if (last === undefined) continue;
+    const folded = foldFrom(`blog-example:${module.key}:${seed}`, { sportKey: module.key, module, cfg, lineups, envelopes: events, stageKind: "league" });
+    if (JSON.stringify(folded.state) !== JSON.stringify(last)) {
+      throw new Error(`${module.key}: seed ${seed}: the app's fold and the walk disagree on the state`);
     }
-    if (outcome === null || forfeitShaped(outcome)) continue;
-    const delta = module.standingsDelta(outcome, cfg as never, { kind: "league" }, state);
+    const outcome = folded.outcome;
+    // Only a decided, played match can be wanted.
+    if (outcome === null || !["win", "draw", "tie", "no_result"].includes(outcome.kind) || forfeitShaped(outcome)) continue;
+    const delta = module.standingsDelta(outcome, cfg as never, { kind: "league" }, folded.state);
     const pair: FixtureResult = [delta[0], delta[1]];
     if (!accept(outcome, pair)) continue;
     const paid = payout(outcome, decidedInFor(module, outcome), pair, true, rules.points, module.awardScoreKeys, setsToWinOf(module, cfg));
-    return { outcome, paid, headline: module.summary(state).headline };
+    return { outcome, paid, headline: folded.summary.headline };
   }
   throw new Error(`${module.key}: no seed up to ${MAX_SEEDS} gives the wanted match (${what})`);
 }
@@ -240,11 +252,12 @@ function cellsOf(label: string, run: Run): (string | number)[] {
   return [label, sideCell(run.wins, "winner", run.unit), sideCell(run.wins, "loser", run.unit), nobodyCell(run.levels, run.unit), beyondCell(run.beyond, run.unit), upperFirst(run.rankedBy)];
 }
 
-/** Whether a variant's declarations differ from the starting one's in anything a cell prints (the decision to play it). */
+/** Whether a variant differs from the starting one in anything a cell prints (the decision to play it): the points the
+ *  loader says its league pays, and what the sport declares it can reach and ranks by first. */
 function declaredDifferently(module: AnySportModule, a: Cfg, b: Cfg): boolean {
   const view = (cfg: Cfg) =>
     JSON.stringify([
-      module.tablePointsRule(cfg as never, "league"),
+      leagueRules(module, cfg).points,
       [...module.reachableResultKinds(cfg as never, "league")].sort(),
       module.reachableSetScores?.(cfg as never) ?? null,
       [...module.reachableDecidedIn(cfg as never, "league")].sort(),
@@ -301,6 +314,13 @@ function build(): ExampleResult {
 }
 
 // ---- claims: every expected value below is recomputed from the sport module's own declarations ----
+//
+// The claims read the sport's points DECLARATION itself, never the loader `build()` reads (an expected value is never
+// derived from the code under test). That read is exempted by name in table-rules-single-resolver.test.ts, and so is
+// the one label every claim's `source` cites it by.
+
+/** How a claim's `source` names the declaration it recomputes from. */
+const DECLARED_POINTS = 'tablePointsRule(cfg, "league")';
 
 interface ExpectedRow {
   rowId: string;
@@ -408,13 +428,13 @@ function claimsFor(module: AnySportModule): Claim[] {
     };
   const level = isFactOf(/^(Draw|Tie|NoResult)$/);
   return [
-    mine("one row for the variant a new division starts on, and one for each other variant whose points differ", "pickVariant (the builder) and tablePointsRule(cfg, \"league\") of every variant", (r) => {
+    mine("one row for the variant a new division starts on, and one for each other variant whose points differ", `pickVariant (the builder) and ${DECLARED_POINTS} of every variant`, (r) => {
       const got = rowsOfSport(r, sport).map((x) => String(x[C.sport]));
       const want = expected.map((e) => e.label);
       return JSON.stringify(got) === JSON.stringify(want) || `rows are [${got.join("; ")}], the declarations give [${want.join("; ")}]`;
     }),
-    mine("the winner's and the loser's points are what the rule pays", "tablePointsRule(cfg, \"league\") (win, loss, bySetScore)", perRow([C.winner, C.loser], isFactOf(/^(Win|Loss)\d*$/))),
-    mine("a match nobody wins pays what the rule pays each side, or is not possible", "reachableResultKinds(cfg, \"league\") and tablePointsRule(cfg, \"league\").draw / .tie / .noResult", (r) => {
+    mine("the winner's and the loser's points are what the rule pays", `${DECLARED_POINTS} (win, loss, bySetScore)`, perRow([C.winner, C.loser], isFactOf(/^(Win|Loss)\d*$/))),
+    mine("a match nobody wins pays what the rule pays each side, or is not possible", `reachableResultKinds(cfg, "league") and ${DECLARED_POINTS}.draw / .tie / .noResult`, (r) => {
       const v = perRow([C.nobody], level)(r);
       if (v !== true) return v;
       // A level fact exists exactly where the declaration reaches one.
@@ -425,7 +445,7 @@ function claimsFor(module: AnySportModule): Claim[] {
       }
       return true;
     }),
-    mine("overtime and shoot-out pay what the rule's chain pays, or are not possible", "reachableDecidedIn(cfg, \"league\") and tablePointsRule(cfg, \"league\") (ot, so, soBonus)", perRow([C.beyond], isFactOf(/^(Win|Loss)(Ot|So)$/))),
+    mine("overtime and shoot-out pay what the rule's chain pays, or are not possible", `reachableDecidedIn(cfg, "league") and ${DECLARED_POINTS} (ot, so, soBonus)`, perRow([C.beyond], isFactOf(/^(Win|Loss)(Ot|So)$/))),
     mine("the table is sorted first by the sport's primary key", "primaryTableKey", perRow([C.sorted], isFactOf(/^RankedBy$/))),
   ];
 }

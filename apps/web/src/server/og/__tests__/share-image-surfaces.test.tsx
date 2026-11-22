@@ -200,6 +200,8 @@ const NewsOg = (await import("@/app/(public)/live/[orgSlug]/news/[postSlug]/open
 const StoryPng = (await import("@/app/(public)/live/[orgSlug]/news/[postSlug]/story.png/route")).GET;
 const GamesOg = (await import("@/app/games/opengraph-image")).default;
 const GameOg = (await import("@/app/games/[slug]/opengraph-image")).default;
+const BlogOg = (await import("@/app/blog/[slug]/opengraph-image")).default;
+const { allBlogPosts } = await import("@/server/blog-content");
 
 const slugs = {
   orgSlug: "scc",
@@ -232,6 +234,9 @@ interface Surface {
  *  - `app/games/opengraph-image.tsx` and `app/games/[slug]/opengraph-image.tsx`
  *    — Seazn Games: no org, no logo, no `<img>` at all. Static registry data
  *    drawn as divs plus GameArt's inline `<svg>` (games/_shared/game-art.tsx).
+ *  - `app/blog/[slug]/opengraph-image.tsx` — Seazn's own blog: no org, no logo,
+ *    no `<img>` at all. A committed post's title and date (content/blog) drawn
+ *    as text on the house slab, in divs and spans.
  *
  * Every OTHER derived surface gets the logo cases by default: a new share image
  * is driven through the fetcher unless someone edits this set, whose members
@@ -246,6 +251,7 @@ const NO_LOGO_SURFACES: ReadonlySet<string> = new Set([
   "app/(public)/r/[ref]/ticket.png/route.tsx",
   "app/games/opengraph-image.tsx",
   "app/games/[slug]/opengraph-image.tsx",
+  "app/blog/[slug]/opengraph-image.tsx",
 ]);
 
 /**
@@ -289,6 +295,10 @@ const DRIVERS: Record<string, Surface> = {
   // the two things most likely to make satori reach for a network asset.
   "app/games/[slug]/opengraph-image.tsx": {
     render: async () => (await GameOg({ params: Promise.resolve({ slug: "chess-quest" }) })) as Response,
+  },
+  // A real committed post, read by the blog's own loader (an empty blog reds here, on `[0]!`).
+  "app/blog/[slug]/opengraph-image.tsx": {
+    render: async () => (await BlogOg({ params: Promise.resolve({ slug: allBlogPosts()[0]!.slug }) })) as Response,
   },
 };
 
@@ -400,7 +410,7 @@ describe("every public share image draws its logo through the guarded fetcher", 
     ]);
   });
 
-  it("exempts exactly these five surfaces, by name, and each is really driven", () => {
+  it("exempts exactly these six surfaces, by name, and each is really driven", () => {
     // Pinned by NAME, not by size. A size pin stays green when one exempt file
     // is swapped for a logo surface: the swapped-in surface quietly loses its
     // three cases, and the only red is the swapped-out one's, downstream, and
@@ -408,6 +418,7 @@ describe("every public share image draws its logo through the guarded fetcher", 
     // is an edit to this list AND the set above.
     expect([...NO_LOGO_SURFACES].sort()).toEqual([
       "app/(public)/r/[ref]/ticket.png/route.tsx",
+      "app/blog/[slug]/opengraph-image.tsx",
       "app/games/[slug]/opengraph-image.tsx",
       "app/games/opengraph-image.tsx",
       "app/join/[token]/opengraph-image.tsx",

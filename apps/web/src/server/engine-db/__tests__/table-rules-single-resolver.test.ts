@@ -61,6 +61,19 @@ const EXEMPT: readonly { file: string; pattern: RegExp; text: string; reason: st
     reason:
       "the stage points EDITOR's sport layer (`sportStageRule` -> `stagePointsContext`): what a pending stage with no rule of its own and no pin opens with, for its rows, split labels and preset chips, over the loader's own `liveStageCfg` composition. The editor reads the stage's own rule and its pin first (`draftFromStored`, the section's `playing`), and nothing is ranked or paid from it",
   },
+  {
+    file: "blog/examples/standings-points.ts",
+    pattern: READS[3]!,
+    text: 'const rule = module.tablePointsRule(cfg as never, "league");',
+    reason:
+      "the blog example's CLAIMS (`expectedRows`): the cells the committed golden must hold, recomputed from the sport's own points declaration, because an expected value is never derived from the code under test - the example's `build()` reads the loader (`tableRulesOf`). Run only by blog-examples.test.ts over the golden; no stage exists, and nothing is ranked, captioned or paid from it",
+  },
+  {
+    file: "blog/examples/standings-points.ts",
+    pattern: READS[3]!,
+    text: "const DECLARED_POINTS = 'tablePointsRule(cfg, \"league\")';",
+    reason: "a string, not a call: the label the blog example's claims cite as their `source` (the declaration above), never evaluated",
+  },
 ];
 
 function sources(dir: string, out: string[] = []): string[] {
