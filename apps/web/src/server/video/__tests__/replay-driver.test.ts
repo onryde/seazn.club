@@ -77,10 +77,17 @@ describe("replayDriver", () => {
     // The adapter takes the global fetch when it is built, so the stub goes in first: no request leaves the process.
     const guid = "3f1c2a9e-0b7d-4c55-9a61-2d8e4f7b1c03";
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ guid, status: 4, length: 28, availableResolutions: "360p,720p,1080p" }), { status: 200 })));
+    // The adapter also records the call through dbRecorder, whose failed insert warns through the SAME log.warn (once per
+    // process). With no database — CI's unit job has no DATABASE_URL — that insert fails at once and its warning lands
+    // BEFORE this one; with a database it lands later or never. The recorder is the next test's subject, so it is stubbed
+    // here and this test counts the adapter's warning alone, with or without a database.
+    const record = vi.spyOn(dbRecorder, "record").mockImplementation(async () => undefined);
     const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
     setEnv({ REPLAY_DRIVER: "bunny", ...BUNNY_ENV });
     const v = await replayDriver().video(guid);
     expect([...v.heights].sort((a, b) => a - b)).toEqual([360, 720]);
+    await new Promise((done) => setImmediate(done));   // the fire-and-forget record settles before anything is counted
+    expect(record, "the stub stood where the adapter records").toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0][0]).toEqual({ videoId: guid });
     expect(String(warn.mock.calls[0][1])).toMatch(/720p/);
