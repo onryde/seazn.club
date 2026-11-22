@@ -24,6 +24,7 @@
 // published summary may use the wording again.
 import { describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
+import { ALL_PLAN_KEYS } from "@/lib/currency";
 import { buildOpenApiDocument } from "../openapi";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -108,9 +109,15 @@ describe.skipIf(!HAS_DB)(
       }
     });
 
-    // "Paid plans and the Event Pass" is the whole catalogue but Community: read from `plans`, never typed here.
+    // "Paid plans and the Event Pass" is the whole catalogue but Community, and the catalogue is the one the product declares:
+    // `ALL_PLAN_KEYS` (lib/currency.ts, every plan and pass rung), never typed here. Not the raw `plans` table: six billing tests
+    // (lib/__tests__/billing-*.test.ts) each insert a temp `plans` row and run in parallel on the same database, so a bare
+    // `select key from plans` judged one of them (`tmp_rc_plan_*`) as a paid plan that "does not grant" the feature (CI run
+    // 45051019151). Each declared key must still be a `plans` row, so a key renamed on one side reds here instead of dropping out.
     it("a 'paid plans and the Event Pass' claim means community does NOT have it and every other plan DOES", async () => {
-      const plans = (await sql<{ key: string }[]>`select key from plans`).map((p) => p.key);
+      const plans = [...ALL_PLAN_KEYS];
+      const rows = new Set((await sql<{ key: string }[]>`select key from plans where key = any(${plans})`).map((p) => p.key));
+      expect(plans.filter((k) => !rows.has(k)), "every declared plan key is a row in `plans`").toEqual([]);
       const paid = claims.filter((c) => c.plan === "Paid");
       expect(plans.length, "anti-vacuity: the catalogue has plans").toBeGreaterThan(2);
       expect(paid.length, "anti-vacuity: a claim of this shape is on the page").toBeGreaterThan(0);
