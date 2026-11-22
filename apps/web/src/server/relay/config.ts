@@ -386,6 +386,35 @@ export const SEAZN_TOKEN_FAILURE_CACHE_SECONDS = 60;
  *  failed mint. Every viewer of a uid waits on the one mint in flight, so a hung one held them all. */
 export const SEAZN_TOKEN_MINT_TIMEOUT_MS = 10_000;
 
+// ---- Seazn-hosted replays (Phase 2, Task 24): moving a recording to the replay host ---------------------------------
+/** Owner ruling 2026-11-21 (G-A): a decided fixture's recordings are moved this long after its result (`fixtures.finished_at`).
+ *  Recommendation 2026-11-21 (G-E): the same constant is when a Seazn session still live after the result is stopped, in every
+ *  mode, so the move always starts. Not tunable: the walkthroughs seed `finished_at` instead. */
+export const SEAZN_REPLAY_DELAY_MINUTES = 15;
+/** Recommendation 2026-11-21 (G-D; the owner's ruling is "1–2 h after the swap"): the Cloudflare copy is deleted no sooner than
+ *  this long after the replay host's copy passed the check (`verified_at`), so open players on the interim recording finish. */
+export const SEAZN_CF_DELETE_DELAY_MINUTES = 60;
+/** Recommendation 2026-11-21 (G-F): a fixture never decided still has its recordings moved this long after its session ended. */
+export const SEAZN_REPLAY_UNDECIDED_FALLBACK_HOURS = 6;
+/** Plan decision: a `fetching` row with no host id this old lost the fetch's answer (a crash or a timeout after the host
+ *  accepted), so it goes back to `downloading` and the fetch is sent again. */
+export const SEAZN_FETCH_STALE_MINUTES = 30;
+/** Plan decision: an `encoding` copy is polled at most this often. The host's webhook (Task 27) is the primary signal; the poll is
+ *  the backstop for one the host dropped (B6). */
+export const SEAZN_POLL_BACKSTOP_MINUTES = 15;
+/** Plan decision: a claimed row is not claimed again for this long, so a run starting after the claim commits skips it; a
+ *  crashed run's rows come back once it runs out. */
+export const SEAZN_CLAIM_LEASE_SECONDS = 120;
+/** Plan decision: the most rows one mover run claims. */
+export const SEAZN_REPLAY_CLAIM_BATCH = 10;
+/** Plan decision: the replay host's fetch of the Cloudflare download may queue for hours, so its URL's token lives this long. */
+export const SEAZN_FETCH_URL_TTL_SECONDS = 6 * 3600;
+/** Plan decision: a failure waits min(2^attempts, this) minutes before the next attempt. */
+export const SEAZN_REPLAY_BACKOFF_MAX_MINUTES = 60;
+/** Plan decision: a `failed` move is retried from `found` while its recording is younger than this — the Cloudflare copy's own
+ *  life, after which there is nothing left to fetch. */
+export const SEAZN_REPLAY_RETRY_DAYS = DELETE_RECORDING_AFTER_DAYS;
+
 // ---- Seazn-hosted replays (Phase 2, Task 21): the replay host and its settings -------------------------------------
 /** How long a replay's player URL (its embed) is valid for. Probe B8: an embed loaded 60 s before its expiry played on for
  *  129 s past it, and one loaded after its expiry was refused, so the token is checked when the page loads. A viewer who reloads

@@ -640,6 +640,25 @@ describe("bunnyConfig — the Bunny settings, from env only (Task 21)", () => {
   });
 });
 
+describe("the replay move's numbers (Task 24): each is the ruling's or the recommendation's own figure, typed here", () => {
+  it("owner ruling 2026-11-21 (G-A, G-E): 15 min after the result; recommendations 2026-11-21: the Cloudflare delete 60 min after the check, the undecided fallback 6 h", () => {
+    expect(config.SEAZN_REPLAY_DELAY_MINUTES).toBe(15);
+    expect(config.SEAZN_CF_DELETE_DELAY_MINUTES).toBe(60);
+    expect(config.SEAZN_REPLAY_UNDECIDED_FALLBACK_HOURS).toBe(6);
+  });
+  it("the plan's mover decisions: stale fetch 30 min, poll backstop 15 min, claim lease 120 s, batch 10, fetch URL 6 h, backoff cap 60 min, retry window 30 days", () => {
+    expect(config.SEAZN_FETCH_STALE_MINUTES).toBe(30);
+    expect(config.SEAZN_POLL_BACKSTOP_MINUTES).toBe(15);
+    expect(config.SEAZN_CLAIM_LEASE_SECONDS).toBe(120);
+    expect(config.SEAZN_REPLAY_CLAIM_BATCH).toBe(10);
+    expect(config.SEAZN_FETCH_URL_TTL_SECONDS).toBe(6 * 3600);
+    expect(config.SEAZN_REPLAY_BACKOFF_MAX_MINUTES).toBe(60);
+    // The retry window is the Cloudflare copy's own life: past it there is nothing left to fetch.
+    expect(config.SEAZN_REPLAY_RETRY_DAYS).toBe(30);
+    expect(config.SEAZN_REPLAY_RETRY_DAYS).toBe(config.DELETE_RECORDING_AFTER_DAYS);
+  });
+});
+
 describe("REPLAY_EMBED_TOKEN_TTL_SECONDS (Task 21)", () => {
   it("is pinned at one hour (probe B8 left the number standing)", () => {
     expect(config.REPLAY_EMBED_TOKEN_TTL_SECONDS).toBe(3600);
