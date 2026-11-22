@@ -12,6 +12,7 @@
 // WHERE IT RUNS. Only on a server and a runner that both have SEAZN_HOSTED_LIVE=true (with SEAZN_VIDEO_ORIGINS naming the server's
 // host): e2e.yml's `e2e-seazn` job. Everywhere else the flag is off, the org has no Seazn pick at all, and the case SKIPS by name — it
 // never passes vacuously. The job also sets CRON_SECRET (the stream tick) and AUTH_SECRET (the compositor stand-in's job token).
+// The Task 25 replay case at the end of the file is the exception: it reads no flag and runs in either mode (see its note).
 //
 // WHAT IS STOOD IN FOR, AND WHERE. Three providers, each only at its boundary:
 //   * the compositor: its job token and heartbeat (helpers/sponsor-relay-standin.ts's recipe: `jobTokenFor`, every body through the
@@ -462,11 +463,11 @@ test("Seazn pre-selected → a spectator opens the page before kick-off → Go l
 // itself (discovery and the copy, across a stop and a restart) is proved by Task 24's fake-clock usecase tests; this seeds its output
 // (helpers/seazn-video-seed.ts `seedPlayableReplays`: one playable row per locked recording) and drives the page. No Stop, tick or
 // grace wait in the browser. The address asserted is always the server's own (the fake replay host's signer), matched by a boolean so a
-// red never prints it; and our own route is never asked with a token. Gated as the walk is (this file runs in e2e-seazn), at 1280,
-// then the same page at 320 for the sideways-scroll and fit check.
+// red never prints it; and our own route is never asked with a token. NOT gated on LIVE, unlike the walk: a playable replay plays
+// whatever LIVE or REPLAY is (controller ruling, Task 25 brief), so this case runs wherever this file runs, LIVE on (e2e-seazn) or off,
+// and proves that ruling in a browser. At 1280, then the same page at 320 for the sideways-scroll and fit check.
 const REPLAY_SEED_MS = 60_000;
 test("Task 25: two playable replays read Part 1 and Part 2 in the replay host's frame, kept out of PostHog's recordings; picking Part 2 loads part 2's signed embed; no sideways scroll at 1280 or 320", async ({ page, baseURL }) => {
-  test.skip(process.env.SEAZN_HOSTED_LIVE !== "true", "needs a server and runner with SEAZN_HOSTED_LIVE=true (e2e.yml's e2e-seazn job)");
   test.setTimeout(REPLAY_SEED_MS + NAV_MS + ONE_RE_READ_MS + 2 * NAV_MS);
   expect(baseURL, "premise: the project names the server").toBeTruthy();
   await page.setViewportSize({ width: 1280, height: 900 });
