@@ -522,7 +522,7 @@ export async function recordGenerate(ctx: ScenarioContext, rec: Recorder, stageI
     return g.fixtures;
   } catch (e) {
     if (!(e instanceof RefusedCall)) throw e;
-    // T8-R1: the message is kept — a 5xx's cause is read from it (americano-loop.ts).
+    // T8-R1: the message is kept as the refusal's evidence. A 5xx's body is never read as a cause (americano-loop.ts, ruling 2026-11-22).
     push({ status: e.status, code: e.code, total: 0, created: 0, message: e.message });
     // W3 app-B Task 6: the Swiss loop reads the refusal's own body (its code and `canFinish`), which the observation drops.
     onRefused?.(e);

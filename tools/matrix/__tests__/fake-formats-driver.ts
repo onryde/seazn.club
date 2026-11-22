@@ -48,11 +48,14 @@ import {
 } from "../lib/driver/types.ts";
 import { X_WD_2_KINDS, isTerminal } from "../lib/observed.ts";
 import { FakeLeagueDriver, bracketWithdrawalActs, bracketWithdrawalPolicy, rulesOfConfig, type FakeFixture } from "./fake-driver.ts";
-import { departedStatusesText, entrantMembersPkeyText, ladderText, wireCodeFor } from "./product-text.ts";
+import { StubPostgresError, catchAllText, departedStatusesText, entrantMembersPkeyText, ladderText, wireCodeFor } from "./product-text.ts";
 
-/** The self-pair's 500 message, read once from V213 (product-text). */
+/** The self-pair's 500 body, read once from the product (product-text). V213's key raises a database unique violation
+ *  (the key name's text, derived from V213), and the v1 catch-all answers a database error with its scrub, never the
+ *  error's text (W5 F1, b94e171a1a) - so the body is what the catch-all's own message expression gives a database error
+ *  carrying that violation. Controller ruling 2026-11-22: the model throws what the product can say, not what it once said. */
 let selfPairText: string | undefined;
-const selfPairViolation = (): string => (selfPairText ??= entrantMembersPkeyText().violation);
+const selfPairBody = (): string => (selfPairText ??= catchAllText().bodyFor(new StubPostgresError(entrantMembersPkeyText().violation)));
 
 export interface FakeMultiStageOptions {
   /** The TARGET stage seq whose proposals flag a tie between seeds 2 and 3,
@@ -1136,8 +1139,8 @@ export class FakeAmericanoDriver extends FakeLeagueDriver {
       selfPairs += n;
     }
     // V213:9: two member rows for one entrant with the same person — the insert fails, the transaction with it.
-    // T8-R5: the violation's text is built from the key name V213 gives Postgres, never typed.
-    if (selfPairs > 0) throw new RefusedCall("POST", path, 500, wireCodeFor(500), selfPairViolation());
+    // T8-R5: the body is the v1 catch-all's scrub of that database error (selfPairBody), never the violation's text.
+    if (selfPairs > 0) throw new RefusedCall("POST", path, 500, wireCodeFor(500), selfPairBody());
     const idFor = (team: readonly [string, string]): string => {
       const sorted = [...team].sort() as [string, string];
       const found = this.#pairs.find((p) => p.members[0] === sorted[0] && p.members[1] === sorted[1]);

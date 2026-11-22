@@ -24,7 +24,7 @@ import { stagesSource } from "./stages-source.ts";
 import { SPORT_KEYS, type StagePostBody } from "../lib/catalogue.ts";
 import { RefusedCall, type FixtureRow, type GenerateOut, type StageRef } from "../lib/driver/types.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
-import { AmericanoModeMismatch, PAIR_PLAYERS_ROUTE, SELF_PAIR_CAUSE, STALL_ROUTE, TEAM_MEMBER_ROUTE, americanoPlannedRounds, americanoRoundSize, modeOf, notePairEntrantDuplicates, playMexicano } from "../lib/scenarios/americano-loop.ts";
+import { AmericanoModeMismatch, PAIR_PLAYERS_ROUTE, STALL_ROUTE, TEAM_MEMBER_ROUTE, americanoPlannedRounds, americanoRoundSize, modeOf, notePairEntrantDuplicates, playMexicano } from "../lib/scenarios/americano-loop.ts";
 import { lineupsPut, seatsEntrant } from "../lib/scenarios/assertions.ts";
 import { rosterSize } from "../lib/scenarios/rosters.ts";
 import { MINTED_PAIRS_KIND_ROUTE, Recorder, decideFixture, ensureLineups, setUpDivision, type DivisionSetup } from "../lib/scenarios/common.ts";
@@ -36,7 +36,7 @@ import { entrantKindFor, resolveSportCfg } from "../lib/sport-cfg.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { FakeLeagueDriver } from "./fake-driver.ts";
 import { FAKE_COUNTS_PAIR_ENTRANTS_AS_PLAYERS_BY_DEFAULT, FakeAmericanoDriver, WAIT_UNLESS } from "./fake-formats-driver.ts";
-import { entrantMembersPkeyFrom, entrantMembersPkeyText, wireCodeFor } from "./product-text.ts";
+import { StubPostgresError, catchAllText, entrantMembersPkeyFrom, entrantMembersPkeyText, wireCodeFor } from "./product-text.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..", "..", "..");
@@ -47,6 +47,12 @@ const FORMAT_TEMPLATES_TS = resolve(REPO, "apps/web/src/lib/format-templates.ts"
 const ENGINE_AMERICANO_JS = resolve(REPO, "tools/matrix/node_modules/@seazn/engine/dist/scheduling/americano.js");
 const ENTRANT_MEMBERS_SQL = resolve(REPO, "db/migration/v2-engine/tables/V213__entrant_members.sql");
 const HTTP_TS = resolve(REPO, "apps/web/src/server/api-v1/http.ts");
+/** The message the matrix records for a generate refused 500 INTERNAL with `body` - RefusedCall composes it itself (method, path,
+ *  status, code, body), so a body is compared through the same constructor the driver throws. */
+const refusalMessage = (body: string, stageId = "s1"): string => new RefusedCall("POST", `/api/v1/stages/${stageId}/generate`, 500, wireCodeFor(500), body).message;
+/** The body a self-pair's 500 reaches the wire with: the v1 catch-all's own message expression run over the database error
+ *  V213's key raises (product-text catchAllText) - the scrub, never the violation's text (W5 F1; ruling 2026-11-22). */
+const selfPairBody = (): string => catchAllText().bodyFor(new StubPostgresError(entrantMembersPkeyText().violation));
 /** PF-9: every case runs on the sport's builder-default variant. */
 const variantFor = offlineBuilderDefault;
 /** The catalogue's americano/mexicano body (catalogue.ts stagesForRow): its declared bound and courts. */
@@ -273,7 +279,7 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
   });
 
   it("fast-check (rule 10, m-2): playMexicano ITSELF over any per-round schedule of forfeit / void / withdraw, either sport, either person-id order, product or corrected player set — its exit and every note agree with the fake's own rows", async () => {
-    const reach = { runs: 0, round1Checks: 0, blockChecks: 0, dupSigned: 0, noDup: 0, stalledNonDecided: 0, refusedSigned: 0, drained: 0, namedPersons: 0 };
+    const reach = { runs: 0, round1Checks: 0, blockChecks: 0, dupSigned: 0, noDup: 0, stalledNonDecided: 0, refusedScrubbed: 0, drained: 0, namedPersons: 0 };
     await fc.assert(fc.asyncProperty(
       fc.constantFrom("generic", "badminton"),
       fc.boolean(),
@@ -329,11 +335,16 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
         expect(named.length, `${label}: each person named once`).toBe(new Set(named).size);
         expect([...named].sort(), `${label}: named persons = the persons seated twice`).toEqual([...seatedTwice].sort());
         reach.namedPersons += named.length;
-        // T8-R1: the refused-form signature ⟺ a 5xx carrying the self-pair's cause.
-        const last = rec.track(setup.stage.id).generates.at(-1);
-        const pk = exit === "refused_generate" && last !== undefined && last.status >= 500 && SELF_PAIR_CAUSE.test(last.message ?? "");
-        expect(rec.notes.some((n) => /^mexicano-pair-entrants-counted-as-players: round \d+ generate refused/.test(n)), `${label}: refused signature ⟺ the PK cause`).toBe(pk);
-        if (pk) reach.refusedSigned++;
+        // Ruling 2026-11-22: a refused generate is never signed from its body - no refused-form note in ANY run - and the body a
+        // refused run carries is the catch-all's scrub of the self-pair's database error (what the product can say), 500 INTERNAL.
+        expect(rec.notes.some((n) => /^mexicano-pair-entrants-counted-as-players: round \d+ generate refused/.test(n)), `${label}: no refused-form signature`).toBe(false);
+        if (exit === "refused_generate") {
+          const last = rec.track(setup.stage.id).generates.at(-1);
+          expect(last, `${label}: a refused exit records its generate`).toMatchObject({ status: 500, code: wireCodeFor(500), message: refusalMessage(selfPairBody(), setup.stage.id) });
+          const refusedRound = Math.max(0, ...rows.map((f) => f.round_no ?? 0)) + 1; // the round after the last the fake's own rows hold
+          expect(driver.selfPairsIn(refusedRound), `${label}: the refused round ${refusedRound} is the fake's own self-pair`).toBeGreaterThan(0);
+          reach.refusedScrubbed++;
+        }
         if (exit === "stalled_rounds" && nonDecided.length > 0) reach.stalledNonDecided++;
         if (exit === "drained") reach.drained++;
         return true;
@@ -345,7 +356,7 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect(reach.dupSigned, "runs with an observed round-≥2 repeat").toBeGreaterThan(0);
     expect(reach.noDup, "runs with none").toBeGreaterThan(0);
     expect(reach.stalledNonDecided, "runs stalled on a forfeit or a void").toBeGreaterThan(0);
-    expect(reach.refusedSigned, "runs refused on the self-pair").toBeGreaterThan(0);
+    expect(reach.refusedScrubbed, "runs refused on the self-pair, each unsigned with the scrubbed body").toBeGreaterThan(0);
     expect(reach.blockChecks, "runs judged against the wait").toBeGreaterThan(0);
     expect(reach.drained, "runs that played every round").toBeGreaterThan(0);
     expect(reach.namedPersons, "persons named across the runs (m-5)").toBeGreaterThan(0);
@@ -461,7 +472,7 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect([...check(checks, "I10-americano-seats-each-person-once").evidence].sort()).toEqual(i10RepeatEvidence(driver, dup).sort());
   });
 
-  it("mexicano self-pair (review 3 I-2; Step 0: the entrant_members PK answers 500): round 2 refused, signature written, full failing set pinned", async () => {
+  it("mexicano self-pair (review 3 I-2; Step 0: the entrant_members PK answers 500, scrubbed): round 2 refused, NO refused-form signature, the scrubbed body recorded, full failing set pinned", async () => {
     // Generic folds a score, so round 1's winners lead round 2's order and a
     // pair entrant meets its own member there — the self-pair. No fake option
     // forces it: it falls out of the product's points (deviation from the
@@ -471,12 +482,18 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect(driver.selfPairsIn(2)).toBeGreaterThan(0);
     expect(driver.roundsGenerated()).toEqual([1]);
     expect(driver.generates).toEqual([{ created: null, status: 500 }]);
-    // T8-R1: the refusal's message is kept, and it is the product's cause.
+    // T8-R1 (ruling 2026-11-22): the refusal's message is kept, and it is the catch-all's scrub of the database error - it names
+    // neither the key nor the violation, so nothing in it could tell this 500 from any other (the cost of the ruling).
     const g = out.observed.stages[0]!.generates;
     expect(g.length).toBe(1);
-    expect(g[0]!.message).toMatch(SELF_PAIR_CAUSE);
+    expect(g[0]!.message).toBe(refusalMessage(selfPairBody()));
+    expect(g[0]!.message).not.toContain(entrantMembersPkeyText().name);
+    expect(g[0]!.message).not.toContain(entrantMembersPkeyText().violation);
     expect(check(checks, "life-loop-bounded").evidence.some((e) => /exited refused_generate/.test(e))).toBe(true);
-    expect(out.notes.filter((n) => n.startsWith(`mexicano-pair-entrants-counted-as-players: round 2 generate refused 500 INTERNAL (${entrantMembersPkeyText().name}:`) && n.includes(`after round 1 created pair entrants ${driver.pairEntrantIds().join(", ")}`) && n.endsWith(`→ ${PAIR_PLAYERS_ROUTE.wave}`)).length).toBe(1);
+    // No signature of any form: the refusal is the only evidence, and its body cannot name the self-pair (round 2 never seated,
+    // so the seating form has nothing to read either). Pair entrants DO exist, so an absent note is not an absent case.
+    expect(driver.pairEntrantIds().length, "round 1 minted pair entrants").toBeGreaterThan(0);
+    expect(out.notes.filter((n) => n.startsWith("mexicano-pair-entrants-counted-as-players"))).toEqual([]);
     // Re-derived under FP-5 (T6-R2: every reached stage is asked to complete
     // once): round 1 is all decided, so the complete SUCCEEDS — life-stage-
     // completed passes, and I4 fails on the unnamed 500 alone. Only round 1's
@@ -487,25 +504,53 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect(failing(checks)).toEqual(["I4-nothing-ends-stuck", "I8-generate-named", "life-draw-path-exercised", "life-loop-bounded"]);
   });
 
-  it("T8-R5 (I-R1): SELF_PAIR_CAUSE is the product's — the name Postgres gives V213's unnamed entrant_members key, which the v1 catch-all carries into the 500 and the fake throws", () => {
+  it("T8-R5 (I-R1, ruling 2026-11-22): the self-pair's 500 body is the v1 catch-all's SCRUB — V213's unnamed key raises a database error, and the catch-all answers a database or socket error with a body carrying none of its text", () => {
     const pk = entrantMembersPkeyText();
     expect(pk.scanned, "migration files checked for a later name, rename or drop").toBeGreaterThan(0);
-    expect(SELF_PAIR_CAUSE.test(pk.violation), pk.violation).toBe(true);
-    // Canary: the same violation on ANOTHER table's key — a sibling `_pkey`, as
-    // a duplicate pair entrant row would raise — is NOT the cause (the regex is not over-broad).
-    for (const other of ["entrants_pkey", "em_pk"]) expect(SELF_PAIR_CAUSE.test(pk.violation.replace(pk.name, other)), other).toBe(false);
     // The member insert has no ON CONFLICT, so a duplicate (entrant, person) row raises (usecases/stages/generators.ts pairEntrantsFor).
     const pairs = sliceFunction(stagesText(), "pairEntrantsFor");
     expect(pairs).toContain("await tx`insert into entrant_members ${tx(memberRows)}`;");
     expect(pairs).not.toMatch(/on conflict/i);
-    // The v1 catch-all: an error no earlier arm claims (a database error is
-    // none of them) answers 500 INTERNAL with the error's OWN message.
-    const http = readFileSync(HTTP_TS, "utf8");
-    const at = http.indexOf("\nasync function v1Inner<T>(");
-    expect(at, "http.ts v1Inner").toBeGreaterThan(-1);
-    const inner = http.slice(at, http.indexOf("\n}\n", at) + 2);
-    expect(inner).toMatch(/\n {4}if \(err instanceof HttpError\) \{[\s\S]*?\n {4}\}\n {4}Sentry\.captureException\(err\);\n {4}const message = err instanceof Error \? err\.message : "Server error";\n[^\n]*\n {4}return errorResponse\(requestId, 500, "INTERNAL", message\);\n {2}\}\n\}$/);
+    // The v1 catch-all (product-text catchAllText reads v1Inner's message expression and isDriverError, and EXECUTES them): an
+    // error no earlier arm claims answers 500 INTERNAL, and a driver's or socket's error answers without its own text.
     expect(wireCodeFor(500)).toBe("INTERNAL");
+    const catchAll = catchAllText();
+    const driverErrors: Array<[string, Error]> = [
+      // Each arm of isDriverError ALONE: a PostgresError with no `code`, and a plain Error carrying a string `code`.
+      ["a database error (the self-pair's own violation)", new StubPostgresError(pk.violation)],
+      ["a database error, any other text", new StubPostgresError('invalid input syntax for type numeric: "x"')],
+      ["a driver/socket error carrying a string code", Object.assign(new Error("connect ECONNREFUSED 10.0.0.7:5432"), { code: "ECONNREFUSED" })],
+    ];
+    const bodies = new Set<string>();
+    for (const [what, err] of driverErrors) {
+      const body = catchAll.bodyFor(err);
+      expect(catchAll.isDriverError(err), `${what} is read as a driver error`).toBe(true);
+      expect(body, `${what}: the body is not the error's text`).not.toBe(err.message);
+      expect(body, `${what}: none of the error's text reaches the body`).not.toContain(err.message);
+      bodies.add(body);
+    }
+    expect(bodies.size, "every driver error answers with the SAME body - the scrub, nothing of the error in it").toBe(1);
+    // The self-pair's body names neither its key nor its violation (the cost of the ruling: it reads as any other 500).
+    const scrubbed = catchAll.bodyFor(driverErrors[0]![1]);
+    expect(scrubbed).not.toContain(pk.name);
+    expect(scrubbed).not.toContain("duplicate key");
+    expect(scrubbed).toBe(selfPairBody());
+    // The positive pair: an app error with no code keeps its OWN sentence, so the scrub is not "every message dropped".
+    const app = new Error("a plain app sentence");
+    expect(catchAll.isDriverError(app)).toBe(false);
+    expect(catchAll.bodyFor(app)).toBe("a plain app sentence");
+  });
+
+  it("T8-R5 (ruling 2026-11-22): catchAllText refuses an http.ts it cannot read the scrub from, by name", () => {
+    const http = readFileSync(HTTP_TS, "utf8");
+    const ok = catchAllText(http);
+    expect(ok.bodyFor(new Error("x"))).toBe("x");
+    // Each of these is a product change that would let a reader of the matrix believe the scrub still stands.
+    expect(() => catchAllText(http.replace("async function v1Inner<T>(", "async function v1Other<T>("))).toThrow("product-text: http.ts v1Inner not found");
+    expect(() => catchAllText(http.replace('return errorResponse(requestId, 500, "INTERNAL", message);', 'return errorResponse(requestId, 500, "INTERNAL", "Server error");'))).toThrow(/v1Inner's catch-all is not in the shape/);
+    expect(() => catchAllText(http.replace("function isDriverError(err: Error): boolean {\n  return ", "function isDriverError(err: Error): boolean {\n  const x = 1;\n  return "))).toThrow(/isDriverError\(err: Error\): boolean is not a one-line/);
+    // A message expression this cannot execute (a TypeScript cast beyond the code cast) is refused, never skipped.
+    expect(() => catchAllText(http.replace('err instanceof Error && !isDriverError(err) ? err.message : "Server error"', '(err as Error).message'))).toThrow(/not plain JavaScript/);
   });
 
   it("T8-R5: the key's name is derived, and refused by name when V213 names it, a later migration renames, names or drops a constraint on the table, or mentions the derived name", () => {
@@ -531,30 +576,31 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect(entrantMembersPkeyFrom(v213, [{ path: "V998__col.sql", text: "alter table entrant_members add column note text;" }]).name).toBe("entrant_members_pkey");
   });
 
-  it("T8-R1: a mexicano 5xx whose message is NOT the self-pair's cause stays unsigned — the same 500 with the product's cause is signed", async () => {
-    // After round 1, the round-2 generate answers 500 INTERNAL with a cause of
-    // its own (the points query's numeric cast, usecases/stages/, say).
-    class Other500 extends FakeAmericanoDriver {
-      override async generate(stageId = "s1"): Promise<GenerateOut> {
-        this.log("generate", stageId);
-        throw new RefusedCall("POST", `/api/v1/stages/${stageId}/generate`, 500, wireCodeFor(500), 'invalid input syntax for type numeric: "x"');
+  it("T8-R1 (ruling 2026-11-22): a mexicano 5xx is never signed from its body — not another cause's text, not the scrub, and not a body carrying the self-pair's own violation text (a body the product cannot give)", async () => {
+    // After round 1, the round-2 generate answers 500 INTERNAL. Whatever the body says, the refusal is recorded and unsigned:
+    // reading a body for the self-pair's key would sign the third case, so it is the one that kills a reintroduced read.
+    const bodies: Array<[string, string]> = [
+      ["another cause (the points query's numeric cast, usecases/stages/, say)", 'invalid input syntax for type numeric: "x"'],
+      ["the catch-all's scrub (what the product answers a database error with)", selfPairBody()],
+      ["the self-pair's own violation text, which the product's scrub never lets through", entrantMembersPkeyText().violation],
+    ];
+    let judged = 0;
+    for (const [what, body] of bodies) {
+      class Body500 extends FakeAmericanoDriver {
+        override async generate(stageId = "s1"): Promise<GenerateOut> {
+          this.log("generate", stageId);
+          throw new RefusedCall("POST", `/api/v1/stages/${stageId}/generate`, 500, wireCodeFor(500), body);
+        }
       }
+      const driver = new Body500({ mode: "mexicano" });
+      const o = await runOn(driver, "LIFECYCLE", { row: "mexicano", sport: "badminton" });
+      expect(o.out.observed.stages[0]!.exit, what).toBe("refused_generate");
+      expect(o.out.observed.stages[0]!.generates.map((g) => [g.status, g.message]), what).toEqual([[500, refusalMessage(body)]]);
+      expect(driver.pairEntrantIds().length, `${what}: pair entrants exist, so only the body could have decided`).toBeGreaterThan(0);
+      expect(o.out.notes.filter((n) => n.includes("mexicano-pair-entrants-counted-as-players")), what).toEqual([]);
+      judged++;
     }
-    const other = new Other500({ mode: "mexicano" });
-    const o = await runOn(other, "LIFECYCLE", { row: "mexicano", sport: "badminton" });
-    expect(o.out.observed.stages[0]!.exit).toBe("refused_generate");
-    expect(o.out.observed.stages[0]!.generates.map((g) => [g.status, SELF_PAIR_CAUSE.test(g.message ?? "")])).toEqual([[500, false]]);
-    expect(other.pairEntrantIds().length, "pair entrants exist, so the message is what decides").toBeGreaterThan(0);
-    expect(o.out.notes.some((n) => n.includes("mexicano-pair-entrants-counted-as-players"))).toBe(false);
-    // The differing case: the same 500, carrying the product's cause, is signed.
-    class Pk500 extends FakeAmericanoDriver {
-      override async generate(stageId = "s1"): Promise<GenerateOut> {
-        this.log("generate", stageId);
-        throw new RefusedCall("POST", `/api/v1/stages/${stageId}/generate`, 500, wireCodeFor(500), entrantMembersPkeyText().violation);
-      }
-    }
-    const pk = await runOn(new Pk500({ mode: "mexicano" }), "LIFECYCLE", { row: "mexicano", sport: "badminton" });
-    expect(pk.out.notes.filter((n) => n.startsWith("mexicano-pair-entrants-counted-as-players: round 2 generate refused 500")).length).toBe(1);
+    expect(judged).toBe(bodies.length);
   });
 
   it("a 4xx mexicano refusal carries no pair-entrant signature (it has a reason of its own)", async () => {
@@ -614,7 +660,7 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     // the product's person ids (UUIDs live), so the second leg is chance. No
     // order is assumed: both are swept, and the signature must track the
     // fake's own rows (the oracle) in each.
-    const seen = { later: 0, notLater: 0, round2: 0, cases: 0 };
+    const seen = { later: 0, notLater: 0, round2: 0, refusedRound2: 0, cases: 0 };
     for (const sport of SPORT_KEYS) for (const seedOrderedPersons of [false, true]) {
       // The product BEFORE the 2026-11-18 fixes (pairs counted as players, a withdrawal leaving the pairs playing): the
       // harness must still red it, so this is the sweep that proves the signature still fires.
@@ -625,7 +671,15 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
       expect(out.notes.some((n) => /mexicano-stalled-on-non-decided/.test(n)), label).toBe(false);
       expect(out.observed.stages[0]!.exit, label).not.toBe("stalled_rounds");
       if (driver.roundsGenerated().includes(2)) seen.round2++;
-      else expect(out.notes.some((n) => n.startsWith("mexicano-pair-entrants-counted-as-players: round 2 generate refused")), `${label}: round 2 missing only through the self-pair refusal`).toBe(true);
+      else {
+        // Round 2 missing only through the self-pair refusal: the fake's own oracle saw a self-pair planned in round 2, the loop
+        // exited refused_generate on a 500 INTERNAL carrying the catch-all's scrub (ruling 2026-11-22), and no note signs it.
+        expect(driver.selfPairsIn(2), `${label}: round 2 is the fake's own self-pair`).toBeGreaterThan(0);
+        expect(out.observed.stages[0]!.exit, label).toBe("refused_generate");
+        expect(out.observed.stages[0]!.generates.at(-1), label).toMatchObject({ status: 500, code: wireCodeFor(500), message: refusalMessage(selfPairBody()) });
+        expect(out.notes.some((n) => n.startsWith("mexicano-pair-entrants-counted-as-players: round 2 generate refused")), `${label}: no refused-form signature`).toBe(false);
+        seen.refusedRound2++;
+      }
       const later = seatedAfter(driver, 1, driver.personOfSeed(3));
       if (later) seen.later++; else seen.notLater++;
       expect(out.notes.some((n) => /^r4-withdrawn-player-kept-playing/.test(n)), label).toBe(later);
@@ -640,6 +694,8 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     }
     expect(seen.cases).toBe(SPORT_KEYS.length * 2);
     expect(seen.round2, "cases where round 2 was generated").toBeGreaterThan(0);
+    expect(seen.refusedRound2, "cases where round 2 was refused on the self-pair, scrubbed and unsigned").toBeGreaterThan(0);
+    expect(seen.round2 + seen.refusedRound2, "every case either generated round 2 or was refused on it").toBe(seen.cases);
     expect(seen.later, "both directions of the biconditional are witnessed").toBeGreaterThan(0);
     expect(seen.notLater).toBeGreaterThan(0);
   });
