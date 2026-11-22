@@ -225,7 +225,7 @@ describe.skipIf(!HAS_DB)("stream targets — the usecase", () => {
     expect(checked, "platforms checked").toBeGreaterThan(0);
     expect(checked).toBe(STREAM_PLATFORMS.length);
     // Legacy kinds are no longer CREATABLE (D6), but a stored one keeps listing until removed: seeded raw, in enum order.
-    const legacy = StreamTargetKind.options.filter((k) => k !== "seazn" && !(STREAM_PLATFORMS as readonly string[]).includes(k));   // seazn is the org's own row (V540), not a stored legacy kind
+    const legacy = StreamTargetKind.options.filter((k) => k !== "seazn" && !(STREAM_PLATFORMS as readonly string[]).includes(k));   // seazn is the org's own row (V541), not a stored legacy kind
     expect(legacy.length, "legacy kinds").toBeGreaterThan(0);
     for (const kind of legacy) await rigTarget(auth.orgId, `stored ${kind}`, kind);
     expect((await listStreamTargets(auth, auth.orgId)).map((t) => t.kind)).toEqual([...STREAM_PLATFORMS, ...legacy]);
@@ -311,7 +311,7 @@ describe.skipIf(!HAS_DB)("stream targets — the usecase", () => {
   });
 
   it("D6: the create schema refuses every kind outside STREAM_PLATFORMS and an rtmpUrl field; a stored legacy kind still LISTS", async () => {
-    const legacy = StreamTargetKind.options.filter((k) => k !== "seazn" && !(STREAM_PLATFORMS as readonly string[]).includes(k));   // seazn is the org's own row (V540), not a stored legacy kind
+    const legacy = StreamTargetKind.options.filter((k) => k !== "seazn" && !(STREAM_PLATFORMS as readonly string[]).includes(k));   // seazn is the org's own row (V541), not a stored legacy kind
     expect(legacy.length).toBeGreaterThan(0);
     for (const kind of legacy) {
       expect(CreateStreamTarget.safeParse({ kind, label: "x", streamKey: "k" }).success, kind).toBe(false);
@@ -452,7 +452,7 @@ describe.skipIf(!HAS_DB)("rename, replace key, remove (spec §5.2, D2)", () => {
   });
 
   it("I2: replace key on a LEGACY-kind row whose envelope will not open is a 422 telling the organiser to remove it (M4: never to add it again) — never a 500 — and nothing is re-sealed; every legacy kind", async () => {
-    const legacy = StreamTargetKind.options.filter((k) => k !== "seazn" && !(STREAM_PLATFORMS as readonly string[]).includes(k));   // seazn is the org's own row (V540), not a stored legacy kind
+    const legacy = StreamTargetKind.options.filter((k) => k !== "seazn" && !(STREAM_PLATFORMS as readonly string[]).includes(k));   // seazn is the org's own row (V541), not a stored legacy kind
     expect(legacy.length).toBeGreaterThan(0);
     let checked = 0;
     for (const kind of legacy) {
@@ -779,10 +779,10 @@ describe.skipIf(!HAS_DB)("/api/v1/orgs/{id}/stream-targets — the route", () =>
   });
 });
 
-// Seazn-hosted video (V540, task 10): every org holds ONE `seazn` destination row. It is listed first when SEAZN_HOSTED_LIVE is
+// Seazn-hosted video (V541, task 10): every org holds ONE `seazn` destination row. It is listed first when SEAZN_HOSTED_LIVE is
 // on, left out when off, and never renamed, re-keyed or removed. The flag is toggled through the env var the config reader
 // reads on every call (relay/config.ts seaznHostedLive: unset = off).
-describe.skipIf(!HAS_DB)("the Seazn destination in the list, rename, replace key and remove (V540, task 10)", () => {
+describe.skipIf(!HAS_DB)("the Seazn destination in the list, rename, replace key and remove (V541, task 10)", () => {
   afterEach(() => { vi.unstubAllEnvs(); });
   const seaznRow = async (orgId: string) => {
     const [r] = await sql<{ id: string; label: string; archived_at: Date | null }[]>`

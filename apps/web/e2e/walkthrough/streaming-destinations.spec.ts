@@ -933,7 +933,7 @@ test("O: a second org lists none of the first org's destinations, and cannot ren
   await openStreaming(page);
   await expectNoOwnDestinations(page); // the second org's Streaming page has none of its own
   await expect(rowOf(page, t.id)).toHaveCount(0);
-  // The Seazn rows are per org (V540): the first org's is never on the second org's page, in either mode; with LIVE on, the one shown is the second's own.
+  // The Seazn rows are per org (V541): the first org's is never on the second org's page, in either mode; with LIVE on, the one shown is the second's own.
   const seaznOf = async (orgId: string) =>
     (await withDb((sql) => sql<{ id: string }[]>`select id from org_stream_targets where org_id = ${orgId} and kind = 'seazn'`)).map((r) => r.id);
   const [firstSeazn, secondSeazn] = [await seaznOf(first.orgId), await seaznOf(second.orgId)];

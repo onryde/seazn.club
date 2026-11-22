@@ -31,7 +31,7 @@ const MARK: Record<StreamTargetKind, { bg: string; fg: string; letter: string }>
   facebook: { bg: "#1877f2", fg: "#ffffff", letter: "f" },
   kick: { bg: "#53fc18", fg: "#0b0e0f", letter: "K" },
   custom_rtmp: { bg: "#e2e8f0", fg: "#334155", letter: "•" },
-  // Seazn-hosted video (V540): the house tile. The Streaming page lists the row only while SEAZN_HOSTED_LIVE is on.
+  // Seazn-hosted video (V541): the house tile. The Streaming page lists the row only while SEAZN_HOSTED_LIVE is on.
   seazn: { bg: "#0f172a", fg: "#ffffff", letter: "S" },
 };
 

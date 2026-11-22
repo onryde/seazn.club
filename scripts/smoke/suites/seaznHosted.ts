@@ -5,7 +5,7 @@ import { BASE, newSession, check, signIn, smokeDb, tag, timedFixture, v1, v1data
 /**
  * Seazn-hosted video, Phase 1 (plan Task 19), over real HTTP on the fake relay drivers:
  *
- * 1. PRESENT AND FIRST — V540's trigger gives every organisation exactly one active `seazn` destination, made with the org,
+ * 1. PRESENT AND FIRST — V541's trigger gives every organisation exactly one active `seazn` destination, made with the org,
  *    so it is the org's OLDEST destination: still first after a Twitch destination is added (read in SQL, the one place
  *    that holds in both modes).
  * 2. THE LIST — with SEAZN_HOSTED_LIVE off (every smoke job: no workflow sets it) the Streaming list leaves the Seazn row out
@@ -48,11 +48,11 @@ export async function seaznHostedSuite(): Promise<void> {
       select id, kind, archived_at is not null as archived from org_stream_targets
        where org_id = ${orgId} order by created_at asc, id asc`;
 
-    // 1a. PRESENT: exactly one active Seazn row, made with the org (V540's trigger), before this suite adds anything.
+    // 1a. PRESENT: exactly one active Seazn row, made with the org (V541's trigger), before this suite adds anything.
     const before = await targetsOf();
     const seaznRows = before.filter((r) => r.kind === "seazn" && !r.archived);
     step(
-      `the new org has exactly one active Seazn destination (V540) (got ${seaznRows.length} of ${before.length} rows)`,
+      `the new org has exactly one active Seazn destination (V541) (got ${seaznRows.length} of ${before.length} rows)`,
       seaznRows.length === 1,
     );
     const seaznId = seaznRows[0]?.id;

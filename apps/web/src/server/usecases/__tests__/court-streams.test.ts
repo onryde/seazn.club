@@ -86,7 +86,7 @@ describe.skipIf(!HAS_DB)("court streams (desk)", () => {
     expect(await counts(day.orgId)).toEqual({ links: 0, codes: 0 });
   });
 
-  it("refuses the Seazn destination with the same YouTube-only 422, LIVE on or off, nothing written (V540)", async () => {
+  it("refuses the Seazn destination with the same YouTube-only 422, LIVE on or off, nothing written (V541)", async () => {
     const [seazn] = await sql<{ id: string }[]>`select id from org_stream_targets where org_id = ${day.orgId} and kind = 'seazn'`;
     expect(seazn, "the org has its Seazn row").toBeDefined();
     let checked = 0;

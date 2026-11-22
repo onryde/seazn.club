@@ -27,7 +27,7 @@ export interface Row {
   start_cause: Session["startCause"];   // capture QR v2 §5.3 (V430)
   warming_at: string | null;            // A8 (V430): the warming timeout's anchor
   ingest_read_failed: boolean;          // V430 (B7 re-review, the outage gap): the latest CLAIMED status read threw
-  destination_kind: string | null;      // admission's copy of the target's kind; 'seazn' (V540) is Session.destination "seazn"
+  destination_kind: string | null;      // admission's copy of the target's kind; 'seazn' (V541) is Session.destination "seazn"
 }
 /** A FUNCTION, not a module-scope fragment: building a `sql` fragment opens the pooled client, and `next build`
  *  evaluates this module (through the daily sweep's cron route) to collect route config in a process with no

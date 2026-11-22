@@ -605,7 +605,7 @@ export async function sweepStreamSessions(
       }
     }
   }
-  // Seazn Task 18: a held recording past the promise is alerted ONCE per recording, ever — the seazn_held_alerts row (V540)
+  // Seazn Task 18: a held recording past the promise is alerted ONCE per recording, ever — the seazn_held_alerts row (V541)
   // is the memory. Phase 1 has no replay table, so "no playable replay" holds for every recording (Task 23 adds the table;
   // the replay check belongs with it). After the deletes, so an alert fault can never cost the pass its retention.
   // Phase 1 review I3: so the alert is armed only with SEAZN_HOSTED_REPLAY on (Phase 2, which needs LIVE): with Phase 1 alone

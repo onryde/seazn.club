@@ -985,9 +985,9 @@ describe.skipIf(!HAS_DB)("stream settings — a row records whether the organise
   });
 });
 
-// Seazn-hosted video (V540, task 10): the fixture's default destination and the settings write know the org's `seazn` row.
+// Seazn-hosted video (V541, task 10): the fixture's default destination and the settings write know the org's `seazn` row.
 // The flag is toggled through the env var the config reader reads on every call (unset = off).
-describe.skipIf(!HAS_DB)("stream settings — the Seazn destination (V540, task 10)", () => {
+describe.skipIf(!HAS_DB)("stream settings — the Seazn destination (V541, task 10)", () => {
   afterEach(() => { vi.unstubAllEnvs(); });
   const pickOf = (r: Awaited<ReturnType<typeof rig>>) => fixtureStreamTarget(sql, { orgId: r.auth.orgId, fixtureId: r.fixtureId });
   async function withKeys() {

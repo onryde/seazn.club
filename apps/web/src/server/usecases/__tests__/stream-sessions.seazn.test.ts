@@ -1,4 +1,4 @@
-// Seazn-hosted video, Phase 1 Task 11: ADMISSION of a session whose destination is the org's `seazn` row (V540). It runs
+// Seazn-hosted video, Phase 1 Task 11: ADMISSION of a session whose destination is the org's `seazn` row (V541). It runs
 // composed whatever mode the caller named, has no external destination (no output, no broadcast, no key read), and two
 // refusals of its own: 422 seazn_unavailable (SEAZN_HOSTED_LIVE off) and 503 seazn_video_unconfigured (any relay driver with no
 // SEAZN_VIDEO_ORIGINS — Task 12 review I1: the fake signs too), both before any provider call. Real Postgres, fake relay and YouTube ports on an injected clock.
@@ -110,7 +110,7 @@ function traced(ingest: FakeIngest, runner: FakeRunner): { drivers: RelayDrivers
 }
 
 /** An org with two started fixtures, the relay and overlay entitlements, `credits` bought credits, a phone paired on each
- *  fixture, a pasted YouTube key, and its Seazn row (made by V540's trigger, read here, never inserted). */
+ *  fixture, a pasted YouTube key, and its Seazn row (made by V541's trigger, read here, never inserted). */
 async function rig(opts: { credits?: number; recorder?: ProviderCallRecorder } = {}) {
   const seeded = await seedOrg();
   const auth = { ...seeded.auth, userId: await rigUser() };
@@ -121,7 +121,7 @@ async function rig(opts: { credits?: number; recorder?: ProviderCallRecorder } =
   await grantCredits({ orgId: auth.orgId, delta: opts.credits ?? 5, createdBy: await rigUser(), note: "seazn admission", idempotencyKey: randomUUID() });
   const pasted = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "Club", streamKey: `yt-${randomUUID()}` });
   const [seazn] = await sql<{ id: string }[]>`select id from org_stream_targets where org_id = ${auth.orgId} and kind = 'seazn'`;
-  expect(seazn, "PREMISE: V540 gave the org its Seazn destination").toBeDefined();
+  expect(seazn, "PREMISE: V541 gave the org its Seazn destination").toBeDefined();
   let now = Date.now();
   const ingest = new FakeIngest({ clock: () => now, connectAfterMs: 3000, ...(opts.recorder ? { recorder: opts.recorder } : {}) });
   ingest.storage = { totalStorageMinutes: 0, totalStorageMinutesLimit: ROOMY_STORAGE_MINUTES, videoCount: 0 };
@@ -522,7 +522,7 @@ describe("Task 12: seaznAccess() and the write-once access column", () => {
     expect(checked).toBe(4);
   });
 
-  // `access` is written once, by the statement that stores the input's credentials, and never updated (V540's trigger refuses a
+  // `access` is written once, by the statement that stores the input's credentials, and never updated (V541's trigger refuses a
   // change at the database; this pins the code). Production code only: tests may seat rows however they like.
   it("no statement under src/server writes fixture_stream_inputs.access except the one that stores the input's credentials", () => {
     const SERVER = resolve(import.meta.dirname, "../..");

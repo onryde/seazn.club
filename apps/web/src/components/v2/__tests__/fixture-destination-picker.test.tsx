@@ -45,7 +45,7 @@ const key = (id: string, label: string, kind: StreamTarget["kind"] = "youtube"):
 describe("destinationRow: what one destination reads as", () => {
   it("a pasted key: the platform's own key line, for EVERY stored kind — and never a health badge (nothing is known about a key's health)", () => {
     let checked = 0;
-    // "seazn" is the org's own row (V540), not a pasted key: its reading has its own describe below (Task 16).
+    // "seazn" is the org's own row (V541), not a pasted key: its reading has its own describe below (Task 16).
     const pasted = StreamTargetKind.options.filter((k) => k !== "seazn");
     for (const kind of pasted) {
       const row = destinationRow(msg, key("k", `Dest ${kind}`, kind));

@@ -77,12 +77,12 @@ export async function seedSeaznMatch(page: Page, o: { name: string; ensurePro?: 
   return match;
 }
 
-/** A WARMING Seazn session on a fixture that already exists (the org's own Seazn destination, V540), for `goLive` to bring on air. The
+/** A WARMING Seazn session on a fixture that already exists (the org's own Seazn destination, V541), for `goLive` to bring on air. The
  *  row is the producer's output; the producer is proved in vitest (see above). */
 export async function seedSeaznSession(orgId: string, fixtureId: string): Promise<SeaznSession> {
   const sessionId = await withDb(async (sql) => {
     const [target] = await sql<{ id: string }[]>`select id from org_stream_targets where org_id = ${orgId} and kind = 'seazn'`;
-    expect(target, "premise: the org has its Seazn destination (V540)").toBeTruthy();
+    expect(target, "premise: the org has its Seazn destination (V541)").toBeTruthy();
     const [owner] = await sql<{ user_id: string }[]>`select user_id from org_members where org_id = ${orgId} and role = 'owner' limit 1`;
     expect(owner, "premise: the org has an owner").toBeTruthy();
     const [s] = await sql<{ id: string }[]>`

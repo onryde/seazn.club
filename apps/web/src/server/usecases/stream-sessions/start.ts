@@ -493,7 +493,7 @@ export async function startBroadcast(
     if (connectionId !== null && prepared !== null) {
       await readPooledKey(tx, orgId, prepared.keyId).catch((err: unknown) => { throw pooledKeyRefusal(err, fixtureId, body.targetId, connectionId); });
     } else if (!seazn) {
-      // Task 11: skipped ONLY for the Seazn destination (V540's one_source check: it holds no key and no connection, so there
+      // Task 11: skipped ONLY for the Seazn destination (V541's one_source check: it holds no key and no connection, so there
       // is nothing to open or re-check). A pasted destination is re-checked here exactly as before.
       const saved = await readTargetSecret(tx, orgId, body.targetId).catch((err: unknown) => { throw unreadableRefusal(err, fixtureId, body.targetId); });
       const destination = checkDestination(saved.url);

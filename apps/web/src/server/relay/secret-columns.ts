@@ -56,7 +56,7 @@ const TARGET_SEALED = ["url", "streamKey"] as const;
  *  beside a bare url, so it exists nowhere else: `{ passphrase, streamId }` is sealed TOGETHER into
  *  `ingest_srt_key_enc` (as `rtmp_enc` seals `{ url, streamKey }`). The RTMPS pair is bare url + sealed stream key.
  *  Seazn-hosted video (Task 12): `access` is the signing the input was CREATED with (null: unsigned), written in THIS statement
- *  and never updated after — V540's trigger refuses a change, and the scan in stream-sessions.seazn.test.ts holds that no
+ *  and never updated after — V541's trigger refuses a change, and the scan in stream-sessions.seazn.test.ts holds that no
  *  other statement writes it. A later switch of the input reads it from here, never from env. Not a secret: hosts only. */
 export async function storeInputCredentials(
   tx: Tx,

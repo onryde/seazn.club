@@ -166,12 +166,12 @@ async function cleanup(): Promise<void> {
       delete from sponsor_orders
       where org_id in (select id from organizations
                        where created_by in (select id from users where email = any(${emails})))`;
-    // seazn_held_alerts.session_id is RESTRICT (V540): a held-recording alert would block the sessions cascade.
+    // seazn_held_alerts.session_id is RESTRICT (V541): a held-recording alert would block the sessions cascade.
     await sql`
       delete from seazn_held_alerts
       where session_id in (select s.id from fixture_stream_sessions s join organizations o on o.id = s.org_id
                            where o.created_by in (select id from users where email = any(${emails})))`;
-    // seazn_locked_videos.input_row_id is RESTRICT too (V540): a recording the stream tick locked would block the inputs cascade.
+    // seazn_locked_videos.input_row_id is RESTRICT too (V541): a recording the stream tick locked would block the inputs cascade.
     await sql`
       delete from seazn_locked_videos
       where input_row_id in (select i.id from fixture_stream_inputs i

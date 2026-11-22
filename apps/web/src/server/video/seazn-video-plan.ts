@@ -5,7 +5,7 @@ import "server-only";
 // fixture that already streamed elsewhere):
 //   1. any session of the fixture with destination_kind = 'seazn' -> `seazn`, WHATEVER the LIVE flag is (controller ruling 2026-11-20:
 //      LIVE stops new Seazn streams, never playback of one that exists). Phase 1 reads `fixture_stream_sessions` alone; Task 25 adds
-//      the replay-rows arm once V541 exists.
+//      the replay-rows arm once V542 exists.
 //   2. any other session, or a fixture that is over -> `external`: a fixture that streamed elsewhere, or is decided, can never flip to
 //      Seazn because the org's default changed (the blocker: a past YouTube fixture with no saved choice would have lost its replay).
 //   3. no session and not over -> `seazn` only when LIVE is on and the fixture's resolved target (its saved choice, else the org's

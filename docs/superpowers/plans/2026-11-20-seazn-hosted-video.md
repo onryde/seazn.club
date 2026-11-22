@@ -45,7 +45,7 @@ Spec §5.7. **Owner ruling 2026-11-21, the sequence and only the sequence:** mat
 
 ## Global Constraints
 
-- **Migration numbers: V538 and V539 for Phase 0 (it ships first), then V540, V541, V542 for Phases 1–3.** V538 `youtube_auto_backoff` (Task 1), V539 `youtube_channel_created_at` (Task 3), V540 `seazn_destination` (Task 9), V541 `seazn_replays` (Task 23), V542 `seazn_delivery` (Task 29). The Seazn spec's "next is V531" and the YouTube plan's "next free V" are both resolved here: this branch already has V531–V537 (no V533). Never reuse a number. Re-check `ls db/migration/deltas | sort -V | tail -3` at each rebase and renumber if main has moved.
+- **Migration numbers: V538 and V539 for Phase 0 (it ships first), then V541, V542, V543 for Phases 1–3.** V538 `youtube_auto_backoff` (Task 1), V539 `youtube_channel_created_at` (Task 3), V541 `seazn_destination` (Task 9), V542 `seazn_replays` (Task 23), V543 `seazn_delivery` (Task 29). Renumbered 2026-11-22: main's W5 shipped `V540__w5_qualification_frozen_cut.sql` first, so the Seazn destination moved V540 → V541, the replays V541 → V542, and delivered minutes takes V543. The Seazn spec's "next is V531" and the YouTube plan's "next free V" are both resolved here: this branch already has V531–V537 (no V533). Never reuse a number. Re-check `ls db/migration/deltas | sort -V | tail -3` at each rebase and renumber if main has moved.
 - **Phase 0 has no flag.** Its source plan defines none: it changes YouTube Connect for every org and ships first, alone or as its own PR (`feat/youtube-channel-safety` off main) before Phases 1–3 rebase on it.
 - **Three server flags, all off by default**, read in `apps/web/src/server/relay/config.ts`, the one place relay numbers and settings live, and parsed the way `STREAM_SRT_ENABLED` is (`"true"`/`"false"`, anything else throws): `SEAZN_HOSTED_LIVE` (Phase 1), `SEAZN_HOSTED_REPLAY` (Phase 2, which needs LIVE), `SEAZN_HOSTED_COST` (Phase 3). With LIVE off, no reader lists, picks, resolves or admits a `seazn` row, so no new Seazn stream can start. Controller ruling (2026-11-20): a fixture that already streamed to Seazn keeps showing its Seazn live and replay whatever LIVE is. The flag gates new picks and starts, never playback of what exists.
 - **No per-org opt-in** (owner, 2026-11-20: "No need, as we will test in stage then promote to Prod"). Every org gets the Seazn destination once `SEAZN_HOSTED_LIVE` is on in that environment; staging first, then prod. No Enable card, admin route or panel prompt.
@@ -334,11 +334,11 @@ C1–C6 settled the token and access questions this task used to probe: the inpu
 - [ ] **Step 4: Run the Step 2 command again.** Expect PASS. Mutate one guard: make `seaznHostedReplay` ignore LIVE, and the LIVE-unset test fails.
 - [ ] **Step 5: Commit** `feat(stream): Seazn-hosted settings and flags`.
 
-### Task 9: Migration V540 — the Seazn destination row
+### Task 9: Migration V541 — the Seazn destination row
 
 **Files:**
 
-- Create: `db/migration/deltas/V540__seazn_destination.sql`
+- Create: `db/migration/deltas/V541__seazn_destination.sql`
 - Test: `apps/web/src/server/relay/__tests__/seazn-destination-migration.test.ts`, following `court-stream-migration.test.ts`. Extend `migration-shape.test.ts` if it enumerates the kind check.
 
 **Plan decision:** use a `kind = 'seazn'` row on `org_stream_targets`, not a flag on `fixture_stream_settings`. `fixture_stream_sessions.target_id`, `court_stream_links.target_id` (not null), the picker, `fixtureStreamTarget`'s default and the session's `destination_kind` copy (`start.ts:477`) all key on a target row, so a row keeps every reader working and a flag would fork each of them.
@@ -365,9 +365,9 @@ C1–C6 settled the token and access questions this task used to probe: the inpu
   - An organisation inserted under `set local role app_user` (the app role) commits and gets its `seazn` row. Run it once with the function as invoker to see it fail, then as definer.
   - Existing suites that read an org's raw `org_stream_targets` rows now also see its `seazn` row: `server/youtube/__tests__/connections.test.ts` (`targetRows`, ~:56), `relay/__tests__/secret-columns.test.ts` (~:147), `relay/__tests__/token-store.test.ts` (~:110), `server/youtube/__tests__/connect-routes.test.ts` (~:1334). Where a test means external destinations, filter `kind <> 'seazn'`; never weaken an assertion otherwise. Re-grep `org_stream_targets` under `__tests__` for any other raw read.
 - [ ] **Step 2: Run them and see them fail** (table shape missing). `cd apps/web && npx vitest run src/server/relay/__tests__/seazn-destination-migration.test.ts src/server/relay/__tests__/migration-shape.test.ts src/server/relay/__tests__/rls-static.test.ts --reporter=json --outputFile=$SCRATCH/t9.json`.
-- [ ] **Step 3: Write V540.** Apply it to a fresh local schema per the `seazn-local-env` skill (`db:apply` then `sync:sports`). Never apply it to a shared database.
+- [ ] **Step 3: Write V541.** Apply it to a fresh local schema per the `seazn-local-env` skill (`db:apply` then `sync:sports`). Never apply it to a shared database.
 - [ ] **Step 4: Run the Step 2 command again, plus the four existing suites named in Step 1** (`connections.test.ts`, `secret-columns.test.ts`, `token-store.test.ts`, `connect-routes.test.ts`, and any other the re-grep found). Expect PASS.
-- [ ] **Step 5: Commit** `feat(db): V540 Seazn destination row`.
+- [ ] **Step 5: Commit** `feat(db): V541 Seazn destination row`.
 
 ### Task 10: Destination reads and writes know Seazn
 
@@ -547,7 +547,7 @@ C1–C6 settled the token and access questions this task used to probe: the inpu
 **Interfaces — Produces:**
 
 - `type PublicFixtureVideo = { live: { src: string; expiresAt: string } | null; replay: { partNo: number; player: "hls" | "embed"; src: string; expiresAt: string }[] }`.
-- **Recommendation 2026-11-21 (applied unless the owner objects), G-B, interim playback:** `replay` holds the signed Cloudflare recording until a verified Bunny row exists, and Task 25 then swaps in the Bunny embed. In Phase 1 the rule reads `seazn_locked_videos` alone (V541 does not exist yet): for each locked recording of the fixture's Seazn sessions whose session is terminal, in `locked_at` order, one part: `partNo` = its position (1…n), `player: "hls"`, `src`/`expiresAt` from `signRecordingPlayback(deps, cf_video_id, now)` (Task 13). A recording not in `seazn_locked_videos` (not yet signed) is never listed. The public read keeps the same privacy as `live` (a private competition gives `replay: []`); the org read lists it. Task 25 adds the `embed` arm and the replay-rows exceptions.
+- **Recommendation 2026-11-21 (applied unless the owner objects), G-B, interim playback:** `replay` holds the signed Cloudflare recording until a verified Bunny row exists, and Task 25 then swaps in the Bunny embed. In Phase 1 the rule reads `seazn_locked_videos` alone (V542 does not exist yet): for each locked recording of the fixture's Seazn sessions whose session is terminal, in `locked_at` order, one part: `partNo` = its position (1…n), `player: "hls"`, `src`/`expiresAt` from `signRecordingPlayback(deps, cf_video_id, now)` (Task 13). A recording not in `seazn_locked_videos` (not yet signed) is never listed. The public read keeps the same privacy as `live` (a private competition gives `replay: []`); the org read lists it. Task 25 adds the `embed` arm and the replay-rows exceptions.
 - `seaznFixtureVideo(fixtureId: string, now: Date): Promise<PublicFixtureVideo>`. The fixture must be readable through `public_fixtures_v`, the same redaction `replayParts` relies on (`server/youtube/parts.ts:38`); if not, it returns `{live:null, replay:[]}`. `live` is set only when the fixture's latest session has `destination_kind = 'seazn'` and `state = 'live'`; `src` comes from `signLivePlayback` (Task 13) for its programme input uid (`readFirstInput(tx, sid, "programme")`). The LIVE flag is not read here: a Seazn session that exists keeps playing (controller ruling).
 - `seaznFixtureVideoForOrg(orgId, fixtureId, now)`: the same answer, org-scoped, for Match Day and the organiser panel. It covers private competitions (spec G5).
 - `GET /api/v1/public/fixtures/{id}/video` returns 200 `PublicFixtureVideo` with `Cache-Control: private, no-store`, so a signed URL is never cached at the edge.
@@ -573,7 +573,7 @@ C1–C6 settled the token and access questions this task used to probe: the inpu
 - Create: `apps/web/src/components/public-site/match-centre/seazn-video-schedule.ts` (pure: when to fetch next)
 - Modify: `apps/web/src/app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/page.tsx:265,472`. When `seaznVideoPlan(fixtureId)` answers `"seazn"`, the page mounts `<SeaznVideoIsland fixtureId>` in the `replay` slot instead of `<ReplayEmbed>`. Every other fixture keeps today's slot byte for byte (spec §5.1).
 - Create: `apps/web/src/server/video/seazn-video-plan.ts`: `seaznVideoPlan(fixtureId: string): Promise<"seazn" | "external">`, decided from the fixture's OWN facts, never from `fixtureStreamTarget` (`stream-codes.ts:496-509` answers `{id,label,source}` with no kind):
-  - any session of the fixture with `destination_kind = 'seazn'` → `seazn`, **whatever LIVE is** (controller ruling: LIVE off stops new Seazn streams only). Phase 1 reads `fixture_stream_sessions` alone; the replay-rows arm is added in Task 25, once V541 exists;
+  - any session of the fixture with `destination_kind = 'seazn'` → `seazn`, **whatever LIVE is** (controller ruling: LIVE off stops new Seazn streams only). Phase 1 reads `fixture_stream_sessions` alone; the replay-rows arm is added in Task 25, once V542 exists;
   - any other session, or the fixture decided → `external`;
   - no session at all and not decided → `seazn` only when LIVE is on and the fixture's resolved target row has `kind = 'seazn'` (saved, or the org's default). The island then renders nothing until the route answers live. With LIVE off this arm answers `external`.
 
@@ -706,7 +706,7 @@ Controller ruling (2026-11-20): every `destination_kind = 'seazn'` recording is 
 
 - `retentionPlan` stays pure and unchanged.
 - The sweep removes from `ownedVideos` every video whose `inputId` is the programme input of a session with `destination_kind = 'seazn'`, whatever the flags. Their deletion is the mover's (Task 24) once Bunny has a verified copy and `SEAZN_CF_DELETE_DELAY_MINUTES` (60) has passed (recommendation 2026-11-21), or Cloudflare's own at 30 days. The 3-day hold below is unchanged. Inputs that still name a held video are deferred by the existing rule (`:552-555`).
-- For each held video older than `RECORDING_RETENTION_DAYS` with no `seazn_held_alerts` row and no `playable` replay: one `captureError(new Error("relay sweep: a Seazn recording past 3 days has not reached Bunny"), { route: "relay.sweep.seazn_held", extra: { sessionId, cfVideoId } })`, then an insert into `seazn_held_alerts` (V540). That is one alert per recording, ever, with or without a replay row.
+- For each held video older than `RECORDING_RETENTION_DAYS` with no `seazn_held_alerts` row and no `playable` replay: one `captureError(new Error("relay sweep: a Seazn recording past 3 days has not reached Bunny"), { route: "relay.sweep.seazn_held", extra: { sessionId, cfVideoId } })`, then an insert into `seazn_held_alerts` (V541). That is one alert per recording, ever, with or without a replay row.
 - Held recordings count against the Cloudflare storage block. Admission and the sweep already read live usage (`storageHeadroomMinutes`), so a full block refuses new starts by the existing rule; nothing new is added for it.
 
 - [ ] **Step 1: Write the failing tests.**
@@ -846,11 +846,11 @@ export interface ReplayHost {
 - [ ] **Step 4: Run them again.** Expect PASS.
 - [ ] **Step 5: Commit** `feat(stream): Bunny Stream adapter`.
 
-### Task 23: Migration V541 — replays
+### Task 23: Migration V542 — replays
 
 **Files:**
 
-- Create: `db/migration/deltas/V541__seazn_replays.sql`
+- Create: `db/migration/deltas/V542__seazn_replays.sql`
 - Test: `apps/web/src/server/relay/__tests__/seazn-replays-migration.test.ts`
 
 **DDL:**
@@ -887,8 +887,8 @@ export interface ReplayHost {
   - A second row with the same `(fixture_id, part_no)` fails 23505.
   - A second `bunny_webhook_events` row with one `event_id` fails 23505.
   - `rls-static.test.ts` lists all three tables.
-- [ ] **Step 2: Run them, write V541 and apply it locally, then run them again.** Expect FAIL first, then PASS.
-- [ ] **Step 3: Commit** `feat(db): V541 Seazn replays`.
+- [ ] **Step 2: Run them, write V542 and apply it locally, then run them again.** Expect FAIL first, then PASS.
+- [ ] **Step 3: Commit** `feat(db): V542 Seazn replays`.
 
 ### Task 24: Move recordings to Bunny
 
@@ -916,7 +916,7 @@ export interface ReplayHost {
   - `deleted` with `bunny_cleaned_at` null → `cleanup`: `remove` the row's `bunny_video_id` if any, delete the Cloudflare copy if still there, then set `bunny_cleaned_at`. A guid that lands after the delete is removed by the mover that holds it, or by the webhook (Task 27).
   - A failure sets `attempts+1` and `next_attempt_at = now + min(2^attempts, 60) minutes`.
   - `failed` retries from `found` while `now - recorded_at < 30 days`.
-- `discoverSeaznRecordings(deps, now)`: for each programme input of a Seazn session that ended more than `FINALISATION_GRACE_SECONDS` ago and whose `replays_discovered_at` is null, calls `listInputVideos(programme)`. **Owner ruling 2026-11-21 (G-A):** the input is also eligible only when its fixture's `finished_at` (the result stamp `auto-stop.ts` reads) is at least `SEAZN_REPLAY_DELAY_MINUTES` old (15 min). **Recommendation 2026-11-21 (applied unless the owner objects), G-F, the undecided fallback:** or, for a fixture that is still not decided (`finished_at` null), when the session's end stamp (the one the `FINALISATION_GRACE_SECONDS` test reads) is at least `SEAZN_REPLAY_UNDECIDED_FALLBACK_HOURS` (6 h) old. So an abandoned or void fixture still gets its replay moved, and Task 18's 3-day alert is for failures only. Each listed video whose own `inputId` is not that programme input is skipped and counted (C6). It inserts a `found` row per remaining video (`on conflict (cf_video_id) do nothing`, `part_no` assigned as V541 says, `cf_duration_seconds` and `cf_height` from the listing's `durationSeconds` and `height`). When every one of them is finished (`inProgress === false`), it sets `replays_discovered_at`, and the input is never listed again.
+- `discoverSeaznRecordings(deps, now)`: for each programme input of a Seazn session that ended more than `FINALISATION_GRACE_SECONDS` ago and whose `replays_discovered_at` is null, calls `listInputVideos(programme)`. **Owner ruling 2026-11-21 (G-A):** the input is also eligible only when its fixture's `finished_at` (the result stamp `auto-stop.ts` reads) is at least `SEAZN_REPLAY_DELAY_MINUTES` old (15 min). **Recommendation 2026-11-21 (applied unless the owner objects), G-F, the undecided fallback:** or, for a fixture that is still not decided (`finished_at` null), when the session's end stamp (the one the `FINALISATION_GRACE_SECONDS` test reads) is at least `SEAZN_REPLAY_UNDECIDED_FALLBACK_HOURS` (6 h) old. So an abandoned or void fixture still gets its replay moved, and Task 18's 3-day alert is for failures only. Each listed video whose own `inputId` is not that programme input is skipped and counted (C6). It inserts a `found` row per remaining video (`on conflict (cf_video_id) do nothing`, `part_no` assigned as V542 says, `cf_duration_seconds` and `cf_height` from the listing's `durationSeconds` and `height`). When every one of them is finished (`inProgress === false`), it sets `replays_discovered_at`, and the input is never listed again.
 - **Recommendation 2026-11-21 (applied unless the owner objects), G-C, "clean and good":** `verifyReplayCopy(row, bunny: { state; lengthSeconds; heights }): { ok: true } | { ok: false; reason: "length" | "rendition" | "state" }`, pure, in `replay-move.ts`. It passes only when ALL hold: `bunny.state === "playable"`; `|bunny.lengthSeconds − row.cf_duration_seconds| <= 2` (±2 s of the Cloudflare duration; a null on either side fails); and `bunny.heights` lists the required rung, the largest of 240, 360, 480 and 720 that is not above `row.cf_height` (so 720p, or the source's height if lower; a null `cf_height`, or one under 240, fails). `ReplayHost.video()` (Task 21) already returns `lengthSeconds` and `heights`, so no port change. The poll runs it on a video the API reports finished. The webhook (Task 27) runs the same function.
 - **Owner ruling 2026-11-21 (G-D):** the Cloudflare copy is deleted after the swap, within 1–2 h. **Recommendation 2026-11-21 (applied unless the owner objects):** the value is 60 min, so the mover's `delete_cf` step runs only from `playable` and only at or after `verified_at + SEAZN_CF_DELETE_DELAY_MINUTES`. The webhook never deletes (Task 27). The Cloudflare recording is also what the public page plays until the swap (G-B, Tasks 14 and 25), so the delay is the time open players have to finish.
 - **Recommendation 2026-11-21 (applied unless the owner objects), G-E:** a Seazn session still `live` at `fixtures.finished_at + SEAZN_REPLAY_DELAY_MINUTES` (the same constant) is stopped with end reason `auto_stopped`, in every mode (Stream switch off, operator phone, automatic phone), so the move always starts. It is an extra arm beside the existing `autoStopApplies` gating in `auto-stop.ts` (read it first): that gating fires only when the switch is on AND the phone is automatic, or for a court session, with delays of 180 s (per-fixture code) and 30 s (court), and it does not change for any session that is not a Seazn one (G1: a pasted-key and a YouTube session decided long ago are not touched). `autoStopOf(sessionId)` (the read model behind the panel's "stops about N after the result" line) must report the delay the tick will use for a Seazn session, the existing delay when the existing rule applies and `SEAZN_REPLAY_DELAY_MINUTES` otherwise, so the line never promises a stop the tick will not make. `fixture-stream-panel.tsx` names the Seazn case with a new key beside `stream.auto.liveLine` (all four dictionaries; the existing "Automatic: stops about N …" wording is wrong when the stop is Seazn's own, because the phone may not be automatic).
@@ -1058,15 +1058,15 @@ Bunny calls a library's webhook on every status change (B6). It is the primary "
 
 # Phase 3 — Cost and lifecycle (`SEAZN_HOSTED_COST`)
 
-### Task 29: Migration V542 — delivered minutes
+### Task 29: Migration V543 — delivered minutes
 
 **Files:**
 
-- Create: `db/migration/deltas/V542__seazn_delivery.sql`. Table `fixture_video_delivery (session_id uuid primary key references fixture_stream_sessions(id) on delete restrict, org_id uuid not null, live_minutes numeric(12,1) not null default 0, replay_minutes numeric(12,1) not null default 0, live_measured_through date null, replay_measured_through date null, updated_at timestamptz not null default now())`, with RLS as in V430.
+- Create: `db/migration/deltas/V543__seazn_delivery.sql`. Table `fixture_video_delivery (session_id uuid primary key references fixture_stream_sessions(id) on delete restrict, org_id uuid not null, live_minutes numeric(12,1) not null default 0, replay_minutes numeric(12,1) not null default 0, live_measured_through date null, replay_measured_through date null, updated_at timestamptz not null default now())`, with RLS as in V430.
 - Test: `apps/web/src/server/relay/__tests__/seazn-delivery-migration.test.ts`
 
-- [ ] **Step 1: Write the test** (table shape, `numeric(12,1)`, RLS listed), see it fail, write V542, apply it locally, and see it pass.
-- [ ] **Step 2: Commit** `feat(db): V542 Seazn delivered minutes`.
+- [ ] **Step 1: Write the test** (table shape, `numeric(12,1)`, RLS listed), see it fail, write V543, apply it locally, and see it pass.
+- [ ] **Step 2: Commit** `feat(db): V543 Seazn delivered minutes`.
 
 ### Task 30: Read delivered minutes
 

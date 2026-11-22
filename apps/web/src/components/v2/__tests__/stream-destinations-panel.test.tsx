@@ -174,7 +174,7 @@ async function schemaRefusal(body: unknown): Promise<unknown> {
   throw new Error("the schema accepted the body");
 }
 
-// "seazn" is the org's own row (V540), not a stored legacy kind; its fixed row has its own describe below (Task 16).
+// "seazn" is the org's own row (V541), not a stored legacy kind; its fixed row has its own describe below (Task 16).
 const LEGACY_KINDS = StreamTargetKind.options.filter((k) => k !== "seazn" && !isStreamPlatform(k));
 
 // ─── the whole panel as markup ────────────────────────────────────────────────────────────────────────────────────────

@@ -144,7 +144,7 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
     expect(again.id).toBe(r.targetId);
     expect(again).toMatchObject({ kind: "youtube", label: "x", watchUrl: null });   // the STORED row answers, not the arguments
     const rows = await sql<{ id: string; kind: string; label: string; watch_url: string | null }[]>`
-      select id, kind, label, watch_url from org_stream_targets where org_id = ${r.orgId} and kind <> 'seazn'`;   // external only: V540's seazn row is every org's
+      select id, kind, label, watch_url from org_stream_targets where org_id = ${r.orgId} and kind <> 'seazn'`;   // external only: V541's seazn row is every org's
     expect(rows).toEqual([{ id: r.targetId, kind: "youtube", label: "x", watch_url: null }]);
     expect(await sql.begin((tx) => readTargetSecret(tx, r.orgId, r.targetId))).toEqual(r.target);   // first spelling kept
     const other = await sql.begin((tx) =>

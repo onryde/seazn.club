@@ -257,7 +257,7 @@ export interface RunnerProvider {
  *  adapter that logged here would log once per CALL. `url` is the URL as called; the recorder templates
  *  it (sanitise.ts pathTemplate) — the adapter passes the ids it interpolated. */
 export interface ProviderCallRecord {
-  /** `bunny` (Task 22): the replay host's adapter records here too; V541 admits it in the table's provider CHECK, and
+  /** `bunny` (Task 22): the replay host's adapter records here too; V542 admits it in the table's provider CHECK, and
    *  replay-driver.ts binds the database recorder to the adapter it builds. */
   provider: "cloudflare" | "fly" | "stripe" | "bunny"; operation: string; subjectId?: string | null; sessionId?: string | null;
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"; url: string; ids: readonly string[];

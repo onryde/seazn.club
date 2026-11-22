@@ -1,4 +1,4 @@
-// V540 (Seazn-hosted video, Phase 1, Task 9): every org holds exactly one `kind = 'seazn'` destination row, made by a
+// V541 (Seazn-hosted video, Phase 1, Task 9): every org holds exactly one `kind = 'seazn'` destination row, made by a
 // trigger on organizations (and once for every org that already existed). The row carries no source of its own, so the
 // one-source check grows a seazn arm; a Seazn session is not exclusive per target, so the V479 one-active index grows a
 // `destination_kind` arm. Two mark tables (seazn_held_alerts, seazn_locked_videos) and two fixture_stream_inputs columns
@@ -78,7 +78,7 @@ async function insertSession(r: Rig, targetId: string, destinationKind: string, 
   return row!.id;
 }
 
-describe.skipIf(!HAS_DB)("V540__seazn_destination.sql — the Seazn destination row is real", () => {
+describe.skipIf(!HAS_DB)("V541__seazn_destination.sql — the Seazn destination row is real", () => {
   it("a new org gets exactly one seazn row: label 'Seazn', no watch url, no key, no connection, not archived", async () => {
     const { auth } = await seedOrg();
     expect(await seaznRows(auth.orgId)).toEqual([

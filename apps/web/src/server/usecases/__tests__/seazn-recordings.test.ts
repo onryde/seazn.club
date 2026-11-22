@@ -63,7 +63,7 @@ afterEach(() => {
 
 type Clock = { now: number };
 /** An org with two started fixtures, the relay entitlements, credits, a phone on each fixture, a pasted YouTube key and its
- *  Seazn row (V540's trigger). `shared` puts a second org on the FIRST org's fake and clock, so one listing can answer both. */
+ *  Seazn row (V541's trigger). `shared` puts a second org on the FIRST org's fake and clock, so one listing can answer both. */
 async function rig(shared?: { ingest: FakeIngest; clock: Clock; runner: FakeRunner }) {
   const seeded = await seedOrg();
   const auth = { ...seeded.auth, userId: await rigUser() };
@@ -74,7 +74,7 @@ async function rig(shared?: { ingest: FakeIngest; clock: Clock; runner: FakeRunn
   await grantCredits({ orgId: auth.orgId, delta: 5, createdBy: await rigUser(), note: "seazn lock", idempotencyKey: randomUUID() });
   const pasted = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "Club", streamKey: `yt-${randomUUID()}` });
   const [seazn] = await sql<{ id: string }[]>`select id from org_stream_targets where org_id = ${auth.orgId} and kind = 'seazn'`;
-  expect(seazn, "PREMISE: V540 gave the org its Seazn destination").toBeDefined();
+  expect(seazn, "PREMISE: V541 gave the org its Seazn destination").toBeDefined();
   const clock: Clock = shared?.clock ?? { now: Date.now() };
   const recorder = new FakeRecorder();
   const ingest = shared?.ingest ?? new FakeIngest({ clock: () => clock.now, connectAfterMs: 3000, recorder });
@@ -352,7 +352,7 @@ describe.skipIf(!HAS_DB)("lockSeaznRecordings — the stream tick's Seazn pass",
     expect(r.ingest.signedVideoDeleteAts.map((d) => d.getTime())).toEqual([expected]);
   });
 
-  it("V541 (Task 14 carry): the lock stores when the recording began (its listing's creation) as recorded_at — null when that is not a date — and a relock leaves it", async () => {
+  it("V542 (Task 14 carry): the lock stores when the recording began (its listing's creation) as recorded_at — null when that is not a date — and a relock leaves it", async () => {
     const r = await rig();
     const sid = await live(r, r.fixtureIds[0], r.seazn);
     const prog = await inputOf(sid, "programme");

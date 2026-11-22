@@ -15,7 +15,7 @@ import "server-only";
 // `replay` (G-B, the interim until Task 25's Bunny embed): every recording in `seazn_locked_videos` under the programme input of
 // one of the fixture's ENDED Seazn sessions, each its signed HLS (`signRecordingPlayback`).
 //   ORDER and NUMBER: recording order. The session's (created_at, id), then, within one session, when the recording began
-//     (recorded_at, V541: the lock pass stores the listing's creation; null, when that was not a date, sorts last), then the lock
+//     (recorded_at, V542: the lock pass stores the listing's creation; null, when that was not a date, sorts last), then the lock
 //     (locked_at, cf_video_id). `partNo` is the recording's 1-based place
 //     among ALL the fixture's locked recordings in that order, given before anything is left out, so a part keeps its number
 //     from one poll to the next; a part that is left out leaves a gap. Task 25 must number its parts the same way.
@@ -37,7 +37,7 @@ import "server-only";
 // `{ live: null, replay: [] }`. A live deployment that cannot even BUILD its relay (its Cloudflare secrets missing) still throws.
 //
 // Secrets: a signed URL is the answer itself and goes nowhere else — never logged, never in an error. The privileged `sql`
-// client: fixture_stream_* and seazn_locked_videos are FORCE RLS with no policy (V410, V540), the stream pattern (parts.ts).
+// client: fixture_stream_* and seazn_locked_videos are FORCE RLS with no policy (V410, V541), the stream pattern (parts.ts).
 import { sql } from "@/lib/db";
 import type { PublicFixtureVideo } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";

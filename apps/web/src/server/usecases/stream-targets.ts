@@ -60,7 +60,7 @@ export class TargetUnreadableError extends HttpError {
   }
 }
 
-/** Seazn-hosted video (V540): the ONE place the Seazn row's visibility and order are decided, for the Streaming list and the
+/** Seazn-hosted video (V541): the ONE place the Seazn row's visibility and order are decided, for the Streaming list and the
  *  fixture's default pick alike. LIVE on: Seazn first, then the rest oldest-first. LIVE off: the row is left out and the
  *  order is the old one, so an org's default stays its oldest pasted destination. Columns are unqualified on purpose: both
  *  callers read `org_stream_targets` alone in that scope. */

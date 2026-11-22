@@ -76,7 +76,7 @@ export const SUPERUSER_ONLY: ReadonlySet<string> = new Set([
   // it, in /admin (P7). Its link table capture_record_sessions has no org_id, so the guard never selects it; it is
   // enabled + forced all the same (rls-static.test.ts reads both).
   "capture_records",
-  // Seazn replays (V541, seazn-hosted Task 23): V410's pattern — RLS FORCEd, ZERO policies, no trg_set_org, no app_user
+  // Seazn replays (V542, seazn-hosted Task 23): V410's pattern — RLS FORCEd, ZERO policies, no trg_set_org, no app_user
   // grant; relay/__tests__/rls-static.test.ts and seazn-replays-migration.test.ts assert it. Its webhook dedupe table,
   // bunny_webhook_events, has no org_id, so the guard never selects it; it is enabled + forced all the same.
   // The org's Bunny collection id; privileged client only, zero policies.

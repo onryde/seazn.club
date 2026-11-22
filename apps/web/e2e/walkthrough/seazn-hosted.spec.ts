@@ -77,7 +77,7 @@ const pub = (key: string) => copy(EN_PUBLIC, key);
 interface Rig { org: StandInOrg; fixtureId: string; fixturePath: string; publicPath: string; seaznId: string }
 
 /** A fresh organiser on Pro (its own context: helpers/sponsor-relay-standin.ts), a PUBLIC competition with one started league fixture
- *  (the match page needs a division past setup), and the org's Seazn destination (V540's trigger). */
+ *  (the match page needs a division past setup), and the org's Seazn destination (V541's trigger). */
 async function seedRig(browser: Browser): Promise<Rig> {
   const org = await seedStandInOrg(browser, "szh", { orgName: "Seazn Hosted Club" });
   rigs.push(org);
@@ -105,7 +105,7 @@ async function seedRig(browser: Browser): Promise<Rig> {
   const [row] = await withDb((sql) => sql<{ no: number; seazn: string | null }[]>`
     select f.fixture_no as no, (select id from org_stream_targets where org_id = ${org.orgId} and kind = 'seazn') as seazn
       from fixtures f where f.id = ${fixtureId}`);
-  expect(row?.seazn, "premise: V540 gave the org its Seazn destination").toBeTruthy();
+  expect(row?.seazn, "premise: V541 gave the org its Seazn destination").toBeTruthy();
   return {
     org,
     fixtureId,

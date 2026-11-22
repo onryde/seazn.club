@@ -1,4 +1,4 @@
--- V541 — Seazn replays (Seazn-hosted video, Phase 2, Task 23).
+-- V542 — Seazn replays (Seazn-hosted video, Phase 2, Task 23).
 --
 -- Every finished recording of a Seazn session's programme input is moved from Cloudflare to Bunny Stream (Task 24) and played
 -- from there (Task 25). This migration holds that move's state: one `fixture_video_replays` row per Cloudflare recording, the
@@ -71,7 +71,7 @@ create index fixture_video_replays_due_idx on fixture_video_replays (state, next
      or (state = 'deleted' and bunny_cleaned_at is null);
 -- The fixture's parts in recording order (discovery's numbering, the replay read).
 create index fixture_video_replays_fixture_recorded_idx on fixture_video_replays (fixture_id, recorded_at);
--- The two RESTRICT keys' walks: an org or a session delete checks this table by them (V540's seazn_* indexes, same reason).
+-- The two RESTRICT keys' walks: an org or a session delete checks this table by them (V541's seazn_* indexes, same reason).
 create index fixture_video_replays_org_idx on fixture_video_replays (org_id);
 create index fixture_video_replays_session_idx on fixture_video_replays (session_id);
 

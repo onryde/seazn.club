@@ -73,7 +73,7 @@ export function installSeaznEnvForDescribe(tag: string): void {
 }
 
 /** An org with two started fixtures (status `scheduled`, no session), the relay entitlements, credits, a phone on each fixture, a pasted
- *  YouTube key and its Seazn row (V540's trigger). */
+ *  YouTube key and its Seazn row (V541's trigger). */
 export async function seaznRig() {
   const seeded = await seedOrg();
   const auth = { ...seeded.auth, userId: await rigUser() };
@@ -90,7 +90,7 @@ export async function seaznRigFor<F extends readonly string[]>(auth: Awaited<Ret
   await grantCredits({ orgId: auth.orgId, delta: 8, createdBy: await rigUser(), note: "seazn rig", idempotencyKey: randomUUID() });
   const pasted = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "Club", streamKey: `yt-${randomUUID()}` });
   const [seazn] = await sql<{ id: string }[]>`select id from org_stream_targets where org_id = ${auth.orgId} and kind = 'seazn'`;
-  expect(seazn, "PREMISE: V540 gave the org its Seazn destination").toBeDefined();
+  expect(seazn, "PREMISE: V541 gave the org its Seazn destination").toBeDefined();
   const clock = { now: Date.now() };
   const ingest = new FakeIngest({ clock: () => clock.now, connectAfterMs: 3000, recorder: new FakeRecorder() });
   ingest.storage = { totalStorageMinutes: 0, totalStorageMinutesLimit: ROOMY_STORAGE_MINUTES, videoCount: 0 };

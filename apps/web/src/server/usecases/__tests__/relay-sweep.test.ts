@@ -139,7 +139,7 @@ async function rig(mode: "passthrough" | "composed" = "passthrough", opts: { sea
   const runner = new FakeRunner();
   const deps: SessionDeps = { drivers: { ingest, runner }, now: () => new Date(now), appUrl: "http://app.test" };
   await pairPresentPhone(fixtureId, { at: deps.now() });   // A7 (capture QR v2 T6): W5 refuses a Go live with no present phone
-  // Seazn-hosted video Task 18: the org's own Seazn row (V540's trigger made it; read, never inserted). The caller holds
+  // Seazn-hosted video Task 18: the org's own Seazn row (V541's trigger made it; read, never inserted). The caller holds
   // SEAZN_HOSTED_LIVE on for the start — admission refuses a Seazn start with it off.
   const targetId = opts.seazn
     ? (await sql<{ id: string }[]>`select id from org_stream_targets where org_id = ${auth.orgId} and kind = 'seazn'`)[0]!.id
@@ -1707,7 +1707,7 @@ describe.skipIf(!HAS_DB)("R2004: an ended composed session's CAMERA recordings (
 // Seazn-hosted video, Phase 1 Task 18 (controller ruling 2026-11-20): every `destination_kind = 'seazn'` programme recording
 // is HELD past RECORDING_RETENTION_DAYS whatever SEAZN_HOSTED_LIVE and SEAZN_HOSTED_REPLAY say, so Phase 1 never deletes a
 // replay Phase 2 will move; Cloudflare's own 30-day deleteRecordingAfterDays is the backstop. A held recording past the
-// promise is alerted ONCE, ever (the seazn_held_alerts mark, V540). The hold only REMOVES from the delete set: the camera
+// promise is alerted ONCE, ever (the seazn_held_alerts mark, V541). The hold only REMOVES from the delete set: the camera
 // step (1c) and every other destination are unchanged, and the ownership filter (I1(c), C6) still skips foreign videos.
 // Every session ends through the REAL path (Go live → stop → completed), on the fake ports.
 // ---------------------------------------------------------------------------------------------------------------

@@ -21,7 +21,7 @@ let bunny: BunnyReplayHost | null = null;
 
 /** The Bunny adapter, built once per process on first use. Its settings are checked HERE (`bunnyConfig`), so a process whose
  *  Bunny variables are missing refuses with their names instead of serving a fake, and a refusal caches nothing.
- *  Every call it makes is a provider-call row through `dbRecorder`, as the Cloudflare and Fly adapters' are (V541 admits
+ *  Every call it makes is a provider-call row through `dbRecorder`, as the Cloudflare and Fly adapters' are (V542 admits
  *  `bunny` in that table's provider CHECK). */
 function buildBunnyDriver(): ReplayHost {
   return (bunny ??= new BunnyReplayHost(bunnyConfig(), { recorder: dbRecorder, warn: (fields, msg) => log.warn(fields, msg) }));

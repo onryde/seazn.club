@@ -4,7 +4,7 @@ import "server-only";
 //
 // Task 12 signs a Seazn session's programme input, but Cloudflare records a signed input's recording UNSIGNED (C3: the finished
 // recording read `requireSignedURLs: false` and played with no token). So every recording of a Seazn programme input is made to
-// need a token here, and a `seazn_locked_videos` row (V540) records that it was.
+// need a token here, and a `seazn_locked_videos` row (V541) records that it was.
 //
 // NEVER WHILE IT RECORDS (controller ruling 2026-11-21, review m1): nobody has measured whether live HLS survives this edit (C7
 // measured the flag's echo, not the stream), so a `live-inprogress` recording is not touched, whatever it reads — C7 found one
@@ -70,7 +70,7 @@ export function seaznRecordingDeleteAt(createdAt: string, nowMs: number): Date {
   return new Date(from + DELETE_RECORDING_AFTER_DAYS * 86_400_000 + MAX_DURATION_MINUTES * 60_000 + FINALISATION_GRACE_SECONDS * 1000);
 }
 
-/** V541 (the Task 14 carry): when the recording BEGAN, stored with its lock so the interim replay can order one session's
+/** V542 (the Task 14 carry): when the recording BEGAN, stored with its lock so the interim replay can order one session's
  *  parts by it. Cloudflare's `created` on a live input's recording is its start. A creation that is not a date stores null:
  *  the lock never fails on a timestamp, and the read orders such a part after the dated ones. */
 function recordedAtOf(createdAt: string): Date | null {

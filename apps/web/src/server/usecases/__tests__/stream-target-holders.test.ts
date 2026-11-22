@@ -108,7 +108,7 @@ describe.skipIf(!HAS_DB)("holderRows — who holds a destination, named for a pe
     })).toThrow(/terminal/);
   });
 
-  // Seazn-hosted video (V540, task 10): the org's Seazn destination is never exclusive, so a session on it holds nothing.
+  // Seazn-hosted video (V541, task 10): the org's Seazn destination is never exclusive, so a session on it holds nothing.
   it("a live session on the Seazn destination holds nothing; the same session on a pasted row holds (positive pair)", async () => {
     const r = await holdRig();
     const [seazn] = await sql<{ id: string }[]>`select id from org_stream_targets where org_id = ${r.auth.orgId} and kind = 'seazn'`;

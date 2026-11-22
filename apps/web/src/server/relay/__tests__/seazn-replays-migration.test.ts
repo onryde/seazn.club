@@ -1,4 +1,4 @@
-// V541 (Seazn-hosted video, Phase 2, Task 23): the replay tables. `fixture_video_replays` is one row per Cloudflare recording
+// V542 (Seazn-hosted video, Phase 2, Task 23): the replay tables. `fixture_video_replays` is one row per Cloudflare recording
 // moved to Bunny, numbered once at discovery (`part_no`, unique per fixture, never changed); `org_video_collections` is an org's
 // Bunny collection; `bunny_webhook_events` is the dedupe mark for Bunny's EventId (Task 27). `public_fixture_seazn_replays_v`
 // is the public read of the playable parts, under public_fixture_youtube_parts_v's redaction. The three carries ride the same
@@ -21,8 +21,8 @@ import { recordProviderCall } from "../telemetry";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
-/** The three tables V541 creates, by name. */
-const V541_TABLES = ["org_video_collections", "fixture_video_replays", "bunny_webhook_events"];
+/** The three tables V542 creates, by name. */
+const V542_TABLES = ["org_video_collections", "fixture_video_replays", "bunny_webhook_events"];
 /** The replay states the brief declares, typed here (never read off the migration). */
 const STATES = ["found", "downloading", "fetching", "encoding", "playable", "failed", "deleted"] as const;
 /** The states a row may hold with no Bunny id: it has none yet (found, downloading, fetching), or lost it (failed, deleted). */
@@ -53,7 +53,7 @@ async function rolledBack(fn: (tx: Tx) => Promise<void>): Promise<void> {
 const probe = (tx: Tx, q: (sp: Tx) => PromiseLike<unknown>): Promise<string> =>
   failure(tx.savepoint((sp) => q(sp as Tx)));
 
-/** An org, a started division with `fixtures` fixtures, and one ended Seazn session on the first fixture (V540's seazn row). */
+/** An org, a started division with `fixtures` fixtures, and one ended Seazn session on the first fixture (V541's seazn row). */
 async function rig(fixtures = 2) {
   const { auth } = await seedOrg();
   const { fixtureIds } = await divisionRig(auth, { entrants: fixtures <= 1 ? 2 : 4 });
@@ -62,7 +62,7 @@ async function rig(fixtures = 2) {
   const [src] = await sql<{ division_id: string; competition_id: string; sport_key: string }[]>`
     select f.division_id, d.competition_id, d.sport_key from fixtures f join divisions d on d.id = f.division_id where f.id = ${fixtureId}`;
   const [seazn] = await sql<{ id: string }[]>`select id from org_stream_targets where org_id = ${auth.orgId} and kind = 'seazn'`;
-  expect(seazn, "PREMISE: V540 gave the org its Seazn destination").toBeDefined();
+  expect(seazn, "PREMISE: V541 gave the org its Seazn destination").toBeDefined();
   const [session] = await sql<{ id: string }[]>`
     insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by, destination_kind,
                                          sport_key, competition_id, division_id, entitlement_via_override)
@@ -89,7 +89,7 @@ const insertReplay = (q: Tx | typeof sql, r: Rig, o: ReplayOpts = {}) => q<{ id:
           ${o.verified ? new Date() : null}, ${o.deletedReason ?? null})
   returning id`;
 
-describe.skipIf(!HAS_DB)("V541__seazn_replays.sql — the replay tables are real", () => {
+describe.skipIf(!HAS_DB)("V542__seazn_replays.sql — the replay tables are real", () => {
   it("a playable row needs a Bunny id AND verified_at (23514 each); encoding needs a Bunny id; the no-Bunny states land without one", async () => {
     const r = await rig(1);
     let probes = 0;
@@ -268,14 +268,14 @@ describe.skipIf(!HAS_DB)("V541__seazn_replays.sql — the replay tables are real
       select c.relname, c.relrowsecurity as rls, c.relforcerowsecurity as forced,
              (select count(*) from pg_policy p where p.polrelid = c.oid)::int as policies
         from pg_class c join pg_namespace n on n.oid = c.relnamespace
-       where n.nspname = current_schema() and c.relname = any(${V541_TABLES}) order by c.relname`;
-    expect(rows).toEqual([...V541_TABLES].sort().map((relname) => ({ relname, rls: true, forced: true, policies: 0 })));
+       where n.nspname = current_schema() and c.relname = any(${V542_TABLES}) order by c.relname`;
+    expect(rows).toEqual([...V542_TABLES].sort().map((relname) => ({ relname, rls: true, forced: true, policies: 0 })));
     const granted = async (rel: string) => (await sql<{ ok: boolean }[]>`
       select (has_table_privilege('app_user', ${rel}::text, 'select') or has_table_privilege('app_user', ${rel}::text, 'insert')
            or has_table_privilege('app_user', ${rel}::text, 'update') or has_table_privilege('app_user', ${rel}::text, 'delete')) as ok`)[0]!.ok;
     expect(await granted("public_fixtures_v"), "the probe must be able to see a grant").toBe(true);
     let ungranted = 0;
-    for (const rel of [...V541_TABLES, "public_fixture_seazn_replays_v"]) {
+    for (const rel of [...V542_TABLES, "public_fixture_seazn_replays_v"]) {
       expect(await granted(rel), `app_user must hold nothing on ${rel}`).toBe(false);
       ungranted++;
     }

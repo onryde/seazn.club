@@ -75,7 +75,7 @@ afterEach(() => {
 
 type Clock = { now: number };
 /** An org with two started public fixtures, the relay entitlements, credits, a phone on each fixture, a pasted YouTube key and
- *  its Seazn row (V540's trigger). `playback` signs through the rig's own fake and a cache of its own. */
+ *  its Seazn row (V541's trigger). `playback` signs through the rig's own fake and a cache of its own. */
 async function rig() {
   const seeded = await seedOrg();
   const auth = { ...seeded.auth, userId: await rigUser() };
@@ -86,7 +86,7 @@ async function rig() {
   await grantCredits({ orgId: auth.orgId, delta: 8, createdBy: await rigUser(), note: "seazn video", idempotencyKey: randomUUID() });
   const pasted = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "Club", streamKey: `yt-${randomUUID()}` });
   const [seazn] = await sql<{ id: string }[]>`select id from org_stream_targets where org_id = ${auth.orgId} and kind = 'seazn'`;
-  expect(seazn, "PREMISE: V540 gave the org its Seazn destination").toBeDefined();
+  expect(seazn, "PREMISE: V541 gave the org its Seazn destination").toBeDefined();
   const clock: Clock = { now: Date.now() };
   const ingest = new FakeIngest({ clock: () => clock.now, connectAfterMs: 3000, recorder: new FakeRecorder() });
   ingest.storage = { totalStorageMinutes: 0, totalStorageMinutesLimit: ROOMY_STORAGE_MINUTES, videoCount: 0 };
@@ -258,7 +258,7 @@ describe.skipIf(!HAS_DB)("seaznFixtureVideo — a fixture's Seazn video for the 
     expect((await read(r, f)).replay.map((p) => signedUid(p.src))).toEqual([rec]);
   });
 
-  it("within ONE session, parts follow when each recording BEGAN (recorded_at, V541), then locked_at, then the uid — numbered 1..n", async () => {
+  it("within ONE session, parts follow when each recording BEGAN (recorded_at, V542), then locked_at, then the uid — numbered 1..n", async () => {
     const r = await rig();
     const f = r.fixtureIds[0];
     const sid = await live(r, f, r.seazn);
