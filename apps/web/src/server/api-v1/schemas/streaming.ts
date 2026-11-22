@@ -162,6 +162,18 @@ export const StreamSessionCurrent = z
      *  own). `private` is true for a broadcast that is PRIVATE on YouTube: the organiser keeps it here and the panel says so, the public
      *  match page never shows it (and its number counts every complete broadcast, so it can differ from the public page's). */
     replayParts: z.array(z.object({ partNo: z.number().int().min(1), url: z.string(), private: z.boolean() }).strict()),
+    /** Seazn-hosted video Task 25: the fixture's Seazn replays as the organiser reads them (server/video/organiser-replays.ts): each
+     *  part the replay move made, by its stored number, `processing` while the copy is on its way, `playable` once verified,
+     *  `failed` when it failed its check; a removed part is not listed. Read for THIS organisation, whatever the competition's
+     *  visibility. `[]` when there is none (every non-Seazn session). */
+    seaznReplays: z.array(
+      z.object({
+        id: z.uuid(),
+        partNo: z.number().int().min(1),
+        state: z.enum(["processing", "playable", "failed"]),
+        lengthSeconds: z.number().int().min(0).nullable(),
+      }).strict(),
+    ),
     /** Owner 2026-10-30: the watch URL of the video on YouTube THIS session streams into (server/youtube/parts.ts `sessionVideoUrl`) -
      *  its YouTube Connect broadcast once YouTube gave it its id, in any state but `failed`. Null for a pasted key, before the id is
      *  known, and once the channel is disconnected (the broadcast rows are purged). The panel's "On YouTube" card links it. */

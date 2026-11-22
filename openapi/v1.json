@@ -59075,6 +59075,51 @@
                                 "additionalProperties": false
                               }
                             },
+                            "seaznReplays": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  },
+                                  "partNo": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "state": {
+                                    "type": "string",
+                                    "enum": [
+                                      "processing",
+                                      "playable",
+                                      "failed"
+                                    ]
+                                  },
+                                  "lengthSeconds": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "partNo",
+                                  "state",
+                                  "lengthSeconds"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "youtubeVideoUrl": {
                               "anyOf": [
                                 {
@@ -59306,6 +59351,7 @@
                             "endedAt",
                             "replayUrl",
                             "replayParts",
+                            "seaznReplays",
                             "youtubeVideoUrl",
                             "youtubeStatus",
                             "youtubeLiveForMs",
@@ -59367,6 +59413,14 @@
                         "partNo": 1,
                         "url": "example",
                         "private": true
+                      }
+                    ],
+                    "seaznReplays": [
+                      {
+                        "id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                        "partNo": 1,
+                        "state": "processing",
+                        "lengthSeconds": 0
                       }
                     ],
                     "youtubeVideoUrl": "example",
@@ -59905,6 +59959,51 @@
                             "additionalProperties": false
                           }
                         },
+                        "seaznReplays": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "partNo": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991
+                              },
+                              "state": {
+                                "type": "string",
+                                "enum": [
+                                  "processing",
+                                  "playable",
+                                  "failed"
+                                ]
+                              },
+                              "lengthSeconds": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "partNo",
+                              "state",
+                              "lengthSeconds"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
                         "youtubeVideoUrl": {
                           "anyOf": [
                             {
@@ -60136,6 +60235,7 @@
                         "endedAt",
                         "replayUrl",
                         "replayParts",
+                        "seaznReplays",
                         "youtubeVideoUrl",
                         "youtubeStatus",
                         "youtubeLiveForMs",
@@ -60192,6 +60292,14 @@
                         "partNo": 1,
                         "url": "example",
                         "private": true
+                      }
+                    ],
+                    "seaznReplays": [
+                      {
+                        "id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                        "partNo": 1,
+                        "state": "processing",
+                        "lengthSeconds": 0
                       }
                     ],
                     "youtubeVideoUrl": "example",

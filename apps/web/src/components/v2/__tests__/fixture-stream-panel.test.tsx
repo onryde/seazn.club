@@ -72,6 +72,7 @@ import { platformName } from "@/components/v2/stream-platform-mark";
 import { YoutubeIcon } from "@/components/v2/youtube-icon";
 import { FixtureDestinationPicker, type FixtureDestinationPickerProps } from "@/components/v2/fixture-destination-picker";
 import { ReplayCopyButton } from "@/components/v2/stream-replay-copy";
+import { SeaznReplaysCard } from "@/components/v2/seazn-replays-card";
 import { YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, YOUTUBE_REFUSAL_CODES, isYoutubeUrl } from "@/lib/youtube";
 import { REFUSAL_FOCUS_RING, focusRefusalBlock } from "@/components/v2/refusal-focus";
 import { D3Warning, PhoneStripView, SignalChain } from "@/components/v2/stream-signal-chain";
@@ -673,7 +674,7 @@ const LEGACY = readModel({ legacy: true, phone: null, code: null });
 const session = (over: Partial<StreamSessionView> = {}): StreamSessionView => ({
   id: "s1", fixtureId: "f-1", mode: "passthrough", overlay: null, state: "warming", desiredState: "live",
   failReason: null, health: null, ingest: { state: "disconnected", protocol: null }, output: null,
-  balance: 2, startedAt: null, endedAt: null, replayUrl: null, replayParts: [], youtubeVideoUrl: null, youtubeStatus: null, youtubeLiveForMs: null,
+  balance: 2, startedAt: null, endedAt: null, replayUrl: null, replayParts: [], seaznReplays: [], youtubeVideoUrl: null, youtubeStatus: null, youtubeLiveForMs: null,
   target: { id: "t1", kind: "youtube", label: "Club" }, fixtureDecided: false, fixtureHeld: false, endReason: null, creditUsed: false,
   startCause: "organiser", restart: null, countdown: null,
   ...over,
@@ -6438,6 +6439,40 @@ describe("T12: after a match — the replay row, and the destination's name read
     expect(html.split(es["streaming.youtube.disconnectedLabel"]!).length - 1, "the label is drawn by the ending line AND the chain").toBeGreaterThanOrEqual(2);
     // The positive pair: the customer's own label passes through untouched.
     expect(textAt(body({ view: session({ state: "ending", target: { id: "t1", kind: "youtube", label: "Club TV" } }), balance: 1 }), "stream-ending")).toBe(m("stream.phone.ending", { destination: "Club TV" }));
+  });
+});
+
+// ─── Seazn-hosted video Task 25: the ended card lists the fixture's Seazn replays ───────────────────────────────────────────
+// The session view's `seaznReplays` (server/video/organiser-replays.ts) reach the ended card's list (seazn-replays-card.tsx, whose own
+// test pins the words). Only the ended card: a live or failed session's card never carries it.
+describe("Task 25: the ended card's Seazn replays", () => {
+  const ENDED = { state: "completed" as const, startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z", endReason: "stopped" as const };
+  const R = [
+    { id: "00000000-0000-4000-8000-000000000001", partNo: 1, state: "playable" as const, lengthSeconds: 120 },
+    { id: "00000000-0000-4000-8000-000000000002", partNo: 2, state: "processing" as const, lengthSeconds: null },
+  ];
+  const cards = (tree: ReactElement[]) => tree.filter((el) => el.type === SeaznReplaysCard);
+
+  it("EMPTY CASE FIRST: an ended session with none hands the card an empty list (it draws nothing)", () => {
+    const tree = body({ view: session({ ...ENDED, seaznReplays: [] }), balance: 1 });
+    expect(byTestId(tree, "stream-ended"), "PREMISE: the ended card").toBeDefined();
+    expect(cards(tree).map((el) => propsOf(el).replays)).toEqual([[]]);
+  });
+
+  it("an ended session hands the card the view's list, inside the ended card", () => {
+    const tree = body({ view: session({ ...ENDED, seaznReplays: R }), balance: 1 });
+    expect(cards(tree).map((el) => propsOf(el).replays)).toEqual([R]);
+    const ended = walk([byTestId(tree, "stream-ended")!]);
+    expect(ended.filter((el) => el.type === SeaznReplaysCard), "inside the ended card").toHaveLength(1);
+  });
+
+  it("a live or a failed session's card never carries it", () => {
+    let checked = 0;
+    for (const view of [session({ state: "live", seaznReplays: R }), session({ ...ENDED, state: "failed", failReason: "machine_crash", seaznReplays: R })]) {
+      expect(cards(body({ view, balance: 1 })), view.state).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 });
 

@@ -34,6 +34,7 @@ import { FixtureDestinationPicker } from "./fixture-destination-picker";
 import { platformName } from "./stream-platform-mark";
 import { YoutubeIcon } from "./youtube-icon";
 import { ReplayCopyButton } from "./stream-replay-copy";
+import { SeaznReplaysCard } from "./seazn-replays-card";
 import { REFUSAL_FOCUS_RING, focusRefusalBlock } from "./refusal-focus";
 import { channelStatus, youtubeTargetLabel } from "./youtube-connect-panel";
 import { D3Warning, PhoneStripView, SignalChain } from "./stream-signal-chain";
@@ -2713,6 +2714,8 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
             )}
           </div>
           {restartEl}
+          {/* Seazn-hosted video (Task 25): the fixture's Seazn replays and their state (it draws nothing when there is none). */}
+          <SeaznReplaysCard replays={p.view.seaznReplays} />
           {(() => {
             // YouTube Connect T16 (O6): the after-match area lists the match's replay PARTS (a restart makes a second broadcast),
             // then the club's own link when it is not one of them. With no parts it is the single row it always was.

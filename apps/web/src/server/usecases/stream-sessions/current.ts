@@ -13,6 +13,7 @@ import {
 } from "@/server/relay/config";
 import { lostCountdown } from "@/server/relay/domain/phone-lost";
 import { fixtureReplayParts, sessionVideoUrl } from "@/server/youtube/parts";
+import { fixtureSeaznReplays } from "@/server/video/organiser-replays";
 import { creditBalance, neverLiveRefundStanding, restartAllowance } from "../stream-credits";
 import { type Row, cols, d } from "./session-row";
 import type { SessionDeps } from "./deps";
@@ -113,6 +114,7 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
     endedAt: row.ended_at ? new Date(row.ended_at).toISOString() : null,
     replayUrl: fx?.stream_url ?? null,
     replayParts: await fixtureReplayParts(row.org_id, fixtureId),
+    seaznReplays: await fixtureSeaznReplays(row.org_id, fixtureId),
     youtubeVideoUrl: await sessionVideoUrl(row.org_id, row.id),
     youtubeStatus: yt.status, youtubeLiveForMs: yt.liveForMs,
     target: { id: target!.id, kind: target!.kind, label: target!.label },
