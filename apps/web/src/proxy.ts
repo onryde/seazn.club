@@ -7,7 +7,9 @@ import { isPublicHubPath } from "@/lib/routes";
 import { isStagingOrigin } from "@/lib/robots-policy";
 import { siteOrigin } from "@/lib/site-origin";
 import { revshareEnabled } from "@/lib/revshare-shared";
-import { streamPlaybackHost } from "@/server/relay/config";
+import { replayDriverMode, streamPlaybackHost } from "@/server/relay/config";
+import { BUNNY_EMBED_HOST } from "@/server/video/replay-bunny";
+import { FAKE_REPLAY_EMBED_HOST } from "@/server/video/replay-fake";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
@@ -79,6 +81,19 @@ function playbackOrigin(): string {
   }
 }
 
+/** The replay host's embed origin(s) for frame-src (Task 25), as ` https://<host>` suffixes: the real host's always (a fixed origin,
+ *  not a setting), and the fake's only under the fake replay driver. A driver setting that throws adds no fake origin and never
+ *  takes the page down (the driver itself refuses it by name where it is used). */
+function replayEmbedOrigins(): string {
+  let fake = false;
+  try {
+    fake = replayDriverMode() === "fake";
+  } catch {
+    fake = false;
+  }
+  return ` https://${BUNNY_EMBED_HOST}${fake ? ` https://${FAKE_REPLAY_EMBED_HOST}` : ""}`;
+}
+
 /** The PostHog first-party proxy origin (prod), as a ` <origin>` connect-src suffix; "" when events ride the same-origin /ingest rewrite. */
 function posthogApiOrigin(): string {
   const host = process.env.NEXT_PUBLIC_POSTHOG_API_HOST;
@@ -144,7 +159,8 @@ export function cspHeader(
     // Seazn-hosted video (Task 15): the <video> plays a MediaSource through a `blob:` URL (hls.js), or the signed manifest itself
     // (Safari's native HLS) from the Stream customer host. A directive of its own, so it restates 'self' (default-src covered media).
     `media-src 'self' blob:${playbackOrigin()}`,
-    `frame-src 'self' https://js.stripe.com https://*.stripe.com https://hooks.stripe.com https://www.youtube-nocookie.com https://youtube-nocookie.com https://challenges.cloudflare.com`,
+    // Seazn-hosted video (Task 25): a replay host's copy plays in the host's own embed page (`replayEmbedOrigins`; proxy-csp-seazn-replay.test.ts).
+    `frame-src 'self' https://js.stripe.com https://*.stripe.com https://hooks.stripe.com https://www.youtube-nocookie.com https://youtube-nocookie.com https://challenges.cloudflare.com${replayEmbedOrigins()}`,
     `object-src 'none'`,
     `base-uri 'self'`,
     `form-action 'self'`,
