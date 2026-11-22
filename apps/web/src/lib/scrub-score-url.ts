@@ -97,6 +97,12 @@
 // (`*.cloudflarestream.com/`, plain or URL-encoded) becomes `[token]`, whatever its shape: on an unsigned input it is the uid,
 // which plays as well as a token does. The host and the rest of the path stay.
 //
+// The replay host's PLAYER URL rides its QUERY (Seazn-hosted video, Task 25; plan B4): the match page's frame loads
+// `https://iframe.mediadelivery.net/embed/<library>/<video>?token=<sha256 hex>&expires=<epoch s>`, which plays the video until it
+// expires, and a session replay's network recording holds the frame's document request. On the host's `/embed/` path, the `token`
+// AND `expires` values become `[token]` / `[expires]`, plain or URL-encoded at any depth; the host, library, video and every other
+// parameter stay. A `token=` on another host is not this rule's.
+//
 // A sampled TRANSACTION carries the request's query string a second time, in its span data, WITH its `?` and beside a URL
 // that has none: `http.query` in `contexts.trace.data` and an outgoing request's breadcrumb (@sentry/opentelemetry
 // `getRequestSpanData`), `url.query` in a span's data (@sentry/core `getHttpSpanDetailsFromUrlObject`). Where the event, or
@@ -166,6 +172,13 @@ const ENCODED_JOIN_CODE = new RegExp(`(%(?:25)*(?:3[Ff]|26)(?:${JOIN_CODE_NAMES}
 /** The replay host's CDN token (probe B5), a path segment `bcdn_token=<token>&expires=…`: the value up to the next `&`, `/`,
  *  `?`, `#`, quote, angle bracket or space. Any value, not only the token's own 43 characters. */
 const BUNNY_CDN_TOKEN = /(bcdn_token=)[^&/?#\s"'<>]+/g;
+/** The replay host's embed path (Task 25; B4) and its query: the host must end there (an optional port), the path is `/embed/…`, and the
+ *  query runs to a `#`, quote, angle bracket or space. Its `token` and `expires` values are scrubbed (`EMBED_QUERY_PARAM`). */
+const BUNNY_EMBED_QUERY = /(iframe\.mediadelivery\.net(?::\d+)?\/embed\/[^?#\s"'<>]*\?)([^#\s"'<>]*)/g;
+const EMBED_QUERY_PARAM = /(^|&)(token|expires)=[^&]*/g;
+/** The same URL-ENCODED inside another URL, at any depth, either hex case: the encoded query runs to the outer URL's next raw `&`. */
+const ENCODED_BUNNY_EMBED_QUERY = /(iframe\.mediadelivery\.net(?:%(?:25)*3[Aa]\d+)?%(?:25)*2[Ff]embed%(?:25)*2[Ff][^?&#\s"'<>]*?%(?:25)*3[Ff])([^&#\s"'<>]*)/g;
+const ENCODED_EMBED_QUERY_PARAM = /((?:^|%(?:25)*26)(token|expires)%(?:25)*3[Dd])[^%]*/g;
 /** A Cloudflare Stream customer host (`customer-<code>.cloudflarestream.com`, an optional port) and the first segment of its
  *  path: the playback token (C1), or an unsigned input's uid. The segment runs to the next `/`, `?`, `#`, quote, angle bracket
  *  or space; a JWT's dots are inside it. The host must end there (`….cloudflarestream.com.other.example/` is not it). */
@@ -297,6 +310,7 @@ const MAYBE_TOKEN = new RegExp(
     "\\/capture\\/codes\\/",
     "capture%(?:25)*2[Ff]codes%",
     "bcdn_token=",
+    "iframe\\.mediadelivery\\.net",
     "\\.cloudflarestream\\.com",
     `(?:${JOIN_CODE_NAMES})=`,
     `(?:${JOIN_CODE_NAMES})%`,
@@ -321,13 +335,17 @@ export function scrubTokenQuery(query: string): string {
  *  `join_code=` / `join=` query value (plain or encoded) becomes `[code]`, the secret after a
  *  `SECRET_PATH_ROUTES` route root (`/claim/`, `/join/`, `/checkin/`, …; plain or encoded) becomes `[token]`, and a
  *  one-time sign-in token in the `token=` query value of a one-time route (plain or encoded) becomes `[token]`, a replay CDN
- *  token after `bcdn_token=` becomes `[token]`, the playback token after a Cloudflare Stream customer host (plain or encoded)
+ *  token after `bcdn_token=` becomes `[token]`, the replay host's embed `token` / `expires` values become `[token]` / `[expires]`
+ *  (plain or encoded), the playback token after a Cloudflare Stream customer host (plain or encoded)
  *  becomes `[token]`, and a bare quick match home token `qm_…` left anywhere else becomes `qm_[token]`. */
 export function scrubScoreUrl(value: string): string {
   if (!MAYBE_TOKEN.test(value)) return value;
   return value
     // First, for the same reason as the room JWT below: a CDN token is random base64url too, and a `dl_` run inside it would be half-eaten.
     .replace(BUNNY_CDN_TOKEN, "$1[token]")
+    // Early too: the embed token is hex and must not be touched by a later rule before its own.
+    .replace(BUNNY_EMBED_QUERY, (_m, head: string, query: string) => head + query.replace(EMBED_QUERY_PARAM, "$1$2=[$2]"))
+    .replace(ENCODED_BUNNY_EMBED_QUERY, (_m, head: string, query: string) => head + query.replace(ENCODED_EMBED_QUERY_PARAM, "$1[$2]"))
     // Early, for the same reason: a Cloudflare playback token is a JWT, and a `dl_` run inside it would be half-eaten.
     .replace(STREAM_PLAYBACK_PATH, "$1[token]")
     .replace(ENCODED_STREAM_PLAYBACK_PATH, "$1[token]")
