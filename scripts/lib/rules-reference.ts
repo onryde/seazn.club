@@ -41,9 +41,9 @@ export const CHECKER_FILES: readonly string[] = [
  *  W5's rows (engine 9.1.0, a rows-only minor: "docs(rules): W5 round-robin rows (rulings 276-291), awaiting proof"): 74 rows reach this repo with
  *  the engine snapshot before W5's own PRs prove them (the standalone W5 rows bump PR, G6, takes the snapshot first). The value
  *  names the PR that proves the row (W5 engine PR 34, W5 app PR A 37, W5 app PR B 3); that PR deletes the entry and fills `proved by`.
- *  Engine 10.0.0 proved the 34 "W5 engine PR" rows and 10.0.1 the 37 "W5 app PR A" rows; W5 app PR B Task 0 (the ^10.0.1 bump)
- *  deleted those 71 entries. The map now holds 40: the 37 W4 app PR A entries and W5 app PR B's 3, which the engine's patch after
- *  B merges proves. scripts/__tests__/rules-reference.test.ts holds the map to the installed table's unproved signed rows. */
+ *  Engine 10.0.0 proved the 34 W5 engine PR rows and 10.0.1 the 37 W5 app PR A rows; W5 app PR B Task 0 (the ^10.0.1 bump)
+ *  deleted those 71 entries, and the W5 close-out (the ^10.0.3 bump, Task 10) deleted W5 app PR B's last 3. The map now holds the 37
+ *  W4 app PR A entries and no W5 one. scripts/__tests__/rules-reference.test.ts holds the map to the installed table's unproved signed rows. */
 export const AWAITING_PROOF: ReadonlyMap<string, string> = new Map<string, string>([
   ["X-SD-1", "W4 app PR A (ruling 274; engine c42a4b7)"],
   ["X-SD-2", "W4 app PR A (ruling 274; engine c42a4b7)"],
@@ -82,9 +82,6 @@ export const AWAITING_PROOF: ReadonlyMap<string, string> = new Map<string, strin
   ["X-SP-3", "W4 app PR A (ruling 274; engine c42a4b7)"],
   ["X-SP-6", "W4 app PR A (ruling 269; engine c42a4b7)"],
   ["X-SP-7", "W4 app PR A (ruling 269; engine c42a4b7)"],
-  ["X-QS-2", "W5 app PR B (ruling 285; engine 9.1.0)"],
-  ["X-ADJ-4", "W5 app PR B (ruling 285; engine 9.1.0)"],
-  ["X-ADJ-5", "W5 app PR B (ruling 285; engine 9.1.0)"],
 ]);
 
 /** Rule rows write every engine path as `packages/engine/...`, in the monorepo and in the engine's own repo alike: the prefix is

@@ -104,6 +104,13 @@ const rowOf = (rows: readonly StandingsRow[], id: string): StandingsRow => {
 };
 const order = (rows: readonly StandingsRow[]) => rows.map((x) => x.entrantId);
 
+/** The stage's stored `config` - X-ADJ-4 "never stage config": an adjustment is a ledger row, so nothing here may move. */
+async function stageConfig(stageId: string): Promise<unknown> {
+  const [s] = await sql<{ config: unknown }[]>`select config from stages where id = ${stageId}`;
+  if (s === undefined) throw new Error("premise: the stage has a row");
+  return s.config;
+}
+
 async function lotsRows(stageId: string) {
   return sql<{ id: string; members: string[]; drawn_at: Date }[]>`
     select id, members::text[] as members, drawn_at from stage_lots_draws where stage_id = ${stageId} order by drawn_at, id`;
@@ -145,11 +152,13 @@ describe.skipIf(!HAS_DB)("Adjust points (W5 app PR B Task 7, C5)", () => {
     // differential: today no path - before Task 7 no write moved a started table's points (C5 was 🚫, carry_deltas FORMAT_LOCKED)
     const r = await levelPair(FOOTBALL);
     const before = await table(r.stageId);
+    const configBefore = await stageConfig(r.stageId);
     const p2 = r.ids[1]!;
     await adjustPoints(r.auth, r.stageId, { entrant_id: p2, delta: -3, reason: REASON });
     await adjustPoints(r.auth, r.stageId, { entrant_id: p2, delta: -1, reason: "Late kick-off" });
     const after = await table(r.stageId);
     expect(rowOf(after, p2).points, "X-ADJ-4 a second adjustment stacks").toBe(rowOf(before, p2).points - 4);
+    expect(await stageConfig(r.stageId), "X-ADJ-4 never stage config: an adjustment is a ledger row, the stage's config is untouched").toEqual(configBefore);
     const listed = await listPointsAdjustments(r.auth, r.stageId);
     expect(listed.adjustments.map((a) => [a.delta, a.reason]), "both, in ledger order").toEqual([
       [-3, REASON],
@@ -174,7 +183,7 @@ describe.skipIf(!HAS_DB)("Adjust points (W5 app PR B Task 7, C5)", () => {
     expect(await loadPointsAdjustments(r.divisionId), "nothing written").toEqual([]);
   });
 
-  it("C5: refused before Start and on a complete table; hidden and refused on a bracket stage", async () => {
+  it("C5 + X-ADJ-4: refused before Start and on a complete table; hidden and refused on a bracket stage", async () => {
     const unstarted = await rig({ n: 4, sport: FOOTBALL });
     const before = await refusal(adjustPoints(unstarted.auth, unstarted.stageId, { entrant_id: unstarted.ids[0]!, delta: -3, reason: REASON }));
     expect([before.status, before.code]).toEqual([422, "RR_ADJUST_NOT_STARTED"]);
@@ -375,6 +384,7 @@ describe.skipIf(!HAS_DB)("Adjust points (W5 app PR B Task 7, C5)", () => {
   });
 
   it("X-ADJ-5 Swiss: the next Pair uses the adjusted score", async () => {
+    // single-sport: Pair reads the stage table's points (stageTablePoints) and every sport's Swiss cascade is points-first, so an adjustment lands on that score in all of them.
     // differential: today no adjustment exists to read - without it the loser meets the other loser in round 2
     const { auth } = await seedOrg("pro");
     const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "ADJ SW " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
