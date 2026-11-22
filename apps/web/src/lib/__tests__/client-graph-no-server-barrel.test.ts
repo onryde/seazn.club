@@ -16,7 +16,7 @@
 // `@seazn/scheduler` and its `placement-client` subpath are what a client must never import. The derivation is the same;
 // only what it finds moved.
 //
-// Engine split 2b (reverse inventory row 2, I): the engine is the INSTALLED package (`@onryde/seazn-engine` under its `@seazn/engine`
+// Engine split 2b (reverse inventory row 2, I): the engine is the INSTALLED package (`@seazn-club/seazn-engine` under its `@seazn/engine`
 // alias), so its exports are read from the installed manifest and walked through its compiled `dist/` graph — what a bundle actually
 // loads. An export target there is a conditional object (`types`, `default`); the bundle loads `default`. The walker's `.ts` filter
 // learned `.js` for the same reason. The engine's own "no gRPC in src" half is the engine's (`test/runtime-deps.test.ts`).

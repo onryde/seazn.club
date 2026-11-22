@@ -31,7 +31,7 @@ import { newSession, check, signIn, tag, v1, v1data, setPlan } from "../harness.
  * against a live service, THAT board stalls at `tiers_completed: 1/4`,
  * `budget_expired: true`, and falls back to greedy for a reason that has
  * nothing to do with the cutover: `PLACEMENT_WALL_SECONDS_MAX` defaults to
- * 10s (`src/placement/config.py` in onryde/seazn.club.placement), and proving makespan
+ * 10s (`src/placement/config.py` in seazn-club/seazn.club.placement), and proving makespan
  * optimal on a 21-fixture/2-court board with a real rest floor does not
  * finish inside it. This 9-fixture hand-built board does, reproducibly:
  *

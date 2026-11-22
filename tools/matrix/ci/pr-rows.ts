@@ -8,7 +8,7 @@
 // writes it and the changed-file list (`git diff --name-only`, one path per line) to files, and appends this
 // CLI's stdout to $GITHUB_OUTPUT. The first `Matrix rows:` line counts, and a fenced code block or an HTML comment is
 // ignored (neither is a declaration: a quote of the template, and text GitHub does not render).
-// Engine split 2b (plan Review Focus 5): the engine is the registry package @onryde/seazn-engine, so no PR touches
+// Engine split 2b (plan Review Focus 5): the engine is the registry package @seazn-club/seazn-engine, so no PR touches
 // packages/engine/** any more and an engine bump reaches this repo as a version change in pnpm-lock.yaml. The job also writes
 // the lock's own diff (`git diff -- pnpm-lock.yaml`), and a diff that moves the engine's version declares like an engine path.
 // Exit codes, each with one meaning (the one convention, D8):
@@ -34,8 +34,8 @@ export const DECLARING: readonly RegExp[] = [/^packages\/engine\//, /^apps\/web\
 
 /** The lock whose diff carries an engine bump since engine split 2b, and the engine's name in it. */
 export const LOCK = "pnpm-lock.yaml";
-/** `@onryde/seazn-engine@<version>` (a version line, a package key, a snapshot key) or `@<specifier>` (an importer's specifier). */
-const ENGINE_IN_LOCK = /@onryde\/seazn-engine@([~^]?\d[^\s'"(),:]*)/g;
+/** `@seazn-club/seazn-engine@<version>` (a version line, a package key, a snapshot key) or `@<specifier>` (an importer's specifier). */
+const ENGINE_IN_LOCK = /@seazn-club\/seazn-engine@([~^]?\d[^\s'"(),:]*)/g;
 
 const USAGE = "usage: pr-rows.ts --body-file <path> --changed-file <path> [--lock-diff-file <path>]";
 
@@ -106,7 +106,7 @@ export function decide(input: { body: string; changed: readonly string[]; lockDi
   const lockListed = changed.includes(LOCK);
   let engineBump: string | null = null;
   if (input.lockDiff === undefined) {
-    if (lockListed) return { exit: 2, why: `the change list names ${LOCK} but no lock diff was given (--lock-diff-file): whether it moves @onryde/seazn-engine cannot be decided, so the job's wiring is wrong` };
+    if (lockListed) return { exit: 2, why: `the change list names ${LOCK} but no lock diff was given (--lock-diff-file): whether it moves @seazn-club/seazn-engine cannot be decided, so the job's wiring is wrong` };
   } else {
     const lock = engineInLockDiff(input.lockDiff);
     if (lock.changesLines !== lockListed) {
@@ -115,7 +115,7 @@ export function decide(input: { body: string; changed: readonly string[]; lockDi
         : `the lock diff changes lines of ${LOCK} but the change list does not name it: the two files the job wrote disagree` };
     }
     if (lock.removed.join(" ") !== lock.added.join(" ")) {
-      engineBump = `${LOCK} (@onryde/seazn-engine ${lock.removed.join(", ") || "absent"} → ${lock.added.join(", ") || "absent"})`;
+      engineBump = `${LOCK} (@seazn-club/seazn-engine ${lock.removed.join(", ") || "absent"} → ${lock.added.join(", ") || "absent"})`;
     }
   }
   let declared: readonly string[] | "all" | null;

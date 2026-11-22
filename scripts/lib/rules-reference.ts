@@ -1,7 +1,7 @@
 // The rules reference CHECKER's monorepo half (W2a ruling 75, spec §6; engine split 1d-5). Engine split 2b (reverse inventory row 16):
 // the engine's test/ left this repository, so scripts/__tests__/rules-reference.test.ts takes its own copy of the proof checker it
-// imported from packages/engine/test/rules-reference.ts, copied from onryde/seazn.club@5a67fbf37d25675c683bbc91785bba5bacd93714
-// (the engine-split-base tag; byte-identical to onryde/seazn.club.engine v1.0.0's test/rules-reference.ts) with only what this half
+// imported from packages/engine/test/rules-reference.ts, copied from seazn-club/seazn.club@5a67fbf37d25675c683bbc91785bba5bacd93714
+// (the engine-split-base tag; byte-identical to seazn-club/seazn.club.engine v1.0.0's test/rules-reference.ts) with only what this half
 // reads: the engine-directory readers (`ENGINE`, `engineFileExists`, `readEngineFile`) and the parser re-exports are not copied,
 // because the rows come from the installed package's testkit (`@seazn/engine/testkit`) and the engine's paths are the engine's
 // checker's. Nothing else is edited: the same TEST_FILE, CHECKER_FILES, AWAITING_PROOF, budget, title parser and proof checks, so

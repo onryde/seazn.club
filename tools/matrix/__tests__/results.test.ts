@@ -788,7 +788,7 @@ const EVIDENCE: readonly [string, string][] = [
   // GitHub shapes that are not tokens: the prefixes named in prose, short identifiers, a run URL, a body one short of the floor.
   ["github token prefixes named in prose", "the fine-grained prefix is github_pat_ and the classic ones are ghp_, ghs_ and gho_"],
   ["short gh-looking identifiers", "ghs_report ghr_run_17 ghp_x1 github_pat_short ghost_writer"],
-  ["github actions run url", "https://github.com/onryde/seazn.club/actions/runs/37218574303"],
+  ["github actions run url", "https://github.com/seazn-club/seazn.club/actions/runs/37218574303"],
   ["a ghs_ body one under the 20-character floor", `ghs_${GH_BODY.slice(0, 19)}`],
   ["a github_pat_ body one under the 20-character floor", finePat(FINE_BODY.slice(0, 19))],
   // Glued to a letter or digit there is no token start (an underscore, by contrast, is one: see the positive row above).

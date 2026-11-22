@@ -1,5 +1,5 @@
 // R4 sponsors on stream — the COMPOSITOR STAND-IN the sponsor e2e specs share (`walkthrough/sponsors-journey.spec.ts`,
-// `sponsors-edge-cases.spec.ts`). The compositor is a separate program (onryde/seazn.club.compositor); in e2e it is
+// `sponsors-edge-cases.spec.ts`). The compositor is a separate program (seazn-club/seazn.club.compositor); in e2e it is
 // stood in for at its HTTP boundary ONLY, exactly as it talks to web (spec 2026-10-27 §3.6, docs/contracts/relay-job.v1.json):
 //
 //   * its job token: HS256 over AUTH_SECRET, audience `seazn-relay`, `{ sid, scope: "relay-job" }` — the claim set

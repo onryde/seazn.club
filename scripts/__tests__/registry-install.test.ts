@@ -1,5 +1,5 @@
 // Engine split 2b, Task A1: seazn.club installs the engine from GitHub Packages, `"@seazn/engine":
-// "npm:@onryde/seazn-engine@^X.Y.Z"` (a caret range on the registry alias; which release is the engine-release bump's business, so
+// "npm:@seazn-club/seazn-engine@^X.Y.Z"` (a caret range on the registry alias; which release is the engine-release bump's business, so
 // no version literal is pinned here), and packages/engine has left the workspace. Three pins:
 //
 //   1. every consumer RESOLVES the registry package, at the version its lock importer names, through a lock importer whose
@@ -9,7 +9,7 @@
 //      and that version satisfies the caret range the manifest declares (a bump that edited the manifests but not the lock
 //      would otherwise pass against the old release).
 //      SNAPSHOT MODE (W3 app-B, plan R1): while pnpm-workspace.yaml's `overrides:` holds exactly one `@seazn/engine` entry shaped
-//      `npm:@onryde/seazn-engine@0.0.0-pr<N>.<40 hex>` (an engine PR's preview, installed so the app can be proven green on it
+//      `npm:@seazn-club/seazn-engine@0.0.0-pr<N>.<40 hex>` (an engine PR's preview, installed so the app can be proven green on it
 //      before the engine is released), the lock importer's specifier and version are compared to THAT entry instead, and the
 //      caret check is skipped (a prerelease satisfies no caret). Everything else in this test, and all of the other pins, are
 //      unchanged: the manifests stay on the caret. The mode cannot ship on main unnoticed: it lives only while the override does,
@@ -27,10 +27,10 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const ROOT = path.resolve(import.meta.dirname, "../..");
-const SCOPED = "@onryde/seazn-engine";
+const SCOPED = "@seazn-club/seazn-engine";
 const ALIAS = "@seazn/engine";
 /** The shape of a pin: the registry alias at a caret range on one full release. No prerelease, no `workspace:`/`link:`/`file:`, no tag, no `*`. */
-const SPEC_SHAPE = /^npm:@onryde\/seazn-engine@\^(\d+)\.(\d+)\.(\d+)$/;
+const SPEC_SHAPE = /^npm:@seazn-club\/seazn-engine@\^(\d+)\.(\d+)\.(\d+)$/;
 const WANT_SHAPE = `a caret range on the registry alias (npm:${SCOPED}@^X.Y.Z)`;
 /** Does `^major.minor.patch` admit `version`? The semver caret rule: the leftmost non-zero part is the ceiling. `semver` is not a root dependency, so this is read here. */
 function caretAdmits(range: string, version: string): boolean {
@@ -46,7 +46,7 @@ function caretAdmits(range: string, version: string): boolean {
   return vM === 0 && vm === 0 && vp === rp;
 }
 /** An engine PR's preview build, as an `overrides:` value: the registry alias at `0.0.0-pr<N>.<the commit's 40 hex>`. */
-const SNAPSHOT_OVERRIDE = /^npm:@onryde\/seazn-engine@(0\.0\.0-pr\d+\.[0-9a-f]{40})$/;
+const SNAPSHOT_OVERRIDE = /^npm:@seazn-club\/seazn-engine@(0\.0\.0-pr\d+\.[0-9a-f]{40})$/;
 /** The snapshot an `overrides:` block of pnpm-workspace.yaml installs for the `@seazn/engine` alias, or null with no such entry
  *  (the strict mode). An entry that is not snapshot-shaped, or a second one, is a deliberate edit that must be made here: it
  *  THROWS, never quietly falls back to either mode. Read by lines, as `workspaceDirs` does (the repo root has no YAML dependency). */
@@ -168,8 +168,8 @@ describe("@seazn/engine is installed from GitHub Packages (engine split 2b, A1)"
         problems.push(`${dir}: ${ALIAS}/core does not resolve (${(e as Error).message.split("\n")[0]})`);
         continue;
       }
-      const pkgRoot = /^(.*\/node_modules\/\.pnpm\/@onryde\+seazn-engine@[^/]+\/node_modules\/@onryde\/seazn-engine)\//.exec(real)?.[1];
-      if (pkgRoot === undefined) { problems.push(`${dir}: ${ALIAS}/core resolves to ${real}, outside node_modules/.pnpm/@onryde+seazn-engine@*`); continue; }
+      const pkgRoot = /^(.*\/node_modules\/\.pnpm\/@seazn-club\+seazn-engine@[^/]+\/node_modules\/@seazn-club\/seazn-engine)\//.exec(real)?.[1];
+      if (pkgRoot === undefined) { problems.push(`${dir}: ${ALIAS}/core resolves to ${real}, outside node_modules/.pnpm/@seazn-club+seazn-engine@*`); continue; }
       const installed = JSON.parse(readFileSync(path.join(pkgRoot, "package.json"), "utf8")) as { name?: string; version?: string };
       if (installed.name !== SCOPED || installed.version !== version) problems.push(`${dir}: installed ${installed.name}@${installed.version}, the lock says ${SCOPED}@${version}`);
       problems.push(...modeProblems(dir, { specifier: entry.specifier, version }, declared, range, snapshot));
@@ -279,6 +279,6 @@ describe("@seazn/engine is installed from GitHub Packages (engine split 2b, A1)"
     // the registry mapping only. pnpm 10.34 refuses to expand `${NODE_AUTH_TOKEN}` in a project .npmrc anyway ("Ignored
     // project-level auth setting"), so a credential line there could only ever be a literal token.
     const npmrc = readFileSync(path.join(ROOT, ".npmrc"), "utf8").split("\n").filter((l) => l.trim() !== "" && !/^\s*[#;]/.test(l));
-    expect(npmrc).toEqual(["@onryde:registry=https://npm.pkg.github.com"]);
+    expect(npmrc).toEqual(["@seazn-club:registry=https://npm.pkg.github.com"]);
   });
 });

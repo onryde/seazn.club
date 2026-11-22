@@ -102,7 +102,7 @@ const SPORT_KEYS: readonly string[] = builtinModules.map((m) => m.key);
 const ts = createRequire(import.meta.url)("typescript") as typeof TS;
 
 // Engine split 2b: packages/engine/src/{scheduling,competition} and the packages/engine/src name root left with the engine. The
-// engine's own ratchet (onryde/seazn.club.engine, scripts/single-sport.ts) scans them there; this one keeps the app's pins.
+// engine's own ratchet (seazn-club/seazn.club.engine, scripts/single-sport.ts) scans them there; this one keeps the app's pins.
 export const SCOPE_DIRS: readonly string[] = [];
 export const NAME_ROOTS = ["apps/web/src"] as const;
 export const TEST_FILE = /\.test\.tsx?$/;

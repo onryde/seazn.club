@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 const ROOT = path.resolve(import.meta.dirname, "../..");
 const SKIP_DIRS = new Set(["node_modules", ".next", "dist", ".turbo", "coverage", ".git", ".stryker-tmp", "reports", "test-results", "playwright-report"]);
 const SOURCE_FILE = /\.(?:[cm]?[jt]s|tsx)$/;
-const ENGINE_SPEC = String.raw`["'](?:@seazn/engine|@onryde/seazn-engine)[^"']*["']`;
+const ENGINE_SPEC = String.raw`["'](?:@seazn/engine|@seazn-club/seazn-engine)[^"']*["']`;
 /**
  * An import of the engine that binds nothing, in each of the three shapes a bundler may drop under `sideEffects: false`:
  * `import "@seazn/engine/x";` (the quote follows `import` directly), `import {} from "@seazn/engine/x";` (an empty binding
@@ -33,17 +33,17 @@ describe("no consumer relies on importing the engine for an effect", () => {
     const hit = (s: string) => [...s.matchAll(BARE_IMPORT)].length;
     expect(hit('import "@seazn/engine/sports";')).toBe(1);
     expect(hit("  import '@seazn/engine';")).toBe(1);
-    expect(hit('import "@onryde/seazn-engine/core";')).toBe(1);
+    expect(hit('import "@seazn-club/seazn-engine/core";')).toBe(1);
     expect(hit('import { a } from "@seazn/engine/core";')).toBe(0);
     expect(hit('import type { A } from "@seazn/engine/core";')).toBe(0);
     expect(hit('const m = await import("@seazn/engine/core");')).toBe(0);
     expect(hit('// import "@seazn/engine/sports"')).toBe(0);
     // the other ways to import for nothing: an empty binding list, and a require() whose result is thrown away
     expect(hit('import {} from "@seazn/engine/sports";')).toBe(1);
-    expect(hit('import {  } from "@onryde/seazn-engine/sports";')).toBe(1);
+    expect(hit('import {  } from "@seazn-club/seazn-engine/sports";')).toBe(1);
     expect(hit('import {\n} from "@seazn/engine/sports";')).toBe(1);
     expect(hit('require("@seazn/engine/sports");')).toBe(1);
-    expect(hit("  require('@onryde/seazn-engine');")).toBe(1);
+    expect(hit("  require('@seazn-club/seazn-engine');")).toBe(1);
     expect(hit('import { a } from "@seazn/engine/core";')).toBe(0);
     expect(hit('const { a } = require("@seazn/engine/core");')).toBe(0);
     expect(hit('module.exports = require("@seazn/engine/core");')).toBe(0);
@@ -57,7 +57,7 @@ describe("no consumer relies on importing the engine for an effect", () => {
     const bare: string[] = [];
     for (const f of files) {
       const source = readFileSync(f, "utf8");
-      if (source.includes("@seazn/engine") || source.includes("@onryde/seazn-engine")) {
+      if (source.includes("@seazn/engine") || source.includes("@seazn-club/seazn-engine")) {
         for (const m of source.matchAll(BARE_IMPORT)) bare.push(`${path.relative(ROOT, f)}: ${m[0].trim()}`);
         if ([...source.matchAll(BOUND_IMPORT)].length > 0) boundImporters++;
       }

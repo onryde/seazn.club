@@ -5,7 +5,7 @@
 // it reads), never a copy of it kept in the test.
 //
 // Engine split 2b (owner ruling 2026-10-30, option A): this file is matrix-truth.yml ONLY. mutation.yml left with the engine
-// (onryde/seazn.club.engine's .github/workflows/mutation.yml, its tests in that repository's test/matrix-workflow.test.ts). The
+// (seazn-club/seazn.club.engine's .github/workflows/mutation.yml, its tests in that repository's test/matrix-workflow.test.ts). The
 // tests that read mutation.yml alone moved there; the three that read both workflows were split, and their matrix-truth.yml halves
 // keep their original ids here (the switchable runner, RUNNER_ENV from runner.environment, carry (b)'s positive control).
 import { spawnSync } from "node:child_process";
@@ -116,7 +116,7 @@ describe("the visibility guard (Review Focus 2)", () => {
     try {
       writeFileSync(join(dir, "gh"), `#!/bin/sh\nn=$(cat "$GH_STATE/n" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$GH_STATE/n"\nif [ "$n" -le "$GH_FAILS" ]; then if [ -n "$GH_BODY" ]; then echo "$GH_BODY"; fi; echo 'HTTP 403' >&2; exit 1; fi\necho "$GH_ANSWER"\n`, { mode: 0o755 });
       writeFileSync(join(dir, "sleep"), `#!/bin/sh\necho "$1" >> "$GH_STATE/sleeps"\n`, { mode: 0o755 });
-      const r = spawnSync("bash", ["-c", script], { env: { PATH: `${dir}:${process.env.PATH ?? ""}`, GITHUB_REPOSITORY: "onryde/seazn.club", GH_STATE: dir, GH_FAILS: String(gh.fails), GH_ANSWER: gh.answer, GH_BODY: gh.body ?? "", ...env }, encoding: "utf8" });
+      const r = spawnSync("bash", ["-c", script], { env: { PATH: `${dir}:${process.env.PATH ?? ""}`, GITHUB_REPOSITORY: "seazn-club/seazn.club", GH_STATE: dir, GH_FAILS: String(gh.fails), GH_ANSWER: gh.answer, GH_BODY: gh.body ?? "", ...env }, encoding: "utf8" });
       const lines = (f: string) => (existsSync(join(dir, f)) ? readFileSync(join(dir, f), "utf8").split("\n").filter(Boolean) : []);
       return { status: r.status, stdout: r.stdout, stderr: r.stderr, calls: Number(lines("n")[0] ?? 0), sleeps: lines("sleeps") };
     } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -148,7 +148,7 @@ describe("the visibility guard (Review Focus 2)", () => {
   it("carry (b): a refusal on a private repository NAMES the Stryker mutation workflow, in every job, and says nothing of a matrix truth run (run for real, with a stand-in gh)", () => {
     const env = { RUNNER_ENV: "github-hosted", INJECT: "none" };
     // (app half, owner ruling 2026-10-30 option A) The loop over mutation.yml's jobs and the public pass-through through its guard
-    // are the engine half (onryde/seazn.club.engine test/matrix-workflow.test.ts). This half is matrix-truth.yml's positive control.
+    // are the engine half (seazn-club/seazn.club.engine test/matrix-workflow.test.ts). This half is matrix-truth.yml's positive control.
     // the positive control: matrix-truth.yml's own guard still names itself (so the assertions above can tell the two apart)
     const own = runWith(env, { fails: 0, answer: "private" });
     expect(own.status).toBe(1);
@@ -725,7 +725,7 @@ describe("ci.yml's per-PR sample (R27, D13)", () => {
 const CI = readFileSync(join(WORKFLOWS, "ci.yml"), "utf8");
 const CI_JOBS = jobsOf(CI);
 const ROWS_STEP = "Rows the PR declares (R27)";
-const SAME_REPO = "onryde/seazn.club";
+const SAME_REPO = "seazn-club/seazn.club";
 
 /** The flags single-sport.test.ts and run-cli.test.ts spell inline (the repo has no shared git-identity helper): a fixed author,
  *  no signing, no hooks — so a scratch commit never depends on, or prompts for, the machine's own git config. */
@@ -1004,7 +1004,7 @@ describe("a re-run does not collide with its own artifacts (m3)", () => {
 });
 
 // --- the matrix-truth.yml halves of the two tests that read both workflows (engine split 2b, owner ruling 2026-10-30, option A) ---
-// The engine halves (mutation.yml's jobs) are onryde/seazn.club.engine's test/matrix-workflow.test.ts, titled " (engine half)".
+// The engine halves (mutation.yml's jobs) are seazn-club/seazn.club.engine's test/matrix-workflow.test.ts, titled " (engine half)".
 describe("both workflows run on the switchable runner (ruling 68, D24)", () => {
   it("every job of matrix-truth.yml AND mutation.yml runs on the switchable runner (ruling 68, D24), and has a timeout-minutes", () => {
     for (const [file, text] of [["matrix-truth.yml", WF]] as const) {

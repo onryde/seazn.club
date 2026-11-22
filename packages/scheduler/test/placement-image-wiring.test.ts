@@ -3,7 +3,7 @@
 // The placement service lives in its own repo now. This repo vendors its proto and pins the image built from the very commit the
 // proto was copied at (`VENDORED.json`'s `imageTag`). Two things must stay true or CI tests the wrong thing without saying so:
 //
-//   * the jobs that run `placement-service:ci` get it by PULLING the pinned `ghcr.io/onryde/seazn-placement:<sha>` (and
+//   * the jobs that run `placement-service:ci` get it by PULLING the pinned `ghcr.io/seazn-club/seazn-placement:<sha>` (and
 //     retagging it), through the one script `scripts/placement-image.sh` — none builds it from source and none types a tag;
 //   * the scheduler's live tests (placement-integration, repair-decompose-cpsat-integration) run in ci.yml's `scheduler-live`
 //     job, against that same pinned image as a service container.
@@ -23,7 +23,7 @@ const REPO = resolve(PACKAGE, "../..");
 const SCRIPT = join(PACKAGE, "scripts/placement-image.sh");
 const REAL_PIN = join(PACKAGE, "VENDORED.json");
 const WORKFLOWS = join(REPO, ".github/workflows");
-const IMAGE = "ghcr.io/onryde/seazn-placement";
+const IMAGE = "ghcr.io/seazn-club/seazn-placement";
 
 const SCRATCH = mkdtempSync(join(tmpdir(), "placement-image-"));
 afterAll(() => rmSync(SCRATCH, { recursive: true, force: true }));
@@ -183,7 +183,7 @@ describe("placement-image.sh pull", () => {
       "  exit 0",
       "fi",
       '[ "$1" = "$DOCKER_FAIL_ON" ] && exit 1',
-      'if [ "$1" = "image" ]; then echo \'["ghcr.io/onryde/seazn-placement@sha256:feedface"]\'; fi',
+      'if [ "$1" = "image" ]; then echo \'["ghcr.io/seazn-club/seazn-placement@sha256:feedface"]\'; fi',
       "exit 0",
       "",
     ].join("\n"),

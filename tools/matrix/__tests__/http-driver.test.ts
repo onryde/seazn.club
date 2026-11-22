@@ -1137,7 +1137,7 @@ describe("HttpDriver — divisionPhase (W1d Task 14, item 15c)", () => {
 
   it("the void and the dating are the product's: core.void is a kernel core event, and PATCH /fixtures/:id takes scheduled_at as an offset datetime or null", () => {
     // (app half, owner ruling 2026-10-30 option A) The pin that core.void is a kernel core event read packages/engine/src/core/events.ts:
-    // it is the engine half, in onryde/seazn.club.engine's test/http-driver.test.ts. This half pins the product's dating.
+    // it is the engine half, in seazn-club/seazn.club.engine's test/http-driver.test.ts. This half pins the product's dating.
     const schemas = schemasText();
     const block = schemas.slice(schemas.indexOf("export const PatchFixture"), schemas.indexOf("export type PatchFixture"));
     expect(block).toContain("scheduled_at: z.iso.datetime({ offset: true }).nullable(),");

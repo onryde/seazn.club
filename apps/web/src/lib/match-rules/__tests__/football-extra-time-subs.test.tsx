@@ -1,4 +1,4 @@
-// Engine 7.0.0 (onryde/seazn.club.engine#41, F-R3) — football's `extraTimeSubs: { subs, windows }`, Law 3's extra substitution
+// Engine 7.0.0 (seazn-club/seazn.club.engine#41, F-R3) — football's `extraTimeSubs: { subs, windows }`, Law 3's extra substitution
 // and opportunity in extra time, as two number controls in the stage rules form.
 //
 // single-sport: the key exists in football's schema alone. Expected shapes come from the engine's declaration (the schema's

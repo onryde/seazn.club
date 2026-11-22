@@ -55,7 +55,7 @@ on:
       - ".github/workflows/matrix-truth.yml"
       - "tools/matrix/ci/**"
 
-# packages: read: every job installs @seazn/engine (`npm:@onryde/seazn-engine`) from GitHub Packages (engine split 2b). When
+# packages: read: every job installs @seazn/engine (`npm:@seazn-club/seazn-engine`) from GitHub Packages (engine split 2b). When
 # ci.yml calls this workflow, its matrix-sample job grants the same: a called workflow's token cannot exceed its caller's.
 permissions:
   contents: read
@@ -126,7 +126,7 @@ jobs:
           node-version: 26
           cache: pnpm
           registry-url: https://npm.pkg.github.com
-          scope: '@onryde'
+          scope: '@seazn-club'
       - run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}
@@ -220,7 +220,7 @@ jobs:
           node-version: 26
           cache: pnpm
           registry-url: https://npm.pkg.github.com
-          scope: '@onryde'
+          scope: '@seazn-club'
       - run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}
@@ -343,7 +343,7 @@ jobs:
           node-version: 26
           cache: pnpm
           registry-url: https://npm.pkg.github.com
-          scope: '@onryde'
+          scope: '@seazn-club'
       - run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}
@@ -503,7 +503,7 @@ jobs:
           node-version: 26
           cache: pnpm
           registry-url: https://npm.pkg.github.com
-          scope: '@onryde'
+          scope: '@seazn-club'
       - run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}

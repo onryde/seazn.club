@@ -352,12 +352,12 @@ describe("toolchain: pnpm workspace", () => {
     const web = JSON.parse(
       readFileSync(join(REPO_ROOT, "apps/web/package.json"), "utf8"),
     ) as { dependencies: Record<string, string> };
-    // Engine split 2b (A1): the engine is the registry package @onryde/seazn-engine from GitHub Packages, consumed under the
+    // Engine split 2b (A1): the engine is the registry package @seazn-club/seazn-engine from GitHub Packages, consumed under the
     // @seazn/engine alias (scripts/__tests__/registry-install.test.ts pins every consumer). The pin is a caret range on the
     // alias, never `workspace:`/`link:`/`file:`, a tag or a 0.0.0-pr snapshot; which release is the engine-release bump's
     // business, so no version is typed here. Consistency with the other five consumers rides the root manifest, the reference.
     const spec = web.dependencies["@seazn/engine"];
-    expect(spec, "apps/web names the engine alias").toMatch(/^npm:@onryde\/seazn-engine@\^\d+\.\d+\.\d+$/);
+    expect(spec, "apps/web names the engine alias").toMatch(/^npm:@seazn-club\/seazn-engine@\^\d+\.\d+\.\d+$/);
     expect(spec, "apps/web carries the root manifest's specifier").toBe(rootManifest().dependencies?.["@seazn/engine"]);
   });
 
@@ -450,7 +450,7 @@ describe("toolchain: pnpm workspace", () => {
      * staging release.
      *
      * `zod` is on the list for a different reason (engine-split 1b-2, R34): no
-     * root script imports it. It is @onryde/seazn-engine's PEER now, and a peer
+     * root script imports it. It is @seazn-club/seazn-engine's PEER now, and a peer
      * is not installed for a workspace package under `--prod`, so
      * packages/engine/node_modules is not even created. `sync:sports` loads
      * @seazn/engine/sports -> src/sports/football/football.ts -> `zod`, and that

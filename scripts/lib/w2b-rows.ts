@@ -3,8 +3,8 @@
 // (test/rules-reference.test.ts: the rows exist, in their files, with their statuses) and the monorepo's
 // (scripts/__tests__/rules-reference.test.ts: the rows' TEXT is Appendix A's, which only the monorepo holds). One copy, so the two
 // cannot disagree about which ids are owed. Moved out of the engine test by engine-split 1d-5; at 2b (D32) each repo takes what it reads.
-// Engine split 2b (reverse inventory row 16): copied verbatim from onryde/seazn.club@5a67fbf37d25675c683bbc91785bba5bacd93714
-// packages/engine/test/w2b-rows.ts (byte-identical to onryde/seazn.club.engine v1.0.0's test/w2b-rows.ts), the engine keeping its
+// Engine split 2b (reverse inventory row 16): copied verbatim from seazn-club/seazn.club@5a67fbf37d25675c683bbc91785bba5bacd93714
+// packages/engine/test/w2b-rows.ts (byte-identical to seazn-club/seazn.club.engine v1.0.0's test/w2b-rows.ts), the engine keeping its
 // own; only this import is re-pointed, to the installed package's published testkit.
 import { RULE_ID, type RuleRow } from "@seazn/engine/testkit";
 
