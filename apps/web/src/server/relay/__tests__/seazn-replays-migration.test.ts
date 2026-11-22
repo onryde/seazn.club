@@ -269,22 +269,47 @@ describe.skipIf(!HAS_DB)("V541__seazn_replays.sql — the replay tables are real
     expect(ungranted).toBe(4);
   });
 
-  it("the mover's claim (Task 24's predicate) can be served by the due index, and the read's (fixture_id, recorded_at) index exists", async () => {
-    // Task 24's claim WHERE, typed from the plan: each arm implies an arm of the index predicate, so the planner may use it.
-    // With sequential scans priced out, a claim the index could not serve would fall back to one anyway; the plan names it.
+  // Task 24's claim WHERE, typed from the plan (Task 24, "Rows are claimed in a short transaction"). The due index's predicate is
+  // this text, so a claim is answered from it and a row the claim never reads is not in it.
+  const CLAIM = "state not in ('playable','deleted') or (state = 'playable' and cf_deleted_at is null) or (state = 'deleted' and bunny_cleaned_at is null)";
+  /** The plan for `select id … where next_attempt_at <= now() and (<where>)`, with sequential scans priced out: a query the due
+   *  index can answer names it; one it cannot falls back to the (disabled) sequential scan, since no other index has a qual. */
+  async function planFor(where: string): Promise<string> {
     let plan = "";
     await rolledBack(async (tx) => {
       await tx`set local enable_seqscan = off`;
-      const rows = await tx<{ "QUERY PLAN": string }[]>`
-        explain select id from fixture_video_replays
-         where next_attempt_at <= now()
-           and (state not in ('playable','deleted') or (state = 'playable' and cf_deleted_at is null)
-                or (state = 'deleted' and bunny_cleaned_at is null))`;
+      const rows = await tx.unsafe<{ "QUERY PLAN": string }[]>(
+        `explain select id from fixture_video_replays where next_attempt_at <= now() and (${where})`);
       plan = rows.map((x) => x["QUERY PLAN"]).join("\n");
     });
-    expect(plan, plan).toMatch(/fixture_video_replays_due_idx/);
+    return plan;
+  }
+
+  it("the mover's claim (Task 24's predicate) is served by the due index, and each of its three arms alone is too; the read's (fixture_id, recorded_at) index exists", async () => {
+    let checked = 0;
+    for (const where of [CLAIM, "state not in ('playable','deleted')", "state = 'playable' and cf_deleted_at is null", "state = 'deleted' and bunny_cleaned_at is null"]) {
+      const plan = await planFor(where);
+      expect(plan, `${where}\n${plan}`).toMatch(/fixture_video_replays_due_idx/);
+      checked++;
+    }
+    expect(checked, "claims planned").toBe(4);
     const [idx] = await sql<{ def: string }[]>`select pg_get_indexdef('fixture_video_replays_fixture_recorded_idx'::regclass) as def`;
     expect(idx!.def).toMatch(/\(fixture_id, recorded_at\)$/);
+  });
+
+  it("the due index holds only rows the claim reads: a SETTLED playable row (verified, Cloudflare copy deleted) and a CLEANED deleted row are outside it — the planner cannot answer either from it", async () => {
+    // Each settled shape still holds the column the brief's looser predicate admitted on (bunny_cleaned_at null on a playable row,
+    // cf_deleted_at null on a cleaned one), so an index over that predicate WOULD answer these queries; this one must not.
+    let checked = 0;
+    for (const where of [
+      "state = 'playable' and verified_at is not null and cf_deleted_at is not null and bunny_cleaned_at is null",
+      "state = 'deleted' and bunny_cleaned_at is not null and cf_deleted_at is null",
+    ]) {
+      const plan = await planFor(where);
+      expect(plan, `${where}\n${plan}`).not.toMatch(/fixture_video_replays_due_idx/);
+      checked++;
+    }
+    expect(checked, "settled shapes planned").toBe(2);
   });
 
   it("fixture_stream_inputs gains replays_discovered_at and seazn_locked_videos gains recorded_at, both nullable timestamps", async () => {

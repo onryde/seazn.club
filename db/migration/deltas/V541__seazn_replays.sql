@@ -61,10 +61,13 @@ create table fixture_video_replays (
 );
 
 -- The mover's claim (Task 24): every row it may still act on — a row not yet playable, a playable row still on Cloudflare, a
--- deleted row awaiting cleanup. The predicate is written so each arm of the claim's WHERE implies an arm of it, which is what
--- lets the planner prove the claim may use this index.
+-- deleted row awaiting cleanup. The predicate IS the claim's WHERE, word for word, so the planner proves the claim may use this
+-- index, and a settled row leaves it: a playable row whose Cloudflare copy is deleted, a deleted row whose Bunny copies are
+-- cleaned. The index holds the work still to do, not every replay ever made.
 create index fixture_video_replays_due_idx on fixture_video_replays (state, next_attempt_at)
-  where state not in ('playable','deleted') or cf_deleted_at is null or bunny_cleaned_at is null;
+  where state not in ('playable','deleted')
+     or (state = 'playable' and cf_deleted_at is null)
+     or (state = 'deleted' and bunny_cleaned_at is null);
 -- The fixture's parts in recording order (discovery's numbering, the replay read).
 create index fixture_video_replays_fixture_recorded_idx on fixture_video_replays (fixture_id, recorded_at);
 -- The two RESTRICT keys' walks: an org or a session delete checks this table by them (V540's seazn_* indexes, same reason).
