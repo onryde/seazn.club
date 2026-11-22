@@ -10,7 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SEAZN_TOKEN_REFRESH_BEFORE_SECONDS } from "@/server/relay/config";
 import type { PublicFixtureVideo } from "@/server/api-v1/schemas";
-import { startVideoPoll } from "../seazn-video-poll";
+import { type PageVisibility, startVideoPoll } from "../seazn-video-poll";
 import { nextVideoFetchMs } from "../seazn-video-schedule";
 
 const T0 = new Date("2026-11-21T12:00:00.000Z");
@@ -295,7 +295,7 @@ describe("startVideoPoll: rebuild (a player that gave up is rebuilt by the next 
     expect(r.calls, "the failed player's ask read the route").toHaveLength(2);
     expect(rec.seen.map((a) => a.rebuild), "first read, then the answer to the ask").toEqual([false, true]);
     // The schedule's own next point (derived from it, not typed): the read after the rebuild answer is an ordinary one.
-    const next = nextVideoFetchMs(live);
+    const next = nextVideoFetchMs(live, { nowMs: Date.now(), settledAtMs: null, emptyStreak: 0 });
     expect(next, "premise: a live answer sets a timer").not.toBeNull();
     await vi.advanceTimersByTimeAsync(next!);
     expect(r.calls).toHaveLength(3);
@@ -343,5 +343,254 @@ describe("startVideoPoll: rebuild (a player that gave up is rebuilt by the next 
     poll.stop();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(rec.seen).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Phase 1 review I2: the loop polled every 30 s forever, hidden tab or not. The delays below are the fix brief's (30 s -> 60 s ->
+// 120 s, capped at 5 min; stop once settled; a hidden page reads nothing and reads once when it is looked at again), typed here.
+// ---------------------------------------------------------------------------------------------------------------------------------
+/** A scripted route that also records the clock offset (ms from T0) of every read. */
+function timed(...steps: (PublicFixtureVideo | Error)[]) {
+  const r = route(...steps);
+  const at: number[] = [];
+  const fetchVideo = vi.fn(async (signal: AbortSignal) => {
+    at.push(Date.now() - T0.getTime());
+    return r.fetchVideo(signal);
+  });
+  return { fetchVideo, at };
+}
+/** A page whose visibility the test sets, as `document` would report it. */
+function fakePage(hidden = false) {
+  const state = { hidden };
+  const listeners = new Set<() => void>();
+  const visibility: PageVisibility = {
+    hidden: () => state.hidden,
+    onChange: (l) => {
+      listeners.add(l);
+      return () => listeners.delete(l);
+    },
+  };
+  const set = (h: boolean) => {
+    state.hidden = h;
+    for (const l of [...listeners]) l();
+  };
+  return { visibility, listeners, hide: () => set(true), show: () => set(false) };
+}
+
+describe("review I2: an empty answer backs off; anything shown resets it", () => {
+  it("EMPTY CASE FIRST: empty answers in a row are read at 30 s, then 60, 120, 240, then every 5 min", async () => {
+    const r = timed(EMPTY);
+    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {} });
+    await vi.advanceTimersByTimeAsync(30_000 + 60_000 + 120_000 + 240_000 + 2 * 5 * MIN);
+    expect(r.at).toEqual([0, 30_000, 90_000, 210_000, 450_000, 750_000, 1_050_000]);
+    poll.stop();
+  });
+
+  it("a live after the empties puts the page back on the floor, and the empty answer after it (the Stop) starts the backoff again at 30 s", async () => {
+    const r = timed(EMPTY, EMPTY, EMPTY, liveFor(60 * MIN), EMPTY, EMPTY);
+    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {} });
+    await vi.advanceTimersByTimeAsync(210_000 + 30_000 + 30_000 + 60_000);
+    // 0, 30, 90 empty (next 120); 210 live (next 30); 240 empty again, the first in a row (next 30); 270 the second (next 60): 330.
+    expect(r.at).toEqual([0, 30_000, 90_000, 210_000, 240_000, 270_000, 330_000]);
+    poll.stop();
+  });
+
+  it("a failed read neither counts as empty nor resets the run: it retries at the floor and the backoff goes on where it was", async () => {
+    const r = timed(EMPTY, EMPTY, new Error("offline"), EMPTY);
+    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {} });
+    await vi.advanceTimersByTimeAsync(90_000 + 30_000 + 120_000);
+    // 0 and 30 empty (next 60); 90 fails (retry 30); 120 empty, the third in a row (next 120): 240.
+    expect(r.at).toEqual([0, 30_000, 90_000, 120_000, 240_000]);
+    poll.stop();
+  });
+});
+
+describe("review I2: a settled fixture", () => {
+  it("EMPTY CASE FIRST: an empty answer once settled stops the loop; before the settle instant it is the backoff", async () => {
+    const r = timed(EMPTY);
+    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {}, settledAtMs: T0.getTime() + 60_000 });
+    await vi.advanceTimersByTimeAsync(24 * 60 * MIN);
+    // 0 (not settled: 30 s), 30 (not settled: 60 s), 90 settled: no timer.
+    expect(r.at).toEqual([0, 30_000, 90_000]);
+    expect(vi.getTimerCount(), "no timer left").toBe(0);
+    poll.stop();
+  });
+
+  it("an hls replay once settled is re-read at its token's refresh point, and that read is the replay's token refresh", async () => {
+    const r = timed(replayFor(60 * MIN), replayFor(60 * MIN));
+    const seen: PublicFixtureVideo[] = [];
+    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: (v) => seen.push(v), settledAtMs: T0.getTime() - MIN });
+    await vi.advanceTimersByTimeAsync(55 * MIN + 1);
+    expect(r.at).toEqual([0, 60 * MIN - REFRESH_MS]);
+    expect(seen).toHaveLength(2);
+    poll.stop();
+  });
+
+  it("no settle time (not decided, or the page could not say): the backoff never stops, it caps", async () => {
+    const r = timed(EMPTY);
+    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {}, settledAtMs: null });
+    await vi.advanceTimersByTimeAsync(60 * MIN);
+    expect(r.at.length, "30, 60, 120, 240 s, then every 5 min for the rest of the hour").toBe(4 + Math.floor((60 * MIN - 450_000) / (5 * MIN)) + 1);
+    expect(vi.getTimerCount()).toBe(1);
+    poll.stop();
+  });
+});
+
+describe("review I2: a hidden page reads nothing", () => {
+  it("EMPTY CASE FIRST: a page opened hidden (a background tab) does not read until it is shown, then reads at once", async () => {
+    const page = fakePage(true);
+    const r = timed(liveFor(60 * MIN));
+    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {}, visibility: page.visibility });
+    await vi.advanceTimersByTimeAsync(10 * MIN);
+    expect(r.at, "hidden: no read").toEqual([]);
+    expect(vi.getTimerCount(), "and no timer").toBe(0);
+    page.show();
+    await flush();
+    expect(r.at, "shown: read at once").toEqual([10 * MIN]);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(r.at, "then the live floor").toEqual([10 * MIN, 10 * MIN + 30_000]);
+    poll.stop();
+  });
+
+  it("hiding a live page stops its timer; shown again after a while it reads at once, then keeps the floor", async () => {
+    const page = fakePage();
+    const r = timed(liveFor(60 * MIN));
+    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {}, visibility: page.visibility });
+    await vi.advanceTimersByTimeAsync(10_000);
+    page.hide();
+    expect(vi.getTimerCount(), "the hidden page's timer is gone").toBe(0);
+    await vi.advanceTimersByTimeAsync(10 * MIN);
+    expect(r.at, "nothing read while hidden").toEqual([0]);
+    page.show();
+    await flush();
+    expect(r.at, "read at once on return").toEqual([0, 10 * MIN + 10_000]);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(r.at).toEqual([0, 10 * MIN + 10_000, 10 * MIN + 40_000]);
+    poll.stop();
+  });
+
+  it("a page looked at again reads within ONE floor whatever the backoff had reached — at once after a long look away, at the floor after a blink", async () => {
+    const page = fakePage();
+    const r = timed(EMPTY);
+    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {}, visibility: page.visibility });
+    await vi.advanceTimersByTimeAsync(210_000);
+    expect(r.at, "premise: the fourth empty answer, whose backoff is 240 s").toEqual([0, 30_000, 90_000, 210_000]);
+    // A blink 5 s after that read: the next read is the floor from it (240 s), not the backoff's 450 s, and not at once.
+    await vi.advanceTimersByTimeAsync(5_000);
+    page.hide();
+    page.show();
+    await vi.advanceTimersByTimeAsync(24_999);
+    expect(r.at, "not before the floor").toHaveLength(4);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(r.at, "at the floor from the last read").toEqual([0, 30_000, 90_000, 210_000, 240_000]);
+    // Now away for a minute: on return, at once.
+    await vi.advanceTimersByTimeAsync(10_000);
+    page.hide();
+    await vi.advanceTimersByTimeAsync(MIN);
+    page.show();
+    await flush();
+    expect(r.at.at(-1), "at once on return").toBe(250_000 + MIN);
+    poll.stop();
+  });
+
+  it("a read in flight when the page hides delivers its answer and schedules nothing; shown, the page reads within the floor of that read", async () => {
+    const page = fakePage();
+    let release!: (v: PublicFixtureVideo) => void;
+    const at: number[] = [];
+    const fetchVideo = vi.fn(() => {
+      at.push(Date.now() - T0.getTime());
+      return new Promise<PublicFixtureVideo>((res) => {
+        release = res;
+      });
+    });
+    const seen: PublicFixtureVideo[] = [];
+    const poll = startVideoPoll({ fetchVideo, onVideo: (v) => seen.push(v), visibility: page.visibility });
+    await flush();
+    page.hide();
+    release(liveFor(60 * MIN));
+    await flush();
+    expect(seen, "the answer is still delivered").toHaveLength(1);
+    expect(vi.getTimerCount(), "but nothing is scheduled while hidden").toBe(0);
+    await vi.advanceTimersByTimeAsync(5 * MIN);
+    page.show();
+    await flush();
+    expect(at, "shown: read at once").toEqual([0, 5 * MIN]);
+    poll.stop();
+  });
+
+  it("hidden and shown again while a read is in flight: its answer's next read is the floor, not its backoff", async () => {
+    const page = fakePage();
+    const steps = [EMPTY, EMPTY, EMPTY, EMPTY];
+    let release: ((v: PublicFixtureVideo) => void) | null = null;
+    const at: number[] = [];
+    const fetchVideo = vi.fn(() => {
+      at.push(Date.now() - T0.getTime());
+      if (at.length < 4) return Promise.resolve(steps[at.length - 1]!);
+      return new Promise<PublicFixtureVideo>((res) => {
+        release = res;
+      });
+    });
+    const poll = startVideoPoll({ fetchVideo, onVideo: () => {}, visibility: page.visibility });
+    await vi.advanceTimersByTimeAsync(210_000);
+    expect(at, "premise: the fourth read is in flight").toEqual([0, 30_000, 90_000, 210_000]);
+    page.hide();
+    page.show();
+    release!(EMPTY);
+    await flush();
+    // The fourth empty answer's backoff is 240 s; the page was looked at again during the read, so the next one is a floor after it.
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(at).toEqual([0, 30_000, 90_000, 210_000, 240_000]);
+    poll.stop();
+  });
+
+  it("a loop the schedule stopped stays stopped when the page is shown (a settled empty fixture, and embeds alone)", async () => {
+    for (const [what, answer, settledAtMs] of [["settled, empty", EMPTY, T0.getTime() - MIN], ["embeds alone", embedOnly, null]] as const) {
+      const page = fakePage();
+      const r = timed(answer);
+      const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {}, visibility: page.visibility, settledAtMs });
+      await flush();
+      page.hide();
+      await vi.advanceTimersByTimeAsync(MIN);
+      page.show();
+      await vi.advanceTimersByTimeAsync(10 * MIN);
+      expect(r.at, `${what}: the one read`).toHaveLength(1);
+      poll.stop();
+    }
+  });
+
+  it("stop lets go of the page: its listener is removed, and a show after it reads nothing", async () => {
+    const page = fakePage();
+    const r = timed(EMPTY);
+    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {}, visibility: page.visibility });
+    await flush();
+    expect(page.listeners.size, "premise: the loop listens").toBe(1);
+    page.hide();
+    poll.stop();
+    expect(page.listeners.size).toBe(0);
+    page.show();
+    await vi.advanceTimersByTimeAsync(10 * MIN);
+    expect(r.at).toEqual([0]);
+  });
+
+  it("with no visibility given, the loop reads the DOCUMENT's (the island passes none): hidden pauses it, visibilitychange resumes it", async () => {
+    const doc = Object.assign(new EventTarget(), { hidden: false });
+    vi.stubGlobal("document", doc);
+    try {
+      const r = timed(liveFor(60 * MIN));
+      const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {} });
+      await vi.advanceTimersByTimeAsync(10_000);
+      doc.hidden = true;
+      doc.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(5 * MIN);
+      expect(r.at, "hidden: the live floor's read did not happen").toEqual([0]);
+      doc.hidden = false;
+      doc.dispatchEvent(new Event("visibilitychange"));
+      await flush();
+      expect(r.at, "visible: at once").toEqual([0, 5 * MIN + 10_000]);
+      poll.stop();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

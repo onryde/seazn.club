@@ -30,6 +30,7 @@ import { sql } from "@/lib/db";
 import { ReplayEmbed } from "@/components/public-site/match-centre/replay-embed";
 import { SeaznVideoIsland } from "@/components/public-site/match-centre/seazn-video-island";
 import { fixtureStreamTarget } from "@/server/usecases/stream-codes";
+import { seaznVideoPlan } from "@/server/video/seazn-video-plan";
 import { type SeaznRig, installSeaznEnv, live, seaznRig, stopAndSettle } from "@/server/video/__tests__/_seazn-session-rig";
 import { connect } from "@/server/youtube/__tests__/_connect-rig";
 
@@ -93,6 +94,23 @@ describe.skipIf(!HAS_DB)("the public match page's replay slot, through the real 
       expect(youtube, `LIVE ${flag}: and the YouTube slot is not`).toHaveLength(0);
       expect(renderToStaticMarkup(tree)).not.toContain("replay-embed");
     }
+  });
+
+  it("review I2: the island is handed the plan's settle time through the REAL loader and plan: a decided Seazn fixture's (its finish stamped by the database), as an ISO instant; null while it is in play", async () => {
+    const r = await seaznRig();
+    orgs.push(r.auth.orgId);
+    const f = r.fixtureIds[0];
+    const sid = await live(r, f, r.seazn);
+    await stopAndSettle(r, f, sid);
+    await setStatus(f, "in_play");
+    const playing = slots(await pageTree(f)).island;
+    expect(playing, "premise: the island is mounted").toHaveLength(1);
+    expect(playing[0]!.props.settledAt, "in play: not settled").toBeNull();
+    await setStatus(f, "decided");
+    const plan = await seaznVideoPlan(f);
+    expect(plan.player === "seazn" ? plan.settledAt : undefined, "PREMISE: the plan settles it").toBeInstanceOf(Date);
+    const decided = slots(await pageTree(f)).island;
+    expect(decided[0]!.props.settledAt, "decided: the plan's own instant, as the client reads it").toBe((plan as { settledAt: Date }).settledAt.toISOString());
   });
 
   it("a PAST YouTube fixture with no saved choice keeps its replay with its parts, though the org's default now resolves Seazn (the blocker's regression)", async () => {

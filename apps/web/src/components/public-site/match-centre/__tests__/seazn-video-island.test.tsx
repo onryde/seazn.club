@@ -21,6 +21,7 @@ import publicNl from "@/dictionaries/nl/public.json";
 import { PublicFixtureVideo } from "@/server/api-v1/schemas";
 import { SeaznVideoIsland, asPublicFixtureVideo, fetchSeaznVideo, nextPartIndex, playerKey, seaznVideoUrl } from "../seazn-video-island";
 import { seaznVideoLabels } from "../seazn-video-labels";
+import { renderIsland } from "@/components/__tests__/_hook-harness";
 
 const NOW = Date.parse("2026-11-21T12:00:00.000Z");
 const labels = seaznVideoLabels(publicEn);
@@ -262,5 +263,65 @@ describe("playerKey: what keeps a player across a token refresh and rebuilds it 
     const keys = [playerKey("live", 0), playerKey("live", 1), playerKey(1, 0), playerKey(1, 1), playerKey(2, 0), playerKey(12, 0), playerKey(1, 20), playerKey(120, 0)];
     expect(new Set(keys).size, "every identity is its own key (no part/epoch pair can collide)").toBe(keys.length);
     expect(keys.length, "anti-vacuity").toBeGreaterThanOrEqual(8);
+  });
+});
+
+// Phase 1 review I2, at the island itself: the page's `settledAt` and the document's visibility reach the loop. `renderIsland` (the
+// workspace's hook harness) runs the island's mount effect, so its REAL `startVideoPoll` reads the (stubbed) route on vitest's fake
+// clock. The loop's own rules are seazn-video-poll.test.ts's; this pins only the wiring the static markup above cannot see.
+describe("review I2: the mounted island's loop", () => {
+  const MIN = 60_000;
+  const emptyRoute = () => vi.fn(async () => new Response(JSON.stringify({ ok: true, data: { live: null, replay: [] } }), { status: 200, headers: { "content-type": "application/json" } }));
+  const mount = (settledAt?: string | null) => renderIsland(SeaznVideoIsland, { fixtureId: "f1", labels, ...(settledAt === undefined ? {} : { settledAt }) });
+
+  it("EMPTY CASE FIRST: no settledAt — empty answers keep being read (backing off); a settledAt already past stops the island after the one", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    try {
+      const open = emptyRoute();
+      vi.stubGlobal("fetch", open);
+      const a = mount();
+      await vi.advanceTimersByTimeAsync(30 * MIN);
+      expect(open.mock.calls.length, "not settled: read on, backing off (30, 60, 120, 240 s, then every 5 min)").toBe(4 + Math.floor((30 * MIN - 450_000) / (5 * MIN)) + 1);
+      a.unmount();
+      const settled = emptyRoute();
+      vi.stubGlobal("fetch", settled);
+      const b = mount(new Date(NOW - MIN).toISOString());
+      await vi.advanceTimersByTimeAsync(30 * MIN);
+      expect(settled.mock.calls, "settled: the one read, then nothing").toHaveLength(1);
+      b.unmount();
+      const notYet = emptyRoute();
+      vi.stubGlobal("fetch", notYet);
+      const c = mount(new Date(Date.now() + 10 * MIN).toISOString());
+      await vi.advanceTimersByTimeAsync(30 * MIN);
+      // 0, 30, 90, 210, 450 s before the settle instant (10 min on); the read at 750 s is past it and stops the loop.
+      expect(notYet.mock.calls, "settles 10 min on: reads until then, and the first empty answer past it is the last").toHaveLength(6);
+      c.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a hidden document: the mounted island reads nothing until the page is shown, and unmounting lets go of the document", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    try {
+      const doc = Object.assign(new EventTarget(), { hidden: true });
+      const removed = vi.spyOn(doc, "removeEventListener");
+      vi.stubGlobal("document", doc);
+      const route = emptyRoute();
+      vi.stubGlobal("fetch", route);
+      const island = mount();
+      await vi.advanceTimersByTimeAsync(10 * MIN);
+      expect(route.mock.calls, "hidden: nothing read").toHaveLength(0);
+      doc.hidden = false;
+      doc.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(route.mock.calls, "shown: read at once").toHaveLength(1);
+      island.unmount();
+      expect(removed.mock.calls.map(([type]) => type), "the listener goes with the island").toEqual(["visibilitychange"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

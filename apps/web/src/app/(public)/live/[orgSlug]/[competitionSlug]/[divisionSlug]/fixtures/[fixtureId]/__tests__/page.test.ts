@@ -62,7 +62,9 @@ vi.mock("@/lib/entitlements", async (importOriginal) => ({
 // Seazn-hosted video (Task 15) — which player the page mounts is `seaznVideoPlan`'s call (server/video/seazn-video-plan.ts, swept
 // against a real database in its own test, and through the real loader in `page-seazn-video.test.ts`). This file's fixtures carry ids
 // that are not uuids, so the plan is stood in for here and answers `external`, the page as it always was, unless a case says otherwise.
-const seaznPlan = vi.hoisted(() => ({ answer: vi.fn<(fixtureId: string) => Promise<"seazn" | "external">>(async () => "external") }));
+const seaznPlan = vi.hoisted(() => ({
+  answer: vi.fn<(fixtureId: string) => Promise<import("@/server/video/seazn-video-plan").SeaznVideoPlan>>(async () => ({ player: "external" })),
+}));
 vi.mock("@/server/video/seazn-video-plan", () => ({ seaznVideoPlan: (id: string) => seaznPlan.answer(id) }));
 
 // Task 14d — the page itself no longer reads `searchParams` (the ISR
@@ -983,7 +985,7 @@ describe("FixturePage — the Seazn player slot (Task 15)", () => {
     embedHost: h.includes("youtube-nocookie.com"),
   });
 
-  afterEach(() => seaznPlan.answer.mockResolvedValue("external"));
+  afterEach(() => seaznPlan.answer.mockResolvedValue({ player: "external" }));
 
   it("EMPTY CASE FIRST: an `external` fixture with no YouTube parts mounts neither player, and the plan was asked for THIS fixture", async () => {
     const { SeaznVideoIsland } = await import("@/components/public-site/match-centre/seazn-video-island");
@@ -1009,7 +1011,7 @@ describe("FixturePage — the Seazn player slot (Task 15)", () => {
   });
 
   it("a Seazn fixture (plan seazn) mounts the island for THIS fixture and none of YouTube's markup — even when YouTube parts exist", async () => {
-    seaznPlan.answer.mockResolvedValue("seazn");
+    seaznPlan.answer.mockResolvedValue({ player: "seazn", settledAt: null });
     const { SeaznVideoIsland } = await import("@/components/public-site/match-centre/seazn-video-island");
     const { ReplayEmbed } = await import("@/components/public-site/match-centre/replay-embed");
     const tree = await withParts();
@@ -1017,6 +1019,7 @@ describe("FixturePage — the Seazn player slot (Task 15)", () => {
     expect(islands, "the Seazn island is mounted").toHaveLength(1);
     expect(islands[0]!.props.fixtureId).toBe("f1");
     expect(islands[0]!.props.endpoint, "the match page reads the public route").toBeUndefined();
+    expect(islands[0]!.props.settledAt, "review I2: a plan with no settle time hands the island none").toBeNull();
     expect(findAll(tree, ReplayEmbed), "the YouTube slot is not mounted").toHaveLength(0);
     const h = renderToStaticMarkup(tree);
     expect(youtubeMarkup(h)).toEqual({ player: false, facade: false, thumbnail: false, embedHost: false });
@@ -1024,7 +1027,7 @@ describe("FixturePage — the Seazn player slot (Task 15)", () => {
   });
 
   it("the island's strings are the page's own, in the org's locale (es: the Spanish live, unavailable and part)", async () => {
-    seaznPlan.answer.mockResolvedValue("seazn");
+    seaznPlan.answer.mockResolvedValue({ player: "seazn", settledAt: null });
     const { SeaznVideoIsland } = await import("@/components/public-site/match-centre/seazn-video-island");
     const { seaznVideoLabels } = await import("@/components/public-site/match-centre/seazn-video-labels");
     const tree = await withParts("es");
@@ -1053,7 +1056,7 @@ describe("FixturePage — the Seazn player slot (Task 15)", () => {
   });
 
   it("a Seazn fixture's own stream link (the club's pill) still shows: only the replay slot moved", async () => {
-    seaznPlan.answer.mockResolvedValue("seazn");
+    seaznPlan.answer.mockResolvedValue({ player: "seazn", settledAt: null });
     const h = renderToStaticMarkup(await render({ status: "decided", stream_url: "https://www.twitch.tv/seaznclub" }));
     expect(h).toContain('data-testid="public-stream-link"');
   });

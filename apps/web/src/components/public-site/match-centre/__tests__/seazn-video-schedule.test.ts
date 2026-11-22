@@ -12,12 +12,16 @@
 import { describe, expect, it } from "vitest";
 import { SEAZN_TOKEN_REFRESH_BEFORE_SECONDS } from "@/server/relay/config";
 import type { PublicFixtureVideo } from "@/server/api-v1/schemas";
-import { SEAZN_VIDEO_POLL_FLOOR_MS, nextVideoFetchMs } from "../seazn-video-schedule";
+import { SEAZN_VIDEO_POLL_CEILING_MS, SEAZN_VIDEO_POLL_FLOOR_MS, type VideoReadContext, nextVideoFetchMs as nextVideoFetchAt } from "../seazn-video-schedule";
 
 const NOW = new Date("2026-11-21T12:00:00.000Z");
 const MIN = 60_000;
 const REFRESH_MS = SEAZN_TOKEN_REFRESH_BEFORE_SECONDS * 1000;
 const at = (offsetMs: number): string => new Date(NOW.getTime() + offsetMs).toISOString();
+/** The loop's context for an answer read at NOW on a fixture that is not settled, the first answer of its kind. */
+const OPEN: VideoReadContext = { nowMs: NOW.getTime(), settledAtMs: null, emptyStreak: 1 };
+/** The rules that do not depend on the loop's context, read in it. */
+const nextVideoFetchMs = (video: PublicFixtureVideo | null): number | null => nextVideoFetchAt(video, OPEN);
 const live = (offsetMs: number): PublicFixtureVideo["live"] => ({ src: "https://host.invalid/t/manifest/video.m3u8", expiresAt: at(offsetMs) });
 const part = (partNo: number, offsetMs: number, player: "hls" | "embed" = "hls"): PublicFixtureVideo["replay"][number] => ({
   partNo,
@@ -91,5 +95,65 @@ describe("nextVideoFetchMs: replay only", () => {
     expect(nextVideoFetchMs({ live: null, replay: [part(1, -10 * MIN)] })).toBe(30_000);
     const bad = { ...part(1, 60 * MIN), expiresAt: "not a date" };
     expect(nextVideoFetchMs({ live: null, replay: [bad] }), "NaN must not become the delay").toBe(30_000);
+  });
+});
+
+// Phase 1 review I2: a 30 s poll forever, on every Seazn fixture page, open or forgotten. The backoff and the stop below are the fix
+// brief's rule (30 s -> 60 s -> 120 s, capped at 5 min; stop once settled), typed here from the brief, never read off the function.
+describe("review I2: nothing to show backs off", () => {
+  it("the ceiling IS the brief's 5 min", () => {
+    expect(SEAZN_VIDEO_POLL_CEILING_MS).toBe(5 * MIN);
+  });
+
+  it("EMPTY CASE FIRST: the first empty answer is the 30 s floor; each one in a row doubles it, to the 5 min ceiling and no further", () => {
+    const empty = { live: null, replay: [] };
+    const waits = [1, 2, 3, 4, 5, 6, 20].map((emptyStreak) => nextVideoFetchAt(empty, { ...OPEN, emptyStreak }));
+    expect(waits).toEqual([30_000, 60_000, 120_000, 240_000, 5 * MIN, 5 * MIN, 5 * MIN]);
+  });
+
+  it("an answer that shows something is read at the floor whatever came before it: a live, and an hls replay", () => {
+    for (const emptyStreak of [0, 1, 5]) {
+      expect(nextVideoFetchAt({ live: live(60 * MIN), replay: [] }, { ...OPEN, emptyStreak }), `live, streak ${emptyStreak}`).toBe(SEAZN_VIDEO_POLL_FLOOR_MS);
+      expect(nextVideoFetchAt({ live: null, replay: [part(1, 60 * MIN)] }, { ...OPEN, emptyStreak }), `hls, streak ${emptyStreak}`).toBe(SEAZN_VIDEO_POLL_FLOOR_MS);
+    }
+  });
+});
+
+describe("review I2: a SETTLED fixture (decided, past the window a new Go live can start in)", () => {
+  const settled = (offsetMs: number, emptyStreak = 1): VideoReadContext => ({ nowMs: NOW.getTime(), settledAtMs: NOW.getTime() + offsetMs, emptyStreak });
+
+  it("EMPTY CASE FIRST: nothing to show once settled stops the loop — from the settle instant itself; one ms before it is still the backoff", () => {
+    const empty = { live: null, replay: [] };
+    expect(nextVideoFetchAt(empty, settled(-10 * MIN)), "settled 10 min ago").toBeNull();
+    expect(nextVideoFetchAt(empty, settled(0)), "settled this instant").toBeNull();
+    expect(nextVideoFetchAt(empty, settled(1)), "1 ms short of it: the first empty answer's floor").toBe(30_000);
+    expect(nextVideoFetchAt(empty, settled(1, 3)), "and its backoff").toBe(120_000);
+  });
+
+  it("a live on a settled fixture is still read at the floor (a Stop must reach the page)", () => {
+    expect(nextVideoFetchAt({ live: live(60 * MIN), replay: [] }, settled(-10 * MIN))).toBe(SEAZN_VIDEO_POLL_FLOOR_MS);
+  });
+
+  it("an hls replay is re-read at its token's refresh point, not at the floor: no restart is coming, and the token must still be refreshed", () => {
+    const wait = nextVideoFetchAt({ live: null, replay: [part(1, 60 * MIN)] }, settled(-10 * MIN));
+    expect(wait, "60 min of token, refreshed 5 min before its end").toBe(60 * MIN - REFRESH_MS);
+    expect(wait).toBe(55 * MIN);
+  });
+
+  it("several hls parts: the EARLIEST token's refresh point, in any order; an embed beside them sets nothing", () => {
+    const parts = [part(1, 60 * MIN), part(2, 20 * MIN), part(3, 40 * MIN), part(4, 5 * MIN, "embed")];
+    expect(nextVideoFetchAt({ live: null, replay: parts }, settled(-1))).toBe(20 * MIN - REFRESH_MS);
+    expect(nextVideoFetchAt({ live: null, replay: [...parts].reverse() }, settled(-1))).toBe(20 * MIN - REFRESH_MS);
+  });
+
+  it("a token inside its refresh window, already past, or not a date: the 30 s floor, never sooner", () => {
+    expect(nextVideoFetchAt({ live: null, replay: [part(1, 2 * MIN)] }, settled(-1))).toBe(30_000);
+    expect(nextVideoFetchAt({ live: null, replay: [part(1, REFRESH_MS + 10_000)] }, settled(-1)), "10 s to its refresh point").toBe(30_000);
+    expect(nextVideoFetchAt({ live: null, replay: [part(1, -10 * MIN)] }, settled(-1))).toBe(30_000);
+    expect(nextVideoFetchAt({ live: null, replay: [{ ...part(1, 60 * MIN), expiresAt: "not a date" }] }, settled(-1)), "NaN must not become the delay").toBe(30_000);
+  });
+
+  it("embeds alone: still no timer", () => {
+    expect(nextVideoFetchAt({ live: null, replay: [part(1, 60 * MIN, "embed")] }, settled(-1))).toBeNull();
   });
 });

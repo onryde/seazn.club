@@ -272,7 +272,7 @@ export default async function FixturePage({ params }: Props) {
   // enhancement's decision, so a failure to read it must not take down a page that rendered without it: the page is what it was.
   const seaznPlan = await seaznVideoPlan(fixture.id).catch((err: unknown) => {
     log.warn({ fixtureId: fixture.id, err: err instanceof Error ? err.name : typeof err }, "match page: the Seazn video plan could not be read; the page renders as it did before Seazn video");
-    return "external" as const;
+    return { player: "external" } as const;
   });
   // R4 S10 (owner rulings D15 + R8) — the competition's sponsors, read exactly as the competition page reads them
   // (its own two calls), so both pages show one board: tier grouping only with Pro `sponsors.tiers`.
@@ -481,10 +481,11 @@ export default async function FixturePage({ params }: Props) {
           realtime={realtime}
           dict={dict}
           replay={
-            seaznPlan === "seazn" ? (
+            seaznPlan.player === "seazn" ? (
               // The island asks the video route itself after hydration: this page is ISR (revalidate = 30), and a signed address minted
               // in its server render would be served past its token's life. Its strings are the few it needs, not the whole dictionary.
-              <SeaznVideoIsland fixtureId={fixture.id} labels={seaznVideoLabels(dict)} />
+              // `settledAt` (review I2): once the fixture is settled, an empty answer stops the island's reads.
+              <SeaznVideoIsland fixtureId={fixture.id} labels={seaznVideoLabels(dict)} settledAt={seaznPlan.settledAt?.toISOString() ?? null} />
             ) : plan.parts.length > 0 ? (
               <ReplayEmbed parts={plan.parts} />
             ) : undefined

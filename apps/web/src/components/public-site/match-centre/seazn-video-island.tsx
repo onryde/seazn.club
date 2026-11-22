@@ -6,8 +6,9 @@
 //   - no live, one or more `hls` parts (the interim Cloudflare recording, signed from the moment the session's recording is locked):
 //     the parts in `partNo` order, ONE player at a time, with a picker ("Part {n}") only when there are two or more; the island keeps
 //     looking every 30 s, so a second Go live (after half-time, or a failed run) turns the page to the new live player without a reload;
-//   - nothing to show (not yet live, ended with no recording signed yet): nothing renders, and the island keeps looking, so a page
-//     opened before kick-off turns to the live player without a reload.
+//   - nothing to show (not yet live, ended with no recording signed yet): nothing renders, and the island keeps looking (backing off,
+//     and stopping once the fixture is settled: Phase 1 review I2), so a page opened before kick-off turns to the live player without
+//     a reload. No read while the tab is hidden; one when it is shown again.
 // `embed` parts are the replay host's own player (Task 25) and have no rendering here yet.
 //
 // WHEN to ask again is the schedule's (seazn-video-schedule.ts), the loop's is seazn-video-poll.ts, and how an address reaches the
@@ -164,27 +165,34 @@ export interface SeaznVideoIslandProps {
   labels: SeaznVideoLabels;
   /** An answer to show before the first read (the server markup of a test); the page passes none. */
   initial?: PublicFixtureVideo;
+  /** When the fixture is settled (ISO; the page's plan, seazn-video-plan.ts): an empty answer from then on stops the reads (Phase 1
+   *  review I2). Absent or null: the reads only back off. */
+  settledAt?: string | null;
 }
 
-export function SeaznVideoIsland({ fixtureId, endpoint = "public", labels, initial }: SeaznVideoIslandProps) {
+export function SeaznVideoIsland({ fixtureId, endpoint = "public", labels, initial, settledAt = null }: SeaznVideoIslandProps) {
   const [video, setVideo] = useState<PublicFixtureVideo | null>(initial ?? null);
   const [epoch, setEpoch] = useState(0);
   const pollRef = useRef<VideoPoll | null>(null);
+  // Not a date: never settled (a NaN settle time compares false, so the loop only backs off).
+  const settledAtMs = settledAt === null ? null : Date.parse(settledAt);
 
   useEffect(() => {
+    // The page's visibility is the document's (the loop's default): no read while the tab is hidden.
     const poll = startVideoPoll({
       fetchVideo: (signal) => fetchSeaznVideo(fixtureId, endpoint, signal),
       onVideo: (next, { rebuild }) => {
         setVideo(next);
         if (rebuild) setEpoch((e) => e + 1);
       },
+      settledAtMs,
     });
     pollRef.current = poll;
     return () => {
       poll.stop();
       pollRef.current = null;
     };
-  }, [fixtureId, endpoint]);
+  }, [fixtureId, endpoint, settledAtMs]);
 
   const refresh = useCallback(() => pollRef.current?.refreshSoon(), []);
   return <SeaznVideoStage video={video} epoch={epoch} labels={labels} onFatal={refresh} />;

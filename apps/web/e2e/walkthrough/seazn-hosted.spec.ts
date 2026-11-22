@@ -207,6 +207,26 @@ async function openViewer(browser: Browser, rig: Rig): Promise<Viewer> {
   };
 }
 
+/** The viewer looks away and back (Phase 1 review I2), as a tab switch does: `document` reports hidden, then visible, each with its
+ *  `visibilitychange`, then its own getters are put back. The island backs off on empty answers (30 s doubling to 5 min), so a page
+ *  that has shown nothing for a while is not on the floor; looked at again, it owes ONE read, at most a floor after its last. The walk
+ *  looks away before each wait that follows a run of empty answers (the first Go live, the interim replay), so each of those waits is
+ *  one re-read again, and the island's REAL visibility wiring (the document's, seazn-video-poll.ts) is what makes it so. */
+async function lookAwayAndBack(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const report = (hidden: boolean) => {
+      Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
+      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => (hidden ? "hidden" : "visible") });
+      document.dispatchEvent(new Event("visibilitychange"));
+    };
+    report(true);
+    report(false);
+    Reflect.deleteProperty(document, "hidden");
+    Reflect.deleteProperty(document, "visibilityState");
+  });
+  expect(await page.evaluate(() => document.hidden), "the page's own visibility is back, and it is visible").toBe(false);
+}
+
 /** One Go live of the Seazn destination, by tapping it, and the compositor stand-in that makes it live: the session row (one new
  *  one, for Seazn, composed), its facts, the first beat through the vendored contract, the keep-alive, the live pill, and the
  *  programme input the spectator's player will be handed. */
@@ -326,7 +346,9 @@ test("Seazn pre-selected → a spectator opens the page before kick-off → Go l
   const first = await goLiveSeazn(page, body, rig, open);
 
   // 4. THE OPEN PAGE TURNS LIVE on its next read, without a reload: the server's own signed address for the programme input, in the
-  //    player and reaching it, on a player that has not failed.
+  //    player and reaching it, on a player that has not failed. The page has shown nothing since it opened, so its reads have backed
+  //    off (review I2); the viewer looks at it again, and that read is within one floor.
+  await lookAwayAndBack(viewer.page);
   await expect.poll(addressIs(player, first.programme.uid), { message: "the open page's player holds the signed address for the programme input", timeout: ONE_RE_READ_MS }).toBe(true);
   await expect(region, "the region is the LIVE one").toHaveAttribute("aria-label", pub("seaznVideo.live"));
   await expect.poll(viewer.reached(first.programme.uid), { message: "the live address reached the browser's player", timeout: CALL_MS }).toBe(true);
@@ -385,6 +407,8 @@ test("Seazn pre-selected → a spectator opens the page before kick-off → Go l
   await releaseStreamSlot();
 
   // 8. THE INTERIM REPLAY: the open page's next read plays the recording, in the same Seazn player, reaching it, still without a reload.
+  //    Since the Stop the page has had empty answers, so it has backed off again: the viewer looks at it again first (review I2).
+  await lookAwayAndBack(viewer.page);
   await expect.poll(addressIs(player, videoId), { message: "the replay player holds the server's signed address for the recording", timeout: ONE_RE_READ_MS }).toBe(true);
   await expect(region, "the region is now the REPLAY one").toHaveAttribute("aria-label", pub("overlay.replay"));
   await expect.poll(viewer.reached(videoId), { message: "the recording's address reached the browser's player", timeout: CALL_MS }).toBe(true);
