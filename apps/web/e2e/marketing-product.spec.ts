@@ -639,7 +639,11 @@ test.describe("live: the listing page in the product theme", () => {
       const cards = await wall.locator(".mkp-wall-card").count();
       const banner = await page.getByTestId("live-start").count();
       expect(cards > 0 ? banner === 0 : banner === 1, `cards ${cards}, banner ${banner}`).toBe(true);
-      await expect(page.locator('main a[href*="/discover"]')).toHaveCount(0);
+      // The old directory, by path - not a competition whose slug merely starts with "discover" (discovery.spec's "Discoverfest").
+      const toDirectory = await page.locator("main a[href]").evaluateAll((as) =>
+        as.map((a) => new URL((a as HTMLAnchorElement).href).pathname).filter((p) => /^(\/[a-z]{2})?\/discover(\/|$)/.test(p)),
+      );
+      expect(toDirectory).toEqual([]);
       await expectNoHorizontalScroll(page);
       expect(errors).toEqual([]);
     });
