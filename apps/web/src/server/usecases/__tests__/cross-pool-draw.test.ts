@@ -420,6 +420,58 @@ describe.skipIf(!HAS_DB)("FX-G5 on_complete: the knockout seeded at the source's
     expect(lines[0]!.n, "nothing drawn").toBe(0);
   });
 
+  // e2e walkthrough tables-w2d "best third across groups" (CI 2026-11-22): six into two pools of three, the winners, the best second
+  // and the best third into a 4-draw, seeded at the groups' completion. Which pool supplies the best second and third is decided by
+  // the results, so the same take is refused for one field and seated for another - both through the real completion.
+  /** 6 into 2 is A = seeds 1, 4, 5 and B = 2, 3, 6 (the boustrophedon deal); the lower seed wins every meeting. */
+  const BEST_THIRD_TAKE = [{ kind: "topNPerGroup", n: 1 }, { kind: "bestNth", nth: 2, count: 1 }, { kind: "bestNth", nth: 3, count: 1 }];
+  const SIX_IN_TWO = { 1: "A", 4: "A", 5: "A", 2: "B", 3: "B", 6: "B" } as const;
+  /** A score per meeting, keyed `winnerSeed-loserSeed`. A meeting the table does not name is a rig fault, never a default score. */
+  const scored = (table: Readonly<Record<string, readonly [number, number]>>): Score => (w, l) => {
+    const s = table[`${w}-${l}`];
+    if (s === undefined) throw new Error(`rig: no score for seed ${w} v seed ${l}`);
+    return s;
+  };
+  const poolsBySeed = (b: Built) => Object.fromEntries([...b.seedOf].map(([id, seed]) => [seed, b.poolOf.get(id)]));
+  const idOfSeed = (b: Built, seed: number) => [...b.seedOf].find(([, s]) => s === seed)![0];
+
+  it("RB5-D4: the winners, the best second and the best third of two pools into a 4-draw, Group B supplying three - refused by name at Complete", async () => {
+    // B2 (diff +2) beats A2 (-4) and B3 (-4) beats A3 (-6) on every cross-group key, so the field is A1, B1, B2, B3. Two round-one
+    // matches hold at most two of one pool apart (pigeonhole): RB5-D4's "one pool supplies more than half the draw" (OWNER 281).
+    // The CI walkthrough's exact refusal: pool B, 3 of 4, single elimination.
+    const score = scored({ "1-4": [5, 0], "1-5": [5, 0], "4-5": [1, 0], "2-3": [1, 0], "2-6": [2, 1], "3-6": [3, 0] });
+    const b = await build({ entrants: 6, pools: 2, kind: "knockout", take: BEST_THIRD_TAKE, score, timing: "on_complete" });
+    expect(poolsBySeed(b), "the premise: the boustrophedon deal").toEqual(SIX_IN_TWO);
+    const err = await completeStage(b.auth, b.srcId).then(
+      () => null,
+      (e: unknown) => e as HttpError,
+    );
+    expect(err?.status, "the completion stands; its seeding half is refused").toBe(409);
+    expect(err?.code).toBe("STAGE_COMPLETED_SEEDING_FAILED");
+    expect(err?.extra).toMatchObject({ cause: "SEEDING_POOL_SEPARATION_IMPOSSIBLE", pool: "B", count: 3, entrants: 4, shape: "single_elim" });
+    const [src] = await sql<{ status: string }[]>`select status from stages where id = ${b.srcId}`;
+    expect(src!.status, "the groups are complete").toBe("complete");
+    expect(await qualifiedOf(b.koId), "never seated with pool-mates in round one (RB5-D1)").toBeNull();
+    const lines = await sql<{ n: number }[]>`select count(*)::int as n from fixtures where stage_id = ${b.koId}`;
+    expect(lines[0]!.n, "nothing drawn").toBe(0);
+  });
+
+  it("RB5-D1/D2: the same take seats at Complete when Group A supplies the best second and Group B the best third - A1 v B3, B1 v A2", async () => {
+    // A2 (diff 0) beats B2 (-1); A3 and B3 are level on diff (-2) and B3 leads on goals for (3 v 0). Winners A1 (+2) and B1 (+3) are
+    // not level, so no tie is drawn. The fold is A1, B1, A2, B3 (rank, then pool), and a 4-draw's round one is 1 v 4, 2 v 3: the
+    // rulebook's rotation (RB5-D2) keeps every pool apart (RB5-D1) without moving a seat.
+    const score = scored({ "1-4": [3, 2], "1-5": [1, 0], "4-5": [1, 0], "2-3": [2, 0], "2-6": [4, 3], "3-6": [1, 0] });
+    const b = await build({ entrants: 6, pools: 2, kind: "knockout", take: BEST_THIRD_TAKE, score, timing: "on_complete" });
+    expect(poolsBySeed(b), "the premise: the boustrophedon deal").toEqual(SIX_IN_TWO);
+    expect((await completeStage(b.auth, b.srcId)).completed).toBe(true);
+    const [a1, b1, a2, b3] = [1, 2, 4, 6].map((s) => idOfSeed(b, s));
+    expect(await qualifiedOf(b.koId), "seeded in the fold's order: A1, B1, the best second A2, the best third B3").toEqual([a1, b1, a2, b3]);
+    const r1 = await roundOne(b);
+    const pairs = r1.pairs.map((p) => [...p].sort().join(" v ")).sort();
+    expect(pairs, "round one: A1 v B3, B1 v A2").toEqual([[a1!, b3!].sort().join(" v "), [b1!, a2!].sort().join(" v ")].sort());
+    for (const [x, y] of r1.pairs) expect(b.poolOf.get(x), `${label(b, x)} v ${label(b, y)}`).not.toBe(b.poolOf.get(y));
+  });
+
   it("a `picks` take is the organiser's own seat order: never drawn, on either path (setup and on_complete)", async () => {
     // doc 05 §2.3's cross-pool template: the organiser lists A1, B2, B1, A2. Its tiers go down along the list, which the engine's
     // draw refuses (`tiers_out_of_order`); the organiser placed every seat, so the draw is not run (as `seeded_map`).
