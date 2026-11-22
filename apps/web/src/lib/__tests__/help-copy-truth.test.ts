@@ -40,7 +40,6 @@ import {
   LOCALE_CLAIMS,
   localeHalfClaimFaults,
   riderClaimShape,
-  SEED_CURRENCIES,
   type LocalisedValue,
   unapprovedClaimFaults,
   lockedRateConstantFaults,
@@ -74,6 +73,8 @@ import {
 } from "@/lib/currency";
 import { HELP_ARTICLE_SLUGS, helpUrl } from "@/lib/help";
 import { allHelpArticles } from "@/server/help-content";
+import { loadPricingMatrix } from "@/lib/pricing-matrix-server";
+import { resolveHelpTokens } from "@/server/help-tokens";
 import { TIPS } from "@/config/tips";
 import { attachConfirmKey } from "@/lib/billing-group-view";
 import {
@@ -95,6 +96,9 @@ import {
 import {
   APPROVED_EVENT_PASS,
   APPROVED_EVENT_PASS_INVENTORY,
+  APPROVED_BUY_PASS_INVENTORY,
+  APPROVED_PASS_ENDS,
+  APPROVED_PASS_ENDS_INVENTORY,
   APPROVED_PLANS_PASS,
   APPROVED_PLANS_INVENTORY,
   APPROVED_ADD_ONS_INVENTORY,
@@ -150,6 +154,16 @@ const KNOWN_GAPS = [
 
 const eventPass = helpArticle("event-pass");
 const plans = helpArticle("plans");
+/** Task 14a split the old event-pass.md into three pages: what the pass is,
+ *  buying one, and when one ends. Every pass-prose guard that ran over the old
+ *  single article now runs over all three, each on its own. */
+const buyPass = helpArticle("buy-an-event-pass");
+const passEnds = helpArticle("event-pass-ends");
+const PASS_PAGES: ReadonlyArray<readonly [label: string, text: string]> = [
+  ["event-pass.md", eventPass],
+  ["buy-an-event-pass.md", buyPass],
+  ["event-pass-ends.md", passEnds],
+];
 
 /** The pass's own copy, and ONLY the pass's own copy. `plans.md` truthfully
  *  says Community is "free forever" two headings up; a permanence scan over the
@@ -160,7 +174,7 @@ const groupsSection = markdownSection(plans, /several organisations/i);
 
 /** The paragraphs the GATE pins word for word. The allowlists skip them: the
  *  gate permits exactly one wording, which is stricter than any set of forms. */
-const GATED = [...APPROVED_EVENT_PASS, ...APPROVED_PLANS_PASS].map((p) => p.text);
+const GATED = [...APPROVED_EVENT_PASS, ...APPROVED_PASS_ENDS, ...APPROVED_PLANS_PASS].map((p) => p.text);
 
 describe("billing help articles say what the resolver enforces", () => {
   it("names the gaps it does not cover, so an unscanned article is a decision", () => {
@@ -175,6 +189,10 @@ describe("billing help articles say what the resolver enforces", () => {
     expect(feeLadderSection, "plans.md has no platform-fee heading").not.toBeNull();
     expect(groupsSection, "plans.md has no billing-group heading").not.toBeNull();
     expect(proseBlocks(eventPass).length).toBeGreaterThan(20);
+    expect(PASS_PAGES.length, "the three pass pages").toBe(3);
+    for (const [label, text] of PASS_PAGES) {
+      expect(proseBlocks(text).length, `${label} scans as nothing`).toBeGreaterThan(8);
+    }
     expect(proseBlocks(plansPassSection!).length).toBeGreaterThan(2);
   });
 
@@ -191,6 +209,8 @@ describe("billing help articles say what the resolver enforces", () => {
   // copy that was approved, or it is not.
   it("the pass's copy is the copy that was approved, paragraph for paragraph", () => {
     expect(inventoryFaults("event-pass.md", eventPass, APPROVED_EVENT_PASS_INVENTORY)).toEqual([]);
+    expect(inventoryFaults("buy-an-event-pass.md", buyPass, APPROVED_BUY_PASS_INVENTORY)).toEqual([]);
+    expect(inventoryFaults("event-pass-ends.md", passEnds, APPROVED_PASS_ENDS_INVENTORY)).toEqual([]);
     expect(
       inventoryFaults("plans.md", plans, APPROVED_PLANS_INVENTORY),
     ).toEqual([]);
@@ -198,6 +218,7 @@ describe("billing help articles say what the resolver enforces", () => {
 
   it("the approved paragraphs still say exactly what was approved", () => {
     expect(goldenParagraphFaults("event-pass.md", eventPass, APPROVED_EVENT_PASS)).toEqual([]);
+    expect(goldenParagraphFaults("event-pass-ends.md", passEnds, APPROVED_PASS_ENDS)).toEqual([]);
     expect(
       goldenParagraphFaults("plans.md#event-pass", plansPassSection!, APPROVED_PLANS_PASS),
     ).toEqual([]);
@@ -209,14 +230,18 @@ describe("billing help articles say what the resolver enforces", () => {
   // either claim must match an approved FORM — so a wording nobody predicted
   // fails by default instead of passing by default.
   it("makes every pass-duration claim in an approved form", () => {
-    expect(unapprovedClaimFaults("event-pass.md", eventPass, DURATION_ALLOWLIST, GATED)).toEqual([]);
+    for (const [label, text] of PASS_PAGES) {
+      expect(unapprovedClaimFaults(label, text, DURATION_ALLOWLIST, GATED), label).toEqual([]);
+    }
     expect(
       unapprovedClaimFaults("plans.md#event-pass", plansPassSection!, DURATION_ALLOWLIST, GATED),
     ).toEqual([]);
   });
 
   it("makes every entry-fee-rate claim in an approved form", () => {
-    expect(unapprovedClaimFaults("event-pass.md", eventPass, FEE_RATE_ALLOWLIST, GATED)).toEqual([]);
+    for (const [label, text] of PASS_PAGES) {
+      expect(unapprovedClaimFaults(label, text, FEE_RATE_ALLOWLIST, GATED), label).toEqual([]);
+    }
     expect(unapprovedClaimFaults("plans.md", plans, FEE_RATE_ALLOWLIST, GATED)).toEqual([]);
   });
 
@@ -225,19 +250,28 @@ describe("billing help articles say what the resolver enforces", () => {
   // examining nothing — this wave's most repeated failure. If the real articles
   // stop exercising an approved form, either the copy or the form is dead.
   it("exercises the approved forms it offers, rather than sweeping nothing in", () => {
-    const duration = approvedFormsExercised(eventPass, DURATION_ALLOWLIST);
-    const fee = approvedFormsExercised(eventPass, FEE_RATE_ALLOWLIST);
+    // Over the three pass pages together: the split put the "stops on a named
+    // condition" form on event-pass-ends.md and buy-an-event-pass.md.
+    const exercised = (allowlist: typeof DURATION_ALLOWLIST) => [
+      ...new Set(PASS_PAGES.flatMap(([, text]) => approvedFormsExercised(text, allowlist))),
+    ];
+    const duration = exercised(DURATION_ALLOWLIST);
+    const fee = exercised(FEE_RATE_ALLOWLIST);
     expect(duration.length, "no duration sentence was classified at all").toBeGreaterThan(1);
     expect(fee.length, "no fee-rate sentence was classified at all").toBeGreaterThan(0);
   });
 
   it("quotes no retired per-division AI-run cap", () => {
-    expect(retiredRunCapProseFaults("event-pass.md", eventPass)).toEqual([]);
+    for (const [label, text] of PASS_PAGES) {
+      expect(retiredRunCapProseFaults(label, text), label).toEqual([]);
+    }
     expect(retiredRunCapProseFaults("plans.md", plans)).toEqual([]);
   });
 
   it("sells the Event Pass as bounded, and says what bounds it", () => {
-    expect(passBoundProseFaults("event-pass.md", eventPass)).toEqual([]);
+    for (const [label, text] of PASS_PAGES) {
+      expect(passBoundProseFaults(label, text), label).toEqual([]);
+    }
     expect(passBoundProseFaults("plans.md#event-pass", plansPassSection!)).toEqual([]);
   });
 
@@ -251,7 +285,9 @@ describe("billing help articles say what the resolver enforces", () => {
   // competition that has taken a paid entry, which is every competition an
   // organiser is reading this page about.
   it("never says the entry-fee rate reverts without the first-paid-entry lock", () => {
-    expect(unqualifiedFeeReversionFaults("event-pass.md", eventPass)).toEqual([]);
+    for (const [label, text] of PASS_PAGES) {
+      expect(unqualifiedFeeReversionFaults(label, text), label).toEqual([]);
+    }
     expect(unqualifiedFeeReversionFaults("plans.md", plans)).toEqual([]);
   });
 
@@ -265,9 +301,19 @@ describe("billing help articles say what the resolver enforces", () => {
   // usd — while in eur and aud the halves land on whole units and it is exactly
   // half, which is why the wording is "no more than half" and not "under half".
   it("quotes an extra-organisation rate the seed's tiers actually charge", () => {
+    // Task 14a: plans.md's billing-group section no longer quotes the rate — it
+    // sends the reader to billing/groups.md, which does. The check follows the
+    // claim to the page that makes it, and plans.md is held to making none.
+    const groupsPage = helpArticleBySlug("billing/groups");
+    expect(groupsSection!, "plans.md must point at the page that states the rate").toContain(
+      "(/help/billing/groups)",
+    );
+    expect(plainProse(groupsSection!), "plans.md quotes a rider rate again").not.toMatch(
+      /\bhalf\b|\$\d/,
+    );
     const claimed = (stripePlans.plans as unknown as PricedPlan[]).map((plan) => ({
       ...plan,
-      product: { description: plainProse(groupsSection!) },
+      product: { description: plainProse(groupsPage) },
     }));
     expect(riderRateFaults(claimed)).toEqual([]);
 
@@ -276,7 +322,7 @@ describe("billing help articles say what the resolver enforces", () => {
     for (const plan of stripePlans.plans) {
       const rider = plan.prices.monthly.tiers.find((t) => t.up_to === "inf");
       expect(rider, `${plan.key} has no monthly rider tier`).toBeDefined();
-      expect(plainProse(groupsSection!), `${plan.key}'s usd rider`).toContain(
+      expect(plainProse(groupsPage), `${plan.key}'s usd rider`).toContain(
         `$${rider!.unit_amount / 100}/month`,
       );
     }
@@ -287,12 +333,16 @@ describe("billing help articles say what the resolver enforces", () => {
   // charged, so a competition that took one before its pass was bought is
   // locked at the pre-pass rate and the pass cannot lower it.
   it("never names a constant percentage as the locked rate", () => {
-    expect(lockedRateConstantFaults("event-pass.md", eventPass)).toEqual([]);
+    for (const [label, text] of PASS_PAGES) {
+      expect(lockedRateConstantFaults(label, text), label).toEqual([]);
+    }
     expect(lockedRateConstantFaults("plans.md#event-pass", plansPassSection!)).toEqual([]);
   });
 
   it("states the lock, rather than merely omitting the false claim", () => {
     expect(feeLockStatedFaults("event-pass.md", eventPass)).toEqual([]);
+    // The page a reader lands on when their pass has ended states it too.
+    expect(feeLockStatedFaults("event-pass-ends.md", passEnds)).toEqual([]);
 
     // ANTI-VACUITY, the backstop for an all-negative rule: the check above
     // would also pass on an article that simply never mentions the fee, and the
@@ -344,7 +394,7 @@ describe("billing/downgrade.md is gated too (#303)", () => {
   // demonstrated rather than asserted.
   it("reds on the exact unqualified sentence #303 found", () => {
     const reverted = downgrade.replace(
-      /What changes is the platform fee[\s\S]*?while the rest of the org sits on Community\./,
+      /What can change is the platform fee\.[\s\S]*?follows Community's rate\./,
       "What changes is the platform fee: back on Community the rate returns to **8%**, where Pro is 2% and Pro Plus 1%. See the fee ladder.\n\n**Passed competitions keep their own rate.** A competition covered by an Event Pass stays at **5%** after the downgrade, and keeps everything else the pass grants — bigger limits, branded exports, sponsor tiers and packages — while the rest of the org sits on Community.",
     );
     expect(reverted, "the replacement never matched — the article moved").not.toBe(downgrade);
@@ -891,32 +941,113 @@ describe.skipIf(!HAS_DB)("billing help articles quote the numbers the matrix enf
     }
   });
 
-  it("the transposed pass fee row quotes the rate every rung on sale enforces", async () => {
-    // `event-pass.md` states its fee as a ROW of rates rather than a column of
-    // plans, so the sweep above cannot read it. It is the fourth published copy
-    // of this fact and went unscanned for the same reason the other two did — a
-    // different shape, so nobody looked.
-    //
-    // The rungs it covers are the SELLABLE ones (owner decision 2026-09-05):
-    // the article's table sold M and L side by side and now sells one, so a
-    // rate demanded here for a withdrawn rung would fault an article that
-    // correctly no longer mentions it. L's own 4% is still pinned against the
-    // matrix — `pricing-matrix.test.ts`'s fee ladder, and the plan-column fee
-    // table in this same article via `FEE_LADDER_PLAN_KEYS["Event Pass"]`,
-    // which deliberately still names both rungs.
-    const passRates = Object.fromEntries(
-      await Promise.all(
-        SELLABLE_PASS_KEYS.map(
-          async (k) => [k, await capFor("registration.fee_percent", k)] as const,
-        ),
-      ),
-    );
-    expect(Object.keys(passRates).length, "no rung on sale — this rule examined nothing")
-      .toBeGreaterThan(0);
-    expect(passFeeRowFaults("event-pass.md", eventPass, passRates)).toEqual([]);
+  /**
+   * A TOKEN COMPARISON TABLE, read by its pairing. Task 14a moved the plan
+   * figures in these tables to `{{plan:<feature>:<plan>}}` tokens, so a cell is
+   * the live value by construction — what can still be wrong is WHICH token sits
+   * in which cell. Each row label names a feature and each column header names
+   * a plan; every cell must be that feature on that plan, or the literal "No
+   * limit" where the matrix row is null. Returns the cells it compared so the
+   * caller can prove it read something.
+   */
+  const ROW_FEATURES: ReadonlyArray<readonly [RegExp, string]> = [
+    [/^active competitions$/i, "competitions.max_active"],
+    [/^divisions/i, "divisions.per_competition.max"],
+    [/^entrants per division$/i, "entrants.per_division.max"],
+    [/^team members$/i, "members.max"],
+    [/^public dashboards$/i, "dashboard.public.max"],
+    [/^organisations on one bill$/i, "orgs.max_owned"],
+    [/^ai credits a month$/i, "ai.credits.monthly"],
+    [/^free match credits a month$/i, "streaming.credits.monthly"],
+    [/^platform fee/i, "registration.fee_percent"],
+  ];
+  const tokenTableCells = async (label: string, markdown: string) => {
+    const faults: string[] = [];
+    const compared: string[] = [];
+    let header: string[] | null = null;
+    for (const line of markdown.split("\n")) {
+      if (!line.trimStart().startsWith("|")) {
+        header = null;
+        continue;
+      }
+      const cells = line.split("|").slice(1, -1).map((c) => c.trim());
+      if (/^-+$/.test(cells[1] ?? "")) continue;
+      if (header === null) {
+        header = cells;
+        continue;
+      }
+      // Two shapes (review m12): a FEATURE per row with a PLAN per column
+      // (plans.md's limits, event-pass.md's comparison), or a PLAN per row with
+      // a FEATURE per column (credits.md, match-credits.md, the fee ladder).
+      const rowFeature = ROW_FEATURES.find(([re]) => re.test(cells[0] ?? ""))?.[1];
+      const rowPlan = PLAN_KEY_BY_LABEL[cells[0] ?? ""];
+      if (!rowFeature && !rowPlan) continue;
+      for (let col = 1; col < cells.length; col++) {
+        const feature = rowFeature ?? ROW_FEATURES.find(([re]) => re.test(header![col] ?? ""))?.[1];
+        const planKey = rowFeature ? PLAN_KEY_BY_LABEL[header[col] ?? ""] : rowPlan;
+        if (!feature || !planKey) continue;
+        const cell = cells[col]!;
+        const where = `${label}: "${cells[0]}" / ${header[col]}`;
+        compared.push(where);
+        const live = await capFor(feature, planKey);
+        if (live === null) {
+          if (!/^no limit$/i.test(cell)) faults.push(`${where} says "${cell}", but ${feature} is unlimited on ${planKey}`);
+          continue;
+        }
+        // A token may be followed by words ("… for each organisation the
+        // subscription pays for"), never preceded by a figure.
+        const token = /^\{\{plan:([\w.]+):(\w+)\}\}%?(?:\s.*)?$/.exec(cell);
+        if (!token) {
+          faults.push(`${where} says "${cell}" — a figure here must be the {{plan:${feature}:${planKey}}} token`);
+        } else if (token[1] !== feature || token[2] !== planKey) {
+          faults.push(`${where} carries {{plan:${token[1]}:${token[2]}}}, but the row and column name ${feature} on ${planKey}`);
+        }
+      }
+    }
+    return { faults, compared };
+  };
+
+  // Was "the transposed pass fee row quotes the rate every rung on sale
+  // enforces", over a one-column pass table. event-pass.md's table now compares
+  // Community, Event Pass and Pro side by side, so the fee row is read by
+  // column: the Event Pass cell must be the pass's own rate, and its neighbours
+  // their own plans'.
+  it("the pass comparison table pairs every cell with its own plan's live value", async () => {
+    const { faults, compared } = await tokenTableCells("event-pass.md", eventPass);
+    expect(faults).toEqual([]);
+    // ANTI-VACUITY: three rows (divisions, entrants, platform fee) by three plans.
+    expect(compared.length, "the comparison table was not read").toBe(9);
+    expect(compared.filter((c) => c.includes("/ Event Pass")), "no Event Pass column").toHaveLength(3);
+    // …and the Event Pass column is the rung on sale, read off the resolved page.
+    const resolved = resolveHelpTokens(eventPass, await loadPricingMatrix());
+    const feeRow = resolved.split("\n").find((l) => /^\|\s*Platform fee/i.test(l));
+    expect(feeRow, "the fee row moved").toBeDefined();
+    for (const key of SELLABLE_PASS_KEYS) {
+      expect(feeRow!.split("|").map((c) => c.trim())[3], `${key}'s rate`).toBe(
+        `${await capFor("registration.fee_percent", key)}%`,
+      );
+    }
+  });
+
+  it("plans.md's limits table pairs every cell with its own plan's live value", async () => {
+    const { faults, compared } = await tokenTableCells("plans.md", plans);
+    expect(faults).toEqual([]);
+    // Eight rows by three plans, plus the fee ladder's four plan rows.
+    expect(compared.length, "the limits table was not read").toBe(28);
+  });
+
+  it("the per-plan credit tables pair every cell with its own plan's live value (review m12)", async () => {
+    for (const slug of ["credits", "match-credits"]) {
+      const { faults, compared } = await tokenTableCells(`${slug}.md`, helpArticle(slug));
+      expect(faults, slug).toEqual([]);
+      // Community, Pro and Enterprise, one column each.
+      expect(compared.length, `${slug}: the per-plan table was not read`).toBe(3);
+    }
   });
 
   it("the Event Pass articles quote the live caps of the rungs on sale, and no others", async () => {
+    // Read RESOLVED: the pages carry tokens, and a reader sees the numbers.
+    const matrix = await loadPricingMatrix();
     const m = {
       entrants: await capFor("entrants.per_division.max", "event_pass"),
       divisions: await capFor("divisions.per_competition.max", "event_pass"),
@@ -939,8 +1070,8 @@ describe.skipIf(!HAS_DB)("billing help articles quote the numbers the matrix enf
     expect(l.divisions).not.toBe(m.divisions);
 
     for (const [label, text] of [
-      ["event-pass.md", eventPass],
-      ["plans.md#event-pass", plansPassSection!],
+      ["event-pass.md", resolveHelpTokens(eventPass, matrix)],
+      ["plans.md#event-pass", resolveHelpTokens(plansPassSection!, matrix)],
     ] as const) {
       expect(text, `${label}: M's entrant cap`).toContain(`${m.entrants} entrants`);
       expect(text, `${label}: M's division cap`).toContain(`${m.divisions} divisions`);
@@ -980,24 +1111,20 @@ describe.skipIf(!HAS_DB)("billing help articles quote the numbers the matrix enf
     return faults;
   };
 
-  // A cross-plan claim is a claim about the OTHER plan's matrix row too. Both
-  // parenthetical comparisons in `event-pass.md` are read in order, so a drifted
-  // Community cap cannot hide behind the pass's own numbers being right.
-  it("the 'Community allows N' comparisons are Community's live caps", async () => {
-    const quoted = [...eventPass.matchAll(/Community allows (\d+)/g)].map((m) => Number(m[1]));
-    expect(quoted, "the comparisons were reworded — re-point this guard").toHaveLength(2);
-    expect(quoted).toEqual([
-      await capFor("entrants.per_division.max", "community"),
-      await capFor("divisions.per_competition.max", "community"),
-    ]);
-  });
+  // "the 'Community allows N' comparisons are Community's live caps" lived
+  // here. event-pass.md no longer makes the comparison in prose: it is the
+  // Community column of the comparison table, read cell by cell — against its
+  // own plan, not the pass's — by the pairing test above.
 
   it("every monthly AI credit figure in plans.md is that plan's live grant", async () => {
     // `enterprise`, not `pro_plus`: V393 deleted that plan and moved the top
     // grant onto enterprise (500, re-cut from 200 in the same wave).
+    // The monthly figures are the "AI credits a month" row of plans.md's limits
+    // table; the pairing test above reads each cell against its own plan.
+    const row = plans.split("\n").find((l) => /^\|\s*AI credits a month\s*\|/.test(l));
+    expect(row, "plans.md lost its AI credits row").toBeDefined();
     for (const key of ["community", "pro", "enterprise"]) {
-      const live = await capFor("ai.credits.monthly", key);
-      expect(plans, `${key}'s monthly grant`).toContain(`${live} AI credits a month`);
+      expect(row, `${key}'s monthly grant`).toContain(`{{plan:ai.credits.monthly:${key}}}`);
     }
     // …and NO rung has a monthly row at all: the pass grant is a one-time
     // top-up. Asked of EVERY rung, hidden ones included — it is a fact about
@@ -1011,10 +1138,12 @@ describe.skipIf(!HAS_DB)("billing help articles quote the numbers the matrix enf
     }
     // The ARTICLE, though, quotes the grant of the rung it sells and no other.
     for (const key of SELLABLE_PASS_KEYS) {
-      expect(plans, `${key}'s one-time grant`).toContain(`+${PASS_CREDIT_GRANT[key]} AI credits`);
+      expect(plansPassSection!, `${key}'s one-time grant`).toMatch(
+        new RegExp(`\\b${PASS_CREDIT_GRANT[key]} AI credits\\b[^.]*\\bone time\\b`),
+      );
     }
     for (const key of HIDDEN_PASS_KEYS) {
-      expect(plans, `${key} is off sale`).not.toContain(`+${PASS_CREDIT_GRANT[key]} AI credits`);
+      expect(plans, `${key} is off sale`).not.toMatch(new RegExp(`\\b${PASS_CREDIT_GRANT[key]} AI credits`));
     }
     // The declaration keeps them distinct whether or not the copy says so, or
     // the negative above is satisfied by the two grants being one number.
@@ -1626,14 +1755,14 @@ describe("an added falsehood fails whatever it says", () => {
   // paragraph quietly deleted.
   it("catches an edit inside an existing paragraph, and a deletion", () => {
     const edited = eventPass.replace(
-      "It does **not** carry to next season's edition",
-      "It **does** carry to next season's edition",
+      "A new competition, even the next edition of the same event, needs its own pass.",
+      "A new competition, even the next edition of the same event, keeps this pass.",
     );
     expect(edited, "the anchor moved — re-point this test").not.toBe(eventPass);
     expect(inventoryFaults("x", edited, APPROVED_EVENT_PASS_INVENTORY)).not.toEqual([]);
 
     const deleted = eventPass.replace(
-      "- The pass covers **that competition only**, while it runs.\n",
+      "- Anything outside this competition. Your other competitions stay on your plan.\n",
       "",
     );
     expect(deleted).not.toBe(eventPass);
@@ -1665,7 +1794,7 @@ describe("an added falsehood fails whatever it says", () => {
       `${eventPass}\n\nSomething new.\n`,
       APPROVED_EVENT_PASS_INVENTORY,
     );
-    const anchor = "Only a competition with no paid card entry yet follows your plan's live rate.";
+    const anchor = "After the pass ends, a competition with no paid card entry yet follows your plan's rate.";
     expect(eventPass, "the anchor moved — re-point this test").toContain(anchor);
     const [paragraphFault] = goldenParagraphFaults(
       "event-pass.md",
@@ -1828,7 +1957,7 @@ describe("every surface a reader sees is covered, not just the paragraphs", () =
       "Entry costs return to normal once the trophy is handed out",
       "An upgrade with no shelf life",
     ]) {
-      const mutated = eventPass.replace("## The fine print", `## ${heading}\n\n## The fine print`);
+      const mutated = eventPass.replace("## One pass, one competition", `## ${heading}\n\n## One pass, one competition`);
       expect(mutated, "the heading anchor moved").not.toBe(eventPass);
       expect(detects(mutated), heading).toBe(true);
     }
@@ -1837,9 +1966,8 @@ describe("every surface a reader sees is covered, not just the paragraphs", () =
   // The gate is POSITIONAL. Set membership raised zero faults when two real
   // paragraphs were swapped, while its own message claimed to catch reordering.
   it("catches two approved paragraphs being swapped", () => {
-    const first = "- The pass covers **that competition only**, while it runs.";
-    const second =
-      "- It does **not** carry to next season's edition — a new edition is a new competition, so a new pass (or the moment Pro starts making sense).";
+    const first = "- Your brand colour on public pages. That stays on Pro.";
+    const second = "- API access.";
     expect(eventPass.includes(`${first}\n${second}`), "the anchors moved").toBe(true);
     const swapped = eventPass.replace(`${first}\n${second}`, `${second}\n${first}`);
     expect(inventoryFaults("x", swapped, APPROVED_EVENT_PASS_INVENTORY)).not.toEqual([]);
@@ -1854,8 +1982,8 @@ describe("every surface a reader sees is covered, not just the paragraphs", () =
     // on every legitimate reprice teaches its next reader to retype the price
     // rather than to check the mutation still lands.
     const mutated = plans.replace(
-      "## Pro — ",
-      "The pass has no end date and applies for the life of the event.\n\n## Pro — ",
+      "## Pro, for every competition",
+      "The pass has no end date and applies for the life of the event.\n\n## Pro, for every competition",
     );
     expect(mutated, "the section anchor moved").not.toBe(plans);
     expect(inventoryFaults("x", mutated, APPROVED_PLANS_INVENTORY)).not.toEqual([]);
@@ -2013,12 +2141,18 @@ describe("the add-ons article says what the billing code actually does", () => {
     // vacuously-green assertion is worse than a deleted one, because it reads
     // as coverage. The seat's own catalog shape is still guarded, in
     // config/__tests__/stripe-plans.test.ts.
-    expect(addOns, "the size pack's delta").toContain(`+${sizePack.delta_each} each`);
-    expect(sizePack.delta_each, "the prose spells this one out in words too").toBe(32);
-    expect(addOns).toContain(`limit by ${sizePack.delta_each}`);
+    // The SIZE PACK's delta went the same way in Task 14a, for the same
+    // reason: the article no longer names an add-on nobody can buy from a
+    // screen (see "says there is no add-on … only while that is still true"
+    // below), and its catalog shape stays guarded in stripe-plans.test.ts.
+    expect(sizePack.delta_each, "the size pack still exists in the catalog").toBeGreaterThan(0);
+    expect(addOns, "a size pack is described again").not.toMatch(/size pack/i);
     expect(orgAddons.length, "no extra-organisation add-on to describe").toBeGreaterThan(0);
     for (const addon of orgAddons) {
-      expect(addOns, `${addon.key}'s delta`).toContain(`+${addon.delta_each} each`);
+      // The article spells the delta in words ("raises the limit by one").
+      const WORDS: Record<number, string> = { 1: "one", 2: "two", 3: "three" };
+      expect(WORDS[addon.delta_each], `${addon.key}'s delta has no word`).toBeDefined();
+      expect(addOns, `${addon.key}'s delta`).toContain(`raises the limit by ${WORDS[addon.delta_each]}`);
       // Monthly-only is a CLAIM the article makes ("every month, whatever your
       // plan's own billing period"), so it is pinned to the seed, not assumed.
       expect(addon.price.interval, `${addon.key} is no longer monthly`).toBe("month");
@@ -2370,22 +2504,35 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
       "the floorNote moved — the article was written to agree with it",
     ).toMatch(/standing on an extra organisation/i);
 
-    // …and the article says both halves, so neither can be dropped silently.
-    expect(addOns, "the seat half").toMatch(/extra seat stops you adding members/i);
+    // …and the article says the org half, so it cannot be dropped silently.
+    // The SEAT half ("an extra seat stops you adding members") went with the
+    // extra seat in Task 14a — no screen sells one, so add-ons.md no longer
+    // names it. The member freeze it described is a downgrade fact, and is
+    // pinned on downgrade.md here, where the article now states it.
     expect(addOns, "the org non-freeze").toMatch(/extra organisation does not freeze anything/i);
+    const downgradeCopy = helpArticle("downgrade");
+    expect(downgradeCopy, "the member freeze is stated").toMatch(
+      /members who joined earliest are frozen first/i,
+    );
     // The owner exemption is real (`frozenMemberIds` filters role === "owner").
     expect(source).toContain('r.role === "owner"');
-    expect(addOns).toMatch(/owners\s+never\s+are/i);
+    expect(downgradeCopy).toMatch(/Owners are never frozen/);
     // …and NOTHING renders a mark (fix round 6, M2). `frozenMemberIds` has one
     // production caller, `assertMemberNotFrozen`; no read model flags a member.
     // Competitions ARE flagged in read models, which is the contrast the module
     // header draws and the reason "marked" read as a UI promise it never kept.
-    expect(addOns, "the article must not promise a badge nobody renders").not.toMatch(
-      /(are|is)\s+marked\s+read-only|that\s+mark\s+is/i,
+    for (const [label, copy] of [["add-ons.md", addOns], ["downgrade.md", downgradeCopy]] as const) {
+      expect(copy, `${label} must not promise a badge nobody renders`).not.toMatch(
+        /(are|is)\s+marked\s+read-only|that\s+mark\s+is/i,
+      );
+    }
+    expect(downgradeCopy, "…and must say how it actually behaves").toMatch(
+      /their changes are refused\. Nothing on screen marks them in advance\./,
     );
-    expect(addOns, "…and must say how it actually behaves").toMatch(
-      /treated\s+as\s+read-only/i,
-    );
+    // Task 14a: the member-freeze REACH below was pinned on add-ons.md's
+    // extra-seat paragraph. That paragraph went with the extra seat, and the
+    // freeze is now explained where a reader meets it — downgrade.md — so every
+    // reach assertion below reads that page instead.
 
     // HOW FAR THE SEAT FREEZE ACTUALLY REACHES. Round 2 said the limit is
     // "re-checked on every write". It is not: `assertMemberNotFrozen` has ONE
@@ -2450,7 +2597,7 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
     // writes are never freeze-checked at all.
     expect(apiAuth).toContain('if (scope === "write" && role === "admin")');
     expect(apiAuth).toContain("if (token) return apiKeyAuth(req, token, orgId);");
-    expect(addOns, "the article must not over-promise enforcement").not.toMatch(
+    expect(downgradeCopy, "the article must not over-promise enforcement").not.toMatch(
       /re-?checked on every write/i,
     );
     // …and it must name the RIGHT surface. "our public API" was still wrong:
@@ -2461,10 +2608,16 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
     // freeze as narrow, and the freeze is not narrow — it reaches 83 write
     // routes across 17 URL prefixes. What IS exclusive is the API-key exemption,
     // which is what the clause now carries.
-    expect(addOns, "…and must say where it IS enforced").toMatch(
-      /blocks signed-in admins writing through our REST API, not API-key clients/i,
+    // In house voice: "admins" for the signed-in role check, "API keys are
+    // not affected" for the bearer branch that returns before it.
+    expect(downgradeCopy, "…and must say where it IS enforced").toMatch(/The freeze applies to admins\./);
+    // Review m1: "API keys are not affected" read as a contradiction beside
+    // "API keys stop working" — the freeze only bites on Community, where
+    // api.access is false. The page now says both halves in one sentence.
+    expect(downgradeCopy, "…and that API-key clients are exempt").toMatch(
+      /The freeze is separate from API keys, which stop working on Community anyway\./,
     );
-    expect(addOns, "'blocks only …' understates the reach").not.toMatch(
+    expect(downgradeCopy, "'blocks only …' understates the reach").not.toMatch(
       /blocks only signed-in admins/i,
     );
 
@@ -2546,11 +2699,11 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
     ).toBeGreaterThan(20);
 
     // The copy must not read as a closed enumeration of a few screens…
-    expect(addOns, "the freeze is not a four-screen corner of the product").not.toMatch(
+    expect(downgradeCopy, "the freeze is not a four-screen corner of the product").not.toMatch(
       /\(API keys, News, Sponsors, Payments\)|not\s+the\s+app['’]s\s+own\s+screens/i,
     );
     // …must state the scope positively…
-    expect(addOns, "the article must say how far the freeze actually reaches").toMatch(
+    expect(downgradeCopy, "the article must say how far the freeze actually reaches").toMatch(
       /blocked\s+across\s+most\s+of\s+the\s+app/i,
     );
     // …and every example it names must be a real caller, so the illustration is
@@ -2568,7 +2721,7 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
       ["officials", "components/v2/officials-panel.tsx"],
       ["settings", "components/v2/division-settings.tsx"],
     ] as const) {
-      expect(addOns, `the article stopped naming ${example}`).toContain(example);
+      expect(downgradeCopy, `the article stopped naming ${example}`).toContain(example);
       expect(
         callers,
         `the article names ${example} as an example, but ${file} no longer writes through a freeze-checked route`,
@@ -2679,7 +2832,7 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
     // The half that IS enforced everywhere is ADMISSION: an invite past
     // members.max is refused in the same transaction (role changes are not).
     expect(codeOnly(webSource("lib/invites.ts"), "invites.ts")).toContain('"members.max"');
-    expect(addOns).toMatch(/invitation that would take you past the limit is refused/i);
+    expect(downgradeCopy).toMatch(/invitation that would take you past the limit is refused/i);
   });
 
   // CLAIM: "added to your next invoice rather than charged on the spot."
@@ -2905,74 +3058,41 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
     // ONE, not two: R13 removed the extra-seat section, so only the size pack
     // still makes this claim. A count rather than a floor, so re-adding the
     // hidden add-on's copy reds here and gets read.
-    expect(addOns.match(/no screen for buying a size pack/g) ?? []).toHaveLength(1);
+    // Task 14a: one sentence now covers both — "no add-on for more team
+    // members" is the extra seat, "or for more entrants or divisions in one
+    // competition" is the size pack. Exactly one, so a second copy gets read.
+    expect(
+      addOns.match(
+        /There is no add-on for more team members, or for more entrants or divisions in one competition\./g,
+      ) ?? [],
+    ).toHaveLength(1);
   });
 
-  // CLAIM: the rider matches the half rate monthly but NOT annually — "about a
-  // third more over a year". Round 1 said "charged at exactly that same rate".
-  it("says the annual rider costs more, and by the factor the seed actually charges", () => {
-    const ratios: string[] = [];
-    for (const addon of orgAddons) {
-      const plan = stripePlans.plans.find((p) => p.key === addon.plan_key)!;
-      const annualRider = plan.prices.annual.tiers!.find((t) => t.up_to === "inf")!;
-      for (const currency of SEED_CURRENCIES) {
-        const perMonth =
-          currency === "usd"
-            ? addon.price.unit_amount
-            : (addon.price.currency_options as Record<string, number>)[currency]!;
-        const inPlanPerYear =
-          currency === "usd"
-            ? annualRider.unit_amount
-            : (annualRider.currency_options as Record<string, number>)![currency]!;
-        const ratio = (perMonth * 12) / inPlanPerYear;
-        // The add-on must be DEARER annually — that is the whole claim. If a
-        // price move ever made them equal, "and on an annual bill it does not"
-        // becomes false and the sentence has to change.
-        if (ratio <= 1.001) ratios.push(`${addon.key} ${currency}: ratio ${ratio.toFixed(3)} — no longer dearer`);
-        // THE FLOOR IS CHOSEN, THE RATIOS ARE DERIVED. `4/3` is a constant
-        // picked to match the wording, not a number computed from the seed —
-        // an earlier report described it as "derived from the seed" and that
-        // was wrong. What the seed decides is every `ratio` above; this line
-        // only asks whether the sentence pinned three lines down is still a
-        // true description of them. Changing the wording means changing this
-        // constant, deliberately, in the same edit.
-        //
-        // "AT LEAST a sixth more" is a FLOOR, and it is a floor because the
-        // gap is not one number: measured across the seed it runs 1.195 (inr)
-        // to 1.469 (usd). The review that caught the original "exactly that
-        // same rate" quoted usd alone, and a sentence tuned to usd would have
-        // been false in gbp and inr by the same mechanism that made "half the
-        // base rate" false — the third time this wave has met a comparative
-        // that only holds in one currency. So the claim is the LOWER bound
-        // over every (add-on x currency) combination, and this is what keeps
-        // it honest if a price moves.
-        //
-        // 4/3 -> 7/6 at the entitlements v18 reprice (2026-09-03). The gap
-        // NARROWED because the monthly rider fell further than the annual one
-        // ($9 -> $6 against $79 -> $49 a year), and INR narrowed most of all:
-        // its x99 rounding takes the monthly rider to 40% of base while the
-        // annual rider is a clean half. "A third" became false in gbp (1.231)
-        // and inr (1.195) on the day the prices moved, which is precisely the
-        // drift this constant exists to force somebody to read.
-        if (ratio < 7 / 6)
-          ratios.push(
-            `${addon.key} ${currency}: ratio ${ratio.toFixed(3)} is below a sixth more — "at least a sixth more over a year" is now false`,
-          );
-        // …and a floor that has drifted absurdly far below the truth is also a
-        // defect: it under-warns a customer the sentence exists to warn.
-        if (ratio > 1.8)
-          ratios.push(
-            `${addon.key} ${currency}: ratio ${ratio.toFixed(3)} — the floor is now so far below the real gap that the wording under-warns`,
-          );
-      }
-    }
-    expect(ratios).toEqual([]);
-    expect(addOns, "the annual divergence is stated").toMatch(
-      /on a monthly bill it matches that half rate exactly, and on an annual bill it does not/i,
+  // CLAIM (Task 14a fix round 1, review I5): an organisation that joins
+  // through an extra place is charged TWICE — as a seat on the plan item, like
+  // every organisation on the bill, and again as the recurring add-on. The
+  // "annual rider costs at least a sixth more" sentence this test used to pin
+  // priced only the add-on, and was retired with it; its seed-ratio loop went
+  // too, because no sentence now makes that comparison. Code-read only: no
+  // Stripe sandbox was reachable to drive it (owner question in the report).
+  it("says an extra organisation pays its seat AND the add-on, because the code charges both", () => {
+    const groups = webSource("server/usecases/billing-groups.ts");
+    // KNOWN-POSITIVE: the plan item's quantity counts EVERY live organisation on
+    // the group, extra-place ones included — there is no subtraction of riders.
+    expect(groups, "syncGroupQuantity no longer counts every organisation — re-read the double charge").toMatch(
+      /select count\(\*\)::text as n from organizations\s+where subscription_id = \$\{subscriptionId\} and deleted_at is null/,
     );
-    expect(addOns).toMatch(/at least a sixth more over a year/i);
-    // …and the false round-1 clause cannot come back.
-    expect(addOns).not.toMatch(/charged at exactly that same rate/i);
+    // …and the add-on is a SEPARATE recurring monthly item.
+    expect(orgAddons.length, "no extra-organisation add-on to describe").toBeGreaterThan(0);
+    for (const addon of orgAddons) {
+      expect(addon.price.interval, `${addon.key} is no longer monthly`).toBe("month");
+    }
+    expect(addOns, "the double charge is stated").toMatch(/An organisation that joins through an extra place is charged twice:/);
+    expect(addOns).toContain("**As an organisation on the bill.**");
+    expect(addOns).toContain("**For the extra place.**");
+    expect(addOns).toMatch(/charged every month, even when your plan is billed yearly/);
+    // …and the add-on-only comparisons cannot come back.
+    expect(addOns).not.toMatch(/matches that half rate exactly|a sixth more|charged at exactly that same rate/i);
   });
 });
 
@@ -2993,7 +3113,10 @@ describe.skipIf(!HAS_DB)("the add-ons article quotes the caps the matrix enforce
     };
     const pro = await capFor("pro");
     expect(pro, "pro must have a finite org cap for this sentence").not.toBeNull();
-    expect(addOns, "Pro's live organisation cap").toContain(`Pro covers ${pro}`);
+    // The cap is a token on disk; the reader sees the resolved figure.
+    expect(addOns, "the cap is the Pro token").toContain("Pro covers {{plan:orgs.max_owned:pro}}");
+    const resolved = resolveHelpTokens(addOns, await loadPricingMatrix());
+    expect(resolved, "Pro's live organisation cap").toContain(`Pro covers ${pro}`);
 
     const enterprise = await capFor("enterprise");
     expect(enterprise, "enterprise's org cap is unlimited").toBeNull();
@@ -3189,7 +3312,7 @@ describe("the add-ons gate catches what the vocabulary cannot", () => {
       "Extra seats — buy them yourself in Settings",
       "Size packs — refundable any time",
     ]) {
-      const mutated = addOns.replace("## See also", `## ${heading}\n\n## See also`);
+      const mutated = addOns.replace("## Credit packs", `## ${heading}\n\n## Credit packs`);
       expect(mutated, "the heading anchor moved").not.toBe(addOns);
       expect(inventoryFaults("x", mutated, APPROVED_ADD_ONS_INVENTORY), heading).not.toEqual([]);
     }
@@ -3198,17 +3321,18 @@ describe("the add-ons gate catches what the vocabulary cannot", () => {
   // The gate is POSITIONAL, and an edit INSIDE a paragraph is the mutation a
   // set-membership check misses. Both are asserted rather than assumed.
   it("catches an edit inside a paragraph, a deletion, and a reorder", () => {
-    const edited = addOns.replace("Nothing is ever deleted", "Members over the limit are removed");
+    const edited = addOns.replace("does not freeze anything.", "removes the organisations over the limit.");
     expect(edited, "the anchor moved").not.toBe(addOns);
     expect(inventoryFaults("x", edited, APPROVED_ADD_ONS_INVENTORY)).not.toEqual([]);
 
-    const deleted = addOns.replace(/\n## Who can buy[\s\S]*?(?=\n## When an add-on)/, "\n");
+    const deleted = addOns.replace(/\n## Who sees what[\s\S]*?(?=\n## If you remove)/, "\n");
     expect(deleted, "the section anchor moved").not.toBe(addOns);
     expect(inventoryFaults("x", deleted, APPROVED_ADD_ONS_INVENTORY)).not.toEqual([]);
 
-    const rows = /\| AI credit pack \|([^\n]*)\n(\| Size pack \|[^\n]*)\n/.exec(addOns);
-    expect(rows, "the table rows moved").not.toBeNull();
-    const swapped = addOns.replace(rows![0], `${rows![2]}\n| AI credit pack |${rows![1]}\n`);
+    // The article has no table any more; two list items are swapped instead.
+    const rows = /(- \*\*The payer\*\*[^\n]*)\n(- \*\*Another owner\*\*[^\n]*)\n/.exec(addOns);
+    expect(rows, "the list items moved").not.toBeNull();
+    const swapped = addOns.replace(rows![0], `${rows![2]}\n${rows![1]}\n`);
     expect(swapped, "the swap was a no-op").not.toBe(addOns);
     expect(inventoryFaults("x", swapped, APPROVED_ADD_ONS_INVENTORY)).not.toEqual([]);
   });
@@ -3382,8 +3506,15 @@ describe.skipIf(!HAS_DB)("no help article misquotes a per-plan capacity cap", ()
 
   const sweep = async (extra: { slug: string; text: string }[] = []) => {
     const live = await loadMatrix();
+    // RESOLVED, as a reader sees it (Task 14a). Billing pages quote caps through
+    // `{{plan:…}}` tokens; read raw, a token is no figure at all and the prose
+    // half went inert. Resolved, a token pasted under the wrong plan reds here.
+    const pricing = await loadPricingMatrix();
     const articles = [
-      ...[...allHelpArticles().values()].map((a) => ({ slug: a.slug, text: helpArticleBySlug(a.slug) })),
+      ...[...allHelpArticles().values()].map((a) => ({
+        slug: a.slug,
+        text: resolveHelpTokens(helpArticleBySlug(a.slug), pricing),
+      })),
       ...extra,
     ];
     const faults: string[] = [];

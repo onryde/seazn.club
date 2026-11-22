@@ -105,6 +105,6 @@ describe("help redirects are served on demand, not prerendered", () => {
   it("the route leaves dynamicParams on (a slug that was not prerendered must still be served), and stays ISR", () => {
     const config = page as unknown as { dynamicParams?: boolean; revalidate?: number };
     expect(config.dynamicParams, "dynamicParams = false would 404 every redirect source").not.toBe(false);
-    expect(config.revalidate).toBe(3600);
+    expect(config.revalidate).toBe(300); // Blog P2 Task 5: the article route reads the plan table for token articles
   });
 });

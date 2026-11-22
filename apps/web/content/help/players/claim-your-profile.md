@@ -1,35 +1,52 @@
 ---
 title: Claim your player profile
-description: Turn the entry an organiser made for you into your own login — see your matches, RSVP availability, check in by QR and control what's public.
+description: Open your invite, claim the profile an organiser made for you, and know what to do when the link does not work.
 order: 1
+related: players/invite-to-claim, players/rsvp-and-check-in, players/player-stats-and-photo
 ---
 
-Organisers add players to their club directory; claiming links that entry to your own login. It's free on every plan — you don't need to belong to the organisation, and one login can hold profiles at several clubs.
+An organiser adds you to their directory as a player. Claiming links that profile to your own login. You do not need to belong to the organisation, and it costs nothing on any plan.
 
-## How claiming works
+![The claim page opened from the invite email: the heading Claim your profile, a line naming the club and the player, the invited address with its middle hidden, and the Claim and sign in button.](/help/players/claim-page.webp "The page the invite email opens. The address is partly hidden.")
 
-An organiser sends you a **claim invite** by email. Open the link in that email and tap **Claim and sign in**: you're signed in as the invited address (we create your account if you don't have one) and the profile is yours, in one step — no password and no second email. Nothing happens until you tap. The link works for 14 days and for one profile, but it only signs you in for 72 hours after it was sent — treat the email like a sign-in email and don't forward it. After 72 hours, opening it asks you to sign in with the invited address first (a magic link, no password), then tap **This is me**, exactly like the link below. Signing in accepts our [Terms of Service](/legal/terms) and [Privacy Policy](/legal/privacy) — the notice sits under the button.
+## Open your invite
 
-Were you handed a link or QR code by the organiser instead of the email? That one asks you to sign in first: use **that same email address** (a magic link, no password), then tap **This is me**.
+You get an email from the organisation with a link. Open it.
 
-Signed in with a different address? The page will tell you — sign out and sign in with the invited one. If the organiser used the wrong address, ask them to re-send the invite. If the link says *expired*, *withdrawn* or *already claimed*, a fresh invite fixes it — your profile and history are unaffected.
+1. The page reads **Claim your profile** and names the club and your profile.
+2. Tap **Claim and sign in**. You are signed in as the invited address, and the profile is yours. If the address has no account, one is made. There is no password and no second email.
+3. You land on your player home with **Profile claimed — this is your player home now.**
 
-## Your player home
+Nothing happens until you tap, so a mail scanner that opens the link cannot use it up. The notice under the button says that continuing means you accept the [Terms of Service](/legal/terms) and the [Privacy Policy](/legal/privacy).
 
-Once claimed, **/me** is your player home across every club:
+The invite lasts 14 days. The link in the email signs you in for 72 hours after it was sent. Treat the email like a sign-in email and do not forward it.
 
-- **Next match and everything coming up** — with the competition, venue and time.
-- **RSVP availability** — tap **In**, **Maybe** or **Out** on any upcoming match, with an optional note ("away that weekend"). Organisers see your answer right where they pick lineups.
-- **Recent results and your teams** — across all your clubs in one list.
+After 72 hours the same link opens a different page: **Sign in or create an account to claim it — no password needed.** Choose **Email me a sign-in link** and sign in with the invited address. The page brings you back. Tap **This is me — claim** followed by your name.
 
-## Check in at the venue
+An organiser can also hand you a link themselves. That link asks you to sign in with the invited address, and then to tap **This is me**. If you are already signed in as that address, it goes straight to **This is me — claim**.
 
-Some organisers pin up a **check-in QR** on match day. Scan it, tap once, and you're marked as *at the venue* in their lineup view. Checking in also counts as an "In" RSVP unless you'd already answered differently.
+> **Example**
+> The club sends Dana Whitfield an invite on Monday at 09:00. She opens the email on Wednesday at 09:00, 48 hours later, and **Claim and sign in** is on the page. Had she opened it on Thursday at 10:00, 73 hours later, the page would show **Sign in or create an account to claim it** instead. She would sign in first and then tap **This is me — claim Dana Whitfield**.
 
-## What's public about you
+## When the page says something else
 
-Claiming puts your consent switches in your hands: **show my name publicly** and **show my photo publicly**, per club. Flip one and your public player card updates immediately — including disappearing entirely when you turn your name off.
+- **Wrong account for this invite.** You are signed in as a different address. The page shows both addresses with the middle hidden. Sign out, then sign in with the invited one. If the organiser typed the wrong address, ask them to send the invite again.
+- **Link not recognised.** Part of the link was lost. Copy the whole link again, or ask for a new invite.
+- **Invite expired.** The 14 days are over. Ask for a new invite.
+- **Invite withdrawn.** The organiser cancelled it or sent a newer one. Use the newer email.
+- **Already claimed.** The profile is linked to an account. If that was you, sign in.
+- **You already have a player profile in this organisation.** One login holds one player profile in each organisation. An organiser can [merge the two records](/help/players/merge-players).
 
-**Consent and the club's plan are two different locks, and both have to be open.** Your consent is yours: nothing the club pays for publishes you, and with *show my name publicly* off there is no card at any price. The plan decides whether public cards exist for that club at all — they need **Pro**, or an [Event Pass](/help/billing/event-pass) on the competition. On a Community club there are no public player cards, so your switches simply have nothing public to govern until the club upgrades. Claiming, your player home, RSVPs, check-in, uploading a photo and the switches themselves work on every plan.
+None of these changes your profile or its history.
 
-**Under 16?** An organiser manages these settings until your 16th birthday (they'll usually have a guardian's consent on file). Everything else on your player home works the same.
+## Several clubs, and officials
+
+One login can claim a profile at each organisation that has you on file. **What's public about you** on your player home lists each club on its own, so your choices are per club.
+
+A referee gets a different page, **Claim your officiating profile**. A pending officiating invite also shows on your player home under **Pending invites**, with **Accept**.
+
+## What you get
+
+Your player home shows your matches and lets you answer **In**, **Maybe** or **Out**. See [RSVP and check in](/help/players/rsvp-and-check-in). Your stats, your photo and what is public are in [your stats, photo and privacy](/help/players/player-stats-and-photo).
+
+If you are under 16 and the organiser has your date of birth on file, an organiser manages your public name and photo settings until you turn 16, and you cannot upload a photo. Everything else on your player home works the same.

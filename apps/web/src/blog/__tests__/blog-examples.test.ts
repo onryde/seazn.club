@@ -1,0 +1,480 @@
+// The example harness (design: "Generated examples", "What is tested"). Four sweeps, each reporting what it
+// checked (zero checked is a failure, TEST-STRATEGY): every registered example regenerates to its committed
+// golden; every claim holds against the sport module's own declarations; every tie-break key an organiser can
+// meet has a label; and the claims have teeth (a tampered result is caught).
+//
+// Never `vitest -u`: it runs the whole suite. `UPDATE_BLOG_EXAMPLES=1` rewrites the goldens instead, and the
+// golden's diff is what a reviewer reads.
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { builtinModules } from "@seazn/engine/sports";
+import { buildWalk, declaredCfgs, forEachSport, lineupFromCatalog } from "@seazn/engine/testkit";
+import { resolvePositions } from "@seazn/engine/sport";
+import { decidedInFor, forfeitShaped, payout, resolveTableRules, setsToWinOf } from "@seazn/engine/competition";
+import { BLOG_EXAMPLES, blogExample } from "@/blog/examples";
+import { BLOG_GOLDENS } from "@/blog/examples/goldens";
+import type { ExampleResult } from "@/blog/examples/types";
+import { sportLabel, tiebreakLabel, variantLabel } from "@/blog/labels";
+import { DECLARED_BUT_UNREACHABLE, rankingKeyProblem } from "@/blog/examples/standings-points";
+import { pageVariantRows, startingVariantKey, syncedVariantName } from "@/blog/examples/starting-variant";
+import { PREFERRED_VARIANT } from "@/lib/preferred-variant";
+import { findBlogLeaks } from "@/blog/leaks";
+
+const GOLDEN_DIR = join(process.cwd(), "src", "blog", "examples", "__golden__");
+const UPDATE = process.env.UPDATE_BLOG_EXAMPLES === "1";
+const goldenPath = (id: string) => join(GOLDEN_DIR, `${id}.json`);
+const stable = (r: ExampleResult) => `${JSON.stringify(r, null, 2)}\n`;
+
+describe("registry", () => {
+  it("is not empty, and its ids are unique, kebab-case and the pilot's is in it", () => {
+    expect(BLOG_EXAMPLES.length, "anti-vacuity: registered examples").toBeGreaterThan(0);
+    const ids = BLOG_EXAMPLES.map((e) => e.id);
+    expect(new Set(ids).size, "unique ids").toBe(ids.length);
+    for (const id of ids) expect(id, id).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+    expect(ids).toContain("standings-points");
+    expect(blogExample("standings-points")?.id).toBe("standings-points");
+    expect(blogExample("no-such-example")).toBeNull();
+  });
+
+  it("every example carries claims, and a single-sport example states why (an 'all' example needs no reason)", () => {
+    let checked = 0;
+    for (const e of BLOG_EXAMPLES) {
+      expect(e.claims.length, `${e.id}: claims`).toBeGreaterThan(0);
+      if (e.sports === "all") {
+        expect(e.singleSportReason, `${e.id}: 'all' carries no single-sport reason`).toBeUndefined();
+      } else {
+        expect(e.sports.length, `${e.id}: sports`).toBeGreaterThan(0);
+        if (e.sports.length === 1) expect(e.singleSportReason?.length ?? 0, `${e.id}: single-sport reason`).toBeGreaterThan(10);
+        const keys = new Set(builtinModules.map((m) => m.key));
+        for (const s of e.sports) expect(keys.has(s), `${e.id}: ${s} is a sport`).toBe(true);
+      }
+      checked++;
+    }
+    expect(checked).toBe(BLOG_EXAMPLES.length);
+  });
+
+  it("the golden folder and the registry name the same examples (no orphan file, no missing golden), and goldens.ts loads each", () => {
+    const files = existsSync(GOLDEN_DIR) ? readdirSync(GOLDEN_DIR).filter((f) => f.endsWith(".json")).map((f) => f.replace(/\.json$/, "")).sort() : [];
+    const ids = BLOG_EXAMPLES.map((e) => e.id).sort();
+    expect(files.length, "anti-vacuity: golden files").toBeGreaterThan(0);
+    expect(files).toEqual(ids);
+    expect(Object.keys(BLOG_GOLDENS).sort()).toEqual(ids);
+    for (const id of ids) expect(BLOG_GOLDENS[id], id).toEqual(JSON.parse(readFileSync(goldenPath(id), "utf8")));
+  });
+});
+
+describe("regenerate: build() deep-equals the committed golden", () => {
+  it("every registered example", () => {
+    if (UPDATE) {
+      mkdirSync(GOLDEN_DIR, { recursive: true });
+      for (const e of BLOG_EXAMPLES) writeFileSync(goldenPath(e.id), stable(e.build()));
+    }
+    let checked = 0;
+    for (const e of BLOG_EXAMPLES) {
+      const golden = JSON.parse(readFileSync(goldenPath(e.id), "utf8")) as ExampleResult;
+      // JSON round trip: the golden is plain data, so compare what a page would read.
+      expect(JSON.parse(JSON.stringify(e.build())), `${e.id} no longer matches its golden (UPDATE_BLOG_EXAMPLES=1 moves it)`).toEqual(golden);
+      expect(readFileSync(goldenPath(e.id), "utf8"), `${e.id}: golden is written in the canonical form`).toBe(stable(golden));
+      checked++;
+    }
+    expect(checked, "examples regenerated").toBe(BLOG_EXAMPLES.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("build() is deterministic: two runs of every example are equal", () => {
+    for (const e of BLOG_EXAMPLES) expect(e.build(), e.id).toEqual(e.build());
+  });
+});
+
+describe("claims: each one checks the result against a declaration, never against the result itself", () => {
+  it("every claim of every example passes", () => {
+    let checked = 0;
+    const failures: string[] = [];
+    for (const e of BLOG_EXAMPLES) {
+      const golden = BLOG_GOLDENS[e.id]!;
+      for (const c of e.claims) {
+        const verdict = c.check(golden);
+        checked++;
+        if (verdict !== true) failures.push(`${e.id}: ${c.says} (${c.source}) -> ${verdict === false ? "false" : verdict}`);
+      }
+    }
+    expect(checked, "claims checked").toBeGreaterThan(0);
+    expect(failures).toEqual([]);
+  });
+
+  it("every claim names its source, and a claim says what it asserts", () => {
+    let checked = 0;
+    for (const e of BLOG_EXAMPLES)
+      for (const c of e.claims) {
+        expect(c.says.length, `${e.id}: says`).toBeGreaterThan(10);
+        expect(c.source.length, `${e.id}: source of '${c.says}'`).toBeGreaterThan(5);
+        checked++;
+      }
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("the pilot sweeps the whole registry: claims for every sport, per forEachSport, and the count is the registry's size", () => {
+    const pilot = blogExample("standings-points")!;
+    expect(pilot.sports).toBe("all");
+    const bySport = new Map<string, number>();
+    for (const c of pilot.claims) if (c.sport !== undefined) bySport.set(c.sport, (bySport.get(c.sport) ?? 0) + 1);
+    const visited = forEachSport(({ key }) => {
+      expect(bySport.get(key) ?? 0, `${key}: claims`).toBeGreaterThanOrEqual(4);
+    });
+    expect(visited, "sports visited").toBe(builtinModules.length);
+    expect(visited).toBeGreaterThan(0);
+    expect(bySport.size, "sports with claims").toBe(visited);
+    // A claim with no sport is example-wide (it reads the registry itself); the pilot has some, and the rest are per sport.
+    const wide = pilot.claims.filter((c) => c.sport === undefined);
+    expect(wide.length, "example-wide claims").toBeGreaterThan(0);
+    expect(wide.length + [...bySport.values()].reduce((a, b) => a + b, 0)).toBe(pilot.claims.length);
+  });
+
+  it("volleyball indoor: the 3-2 win pays the declared 2-1, which differs from the 3-0 a wrong constant would give (class 19)", () => {
+    const facts = BLOG_GOLDENS["standings-points"]!.facts;
+    const volleyball = builtinModules.find((m) => m.key === "volleyball")!;
+    const indoor = declaredCfgs(volleyball).find((c) => c.name === "indoor")!.cfg;
+    const map = volleyball.tablePointsRule(indoor, "league").bySetScore!;
+    // The declaration itself: the two scores pay different pairs (else this test could not tell them apart).
+    expect(map["3-2"]).not.toEqual(map["3-0"]);
+    expect(String(facts.volleyballIndoorWin32)).toBe(String(map["3-2"]![0]));
+    expect(String(facts.volleyballIndoorLoss32)).toBe(String(map["3-2"]![1]));
+    expect(String(facts.volleyballIndoorWin30)).toBe(String(map["3-0"]![0]));
+    expect(facts.volleyballIndoorWin32).not.toBe(facts.volleyballIndoorWin30);
+  });
+
+  it("the claims have teeth: corrupting any one cell of any row of any sport is caught by that sport's claims, and by no other sport's", () => {
+    const pilot = blogExample("standings-points")!;
+    const golden = BLOG_GOLDENS["standings-points"]!;
+    const rowsOf = (r: ExampleResult, key: string) => r.table!.rows.filter((row) => row[0] === sportLabel(key) || String(row[0]).startsWith(`${sportLabel(key)} (`));
+    let corrupted = 0;
+    let extraRows = 0;
+    for (const m of builtinModules) {
+      const count = rowsOf(golden, m.key).length;
+      expect(count, `${m.key}: rows`).toBeGreaterThan(0);
+      if (count > 1) extraRows += count - 1;
+      for (let i = 0; i < count; i++)
+        for (const col of [1, 2, 3, 4, 5]) {
+          const mutant = structuredClone(golden);
+          const row = rowsOf(mutant, m.key)[i]!;
+          row[col] = `${String(row[col])}9`;
+          expect(pilot.claims.filter((c) => c.sport === m.key && c.check(mutant) !== true).length, `${m.key} row ${i} column ${col}`).toBeGreaterThan(0);
+          // ...and no other sport's claims notice it (the example-wide claims may: they read every row).
+          expect(pilot.claims.filter((c) => c.sport !== undefined && c.sport !== m.key && c.check(mutant) !== true).length, `${m.key}: a neighbour's claim fired`).toBe(0);
+          corrupted++;
+        }
+      // A missing fact is a failure, never a crash: remove each fact of the sport's rows in turn.
+      const prefix = m.key;
+      const factKeys = Object.keys(golden.facts).filter((k) => k.startsWith(prefix) && /^(Win|Loss|Draw|Tie|NoResult|RankedBy|[A-Z][a-z]+(Win|Loss|Draw|Tie|NoResult|RankedBy))/.test(k.slice(prefix.length)) && !(m.key === "hockey" && k.startsWith("icehockey")));
+      expect(factKeys.length, `${m.key}: facts`).toBeGreaterThan(0);
+      for (const k of factKeys) {
+        const factless = structuredClone(golden);
+        delete factless.facts[k];
+        expect(pilot.claims.filter((c) => c.sport === m.key && c.check(factless) !== true).length, `${m.key}: fact ${k} removed`).toBeGreaterThan(0);
+        corrupted++;
+      }
+      // A missing row, too.
+      const rowless = structuredClone(golden);
+      rowless.table!.rows = rowless.table!.rows.filter((r) => !rowsOf(golden, m.key).some((x) => x[0] === r[0]));
+      expect(pilot.claims.filter((c) => c.sport === m.key && c.check(rowless) !== true).length, `${m.key}: rows removed`).toBeGreaterThan(0);
+      corrupted++;
+    }
+    expect(extraRows, "variant rows swept").toBeGreaterThanOrEqual(4);
+    expect(corrupted).toBeGreaterThan(builtinModules.length * 5);
+  });
+});
+
+describe("the example-wide claims have teeth too", () => {
+  const pilot = blogExample("standings-points")!;
+  const golden = BLOG_GOLDENS["standings-points"]!;
+  const wide = pilot.claims.filter((c) => c.sport === undefined);
+  const failing = (r: ExampleResult) => wide.filter((c) => c.check(r) !== true).map((c) => c.says);
+
+  it("pass on the golden, and a table that drops a sport, reorders two, or lies about the count fails the row claim", () => {
+    expect(wide.length, "anti-vacuity: example-wide claims").toBe(2);
+    expect(failing(golden)).toEqual([]);
+    const dropped = structuredClone(golden);
+    // The last SPORT goes, all its rows (dropping one variant row of it is the per-sport claims' catch, tested above).
+    dropped.table!.rows = dropped.table!.rows.filter((r) => !String(r[0]).startsWith(sportLabel(builtinModules[builtinModules.length - 1]!.key)));
+    expect(dropped.table!.rows.length, "rows left").toBeLessThan(golden.table!.rows.length - 1);
+    expect(failing(dropped).length, "a sport dropped").toBeGreaterThan(0);
+    const swapped = structuredClone(golden);
+    [swapped.table!.rows[0], swapped.table!.rows[1]] = [swapped.table!.rows[1]!, swapped.table!.rows[0]!];
+    expect(failing(swapped).length, "two rows swapped").toBeGreaterThan(0);
+    const miscounted = structuredClone(golden);
+    miscounted.facts.sportCount = Number(miscounted.facts.sportCount) + 1;
+    expect(failing(miscounted).length, "a wrong sportCount").toBeGreaterThan(0);
+  });
+
+  it("the ranking rule: keys exactly points and wins, points outnumber wins, wins in at least two sports (counts the registry does not hold today)", () => {
+    expect(rankingKeyProblem({ Points: 8, Wins: 3 })).toBeNull();
+    expect(rankingKeyProblem({ Points: 5, Wins: 2 })).toBeNull();
+    expect(rankingKeyProblem({ Points: 3, Wins: 3 }), "tie in count").not.toBeNull();
+    expect(rankingKeyProblem({ Points: 2, Wins: 5 }), "wins outnumber points").not.toBeNull();
+    expect(rankingKeyProblem({ Points: 10, Wins: 1 }), "a single sport is not a few").not.toBeNull();
+    expect(rankingKeyProblem({ Points: 11 }), "no sport ranks by wins").not.toBeNull();
+    expect(rankingKeyProblem({ Wins: 11 }), "no sport ranks by points").not.toBeNull();
+    expect(rankingKeyProblem({ Points: 8, Wins: 2, "Goal difference": 1 }), "a third key").not.toBeNull();
+    // ...and today's registry satisfies it, with its real counts reported.
+    const real: Record<string, number> = {};
+    forEachSport(({ module }) => {
+      const k = tiebreakLabel(module.primaryTableKey);
+      real[k.charAt(0).toUpperCase() + k.slice(1)] = (real[k.charAt(0).toUpperCase() + k.slice(1)] ?? 0) + 1;
+    });
+    expect(Object.values(real).reduce((a, b) => a + b, 0)).toBe(builtinModules.length);
+    expect(rankingKeyProblem(real)).toBeNull();
+  });
+
+  it("a table whose every sport ranks by the same key, or names a key no sport declares, fails the ranking claim", () => {
+    const flat = structuredClone(golden);
+    for (const r of flat.table!.rows) r[5] = "Points";
+    expect(failing(flat).length, "every sport ranks by points").toBeGreaterThan(0);
+    const alien = structuredClone(golden);
+    alien.table!.rows[0]![5] = "Goal difference";
+    expect(failing(alien).length, "a key no sport declares first").toBeGreaterThan(0);
+    // The ruling's three parts: points must outnumber wins, and wins must be first in at least two sports.
+    const manyWins = structuredClone(golden);
+    for (const r of manyWins.table!.rows) r[5] = "Wins";
+    expect(failing(manyWins).length, "wins everywhere").toBeGreaterThan(0);
+    const oneWins = structuredClone(golden);
+    for (const r of oneWins.table!.rows) r[5] = String(r[5]) === "Wins" ? "Points" : r[5]!;
+    expect(failing(oneWins).length, "no sport ranks by wins").toBeGreaterThan(0);
+  });
+});
+
+/** Every string anywhere in a golden: keys of nothing, values of everything (table, diagram, facts, text). */
+function stringLeaves(v: unknown): string[] {
+  if (typeof v === "string") return [v];
+  if (typeof v === "number" || v === null || v === undefined) return [];
+  if (Array.isArray(v)) return v.flatMap(stringLeaves);
+  return Object.values(v as Record<string, unknown>).flatMap(stringLeaves);
+}
+
+describe("the pilot's result reads like copy: no key, no identifier, no developer word", () => {
+  it("every string leaf of every golden passes the leak scan", () => {
+    let strings = 0;
+    const leaks: string[] = [];
+    for (const g of Object.values(BLOG_GOLDENS))
+      for (const s of stringLeaves(g)) {
+        strings++;
+        for (const l of findBlogLeaks(s)) leaks.push(`${l.rule}: ${l.match} in '${s}'`);
+      }
+    expect(strings, "anti-vacuity: strings scanned").toBeGreaterThan(100);
+    expect(leaks).toEqual([]);
+  });
+  it("stringLeaves reaches a diagram's strings, a nested array and a fact (a leak hidden there is found)", () => {
+    const g: ExampleResult = {
+      facts: { a: "fact_leak" },
+      diagram: { kind: "ladder", title: "A title", rungs: ["Ana", "rung_leak"], challenger: "Ben", target: "Cy", swapped: true },
+      text: ["plain"],
+    };
+    const leaves = stringLeaves(g);
+    expect(leaves).toEqual(expect.arrayContaining(["fact_leak", "rung_leak", "A title", "ladder", "plain"]));
+    expect(leaves.flatMap((x) => findBlogLeaks(x).map((l) => l.match)).sort()).toEqual(["fact_leak", "rung_leak"]);
+  });
+});
+
+describe("the starting variant is the builder's, read from the builder's code", () => {
+  const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
+  it("pickVariant's table is imported, not copied: the five preferred sports start on their preferred variant", () => {
+    let checked = 0;
+    for (const m of builtinModules) {
+      const preferred = PREFERRED_VARIANT[m.key];
+      if (preferred === undefined) continue;
+      expect(startingVariantKey(m), m.key).toBe(preferred);
+      checked++;
+    }
+    expect(checked).toBe(Object.keys(PREFERRED_VARIANT).length);
+    expect(checked).toBeGreaterThan(0);
+  });
+  it("every other sport starts on the first variant by name (the page's `order by is_system desc, name`), and the pick is a declared variant", () => {
+    let checked = 0;
+    forEachSport(({ module }) => {
+      const key = startingVariantKey(module);
+      expect(Object.keys(module.variants), module.key).toContain(key);
+      if (PREFERRED_VARIANT[module.key] === undefined) {
+        const names = pageVariantRows(module).map((r) => r.name);
+        expect(names, module.key).toEqual([...names].sort());
+        expect(pageVariantRows(module)[0]!.key, module.key).toBe(key);
+      }
+      checked++;
+    });
+    expect(checked).toBe(builtinModules.length);
+  });
+  it("witnesses of what a new division starts on TODAY (read off the page's order; the product question is queued)", () => {
+    const start = (k: string) => startingVariantKey(builtinModules.find((m) => m.key === k)!);
+    expect(start("volleyball")).toBe("beach");
+    expect(start("generic")).toBe("score");
+    expect(start("tabletennis")).toBe("bo5");
+    expect(start("boardgame")).toBe("blitz");
+    expect(start("football")).toBe("11-a-side");
+  });
+  it("the page and the sync script still do what this file mirrors (a drift turns this red)", () => {
+    const page = read("src/app/o/[orgSlug]/c/[compSlug]/d/new/page.tsx");
+    expect(page).toContain("order by is_system desc, name");
+    expect(page).toContain("sportOptionsFrom(sportRows, variantRows");
+    expect(read("src/components/v2/division-builder.tsx")).toContain("useState(sport ? pickVariant(sport.key, sport.variants) : \"\")");
+    const script = read("../../scripts/sync-sports.ts");
+    expect(script).toContain("${titleCase(variantKey)}");
+    const norm = (t: string) => t.replace(/\s+/g, "").replace(/;/g, "").replace(/'/g, '"');
+    const inScript = /function titleCase\(key: string\): string \{([\s\S]*?)\n\}/.exec(script)?.[1];
+    expect(inScript, "titleCase found in the sync script").toBeDefined();
+    const mine = syncedVariantName.toString();
+    expect(norm(mine.slice(mine.indexOf("{") + 1, mine.lastIndexOf("}"))), "the same body as scripts/sync-sports.ts titleCase").toBe(norm(inScript!));
+    expect(syncedVariantName("fih-shootout")).toBe("Fih Shootout");
+    expect(syncedVariantName("win_loss")).toBe("Win Loss");
+    expect(syncedVariantName("11-a-side")).toBe("11 A Side");
+  });
+  it("a variant's row label is the picker's word, and a variant with no word throws", () => {
+    expect(variantLabel("volleyball", "beach")).toBe("Beach");
+    expect(() => variantLabel("volleyball", "sand")).toThrow(/volleyball\/sand/);
+  });
+});
+
+describe("a result kind the engine declares reachable but no match is booked as is left out, and the exemption cannot go stale", () => {
+  const SEEDS = 1200;
+  /**
+   * The level kinds a seeded walk of this variant is BOOKED as by the table: each finished match goes through the app's
+   * own rule resolver and `payout`, and counts as level when its outcome is a draw/tie/no_result or when `payout` books
+   * both sides drawn (a draw-plus-bonus shoot-out, whose `outcome()` says win). Reading `outcome().kind` alone is blind to
+   * the second, which is how a wrong exemption once hid behind it.
+   */
+  const booked = (sportKey: string, variantKey: string): { levels: Map<string, number>; outcomeKinds: Map<string, number>; matches: number } => {
+    const m = builtinModules.find((x) => x.key === sportKey)!;
+    const cfg = declaredCfgs(m).find((c) => c.name === variantKey)!.cfg;
+    const rule = resolveTableRules({ module: m, stageKind: "league", mergedCfg: cfg, stageOwn: { points: null, tiebreakers: null, crossGroup: null }, divisionTiebreakers: null, pinned: null }).points;
+    const catalog = resolvePositions(m, cfg);
+    const lineups = { home: lineupFromCatalog(catalog, "cy"), away: lineupFromCatalog(catalog, "dev") };
+    const levels = new Map<string, number>();
+    const outcomeKinds = new Map<string, number>();
+    let matches = 0;
+    for (let seed = 1; seed <= SEEDS; seed++) {
+      const { states } = buildWalk(m, cfg, lineups, seed, 3000);
+      const last = states[states.length - 1];
+      const o = last === undefined ? null : m.outcome(last);
+      if (o === null || last === undefined) continue;
+      matches++;
+      outcomeKinds.set(o.kind, (outcomeKinds.get(o.kind) ?? 0) + 1);
+      const delta = m.standingsDelta(o, cfg, { kind: "league" }, last);
+      const paid = payout(o, decidedInFor(m, o), [delta[0], delta[1]], true, rule, m.awardScoreKeys, setsToWinOf(m, cfg));
+      const kind = o.kind === "draw" || o.kind === "tie" ? o.kind : o.kind === "no_result" ? "noResult" : o.kind === "win" && !forfeitShaped(o) && paid.every((d) => d.drawn === 1) ? "draw" : null;
+      if (kind !== null) levels.set(kind, (levels.get(kind) ?? 0) + 1);
+    }
+    return { levels, outcomeKinds, matches };
+  };
+
+  it("every exempted (variant, kind) is declared reachable AND never booked as that level result across the seeded walks", () => {
+    let checked = 0;
+    for (const [id, kinds] of Object.entries(DECLARED_BUT_UNREACHABLE)) {
+      const [sportKey, variantKey] = id.split("/") as [string, string];
+      const m = builtinModules.find((x) => x.key === sportKey)!;
+      const cfg = declaredCfgs(m).find((c) => c.name === variantKey)!.cfg;
+      const seen = booked(sportKey, variantKey);
+      expect(seen.matches, `${id}: matches booked`).toBeGreaterThan(100);
+      for (const k of kinds) {
+        expect(m.reachableResultKinds(cfg, "league").has(k), `${id}: ${k} is declared reachable (else the exemption is dead)`).toBe(true);
+        expect(seen.levels.get(k) ?? 0, `${id}: ${k} must never be booked, else drop the exemption`).toBe(0);
+        checked++;
+      }
+    }
+    expect(checked).toBe(Object.values(DECLARED_BUT_UNREACHABLE).flat().length);
+    expect(checked).toBeGreaterThan(0);
+  });
+  it("the walks DO book each of these level kinds elsewhere (so a zero above is the variant, not the search)", () => {
+    expect(booked("cricket", "t20").levels.get("noResult") ?? 0, "cricket t20 no result").toBeGreaterThan(0);
+    expect(booked("hockey", "fih-outdoor").levels.get("draw") ?? 0, "hockey fih-outdoor draw").toBeGreaterThan(0);
+  });
+  it("hockey with a shoot-out: outcome() never says draw, yet the table books drawn matches (the class the old check was blind to)", () => {
+    const seen = booked("hockey", "fih-shootout");
+    expect(seen.outcomeKinds.get("draw") ?? 0, "outcome kind draw").toBe(0);
+    expect(seen.levels.get("draw") ?? 0, "booked as a draw").toBeGreaterThan(0);
+    expect(DECLARED_BUT_UNREACHABLE["hockey/fih-shootout"], "no exemption for it").toBeUndefined();
+  });
+  it("the golden prints a Test match without a no result, and the shoot-out hockey row as a draw plus a shoot-out bonus", () => {
+    const rows = BLOG_GOLDENS["standings-points"]!.table!.rows;
+    const facts = BLOG_GOLDENS["standings-points"]!.facts;
+    expect(rows.find((r) => r[0] === "Cricket (Test match)")![3]).toBe("1 (a draw or a tie)");
+    expect(rows.find((r) => r[0] === "Cricket (T20)")![3]).toBe("1 (a tie or no result)");
+    const hockey = rows.find((r) => r[0] === "Hockey (FIH with shoot-out)")!;
+    expect(hockey[3]).toBe(String(facts.hockeyFihshootoutDraw));
+    expect(hockey[4]).toBe(`winner ${facts.hockeyFihshootoutWinSo}, loser ${facts.hockeyFihshootoutLossSo} (shoot-out)`);
+    // The bonus is on top of the draw: winner = draw + bonus, loser = draw.
+    expect(Number(facts.hockeyFihshootoutLossSo)).toBe(Number(facts.hockeyFihshootoutDraw));
+    // ...and the post's "a bonus point" is the rule's own declared soBonus (1), not a typed figure.
+    const hockeyModule = builtinModules.find((x) => x.key === "hockey")!;
+    const rule = hockeyModule.tablePointsRule(declaredCfgs(hockeyModule).find((c) => c.name === "fih-shootout")!.cfg, "league");
+    expect(rule.soBonus).toBe(1);
+    expect(Number(facts.hockeyFihshootoutWinSo) - Number(facts.hockeyFihshootoutDraw)).toBe(rule.soBonus);
+  });
+});
+
+describe("the registry is server-only: nothing a page loads imports the engine's testkit, the registry or the dictionaries' label file", () => {
+  // Both import forms: `from "x"` and a bare side-effect `import "x"`; dynamic `import("x")` too.
+  const spec = String.raw`(?:from\s+|import\s*\(?\s*)["']`;
+  const FORBIDDEN = [
+    new RegExp(spec + String.raw`@/blog/examples["']`),
+    new RegExp(spec + String.raw`@/blog/examples/(?:index|standings-points|starting-variant)["']`),
+    new RegExp(spec + String.raw`@seazn/engine/testkit["']`),
+    new RegExp(spec + String.raw`@/blog/labels["']`),
+  ];
+  const walk = (dir: string): string[] =>
+    readdirSync(dir).flatMap((f) => {
+      const p = join(dir, f);
+      if (f === "__tests__" || f === "node_modules") return [];
+      return statSync(p).isDirectory() ? walk(p) : /\.(ts|tsx)$/.test(f) ? [p] : [];
+    });
+  it("no module under src/app or src/components imports any of them", () => {
+    const files = [...walk(join(process.cwd(), "src", "app")), ...walk(join(process.cwd(), "src", "components"))];
+    expect(files.length, "anti-vacuity: files scanned").toBeGreaterThan(500);
+    const hits = files.filter((f) => FORBIDDEN.some((re) => re.test(readFileSync(f, "utf8")))).map((f) => f.replace(process.cwd(), ""));
+    expect(hits).toEqual([]);
+  });
+  it("the scan itself sees each forbidden import form", () => {
+    const forms = ['import "@/blog/labels";', 'const m = await import("@/blog/labels");', 'import { x } from "@/blog/examples";', "import x from '@/blog/examples/standings-points';", 'import { y } from "@seazn/engine/testkit";', 'import { t } from "@/blog/labels";'];
+    for (const f of forms) expect(FORBIDDEN.some((re) => re.test(f)), f).toBe(true);
+    expect(FORBIDDEN.some((re) => re.test('import { g } from "@/blog/examples/goldens";'))).toBe(false);
+  });
+});
+
+describe("labels", () => {
+  it("every tie-break key any sport's league or Swiss default order can hold has a label (every declared config)", () => {
+    let keys = 0;
+    const missing: string[] = [];
+    forEachSport(({ module }) => {
+      for (const { cfg } of declaredCfgs(module))
+        for (const kind of ["league", "swiss"] as const)
+          for (const key of module.defaultTiebreakers(kind, cfg)) {
+            keys++;
+            try {
+              expect(tiebreakLabel(key).length).toBeGreaterThan(0);
+            } catch {
+              missing.push(`${module.key}/${kind}: ${key}`);
+            }
+          }
+    });
+    expect(keys, "anti-vacuity: keys checked").toBeGreaterThan(50);
+    expect(missing).toEqual([]);
+  });
+
+  it("a missing label throws, naming the key; a present one is the organiser screen's word", () => {
+    expect(() => tiebreakLabel("no_such_rule")).toThrow(/no_such_rule/);
+    expect(() => sportLabel("curling")).toThrow(/curling/);
+    expect(tiebreakLabel("points")).toBe("points");
+    expect(tiebreakLabel("wins")).toBe("wins");
+    expect(tiebreakLabel("buchholz_cut1")).toBe("Buchholz Cut-1");
+    expect(sportLabel("boardgame")).toBe("Chess");
+  });
+
+  it("no label is a code identifier", () => {
+    let checked = 0;
+    forEachSport(({ module }) => {
+      for (const { cfg } of declaredCfgs(module))
+        for (const key of module.defaultTiebreakers("league", cfg)) {
+          expect(findBlogLeaks(tiebreakLabel(key)), `${key}: ${tiebreakLabel(key)}`).toEqual([]);
+          checked++;
+        }
+    });
+    expect(checked).toBeGreaterThan(0);
+  });
+});

@@ -6,6 +6,10 @@ import { siteOrigin } from "@/lib/site-origin";
 import { routes } from "@/lib/routes";
 import { LOCALES } from "@/lib/i18n-constants";
 import { localizedPath } from "@/lib/seo-meta";
+import { FORMAT_FAMILIES } from "@/config/format-gallery";
+import { blogUrl } from "@/lib/blog";
+import { allBlogPosts } from "@/server/blog-content";
+import { allHelpArticles } from "@/server/help-content";
 
 // Request-time, never prerendered. A sitemap.ts is "cached by default unless
 // it uses a Request-time API or dynamic config option" (node_modules/next/dist/
@@ -36,6 +40,27 @@ function marketing(path: string, extra: { changeFrequency: "hourly" | "weekly" |
   };
 }
 
+/**
+ * /help and /blog are English-canonical trees outside /{lang}: one URL each, no hreflang. The help half was never listed
+ * before the blog (the programme owed it). Posts carry the one honest timestamp the sitemap has, `updated ?? date`;
+ * help articles have none, so they carry none (see the lastmod ruling below).
+ */
+function contentEntries(): MetadataRoute.Sitemap {
+  return [
+    { url: `${BASE}/help`, changeFrequency: "weekly", priority: 0.6 },
+    ...[...allHelpArticles().keys()].map((slug) => ({ url: `${BASE}/help/${slug}`, changeFrequency: "monthly" as const, priority: 0.5 })),
+    { url: `${BASE}/help/formats`, changeFrequency: "monthly", priority: 0.5 },
+    ...FORMAT_FAMILIES.map((f) => ({ url: `${BASE}/help/formats/${f.slug}`, changeFrequency: "monthly" as const, priority: 0.5 })),
+    { url: `${BASE}/blog`, changeFrequency: "weekly", priority: 0.7 },
+    ...allBlogPosts().map((p) => ({
+      url: `${BASE}${blogUrl(p.slug)}`,
+      lastModified: p.updated ?? p.date,
+      changeFrequency: "monthly" as const,
+      priority: 0.6,
+    })),
+  ];
+}
+
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const staticEntries: MetadataRoute.Sitemap = [
     marketing("", { changeFrequency: "weekly", priority: 1 }),
@@ -61,6 +86,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { url: `${BASE}/legal/cookie-policy`, changeFrequency: "yearly", priority: 0.2 },
     { url: `${BASE}/legal/dpa`, changeFrequency: "yearly", priority: 0.2 },
     { url: `${BASE}/legal/sub-processors`, changeFrequency: "monthly", priority: 0.2 },
+    ...contentEntries(),
   ];
 
   // Public competitions + their divisions (doc 09 §3 — `public` only;

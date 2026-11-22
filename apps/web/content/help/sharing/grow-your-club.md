@@ -1,25 +1,29 @@
 ---
 title: Growing your club
-description: Every shared link is a small invitation — share bar, attribution and the free "run your own" path.
+description: How shared links bring new organisers to Seazn Club, and which parts of the "Powered by" line and the directory depend on your plan.
 order: 7
+related: sharing/visibility, sharing/news, sharing/dashboard, billing/plans
 ---
 
-Sharing your competition doesn't just inform your own players — every link out is a quiet invitation for someone else to run their own.
+Every public link you share can bring a new organiser. A parent who follows one competition can be running their own next season.
 
-## Share it, fast
+## Share a link
 
-The public competition page carries a **share bar** right under the title: WhatsApp, copy link, and a native share sheet on phones that support one. Grassroots sport runs on WhatsApp — this is the fastest way a schedule reaches a group chat.
+Your public pages carry sharing buttons. A division page has **Share on WhatsApp** under its title. A news post has **WhatsApp** and **Copy link**. Grassroots sport runs on group chats, and these are the fastest ways a schedule or a result reaches one. See [news and share cards](/help/sharing/news).
 
-## The "Powered by Seazn Club" line
+## The Powered by line
 
-Free (Community) organisations keep a small **Powered by Seazn Club** line in the public dashboard's footer, with a **Run your own free →** link. Anyone who clicks it lands on the same free sign-up you started with — a parent following one competition can be running their own next season without ever being asked. Upgrading to Pro removes the line entirely; your dashboard carries only your own branding.
+Your organisation page, your news feed and your match pages end with a small line: **Powered by Seazn Club · Run your own free →**. An embed shows **Run your own free →** only, and the **Present** board shows none. The link goes to the free sign-up.
 
-## Your own "run your own" nudge
+A Community organisation and a Pro organisation both keep the line. Removing it from the organisation page, the news feed and the match pages is part of Enterprise. The embed keeps **Run your own free →** on every plan. See [plans at a glance](/help/billing/plans) and [Pricing](/pricing).
 
-If you've claimed a player profile, `/me` carries the same nudge — **Run your own tournament — free.** — so a player who's spent a season watching from the entrant side has a one-tap path to the organiser side.
+## Showcase on seazn.club
 
-## Common questions
+A **Public** competition can opt in with **Showcase on seazn.club**. Once the competition is published it can be listed on the Seazn Club site. The setting is in the competition's visibility settings. See [who can see what](/help/sharing/visibility).
 
-**Can I turn off the WhatsApp/copy share bar?** No — it's on every public competition page, free and Pro alike; only the footer attribution line is plan-gated.
+## Your players
 
-**Does the Discover directory help here too?** Yes — public competitions you opt in with **Showcase on seazn.club** get listed there once they are published (a draft never is), each with its own "run your own" CTA back to `/start`; see [who can see what](/help/sharing/visibility) for the visibility switch that makes a competition eligible.
+A player who has claimed a profile sees **Run your own tournament — free.** on their own page, with a **Start free →** button, so a season on the entrant side leads to the organiser side.
+
+> **Example**
+> Your club's **Spring Open** is **Public** and published, with **Showcase on seazn.club** ticked. A parent follows it on the club's page, opens a result you shared in the group chat and reads **Powered by Seazn Club · Run your own free →** at the foot. The link takes them to the free sign-up.

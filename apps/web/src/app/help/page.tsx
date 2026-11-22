@@ -7,6 +7,8 @@ import { HELP_SECTIONS, helpNav } from "@/server/help-content";
 import { FORMAT_FAMILIES } from "@/config/format-gallery";
 import { HelpSearch } from "@/components/help/help-search";
 
+// Prerendered and cached at the edge (layout.tsx): a request-time read fails the build. No plan table here: an hour.
+export const dynamic = "error";
 export const revalidate = 3600;
 
 const SECTION_ICONS: Record<string, React.ComponentType<{ className?: string; strokeWidth?: number; "aria-hidden"?: boolean }>> = {

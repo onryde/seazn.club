@@ -4,10 +4,15 @@ import { FORMAT_FAMILIES, FormatDiagram, formatFamily } from "@/config/format-ga
 import { previewDivisionFixtures } from "@/server/usecases/stages";
 import { FormatPreviewView } from "@/components/format-preview-view";
 import { HelpBreadcrumb, HelpShell } from "@/components/help/help-shell";
+import { HelpRelated } from "@/components/help/help-related";
+import { helpBlogLinks } from "@/server/blog-help-links";
 import { familyNeedsPaidPlan } from "@/lib/format-plan-badge";
+import { PHASE_PRODUCTION_BUILD } from "next/constants";
 import { loadPricingMatrix } from "@/lib/pricing-matrix-server";
 
-export const revalidate = 3600;
+// Prerendered and cached at the edge (layout.tsx): a request-time read fails the build. 300 s: the badge reads the plan table.
+export const dynamic = "error";
+export const revalidate = 300;
 
 type Props = { params: Promise<{ family: string }> };
 
@@ -30,8 +35,14 @@ export default async function FormatExplainerPage({ params }: Props) {
   // The example is the REAL generated draw over a canned 8-entrant set — not
   // an illustration, the actual generator output.
   const phases = previewDivisionFixtures(f.cannedStages, 8);
-  // The badge reads the live plan table; an unreadable table shows no badge rather than a guess.
-  const matrix = await loadPricingMatrix().catch(() => ({}) as Awaited<ReturnType<typeof loadPricingMatrix>>);
+  // The badge reads the live plan table. At build there is no database, so an unreadable table shows no badge rather
+  // than a guess; at runtime the failure throws, so Next keeps the last good page instead of caching a badge-less one.
+  const matrix = await loadPricingMatrix().catch((e: unknown) => {
+    if (process.env.NEXT_PHASE === PHASE_PRODUCTION_BUILD) return {} as Awaited<ReturnType<typeof loadPricingMatrix>>;
+    throw e;
+  });
+
+  const blogLinks = await helpBlogLinks(`formats/${f.slug}`);
 
   return (
     <HelpShell currentHref="/help/formats">
@@ -87,6 +98,7 @@ export default async function FormatExplainerPage({ params }: Props) {
         fixtures are built the same way.
       </p>
       <FormatPreviewView phases={phases} />
+      <HelpRelated related={[]} prev={null} next={null} blogLinks={blogLinks} />
     </article>
     </HelpShell>
   );

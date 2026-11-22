@@ -1,31 +1,37 @@
 ---
 title: Languages
-description: Pick your language, and set the language your public pages show to spectators.
+description: Choose the language your public pages are written in, your own app language, and what the site footer's language picker changes.
 order: 5
+related: sharing/visibility, sharing/sponsor-invoices, sharing/news
 ---
 
-Seazn Club is available in **English, French, Spanish, and Dutch**.
+Seazn Club comes in **English**, **Français**, **Español** and **Nederlands**. Three settings decide which one a screen uses, and they do not do the same job.
 
-## Change your language
+![The Organisation settings with the Public language field set to Français and a Save button.](/help/sharing/public-language.webp "Public language in Settings, Organisation.")
 
-Use the language picker in the site footer. Your choice is remembered on this device, so every page — marketing, your console, and public pages — follows it from then on. Signed in or not, the picker works the same way.
+## The language of your public pages
 
-## The language your spectators see
+**Public language** is a setting on your organisation. It is the language your public pages, entrant emails, exports and embeds are written in. Set it to the language your members read, not the one you work in.
 
-Your organisation has a **default language** for its public pages (live scores, schedules, standings). Every visitor sees those pages in that language, whichever country they're browsing from — so a French club's public hub reads in French for everyone. A visitor who picks their own language in the footer sees the rest of the site in their choice.
+1. Open **Settings**, then **Organisation**.
+2. Under **Public language**, choose a language.
+3. Select **Save**.
 
-## What gets translated
+Everyone who opens your public pages sees them in that language: the competition page, the **Present** board, the news feed, an embed and a sponsor's invoice. A visitor who chose another language in the site footer still reads your club's pages in yours. The slideshow you open from your console is not one of them: its labels stay in English. Amounts follow the language too: an invoice for 250 reads **250,00 £GB** in French.
 
-The whole interface — buttons, labels, headings, system messages, the interactive demos on our marketing pages, and the format guides that explain each tournament shape — is translated. This includes the built-in **scoring vocabulary** (sport names on the discover page, cricket dismissal and extra types in the scoring pad, and the brand-colour swatch names in your settings) and the **payment settings** page. **Your own content is never machine-translated:** organisation, competition, and division names, descriptions, and anything you type stays exactly as you wrote it. If you run a bilingual event, write those names in the language your audience expects.
+Your own words stay as you typed them. Organisation, competition and division names, news posts and descriptions are not translated. For a bilingual event, write the names in the language your audience expects.
+
+## Your own language
+
+**Settings**, then **Preferences**, has a **Language** field with a **Save** button. It sets the language of the app for you. Your organisation's public pages follow the organisation's language, not this.
+
+## The footer picker
+
+The **Language** picker is in the footer of the Seazn Club site, on the home page and the other site pages. Your pick is remembered on that device and changes those pages. Your club's public pages do not follow it.
 
 ## Emails
 
-Transactional emails — sign-in links, email-change and account notices, registration confirmations, payment reminders, refunds — are sent in the recipient's language. For a signed-in account we use your saved **account language**; set it from the language picker while signed in.
+An email goes out in the recipient's own pick when it has one, then the language saved on their account, then your organisation's **Public language**, then English.
 
-**Registrants** don't need an account: a registration confirmation (and any later payment reminder, promotion from the waitlist, or refund notice) is sent in the language the registrant filled the form in — their own footer pick, or otherwise the organiser's default language for that event. So a French club's entrants are emailed in French without anyone choosing anything. When we genuinely can't tell (a registrant who entered before this was added), the email falls back to English.
-
-As with the interface, the words we write are translated but your own content — names, descriptions, payment instructions — is passed through exactly as you entered it.
-
-## Dates, times, and numbers
-
-Dates, durations, and numbers follow your language's conventions automatically. Match times still use the competition's timezone — see [Timezones](/help/scheduling/timezones).
+> **Example**
+> Your club is in the Netherlands and your members read Dutch. You set **Public language** to **Nederlands** and select **Save**. A parent in Belgium who chose **Français** in the footer opens your competition page and reads it in Dutch. The same parent opens the Seazn Club home page and reads French.

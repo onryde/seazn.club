@@ -1,82 +1,67 @@
 ---
 title: Sponsors
-description: Tiered sponsor logos on your public pages — and the packages and deals that put a sponsor on them.
+description: Add a sponsor, see where its logo shows on your public pages, and how a sponsor's tier and click count work.
 order: 6
+related: sharing/sponsors-packages, sharing/sponsor-deals, sharing/sponsor-invoices, sharing/sponsors-hub
 ---
 
-Sponsor logos appear on your public competition pages, the registration page and the venue slideshow. Every plan can run a sponsor strip, keep a price list of packages and record a sponsorship deal; **tiers above Partner, per-competition placement and online invoices need Pro — or an [Event Pass](/help/billing/event-pass) on the competition you're selling around**.
+A sponsor is a business or person that backs your club. You add the sponsor once. A **deal** then sets its tier and when it shows. This page covers the sponsor itself. [Packages](/help/sharing/sponsors-packages), [deals](/help/sharing/sponsor-deals) and [invoices](/help/sharing/sponsor-invoices) have their own pages.
 
-## Add sponsors
+## Add a sponsor
 
-Open **Sponsors** in the top bar or on your Dashboard, then the **Sponsors** tab. The hub's other tabs, including sponsors on your streams and the reports you can send a sponsor, are covered in [The Sponsors hub](/help/sharing/sponsors-hub). Add a name, an optional link and a logo (PNG/JPG/WebP up to 2 MB). Use the arrows to set the display order — that order is what the public sees. The sponsor's name, link and logo are all you edit on the sponsor itself: its tier and where it shows come from its deals (see Deals below), and its page shows them read-only.
+Open **Sponsors** in the top bar, or on your organisation's Competitions page. Then open the **Sponsors** tab.
 
-## Tiers (Pro or Event Pass)
+1. Under **Add a sponsor**, give the sponsor a **Logo**, a **Sponsor name** and a **Link (optional)**. The logo takes a PNG, JPG or WebP file, up to 2 MB. A square logo on a transparent background works best.
+2. Select **Add sponsor**.
 
-Pro orgs — and any competition holding an Event Pass — group sponsors into **Title, Gold, Silver and Partner** tiers. A sponsor's tier comes from its deal's package — there is no tier box on the sponsor. On public pages the title sponsor renders largest, then each tier in descending prominence. On the free plan every sponsor sits in one flat strip.
+A sponsor with no logo shows a letter in its place. The sponsor appears in your list at once, and on your public pages as a **Partner**, even before it has a deal. Its row reads **No deal**.
 
-On the **Sponsors** tab each row names its deal's tier beside the package (on the free plan, only a tier above Partner), and a sponsor whose waiting deal will move it to another tier carries a note such as **Gold when live**: it stays in its current group until that deal goes live.
+A sponsor's **Tier**, **Competition** and **On stream** setting are read-only on its own page, with the note **Set by the live deal**. To change them, change the deal. To give a sponsor a tier, select **Add deal** and follow [sponsor deals](/help/sharing/sponsor-deals).
 
-## Per-competition sponsors (Pro or Event Pass)
+## Where sponsors show
 
-By default a sponsor is org-wide — it shows on every competition. To scope a sponsor to one event, give it a deal for that competition: the deal's scope is where the sponsor shows. Competition-scoped sponsors lead the strip on their event's pages.
+![The public competition page of a fictional club. A Presented by band sits under the competition name, a Sponsors section shows one Gold and one Silver panel, and a Partners line lists two names.](/help/sharing/sponsors-public-hub.webp "A competition page with the four tiers live: the Presented by band, Gold and Silver panels and the Partners line.")
 
-## Click tracking
+On a Pro organisation, a competition's public page shows:
 
-Public sponsor logos link through a tracked redirect, so the click count in the manager shows each sponsor the traffic you sent them. Use it as proof of delivery when you renew a deal.
+- **Title sponsor.** A **Presented by** band at the top with a **Visit** button.
+- **Sponsors.** A **Gold** panel, large, and a **Silver** panel, smaller.
+- **Partners.** One line of names, for example **Ridge Physio · Oakfield Dental**.
 
-## Packages: your price list
+The page for a single match shows the same sponsors block.
 
-A **package** is a price on your list: a name, a price, a tier, where it applies (the whole organisation or one competition) and whether it includes your stream. Open **Sponsors → Packages** to create one or retire one. Packages are on every plan; a tier above Partner, or a package for one competition, needs Pro or an Event Pass.
+On a Community organisation the page shows one **Sponsors** strip with every sponsor, with no tiers. An [Event Pass](/help/billing/event-pass) competition is tiered too.
 
-Each package shows how many sponsors hold a deal on it. **Retire** stops new deals using a package and hides its card until you turn on **Show retired (N)**, the switch above the list. Deals already on it carry on, and past deals keep its name and price.
+Sponsors do not show on a division's page, on your organisation's public page, on the **Present** board or on the registration page. On the slideshow you open from your console, a **Sponsors** strip stays on screen under the slides. See [the TV slideshow](/help/sharing/slideshow).
 
-Under the price list, **What each tier gets** explains the four tiers in plain words: the Title sponsor is named under the competition name, Gold gets a large logo panel on the sponsor board and Silver a smaller one, and a Partner is listed by name in the Partners line. It also shows how many turns each tier takes in the stream rotation. It is there on every plan. On a plan without tiers it also says what that plan's own pages do (every sponsor in one strip, one turn each in the stream rotation, except on a competition with an Event Pass) and what to upgrade for, with a link to billing for an editor. The section folds under its heading at every width, and it starts open while the list has no packages yet.
+Every public page that shows sponsors also carries the **Powered by Seazn Club** line. Read [growing your club](/help/sharing/grow-your-club) for which plan removes it.
 
-## Deals: putting a sponsor on a package
+## Order inside a tier
 
-A **deal** is one sponsor on one package. Open a sponsor on the **Sponsors** tab and choose **Add deal**, then pick the package, how it is paid and when the sponsor goes live. A sponsor's tier and where it shows come only from its deals, never from the sponsor's own editor. A new sponsor with no deal shows as a Partner for the whole organisation (sponsors you added before keep the tier they hold), and one you want to show higher for free gets a **Complimentary** deal on the package you choose. While a deal is live it also sets the sponsor's On stream setting, so that is locked on the sponsor too.
+Each sponsor row on the **Sponsors** tab has an up and a down button, named for example **Move Ridge Physio up on your public board**. They change a sponsor's place on your public pages: move one up in the Partners line and its name comes earlier in the line. On phones the buttons sit behind the **⋯** on the row.
 
-**How it is paid**
+## A Title sponsor's poster
 
-- **Online invoice** (Pro, or an Event Pass on that competition). We email the sponsor a numbered invoice with a **Pay by card** button. Money settles to your connected account, and the platform keeps a fixed **5%** of each sponsorship paid by card, on every plan (this is separate from the entry-fee rate, which depends on your plan). You need **Get paid (Stripe Connect)** set up, the same onboarding used for card entry fees.
-- **Offline.** Bank transfer or cash. The deal has a numbered invoice too, with your bank details on it. You mark the deal paid when the money arrives.
-- **Complimentary.** No payment.
+A Title sponsor can have a poster. Select the pencil on its row, or **Edit** on its page, and use **Title poster (optional)**. The poster shows beside the competition name while the sponsor is a Title sponsor. It takes a PNG, JPG or WebP file, up to 2 MB, best at 1080 × 1350 (4:5, Instagram portrait). The editor warns when a picture is cut off at the edges.
 
-**When the sponsor goes live**
+## Clicks
 
-- **When paid.** As soon as an online invoice is paid, or when you mark an offline deal paid.
-- **Straight away.** Before payment arrives, or when you save a complimentary deal.
-- **After I approve.** The deal waits until you press **Approve**.
+A sponsor with a **Link** is tracked. A tap on its logo or its name goes through to the sponsor's website and adds one to its count. A sponsor with no **Link** has no link and no count. The row reads **1 click**, or **0 clicks** before the first one. Overview on the [Sponsors hub](/help/sharing/sponsors-hub) breaks the clicks down by period.
 
-Each deal has its own page: a timeline of what has happened and what comes next, and only the buttons that apply right now. **End now** ends the deal at once; when a sponsor's last deal ends, it comes off your public pages until you choose **Show on site again** on its page. **Refund** on a deal paid by card sends the money back through Stripe; on an offline deal it records the refund and you pay the sponsor back yourself.
+## Take a sponsor off your pages
 
-A sponsor who is already live under one deal can be given a second. The new deal waits for the first to end, unless you end the first one from the same sheet.
+- **End the deal.** Open the sponsor, find its deal under **Deals** and select **End now**, then **End deal**. The sponsor leaves your public pages at once, and its page shows a **Show on site again** button. Select it and the sponsor returns to your public pages.
+- **Archive.** **Archive** hides the sponsor from your list, your public pages, the TV slideshow and the stream. Its deals, invoices, payments and click counts are kept. **Archive** is refused with **End or settle its deal first.** while a deal is live.
 
-## Invoices
+An archived sponsor sits under **Show archived (1)**. Open it and select **Unarchive** to bring it back.
 
-Every online and offline deal has an invoice; a complimentary deal has none. Invoices work on every plan: a club on the free plan can record a sponsor's cash payment and give them an invoice for it.
+## Who can do what
 
-**Numbering.** Invoice numbers run per organisation, starting at **SP-0001**: the next deal takes the next number, and a number is never reused, even when the deal ends. The number is on the invoice and its PDF, and it is the reference an offline sponsor puts on their transfer. You see it on the deal too, with **Download invoice (PDF)** for your own copy.
+Owners and admins add, edit and archive sponsors. A Viewer sees the **Overview** and **Sponsors** tabs only, with no **Add a sponsor**, **Edit** or **Share report** controls. A Viewer who opens the **Packages** or **On stream** address lands on **Overview**.
 
-**Where the details live.** Open **Settings → Connect** and fill in **Sponsor invoices**: the address printed under your club's name, and the bank details printed on offline invoices. They are not the same as the offline payment instructions you write for players on the registration page, which are worded for entrants and never appear on a sponsor invoice. An invoice picks up the details as they are when the sponsor opens it, so a change shows on invoices already sent when they are opened. An invoice email already sent keeps the bank details it was sent with: after changing them, use **Resend invoice** so the sponsor has the new ones. Only owners and admins can change them.
+## Plans
 
-**What the sponsor gets.** An email with a link to the invoice page. It needs no login. It shows who it is from and to, what the sponsor gets (tier, competitions, whether they are on your stream), the total, and a stamp that reads **Unpaid**, **Paid**, **Refunded**, **Cancelled**, **Written off** or **Ended**. **Download PDF** gives the same invoice as a file, and **Print** prints the page. The invoice is written in your organisation's language.
+A Community organisation can add sponsors and show them as Partners, and can use complimentary and offline deals. Gold, Silver and Title tiers, a deal for one competition and online invoices need Pro, or an Event Pass for that competition. See [plans at a glance](/help/billing/plans).
 
-- **Pay by card (online invoices).** **Pay by card** opens Stripe's secure payment page. When the payment lands the invoice reads **Paid**, the deal goes live by its go-live rule, and we email the organisation's owner that the sponsor paid, once per payment. If a sponsor taps the button a second time on a paid invoice, nothing is charged: they are sent back to the invoice, which reads Paid. If your club can no longer take cards (Stripe disconnected, or the plan changed), the button is replaced by a note to contact you.
-- **Bank transfer (offline invoices).** There is no pay button. The invoice shows your bank details and asks for its number as the payment reference. Save your bank details first: without them an offline invoice shows none. When the money arrives, press **Mark as paid** on the deal and the invoice reads **Paid**. An offline invoice is only emailed when the deal has a billing email; without one you tell the sponsor yourself.
-
-**Send and resend.** An online invoice is emailed when you add the deal. An offline deal with a billing email sends its first invoice when you press **Send invoice** on the deal, and any deal whose invoice has not gone out yet offers the same button (for example when Stripe didn't answer as you added an online deal). Once an invoice has gone out, the button reads **Resend invoice** and emails it again. Each send makes a new link and **stops the earlier one**: a sponsor who opens an old link sees "This invoice link doesn't open anything" and should use the newest email. After sending, the deal shows the invoice link so you can copy it into your own message; it is the same link the email carries, never a Stripe payment link. To protect your sender reputation an organisation can send up to 50 sponsor invoice emails in 24 hours.
-
-**When a deal ends before it is paid.** If you end a deal yourself before it is paid, the invoice reads **Cancelled** and nothing is due. A deal that ends unpaid on its own, because its end date passed or its competition finished, depends on how it is paid. An **online** invoice reads **Ended**: its pay link is gone, and the sponsor is told to contact you about anything still owed. An **offline** deal that had already gone live is still owed: its invoice stays **Unpaid**, with a note that the sponsorship has ended and the invoice is still due, and its row on the **Sponsors** tab reads **Ended · unpaid** and offers **Mark as paid**. Marking it paid leaves the deal ended and the invoice reads Paid. If you will not collect it, open the sponsor and choose **Write off** (it asks first, and it is final): the invoice then reads **Written off**, with "Nothing due".
-
-## Common questions
-
-**Where do the logos appear?** The public competition page footer, the registration masthead and the slideshow strip.
-
-**My old sponsors are still there?** Existing sponsor lists were migrated automatically as Partner-tier entries — nothing was lost.
-
-**A sponsor says their invoice link doesn't open?** You have sent a newer one since: every resend replaces the earlier link. Ask them to use your latest email, or copy the link from the deal after you press **Resend invoice** and send it yourself.
-
-**Where do I change the bank details on an invoice?** **Settings → Connect → Sponsor invoices**. See Invoices above.
-
-**A sponsor paid but isn't showing?** Open the sponsor's deal: its page shows whether the payment has arrived. An online payment is confirmed by Stripe (usually seconds). If the deal goes live only after you approve it, press **Approve**. Contact support if a paid deal stays pending.
+> **Example**
+> You add **Quay Tyres** with a logo and a link. Its row reads **No deal** and the competition page lists it under **Partners**. You select **Add deal** and give it a Gold package straight away. The row reads **Live** and a Gold panel appears on the competition page. A visitor taps the logo and the row reads **1 click**. You select **End now**. The Gold panel goes and the sponsor comes off your pages. You select **Show on site again** and its name is back.

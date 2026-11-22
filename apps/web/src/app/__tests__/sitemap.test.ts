@@ -11,7 +11,7 @@
 // Pinned here, each against the thing that decides it rather than a retyped
 // literal: the route's `dynamic` export, the read's cache window (the exported
 // shipped default, and its env override for e2e/smoke), that sitemap() really
-// reads THROUGH the cache, that no entry carries a lastmod, the static
+// reads THROUGH the cache, that no entry carries a lastmod (but a blog post, which has a real date), the static
 // fallback on a DB error, and — against a real database — that a public
 // published competition and its division are listed while an unlisted one is
 // not.
@@ -142,7 +142,7 @@ describe("sitemap.xml: reads and fallback", () => {
     expect(out).toContain(`${BASE}/live/acme-club/summer-cup/open`);
   });
 
-  it("no entry carries lastmod: not the static pages, the sport landings, a competition hub or a division", async () => {
+  it("no entry carries lastmod but a blog post: not the static pages, the sport landings, a competition hub or a division", async () => {
     // Owner ruling 2026-09-28: the sitemap states no lastmod at all. The only
     // timestamp a competition has is created_at (there is no updated_at), which
     // is not a modification time, and a lastmod stamped with the request time
@@ -164,12 +164,16 @@ describe("sitemap.xml: reads and fallback", () => {
     expect(out).toContain(`${BASE}/live/acme-club/summer-cup/open`);
     expect(out).toContain(`${BASE}/live/acme-club/winter-cup`);
 
-    expect(entries.filter((e) => e.lastModified !== undefined).map((e) => e.url)).toEqual([]);
+    // One kind of entry has a real date: a blog post (its own `updated ?? date`, pinned in sitemap-help-blog.test.ts). Every other
+    // kind states none, and the stated ones are exactly the posts.
+    const dated = entries.filter((e) => e.lastModified !== undefined).map((e) => e.url);
+    expect(dated.length, "premise: the posts are dated").toBeGreaterThan(0);
+    expect(dated.filter((u) => !u.startsWith(`${BASE}/blog/`))).toEqual([]);
     // Through the serialiser the route itself uses, so a key spelled any other
     // way that still reaches the XML is caught too.
     const xml = resolveRouteData(entries, "sitemap");
     expect(xml).toContain(`<loc>${BASE}/live/acme-club/summer-cup/open</loc>`);
-    expect(xml).not.toContain("<lastmod>");
+    expect(xml.match(/<lastmod>/g)).toHaveLength(dated.length);
   });
 
   it("a database error at request time serves the static routes, not a 500", async () => {
@@ -185,7 +189,10 @@ describe("sitemap.xml: reads and fallback", () => {
     const out = urls(await sitemap());
     // Premise: the pages that replace them are listed, so this is not an empty sitemap passing by default.
     for (const kept of ["/en/live", "/en/product/format", "/en/product/scheduling"]) expect(out).toContain(`${BASE}${kept}`);
-    const gone = out.filter((u) => /\/(discover|formats|use-cases)(\/|$)|\/[a-z]{2}\/scheduling$/.test(new URL(u).pathname));
+    // The help tree has real /help/formats pages (the format gallery): they are not the deleted /formats route, so they are
+    // exempt by their prefix, and the premise below proves the exemption has something to exempt.
+    expect(out.filter((u) => u.startsWith(`${BASE}/help/formats`)).length).toBeGreaterThan(0);
+    const gone = out.filter((u) => !u.startsWith(`${BASE}/help/formats`) && /\/(discover|formats|use-cases)(\/|$)|\/[a-z]{2}\/scheduling$/.test(new URL(u).pathname));
     expect(gone).toEqual([]);
   });
 });
@@ -285,6 +292,6 @@ describe.skipIf(!HAS_DB)("sitemap.xml: a seeded database", () => {
     expect(out.filter((u) => u.includes(`/live/${scene.orgSlug}/${scene.unlisted.slug}`))).toEqual([]);
     // And from real rows too — the query's own `updated`, not a fixture's —
     // nothing is dated.
-    expect(entries.filter((e) => e.lastModified !== undefined).map((e) => e.url)).toEqual([]);
+    expect(entries.filter((e) => e.lastModified !== undefined && !e.url.startsWith(`${BASE}/blog/`)).map((e) => e.url)).toEqual([]);
   });
 });

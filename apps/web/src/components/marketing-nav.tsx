@@ -2,10 +2,11 @@ import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth";
 import { NavScrollFlip } from "@/components/marketing/nav-scroll";
 import { MarketingMobileNav } from "@/components/marketing/mobile-nav";
-import { CalendarClock, ClipboardList, Handshake, LayoutGrid, Radio, Smartphone, Ticket, Trophy, type LucideIcon } from "lucide-react";
+import { CalendarClock, CircleHelp, ClipboardList, Handshake, LayoutGrid, Radio, Smartphone, Ticket, Trophy, type LucideIcon } from "lucide-react";
+import { NavSessionSwap } from "@/components/marketing/nav-session-swap";
 import { NavMenu } from "@/components/marketing/nav-menu";
 import { SportIcon } from "@/components/v2/division-builder/sport-icon";
-import { NAV_GROUPS, TOP_LINKS } from "@/lib/marketing/product-nav";
+import { HELP_LINK, NAV_GROUPS, TOP_LINKS } from "@/lib/marketing/product-nav";
 import { getDictionary, t } from "@/lib/i18n";
 import { toLocale } from "@/lib/i18n-constants";
 
@@ -22,12 +23,20 @@ const menuIcon = (icon: string) => {
 export async function MarketingNav({
   variant = "light",
   lang = "en",
+  auth = "server",
 }: {
   variant?: "night-scroll" | "light";
   lang?: string;
+  /**
+   * Who the bar is drawn for. `"server"` (the default) asks the session and draws the visitor's own actions.
+   * `"client"` never reads the session: the server draws the signed-out actions and a client island swaps in
+   * "Dashboard" once the browser carries the signed-in hint (nav-session-swap.tsx). That is what lets /help and
+   * /blog be cached and shared between visitors; a page that passes it must read no cookie anywhere else either.
+   */
+  auth?: "server" | "client";
 }) {
   const [user, d] = await Promise.all([
-    getCurrentUser().catch(() => null),
+    auth === "server" ? getCurrentUser().catch(() => null) : Promise.resolve(null),
     getDictionary(toLocale(lang), "marketing"),
   ]);
   const night = variant === "night-scroll";
@@ -35,6 +44,28 @@ export async function MarketingNav({
   const groups = NAV_GROUPS.map((g) => ({ id: g.id, label: t(d, g.key), links: g.links.map((l) => ({ href: l.href, label: t(d, l.key) })) }));
   const menus = NAV_GROUPS.map((g) => ({ id: g.id, label: t(d, g.key), links: g.links.map((l) => ({ href: l.href, label: t(d, l.key), desc: t(d, l.desc), icon: menuIcon(l.icon) })) }));
   const top = TOP_LINKS.map((l) => ({ href: l.href, label: t(d, l.key) }));
+  const help = { href: HELP_LINK.href, label: t(d, HELP_LINK.key) };
+  const dashboardLabel = `${t(d, "nav.dashboard")} →`;
+  const dashboardLink = (
+    <Link href="/dashboard" className="btn btn-primary max-sm:hidden text-sm whitespace-nowrap">
+      {dashboardLabel}
+    </Link>
+  );
+  const signedOutLinks = (
+    <>
+      <Link href="/login" className="mk-nav-link btn btn-ghost max-sm:hidden text-sm whitespace-nowrap">
+        {t(d, "nav.login")}
+      </Link>
+      <Link href="/login?tab=signup" className="mk-nav-cta btn max-sm:hidden text-sm font-semibold whitespace-nowrap">
+        {t(d, "nav.startFree")}
+      </Link>
+    </>
+  );
+  const mobileSignedIn = [{ href: "/dashboard", label: dashboardLabel, primary: true }];
+  const mobileSignedOut = [
+    { href: "/login", label: t(d, "nav.login"), primary: false },
+    { href: "/login?tab=signup", label: t(d, "nav.startFree"), primary: true },
+  ];
   return (
     <header
       data-mk-nav
@@ -67,6 +98,16 @@ export async function MarketingNav({
               {l.label}
             </Link>
           ))}
+          {/* Help: an icon, like the signed-in header's "?" (components/help-menu.tsx), but a plain link — one
+              destination, so no menu. From `md` only: below it the panel carries a "Help" row. 44px square hit area. */}
+          <Link
+            href={help.href}
+            aria-label={help.label}
+            title={help.label}
+            className="mk-nav-link grid h-11 w-11 shrink-0 place-items-center rounded-lg max-md:hidden"
+          >
+            <CircleHelp aria-hidden className="h-[18px] w-[18px]" strokeWidth={1.75} />
+          </Link>
           {/* Below `sm` the auth actions live in the mobile panel, not here.
               At 320 the bar has to hold a 96px wordmark, a 36px menu button
               and 32px of gutter, which leaves ~150px — and `nav.startFree` is
@@ -76,36 +117,20 @@ export async function MarketingNav({
               alone would have traded the wrap for horizontal overflow, which
               is worse. Every marketing page carries its own in-body CTAs, so
               the header CTA is a convenience here, not the only route. */}
-          {user ? (
-            <Link href="/dashboard" className="btn btn-primary max-sm:hidden text-sm whitespace-nowrap">
-              {t(d, "nav.dashboard")} →
-            </Link>
+          {auth === "client" ? (
+            <NavSessionSwap signedOut={signedOutLinks} signedIn={dashboardLink} />
+          ) : user ? (
+            dashboardLink
           ) : (
-            <>
-              <Link href="/login" className="mk-nav-link btn btn-ghost max-sm:hidden text-sm whitespace-nowrap">
-                {t(d, "nav.login")}
-              </Link>
-              <Link
-                href="/login?tab=signup"
-                className="mk-nav-cta btn max-sm:hidden text-sm font-semibold whitespace-nowrap"
-              >
-                {t(d, "nav.startFree")}
-              </Link>
-            </>
+            signedOutLinks
           )}
           <MarketingMobileNav
             groups={groups.map((g) => ({ label: g.label, links: g.links }))}
-            links={top}
+            links={[...top, help]}
             openLabel={t(d, "nav.openMenu")}
             closeLabel={t(d, "nav.closeMenu")}
-            auth={
-              user
-                ? [{ href: "/dashboard", label: `${t(d, "nav.dashboard")} →`, primary: true }]
-                : [
-                    { href: "/login", label: t(d, "nav.login"), primary: false },
-                    { href: "/login?tab=signup", label: t(d, "nav.startFree"), primary: true },
-                  ]
-            }
+            auth={user ? mobileSignedIn : mobileSignedOut}
+            authSignedIn={auth === "client" ? mobileSignedIn : undefined}
           />
         </nav>
       </div>

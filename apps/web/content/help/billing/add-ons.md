@@ -1,57 +1,58 @@
 ---
-title: Add-ons — buying more of one thing
-description: Three ways to buy extra capacity without changing plan — AI credit packs, competition size packs and extra organisations. Each one is scoped, billed and bought differently.
+title: Add-ons
+description: Add extra organisations to a Pro bill without changing plan, and where to buy AI and match credit packs.
 order: 7
+related: billing/groups, billing/plans, billing/credits, billing/match-credits
 ---
 
-An add-on buys **more of one specific thing** without moving you to a different plan. There are three of them, and they do not behave the same way:
+An add-on buys more of one thing without changing your plan. The **Add-ons** page in **Settings** sells one: **extra organisations** on your bill. Credit packs are bought on the **Credits** page.
 
-| Add-on | What it lifts | Scope | Billing |
-| --- | --- | --- | --- |
-| AI credit pack | Credit balance | The shared wallet | One-time |
-| Size pack | Entrants per division, +32 each | One competition | One-time |
-| Extra organisation | Organisations on the bill, +1 each | The billing group | Monthly |
+## Extra organisations
 
-## AI credit packs
+One subscription already covers several organisations: Pro covers {{plan:orgs.max_owned:pro}}, and Enterprise is unlimited. Each organisation after the first costs no more than half the base rate, up to that limit. When every place is full, an extra organisation raises the limit by one for the whole billing group, so you do not have to change plan. See [billing groups](/help/billing/groups) for how organisations share a bill.
 
-A credit pack tops up the shared wallet that every organisation on the bill spends from. It is a one-time purchase, the credits land as soon as the payment clears, and the credits themselves **never expire** — unlike your monthly grant, which resets on the 1st. Buy one with **Buy credits** on the Credits tab.
+To buy:
 
-See [AI credits](/help/billing/credits) for the pack ladder, the order runs spend in, and how a billing group shares one wallet.
+1. Open **Settings** and choose **Add-ons**. The line under the intro counts the organisations on the bill against its limit.
+2. Under **Extra organisations**, use **+** and **−** to set the number you want. The price for each one is beside the control, and the new monthly total appears below it.
+3. Choose **Save**.
 
-## Size packs — one competition, bought once
+![The Add-ons page on a Pro bill: the intro line, the count of organisations on the bill against its limit, and the Extra organisations card with its explanation, the minus and plus buttons around a count of 0, and the price for each per month.](/help/billing/add-ons.webp "The Add-ons page as the payer of a Pro bill sees it.")
 
-A size pack raises **one competition's** entrants-per-division limit by 32, and does so permanently for that competition. Buy two for the same competition and the headroom stacks. Because it is scoped to a competition it never lifts an organisation-wide limit such as members — a size pack and an extra seat are not substitutes for each other.
+An organisation that joins through an extra place is charged twice:
 
-Any **owner** of the competition's organisation can buy one. It charges the billing group's saved card only when that owner is also the person who pays for the group; anyone else is charged directly, which is the same rule an [Event Pass](/help/billing/event-pass) purchase follows.
+- **As an organisation on the bill.** Like every organisation after the first, it is charged the same per-organisation rate as the others, on your bill's own monthly or yearly cycle.
+- **For the extra place.** The price beside the control, charged every month, even when your plan is billed yearly.
 
-There is **no screen for buying a size pack** today: the purchase can only be started through the billing API, and nothing in the app calls it. [Talk to us](mailto:hello@seazn.club) if you need more entrants in a division.
+So an organisation past the plan's limit costs more than one inside it.
 
-## Extra organisations — the whole bill, every month
+- **Adding** one: you pay the difference for the rest of this billing period, **added to your next invoice** rather than charged on the spot.
+- **Removing** one: it takes effect now, and there is no refund for the rest of the period.
 
-One subscription already covers several organisations: Pro covers 5, and Enterprise is unlimited. Once every slot is full, an extra organisation buys **one more slot** rather than forcing you up a plan. Each organisation after the first costs no more than half the base rate.
+You cannot go below the number of organisations standing on an extra organisation. Move one out of the group first.
 
-The add-on is charged **every month, whatever your plan's own billing period** — so on a monthly bill it matches that half rate exactly, and on an annual bill it does not. An annual group pays for its extra organisations monthly, which comes to **at least a sixth more over a year** than a slot inside the plan's own limit costs, and rather more than that in some currencies. If you are annual and expect to stay over the limit, compare the add-on against moving up a plan before you buy.
+## Who sees what
 
-Raise the count and you pay the difference for the rest of the period, **added to your next invoice** rather than charged on the spot. Lower it and it takes effect immediately, with no refund. You cannot go below the number of organisations that are actually standing on an extra organisation: move one out of the group first.
+- **The payer** of a Pro bill sees the control.
+- **Another owner** sees **Only the person who pays for this billing group can buy add-ons.**
+- **On Community**, the page says **Add-ons are available on Pro. Upgrade to buy past the Community limit.**
+- **On Pro without a card subscription**, for example while a plan set up by our team is active, the page says **Extra organisations need an active paid subscription. Complete checkout on the Billing tab first.**
+- **On Enterprise**, the page says **Your plan already covers unlimited organisations — there is nothing to add here.**
 
-Buy them on **Settings → Add-ons**. Community cannot, because there is no subscription for the add-on to ride.
+## If you remove extra organisations
 
-## Who can buy, and what it is billed in
+Removing an extra organisation does not freeze anything. Organisations already on the bill keep working. You only cannot add another until the bill is back under its limit. That is also why the control cannot go below the number of organisations standing on an extra organisation: you cannot cancel your way over the limit.
 
-A **credit pack**, an **extra seat** and an **extra organisation** are all bought by the group's **payer** — the one person who holds the card and the invoice. A **size pack** is the exception: any owner of the competition's organisation can buy one, because it is scoped to a single competition rather than to the bill.
+## Credit packs
 
-Once your billing group has a subscription, its **currency is fixed**, and every later purchase uses that currency. You are never asked to choose one twice.
+- **AI credit packs** are on **Settings → Credits → AI**, under **Buy credits**. See [AI credits](/help/billing/credits).
+- **Match credit packs** for streaming are on **Settings → Credits**, under **Buy match credits**. See [match credits](/help/billing/match-credits).
 
-## When an add-on stops
+Packs are one-time purchases and never expire.
 
-Nothing is ever deleted. What differs is whether being over the limit stops you *using* what you have, or only stops you *adding* more — and the two recurring add-ons answer that differently.
+## More room in one competition
 
-**An extra seat stops you adding members, and makes the ones over the limit read-only.** Cancelling a seat removes nobody and touches no data. What it stops outright is *growing*: an invitation that would take you past the limit is refused, everywhere, straight away. Members already over the limit are treated as read-only — the same idea as [what downgrading freezes](/help/billing/downgrade) — and owners never are. Nothing puts a badge on them: it is worked out when a write arrives, and it blocks signed-in admins writing through our REST API, not API-key clients. Inside the app that is not a corner of the product — those routes are what almost every editing screen saves through, so expect a frozen admin to be blocked across most of the app, the schedule board, entrants, officials and settings among them. Treat it as a prompt to make room. Buying the seat back clears both immediately.
+There is no add-on for more team members, or for more entrants or divisions in one competition. For one competition, an [Event Pass](/help/billing/event-pass) raises its divisions and entrants. For every competition, see [plans](/help/billing/plans).
 
-**An extra organisation does not freeze anything.** The organisation limit is checked only when a *new* organisation is added, and is never re-applied to organisations that already exist. So a group that ends up over its limit — after a plan change, say — keeps every organisation it already has, fully working; what it loses is the ability to add another until it is back under the limit. That is also why you cannot cancel your way over the line: the control refuses to go below the number of organisations that are standing on an extra organisation, and asks you to move one out of the group first.
-
-Credit packs and size packs are one-time purchases, so there is nothing to cancel and nothing to lapse: what they added stays added.
-
-## See also
-
-[Billing groups](/help/billing/groups) for how one card and one invoice cover several organisations. [AI credits](/help/billing/credits) for the shared wallet. [Plans at a glance](/help/billing/plans) for what is already included before you need an add-on at all.
+> **Example**
+> Riverside Racquets is on Pro, and its bill is full: it holds {{plan:orgs.max_owned:pro}} organisations, the club and its junior sections. The club starts one more section. The payer opens **Add-ons**, uses **+** to set **Extra organisations** to 1 and chooses **Save**. The new section can now join the bill. It is charged like the other organisations on the bill, and the extra place is charged every month on top. For the days left in this billing period, the payer pays the difference on the next invoice.

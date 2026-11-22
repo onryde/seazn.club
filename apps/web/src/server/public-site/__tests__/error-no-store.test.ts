@@ -81,7 +81,13 @@ const CASES: Array<{ name: string; path: string; status: number; write: Write; o
   { name: "/live/ (the tree's root, one segment) 404", path: "/live/x", status: 404, write: { how: "setHeader", cacheControl: FOUND_PAGE }, owed: ERROR_NO_STORE },
   { name: "/live 404 — writeHead(object)", path: "/live/o/c", status: 404, write: { how: "writeHead-object", cacheControl: FOUND_PAGE }, owed: ERROR_NO_STORE },
   { name: "/live 404 — writeHead(flat raw)", path: "/live/o/c", status: 404, write: { how: "writeHead-flat", cacheControl: FOUND_PAGE }, owed: ERROR_NO_STORE },
+  // Blog P2 Task 5: /help and /blog are cached at the edge too, so their errors are never stored either.
+  { name: "/help 404 (unknown article)", path: "/help/no-such-page", status: 404, write: { how: "setHeader", cacheControl: "s-maxage=300" }, owed: ERROR_NO_STORE },
+  { name: "/blog 404", path: "/blog/no-such-post", status: 404, write: { how: "setHeader", cacheControl: "s-maxage=3600" }, owed: ERROR_NO_STORE },
+  { name: "/help RSC 500", path: "/help/x?_rsc=abc", status: 500, write: { how: "setHeader", cacheControl: "s-maxage=300" }, owed: ERROR_NO_STORE },
   // Everything else is untouched.
+  { name: "/help 200 (found article)", path: "/help/registration/waitlist", status: 200, write: { how: "setHeader", cacheControl: "s-maxage=300" }, owed: "s-maxage=300" },
+  { name: "/helpdesk 404 (not the tree)", path: "/helpdesk", status: 404, write: { how: "setHeader", cacheControl: FOUND_PAGE }, owed: FOUND_PAGE },
   { name: "/live 200 (found page)", path: "/live/o/c", status: 200, write: { how: "setHeader", cacheControl: FOUND_PAGE }, owed: FOUND_PAGE },
   { name: "/embed 200", path: "/embed/divisions/x/standings", status: 200, write: { how: "setHeader", cacheControl: FOUND_PAGE }, owed: FOUND_PAGE },
   { name: "/live 308 (rename redirect)", path: "/live/o/old", status: 308, write: { how: "setHeader", cacheControl: FOUND_PAGE }, owed: FOUND_PAGE },

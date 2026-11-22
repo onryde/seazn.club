@@ -32,7 +32,9 @@ export const SPORT_LINKS = [
   { key: "nav.sport.all", href: "/sports", desc: "nav.desc.sport.all", icon: "layout-grid" },
 ] as const satisfies readonly NavLink[];
 
+/** Blog sits between the Sports menu and Pricing (owner pick, 2026-11-19); /blog is English-canonical, outside /{lang}. */
 export const TOP_LINKS = [
+  { key: "nav.blog", href: "/blog" },
   { key: "nav.pricing", href: "/pricing" },
   { key: "nav.live", href: "/live" },
 ] as const satisfies readonly NavLink[];
@@ -43,6 +45,13 @@ export const NAV_GROUPS = [
   { id: "sports", key: "nav.sports", links: SPORT_LINKS },
 ] as const;
 
+/**
+ * Help is an icon beside the sign-in actions, a "Help" text row in the phone panel (owner, 2026-11-19: "like today
+ * after login"). It is not a menu: one destination, so a plain link. Not in TOP_LINKS, which are the text links
+ * of the bar; marketing-nav.tsx draws it and the panel gets it as one more row.
+ */
+export const HELP_LINK = { key: "nav.help", href: "/help" } as const satisfies NavLink;
+
 export function navHrefs(): string[] {
-  return [...NAV_GROUPS.flatMap((g) => g.links.map((l) => l.href)), ...TOP_LINKS.map((l) => l.href)];
+  return [...NAV_GROUPS.flatMap((g) => g.links.map((l) => l.href)), ...TOP_LINKS.map((l) => l.href), HELP_LINK.href];
 }

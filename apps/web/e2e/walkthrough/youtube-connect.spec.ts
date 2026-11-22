@@ -866,12 +866,19 @@ spec("made-for-kids replay: a part made while the channel was declared made-for-
     // Real tap area and no overflow: the link is at least 44px tall, is what a tap at its centre hits, and the card sits inside the viewport.
     const box = (await open.boundingBox())!;
     expect(box.height, `@${width}: the link is a 44px target`).toBeGreaterThanOrEqual(44);
+    // `elementFromPoint` is VIEWPORT-relative and answers null for anything below the fold, which reads as "covered" when it only
+    // means "off-screen". At 320 the link IS below a 700px fold (the replay card sits under the score card), as it always was: it
+    // used to land in view only because the tab rail's mount-time `scrollIntoView` dragged the whole page down (fixed in e3decdd888,
+    // which scrolls the rail on X only). A phone user scrolls to it, so the test does too - and hit-tests it THERE, which also
+    // proves nothing sticky covers it where a scroll leaves it.
+    await open.scrollIntoViewIfNeeded();
     const hit = await open.evaluate((el) => {
       const r = el.getBoundingClientRect();
       const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-      return top !== null && el.contains(top);
+      if (top === null) return "(nothing: the link's centre is outside the viewport)";
+      return el.contains(top) ? "self" : `${top.tagName.toLowerCase()}[${(top as HTMLElement).dataset.testid ?? ""}]`;
     });
-    expect(hit, `@${width}: a tap at the link's centre lands on the link`).toBe(true);
+    expect(hit, `@${width}: a tap at the link's centre lands on the link`).toBe("self");
     const cardBox = (await card.boundingBox())!;
     expect(cardBox.x, `@${width}: the card starts inside the viewport`).toBeGreaterThanOrEqual(0);
     expect(cardBox.x + cardBox.width, `@${width}: the card ends inside the viewport`).toBeLessThanOrEqual(width);

@@ -1,23 +1,43 @@
 ---
 title: Who can see what
-description: Private, Link only, Public — the one switch that controls your competition's audience.
+description: Private, Link only and Public decide who can open a competition's public pages, and what search engines and your organisation page do with it.
 order: 1
+related: sharing/dashboard, sharing/embeds, sharing/presentation-mode, getting-started/create-a-competition
 ---
 
-Every competition has one visibility switch:
+Every competition has one visibility setting. It answers "who can see this event". Divisions follow their competition, so there is no setting per division.
 
-- **Private** — only your organisation's members, signed in. The public URL shows nothing exists.
-- **Link only** — anyone holding the URL can view, but search engines are told not to index it and it never appears in our Discover directory. Right for "the club WhatsApp group, not the world".
-- **Public** — once published: indexable, listed on your public org page, and eligible for the Discover directory if you opt in. While it is still a **draft** it behaves like Link only — anyone with the URL can view it and register, but it is not listed anywhere and search engines are told not to index it. Publishing it (Status → Published) is what lists it; it stays listed when it goes live and when it finishes. See [create a competition](/help/getting-started/create-a-competition#visibility).
+![The Who can see this setting with Private, Link only and Public, and the line under Link only reading Anyone with the link can view. Hidden from Google and our directory.](/help/sharing/visibility.webp "Who can see this, in a competition's settings.")
 
-Divisions follow their competition — there is no per-division override, so one switch answers "who can see this event".
+## Change it
 
-## What changes with visibility
+Open the competition, then **Settings**, then **Who can see this**. Choose **Private**, **Link only** or **Public**. A line under each choice says what it does. **Share link** and **Copy link** give you the address. **Who will find it** lists who can reach the competition now.
 
-Public dashboards, standings JSON, share images and embeds all honour it: a private competition 404s everywhere public, link-only works but stays out of search.
+## The three choices
 
-## Common questions
+| Choice | Who can open it | In search results | Your organisation page |
+| --- | --- | --- | --- |
+| **Private** | **Only members of your organisation on Seazn can see it.** The public address shows a not-found page, even to a signed-in member of your organisation. Use the console. | Not indexed | Not listed |
+| **Link only** | **Anyone with the link can view. Hidden from Google and our directory.** | Told not to index | Not listed |
+| **Public** | **Listed on your organisation's page and open to search engines once it's published.** | Indexed | Listed once published |
 
-**Can I go public later?** Yes, any time — and back. Going back to private immediately 404s the public pages (cached copies can take up to a minute to fade).
+A **Public** competition that is still a **draft** behaves like **Link only**. Anyone with the address can open it. It is not listed and search engines are told not to index it. Publishing it lists it.
 
-**Youth divisions?** They default to shortened player names on anything public — see [youth privacy](/help/registration/youth).
+The organisation page and the sitemap list only competitions that are **Public** and published. A **Public** competition can also join **Showcase on seazn.club**.
+
+The choice applies alike to the competition page, its division pages, the **Present** board and an embed. The slideshow you open from your console needs a sign-in whatever the setting, so a visitor cannot open it.
+
+## Changing it later
+
+You can go public later, and back. Switch a competition to **Private** and its public pages return a not-found page at once. An embed on another website can keep showing for up to a minute. Switch **Private** back to **Link only** and the pages open again.
+
+## Plan limit on public competitions
+
+A plan limits how many competitions can be **Public** or **Link only** at once. On Community the limit is {{plan:dashboard.public.max:community}}. On Pro it is {{plan:dashboard.public.max:pro}}. Only live competitions that do not have an Event Pass count. When your plan has no slot free, a new competition is made **Private**. Switching an existing competition to **Public** or **Link only** is refused instead, with a line ending **archive a finished one, or upgrade.** For a new one the form reads **This one will be created private** and **Created as private for now: your plan has no public or link-only slot free.** Make room by switching another one to **Private**.
+
+## Youth divisions
+
+Youth divisions show shortened player names on public pages. See [youth privacy](/help/registration/youth).
+
+> **Example**
+> You run **Spring Open** as **Public** and have **Autumn Cup** on **Link only**, which is the whole allowance on a Community plan. You start a third competition. The form says **This one will be created private**. The third competition opens only for your members. You switch **Autumn Cup** to **Private**. Its address now shows a not-found page to everyone, and your members open it from the console.

@@ -238,7 +238,9 @@ describe("nav links are not inert", () => {
       const parts = href.split("/").filter(Boolean);
       const direct = path.join(root, ...parts, "page.tsx");
       const dynamic = path.join(root, ...parts.slice(0, -1), "[sport]", "page.tsx");
-      const ok = fs.existsSync(direct) || (parts[0] === "sports" && isSportPage(parts[1] ?? "") && fs.existsSync(dynamic));
+      // /blog and /help are English-canonical trees at the app root, outside the /{lang} marketing group.
+      const outsideLang = fs.existsSync(path.resolve(root, "..", "..", ...parts, "page.tsx")) && (parts[0] === "blog" || parts[0] === "help");
+      const ok = fs.existsSync(direct) || outsideLang || (parts[0] === "sports" && isSportPage(parts[1] ?? "") && fs.existsSync(dynamic));
       expect(ok, href).toBe(true);
       checked++;
     }
