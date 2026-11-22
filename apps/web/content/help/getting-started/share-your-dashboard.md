@@ -11,11 +11,13 @@ A competition has a public page with scores, schedules, standings and entrants, 
 
 Open the competition, then **Settings**. **Who can see this** says who can open the page:
 
-- **Private**: only members of your organisation can open it. A visitor who is not signed in gets a not-found page.
+- **Private**: the public address shows a not-found page to everyone, including signed-in members of your organisation. Members work on it in the console.
 - **Link only**: anyone with the link.
 - **Public**: anyone with the link, and your organisation page lists it once it is published.
 
-A new competition starts as **Public** but is a draft, so it opens for anyone with the link and your organisation page does not list it yet. Set **Status** to **published** and press **Save changes** to list it. [Who can see what](/help/sharing/visibility) has the detail.
+A new competition starts as **Public** but is a draft, so it opens for anyone with the link and your organisation page does not list it yet. Set **Status** to **published** and press **Save changes** to list it.
+
+A plan limits how many published competitions can be **Public** or **Link only** at once. Community allows {{plan:dashboard.public.max:community}}, and a draft does not count. With no slot free, a new competition is created **Private** and the form says "This one will be created private". [Who can see what](/help/sharing/visibility) has the detail.
 
 ## Get the link
 
@@ -29,7 +31,7 @@ A division has its own address. **View Public Page ↗** in a division's header 
 
 ## Print a poster
 
-**QR ↗** opens a printable PDF poster. Print it for the venue: scanning it opens the live page. The poster is made whatever the visibility, but if the competition is **Private**, the page it points to is not found. Choose **Link only** or **Public** before you print.
+**QR ↗** opens a printable PDF poster. Print it for the venue: scanning it opens the live page. A **Private** competition has no **QR ↗** and its poster address is a not-found page, so choose **Link only** or **Public** before you print.
 
 ## At the venue and on your own website
 

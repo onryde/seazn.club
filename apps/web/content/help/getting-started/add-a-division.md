@@ -5,7 +5,7 @@ order: 3
 related: getting-started/add-entrants, entrants/kinds, divisions/settings, divisions/archive
 ---
 
-A **division** is a single draw inside your competition: "Men's A", "U14 Mixed" or "Office Ping-Pong". Each one has one sport, one kind of entrant and one format. Nothing is locked until scoring starts, so you can set one up and change your mind.
+A **division** is a single draw inside your competition: "Men's A", "U14 Mixed" or "Office Ping-Pong". Each one has one sport, one kind of entrant and one format. The sport is fixed once you create the division, but the format can change until scoring starts, so you can set one up and change your mind about how it is played.
 
 ## Open the builder
 

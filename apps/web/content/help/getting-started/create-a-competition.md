@@ -19,7 +19,7 @@ The **New competition** page opens on a gallery of ready-made formats such as **
 
 1. Type a **Name**. The web address comes from it.
 2. Choose **Starts on** if you know it. You can leave it empty.
-3. Choose **Ends on**. It is required. It fills itself in from the start date, so change it if the event runs longer. An end date before the start date is refused: "end date cannot be before the start date."
+3. Choose **Ends on**. It is required. It fills itself in from the start date, so change it if the event runs longer. An end date before the start date is refused: "The end date cannot be before the start date." and **Create competition** stays off.
 4. Pick **Who can see this**: **Private**, **Link only** or **Public**. **Public** is already chosen. [Who can see what](/help/sharing/visibility) explains each one.
 5. Switch on **Showcase on seazn.club** only if you want the event featured on the seazn.club home and sport pages.
 6. Add a **Description** if you like. **Write** and **Preview** show what visitors will read.
@@ -31,7 +31,7 @@ The button stays off until the form has what it needs. Under it the form says **
 
 A panel reads **Competition created** and shows the name, the visibility and the dates. Below it, **Add your first division** explains that a division holds one format, its entrants and its fixtures, and that singles and doubles would usually be two divisions. Press **Add division** to go on to [adding a division](/help/getting-started/add-a-division), or **Later** to stop here.
 
-The new competition is a **draft**. Its page says **Setting up** and shows its divisions and registrations. A draft that is **Public** behaves like **Link only**: anyone with the address can open it, but your organisation page does not list it.
+The new competition is a **draft**. Its page says **Setting up** and shows its divisions and registrations. A draft that is **Public** behaves like **Link only**: anyone with the address can open it, but your organisation page does not list it. If your plan has no public slot left, the form creates it **Private** instead: see the limits below.
 
 ## Publish it
 
@@ -42,6 +42,8 @@ Open the competition, then **Settings**. In **Status**, choose **published** and
 Your plan limits how many competitions can be active at once. A draft counts. Community allows {{plan:competitions.max_active:community}}. Pro and Enterprise set no limit.
 
 At the limit, the form says "Your plan's active-competition limit is reached." and links to plans. Setting a competition to **completed** frees its place for a new one.
+
+A second limit covers **Public** and **Link only** competitions once they are published. Community allows {{plan:dashboard.public.max:community}} at once, and a draft does not count. With no slot free, the form says "This one will be created private". [Who can see what](/help/sharing/visibility) has the detail.
 
 > **Example**
 > On Community you create three competitions, all drafts. A fourth is refused with that message. You set the first to **completed**, and the fourth now goes through. Setting the first back to **live** is then refused, because the limit is full again.

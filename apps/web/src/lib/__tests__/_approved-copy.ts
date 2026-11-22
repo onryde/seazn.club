@@ -628,7 +628,7 @@ export const APPROVED_CREATE_ORG_INVENTORY: string[] = [
   "f9ceb5454551da29",
   "7ad2690b11e9dbdf",
   "9b651647cd419ff3",
-  "ad27a1c9b06dce3d"
+  "346c3229c8c616fd"
 ];
 
 /** Every user-visible surface of `content/help/billing/buy-an-event-pass.md`,

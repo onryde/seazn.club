@@ -26,7 +26,7 @@ There is no field for several names at once: add one name per press. The form do
 
 Press **Import CSV** and choose a `.csv` file. The entrants appear in the table straight away. There is no preview step first, so check the table afterwards.
 
-Start the file with a row that names the columns, such as `name,seed`. **Sample CSV** downloads a file that shows the columns the import reads: `name`, `dob`, `gender`, `seed`, `team` and `squad_number`. You can leave a cell empty.
+One name per line is enough: a file with no header row imports each line as a name. To fill more columns, start the file with a row that names them, such as `name,seed`. Only a first line that contains "name" counts as a header. A comma splits a line into columns, so a name written "Rao, Dev" is imported as "Rao". **Sample CSV** downloads a file that shows the columns the import reads: `name`, `dob`, `gender`, `seed`, `team` and `squad_number`. You can leave a cell empty.
 
 ## Let players register themselves
 

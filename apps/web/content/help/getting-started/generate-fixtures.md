@@ -1,6 +1,6 @@
 ---
 title: Generate fixtures
-description: Turn your format and entrants into a list of matches. You generate once, and rebuild if the roster changes.
+description: Turn your format and entrants into a list of matches. Generate once; if the roster changes, a league rebuilds, a knockout updates its draw and a Swiss pairs the next round.
 order: 5
 related: getting-started/start-scoring, scheduling/board, divisions/lifecycle, scheduling/timezones
 ---
@@ -19,14 +19,31 @@ The stage turns **Active**. A notice says how many fixtures it made, and the mat
 > **Example**
 > A league of four players makes **Generated 6 fixture(s) (0 already existed).** It is three rounds of two matches, so every pair plays once. A knockout of four makes two semi-finals and a final.
 
-The button then goes away. You do not press it a second time.
+On a league the button then goes away, so you do not press it a second time. A Swiss works round by round: **Generate fixtures** lays out the rounds with empty places (**TBD** against **TBD**, marked **Awaiting draw**), and **Pair next round** seats the players of the next round.
 
 ## When the roster changes before you start
 
-Add someone after you generated, and the stage card shows **Fixtures don't match the roster** and who is missing, such as "Active, but not on a fixture yet: Eva Lindqvist, Farid Haddad". Press **Rebuild fixtures**. It asks "Rebuild this stage's fixtures?" and says how many fixtures it deletes. It also says "Times and courts stay with each match's place in the draw." and "This can't be undone." Press **Rebuild** to go ahead, or **Cancel**.
+Add someone after you generated, and the stage card tells you, with the control your format needs. Each format in this table was seen on a division of four to six players before **Start tournament**.
+
+| Format | The card says | You press |
+|---|---|---|
+| League | **Fixtures don't match the roster**, then "Active, but not on a fixture yet:" and the name | **Rebuild fixtures** |
+| Knockout | The same notice, and **Update draw** appears beside **Complete stage** | **Update draw** |
+| Swiss | **Waiting for the next round**, then "Not paired this round:" and the name | **Pair next round** |
+
+**League.** **Rebuild fixtures** asks "Rebuild this stage's fixtures?" and says how many fixtures it deletes. It also says "Times and courts stay with each match's place in the draw." and "This can't be undone." If the fixtures carry officials, team sheets or linked scoring devices, the box lists them and says you will set them up again. Press **Rebuild** to go ahead, or **Cancel**.
 
 > **Example**
 > You generated a league of four, which made 6 fixtures. You add two more players. **Rebuild fixtures** warns that it deletes 6 fixtures. After **Rebuild**, the page says **Rebuilt — 6 fixture(s) replaced. 15 fixture(s) drawn in their place.** Six players make 15 matches in five rounds of three.
+
+**Knockout.** **Update draw** puts a newcomer into a free bye if the bracket has one, and says "1 new entrant placed in a bye." If the bracket has no free place, it draws the bracket again and says "The bracket was drawn again to match the current entrants. Printed scorer sheets for this stage will stop working." A bracket that already has match setup on its lines, such as officials or team sheets, is not redrawn this way. **Rebuild fixtures**, beside it, lists what it clears first.
+
+> **Example**
+> You generated a knockout of five players, which left 4 matches to schedule. You add a sixth. **Update draw** says "1 new entrant placed in a bye." and the knockout now has 5 matches to schedule, two of them quarter-finals.
+
+**Swiss.** Players you add before you press **Pair next round** are paired with everyone else. Once round 1 is paired, a late player waits. The card says "Not paired this round:" and the name, and "Swiss pairs one round at a time. Use Pair next round to seat them." **Pair next round** refuses while the current round has undecided matches, so you seat the newcomer once round 1 has its results.
+
+Once a match in the stage has a result, **Rebuild fixtures** refuses and says "Can't rebuild — this stage already has recorded results. Complete it as it stands, or use Generate to add missing entrants instead."
 
 Once you press **Start tournament**, a league gives a late player catch-up matches and shows no **Rebuild fixtures** button. [A division's life](/help/divisions/lifecycle) shows who can still join each format.
 

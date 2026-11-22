@@ -1903,6 +1903,14 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
     expect(await capFor("competitions.max_active", "pro"), "Pro is unlimited (null row)").toBeNull();
     expect(await capFor("competitions.max_active", "enterprise"), "Enterprise is unlimited (null row)").toBeNull();
     expect(md).toContain("Pro and Enterprise set no limit.");
+
+    // Fix round 1 (review m2): the second limit, on PUBLISHED public and link-only competitions. Same figure on both pages
+    // that state it; a draft is not counted (the meter's status set is published and live, `PUBLIC_DASHBOARD_STATUSES`).
+    const publicCap = await capFor("dashboard.public.max", "community");
+    expect(publicCap, "Community has a public cap").not.toBeNull();
+    expect(md).toContain(`Community allows ${publicCap} at once, and a draft does not count.`);
+    const share = await resolvedHelp("content/help/getting-started/share-your-dashboard.md");
+    expect(share).toContain(`Community allows ${publicCap}, and a draft does not count.`);
   });
 
   // Task 15 (help rewrite). `api/keys.md` splits by plan: a key needs Pro, and a key that writes needs Enterprise. The
@@ -1923,6 +1931,15 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
     expect(await flag("api.write", "enterprise"), "Enterprise can write").toBe(true);
     expect(md).toContain("On Pro, **Read** is the choice you can use.");
     expect(md).toContain("On Enterprise, all three are open to you.");
+
+    // Fix round 1 (review m6): the per-key rate limit, read from the constant the route enforces. Every plan but Pro gets
+    // the baseline, so Enterprise's figure is the baseline's. Source declarations, not a figure typed here.
+    const auth = readFileSync("src/server/api-v1/auth.ts", "utf8");
+    const rate = auth.match(/KEY_RATE\s*=\s*\{\s*free:\s*(\d+),\s*pro:\s*(\d+)/);
+    expect(rate, "KEY_RATE declaration found in auth.ts").not.toBeNull();
+    const [, free, pro] = rate!;
+    expect(md).toContain(`${pro} calls on Pro and ${free} on Enterprise`);
+    expect(Number(pro), "Pro's limit differs from the baseline, so the sentence can tell them apart").not.toBe(Number(free));
   });
 
   // `content/help/billing/plans.md` was the ONE help article with no test

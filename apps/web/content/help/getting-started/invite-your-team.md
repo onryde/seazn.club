@@ -16,7 +16,7 @@ Both ways ask for a role: **Viewer (read-only)** or **Admin (can manage)**.
 - **Admin** can add and change competitions, divisions, entrants and results.
 - **Viewer** is read-only. The invite page says "Viewers get read-only access to the board." On a match page a viewer sees the match and its history, with no scoring controls.
 
-The **Owner** is the person who made the organisation. The owner's row has no role choice. A person who only needs to score one match does not need an account: hand them a [device link](/help/scoring/device-links). Officials who score are set up under [officials](/help/scoring/scorer-role).
+The **Owner** role is the top one, and an organisation can have more than one owner. Only an owner changes roles, and an owner sees the role choice (**Owner**, **Admin** or **Viewer**) on every row except their own. An organisation must keep at least one owner. A person who only needs to score one match does not need an account: hand them a [device link](/help/scoring/device-links). Officials who score are set up under [officials](/help/scoring/scorer-role).
 
 ## Invite by email
 
@@ -36,7 +36,7 @@ Choose a role under **Invite by link** and press **+ Create link**. The link is 
 | Send invites and create links | Yes | Yes | No |
 | Change someone's role, or **Remove** them | Yes | No | No |
 
-The owner changes another member's role with the choice beside their name (**Owner**, **Admin** or **Viewer**), or presses **Remove**.
+An owner changes another member's role with the choice beside their name, or presses **Remove**. An admin sees no role choices and no **Remove** buttons. The page gives you no control on your own row, and the server refuses to demote or remove the last owner: "An organization must keep at least one owner".
 
 > **Example**
 > You email an invite to a Viewer and create a link for Admin. The Team page lists the Viewer invite as expiring in seven days and the Admin link as expiring tomorrow. A person joins through the link and appears under **Members**. As the owner, you now see a role choice and **Remove** beside their name. They, as an Admin, see the invite panels but no role choice.

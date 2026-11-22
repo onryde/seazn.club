@@ -41,6 +41,14 @@ Send the secret in an `Authorization: Bearer sc_…` header. The panel says the 
 > **Example**
 > You make a **Read** key called "Club website". It lists as "created 22 Nov 2026 · last used never". You call the list of competitions with it, and the call is answered. The list now says "last used 22 Nov 2026". A call that tries to create a competition is refused: "This key is limited to 'read' — this endpoint needs the 'manage' scope. Create a key with the right scope in org settings."
 
+## What a key cannot do
+
+- **Keep working without Pro.** If your plan drops to Community, the same key is refused: "API keys are a Pro feature."
+- **Call without limit.** Each key has its own limit per minute: 300 calls on Pro and 60 on Enterprise. The next call is refused with "Rate limit exceeded for this API key — retry after the window resets." Every answer carries `X-RateLimit-Limit` and `X-RateLimit-Remaining`.
+- **Reach every endpoint.** A key calls only the endpoints the API lists for its scope. It cannot make or revoke keys: that call is refused with "API keys cannot access this endpoint — use a session login."
+
+A **Manage** key can create and change clubs, teams, competitions, divisions, entrants, fixtures, schedules and registrations, so keep it like a password.
+
 ## Revoke a key
 
 Press **Revoke** beside the key. A box asks "Revoke this API key?" and says integrations using it stop working immediately and this cannot be undone. Press **Revoke key** to go ahead. The key moves under **Revoked keys**, and a call with its secret is refused with "Invalid API key". A revoked key cannot be turned back on: make a new one.

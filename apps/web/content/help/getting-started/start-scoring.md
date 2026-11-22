@@ -33,12 +33,12 @@ Once a match is finalized, the **Standings** tab counts it. Players who have not
 
 ## If you make a mistake
 
-The pad has **Take back**. In **Activity**, each entry that still counts has a **Void** button, and **⟲ Void last entry** removes the latest one. Voiding does not erase the entry. The match is worked out again as if it never happened.
+On a badminton pad, **Take back** undoes the latest tap. In **Activity**, each entry that still counts has a **Void** button, and **⟲ Void last entry** removes the latest one. Voiding does not erase the entry. The match is worked out again as if it never happened.
 
 > **Example**
 > On a badminton pad you award two rallies to Asha Rao and the score reads 2–0. **Take back** makes it 1–0. **⟲ Void last entry** then makes it 0–0. **Activity** keeps every entry, marks the two rallies **VOIDED** and adds two **Entry undone** rows.
 
-A finalized match shows no **Void** buttons and no pad. See [fixing a mistake](/help/scoring/corrections) for what you can still do.
+A finalized match shows no **Void** buttons and no pad. [Fixing a mistake](/help/scoring/corrections) covers what you can still do, and the other sports.
 
 ## Who can score
 
