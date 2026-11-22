@@ -476,7 +476,8 @@ export function BoardPanelView(p: BoardPanelViewProps) {
             <section data-testid="md-board-hold" data-reason={holdReason} className={`flex flex-col gap-1.5 ${CARD_BOX} border-[#f1c4c0] lg:order-1 lg:gap-1 lg:p-2.5`}>
               <span className="self-start rounded-full bg-[#fde8e6] px-2.5 py-[3px] text-xs font-semibold text-[#7f1d1d]">{f.t(HELD_TITLE_KEYS[holdReason])}</span>
               {/* 13px (the phone's size) from lg up to xl, 14px from xl: the narrowest lg (1024 x 768) is where the 168-character reason (Dutch longest) wraps most and Settle
-                  ended 10px below the fold at 14px (fix round 1, B6); the 1280 pins are untouched, the body is 14px there as before. */}
+                  ended 10px below the fold at 14px (fix round 1, B6). From xl the body is 14px again; the card's 10px padding and tighter gaps hold
+                  from lg up (2dc8bd9b58: CI's fonts wrap this reason ~24px taller at 1280, so the headroom is kept there too). */}
               <p className="m-0 text-[13px] leading-[1.45] lg:max-xl:leading-[1.35] xl:text-sm">{f.t(holdBody.key, holdBody.vars)}</p>
             </section>
           )}

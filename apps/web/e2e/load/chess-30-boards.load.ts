@@ -270,7 +270,7 @@ type Policy = "required" | "optional" | "off";
 /** A seeded board with what the run needs to judge it: its camera policy, its rank in its round (the batch is the rank divided by the batch
  *  size) and, once the round's stamp is read back, the instants of its window. */
 type LoadBoard = RoundBoard & { policy: Policy; rank: number; stageId: string; times: BoardTimes | null };
-const POLICY_MIX: { policy: Policy; boards: number }[] = (process.env.LOAD_POLICY_MIX ?? `required:${BOARDS}`).split(",").map((part) => {
+const POLICY_MIX: { policy: Policy; boards: number }[] = (process.env.LOAD_POLICY_MIX || `required:${BOARDS}`).split(",").map((part) => {
   const [policy, n] = part.trim().split(":");
   if (policy !== "required" && policy !== "optional" && policy !== "off") throw new Error(`LOAD_POLICY_MIX: unknown policy "${policy}"`);
   const boards = Number(n);
@@ -278,7 +278,9 @@ const POLICY_MIX: { policy: Policy; boards: number }[] = (process.env.LOAD_POLIC
   return { policy, boards };
 });
 if (POLICY_MIX.reduce((a, m) => a + m.boards, 0) !== BOARDS) throw new Error(`LOAD_POLICY_MIX must add up to LOAD_BOARDS (${BOARDS})`);
-if (new Set(POLICY_MIX.map((m) => m.policy)).size !== POLICY_MIX.length) throw new Error("LOAD_POLICY_MIX names a policy twice");
+// A policy may be named twice: "required:64,required:64" seeds TWO divisions of the same policy, each its own round opened at the same
+// moment - two big events starting in the same quarter-hour on the one shared call budget (costing paper §2, "not proven"). byPolicy
+// then sums both divisions of a policy; byDivision says what each saw.
 
 if (PLIES < 2 || PLIES % 2 !== 0) throw new Error(`LOAD_PLIES must be an even number of at least 2, got ${PLIES}`);
 
@@ -1108,8 +1110,24 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
     // D21-fix-3: what each policy's boards and players saw. A board is STRANDED when its game was not on its players'
     // screens within 30 s of the second seat (the room's own create failed and only the sweep, on its cadence, makes it).
     const STRANDED_AFTER_MS = 30_000;
+    // Two divisions of one policy (the concurrent-events run): what each division's boards and players saw on its own.
+    const byDivision = [...new Set(round.boards.map((b) => b.stageId))].map((stageId, d) => {
+      const boards = round.boards.map((b, i) => ({ b, i })).filter(({ b }) => b.stageId === stageId);
+      const mine = players.filter((p) => p.board.stageId === stageId);
+      const gamesSeen = boards.filter(({ i }) => times[`gameSeen.${i}`] !== undefined).length;
+      return {
+        division: d + 1,
+        policy: boards[0]!.b.policy,
+        boards: boards.length,
+        players: mine.length,
+        gamesSeen,
+        boardsWithoutGame: boards.length - gamesSeen,
+        arrivalToSeatedMs: spread(mine.map((p) => p.checkInMs).filter((x): x is number => x !== null)),
+      };
+    });
+    expect(byDivision.length, "anti-vacuity: one row per seeded division").toBe(POLICY_MIX.length);
     const byPolicy = Object.fromEntries(
-      POLICY_MIX.map(({ policy }) => {
+      [...new Set(POLICY_MIX.map((m) => m.policy))].map((policy) => {
         const mine = players.filter((p) => p.policy === policy);
         const boards = round.boards.map((b, i) => ({ b, i })).filter(({ b }) => b.policy === policy);
         const gameAfterSeats = boards.flatMap(({ b, i }) => {
@@ -1443,6 +1461,7 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
         perEndpointInsideSweepPasses: groupCalls(sweepFixtureCalls),
       },
       byPolicy,
+      byDivision,
       sweepMintRetries,
       budget: {
         metered: METERED,

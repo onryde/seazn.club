@@ -18,7 +18,9 @@
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { builtinModules } from "@seazn/engine/sports";
+import { roundRobinFixtureCount } from "@seazn/engine/scheduling";
 import { sql } from "@/lib/db";
+import { formatMaxEntrants, START_LINE_BUDGET } from "@/lib/format-max-entrants";
 import { getLimit, invalidateOrgEntitlements } from "@/lib/entitlements";
 import { PaymentRequiredError } from "@/lib/errors";
 import { log } from "@/server/logger";
@@ -39,6 +41,7 @@ import { publicRegistrationInfo } from "../registrations/settings";
 import { confirmRegistration, confirmRegistrationWaived, putRegistrationSettings, sweepRegistrations } from "../registrations";
 import { promoteFromWaitlist, rejectRegistration, withdrawRegistration } from "../registration-approval";
 import { submitRegistrationGroup } from "../registration-submit";
+import { createStages } from "../stages";
 import { SETTINGS_BASE, seedRegistration } from "./_registration-fixtures";
 import { seedOwner, seedPlayer, type SeedPlayer } from "./_external-play-seed";
 
@@ -462,6 +465,114 @@ describe.skipIf(!HAS_DB)("door: the organiser's Promote, Confirm and Waive check
     expect(await r.statusOf(w1)).toBe("waitlisted");
     expect(await r.statusOf(w2)).toBe("waitlisted");
     expect(held.length, "premise: the division was full").toBe(MAX);
+  });
+});
+
+// ─── Door 4b: a FORMAT max below the online cap (PR #1278 review m4) ─────────────────────────────────────────
+//
+// An online division whose first stage is a single round robin: its format's max (the largest field whose draw fits the Start line
+// budget, lib/format-max-entrants.ts) is below the online cap, so the doors above never reach it. The organiser's room check
+// (`assertOrganiserPromotionHasRoom`, registrations/waitlist.ts) asks, in order: the online room (on the places HELD), then the
+// format's max, then the plan's limit (both on the sign-ups holding a place). Two orderings are pinned here, each by a state the
+// product can reach: past BOTH the online cap and the format's max (M sign-ups, then the organiser adds the rest by hand - the add
+// door has no format gate, and the league was set on the empty division first, so the stage door never saw the field) the format
+// answers, the tighter real limit (owner "apply rec" 2026-11-22: its sentence says what to change); past BOTH the format's max and a LOWER plan limit (a plan lowered under the entries already in) the format answers.
+// The format's max is the product's own declaration, pinned to the engine's round-robin count - never read from the cap under test.
+// Single sport: online play exists for boardgame alone (`supportsOnlinePlay`, external-play/online-play.ts).
+
+const LEAGUE = { kind: "league", config: { legs: 1 } } as const;
+const FORMAT_TOO_MANY = "FORMAT_TOO_MANY_ENTRANTS";
+
+describe.skipIf(!HAS_DB)("door: an online division whose FORMAT max is below the online cap (review m4)", () => {
+  const M = formatMaxEntrants(LEAGUE)!;
+
+  /** The registration rig, online, with its first stage set to the league while the division is still empty. */
+  async function leagueRig(plan: PlanName, approval: "auto" | "manual") {
+    const r = await regRig(plan, "online", approval);
+    await createStages(r.auth, r.division.id, { seq: 1, name: "League", progression: null, ...LEAGUE } as never);
+    const [first] = await sql<{ kind: string; config: unknown }[]>`
+      select kind, config from stages where division_id = ${r.division.id} order by seq limit 1`;
+    expect(formatMaxEntrants(first!), "premise: the stored first stage is the league of max M").toBe(M);
+    return r;
+  }
+  const placesOf = async (r: Awaited<ReturnType<typeof regRig>>) =>
+    (await publicRegistrationInfo(r.orgSlug, r.competition.slug)).divisions.find((d) => d.division_id === r.division.id)!;
+
+  it("premise: the league's max is the engine's round-robin count, below the online cap and Pro's limit, above the size pack's 96", () => {
+    expect(roundRobinFixtureCount(M, 1), "M's draw fits the budget").toBeLessThanOrEqual(START_LINE_BUDGET);
+    expect(roundRobinFixtureCount(M + 1, 1), "M + 1's does not").toBeGreaterThan(START_LINE_BUDGET);
+    expect(M, "below the online cap, or the online room would answer first and this block would test nothing new").toBeLessThan(MAX);
+    expect(M, "below Pro's limit").toBeLessThan(PLANS.pro.cap!);
+    expect(PLANS["size-pack-96"].cap!, "the size pack's limit is below M").toBeLessThan(M);
+  });
+
+  it("Promote on Pro: with M - 1 held the M-th is promoted; at M held the next is refused FORMAT_TOO_MANY_ENTRANTS (not ONLINE_DIVISION_FULL, not PROMOTE_PLAN_LIMIT), confirmed over capacity or not, and nothing is written", async () => {
+    const r = await leagueRig("pro", "manual");
+    await r.holders(M - 1);
+    const a = await r.waiting();
+    expect((await promoteFromWaitlist(r.auth, r.division.id, { registrationId: a }))!.status, `the ${M}th`).toBe("pending");
+    expect(await heldOf(r.division.id), "premise: M held, inside the online cap").toBe(M);
+    const b = await r.waiting();
+    let refusals = 0;
+    for (const confirmOverCapacity of [false, true]) {
+      await expect(promoteFromWaitlist(r.auth, r.division.id, { registrationId: b, confirmOverCapacity })).rejects.toMatchObject({
+        status: 422,
+        code: FORMAT_TOO_MANY,
+        extra: { max: M, entrants: M },
+      });
+      refusals += 1;
+    }
+    expect(refusals, "anti-vacuity: both confirmations were asked").toBe(2);
+    expect(await r.statusOf(b), "still waitlisted").toBe("waitlisted");
+    expect(await heldOf(r.division.id), "nothing written").toBe(M);
+  });
+
+  it("past BOTH the online cap and the format's max (M sign-ups + 128 - M added by hand), the format's max answers first: FORMAT_TOO_MANY_ENTRANTS, not ONLINE_DIVISION_FULL", async () => {
+    const r = await leagueRig("pro", "manual");
+    await r.holders(M);
+    await fillEntrants(r.division.id, MAX - M);
+    expect(await heldOf(r.division.id), "premise: 128 held").toBe(MAX);
+    const w = await r.waiting();
+    await expect(promoteFromWaitlist(r.auth, r.division.id, { registrationId: w, confirmOverCapacity: true })).rejects.toMatchObject({
+      status: 422,
+      code: FORMAT_TOO_MANY,
+      extra: { max: M, entrants: M },
+    });
+    expect(await r.statusOf(w)).toBe("waitlisted");
+  });
+
+  it("past BOTH the format's max and a LOWER plan limit (96, lowered under M entries), the format answers; below M the same plan answers with its own refusal", async () => {
+    const at = await leagueRig("size-pack-96", "manual");
+    await at.holders(M);
+    const w = await at.waiting();
+    await expect(promoteFromWaitlist(at.auth, at.division.id, { registrationId: w })).rejects.toMatchObject({
+      status: 422,
+      code: FORMAT_TOO_MANY,
+      extra: { max: M, entrants: M },
+    });
+    expect(await at.statusOf(w)).toBe("waitlisted");
+
+    // The positive pair: the plan's guard is live in this rig - where the format does not bind, the plan's refusal is the answer.
+    const below = await leagueRig("size-pack-96", "manual");
+    await below.holders(PLANS["size-pack-96"].cap!);
+    const v = await below.waiting();
+    await expect(promoteFromWaitlist(below.auth, below.division.id, { registrationId: v })).rejects.toMatchObject({
+      status: 422,
+      code: PROMOTE_PLAN_LIMIT_CODE,
+    });
+    expect(await below.statusOf(v)).toBe("waitlisted");
+  });
+
+  it("the public panel and the sign-up agree: M - 1 held leaves 1 place; the M-th sign-up is confirmed and the panel reads 0 (not 128 - M), full; the next sign-up waits", async () => {
+    const r = await leagueRig("pro", "auto");
+    await r.holders(M - 1);
+    expect((await placesOf(r)).remaining, "M - 1 held").toBe(1);
+    expect(await signUp(r, "online"), `sign-up number ${M}`).toBe("confirmed");
+    const full = await placesOf(r);
+    expect(full.remaining, "M held: the format's max binds, not the online cap").toBe(0);
+    expect(full.closed_reason, "still open - joins the waitlist").toBe("full");
+    expect(await signUp(r, "online"), `sign-up number ${M + 1}`).toBe("waitlisted");
+    expect(await heldOf(r.division.id), "never past the format's max").toBe(M);
   });
 });
 

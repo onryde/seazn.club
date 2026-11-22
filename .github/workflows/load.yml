@@ -29,6 +29,11 @@ on:
         type: choice
         options: [B, B-honest, B-slow-5, B-slow-10]
         default: B
+      policy_mix:
+        description: "LOAD_POLICY_MIX: boards per division, e.g. required:64,required:64 = two 128-player divisions opened together (empty = one division)"
+        required: false
+        type: string
+        default: ""
 
 # Own group: never cancels, and is never cancelled by, e2e.yml (group e2e-*).
 concurrency:
@@ -145,6 +150,8 @@ jobs:
           if [ -z "$up" ]; then echo "server did not become healthy"; cat "$LOAD_OUT/server.log"; exit 1; fi
       - name: Run the load harness
         working-directory: apps/web
+        env:
+          POLICY_MIX: ${{ inputs.policy_mix }}
         run: |
           set +e
           case "${{ inputs.scenario }}" in
@@ -156,7 +163,7 @@ jobs:
           esac
           PLAYWRIGHT_BASE=http://localhost:3391 \
           LOAD_SWEEP_EVERY_S=300 LOAD_WEBHOOKS=1 LOAD_PRESENCE_PROOF=0 \
-          LOAD_BOARDS="${{ inputs.boards }}" LOAD_SCENARIO="${{ inputs.scenario }}" \
+          LOAD_BOARDS="${{ inputs.boards }}" LOAD_SCENARIO="${{ inputs.scenario }}" LOAD_POLICY_MIX="$POLICY_MIX" \
           LOAD_ARRIVAL_SPREAD_S=60 LOAD_OPENED_AGO_S=250 \
           LOAD_CAMERA_LAG_MIN_S=$LAG_MIN LOAD_CAMERA_LAG_MAX_S=$LAG_MAX \
           LOAD_REPORT="$LOAD_OUT/report.json" LOAD_SERVER_LOG="$LOAD_OUT/server.log" \
@@ -279,6 +286,8 @@ jobs:
           if [ -z "$up" ]; then echo "server did not become healthy"; cat "$LOAD_OUT/server.log"; exit 1; fi
       - name: Run the load harness
         working-directory: apps/web
+        env:
+          POLICY_MIX: ${{ inputs.policy_mix }}
         run: |
           set +e
           case "${{ inputs.scenario }}" in
@@ -290,7 +299,7 @@ jobs:
           esac
           PLAYWRIGHT_BASE=http://localhost:3391 \
           LOAD_SWEEP_EVERY_S=300 LOAD_WEBHOOKS=1 LOAD_PRESENCE_PROOF=1 \
-          LOAD_BOARDS="${{ inputs.boards }}" LOAD_SCENARIO="${{ inputs.scenario }}" \
+          LOAD_BOARDS="${{ inputs.boards }}" LOAD_SCENARIO="${{ inputs.scenario }}" LOAD_POLICY_MIX="$POLICY_MIX" \
           LOAD_ARRIVAL_SPREAD_S=60 LOAD_OPENED_AGO_S=250 \
           LOAD_CAMERA_LAG_MIN_S=$LAG_MIN LOAD_CAMERA_LAG_MAX_S=$LAG_MAX \
           LOAD_REPORT="$LOAD_OUT/report.json" LOAD_SERVER_LOG="$LOAD_OUT/server.log" \
