@@ -206,7 +206,7 @@ describe("the real /help/[...slug] page", () => {
     const params = page.generateStaticParams().map((p) => p.slug.join("/"));
     expect(params).not.toContain(TOKEN_ARTICLE.slug);
     expect(params).toContain(PLAIN_ARTICLE.slug);
-    expect(params, "anti-vacuity: the real articles are still prerendered").toContain("getting-started/create-your-organisation");
+    expect(params, "anti-vacuity: the real articles are still prerendered").toContain("getting-started/start-scoring");
     expect(params.length).toBeGreaterThan(10);
   });
 
@@ -226,7 +226,7 @@ describe("the real /help/[...slug] page", () => {
 
   it("rendering a token-free page never touches the matrix loader (real article and fixture)", async () => {
     const page = await import("@/app/help/[...slug]/page");
-    for (const slug of [PLAIN_ARTICLE.slug, "getting-started/create-your-organisation"]) {
+    for (const slug of [PLAIN_ARTICLE.slug, "getting-started/start-scoring"]) {
       const el = (await page.default({ params: Promise.resolve({ slug: slug.split("/") }) })) as ReactElement;
       expect(renderToStaticMarkup(el).length).toBeGreaterThan(100);
     }

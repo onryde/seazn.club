@@ -265,9 +265,7 @@ const FORMATS_PAGES = "formats-pages";
 
 type Known = Record<string, Record<string, LeakRule[]>>;
 /** section -> page -> the rules that page is excused for. Sections delete their own entries. */
-const KNOWN: Known = {
-  "getting-started": { "getting-started/generate-fixtures": ["developer-word"] },
-};
+const KNOWN: Known = {};
 
 /** Strip tags from rendered markup; decode the few entities React emits. */
 function htmlToText(html: string): string {

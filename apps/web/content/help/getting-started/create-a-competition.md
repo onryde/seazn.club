@@ -1,46 +1,49 @@
 ---
 title: Create a competition
-description: A competition is the event — it holds divisions, dates, branding and a public page.
+description: A competition is the event. Name it, set its dates and who can see it, then add your first division.
 order: 2
+related: getting-started/add-a-division, sharing/visibility, divisions/lifecycle, billing/event-pass
 ---
 
-A **competition** is the event itself: "Summer League 2026", "Spring Smash". It holds one or more divisions, its dates, a description and its own public dashboard.
+A **competition** is the event itself: "Summer League 2026" or "Spring Smash". It holds one or more divisions, its dates, a description and its own public page. This page takes you from nothing to a competition that is ready for its first division.
 
-## Create one
+## Open the form
 
-1. From your dashboard press **New competition**.
-2. Give it a name — the web address is derived from it automatically.
-3. Set the dates. An **end date is required**; a start date is optional. If you give both, the end date cannot fall before the start.
-4. Add a description. It supports headings, images, links and a call-to-action button, and shows on your public page exactly as the Preview tab shows it.
+On a new organisation, press **Create my first competition →** on the welcome screen. Anywhere else, open your organisation's home page and press **+ New Competition**. (An empty home page also offers **Create your first competition**.)
 
-The end date is the one field you cannot leave blank, because it is what tells us when the event is over: it drives the wrap-up prompt below, and the [Event Pass](/help/billing/event-pass) window. You can change it whenever the schedule moves — in the competition's settings — but you cannot clear it back to nothing.
+The **New competition** page opens on a gallery of ready-made formats such as **Grand Slam — 128 draw** and **Swiss — 11 rounds**. This page follows **Start from blank**.
 
-## Visibility
+## Fill it in
 
-A new competition starts as a **draft**, with **Public** visibility unless you pick another when you create it. While it is a draft, anyone you give the link to can open its page and register, but it is not listed on your organisation page or in search results. Set its **Status** to **Published** in the competition's settings when you are ready, and it appears on your organisation page and becomes findable by search engines. Starting a division does not publish it for you: while the competition is still a public draft, the Start tournament confirmation says so and links to its settings.
+![The New competition form filled in: the name Spring Open, both dates, Who can see this with Public chosen, the Showcase on seazn.club switch off, and the Create competition button ready.](/help/getting-started/new-competition-form.webp "The New competition form on Start from blank, filled in")
 
-Visibility is separate from status, and you can change it at any time in the same settings:
+1. Type a **Name**. The web address comes from it.
+2. Choose **Starts on** if you know it. You can leave it empty.
+3. Choose **Ends on**. It is required. It fills itself in from the start date, so change it if the event runs longer. An end date before the start date is refused: "end date cannot be before the start date."
+4. Pick **Who can see this**: **Private**, **Link only** or **Public**. **Public** is already chosen. [Who can see what](/help/sharing/visibility) explains each one.
+5. Switch on **Showcase on seazn.club** only if you want the event featured on the seazn.club home and sport pages.
+6. Add a **Description** if you like. **Write** and **Preview** show what visitors will read.
+7. Press **Create competition**.
 
-- **Public**: listed on your organisation page and findable in search once published.
-- **Link only**: anyone with the link can view and register, but it is never listed, even after publishing.
-- **Private**: only your team sees it.
+The button stays off until the form has what it needs. Under it the form says **Add a name and an end date**, or **Add an end date**.
 
-To also appear on the seazn.club Discover page, a public competition needs **Showcase on seazn.club** switched on. It is shown there once it is published and has a published schedule or a result.
+## What you get
 
-If your plan's limit on public pages is already reached, a new competition is created **Private** instead, and you are told so. Publishing takes one of those public pages too: when they are all in use, publishing a public competition is refused until you free one or upgrade.
+A panel reads **Competition created** and shows the name, the visibility and the dates. Below it, **Add your first division** explains that a division holds one format, its entrants and its fixtures, and that singles and doubles would usually be two divisions. Press **Add division** to go on to [adding a division](/help/getting-started/add-a-division), or **Later** to stop here.
 
-A finished competition stays listed when you mark it completed or archived: it shows as **Finished**, and nothing is lost. Setting a published competition back to draft takes it off your organisation page again.
+The new competition is a **draft**. Its page says **Setting up** and shows its divisions and registrations. A draft that is **Public** behaves like **Link only**: anyone with the address can open it, but your organisation page does not list it.
 
-## Common questions
+## Publish it
 
-**Free plan limits?** Community orgs can run 10 active competitions at a time. Finished ones can be marked completed or archived to free a slot — and a competition covered by an [Event Pass](/help/billing/event-pass) doesn't use a slot at all. Retiring a competition is what closes it: a completed or archived one takes no new divisions, and is closed to a new Event Pass.
+Open the competition, then **Settings**. In **Status**, choose **published** and press **Save changes**. The competition now appears on your organisation's public page. The other statuses are **live**, **completed** and **archived**.
 
-**Does a finished competition retire itself?** No — nothing changes a competition's status on your behalf. Once its end date is more than a week behind, its overview asks an organiser which happened: the event finished, or the date moved. Both answers take one click — **Mark it completed**, or change the end date in the competition's settings. We ask rather than decide, because a status you never chose is one you would have to undo, while correcting an optimistic end date simply puts things back.
+## How many you can have
 
-**Can I add a division to a finished competition?** No. Once a competition is **completed** or **archived** it accepts no new divisions: the wizard takes the details and then refuses with *"This competition is finished, so no new divisions can be added to it."* Restoring an archived division back into it is refused for the same reason. Nothing else about the competition changes — it stays fully readable, and everything already inside it is untouched.
+Your plan limits how many competitions can be active at once. A draft counts. Community allows {{plan:competitions.max_active:community}}. Pro and Enterprise set no limit.
 
-Two ways on. If the event is in fact still running, set its **Status** back to **Live** (or **Published**) in the competition's settings and add the division — it counts against your active-competition limit again while it's active. If the event really is over, next season is a new competition ([and it needs its own Event Pass](/help/billing/event-pass)).
+At the limit, the form says "Your plan's active-competition limit is reached." and links to plans. Setting a competition to **completed** frees its place for a new one.
 
-**Can I still buy an Event Pass for it?** Only while it is running, or during the week of grace after the date it was due to end. A competition that is completed or archived, or more than a week past that date, is **closed to a new [Event Pass](/help/billing/event-pass)** — the buy link disappears instead of leading to a checkout that would refuse the sale. Correcting the date puts the offer back on the next page load.
+> **Example**
+> On Community you create three competitions, all drafts. A fourth is refused with that message. You set the first to **completed**, and the fourth now goes through. Setting the first back to **live** is then refused, because the limit is full again.
 
-Next: [Add a division](/help/getting-started/add-a-division).
+An [Event Pass](/help/billing/event-pass) can lift the limits of one competition. The limit on public pages is separate. See [who can see what](/help/sharing/visibility).

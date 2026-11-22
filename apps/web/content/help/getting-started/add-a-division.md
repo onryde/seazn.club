@@ -1,29 +1,59 @@
 ---
 title: Add a division
-description: Divisions are where the games happen — one sport, one format, one set of entrants.
+description: A division is one draw inside your competition, with its own sport, entrants and format. Four steps build it.
 order: 3
+related: getting-started/add-entrants, entrants/kinds, divisions/settings, divisions/archive
 ---
 
-A **division** is a single draw inside your competition: "Men's A", "U14 Mixed", "Office Ping-Pong". Each division has one sport, one entrant kind (teams, individuals or pairs) and one format.
+A **division** is a single draw inside your competition: "Men's A", "U14 Mixed" or "Office Ping-Pong". Each one has one sport, one kind of entrant and one format. Nothing is locked until scoring starts, so you can set one up and change your mind.
 
-**Needs you** lists what is blocking the competition — a stage waiting on its draw, fixtures without a time, registrations to approve, and, for any division whose timetable has been published (even one you haven't pressed **Start** on yet), a stage with no fixtures yet (one that is seeded when the stage before it is completed, or one you never generated), a match in play with no scorer, or a result overdue — with one button each. The pill beside the title is derived from your divisions: **N in play** while matches are being scored, **Today** when something is on today, the **next kick-off date** when one is scheduled, **Scheduled** when the competition is under way but nothing is dated yet, **Finished** when every division is complete, and **Setting up** only while nothing has been played at all. On the day itself, Needs you moves to [Match Day](/help/scheduling/match-day), which the competition page links to. A division row shows its sport, one status line, and a red pill when something on it needs you.
+## Open the builder
 
-## The division wizard
+On the **Competition created** panel, press **Add division**. Later, open the competition and press **+ Add division**. The **New division** page names your competition and shows four steps: **Who plays**, **Format**, **Division rules** and **Review**. Press **Next** to move on and **Back** to return.
 
-1. Open your competition and press **Add division**.
-2. **Who plays** — name the division, pick the **sport** (the sports your organisation has run come first) and who plays: **teams**, **individuals** or **pairs**. The division takes the kind you pick; you can widen it later on its Entrants tab.
-3. **Format** — league, knockout, groups + knockout, and more. Not sure? Press *How this works* next to any format for a diagram and a live example, or read the [format guides](/help/formats).
-4. **Division rules** — the variant and the match rules, which decide how matches are scored.
-5. **Review** and create. Nothing is locked until you start scoring, so experiment freely.
+## Who plays
 
-## Common questions
+![The Who plays step with a Division name field, five sport tiles, the Entrants are choice and the Category buttons.](/help/getting-started/division-builder-who-plays.webp "The Who plays step on a new division")
 
-**Can I change the format later?** Yes, in two steps. The structure (league, knockout, groups + knockout…) can change until scoring starts, from **Format** on the Fixtures tab's **Division rules** card; if fixtures already exist it lists what it will clear and asks before it clears them. The match rules (best of, points to win, standings points) stay editable until a stage that plays by them has started; after that each locked field says which stage holds it, so results stay fair ([division settings](/help/divisions/settings)).
+1. Type the **Division name**.
+2. Choose the **Sport**. The first five tiles are shown, and **Show 6 more sports** opens the rest. A new organisation starts with Football, Cricket, Badminton, Tennis and Table tennis, with Football chosen. After that, the sport you used last moves to the front and is already chosen. "The sport can't change after you create the division."
+3. Choose who plays under **Entrants are**. The choices depend on the sport. See [teams, individuals and pairs](/help/entrants/kinds). You can change them later on the **Entrants** tab.
+4. Pick a **Category**: **Open**, **Men's**, **Women's** or **Mixed**. The age line starts as **Open to all ages**.
 
-**How many entrants can I add?** Per division: **64** on Community, **256** on Pro, unlimited on Enterprise. An [Event Pass](/help/billing/event-pass) lifts one competition on its own, to **128** entrants per division.
+## Format
 
-**How many divisions can a competition have?** **4** on Community, **10** under an [Event Pass](/help/billing/event-pass), and **20** on Pro. Archiving a division gives its slot back only if that division never recorded a result — [archive and delete](/help/divisions/archive) has the detail. A division you set up wrongly and never played costs you nothing to throw away.
+The step starts with a plan for your numbers. It asks for **Entrants**, **Courts** and **Hours**, and uses them for the estimates. The plan itself is not saved.
 
-**The wizard refused my division — why?** It names which of two things happened. *"This competition is finished, so no new divisions can be added to it"* means the competition's status is **completed** or **archived**; set it back to Live if the event is still running, or start next season's competition ([finishing a competition](/help/getting-started/create-a-competition)). An upgrade panel instead means the **division limit** is full — and when archived divisions are what's filling it, the panel says so underneath ([archive and delete](/help/divisions/archive)).
+Below it, **Suggested formats** lists formats with the matches and the time each one needs for your numbers. For 16 entrants in badminton it starts with **Knockout**, then **Qualifying + Main draw**, **Knockout + Plate**, **Double elimination** and **Swiss**, and a button shows 11 more. **How this works →** and **Show example fixtures** sit below the list. The [format guides](/help/formats) explain each format. A knockout also asks how **Third place** is decided: **Shared** or **Play-off match**.
 
-Next: [Add entrants](/help/getting-started/add-entrants).
+Fixtures are drawn later, from the division itself, so nothing is generated yet.
+
+## Division rules
+
+The variant and the match rules decide how a match is scored. They start from the sport's defaults. A badminton division, for example, offers **BWF 3×21**, **BWF 3×15** and **Short (11 points)**. A **Schedule** section is optional: **Set now** takes a start, an end and a place, or you can leave it for the schedule board.
+
+## Review
+
+**What this makes** shows an estimate, such as 15 matches in 4 rounds for 16 entrants on 2 courts. You add the real entrants after you create the division. Each choice has an **Edit** button and a note about where to change it later. Press **Create division**.
+
+You land on the division's **Fixtures** tab. The stage is **Pending** with a **Generate fixtures** button. A knockout adds "Needs at least 4 entrants". Next: [add entrants](/help/getting-started/add-entrants).
+
+## Limits
+
+A division needs room on your plan:
+
+| What | Community | Event Pass | Pro |
+|---|---|---|---|
+| Divisions in one competition | {{plan:divisions.per_competition.max:community}} | {{plan:divisions.per_competition.max:event_pass}} | {{plan:divisions.per_competition.max:pro}} |
+| Entrants in one division | {{plan:entrants.per_division.max:community}} | {{plan:entrants.per_division.max:event_pass}} | {{plan:entrants.per_division.max:pro}} |
+
+Enterprise sets no limit on either. An [Event Pass](/help/billing/event-pass) lifts one competition.
+
+When the competition is full, the builder lets you reach **Review**. A panel there says "Adding another division needs a bigger plan." and **Create division** does not create it. On a competition that is **completed** or **archived**, a division is refused with "This competition is finished, so no new divisions can be added to it." Archiving a division gives its place back only if nothing was scored in it: see [archive and delete](/help/divisions/archive).
+
+> **Example**
+> On Community you add four divisions to **Spring Open**, and each one is created. You build a fifth and press **Create division**. The **Review** step shows "Adding another division needs a bigger plan." and no fifth division appears.
+
+## Change it later
+
+The format can change until scoring starts, from **Format** on the **Division rules** card of the **Fixtures** tab. The Review step says the same: "Later: Fixtures › Division rules › Format, until scoring starts." After the first score, the tab says "Format is locked once scoring starts." See [a division's life](/help/divisions/lifecycle) for what locks and when, and [division settings](/help/divisions/settings) for the **Settings** tab.

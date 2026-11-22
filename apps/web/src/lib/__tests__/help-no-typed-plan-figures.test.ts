@@ -79,10 +79,7 @@ describe("typedPlanFigureLines: hand-written cases", () => {
 });
 
 /** page -> why it still types a plan figure. Read every hit line before adding or removing one. */
-const FEE = "fee percent per plan: a billing/registration content task converts it to {{plan:registration.fee_percent:<plan>}}";
-const KNOWN: Record<string, string> = {
-  "getting-started/create-your-organisation": FEE,
-};
+const KNOWN: Record<string, string> = {};
 
 describe("help articles type no plan figures", () => {
   it("sweeps every Markdown article; only KNOWN pages type a plan figure, and each still does", () => {

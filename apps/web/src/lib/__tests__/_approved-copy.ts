@@ -584,36 +584,51 @@ export const APPROVED_GROUPS_INVENTORY: string[] = [
  * plan org caps, and the vocabulary that was supposedly defending it scored
  * 0/24.
  *
- * WHAT IT ASSERTS: the fee ladder (8/5/2/1, `plan_entitlements`
- * `registration.fee_percent`), the plan org caps (5 / 10, `orgs.max_owned`,
- * V314), the extra-organisation rate (`riderClaimShape`), and that Community
- * can already take card entry fees.
- *
- * Surface 11 ("Who can see my organisation?") re-approved 2026-09-27 for the
- * owner decision that a DRAFT competition is unlisted until published: the
- * org page lists Public competitions past draft — published, live, completed
- * or archived (`listOrgHomeCompetitions`: `status <> 'draft'`) — and a new
- * competition is a public draft reachable by link and open to register.
- * Re-approved again the same day (review item 8): "Public and published" read
- * as if a live or finished competition dropped off the page, which it does not.
- * Re-approved 2026-11-04 (LIVE1): the public page moved from `/shared/your-org`
- * to `/live/your-org` (`routes.publicHub(org)`; the org home under the
- * moved `(public)/live` tree still lists through `listOrgHomeCompetitions`
- * in `server/public-site/data.ts`); only the path changed, the claim did not.
+ * WHAT IT ASSERTS (as of Task 15, 2026-11-22): the org caps (`orgs.max_owned`,
+ * as tokens) and the extra-organisation rate (`riderClaimShape`). Until then it
+ * also carried the fee ladder, the "Who can see my organisation?" surface
+ * (re-approved 2026-09-27 and 2026-11-04 for the draft-is-unlisted ruling and
+ * the `/shared` to `/live` move) and the Community card-fee line; those claims
+ * now live in sharing/visibility, billing/plans and registration/card-payments.
+ * Re-approved 2026-11-22 (help rewrite, Task 15): the page was rewritten as a
+ * first-run walkthrough, every sentence driven on a fresh Community
+ * organisation (the Task 15 claim sheet). It still states the half-rate
+ * claim (`More than one organisation`, via `riderClaimShape`), so it stays on
+ * the axis; the fee ladder and the "Community can take card entry fees" lines
+ * are gone from it (they live in billing/plans and registration/card-payments),
+ * and the org caps are `{{plan:orgs.max_owned:<plan>}}` tokens now.
  */
 export const APPROVED_CREATE_ORG_INVENTORY: string[] = [
   "5a9aee8c75f74828",
-  "c7abb53b293957ff",
-  "7780e9adec7a42e1",
-  "97afdcb5cc7373e9",
-  "332fd65e1bd72032",
-  "b29441d979e91695",
-  "b389c86ad2de4a26",
-  "75ff1142c46e7346",
-  "09c784bdca897d29",
-  "98cabe982ddf445c",
-  "3b7f53eba6ec307f",
-  "ec33da78b550dcac"
+  "d3dcc5ae5e5144b2",
+  "01c8b9f70653ba9b",
+  "47edae8c3a0940d8",
+  "bf7f406496864320",
+  "107160c4b80476b0",
+  "e45d3bb712ecbeab",
+  "17f097713e42ad85",
+  "4453b9202a720e5c",
+  "12f83290bbb28b7c",
+  "994bc682c79954a6",
+  "37024e593784619d",
+  "8aba1d2e765244ba",
+  "2674f36a611bc43e",
+  "d898de463fbff782",
+  "52cbbb4e48a82d5a",
+  "4a2babaa72369f2e",
+  "57618eb0b22ecf4c",
+  "4ebd7de2485ce0ae",
+  "03954b968d97d2e2",
+  "02a009f67c401f8a",
+  "3790279f7d19b1d3",
+  "4ed06dd3e7784c0f",
+  "f553103e10e1938a",
+  "c330f603bc8296d7",
+  "6426f03ec202aa42",
+  "f9ceb5454551da29",
+  "7ad2690b11e9dbdf",
+  "9b651647cd419ff3",
+  "ad27a1c9b06dce3d"
 ];
 
 /** Every user-visible surface of `content/help/billing/buy-an-event-pass.md`,

@@ -52,7 +52,7 @@ const COPY_THAT_SAYS_HALF = [
   "config/stripe-plans.json: both plans' product.description",
   "content/help/billing/add-ons.md: 'Extra organisations'",
   "content/help/billing/groups.md: 'What it costs'",
-  "content/help/getting-started/create-your-organisation.md: 'Can I run more than one organisation?'",
+  "content/help/getting-started/create-your-organisation.md: 'More than one organisation'",
   "e2e/billing-groups.spec.ts + e2e/billing-groups-journey.spec.ts: the attach-dialog assertion",
 ].join("\n  - ");
 
