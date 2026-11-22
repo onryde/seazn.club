@@ -17,7 +17,7 @@ Open the competition, then **Settings**. **Who can see this** says who can open 
 
 A new competition starts as **Public** but is a draft, so it opens for anyone with the link and your organisation page does not list it yet. Set **Status** to **published** and press **Save changes** to list it.
 
-A plan limits how many published competitions can be **Public** or **Link only** at once. Community allows {{plan:dashboard.public.max:community}}, and a draft does not count. With no slot free, a new competition is created **Private** and the form says "This one will be created private". [Who can see what](/help/sharing/visibility) has the detail.
+A plan limits how many competitions can be **Public** or **Link only** once they are published or live. Community allows {{plan:dashboard.public.max:community}}, and a draft does not count. With no slot free, a new competition is created **Private** and the form says "This one will be created private". Publishing a **Public** or **Link only** competition when no slot is free is refused: **Save changes** shows "Your plan's public dashboards are all in use — archive a finished one, or upgrade." [Who can see what](/help/sharing/visibility) has the detail.
 
 ## Get the link
 

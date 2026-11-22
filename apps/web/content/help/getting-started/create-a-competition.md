@@ -43,7 +43,7 @@ Your plan limits how many competitions can be active at once. A draft counts. Co
 
 At the limit, the form says "Your plan's active-competition limit is reached." and links to plans. Setting a competition to **completed** frees its place for a new one.
 
-A second limit covers **Public** and **Link only** competitions once they are published. Community allows {{plan:dashboard.public.max:community}} at once, and a draft does not count. With no slot free, the form says "This one will be created private". [Who can see what](/help/sharing/visibility) has the detail.
+A second limit covers **Public** and **Link only** competitions once they are published or live. Community allows {{plan:dashboard.public.max:community}} at once, and a draft does not count. With no slot free, the form says "This one will be created private". Publishing one when no slot is free is refused: **Save changes** shows "Your plan's public dashboards are all in use — archive a finished one, or upgrade." [Who can see what](/help/sharing/visibility) has the detail.
 
 > **Example**
 > On Community you create three competitions, all drafts. A fourth is refused with that message. You set the first to **completed**, and the fourth now goes through. Setting the first back to **live** is then refused, because the limit is full again.

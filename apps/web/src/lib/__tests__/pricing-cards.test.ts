@@ -1911,6 +1911,48 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
     expect(md).toContain(`Community allows ${publicCap} at once, and a draft does not count.`);
     const share = await resolvedHelp("content/help/getting-started/share-your-dashboard.md");
     expect(share).toContain(`Community allows ${publicCap}, and a draft does not count.`);
+
+    // Review N5(a): the RESOLVED figure alone cannot tell two cells apart when they are equal (a token swapped to
+    // `competitions.max_active` resolves to the same number on a matrix where both caps match), so the raw token's
+    // KEY text is asserted on both pages as well.
+    for (const page of ["create-a-competition", "share-your-dashboard"]) {
+      const raw = readFileSync(`content/help/getting-started/${page}.md`, "utf8");
+      expect(raw, `${page} cites the public-dashboard cap's own key`).toContain("{{plan:dashboard.public.max:community}}");
+      expect(raw, `${page} states the public cap with the public cap's token, not the active-competition one`).not.toMatch(
+        /Community allows \{\{plan:competitions\.max_active:community\}\}, and a draft/,
+      );
+    }
+
+    // Review N5(b)/N6: "a draft does not count" and "published or live" are read from the meter's own declaration, not
+    // typed here. A status added to or dropped from the set moves this test.
+    const freeze = readFileSync("src/server/usecases/entitlement-freeze.ts", "utf8");
+    const decl = freeze.match(/PUBLIC_DASHBOARD_STATUSES\s*=\s*\[([^\]]*)\]\s*as const/);
+    expect(decl, "PUBLIC_DASHBOARD_STATUSES declaration found").not.toBeNull();
+    const statuses = [...decl![1]!.matchAll(/"([^"]+)"/g)].map((m) => m[1]!);
+    expect(statuses.length, "the status set is not empty (an empty set would pass every negative below)").toBeGreaterThan(0);
+    expect(statuses, "a draft holds no public slot").not.toContain("draft");
+    const named = statuses.join(" or ");
+    expect(md).toContain(`once they are ${named}.`);
+    expect(share).toContain(`once they are ${named}.`);
+
+    // Review N6: publishing into a full cap is refused, and the page quotes the sentence the Settings gate renders. The
+    // string is the product's own (`featureReason`), the guard is the one `patchCompetition` runs on a publish, and the
+    // two display hops are source-pinned because apps/web vitest has no DOM to render the gate in.
+    const { featureReason } = await import("@/lib/feature-copy");
+    const reason = featureReason("dashboard.public.max");
+    expect(reason, "the key has its own sentence, not the generic fallback").not.toBe("This feature needs a plan upgrade.");
+    expect(md).toContain(`"${reason}"`);
+    expect(share).toContain(`"${reason}"`);
+    expect(freeze).toContain("export function countsTowardPublicQuota");
+    expect(readFileSync("src/server/usecases/competitions.ts", "utf8")).toContain(
+      "if (goingPublic && !alreadyMetered) await assertPublicQuota(auth, id);",
+    );
+    expect(readFileSync("src/components/upgrade-gate.tsx", "utf8")).toContain(
+      "const reason = reasonOverride ?? featureReason(feature);",
+    );
+    expect(readFileSync("src/components/v2/competition-settings.tsx", "utf8")).toContain(
+      "<UpgradeGate feature={paywallFeature} viewerPlan={viewerPlan} />",
+    );
   });
 
   // Task 15 (help rewrite). `api/keys.md` splits by plan: a key needs Pro, and a key that writes needs Enterprise. The
@@ -1940,6 +1982,10 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
     const [, free, pro] = rate!;
     expect(md).toContain(`${pro} calls on Pro and ${free} on Enterprise`);
     expect(Number(pro), "Pro's limit differs from the baseline, so the sentence can tell them apart").not.toBe(Number(free));
+    // Review N2: the page says Enterprise gets the BASELINE. That is a claim about the plan mapping, which the two constants
+    // above do not carry: only the ternary decides who gets which. Pinned as text so a change that hands Enterprise (or any
+    // other plan) the Pro figure reds this test instead of leaving the page wrong.
+    expect(auth, "only Pro gets the higher per-key limit").toContain('sub?.plan_key === "pro" ? KEY_RATE.pro : KEY_RATE.free');
   });
 
   // `content/help/billing/plans.md` was the ONE help article with no test

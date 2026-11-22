@@ -29,7 +29,7 @@ Add someone after you generated, and the stage card tells you, with the control 
 |---|---|---|
 | League | **Fixtures don't match the roster**, then "Active, but not on a fixture yet:" and the name | **Rebuild fixtures** |
 | Knockout | The same notice, and **Update draw** appears beside **Complete stage** | **Update draw** |
-| Swiss | **Waiting for the next round**, then "Not paired this round:" and the name | **Pair next round** |
+| Swiss | **Waiting for the next round**, then "Not paired this round:" and the names of the players not yet seated | **Pair next round** |
 
 **League.** **Rebuild fixtures** asks "Rebuild this stage's fixtures?" and says how many fixtures it deletes. It also says "Times and courts stay with each match's place in the draw." and "This can't be undone." If the fixtures carry officials, team sheets or linked scoring devices, the box lists them and says you will set them up again. Press **Rebuild** to go ahead, or **Cancel**.
 
@@ -41,11 +41,9 @@ Add someone after you generated, and the stage card tells you, with the control 
 > **Example**
 > You generated a knockout of five players, which left 4 matches to schedule. You add a sixth. **Update draw** says "1 new entrant placed in a bye." and the knockout now has 5 matches to schedule, two of them quarter-finals.
 
-**Swiss.** Players you add before you press **Pair next round** are paired with everyone else. Once round 1 is paired, a late player waits. The card says "Not paired this round:" and the name, and "Swiss pairs one round at a time. Use Pair next round to seat them." **Pair next round** refuses while the current round has undecided matches, so you seat the newcomer once round 1 has its results.
+**Swiss.** Before round 1 is paired, the card lists every entrant after "Not paired this round:", so a newcomer is one more name in that list and **Pair next round** seats them with everyone else. Once round 1 is paired, a late player waits, and only then does the list name the latecomer alone. The card also says "Swiss pairs one round at a time. Use Pair next round to seat them." **Pair next round** refuses while the current round has undecided matches, so you seat the newcomer once round 1 has its results.
 
-Once a match in the stage has a result, **Rebuild fixtures** refuses and says "Can't rebuild — this stage already has recorded results. Complete it as it stands, or use Generate to add missing entrants instead."
-
-Once you press **Start tournament**, a league gives a late player catch-up matches and shows no **Rebuild fixtures** button. [A division's life](/help/divisions/lifecycle) shows who can still join each format.
+Once a match in the stage has a result, **Rebuild fixtures** refuses and says "Can't rebuild — this stage already has recorded results. Complete it as it stands, or use Generate to add missing entrants instead." On a league that has started, a late player gets catch-up matches, and there is no **Rebuild fixtures** button to press. [A division's life](/help/divisions/lifecycle) shows who can still join each format.
 
 ## Times and courts
 
