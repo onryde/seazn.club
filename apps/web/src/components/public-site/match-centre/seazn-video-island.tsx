@@ -33,6 +33,7 @@ import { SeaznReplayFrame } from "./seazn-replay-frame";
 import { holdAfterAnswer, holdWait, parseHold, showsPlayer } from "./seazn-video-hold";
 import type { SeaznVideoLabels } from "./seazn-video-labels";
 import { startVideoPoll, type VideoPoll } from "./seazn-video-poll";
+import { BadVideoAnswer, createVideoReporter, sentryVideoReport, type PlayerFatal } from "./seazn-video-report";
 
 export type SeaznVideoEndpoint = "public" | "org";
 
@@ -52,10 +53,10 @@ const isPart = (v: unknown): boolean =>
  *  worth a client bundle, so this is its hand-written twin, held to it by the island's test). Throws on anything else, so the loop
  *  keeps what it had. */
 export function asPublicFixtureVideo(raw: unknown): PublicFixtureVideo {
-  if (!isObject(raw)) throw new Error("seazn video: the answer is not an object");
+  if (!isObject(raw)) throw new BadVideoAnswer("seazn video: the answer is not an object");
   const { live, replay } = raw;
-  if (live !== null && !isSigned(live)) throw new Error("seazn video: bad live source");
-  if (!Array.isArray(replay) || !replay.every(isPart)) throw new Error("seazn video: bad replay parts");
+  if (live !== null && !isSigned(live)) throw new BadVideoAnswer("seazn video: bad live source");
+  if (!Array.isArray(replay) || !replay.every(isPart)) throw new BadVideoAnswer("seazn video: bad replay parts");
   return raw as unknown as PublicFixtureVideo;
 }
 
@@ -95,8 +96,9 @@ interface StageProps {
   /** How many times the players have been rebuilt after giving up. */
   epoch: number;
   labels: SeaznVideoLabels;
-  /** A player gave up on its address: ask the route for a fresh one, and rebuild the player with it. */
-  onFatal: () => void;
+  /** A player gave up on its address: report it (once per address; codes only, never the address) and ask the route for a fresh one,
+   *  and rebuild the player with it. */
+  onFatal: (fatal: PlayerFatal) => void;
   /** The replay host's frame holds an address whose token has passed: ask the route for a fresh one (no rebuild). */
   onStale: () => void;
 }
@@ -139,7 +141,14 @@ export function SeaznVideoStage({ video, epoch, labels, onFatal, onStale, reserv
     if (video.live !== null) {
       return (
         <section data-testid="seazn-video" aria-label={labels.live} className={REGION}>
-          <SeaznPlayer key={playerKey("live", epoch)} src={video.live.src} title={labels.live} liveLabel={labels.live} unavailable={labels.unavailable} onFatal={onFatal} />
+          <SeaznPlayer
+            key={playerKey("live", epoch)}
+            src={video.live.src}
+            title={labels.live}
+            liveLabel={labels.live}
+            unavailable={labels.unavailable}
+            onFatal={(failure, address) => onFatal({ address, source: "live", partNo: null, player: "hls", failure })}
+          />
         </section>
       );
     }
@@ -154,7 +163,7 @@ export function SeaznVideoStage({ video, epoch, labels, onFatal, onStale, reserv
 }
 
 /** The replay: its picker and the picked part's player. Exported for its test (the wiring of its callbacks). */
-export function ReplayParts({ parts, epoch, labels, onFatal, onStale }: { parts: PublicFixtureVideo["replay"]; epoch: number; labels: SeaznVideoLabels; onFatal: () => void; onStale: () => void }) {
+export function ReplayParts({ parts, epoch, labels, onFatal, onStale }: { parts: PublicFixtureVideo["replay"]; epoch: number; labels: SeaznVideoLabels; onFatal: (fatal: PlayerFatal) => void; onStale: () => void }) {
   const base = useId();
   // The viewer's pick is a part NUMBER, which a later read keeps stable; a part that is gone from the list falls back to the first.
   const [picked, setPicked] = useState<number | null>(null);
@@ -177,7 +186,13 @@ export function ReplayParts({ parts, epoch, labels, onFatal, onStale }: { parts:
     active.player === "embed" ? (
       <SeaznReplayFrame key={frameKey(active.partNo, epoch)} src={active.src} expiresAt={active.expiresAt} title={title} onStale={onStale} />
     ) : (
-      <SeaznPlayer key={playerKey(active.partNo, epoch)} src={active.src} title={title} unavailable={labels.unavailable} onFatal={onFatal} />
+      <SeaznPlayer
+        key={playerKey(active.partNo, epoch)}
+        src={active.src}
+        title={title}
+        unavailable={labels.unavailable}
+        onFatal={(failure, address) => onFatal({ address, source: "replay", partNo: active.partNo, player: "hls", failure })}
+      />
     );
   return (
     <section data-testid="seazn-video" aria-label={labels.replay} className={REGION}>
@@ -250,6 +265,8 @@ export function SeaznVideoIsland({
   const [holdUntil, setHoldUntil] = useState<number | null>(() => parseHold(holdFromPlan));
   const [epoch, setEpoch] = useState(0);
   const pollRef = useRef<VideoPoll | null>(null);
+  // One reporter per page view (Task 25): a player's failure once per address, a failed read once per kind (seazn-video-report.ts).
+  const [reporter] = useState(() => createVideoReporter(sentryVideoReport));
   // Not a date: never settled (a NaN settle time compares false, so the loop only backs off).
   const settledAtMs = settledAt === null ? null : Date.parse(settledAt);
   // Not a date: no window (the schedule reads a NaN hint as cold).
@@ -268,13 +285,14 @@ export function SeaznVideoIsland({
       settledAtMs,
       kickoffAtMs,
       activeUntilMs,
+      onReadFailed: (err) => reporter.route(fixtureId, err),
     });
     pollRef.current = poll;
     return () => {
       poll.stop();
       pollRef.current = null;
     };
-  }, [fixtureId, endpoint, settledAtMs, kickoffAtMs, activeUntilMs]);
+  }, [fixtureId, endpoint, settledAtMs, kickoffAtMs, activeUntilMs, reporter]);
 
   // The wait ends by itself: the box lets go ONCE, when it runs out, whatever the loop is doing (it may have stopped, settled). One the
   // page drew that has already run out (an old cached page) lets go at once: the line goes, the reserved box stays for the first answer.
@@ -284,7 +302,10 @@ export function SeaznVideoIsland({
     return () => clearTimeout(timer);
   }, [holdUntil]);
 
-  const refresh = useCallback(() => pollRef.current?.refreshSoon(), []);
+  const refresh = useCallback((fatal: PlayerFatal) => {
+    reporter.player(fixtureId, fatal);
+    pollRef.current?.refreshSoon();
+  }, [reporter, fixtureId]);
   const readSoon = useCallback(() => pollRef.current?.readSoon(), []);
   return <SeaznVideoStage video={video} epoch={epoch} labels={labels} onFatal={refresh} onStale={readSoon} reserve={reserve} held={holdUntil !== null} picker={replayParts} />;
 }

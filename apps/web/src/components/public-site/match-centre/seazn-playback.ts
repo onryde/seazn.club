@@ -19,11 +19,40 @@
 //     delivers). hls.js is built with `autoStartLoad: false` and started by the first `play`, but it DOES ask for the manifest at
 //     `loadSource` (a small text file; it also lets a refused address show its note early); a native element has `preload="none"`.
 //   - A failure the player cannot recover from (a fatal hls.js error, a browser hls.js cannot run in, a bundle that will not load,
-//     an element error) is `onFatal`: the player says so and the island reads the route again for a fresh address.
+//     an element error) is `onFatal`: the player says so and the island reads the route again for a fresh address. It comes with
+//     WHY, as codes only (`PlaybackFailure`: hls.js's error type and details, the HTTP status it got, the element's MediaError code),
+//     because the island reports it (seazn-video-report.ts). Never an address, a token, a URL or an error's text: hls.js's error data
+//     carries the request's URL (the token is a path segment) and its `error.message` can quote it.
 import type Hls from "hls.js";
 import { parseSignedAddress, withToken, type SignedAddress } from "./seazn-signed-address";
 
 export const HLS_MIME = "application/vnd.apple.mpegurl";
+
+/** Why the player gave up, as codes only (see the header). */
+export interface PlaybackFailure {
+  /** `hls`: a fatal hls.js error; `unsupported`: a browser hls.js cannot run in; `bundle`: hls.js would not load; `element`: the
+   *  element's own error (native HLS); `unsigned`: an address with no token to read (the signer changed shape). */
+  reason: "hls" | "unsupported" | "bundle" | "element" | "unsigned";
+  /** hls.js's error type and details (`networkError`, `manifestLoadError`), for an hls.js error; else null. */
+  hlsType: string | null;
+  hlsDetails: string | null;
+  /** The HTTP status hls.js got (its `response.code`), when it gives one; else null. */
+  httpStatus: number | null;
+  /** The element's MediaError code (1-4), for an element error; else null. */
+  mediaCode: number | null;
+}
+/** A code is a bare word (hls.js's enums are); anything else, a URL included, is dropped. */
+const codeOf = (v: unknown): string | null => (typeof v === "string" && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(v) ? v : null);
+const statusOf = (v: unknown): number | null => (typeof v === "number" && Number.isInteger(v) && v >= 100 && v <= 599 ? v : null);
+/** The element's MediaError code: 1-4. */
+const mediaCodeOf = (v: unknown): number | null => (typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 4 ? v : null);
+const failure = (reason: PlaybackFailure["reason"], more: Partial<PlaybackFailure> = {}): PlaybackFailure =>
+  ({ reason, hlsType: null, hlsDetails: null, httpStatus: null, mediaCode: null, ...more });
+/** A fatal hls.js error's codes (its `ErrorData`: `type`, `details`, `response.code`), never its `url`, `error` or `response.text`. */
+export function hlsFailureOf(data: unknown): PlaybackFailure {
+  const d = (typeof data === "object" && data !== null ? data : {}) as { type?: unknown; details?: unknown; response?: { code?: unknown } | null };
+  return failure("hls", { hlsType: codeOf(d.type), hlsDetails: codeOf(d.details), httpStatus: statusOf(d.response?.code) });
+}
 
 export interface Playback {
   /** The newest address the island holds. The first one is loaded; every later one is the same video under a fresh token. The same
@@ -38,7 +67,7 @@ function positionOf(video: HTMLVideoElement): number | null {
   return Number.isFinite(t) && t > 0 ? t : null;
 }
 
-export function createPlayback(video: HTMLVideoElement, { onFatal }: { onFatal: () => void }): Playback {
+export function createPlayback(video: HTMLVideoElement, { onFatal }: { onFatal: (failure: PlaybackFailure) => void }): Playback {
   const native = video.canPlayType(HLS_MIME) !== "";
   let disposed = false;
   /** The viewer has pressed play at least once: from then on a load starts by itself. */
@@ -60,7 +89,7 @@ export function createPlayback(video: HTMLVideoElement, { onFatal }: { onFatal: 
       hls.startLoad();
     }
   };
-  const onError = () => onFatal();
+  const onError = () => onFatal(failure("element", { mediaCode: mediaCodeOf(video.error?.code) }));
   if (native) video.addEventListener("error", onError);
   else video.addEventListener("play", onPlay);
 
@@ -69,7 +98,7 @@ export function createPlayback(video: HTMLVideoElement, { onFatal }: { onFatal: 
       .then(({ default: HlsCtor }) => {
         if (disposed) return null;
         if (!HlsCtor.isSupported()) {
-          onFatal();
+          onFatal(failure("unsupported"));
           return null;
         }
         const h = new HlsCtor({
@@ -80,13 +109,13 @@ export function createPlayback(video: HTMLVideoElement, { onFatal }: { onFatal: 
         });
         h.attachMedia(video);
         h.on(HlsCtor.Events.ERROR, (_event, data) => {
-          if (data.fatal) onFatal();
+          if (data.fatal) onFatal(hlsFailureOf(data));
         });
         hls = h;
         return h;
       })
       .catch(() => {
-        onFatal();
+        onFatal(failure("bundle"));
         return null;
       });
     return hlsReady;
@@ -138,7 +167,7 @@ export function createPlayback(video: HTMLVideoElement, { onFatal }: { onFatal: 
       // refresh (when the old token lapses and the picture dies an hour in).
       const signed = parseSignedAddress(src);
       if (signed === null) {
-        onFatal();
+        onFatal(failure("unsigned"));
         return;
       }
       held = signed;

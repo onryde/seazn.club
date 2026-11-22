@@ -8,7 +8,7 @@
 // sets it on a native one after hydration), and PostHog's DOM snapshots must never record it, so `ph-no-capture` is on the element and
 // on its wrapper. The theme is the match card's: a black stage in the replay's frame (16:9, 200px floor), the house chip and note.
 import { useEffect, useRef, useState } from "react";
-import { createPlayback, type Playback } from "./seazn-playback";
+import { createPlayback, type Playback, type PlaybackFailure } from "./seazn-playback";
 
 /** The player's frame: 16:9 with a 200 px floor, dark. One authority for the box, so the island's reserved box (Phase 1 visual D1)
  *  is the player's box and the swap moves nothing. */
@@ -23,8 +23,9 @@ export interface SeaznPlayerProps {
   unavailable: string;
   /** Set for a live source: the chip drawn over the picture. */
   liveLabel?: string;
-  /** The player gave up on its address (a fatal error): the island reads the route again for a fresh one. */
-  onFatal?: () => void;
+  /** The player gave up on its address (a fatal error): the island reports why (codes only) and reads the route again for a fresh
+   *  one. `address` is the address it gave up on, for the island's once-per-address report; it is never sent anywhere. */
+  onFatal?: (failure: PlaybackFailure, address: string) => void;
 }
 
 export function SeaznPlayer({ src, title, unavailable, liveLabel, onFatal }: SeaznPlayerProps) {
@@ -45,9 +46,9 @@ export function SeaznPlayer({ src, title, unavailable, liveLabel, onFatal }: Sea
     const video = videoRef.current;
     if (video === null) return;
     const playback = createPlayback(video, {
-      onFatal: () => {
+      onFatal: (failure) => {
         setFailedSrc(srcRef.current);
-        onFatalRef.current?.();
+        onFatalRef.current?.(failure, srcRef.current);
       },
     });
     playbackRef.current = playback;

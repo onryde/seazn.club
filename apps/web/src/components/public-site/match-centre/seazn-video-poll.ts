@@ -55,6 +55,8 @@ export interface VideoPollHooks {
   activeUntilMs?: number | null;
   /** The page's visibility. Absent: the document's (the island passes none); a test passes its own. */
   visibility?: PageVisibility;
+  /** Each failed read's error (Task 25: the island reports it, seazn-video-report.ts). Never called for the abort `stop` makes. */
+  onReadFailed?: (err: unknown) => void;
 }
 export interface VideoPoll {
   stop: () => void;
@@ -68,7 +70,7 @@ export interface VideoPoll {
  *  the island. */
 export const SEAZN_VIDEO_FETCH_TIMEOUT_MS = 15_000;
 
-export function startVideoPoll({ fetchVideo, onVideo, settledAtMs = null, kickoffAtMs = null, activeUntilMs = null, visibility }: VideoPollHooks): VideoPoll {
+export function startVideoPoll({ fetchVideo, onVideo, settledAtMs = null, kickoffAtMs = null, activeUntilMs = null, visibility, onReadFailed }: VideoPollHooks): VideoPoll {
   const page = visibility ?? documentVisibility();
   const isHidden = () => page?.hidden() ?? false;
   let stopped = false;
@@ -122,11 +124,12 @@ export function startVideoPoll({ fetchVideo, onVideo, settledAtMs = null, kickof
       failStreak = 0;
       emptyStreak = isEmptyVideo(video) ? emptyStreak + 1 : 0;
       schedule(nextVideoFetchMs(video, { nowMs: Date.now(), settledAtMs, emptyStreak, kickoffAtMs, activeUntilMs }));
-    } catch {
+    } catch (err) {
       if (stopped) return;   // only stop() aborts besides the give-up, and the give-up is a failed read
       inFlight = null;
       failStreak += 1;
       schedule(backoffMs(failStreak));
+      onReadFailed?.(err);
     }
   }
 

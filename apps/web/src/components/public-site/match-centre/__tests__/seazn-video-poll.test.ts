@@ -207,6 +207,57 @@ describe("startVideoPoll: a failed read", () => {
   });
 });
 
+// Task 25 (coordinator's addition): each failed read's error reaches the island (which reports it, seazn-video-report.ts) — a failed
+// first read, a failure after an answer, the give-up timer's abort — and the abort `stop` makes never does.
+describe("startVideoPoll: onReadFailed", () => {
+  it("EMPTY CASE FIRST: reads that answer report nothing", async () => {
+    const failed: unknown[] = [];
+    const poll = startVideoPoll({ fetchVideo: route(EMPTY).fetchVideo, onVideo: () => {}, onReadFailed: (e) => void failed.push(e) });
+    await flush();
+    await vi.advanceTimersByTimeAsync(5 * MIN);
+    expect(failed).toEqual([]);
+    poll.stop();
+  });
+
+  it("every failed read hands its own error over, in order, and a good answer between them is not one", async () => {
+    const first = new Error("offline");
+    const second = new Error("503");
+    const r = route(first, EMPTY, second, EMPTY);
+    const failed: unknown[] = [];
+    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {}, onReadFailed: (e) => void failed.push(e) });
+    /** Runs the clock a second at a time until the route has been read `n` times. */
+    const untilRead = async (n: number) => {
+      for (let i = 0; i < 10 * 60 && r.calls.length < n; i++) await vi.advanceTimersByTimeAsync(1_000);
+      expect(r.calls, `premise: read ${n} happened`).toHaveLength(n);
+    };
+    await flush();
+    expect(failed).toEqual([first]);
+    await untilRead(2);
+    expect(failed, "the answer is not a failure").toEqual([first]);
+    await untilRead(3);
+    expect(failed).toEqual([first, second]);
+    await untilRead(4);
+    expect(failed, "nor is the one after").toEqual([first, second]);
+    poll.stop();
+  });
+
+  it("the give-up timer's abort is a failed read (an AbortError handed over); the abort stop() makes is not", async () => {
+    const failed: unknown[] = [];
+    const fetchVideo = vi.fn((signal: AbortSignal) => new Promise<PublicFixtureVideo>((_res, reject) => {
+      signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+    }));
+    const poll = startVideoPoll({ fetchVideo, onVideo: () => {}, onReadFailed: (e) => void failed.push(e) });
+    await flush();
+    await vi.advanceTimersByTimeAsync(SEAZN_VIDEO_FETCH_TIMEOUT_MS);
+    expect(failed.map((e) => (e as DOMException).name)).toEqual(["AbortError"]);
+    await vi.advanceTimersByTimeAsync(SEAZN_VIDEO_POLL_FLOOR_MS);
+    expect(fetchVideo, "premise: the retry is in flight").toHaveBeenCalledTimes(2);
+    poll.stop();
+    await flush();
+    expect(failed, "stop's abort is not reported").toHaveLength(1);
+  });
+});
+
 describe("startVideoPoll: stop", () => {
   it("ends the timer: no further read, and no timer left", async () => {
     const r = route(EMPTY);

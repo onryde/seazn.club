@@ -16,6 +16,13 @@
 //     the one attribute the player reads it from (never as `src` before hydration, never in a label or a title).
 // The shape of the answer comes from the route's own schema (`PublicFixtureVideo`), never typed twice.
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+// Task 25 (coordinator's addition): the island's failure reports go to the client's Sentry path; recorded here, the rest of the SDK real.
+const sentry = vi.hoisted(() => ({ messages: [] as { message: string; context: unknown }[] }));
+vi.mock("@sentry/nextjs", async (orig) => ({
+  ...(await orig<typeof import("@sentry/nextjs")>()),
+  captureMessage: (message: string, context: unknown) => void sentry.messages.push({ message, context }),
+}));
 import { renderToStaticMarkup } from "react-dom/server";
 import publicEn from "@/dictionaries/en/public.json";
 import publicEs from "@/dictionaries/es/public.json";
@@ -30,6 +37,7 @@ import { SEAZN_VIDEO_HOLD_MS } from "../seazn-video-hold";
 import { FINALISATION_GRACE_SECONDS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS, RUNNER_STOP_GRACE_SECONDS, STREAM_TICK_PERIOD_SECONDS } from "@/server/relay/config";
 import { SEAZN_VIDEO_POLL_FLOOR_MS } from "../seazn-video-schedule";
 import { renderIsland, type walk } from "@/components/__tests__/_hook-harness";
+import type { PlayerFatal } from "../seazn-video-report";
 
 const NOW = Date.parse("2026-11-21T12:00:00.000Z");
 const labels = seaznVideoLabels(publicEn);
@@ -399,7 +407,11 @@ describe("Task 25: the frame's ask reaches the loop as a read, not a rebuild", (
   const MIN = 60_000;
   const embeds = answer({ replay: [part(1, "embed"), part(2, "embed")] });
   const route = () => vi.fn(async () => new Response(JSON.stringify({ ok: true, data: embeds }), { status: 200, headers: { "content-type": "application/json" } }));
-  type StageEl = { props: { onStale: () => void; onFatal: () => void; epoch: number } };
+  type StageEl = { props: { onStale: () => void; onFatal: (fatal: PlayerFatal) => void; epoch: number } };
+  const fatalOn = (address: string): PlayerFatal => ({
+    address, source: "replay", partNo: 2, player: "hls",
+    failure: { reason: "hls", hlsType: "networkError", hlsDetails: "manifestLoadError", httpStatus: 403, mediaCode: null },
+  });
 
   it("the island hands the stage an onStale that reads again (a final replay sets no timer of its own) and keeps the epoch; onFatal rebuilds", async () => {
     vi.useFakeTimers();
@@ -417,10 +429,21 @@ describe("Task 25: the frame's ask reaches the loop as a read, not a rebuild", (
       expect(fetchMock, "the frame's ask: one fresh read").toHaveBeenCalledTimes(2);
       expect(stage().props.epoch, "a read, not a rebuild: the frame keeps its element").toBe(0);
       await vi.advanceTimersByTimeAsync(10 * MIN);
-      stage().props.onFatal();
+      sentry.messages.length = 0;
+      stage().props.onFatal(fatalOn(embeds.replay[1]!.src));
       await vi.advanceTimersByTimeAsync(0);
       expect(fetchMock).toHaveBeenCalledTimes(3);
       expect(stage().props.epoch, "the contrast: a player that gave up is rebuilt").toBe(1);
+      // ...and reported, once for its address, with the island's fixture and no part of the address.
+      expect(sentry.messages.map((m) => (m.context as { extra: unknown }).extra)).toEqual([
+        { stage: "player", fixtureId: "f1", source: "replay", partNo: 2, player: "hls", reason: "hls", hlsType: "networkError", hlsDetails: "manifestLoadError", httpStatus: 403, mediaCode: null },
+      ]);
+      await vi.advanceTimersByTimeAsync(10 * MIN);
+      stage().props.onFatal(fatalOn(embeds.replay[1]!.src));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stage().props.epoch, "rebuilt again").toBe(2);
+      expect(sentry.messages, "the same address: no second report").toHaveLength(1);
+      expect(JSON.stringify(sentry.messages)).not.toMatch(/tok-|fake\.invalid|manifest\/|m3u8|expires|\?/);
       island.unmount();
     } finally {
       vi.useRealTimers();
@@ -433,18 +456,56 @@ describe("Task 25: the frame's ask reaches the loop as a read, not a rebuild", (
     const el = SeaznVideoStage({ video: embeds, epoch: 0, labels, onFatal, onStale, reserve: false, held: false, picker: [] }) as unknown as { type: unknown; props: { onStale: unknown; onFatal: unknown } };
     expect(el.type).toBe(ReplayParts);
     expect([el.props.onStale, el.props.onFatal]).toEqual([onStale, onFatal]);
+    const r = renderIsland(ReplayParts, { parts: [...embeds.replay], epoch: 0, labels, onFatal, onStale });
+    const frames = r.tree().filter((e) => e.type === SeaznReplayFrame);
+    expect(frames, "one frame").toHaveLength(1);
+    expect((frames[0]!.props as { onStale: unknown }).onStale).toBe(onStale);
+  });
+
+  it("Task 25 report: a player's give-up reaches the stage's onFatal as the island knows it — its address, live or replay, the part, hls, and the player's codes", () => {
+    const failure = { reason: "element", hlsType: null, hlsDetails: null, httpStatus: null, mediaCode: 3 } as const;
+    // The live: the stage's own player. renderIsland's tree is the component's own output, so the replay's player is read off
+    // ReplayParts (the stage hands it onFatal unchanged, the test above).
+    const liveFatal = vi.fn();
+    const live = renderIsland(SeaznVideoStage, { video: answer({ live: signed("live"), replay: [part(1)] }), epoch: 0, labels, onFatal: liveFatal, onStale: () => {}, reserve: false, held: false, picker: [] });
+    const replayFatal = vi.fn();
+    const replay = renderIsland(ReplayParts, { parts: [...answer({ replay: [part(1, "embed"), part(4)] }).replay], epoch: 0, labels, onFatal: replayFatal, onStale: () => {} });
+    // The first part is the host's frame: pick Part 4, the interim recording, so the player is the <video>.
+    const tab = replay.tree().find((e) => e.type === "button" && String((e.props as { id?: string }).id).endsWith("-tab-4"));
+    expect(tab, "premise: Part 4's tab").toBeDefined();
+    (tab!.props as { onClick: () => void }).onClick();
     let checked = 0;
-    for (const [parts, kind, prop, fn] of [
-      [embeds.replay, SeaznReplayFrame, "onStale", onStale],
-      [answer({ replay: [part(1), part(2, "embed")] }).replay, SeaznPlayer, "onFatal", onFatal],
+    for (const [island, onFatal, expected] of [
+      [replay, replayFatal, { source: "replay", partNo: 4 }],
+      [live, liveFatal, { source: "live", partNo: null }],
     ] as const) {
-      const r = renderIsland(ReplayParts, { parts: [...parts], epoch: 0, labels, onFatal, onStale });
-      const found = r.tree().filter((e) => e.type === kind);
-      expect(found, `one ${String(prop)} target`).toHaveLength(1);
-      expect((found[0]!.props as Record<string, unknown>)[prop]).toBe(fn);
+      const players = island.tree().filter((e) => e.type === SeaznPlayer);
+      expect(players, `premise: one <video> player (${expected.source})`).toHaveLength(1);
+      (players[0]!.props as { onFatal: (f: typeof failure, address: string) => void }).onFatal(failure, "the-address");
+      expect(onFatal).toHaveBeenCalledWith({ address: "the-address", ...expected, player: "hls", failure });
       checked++;
     }
     expect(checked).toBe(2);
+  });
+
+  it("Task 25 report: a failed read of the route is reported once per kind, with its status, from the mounted island", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    try {
+      sentry.messages.length = 0;
+      const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: false, error: "unavailable" }), { status: 503, headers: { "content-type": "application/json" } }));
+      vi.stubGlobal("fetch", fetchMock);
+      const island = renderIsland(SeaznVideoIsland, { fixtureId: "f1", labels });
+      await vi.advanceTimersByTimeAsync(5 * MIN);
+      expect(fetchMock.mock.calls.length, "premise: the loop retried").toBeGreaterThanOrEqual(3);
+      expect(sentry.messages.map((m) => [m.message, (m.context as { extra: { reason: string; httpStatus: number | null; fixtureId: string } }).extra])).toEqual([
+        ["seazn video: the video route could not be read", { stage: "route", fixtureId: "f1", source: null, partNo: null, player: null, reason: "http", hlsType: null, hlsDetails: null, httpStatus: 503, mediaCode: null }],
+      ]);
+      expect(JSON.stringify(sentry.messages)).not.toMatch(/\/api\/|video\?|unavailable/);
+      island.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
