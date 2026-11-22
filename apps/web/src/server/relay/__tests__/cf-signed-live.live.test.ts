@@ -8,6 +8,13 @@
 //   2. PUT keeps it — a `PUT /live_inputs/{uid}` re-sending the create's `recording` with `enabled: false`: is
 //      `recording.requireSignedURLs` still `true` in the echo?
 //   3. expiry — a token minted with `exp` = now + 60 s: 200 at once, 401/403 at now + 90 s?
+//   4. the deletion across the lock (Phase 1 review I3) — the recording's `scheduledDeletion` before the lock; after the
+//      lock body Task 13 first sent (`{requireSignedURLs:true}` alone: does the edit keep what the input's
+//      `deleteRecordingAfterDays` stamped?); after the body the lock now sends (`scheduledDeletion` = creation + the input's
+//      retention + the longest run and finalisation, seazn-recordings.ts `seaznRecordingDeleteAt`: does Cloudflare accept it
+//      on a live-inprogress recording, or 400?); and after the recording ends. Each read is the echo and a GET re-read.
+//      Printed: the video uid, the scheduledDeletion values, the edit's HTTP status and Cloudflare's error CODES — never a
+//      token, a URL or an error message.
 //
 // Gate (the `_live-fly-gate.ts` order): the flag CF_LIVE_PROBE=1 first, and only behind it the account pair
 // CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_STREAM_TOKEN (environment, then apps/web/.env.local). Without the flag nothing
@@ -24,6 +31,7 @@
 //     re-check), anything else is left and reported with its uids.
 //   * Cleanup lives in `afterAll`, so it runs when an assertion fails.
 //   * No update other than the probe's one PUT is sent, and only to this run's throwaway input (ingest-cf.ts:10-15).
+//     The two lock edits (step 4) go only to this run's own recording, which the cleanup deletes.
 //   * Secrets (API token, stream key, playback tokens) are never logged or asserted on; a token is shown, if ever, as
 //     its first 6 characters. The stream key reaches ffmpeg as argv only.
 //
@@ -33,6 +41,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { CLOUDFLARE_STREAM_BASE } from "../ingest-cf";
+import { DELETE_RECORDING_AFTER_DAYS, FINALISATION_GRACE_SECONDS, MAX_DURATION_MINUTES } from "../config";
 
 type CfLiveGate = { enabled: true; accountId: string; token: string } | { enabled: false; reason: string };
 
@@ -137,7 +146,15 @@ describe.skipIf(!GATE.enabled)("Cloudflare Stream — signed recording lock, PUT
 
   const httpStatus = async (url: string) => (await fetch(url, { redirect: "manual" })).status;
 
-  type Video = { uid: string; liveInput?: string | null; requireSignedURLs?: boolean; status?: { state?: string; errorReasonCode?: string; errorReasonText?: string }; playback?: { hls?: string } };
+  type Video = {
+    uid: string; liveInput?: string | null; requireSignedURLs?: boolean; created?: string; scheduledDeletion?: string | null;
+    status?: { state?: string; errorReasonCode?: string; errorReasonText?: string }; playback?: { hls?: string };
+  };
+  /** Cloudflare's error codes only: a message is free text, and nothing but ids and the deletion values is printed (step 4). */
+  const codesOf = (errors: unknown): unknown[] => (Array.isArray(errors) ? errors.map((e) => (e as { code?: unknown })?.code ?? null) : []);
+  /** Step 4's record: the video uid and the scheduledDeletion values (with each edit's status and error codes), nothing else. */
+  const deletion: Record<string, unknown> = {};
+  obs.scheduledDeletion = deletion;
 
   /** The input's OWN videos, each checked against the input (C6): a foreign item is skipped and counted. */
   async function ownVideos(): Promise<Video[]> {
@@ -261,6 +278,9 @@ describe.skipIf(!GATE.enabled)("Cloudflare Stream — signed recording lock, PUT
     note(`captured video ${videoUid}`);
     const before = await readVideo();
     obs.videoBeforeLock = { state: before.status?.state, requireSignedURLs: before.requireSignedURLs };
+    deletion.videoUid = videoUid;
+    deletion.created = before.created ?? null;
+    deletion.beforeLock = before.scheduledDeletion ?? null;   // did the input's deleteRecordingAfterDays stamp one at all?
     const host = new URL(before.playback!.hls!).origin;
 
     // Live HLS through a fresh input-uid token must answer 200 before the lock (C1), or the after-lock read means nothing.
@@ -297,6 +317,19 @@ describe.skipIf(!GATE.enabled)("Cloudflare Stream — signed recording lock, PUT
     // 4. Lock the in-progress recording.
     const lock = await cf<Video>("POST", `/${videoUid}`, { requireSignedURLs: true });
     obs.lockEcho = { status: lock.status, requireSignedURLs: lock.result?.requireSignedURLs, state: lock.result?.status?.state };
+    // 4a. The deletion after the lock-only edit: its echo, and a re-read.
+    deletion.lockOnly = { status: lock.status, echo: lock.result?.scheduledDeletion ?? null, reread: (await readVideo()).scheduledDeletion ?? null };
+    // 4b. The edit the lock now sends: the same, with the recording's own deletion (seaznRecordingDeleteAt's formula over this
+    // recording's `created`, from now when Cloudflare gives none). A 400 here is the risk review I3 names.
+    const createdMs = Date.parse(before.created ?? "");
+    const deleteAt = new Date((Number.isFinite(createdMs) ? createdMs : Date.now())
+      + DELETE_RECORDING_AFTER_DAYS * 86_400_000 + MAX_DURATION_MINUTES * 60_000 + FINALISATION_GRACE_SECONDS * 1000).toISOString();
+    const lockWithDeletion = await cf<Video>("POST", `/${videoUid}`, { requireSignedURLs: true, scheduledDeletion: deleteAt });
+    deletion.sent = deleteAt;
+    deletion.lockWithDeletion = {
+      status: lockWithDeletion.status, errorCodes: codesOf(lockWithDeletion.errors),
+      echo: lockWithDeletion.result?.scheduledDeletion ?? null, reread: (await readVideo()).scheduledDeletion ?? null,
+    };
     await sleep(5_000);
     obs.liveHlsAfterLock = await httpStatus(`${host}/${await mint(inputUid)}/manifest/video.m3u8`);
     obs.unsignedVideoManifestAfterLock = await httpStatus(`${host}/${videoUid}/manifest/video.m3u8`);
@@ -323,6 +356,7 @@ describe.skipIf(!GATE.enabled)("Cloudflare Stream — signed recording lock, PUT
       after = await readVideo();
     }
     obs.videoAfterEnd = { state: after.status?.state, requireSignedURLs: after.requireSignedURLs, errorReasonCode: after.status?.errorReasonCode, errorReasonText: after.status?.errorReasonText };
+    deletion.afterEnd = after.scheduledDeletion ?? null;
 
     // 7. PUT re-sending the create's recording with enabled:false — only on this run's input, now off air.
     const put = await cf<{ recording?: { requireSignedURLs?: boolean; allowedOrigins?: string[]; mode?: string; timeoutSeconds?: number }; enabled?: boolean }>(
@@ -338,6 +372,14 @@ describe.skipIf(!GATE.enabled)("Cloudflare Stream — signed recording lock, PUT
     expect.soft([401, 403], "unsigned video manifest refused").toContain(obs.unsignedVideoManifestAfterLock);
     expect.soft(after.requireSignedURLs, "lock survives the recording's end").toBe(true);
     expect.soft(put.result?.recording?.requireSignedURLs, "PUT keeps requireSignedURLs").toBe(true);
+    // Step 4 (review I3): the lock's deletion is accepted on an in-progress recording, kept in the echo and the re-read, and still
+    // there after the end. Instants are compared as instants (Cloudflare may write the same one differently).
+    const same = (v: unknown) => (typeof v === "string" ? Date.parse(v) : NaN);
+    const wd = deletion.lockWithDeletion as { status: number; echo: unknown; reread: unknown };
+    expect.soft(wd.status, "the lock with scheduledDeletion answers 200 on an in-progress recording").toBe(200);
+    expect.soft(same(wd.echo), "its echo carries the deletion sent").toBe(Date.parse(deleteAt));
+    expect.soft(same(wd.reread), "a re-read carries it").toBe(Date.parse(deleteAt));
+    expect.soft(same(deletion.afterEnd), "it survives the recording's end").toBe(Date.parse(deleteAt));
     expect.soft(obs.expiryAtOnce, "short token at once").toBe(200);
     expect.soft([401, 403], "short token at now+90 s").toContain(obs.expiryAtPlus90);
   }, 20 * 60_000);
