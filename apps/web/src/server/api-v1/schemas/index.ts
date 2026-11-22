@@ -36,7 +36,8 @@
 // needs are `export`ed from their module but are NOT re-exported here.
 
 // Capture QR v2 (PR-1 T1) — the phone↔web contract's zod twins (docs/contracts/capture-*.json), re-exported, never
-// re-typed. Relative + explicit `.ts`, same reason as above; capture-schemas.ts imports zod and nothing else.
+// re-typed. Relative + explicit `.ts`, same reason as above; capture-schemas.ts imports zod and lib/public-hub-root.mjs
+// (plain ESM that imports nothing) and nothing else.
 export {
   CAPTURE_CODE_RE, CaptureEndReason, CaptureStartedBy, CaptureCause, CapturePhoneState, CaptureNotReady,
   CaptureStartFailed, CaptureWaiting, CaptureCred, CaptureSession, CaptureDescriptor, CaptureBeat, CaptureBeatAnswer,

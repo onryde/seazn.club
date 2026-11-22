@@ -1,10 +1,13 @@
 // apps/web/src/server/api-v1/capture-schemas.ts — the zod twins of docs/contracts/capture-*.json (spec §4, §6.3,
 // §6.14). The JSON files are the cross-repo authority; capture-contract.test.ts pins parity both ways.
 //
-// Imports zod and nothing else: api-v1/schemas/ re-exports this file through a relative `.ts` specifier, and the
-// standalone OpenAPI generator (scripts/openapi-gen.ts, bare `node --experimental-strip-types`) loads api-v1/schemas/.
+// Imports zod and the public hub's root (lib/public-hub-root.mjs, plain ESM that imports nothing) and nothing else:
+// api-v1/schemas/ re-exports this file through a relative `.ts` specifier, and the standalone OpenAPI generator
+// (scripts/openapi-gen.ts, bare `node --experimental-strip-types`) loads api-v1/schemas/ — so relative specifiers only, never `@/`.
 // scripts/gen-capture-contracts.ts generates the JSON from these twins; it is kept for the next v-bump.
 import { z } from "zod";
+// LIVE1: the spectator tree's root is spelled in ONE module (lib/__tests__/public-hub-links.test.ts reds anywhere else).
+import { PUBLIC_HUB_ROOT } from "../../lib/public-hub-root.mjs";
 
 export const CAPTURE_CODE_RE = /^[0-9a-hjkmnp-tv-z]{12}$/;
 const Code = z.string().regex(CAPTURE_CODE_RE);
@@ -362,8 +365,12 @@ const MdInstant = z.iso.datetime();
 /** Seazn-hosted video (Task 17, owner ruling option A): a playing match that is on air to Seazn carries the PUBLIC match page's address,
  *  which the phone opens in the system browser ("Watch live"). The pattern is the agreed contract: an https origin (a host, optionally a
  *  port), `/live/{org}/{competition}/{division}/fixtures/{uuid}`, and NOTHING after it — no query, no fragment. The page's player signs
- *  its own short-lived address; the phone is never handed a playback URL or a token. */
-export const CAPTURE_MATCHDAY_WATCH_URL_RE = new RegExp("^https://[a-z0-9.-]+(?::\\d+)?/live/[^/?#]+/[^/?#]+/[^/?#]+/fixtures/[0-9a-fA-F-]{36}$");
+ *  its own short-lived address; the phone is never handed a playback URL or a token. The root comes from lib/public-hub-root.mjs
+ *  (LIVE1), escaped for a pattern; capture-contract.test.ts pins the pattern's source byte for byte to the agreed one. */
+const HUB_ROOT_PATTERN = PUBLIC_HUB_ROOT.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+export const CAPTURE_MATCHDAY_WATCH_URL_RE = new RegExp(
+  `^https://[a-z0-9.-]+(?::\\d+)?${HUB_ROOT_PATTERN}/[^/?#]+/[^/?#]+/[^/?#]+/fixtures/[0-9a-fA-F-]{36}$`,
+);
 /** One match as the list shows it. */
 export const CaptureMatchdayRow = z.strictObject({
   fixture_id: z.uuid(),
