@@ -27,7 +27,7 @@ import { putArrival } from "../match-day-kit";
 import { DEADLINE_AFTER_MS, LINE_DEADLINE_GRACE_MS } from "../../src/server/external-play/window";
 import { finishSeaznMatch, goLive, seedSeaznSession, signedAddressPattern, stubFakePlaybackHost } from "../helpers/seazn-video-seed";
 import { ARMAGEDDON_RESULTS } from "@seazn/engine/sports/boardgame";
-import { consentedAnonymousState, dismissCookieBanner } from "../scorepad-a11y-kit";
+import { HIT_TARGET_FLOOR_PX, consentedAnonymousState, dismissCookieBanner } from "../scorepad-a11y-kit";
 import { openMatchActions } from "../helpers/match-actions";
 import { v3Sheet, assertTapFloor, padTile, dlDict, projectViewport, projectTag } from "./_shared";
 
