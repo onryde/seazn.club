@@ -33,7 +33,7 @@ An undo puts back what the merge moved. It leaves a rename and a team you added 
 - **A later edit stays.** If you renamed the kept player after the merge, the new name stays.
 - **A later team stays.** A team you added the kept player to after the merge stays on the kept record.
 - **An edit to something the merge moved is replaced.** If you changed a squad number the merge had carried over, the undo puts back the numbers from before the merge.
-- **Public settings are replaced too.** The kept record's public name and photo settings go back to what they were before the merge. If the player turned one off after the merge, the undo turns it back on, so check the settings after an undo.
+- **Public settings are replaced too.** The kept record's public name and photo settings go back to what they were before the merge. If the player turned one off after the merge and it was on before the merge, the undo turns it back on, so check the settings after an undo.
 
 ## Limits
 
