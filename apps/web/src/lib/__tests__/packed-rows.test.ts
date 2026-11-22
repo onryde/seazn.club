@@ -40,7 +40,7 @@ describe("packRows / unpackRows", () => {
       { id: "f3", status: "scheduled", pool: null, late: true },
       { id: "f4", status: "decided", pool: "A" },
     ];
-    const back = unpackRows(wire(packRows(rows)));
+    const back = unpackRows<(typeof rows)[number]>(wire(packRows(rows)));
     expect(back).toEqual(rows);
     expect(Object.hasOwn(back[1]!, "summary"), "absent stays absent").toBe(false);
     expect(back[0]!.pool, "null stays null").toBeNull();

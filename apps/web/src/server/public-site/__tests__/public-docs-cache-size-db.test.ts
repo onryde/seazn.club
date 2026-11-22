@@ -24,7 +24,6 @@ vi.mock("next/cache", () => ({
   revalidateTag: vi.fn(),
 }));
 
-import { sql } from "@/lib/db";
 import { getPublicCompetitionHub } from "../competition-hub";
 import { getPublicDivision } from "../data";
 import { NEXT_CACHE_ITEM_LIMIT_BYTES, compressEntry, inflateEntry } from "../cache-entry";
