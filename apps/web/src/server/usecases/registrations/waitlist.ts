@@ -88,6 +88,9 @@ export function freesTeamSlot(row: { status: string; free_agent: boolean }): boo
 /** The room check an ORGANISER's manual promotion owes (registration defects, item 1), run inside the promoting transaction.
  *  `promoteOldestWaitlisted` trusts its caller that a place is free, which holds for the automatic promotions (a withdrawal,
  *  rejection or expiry just made the place) and not for an organiser pressing Promote on a full division.
+ *  - at or past the FORMAT's max entrants (`divisionFormatMaxes`: the largest field the first stage's draw fits): always refused,
+ *    422 `FORMAT_TOO_MANY_ENTRANTS`, on any plan and confirmed or not. It answers FIRST, before the online cap (owner "apply rec"
+ *    2026-11-22): no plan or cap raises it, so its sentence is the one that says what to change;
  *  - past the PLAN's per-division limit (`planLimit`, the limit submit honours: `getLimit` with its add-on bonus; null = unlimited):
  *    always refused, 422 `PROMOTE_PLAN_LIMIT`;
  *  - past the cap of a division that plays ONLINE, min(`planLimit`, 128) (owner ruling 2026-11-21): always refused too, but where the
@@ -96,7 +99,7 @@ export function freesTeamSlot(row: { status: string; free_agent: boolean }): boo
  *    count every online-cap door shares, not by the plan's count below; a plan limit LOWER than the cap judges that same count too (re-review
  *    N2) and answers with `PROMOTE_PLAN_LIMIT`;
  *  - at or past the division's OWN capacity: refused 409 `PROMOTE_OVER_CAPACITY` unless `confirmOverCapacity`.
- *  The plan's and the capacity's count is submit's own (team entries holding a place, a solo sign-up never one), taken under the same
+ *  The format's, the plan's and the capacity's count is submit's own (team entries holding a place, a solo sign-up never one), taken under the same
  *  `division:` advisory lock and `registration_settings` row lock submit takes (in that order), so two promotions - or a promotion and
  *  a sign-up, an add, a Reinstate - cannot both pass on the last place. */
 export async function assertOrganiserPromotionHasRoom(
@@ -127,10 +130,6 @@ export async function assertOrganiserPromotionHasRoom(
       PROMOTE_PLAN_LIMIT_CODE,
       { limit, taken },
     );
-  // Owner ruling 2026-11-21: past min(plan limit, 128) places an online chess division is full, and no confirmation lifts it. Judged by
-  // the one online count (live entrants + sign-ups let in), the promoted entry being the +1. Where the online cap binds (the plan's
-  // limit is absent or no lower) it is the online refusal, and it comes first (the tie at a plan of exactly 128: no upgrade changes
-  // anything); where a LOWER plan limit binds (re-review N2: a size pack's 96) the same count answers with the plan's own refusal.
   const formatMax = (await divisionFormatMaxes(tx, [divisionId])).get(divisionId) ?? null;
   const verdict = promotionVerdict({ capacity: settings?.capacity ?? null, planLimit: opts.planLimit, formatMax, active });
   // W5 B4 (F8): the format's max entrants - no plan and no confirmation lifts it, so it is refused by the name the draw doors use.
@@ -138,6 +137,11 @@ export async function assertOrganiserPromotionHasRoom(
   // It answers BEFORE the online cap (2026-11-22, owner "apply rec"): where both are past, the format's max is the tighter, real limit
   // (a 100-entrant league cannot be drawn with more however the cap moves) and its sentence says what to change.
   if (verdict.kind === "format_max") throw formatMaxPromotionRefusal(verdict.max, verdict.active);
+  // Owner ruling 2026-11-21: past min(plan limit, 128) places an online chess division is full, and no confirmation lifts it. Judged by
+  // the one online count (live entrants + sign-ups let in), the promoted entry being the +1. Where the online cap binds (the plan's
+  // limit is absent or no lower) it is the online refusal, and it comes before the plan's (the tie at a plan of exactly 128: no upgrade
+  // changes anything) - after the format's max above; where a LOWER plan limit binds (re-review N2: a size pack's 96) the same count
+  // answers with the plan's own refusal.
   const held = online ? await countOnlineHeld(tx, divisionId) : 0;
   if (online && onlineCapBinds(true, opts.planLimit)) assertOnlineRoom(held + 1);
   if (verdict.kind === "plan_limit") throw planLimitRefusal(verdict.limit, verdict.active);

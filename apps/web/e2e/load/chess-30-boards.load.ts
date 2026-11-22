@@ -42,8 +42,8 @@
  *   AUTH_SECRET=... CRON_SECRET=... LICHESS_TOKEN_KEK=... \
  *   npx playwright test -c playwright.load.config.ts
  *
- * D21-fix-3: LOAD_POLICY_MIX ("required:30" by default; "required:10,optional:10,off:10" seeds one division per policy) puts
- * the three camera policies in one run; the report's `byPolicy` says per policy what the boards and players saw - games, stranded
+ * D21-fix-3: LOAD_POLICY_MIX ("required:30" by default; "required:10,optional:10,off:10" seeds one division per mix entry, and a
+ * policy named twice - "required:64,required:64" - seeds two) puts the three camera policies in one run; the report's `byPolicy` says per policy what the boards and players saw - games, stranded
  * boards, wrong refusals, and for an OPTIONAL seat the budget left without a token (the seat says so: `cameraRetry`) how long
  * until its tile, asked for on the room's own schedule (the camera route, not a seat call). Every claim carries the held
  * participant id, as the room's does.
@@ -264,8 +264,8 @@ const SERVER_LOG = process.env.LOAD_SERVER_LOG ?? "";
 const JOIN_MS: [number, number] = [1_000, 2_000];
 
 /** D21-fix-3: the camera policies of the boards in the run - "required:30" (the default: all Required, the D22 run) or a
- *  mix, "required:10,optional:10,off:10". One division per policy (the policy is a division's), so one round is seeded
- *  for each; the counts must add up to LOAD_BOARDS. */
+ *  mix, "required:10,optional:10,off:10". One division per mix ENTRY (the policy is a division's, and a policy may be named
+ *  twice), so one round is seeded for each entry; the counts must add up to LOAD_BOARDS. */
 type Policy = "required" | "optional" | "off";
 /** A seeded board with what the run needs to judge it: its camera policy, its rank in its round (the batch is the rank divided by the batch
  *  size) and, once the round's stamp is read back, the instants of its window. */
@@ -425,7 +425,7 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
     // ----------------------------------------------------------------------------------------------- seeding
     const tag = Date.now().toString(36);
     const names = Array.from({ length: BOARDS * 2 }, (_, i) => `Load ${String(i + 1).padStart(2, "0")} ${tag}`);
-    // One round (one division) per policy: the camera policy is the division's.
+    // One round (one division) per mix entry: the camera policy is the division's, and a policy named twice seeds two.
     const allBoards: LoadBoard[] = [];
     let used = 0;
     for (const mix of POLICY_MIX) {
@@ -1125,7 +1125,7 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
         arrivalToSeatedMs: spread(mine.map((p) => p.checkInMs).filter((x): x is number => x !== null)),
       };
     });
-    expect(byDivision.length, "anti-vacuity: one row per seeded division").toBe(POLICY_MIX.length);
+    // Its anti-vacuity check (one row per seeded division) sits with the invariants, AFTER the report is written (the header's promise).
     const byPolicy = Object.fromEntries(
       [...new Set(POLICY_MIX.map((m) => m.policy))].map((policy) => {
         const mine = players.filter((p) => p.policy === policy);
@@ -1559,6 +1559,7 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
     } else {
       expect(evidence.total, "anti-vacuity: meetings exist").toBeGreaterThan(0);
     }
+    expect(byDivision.length, "anti-vacuity: one row per seeded division").toBe(POLICY_MIX.length);
     // D21-fix-3: no board stranded, no wrong refusal, and every optional seat the budget left tokenless got its tile.
     for (const [policy, row] of Object.entries(byPolicy)) {
       if (STRICT) expect(row.boardsWithoutGame, `${policy}: every board got a game`).toBe(0);
