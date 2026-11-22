@@ -18,13 +18,17 @@ import "server-only";
 // recording must name this input itself (its own `liveInput`) before anything is done to it; one that does not — or names none —
 // is counted `refused` and never touched. This pass only signs; it never deletes.
 //
+// THE DELETION (Phase 1 review I3): the sweep HOLDS every Seazn programme recording for Phase 2 (relay-sweep.ts), so Cloudflare's own
+// deletion is the only one, and whether this edit keeps the one the input stamped was never measured. So the lock sends it too
+// (`seaznRecordingDeleteAt`): the same instant on every relock, never earlier than Cloudflare's own.
+//
 // The flags are not read: a Seazn recording is signed whatever SEAZN_HOSTED_LIVE or SEAZN_HOSTED_REPLAY say, as Task 18 holds it
 // whatever they are. The pass never throws past one recording; the route wraps the whole pass so a throw (the database down) is
 // one failure and the firing goes on. No token is minted here, and nothing logged holds more than ids and an error's class
 // (a database error can echo a connection string: route.ts `endYoutube`).
 import { sql } from "@/lib/db";
 import { log } from "@/server/logger";
-import { FINALISATION_GRACE_SECONDS } from "@/server/relay/config";
+import { DELETE_RECORDING_AFTER_DAYS, FINALISATION_GRACE_SECONDS, MAX_DURATION_MINUTES } from "@/server/relay/config";
 import { TERMINAL_STATES, type SessionState } from "@/server/relay/domain/session";
 import type { IngestVideo } from "@/server/relay/ports";
 import type { SessionDeps } from "./stream-sessions";
@@ -52,6 +56,17 @@ const FINISHED = new Set(["ready", "error"]);
 const RECORDING = "live-inprogress";
 
 interface SeaznInput { id: string; session_id: string; org_id: string; uid: string; state: SessionState; end_ref: Date }
+
+/** Phase 1 review I3: when Cloudflare is to delete a Seazn recording, sent in the lock's own edit. The input's retention
+ *  (DELETE_RECORDING_AFTER_DAYS, which Cloudflare counts from when the recording is READY) from the recording's CREATION, plus the
+ *  longest a recording runs (MAX_DURATION_MINUTES) and finalises (FINALISATION_GRACE_SECONDS): never before Cloudflare's own, and
+ *  never short of its "at least 30 days from upload" floor. From the recording's own creation, so a relock sends the same instant.
+ *  A creation that is not a date counts from `nowMs` (the pass's clock): the lock must never fail on a timestamp. */
+export function seaznRecordingDeleteAt(createdAt: string, nowMs: number): Date {
+  const created = Date.parse(createdAt);
+  const from = Number.isFinite(created) ? created : nowMs;
+  return new Date(from + DELETE_RECORDING_AFTER_DAYS * 86_400_000 + MAX_DURATION_MINUTES * 60_000 + FINALISATION_GRACE_SECONDS * 1000);
+}
 
 export async function lockSeaznRecordings(
   deps: Pick<SessionDeps, "drivers">,
@@ -114,7 +129,7 @@ export async function lockSeaznRecordings(
       if (known && v.signed === true) { confirmed++; continue; }
       if (!canCall()) { stopped = true; break; }
       try {
-        const res = await ingest.requireSignedVideo(v.videoId);
+        const res = await ingest.requireSignedVideo(v.videoId, { deleteAt: seaznRecordingDeleteAt(v.createdAt, nowMs) });
         if (res === "set" && !known) {
           await sql`insert into seazn_locked_videos (cf_video_id, input_row_id) values (${v.videoId}, ${input.id}) on conflict (cf_video_id) do nothing`;
           out.locked++;

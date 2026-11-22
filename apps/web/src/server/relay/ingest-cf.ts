@@ -139,6 +139,9 @@ const INPUT_STATES: ReadonlyMap<string, IngestState | null> = new Map<string, In
 
 /** m-2: `captureError`'s shape (lib/sentry.ts), so the live pair passes it as is. */
 export type ErrorReporter = (err: unknown, context?: { route?: string; extra?: Record<string, unknown> }) => void;
+/** Phase 1 review I3: where a soft finding is logged (the live pair passes the app logger's `warn`, drivers.ts). Fields hold ids
+ *  only, never a token or a body. */
+export type Warn = (fields: Record<string, unknown>, message: string) => void;
 
 /** Dd: -1 (duration, size) and 0 (width, height) are Cloudflare's "not known
  *  yet". Tested on the VALUE, so an errored video's -1 is dropped too; a real
@@ -189,6 +192,8 @@ export class CloudflareIngest implements IngestProvider {
    *  app module (fakes.ts imports it, and e2e specs import fakes.ts outside Next), so the live pair passes
    *  `captureError` (drivers.ts). Default: nothing. */
   private readonly reportError: ErrorReporter;
+  /** Phase 1 review I3: the lock's echo with no scheduled deletion. INJECTED like `reportError`. Default: nothing. */
+  private readonly warn: Warn;
   /** m-2 / G-1 / m-c: what has already been reported, `<what>:<session, or input:<uid> with no session>` — each kind of
    *  report goes out once per session (per process: the live pair is a process singleton, drivers.ts). */
   private readonly reported = new Set<string>();
@@ -207,7 +212,7 @@ export class CloudflareIngest implements IngestProvider {
     return Boolean(env.CLOUDFLARE_ACCOUNT_ID) && Boolean(env.CLOUDFLARE_STREAM_TOKEN);
   }
 
-  constructor(opts: { fetchImpl?: typeof fetch; accountId?: string; token?: string; recorder?: ProviderCallRecorder; reportError?: ErrorReporter } = {}) {
+  constructor(opts: { fetchImpl?: typeof fetch; accountId?: string; token?: string; recorder?: ProviderCallRecorder; reportError?: ErrorReporter; warn?: Warn } = {}) {
     const accountId = opts.accountId ?? process.env.CLOUDFLARE_ACCOUNT_ID;
     const token = opts.token ?? process.env.CLOUDFLARE_STREAM_TOKEN;
     if (!accountId) throw new Error("CLOUDFLARE_ACCOUNT_ID is not set (RELAY_DRIVERS=live needs it)");
@@ -218,6 +223,7 @@ export class CloudflareIngest implements IngestProvider {
     this.accountId = accountId;
     this.rec = opts.recorder ?? NOOP_RECORDER;
     this.reportError = opts.reportError ?? (() => undefined);
+    this.warn = opts.warn ?? (() => undefined);
   }
 
   /** One request, one record (ruling 13). `meta.ids` are the ids the caller
@@ -657,18 +663,29 @@ export class CloudflareIngest implements IngestProvider {
     return token;
   }
 
-  /** Seazn Task 13 (C3): "Edit video details" — `POST /accounts/{account_id}/stream/{identifier}` with `{ requireSignedURLs: true }`
-   *  and nothing else. C3 measured a signed input's FINISHED recording reading unsigned; C7 measured this call answering 200 and
-   *  echoing `true` on an in-progress one, after which the unsigned manifest answered 401. Read back like every setting this
-   *  adapter sends (U1): a 200 whose echo is not `true` did not lock anything, and is an error. A 404 is a video Cloudflare does
-   *  not hold — `absent`. Never a DELETE, never a listing: the uid is the caller's, checked against its own input (C6). */
-  async requireSignedVideo(videoId: string): Promise<"set" | "absent"> {
-    const r = await this.call<{ requireSignedURLs?: boolean | null }>("POST", `/${encodeURIComponent(videoId)}`, { requireSignedURLs: true },
+  /** Seazn Task 13 (C3): "Edit video details" — `POST /accounts/{account_id}/stream/{identifier}` with `{ requireSignedURLs: true,
+   *  scheduledDeletion }` and nothing else. C3 measured a signed input's FINISHED recording reading unsigned; C7 measured this call
+   *  answering 200 and echoing `true` on an in-progress one, after which the unsigned manifest answered 401. Read back like every
+   *  setting this adapter sends (U1): a 200 whose echo is not `true` did not lock anything, and is an error. A 404 is a video
+   *  Cloudflare does not hold — `absent`. Never a DELETE, never a listing: the uid is the caller's, checked against its own input
+   *  (C6).
+   *
+   *  Phase 1 review I3: `scheduledDeletion` (Cloudflare: "at least 30 days from upload time"; omitted means no change) rides in the
+   *  same edit, because nobody has measured whether this POST keeps the deletion the input's `deleteRecordingAfterDays` stamped,
+   *  and the sweep holds every Seazn programme recording for Phase 2. An echo with no deletion is WARNED by video id, never
+   *  refused: the lock (the token rule) held, and a refusal would leave the recording unsigned and retried forever. */
+  async requireSignedVideo(videoId: string, o: { deleteAt: Date }): Promise<"set" | "absent"> {
+    const r = await this.call<{ requireSignedURLs?: boolean | null; scheduledDeletion?: string | null }>("POST", `/${encodeURIComponent(videoId)}`,
+      { requireSignedURLs: true, scheduledDeletion: o.deleteAt.toISOString() },
       { operation: "requireSignedVideo", ids: [videoId], subjectId: videoId });
     if (r.status === 404) return "absent";
     if (!r.json.success || !r.json.result) this.fail("require signed video", r);
     const echoed = r.json.result.requireSignedURLs;
     if (echoed !== true) throw new Error(this.red(`cloudflare require signed video: not applied — requireSignedURLs sent true, echoed ${String(echoed)}`));
+    const deletion = r.json.result.scheduledDeletion;
+    if (typeof deletion !== "string" || Number.isNaN(Date.parse(deletion))) {
+      this.warn({ videoId }, "cloudflare require signed video: the echo carries no scheduled deletion — Cloudflare may never delete this recording");
+    }
     return "set";
   }
 }

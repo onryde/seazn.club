@@ -340,6 +340,8 @@ export class FakeIngest implements IngestProvider {
 
   /** Seazn Task 13: every requireSignedVideo call's video id, in order — a repeat and an unknown id included. */
   readonly signedVideoCalls: string[] = [];
+  /** Phase 1 review I3: the deletion each requireSignedVideo call sent, in step with `signedVideoCalls`. */
+  readonly signedVideoDeleteAts: Date[] = [];
 
   scriptDeleteVideo(videoId: string, results: DeleteVideoResult[]): void {
     this.deleteScripts.set(videoId, [...results]);
@@ -381,11 +383,12 @@ export class FakeIngest implements IngestProvider {
     return `fake.${uid}.${Math.floor(o.expiresAt.getTime() / 1000)}${o.downloadable ? ".dl" : ""}`;
   }
 
-  /** Seazn Task 13 (C3): Cloudflare's `POST /stream/{uid}` with `requireSignedURLs: true`. A video the fake does not hold is the
-   *  404: `absent`. */
-  async requireSignedVideo(videoId: string): Promise<"set" | "absent"> {
+  /** Seazn Task 13 (C3): Cloudflare's `POST /stream/{uid}` with `requireSignedURLs: true` and (review I3) `scheduledDeletion`. A
+   *  video the fake does not hold is the 404: `absent`. */
+  async requireSignedVideo(videoId: string, o: { deleteAt: Date }): Promise<"set" | "absent"> {
     this.record("requireSignedVideo", "POST", `/${videoId}`, [videoId], videoId);
     this.signedVideoCalls.push(videoId);
+    this.signedVideoDeleteAts.push(new Date(o.deleteAt));
     const v = this.videos.find((x) => x.videoId === videoId);
     if (!v) return "absent";
     v.signed = true;

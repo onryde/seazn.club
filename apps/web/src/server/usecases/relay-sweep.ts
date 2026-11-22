@@ -33,7 +33,7 @@ import "server-only";
 import { sql, type Tx } from "@/lib/db";
 import { captureError } from "@/lib/sentry";
 import { log } from "@/server/logger";
-import { EST_COST_CURRENCY, MAX_DURATION_MINUTES, PHONE_BEAT_RETENTION_HOURS, SAMPLE_RETENTION_DAYS, relayEnvironment } from "@/server/relay/config";
+import { EST_COST_CURRENCY, MAX_DURATION_MINUTES, PHONE_BEAT_RETENTION_HOURS, SAMPLE_RETENTION_DAYS, relayEnvironment, seaznHostedReplay } from "@/server/relay/config";
 import { retentionPlan, type RetainedInput, type RetainedVideo } from "@/server/relay/domain/retention";
 import { machineNameFor, type RunnerState } from "@/server/relay/domain/runner";
 import type { DbEndReason } from "@/server/relay/domain/end-reason";
@@ -596,9 +596,12 @@ export async function sweepStreamSessions(
   // Seazn Task 18: a held recording past the promise is alerted ONCE per recording, ever — the seazn_held_alerts row (V540)
   // is the memory. Phase 1 has no replay table, so "no playable replay" holds for every recording (Task 23 adds the table;
   // the replay check belongs with it). After the deletes, so an alert fault can never cost the pass its retention.
+  // Phase 1 review I3: so the alert is armed only with SEAZN_HOSTED_REPLAY on (Phase 2, which needs LIVE): with Phase 1 alone
+  // every Seazn recording would alert at day 3. The count is kept either way, and nothing is marked while it is off, so turning
+  // Phase 2 on alerts what is already past the promise, once.
   const pastPromise = retentionPlan(heldVideos, [], now).deleteVideos;
   out.seaznHeldPastPromise = pastPromise.length;
-  if (pastPromise.length > 0) {
+  if (pastPromise.length > 0 && seaznHostedReplay()) {
     let alerted: Set<string> | null = null;
     try {
       alerted = new Set((await sql<{ id: string }[]>`

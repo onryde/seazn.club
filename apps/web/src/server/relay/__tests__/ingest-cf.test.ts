@@ -19,6 +19,8 @@ import type { IngestState, OutputState, ProviderCallRecord } from "../ports";
 import {
   CLOUDFLARE_RETENTION_RANGE, DELETE_RECORDING_AFTER_DAYS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS, OUTPUT_READ_FAILURES_BEFORE_REPORT,
 } from "../config";
+/** Phase 1 review I3: a recording's deletion instant, as the lock pass computes it (seazn-recordings.ts). */
+const DELETE_AT = new Date("2026-12-22T15:30:00.000Z");
 
 type Call = { url: string; init: RequestInit };
 type Reply = { status: number; body: unknown; headers?: Record<string, string> };
@@ -136,11 +138,14 @@ function cfReply(c: Call): Reply {
   // acceptance (a 200 that did not apply it), `v_gone` a video Cloudflare does not hold, `v_boom` a provider fault.
   if (c.init.method === "POST" && /\/stream\/v_unsigned_echo$/.test(c.url))
     return { status: 200, body: { success: true, result: { uid: "v_unsigned_echo", requireSignedURLs: false } } };
+  // Phase 1 review I3: `v_no_deletion_echo` applies the lock but echoes no scheduled deletion (what the review fears the edit does).
+  if (c.init.method === "POST" && /\/stream\/v_no_deletion_echo$/.test(c.url))
+    return { status: 200, body: { success: true, result: { uid: "v_no_deletion_echo", requireSignedURLs: true, scheduledDeletion: null } } };
   if (c.init.method === "POST" && /\/stream\/v_gone$/.test(c.url)) return { status: 404, body: { success: false, errors: [{ code: 10003, message: "video not found" }] } };
   if (c.init.method === "POST" && /\/stream\/v_boom$/.test(c.url)) return { status: 500, body: { success: false, errors: [{ code: 10000, message: "internal error" }] } };
   if (c.init.method === "POST" && /\/stream\/[^/?]+$/.test(c.url)) {
-    const sent = JSON.parse(String(c.init.body)) as { requireSignedURLs?: boolean };
-    return { status: 200, body: { success: true, result: { uid: c.url.split("/").pop(), status: { state: "ready" }, requireSignedURLs: sent.requireSignedURLs ?? false } } };
+    const sent = JSON.parse(String(c.init.body)) as { requireSignedURLs?: boolean; scheduledDeletion?: string };
+    return { status: 200, body: { success: true, result: { uid: c.url.split("/").pop(), status: { state: "ready" }, requireSignedURLs: sent.requireSignedURLs ?? false, scheduledDeletion: sent.scheduledDeletion ?? null } } };
   }
   // C1: "Delete an output" answers HTTP 200 with the body `{}` (Cloudflare API docs, fetched 2026-09-29) — no `success`
   // envelope. `out_gone` is an output already removed (Cloudflare's 404), `out_boom` a provider fault.
@@ -1176,7 +1181,7 @@ describe("fake/real provider-call parity (Task 3 review G1, m4)", () => {
     await real.deleteVideo("v_done");
     await real.deleteInput(realCreds.inputId);
     await real.playbackToken(realCreds.inputId, { expiresAt: BEFORE });   // Seazn Task 13: appended, so the indexes above hold
-    await real.requireSignedVideo("v_done");
+    await real.requireSignedVideo("v_done", { deleteAt: DELETE_AT });
 
     const fakePort = new FakeRecorder();
     const fake = new FakeIngest({ recorder: fakePort });
@@ -1193,7 +1198,7 @@ describe("fake/real provider-call parity (Task 3 review G1, m4)", () => {
     await fake.deleteVideo("v_done");
     await fake.deleteInput(fakeCreds.inputId);
     await fake.playbackToken(fakeCreds.inputId, { expiresAt: BEFORE });
-    await fake.requireSignedVideo("v_done");
+    await fake.requireSignedVideo("v_done", { deleteAt: DELETE_AT });
 
     await new Promise((r) => setImmediate(r));
     const realShapes = shapes(realPort.calls, { input: realCreds.inputId, video: "v_done", output: realOut });
@@ -1362,7 +1367,7 @@ describe("Seazn Task 13: playback tokens and the recording lock", () => {
       expect(err?.message).not.toContain(API);
       await settle();
       expect(port.calls.map((c) => [c.operation, c.status, c.errorCode])).toEqual([["playbackToken", null, "timeout"]]);
-      await cf.requireSignedVideo("v_cam_done");
+      await cf.requireSignedVideo("v_cam_done", { deleteAt: DELETE_AT });
       expect(inits[1]!.signal, "the lock names no timeout").toBeUndefined();
       expect(timeout, "only the token asked for one").toHaveBeenCalledTimes(1);
     } finally {
@@ -1370,20 +1375,34 @@ describe("Seazn Task 13: playback tokens and the recording lock", () => {
     }
   });
 
-  it("requireSignedVideo POSTs exactly { requireSignedURLs: true } to /stream/{videoId} and answers `set` only on an echo of true; a 200 echoing false is an error (C3); a 404 is `absent`; a 500 throws, redacted", async () => {
+  it("requireSignedVideo POSTs exactly { requireSignedURLs: true, scheduledDeletion } to /stream/{videoId} and answers `set` only on an echo of true; a 200 echoing false is an error (C3); a 404 is `absent`; a 500 throws, redacted", async () => {
     const { rec, cf, port } = build();
-    expect(await cf.requireSignedVideo("v_cam_done")).toBe("set");
+    expect(await cf.requireSignedVideo("v_cam_done", { deleteAt: DELETE_AT })).toBe("set");
     expect([rec.calls[0]!.init.method, rec.calls[0]!.url]).toEqual(["POST", `${CLOUDFLARE_STREAM_BASE}/acct/stream/v_cam_done`]);
-    expect(JSON.parse(String(rec.calls[0]!.init.body))).toEqual({ requireSignedURLs: true });
-    await expect(cf.requireSignedVideo("v_unsigned_echo")).rejects.toThrow(/^cloudflare require signed video: not applied — requireSignedURLs sent true, echoed false/);
-    expect(await cf.requireSignedVideo("v_gone")).toBe("absent");
-    const boom = await cf.requireSignedVideo("v_boom").then(() => null, (e: unknown) => e as Error);
+    expect(JSON.parse(String(rec.calls[0]!.init.body)), "review I3: the deletion rides in the same edit").toEqual({ requireSignedURLs: true, scheduledDeletion: DELETE_AT.toISOString() });
+    await expect(cf.requireSignedVideo("v_unsigned_echo", { deleteAt: DELETE_AT })).rejects.toThrow(/^cloudflare require signed video: not applied — requireSignedURLs sent true, echoed false/);
+    expect(await cf.requireSignedVideo("v_gone", { deleteAt: DELETE_AT })).toBe("absent");
+    const boom = await cf.requireSignedVideo("v_boom", { deleteAt: DELETE_AT }).then(() => null, (e: unknown) => e as Error);
     expect(boom?.message).toMatch(/^cloudflare require signed video: HTTP 500 code 10000/);
     expect(boom?.message).not.toContain(API);
     await settle();
     expect(port.calls.map((c) => [c.operation, c.subjectId])).toEqual([
       ["requireSignedVideo", "v_cam_done"], ["requireSignedVideo", "v_unsigned_echo"], ["requireSignedVideo", "v_gone"], ["requireSignedVideo", "v_boom"],
     ]);
+  });
+
+  it("review I3: an echo with no scheduled deletion still locks (`set`: the token rule held) but is WARNED, by video id alone; an echo that keeps it warns nothing", async () => {
+    const warn = vi.fn();
+    const rec = recorder(cfReply);
+    const cf = new CloudflareIngest({ fetchImpl: rec.fetchImpl, accountId: "acct", token: API, warn });
+    expect(await cf.requireSignedVideo("v_cam_done", { deleteAt: DELETE_AT }), "the healthy echo").toBe("set");
+    expect(warn, "a kept deletion warns nothing").not.toHaveBeenCalled();
+    expect(await cf.requireSignedVideo("v_no_deletion_echo", { deleteAt: DELETE_AT }), "the lock itself held").toBe("set");
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [fields, message] = warn.mock.calls[0]! as [Record<string, unknown>, string];
+    expect(fields, "the video id and nothing else").toEqual({ videoId: "v_no_deletion_echo" });
+    expect(message).toMatch(/scheduled deletion/);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(API);
   });
 
   it("both listings carry the video's own `requireSignedURLs` as `signed` — true, false, and null when the item does not say (C3, C7)", async () => {

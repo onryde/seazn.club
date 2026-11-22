@@ -20,7 +20,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 vi.mock("@/lib/sentry", () => ({ captureError: vi.fn() }));
 
 import { sql } from "@/lib/db";
-import { FINALISATION_GRACE_SECONDS } from "@/server/relay/config";
+import { DELETE_RECORDING_AFTER_DAYS, FINALISATION_GRACE_SECONDS, MAX_DURATION_MINUTES } from "@/server/relay/config";
 import { setRelayDriversForTest } from "@/server/relay/drivers";
 import { FakeIngest, FakeRecorder, FakeRunner } from "@/server/relay/fakes";
 import { pairPresentPhone, rigUser } from "@/server/relay/__tests__/_session-rig";
@@ -289,6 +289,41 @@ describe.skipIf(!HAS_DB)("lockSeaznRecordings — the stream tick's Seazn pass",
     expect(await pass(r, [r.auth.orgId], { now: markAt + 60 * SEC })).toEqual({ ...ZERO, locked: 1 });
     expect(r.ingest.videoAccess(bad)).toBe(true);
     expect((await inputOf(sid, "programme")).locked_at?.getTime()).toBe(markAt + 60 * SEC);
+  });
+
+  // Phase 1 review I3: whether the lock edit keeps the deletion Cloudflare stamped from the input's `deleteRecordingAfterDays` was
+  // never measured, and the sweep holds every Seazn programme recording, so the lock sends the deletion itself. Expected from the
+  // relay's own declarations: the input's deletion in days, from the recording's creation, plus the longest a recording can run
+  // (MAX_DURATION_MINUTES) and finalise (FINALISATION_GRACE_SECONDS) — so it is never before Cloudflare's own (counted from READY)
+  // and never short of its "at least 30 days from upload" floor.
+  it("review I3: the lock sends the recording's deletion in the SAME edit — its creation + the input's retention + the longest run and finalisation — and a relock sends the very same instant", async () => {
+    const r = await rig();
+    const sid = await live(r, r.fixtureIds[0], r.seazn);
+    const prog = await inputOf(sid, "programme");
+    const created = new Date(r.clock.now - 20 * 60 * SEC);
+    const v = vid("delete-at");
+    r.ingest.addVideo({ videoId: v, inputId: prog.uid, createdAt: created.toISOString(), inProgress: false, state: "inprogress" });
+    expect(await pass(r, [r.auth.orgId])).toEqual({ ...ZERO, locked: 1 });
+    const expected = created.getTime() + DELETE_RECORDING_AFTER_DAYS * 86_400 * SEC + MAX_DURATION_MINUTES * 60 * SEC + FINALISATION_GRACE_SECONDS * SEC;
+    expect(r.ingest.signedVideoDeleteAts.map((d) => d.getTime())).toEqual([expected]);
+    expect(expected - (created.getTime() + MAX_DURATION_MINUTES * 60 * SEC + FINALISATION_GRACE_SECONDS * SEC), "30 days after the latest it can have been uploaded").toBeGreaterThanOrEqual(30 * 86_400 * SEC);
+    // The C7 relock, a day later: the same instant, not pushed on by the day (it is the recording's, not the pass's).
+    const ended = await stopAndSettle(r, r.fixtureIds[0], sid);
+    r.ingest.updateVideo(v, { inProgress: false, state: "ready", signed: false });
+    expect(await pass(r, [r.auth.orgId], { now: ended + 86_400 * SEC })).toEqual({ ...ZERO, relocked: 1 });
+    expect(r.ingest.signedVideoDeleteAts.map((d) => d.getTime())).toEqual([expected, expected]);
+  });
+
+  it("review I3: a recording whose creation is not a date is still locked — its deletion counted from the pass's own clock — never left unsigned by a bad timestamp", async () => {
+    const r = await rig();
+    const sid = await live(r, r.fixtureIds[0], r.seazn);
+    const prog = await inputOf(sid, "programme");
+    const v = vid("no-created");
+    r.ingest.addVideo({ videoId: v, inputId: prog.uid, createdAt: "not a date", inProgress: false });
+    expect(await pass(r, [r.auth.orgId])).toEqual({ ...ZERO, locked: 1 });
+    expect(r.ingest.videoAccess(v), "signed").toBe(true);
+    const expected = r.clock.now + DELETE_RECORDING_AFTER_DAYS * 86_400 * SEC + MAX_DURATION_MINUTES * 60 * SEC + FINALISATION_GRACE_SECONDS * SEC;
+    expect(r.ingest.signedVideoDeleteAts.map((d) => d.getTime())).toEqual([expected]);
   });
 
   it("LIVE and REPLAY both off: a Seazn recording is still locked (the pass reads no flag)", async () => {

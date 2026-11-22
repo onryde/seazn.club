@@ -131,8 +131,11 @@ export interface IngestProvider {
   playbackToken(uid: string, o: { expiresAt: Date; downloadable?: boolean }): Promise<string>;
   /** Seazn Task 13 (C3): make ONE video need a signed token to play, read back from the provider's echo — `set` only when the
    *  echo says so (a 200 that does not is an error). `absent` is a video the provider does not hold (gone between the listing
-   *  and this call). The uid comes from a listing item checked against its own input (C6), never from a filtered listing alone. */
-  requireSignedVideo(videoId: string): Promise<"set" | "absent">;
+   *  and this call). The uid comes from a listing item checked against its own input (C6), never from a filtered listing alone.
+   *  Phase 1 review I3: the same edit sets the video's own deletion to `deleteAt`, so a held recording is still deleted by the
+   *  provider whatever the edit does to the deletion its input stamped (never measured); an echo without it is warned, not
+   *  refused (the token rule held). */
+  requireSignedVideo(videoId: string, o: { deleteAt: Date }): Promise<"set" | "absent">;
 }
 export type RunnerSpec = {
   sessionId: string; attempt: number; jobToken: string; appUrl: string;   // attempt → the Machine NAME (domain/runner.ts machineNameFor)

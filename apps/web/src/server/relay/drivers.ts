@@ -123,7 +123,11 @@ export function relayDrivers(): RelayDrivers {
   const mode = relayDriverMode();
   instance =
     mode === "live"
-      ? { ingest: new CloudflareIngest({ recorder: dbRecorder, reportError: captureError }), runner: lazyRunner() }   // m-2: unseen output words reach Sentry
+      ? {
+          // m-2: unseen output words reach Sentry; review I3: a lock echo with no scheduled deletion reaches the log.
+          ingest: new CloudflareIngest({ recorder: dbRecorder, reportError: captureError, warn: (fields, message) => log.warn(fields, message) }),
+          runner: lazyRunner(),
+        }
       : mode === "disabled"
         ? disabledRelayDrivers()
         : { ingest: new FakeIngest({ recorder: dbRecorder }), runner: new FakeRunner({ recorder: dbRecorder }) };

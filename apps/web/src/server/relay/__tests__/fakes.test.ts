@@ -82,10 +82,13 @@ describe("FakeIngest", () => {
     fake.addVideo({ videoId: "v-mine", inputId: "in-1", createdAt: at, inProgress: true });
     fake.addVideo({ videoId: "v-theirs", inputId: "in-2", createdAt: at, inProgress: false });
     expect([fake.videoAccess("v-mine"), fake.videoAccess("v-theirs")]).toEqual([false, false]);
-    expect(await fake.requireSignedVideo("v-mine")).toBe("set");
+    const deleteAt = new Date("2026-12-22T15:30:00.000Z");
+    expect(await fake.requireSignedVideo("v-mine", { deleteAt })).toBe("set");
     expect([fake.videoAccess("v-mine"), fake.videoAccess("v-theirs")], "only the named video").toEqual([true, false]);
-    expect(await fake.requireSignedVideo("v-never")).toBe("absent");
+    expect(await fake.requireSignedVideo("v-never", { deleteAt: new Date(deleteAt.getTime() + 1_000) })).toBe("absent");
     expect(fake.signedVideoCalls).toEqual(["v-mine", "v-never"]);
+    // Phase 1 review I3: the deletion each edit sent, in step with the calls.
+    expect(fake.signedVideoDeleteAts.map((d) => d.toISOString())).toEqual(["2026-12-22T15:30:00.000Z", "2026-12-22T15:30:01.000Z"]);
     expect(() => fake.videoAccess("v-never"), "an unknown video is the test's mistake").toThrow(/unknown video/);
     // The listing reads the video's own flag, and a recording that finishes can read unsigned again (C3 at ready).
     expect((await fake.listInputVideos("in-1")).map((v) => [v.videoId, v.signed])).toEqual([["v-mine", true]]);
