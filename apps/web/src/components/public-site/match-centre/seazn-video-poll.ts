@@ -54,6 +54,10 @@ export interface VideoPoll {
   refreshSoon: () => void;
 }
 
+/** Phase 1 review m8: a read not answered by then is given up (aborted) and counts as a failed read, so a hung request cannot freeze
+ *  the island. */
+export const SEAZN_VIDEO_FETCH_TIMEOUT_MS = 15_000;
+
 export function startVideoPoll({ fetchVideo, onVideo, settledAtMs = null, visibility }: VideoPollHooks): VideoPoll {
   const page = visibility ?? documentVisibility();
   const isHidden = () => page?.hidden() ?? false;
@@ -96,8 +100,9 @@ export function startVideoPoll({ fetchVideo, onVideo, settledAtMs = null, visibi
     inFlight = mine;
     lastReadAt = Date.now();
     try {
-      const video = await fetchVideo(mine.signal);
-      if (stopped || mine.signal.aborted) return;
+      const giveUp = setTimeout(() => mine.abort(), SEAZN_VIDEO_FETCH_TIMEOUT_MS);
+      const video = await fetchVideo(mine.signal).finally(() => clearTimeout(giveUp));
+      if (stopped) return;
       const rebuild = rebuildNext;
       rebuildNext = false;
       onVideo(video, { rebuild });
@@ -105,7 +110,7 @@ export function startVideoPoll({ fetchVideo, onVideo, settledAtMs = null, visibi
       emptyStreak = isEmptyVideo(video) ? emptyStreak + 1 : 0;
       schedule(nextVideoFetchMs(video, { nowMs: Date.now(), settledAtMs, emptyStreak }));
     } catch {
-      if (stopped || mine.signal.aborted) return;
+      if (stopped) return;   // only stop() aborts besides the give-up, and the give-up is a failed read
       inFlight = null;
       schedule(SEAZN_VIDEO_POLL_FLOOR_MS);
     }

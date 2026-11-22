@@ -10,8 +10,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SEAZN_TOKEN_REFRESH_BEFORE_SECONDS } from "@/server/relay/config";
 import type { PublicFixtureVideo } from "@/server/api-v1/schemas";
-import { type PageVisibility, startVideoPoll } from "../seazn-video-poll";
-import { nextVideoFetchMs } from "../seazn-video-schedule";
+import { type PageVisibility, SEAZN_VIDEO_FETCH_TIMEOUT_MS, startVideoPoll } from "../seazn-video-poll";
+import { SEAZN_VIDEO_POLL_FLOOR_MS, nextVideoFetchMs } from "../seazn-video-schedule";
 
 const T0 = new Date("2026-11-21T12:00:00.000Z");
 const MIN = 60_000;
@@ -208,6 +208,38 @@ describe("startVideoPoll: stop", () => {
     await flush();
     expect(seen, "an answer that arrives after the stop is dropped").toEqual([]);
     expect(vi.getTimerCount(), "and schedules nothing").toBe(0);
+  });
+});
+
+// Phase 1 review m8: one read at a time, so a request that never answers used to freeze the island (no Stop, no live) until the
+// browser gave up. It is given up at 15 s (the review's figure) and treated as a failed read.
+describe("review m8: a read that hangs", () => {
+  it("is given up at the fetch timeout and tried again a floor later; a read that answers inside the timeout is never cut off", async () => {
+    expect(SEAZN_VIDEO_FETCH_TIMEOUT_MS, "the review's 15 s").toBe(15_000);
+    const signals: AbortSignal[] = [];
+    const fetchVideo = vi.fn((signal: AbortSignal) => new Promise<PublicFixtureVideo>((resolve, reject) => {
+      signals.push(signal);
+      // The first read never answers (it rejects only when aborted, as fetch does); the second answers after 14 s.
+      if (signals.length === 1) signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+      else setTimeout(() => resolve(EMPTY), SEAZN_VIDEO_FETCH_TIMEOUT_MS - 1_000);
+    }));
+    const seen: PublicFixtureVideo[] = [];
+    const poll = startVideoPoll({ fetchVideo, onVideo: (v) => seen.push(v) });
+    await flush();
+    await vi.advanceTimersByTimeAsync(SEAZN_VIDEO_FETCH_TIMEOUT_MS - 1);
+    expect(signals[0]!.aborted, "not before the timeout").toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(signals[0]!.aborted, "given up at the timeout").toBe(true);
+    await vi.advanceTimersByTimeAsync(SEAZN_VIDEO_POLL_FLOOR_MS - 1);
+    expect(fetchVideo, "the retry waits the floor").toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetchVideo, "and then reads again").toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(SEAZN_VIDEO_FETCH_TIMEOUT_MS - 1_000);
+    expect(signals[1]!.aborted, "a slow answer inside the timeout is kept").toBe(false);
+    expect(seen).toEqual([EMPTY]);
+    await vi.advanceTimersByTimeAsync(SEAZN_VIDEO_FETCH_TIMEOUT_MS);
+    expect(signals[1]!.aborted, "and its give-up timer was cleared").toBe(false);
+    poll.stop();
   });
 });
 
