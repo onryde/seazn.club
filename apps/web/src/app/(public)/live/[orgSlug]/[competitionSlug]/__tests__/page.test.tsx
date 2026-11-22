@@ -30,6 +30,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { isValidElement, type ReactElement } from "react";
 import { propsOf, walk } from "@/components/__tests__/_hook-harness";
 import { CompetitionLanding } from "@/components/public-site/matches-hub/competition-landing";
+import { unpackHubDoc } from "@/components/public-site/packed-hub-doc";
 import { ShareBar } from "@/components/share-bar";
 import en from "@/dictionaries/en/public.json";
 import es from "@/dictionaries/es/public.json";
@@ -320,7 +321,9 @@ describe("the competition page mounts the landing", () => {
     expect(mount, "CompetitionLanding is mounted").toBeTruthy();
     const props = propsOf(mount!) as Record<string, unknown>;
 
-    expect(props.initial).toBe(hub);
+    // W5 follow-ups B4: the document goes over packed (its matches as columns), and unpacks to exactly the hub doc.
+    expect(Array.isArray((props.initial as { matches: unknown }).matches), "matches are sent packed").toBe(false);
+    expect(unpackHubDoc(props.initial as never)).toEqual(hub);
     expect(props.locale).toBe("en");
     expect((props.dict as Record<string, string>)["landing.present"]).toBe(en["landing.present"]);
     // Both slots, each a real element — `shareSlot` in particular, whose only

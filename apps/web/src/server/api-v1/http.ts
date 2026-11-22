@@ -186,9 +186,10 @@ async function v1Inner<T>(
     const result = await fn();
     const rate = rateLimitHeaders();
     if (result instanceof Reply) {
-      // 204 carries no body by definition (v3/09 §4 — DELETE division).
-      if (result.status === 204) {
-        return new NextResponse(null, { status: 204, headers: { ...rate, ...result.headers } });
+      // 204 carries no body by definition (v3/09 §4 — DELETE division); nor does 304 (W5 follow-ups B4: the hub poll that
+      // already holds the document's build).
+      if (result.status === 204 || result.status === 304) {
+        return new NextResponse(null, { status: result.status, headers: { ...rate, ...result.headers } });
       }
       return NextResponse.json(
         { ok: true, data: result.data, requestId },

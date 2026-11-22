@@ -69,6 +69,7 @@ import {
 } from "@/components/public-site/sponsors-board";
 import type { BoardClickTag } from "@/lib/sponsor-clicks";
 import { CompetitionLanding } from "@/components/public-site/matches-hub/competition-landing";
+import { packHubDoc } from "@/components/public-site/packed-hub-doc";
 // ONE producer for the competition's date line, shared with the Info tab that
 // renders the same two dates a tab away. Two implementations of "1 September
 // 2026 – 20 September 2026" is how one of them ends up a day out; `info-tab`'s
@@ -427,7 +428,9 @@ export default async function CompetitionHomePage({ params }: Props) {
 
           The sponsor board is deliberately NOT among them — see below. */}
       <CompetitionLanding
-        initial={hub}
+        // W5 follow-ups B4: matches as columns (`packHubDoc`), about a third of the flight at a cap-sized competition; the
+        // landing unpacks them before anything reads the document.
+        initial={packHubDoc(hub)}
         // The HUB SLICE, not the whole dictionary. `CompetitionLanding` is a
         // client root, so whatever it is handed is serialised into the HTML —
         // the full `public.json` was 85 KB of a 131 KB page, and put every

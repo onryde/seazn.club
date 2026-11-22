@@ -895,3 +895,29 @@ describe("CompetitionLanding — a poll re-renders the ACTIVE tab in place", () 
     spy.mockRestore();
   });
 });
+
+// W5 follow-ups B4: the hub page now hands the landing its document with `matches` packed as columns (`packHubDoc`). The
+// landing must render exactly what it renders from the plain document, on every tab a deep link can open - a differential
+// against the plain render, never a copy of the markup.
+describe("CompetitionLanding — a packed document renders as the plain one (B4)", () => {
+  it("every tab, from a document with live, upcoming and finished matches across divisions", async () => {
+    const { packHubDoc } = await import("../packed-hub-doc");
+    const doc = hubDoc({
+      matches: [
+        m("l1", "live", "2026-09-05T10:00:00.000Z", "premier"),
+        m("u1", "upcoming", "2026-09-05T12:00:00.000Z", "premier"),
+        m("c1", "completed", "2026-09-04T12:00:00.000Z", "championship"),
+      ],
+    });
+    const packed = packHubDoc(doc);
+    expect(Array.isArray(packed.matches), "premise: the matches really are packed").toBe(false);
+    let tabs = 0;
+    for (const tab of [null, "matches", "table", "stats", "teams", "info", "knockout"]) {
+      tabParam.value = tab;
+      expect(renderToStaticMarkup(<CompetitionLanding initial={packed} dict={dict} locale="en" />), `tab ${tab}`).toBe(render(doc));
+      tabs += 1;
+    }
+    tabParam.value = null;
+    expect(tabs, "anti-vacuity").toBe(7);
+  });
+});

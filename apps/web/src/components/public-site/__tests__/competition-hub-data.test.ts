@@ -16,6 +16,8 @@ function stubFetch(payload: unknown, ok = true, status = 200) {
     vi.fn(async () => ({
       ok,
       status,
+      // A real Response always carries headers; the fetch layer reads the hub's ETag off them (W5 follow-ups B4).
+      headers: new Headers(),
       json: async () => payload,
     })),
   );
