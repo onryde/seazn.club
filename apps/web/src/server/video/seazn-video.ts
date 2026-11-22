@@ -93,6 +93,13 @@ interface EntryRow {
 
 /** What a rejected mint is logged as: its class alone. A message could quote a request, and a request can carry a token. */
 const errorClass = (e: unknown): string => (e instanceof Error ? e.name : typeof e);
+/** The provider's status and code on a failed mint (Task 25, coordinator's addition): read off the Cloudflare adapter's refusal
+ *  (ingest-cf.ts `fail`: `cloudflare <what>: HTTP <status> code <code> <text>`) as NUMBERS alone, so the provider's free text, which
+ *  can quote a request, never reaches the line. Anything else (a transport failure, a timeout, another adapter) is null, null. */
+function providerCodeOf(e: unknown): { httpStatus: number | null; providerCode: string | null } {
+  const m = e instanceof Error ? /^cloudflare [a-z ]+: HTTP (\d{3})(?: code (\d{1,9}))?(?:\s|$)/.exec(e.message) : null;
+  return { httpStatus: m ? Number(m[1]) : null, providerCode: m?.[2] ?? null };
+}
 /** A failure worth a line: a mint that was asked and failed. A refusal inside a failed mint's window asked nothing (review I1). */
 const freshFailure = (e: unknown): boolean => !(e instanceof PlaybackTokenRecentlyFailed);
 
@@ -197,7 +204,10 @@ async function videoOf(fixtureId: string, orgId: string | null, now: Date, playb
   let live: PublicFixtureVideo["live"] = null;
   if (liveSigned !== null && "ok" in liveSigned) live = liveSigned.ok;
   else if (liveSigned !== null && freshFailure(liveSigned.err)) {
-    log.warn({ sessionId: latest!.id, err: errorClass(liveSigned.err) }, "seazn video: the live could not be signed; this answer has no live");
+    log.warn(
+      { fixtureId, sessionId: latest!.id, err: errorClass(liveSigned.err), ...providerCodeOf(liveSigned.err) },
+      "seazn video: the live could not be signed; this answer has no live",
+    );
   }
   const replay: PublicFixtureVideo["replay"] = [];
   signed.forEach((s, i) => {
@@ -206,7 +216,7 @@ async function videoOf(fixtureId: string, orgId: string | null, now: Date, playb
       if (s.value !== null) replay.push({ partNo: p.partNo, player: p.player, src: s.value.src, expiresAt: s.value.expiresAt });
     } else if (freshFailure(s.reason)) {
       log.warn(
-        { sessionId: p.sessionId, cfVideoId: p.cfVideoId, err: errorClass(s.reason) },
+        { fixtureId, sessionId: p.sessionId, cfVideoId: p.cfVideoId, err: errorClass(s.reason), ...providerCodeOf(s.reason) },
         "seazn video: a replay part could not be signed; it is left out of this answer",
       );
     }

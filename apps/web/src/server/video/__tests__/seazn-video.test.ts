@@ -25,6 +25,7 @@ import { log } from "@/server/logger";
 import { DELETE_RECORDING_AFTER_DAYS } from "@/server/relay/config";
 import { RelayDriversDisabled, disabledRelayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
 import { FakeIngest, FakeRecorder, FakeRunner } from "@/server/relay/fakes";
+import { CloudflareIngest } from "@/server/relay/ingest-cf";
 import { pairPresentPhone, rigUser } from "@/server/relay/__tests__/_session-rig";
 import { lockSeaznRecordings } from "@/server/usecases/seazn-recordings";
 import { grantCredits } from "@/server/usecases/stream-credits";
@@ -38,6 +39,14 @@ import { GET } from "@/app/api/v1/public/fixtures/[id]/video/route";
 
 /** The one line a live that cannot be signed is logged under (review I1). */
 const LIVE_UNSIGNED_LOG = "seazn video: the live could not be signed; this answer has no live";
+/** What the REAL Cloudflare adapter throws when the token endpoint refuses (`success: false`, Cloudflare's first error). */
+async function refusalFrom(status: number, code: number, message: string): Promise<unknown> {
+  const fetchImpl = (async () => new Response(JSON.stringify({ success: false, errors: [{ code, message }], result: null }), { status, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+  const cf = new CloudflareIngest({ accountId: "acct", token: "api-token-not-a-secret-here", fetchImpl });
+  const err = await cf.playbackToken("in_leak", { expiresAt: new Date(Date.now() + 3_600_000) }).then(() => null, (e: unknown) => e);
+  expect(err, "premise: the adapter refused").toBeInstanceOf(Error);
+  return err;
+}
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const ROOMY_STORAGE_MINUTES = 100_000_000;
@@ -345,7 +354,8 @@ describe.skipIf(!HAS_DB)("seaznFixtureVideo — a fixture's Seazn video for the 
       expect(signedUid(answer.live!.src), "the live still answers").toBe((await programmeOf(second)).uid);
       expect(answer.replay.map((p) => [p.partNo, signedUid(p.src)]), "Part 2 still answers, under its own number").toEqual([[2, b]]);
       const partLogs = warn.mock.calls.filter(([o]) => typeof o === "object" && o !== null && "cfVideoId" in o);
-      expect(partLogs.map(([o]) => o), "one line, by uid and error class").toEqual([{ sessionId: first, cfVideoId: a, err: "Error" }]);
+      expect(partLogs.map(([o]) => o), "one line, by fixture, uid and error class (no provider code: not the adapter's refusal)")
+        .toEqual([{ fixtureId: f, sessionId: first, cfVideoId: a, err: "Error", httpStatus: null, providerCode: null }]);
       expect(JSON.stringify(warn.mock.calls), "no token and no error message in any log line").not.toMatch(/fake\.|refused/);
       r.mint.mockImplementation((uid, o) => real.call(r.ingest, uid, o));
       expect((await seaznFixtureVideo(f, now, fresh())).replay.map((p) => [p.partNo, signedUid(p.src)]), "recovered").toEqual([[1, a], [2, b]]);
@@ -364,7 +374,9 @@ describe.skipIf(!HAS_DB)("seaznFixtureVideo — a fixture's Seazn video for the 
     const second = await live(r, f, r.seazn);
     const liveUid = (await programmeOf(second)).uid;
     const real = FakeIngest.prototype.playbackToken;
-    r.mint.mockImplementation((uid, o) => (uid === liveUid ? Promise.reject(new Error("cloudflare playback token: HTTP 429 code 10000 refused")) : real.call(r.ingest, uid, o)));
+    // The REAL adapter's refusal (Cloudflare's 429 envelope through CloudflareIngest), so the log reads what production throws.
+    const cfRefusal = await refusalFrom(429, 10000, "Too many requests: retry the token for in_leak later");
+    r.mint.mockImplementation((uid, o) => (uid === liveUid ? Promise.reject(cfRefusal) : real.call(r.ingest, uid, o)));
     const liveMints = () => r.mint.mock.calls.filter(([uid]) => uid === liveUid).length;
     const warn = vi.spyOn(log, "warn");
     const liveLogs = () => warn.mock.calls.filter(([, msg]) => msg === LIVE_UNSIGNED_LOG);
@@ -373,8 +385,11 @@ describe.skipIf(!HAS_DB)("seaznFixtureVideo — a fixture's Seazn video for the 
       expect(answer.live, "the live is left out").toBeNull();
       expect(answer.replay.map((p) => [p.partNo, p.player, signedUid(p.src)]), "the part still answers").toEqual([[1, "hls", rec]]);
       expect(PublicFixtureVideo.parse(answer), "still the published contract").toEqual(answer);
-      expect(liveLogs().map(([o]) => o), "one line, by session and error class").toEqual([{ sessionId: second, err: "Error" }]);
-      expect(JSON.stringify(warn.mock.calls), "no token and no error message in any log line").not.toMatch(/fake\.|refused|429/);
+      // Coordinator's addition (Task 25): the fixture and the provider's status and code — numbers read off the adapter's refusal,
+      // never its text.
+      expect(liveLogs().map(([o]) => o), "one line, by fixture, session, error class and the provider's code")
+        .toEqual([{ fixtureId: f, sessionId: second, err: "Error", httpStatus: 429, providerCode: "10000" }]);
+      expect(JSON.stringify(warn.mock.calls), "no token and no error message in any log line").not.toMatch(/fake\.|refused|Too many|in_leak|retry/);
       // 30 s on (the island's floor), inside the window: the same answer, no Cloudflare call, no second line.
       r.clock.now += 30_000;
       expect((await read(r, f)).live).toBeNull();
