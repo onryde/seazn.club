@@ -38,6 +38,8 @@ import type { SessionDeps } from "./stream-sessions";
 export const SEAZN_PASS_BUDGET_MS = 8_000;
 /** No provider call starts with less than this left of the pass's slice; what is not reached is `deferred` to the next firing. */
 export const SEAZN_PASS_CALL_FLOOR_MS = 2_000;
+/** Phase 1 review m13: the most foreign recording ids one C6 warning names (it repeats every pass); the count is whole. */
+export const SEAZN_PASS_LOGGED_IDS_MAX = 10;
 
 /** The pass's answer, read by the cron Worker as `data.seazn` (`failed` is its one failure counter, R3).
  *  - `locked`: recordings made to need a token for the first time this pass;
@@ -114,7 +116,7 @@ export async function lockSeaznRecordings(
     const foreign = listed.filter((v) => v.inputId !== input.uid);
     if (foreign.length > 0) {
       out.refused += foreign.length;
-      log.warn({ sid: input.session_id, refused: foreign.map((v) => ({ videoId: v.videoId, videoInput: v.inputId })) }, "seazn pass: a programme input's listing named recordings of another input — left untouched (C6)");
+      log.warn({ sid: input.session_id, refusedCount: foreign.length, refused: foreign.slice(0, SEAZN_PASS_LOGGED_IDS_MAX).map((v) => ({ videoId: v.videoId, videoInput: v.inputId })) }, "seazn pass: a programme input's listing named recordings of another input — left untouched (C6)");
     }
     const lockedBefore = own.length === 0 ? new Set<string>() : new Set((await sql<{ cf_video_id: string }[]>`
       select cf_video_id from seazn_locked_videos where cf_video_id in ${sql(own.map((v) => v.videoId))}`).map((r) => r.cf_video_id));

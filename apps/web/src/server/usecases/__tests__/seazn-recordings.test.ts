@@ -27,7 +27,8 @@ import { pairPresentPhone, rigUser } from "@/server/relay/__tests__/_session-rig
 import { grantCredits } from "../stream-credits";
 import { type SessionDeps, createSession, currentSession, heartbeat, stopSession } from "../stream-sessions";
 import { createStreamTarget } from "../stream-targets";
-import { lockSeaznRecordings } from "../seazn-recordings";
+import { SEAZN_PASS_LOGGED_IDS_MAX, lockSeaznRecordings } from "../seazn-recordings";
+import { log } from "@/server/logger";
 import { override } from "./_capture-rig";
 import { seedOrg, startedDivisionWithFixture } from "./_rig";
 
@@ -147,6 +148,31 @@ describe.skipIf(!HAS_DB)("lockSeaznRecordings — the stream tick's Seazn pass",
     expect(await pass(r, [r.auth.orgId]), "the second pass: listed, already locked, reads signed").toEqual(ZERO);
     expect(r.ingest.signedVideoCalls, "no second lock call").toHaveLength(2);
     expect((await inputOf(sid, "programme")).locked_at, "still live: never marked finished").toBeNull();
+  });
+
+  // Phase 1 review m13 (T13 m8): the refusal is logged every pass (every minute) while the listing keeps answering it, so the
+  // logged ids are capped; the count is whole.
+  it("m13: a listing answering more foreign recordings than the cap logs the first SEAZN_PASS_LOGGED_IDS_MAX ids and the whole count", async () => {
+    const a = await rig();
+    const sid = await live(a, a.fixtureIds[0], a.seazn);
+    const prog = await inputOf(sid, "programme");
+    const other = await inputOf(sid, "camera");
+    const at = new Date(a.clock.now).toISOString();
+    const foreign = Array.from({ length: SEAZN_PASS_LOGGED_IDS_MAX + 2 }, (_, i) => vid(`foreign-${i}`));
+    expect(foreign.length, "PREMISE: more foreign recordings than the cap").toBeGreaterThan(SEAZN_PASS_LOGGED_IDS_MAX);
+    for (const v of foreign) a.ingest.addVideo({ videoId: v, inputId: other.uid, createdAt: at, inProgress: false });
+    a.ingest.seedInputListing(prog.uid, foreign);
+    const warn = vi.spyOn(log, "warn");
+    try {
+      expect(await pass(a, [a.auth.orgId])).toEqual({ ...ZERO, refused: foreign.length });
+      const lines = warn.mock.calls.filter(([, m]) => String(m).includes("(C6)"));
+      expect(lines, "one C6 line for the input").toHaveLength(1);
+      const fields = lines[0]![0] as { refused: { videoId: string }[]; refusedCount: number };
+      expect(fields.refused.map((r) => r.videoId)).toEqual(foreign.slice(0, SEAZN_PASS_LOGGED_IDS_MAX));
+      expect(fields.refusedCount).toBe(foreign.length);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("C6: a listing that also answers two recordings of OTHER inputs — one of them another org's Seazn programme input — locks only its own; refused is 2 and no call names the others", async () => {
