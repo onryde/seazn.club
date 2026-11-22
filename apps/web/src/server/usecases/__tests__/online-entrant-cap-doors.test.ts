@@ -475,8 +475,8 @@ describe.skipIf(!HAS_DB)("door: the organiser's Promote, Confirm and Waive check
 // (`assertOrganiserPromotionHasRoom`, registrations/waitlist.ts) asks, in order: the online room (on the places HELD), then the
 // format's max, then the plan's limit (both on the sign-ups holding a place). Two orderings are pinned here, each by a state the
 // product can reach: past BOTH the online cap and the format's max (M sign-ups, then the organiser adds the rest by hand - the add
-// door has no format gate, and the league was set on the empty division first, so the stage door never saw the field) the online
-// room answers; past BOTH the format's max and a LOWER plan limit (a plan lowered under the entries already in) the format answers.
+// door has no format gate, and the league was set on the empty division first, so the stage door never saw the field) the format
+// answers, the tighter real limit (owner "apply rec" 2026-11-22: its sentence says what to change); past BOTH the format's max and a LOWER plan limit (a plan lowered under the entries already in) the format answers.
 // The format's max is the product's own declaration, pinned to the engine's round-robin count - never read from the cap under test.
 // Single sport: online play exists for boardgame alone (`supportsOnlinePlay`, external-play/online-play.ts).
 
@@ -527,7 +527,7 @@ describe.skipIf(!HAS_DB)("door: an online division whose FORMAT max is below the
     expect(await heldOf(r.division.id), "nothing written").toBe(M);
   });
 
-  it("past BOTH the online cap and the format's max (M sign-ups + 128 - M added by hand), the online room answers first: ONLINE_DIVISION_FULL", async () => {
+  it("past BOTH the online cap and the format's max (M sign-ups + 128 - M added by hand), the format's max answers first: FORMAT_TOO_MANY_ENTRANTS, not ONLINE_DIVISION_FULL", async () => {
     const r = await leagueRig("pro", "manual");
     await r.holders(M);
     await fillEntrants(r.division.id, MAX - M);
@@ -535,8 +535,8 @@ describe.skipIf(!HAS_DB)("door: an online division whose FORMAT max is below the
     const w = await r.waiting();
     await expect(promoteFromWaitlist(r.auth, r.division.id, { registrationId: w, confirmOverCapacity: true })).rejects.toMatchObject({
       status: 422,
-      code: ONLINE_DIVISION_FULL,
-      extra: { limit: MAX },
+      code: FORMAT_TOO_MANY,
+      extra: { max: M, entrants: M },
     });
     expect(await r.statusOf(w)).toBe("waitlisted");
   });
