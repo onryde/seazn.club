@@ -84,6 +84,14 @@ export const GOOGLE_FLASH_LINKED_ELSEWHERE = "linked_elsewhere";
 export const LICHESS_AUTH_URL = "https://lichess.org/oauth";
 export const LICHESS_TOKEN_URL = "https://lichess.org/api/token";
 export const LICHESS_ACCOUNT_URL = "https://lichess.org/api/account";
+/** Lichess's API tips (lichess.org/page/api-tips): "All requests going to lichess.org MUST include a User-Agent header
+ *  with your website URL, or the name of your application, or a contact email". Sent on EVERY request to Lichess: the
+ *  Board API client (server/external-play/lichess/board-api.ts), the token revoke and token test
+ *  (server/usecases/external-accounts.ts) and the OAuth callback (app/api/auth/lichess/callback/route.ts). It lives here
+ *  beside the Lichess URLs because two of those three already import this module and it imports nothing but
+ *  `server-only`, so the Board API client takes no new weight by importing it. No personal email.
+ *  lichess-user-agent.test.ts holds every `fetch(` in those files to it. */
+export const LICHESS_USER_AGENT = "Seazn Club (https://seazn.club)";
 /** Design §3.1 (2026-10-09, amended 2026-10-10): our server submits both
  *  players' moves with their own tokens, so the grant must carry `board:play`
  *  (submit a move, resign, offer a draw, abort), `challenge:write` (White's

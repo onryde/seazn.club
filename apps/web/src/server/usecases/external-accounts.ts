@@ -8,7 +8,7 @@ import "server-only";
 // privileged `sql` (FORCE RLS with no app_user policy).
 import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { LICHESS_OAUTH_SCOPES, LICHESS_TOKEN_URL } from "@/lib/oauth";
+import { LICHESS_OAUTH_SCOPES, LICHESS_TOKEN_URL, LICHESS_USER_AGENT } from "@/lib/oauth";
 import { LICHESS_TIMEOUT_MS } from "@/server/external-play/window";
 import { openPlayerToken, sealPlayerToken } from "@/server/external-play/secrets";
 import { log } from "@/server/logger";
@@ -128,7 +128,7 @@ async function revokeAtLichess(
   try {
     const res = await fetch(lichessTokenUrl(), {
       method: "DELETE",
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { Authorization: `Bearer ${token}`, "User-Agent": LICHESS_USER_AGENT },
       signal: AbortSignal.timeout(LICHESS_TIMEOUT_MS),
     });
     return res.ok ? null : { reason: "revoke_rejected", status: res.status };
@@ -426,7 +426,7 @@ async function testAtLichess(
   try {
     res = await fetch(`${lichessTokenUrl()}/test`, {
       method: "POST",
-      headers: { "content-type": "text/plain" },
+      headers: { "content-type": "text/plain", "User-Agent": LICHESS_USER_AGENT },
       body: token,
       signal,
     });
