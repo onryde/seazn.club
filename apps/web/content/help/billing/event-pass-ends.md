@@ -37,7 +37,7 @@ The overview offers **Create the next edition** and **Go Pro — 14-day free tri
 The reason is read from the competition each time, so correcting it brings the pass back:
 
 - If the end date has passed but the event is still being played, move the end date forward. The overview's notice **This competition's end date has passed** has a **Change the end date** button. The pass applies again.
-- Marked it completed or archived by mistake? Open the competition's settings, set **Status** back to **live** and choose **Save changes**. The pass applies again.
+- Marked it completed or archived by mistake? Open the competition's settings, set **Status** back to **live** and choose **Save changes**. The pass applies again as long as its end date passed no more than 7 days ago. If the end date passed longer ago, move it forward too.
 - For a truly finished event, choose **Create the next edition** for the next one. A new competition needs its own pass.
 
 ## When a pass is refunded

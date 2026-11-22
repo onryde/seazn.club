@@ -9,7 +9,7 @@ An add-on buys more of one thing without changing your plan. The **Add-ons** pag
 
 ## Extra organisations
 
-One subscription already covers several organisations: Pro covers {{plan:orgs.max_owned:pro}}, and Enterprise is unlimited. Each organisation after the first costs no more than half the base rate. When every place is full, an extra organisation raises the limit by one for the whole billing group, so you do not have to change plan. See [billing groups](/help/billing/groups) for how organisations share a bill.
+One subscription already covers several organisations: Pro covers {{plan:orgs.max_owned:pro}}, and Enterprise is unlimited. Each organisation after the first costs no more than half the base rate, up to that limit. When every place is full, an extra organisation raises the limit by one for the whole billing group, so you do not have to change plan. See [billing groups](/help/billing/groups) for how organisations share a bill.
 
 To buy:
 
@@ -21,7 +21,7 @@ To buy:
 
 An organisation that joins through an extra place is charged twice:
 
-- **As an organisation on the bill.** Like every organisation after the first, it is charged at the plan's rate for each extra organisation, on your bill's own monthly or yearly cycle.
+- **As an organisation on the bill.** Like every organisation after the first, it is charged the same per-organisation rate as the others, on your bill's own monthly or yearly cycle.
 - **For the extra place.** The price beside the control, charged every month, even when your plan is billed yearly.
 
 So an organisation past the plan's limit costs more than one inside it.
