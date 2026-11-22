@@ -111,10 +111,10 @@ create view public_fixture_seazn_replays_v as
 
 -- ─── 6. carry (Task 22 m8): stream_provider_calls admits the Bunny adapter's records ──────────────────────────────────
 -- V410's inline CHECK, by its generated name; the new list is a superset, so every existing row still passes it. Dropped and
--- re-added NOT VALID in one alter, then validated in its own statement (V530's shape): the add scans nothing, and the
--- VALIDATE's scan of the existing rows takes only SHARE UPDATE EXCLUSIVE. Measured on PG (t23, 2026-11-22): inside ONE
--- transaction, which is how Flyway runs this file, the add's ACCESS EXCLUSIVE is still held through that scan until commit,
--- so the split shortens the lock only once the validate runs in a later transaction. stream_provider_calls has no retention.
+-- re-added NOT VALID in one alter, then validated in its own statement (V530's shape), for clarity only: the split does NOT
+-- shorten the lock. Flyway runs this file in one transaction, so the add's ACCESS EXCLUSIVE on stream_provider_calls is held
+-- through the VALIDATE's scan until commit (measured on PG, 2026-11-22). The lock lasts only that scan of a small table
+-- (controller ruling 2026-11-22; no prod row count was taken), and the constraint ends validated.
 alter table stream_provider_calls
   drop constraint stream_provider_calls_provider_check,
   add constraint stream_provider_calls_provider_check check (provider in ('cloudflare','fly','stripe','bunny')) not valid;
