@@ -29,13 +29,15 @@ A competition with an Event Pass is not counted, so it is never frozen while its
 
 Community allows {{plan:members.max:community}} team members. If you have more, the members who joined earliest are frozen first, until the rest fit inside the limit. Owners are never frozen.
 
-A frozen member keeps their access to see everything, but their changes are refused. Nothing on screen marks them in advance. They find out when they try to save.
+The freeze applies to admins. A frozen admin can still see everything, but their changes are refused. Nothing on screen marks them in advance. They find out when they try to save, and they are blocked across most of the app: the schedule board, entrants, officials and settings among them. API keys are not affected.
+
+An invitation that would take you past the limit is refused.
 
 ## Features that switch off
 
 Features your plan no longer includes stop working. They do not freeze anything. For example, public pages lose your brand colour and keep your logo, exports come out plain, and API keys stop working.
 
-Card entry fees keep working on Community. Your Stripe connection stays linked and paid entries are untouched. What can change is the platform fee for a competition that has not taken a paid entry yet. See [the platform fee on entry fees](/help/billing/plans#the-platform-fee-on-entry-fees).
+Card entry fees keep working on Community. Your Stripe connection stays linked and paid entries are untouched. What can change is the platform fee. A competition that has taken its first paid card entry keeps its platform fee locked at the rate that entry was charged, even after you downgrade or its Event Pass ends. A competition with no paid card entry yet follows Community's rate. See [the platform fee on entry fees](/help/billing/plans#the-platform-fee-on-entry-fees).
 
 ## Make room
 

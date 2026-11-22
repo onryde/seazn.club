@@ -34,17 +34,21 @@ A competition stops counting as active once you mark it completed or archive it.
 
 When you reach a limit, the thing that would go over it is refused. Nothing you already have is removed.
 
-## Community
+## Community, the free plan
 
-Community is free, with no card. You can run real competitions on it, take entry fees by card or offline, put your logo on your public pages and export plain PDF and spreadsheet files.
+Community is free, with no card. It runs up to {{plan:competitions.max_active:community}} active competitions, each with up to {{plan:divisions.per_competition.max:community}} divisions and {{plan:entrants.per_division.max:community}} entrants per division, and up to {{plan:members.max:community}} team members. You can run real competitions on it, take entry fees by card or offline, put your logo on your public pages and export plain PDF and spreadsheet files.
 
-## Event Pass
+## Event Pass, for one competition
 
-An Event Pass is a one-time payment that lifts **one competition** while it runs. It raises that competition to {{plan:divisions.per_competition.max:event_pass}} divisions of {{plan:entrants.per_division.max:event_pass}} entrants and adds most of Pro's features to it. There is no subscription. See [the Event Pass](/help/billing/event-pass).
+An Event Pass is a one-time payment that lifts **one competition** while it runs. It raises that competition to **{{plan:divisions.per_competition.max:event_pass}} divisions** of **{{plan:entrants.per_division.max:event_pass}} entrants** and adds most of Pro's features to it. There is no subscription.
 
-## Pro
+Buying a pass also adds 5 AI credits to your organisation, one time, and a one-time batch of match credits. See [the Event Pass](/help/billing/event-pass).
 
-Pro lifts every competition in your organisation and adds:
+The pass stops once the competition is completed or archived, or a week after its end date. A new competition needs its own pass. See [when an Event Pass ends](/help/billing/event-pass-ends).
+
+## Pro, for every competition
+
+Pro lifts every competition in your organisation to {{plan:divisions.per_competition.max:pro}} divisions and {{plan:entrants.per_division.max:pro}} entrants per division, with no limit on active competitions, and up to {{plan:members.max:pro}} team members. It adds:
 
 - your brand colour on public pages and the slideshow
 - branded PDF and spreadsheet exports, and public player profiles
@@ -56,9 +60,13 @@ Pro lifts every competition in your organisation and adds:
 
 Pro starts with a 14-day free trial. See [start, switch or cancel Pro](/help/billing/change-plan).
 
-## Enterprise
+## Enterprise for federations and platforms
 
-Enterprise is everything in Pro with no limits on size, plus an API key that can write, and no "Powered by Seazn Club" badge on your public pages. It is not sold on the pricing page. The page has a **Talk to us** link below the plans instead.
+Enterprise is everything in Pro with no limits on size, including unlimited entrants per division and unlimited team members, plus an API key that can write, and no "Powered by Seazn Club" badge on your public pages. It is not sold on the pricing page. The page has a **Talk to us** link below the plans instead.
+
+## Several organisations on one bill
+
+One subscription can pay for several organisations, with one card and one invoice. Every organisation on the bill runs on the bill's plan. See [billing groups](/help/billing/groups) and, when the bill is full, [add-ons](/help/billing/add-ons).
 
 ## The platform fee on entry fees
 
@@ -67,11 +75,11 @@ Taking entry fees is free on every plan. What your plan changes is the fee we ke
 | Plan | Platform fee |
 | --- | --- |
 | Community | {{plan:registration.fee_percent:community}}% |
-| Event Pass, on its competition | {{plan:registration.fee_percent:event_pass}}% |
+| Event Pass | {{plan:registration.fee_percent:event_pass}}% |
 | Pro | {{plan:registration.fee_percent:pro}}% |
 | Enterprise | {{plan:registration.fee_percent:enterprise}}% |
 
-Stripe's own card processing fee is separate. Once a competition takes its first paid entry, its rate is locked for that competition. See [the entry-fee rate locks when sales start](/help/billing/groups#the-entry-fee-rate-locks-when-sales-start) and [how card entry fees flow](/help/registration/card-payments).
+The Event Pass row is for the competition a pass covers. Stripe's own card processing fee is separate. Once a competition takes its first paid entry, its rate is locked for that competition. See [the entry-fee rate locks when sales start](/help/billing/groups#the-entry-fee-rate-locks-when-sales-start) and [how card entry fees flow](/help/registration/card-payments).
 
 > **Example**
 > Riverside Racquets is on Community and runs Autumn Open and Club Championship. **Usage** shows **Active competitions 2 / {{plan:competitions.max_active:community}}**. They buy an Event Pass for Autumn Open, and the count drops to 1, because a competition with a pass does not count. They can now create two more competitions. Creating one more after that is refused until they finish or archive one.

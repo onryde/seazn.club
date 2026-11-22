@@ -9,7 +9,7 @@ An add-on buys more of one thing without changing your plan. The **Add-ons** pag
 
 ## Extra organisations
 
-One Pro bill already covers {{plan:orgs.max_owned:pro}} organisations. Each extra organisation raises that limit by one, for the whole billing group. See [billing groups](/help/billing/groups) for how organisations share a bill.
+One subscription already covers several organisations: Pro covers {{plan:orgs.max_owned:pro}}, and Enterprise is unlimited. Each organisation after the first costs no more than half the base rate. When every place is full, an extra organisation raises the limit by one for the whole billing group, so you do not have to change plan. See [billing groups](/help/billing/groups) for how organisations share a bill.
 
 To buy:
 
@@ -19,12 +19,12 @@ To buy:
 
 ![The Add-ons page on a Pro bill: the intro line, the count of organisations on the bill against its limit, and the Extra organisations card with its explanation, the minus and plus buttons around a count of 0, and the price for each per month.](/help/billing/add-ons.webp "The Add-ons page as the payer of a Pro bill sees it.")
 
-Extra organisations are charged every month, even when your plan is billed yearly.
+Extra organisations are charged every month, even when your plan is billed yearly. So on a monthly bill it matches that half rate exactly, and on an annual bill it does not: on a yearly bill, an extra organisation costs at least a sixth more over a year than a place inside the plan's limit. If you are on a yearly bill and expect to stay over the limit, compare it with moving up a plan.
 
-- **Adding** one: you pay the difference for the rest of this billing period.
+- **Adding** one: you pay the difference for the rest of this billing period, **added to your next invoice** rather than charged on the spot.
 - **Removing** one: it takes effect now, and there is no refund for the rest of the period.
 
-You cannot go below the number of organisations that are using an extra place. Move one out of the group first.
+You cannot go below the number of organisations standing on an extra organisation. Move one out of the group first.
 
 ## Who sees what
 
@@ -36,7 +36,7 @@ You cannot go below the number of organisations that are using an extra place. M
 
 ## If you remove extra organisations
 
-Nothing freezes. Organisations already on the bill keep working. You only cannot add another until the bill is back under its limit.
+Removing an extra organisation does not freeze anything. Organisations already on the bill keep working. You only cannot add another until the bill is back under its limit. That is also why the control cannot go below the number of organisations standing on an extra organisation: you cannot cancel your way over the limit.
 
 ## Credit packs
 

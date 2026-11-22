@@ -8,7 +8,7 @@ related: billing/event-pass, billing/buy-an-event-pass, billing/downgrade
 An Event Pass lifts its competition while the competition is running. It stops applying when:
 
 - you mark the competition **completed** or archive it, or
-- the competition's end date was more than 7 days ago.
+- the competition's end date passed more than 7 days ago.
 
 The 7 days are a grace week, so a competition that runs over its planned end keeps its pass through the finals.
 
@@ -36,7 +36,7 @@ The overview offers **Create the next edition** and **Go Pro — 14-day free tri
 
 The reason is read from the competition each time, so correcting it brings the pass back:
 
-- If the end date was wrong and the event is still being played, move the end date forward. The overview's notice **This competition's end date has passed** has a **Change the end date** button. The pass applies again.
+- If the end date has passed but the event is still being played, move the end date forward. The overview's notice **This competition's end date has passed** has a **Change the end date** button. The pass applies again.
 - A finished competition stays finished. For the next one, choose **Create the next edition**. A new competition needs its own pass.
 
 ## When a pass is refunded
@@ -44,4 +44,4 @@ The reason is read from the competition each time, so correcting it brings the p
 If a pass is refunded, or a card payment for it is disputed and lost, the pass is removed from the competition. The competition falls back to your plan's limits in the same way, and the owner gets an email. Nothing is deleted.
 
 > **Example**
-> Autumn Open holds an Event Pass, and its end date is Saturday 14 November. The finals overrun, but the pass keeps applying through Saturday 21 November. On Sunday 22 November the overview shows **Event Pass ended** with the end-date reason. The final is next weekend, so the owner chooses **Change the end date** and sets it to 29 November. The overview shows **Event Pass active** again.
+> Autumn Open holds an Event Pass. Its end date passed on Saturday 14 November, but the finals overran. The pass ends 7 days after the end date, so it applies through Saturday 21 November. On Sunday 22 November the overview shows **Event Pass ended** with the end-date reason. The end date has passed but the final is next weekend, so the owner chooses **Change the end date** and sets 29 November. The overview shows **Event Pass active** again.

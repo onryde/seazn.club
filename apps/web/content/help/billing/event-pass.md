@@ -11,6 +11,8 @@ The price is on the [pricing page](/pricing) and on the competition's upgrade pa
 
 ## What changes for the competition
 
+The pass raises its competition to **{{plan:divisions.per_competition.max:event_pass}} divisions** and **{{plan:entrants.per_division.max:event_pass}} entrants** per division.
+
 | | Community | Event Pass | Pro |
 | --- | --- | --- | --- |
 | Divisions in this competition | {{plan:divisions.per_competition.max:community}} | {{plan:divisions.per_competition.max:event_pass}} | {{plan:divisions.per_competition.max:pro}} |
@@ -28,12 +30,14 @@ The pass also adds, for that competition only:
 
 It also turns on career stats across its divisions, automatic officials assignment, automatic suspension tracking, embeds and auto-drafted result posts. The upgrade page shows the comparison above.
 
+The pass's lower platform fee applies to entries paid by card while the pass applies. If the competition takes its first paid card entry while the pass applies, its platform fee is locked at the pass's rate for every later entry, even after the pass ends. If it took a paid card entry before you bought the pass, its platform fee stays locked at the rate that first entry was charged. After the pass ends, a competition with no paid card entry yet follows your plan's rate.
+
 ![The What changes for this competition table: rows for divisions, entrants per division, platform fee, advanced formats, realtime scoreboard, branded exports, player profiles and sponsor tiers, with columns Free, Event Pass and Pro, and an Applies to row reading Every competition, This competition, Every competition.](/help/billing/pass-compare.webp "The comparison on a competition's upgrade page. The Event Pass column is the one the pass gives.")
 
 ## What else you get
 
 - **A free slot.** A competition with a pass does not count against your active-competition limit while the pass applies.
-- **One-time credits.** Buying a pass adds AI credits and match credits to your organisation once. The amounts are on the [pricing page](/pricing). The AI credits never expire.
+- **One-time credits.** Buying a pass adds 5 AI credits to your organisation, one time, and a one-time batch of match credits. The number of match credits is on the [pricing page](/pricing).
 
 ## What it does not include
 

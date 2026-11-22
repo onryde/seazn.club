@@ -5,7 +5,7 @@ order: 9
 related: billing/event-pass, billing/event-pass-ends, billing/change-plan
 ---
 
-Only an **owner** of the organisation can buy an Event Pass. An admin sees the offer, but the upgrade page tells them **Only the organization owner can purchase upgrades.**
+An Event Pass lifts one competition while it runs. Only an **owner** of the organisation can buy one. An admin sees the offer, but the upgrade page tells them **Only the organization owner can purchase upgrades.**
 
 ## Buy it
 
@@ -34,17 +34,17 @@ When the payment goes through, the competition's overview shows **Event Pass act
 A competition can take a pass while it is running. It closes to new passes when:
 
 - you mark it **completed** or archive it, or
-- its end date was more than 7 days ago.
+- its end date passed more than 7 days ago.
 
 The upgrade page then says **This competition is closed to Event Passes**, and the offer disappears from the overview and from **Plan & Billing**.
 
-If the end date is wrong and the event is still being played, the upgrade page says so and offers **Update the end date →**. Correct the date, and the pass is offered again.
+If the end date has passed but the event is still being played, the upgrade page offers **Update the end date →**. Correct the date, and the pass is offered again.
 
-## A pass and Pro
+## Starting Pro after a pass
 
 If you start Pro within 30 days of buying a pass, the pass comes off your first Pro invoice. This happens once per billing group, the first time it subscribes.
 
 A competition with a pass cannot be deleted, because the pass is a payment record. Archive it instead. Nothing is lost.
 
 > **Example**
-> Spring Ladder's end date is 14 November, but the last round is still to play. On 22 November, 8 days later, the owner opens its upgrade page and sees **This competition is closed to Event Passes**. The owner chooses **Update the end date →**, moves the end date to 6 December and saves. The upgrade page now shows **Buy the pass** again.
+> Spring Ladder's end date passed on 14 November, but the last round is still to play. On 22 November, 8 days later, the owner opens its upgrade page and sees **This competition is closed to Event Passes**. The owner follows the link, sets 6 December as the last day and saves. The upgrade page now shows **Buy the pass** again.

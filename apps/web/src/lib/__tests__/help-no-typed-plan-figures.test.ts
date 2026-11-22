@@ -82,10 +82,7 @@ describe("typedPlanFigureLines: hand-written cases", () => {
 const FEE = "fee percent per plan: a billing/registration content task converts it to {{plan:registration.fee_percent:<plan>}}";
 const PRICE = "plan price: not token-able yet (this task renders int_value features only, no prices)";
 const KNOWN: Record<string, string> = {
-  "billing/downgrade": `${FEE} (5/2/1 and the Event Pass 3% lock-in)`,
-  "billing/event-pass": `${PRICE} ($11.99, twice) + ${FEE} + an illustrative $2,000 / $40 example`,
   "billing/groups": `${PRICE} ($14.99, $6.99, $128.99, $63.99, $384.95, $644.95) + ${FEE} + an illustrative 60%-off coupon`,
-  "billing/plans": `${PRICE} ($11.99, $14.99, $6.99) + ${FEE} (the fee ladder table and four inline fees)`,
   "getting-started/create-your-organisation": FEE,
 };
 

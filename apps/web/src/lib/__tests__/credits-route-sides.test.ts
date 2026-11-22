@@ -102,20 +102,28 @@ describe("Settings → Credits: which side each link opens", () => {
     expect(link).not.toMatch(/routes\.credits\(/);
   });
 
-  it("the help article tells the page's story: it opens on Streaming, listed first, and has no Invite & earn card (H1)", () => {
-    const article = helpArticleBySlug("billing/credits");
-    // The side the page opens on, from the page's own parser, is the side the article says it opens on.
+  it("the help articles tell the page's story: it opens on Streaming, listed first, and has no Invite & earn card (H1)", () => {
+    // RE-POINTED (help rewrite, Task 14a): billing/credits was split. billing/match-credits covers the Streaming side
+    // and billing/credits the AI side. The rules are the same ones, asked of the pair: the article for the side the
+    // page opens on says so, the other side's article sends the reader to its tab, neither sends a reader to the side
+    // they are already on, neither mentions the hidden card, and the opening side's article comes first in the nav.
     const opens = creditsKindOf(undefined) === "stream" ? "Streaming" : "AI";
-    expect(article).toContain(`It opens on **${opens}**`);
-    expect(article).toContain("two sides, switched at the top — **Streaming** and **AI**");
-    expect(article, "no step tells the reader to switch to the side the page already opens on").not.toContain("switch to **Streaming**");
-    // The card is hidden (owner, 2026-11-11); the article must not send a reader looking for it.
-    expect(article).not.toMatch(/Invite (&|&amp;|and) earn/i);
-    // The article reads in the page's order: the side it opens on is the article's first section.
-    const sections = [...article.matchAll(/^## (.+)$/gm)].map((m) => m[1]!);
-    expect(sections.length, "anti-vacuity: the article has sections").toBeGreaterThan(1);
-    expect(sections[0], "the first section is the side the page opens on").toBe(`Match credits (${opens})`);
-    expect(sections, "the other side follows").toContain("AI credits");
-    expect(article).not.toContain("This article starts with the AI side");
+    const other = opens === "Streaming" ? "AI" : "Streaming";
+    const bySide = { Streaming: helpArticleBySlug("billing/match-credits"), AI: helpArticleBySlug("billing/credits") };
+    const order = (md: string) => Number(/^order:\s*([\d.]+)\s*$/m.exec(md)?.[1] ?? Number.NaN);
+    const first = bySide[opens];
+    const second = bySide[other];
+    expect(first).toContain(`It opens on **${opens}**`);
+    expect(first).toContain("two sides, switched at the top — **Streaming** and **AI**");
+    expect(second, "the other side's article names its tab").toContain(`Choose **${other}** at the top`);
+    for (const article of [first, second]) {
+      expect(article, "no step tells the reader to switch to the side the page already opens on").not.toContain(`switch to **${opens}**`);
+      // The card is hidden (owner, 2026-11-11); the articles must not send a reader looking for it.
+      expect(article).not.toMatch(/Invite (&|&amp;|and) earn/i);
+      expect(article).not.toContain("This article starts with the AI side");
+    }
+    // The articles read in the page's order: the side it opens on comes first in the billing nav.
+    expect(Number.isFinite(order(first)) && Number.isFinite(order(second)), "anti-vacuity: both articles carry an order").toBe(true);
+    expect(order(first), "the side the page opens on is listed first").toBeLessThan(order(second));
   });
 });

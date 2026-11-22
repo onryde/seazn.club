@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import {
   FREE_CARD_BULLETS,
@@ -29,6 +29,16 @@ import {
   wholeNumber,
 } from "@/lib/copy-truth";
 import { sql } from "@/lib/db";
+import { loadPricingMatrix } from "@/lib/pricing-matrix-server";
+import { resolveHelpTokens } from "@/server/help-tokens";
+
+/** A help article as a reader sees it: every `{{plan:<feature>:<plan>}}` token resolved against the live plan table, the
+ *  way the help page renders it (server/help-tokens.ts). Billing help writes its plan figures as tokens (help rewrite,
+ *  Task 14a), so a pin on a figure reads the RESOLVED text: the figure is still the matrix's, and what can still drift is
+ *  the wording and which plan's cell a sentence names. resolveHelpTokens throws on a token with no integer cell. */
+async function resolvedHelp(path: string): Promise<string> {
+  return resolveHelpTokens(readFileSync(path, "utf8"), await loadPricingMatrix());
+}
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -1765,10 +1775,17 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
   });
 
   it("the Event Pass help article presents the rung on sale with its live caps", async () => {
-    const article = readFileSync("content/help/billing/event-pass.md", "utf8");
+    // RE-POINTED (help rewrite, Task 14a): the article was split into event-pass, buy-an-event-pass and
+    // event-pass-ends, and writes its caps as plan tokens. The positives still name event-pass.md (the bold caps live
+    // there); the negatives sweep all three pages, resolved, so a withdrawn rung's figure in any of them reds.
+    const pages = ["event-pass", "buy-an-event-pass", "event-pass-ends"];
+    const resolved = await Promise.all(pages.map((slug) => resolvedHelp(`content/help/billing/${slug}.md`)));
+    expect(resolved.length, "anti-vacuity: the three pass pages were read").toBe(3);
+    const lead = resolved[0]!;
+    const article = resolved.join("\n\n");
     for (const rung of SELLABLE_PASS_KEYS) {
-      expect(article).toContain(`**${await capFor("entrants.per_division.max", rung)} entrants**`);
-      expect(article).toContain(
+      expect(lead).toContain(`**${await capFor("entrants.per_division.max", rung)} entrants**`);
+      expect(lead).toContain(
         `**${await capFor("divisions.per_competition.max", rung)} divisions**`,
       );
     }
@@ -1885,7 +1902,16 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
   // with Community's cap for two migrations, and it is `order: 1` in the
   // billing section — the first thing a reader deciding what to buy opens.
   describe("the plans-at-a-glance article quotes the matrix, not remembered numbers", () => {
-    const article = () => readFileSync("content/help/billing/plans.md", "utf8");
+    // RE-POINTED (help rewrite, Task 14a): plans.md writes every plan figure as a token, so the pins below read the
+    // article as the reader sees it — resolved against the live plan table.
+    let resolvedPlans = "";
+    beforeAll(async () => {
+      resolvedPlans = await resolvedHelp("content/help/billing/plans.md");
+    });
+    const article = () => {
+      expect(resolvedPlans.length, "plans.md was resolved before it was read").toBeGreaterThan(0);
+      return resolvedPlans;
+    };
 
     /** One `## ` section's body. Scoped because the article legitimately quotes
      *  FOUR plans' caps, so a page-wide assertion about any single number can
