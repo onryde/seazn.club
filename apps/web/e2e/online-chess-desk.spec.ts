@@ -2,15 +2,16 @@
  * T16 — the organiser's and the spectator's online-chess surfaces, in a
  * browser, against the real server:
  *
- *  - Open round (D12), in the Arbiter Panel's round column (phase 2 moved it
- *    off the Fixtures tab): a round PAIRED and not opened, the confirmation
+ *  - Open round (D12), on Match Day's round panel (it left the Fixtures tab in
+ *    phase 2 and the Arbiter page with Match Day all-in-one): a round PAIRED and not opened, the confirmation
  *    that names who it invites, and every pairing invited after, the invite
  *    words each waiting seat reads, and the check-in groups of a staggered
  *    round;
- *  - the online-play queue, in the same column: a held board settled from its
- *    card's Review, a flagged board let go on — and the run sheet's chips that
- *    point at both (the tab keeps only those chips and one entry card);
- *  - Unpair refused while a game is on file, with the way to the arbiter panel;
+ *  - the online-play queue (Held | Flagged, kept on the Fixtures tab; each row
+ *    opens its board's panel on Match Day): a held board settled, a flagged
+ *    board let go on, a finished board marked reviewed - and the run sheet's
+ *    chips that point at the same boards;
+ *  - Unpair refused while a game is on file, with the way to Match Day;
  *  - "Your board": a signed-in player's door into their room, nobody else's;
  *  - the public watch panel: the game's position, view-only, kept current by
  *    the poll, and the not-opened line before the round opens; from the
@@ -46,16 +47,18 @@ import { routes } from "../src/lib/routes";
 import { CHECKIN_BATCH_GAP_MS, CHECKIN_BATCH_SIZE, DEADLINE_AFTER_MS } from "../src/server/external-play/window";
 import { TAG, apiJson, loginUi, withDb } from "./helpers";
 import {
-  column,
+  boardPanelUrl,
   expectConfirmSeatWord,
+  focus,
   expectSeatWord,
   openAnswerOf,
   openNoticeLines,
+  openRoundPanel,
   openRoundSent,
   recordedOpenNotices,
   recordOpenNotices,
   waitingSeat,
-} from "./arbiter-column-kit";
+} from "./match-day-online-kit";
 import {
   CLOCK,
   fill,
@@ -296,19 +299,19 @@ async function flagBoard(r: SeededRound, board: RoundBoard): Promise<void> {
   });
 }
 
-// ─── the Arbiter Panel's round column (phase 2) ─────────────────────────────
-// Open round, the invites, the round's +5 and the queue of boards that need a decision moved off the Fixtures tab into the panel's
-// round column (spec 2026-10-24-arbiter-round-column-design.md). The column's locators and the open-round route's answer live in
-// arbiter-column-kit.ts (arbiter-panel.spec.ts and mobile.spec.ts drive the same column, and a spec cannot import a spec). A press
-// from the BEFORE block cannot be read off the screen: the open flips the column to its check-in phase and the block (with its
-// answer) unmounts, so the answer is read from the wire AND recorded as it is drawn (`recordOpenNotices`, a MutationObserver), and
-// the same press's reopen from the check-in hero keeps its notice on screen.
+// ─── Match Day's round panel (the Arbiter Panel's round column, moved there by Match Day all-in-one) ─────────────────────────────
+// Open round, the invites and the round's +5 are Match Day's round panel (`?round=`); a board that needs a decision is decided on its
+// board panel (`?board=`), and the Fixtures tab keeps the Held | Flagged queue with an "Open in Match Day" link on each row (owner O2).
+// The panel's locators and the open-round route's answer live in match-day-online-kit.ts (match-day-online.spec.ts and the mobile area
+// drive the same panels, and a spec cannot import a spec). A press from the BEFORE block cannot be read off the screen: the open flips
+// the panel to its check-in phase and the block (with its answer) unmounts, so the answer is read from the wire AND recorded as it is
+// drawn (`recordOpenNotices`, a MutationObserver), and the same press's reopen from the check-in hero keeps its notice on screen.
 
-/** The panel's decision area for the board on screen (at lg and up its name is the plain heading). */
-const decision = (page: Page) => page.getByRole("region", { name: uiEn["arbiter.decide.heading"]! });
+/** The board panel's decision area (Match Day's `?board=`). */
+const decision = (page: Page) => page.getByTestId("arbiter-decision");
 
 test.describe("online chess — the organiser's desk", () => {
-  test("Open round (D12): paired, not opened — the column's confirmation names who it invites; opened, the column reads what was sent", async ({
+  test("Open round (D12): paired, not opened — the panel's confirmation names who it invites; opened, the panel reads what was sent", async ({
     page,
     request,
   }) => {
@@ -328,8 +331,8 @@ test.describe("online chess — the organiser's desk", () => {
       );
     expect(await invites(), "the empty case first: no invite is queued before the open").toBe(0);
 
-    // The Fixtures tab hands the round over: no Open round control here any more, one entry card into the panel that says round 1
-    // is ready to open (phase 2 moved the control into the Arbiter Panel's round column).
+    // The Fixtures tab hands the round over: no Open round control here, one entry card into Match Day that says round 1 is ready to
+    // open (the control is Match Day's round panel).
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(r.fixturesTab);
     const entry = page.getByTestId("arbiter-entry");
@@ -352,10 +355,11 @@ test.describe("online chess — the organiser's desk", () => {
     expect(await noSidewaysScroll(page)).toBe(3);
     await shoot(page, "open-round-entry");
 
-    // The way in is the entry card's link.
+    // The way in is the entry card's link, to Match Day's list; the round's row opens its panel.
     await page.setViewportSize({ width: 1280, height: 900 });
     await entry.getByRole("link", { name: uiEn["arbiter.entry.link"]!, exact: true }).click();
-    await expect(page).toHaveURL(new RegExp(`${r.arbiterPath}$`));
+    await expect(page).toHaveURL(new RegExp(`${r.matchDayPath}$`));
+    await page.locator(`[data-testid="md-round-row"][data-key="${r.stageId}:1"]`).click({ timeout: 30_000 });
 
     // Every request this page makes to the open-round route, so "one press is one POST" and "Cancel sends nothing" are counted.
     const posts: string[] = [];
@@ -363,13 +367,13 @@ test.describe("online chess — the organiser's desk", () => {
       if (q.method() === "POST" && q.url().includes(`/stages/${r.stageId}/open-round`)) posts.push(q.url());
     });
 
-    const col = column(page);
-    await expect(col).toHaveAttribute("data-phase", "before", { timeout: 30_000 });
+    const col = focus(page);
+    await expect(col).toHaveAttribute("data-state", "before", { timeout: 30_000 });
     const block = col.locator('[data-testid="arbiter-column-open"][data-round-no="1"]');
     await expect(block).toHaveCount(1);
-    // Of the paired rounds only the lowest is the next to open: round 2 has no block yet.
+    // The panel is ONE round's: round 1's block is the only one on it (round 2 has its own panel).
     await expect(col.getByTestId("arbiter-column-open")).toHaveCount(1);
-    await expect(block.getByRole("heading", { name: fill("runsheet.round.heading", { round: 1 }) })).toBeVisible();
+    await expect(block, "the block is named for its round").toHaveAttribute("aria-label", fill("runsheet.round.heading", { round: 1 }));
     // Four players are about to be invited, and none has been (the lede says so: "nothing is sent until you open the round").
     await expect(block).toContainText(fill("runsheet.round.pairedLede.other", { count: r.boards.length, players: r.boards.length * 2 }));
     let listed = 0;
@@ -388,8 +392,8 @@ test.describe("online chess — the organiser's desk", () => {
 
     // The confirmation: how many players, which pairings — and Cancel sends nothing.
     await page.setViewportSize({ width: 1280, height: 900 });
-    await block.getByTestId("arbiter-column-open-cta").click();
-    const dialog = page.getByTestId("arbiter-column-confirm");
+    await block.getByTestId("md-round-open-cta").click();
+    const dialog = page.getByTestId("md-round-confirm");
     await expect(dialog).toBeVisible();
     await expect(dialog).toContainText(fill("runsheet.round.confirmTitle", { round: 1 }));
     await expect(dialog).toContainText(fill("runsheet.round.confirmBody.other", { count: 4 }));
@@ -405,21 +409,21 @@ test.describe("online chess — the organiser's desk", () => {
     expect(named, "anti-vacuity: every pairing named").toBe(2);
     await shoot(page, "open-round-confirm");
     await page.setViewportSize({ width: 1280, height: 900 });
-    await page.getByTestId("arbiter-column-confirm-cancel").click();
+    await page.getByTestId("md-round-confirm-cancel").click();
     await expect(dialog).toHaveCount(0);
     expect(await opens(), "Cancel opened nothing").toBe(0);
     expect(await invites(), "Cancel queued nothing").toBe(0);
     expect(posts, "Cancel sent no request").toHaveLength(0);
 
-    await block.getByTestId("arbiter-column-open-cta").click();
-    await expect(page.getByTestId("arbiter-column-confirm-confirm")).toHaveText(fill("runsheet.round.confirmCta.other", { count: 4 }));
+    await block.getByTestId("md-round-open-cta").click();
+    await expect(page.getByTestId("md-round-confirm-confirm")).toHaveText(fill("runsheet.round.confirmCta.other", { count: 4 }));
     // The open answers into the BEFORE block, and the refresh that follows flips the column to its check-in phase, which takes the
     // block (and the answer it was showing) away: the notice is recorded as it is drawn, and read once the flip has happened.
     await recordOpenNotices(page);
     const sentOpen = openRoundSent(page, r.stageId);
-    await page.getByTestId("arbiter-column-confirm-confirm").click();
+    await page.getByTestId("md-round-confirm-confirm").click();
     const answer = await openAnswerOf(await sentOpen);
-    await expect(col).toHaveAttribute("data-phase", "checkin", { timeout: 30_000 });
+    await expect(col).toHaveAttribute("data-state", "checkin", { timeout: 30_000 });
     const drawn = await recordedOpenNotices(page);
     expect(drawn, "the observer was installed and survived the flip (the page did not navigate)").not.toBeNull();
     expect(drawn!.length, "the open's answer was drawn in the Before block before the refresh took it away").toBeGreaterThan(0);
@@ -471,7 +475,7 @@ test.describe("online chess — the organiser's desk", () => {
 
     // After the refresh the round is OPEN either way: the check-in hero names it, and what is still owed follows the stamps.
     const hero = col.getByTestId("arbiter-checkin-hero");
-    await expect(hero.getByRole("heading", { name: fill("runsheet.round.heading", { round: 1 }) })).toBeVisible();
+    await expect(hero, "the hero is named for its round").toHaveAttribute("aria-label", fill("runsheet.round.heading", { round: 1 }));
     const reinvite = col.getByTestId("arbiter-column-reinvite");
     if (sent === 0) {
       // Opened, and nobody reached: the hero offers the open again, and every seat says its mail did not arrive. The seat reads
@@ -531,16 +535,22 @@ test.describe("online chess — the organiser's desk", () => {
     expect(await noSidewaysScroll(page)).toBe(3);
 
     // R1: round 2's confirmation says round 1 is still being played (its boards still to be played), and opening stays the
-    // organiser's call - the confirm is there. Round 2 is offered once round 1 is PLAYING (the column's playing phase offers the next
-    // round; the check-in phase shows the hero alone), so round 1's boards are put in play, the way the sweep's create leaves them.
+    // organiser's call - the confirm is there. Round 2 is offered once round 1 is PLAYING (round 1's panel, in its playing phase, says
+    // round 2 is ready and leads to round 2's own panel; the check-in phase shows the hero alone), so round 1's boards are put in play,
+    // the way the sweep's create leaves them.
     for (const b of r.boards) await roundGameSql(b, { moves: LINE.slice(0, 4) });
-    await page.goto(r.arbiterPath);
-    await expect(col).toHaveAttribute("data-phase", "playing", { timeout: 30_000 });
+    await openRoundPanel(page, r, "playing");
+    const ready = col.getByTestId("md-round-ready");
+    await expect(ready, "round 1's panel says the next round is ready").toHaveAttribute("data-key", `${r.stageId}:2`, { timeout: 30_000 });
+    await ready.getByTestId("md-round-ready-go").click();
+    await expect(col).toHaveAttribute("data-key", `${r.stageId}:2`);
+    await expect(col).toHaveAttribute("data-state", "before");
     const second = col.locator('[data-testid="arbiter-column-open"][data-round-no="2"]');
     await expect(second).toHaveCount(1);
-    await expect(second.getByRole("heading", { name: fill("runsheet.round.heading", { round: 2 }) })).toBeVisible();
+    // A division with more than one stage names the stage first ("League · Round 2", `arbiter.roundLine`); the round's own words end the label either way.
+    await expect(second, "round 2's block is named for its round").toHaveAttribute("aria-label", new RegExp(`${fill("runsheet.round.heading", { round: 2 })}$`));
     // Quiet while any board plays, and the warning is on the page before the press, not only in the confirmation.
-    await expect(second.getByTestId("arbiter-column-next")).toHaveAttribute("data-primary", "false");
+    await expect(second.getByTestId("md-round-open-cta")).toHaveAttribute("data-primary", "false");
     const inline = second.getByTestId("arbiter-column-earlier");
     await expect(inline).toHaveAttribute("role", "note");
     await expect(inline.locator("[data-earlier-round]")).toHaveCount(1);
@@ -550,8 +560,8 @@ test.describe("online chess — the organiser's desk", () => {
     expect(await noSidewaysScroll(page)).toBe(3);
     await shoot(page, "open-round-earlier-inline");
     await page.setViewportSize({ width: 1280, height: 900 });
-    await second.getByTestId("arbiter-column-next").click();
-    const confirmSecond = page.getByTestId("arbiter-column-confirm");
+    await second.getByTestId("md-round-open-cta").click();
+    const confirmSecond = page.getByTestId("md-round-confirm");
     await expect(confirmSecond).toContainText(fill("runsheet.round.confirmTitle", { round: 2 }));
     const earlier = confirmSecond.getByTestId("open-round-earlier");
     await expect(earlier).toHaveAttribute("role", "note");
@@ -559,17 +569,17 @@ test.describe("online chess — the organiser's desk", () => {
     await expect(earlier.locator('[data-earlier-round="1"]')).toHaveText(
       fill("runsheet.round.confirmEarlierInPlay.other", { round: 1, count: r.boards.length }),
     );
-    await expect(page.getByTestId("arbiter-column-confirm-confirm")).toBeEnabled();
+    await expect(page.getByTestId("md-round-confirm-confirm")).toBeEnabled();
     expect(await noSidewaysScroll(page)).toBe(3);
     await shoot(page, "open-round-earlier");
     await page.setViewportSize({ width: 1280, height: 900 });
-    await page.getByTestId("arbiter-column-confirm-cancel").click();
+    await page.getByTestId("md-round-confirm-cancel").click();
     await expect(confirmSecond).toHaveCount(0);
     expect(await opens(), "Cancel opened nothing: round 1's open is still the only one").toBe(1);
     expect(posts.length, "Cancel sent no further request").toBe(sent === 0 ? 2 : 1);
   });
 
-  // Spec 2026-10-24-arbiter-round-column-design.md §6: the waiting list names what became of each seat's mail, in the outbox's own
+  // Spec 2026-10-24-arbiter-round-column-design.md §6 (now Match Day's round panel): the waiting list names what became of each seat's mail, in the outbox's own
   // five words plus "Not invited" for a seat with no mail, and a seat the mail still holds stops being offered a re-invite. The e2e
   // servers send no mail, so the worker and the provider's webhook never run; `seedSeatInvite` writes the row the way they leave
   // it, with the seat's stamp to match, and `seedSeatUninvited` takes a seat's rows away. All six words are read in the browser.
@@ -580,7 +590,7 @@ test.describe("online chess — the organiser's desk", () => {
     test.setTimeout(240_000);
     const r = await seedOnlineRound(request, [longName(), "Ana Petrova", "Bo Lindqvist", "Chen Wei"]);
     const [b1, b2] = [r.boards[0]!, r.boards[1]!];
-    const col = column(page);
+    const col = focus(page);
     const reinvite = col.getByTestId("arbiter-column-reinvite");
     // Every word a seat is read as, so the six are accounted for at the end against the engine's own list (INVITE_WORD_KEYS).
     const seen = new Set<SeatInviteWord>();
@@ -589,8 +599,7 @@ test.describe("online chess — the organiser's desk", () => {
       seen.add(word);
     };
     await page.setViewportSize({ width: 1280, height: 900 });
-    await page.goto(r.arbiterPath);
-    await expect(col).toHaveAttribute("data-phase", "checkin", { timeout: 30_000 });
+    await openRoundPanel(page, r, "checkin");
 
     // The empty case first: no mail was accepted by anyone, every row ended `dead`, so all four seats read Not delivered and the
     // round offers the open again (nobody was reached).
@@ -601,7 +610,7 @@ test.describe("online chess — the organiser's desk", () => {
     await seedSeatInvite(b1.fixtureId, "white", "bounced");
     await seedSeatInvite(b1.fixtureId, "black", "delivered");
     await page.reload();
-    await expect(col).toHaveAttribute("data-phase", "checkin", { timeout: 30_000 });
+    await expect(col).toHaveAttribute("data-state", "checkin", { timeout: 30_000 });
     await read(b1, "white", "bounced");
     await read(b1, "black", "delivered");
     await read(b2, "white", "not_delivered");
@@ -636,7 +645,7 @@ test.describe("online chess — the organiser's desk", () => {
     // badly) and "Not invited" (no mail at all). The press does not move: what is owed follows the stamps, not the mail.
     expect(await seedSeatUninvited(b2.fixtureId, "black"), "premise: one address per seat, so the seat had one row on file").toBe(1);
     await page.reload();
-    await expect(col).toHaveAttribute("data-phase", "checkin", { timeout: 30_000 });
+    await expect(col).toHaveAttribute("data-state", "checkin", { timeout: 30_000 });
     await read(b2, "black", "not_invited");
     await expect(waitingSeat(page, b2, "black").getByTestId("arbiter-invite-word")).toHaveText(uiEn["runsheet.round.notInvited"]!);
     // The other three seats still read what the mail on file says.
@@ -654,7 +663,7 @@ test.describe("online chess — the organiser's desk", () => {
   // Final review I-1 (spec §3.2.1, "What the organiser sees"): the view has always carried each check-in group's boards,
   // opening and closing, and the desk drew none of it - it read one "open until", the LAST group's deadline, while the first
   // group's no-shows were already reaching the organiser. A round of CHECKIN_BATCH_SIZE + 1 boards (so two groups) on a
-  // required-camera division staggers; this drives it through the product and reads the Arbiter Panel's check-in hero, which
+  // required-camera division staggers; this drives it through the product and reads Match Day's round panel (its check-in hero), which
   // lists the groups now (the Fixtures tab's control, and its "open until" line, are gone).
   test("Open round, staggered (I-1): an opened round lists its check-in groups - the boards, the opening and the closing of EACH - instead of one 'open until'", async ({
     page,
@@ -696,9 +705,8 @@ test.describe("online chess — the organiser's desk", () => {
     expect(groups[1]!.from, "premise: the last group is one board").toBe(groups[1]!.to);
 
     await page.setViewportSize({ width: 1280, height: 900 });
-    await page.goto(r.arbiterPath);
-    const col = column(page);
-    await expect(col).toHaveAttribute("data-phase", "checkin", { timeout: 30_000 });
+    const col = focus(page);
+    await openRoundPanel(page, r, "checkin");
     const list = col.getByTestId("arbiter-column-batches");
     await expect(list).toBeVisible({ timeout: 30_000 });
     // Every seat is stamped and bound to this open, so there is nothing to re-invite (the groups are drawn only then).
@@ -746,7 +754,7 @@ test.describe("online chess — the organiser's desk", () => {
     await shoot(page, "open-round-groups");
   });
 
-  test("the queue: a held board settled from it, a flagged board let go on — in the Arbiter Panel's round column, and the run sheet's chips point at both", async ({
+  test("the queue: a held board settled, a flagged board let go on - decided on Match Day's board panel, reached from the Fixtures tab's queue rows and the run sheet's chips", async ({
     page,
     request,
   }) => {
@@ -754,9 +762,8 @@ test.describe("online chess — the organiser's desk", () => {
     const r = await seedOnlineRound(request, [longName(), "Ana Petrova", "Bo Lindqvist", "Chen Wei", "Dara Okafor", "Eli Brandt"], {
       camera: "required",
     });
-    // Board 1 is the board the panel opens on, so it is the one that is NOT held: the held chip must move the panel to ITS board.
+    // Board 1 is the board Match Day lists first, so it is the one that is NOT held: the held chip must lead to ITS board.
     const [over, flagged, held] = [r.boards[0]!, r.boards[1]!, r.boards[2]!];
-    const boardNo = (b: RoundBoard) => r.boards.indexOf(b) + 1;
     await roundGameSql(held, { moves: LINE.slice(0, 6), hold: "mismatch" });
     await roundGameSql(flagged, { moves: LINE });
     await flagBoard(r, flagged);
@@ -792,76 +799,65 @@ test.describe("online chess — the organiser's desk", () => {
     const heldChip = heldRow.getByTestId("run-sheet-online-held-chip");
     await expect(heldChip).toHaveAttribute("aria-label", fill("runsheet.online.heldName", { match: vs(held.home.name, held.away.name) }), { timeout: 30_000 });
     await expect(flaggedRow.getByTestId("run-sheet-camera-chip")).toHaveText(fill("runsheet.camera.flag.one", { count: 1 }));
-    await expect(flaggedRow.getByTestId("run-sheet-camera-chip")).toHaveAttribute("href", `${r.arbiterPath}?fixture=${flagged.fixtureId}`);
+    await expect(flaggedRow.getByTestId("run-sheet-camera-chip")).toHaveAttribute("href", boardPanelUrl(r, flagged.fixtureId));
     await expect(heldRow.getByTestId("run-sheet-camera-chip")).toHaveCount(0);
     await expect(flaggedRow.getByTestId("run-sheet-online-held-chip")).toHaveCount(0);
-    // I3: our side's connection problems — the quiet chip, to the same panel; never counted as a camera flag.
+    // I3: our side's connection problems — the quiet chip, to the same board's panel; never counted as a camera flag.
     const connection = flaggedRow.getByTestId("run-sheet-connection-chip");
     await expect(connection).toHaveAttribute("data-state", "ours");
     await expect(connection).toHaveText(uiEn["arbiter.flag.connection.chipPlain"]!);
-    await expect(connection).toHaveAttribute("href", `${r.arbiterPath}?fixture=${flagged.fixtureId}`);
+    await expect(connection).toHaveAttribute("href", boardPanelUrl(r, flagged.fixtureId));
     await expect(heldRow.getByTestId("run-sheet-connection-chip")).toHaveCount(0);
 
-    // The queue is the panel's now: the tab has none (the panel is offered here), and says so in one line on its entry card, the
-    // column title's own words and count.
-    for (const gone of ["external-play-needs-result-queue", "external-play-held", "external-play-flagged"]) {
-      await expect(page.getByTestId(gone), `${gone}: the queue left the Fixtures tab`).toHaveCount(0);
+    // The Fixtures tab keeps the queue (owner O2): the held board and the two flagged boards, each row with "Open in Match Day" on ITS
+    // board, and the entry card counts the three in the words Match Day's own title uses.
+    const queue = page.getByTestId("external-play-needs-result-queue");
+    await expect(queue, "the queue is on the tab").toBeVisible();
+    const openLinks = queue.getByTestId("external-play-open-match-day");
+    await expect(openLinks, "one 'Open in Match Day' per board that needs a decision").toHaveCount(3);
+    let linked = 0;
+    for (const b of [held, flagged, over]) {
+      const row = queue.locator(`[data-testid="external-play-queue-row-${b.fixtureId}"], [data-testid="external-play-flagged-${b.fixtureId}"]`);
+      await expect(row, `${b.fixtureId}: one queue row`).toHaveCount(1);
+      const link = row.getByTestId("external-play-open-match-day");
+      await expect(link).toHaveText(uiEn["externalPlay.queue.openInMatchDay"]!);
+      await expect(link, "it leads to that board, not to the page's top").toHaveAttribute("href", boardPanelUrl(r, b.fixtureId));
+      linked += 1;
     }
+    expect(linked, "anti-vacuity: every board's row linked").toBe(3);
     const entryStatus = page.getByTestId("arbiter-entry").getByTestId("arbiter-entry-status");
     await expect(entryStatus).toHaveAttribute("data-kind", "attention");
     await expect(entryStatus).toHaveText(fill("arbiter.column.queue.other", { count: 3 }));
     expect(await noSidewaysScroll(page)).toBe(3);
     await shoot(page, "queue-run-sheet");
 
-    // The held chip leads to the panel with THAT board on screen (a link to its own board, not to the page's top).
+    // The held chip leads to Match Day with THAT board on screen (its own panel, not the first board's).
     await page.setViewportSize({ width: 1280, height: 900 });
-    await expect(heldChip).toHaveAttribute("href", `${r.arbiterPath}?fixture=${held.fixtureId}`);
+    await expect(heldChip).toHaveAttribute("href", boardPanelUrl(r, held.fixtureId));
     await heldChip.click();
-    await expect(page).toHaveURL(new RegExp(`${r.arbiterPath}\\?fixture=${held.fixtureId}$`));
-    const nav = page.getByRole("navigation", { name: uiEn["arbiter.boardsHeading"] }).getByRole("button");
-    await expect(nav).toHaveCount(3);
-    await expect(nav.nth(boardNo(held) - 1), "the held board is the one on screen").toHaveAttribute("aria-pressed", "true");
-    await expect(nav.nth(boardNo(over) - 1), "and board 1, the page's default, is not").toHaveAttribute("aria-pressed", "false");
-
-    // The queue, in the column: each board once, held and flagged as separate cards, counted once.
-    const col = column(page);
-    await expect(col).toHaveAttribute("data-phase", "playing", { timeout: 30_000 });
-    const queue = col.getByTestId("arbiter-column-queue");
-    const title = queue.getByTestId("arbiter-column-queue-title");
-    await expect(title).toHaveText(fill("arbiter.column.queue.other", { count: 3 }));
-    await expect(title).toHaveAttribute("data-tone", "held");
-    const card = (b: RoundBoard) => queue.locator(`[data-testid="arbiter-column-card"][data-fixture-id="${b.fixtureId}"]`);
-    await expect(queue.getByTestId("arbiter-column-card"), "one card per board that needs a decision").toHaveCount(3);
-    await expect(card(held)).toHaveAttribute("data-kind", "held");
-    await expect(card(held).getByTestId("arbiter-column-card-chip")).toHaveText(uiEn["externalPlay.held.mismatch"]!);
-    await expect(card(flagged)).toHaveAttribute("data-kind", "flagged");
-    await expect(card(flagged).getByTestId("arbiter-column-card-chip")).toHaveText(fill("arbiter.flagCount.other", { count: 3 }));
-    await expect(card(over)).toHaveAttribute("data-kind", "flagged");
-    await expect(card(over).getByTestId("arbiter-column-card-chip")).toHaveText(fill("arbiter.flagCount.one", { count: 1 }));
-    let named = 0;
-    for (const b of [held, flagged, over]) {
-      await expect(card(b).getByTestId("arbiter-column-card-names")).toContainText(b.home.name);
-      await expect(card(b).getByTestId("arbiter-column-card-names")).toContainText(b.away.name);
-      await expect(card(b).getByTestId("arbiter-column-review")).toHaveText(fill("arbiter.column.review", { board: boardNo(b) }));
-      named += 1;
-    }
-    expect(named, "anti-vacuity: every card named and offering its review").toBe(3);
+    await expect(page).toHaveURL(new RegExp(`${r.matchDayPath}\\?board=${held.fixtureId}$`));
+    const col = focus(page);
+    await expect(col, "the held board is the one on screen").toHaveAttribute("data-fixture-id", held.fixtureId, { timeout: 30_000 });
+    await expect(col).toHaveAttribute("data-online", "board");
+    await expect(col).toHaveAttribute("data-state", "on_hold");
+    // Match Day's list names each board by its state: the held board is on hold, the flagged one is live, the finished one has its result.
+    const rowState = (b: RoundBoard) => page.locator(`[data-testid="md-board-row"][data-fixture-id="${b.fixtureId}"]`);
+    await expect(rowState(held)).toHaveAttribute("data-state", "on_hold");
+    await expect(rowState(flagged)).toHaveAttribute("data-state", "live");
+    await expect(rowState(over)).toHaveAttribute("data-state", "result");
     expect(await noSidewaysScroll(page)).toBe(3);
-    await shoot(page, "queue-held-flagged");
+    await shoot(page, "queue-held-board");
 
-    // Let the game go on: Review opens the board's decision area; exactly the flags shown are closed, under the organiser's name;
-    // the game is untouched.
+    // Let the game go on: the queue row's link opens the board's decision area; exactly the flags shown are closed, under the
+    // organiser's name; the game is untouched.
     await page.setViewportSize({ width: 1280, height: 900 });
-    await card(flagged).getByTestId("arbiter-column-review").click();
-    await expect(nav.nth(boardNo(flagged) - 1)).toHaveAttribute("aria-pressed", "true");
-    await expect(page).toHaveURL(new RegExp(`\\?fixture=${flagged.fixtureId}$`));
+    await page.goto(r.fixturesTab);
+    await queue.locator(`[data-testid="external-play-flagged-${flagged.fixtureId}"]`).getByTestId("external-play-open-match-day").click();
+    await expect(col).toHaveAttribute("data-fixture-id", flagged.fixtureId, { timeout: 30_000 });
+    await expect(page).toHaveURL(new RegExp(`\\?board=${flagged.fixtureId}$`));
     const answer = decision(page).getByRole("status");
     await decision(page).getByRole("button", { name: uiEn["arbiter.decide.goOn"]! }).click();
     await expect(answer).toHaveText(uiEn["arbiter.notice.wentOn"]!);
-    // Its card gone with the refresh, the answer stays on screen (it belongs to the board on screen, not to the card).
-    await expect(card(flagged)).toHaveCount(0);
-    await expect(title).toHaveText(fill("arbiter.column.queue.other", { count: 2 }));
-    await expect(answer).toBeVisible();
     const flags = await withDb(
       (sql) => sql<{ closed: boolean; role: string | null }[]>`
         select f.closed_at is not null as closed, m.role from fixture_play_flags f
@@ -878,23 +874,30 @@ test.describe("online chess — the organiser's desk", () => {
       return row!.status;
     });
     expect(live, "going on changes no result").toBe("live");
+    // Back on the tab its row is gone and the entry card counts the two that are left.
+    await page.goto(r.fixturesTab);
+    await expect(queue.locator(`[data-testid="external-play-flagged-${flagged.fixtureId}"]`), "the decided board left the queue").toHaveCount(0, { timeout: 30_000 });
+    await expect(queue.getByTestId("external-play-open-match-day")).toHaveCount(2);
+    await expect(entryStatus).toHaveText(fill("arbiter.column.queue.other", { count: 2 }));
 
-    // A finished game's flags: nothing to let go on — "Mark as reviewed" closes them, and the decision area says so.
-    await card(over).getByTestId("arbiter-column-review").click();
-    await expect(nav.nth(boardNo(over) - 1)).toHaveAttribute("aria-pressed", "true");
+    // A finished game's flags: nothing to let go on - "Mark as reviewed" closes them, and the decision area says so.
+    await queue.locator(`[data-testid="external-play-flagged-${over.fixtureId}"]`).getByTestId("external-play-open-match-day").click();
+    await expect(col).toHaveAttribute("data-fixture-id", over.fixtureId, { timeout: 30_000 });
     const review = decision(page).getByRole("button", { name: uiEn["externalPlay.queue.markReviewed"]!, exact: true });
     await review.click();
     await expect(decision(page).getByRole("status")).toHaveText(uiEn["externalPlay.queue.reviewed"]!);
-    await expect(card(over)).toHaveCount(0);
-    await expect(title).toHaveText(fill("arbiter.column.queue.one", { count: 1 }));
     const overFlags = await withDb(
       (sql) => sql<{ closed: boolean }[]>`select closed_at is not null as closed from fixture_play_flags where fixture_id = ${over.fixtureId}`,
     );
     expect(overFlags, "closed and kept").toEqual([{ closed: true }]);
+    await page.goto(r.fixturesTab);
+    await expect(queue.locator(`[data-testid="external-play-flagged-${over.fixtureId}"]`)).toHaveCount(0, { timeout: 30_000 });
+    await expect(queue.getByTestId("external-play-open-match-day")).toHaveCount(1);
+    await expect(entryStatus).toHaveText(fill("arbiter.column.queue.one", { count: 1 }));
 
     // Settle the held board: White (the home side, on the row) wins.
-    await card(held).getByTestId("arbiter-column-review").click();
-    await expect(nav.nth(boardNo(held) - 1)).toHaveAttribute("aria-pressed", "true");
+    await queue.locator(`[data-testid="external-play-queue-row-${held.fixtureId}"]`).getByTestId("external-play-open-match-day").click();
+    await expect(col).toHaveAttribute("data-fixture-id", held.fixtureId, { timeout: 30_000 });
     const toggle = decision(page).getByRole("button", { name: uiEn["arbiter.decide.settle"]! });
     await toggle.click();
     await expect(toggle).toHaveAttribute("aria-expanded", "true");
@@ -902,11 +905,7 @@ test.describe("online chess — the organiser's desk", () => {
     await expect(whiteWins).toHaveCount(1);
     await whiteWins.click();
     // 45 s: under `next dev` the resolve route's first POST compiles (~15-20 s); a prod server answers at once.
-    await expect(card(held)).toHaveCount(0, { timeout: 45_000 });
-    await expect(decision(page).getByRole("status")).toHaveText(uiEn["arbiter.notice.settled"]!);
-    // Nothing needs a decision any more: the column has no queue, not an empty one.
-    await expect(queue.getByTestId("arbiter-column-card")).toHaveCount(0);
-    await expect(title).toHaveCount(0);
+    await expect(decision(page).getByRole("status")).toHaveText(uiEn["arbiter.notice.settled"]!, { timeout: 45_000 });
     const state = await withDb(async (sql) => {
       const [row] = await sql<{ status: string; outcome: { kind?: string; winner?: string } | null }[]>`
         select status, outcome from fixtures where id = ${held.fixtureId}`;
@@ -916,7 +915,7 @@ test.describe("online chess — the organiser's desk", () => {
     expect(state.outcome).toMatchObject({ kind: "win", winner: held.home.entrantId });
 
     // Back on the run sheet, the chips follow: the held chip is gone, the flagged board's camera chip reads ok and its connection
-    // chip is gone, and the entry card has nothing to flag.
+    // chip is gone, and the queue is gone with nothing left to decide.
     await page.goto(r.fixturesTab);
     await expect(await runSheetRow(page, held)).toBeVisible({ timeout: 30_000 });
     await expect((await runSheetRow(page, held)).getByTestId("run-sheet-online-held-chip")).toHaveCount(0);
@@ -924,15 +923,15 @@ test.describe("online chess — the organiser's desk", () => {
     await expect((await runSheetRow(page, flagged)).getByTestId("run-sheet-camera-chip")).toHaveAttribute("data-state", "ok");
     await expect((await runSheetRow(page, flagged)).getByTestId("run-sheet-camera-chip")).toHaveText(uiEn["runsheet.camera.ok"]!);
     await expect((await runSheetRow(page, flagged)).getByTestId("run-sheet-connection-chip")).toHaveCount(0);
+    await expect(page.getByTestId("external-play-open-match-day"), "nothing needs a decision: no queue row, no link").toHaveCount(0);
     // The queue is empty, so nothing outranks the phase any more and the card says what the phase is. Round 1 was opened a few
     // minutes ago and its check-in window (DEADLINE_AFTER_MS) is still running, so the phase is check-in for round 1: asserted as
     // the line itself (kind and words), which an absent card or a stale "needs a decision" line cannot satisfy.
-    const settledEntry = page.getByTestId("arbiter-entry").getByTestId("arbiter-entry-status");
-    await expect(settledEntry).toHaveAttribute("data-kind", "checkin");
-    await expect(settledEntry).toHaveText(fill("arbiter.entry.status.checkin", { round: 1 }));
+    await expect(entryStatus).toHaveAttribute("data-kind", "checkin");
+    await expect(entryStatus).toHaveText(fill("arbiter.entry.status.checkin", { round: 1 }));
   });
 
-  test("Unpair while a game is on file: refused, the round stays paired, and the notice leads to the arbiter panel", async ({
+  test("Unpair while a game is on file: refused, the round stays paired, and the notice leads to Match Day", async ({
     page,
     request,
   }) => {
@@ -957,13 +956,13 @@ test.describe("online chess — the organiser's desk", () => {
     expect(await seated(), "the refusal left both boards paired").toBe(2);
     const link = notice.getByTestId("online-game-exists-link");
     await expect(link).toHaveText(uiEn["externalPlay.gameExistsCta"]);
-    await expect(link).toHaveAttribute("href", r.arbiterPath);
+    await expect(link).toHaveAttribute("href", r.matchDayPath);
     expect(await noSidewaysScroll(page)).toBe(3);
     await shoot(page, "unpair-game-exists");
     await page.setViewportSize({ width: 1280, height: 900 });
     await link.click();
-    await expect(page).toHaveURL(new RegExp(`${r.arbiterPath}$`));
-    await expect(page.getByRole("heading", { level: 1, name: uiEn["arbiter.title"] })).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(`${r.matchDayPath}$`));
+    await expect(page.getByTestId("md-online"), "Match Day's online boards are on screen").toBeVisible({ timeout: 30_000 });
   });
 
   // Email outbox phase 3 (Task 14, spec §7): the void, driven by the press. The vitest file calls the cancel; this one proves the

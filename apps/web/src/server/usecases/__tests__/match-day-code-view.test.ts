@@ -24,6 +24,7 @@ import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
 import { ensureDeviceLink } from "../device-links";
 import { at, iso, place, seedDay, setStatus, T0, type Day } from "./_match-day-seed";
+import { seedOnlineDivisionIn } from "./_match-day-online-seed";
 import { GET } from "@/app/api/v1/match-day-code/route";
 
 vi.stubEnv("DEVICE_LINK_KEK", randomBytes(32).toString("hex"));
@@ -263,6 +264,59 @@ describe.skipIf(!HAS_DB)("the day read for a Match Day code", () => {
     const after = await getMatchDayForCode(code, NOW);
     expect(after.courts.map((c) => c.court_id)).toEqual([day.courts.c3]);
     expect(after.courts[0]!.next).toEqual([]);
+  });
+
+  // Owner O3 (2026-11-17): the capture phone's day read leaves ONLINE divisions out - an online board is the web Match Day's to list
+  // (online_rounds), and the code read's `online` stays []. In-hall divisions of the same competition are untouched.
+  describe("owner O3: online divisions stay out of the day read (one competition, both kinds of division)", () => {
+    /** Three boards of an online chess division in THIS competition: one in play on no court, one planned today on Court 2 (Hall A), one
+     *  ready with no court. Every one of them would be listed if the division were in-hall: the first two by status, the third by
+     *  the no-court list's own rule. */
+    async function addOnline() {
+      const online = await seedOnlineDivisionIn(day.auth, day.comp.id, { name: "Rapid", fixtures: 3 });
+      const [playing, queued, ready] = online.boards.map((b) => b.fixtureId) as [string, string, string];
+      await setStatus(playing, "in_play");
+      await place(day, queued, 45, day.courts.c2);
+      return { ...online, ids: [playing, queued, ready] };
+    }
+    const listedIds = (view: Awaited<ReturnType<typeof getMatchDayForCode>>): string[] => [
+      ...view.courts.flatMap((c) => [...(c.now ? [c.now.fixture_id] : []), ...c.next.map((r) => r.fixture_id), ...c.finished.map((r) => r.fixture_id)]),
+      ...view.no_court.map((r) => r.fixture_id),
+    ];
+
+    it("competition scope: none of the online division's boards is listed (0 of 3), every in-hall row is (5 of 5), online stays []", async () => {
+      const online = await addOnline();
+      const { code } = await codeFor(day, { kind: "competition" });
+      const view = await getMatchDayForCode(code, NOW);
+      const listed = listedIds(view);
+      expect(online.ids.length, "seeded online boards").toBe(3);
+      expect(listed.filter((id) => online.ids.includes(id)).length, "online boards listed").toBe(0);
+      // The in-hall board of the describe's beforeEach: f0..f4 are listed (f5 is yesterday's). Counted against the seed, never zero.
+      const inHall = f.slice(0, 5);
+      expect(listed.filter((id) => inHall.includes(id)).sort()).toEqual([...inHall].sort());
+      expect(view.online).toEqual([]);
+      expect(CaptureMatchdayDay.safeParse(view).success).toBe(true);
+    });
+
+    it("the same board, the division set back to in-hall: the three boards ARE listed - it is the online filter, not the seed, that leaves them out", async () => {
+      const online = await addOnline();
+      const { code } = await codeFor(day, { kind: "competition" });
+      expect(listedIds(await getMatchDayForCode(code, NOW)).filter((id) => online.ids.includes(id))).toEqual([]);
+      await sql`update divisions set config = jsonb_set(config, '{onlinePlay}', '"off"') where id = ${online.divisionId}`;
+      const after = listedIds(await getMatchDayForCode(code, NOW));
+      expect(after.filter((id) => online.ids.includes(id)).sort()).toEqual([...online.ids].sort());
+    });
+
+    it("venue scope: the online board placed on a Hall A court is not listed; the in-hall court rows still are", async () => {
+      const online = await addOnline();
+      const { code } = await codeFor(day, { kind: "venue", venueId: day.venues.hallA });
+      const view = await getMatchDayForCode(code, NOW);
+      expect(view.courts.map((c) => c.court_id)).toEqual([day.courts.c1, day.courts.c2]);
+      expect(listedIds(view).filter((id) => online.ids.includes(id)).length).toBe(0);
+      expect(view.courts[0]!.now?.fixture_id, "the in-hall court is untouched").toBe(f[0]);
+      expect(view.courts[0]!.next.map((r) => r.fixture_id)).toEqual([f[1]]);
+      expect(view.courts[0]!.finished.map((r) => r.fixture_id)).toEqual([f[2]]);
+    });
   });
 
   describe("tags and slot labels (F-T8-3, F-T8-4)", () => {

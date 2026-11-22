@@ -6,6 +6,7 @@ import { admitTableLateEntrant } from "../roundrobin-late-entry";
 import { admitSwissLateEntrant } from "../swiss-late-entry";
 import { appendToLadderOrder } from "../ladder-late-entry";
 import { divisionPlaysOnline } from "@/server/external-play/online-play";
+import { logOnlineCapBreach } from "@/server/external-play/online-entrant-cap";
 import { type SeatGate } from "../online-seat-gate";
 import { assertDivisionTakesKind, loadEntrantShape } from "../entrant-shape";
 import { submitterAccounts } from "../registration-submitter-account";
@@ -254,6 +255,11 @@ export async function materialise(
   // clears only when nothing else in the cart still needs it — the SAME
   // helper withdrawCore and sweepRegistrations' expiry branch now call too.
   await clearExpiresIfNoLongerNeeded(tx, reg.group_id, reg.id);
+  // The online chess cap is NEVER enforced here (review I3): a confirmation is often a card payment that has already moved, and a throw
+  // would roll the webhook back for Stripe to redeliver, for ever. It holds upstream instead - the sign-up was counted when it was let
+  // in (pending / paid, `countOnlineHeld`), so becoming an entrant moves its place from one term of the count to the other and never
+  // grows it, and the doors that seat a waitlisted one (Promote, Confirm, Waive) refuse first. A breach is only LOGGED.
+  await logOnlineCapBreach(tx, reg.division_id);
   return entrant.id;
 }
 

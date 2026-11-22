@@ -14,6 +14,12 @@ import "server-only";
 // branch is unreachable from here. The job leaves no ended room behind: it only creates, and an unadopted room that a later
 // sweep ends is that sweep's (Task 8) to delete, never this job's.
 //
+// A billing-FROZEN competition's rows are deferred, not made (Match Day O4, ruling MD-R16 2026-11-20): its round cannot be opened
+// (`openRound` refuses it with the freeze's 402), so a room made for it is vendor spend on a round that cannot start. The pass asks
+// `frozenCompetitionIds` once per org, in the pass - NOT a `frozen_at` predicate in the candidate SQL, because the mark is stored
+// lazily (the first read that finds the org over its limit chooses and stores it). The rows stay candidates (the sweep's teardown
+// must not end the rooms already made for them) and keep their place: the first pass after the freeze lifts makes them.
+//
 // The pass is OFF unless EXTERNAL_PLAY_PREMINT is exactly "1": a flag-off environment reports `disabled` (not a failure) BEFORE
 // the lock is taken, so a minute with the flag off can never report `skipped` (a failure counter for the cron Worker) because
 // some other pass held the lock. With the flag on it is one pass at a time (the sweep's lock shape), and it shares the cron
@@ -36,6 +42,7 @@ import {
 } from "@/server/external-play/video/realtimekit";
 import type { CallBudget } from "@/server/external-play/video/budget";
 import { onlinePlayDivisionWhere } from "./guard";
+import { frozenCompetitionIds } from "../entitlement-freeze";
 import { onlineChessOffered } from "./online-chess-flag";
 import { PLAYABLE_STATUSES, codeOf } from "./sweep/pass";
 
@@ -59,6 +66,10 @@ export const PREMINT_FAILURES_BEFORE_BREAK = 3;
 /** The one-pass-at-a-time advisory lock's name (`hashtext`). */
 export const PREMINT_LOCK = "external-play-premint";
 
+/** The `failures` code of an organisation whose freeze could not be read (MD-R20, gaps wave A7): a fault that must page, unlike a frozen
+ *  competition (a billing state) and a spent budget, which only defer. */
+export const PREMINT_FREEZE_UNREADABLE = "freeze_unreadable";
+
 /** The cron Worker reads `data.failed` and `data.skipped` as its failure counters (apps/cron-worker/src/schedule.ts), and
  *  apps/cron-worker/test/drift.test.ts finds each field's numeric declaration in this module's CODE. */
 export type PremintReport = {
@@ -72,19 +83,22 @@ export type PremintReport = {
   scanned: number;
   /** Rooms the pass made (a successful `ensureMeeting`: a claim that made the same room first would be counted too). */
   roomsMade: number;
-  /** Rows NOT started: the call cap, the pass budget or the platform's bucket ran out, or the club is not offered online
-   *  chess. They keep their place; the next pass reaches them. Never a failure. */
+  /** Rows NOT started: the call cap, the pass budget or the platform's bucket ran out, the club is not offered online
+   *  chess, or the competition is billing-frozen (MD-R16) - and the rows of an organisation whose freeze could not be read, but its
+   *  FIRST row (MD-R20: that one is the org's one failure, `PREMINT_FREEZE_UNREADABLE`). They keep their place; the next pass reaches
+   *  them. A deferral is never a failure of its own: `scanned = roomsMade + failed + deferred`. */
   deferred: number;
   /** `failures.length`, derived ONCE as the pass returns. */
   failed: number;
   /** 1: a check-in window was open (R3: any round of the scope opened up to ROUND_WINDOW_TAIL_MS ago), so the pass made no vendor
    *  call and counted every candidate `deferred`. Informational, not a failure. */
   windowsOpen: 0 | 1;
-  /** One per row whose `ensureMeeting` threw: a code, never a message (the report is returned to the cron caller). */
+  /** One per row whose `ensureMeeting` threw, and one per organisation whose freeze could not be read (on that org's first row, code
+   *  `PREMINT_FREEZE_UNREADABLE`): a code, never a message (the report is returned to the cron caller). */
   failures: { fixtureId: string; side: "home" | "away"; code: string }[];
 };
 
-export type PremintCandidate = { fixtureId: string; orgId: string; side: "home" | "away" };
+export type PremintCandidate = { fixtureId: string; orgId: string; competitionId: string; side: "home" | "away" };
 
 export type PremintDeps = {
   /** TEST SEAM - scope the pass to these orgs. Production passes none and serves every org; an EMPTY list matches nothing. */
@@ -164,7 +178,7 @@ export async function premintCandidates(orgIds?: readonly string[]): Promise<Pre
   const scope = orgIds === undefined ? sql`` : sql`and c.org_id in ${sql(orgIds as string[])}`;
   return sql<PremintCandidate[]>`
     with boards as (
-      select f.id, f.stage_id, f.round_no, f.seq_in_round, c.org_id,
+      select f.id, f.stage_id, f.round_no, f.seq_in_round, c.org_id, c.id as competition_id,
              min(f.scheduled_at) over (partition by f.stage_id, f.round_no) as round_at
         from fixtures f
         join stages s on s.id = f.stage_id
@@ -173,7 +187,7 @@ export async function premintCandidates(orgIds?: readonly string[]): Promise<Pre
        where ${premintBoardWhere()}
          ${scope}
     )
-    select b.id as "fixtureId", b.org_id as "orgId", sd.side
+    select b.id as "fixtureId", b.org_id as "orgId", b.competition_id as "competitionId", sd.side
       from boards b
      cross join (values ('home'), ('away')) as sd(side)
      where not exists (select 1 from fixture_video_meetings m where m.fixture_id = b.id and m.side = sd.side)
@@ -271,6 +285,27 @@ async function runPass(deps: PremintDeps): Promise<PremintReport> {
     return answer;
   };
 
+  // MD-R16: the org's frozen competitions, read once per org the pass reaches (`frozenCompetitionIds` may choose and store the freeze on
+  // its first read, and is asked outside any `withTenant`: this pass holds none). MD-R20: a read that FAILS is that org's alone - logged
+  // once (the answer is kept for the pass, so its rows share the one catch), and `null` here means "unknown": the org's rows are held,
+  // FAIL CLOSED (a competition that might be frozen gets no vendor call), while every other org's rooms are still made. The org then
+  // mints on demand at its open, as before the pre-mint, if the read keeps failing. A read that keeps failing is a fault, so it is also
+  // reported: ONE failure per org per pass (its first row, `PREMINT_FREEZE_UNREADABLE`, which the Worker counts in `data.failed`), the
+  // rest of its rows deferred - a quiet deferral every minute would never be seen. A frozen competition (a billing state) stays a deferral.
+  const freezeFailureReported = new Set<string>();
+  const frozenByOrg = new Map<string, Promise<Set<string> | null>>();
+  const frozenIn = (orgId: string): Promise<Set<string> | null> => {
+    let set = frozenByOrg.get(orgId);
+    if (set === undefined) {
+      set = frozenCompetitionIds(orgId).catch((err: unknown) => {
+        log.error({ orgId, err }, "external-play premint: an organisation's freeze could not be read; its rows are deferred");
+        return null;
+      });
+      frozenByOrg.set(orgId, set);
+    }
+    return set;
+  };
+
   let vendorErrorsInARow = 0;
   for (let i = 0; i < rows.length; i++) {
     // The pass's wall-clock budget, before the row's flag ask: that ask is a remote call outside `premintBudget`, and a club it
@@ -282,7 +317,21 @@ async function runPass(deps: PremintDeps): Promise<PremintReport> {
       break;
     }
     const row = rows[i]!;
+    // The club's offer is asked FIRST (gaps wave A fix round 1, m6): a club that is not offered online chess mints nothing whatever its
+    // freeze says, so its freeze is not read and an unreadable one pages nobody - there is nothing of it to pre-mint.
     if (!(await offeredTo(row.orgId))) {
+      report.deferred += 1;
+      continue;
+    }
+    // A frozen competition cannot open its round, so no room is made for it; the row keeps its place for the pass after the thaw.
+    // An org whose freeze could not be read (`null`) is held the same way.
+    const frozen = await frozenIn(row.orgId);
+    if (frozen === null && !freezeFailureReported.has(row.orgId)) {
+      freezeFailureReported.add(row.orgId);
+      report.failures.push({ fixtureId: row.fixtureId, side: row.side, code: PREMINT_FREEZE_UNREADABLE });
+      continue;
+    }
+    if (frozen === null || frozen.has(row.competitionId)) {
       report.deferred += 1;
       continue;
     }

@@ -52,7 +52,7 @@ function readBrowserZone(): string | null {
 const noZone = () => null;
 
 /** The browser's own IANA zone ("Asia/Tokyo"); `null` on the server, during hydration, and where the engine cannot resolve one. For
- *  asking whether a venue's clock is the viewer's (the arbiter panel's "(Tokyo time)" label, Task 16 D1): the server cannot know it,
+ *  asking whether a venue's clock is the viewer's (the "(Tokyo time)" label on a venue-zone time, Task 16 D1): the server cannot know it,
  *  so a server render that guessed would hydrate to something else. A zone does not change under a page, so there is no subscription. */
 export function useBrowserZone(): string | null {
   return useSyncExternalStore(subscribeToNothing, readBrowserZone, noZone);

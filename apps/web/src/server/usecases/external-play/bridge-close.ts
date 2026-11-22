@@ -2,7 +2,7 @@ import "server-only";
 // One authority for "this online game is over for us" (T16 fix round 1, I1).
 //
 // A fixture that is no longer playable — decided on the scoring pad, settled
-// from the arbiter panel or the queue, walked over or voided by a withdrawal,
+// from Match Day's board panel or the queue, walked over or voided by a withdrawal,
 // cancelled — ends our interest in its online game, whatever the bridge row
 // still reads: pending, ready, live, or held for the organiser. Before this, a
 // HELD row under a decided fixture was left alone (reconcile closed only

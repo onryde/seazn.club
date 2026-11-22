@@ -11,8 +11,8 @@ import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import type { OpenRoundView } from "@/lib/open-round";
 import { emptyExtendTally } from "@/lib/checkin-extend";
 
-const router = vi.hoisted(() => ({ refresh: vi.fn() }));
-vi.mock("next/navigation", () => ({ useRouter: () => router }));
+/** The shell's quiet day read, handed to the hook as its refresh (`useOpenRoundWith`: the router-bound form had no caller and went, B8). */
+const shellRefresh = vi.hoisted(() => vi.fn());
 
 type Call = { url: string; json?: unknown; resolve: (v: unknown) => void; reject: (e: unknown) => void };
 const net = vi.hoisted(() => ({ calls: [] as Call[] }));
@@ -26,11 +26,11 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
 });
 
 import { initialOpenRoundUi } from "../open-round-state";
-import { useOpenRound, type OpenRoundHandle } from "../use-open-round";
+import { useOpenRoundWith, type OpenRoundHandle } from "../use-open-round";
 
 /** The probe hands the whole handle out as a prop, so a test reads and calls exactly what a second caller would. */
 function Probe({ view }: { view: OpenRoundView | null }) {
-  return createElement("probe", { handle: useOpenRound(view) });
+  return createElement("probe", { handle: useOpenRoundWith(view, shellRefresh) });
 }
 const mount = (view: OpenRoundView | null) => {
   const ui = renderIsland(Probe, { view });
@@ -63,10 +63,10 @@ const VIEW = (o: Partial<OpenRoundView> = {}): OpenRoundView => ({
 
 beforeEach(() => {
   net.calls.length = 0;
-  router.refresh.mockReset();
+  shellRefresh.mockReset();
 });
 
-describe("useOpenRound - the empty case first", () => {
+describe("useOpenRoundWith - the empty case first", () => {
   it("a null view is the initial state and four presses that do nothing: no state change, no request, no refresh", async () => {
     const { ui, handle } = mount(null);
     expect(handle().state).toEqual(initialOpenRoundUi());
@@ -83,7 +83,7 @@ describe("useOpenRound - the empty case first", () => {
     }
     expect(presses, "four presses were tried").toHaveLength(4);
     expect(net.calls, "nothing reached the network").toHaveLength(0);
-    expect(router.refresh).not.toHaveBeenCalled();
+    expect(shellRefresh).not.toHaveBeenCalled();
     // Handing a real round in afterwards starts from nothing asked. (The teeth for ask/cancel are the state read AFTER each
     // press above, while the view is still null: a round change resets the state, so this line alone could not tell.)
     ui.rerender({ view: VIEW() });
@@ -113,7 +113,7 @@ describe("useOpenRound - the empty case first", () => {
   });
 });
 
-describe("useOpenRound - the state belongs to ONE round (reset when the round on screen changes)", () => {
+describe("useOpenRoundWith - the state belongs to ONE round (reset when the round on screen changes)", () => {
   it("the pair first: a redraw of the SAME round with fresh data keeps the state (a poll must not close the organiser's dialog)", () => {
     const { ui, handle } = mount(VIEW());
     handle().ask();
@@ -180,7 +180,7 @@ describe("useOpenRound - the state belongs to ONE round (reset when the round on
   });
 });
 
-describe("useOpenRound - the presses follow THIS round", () => {
+describe("useOpenRoundWith - the presses follow THIS round", () => {
   it("the press opens THIS round: the confirmation posts ONE request to this stage's open-round route with this round's number - not the next round's - and a double confirm sends nothing more", async () => {
     // Moved here from the deleted Open round control's suite (Task 4's killer, kept): the number is 7, so a press that read
     // `roundNo + 1`, another field or a stale render lands on 8 and fails. The column's block makes the same assertion through its
@@ -197,7 +197,7 @@ describe("useOpenRound - the presses follow THIS round", () => {
     expect(handle().state.confirming, "answered: the confirmation closes").toBe(false);
     expect(handle().state.busy).toBeNull();
     expect(handle().state.notice).toEqual({ kind: "answered", result: answer });
-    expect(router.refresh).toHaveBeenCalledTimes(1);
+    expect(shellRefresh).toHaveBeenCalledTimes(1);
   });
 
   it("open and resend each send for the view's own stage and round number, one request at a time", async () => {
@@ -212,7 +212,7 @@ describe("useOpenRound - the presses follow THIS round", () => {
     net.calls[1]!.resolve({ emailed: 1, retrying: 0 });
     await flush();
     expect(net.calls, "exactly the two presses went out").toHaveLength(2);
-    expect(router.refresh, "each answer refreshed the page once").toHaveBeenCalledTimes(2);
+    expect(shellRefresh, "each answer refreshed the page once").toHaveBeenCalledTimes(2);
   });
 
   it("the handle has no round-extend press: the round's +5 is the panel's own control, so nothing here can send one", () => {

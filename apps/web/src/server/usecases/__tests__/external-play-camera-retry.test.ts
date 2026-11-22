@@ -212,8 +212,10 @@ describe.skipIf(!DB)("cameraTokenForSeat - the token-only door (D21-fix-3)", () 
     const s = await seed("optional");
     await drain();
     expect((await cameraTokenForSeat(ask(s), { now: new Date() })).retry).toBe(true);
-    await sql`insert into realtimekit_call_budget (key, tokens, refilled_at) values (${bucketKey()}, 50, now())
-              on conflict (key) do update set tokens = 50, refilled_at = now()`;
+    // Fifty tokens, and a refill stamp in the future (as `drain` does) so no time passes into more: the charge is then EXACT, whatever
+    // the refill rate or how long the calls take under load (a stamp of now() made the tolerance a function of both).
+    await sql`insert into realtimekit_call_budget (key, tokens, refilled_at) values (${bucketKey()}, 50, now() + interval '1 hour')
+              on conflict (key) do update set tokens = 50, refilled_at = now() + interval '1 hour'`;
     const got = await cameraTokenForSeat(ask(s), { now: new Date() });
     expect(got.retry).toBe(false);
     expect(got.participant?.participantId, "the caller's own participant").toBeTruthy();
@@ -222,8 +224,7 @@ describe.skipIf(!DB)("cameraTokenForSeat - the token-only door (D21-fix-3)", () 
     const seen = fx.calls.length;
     expect(seen, "premise: the vendor saw requests").toBeGreaterThan(0);
     const after = (await bucketTokens())!;
-    expect(50 - after, "the bucket was charged one token per request the vendor saw (+ a refill of well under one)").toBeGreaterThanOrEqual(seen - 0.5);
-    expect(50 - after).toBeLessThanOrEqual(seen);
+    expect(50 - after, "the bucket was charged exactly one token per request the vendor saw").toBe(seen);
   });
 
   it("a SECOND ask after the token came hands one again (the token is regenerated, the participant is the same) - never 'no tile'", async () => {

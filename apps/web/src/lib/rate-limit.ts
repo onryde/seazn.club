@@ -228,7 +228,7 @@ export const CAMERA_FAULT_PING_LIMIT: RateLimitConfig = { max: 10, windowSeconds
 export const CAMERA_REPORT_LIMIT: RateLimitConfig = { max: 12, windowSeconds: 60 };
 
 /**
- * The arbiter panel's "Resync from Lichess" (T15 fix round 1, M3), per
+ * The board panel's "Resync from Lichess" (T15 fix round 1, M3), per
  * fixture across every organiser: each one opens a Lichess stream with a
  * PLAYER's token, and Lichess's 429 stops every call the club makes for a
  * minute. Six a minute is more than any person presses; fail-open, so a Redis
@@ -237,7 +237,7 @@ export const CAMERA_REPORT_LIMIT: RateLimitConfig = { max: 12, windowSeconds: 60
 export const ARBITER_RESYNC_LIMIT: RateLimitConfig = { max: 6, windowSeconds: 60 };
 
 /**
- * The arbiter panel's join (D16, §5.6.4), per fixture and organiser. With a meeting per player the panel's white/black
+ * The board panel's camera join (D16, §5.6.4), per fixture and organiser. With a meeting per player the panel's white/black
  * switch joins on every press, and each join mints a participant row and spends vendor calls (the participant's add, and
  * its kick and delete on the way out). Twelve a minute is more than any person flips; a stuck loop stops at it, and past
  * it the answer is a 429 the panel shows as its generic error tile with a retry. Fail-open like its neighbours, so a Redis

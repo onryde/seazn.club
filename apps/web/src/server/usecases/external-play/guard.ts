@@ -2,6 +2,7 @@ import "server-only";
 // ONE guard fronting every online-play entry point (chess Lichess
 // external-play redesign, Task 7 — spec §6, §7.2). Replaces the
 // pre-redesign `usecases/external-play.ts` (deleted this task; R1).
+import type postgres from "postgres";
 import { sql } from "@/lib/db";
 import { entrantDisplayName } from "@/lib/entrant-name";
 import { mapBoardgameClockToLichess, type BoardgameClockInput } from "@/server/external-play/clock";
@@ -76,6 +77,9 @@ export type OnlinePlayFixture = {
   orgId: string;
   orgSlug: string;
   orgName: string;
+  /** The competition the board belongs to: what the billing freeze (`competitions.max_active`) is keyed on, so a START write of an online
+   *  round (open, resend, +5) asks `assertCompetitionNotFrozen(orgId, competitionId)` of the board it was handed. */
+  competitionId: string;
   competitionSlug: string;
   divisionSlug: string;
   /** `null` ⇒ the board has no start time (an unscheduled online Swiss round,
@@ -209,7 +213,7 @@ export function onlinePlayClock(divisionConfig: unknown) {
 export async function loadOnlinePlayFixture(fixtureId: string): Promise<OnlinePlayFixture | null> {
   const [row] = await sql<LoadedRow[]>`
     select f.id as "fixtureId", o.id as "orgId", o.slug as "orgSlug", o.name as "orgName",
-           c.slug as "competitionSlug", d.slug as "divisionSlug", f.scheduled_at as "scheduledAt",
+           c.id as "competitionId", c.slug as "competitionSlug", d.slug as "divisionSlug", f.scheduled_at as "scheduledAt",
            f.home_entrant_id as "homeEntrantId", f.away_entrant_id as "awayEntrantId",
            f.status as "fixtureStatus", d.config as "divisionConfig",
            case when ep.fixture_id is null then null else to_jsonb(ep) end as bridge
@@ -230,6 +234,7 @@ export async function loadOnlinePlayFixture(fixtureId: string): Promise<OnlinePl
     orgId: row.orgId,
     orgSlug: row.orgSlug,
     orgName: row.orgName,
+    competitionId: row.competitionId,
     competitionSlug: row.competitionSlug,
     divisionSlug: row.divisionSlug,
     scheduledAt: row.scheduledAt,
@@ -388,9 +393,10 @@ export function sideDisplayName(a: {
   return resolved.trim() === "" ? "—" : resolved;
 }
 
-async function loadSide(side: Side, entrantId: string): Promise<SidePlayer> {
-  const rows = await sql<SideRow[]>`
-    select e.display_name as "displayName", e.kind as "kind",
+/** The columns `sideOf` reads, for one entrant (`loadSide`) or for many (`loadSidesOfBoards`): one source for the two readers, so a seat
+ *  reads the same through either. */
+const sideRowsOf = (where: postgres.Fragment, order: postgres.Fragment) => sql<(SideRow & { entrantId: string })[]>`
+    select e.id as "entrantId", e.display_name as "displayName", e.kind as "kind",
            p.id as "personId", p.full_name as "fullName", p.user_id as "userId",
            u.email, u.locale, u.deleted_at as "deletedAt",
            uea.external_user_id as "externalUserId", uea.username
@@ -399,8 +405,16 @@ async function loadSide(side: Side, entrantId: string): Promise<SidePlayer> {
       left join persons p on p.id = em.person_id and p.merged_into is null
       left join users u on u.id = p.user_id
       left join user_external_accounts uea on uea.user_id = p.user_id and uea.provider = 'lichess'
-     where e.id = ${entrantId}
-     order by em.person_id`;
+     where ${where}
+     order by ${order}`;
+
+async function loadSide(side: Side, entrantId: string): Promise<SidePlayer> {
+  return sideOf(side, entrantId, await sideRowsOf(sql`e.id = ${entrantId}`, sql`em.person_id`));
+}
+
+/** One seat as the arbiter, the room and the invite read it, from the rows of its entrant (none: an entrant that is not there, or no
+ *  entrant yet - the snapshot is empty and the name is the em-dash floor). */
+function sideOf(side: Side, entrantId: string, rows: readonly SideRow[]): SidePlayer {
   // F5: the snapshot is a fallback for the resolver, never the entrant id.
   const snapshotName = rows[0]?.displayName ?? "";
   const kind = rows[0]?.kind ?? null;
@@ -482,6 +496,27 @@ export async function loadSides(
     loadSide("away", f.awayEntrantId),
   ]);
   return { home, away };
+}
+
+/** `loadSides` for many boards in ONE read (gaps wave A, fix round 1, A10): the round composition and the flagged lister built every board
+ *  with two statements of its own, 80 of the 180 a 32-board Match Day poll issued. The answer for each board, in the order given, is what
+ *  `loadSides` gives for it (a board listed twice answers twice; a seat with no entrant, or an id that is none, reads as an entrant with
+ *  no rows, as `loadSide` reads it). No boards: no answer and no statement. */
+export async function loadSidesOfBoards(
+  boards: readonly Pick<OnlinePlayFixture, "homeEntrantId" | "awayEntrantId">[],
+): Promise<{ home: SidePlayer; away: SidePlayer }[]> {
+  const ids = [...new Set(boards.flatMap((b) => [b.homeEntrantId, b.awayEntrantId]).filter((id): id is string => typeof id === "string"))];
+  const rows = ids.length === 0 ? [] : await sideRowsOf(sql`e.id = any(${ids}::uuid[])`, sql`e.id, em.person_id`);
+  const byEntrant = new Map<string, SideRow[]>();
+  for (const r of rows) {
+    const list = byEntrant.get(r.entrantId);
+    if (list) list.push(r);
+    else byEntrant.set(r.entrantId, [r]);
+  }
+  return boards.map((b) => ({
+    home: sideOf("home", b.homeEntrantId, byEntrant.get(b.homeEntrantId) ?? []),
+    away: sideOf("away", b.awayEntrantId, byEntrant.get(b.awayEntrantId) ?? []),
+  }));
 }
 
 /** Which side has White — home unless a `boardgame.pairing` card recorded

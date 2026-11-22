@@ -3,7 +3,7 @@
  *
  * WHAT IT ANSWERS. When a club opens a round of 30 online boards at once — 60 players checking in, creating games,
  * playing ~20 plies each and resigning — how many calls leave the platform for each vendor in any five minutes
- * (RealtimeKit's limit is 1,200 per account per five minutes; our own ceiling is 900, video/budget.ts), how many
+ * (RealtimeKit's limit is 3,500 per account per five minutes; our own ceiling is 2,625, video/budget.ts), how many
  * Lichess challenges are created (500 per ten minutes per IP, coordinator's brief), how long do the room's reads and
  * the players' moves take at p50/p95, how many database connections are open at the peak (prod budget: 60), and how
  * long does a sweep pass take while all of it is going on.
@@ -21,7 +21,7 @@
  * leave through the budget).
  *
  * TWO MODES. METERED (LOAD_METERED=1, the default): the server runs with REALTIMEKIT_METER_ANY_BASE=1, so the call
- * budget (video/budget.ts, burst 300 + 2/s) acts on the fixture host as it does on Cloudflare's, and the run shows what a
+ * budget (video/budget.ts, burst 525 + 7/s) acts on the fixture host as it does on Cloudflare's, and the run shows what a
  * deferral costs a player: the seat answers `camera_starting`, the screen re-asks on its back-off, and past its bounds a
  * player presses Check in again. UNMETERED (LOAD_METERED=0, a server without the flag): nothing is deferred and the run
  * measures DEMAND - the RealtimeKit calls a round would make if the budget were not there - and replays the recorded
@@ -82,7 +82,12 @@
  * pairs is a failure and B has none. `B` owes NO held-stays bar: its demand sits a few tokens from the bucket's supply, so whether a stay is
  * held is run to run (5 of 6 runs) - its held count and lowest gate level are only RECORDED. The DRY bars (a stay held, and the gate saw a
  * bucket level under the completing level, `lineCompletingLevel`) belong to `B-dry`, whose arrival spread is derived so the bucket is short of tokens by construction.
- * Every strict leg owes 0 never created / 0 late / 0 beyond the stranded bound. Each is run once, on a fresh database:
+ * Every strict leg owes 0 never created / 0 late / 0 beyond the stranded bound. Each is run once, on a fresh database.
+ *
+ * The recipes below, and the measurements quoted beside them, were drawn against the 900-call ceiling (a bucket of 300 + 2 a second). The
+ * ceiling is now 2,625 (525 + 7 a second, video/budget.ts): thirty boards (60 players) no longer exceed it, so a leg that depends on the
+ * bucket running dry or a line forming - `B`, `B-honest`, `B-dry`, `B-slow-*` - needs a bigger run (LOAD_BOARDS=64, a full 128-player online
+ * division) and its own fresh measurement before its figures are quoted. `B-dry` says so itself: it refuses a run too small to run dry.
  *
  *   A           LOAD_SCENARIO=A LOAD_BOARDS=30 LOAD_ARRIVAL_SPREAD_S=20 LOAD_OPENED_AGO_S=0
  *               (all 60 on the page before the batches open; the harness's own 1-3 s cameras; strict)
@@ -90,7 +95,7 @@
  *               (RECORDS whether the batch size or the gap must move; the code's constants are not touched by a run)
  *   B           LOAD_SCENARIO=B LOAD_BOARDS=30 LOAD_ARRIVAL_SPREAD_S=60 LOAD_OPENED_AGO_S=250 LOAD_CAMERA_LAG_MIN_S=0 LOAD_CAMERA_LAG_MAX_S=0
  *               (instant cameras: the bucket's figures alone; the bucket runs dry once and the line holds ONE stay, so there are no pairs)
- *   B-dry       LOAD_SCENARIO=B-dry LOAD_BOARDS=30 LOAD_OPENED_AGO_S=250 LOAD_CAMERA_LAG_MIN_S=0 LOAD_CAMERA_LAG_MAX_S=0 - and NO LOAD_ARRIVAL_SPREAD_S: B's shape
+ *   B-dry       LOAD_SCENARIO=B-dry LOAD_BOARDS=64 LOAD_OPENED_AGO_S=250 LOAD_CAMERA_LAG_MIN_S=0 LOAD_CAMERA_LAG_MAX_S=0 - and NO LOAD_ARRIVAL_SPREAD_S: B's shape
  *               with the spread derived (line-load.ts dryArrivalSpreadS, refused if set by hand); owes the dry bars
  *   B-honest    as B with LOAD_SCENARIO=B-honest and the harness's 1-3 s cameras (LOAD_CAMERA_LAG_MIN_S=1 LOAD_CAMERA_LAG_MAX_S=3):
  *               a stay then costs ~10-12 calls and the line forms, which instant cameras do not make it do - it owns the order bars
@@ -1417,7 +1422,7 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
         perPlayerCheckIn: Math.round((perPhase["check-in"].realtimekit / players.length) * 10) / 10,
       },
       perPhase,
-      // What the call budget (burst 300, 2/s) would have pushed back on, had the fixture host been metered. OPEN LOOP:
+      // What the call budget (burst 525, 7/s) would have pushed back on, had the fixture host been metered. OPEN LOOP:
       // a refused call is not retried here, in the product it comes back after the back-off, so this is the demand the
       // bucket would have deferred - not a count of what the product deferred. `byPhase` splits it where the demand is.
       budgetReplay: {
@@ -1458,7 +1463,7 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
       rtkHeadroom: {
         callsPerBoard: Math.round((videoCalls.length / BOARDS) * 10) / 10,
         boardsPerCeilingIn5Min: Math.floor(LOAD_LIMITS.rtkCeiling / (videoCalls.length / BOARDS)),
-        boardsPerBurstOf300: Math.floor(300 / ((perPhase["check-in"].realtimekit + 0) / BOARDS)),
+        boardsPerBurst: Math.floor(LOAD_LIMITS.rtkBurst / ((perPhase["check-in"].realtimekit + 0) / BOARDS)),
       },
       claimsPerPlayer: { min: Math.min(...players.map((p) => p.claims)), max: Math.max(...players.map((p) => p.claims)), total: players.reduce((a, p) => a + p.claims, 0) },
       database: { peakConnections, samples: dbSamples.length, prodBudget: LOAD_LIMITS.dbConnectionBudget, peakActive: dbSamples.reduce((m, s) => Math.max(m, s.active), 0), peakIdleInTx: dbSamples.reduce((m, s) => Math.max(m, s.idleInTx), 0) },

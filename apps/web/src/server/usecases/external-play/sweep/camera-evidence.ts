@@ -168,7 +168,7 @@ async function readCameraEvidence(
     // never HIDES (fix round 5, ruling 1): many or long stamps in one match
     // are TOLD to the organiser — a neutral flag, never camera_lost. Its note
     // leads with the stamped total in whole seconds (T16's {duration}). The
-    // arbiter panel shows the same total from the same function (I1).
+    // Match Day's board panel shows the same total from the same function (I1).
     const { faults, stamped } = await matchGuardFaults(sql, { fixtureId: c.fixtureId, side: c.side, personId, window });
     if (stamped.flag) {
       flags.push({

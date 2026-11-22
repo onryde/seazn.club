@@ -1,9 +1,9 @@
 import "server-only";
 // T15 fix round 1, C1 (D7 safeguarding): ONE predicate for "does this user
-// play on this board?". An organiser may watch a board's cameras through the
-// arbiter panel; a PLAYER may never watch their opponent's, and an organiser
+// play on this board?". An organiser may watch a board's cameras through
+// Match Day's board panel; a PLAYER may never watch their opponent's, and an organiser
 // who also plays is a player on their own board. The arbiter's join refuses
-// on it, the panel's loader hides the viewer's own boards with it, and the
+// on it, the arbiter loader hides the viewer's own boards with it, and the
 // sweep removes an arbiter participant whose user it answers yes for. None
 // of them copies it.
 //

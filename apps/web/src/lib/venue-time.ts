@@ -1,5 +1,5 @@
-// The venue's zone on screens an organiser reads from anywhere (Task 16 sign-off D1). The arbiter panel prints every time of day in
-// the VENUE's zone, so one deadline reads the same in the round column and in the decision area. An organiser whose own zone sits at
+// The venue's zone on screens an organiser reads from anywhere (Task 16 sign-off D1). Match Day's board and round panels print every
+// time of day in the VENUE's zone, so one deadline reads the same in the round panel and in the decision area. An organiser whose own zone sits at
 // a different UTC offset at that instant is told whose clock it is, once per time: "15:56 (Tokyo time)".
 //
 // Pure and client-safe. The viewer's zone is an INPUT (`null` until the browser is mounted): the server cannot know it, and a server

@@ -1,7 +1,7 @@
 "use client";
 // T16 (T19 carry): the organiser's answer when Unpair, Rebuild or deleting an entrant is refused because an online
 // game stands behind a board it would clear (409 ONLINE_GAME_EXISTS). The way out is settling that board in the
-// arbiter panel, so the notice links there — or, on a page with no panel to link to, says so alone.
+// board's panel on Match Day, so the notice links there — or, on a page with no Match Day link to offer, says so alone.
 import Link from "next/link";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";

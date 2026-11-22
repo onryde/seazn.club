@@ -9,6 +9,13 @@ import type { PutRegistrationSettings, RegistrationFormField } from "@/server/ap
 import { resolveLogoUrl } from "@/server/public-site/data";
 import { requiresDob, requiresGender } from "../registration-eligibility";
 import { divisionPlaysOnline } from "@/server/external-play/online-play";
+import {
+  effectiveEntrantCap,
+  onlineCapBinds,
+  onlineDivisionFullError,
+  onlineHeldSql,
+  onlineRoomLeft,
+} from "@/server/external-play/online-entrant-cap";
 import { chessIndividualOnlyError, isChessSport } from "@/lib/chess-individual-only";
 import { effectivePolicy, readCameraPolicy, type CameraPolicy } from "@/server/external-play/camera-policy";
 import { onlineChessOffered } from "../external-play/online-chess-flag";
@@ -184,7 +191,13 @@ export async function putRegistrationSettings(
   // confirm would hit the wall after money changed hands.
   if (input.capacity != null) {
     const limit = await getLimit(auth.orgId, "entrants.per_division.max", regDiv?.competition_id);
-    if (limit !== null && input.capacity > limit) {
+    // A division that plays online holds at most min(plan limit, 128) (owner ruling 2026-11-21): a capacity above it promises places
+    // the division cannot hold. Where the PLAN is what binds the old sentence stands; where the online cap is, it says so instead
+    // (a capacity limit - no plan lifts it, so no "raise the plan").
+    const online = regDiv ? divisionPlaysOnline(regDiv) : false;
+    const cap = effectiveEntrantCap(online, limit);
+    if (cap !== null && input.capacity > cap) {
+      if (onlineCapBinds(online, limit)) throw onlineDivisionFullError();
       throw new HttpError(
         422,
         `Capacity exceeds your plan's entrant limit (${limit}) — raise the plan or lower the capacity`,
@@ -409,9 +422,27 @@ export async function publicRegistrationInfo(
   const offered = couldPlayOnline && (await onlineChessOffered({ orgId: comp.org_id, userId: null }));
   const onlinePlay = (r: (typeof rows)[number]) => offered && divisionPlaysOnline(r);
 
+  // The places an ONLINE division holds, by the count every online-cap door shares (live entrants + sign-ups let in): one read for the
+  // divisions that play online, none for a competition with no such division. A read, so no lock (the panel is a display; submit
+  // decides under the lock).
+  const heldById = new Map<string, number>();
+  const onlineRowIds = rows.filter(divisionPlaysOnline).map((r) => r.division_id);
+  if (onlineRowIds.length > 0) {
+    for (const h of await sql<{ id: string; held: number }[]>`
+      select d.id, ${onlineHeldSql(sql, sql`d.id`)} as held from divisions d where d.id in ${sql(onlineRowIds)}`) {
+      heldById.set(h.id, h.held);
+    }
+  }
+
   const now = new Date();
   const divisions: PublicDivisionInfo[] = rows.map((r) => {
-    const remaining = placesLeft({ capacity: r.capacity, planLimit, formatMax: formatMaxes.get(r.division_id) ?? null, active: r.active });
+    // Counted against the cap submit enforces: the plan's limit and the division's capacity by their own count, and for a division that
+    // plays online also what is left of min(plan limit, 128) by the online count (online-entrant-cap.ts; a plan below 128 counts the SAME
+    // places, re-review N2) - whichever is tighter.
+    const planSide = placesLeft({ capacity: r.capacity, planLimit, formatMax: formatMaxes.get(r.division_id) ?? null, active: r.active });
+    const remaining = divisionPlaysOnline(r)
+      ? Math.min(planSide ?? Number.POSITIVE_INFINITY, onlineRoomLeft(heldById.get(r.division_id) ?? 0, effectiveEntrantCap(true, planLimit)!))
+      : planSide;
     // A card division can't take submissions when Connect is broken OR the
     // paid entitlement is gone — closing it with an honest reason beats
     // accepting money we can't keep (spec #9, P2-10).

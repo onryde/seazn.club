@@ -106,6 +106,7 @@ import { PROMOTE_OVER_CAPACITY_CODE, PROMOTE_PLAN_LIMIT_CODE } from "@/lib/regis
 import { FORMAT_MAX_PROMOTION } from "@/lib/roundrobin-refusals";
 import { REMINDER_CAP_PER_DAY, REMINDER_CONFIRM_WITHIN_MS, REMINDER_LIMIT_CODE } from "@/lib/registration-reminder";
 import type { MessageKey } from "@/lib/messages";
+import { onlineEntrantCapText } from "@/components/v2/online-entrant-cap-refusal";
 import type { RegistrationListRow } from "@/server/usecases/registrations";
 
 type Status = RegistrationListRow["status"];
@@ -271,7 +272,9 @@ export function RegistrationHubRegistrantActions({
       const n = new Intl.NumberFormat(locale);
       return msg(FORMAT_MAX_PROMOTION.key, { max: n.format(err.extra.max), entrants: n.format(err.extra.entrants) });
     }
+    // An online chess division is full (128, on every plan; a capacity limit, so no plan to raise): said by its code.
     const said =
+      onlineEntrantCapText(err, (key, vars) => msg(key as MessageKey, vars)) ??
       registrantKindRefusalText(err, (key, vars) => msg(key, vars)) ??
       lichessRegistrantRefusalText(err, (key) => msg(key as MessageKey));
     return said ?? errorText(err);

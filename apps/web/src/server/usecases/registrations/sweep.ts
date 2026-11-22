@@ -10,6 +10,7 @@ import type { RegistrationSettingsRow, RegistrationWithGroupRow, DivisionCtx } f
 import { regGroupCols, loadSettings, divisionCtx } from "./lookups";
 import { clearExpiresIfNoLongerNeeded } from "./materialise";
 import { freesTeamSlot, promoteOldestWaitlisted, openPromotionSeatGate, notifyPromoted, returnToWaitlist } from "./waitlist";
+import { lockForPromotionCap, onlineCapHoldsPromotion, openOnlineCapGuard } from "@/server/external-play/online-entrant-cap";
 import { paymentReminderMessage } from "./mail";
 import { issuePayLink, recordPayToken } from "./pay-token";
 import { refundEntryUnderLock } from "./refunds";
@@ -270,6 +271,7 @@ export async function sweepRegistrations(
     limit 200`;
   for (const { id, division_id } of overdue) {
     const seatGate = await openPromotionSeatGate(division_id);
+    const capGuard = await openOnlineCapGuard(division_id); // re-review N1: an online division at its cap serves nobody (below)
     const outcome = (await sql.begin(async (tx) => {
       if (seatGate) await seatGate.load(tx);
       const [locked] = await tx<RegistrationWithGroupRow[]>`
@@ -284,6 +286,7 @@ export async function sweepRegistrations(
       ) {
         return null; // a webhook won the race, or the deadline moved
       }
+      if (freesTeamSlot(locked)) await lockForPromotionCap(tx, division_id, capGuard);
       await tx`update registrations set status = 'expired', updated_at = now()
                where id = ${id}`;
       // RS009 — same reason withdrawCore does it: expiry is a status change,
@@ -304,9 +307,10 @@ export async function sweepRegistrations(
       // capacity in the first place (registration-submit.ts's `taken` gate
       // excludes it), so its own expiry here must never trigger a waitlist
       // promotion. See freesTeamSlot's own doc comment.
-      const promoted = freesTeamSlot(locked)
-        ? await promoteOldestWaitlisted(tx, division_id, settings, undefined, seatGate)
-        : null;
+      const promoted =
+        freesTeamSlot(locked) && !(await onlineCapHoldsPromotion(tx, division_id, capGuard))
+          ? await promoteOldestWaitlisted(tx, division_id, settings, undefined, seatGate)
+          : null;
       await audit(tx, div.competition_id, div.org_id, "registration.expired", {
         registration_id: id,
         promoted_registration_id: promoted?.id ?? null,
@@ -360,6 +364,7 @@ export async function sweepRegistrations(
     limit 200`;
   for (const { id, division_id } of lapsing) {
     const seatGate = await openPromotionSeatGate(division_id);
+    const capGuard = await openOnlineCapGuard(division_id); // re-review N1, as the expiry pass above
     const outcome = (await sql.begin(async (tx) => {
       if (seatGate) await seatGate.load(tx);
       const [locked] = await tx<RegistrationWithGroupRow[]>`
@@ -375,6 +380,7 @@ export async function sweepRegistrations(
       ) {
         return null; // an organiser action won the race, or the deadline moved
       }
+      await lockForPromotionCap(tx, division_id, capGuard);
       // PR #677 finding L3, REJECTED after testing — `amount_cents` is
       // deliberately RETAINED here, and clearing it is a money defect.
       //
@@ -403,7 +409,9 @@ export async function sweepRegistrations(
       // lapsed — see promoteOldestWaitlisted's own doc comment for why
       // `for update skip locked` alone cannot stop this call from
       // re-selecting it.
-      const promoted = await promoteOldestWaitlisted(tx, division_id, settings, id, seatGate);
+      const promoted = (await onlineCapHoldsPromotion(tx, division_id, capGuard))
+        ? null
+        : await promoteOldestWaitlisted(tx, division_id, settings, id, seatGate);
       await audit(tx, div.competition_id, div.org_id, "registration.promotion_lapsed", {
         registration_id: id,
         promoted_registration_id: promoted?.id ?? null,

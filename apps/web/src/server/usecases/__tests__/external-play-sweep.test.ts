@@ -4577,7 +4577,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
             lane: null, is_final: false, third_place: false, conditional: false, ext_key: null,
           },
           href: "/o/org/c/comp/d/div/f/1", tz: "UTC", orgTz: "UTC", nowMs: Date.now(), canEdit: true,
-          entrantNames: {}, onlinePlay: sheet, arbiterHref: `/arbiter?fixture=${m.b.fixtureId}`,
+          entrantNames: {}, onlinePlay: sheet, arbiterHref: `/o/org/c/comp/match-day?board=${m.b.fixtureId}`,
         }).tree();
         const chipsOf = (id: string) => [...new Set(tree.filter((el) => propsOf(el)["data-testid"] === id))].map((el) => propsOf(el)["data-state"]);
         expect(chipsOf("run-sheet-connection-chip"), "the row: our side's quiet chip").toEqual(["ours"]);

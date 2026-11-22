@@ -7,7 +7,7 @@ import { z } from "zod";
 // registration-rules.ts above: this file is shared with the standalone
 // OpenAPI generator script, which has no `@/` alias resolution.
 import { streamUrlSchema } from "../../../lib/stream-url.ts";
-import type { BoardErrorCode, GrantRefusal } from "../../external-play/types.ts";
+import { NEEDS_REASONS, type BoardErrorCode, type GrantRefusal } from "../../external-play/types.ts";
 import { VenueId, CourtId, Uuid } from "./common.ts";
 
 // ---------------------------------------------------------------------------
@@ -196,6 +196,53 @@ export const MatchDayCourt = z.object({
   stream_link: MatchDayCourtStream.nullable(),
 });
 
+/** Match Day online: one row of the online block - one (division, stage, round) to show (types.ts `MatchDayOnlineRound`). `view`, `round` and
+ *  `needs_decision` are documented objects, not typed here: lib/open-round.ts `OpenRoundView` and lib/arbiter-view.ts `ArbiterRound` /
+ *  `ArbiterBoard` have no zod, and a plain z.object STRIPS an undeclared key on parse, so each is an open object (`z.looseObject`) that
+ *  keeps whatever the server sent - presence, camera and `joinable` on every board's sides, `hold_reason` on a held board. */
+export const MatchDayOnlineRound = z.object({
+  /** `${stage_id}:${round_no}` - the `?round=` param's value. */
+  key: z.string(),
+  division_id: Uuid,
+  division_name: z.string(),
+  division_slug: z.string(),
+  stage_id: Uuid,
+  stage_name: z.string(),
+  round_no: z.number().int(),
+  /** The division has more than one round row on the page: the row names the stage. */
+  multi_stage: z.boolean(),
+  /** `not_started`: the division has not started; `before`: paired, not opened; `checkin`: opened and a board still checking in; `playing`: opened, none checking in. */
+  phase: z.enum(["not_started", "before", "checkin", "playing"]),
+  /** Whether the club is offered online chess (the `online-chess` flag). */
+  offered: z.boolean(),
+  /** The venue zone the round's times are printed in. */
+  tz: z.string(),
+  /** The open-round reader's view of this (stage, round) (lib/open-round.ts OpenRoundView): the press, the pairings, the batches. Null when it has none for it, and for `not_started`. */
+  view: z
+    .looseObject({})
+    .meta({ description: "The open-round reader's view of this (stage, round) (OpenRoundView): `state` (paired | open), the press, the pairings and the check-in batches. Null when the reader has none for it, and for `not_started`." })
+    .nullable(),
+  /** The opened round whole (lib/arbiter-view.ts ArbiterRound), its `boards` carrying seats, check-in, sides (presence, camera, joinable), `flagCount` (flags are counted, never listed: `flags` is []) and `hold_reason`. Null before the open. */
+  round: z
+    .looseObject({})
+    .meta({
+      description:
+        "The opened round whole (ArbiterRound): `boards` (each an ArbiterBoard with `state`, `seats`, `checkin`, `sides` - presence, camera, `joinable` - `flagCount`, an always-empty `flags`, and `hold_reason` - null for a view-only member or an API key), `ownBoards` and `current`. Null before the open.",
+    })
+    .nullable(),
+  /** Held or flagged boards of the division NOT in `round.boards`, any round, each an ArbiterBoard with `stage_id`, `round_no` and `hold_reason`. A cancelled board is here only while it has an open flag. */
+  needs_decision: z.array(
+    z.looseObject({}).meta({
+      description:
+        "An ArbiterBoard (as in `round.boards`) with `stage_id`, `round_no` and `hold_reason` (null for a view-only member or an API key): a held or flagged board of the division that is not in `round.boards`. Carried on the division's FIRST row only.",
+    }),
+  ),
+  /** Boards the viewer plays on that no list shows: the row's own round's and, on the division's first row, the held boards of earlier rounds. A board only flagged in an earlier round and the viewer's own is in no count. */
+  own_boards: z.number().int().nonnegative(),
+  /** The Swiss round this row's stage would pair next (the lowest round with an unseated board), the same on every row of the stage; null for any other stage and for a Swiss with every round seated. The round panel offers "Pair next round" from it once the round is over. */
+  pair_next_round: z.number().int().positive().nullable().meta({ description: "The Swiss round this row's stage would pair next (the lowest round with an unseated board), the same on every row of the stage. Null for any other kind of stage and for a Swiss with every round seated." }),
+});
+
 export const MatchDayView = z.object({
   competition_id: Uuid,
   date: z.iso.date(),
@@ -215,13 +262,58 @@ export const MatchDayView = z.object({
       // B4: Match Day's "Find a court" on an unscheduled row — only when the division has a ready match with no court; the
       // court it opens (the first free one that match may use), or null for the page's list.
       alt: z.object({ label: z.string(), href: z.string(), court_id: Uuid.nullable() }).optional(),
+      // Match Day online (T4): the two PER-BOARD kinds (`board_held`, `board_flagged`) carry the board's fixture id; `round_key`
+      // (`${stage_id}:${round_no}`, the `?round=` value) is set only on a link hold whose action opens its ROUND (ruling MD-R2).
+      // Declared, because a plain z.object strips an undeclared key on parse and the poll body would lose what the shell needs.
+      fixture_id: Uuid.optional(),
+      round_key: z.string().optional(),
     }),
   ),
   results_owed: z.number().int().nonnegative(),
   fixtures_today: z.number().int().nonnegative(),
   // Match Day E2 item 5: the venues where this competition has a match today (the venue filter's default selection).
   venues_today: z.array(Uuid),
+  // Match Day online: the competition's online chess rounds, after the courts; empty when it has none (or the feature is off).
+  online_rounds: z.array(MatchDayOnlineRound),
+  // True when this poll's online ROUNDS read failed (the rest of the day is answered whole): `online_rounds` is then [] because nothing was read,
+  // not because there is no online round - a page that holds a last answer keeps it. False when the read answered, an empty answer included.
+  online_failed: z.boolean(),
+  // The divisions whose held or flagged board read failed in this poll (sorted ids): their per-board Needs-you rows (`board_held`,
+  // `board_flagged`) are missing from `needs_you` because they were not read, not because nothing is held. A page that holds a last answer
+  // keeps its last per-board rows of exactly these divisions. Empty when every read answered.
+  boards_unread: z.array(Uuid),
+  // Whether the competition is billing-frozen as of this poll: a page that saw a 402, or loaded frozen, takes the freeze back only from a poll that says
+  // false. Null when this poll's freeze read failed (the day is answered whole): no evidence either way.
+  frozen: z.boolean().nullable(),
 });
+
+/** The focused board's position (lib/match-day/types.ts `BoardPosition`): the replayed ledger as FEN, the last REPLAYED ply as its two
+ *  squares, and whose turn it is. */
+export const BoardPosition = z.object({
+  fen: z.string(),
+  lastMove: z.tuple([z.string(), z.string()]).nullable(),
+  turn: z.enum(["white", "black"]),
+});
+
+/** GET /fixtures/{id}/match-day-board (lib/match-day/types.ts `MatchDayBoard`): an `ArbiterBoard` (lib/arbiter-view.ts, no zod) with the
+ *  focus's own keys. A plain z.object STRIPS an undeclared key on parse, so the board is an open object (`z.looseObject`) that keeps
+ *  whatever the server sent - `sides` with presence, camera and `joinable`, `seats`, `checkin`, `flags` (each card whole for an editor's role) - and the keys the focus
+ *  adds are declared. */
+export const MatchDayBoard = z
+  .looseObject({
+    fixtureId: Uuid,
+    /** The bridge's replayed position; null while no game is on file. */
+    position: BoardPosition.nullable(),
+    stage_id: Uuid,
+    round_no: z.number().int(),
+    /** Why the board is held (the `needs_reason` vocabulary, the server's one list - `NEEDS_REASONS`) while it is `on_hold`; null in any
+     *  other state, and null for a reader without an editor's role (MD-R21: the reason names the players' conduct). */
+    hold_reason: z.enum(NEEDS_REASONS).nullable(),
+  })
+  .meta({
+    description:
+      "An ArbiterBoard as the round view paints it (`state`, `clock`, `sides` - presence, camera, `joinable` - `seats`, `checkin`, `flags` - whole for an owner or an admin, kind and time only for a view-only member or a key - `flagCount`, ...) with `position`, `stage_id`, `round_no` and `hold_reason` (why the board is held: whole for an owner or an admin, null for a view-only member or a key).",
+  });
 
 export const MatchDayCandidate = z.object({
   fixture: MatchDayFixture,

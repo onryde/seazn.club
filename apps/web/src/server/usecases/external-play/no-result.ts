@@ -1,6 +1,6 @@
 import "server-only";
 // I-3 (controller rulings, fix rounds 2 and 3) — what the organiser's "No result" means on an online board, in ONE
-// place: the settle (resolve.ts) writes it, and the two readers that offer it (the arbiter panel's loader, the
+// place: the settle (resolve.ts) writes it, and the two readers that offer it (the arbiter loader Match Day's panels read, the
 // needs-result queue) carry the same `noResultOffer`, so neither can offer a No result the server refuses.
 //
 //   - VOID: No result is an abandon — `core.abandon {reason}` (W2b's abandon reason slot): no points to either player

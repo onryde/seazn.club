@@ -1943,6 +1943,56 @@ test.describe("Match Day — PB2: a billing-frozen competition scores, calls not
 });
 
 /**
+ * B5 fix round 1: a page that LOADED frozen takes the freeze back from the poll that finds the organisation under its limit again. The unit suite drives
+ * the shell with a hand-made poll; this drives the real route (GET …/match-day, `frozen` from `frozenCompetitionIds`) into the real shell, so the lift is
+ * proven through its producer and its consumer. The refresh button is the poll's own read (use-day-refresh), taken on demand.
+ */
+test.describe("Match Day - B5 fix round 1: a page loaded frozen lifts the freeze from the poll that says it is not", () => {
+  test("loaded frozen: a poll that still says frozen leaves the banner and Call out; a poll that says false takes the banner away and offers Call, with no reload", async ({ browser }) => {
+    test.setTimeout(240_000);
+    const context = await browser.newContext({ storageState: { cookies: [], origins: [] }, viewport: { width: 1280, height: 900 } });
+    try {
+      const page = await context.newPage();
+      const { orgId } = await freshOrg(page, "mdthaw");
+      await dismissConsent(page);
+      await setOrgPlanBySql({ orgId }, "pro");
+      await invalidateOrgEntitlements(page.request, orgId);
+      const seed = await seedMatchDay(page.request, "Thaw");
+      const path = await competitionPath(page.request, seed.competitionId, "/match-day");
+      await setEntitlementOverrideSql(orgId, "competitions.max_active", 0);
+      await invalidateOrgEntitlements(page.request, orgId);
+      await page.goto(path, { waitUntil: "load" });
+      await expect(page.getByTestId("md-frozen"), "premise: the page LOADED frozen").toHaveText(UI_EN["matchDay.frozen"]!);
+      const focus = page.getByTestId("md-focus");
+      await row(page, seed.court2).click();
+      await expect(focus).toHaveAttribute("data-state", "free");
+      await expect(focus.locator(`[data-testid="md-candidate"][data-fixture-id="${seed.calDee}"]`)).toBeVisible();
+      await expect(focus.getByRole("button", { name: /^Call to / }), "premise: frozen, no Call is offered").toHaveCount(0);
+
+      /** One read of the day through the page's own refresh button; the answer's `frozen`, read off the wire. */
+      const refreshAndRead = async () => {
+        const answered = page.waitForResponse((r) => r.request().method() === "GET" && r.url().includes(`/competitions/${seed.competitionId}/match-day`) && r.status() === 200);
+        await page.getByTestId("md-refresh-button").click();
+        const body = (await (await answered).json()) as { data: { frozen: boolean | null } };
+        await expect(page.getByTestId("md-refresh-button"), "the read finished").toBeEnabled({ timeout: 30_000 });
+        return body.data.frozen;
+      };
+      expect(await refreshAndRead(), "the real route says the competition is still frozen").toBe(true);
+      await expect(page.getByTestId("md-frozen"), "a poll that still says frozen leaves the banner").toBeVisible();
+      await expect(focus.getByRole("button", { name: /^Call to / }), "and still offers no Call").toHaveCount(0);
+
+      await setEntitlementOverrideSql(orgId, "competitions.max_active", 100);
+      await invalidateOrgEntitlements(page.request, orgId);
+      expect(await refreshAndRead(), "the real route now says it is NOT frozen (false, not null: the read worked)").toBe(false);
+      await expect(page.getByTestId("md-frozen"), "the poll that says false takes the banner away, with no reload").toHaveCount(0);
+      await expect(focus.getByRole("button", { name: /^Call to / }).first(), "and the Call the freeze took away is offered again").toBeVisible();
+    } finally {
+      await context.close();
+    }
+  });
+});
+
+/**
  * Match Day PB2 item 3: the board's POLL (GET …/match-day, what the shell re-reads) carries no Needs-you rows to a view-only
  * member. The organiser's read of the same board is asked first: rows there, none for the viewer — the strip, not an empty day.
  */

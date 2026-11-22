@@ -24,6 +24,8 @@ import type { TableStageKind, TiebreakerKey } from "@seazn/engine/sport";
 import type { Dict } from "@/lib/i18n-constants";
 import { configIssueText, settingsSaveErrorText } from "@/lib/config-issue-copy";
 import { ONLINE_CHESS_DISABLED_CODE, onlinePlayShown } from "@/lib/online-chess";
+import { onlineEntrantCapText } from "../online-entrant-cap-refusal";
+import type { MessageKey } from "@/lib/messages";
 import { CHESS_INDIVIDUAL_ONLY, isChessSport } from "@/lib/chess-individual-only";
 import { LICHESS_CLOCK_FIELD_KEYS, selectedTimeControlKey, timeControlOptions, timeControlRuleValues } from "@/lib/online-time-control";
 import { hasLinkGaps, linkGapSentence, type LinkGapsSummary } from "@/lib/online-link-gaps";
@@ -308,6 +310,9 @@ export function DivisionRulesStrip({
       return msg("divset.err.timeControlUnsupported", { controls });
     }
     if (err instanceof ApiV1Error && err.code === ONLINE_CHESS_DISABLED_CODE) return msg("divset.err.onlineChessDisabled");
+    // Turning online play on for a division that already holds more than an online chess division may (owner ruling 2026-11-21).
+    const tooMany = err instanceof ApiV1Error ? onlineEntrantCapText(err, (key, vars) => msg(key as MessageKey, vars)) : null;
+    if (tooMany !== null) return tooMany;
     // A chess division stored with a legacy entrants override that names teams: the format save re-sends the config, and the
     // server refuses it (owner ruling 2026-10-26). Server English otherwise: localise the code.
     if (err instanceof ApiV1Error && err.code === CHESS_INDIVIDUAL_ONLY) return msg("divset.err.chessIndividualOnly");

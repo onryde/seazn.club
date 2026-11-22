@@ -15,7 +15,7 @@ import { withVenueName } from "./venue-clock";
 export const MUTED = "text-[#6b5b8a]";
 export const SOFT = "text-[#4a3a6b]";
 /** The panel's clock face: Barlow, tabular numerals. For the check-in countdown, the seat clocks and the tally's numbers only - it
- *  lives here (not in arbiter-panel.tsx) so the round column can read it without importing the panel that mounts the column. */
+ *  lives here so Match Day's round and board panels read ONE face without importing each other. */
 export const CLOCK_FACE = "[font-family:var(--font-barlow,var(--font-geist-sans))] font-semibold tabular-nums";
 // T17B fix 2 (D7): the hand on every button (Tailwind v4 preflight gives <button> the arrow); never on a disabled one.
 export const BUTTON_QUIET =
@@ -39,7 +39,7 @@ export type Fmt = {
   list(items: string[]): string;
 };
 
-/** `venueTz`: the zone every time of day is read in, STATED by every caller (the arbiter panel and the Fixtures tab's online queue pass the venue's,
+/** `venueTz`: the zone every time of day is read in, STATED by every caller (Match Day's panels and the Fixtures tab's online queue pass the venue's,
  *  Task 16 D1 and the owner's 2026-10-25 ruling). It is never optional: a formatter handed no zone used to read the viewer's own, unlabelled,
  *  which is the bug that ruling fixed. `null` is for a caller that draws no time of day, and the types accept it only beside a `null` clock; a
  *  live clock with a `null` zone is refused by the types, and if one gets here anyway the formatter paints no time (`hm`/`hms` answer `null`) rather

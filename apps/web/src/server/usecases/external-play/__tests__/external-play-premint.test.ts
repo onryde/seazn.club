@@ -16,6 +16,8 @@ import { randomUUID } from "node:crypto";
 import type { DeliverMessage } from "@/server/email-outbox/transport";
 import { stubOutboxEnv, type SentInvite } from "@/server/usecases/__tests__/_invite-mail";
 import { sql } from "@/lib/db";
+import { log } from "@/server/logger";
+import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { divisionScoringClosed } from "@/lib/division-phase";
 import { isSwissByeShellExtKey, SWISS_BYE_SHELL_EXT_KEY_SQL_PATTERN } from "@/lib/swiss-shell";
 import { ROUND_WINDOW_TAIL_MS } from "@/server/external-play/window";
@@ -25,6 +27,7 @@ import { effectivePolicy, type CameraPolicy } from "@/server/external-play/camer
 import { endMeeting, ensureMeeting } from "@/server/external-play/video/realtimekit";
 import { REALTIMEKIT_FIXTURE_ENV, startRealtimeKitFixtureServer, type RealtimeKitFixtureServer } from "../../../../../e2e/realtimekit-fixture-server";
 import { unpairSwissRound } from "../../stages";
+import { frozenCompetitionIds } from "../../entitlement-freeze";
 import { openRound } from "../open-round";
 import { seatPlayer } from "../preflight";
 import {
@@ -48,6 +51,22 @@ import {
   type SeedOnlineChessRoundOpts,
   type SeedOnlineChessRoundResult,
 } from "../../__tests__/_external-play-seed";
+import { seedSecondOnlineRound } from "../../__tests__/_second-online-round-seed";
+
+// MD-R20: the freeze read, switchable per org. It is the REAL `frozenCompetitionIds` unless an org is named here, in which case it rejects
+// as a failing database read would; every other test in this file reads the real one.
+const freezeRead = vi.hoisted(() => ({ failOrgs: new Set<string>(), asked: [] as string[] }));
+vi.mock("../../entitlement-freeze", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../entitlement-freeze")>();
+  return {
+    ...actual,
+    frozenCompetitionIds: async (orgId: string) => {
+      freezeRead.asked.push(orgId);
+      if (freezeRead.failOrgs.has(orgId)) throw new Error("the freeze read failed (test)");
+      return actual.frozenCompetitionIds(orgId);
+    },
+  };
+});
 
 const DB = !!process.env.DATABASE_URL;
 const MIN = 60_000;
@@ -81,6 +100,7 @@ beforeEach(async () => {
   vi.stubEnv("EXTERNAL_PLAY_PREMINT", "1");
   mail.sent.length = 0;
   mail.fail.clear();
+  freezeRead.failOrgs.clear();
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -174,8 +194,8 @@ describe.skipIf(!DB)("premint candidates (the set)", () => {
     await unseat(ids(r));
     const rows = await rowsOf([r.orgId]);
     expect(rows).toEqual([
-      { fixtureId: r.boards[0]!.fixtureId, orgId: r.orgId, side: "away" },
-      { fixtureId: r.boards[0]!.fixtureId, orgId: r.orgId, side: "home" },
+      { fixtureId: r.boards[0]!.fixtureId, orgId: r.orgId, competitionId: r.competitionId, side: "away" },
+      { fixtureId: r.boards[0]!.fixtureId, orgId: r.orgId, competitionId: r.competitionId, side: "home" },
     ]);
   });
 
@@ -1020,4 +1040,130 @@ describe.skipIf(!DB)("premint (Task 8)", () => {
     expect(roomsB.map((m) => m.meeting_id), "its row is gone and a fresh room stands").not.toContain(stale.meetingId);
     expect(roomsB.map((m) => m.side)).toEqual(["away"]);
   });
+});
+
+// ─── Match Day O4, ruling MD-R16 (2026-11-20): a billing-frozen competition's unopened round is not pre-minted ───────────────────
+// A frozen competition cannot open a round (402, open-round.ts), so a room made for it is vendor spend on a round that cannot start. The pass
+// asks `frozenCompetitionIds` once per org and defers a frozen competition's rows - NOT a `frozen_at` predicate in the candidate SQL, because the
+// mark is stored lazily (the first read that finds the org over its limit chooses and stores it). The deferred rows keep their place: they stay
+// candidates (the sweep's teardown must not end the rooms already made for them), and the first pass after the freeze lifts makes them.
+describe.skipIf(!DB)("premint pass - a billing-frozen competition's unopened round (MD-R16)", () => {
+  /** Pin the org's `competitions.max_active` (the override the freeze sweeps use): a limit under the org's active count freezes the overflow. */
+  async function setLimit(orgId: string, limit: number): Promise<void> {
+    await sql`
+      insert into org_entitlement_overrides (org_id, feature_key, int_value)
+      values (${orgId}, 'competitions.max_active', ${limit})
+      on conflict (org_id, feature_key) do update set int_value = ${limit}, bool_value = null`;
+    await invalidateOrgEntitlements(orgId);
+  }
+  /** The create titles a pass makes for these boards: one per (board, side), the product's own naming (`seazn-fixture-<board>-<side>`). */
+  const titles = (fixtureIds: string[]) => bothSides(fixtureIds).map((k) => titleFor({ fixtureId: k.split("/")[0]!, side: k.split("/")[1] as "home" | "away" })).sort();
+
+  it("a frozen competition's rows are deferred while the same org's other competition and another org are made in the SAME pass; a second pass makes nothing more; once the freeze lifts the next pass makes them", async () => {
+    const a = await seedRound(1); // the OLDER competition of its org: the one a limit of 1 freezes
+    const b = await seedSecondOnlineRound(a, { scheduledAt: new Date("2026-10-01T12:00:00.000Z"), cameraPolicy: "optional" });
+    const other = await seedRound(1); // another org, nothing frozen there
+    const aIds = ids(a);
+    const bIds = b.boards.map((x) => x.fixtureId);
+    const otherIds = ids(other);
+    const orgs = [a.orgId, other.orgId];
+
+    // premise: three boards, both sides each, all candidates before anything is frozen (so "deferred" below is the freeze's doing)
+    expect(keysOf(await rowsOf(orgs)).sort(), "premise: all three boards are candidates").toEqual(bothSides([...aIds, ...bIds, ...otherIds]).sort());
+    expect(await frozenCompetitionIds(a.orgId), "premise: nothing is frozen yet").toEqual(new Set());
+
+    await setLimit(a.orgId, 1);
+    expect([...(await frozenCompetitionIds(a.orgId))], "premise: exactly the older competition is frozen").toEqual([a.competitionId]);
+    expect(await frozenCompetitionIds(other.orgId), "premise: the other org has nothing frozen").toEqual(new Set());
+
+    // the pass: a's two rows are deferred, the other four are made - one create per (board, side)
+    const report = await run(orgs);
+    expect(report).toEqual({ skipped: 0, disabled: 0, scanned: 6, roomsMade: 4, deferred: 2, failed: 0, windowsOpen: 0, failures: [] });
+    expect(createsFor(aIds), "the frozen competition: no vendor call").toEqual([]);
+    expect(await roomsOf(aIds), "the frozen competition: no room on file").toEqual([]);
+    expect(createsFor(bIds).sort(), "the same org's other competition: made").toEqual(titles(bIds));
+    expect(createsFor(otherIds).sort(), "the other org: made").toEqual(titles(otherIds));
+    expect(await roomsOf(bIds), "b's rooms are on file").toHaveLength(2);
+
+    // the SEQUENCE: still frozen, a second pass - the rows are still candidates, still deferred, and the vendor is still not asked
+    const mark = fx.calls.length;
+    expect(keysOf(await rowsOf(orgs)).sort(), "the deferred rows keep their place: still candidates").toEqual(bothSides(aIds).sort());
+    expect(await run(orgs), "a second frozen pass").toMatchObject({ scanned: 2, roomsMade: 0, deferred: 2, failed: 0 });
+    expect(fx.calls.length, "and it makes no vendor call at all").toBe(mark);
+
+    // the freeze lifts: the next pass makes them
+    await setLimit(a.orgId, 50);
+    expect(await frozenCompetitionIds(a.orgId), "premise: the freeze has lifted").toEqual(new Set());
+    expect(await run(orgs), "the pass after the thaw").toMatchObject({ scanned: 2, roomsMade: 2, deferred: 0, failed: 0 });
+    expect(createsFor(aIds).sort(), "the thawed competition's rooms are made").toEqual(titles(aIds));
+    expect(await roomsOf(aIds)).toHaveLength(2);
+  }, 120_000);
+
+  it("MD-R20: one org's freeze read failing defers ONLY that org's rows (fail closed: no vendor call for it, though nothing of it is frozen), logs the error once with its orgId, and the other org's rooms are made in the same pass; the next pass makes the deferred rooms", async () => {
+    const a = await seedRound(1); // the org whose freeze read will fail: in quota, nothing frozen
+    const b = await seedRound(1);
+    const aIds = ids(a);
+    const bIds = ids(b);
+    expect(await frozenCompetitionIds(a.orgId), "premise: nothing of A is frozen, so a deferral below is the failed read's doing").toEqual(new Set());
+    expect(keysOf(await rowsOf([a.orgId, b.orgId])).sort(), "premise: both boards are candidates").toEqual(bothSides([...aIds, ...bIds]).sort());
+
+    const logged = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    try {
+      freezeRead.failOrgs.add(a.orgId);
+      const report = await run([a.orgId, b.orgId]);
+      // A7 (gaps wave A): an org whose freeze cannot be read is a FAULT, not a quiet deferral - a competition that is merely frozen is a billing
+      // state and stays `failed: 0`, but a read that keeps failing would defer an org's rooms for ever and page nobody. So it is ONE failure for
+      // the org (its first row, code `freeze_unreadable`, which the Worker counts in `data.failed`) and the org's other rows are deferred;
+      // `scanned = made + failed + deferred` still holds (4 = 2 + 1 + 1).
+      expect(report, "the pass ran to its end: A's first row a failure and the rest deferred, B made").toMatchObject({ skipped: 0, disabled: 0, scanned: 4, roomsMade: 2, deferred: 1, failed: 1, windowsOpen: 0 });
+      expect(report.failures, "ONE failure for the org, by code and never a message").toEqual([{ fixtureId: aIds[0], side: expect.stringMatching(/^(home|away)$/), code: "freeze_unreadable" }]);
+      expect(report.scanned, "the ledger adds up").toBe(report.roomsMade + report.failed + report.deferred);
+      expect(createsFor(aIds), "A: fail closed, no vendor call").toEqual([]);
+      expect(await roomsOf(aIds), "A: no room on file").toEqual([]);
+      expect(createsFor(bIds).sort(), "B: made").toEqual(titles(bIds));
+      const own = logged.mock.calls.filter(([fields]) => (fields as { orgId?: string } | undefined)?.orgId === a.orgId);
+      expect(own, "the error is logged ONCE for A (a row of the org each, memoised per pass), with its orgId").toHaveLength(1);
+      expect(logged.mock.calls.filter(([fields]) => (fields as { orgId?: string } | undefined)?.orgId === b.orgId), "and not for B").toEqual([]);
+
+      // the SEQUENCE: the read is still down - the next pass is the same one failure for A (it keeps paging until the read works), B's
+      // rooms exist already so B has nothing to make
+      const again = await run([a.orgId, b.orgId]);
+      expect(again, "a second pass with the read still down").toMatchObject({ scanned: 2, roomsMade: 0, deferred: 1, failed: 1 });
+      expect(again.failures.map((f) => f.code), "still the one failure, the same code").toEqual(["freeze_unreadable"]);
+      expect(createsFor(aIds), "and still no vendor call for A").toEqual([]);
+
+      // the read recovers: the deferred rows kept their place, the next pass makes them
+      freezeRead.failOrgs.clear();
+      expect(await run([a.orgId, b.orgId]), "the next pass").toMatchObject({ scanned: 2, roomsMade: 2, deferred: 0, failed: 0 });
+      expect(createsFor(aIds).sort(), "A's rooms are made once the read works").toEqual(titles(aIds));
+    } finally {
+      logged.mockRestore();
+    }
+  }, 120_000);
+
+  // Fix round 1 (m6): the club's offer is asked BEFORE its freeze, so a club that is not offered online chess is never paged for a freeze it
+  // would not have minted through anyway - and its freeze is not even read. (Paging that club every minute would be a fault nobody can act on:
+  // there is nothing of it to pre-mint.)
+  it("MD-R20: a club NOT offered online chess is not paged when its freeze read fails - its rows are deferred, no failure, and its freeze is never read; the offered club beside it is paged", async () => {
+    const a = await seedRound(1); // not offered; its freeze read would fail
+    const b = await seedRound(1); // offered; its freeze read fails too: the positive pair
+    await unseat([...ids(a), ...ids(b)]);
+    freezeRead.asked.length = 0;
+    const logged = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    try {
+      freezeRead.failOrgs.add(a.orgId);
+      freezeRead.failOrgs.add(b.orgId);
+      const report = await run([a.orgId, b.orgId], { offered: async ({ orgId }) => orgId === b.orgId });
+
+      expect(report, "A's 2 rows deferred (not offered); B's first row the one failure, its other deferred").toMatchObject({ scanned: 4, roomsMade: 0, deferred: 3, failed: 1 });
+      expect(report.failures, "the one failure is B's: an offered club whose freeze cannot be read").toEqual([{ fixtureId: expect.any(String), side: expect.stringMatching(/^(home|away)$/), code: "freeze_unreadable" }]);
+      expect(ids(b), "premise: the failure names a board of B").toContain(report.failures[0]!.fixtureId);
+      expect(report.scanned, "the ledger adds up").toBe(report.roomsMade + report.failed + report.deferred);
+      expect(freezeRead.asked, "A's freeze was never read: the club is not offered").not.toContain(a.orgId);
+      expect(freezeRead.asked, "the positive pair: B's was").toContain(b.orgId);
+      expect(logged.mock.calls.filter(([fields]) => (fields as { orgId?: string } | undefined)?.orgId === a.orgId), "nothing logged for A").toEqual([]);
+    } finally {
+      logged.mockRestore();
+    }
+  }, 120_000);
 });

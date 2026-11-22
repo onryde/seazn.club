@@ -1,10 +1,10 @@
 "use client";
 
-// The Open / Resend press of ONE round, lifted out of the Open round control (since deleted: the Arbiter Panel's round column is
-// its only home) so the column and the panel's round bar press the very same thing. It owns the reducer (open-round-state.ts,
-// rules R1-R5: one request at a time, the open only from its confirmation), the router, and the runner that puts each request on
-// the network with an `apiV1` POST and a `router.refresh()` after the answer. The round's "+5 min" is not here: it is the panel's
-// own `RoundExtend` (checkin-extend-ui.ts), one control for the round on screen.
+// The Open / Resend press of ONE round, lifted out of the Open round control (since deleted; Match Day's round panel, round-focus.tsx,
+// is its only home). It owns the reducer (open-round-state.ts,
+// rules R1-R5: one request at a time, the open only from its confirmation) and the runner that puts each request on the network
+// with an `apiV1` POST and the caller's own refresh after the answer. The round's "+5 min" is not here: it is the panel's own
+// `RoundExtend` (checkin-extend-ui.ts), one control for the round on screen.
 //
 // The state belongs to ONE round. It is reset when the round on screen changes - a different stage or round number, or none at
 // all (`view` null is its own identity) - and NOT when the same round is redrawn with fresh data, because a poll must not close
@@ -18,7 +18,6 @@
 // so a press on the new round is ignored for as long as the old round's request is out (its round-trip), then works.
 // Only the round the presses TARGET follows the view - `stageId` and `roundNo`, read at call time, never a stale render's.
 import { useMemo, useReducer, useState } from "react";
-import { useRouter } from "next/navigation";
 import { apiV1 } from "@/lib/client-v1";
 import type { OpenRoundView } from "@/lib/open-round";
 import { initialOpenRoundUi, openRoundRunner, openRoundUi, type OpenRoundUiState } from "./open-round-state";
@@ -40,13 +39,16 @@ type Presses = Omit<OpenRoundHandle, "state">;
 /** The presses of a handle with no round: every call does nothing. */
 const NO_PRESSES: Presses = { ask: () => {}, cancel: () => {}, open: () => {}, resend: () => {} };
 
-/** A null view gives a no-op handle (initial state; every call does nothing). ArbiterPanel calls it for the round on screen (C9). */
-export function useOpenRound(view: OpenRoundView | null): OpenRoundHandle {
-  const router = useRouter();
+/** The handle for one round (a null view gives a no-op handle: initial state, every call does nothing), with the caller's own refresh after
+ *  an answer. Match Day's round panel is the only caller (Task 7): the shell's page is a client island that re-reads the day itself, so it
+ *  hands its quiet day read - Next's `router.refresh()` would not move it, and a router-bound form had no caller (B8, deleted). `refresh`
+ *  must keep its identity across renders (a `useCallback`), or the runner - whose in-flight flag keeps a double tap off the network - is
+ *  rebuilt with it. Reads no router, so a round panel mounts anywhere. */
+export function useOpenRoundWith(view: OpenRoundView | null, refresh: () => void): OpenRoundHandle {
   const [state, dispatch] = useReducer(openRoundUi, undefined, initialOpenRoundUi);
   const runner = useMemo(
-    () => openRoundRunner({ dispatch, post: (path, body) => apiV1(path, { method: "POST", json: body }), refresh: () => router.refresh() }),
-    [router],
+    () => openRoundRunner({ dispatch, post: (path, body) => apiV1(path, { method: "POST", json: body }), refresh }),
+    [refresh],
   );
   // Primitives, so the presses keep their identity while the same round is redrawn with fresh data.
   const stageId = view === null ? null : view.stageId;

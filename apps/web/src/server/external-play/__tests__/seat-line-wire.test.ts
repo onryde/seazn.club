@@ -68,25 +68,25 @@ describe("etaS: the time to ADMISSION - the place ahead at its worst case, the s
   // Hand-computed from spec §5.7.9's own figures, NOT from a helper that retypes its formula (re-review m-4): a retyped formula
   // freezes whatever the spec text said when it was written. The premise pins the constants these numbers rest on to the spec's
   // figures (a place ahead "(24)" = 21 + 3; the front stay's cadence clamp [2 s, 3 s]; near places 1 to 5 at 3 s, behind at 5 s;
-  // a refill of 2 tokens a second); if one is changed on purpose, this table is recomputed by hand, not by the formula.
+  // a refill of 7 tokens a second); if one is changed on purpose, this table is recomputed by hand, not by the formula.
   it("premise: the constants the hand-computed table rests on are the spec's figures", () => {
-    expect([L, R, RTK_BUDGET_REFILL_PER_S]).toEqual([21, 3, 2]);
+    expect([L, R, RTK_BUDGET_REFILL_PER_S]).toEqual([21, 3, 7]);
     expect(L + R, "the spec's priced place ahead: 24").toBe(24);
     expect([LINE_POLL_MIN_MS, LINE_POLL_MS, LINE_POLL_SLOW_MS, LINE_NEAR_POSITIONS]).toEqual([2_000, 3_000, 5_000, 5]);
   });
 
-  it("the table, worked by hand (tokens to admit = places ahead x 24 + own need; seconds = (tokens - pool) / 2 + the poll; rounded up)", () => {
+  it("the table, worked by hand (tokens to admit = places ahead x 24 + own need; seconds = (tokens - pool) / 7 + the poll; rounded up)", () => {
     // [label, position, need, pool, busy, etaS, working]
     const table: [string, number, number, number, boolean, number, string][] = [
-      ["the spec's case: completing at the front, pool 22 (was told 0 s)", 1, 24, 22, false, 3, "short 24-22 = 2 -> 1 s; front cadence = 1 s clamped up to 2 s; 1 + 2 = 3"],
-      ["front, plain, dry pool", 1, 21, 0, false, 14, "short 21 -> 10.5 s; cadence clamped down to 3 s; 13.5 -> 14"],
+      ["the spec's case: completing at the front, pool 22 (was told 0 s)", 1, 24, 22, false, 3, "short 24-22 = 2 -> 0.29 s; front cadence = 0.29 s clamped up to 2 s; 0.29 + 2 = 2.29 -> 3"],
+      ["front, plain, dry pool", 1, 21, 0, false, 6, "short 21 -> 3 s; cadence 3 s (inside [2 s, 3 s]); 3 + 3 = 6 exactly"],
       ["front, pool exactly covers", 1, 21, 21, false, 2, "short 0; cadence floor 2 s; 0 + 2 = 2 (never 0)"],
-      ["front, one token short", 1, 21, 20, false, 3, "short 1 -> 0.5 s; cadence floor 2 s; 2.5 -> 3"],
-      ["second place, dry pool", 2, 21, 0, false, 26, "24 + 21 = 45 -> 22.5 s; near cadence 3 s; 25.5 -> 26"],
-      ["the last near place (5)", 5, 21, 0, false, 62, "4 x 24 + 21 = 117 -> 58.5 s; near cadence 3 s; 61.5 -> 62"],
-      ["the first slow place (6)", 6, 21, 0, false, 76, "5 x 24 + 21 = 141 -> 70.5 s; slow cadence 5 s; 75.5 -> 76"],
-      ["a completing stay at place 3 and a pool in the hole", 3, 24, -6, false, 42, "2 x 24 + 24 = 72; 72 + 6 = 78 -> 39 s; near cadence 3 s; 42"],
-      ["busy answer at the front: the floor is the trail", 1, 21, 0, true, 13, "10.5 s; busy cadence 2 s; 12.5 -> 13"],
+      ["front, one token short", 1, 21, 20, false, 3, "short 1 -> 0.14 s; cadence floor 2 s; 2.14 -> 3"],
+      ["second place, dry pool", 2, 21, 0, false, 10, "24 + 21 = 45 -> 6.43 s; near cadence 3 s; 9.43 -> 10"],
+      ["the last near place (5)", 5, 21, 0, false, 20, "4 x 24 + 21 = 117 -> 16.71 s; near cadence 3 s; 19.71 -> 20"],
+      ["the first slow place (6)", 6, 21, 0, false, 26, "5 x 24 + 21 = 141 -> 20.14 s; slow cadence 5 s; 25.14 -> 26"],
+      ["a completing stay at place 3 and a pool in the hole", 3, 24, -6, false, 15, "2 x 24 + 24 = 72; 72 + 6 = 78 -> 11.14 s; near cadence 3 s; 14.14 -> 15"],
+      ["busy answer at the front: the floor is the trail", 1, 21, 0, true, 5, "3 s; busy cadence 2 s; 3 + 2 = 5 exactly"],
       ["a pool far past the place: only the trail of a slow place", 7, 21, 1_000, false, 5, "short < 0 -> 0 s; slow cadence 5 s; 5"],
     ];
     let checked = 0;
@@ -114,7 +114,7 @@ describe("etaS: the time to ADMISSION - the place ahead at its worst case, the s
     const waitS = (need - pool) / RTK_BUDGET_REFILL_PER_S;
     expect(waitS, "premise: a real wait for the pool").toBeGreaterThan(0);
     expect(got, "at least the wait for the pool").toBeGreaterThanOrEqual(Math.ceil(waitS));
-    expect(got, "the wait for the pool (2 tokens at 2 a second: 1 s) and the poll that admits it (the 2 s floor), by hand").toBe(3);
+    expect(got, "the wait for the pool (2 tokens at 7 a second: 2/7 of a second) and the poll that admits it (the 2 s floor): 2.29 s, rounded up, by hand").toBe(3);
     // The wrong answer's constant: the old formula (position x L - pool) said 0 here.
     expect(Math.max(0, 1 * L - pool), "premise: the old pricing said 0 s").toBe(0);
     expect(got).toBeGreaterThan(0);
@@ -125,7 +125,7 @@ describe("etaS: the time to ADMISSION - the place ahead at its worst case, the s
     const exact = at(L);
     const short = at(L - 1);
     expect(exact, "covered: only the 2 s floor of the poll").toBe(2);
-    expect(short, "one token short: 0.5 s of refill and the 2 s floor, 2.5 rounded up").toBe(3);
+    expect(short, "one token short: a seventh of a second of refill and the 2 s floor, 2.14 rounded up").toBe(3);
     expect(short, "one token short is not the same as covered").toBeGreaterThan(exact);
   });
 
@@ -134,7 +134,11 @@ describe("etaS: the time to ADMISSION - the place ahead at its worst case, the s
     const one = lineWire({ ...base, position: 1, pool: 0 }).etaS;
     const two = lineWire({ ...base, position: 2, pool: 0 }).etaS;
     expect(cadenceMs(1, L, 0), "premise: same cadence at both places").toBe(cadenceMs(2, L, 0));
-    expect(two - one).toBe(AHEAD / RTK_BUDGET_REFILL_PER_S);
+    // By hand at 7 a second: the front place needs 21 tokens, 3 s, + the 3 s cadence = 6 s exactly; the second needs 24 + 21 = 45, 6.43 s,
+    // + 3 s = 9.43 -> 10 s. Whole seconds round each answer up on its own, so the gap is the refill of the ahead price - 24 / 7 = 3.43 s -
+    // to within one second either way, never the exact quotient (24 is no longer a multiple of the refill).
+    expect([one, two], "by hand: 6 s and 10 s").toEqual([6, 10]);
+    expect(Math.abs(two - one - AHEAD / RTK_BUDGET_REFILL_PER_S), "the gap is the ahead price's refill, to a second of rounding").toBeLessThan(1);
     expect(AHEAD, "premise: the ahead price is more than the plain reservation").toBeGreaterThan(L);
   });
 
@@ -213,8 +217,11 @@ describe("pollMs: never faster than the floor, near places at the near cadence, 
     const plain = lineWire({ ...base, position: 1, pool: 5, need: L });
     const completing = lineWire({ ...base, position: 1, pool: 5, need: L + 3 });
     expect(completing.pollMs).toBeGreaterThanOrEqual(plain.pollMs);
-    // A pool where the difference is visible: the plain stay is within a floor of admission, the completing one is not.
-    const p = L - 1;
+    // A pool where the difference is visible: the plain stay is exactly a floor's worth of refill from admission (the floor's seconds
+    // at the refill rate, in tokens), the completing one - four tokens further off - is not.
+    const floorTokens = (LINE_POLL_MIN_MS / 1_000) * RTK_BUDGET_REFILL_PER_S;
+    expect(Number.isInteger(floorTokens) && floorTokens > 0 && floorTokens < L, "premise: the floor's tokens are a whole number of tokens under one reservation").toBe(true);
+    const p = L - floorTokens;
     expect(lineWire({ ...base, pool: p, need: L }).pollMs).toBe(LINE_POLL_MIN_MS);
     expect(lineWire({ ...base, pool: p, need: L + 4 }).pollMs).toBeGreaterThan(LINE_POLL_MIN_MS);
   });
@@ -289,28 +296,28 @@ describe("mayTimeOut: etaS + LINE_SERVE_TAIL_S greater than the seconds to close
 // `aheadReserved` is what every waiting stay ahead is promised: each at its OWN stamped price plus its stamped re-verify, the worst
 // case. The place's own price is `need`. Hand-worked from the price table (flag on: all 9, room 8; flag off: all 21), not from the function.
 describe("etaS follows aheadReserved, not the count of places ahead (the stamped price)", () => {
-  // tokens to admit = aheadReserved + need; seconds = (tokens - pool) / 2 + the near cadence's 3 s; rounded up.
-  it("three places ahead stamped 9 (all, flag on), 8 (room, flag on) and 21 (all, flag off), each with its re-verify: (9+1)+(8+1)+(21+3) = 43; a 8-priced fourth place on a pool of 4 waits (43+8-4)/2 + 3 = 26.5 -> 27", () => {
+  // tokens to admit = aheadReserved + need; seconds = (tokens - pool) / 7 + the near cadence's 3 s; rounded up.
+  it("three places ahead stamped 9 (all, flag on), 8 (room, flag on) and 21 (all, flag off), each with its re-verify: (9+1)+(8+1)+(21+3) = 43; a 8-priced fourth place on a pool of 4 waits (43+8-4)/7 + 3 = 9.71 -> 10", () => {
     const got = lineWireOf({ position: 4, aheadReserved: 10 + 9 + 24, pool: 4, need: 8, now: ROUND, anchor: ANCHOR, left: null });
-    expect(got.etaS).toBe(27);
+    expect(got.etaS).toBe(10);
     expect(got.pollMs, "premise: the near cadence the hand count used").toBe(LINE_POLL_MS);
-    // The pricing this replaces counted places: 3 x (21 + 3) + the stay's own 21 - 4 = 89 tokens -> 44.5 + 3 -> 48. A cheaper pricing
-    // of every place (3 x 9 + 8 - 4 = 31) says 19. The stamped sum is neither.
-    expect(Math.ceil((3 * 24 + 21 - 4) / 2 + 3), "premise: the place-count pricing says 48").toBe(48);
-    expect(Math.ceil((3 * 9 + 8 - 4) / 2 + 3), "premise: the cheapest-everywhere pricing says 19").toBe(19);
+    // The pricing this replaces counted places: 3 x (21 + 3) + the stay's own 21 - 4 = 89 tokens -> 12.71 + 3 -> 16. A cheaper pricing
+    // of every place (3 x 9 + 8 - 4 = 31) says 8 (4.43 + 3 = 7.43). The stamped sum is neither.
+    expect(Math.ceil((3 * 24 + 21 - 4) / 7 + 3), "premise: the place-count pricing says 16").toBe(16);
+    expect(Math.ceil((3 * 9 + 8 - 4) / 7 + 3), "premise: the cheapest-everywhere pricing says 8").toBe(8);
   });
 
   it("the same position with a different sum is a different estimate, and the same sum at another position is the same (the position decides only the cadence)", () => {
     const at = (position: number, aheadReserved: number) => lineWireOf({ position, aheadReserved, pool: 0, need: 8, now: ROUND, anchor: ANCHOR, left: null }).etaS;
     // positions 2 and 3 share the near cadence (3 s): only the sum moves the answer.
-    expect(at(2, 10), "(10 + 8) / 2 + 3 = 12").toBe(12);
-    expect(at(2, 24), "(24 + 8) / 2 + 3 = 19").toBe(19);
+    expect(at(2, 10), "(10 + 8) / 7 + 3 = 5.57 -> 6").toBe(6);
+    expect(at(2, 24), "(24 + 8) / 7 + 3 = 7.57 -> 8").toBe(8);
     expect(at(3, 24), "the same sum at another near place: the same answer").toBe(at(2, 24));
     expect(at(2, 24)).toBeGreaterThan(at(2, 10));
   });
 
   it("the front place has nothing ahead: aheadReserved 0, and its own need alone sets the wait (the empty case)", () => {
-    // need 8, pool 0: 8 / 2 = 4 s; the front cadence clamps (8 / 2 = 4 s -> 3 s, the near cadence); 4 + 3 = 7.
-    expect(lineWireOf({ position: 1, aheadReserved: 0, pool: 0, need: 8, now: ROUND, anchor: ANCHOR, left: null }).etaS).toBe(7);
+    // need 8, pool 0: 8 / 7 = 1.14 s; the front cadence clamps UP to the 2 s floor; 1.14 + 2 = 3.14 -> 4.
+    expect(lineWireOf({ position: 1, aheadReserved: 0, pool: 0, need: 8, now: ROUND, anchor: ANCHOR, left: null }).etaS).toBe(4);
   });
 });

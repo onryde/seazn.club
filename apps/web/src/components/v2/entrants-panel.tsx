@@ -16,6 +16,7 @@ import type { ViewerPlan } from "@/lib/viewer-plan";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { lichessRefusalText } from "./entrants-lichess-refusal";
+import { onlineEntrantCapText } from "./online-entrant-cap-refusal";
 import type { MessageKey } from "@/lib/messages";
 import { SuspensionChip } from "@/components/discipline/suspension-chip";
 // RS007/V380 — the SAME organiser-facing category/age-band derivations the
@@ -411,6 +412,13 @@ export function EntrantsPanel({
       // add past the format's max says it in the late add's own sentence (`lateEntryRefusalText`).
       if (err instanceof ApiV1Error && isRoundRobinRefusalCode(err.code)) {
         setError(lateEntryRefusalText(err.code, err.extra, msg, locale));
+        return;
+      }
+      // An online chess division is full (128 entrants, on every plan): said by its code in the organiser's language. A capacity
+      // limit, not a plan one - so no upgrade gate, and never the server's English.
+      const capText = err instanceof ApiV1Error ? onlineEntrantCapText(err, (key, vars) => msg(key as MessageKey, vars)) : null;
+      if (capText !== null) {
+        setError(capText);
         return;
       }
       // An online-play division refuses a player without a Lichess link that can play: the server's words are English

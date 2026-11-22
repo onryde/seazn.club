@@ -91,30 +91,35 @@ const HAND_CHECKED_DYNAMIC: Record<string, number> = {
   // `const path = `/api/v1/orgs/${orgId}/stream-targets/${t.id}`` — one literal
   // shared by the row's Remove (DELETE) and Rename/Replace (PATCH)
   "src/components/v2/stream-destinations-panel.tsx": 2,
-  // Online chess (traced 2026-10-13, re-traced D16). (1) `makeArbiterSerial({ join, connect })` (arbiter-watch.ts) — `join` POSTs
-  // `/api/v1/fixtures/${id}/external-play/arbiter` with `{ side }` (the route exists). The browser sends no DELETE any more
-  // (re-traced plan 3 Task 2: the DELETE route is explicit revocation only), so the count fell from 3 to 2.
-  // (2) `decisionRunner({ post: (path, body) => apiV1(path, …) })` — arbiter-decision.ts builds every path as
-  // `/api/v1/fixtures/${id}/external-play/${tail}`, tail ∈ resync | video-override | flags/close | resolve (each a POST
-  // route that exists). The check-in extension (traced 2026-10-19, spec 2026-10-09 §3.2.2) adds a third dynamic call and a tail to
-  // (2): the board's "+5 min" goes through the same `decisionRunner` post, to `extendBoardPath` =
-  // `/api/v1/fixtures/${id}/external-play/extend-checkin` (a POST route that exists, src/app/api/v1/fixtures/[id]/external-play/
-  // extend-checkin); (3) `roundExtendRunner({ post: (path, body) => apiV1(path, …) })` (checkin-extend-ui.ts) posts only
-  // `extendRoundPath` = `/api/v1/stages/${stageId}/extend-checkin` with `{ roundNo }` (a POST route that exists, src/app/api/v1/
-  // stages/[id]/extend-checkin).
-  "src/components/v2/arbiter-panel.tsx": 2,
+  // Online chess (traced 2026-10-13, re-traced D16, then when the Arbiter page was retired into Match Day). `makeArbiterSerial({ join, connect })`
+  // (arbiter-watch.ts; the browser's instance is `browserSerial`, match-day/online/arbiter-joins.ts) - `join` POSTs
+  // `/api/v1/fixtures/${id}/external-play/arbiter` with `{ side }` (the route exists); a template LITERAL in arbiter-joins.ts's own scan is not
+  // counted here. The browser sends no DELETE (plan 3 Task 2: the DELETE route is explicit revocation only). The `decisionRunner` posts, the
+  // check-in extension's `extendBoardPath` / `extendRoundPath` and the open's and resend's POSTs are counted under their present callers below
+  // (match-day/board-focus.tsx, match-day/round-focus.tsx, desk/use-open-round.ts, external-play-needs-result-queue.tsx): the Arbiter panel
+  // and the round column's queue cards that used to carry them are deleted.
   // `openRoundRunner({ post: (path, body) => apiV1(path, …) })` — open-round-state.ts posts only
   // `/api/v1/stages/${stageId}/open-round` and `/api/v1/fixtures/${id}/external-play/resend` (both POST routes that exist). ONE
-  // dynamic call. It moved out of open-round-control.tsx into the `useOpenRound` hook (arbiter round column, Task 4), which the
-  // arbiter column uses; the control is deleted (Task 10), and with it the round "+5" that once shared this `post` - the round's
-  // `extendRoundPath` is posted by the panel's own `roundExtendRunner` (counted under arbiter-panel.tsx above).
+  // dynamic call. It moved out of open-round-control.tsx into the `useOpenRoundWith` hook (arbiter round column, Task 4), which Match Day's
+  // round panel uses; the control is deleted (Task 10), and with it the round "+5" that once shared this `post` - the round's
+  // `extendRoundPath` is posted by Match Day's round panel (counted under match-day/round-focus.tsx below).
   "src/components/v2/desk/use-open-round.ts": 1,
-  // The same `decisionRunner` post as the arbiter panel's (2) above.
+  // The same `decisionRunner` post as Match Day's board panel's (counted under match-day/board-focus.tsx below).
   "src/components/v2/external-play-needs-result-queue.tsx": 1,
-  // The arbiter round column's queue cards (Task 7): the same `decisionRunner({ post: (path, body) => apiV1(path, …) })` shape, and
-  // the cards only ever call `runner.goOn`, which posts `/api/v1/fixtures/${id}/external-play/flags/close` with `{ ids }` (a POST
-  // route that exists, src/app/api/v1/fixtures/[id]/external-play/flags/close) for a cancelled flagged board's "Mark as reviewed".
-  "src/components/v2/arbiter/round-queue-cards.tsx": 1,
+  // Match Day's round panel (Task 7): ONE module-level `post = (path, body) => apiV1(path, …)` handed to the panel's `+5 min` runners
+  // (round-presses.ts `boardExtendRunner`, checkin-extend-ui.ts `roundExtendRunner`) and to `pairNextRunner`. The paths they build are
+  // `extendBoardPath` = `/api/v1/fixtures/${id}/external-play/extend-checkin`, `extendRoundPath` = `/api/v1/stages/${stageId}/extend-checkin`
+  // and `pairNextPath` = `/api/v1/stages/${stageId}/generate` (all POST routes that exist: src/app/api/v1/fixtures/[id]/external-play/
+  // extend-checkin, src/app/api/v1/stages/[id]/extend-checkin, src/app/api/v1/stages/[id]/generate). The open's and the resend's POSTs are
+  // `useOpenRoundWith`'s, counted under desk/use-open-round.ts above.
+  "src/components/v2/match-day/round-focus.tsx": 1,
+  // Match Day's board panel (Task 8, traced 2026-11-20): ONE module-level `post = (path, body) => apiV1(path, …)` handed to
+  // `decisionRunner` (arbiter-decision.ts), the same runner the held queue uses (the Arbiter panel that shared it is deleted): every path it builds is
+  // `/api/v1/fixtures/${id}/external-play/${tail}`, tail ∈ resync | video-override | flags/close | resolve, and the board's "+5 min" posts
+  // `extendBoardPath` = `/api/v1/fixtures/${id}/external-play/extend-checkin` (each a POST route that exists: src/app/api/v1/fixtures/[id]/
+  // external-play/{resync,video-override,flags/close,resolve,extend-checkin}). The panel's own read - GET `/api/v1/fixtures/${id}/match-day-board`
+  // (src/app/api/v1/fixtures/[id]/match-day-board) - is a template LITERAL, so the scan above reads it and it is not counted here.
+  "src/components/v2/match-day/board-focus.tsx": 1,
 };
 
 describe("apiV1 call paths", () => {

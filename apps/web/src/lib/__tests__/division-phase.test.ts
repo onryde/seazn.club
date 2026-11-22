@@ -9,6 +9,7 @@ import {
   localDateKey,
   ledgerRank,
   leadingAttention,
+  sortAttentions,
   hasPlayedFixture,
   isResultMissing,
   isUnscheduledFixture,
@@ -1198,6 +1199,33 @@ describe("isResultMissing", () => {
       fixtures.filter((f) => isResultMissing(f, Date.parse(nowIso))).map((f) => f.id),
     );
   });
+
+  // Gaps wave A fix round 1 (m3, m4/A12): the HELD board. An online board held for the organiser is, to this module, a `scheduled` fixture
+  // whose slot has passed - the hold is the bridge row's, which `PhaseFixture` does not carry (the desk raises its `board_held` row from the
+  // listers, `onlineBoardAttentions`). Spec 2026-11-05 5.4 says "the results-owed count is unchanged", so such a board is counted here, exactly
+  // as the predicate says and exactly as the run sheet's "Needs result" chip does for the same board (run-sheet-filters.test.tsx pins the chip).
+  // A6 first gave `PhaseFixture` a flag that took held boards out of this attention and so lowered the count; the dedupe is the row's
+  // (`needsYouItems`), not the attention's, and there is no such flag any more.
+  it("agrees with the `result_missing` attention for a HELD board: a late online board the desk holds is counted, never skipped (spec 5.4: the count is unchanged)", () => {
+    const base = { status: "scheduled", startedAt: null, eventCount: 0, matchMinutes: 60, hasScorer: true, stageId: "s", awaitsSeedDraw: false, awaitsSettle: false, awaitsRoundOpen: false };
+    const fixtures: PhaseFixture[] = [
+      { ...base, id: "held-late", scheduledAt: "2026-09-05T10:00:00Z" },
+      { ...base, id: "plain-late", scheduledAt: "2026-09-05T09:00:00Z" },
+      { ...base, id: "held-in-window", scheduledAt: "2026-09-05T17:45:00Z" },
+      { ...base, id: "unopened-late", scheduledAt: "2026-09-05T08:00:00Z", awaitsRoundOpen: true },
+    ];
+    const nowIso = "2026-09-05T18:00:00Z";
+    const row = resolveAttention({
+      divisionStatus: "active", stages: [], fixtures,
+      now: nowIso, tz: "UTC", awaitingRegistrations: 0, bansToReview: 0, lateWaiting: [],
+    }).find((a) => a.kind === "result_missing");
+    const ids = row?.kind === "result_missing" ? row.fixtureIds : [];
+    expect(ids, "the late held board is counted beside the plain late one, named; the one still in its window and the unopened one are not").toEqual(["held-late", "plain-late"]);
+    expect(row?.kind === "result_missing" ? row.count : 0).toBe(2);
+    expect(ids, "the attention is the predicate's own answer over the open rounds' boards").toEqual(
+      fixtures.filter((f) => !f.awaitsRoundOpen && isResultMissing(f, Date.parse(nowIso))).map((f) => f.id),
+    );
+  });
 });
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -1527,5 +1555,142 @@ describe("final_decided — a decided final on an open stage asks to complete it
     }));
     const red = attention.filter((a) => ATTENTION_SEVERITY[a.kind] === "red").map((a) => a.kind);
     expect(red).toEqual(["needs_decision", "final_decided", "no_scorer"]);
+  });
+});
+
+// ---- Match Day online (T4): the two PER-BOARD kinds ----------------------------------------------------------------------------
+// `board_held` (red) and `board_flagged` (amber) are raised by competition-desk.ts from the two listers, never by `resolveAttention`;
+// this is their place in the model: severity, and where each ranks against every other kind of its band (`KIND_ORDER`, a private array,
+// reached only through `leadingAttention` and `sortAttentions`). Expected positions are the plan's words: board_held directly after
+// needs_decision, board_flagged directly after result_missing.
+describe("Match Day online: board_held and board_flagged in the model", () => {
+  const HELD: Extract<Attention, { kind: "board_held" }> = {
+    kind: "board_held", fixtureId: "f-held", stageId: "s1", roundNo: 2, boardNo: 4, home: "Novak", away: "Silva", reason: "no_show_white", reopen: false,
+  };
+  const FLAGGED: Extract<Attention, { kind: "board_flagged" }> = { kind: "board_flagged", fixtureId: "f-flag", roundNo: 2, boardNo: 2, home: "Chen", away: "Abara", flags: 2 };
+  /** One attention of every kind but the two under test, for pairing against them. */
+  const SAMPLE_OF = (kind: Attention["kind"]): Attention => {
+    switch (kind) {
+      case "needs_draw": return { kind, stageName: "Finals", door: "compute" };
+      case "needs_fixtures": return { kind, stageName: "Finals" };
+      case "unscheduled": return { kind, count: 1 };
+      case "no_scorer": return { kind, count: 1, fixtureIds: ["f"], minutesSinceKickoff: 5 };
+      case "not_recording": return { kind, count: 1, fixtureIds: ["f"], minutesSinceKickoff: 20 };
+      case "result_missing": return { kind, count: 1, fixtureIds: ["f"] };
+      case "needs_decision": return { kind, count: 1, fixtureIds: ["f"] };
+      case "final_decided": return { kind, stageName: "Knockout" };
+      case "registrations_waiting": return { kind, count: 1 };
+      case "bans_waiting": return { kind, count: 1 };
+      case "late_players_waiting": return { kind, count: 1, stageName: "Cup" };
+      case "late_unplaced": return { kind, count: 1, stageName: "League", names: ["Lou"] };
+      case "withdrawal_owed": return { kind, count: 1, names: ["Rae"] };
+      case "board_held": return HELD;
+      case "board_flagged": return FLAGGED;
+    }
+  };
+  const kindsOf = (sev: "red" | "amber" | "slate") => (Object.keys(ATTENTION_SEVERITY) as Attention["kind"][]).filter((k) => ATTENTION_SEVERITY[k] === sev);
+  const div = (...attention: Attention[]) => ({ attention });
+
+  it("severity: a held board is RED (a decision owed), a flagged one AMBER (review work; the game carried on)", () => {
+    expect(ATTENTION_SEVERITY.board_held).toBe("red");
+    expect(ATTENTION_SEVERITY.board_flagged).toBe("amber");
+  });
+
+  it("EMPTY CASE FIRST: resolveAttention never raises either kind - an online hold is no fixture status, so only the desk's producer can (count reported)", () => {
+    // Every shape the resolver has a branch for: nothing, a live match, a held bracket result, a recorded abandon awaiting its settle,
+    // an unopened online round. If the resolver ever grew a branch for the bridge, this is where it would show.
+    const shapes: Partial<PhaseInput>[] = [
+      {},
+      { fixtures: [fx({ id: "a", status: "in_play", hasScorer: true })] },
+      { fixtures: [fx({ id: "a", status: "needs_decision" })] },
+      { fixtures: [fx({ id: "a", status: "abandoned", awaitsSettle: true })] },
+      { fixtures: [fx({ id: "a", status: "scheduled", awaitsRoundOpen: true })] },
+      { divisionStatus: "completed", stages: [stage({ status: "complete" })], fixtures: [fx({ id: "a", status: "decided" })] },
+    ];
+    let checked = 0;
+    for (const o of shapes) {
+      const kinds = resolveAttention(input(o)).map((a) => a.kind);
+      expect(kinds).not.toContain("board_held");
+      expect(kinds).not.toContain("board_flagged");
+      checked++;
+    }
+    expect(checked, "shapes checked").toBe(shapes.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("board_held ranks directly after needs_decision in its band: it loses to the three kinds before it and beats every red kind after, both orders (pairs reported)", () => {
+    const BEFORE = ["needs_draw", "needs_fixtures", "needs_decision"] as const;
+    const reds = kindsOf("red").filter((k) => k !== "board_held");
+    // The expected split is the plan's, and it must cover the band exactly: a red kind added later must be placed here by hand.
+    const AFTER = reds.filter((k) => !(BEFORE as readonly string[]).includes(k));
+    expect([...BEFORE, ...AFTER].sort()).toEqual([...reds].sort());
+    expect(AFTER.sort(), "the reds after it today").toEqual(["final_decided", "no_scorer"]);
+    let checked = 0;
+    for (const k of BEFORE) {
+      expect(leadingAttention([div(HELD), div(SAMPLE_OF(k))]), `${k} outranks board_held`).toEqual(SAMPLE_OF(k));
+      expect(leadingAttention([div(SAMPLE_OF(k)), div(HELD)]), `${k} outranks board_held (reversed)`).toEqual(SAMPLE_OF(k));
+      checked++;
+    }
+    for (const k of AFTER) {
+      expect(leadingAttention([div(HELD), div(SAMPLE_OF(k))]), `board_held outranks ${k}`).toEqual(HELD);
+      expect(leadingAttention([div(SAMPLE_OF(k)), div(HELD)]), `board_held outranks ${k} (reversed)`).toEqual(HELD);
+      checked++;
+    }
+    expect(checked, "red kinds paired with board_held").toBe(reds.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("board_flagged ranks directly after result_missing in its band: it loses to the three match ambers before it and beats every amber after, both orders (pairs reported)", () => {
+    const BEFORE = ["not_recording", "unscheduled", "result_missing"] as const;
+    const ambers = kindsOf("amber").filter((k) => k !== "board_flagged");
+    const AFTER = ambers.filter((k) => !(BEFORE as readonly string[]).includes(k));
+    expect([...BEFORE, ...AFTER].sort()).toEqual([...ambers].sort());
+    expect(AFTER.sort(), "the ambers after it today").toEqual(["bans_waiting", "late_players_waiting", "late_unplaced", "withdrawal_owed"]);
+    let checked = 0;
+    for (const k of BEFORE) {
+      expect(leadingAttention([div(FLAGGED), div(SAMPLE_OF(k))]), `${k} outranks board_flagged`).toEqual(SAMPLE_OF(k));
+      expect(leadingAttention([div(SAMPLE_OF(k)), div(FLAGGED)]), `${k} outranks board_flagged (reversed)`).toEqual(SAMPLE_OF(k));
+      checked++;
+    }
+    for (const k of AFTER) {
+      expect(leadingAttention([div(FLAGGED), div(SAMPLE_OF(k))]), `board_flagged outranks ${k}`).toEqual(FLAGGED);
+      expect(leadingAttention([div(SAMPLE_OF(k)), div(FLAGGED)]), `board_flagged outranks ${k} (reversed)`).toEqual(FLAGGED);
+      checked++;
+    }
+    expect(checked, "amber kinds paired with board_flagged").toBe(ambers.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("severity still decides first: a held board outranks every amber and slate kind, and a flagged one only the slate", () => {
+    for (const k of [...kindsOf("amber"), ...kindsOf("slate")]) {
+      expect(leadingAttention([div(SAMPLE_OF(k)), div(HELD)]), `board_held over ${k}`).toEqual(HELD);
+    }
+    for (const k of kindsOf("red")) {
+      expect(leadingAttention([div(FLAGGED), div(SAMPLE_OF(k))]), `${k} over board_flagged`).toEqual(SAMPLE_OF(k));
+    }
+    for (const k of kindsOf("slate")) {
+      expect(leadingAttention([div(SAMPLE_OF(k)), div(FLAGGED)]), `board_flagged over ${k}`).toEqual(FLAGGED);
+    }
+  });
+
+  it("a red held board lifts its division's ledger row above every phase, a flagged one lifts nothing (orthogonal to the phase)", () => {
+    expect(ledgerRank({ phase: "finished", attention: [HELD] })).toBeLessThan(ledgerRank({ phase: "match_day", attention: [] }));
+    expect(ledgerRank({ phase: "finished", attention: [FLAGGED] })).toBe(ledgerRank({ phase: "finished", attention: [] }));
+  });
+
+  it("sortAttentions: red first, then KIND_ORDER - a held board appended last sits where its meaning puts it; boards of one kind keep their order", () => {
+    // The desk appends the board kinds AFTER resolveAttention's own sorted list and sorts the whole again.
+    expect(sortAttentions([])).toEqual([]);
+    const second: Attention = { ...HELD, fixtureId: "f-held-2", boardNo: 5 };
+    const list: Attention[] = [SAMPLE_OF("unscheduled"), SAMPLE_OF("final_decided"), SAMPLE_OF("needs_decision"), FLAGGED, SAMPLE_OF("result_missing"), HELD, second, SAMPLE_OF("bans_waiting")];
+    const sorted = sortAttentions([...list]);
+    expect(sorted.map((a) => a.kind)).toEqual([
+      "needs_decision", "board_held", "board_held", "final_decided", "unscheduled", "result_missing", "board_flagged", "bans_waiting",
+    ]);
+    expect(sorted.filter((a) => a.kind === "board_held").map((a) => (a as { fixtureId: string }).fixtureId), "stable").toEqual(["f-held", "f-held-2"]);
+    // resolveAttention ends with the same comparator: its own order is the one `sortAttentions` gives.
+    const own = resolveAttention(input({ fixtures: [fx({ id: "u", status: "scheduled", scheduledAt: null })], awaitingRegistrations: 1, bansToReview: 1 }));
+    expect(sortAttentions([...own].reverse())).toEqual(own);
+    expect(own.length, "premise: more than one kind, so the order means something").toBeGreaterThan(1);
   });
 });

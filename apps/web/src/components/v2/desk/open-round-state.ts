@@ -1,5 +1,5 @@
-// T16 (D12) — the Open round presses as one reducer, and the runner that puts them on the network one at a time (used by the
-// Arbiter Panel's round column through use-open-round.ts). Rules R1–R5 are stated with their tests in
+// T16 (D12) — the Open round presses as one reducer, and the runner that puts them on the network one at a time (used by Match Day's
+// round panel through use-open-round.ts). Rules R1–R5 are stated with their tests in
 // __tests__/open-round-state.test.ts: one request at a time across the round's Open and its pairings' Resend; the round is opened
 // only from its confirmation; an answer lands only if it answers the request in flight; a request in flight holds the dialog; the
 // open's answer is the round's notice, a resend's is its pairing's. The round's "+5 min" used to be a third request here; it is the

@@ -92,7 +92,7 @@ export function CourtList({
             aria-expanded={foldOpen}
             aria-controls={foldOpen ? foldId : undefined}
             onClick={() => setFoldOpen((o) => !o)}
-            className="grid min-h-14 w-full min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 px-4 py-3 text-left text-slate-700 transition hover:bg-purple-50/60"
+            className="grid min-h-14 w-full min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 px-4 py-3 text-left text-slate-700 transition hover:bg-purple-50/60 cursor-pointer"
           >
             <span aria-hidden className={`h-2.5 w-2.5 shrink-0 rounded-full ${DOT.free}`} />
             <span className="min-w-0 text-sm [overflow-wrap:anywhere]">
@@ -180,7 +180,7 @@ function CourtRow({
         data-scorer={scorer ?? undefined}
         aria-current={selected ? "true" : undefined}
         onClick={() => onSelect(c.court_id)}
-        className={`grid min-h-14 w-full min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 px-4 py-3 text-left transition hover:bg-purple-50/60 ${
+        className={`grid min-h-14 w-full min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 px-4 py-3 text-left transition hover:bg-purple-50/60 cursor-pointer ${
           selected ? "md:bg-purple-50 md:shadow-[inset_3px_0_0_var(--color-purple-600)]" : ""
         } ${c.state === "in_use_elsewhere" ? "text-slate-500" : "text-slate-900"}`}
       >
@@ -294,7 +294,7 @@ export function NoCourtList({
                 data-scorer={scorer ?? undefined}
                 aria-current={selected ? "true" : undefined}
                 onClick={() => onSelect(f)}
-                className="grid min-h-14 min-w-0 flex-1 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 py-3 pl-4 pr-2 text-left text-slate-900 transition hover:bg-purple-50/60"
+                className="grid min-h-14 min-w-0 flex-1 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 py-3 pl-4 pr-2 text-left text-slate-900 transition hover:bg-purple-50/60 cursor-pointer"
               >
                 <span aria-hidden className="h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-500" />
                 <span className="min-w-0">

@@ -8,6 +8,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { ATTENTION_SEVERITY, DRAW_DOORS, NOT_RECORDING_GRACE_MINUTES, type Attention } from "../src/lib/division-phase";
 import { needsYouInMatchDay, needsYouOnCompetitionPage } from "./needs-you-home";
+import { cancelFlaggedSql, holdNoShowSql } from "./match-day-online-kit";
+import { seedOnlineRound } from "./match-room-kit";
 
 /** The SHIPPED English strings, read the way `board-v3.spec.ts` reads them —
  *  a JSON `import` needs an import attribute Playwright's loader does not
@@ -56,6 +58,8 @@ const P_SETUP = {
 const P_ON_COMPLETE = { ...P_SETUP, timing: "on_complete" };
 
 type Rig = { compSlug: string; divSlug: string;
+  /** The board a per-board row (`board_held`, `board_flagged`) is about: its fixture id. The landing page must have opened THAT board. */
+  boardId?: string;
   /** Something the LANDING page must show, proving it holds the work this
    *  row is about and not merely the right URL. */
   landText?: string };
@@ -238,7 +242,9 @@ type Row = {
    *  sniffed off the page: a build that stops (or starts) being a match day reds the helper instead of quietly switching. */
   matchDay?: true;
   /** What the landing page must offer for the work the row names. */
-  land: (page: Page) => Promise<void>;
+  land: (page: Page, rig: Rig) => Promise<void>;
+  /** Kinds the same rig must NOT raise, looked at beside the row it does (the row is asserted present first, so an empty list proves nothing). */
+  neverRaises?: Attention["kind"][];
 };
 
 const ROWS: Row[] = [
@@ -567,7 +573,62 @@ const ROWS: Row[] = [
       await assertUsable(page, '[data-testid="entrant-row-withdraw"]', "the entrants tab offers Withdraw on the rows");
     },
   },
+  // Match Day online (plan 2026-11-05-match-day-all-in-one.md Task 6; the online boards are on whenever the club has online chess, no
+  // separate flag): the two per-board kinds, from a REAL online round (the product's own seed: a public competition, a chess division
+  // played online, Start, the open) with the hold and the flag written by SQL where no API writes them (match-day-online-kit.ts says why
+  // for each). The row's action opens the board in
+  // Match Day's own focus column - `md-focus` of THAT fixture - and the list's row for it is the current one.
+  {
+    // A board held for the organiser, DATED in the past: the round's open already makes today a match day. A board that should have been played by
+    // now USED to raise `result_missing` too; since gaps A6 a hold is raised ONCE (spec 2026-11-05 5.4, "a hold is never counted twice"; a held board
+    // is left out of `result_missing`, `PhaseFixture.heldOnline`), so the rig keeps the late date on purpose - it is exactly the case the dedupe is for -
+    // and asserts the row's absence (`neverRaises`) beside the one row it raises.
+    id: "board_held",
+    kind: "board_held",
+    // A board that should have been played by now makes today a match day: its Needs-you list is Match Day's (B1), not the page's.
+    matchDay: true,
+    // Board 1 of a round with one board: the label is the dictionary's template with the seed's own board number.
+    label: en["desk.needsYou.board.action"]!.replace("{board}", "1"),
+    neverRaises: ["result_missing"],
+    build: async (request) => {
+      const r = await seedOnlineRound(request, [`Held White ${TAG}`, `Held Black ${TAG}`], { camera: "optional" });
+      expect(r.boards.length, "premise: one board").toBe(1);
+      const board = r.boards[0]!;
+      await holdNoShowSql(board.fixtureId);
+      await setFixtureScheduledAtSql(board.fixtureId, new Date(Date.now() - 3 * 3600_000).toISOString());
+      return { compSlug: r.slugs.comp, divSlug: r.slugs.div, boardId: board.fixtureId };
+    },
+    land: async (page, rig) => landOnBoard(page, rig, "on_hold"),
+  },
+  {
+    // A board cancelled with an open flag (the one case O1 lists a cancelled board): its report is the organiser's to review.
+    id: "board_flagged",
+    kind: "board_flagged",
+    label: en["desk.needsYou.board.action"]!.replace("{board}", "1"),
+    build: async (request) => {
+      const r = await seedOnlineRound(request, [`Flag White ${TAG}`, `Flag Black ${TAG}`], { camera: "optional" });
+      expect(r.boards.length, "premise: one board").toBe(1);
+      const board = r.boards[0]!;
+      await cancelFlaggedSql(r.orgId, board.fixtureId);
+      return { compSlug: r.slugs.comp, divSlug: r.slugs.div, boardId: board.fixtureId };
+    },
+    land: async (page, rig) => landOnBoard(page, rig, "cancelled"),
+  },
 ];
+
+/** Match Day opened the board the row named, in its own focus column: the panel is THAT fixture's, in the state the seed left it, and the
+ *  list's row for it is the selected one (a second board of the day, or none, would not make this pass). */
+async function landOnBoard(page: Page, rig: Rig, state: "on_hold" | "cancelled") {
+  expect(rig.boardId, "a per-board rig names its board").toBeTruthy();
+  const focus = page.getByTestId("md-focus");
+  await expect(focus).toHaveAttribute("data-online", "board");
+  await expect(focus).toHaveAttribute("data-fixture-id", rig.boardId!);
+  await expect(focus).toHaveAttribute("data-state", state);
+  const listed = page.locator(`[data-testid="md-board-row"][data-fixture-id="${rig.boardId}"]`);
+  await expect(listed, "the board is a row of the list").toHaveCount(1);
+  await expect(listed).toHaveAttribute("aria-current", "true");
+  await expect(page.getByTestId("md-lost"), "opened, not 'left the list'").toHaveCount(0);
+}
 
 test.describe("competition desk: every action label lands on the control it names", () => {
   test("the table covers every action a desk row can offer — a dropped row fails here", () => {
@@ -596,6 +657,9 @@ test.describe("competition desk: every action label lands on the control it name
       // wrong page state is worse than a red one.
       const rowEl = needs.locator(`[data-attention="${row.kind}"]`);
       await expect(rowEl, `${row.kind} was never raised — the fixture built a different state`).toHaveCount(1);
+      for (const never of row.neverRaises ?? []) {
+        await expect(needs.locator(`[data-attention="${never}"]`), `${row.id}: the same hold must not be counted again as ${never}`).toHaveCount(0);
+      }
       // Dual mobile/desktop DOM: `:visible` picks whichever copy renders.
       const action = rowEl.locator("a:visible").first();
       await expect(action, `${row.kind} action label`).toHaveText(row.label);
@@ -615,7 +679,7 @@ test.describe("competition desk: every action label lands on the control it name
         await expect(inDom.filter({ visible: true }).first(),
           `${row.kind}: "${rig.landText}" is in the DOM but no copy of it is visible`).toBeVisible();
       }
-      await row.land(page);
+      await row.land(page, rig);
     });
   }
 });

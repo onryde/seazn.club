@@ -30,7 +30,7 @@ vi.mock("@/components/i18n/dict-provider", () => ({
 
 import { RegisterLichessCard, onlineDivisionNames, registerReturnPath, type RegisterLichessState } from "../register-lichess-card";
 import { StepConsent } from "../step-consent";
-import { BANNED_RE } from "@/components/v2/arbiter/__tests__/_banned-copy";
+import { BANNED_RE } from "@/components/v2/match-day/__tests__/_banned-copy";
 import { EMPTY_CART } from "../types";
 
 const esc = (s: string) => s.replaceAll("&", "&amp;").replaceAll("'", "&#x27;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");

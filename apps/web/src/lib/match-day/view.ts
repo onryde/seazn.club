@@ -7,16 +7,21 @@ import { fmtPublicTime } from "@/lib/format";
 import { venueNoun, type VenueNoun } from "@/lib/venue";
 import { liveLabel, scoreLineOf, type LevelWords, type ScoreLine } from "@/lib/score/levels";
 import type { Attention, Severity } from "@/lib/division-phase";
+import { holdReasonForReader } from "@/lib/arbiter-view";
 import { mayEmbedReplay, youtubeVideoId, type PublicReplayPart } from "@/lib/youtube";
-import { needsYouKey } from "@/components/v2/desk/needs-you";
+import { needsYouKey, SEV_ORDER } from "@/components/v2/desk/needs-you";
+import { onlineRoundPhase, resolveOnlineFocus, type OnlineFocus, type OnlineOpened } from "./online";
+import { boardName, boardsPlaying, onlineRoundTitle } from "./online-copy";
 import { CALL_REFUSAL, TBD_ENTRANT, type CallPreview, type CallWarning } from "./call";
 import { closedNow, closureAtClock } from "./closure";
 import type {
   CourtClosure,
   MatchDayCandidate,
+  MatchDayBoardRow,
   MatchDayCourt,
   MatchDayFindCourt,
   MatchDayFixture,
+  MatchDayOnlineRound,
   MatchDayView,
   NeedsYouItem,
   ScorerAttention,
@@ -88,10 +93,20 @@ export function courtCounts(courts: readonly Pick<MatchDayCourt, "state" | "clos
   return { courts: courts.length, playing, free };
 }
 
-/** Whether anything on the page is moving: a match playing or called — on a court, or playing on none (B4). Decides the poll's
- *  cadence (band-poll.ts). */
-export function isLive(view: Pick<MatchDayView, "courts" | "playing_no_court">): boolean {
-  return view.playing_no_court.length > 0 || view.courts.some((c) => c.state === "playing" || c.state === "called");
+/** Whether anything on the page is moving: a match playing or called — on a court, or playing on none (B4) — or an online round in
+ *  check-in or with a board starting or live (Match Day online, Task 6: an online night polls at the live cadence, where a board
+ *  turning up or a game starting is the news). Decides the poll's cadence (band-poll.ts). */
+export function isLive(view: Pick<MatchDayView, "courts" | "playing_no_court" | "online_rounds">): boolean {
+  return (
+    view.playing_no_court.length > 0 ||
+    view.courts.some((c) => c.state === "playing" || c.state === "called") ||
+    view.online_rounds.some(onlineRoundIsLive)
+  );
+}
+
+/** An online round in check-in (`onlineRoundPhase`: any board still checking in), or with a board that has started or is live. */
+function onlineRoundIsLive(r: MatchDayOnlineRound): boolean {
+  return onlineRoundPhase(r, null) === "checkin" || (r.round?.boards.some((b) => b.state.kind === "starting" || b.state.kind === "live") ?? false);
 }
 
 /** The noun for the matches playing on NO court as a group (B4 fix round 1, R3): their sports' word when they share one (an
@@ -104,24 +119,33 @@ export function noCourtNoun(fixtures: readonly Pick<MatchDayFixture, "sport_key"
 }
 
 /** The header's counts line (§6.3, B4): "N courts · N playing · N free", then the matches playing on no court when there are
- *  any ("1 match with no court", in their sports' word: `noCourtNoun`). With no courts at all the court words say nothing —
- *  "0 playing · 0 free" — so the line is the no-court count alone, or "0 courts" when there is nothing either (the empty page). */
+ *  any ("1 match with no court", in their sports' word: `noCourtNoun`), then the online boards checking in or live ("6 boards
+ *  playing", Match Day online §5.3; `boardsPlaying` of the `online` rounds on the list). With no courts at all the court words say
+ *  nothing — "0 playing · 0 free" — so the line is the no-court count and the boards' part alone; with neither it is "0 boards playing"
+ *  when online rounds are listed (a paired round nobody has opened) and "0 courts" when there is nothing at all (the empty page). */
 export function headerCountParts(
   dict: Dict,
   locale: Locale,
   noun: VenueNoun,
   courts: readonly Pick<MatchDayCourt, "state" | "closure">[],
   noCourt: readonly Pick<MatchDayFixture, "sport_key">[],
+  online: readonly Pick<MatchDayOnlineRound, "round">[] = [],
 ): string[] {
   const counts = courtCounts(courts);
   const noCourtPart =
     noCourt.length > 0 ? [plural(dict, `matchDay.header.noCourt.${noCourtNoun(noCourt)}`, noCourt.length, locale)] : [];
-  if (counts.courts === 0) return noCourtPart.length > 0 ? noCourtPart : [plural(dict, `matchDay.header.places.${noun}`, 0, locale)];
+  const boards = boardsPlaying(online);
+  const boardsPart = boards > 0 ? [plural(dict, "matchDay.header.boards", boards, locale)] : [];
+  if (counts.courts === 0) {
+    if (noCourtPart.length > 0 || boardsPart.length > 0) return [...noCourtPart, ...boardsPart];
+    return online.length > 0 ? [plural(dict, "matchDay.header.boards", 0, locale)] : [plural(dict, `matchDay.header.places.${noun}`, 0, locale)];
+  }
   return [
     plural(dict, `matchDay.header.places.${noun}`, counts.courts, locale),
     t(dict, "matchDay.header.playing", { count: counts.playing }),
     t(dict, "matchDay.header.free", { count: counts.free }),
     ...noCourtPart,
+    ...boardsPart,
   ];
 }
 
@@ -353,8 +377,15 @@ export function filterNoCourt(fixtures: readonly MatchDayFixture[], divisions: R
   return divisions === null ? [...fixtures] : fixtures.filter((f) => divisions.has(f.division_id));
 }
 
-/** What the organiser opened: a court, or a match playing on no court (B4) — with its name, to say so if it leaves the list. */
-export type Opened = { kind: "court" | "match"; id: string; name: string };
+/** The same filter on the online rounds (Match Day online §5.3): every round, or only the chosen divisions'. A round has no venue, so
+ *  the venue filter never touches it. */
+export function filterOnlineRounds(rounds: readonly MatchDayOnlineRound[], divisions: ReadonlySet<string> | null): MatchDayOnlineRound[] {
+  return divisions === null ? [...rounds] : rounds.filter((r) => divisions.has(r.division_id));
+}
+
+/** What the organiser opened: a court, a match playing on no court (B4), or an online round or board (`id` is the round's key, or
+ *  the board's fixture id; lib/match-day/online.ts `resolveOnlineFocus`) - with its name, to say so if it leaves the list. */
+export type Opened = { kind: "court" | "match" | "round" | "board"; id: string; name: string };
 
 /** What is focused (§6.1, review M6): what the organiser opened while it is still on the list; none opened yet → the first
  *  court (the desktop's default), else the first match playing on no court (B4: a day with no courts at all); what was opened
@@ -381,6 +412,55 @@ export function resolveFocus(
   }
   const court = courts.find((c) => c.court_id === opened.id);
   return court === undefined ? { kind: "lost", name: opened.name } : { kind: "court", court };
+}
+
+/** What the shell focuses once the online rounds are on the page (Match Day online, Task 6): a court, a match on no court, an online
+ *  round or one of its boards. `rounds` are the rounds as the list shows them (filtered and in `orderOnlineRounds` order). */
+export type DayFocus = Focus | Extract<OnlineFocus, { kind: "round" | "board" }>;
+
+/** What `Opened` names, in the online rules' own shape: a round by its key (its `id`), a board by its fixture id. */
+function onlineOpenedOf(opened: Opened): OnlineOpened {
+  return opened.kind === "round" ? { kind: "round", key: opened.id, name: opened.name } : { kind: "board", id: opened.id, name: opened.name };
+}
+
+/** `resolveFocus` over the whole list (§5.2: "the desktop's default focus stays the first row of the whole list"). A court or a match
+ *  keeps `resolveFocus`'s rules untouched; an opened round or board goes through `resolveOnlineFocus` and NEVER `resolveFocus`, which
+ *  answers `lost` for a kind it does not list; with nothing opened and no court or match on the page the first online round is the
+ *  default. An unknown round or board is `lost`, named - never another row in its place. */
+export function resolveDayFocus(
+  courts: readonly MatchDayCourt[],
+  noCourt: readonly MatchDayFixture[],
+  rounds: readonly MatchDayOnlineRound[],
+  opened: Opened | null,
+): DayFocus {
+  if (opened === null) {
+    const first = resolveFocus(courts, noCourt, null);
+    if (first.kind !== "none" || rounds[0] === undefined) return first;
+    return { kind: "round", round: rounds[0] };
+  }
+  if (opened.kind === "round" || opened.kind === "board") return resolveOnlineFocus(rounds, onlineOpenedOf(opened));
+  return resolveFocus(courts, noCourt, opened);
+}
+
+/** What `?court=`, `?board=` and `?round=` open first, all read alike (Match Day online §7): a value that names a court, a board or a
+ *  round on the page opens it, with its name to say so if it leaves; ANY other value is ignored - no `opened`, the default focus, no
+ *  notice (a board the viewer plays on is never listed, so its link must not tell them so). Court first, then board, then round. */
+export function openedFromParams(
+  dict: Dict,
+  view: Pick<MatchDayView, "courts" | "online_rounds">,
+  params: { court: string | null; board: string | null; round: string | null },
+): Opened | null {
+  const court = params.court === null ? undefined : view.courts.find((c) => c.court_id === params.court);
+  if (court !== undefined) return { kind: "court", id: court.court_id, name: court.court_name };
+  if (params.board !== null) {
+    const focus = resolveOnlineFocus(view.online_rounds, { kind: "board", id: params.board, name: "" });
+    if (focus.kind === "board") return { kind: "board", id: focus.board.fixtureId, name: boardName(dict, focus.board) };
+  }
+  if (params.round !== null) {
+    const focus = resolveOnlineFocus(view.online_rounds, { kind: "round", key: params.round, name: "" });
+    if (focus.kind === "round") return { kind: "round", id: focus.round.key, name: onlineRoundTitle(dict, focus.round) };
+  }
+  return null;
 }
 
 /** Where "Find a court" leads (B4 fix round 1, R2): Match Day opened on that court (`?court=`, the page's focus param), or the
@@ -466,10 +546,51 @@ export function isMatchDayView(v: unknown): v is MatchDayView {
   return (
     Array.isArray(o.courts) &&
     Array.isArray(o.playing_no_court) &&
+    // Match Day online: a view without the online block (a server older than the page) is not one this page can draw.
+    Array.isArray(o.online_rounds) &&
     typeof o.date === "string" &&
     typeof o.tz === "string" &&
     typeof o.now === "string"
   );
+}
+
+/** What the page holds after a poll (gaps wave A2, fix rounds 1 and 2): each part of the online half that a poll FAILED to read is held
+ *  from the page's last answer, and nothing else is.
+ *  - `online_failed` (the rounds read failed, ruling MD-R9: the courts are answered whole): the poll carries `online_rounds: []` because
+ *    nothing was read, so taking it would close the board panel open on a game as "left the list", drop a phone to the list and make the
+ *    cameras leave and join again, for a database hiccup. The page keeps its last rounds. A poll whose rounds ANSWERED is never held, a
+ *    desk-only failure included: its rounds are the fresh ones.
+ *  - `boards_unread` (the held or flagged lister of these divisions failed): the desk's per-board Needs-you rows (`board_held`,
+ *    `board_flagged`) of THOSE divisions are missing because they were not read. The page keeps its last such rows of exactly those
+ *    divisions and takes every other row from the poll - another division's, a badminton division's, a settle that has just happened -
+ *    so one chess division failing on every poll never freezes the rest of the list (MD-R9: chess failing must not degrade the courts).
+ *  The results-owed count is the poll's always: it comes from the matches' own state (`resultsOwedOf`), never from a lister.
+ *  An ANSWERED poll - nothing unread, rounds read - is taken whole, an empty answer included: a round that ended leaves, a board that was
+ *  settled leaves its row on the next read that answers. */
+export function viewAfterPoll(prev: MatchDayView, next: MatchDayView): MatchDayView {
+  const unread = next.boards_unread ?? [];
+  if (!next.online_failed && unread.length === 0) return next;
+  // A row is found by the one function that named it (`needsYouKey`), never by parsing its key.
+  const held = prev.needs_you.filter((it) => {
+    const fixture = it.fixture_id;
+    if (fixture === undefined || (it.kind !== "board_held" && it.kind !== "board_flagged")) return false;
+    return unread.some((division) => needsYouKey(division, it.kind, fixture) === it.key);
+  });
+  return {
+    ...next,
+    online_rounds: next.online_failed ? prev.online_rounds : next.online_rounds,
+    // A held row joins the END of its severity: the poll's own rows keep their place, and the list stays in the desk's order.
+    needs_you: held.length === 0 ? next.needs_you : [...next.needs_you, ...held].sort((a, b) => SEV_ORDER.indexOf(a.severity) - SEV_ORDER.indexOf(b.severity)),
+  };
+}
+
+/** What a poll does to the freeze a press's 402 taught the page (MD-R30, B5). `seenAt` is the browser's clock at the last 402 (null: none seen); a
+ *  poll lifts it only when it says `frozen: false` AND was ASKED after the 402 - a read already in flight when the 402 landed describes the
+ *  competition as it was a moment before and says nothing about now. An older server sends no flag (`undefined`), and a poll whose freeze read failed sends `null`: no evidence, so it keeps it.
+ *  The same millisecond keeps it too: the two cannot be ordered, and the cost of being wrong is one press that answers 402 again. */
+export function freezeSeenAfterPoll(seenAt: number | null, frozen: boolean | null | undefined, startedAt: number): number | null {
+  if (seenAt === null) return null;
+  return frozen === false && startedAt > seenAt ? null : seenAt;
 }
 
 /** The same guard for a candidates answer. */
@@ -636,12 +757,32 @@ export function needsYouTone(items: readonly Pick<NeedsYouItem, "severity">[]): 
   return best;
 }
 
+/** One held board for a reader (MD-R21): its reason, as `holdReasonForReader` says. Every other key of the board is the input's. */
+function boardForReader(b: MatchDayBoardRow, canEdit: boolean): MatchDayBoardRow {
+  return { ...b, hold_reason: holdReasonForReader(b.hold_reason ?? null, canEdit) };
+}
+
 /** Match Day as THIS reader may receive it (task G5; PB2 item 3): an organiser (`canEdit`, an editor's role) gets the view
  *  whole; anyone else — a view-only member, an API key — gets no Needs-you rows and no owed-result count, the organiser's
- *  to-do list. The ONE strip both doors use: the page's first paint (which is serialised into the response) and the poll that
+ *  to-do list, and no WHY on a held online board (MD-R21: `hold_reason`, on each round's boards and on `needs_decision`, is
+ *  null - the board is still listed, still held; the reason names the players' conduct, as a flag's evidence does, MD-R13).
+ *  The ONE strip both doors use: the page's first paint (which is serialised into the response) and the poll that
  *  follows it every few seconds. The rest of the board is the organiser's. */
-export function matchDayForReader<V extends Pick<MatchDayView, "needs_you" | "results_owed">>(view: V, canEdit: boolean): V {
-  return canEdit ? view : { ...view, needs_you: [], results_owed: 0 };
+export function matchDayForReader<V extends Pick<MatchDayView, "needs_you" | "results_owed"> & { online_rounds?: MatchDayView["online_rounds"] }>(
+  view: V,
+  canEdit: boolean,
+): V {
+  if (canEdit) return view;
+  const stripped = { ...view, needs_you: [], results_owed: 0 };
+  if (view.online_rounds === undefined) return stripped;
+  return {
+    ...stripped,
+    online_rounds: view.online_rounds.map((r) => ({
+      ...r,
+      round: r.round === null ? null : { ...r.round, boards: r.round.boards.map((b) => boardForReader(b as MatchDayBoardRow, false)) },
+      needs_decision: r.needs_decision.map((b) => boardForReader(b, false)),
+    })),
+  };
 }
 
 /** How many things need the organiser, by the header's own count (fix round 1, m1): every list row that is NOT an owed result,

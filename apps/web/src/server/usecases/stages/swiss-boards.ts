@@ -45,7 +45,7 @@ import { fireStageRevalidate } from "./helpers";
  * exist). A game that is over (`game_over_at`: one Lichess aborted, say) or a
  * bridge our side closed (`finished`) blocks nothing, and its row goes with
  * the seats. Nothing is written before the refusal, and the caller's
- * transaction rolls back on it. A live game is settled in the arbiter panel
+ * transaction rolls back on it. A live game is settled in Match Day's board panel
  * (T16), which decides it, so the round stays paired by its own result
  * guards. Pre-review ruling + review M8, 2026-10-10.
  *
@@ -73,7 +73,7 @@ export async function lockBoardsRefusingOnlineGames(tx: Tx, ids: readonly string
   if (game) {
     throw new HttpError(
       409,
-      "An online game exists on a board this would clear, so it cannot be cleared. Settle that board in the arbiter panel.",
+      "An online game exists on a board this would clear, so it cannot be cleared. Settle that board in Match Day.",
       ONLINE_GAME_EXISTS_CODE,
     );
   }

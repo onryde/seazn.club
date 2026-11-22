@@ -6,9 +6,13 @@
 // I5, external-play-sweep.test.ts job 5); the real producer → this parser
 // round trip is asserted inside those two suites.
 import { describe, expect, it } from "vitest";
+import { NEEDS_REASONS } from "@/server/external-play/types";
 import {
+  type ArbiterFlag,
   boardMoveNo,
+  flagsForReader,
   fullMoveOf,
+  holdReasonForReader,
   parseCameraLostNote,
   parseMultipleDevicesNote,
   parseOutOfBandNote,
@@ -195,5 +199,85 @@ describe("timelineSegments — where the off time sits in the match", () => {
     const iv = [{ from: "2026-10-12T19:31:05.000Z", to: "2026-10-12T19:34:14.000Z", confirmedByEvents: true }];
     expect(timelineSegments({ windowFrom: null, windowSeconds: 1260, intervals: iv })).toEqual([]);
     expect(timelineSegments({ windowFrom: "2026-10-12T19:18:00.000Z", windowSeconds: 0, intervals: iv })).toEqual([]);
+  });
+});
+
+// MD-R13: a flag names a player and carries what the sweep found about them. The editors who review a board get the card whole; a reader
+// without an editor's role (a view-only member, an API key) gets which kind of flag it is and when it was opened, nothing else.
+describe("flagsForReader - the evidence is the organiser's", () => {
+  const WHOLE: ArbiterFlag[] = [
+    { id: "f1", kind: "out_of_band_play", at: "2026-10-12T19:38:00.000Z", plies: { from: 2, to: 5 } },
+    {
+      id: "f2",
+      kind: "camera_lost",
+      at: "2026-10-12T19:40:00.000Z",
+      personName: "Ada Lovelace",
+      report: { offSeconds: 189, windowSeconds: 1260, intervals: [{ from: "2026-10-12T19:31:05.000Z", to: "2026-10-12T19:34:14.000Z", confirmedByEvents: true }], connections: 3, sessions: 2 },
+      windowFrom: "2026-10-12T19:18:00.000Z",
+    },
+    { id: "f3", kind: "camera_connection_problems", at: "2026-10-12T19:42:00.000Z", personName: "Alan Turing", seconds: 90, stamps: 2 },
+    {
+      id: "f4",
+      kind: "multiple_devices",
+      at: "2026-10-12T19:43:00.000Z",
+      personName: "Grace Hopper",
+      report: { devices: 2, seconds: 75, intervals: [{ from: "2026-10-12T19:30:00.000Z", to: "2026-10-12T19:31:15.000Z" }] },
+    },
+  ];
+  /** The four kinds the flags table's CHECK names (V451, widened by V455 and T17B): each is a card with its own detail. */
+  const KINDS = ["out_of_band_play", "camera_lost", "camera_connection_problems", "multiple_devices"] as const;
+
+  it("an editor gets every card whole, untouched", () => {
+    expect(flagsForReader(WHOLE, true)).toEqual(WHOLE);
+    expect(WHOLE.map((f) => f.kind), "the cards under test cover every kind").toEqual([...KINDS]);
+  });
+
+  it("a reader without an editor's role gets kind, opening time and id for each - every other field is null, and no name or number of the evidence travels", () => {
+    const out = flagsForReader(WHOLE, false);
+    expect(out).toHaveLength(WHOLE.length);
+    let checked = 0;
+    for (const [i, flag] of out.entries()) {
+      const whole = WHOLE[i]!;
+      expect([flag.id, flag.kind, flag.at], whole.kind).toEqual([whole.id, whole.kind, whole.at]);
+      // The same shape the card has, so a reader of the card meets a null where the editor meets evidence - never a missing key.
+      expect(Object.keys(flag).sort(), `${whole.kind}: the same keys`).toEqual(Object.keys(whole).sort());
+      const detail = Object.entries(flag).filter(([k]) => !["id", "kind", "at"].includes(k));
+      expect(detail.length, `${whole.kind}: has detail fields to blank`).toBeGreaterThan(0);
+      for (const [k, v] of detail) expect(v, `${whole.kind}.${k}`).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(KINDS.length);
+    const wire = JSON.stringify(out);
+    for (const secret of ["Ada Lovelace", "Alan Turing", "Grace Hopper", "189", "1260", "19:31:05", "19:30:00", "19:18:00"]) {
+      expect(wire, `no ${secret} for a reader`).not.toContain(secret);
+    }
+  });
+
+  it("the sequence and the empty case: a second strip of the same cards gives the same answer, the input keeps its evidence, and no flag is no flag for either reader", () => {
+    const first = flagsForReader(WHOLE, false);
+    expect(flagsForReader(WHOLE, false)).toEqual(first);
+    expect(flagsForReader(WHOLE, true), "the cards were not blanked in place").toEqual(WHOLE);
+    expect(flagsForReader([], false)).toEqual([]);
+    expect(flagsForReader([], true)).toEqual([]);
+  });
+});
+
+// MD-R21: why a board is held names the players' conduct (`fair_play`, the no-shows), so it is the organiser's like the flags are: the ONE
+// strip every door applies. The vocabulary is the server's own list, never one typed here.
+describe("holdReasonForReader - a hold's reason is the organiser's", () => {
+  it("an editor's role gets the reason as it is; anyone else gets null - for EVERY reason of the vocabulary", () => {
+    let checked = 0;
+    for (const reason of NEEDS_REASONS) {
+      expect(holdReasonForReader(reason, true), `${reason}: editor`).toBe(reason);
+      expect(holdReasonForReader(reason, false), `${reason}: reader`).toBeNull();
+      checked++;
+    }
+    expect(NEEDS_REASONS.length, "premise: the vocabulary is not empty").toBeGreaterThan(0);
+    expect(checked, "anti-vacuity: every reason swept").toBe(NEEDS_REASONS.length);
+  });
+
+  it("the empty case: a board that is not held has no reason for either reader, and the answer is null, not undefined", () => {
+    expect(holdReasonForReader(null, true)).toBeNull();
+    expect(holdReasonForReader(null, false)).toBeNull();
   });
 });

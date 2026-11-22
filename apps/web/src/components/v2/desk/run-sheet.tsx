@@ -205,7 +205,7 @@ export function RunSheet({
   /** T16 — each online chess board's camera, flags and hold (`listRunSheetOnlinePlay`, read by the division page for
    *  organisers), keyed by fixture id; every row gets ITS OWN entry. Absent = no chips. */
   onlinePlay?: Record<string, RunSheetOnlinePlay>;
-  /** T16 — the arbiter panel opened on one board: where a row's camera / off-Seazn chip leads. */
+  /** T16 — Match Day's panel opened on one board (`?board=`): where a row's camera / off-Seazn chip leads. */
   arbiterHrefFor?: (fixtureId: string) => string;
   /** Match Day B2 - set ONLY on a match day, for an organiser: where an unscheduled match's "Find a court" leads (the division
    *  page decides; read nowhere here, like `arbiterHrefFor`). Threaded to the two blocks that can hold an untimed, open match - the

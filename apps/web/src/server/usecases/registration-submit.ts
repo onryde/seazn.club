@@ -61,7 +61,8 @@ import {
   seasonStartYearFrom,
   type EligibilityIssue,
 } from "./registration-eligibility";
-import { divisionPlaysOnline } from "@/server/external-play/online-play";
+import { divisionPlaysOnline, supportsOnlinePlay } from "@/server/external-play/online-play";
+import { countOnlineHeld, effectiveEntrantCap, lockDivisionForCap } from "@/server/external-play/online-entrant-cap";
 import { assertUserHasLichessForOnlinePlay } from "./external-accounts";
 import { onlineChessOffered } from "./external-play/online-chess-flag";
 import { openRegistrationSeatGate, type RegistrationSeatGate } from "./online-seat-gate";
@@ -801,6 +802,26 @@ export async function submitRegistrationGroup(
     // all read from `liveSettingsById`, never from the pre-lock `settingsById`
     // snapshot (which stays in scope only for the pre-tx structural checks
     // above, which do not need transactional freshness).
+    //
+    // The online chess cap (owner ruling 2026-11-21; review C1 / I2 / M2): the `division:` advisory lock of every cart division, sorted,
+    // BEFORE the settings rows below (the global order is advisory -> row; materialise's late entry already took `division:` after the
+    // settings lock, which this order makes a no-wait re-take), so the count under it cannot move; and whether a division plays online
+    // is read HERE, under that lock, never from the pre-transaction snapshot - an organiser switching a division online between the
+    // two would otherwise be admitted past the cap on a stale answer.
+    // Only a division of a sport that CAN play online takes the lock (`sport_key` is fixed at creation, so which ones those are needs no
+    // lock to read): a sign-up for anything else never queues behind a fixture writer for a count it does not make.
+    const sportOf = new Map(
+      (await tx<{ id: string; sport_key: string }[]>`select id, sport_key from divisions where id in ${tx(distinctDivisionIds)}`).map((r) => [r.id, r.sport_key]),
+    );
+    const onlineCapable = distinctDivisionIds.filter((id) => supportsOnlinePlay(sportOf.get(id) ?? ""));
+    for (const id of onlineCapable) await lockDivisionForCap(tx, id);
+    const onlineDivisionIds = new Set<string>();
+    if (onlineCapable.length > 0) {
+      for (const row of await tx<{ id: string; sport_key: string; config: unknown }[]>`
+        select id, sport_key, config from divisions where id in ${tx(onlineCapable)}`) {
+        if (divisionPlaysOnline(row)) onlineDivisionIds.add(row.id);
+      }
+    }
     const liveSettingsById = new Map<string, SubmitSettingsRow>();
     for (const id of distinctDivisionIds) {
       const [live] = await tx<SubmitSettingsRow[]>`
@@ -875,6 +896,8 @@ export async function submitRegistrationGroup(
       // LIVE settings (fetched under the lock above), never the pre-lock
       // `p.settings` snapshot — review MAJOR 3.
       const live = liveSettingsById.get(p.input.division_id)!;
+      // The plan's per-division limit, the division's own capacity and the format's max entrants: the count and the semantics are the
+      // plan's, untouched (the online cap is judged separately, by the online count).
       const hardCap = Math.min(
         live.capacity ?? Number.POSITIVE_INFINITY,
         planLimit ?? Number.POSITIVE_INFINITY,
@@ -911,6 +934,14 @@ export async function submitRegistrationGroup(
           where division_id = ${p.input.division_id} and status in ${tx([...SPOT_HOLDERS])}
             and free_agent = false`;
         waitlisted = taken >= hardCap;
+        // A division that plays online holds at most min(plan limit, 128) places (owner ruling 2026-11-21; online-entrant-cap.ts), counted
+        // as every online-cap door counts - live entrants plus sign-ups let in, `countOnlineHeld` - under the `division:` lock taken
+        // above, with this cart's own earlier entries already in. Past it the entry waits, exactly as it does past the plan's limit.
+        // Whatever the plan: a plan below the online cap (a size pack's 96) judges the SAME count against ITS limit, so direct adds
+        // and sign-ups share one allowance (re-review N2); `hardCap` above is the registrations-only count.
+        if (!waitlisted && onlineDivisionIds.has(p.input.division_id)) {
+          waitlisted = (await countOnlineHeld(tx, p.input.division_id)) >= effectiveEntrantCap(true, planLimit)!;
+        }
       }
       // On a TEAM division `fee_cents` is the price of a team. Someone
       // entering that division alone is buying one place, not a team, so they

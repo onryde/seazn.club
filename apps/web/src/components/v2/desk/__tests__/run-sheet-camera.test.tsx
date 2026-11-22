@@ -31,7 +31,7 @@ vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => vi.fn(asy
 
 const TZ = "UTC";
 const NOW_MS = Date.UTC(2026, 9, 12, 19, 0, 0);
-const ARBITER = "/o/org/c/comp/d/div/arbiter?fixture=f1";
+const ARBITER = "/o/org/c/comp/match-day?board=f1";
 const MATCH = `Alpha ${messages["schedule.vs"]} Bravo`;
 
 function fx(o: Partial<RunSheetFixture> = {}): RunSheetFixture {
@@ -250,7 +250,7 @@ describe("the sheet: a held online board owes its result", () => {
         onFilter={() => {}}
         stageId={null}
         onlinePlay={onlinePlay}
-        arbiterHrefFor={(id) => `/arbiter?fixture=${id}`}
+        arbiterHrefFor={(id) => `/o/org/c/comp/match-day?board=${id}`}
       />,
     );
   const rowsIn = (h: string) => [...h.matchAll(/<li data-fixture-no="(\d+)"/g)].map((m) => Number(m[1]));
@@ -274,7 +274,7 @@ describe("the sheet: a held online board owes its result", () => {
   it("the sheet hands each row ITS OWN entry and arbiter link", () => {
     const h = sheet("all", { f2: online({ cameraFlagCount: 1 }) });
     const rowOf = (no: number) => /<li data-fixture-no="\d+"[\s\S]*?<\/li>/g.exec(h.slice(h.indexOf(`<li data-fixture-no="${no}"`)))![0];
-    expect(rowOf(2)).toContain('href="/arbiter?fixture=f2"');
+    expect(rowOf(2)).toContain('href="/o/org/c/comp/match-day?board=f2"');
     expect(rowOf(1)).not.toContain("run-sheet-camera-chip");
   });
 });
@@ -337,13 +337,13 @@ describe("StagesPanel threads the map and the arbiter link to the run sheet", ()
     canEdit: true, tz: "UTC", orgTz: "UTC", canExport: false, viewerPlan: "community" as const,
   };
 
-  it("an entry for the row ⇒ its chips, the camera chip leading to the arbiter panel for THAT fixture when the page offers the panel; no map ⇒ none", () => {
+  it("an entry for the row ⇒ its chips, the camera chip leading to Match Day on THAT board when the page offers it; no map ⇒ none", () => {
     const entry = { "f-s1": online({ cameraFlagCount: 2, held: "aborted" }) };
-    const h = renderToStaticMarkup(<StagesPanel {...props} onlinePlay={entry} arbiterHref="/o/org/c/comp/d/div/arbiter" />);
+    const h = renderToStaticMarkup(<StagesPanel {...props} onlinePlay={entry} arbiterHref="/o/org/c/comp/match-day" />);
     // Typed from the route's contract, not built with the helper.
-    expect(h).toContain('href="/o/org/c/comp/d/div/arbiter?fixture=f-s1"');
+    expect(h).toContain('href="/o/org/c/comp/match-day?board=f-s1"');
     // The held chip, offered: the panel on THIS board, and no dead anchor (nothing on the tab carries it while the panel is offered).
-    expect(tagOf(h, "run-sheet-online-held-chip"), "offered: the held chip leads into the panel").toContain('href="/o/org/c/comp/d/div/arbiter?fixture=f-s1"');
+    expect(tagOf(h, "run-sheet-online-held-chip"), "offered: the held chip leads into Match Day on this board").toContain('href="/o/org/c/comp/match-day?board=f-s1"');
     expect(h).not.toContain("#external-play-queue-row-f-s1");
     // The pair: the page did not offer the panel (`arbiterHref` absent), the camera chip is still there but leads nowhere.
     const notOffered = renderToStaticMarkup(<StagesPanel {...props} onlinePlay={entry} />);

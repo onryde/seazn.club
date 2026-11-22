@@ -1,7 +1,7 @@
 // T17B fix 2, D19: the room's sound switch, remembered per device in localStorage. Every storage touch is inside
 // try/catch — a blocked origin throws on the accessor itself, private modes and full quotas throw on the calls — and
 // the page keeps the choice in memory, so the switch works with no storage at all (it is then forgotten on reload).
-// Default ON: the room is the players' page. (The arbiter's view, components/v2/arbiter-panel.tsx, draws no board
+// Default ON: the room is the players' page. (The arbiter's view, Match Day's board panel, draws no board
 // and plays no move sounds — OFF by construction.)
 
 export const SOUND_PREF_KEY = "seazn:match-room:sound";

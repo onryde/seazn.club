@@ -267,6 +267,9 @@ const SAMPLE: { [K in Attention["kind"]]: Extract<Attention, { kind: K }> } = {
   late_players_waiting: { kind: "late_players_waiting", count: 1, stageName: "Cup" },
   late_unplaced: { kind: "late_unplaced", count: 1, stageName: "League", names: ["Lou Late"] },
   withdrawal_owed: { kind: "withdrawal_owed", count: 1, names: ["Rae Registrant"] },
+  // Match Day online (T4): the two PER-BOARD kinds - one row per board, so a division with a held board and a flagged one is two rows.
+  board_held: { kind: "board_held", fixtureId: "f-held", stageId: "st-1", roundNo: 2, boardNo: 4, home: "Novak", away: "Silva", reason: "no_show_white", reopen: false },
+  board_flagged: { kind: "board_flagged", fixtureId: "f-flag", roundNo: 2, boardNo: 7, home: "Chen", away: "Abara", flags: 1 },
 };
 
 const SIDES = [

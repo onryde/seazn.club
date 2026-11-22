@@ -75,7 +75,7 @@ export default async function OrgHomePage({
   const { items: competitions } = await listCompetitions(auth, { cursor: null, limit: 100 });
   const [stats, today] = await Promise.all([
     listCompetitionCardStats(auth),
-    // One bounded read for the whole list (three statements, however many cards), never a query per card.
+    // One bounded read for the whole list (at most five statements, however many cards), never a query per card.
     competitionsFixturesToday(
       auth,
       competitions.map((c) => c.id),

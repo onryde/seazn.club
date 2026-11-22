@@ -1,7 +1,7 @@
 // The check-in extension (spec 2026-10-09 §3.2.2; owner-approved 2026-10-19): the arbiter adds time to a board's check-in while
 // it is still open - per board, and for a whole round. Client-safe on purpose (nothing server-only): the server rule
 // (`server/external-play/window.ts` `extendRefusal`, `usecases/external-play/checkin-extend.ts`) and the two screens that
-// offer it (the arbiter panel, the organiser's Open round control) read ONE vocabulary here.
+// offer it (Match Day's board and round panels, the organiser's Open round control) read ONE vocabulary here.
 // Relative with `.ts`, not "@/…": api-v1/schemas/ imports this file, so it is also compiled under tsconfig.scripts.json
 // (nodenext), which refuses an extensionless specifier - the convention of every file in that chain.
 import type { DictionaryKey } from "./i18n-keys.ts";
@@ -104,48 +104,13 @@ export function nextExtendEdge(edges: readonly number[], nowMs: number): number 
   return best;
 }
 
-/** The short reason shown where the +5 button is not offered (owner, 2026-10-19): check-in not opened, closed, a game started, no
- *  extensions left. Each is one sentence that says what cannot be done and why ("Can't extend check-in: a game has started", phase 2
- *  Task 11), because the round column shows it with no button beside it. `not_playable` (a board that is over) says nothing: it has no check-in to speak of. Every
- *  refusal is a key of this table, so a sixth reason cannot be added without choosing its words (or choosing silence) here. */
-export const EXTEND_WHY_KEYS: Readonly<Record<ExtendRefusal, DictionaryKey | null>> = {
-  not_playable: null,
-  game_started: "externalPlay.checkinExtend.why.gameStarted",
-  closed: "externalPlay.checkinExtend.why.closed",
-  not_open: "externalPlay.checkinExtend.why.notOpen",
-  cap_reached: "externalPlay.checkinExtend.why.capReached",
-};
-
-/** The reason a round has no "+5 min to the round" to offer (owner, 2026-10-19): when every board that has a reason says the SAME one,
- *  that reason's own words (`EXTEND_WHY_KEYS`); when they differ, the one sentence that is true of all of them. */
-export const EXTEND_ROUND_MIXED_WHY_KEY: DictionaryKey = "externalPlay.checkinExtend.why.roundNoneOpen";
-
-/** What a round says in place of its button: the `data-why` code (a refusal, or `mixed`) and the dictionary key of its words. */
-export type RoundWhy = { code: ExtendRefusal | "mixed"; key: DictionaryKey };
-
-/** The reason a round-wide press has nothing to reach, from each board's refusal at the instant asked (`null`: that board would accept
- *  a press). Null when ANY board would accept one (the round has its button, and a button needs no reason), and when no board has a
- *  reason to speak of: a round that lists no boards, and one whose every board is over (`not_playable` is silent, as it is on the
- *  board). Boards that are over are left out of the count: "a game has started" is true of a round whose boards are all either started or over. */
-export function roundWhy(refusals: Iterable<ExtendRefusal | null>): RoundWhy | null {
-  const spoken = new Set<ExtendRefusal>();
-  for (const r of refusals) {
-    if (r === null) return null;
-    if (EXTEND_WHY_KEYS[r] !== null) spoken.add(r);
-  }
-  if (spoken.size === 0) return null;
-  if (spoken.size > 1) return { code: "mixed", key: EXTEND_ROUND_MIXED_WHY_KEY };
-  const [only] = [...spoken] as [ExtendRefusal];
-  return { code: only, key: EXTEND_WHY_KEYS[only]! };
-}
-
 /** A round's boards by the refusal the server gave each (`extendRefusal` at the snapshot), counted per cause. */
 export type ExtendTally = Record<ExtendRefusal, number>;
 export const emptyExtendTally = (): ExtendTally => ({ not_playable: 0, game_started: 0, closed: 0, not_open: 0, cap_reached: 0 });
 
 /** Every board of an Open round view as one refusal at `nowMs`: the boards outside `windows` as the server's tally counted them (no tick
  *  of a clock changes why a game is on file, a board is over, or a window has closed), and each window board as the clock judges it
- *  (`liveExtendRefusal`, the arbiter panel's own function: ahead of its opening `not_open`, inside it `null` - it would accept a
+ *  (`liveExtendRefusal`, the board panel's own function: ahead of its opening `not_open`, inside it `null` - it would accept a
  *  press - or `cap_reached` when it has none left, and past its deadline `closed`). `nowMs` null (the viewer's clock is not known yet):
  *  the windows read as the snapshot saw them, and a window with presses left that the snapshot saw OPEN would have made the server's
  *  own count non-zero, which is a round that has its button and is never asked for a reason. */

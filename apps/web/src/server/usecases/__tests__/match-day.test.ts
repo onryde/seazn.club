@@ -32,8 +32,10 @@ import { resolvePositions } from "@seazn/engine/sport";
 import { badminton, setBasedServeContext, type SetBasedState } from "@seazn/engine/sports/setbased";
 import { defaultLineupPair, goldenCorpora } from "@seazn/engine/testkit";
 import { builtinModules } from "@seazn/engine/sports";
-import { sql, withTenant } from "@/lib/db";
+import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { invalidateOrgEntitlements } from "@/lib/entitlements";
+import { frozenCompetitionIds } from "../entitlement-freeze";
 import uiEn from "@/dictionaries/en/ui.json";
 import uiFr from "@/dictionaries/fr/ui.json";
 import enPublic from "@/dictionaries/en/public.json";
@@ -77,6 +79,22 @@ vi.mock("@/server/usecases/fixtures", async (importOriginal) => {
     },
   };
 });
+// B5 fix round 1 (I1): the poll's freeze read is a lifeline read (MD-R9). The fault replaces its answer with a throw while `freezeFault.fail` is set; every
+// other call is the real read (the premise reads of the B5 test below go through it too).
+const freezeFault = vi.hoisted(() => ({ fail: false, hits: 0 }));
+vi.mock("../entitlement-freeze", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../entitlement-freeze")>();
+  return {
+    ...real,
+    frozenCompetitionIds: async (...args: Parameters<typeof real.frozenCompetitionIds>) => {
+      if (freezeFault.fail) {
+        freezeFault.hits++;
+        throw new Error("boom: the freeze read is down");
+      }
+      return real.frozenCompetitionIds(...args);
+    },
+  };
+});
 import { log } from "@/server/logger";
 import type { MatchDayCandidate, MatchDayCourt, MatchDayFixture, MatchDayView } from "@/lib/match-day/types";
 import { MatchDayView as MatchDayViewSchema } from "@/server/api-v1/schemas";
@@ -89,7 +107,7 @@ import { createDivision, listDivisions } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { callFixtureToCourt, undoCall } from "../match-day-call";
-import { __setBoardReadHookForTests, countFixturesToday, findCourtForDivision, getMatchDay, matchDayCandidates } from "../match-day";
+import { __setBoardReadHookForTests, competitionFixturesToday, findCourtForDivision, getMatchDay, matchDayCandidates } from "../match-day";
 import { loadFixtureMatchRules } from "../fixtures";
 import { putScheduleSettings } from "../schedule";
 import { createCourt } from "../venues";
@@ -109,6 +127,7 @@ import {
 } from "./_match-day-seed";
 import { makeCommunityRig } from "./_rig";
 import { seedOnlineChessFixture } from "./_external-play-seed";
+import { openStamp, seedOnlineDivisionIn } from "./_match-day-online-seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -280,6 +299,59 @@ const queueOf = (c: MatchDayCourt): [string, number, number][] =>
   c.queue.map((q) => [q.id, (Date.parse(q.planned_at) - at(0).getTime()) / 60_000, (Date.parse(q.estimated_at) - at(0).getTime()) / 60_000]);
 
 describe.skipIf(!HAS_DB)("getMatchDay", () => {
+  it("B5 - the poll says whether the competition is billing-frozen NOW: false, then true under the ceiling, then false again when room appears (the page lifts a 402 it saw only from this)", async () => {
+    const day = await seedDay();
+    const limit = async (n: number) => {
+      await sql`
+        insert into org_entitlement_overrides (org_id, feature_key, int_value)
+        values (${day.orgId}, 'competitions.max_active', ${n})
+        on conflict (org_id, feature_key) do update set int_value = ${n}, bool_value = null`;
+      await invalidateOrgEntitlements(day.orgId);
+    };
+    await limit(50);
+    expect([...(await frozenCompetitionIds(day.orgId))], "premise: nothing frozen").toEqual([]);
+    const before = await getMatchDay(day.auth, day.comp.id, at(0));
+    expect(before.frozen, "within the ceiling").toBe(false);
+    await limit(0);
+    expect([...(await frozenCompetitionIds(day.orgId))], "premise: exactly this competition is frozen").toEqual([day.comp.id]);
+    const during = await getMatchDay(day.auth, day.comp.id, at(0));
+    expect(during.frozen, "over the ceiling").toBe(true);
+    expect(MatchDayViewSchema.parse(JSON.parse(JSON.stringify(during))).frozen, "the wire keeps it (a plain z.object strips an undeclared key)").toBe(true);
+    await limit(50);
+    expect([...(await frozenCompetitionIds(day.orgId))], "premise: room again").toEqual([]);
+    expect((await getMatchDay(day.auth, day.comp.id, at(0))).frozen, "thawed").toBe(false);
+  });
+
+  it("B5 fix round 1 (I1) - the freeze read is a lifeline: when it throws the poll still answers whole, says `frozen: null` (no evidence: the page keeps what it holds), logs once, and the next poll reads it again", async () => {
+    const day = await seedDay();
+    const logged = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    try {
+      const base = await getMatchDay(day.auth, day.comp.id, at(0));
+      expect(base.frozen, "premise: the answered poll says false").toBe(false);
+      freezeFault.fail = true;
+      freezeFault.hits = 0;
+      const down = await getMatchDay(day.auth, day.comp.id, at(0)); // a rejection here is the defect: the day screen is the organiser's lifeline
+      expect(freezeFault.hits, "premise: the forced throw was reached").toBe(1);
+      const { frozen: downFrozen, ...downRest } = down;
+      const { frozen: baseFrozen, ...baseRest } = base;
+      expect(downFrozen, "an unread freeze is not 'not frozen': it is null").toBeNull();
+      expect(baseFrozen).toBe(false);
+      expect(downRest, "everything else the poll answers is the poll's own: the day is whole").toEqual(baseRest);
+      expect(MatchDayViewSchema.parse(JSON.parse(JSON.stringify(down))).frozen, "and the wire carries the null (a boolean-only schema would refuse the whole poll)").toBeNull();
+      expect(logged, "logged once, loud").toHaveBeenCalledTimes(1);
+      const [fields] = logged.mock.calls[0]! as [{ err: Error; competitionId: string }, string];
+      expect(fields.competitionId).toBe(day.comp.id);
+      expect(fields.err.message).toBe("boom: the freeze read is down");
+      freezeFault.fail = false;
+      const up = await getMatchDay(day.auth, day.comp.id, at(0));
+      expect(up.frozen, "the next poll reads it again").toBe(false);
+      expect(logged, "and logs nothing more").toHaveBeenCalledTimes(1);
+    } finally {
+      freezeFault.fail = false;
+      logged.mockRestore();
+    }
+  });
+
   it("the court list: every division's candidate courts, and every court holding one of this competition's matches today — not tomorrow's, not another competition's", async () => {
     const day = await seedDay();
     const { p1, p2, p3, p4 } = pairs(day);
@@ -929,6 +1001,10 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
       results_owed: 0,
       fixtures_today: 0,
       venues_today: [],
+      online_rounds: [],
+      online_failed: false,
+      boards_unread: [],
+      frozen: false, // B5: the empty case says "not frozen" outright (a free org with a competition and nothing over its cap), never leaves the field off
     });
   });
 
@@ -1171,7 +1247,7 @@ describe.skipIf(!HAS_DB)("countFixturesToday", () => {
     await setStatus(cancelled, "cancelled"); // Sat 7 Nov, cancelled
 
     // The division declares no zone of its own, so its day is the organisation's (Amsterdam).
-    const count = (isoAt: string) => withTenant(day.orgId, (tx) => countFixturesToday(tx, day.comp.id, new Date(isoAt)));
+    const count = (isoAt: string) => competitionFixturesToday(day.auth, day.comp.id, new Date(isoAt));
     const days: [string, number][] = [
       ["2026-11-06T12:00:00.000Z", 0], // the day before
       ["2026-11-07T12:00:00.000Z", 1], // the day of: 11:00, not the cancelled 12:00, not 00:30 tomorrow
@@ -1212,7 +1288,7 @@ describe.skipIf(!HAS_DB)("countFixturesToday", () => {
     const C = between(day.comp, p1, p3).id; // 10:30Z Sun 8: Amsterdam Sun 11:30 (tomorrow), Auckland Sun 23:30 — today
     const D = between(day.comp, p2, p4).id; // no court, 05:00Z Sun 8: Amsterdam Sun 06:00 (a later day), Auckland Sun 18:00 — today
     const E = between(day.comp, p1, p4).id; // no court, 11:00Z Sun 8: Auckland Mon 9 Nov 00:00 — a later day
-    const count = () => withTenant(day.orgId, (tx) => countFixturesToday(tx, day.comp.id, now));
+    const count = () => competitionFixturesToday(day.auth, day.comp.id, now);
     const deskPhase = async () => (await getCompetitionDesk(day.auth, day.comp.id, now)).divisions.get(day.comp.divisionId);
 
     await place(day, A, minutesTo("2026-11-07T08:00:00.000Z"), day.courts.c1);
@@ -1277,7 +1353,7 @@ describe.skipIf(!HAS_DB)("countFixturesToday", () => {
     expect(view.courts.map((c) => c.court_id)).toEqual([day.courts.c1]);
     expect(courtOf(view, day.courts.c1)).toMatchObject({ state: "playing", current: { id: f34 }, queue: [] });
     expect(view.fixtures_today).toBe(0);
-    expect(await withTenant(day.orgId, (tx) => countFixturesToday(tx, day.comp.id, at(10)))).toBe(0);
+    expect(await competitionFixturesToday(day.auth, day.comp.id, at(10))).toBe(0);
     expect(await matchDayCandidates(day.auth, day.comp.id, day.courts.c1, at(10))).toEqual([]);
 
     // Another competition's board: both matches in play hold their courts. Court 1 is held until max(10, 0 + 30) = 30, so
@@ -1286,6 +1362,30 @@ describe.skipIf(!HAS_DB)("countFixturesToday", () => {
     expect(courtOf(theirs, day.courts.c1)).toMatchObject({ state: "in_use_elsewhere", in_use_by: day.comp.name });
     expect(courtOf(theirs, day.courts.c2)).toMatchObject({ state: "in_use_elsewhere", in_use_by: day.comp.name });
     expect(queueOf(courtOf(theirs, day.courts.c1))).toEqual([[xy, 20, 30]]);
+  });
+
+  // Match Day online, Task 5: an online chess division beside an in-hall one in the SAME competition. The online boards carry no
+  // planned time, so only an opened round makes them today's (the arms are tested alone in match-day-home-today.test.ts); here they
+  // must ADD to the in-hall count and leave it alone otherwise. One sport on the online side (online play is chess-only: openRound
+  // refuses any other); the in-hall side is `seedDay`'s generic division, whose own cases above are unchanged.
+  it("an online division's opened round adds its boards to the in-hall matches today; an unopened round and an archived division add nothing", async () => {
+    const day = await seedDay();
+    const { p1, p2 } = pairs(day);
+    await place(day, between(day.comp, p1, p2).id, 0, day.courts.c1); // Sat 7 Nov 11:00 in Amsterdam: the one in-hall match today
+    const rapid = await seedOnlineDivisionIn(day.auth, day.comp.id, { name: "Rapid", fixtures: 2 });
+    const blitz = await seedOnlineDivisionIn(day.auth, day.comp.id, { name: "Blitz", fixtures: 3 });
+    const now = at(10);
+    const count = () => competitionFixturesToday(day.auth, day.comp.id, now);
+    const reads = async () => [await count(), (await getCompetitionDesk(day.auth, day.comp.id, now)).fixtures_today, (await getMatchDay(day.auth, day.comp.id, now)).fixtures_today];
+    expect(await reads(), "before any round is opened: the in-hall match alone, on every surface").toEqual([1, 1, 1]);
+
+    const owner = (stageId: string) => ({ stageId, orgId: day.orgId, ownerUserId: day.auth.userId! });
+    await openStamp(owner(rapid.stageId), 1, at(5)); // opened five minutes into the day; Blitz stays paired and unopened
+    expect(await reads(), "Rapid's two boards join the in-hall match; Blitz's three do not").toEqual([3, 3, 3]);
+
+    await sql`update divisions set archived_at = now() where id = ${rapid.divisionId}`;
+    expect(await reads(), "an archived division is gone from the competition, its opened round with it").toEqual([1, 1, 1]);
+    expect(blitz.boards, "premise: the unopened division has boards of its own").toHaveLength(3);
   });
 });
 

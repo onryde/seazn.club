@@ -2,8 +2,8 @@ import "server-only";
 // The match a player's camera is judged over, and OUR safeguard's stamps
 // inside it — ONE definition for the two readers (T15 fix round 1, I1): the
 // sweep's job 5, which decides camera_lost and camera_connection_problems,
-// and the arbiter panel, which shows the organiser the stamped time. The
-// panel never re-derives either: what it shows is what job 5 judged.
+// and the arbiter loader (`loadArbiterRound`), which shows the organiser the stamped time on Match Day's panels. The
+// loader never re-derives either: what it shows is what job 5 judged.
 import type postgres from "postgres";
 import { guardFaultSpans } from "./guard-faults";
 import { stampedInMatch, type StampedInMatch } from "./match-camera-off";

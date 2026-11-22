@@ -8,25 +8,28 @@
 //     Lichess when a game is on file, and Settle — four buttons by colour, or
 //     "Pick the winner" for a drawn knockout game, which opens on its own;
 //   - Flagged: boards whose game carried on with OPEN flags. Evidence, never
-//     a verdict: the flag cards are the arbiter panel's own, and "Let the game
+//     a verdict: the flag cards are the ones Match Day's board panel draws, and "Let the game
 //     go on" (or, once the game is over, "Mark as reviewed") closes exactly
 //     the flags on screen.
 //
-// Phase 2 (spec 2026-10-24-arbiter-round-column-design.md §8): this queue is on the Fixtures tab only where the Arbiter Panel is NOT
-// offered (online play switched off, or the club not offered online chess), so it links nowhere into it: the panel would 404.
-// Where the panel is offered, the same two lists are the round column's queue, there.
+// Match Day is the primary place to decide a board (owner O2, 2026-11-17): the Arbiter page this queue used to sit beside is gone, so
+// the queue is on the Fixtures tab of every chess desk, and each held and flagged row says "Open in Match Day" (`routes.competitionMatchDayBoard`,
+// the competition's Match Day with `?board=<fixture id>`, built here from the `orgSlug` and `compSlug` props). Its decisions stay exactly as they were, through the same `decisionRunner` and
+// `FlagCard`: the link is one more way to the same decision, never a replacement for it.
 //
 // Every action here FINISHES play or reviews it, so nothing is gated by the
 // online-chess flag (T20). The invite resend is not here: the server refuses
 // it for every held board (invite.ts, 409 BOARD_HELD / ONLINE_GAME_EXISTS).
 //
-// The requests share the arbiter panel's reducer and runner
+// The requests share Match Day's board panel's reducer and runner
 // (arbiter-decision.ts): one request at a time across the whole queue, and an
 // answer shows on the row it was sent for.
 import { useEffect, useMemo, useReducer, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "@/components/ui/console-link";
 import { boardIsOver } from "@/lib/arbiter-view";
 import { apiV1 } from "@/lib/client-v1";
+import { routes } from "@/lib/routes";
 import type { FlaggedBoard } from "@/server/usecases/external-play/arbiter";
 import type { NeedsOrganiserExternalPlayRow } from "@/server/usecases/external-play/queue";
 import { arbiterDecision, decisionRunner, initialArbiterDecision, type ArbiterDecisionState, type ArbiterNotice } from "./arbiter-decision";
@@ -43,14 +46,21 @@ export type ExternalPlayQueueProps = {
   flagged: FlaggedBoard[];
   /** Flagged boards the viewer plays on: hidden from them (C1), counted. */
   ownFlagged: number;
-  /** The division's venue zone (`getScheduleSettings().tz`): every time of day on the flag cards is read in it, as on the arbiter panel
-   *  (Task 16 D1), and says "(Tokyo time)" after mount when the viewer's own offset differs at that instant. */
+  /** The division's venue zone (`getScheduleSettings().tz`): every time of day on the flag cards is read in it, as on Match Day's board
+   *  panel (Task 16 D1), and says "(Tokyo time)" after mount when the viewer's own offset differs at that instant. */
   venueTz: string;
+  /** The competition this desk belongs to: "Open in Match Day" leads to its Match Day with `?board=<fixture id>` (`routes.competitionMatchDayBoard`).
+   *  Slugs, not a link builder: this is a client island and its page is a Server Component, which cannot hand it a function (Next refuses it at
+   *  render: a 500 on the Fixtures tab of every chess desk). Required, never defaulted: a queue mounted without them would carry rows with no
+   *  way into the panel, and the type is what stops a new caller doing that. */
+  orgSlug: string;
+  compSlug: string;
 };
 
 const CHIP = "self-start rounded-full px-2.5 py-[3px] text-xs font-semibold";
 const CHIP_HELD = `${CHIP} bg-[#fef2f2] text-[#b42318]`;
 const LIST_HEADING = "m-0 text-[13px] font-semibold text-[#4a3a6b]";
+const OPEN_IN_MATCH_DAY = "inline-flex min-h-11 items-center self-start text-sm font-semibold text-[#5b21b6] underline-offset-2 hover:underline";
 const SETTLE_TOGGLE =
   "flex min-h-11 cursor-pointer list-none items-center justify-center rounded-[10px] bg-[#7c3aed] px-3 text-[15px] font-semibold text-white [&::-webkit-details-marker]:hidden";
 
@@ -81,11 +91,11 @@ function rowNotice(fixtureId: string, decision: ArbiterDecisionState, over: bool
   );
 }
 
-export function ExternalPlayNeedsResultQueue({ held, flagged, ownFlagged, venueTz }: ExternalPlayQueueProps) {
+export function ExternalPlayNeedsResultQueue({ held, flagged, ownFlagged, venueTz, orgSlug, compSlug }: ExternalPlayQueueProps) {
   const router = useRouter();
   const [decision, dispatch] = useReducer(arbiterDecision, null, initialArbiterDecision);
   // Flag times of day render after mount, and in the venue's zone (as in the
-  // arbiter panel): the server's timezone is not the organiser's, and the
+  // Match Day's board panel): the server's timezone is not the organiser's, and the
   // organiser may not be where the venue is.
   const [nowMs, setNowMs] = useState<number | null>(null);
   useEffect(() => {
@@ -99,7 +109,7 @@ export function ExternalPlayNeedsResultQueue({ held, flagged, ownFlagged, venueT
         dispatch,
         post: (path, body) => apiV1(path, { method: "POST", ...(body === undefined ? {} : { json: body }) }),
         refresh: () => router.refresh(),
-        // The queue never overrides video: that decision is the panel's.
+        // The queue never overrides video: that decision is Match Day's board panel's.
         overrideNote: "",
       }),
     [router],
@@ -113,7 +123,8 @@ export function ExternalPlayNeedsResultQueue({ held, flagged, ownFlagged, venueT
     dispatch({ type: "select", boardId: fixtureId });
   };
 
-  const rowIds = new Set([...held.map((r) => r.fixtureId), ...flagged.map((b) => b.fixtureId)]);
+  const heldIds = new Set(held.map((r) => r.fixtureId));
+  const rowIds = new Set([...heldIds, ...flagged.map((b) => b.fixtureId)]);
   const notice = decision.notice;
   // The row it answers has left the list (settled, or its flags closed): the
   // answer shows here instead of vanishing with it.
@@ -220,6 +231,9 @@ export function ExternalPlayNeedsResultQueue({ held, flagged, ownFlagged, venueT
           </>
         )}
         {rowNotice(row.fixtureId, decision, false, f)}
+        <Link href={routes.competitionMatchDayBoard(orgSlug, compSlug, row.fixtureId)} data-testid="external-play-open-match-day" className={OPEN_IN_MATCH_DAY}>
+          {f.t("externalPlay.queue.openInMatchDay")}
+        </Link>
       </li>
     );
   };
@@ -286,6 +300,12 @@ export function ExternalPlayNeedsResultQueue({ held, flagged, ownFlagged, venueT
                       </button>
                     </div>
                     {rowNotice(b.fixtureId, decision, over, f)}
+                    {/* One way into a board: a board that is also held has its link on the held card (B2). */}
+                    {!heldIds.has(b.fixtureId) && (
+                      <Link href={routes.competitionMatchDayBoard(orgSlug, compSlug, b.fixtureId)} data-testid="external-play-open-match-day" className={OPEN_IN_MATCH_DAY}>
+                        {f.t("externalPlay.queue.openInMatchDay")}
+                      </Link>
+                    )}
                   </li>
                 );
               })}

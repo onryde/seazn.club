@@ -226,3 +226,14 @@ describe("routes.orgSponsors (R4 S11: the Sponsors hub is top-level, not a Setti
     expect(routes.orgSponsors("acme", "on_stream")).toBe("/o/acme/sponsors?tab=on_stream");
   });
 });
+
+describe("routes.competitionMatchDayBoard (Task 10: the Arbiter page is gone, so every board link is a Match Day address)", () => {
+  it("builds the day's address with ?board=<fixture id>, and the old division /arbiter builder is gone", () => {
+    expect(routes.competitionMatchDayBoard("acme", "summer-smash", "fx-1")).toBe("/o/acme/c/summer-smash/match-day?board=fx-1");
+    // The id rides in the query string, encoded: an id with a reserved character cannot end the parameter or start another.
+    expect(routes.competitionMatchDayBoard("acme", "summer-smash", "a&b=c d")).toBe("/o/acme/c/summer-smash/match-day?board=a%26b%3Dc%20d");
+    // It is the day's own path plus the one parameter - the same page `competitionMatchDay` names.
+    expect(routes.competitionMatchDayBoard("acme", "summer-smash", "x").startsWith(routes.competitionMatchDay("acme", "summer-smash"))).toBe(true);
+    expect("divisionArbiter" in routes, "no builder is left for the retired page").toBe(false);
+  });
+});

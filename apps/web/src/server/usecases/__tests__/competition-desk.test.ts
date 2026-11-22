@@ -23,10 +23,11 @@ import { getCompetitionDesk, competitionPhase } from "../competition-desk";
 import { NOT_RECORDING_GRACE_MINUTES } from "@/lib/division-phase";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import en from "@/dictionaries/en/ui.json";
-import { needsYouAt, needsYouItems } from "@/components/v2/desk/needs-you";
+import { needsYouAt, needsYouHome, needsYouItems } from "@/components/v2/desk/needs-you";
 import { getMatchDay } from "../match-day";
 import { listDivisions } from "../divisions";
 import { ORG_TZ, between, seedDay, setStatus, type Fx, type Pair } from "./_match-day-seed";
+import { openStamp, seedOnlineDivisionIn } from "./_match-day-online-seed";
 const HAS_DB = !!process.env.DATABASE_URL;
 
 const GENERIC_CONFIG = {
@@ -1484,6 +1485,33 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
       // sweep saw the other side too, so a ladder that always answered match_day could not pass silently.
       expect(implied, "instants in the match_day phase").toBe(3);
       expect(otherPhases, "instants in another phase").toBe(instants.length - 3);
+    });
+
+    // Match Day online, Task 5 (Review Focus 5): an online round opened at 23:50. The boards have no planned time, so the opened round
+    // is what makes the day: the Needs-you list is Match Day's at the open and at 00:10 the next day, while the window is live, and is
+    // the competition page's again once it is over - never jumping to the competition page at midnight under a live round.
+    // One sport on the online side (online play is chess-only); the club is on Amsterdam, so "the next day" is Amsterdam's.
+    it("an online round opened at 23:50 keeps the day a match day at 00:10 the next day, and the competition page has the list again once the window is over", async () => {
+      const day = await seedDay();
+      const rapid = await seedOnlineDivisionIn(day.auth, day.comp.id, { name: "Rapid", fixtures: 2 });
+      // Sat 7 Nov 23:50 in Amsterdam (UTC+1) is 22:50Z.
+      await openStamp({ stageId: rapid.stageId, orgId: day.orgId, ownerUserId: day.auth.userId! }, 1, new Date("2026-11-07T22:50:00.000Z"));
+      const read = async (instant: string) => {
+        const now = new Date(instant);
+        const desk = await getCompetitionDesk(day.auth, day.comp.id, now);
+        return { desk, view: await getMatchDay(day.auth, day.comp.id, now) };
+      };
+
+      const atOpen = await read("2026-11-07T22:55:00.000Z"); // 23:55 Sat: the day of the open
+      const atNight = await read("2026-11-07T23:10:00.000Z"); // 00:10 Sun: the next calendar day in Amsterdam, the window still live
+      for (const [label, r] of [["at the open", atOpen], ["at 00:10", atNight]] as const) {
+        expect(r.desk.fixtures_today, `${label}: the two boards are today's`).toBe(2);
+        expect(r.view.fixtures_today, `${label}: Match Day reports the desk's number`).toBe(2);
+        expect(needsYouHome(r.desk.fixtures_today), `${label}: the Needs-you list is Match Day's`).toBe("match_day");
+      }
+      const morning = await read("2026-11-08T08:00:00.000Z"); // 09:00 Sun: the open was yesterday, every window long over, no game on file
+      expect(morning.desk.fixtures_today).toBe(0);
+      expect(needsYouHome(morning.desk.fixtures_today), "the list is the competition page's again").toBe("competition");
     });
 
     it("the Needs-you list lives in one place: Match Day carries it only on a match day, the competition page before the day", async () => {

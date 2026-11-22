@@ -1,5 +1,5 @@
 // Owner rule (2026-10-19): +5 is offered ONLY INSIDE a board's check-in window - not before it opens, not from its deadline on, to the
-// millisecond - and a screen keeps that true on a TICKING clock, not on the snapshot it was drawn from (the arbiter panel's poll is up to
+// millisecond - and a screen keeps that true on a TICKING clock, not on the snapshot it was drawn from (Match Day's poll is up to
 // 20 s apart). The rule itself is the server's `extendRefusal` (window.ts); `liveExtendRefusal` and `liveExtendableCount` re-ask only the
 // CLOCK of a snapshot's own refusal and windows. Three things are proven here:
 //   1. THE EDGES, written from the rule and the constants: the opening included, the deadline excluded, on a batch-0 board, on a later
@@ -13,8 +13,6 @@ import {
   CHECKIN_EXTEND_MAX,
   CHECKIN_EXTEND_STEP_MS,
   EXTEND_REFUSALS,
-  EXTEND_ROUND_MIXED_WHY_KEY,
-  EXTEND_WHY_KEYS,
   emptyExtendTally,
   extendEdgesOf,
   extensionsLeft,
@@ -23,10 +21,8 @@ import {
   liveExtendableCount,
   liveRoundRefusals,
   nextExtendEdge,
-  roundWhy,
   watchedWindows,
   type CheckinExtendState,
-  type ExtendRefusal,
   type ExtendWindow,
 } from "@/lib/checkin-extend";
 import {
@@ -39,6 +35,7 @@ import {
   extendWindowOf,
   windowFor,
 } from "@/server/external-play/window";
+import { roundVerdict } from "./_round-verdict";
 
 const O = new Date("2026-10-19T12:00:00.000Z");
 const at = (base: Date, ms: number) => new Date(base.getTime() + ms);
@@ -211,16 +208,6 @@ describe("the windows a round screen is handed, counted on a clock", () => {
   });
 });
 
-describe("the short reason shown in place of a missing +5 button", () => {
-  it("every refusal has a table entry: four have words (the four the owner named) and a board that is over says nothing", () => {
-    expect(Object.keys(EXTEND_WHY_KEYS).sort(), "the table is closed over the refusals").toEqual([...EXTEND_REFUSALS].sort());
-    expect(EXTEND_WHY_KEYS.not_playable).toBeNull();
-    const worded = EXTEND_REFUSALS.filter((r) => EXTEND_WHY_KEYS[r] !== null);
-    expect(worded, "anti-vacuity: the four reasons").toHaveLength(4);
-    expect(new Set(worded.map((r) => EXTEND_WHY_KEYS[r])).size, "each its own words").toBe(4);
-  });
-});
-
 describe("the edges a screen schedules its next read on", () => {
   const W = (opens: number, closes: number) => ({ opensAt: new Date(opens).toISOString(), deadlineAt: new Date(closes).toISOString(), extensionsLeft: 1 });
 
@@ -246,43 +233,6 @@ describe("the edges a screen schedules its next read on", () => {
     expect(watchedWindows([null, mk("not_playable"), mk("game_started"), mk("closed")]), "settled by something a clock cannot move").toEqual([]);
     expect(watchedWindows([mk(null), mk("not_open"), mk("cap_reached"), null]), "clock-dependent").toHaveLength(3);
     expect(EXTEND_REFUSALS.length, "premise: five refusals, three settled").toBe(5);
-  });
-});
-
-// ── the round's reason: what the round says where "+5 min to the round" is not offered (owner, 2026-10-19) ──────────────────────────
-describe("roundWhy - one cause says its own words; a mix says the round's", () => {
-  const SPOKEN = EXTEND_REFUSALS.filter((r) => EXTEND_WHY_KEYS[r] !== null);
-
-  it("the empty cases first: a round that lists no boards, one whose every board is over, and one where a board would accept a press say nothing", () => {
-    expect(roundWhy([]), "no boards").toBeNull();
-    expect(roundWhy(["not_playable", "not_playable"]), "every board over").toBeNull();
-    expect(roundWhy(["closed", null]), "a board would accept a press: the round has its button").toBeNull();
-    expect(roundWhy([null]), "one extendable board").toBeNull();
-    expect(roundWhy(["game_started", "closed", null]), "a mix with an extendable board").toBeNull();
-  });
-
-  it("ONE cause, however many boards give it, is that cause's own words - and boards that are over do not make it a mix", () => {
-    let checked = 0;
-    for (const r of SPOKEN) {
-      for (const boards of [[r], [r, r, r], [r, "not_playable"], ["not_playable", r, r]] as ExtendRefusal[][]) {
-        expect(roundWhy(boards), `${r} x ${boards.length}`).toEqual({ code: r, key: EXTEND_WHY_KEYS[r] });
-        checked += 1;
-      }
-    }
-    expect(checked, "anti-vacuity: 4 causes x 4 rounds").toBe(16);
-  });
-
-  it("TWO causes, every pair of the four, in either order, is the one sentence true of all of them: 'No board can be extended right now'", () => {
-    let pairs = 0;
-    for (const a of SPOKEN) {
-      for (const b of SPOKEN) {
-        if (a === b) continue;
-        expect(roundWhy([a, b]), `${a} + ${b}`).toEqual({ code: "mixed", key: EXTEND_ROUND_MIXED_WHY_KEY });
-        pairs += 1;
-      }
-    }
-    expect(pairs, "anti-vacuity: 4 x 3 ordered pairs").toBe(12);
-    expect(roundWhy(["game_started", "closed", "not_playable", "cap_reached"])?.code, "three causes and a board that is over").toBe("mixed");
   });
 });
 
@@ -312,7 +262,7 @@ describe("liveRoundRefusals - the Open round control's reading of its two facts,
   });
 });
 
-describe("the arbiter panel's reading and the Open round control's reading of the same round are one reading, and both are the server's", () => {
+describe("Match Day's reading and the Open round control's reading of the same round are one reading, and both are the server's", () => {
   type B = { batch: number; extensions: number; playable: boolean; gameOnFile: boolean };
   const open: B = { batch: 0, extensions: 0, playable: true, gameOnFile: false };
   const ROUNDS: Record<string, B[]> = {
@@ -345,7 +295,7 @@ describe("the arbiter panel's reading and the Open round control's reading of th
       }
       const grid = [O.getTime() - 3 * WINDOW_OPEN_LEAD_MS, ...[...edges].sort((a, b) => a - b), O.getTime() + 2 * 60 * 60_000];
       // The snapshot: drawn at the first instant, as the server's `extendReach` draws it (windows for what only the clock decides, the
-      // rest counted by the reason given); the arbiter's panel is handed each board's own state.
+      // rest counted by the reason given); Match Day's board panel is handed each board's own state.
       const snapAt = new Date(grid[0]!);
       const states = boards.map((b) => snapshot(b, snapAt));
       const windows: ExtendWindow[] = [];
@@ -359,12 +309,12 @@ describe("the arbiter panel's reading and the Open round control's reading of th
       expect(windows.length + Object.values(tally).reduce((a, n) => a + n, 0), `${name}: every board is in the windows or the tally, once`).toBe(boards.length);
       for (const t of grid) {
         const now = new Date(t);
-        const want = roundWhy(boards.map((b) => truth(b, now)));
-        const arbiter = roundWhy(states.map((c) => liveExtendRefusal(c, t)));
-        const control = roundWhy(liveRoundRefusals(tally, windows, t));
-        expect(arbiter, `${name} @ ${now.toISOString()}: the arbiter panel`).toEqual(want);
+        const want = roundVerdict(boards.map((b) => truth(b, now)));
+        const arbiter = roundVerdict(states.map((c) => liveExtendRefusal(c, t)));
+        const control = roundVerdict(liveRoundRefusals(tally, windows, t));
+        expect(arbiter, `${name} @ ${now.toISOString()}: Match Day's panel`).toEqual(want);
         expect(control, `${name} @ ${now.toISOString()}: the Open round control`).toEqual(want);
-        seen.add(want === null ? "none" : want.code);
+        seen.add(want);
         checked += 1;
       }
     }

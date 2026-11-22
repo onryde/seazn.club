@@ -19,6 +19,7 @@ import { regGroupCols, loadSettings, divisionCtx, fallbackOrigin } from "./looku
 import { clearExpiresIfNoLongerNeeded } from "./materialise";
 import { queueRegistrationWithdrawnMails } from "./lifecycle-mail";
 import { freesTeamSlot, promoteOldestWaitlisted, openPromotionSeatGate, notifyPromoted } from "./waitlist";
+import { lockForPromotionCap, onlineCapHoldsPromotion, openOnlineCapGuard } from "@/server/external-play/online-entrant-cap";
 import { refundEntryUnderLock, resolveRefundPolicy } from "./refunds";
 
 /**
@@ -250,6 +251,8 @@ export async function withdrawCore(reg: RegistrationWithGroupRow, actorId: strin
   // The spot this frees goes to the waitlist, and where that seats the next registrant at once the seat gate decides who
   // (`promoteOldestWaitlisted`). Opened out here, before the transaction.
   const seatGate = await openPromotionSeatGate(reg.division_id, settings);
+  // Re-review N1: the same promotion asks the online cap whether a place is really free (an entitlement read, so out here as well).
+  const capGuard = await openOnlineCapGuard(reg.division_id);
 
   const outcome = (await sql.begin(async (tx) => {
     if (seatGate) await seatGate.load(tx); // a superuser transaction: the link read needs no prelude
@@ -264,6 +267,8 @@ export async function withdrawCore(reg: RegistrationWithGroupRow, actorId: strin
       throw new HttpError(422, "This registration was rejected and cannot be withdrawn");
     }
     const freedSpot = freesTeamSlot(locked);
+    // The division lock before any entrant row is written (registration row -> `division:` -> entrants, online-entrant-cap.ts).
+    if (freedSpot) await lockForPromotionCap(tx, reg.division_id, capGuard);
     await tx`
       update registrations
       set status = 'withdrawn', withdrawn_at = now(), updated_at = now()
@@ -295,9 +300,14 @@ export async function withdrawCore(reg: RegistrationWithGroupRow, actorId: strin
     // check regardless of what status it just left, and a cart with another
     // still-pending entry is correctly left untouched.
     await clearExpiresIfNoLongerNeeded(tx, locked.group_id, locked.id);
-    const promoted = freedSpot
-      ? await promoteOldestWaitlisted(tx, reg.division_id, settings, undefined, seatGate)
-      : null;
+    // A registration that leaves is not always a place that frees: an organiser may have withdrawn its entrant from the table already
+    // (and filled the place). An online division at its cap serves nobody from the waitlist (`onlineCapHoldsPromotion`) - except for
+    // the place THIS withdrawal frees: after Start the entrant is still live until the table withdrawal below runs, so it is passed as
+    // the one leaving (`cascadeOwed`), and counted out while it is live.
+    const promoted =
+      freedSpot && !(await onlineCapHoldsPromotion(tx, reg.division_id, capGuard, cascadeOwed ? locked.entrant_id : null))
+        ? await promoteOldestWaitlisted(tx, reg.division_id, settings, undefined, seatGate)
+        : null;
     await audit(tx, ctx.competition_id, ctx.org_id, "registration.withdrawn", {
       registration_id: reg.id,
       by,

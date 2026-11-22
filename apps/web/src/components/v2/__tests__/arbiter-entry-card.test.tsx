@@ -1,5 +1,5 @@
-// The Fixtures tab's one card for the Arbiter Panel (spec 2026-10-24-arbiter-round-column-design.md §8, controller ruling 1,
-// option C): the existing "Arbiter panel" link plus ONE status line instead of a fixed body. This suite is the card's half
+// The Fixtures tab's one card for Match Day's online boards (spec 2026-10-24-arbiter-round-column-design.md §8, controller ruling 1,
+// option C; the Arbiter page it led to is retired, the card now says "Open Match Day"): the link plus ONE status line instead of a fixed body. This suite is the card's half
 // (what each line SAYS, in four locales); the page's half - which line it picks, from which reads - is
 // `app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/__tests__/arbiter-entry-link.test.tsx`, and the picker's own ladder is
 // `lib/__tests__/round-column.test.ts`.
@@ -18,7 +18,7 @@ import nlUi from "@/dictionaries/nl/ui.json";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 
-const HREF = "/o/org/c/comp/d/div/arbiter";
+const HREF = "/o/org/c/comp/match-day";
 const DICTS: Record<Locale, Record<string, string>> = {
   en: enUi as Record<string, string>,
   es: esUi as Record<string, string>,

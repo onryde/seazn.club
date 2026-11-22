@@ -19,8 +19,8 @@ The choice is made once. Scoring a read-only competition does not swap it for an
 
 In a read-only competition:
 
-- **Matches still score.** A match can be scored and finished on the pad, so nothing in progress is stranded.
-- **You cannot change it.** Adding entrants, editing the schedule and other changes are refused.
+- **Matches still score.** A match can be scored and finished on the pad, so nothing in progress is stranded. The same goes for an online chess board that is on hold: you can resync it from Lichess, let the game go on, or settle it.
+- **You cannot change it.** Everything else waits for room: the schedule, entrants, registrations, match formats, calling matches on Match Day, opening a round of online chess, re-sending a player's invite, adding time to a check-in with **+5 min**, and starting any new stream, whether from the stream panel, a camera phone or an automatic start. A stream already running keeps going, and you can still stop it.
 - **Everything stays visible.** Its pages, standings and history are still there, for you and for the public.
 
 A competition with an Event Pass is not counted, so it is never frozen while its pass applies.

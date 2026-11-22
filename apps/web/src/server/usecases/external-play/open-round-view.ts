@@ -43,7 +43,8 @@ import {
   roomPhase,
   windowFor,
 } from "@/server/external-play/window";
-import { loadSideNames, whiteSideOf, type Side } from "./guard";
+import { whiteSideOfFold } from "@/server/external-play/colours";
+import { loadSideNames, type Side } from "./guard";
 import { bridgeTakesInvites } from "./invite";
 import { isPlayableFixtureStatus } from "./preflight";
 import { seatStampBound } from "./seat-stamp";
@@ -75,6 +76,9 @@ type Row = {
   whiteEmailedAt: Date | null;
   blackEmailedAt: Date | null;
   whiteSide: Side | null;
+  /** The pairing card's colour in the board's fold (`match_states.state.colorOfHome`: "B" = Black on home), read WITH the row - the colour of a
+   *  board no game has fixed yet (`whiteSide` null). One rule reads it, `whiteSideOfFold` (the arbiter's rows read it the same way). */
+  colorOfHome: string | null;
   /** D17: the bridge row our side CLOSED with no game (`finished`, no move, no recorded challenge or create marker) - the one row an
    *  open RE-ARMS: resets and invites afresh, as if the board had never had one. openRound reads exactly this (`rearmed`), with the same
    *  `gameEvidenceOn`. It only matters on a board that is playable again (the organiser voided the No result). */
@@ -145,10 +149,12 @@ export async function listOpenRounds(
            coalesce(ep.checkin_extensions, 0)::int as extensions,
            ep.round_open_id as "roundOpenId", ep.white_emailed_at as "whiteEmailedAt",
            ep.black_emailed_at as "blackEmailedAt", ep.white_side as "whiteSide",
+           ms.state->>'colorOfHome' as "colorOfHome",
            coalesce(ep.status = 'finished' and ep.move_count = 0 and not ${gameEvidenceOn(now)}, false) as "rearmable"
       from fixtures f
       join stages s on s.id = f.stage_id
       left join fixture_external_play ep on ep.fixture_id = f.id
+      left join match_states ms on ms.fixture_id = f.id
      where f.division_id = ${divisionId} and f.org_id = ${auth.orgId} and f.round_no is not null
      order by s.seq, f.round_no, f.seq_in_round nulls last, f.id`;
 
@@ -232,14 +238,13 @@ export async function listOpenRounds(
     f.open === null ? nextPaired.get(f.stageId) === f.roundNo : f.press !== "none" || !f.closed,
   );
 
-  // M8: every shown board's names in one read. The colour stays per board — `whiteSideOf` is the fold's own reading
-  // (getFixtureState), asked only where no game has fixed it yet — but concurrently, not one board after another.
+  // M8: every shown board's names in one read. The colour is the game's own record when there is one; else the pairing card's, which came
+  // back WITH the row (`colorOfHome`, `whiteSideOfFold`: the rule the game's creation and the arbiter's rows read). It was a fold read per
+  // board (`whiteSideOf`: an owner mint and a transaction each), which a round paired and not yet opened - every board without a game - paid
+  // on every poll (final review, M2).
   const shownBoards = shown.flatMap((f) => f.boards);
-  const [names, colours] = await Promise.all([
-    loadSideNames(shownBoards.flatMap((b) => [b.homeEntrantId, b.awayEntrantId])),
-    Promise.all(shownBoards.map((b) => b.whiteSide ?? whiteSideOf({ fixtureId: b.fixtureId, orgId: auth.orgId }))),
-  ]);
-  const whiteSideByFixture = new Map(shownBoards.map((b, i) => [b.fixtureId, colours[i]!]));
+  const names = await loadSideNames(shownBoards.flatMap((b) => [b.homeEntrantId, b.awayEntrantId]));
+  const whiteSideByFixture = new Map(shownBoards.map((b) => [b.fixtureId, b.whiteSide ?? whiteSideOfFold({ colorOfHome: b.colorOfHome })]));
   const nameOf = (entrantId: string) => names.get(entrantId) ?? "—";
 
   // Whether a round that is not yet open WOULD stagger: the camera policy of this moment, which is what the open will store.

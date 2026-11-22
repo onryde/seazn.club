@@ -1,6 +1,11 @@
 import "server-only";
 import { HttpError } from "@/lib/errors";
 
+/** The most entrants one online chess division holds, on every plan (owner ruling 2026-11-21). Declared in lib/online-chess.ts (client-safe,
+ *  so the islands that say the refusal read the same number) and re-exported here beside the predicate it applies to: the cap binds a
+ *  division for which `divisionPlaysOnline` is true, through server/external-play/online-entrant-cap.ts. */
+export { ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION } from "@/lib/online-chess";
+
 export type OnlinePlayMode = "off" | "lichess";
 
 const ONLINE_PLAY_VALUES = new Set<OnlinePlayMode>(["off", "lichess"]);

@@ -1,7 +1,7 @@
 // T17B fix 2, D21 (review I2) — the seat gate inside RealtimeKit's budget.
 //
-// The vendor allows 1,200 REST calls per five minutes for the WHOLE account and refuses every call, for every club, for
-// five minutes past it. A claim for a starting camera costs the vendor four calls (a token refresh, the live session, its
+// The vendor allows 3,500 REST calls per five minutes for the WHOLE account (RealtimeKit's own documented limit) and refuses every
+// call, for every club, for five minutes past it. A claim for a starting camera costs the vendor four calls (a token refresh, the live session, its
 // participants, the peer report), and the room used to make one every second. Two guards, both driven here through the
 // REAL seat and the REAL adapter against the e2e RealtimeKit fixture server (e2e/realtimekit-fixture-server.ts), counting
 // the calls the FIXTURE saw — never the seat's own idea of what it asked:
@@ -31,7 +31,7 @@ import {
 import { CAMERA_EVIDENCE_DEADLINE_MS } from "@/components/public-site/match-room/room-snapshot";
 import { seatPlayer, type PreflightDeps, type SeatResult } from "../external-play/preflight";
 import { RealtimeKitDeferred, addParticipant, ensureMeeting, peerReportCamera, refreshParticipantToken, seatCameraEvidence } from "@/server/external-play/video/realtimekit";
-import { RTK_BUDGET_WINDOW_MS, RTK_CALLS_PER_WINDOW, RTK_VENDOR_LIMIT_PER_WINDOW, takeRealtimeKitCall } from "@/server/external-play/video/budget";
+import { RTK_BUDGET_BURST, RTK_BUDGET_WINDOW_MS, RTK_CALLS_PER_WINDOW, RTK_VENDOR_LIMIT_PER_WINDOW, takeRealtimeKitCall } from "@/server/external-play/video/budget";
 import { cameraEvidenceDelayMs, CAMERA_EVIDENCE_MAX_POLLS } from "@/components/public-site/match-room/room-snapshot";
 import { randomUUID } from "node:crypto";
 import { appendFileSync } from "node:fs";
@@ -559,11 +559,21 @@ describe.skipIf(!DB)("thirty boards check in: the vendor's account limit is neve
     claims: number;
   };
 
-  async function run(arrivalMs: (i: number) => number, opts: { horizonMs: number }) {
+  /** `leaveTokens`: the bucket holds only this many tokens when the round opens - the rest of the burst was spent in the same
+   *  second by OTHER clubs, the account's budget being shared (those calls count toward the vendor's window, so they are in `grants`).
+   *  Thirty boards' sixty players cost less than the whole burst (a bucket of RTK_BUDGET_BURST), so without it the worst case never
+   *  reaches the deferral this test is about. */
+  async function run(arrivalMs: (i: number) => number, opts: { horizonMs: number; leaveTokens?: number }) {
     const key = `test|thirty|${randomUUID()}`;
     const base = Date.now(); // the boards were opened five minutes before it (seed)
     let simNow = base;
     const grants: number[] = []; // simulated ms of every request the bucket let through
+    if (opts.leaveTokens !== undefined) {
+      for (let i = 0; i < RTK_BUDGET_BURST - opts.leaveTokens; i += 1) {
+        expect(await takeRealtimeKitCall(key, { at: new Date(base) }), "premise: the bucket was full to spend from").toBe(true);
+        grants.push(base);
+      }
+    }
     let refusals = 0;
     const budget = async () => {
       const ok = await takeRealtimeKitCall(key, { at: new Date(simNow) });
@@ -654,10 +664,11 @@ describe.skipIf(!DB)("thirty boards check in: the vendor's account limit is neve
     expect([...r.reasons.keys()].sort(), "no claim was ever told anything but the way in").toEqual(["camera_required", "seated"]);
   }, 300_000);
 
-  it("ALL sixty in the same second (the worst case): the vendor's limit is still never reached, nobody is told their camera or the video is at fault, and everyone gets in", async () => {
-    const r = await run(() => 0, { horizonMs: 12 * 60_000 });
+  it("ALL sixty in the same second, with the rest of the burst spent by other clubs (the worst case): the vendor's limit is still never reached, nobody is told their camera or the video is at fault, and everyone gets in", async () => {
+    // Fewer tokens than players: every player needs several requests, so the burst cannot carry them and the bucket must defer.
+    const r = await run(() => 0, { horizonMs: 12 * 60_000, leaveTokens: BOARDS * 2 });
     expect(r.players.filter((p) => p.seated).length, "everyone seated in the end").toBe(BOARDS * 2);
-    expect(r.refusals, "premise: the burst really was more than the bucket's burst — requests were deferred").toBeGreaterThan(0);
+    expect(r.refusals, "premise: the demand really was more than the tokens the bucket held — requests were deferred").toBeGreaterThan(0);
     expect(r.worst, "the busiest closed five minutes, in vendor requests").toBeLessThanOrEqual(RTK_CALLS_PER_WINDOW);
     const wrong = [...r.reasons.keys()].filter((k) => !["camera_required", "camera_starting", "seated"].includes(k));
     expect(wrong, "never camera_lost / camera_blocked / video_unavailable / anything else").toEqual([]);

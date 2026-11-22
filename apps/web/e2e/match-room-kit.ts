@@ -44,7 +44,7 @@ export function fill(key: string, vars: Record<string, string | number> = {}): s
   return raw.replace(/\{(\w+)\}/g, (_, k: string) => String(vars[k] ?? `{${k}}`));
 }
 
-/** The regex SOURCE for a `{time}` slot printed by the Arbiter Panel: an HH:MM, then (Task 16 D1) - when the viewer's own UTC offset
+/** The regex SOURCE for a `{time}` slot printed by a Match Day flag card: an HH:MM, then (Task 16 D1) - when the viewer's own UTC offset
  *  differs from the venue's at that instant - the venue's name once, "15:56 (Tokyo time)". The suffix is read off the dictionary's
  *  `arbiter.venueTime` so a reworded label moves with it, and optional because whether it shows depends on the browser's zone against
  *  the seeded venue's (the page prints every time in the VENUE's zone). */
@@ -106,7 +106,7 @@ export type SeededRoom = {
   roundOpen: { id: string; openedAt: Date } | null;
 };
 
-/** A signed-up player (also the arbiter spec's, e2e/arbiter-panel.spec.ts). */
+/** A signed-up player (also Match Day online's, e2e/match-day-online.spec.ts). */
 export async function seedUser(name: string): Promise<{ userId: string; email: string }> {
   const email = `room-${TAG}-${randomUUID().slice(0, 8)}@e2e.local`;
   return withDb(async (sql) => {
@@ -363,10 +363,12 @@ export type SeededRound = {
   competitionId: string;
   divisionId: string;
   stageId: string;
-  /** The division's run sheet (`?tab=fixtures`). The queue and Open round live in the Arbiter Panel's round column now
-   *  (`arbiterPath`); the tab keeps the run-sheet chips and the `arbiter-entry` card that leads there. */
+  /** The division's run sheet (`?tab=fixtures`). Open round lives on Match Day's round panel (`matchDayPath`); the tab keeps the run-sheet
+   *  chips, the Held | Flagged queue (each row with its "Open in Match Day") and the `arbiter-entry` card ("Open Match Day") that lead there. */
   fixturesTab: string;
-  arbiterPath: string;
+  /** The COMPETITION's Match Day (`/o/{org}/c/{comp}/match-day`): one page for every division of it. Append `?board=<fixture id>` or
+   *  `?round=<stage id>:<round no>` to open a board's or a round's panel in place. */
+  matchDayPath: string;
   /** `/live/{org}/{comp}/{div}` — prefix of every public fixture page. */
   publicBase: string;
   /** The slug chain, for `routes.*` builders (T17 review M10: never retyped). */
@@ -393,7 +395,9 @@ export async function seedOnlineRound(
      *  the competition's floor (`off`, no tile); "optional" shows the tile
      *  with no duty; "required" gates every seat on the meeting. */
     camera?: "required" | "optional" | "off";
-    stage?: "league" | "swiss";
+    /** The stage the generator builds: a league unless named. "knockout" is a real bracket (its next match and that match's seat wired by
+     *  the generator itself); round 1 is its first round, so a four-player one is two semi-finals. */
+    stage?: "league" | "swiss" | "knockout";
     /** The division's clock (default CLOCK, 10+5) — a curated key of time-controls.ts. */
     clock?: { base: number; increment: number };
     /** T17: link each player with a token the server CAN open, so a game can
@@ -465,7 +469,7 @@ export async function seedOnlineRound(
     const paired = await apiJson(request, `/api/v1/stages/${stageId}/generate`, "POST", {});
     expect(paired.status, `pair round 1: ${JSON.stringify(paired.error)}`).toBeLessThan(300);
   } else {
-    ({ stageId } = await createStageAndGenerate(request, divisionId));
+    ({ stageId } = await createStageAndGenerate(request, divisionId, opts.stage === "knockout" ? { kind: "knockout", name: "Knockout" } : undefined));
     const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
     expect(started.status, `start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
   }
@@ -491,7 +495,7 @@ export async function seedOnlineRound(
       divisionId,
       stageId,
       fixturesTab: `${base}?tab=fixtures`,
-      arbiterPath: `${base}/arbiter`,
+      matchDayPath: `/o/${slug!.org}/c/${slug!.comp}/match-day`,
       publicBase: `/live/${slug!.org}/${slug!.comp}/${slug!.div}`,
       slugs: { org: slug!.org, comp: slug!.comp, div: slug!.div },
       boards: rows.map((r) => ({ fixtureId: r.id, home: byEntrant.get(r.home)!, away: byEntrant.get(r.away)! })),
@@ -502,7 +506,7 @@ export async function seedOnlineRound(
 /** A game on a board's ledger, as T9 (create) and T10 (moves) leave it, White
  *  the home side (recorded on the row, the way T9 records it). `hold` puts it
  *  on the organiser's desk (needs_organiser). The rules judge `moves`. */
-export async function roundGameSql(board: RoundBoard, opts: { moves: string[]; hold?: "mismatch" }): Promise<{ fen: string }> {
+export async function roundGameSql(board: RoundBoard, opts: { moves: string[]; hold?: string }): Promise<{ fen: string }> {
   const rules = new Chess();
   for (const uci of opts.moves) rules.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), ...(uci.length > 4 ? { promotion: uci[4] } : {}) });
   await withDb(async (sql) => {

@@ -28,7 +28,6 @@ import {
   extendRoundLabel,
   extendRoundLines,
   extendRoundPath,
-  extendWhyLine,
   extendedNoticeTime,
   initialRoundExtend,
   laterIso,
@@ -115,7 +114,7 @@ describe("the words", () => {
   });
 });
 
-describe("the round press (arbiter panel)", () => {
+describe("the round press (Match Day's round panel)", () => {
   const s0 = initialRoundExtend();
   const run = (...a: RoundExtendAction[]) => a.reduce(roundExtendUi, s0);
   const ANSWER: RoundExtendAction = { type: "extendDone", outcome: { ok: true, result: R({ extended: 3 }) } };
@@ -227,14 +226,8 @@ describe("what a board's +5 is on a ticking clock", () => {
     expect(sentence).not.toContain("12:55");
   });
 
-  it("the helper line carries the step and the cap from the constants; the reason line has words for four refusals and silence for a board that is over", () => {
+  it("the helper line carries the step and the cap from the constants", () => {
     expect(extendHelperLine(C)).toBe(`Adds ${CHECKIN_EXTEND_STEP_MINUTES} minutes while check-in is open. Up to ${CHECKIN_EXTEND_MAX} times per board.`);
-    const said = EXTEND_REFUSALS.map((r) => extendWhyLine(r, C));
-    expect(said.filter((x) => x !== null), "anti-vacuity: four reasons").toHaveLength(4);
-    expect(extendWhyLine("not_playable", C)).toBeNull();
-    expect(said.filter((x) => x !== null).sort()).toEqual(
-      ["Can't extend check-in: it hasn't opened yet", "Can't extend check-in: it has closed", "Can't extend check-in: a game has started", "Can't extend check-in: no extensions left"].sort(),
-    );
   });
 
   it("the round reducer's clear: drops the answer and nothing else, and is a no-op with nothing to drop", () => {

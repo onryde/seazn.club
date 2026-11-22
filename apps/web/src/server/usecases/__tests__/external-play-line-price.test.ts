@@ -248,35 +248,39 @@ describe.skipIf(!DB)("the pool and the estimate follow the stamped prices", () =
     expect(a.kind).toBe("queued");
     if (a.kind !== "queued") throw new Error("unreachable");
     expect(a.line.position, "behind the three").toBe(4);
-    // Hand: places ahead (9+1) + (8+1) + (21+3) = 43; its own need 8; pool 4 -> 47 tokens at 2 a second = 23.5 s; the fourth place polls
-    // at the near cadence, 3 s: 26.5, rounded up.
-    expect(RTK_BUDGET_REFILL_PER_S, "premise: the refill the hand count uses").toBe(2);
+    // Hand: places ahead (9+1) + (8+1) + (21+3) = 43; its own need 8; pool 4 -> 47 tokens at 7 a second = 6.71 s; the fourth place polls
+    // at the near cadence, 3 s: 9.71, rounded up.
+    expect(RTK_BUDGET_REFILL_PER_S, "premise: the refill the hand count uses").toBe(7);
     expect(LINE_POLL_MS, "premise: the near cadence the hand count uses").toBe(3_000);
-    expect(a.line.etaS).toBe(27);
-    // The wrong answers' constants: the old position pricing (3 x 24 + 21 - 4 = 89 tokens -> 44.5 + 3 = 48) and a flat 'none' price
-    // for every place (3 x 9 + 8 - 4 = 31 -> 15.5 + 3 = 19) both differ.
-    expect(Math.ceil((3 * 24 + 21 - 4) / 2 + 3), "premise: the old pricing says 48").toBe(48);
-    expect(Math.ceil((3 * 9 + 8 - 4) / 2 + 3), "premise: pricing every place as the cheapest says 19").toBe(19);
+    expect(a.line.etaS).toBe(10);
+    // The wrong answers' constants: the old position pricing (3 x 24 + 21 - 4 = 89 tokens -> 12.71 + 3 = 15.71 -> 16) and a flat 'none' price
+    // for every place (3 x 9 + 8 - 4 = 31 -> 4.43 + 3 = 7.43 -> 8) both differ.
+    expect(Math.ceil((3 * 24 + 21 - 4) / 7 + 3), "premise: the old pricing says 16").toBe(16);
+    expect(Math.ceil((3 * 9 + 8 - 4) / 7 + 3), "premise: pricing every place as the cheapest says 8").toBe(8);
   });
 
   it("a WAITING stay ahead with a null stamp is promised at the unpriced maximum, column by column: both null 21 + 3, only the recheck null 9 + 3, only the reservation null 21 + 1 - and a fully stamped one 9 + 1 for contrast", async () => {
     // The estimate's `aheadReserved` coalesces each column on its own (`readStanding`'s ahead sum): a row from before the stamp, or one
     // with a single column null, must not drop out of the sum (a NULL addend makes the whole row's term NULL, and `sum` skips it).
     expect([LINE_RESERVATION_MAX, LINE_FALLBACK_READ_CALLS], "premise: the unpriced maximum and the unpriced re-verify the hand count uses").toEqual([21, 3]);
-    expect(RTK_BUDGET_REFILL_PER_S, "premise: the refill the hand count uses").toBe(2);
+    expect(RTK_BUDGET_REFILL_PER_S, "premise: the refill the hand count uses").toBe(7);
     expect(LINE_POLL_MS, "premise: the near cadence the hand count uses").toBe(3_000);
-    // etaS = ceil((promised ahead + own need 8 - pool 4) / 2 + 3 s). The fourth claim is a `room` stay (need 8, flag on), not completing.
+    // etaS = ceil((promised ahead + own need 8 - pool) / 7 + 3 s). The fourth claim is a `room` stay (need 8, flag on), not completing.
+    // Each case has its OWN pool (the bucket pinned at the admitted stay's reservation plus the pool), chosen by hand so the tokens still
+    // to refill sit just past a multiple of 7: x = 7k + 3, one second of refill per 7 tokens, so the smallest slip a coalesce can make
+    // (a recheck of 0 instead of 3: three tokens) drops the answer by a whole second. A shared pool cannot do that at 7 a second - the
+    // two-token gaps between the promised sums of 24 and 22, 12 and 10 straddle no multiple of 7 together.
     const CASES = [
-      { label: "both columns null", stamp: [null, null], promised: 24, etaS: 17 }, // (24 + 8 - 4) / 2 + 3 = 17
-      { label: "only recheck_cost null", stamp: [9, null], promised: 12, etaS: 11 }, // (12 + 8 - 4) / 2 + 3 = 11
-      { label: "only reservation null", stamp: [null, 1], promised: 22, etaS: 16 }, // (22 + 8 - 4) / 2 + 3 = 16
-      { label: "fully stamped (contrast)", stamp: [9, 1], promised: 10, etaS: 10 }, // (10 + 8 - 4) / 2 + 3 = 10
+      { label: "both columns null", stamp: [null, null], promised: 24, pool: 1, etaS: 8 }, // x = 24 + 8 - 1 = 31 = 7x4 + 3: 4.43 + 3 = 7.43 -> 8
+      { label: "only recheck_cost null", stamp: [9, null], promised: 12, pool: 3, etaS: 6 }, // x = 12 + 8 - 3 = 17 = 7x2 + 3: 2.43 + 3 = 5.43 -> 6
+      { label: "only reservation null", stamp: [null, 1], promised: 22, pool: 6, etaS: 7 }, // x = 22 + 8 - 6 = 24 = 7x3 + 3: 3.43 + 3 = 6.43 -> 7
+      { label: "fully stamped (contrast)", stamp: [9, 1], promised: 10, pool: 1, etaS: 6 }, // x = 10 + 8 - 1 = 17 = 7x2 + 3: 2.43 + 3 = 5.43 -> 6
     ] as const;
     let checked = 0;
     for (const c of CASES) {
       const key = scene();
       await holdReservation(key, sceneAt(0)); // an admitted, unstamped stay reserving 21: the line is active
-      await pin(key, 25); // pool = 25 - 21 = 4: the claim below is held
+      await pin(key, 21 + c.pool); // pool = (21 + pool) - 21: the claim below is held (the pool is under its need of 8)
       const ahead = await seedBoard();
       await putStay({
         fixtureId: ahead.fixtureId,
@@ -298,8 +302,10 @@ describe.skipIf(!DB)("the pool and the estimate follow the stamped prices", () =
       checked += 1;
     }
     expect(checked, "cases checked").toBe(4);
-    // The four estimates are four different numbers: no case is satisfied by another's value.
-    expect(new Set(CASES.map((c) => c.etaS)).size).toBe(4);
+    // Each case is sensitive: three promised tokens fewer (the smallest slip a coalesce can make) answers a different second.
+    for (const c of CASES) {
+      expect(Math.ceil((c.promised - 3 + 8 - c.pool) / 7 + 3), `${c.label}: three tokens fewer would answer differently`).not.toBe(c.etaS);
+    }
   });
 });
 

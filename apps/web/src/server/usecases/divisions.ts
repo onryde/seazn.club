@@ -79,6 +79,7 @@ import {
 import { anyRoundOpened } from "@/server/external-play/round-open";
 import { assertTimeControl } from "@/server/external-play/time-controls";
 import type { BoardgameClockInput } from "@/server/external-play/clock";
+import { assertOnlinePlayFits, countOnlineHeld } from "@/server/external-play/online-entrant-cap";
 import { assertOnlineChessOffered, onlineChessDisabled, onlineChessOffered } from "./external-play/online-chess-flag";
 import { audit } from "./audit";
 
@@ -1263,6 +1264,14 @@ export async function patchDivision(
           onlineOffered !== true
         ) {
           throw onlineChessDisabled();
+        }
+        // Owner ruling 2026-11-21: an online chess division holds at most 128 entrants, so a division already holding more cannot be turned
+        // online. Only the same off -> lichess transition (a re-send of a stored 'lichess' or turning it off is never gated, for a division
+        // saved before the cap must still save), counted as every online-cap door counts: the places the division HOLDS - live entrants
+        // plus sign-ups already let in (review C1: 200 pending sign-ups and no entrants used to pass, then materialise made 200). The
+        // `division:` lock is held here (the config save and the camera gate both took it above), so the count cannot move under it.
+        if (readOnlinePlay(nextConfig) === "lichess" && readOnlinePlay(currentConfig) !== "lichess") {
+          assertOnlinePlayFits(await countOnlineHeld(tx, id));
         }
         const clockOrOnlineChanged =
           canonicalJson(nextConfig.clock ?? null) !== canonicalJson(currentConfig.clock ?? null) ||

@@ -58,7 +58,8 @@ export const CAMERA_REPORT_STALE_MS = 75_000;
 
 /** D21 (T17B fix 2, review I2): the re-ask SCHEDULE, which is also the server's minimum interval between vendor reads of
  *  one participant. Every read of a starting camera costs the vendor four calls (a token refresh, the live session, its
- *  participants, the peer report) against an account limit of 1,200 per five minutes, past which EVERY call is refused
+ *  participants, the peer report) against RealtimeKit's documented account limit of 3,500 per five minutes (it was costed at 1,200
+ *  when this schedule was set, and the schedule stands), past which EVERY call is refused
  *  for five minutes; polling once a second put 50 boards checking in at once at ~6,000. So the wait between reads grows —
  *  1, 2, 4, 8 s, held at 8 — which reads a camera that is up in the measured ~1.4 s within about a second of it, and
  *  costs a camera that never comes five reads, not twenty. Owner-set (controller ruling, 2026-10-15); never below a

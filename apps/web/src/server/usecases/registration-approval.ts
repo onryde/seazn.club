@@ -22,6 +22,7 @@ import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { entryPaymentLost } from "./registrations/disputes";
 import { openRegistrationSeatGate, type RegistrationSeatGate } from "./online-seat-gate";
+import { lockForPromotionCap, onlineCapHoldsPromotion, openOnlineCapGuard } from "@/server/external-play/online-entrant-cap";
 import {
   SPOT_HOLDERS,
   freesTeamSlot,
@@ -230,6 +231,10 @@ export async function rejectRegistration(
   // `frozenCompetitionIds` queries the pooled `sql` proxy and `withTenant`
   // pins a pooled connection for its whole callback.
   const frozen = await frozenCompetitionIds(auth.orgId);
+  // Re-review N1: the promotion below asks the online cap whether a place is really free, which needs the plan's limit - an
+  // entitlement read, so out here too. The division is read plainly (the tenant read below is what answers a stranger's id).
+  const [preReg] = await sql<{ division_id: string }[]>`select division_id from registrations where id = ${regId}`;
+  const capGuard = preReg ? await openOnlineCapGuard(preReg.division_id) : undefined;
   const result = await withTenant(auth.orgId, async (tx) => {
     const reg = await orgReg(tx, regId);
     if (reg.status === "rejected") {
@@ -252,6 +257,7 @@ export async function rejectRegistration(
     }
     const competitionId = await divisionCompetitionId(tx, reg.division_id);
     assertNotFrozen(frozen, competitionId);
+    if (freesTeamSlot(reg)) await lockForPromotionCap(tx, reg.division_id, capGuard);
     await tx`
       update registrations set status = 'rejected', updated_at = now()
       where id = ${regId}`;
@@ -272,7 +278,10 @@ export async function rejectRegistration(
     // off its own status change. See freesTeamSlot's own doc comment.
     // No seat gate: a rejection needs a MANUAL-approval division (checked above), and a promotion seats the registrant at once only
     // under auto-approval (`promotionSeats`) - here it opens a pay window or leaves the entry for the organiser, seating nobody.
-    const promoted = freesTeamSlot(reg) ? await promoteOldestWaitlisted(tx, reg.division_id, settings) : null;
+    const promoted =
+      freesTeamSlot(reg) && !(await onlineCapHoldsPromotion(tx, reg.division_id, capGuard))
+        ? await promoteOldestWaitlisted(tx, reg.division_id, settings)
+        : null;
     await audit(tx, competitionId, auth.orgId, "registration.rejected", {
       registration_id: regId,
       paid: reg.status === "paid",
