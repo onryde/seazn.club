@@ -698,8 +698,11 @@ export function RunSheet({
                   <NowRule msg={msg} />
                 </ul>
               )}
+              {/* W5 follow-ups B2 (perf P2): a folded round's rows mount when it is opened - rendered hidden, every finished round's
+                  rows were in the HTML and in hydration (half the run sheet's DOM at the caps). The list stays, empty and hidden, so the
+                  bar's `aria-controls` still names it. */}
               <ul id={listId} hidden={!open} className="divide-y divide-slate-50">
-                {section.rows.map((f, i) => (
+                {open && section.rows.map((f, i) => (
                   <RowWithNow
                     key={f.id}
                     fixture={f}

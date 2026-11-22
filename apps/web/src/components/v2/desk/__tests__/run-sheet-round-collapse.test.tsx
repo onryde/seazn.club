@@ -333,3 +333,56 @@ describe("PB1 item 3: the bar is the toggle - a tap opens and closes it, and the
     expect(lists.some(Boolean), "and never hidden").toBe(false);
   });
 });
+
+// W5 follow-ups B2 (perf-measure-report P2): a folded round's rows were rendered in full inside `<ul hidden>`, so every row of every
+// finished round was in the SSR HTML and in hydration - half of the run sheet's 70k DOM nodes at the caps, and all but a few hundred of a
+// finished Swiss's. Its rows now mount when the round is opened. The list itself stays (empty, hidden), so the bar's `aria-controls`
+// still names a list in the page; what a person sees does not change.
+describe("B2 a folded round's rows mount on open, not rendered hidden", () => {
+  /** The rows each round's list holds, in round order (`data-fixture-no` is the row's own `<li>`). */
+  function rowsPerList(html: string): number[] {
+    return [...html.matchAll(/<ul[^>]*\sid="run-sheet-rounds-[^"]*"[^>]*>([\s\S]*?)<\/ul>/g)].map((m) => m[1]!.split("data-fixture-no=").length - 1);
+  }
+  const rowCount = (island: { tree: () => ReactElement[] }) => island.tree().filter((el) => propsOf(el).fixture !== undefined && propsOf(el).hrefFor !== undefined).length;
+  const bars = (island: { tree: () => ReactElement[] }) => island.tree().filter((el) => propsOf(el).toggle !== undefined);
+  const tap = (island: { tree: () => ReactElement[] }, i: number) => (propsOf(bars(island)[i]!).toggle as { onToggle: () => void }).onToggle();
+
+  it("the folded round draws its list with no row in it; the open rounds draw every row - in every kind that folds", () => {
+    let checked = 0;
+    for (const kind of ROUND_SEQUENCE_STAGE_KINDS) {
+      const html = sheet(THREE_ROUNDS(), kind);
+      expect(listHidden(html, "run-sheet-rounds-s1-1"), `${kind}: the folded list is still in the page, hidden (aria-controls)`).toBe(true);
+      expect(rowsPerList(html), `${kind}: round 1 (2 played) folded and empty; round 2 (2) and round 3 (1) in full`).toEqual([0, 2, 1]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every kind that draws bars").toBeGreaterThan(0);
+  });
+
+  it("opening mounts the round's rows, folding unmounts them, any number of times; the other rounds keep theirs", () => {
+    const island = renderIsland(RunSheet, propsFor(THREE_ROUNDS(), "league") as never);
+    expect(rowCount(island), "default: round 1's two rows are not rendered").toBe(3);
+    const seen: number[] = [];
+    for (let i = 0; i < 2; i++) {
+      tap(island, 0);
+      seen.push(rowCount(island));
+      tap(island, 0);
+      seen.push(rowCount(island));
+    }
+    expect(seen, "open: all five rows; folded: three").toEqual([5, 3, 5, 3]);
+    tap(island, 1);
+    expect(rowCount(island), "folding an open round by hand takes its rows away too").toBe(1);
+  });
+
+  it("the empty case: a stage where nothing has finished folds nothing and renders every row", () => {
+    const rows = [fx(1, 1), fx(2, 1), fx(3, 2)];
+    expect(rowsPerList(sheet(rows, "league"))).toEqual([2, 1]);
+  });
+
+  it("a fold that holds the NOW rule still draws it once, under its bar, with no row behind it", () => {
+    // Round 1 settled early today, round 2 is another day: the rule belongs in round 1 (the same scene as the rule tests above).
+    const rows = [played(1, 1, `${DAY}T09:00:00.000Z`), played(2, 1, `${DAY}T10:00:00.000Z`), fx(3, 2, { scheduled_at: "2026-09-07T10:00:00.000Z" })];
+    const html = sheet(rows, "league");
+    expect(rowsPerList(html)[0], "the folded round renders no row").toBe(0);
+    expect(nowRules(html), "the rule is drawn exactly once").toBe(1);
+  });
+});
