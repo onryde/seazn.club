@@ -831,35 +831,50 @@ test.describe("goals: football, hockey, ice hockey, best third", () => {
     const section = await openEditor(page, request, r.divisionId, groupId);
     await expect(section.getByTestId("stage-tiebreaks-cross-group")).toHaveText(say("stageTiebreaks.crossGroup", { steps: cross.map(stepWord).join(", ") }));
 
-    const pools = [...new Set(fixtures.map((f) => f.pool_id))];
-    expect(pools.length, "rig: two groups").toBe(2);
-    const members = (pool: string | null) => {
+    // The groups in pool order (`GET /stages/{id}/pools`): group 1 is A, group 2 is B. Each one's members off the drawn fixtures.
+    const listed = await apiJson<{ pools: { id: string; key: string }[] }>(request, `/api/v1/stages/${groupId}/pools`);
+    expect(listed.status, "GET /stages/{id}/pools").toBe(200);
+    const pools = listed.data!.pools;
+    expect(pools.map((p) => p.key), "rig: two groups, A and B").toEqual(["A", "B"]);
+    expect(new Set(fixtures.map((f) => f.pool_id)), "rig: every group line sits in one of the two").toEqual(new Set(pools.map((p) => p.id)));
+    const members = (pool: string) => {
       const ids = new Set(fixtures.filter((f) => f.pool_id === pool).flatMap((f) => [f.home_entrant_id, f.away_entrant_id]));
-      return r.field.filter((w) => ids.has(w.id)) as [Who, Who, Who];
+      const who = r.field.filter((w) => ids.has(w.id));
+      expect(who.length, "rig: a group of three").toBe(3);
+      return who as [Who, Who, Who];
     };
-    const [X1, Y1, Z1] = members(pools[0]!);
-    const [X2, Y2, Z2] = members(pools[1]!);
+    const [X1, Y1, Z1] = members(pools[0]!.id);
+    const [X2, Y2, Z2] = members(pools[1]!.id);
     const result = async (w: Who, l: Who, [gw, gl]: readonly [number, number]) => {
       const f = between(fixtures, w, l);
       const goals: Ev[] = [...Array<Ev>(gw).fill(["football.goal", { by: w.id }]), ...Array<Ev>(gl).fill(["football.goal", { by: l.id }])];
       await play(request, f, [["core.start"], ...goals, ["football.period", { phase: "HT" }], ["football.period", { phase: "FT" }]]);
     };
-    // Group 1: X1 2-0 Y1, X1 1-0 Z1, Y1 1-0 Z1 → Z1 0 points, goals for 0, difference −2.
-    await result(X1, Y1, [2, 0]);
+    // Group 1 (A): X1 3-2 Y1, X1 1-0 Z1, Y1 1-0 Z1 → Y1 3 points, goals for 3, difference 0; Z1 0 points, for 0, difference −2.
+    await result(X1, Y1, [3, 2]);
     await result(X1, Z1, [1, 0]);
     await result(Y1, Z1, [1, 0]);
-    // Group 2: X2 2-0 Y2, X2 5-3 Z2, Y2 2-0 Z2 → Z2 0 points, goals for 3, difference −4.
+    // Group 2 (B): X2 2-0 Y2, X2 5-3 Z2, Y2 2-0 Z2 → Y2 3 points, for 2, difference 0; Z2 0 points, for 3, difference −4.
     await result(X2, Y2, [2, 0]);
     await result(X2, Z2, [5, 3]);
     await result(Y2, Z2, [2, 0]);
     // The thirds: level on points; the edited order asks goals for first (Z2 3 > Z1 0), the sport's default would ask the
-    // difference first (Z1 −2 > Z2 −4). The seconds: Y2 (difference 0, for 2) beats Y1 (−1, 1) on either order.
+    // difference first (Z1 −2 > Z2 −4). The seconds: Y1 (difference 0, for 3) beats Y2 (0, 2) on either order.
+    // W5 (RB5-D1, RB5-D4; OWNER 281): the finals' round one never pairs two of one group, and a field one group supplies three
+    // of four cannot be seated (two matches hold at most two of a group apart), so Complete refuses it by name. The winners hold
+    // seeds 1 and 2 in pool order (X1, X2: not level, X2 scored more), so with Z2 the best third this field is seatable only with
+    // the best second from group 1 - hence Y1, not Y2. With Y2 second, group 2 would supply three of the four.
     const done = await apiJson<{ qualified?: { stage_id: string; entrants: string[] } }>(request, `/api/v1/stages/${groupId}/complete`, "POST");
     expect(done.status, `complete the groups: ${JSON.stringify(done.error)}`).toBeLessThan(300);
     expect(done.data!.qualified?.stage_id, "the groups seed the finals").toBe(koId);
-    expect([...(done.data!.qualified?.entrants ?? [])].sort(), "two winners, the best second, the best third ON THE EDITED ORDER").toEqual([X1.id, X2.id, Y2.id, Z2.id].sort());
-    const seated = new Set((await fixturesOf(request, r.divisionId, koId)).flatMap((f) => [f.home_entrant_id, f.away_entrant_id]));
+    expect([...(done.data!.qualified?.entrants ?? [])].sort(), "two winners, the best second, the best third ON THE EDITED ORDER").toEqual([X1.id, X2.id, Y1.id, Z2.id].sort());
+    const finals = await fixturesOf(request, r.divisionId, koId);
+    const seated = new Set(finals.flatMap((f) => [f.home_entrant_id, f.away_entrant_id]));
     expect([seated.has(Z2.id), seated.has(Z1.id)], "the finals seat Z2, not Z1").toEqual([true, false]);
+    // RB5-D2: rank, then pool rotation, on a 4-draw's 1 v 4 and 2 v 3 - group 1's winner meets the best third (group 2), group 2's
+    // winner the best second (group 1). Only round one is seated at the groups' completion.
+    const roundOne = finals.filter((f) => f.home_entrant_id !== null && f.away_entrant_id !== null).map((f) => [f.home_entrant_id!, f.away_entrant_id!].sort().join(" v ")).sort();
+    expect(roundOne, "round one crosses the groups: X1 v Z2, X2 v Y1").toEqual([[X1.id, Z2.id].sort().join(" v "), [X2.id, Y1.id].sort().join(" v ")].sort());
 
     const visitor = await spectator(browser, { width: 1280, height: 900 });
     await expectPublicTable(visitor, r.path, [

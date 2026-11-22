@@ -25,6 +25,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import type { KnockoutLateEntryResult, TableLateEntryResult } from "@/server/api-v1/schemas";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { formatMaxGate } from "@/lib/format-max-entrants";
 import { isRootTableStage, tableLateEntryOffered } from "@/lib/open-entry-stages";
 import { isRrExtKey, rrLinesOfRows, type RrStoredRow } from "@/lib/roundrobin-reconcile";
 import {
@@ -38,13 +39,13 @@ import {
 } from "@/lib/roundrobin-late-entry";
 import { DEPARTED_STATUSES } from "./entrants";
 import { fixtureStartedSql, stageHasStarted } from "./fixture-started-sql";
+import { insertFixtureRows } from "./fixture-insert";
 import { placeWaitingKnockoutEntrant } from "./knockout-late-entry";
-import { roundRobinRefusal } from "./roundrobin-refusal";
+import { formatMaxLateEntryRefusal, roundRobinRefusal } from "./roundrobin-refusal";
 import { afterScheduleWrite } from "./schedule/after-write";
 import {
   afterGenerateCommit,
   divisionHasStarted,
-  lockSwissBoardAppends,
   rebuildStageInTx,
   refoldStageTable,
   type GenerateWrite,
@@ -258,7 +259,7 @@ export async function applyTableLateDecision(
       conditional: false,
     };
   });
-  await tx`insert into fixtures ${tx(rows)}`;
+  await insertFixtureRows(tx, rows);
   if (consumed.length > 0) {
     const gone = consumed.map((b) => `${b.roundNo}|${b.leg}|${b.entrantId}`);
     await tx`
@@ -332,10 +333,23 @@ async function placeInRootTable(
   if (stage.status === "complete") throw roundRobinRefusal("RR_LATE_ENTRY_STAGE_COMPLETE");
   if (!(await tableDrawnAndOffered(tx, divisionId, stages, stage))) return null;
 
-  // The append lock of every line of the stage (`fixture:<id>`, the key each score append takes), before `started` is read: a
-  // scorer starting a bye-slot round either commits first (and the read sees it) or waits on the finished write.
-  const ids = await tx<{ id: string }[]>`select id from fixtures where stage_id = ${stage.id}`;
-  await lockSwissBoardAppends(tx, ids.map((r) => r.id));
+  // Before `started` is read, the format freeze's key EXCLUSIVE (`division-config:<division>`): a line's first event takes it
+  // SHARED before it freezes and starts the line (`append-event.ts`), so a scorer starting a bye-slot round either commits first
+  // (and the read sees it) or waits for this add to commit — the same guarantee a format save takes it for. W5 stress fix F2: ONE
+  // key, where this took the append lock of every line of the stage (`fixture:<id>`) and a 10,296-line league ran Postgres out
+  // of lock slots. Global order `division:` -> stage seats -> `fixture:` -> `division-config:` -> rows: the caller holds
+  // `division:`, and nothing after this takes a stage-seat or fixture lock.
+  await tx`select pg_advisory_xact_lock(hashtext(${"division-config:" + divisionId}))`;
+  // B4 re-review N-3 (controller ruling 2026-11-21; plan-limits design §3.3 item 4): a late add is exempt from the PLAN cap, never from
+  // the format's technical max - this is where its catch-up lines are minted, in the organiser's request, and `createEntrants` takes
+  // up to 500 at once (one such add into a 100-entrant league minted ~174,000 lines). The field is the division's active roster with
+  // the newcomer in it, as Start counts it (`refuseFormatTooManyAtStart`); a batch is asked once per entrant, so the one that would
+  // pass the max rolls the whole request back. A running field already past the max (a Reinstate, an automatic arrival - which never
+  // reach here) is left as it is: only a write that would mint lines for one more is refused.
+  const [{ n: field }] = await tx<{ n: number }[]>`
+    select count(*)::int as n from entrants where division_id = ${divisionId} and status in ('registered', 'confirmed')`;
+  const overMax = formatMaxGate([stage], field);
+  if (overMax !== null) throw formatMaxLateEntryRefusal(overMax.max, overMax.entrants);
   const place = await readTableLatePlace(tx, stage, entrantId, opts.poolKey);
   const decision = decideRoundRobinLateEntry(place.input);
   if (decision.case === "refused") throw roundRobinRefusal(decision.code);

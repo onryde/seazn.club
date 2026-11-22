@@ -91,6 +91,11 @@ const view = async (divisionId: string) =>
            has_rank_overrides
     from public_stages_v where division_id = ${divisionId} order by seq`;
 
+/** V540 (W5 Task 6): every stage of the division, in seq order, as [name, qualify_best_nth, qualified]. */
+const frozen = async (divisionId: string) =>
+  (await sql<{ name: string; qualify_best_nth: boolean; qualified: unknown }[]>`
+    select name, qualify_best_nth, qualified from public_stages_v where division_id = ${divisionId} order by seq`).map((r) => [r.name, r.qualify_best_nth, r.qualified]);
+
 /** Every stage of the division, in seq order, as [name, count, perGroup, next]. */
 const cuts = async (divisionId: string) =>
   (await view(divisionId)).map((r) => [r.name, r.qualify_count, r.qualify_per_group, r.next_stage_name]);
@@ -178,7 +183,10 @@ describe.skipIf(!HAS_DB)("public_stages_v — qualification columns (V414)", () 
     ]);
   });
 
-  it("a bestNth beside the cut in the same take → no cut (unforecastable)", async () => {
+  // W5 app PR B Task 6 (K25, V540): re-pinned. This shape - "the winners and the best runner-up" - was "no cut (unforecastable)",
+  // so the commonest unequal-pool format had no cut line and, once finished, no frozen markers. Now its cut is the per-group quota
+  // with `qualify_best_nth` set: the app shows no live race on it and freezes its markers from who went through.
+  it("K25 a bestNth beside a per-group cut in the same take → the per-group cut, flagged best-Nth", async () => {
     const d = await division();
     await createStages(d.auth, d.divisionId, [
       { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 3 } } },
@@ -194,9 +202,64 @@ describe.skipIf(!HAS_DB)("public_stages_v — qualification columns (V414)", () 
       },
     ] as never);
     expect(await cuts(d.divisionId)).toEqual([
-      ["Groups", null, false, null],
+      ["Groups", 1, true, "KO"],
       ["KO", null, false, null],
     ]);
+    expect(await frozen(d.divisionId), "the cut is flagged best-Nth; nobody has gone through yet").toEqual([
+      ["Groups", true, null],
+      ["KO", false, null],
+    ]);
+  });
+
+  it("K25 guards: a bestNth at or above the quota, or beside an overall (rankRange) cut, still blocks the cut", async () => {
+    const shapes: [string, unknown[]][] = [
+      ["nth within the quota", [{ kind: "topNPerGroup", n: 2 }, { kind: "bestNth", nth: 2, count: 1 }]],
+      ["beside an overall cut", [{ kind: "rankRange", from: 1, to: 4 }, { kind: "bestNth", nth: 3, count: 1 }]],
+      ["a malformed count", [{ kind: "topNPerGroup", n: 1 }, { kind: "bestNth", nth: 2, count: 0 }]],
+    ];
+    let checked = 0;
+    for (const [why, take] of shapes) {
+      const d = await division();
+      await createStages(d.auth, d.divisionId, [
+        { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 3 } } },
+        { seq: 2, kind: "knockout", name: "KO", config: {}, progression: prog(take) },
+      ] as never);
+      expect(await cuts(d.divisionId), why).toEqual([
+        ["Groups", null, false, null],
+        ["KO", null, false, null],
+      ]);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("V540 `qualified`: the destination's newest CONFIRMED proposal's seats from THIS stage, else its stored config.qualified; never a draft or a stale one", async () => {
+    const d = await division();
+    const [groups, ko] = await createStages(d.auth, d.divisionId, [
+      { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } } },
+      { seq: 2, kind: "knockout", name: "KO", config: {}, progression: { ...prog([{ kind: "topNPerGroup", n: 1 }]), timing: "setup" } },
+    ] as never);
+    const [e1, e2, e3, e4] = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
+    // The confirm's stored shape (seed-proposal.ts wireQualifier): rank, source.stageId, entrantId, destinationSlot.
+    const slate = (ids: string[], from = groups!.id) => ({ qualifiers: ids.map((entrantId, i) => ({ rank: i + 1, source: { stageId: from, rank: 1 }, entrantId, destinationSlot: `s${i}` })), ties: [], standingsHash: "h" });
+    const propose = (computed: unknown, status: string, at: string) =>
+      sql`insert into stage_seed_proposals (org_id, stage_id, computed, status, created_at) values (${d.auth.orgId}, ${ko!.id}, ${sql.json(computed as never)}, ${status}, ${at}::timestamptz)`;
+    const went = async () => (await frozen(d.divisionId))[0]![2];
+    expect(await went(), "the empty case: nobody seated, nothing stored").toBeNull();
+    await propose(slate([e1, e2]), "draft", "2030-01-01T00:00:01Z");
+    expect(await went(), "a draft is no one's verdict").toBeNull();
+    await sql`update stages set config = config || ${sql.json({ qualified: [e3, e4] } as never)} where id = ${ko!.id}`;
+    expect(await went(), "an on_complete destination's stored config.qualified").toEqual([e3, e4]);
+    await propose(slate([e2, e1]), "stale", "2030-01-01T00:00:02Z");
+    expect(await went(), "a stale proposal is no verdict either").toEqual([e3, e4]);
+    // a confirmed slate wins over config.qualified, in seat order; another source's seat is not this stage's
+    const other = { qualifiers: [...slate([e2, e1]).qualifiers, { rank: 3, source: { stageId: randomUUID(), rank: 1 }, entrantId: e4, destinationSlot: "s2" }], ties: [], standingsHash: "h" };
+    await propose(other, "confirmed", "2030-01-01T00:00:03Z");
+    expect(await went(), "the confirmed seats from THIS stage, seat order").toEqual([e2, e1]);
+    await propose(slate([e1]), "confirmed", "2030-01-01T00:00:04Z");
+    expect(await went(), "the newest confirmed").toEqual([e1]);
+    // a stage with no cut publishes no verdict, whatever is stored downstream (the KO itself)
+    expect((await frozen(d.divisionId))[1]).toEqual(["KO", false, null]);
   });
 
   // M6: the case above is also nulled by the one-rule-per-destination guard,

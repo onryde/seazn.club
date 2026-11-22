@@ -44,12 +44,12 @@ export function snakeSizes(entrants: number, pools: number): number[] {
 }
 
 /** How many slots of one pot the table shape can fill. A pot of group-rank or best-Nth slots is all or nothing: a wave of
- *  `topNPerGroup` needs every pool to hold that rank, and a best-Nth reads the rank of EVERY pool before it compares (the
- *  engine's `rowAtRank` on each, so one short pool refuses the whole rule). A rank range is a prefix: it fills as far as the table
- *  has rows. Any other descriptor is not read off a table and is not this gate's to judge (counted as filled). */
+ *  `topNPerGroup` needs every pool to hold that rank, and a best-Nth's `position` needs that many pools to SUPPLY its nth - engine
+ *  10's RB5-U7 (ruling 286; W5 app PR B T4, K16): a pool shorter than nth supplies no candidate and is left out of the comparison
+ *  rather than refusing it, so a best 3rd of pools [3, 3, 2] is the better of two. A rank range is a prefix: it fills as far as the
+ *  table has rows. Any other descriptor is not read off a table and is not this gate's to judge (counted as filled). */
 function potSupply(pot: readonly SlotDescriptor[], sizes: readonly number[]): number {
   const total = sizes.reduce((a, b) => a + b, 0);
-  const smallest = Math.min(...sizes);
   const filled = pot.filter((d): boolean => {
     switch (d.kind) {
       case "group_rank": {
@@ -59,7 +59,7 @@ function potSupply(pot: readonly SlotDescriptor[], sizes: readonly number[]): nu
       case "rank_range":
         return d.rank <= total;
       case "best_nth":
-        return d.nth <= smallest && d.position <= sizes.length;
+        return d.position <= sizes.filter((size) => size >= d.nth).length;
       default:
         return true;
     }
@@ -118,7 +118,19 @@ export function stageGraphCutIssue(stages: readonly CutGraphStage[], entrants: n
 /** The builder's question: does `template`, built at `qualified` qualifiers over `pools` pools, ask more of `entrants` than they
  *  can give? The graph is the template's own (`buildTemplateStages`), judged by the same function the server judges the stored one by. */
 export function cutIssue(entrants: number, pools: number, qualified: number, template: string): CutIssue | null {
-  const drafts = buildTemplateStages(template, { qualified, swissRounds: 3, poolCount: pools, legs: 1 });
-  const issue = stageGraphCutIssue(drafts, entrants);
-  return issue === null ? null : { reason: issue.reason, qualified: issue.qualified, max: issue.max };
+  const issueAt = (q: number) => stageGraphCutIssue(buildTemplateStages(template, { qualified: q, swissRounds: 3, poolCount: pools, legs: 1 }), entrants);
+  const issue = issueAt(qualified);
+  if (issue === null) return null;
+  // W5 app PR B T4 (K16): `max` is the largest Top N the builder can offer, i.e. the largest cut of THIS template the field
+  // supplies - the template expands a smaller Top N to a different take (fewer per pool, a different best-Nth), so the take's own
+  // supply undercounts it once short pools stop refusing a best-Nth (RB5-U7: 3 in pools of 2 and 1 resolves a top 3, while the
+  // top 4's take fills only its 2 winners). Searched down from the ask, never below the take's own supply.
+  let max = issue.max;
+  for (let q = qualified - 1; q > issue.max; q--) {
+    if (issueAt(q) === null) {
+      max = q;
+      break;
+    }
+  }
+  return { reason: issue.reason, qualified: issue.qualified, max };
 }

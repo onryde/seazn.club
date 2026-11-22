@@ -24,8 +24,7 @@ import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
-import { isRoundRobinRefusalCode } from "@/lib/roundrobin-refusals";
-import { undoRefusalText } from "@/lib/undo-refusals";
+import { isRoundRobinRefusalCode, lateEntryRefusalText } from "@/lib/roundrobin-refusals";
 import { lateEntryNotice, lateEntryNoticeText } from "@/lib/swiss-late-entry-notice";
 import type { TableLateEntryResult } from "@/server/api-v1/schemas";
 import type { KnockoutWaitingEntrant } from "@/server/usecases/knockout-desk";
@@ -98,7 +97,7 @@ export function TableWaitingStrip({
   const nameMap: Record<string, string> = { ...names, ...Object.fromEntries(waiting.map((w) => [w.entrantId, w.name])) };
   const refusalOf = (err: unknown, name: string): string =>
     err instanceof ApiV1Error && isRoundRobinRefusalCode(err.code)
-      ? undoRefusalText(err.code, err.extra, msg)
+      ? lateEntryRefusalText(err.code, err.extra, msg, locale)
       : err instanceof ApiV1Error && err.code === "STAGE_HAS_RESULTS"
         ? msg("roundrobin.waiting.rebuildRefused", { name })
         : msg("knockout.waiting.failed");

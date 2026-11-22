@@ -111,6 +111,8 @@ async function seed(locale: L): Promise<Scene> {
 
   // One standings snapshot per pool, over the members the generator put in
   // it (read off its fixtures). `org_id` comes from the stages trigger.
+  // W5 app PR B Task 1: the generate now stores each pool's LEVEL table itself (the seating); these ranked ones replace it.
+  await sql`delete from standings_snapshots where stage_id = ${stage!.id}`;
   for (const pool of pools) {
     const members = [
       ...new Set(

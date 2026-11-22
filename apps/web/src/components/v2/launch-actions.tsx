@@ -5,7 +5,7 @@
 //  B. Schedule — plan-first: opens the drag-and-drop board (generate + auto
 //     pass live there); publish and start follow from the board.
 import { ThirdPlaceUseShared, tooFewOfferFrom } from "@/components/v2/third-place-use-shared";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "@/components/ui/console-link";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
@@ -13,16 +13,19 @@ import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import { routes } from "@/lib/routes";
 import { PUBLISH_BLOCKED, PUBLISH_UNACKNOWLEDGED } from "@/lib/schedule-board";
-import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
+import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { isSwissRefusalCode } from "@/lib/swiss-refusals";
 import { swissRefusalText } from "@/lib/swiss-refusal-text";
 import { isKnockoutRefusalCode, knockoutRefusalText } from "@/lib/knockout-refusals";
+import { isRoundRobinRefusalCode } from "@/lib/roundrobin-refusals";
+import { undoRefusalText } from "@/lib/undo-refusals";
 import { ScheduleGateDialog } from "@/components/v2/board/schedule-gate-dialog";
 import { StartConfirmDialog } from "@/components/v2/start-confirm-dialog";
 import { startEntrantsLine, type EntryStage } from "@/lib/open-entry-stages";
 import { startPromotesCompetition } from "@/lib/start-promotes-competition";
 import { publishWouldList } from "@/lib/competition-listing";
 import { divisionScoringClosed } from "@/lib/division-phase";
+import { formatMaxGate } from "@/lib/format-max-entrants";
 import type { BoardConflict, BoardFixture } from "@/components/v2/board/types";
 
 interface Props {
@@ -59,6 +62,9 @@ interface Props {
    *  decision 2026-09-27). Already in the page's COLS, like `status`. */
   competitionVisibility: string;
   viewerPlan: ViewerPlan;
+  /** W5 B4 (stress F8): the division's FIELD (entrants not departed: the set the generator draws), so Start can say before the
+   *  click that the format cannot start it (`formatMaxGate`, the server's own rule). The page already holds it. */
+  activeEntrants: number;
 }
 
 export function LaunchActions({
@@ -74,8 +80,16 @@ export function LaunchActions({
   competitionStatus,
   competitionVisibility,
   viewerPlan,
+  activeEntrants,
 }: Props) {
   const msg = useMsg();
+  const locale = useLocaleOrDefault();
+  // W5 B4 (stress F8; owner 2026-11-21): a field past its format's max entrants cannot start - Start is disabled and says why,
+  // in the server's own sentence (the create and Start doors refuse the same field by the same name).
+  const tooMany = useMemo(
+    () => formatMaxGate([...stages].sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0)), activeEntrants),
+    [stages, activeEntrants],
+  );
   const msgPlural = useMsgPlural();
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -146,6 +160,10 @@ export function LaunchActions({
         // W4 B2 fix round 1 (G1): Start reconciles a root knockout drawn before its roster moved, and refuses by name when
         // that would redraw over organiser setup — the knockout table's sentence, in the reader's language.
         setError(knockoutRefusalText(err.code, err.extra, msg));
+      } else if (err instanceof ApiV1Error && isRoundRobinRefusalCode(err.code)) {
+        // W5 stress fix F7: a round-robin refusal (a stored group stage of more pools than A-Z holds, RR_TOO_MANY_POOLS, or a
+        // redraw Start would make over setup) - the table's sentence in the reader's language, never the server's English.
+        setError(undoRefusalText(err.code, err.extra, msg, locale));
       } else {
         setError(err instanceof Error ? err.message : msg("launch.failedStart"));
       }
@@ -160,7 +178,8 @@ export function LaunchActions({
         <button
           type="button"
           data-testid="launch-start-division"
-          disabled={busy}
+          disabled={busy || tooMany !== null}
+          aria-describedby={tooMany !== null ? "launch-start-too-many" : undefined}
           // Opens the confirmation. It does NOT start: the POST lives on the
           // dialog's own confirm, below.
           onClick={() => {
@@ -172,6 +191,14 @@ export function LaunchActions({
         >
           {busy ? msg("launch.starting") : msg("launch.start")}
         </button>
+      )}
+      {canEdit && divisionScoringClosed(status) && tooMany !== null && (
+        <span id="launch-start-too-many" data-testid="launch-start-too-many" className="text-xs text-amber-800">
+          {msg("roundrobin.refusal.FORMAT_TOO_MANY_ENTRANTS", {
+            max: new Intl.NumberFormat(locale).format(tooMany.max),
+            entrants: new Intl.NumberFormat(locale).format(tooMany.entrants),
+          })}
+        </span>
       )}
       <Link href={routes.divisionSchedule(orgSlug, compSlug, divSlug)} className="btn btn-ghost px-3 py-1.5 text-xs">
         {msg("launch.schedule")}

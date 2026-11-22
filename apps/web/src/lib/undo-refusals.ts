@@ -6,7 +6,7 @@
 // tables it reads have no runtime import of their own.
 import type { MessageKey } from "@/lib/messages";
 import { isKnockoutRefusalCode, knockoutRefusalKey, knockoutRefusalText, type KnockoutRefusalCode } from "@/lib/knockout-refusals";
-import { isRoundRobinRefusalCode, roundRobinRefusalKey, type RoundRobinRefusalCode } from "@/lib/roundrobin-refusals";
+import { isRoundRobinRefusalCode, roundRobinRefusalKey, roundRobinRefusalText, type RoundRobinRefusalCode } from "@/lib/roundrobin-refusals";
 import { isSwissRefusalCode, swissRefusalKey, type SwissRefusalCode } from "@/lib/swiss-refusals";
 
 /** A refusal code an undo step can answer with, of any family. */
@@ -32,13 +32,11 @@ export function undoRefusalText(
   code: UndoRefusalCode,
   extra: Readonly<Record<string, unknown>> | undefined,
   msg: (key: MessageKey, vars?: Record<string, string | number>) => string,
+  /** The reader's locale, for a round-robin sentence's numbers (`roundRobinRefusalText`); absent, they are written bare. */
+  locale?: string,
 ): string {
   if (isKnockoutRefusalCode(code)) return knockoutRefusalText(code, extra ?? {}, msg);
-  if (isRoundRobinRefusalCode(code)) {
-    // A round-robin sentence names its fields by the same names the server sends in `extra` (`roundRobinRefusal(code, details)`).
-    const vars: Record<string, string | number> = {};
-    for (const [k, v] of Object.entries(extra ?? {})) if (typeof v === "string" || typeof v === "number") vars[k] = v;
-    return msg(roundRobinRefusalKey(code), vars);
-  }
+  // A round-robin sentence names its fields by the same names the server sends in `extra` (`roundRobinRefusal(code, details)`).
+  if (isRoundRobinRefusalCode(code)) return roundRobinRefusalText(code, extra, msg, locale);
   return msg(swissRefusalKey(code));
 }

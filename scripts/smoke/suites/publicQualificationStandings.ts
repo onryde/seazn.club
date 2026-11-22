@@ -167,6 +167,54 @@ export async function publicQualificationStandingsSuite(): Promise<void> {
       count(plainPage.body, /data-qual-marker="/g) === 0,
   );
 
+  // --- W5 app PR B Task 6 (X-QS-1; R24 pick 17 A): a FINISHED league into Finals keeps its cut, frozen. Every line of a league
+  // of four played (no Complete: nobody seated yet, so the markers freeze from the final table's order). The page draws one cut
+  // line in the past tense, each row "qualified" or "out" with the through tick / out dash, and a legend of TWO keys - "Still
+  // open" is gone. Before Task 6 the finished table drew no cut, no marker and no legend at all.
+  const doneDiv = await mkDiv("Done");
+  const done = v1data<{ id: string }[]>(
+    await v1(free, `/api/v1/divisions/${doneDiv.id}/stages`, "POST", [
+      { seq: 1, kind: "league", name: "League", config: {}, progression: null },
+      {
+        seq: 2,
+        kind: "knockout",
+        name: "Finals",
+        config: {},
+        progression: { sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }] }], placement: "rank_order", timing: "on_complete" },
+      },
+    ]),
+  );
+  const doneLeague = done[0].id;
+  await v1(free, `/api/v1/divisions/${doneDiv.id}/entrants`, "POST", field("Done"));
+  const doneGen = v1data<{ fixtures: Fx[] }>(await v1(free, `/api/v1/stages/${doneLeague}/generate`, "POST"));
+  await v1(free, `/api/v1/divisions/${doneDiv.id}/start`, "POST");
+  for (const f of doneGen.fixtures.filter((x) => x.home_entrant_id !== null && x.away_entrant_id !== null)) await score(f.id);
+  await settle(doneLeague, 12);
+  const donePage = await html(newSession(), `/live/${org.slug}/${comp.slug}/${doneDiv.slug}?tab=standings`);
+  const doneRows = [...donePage.body.matchAll(/<tr data-qual="(\w+)"[^>]*>([\s\S]*?)<\/tr>/g)].map((m) => ({
+    status: m[1] ?? "",
+    markers: [...(m[2] ?? "").matchAll(/data-qual-marker="(\w+)"/g)].map((x) => x[1] ?? ""),
+  }));
+  check(
+    `frozen cut (X-QS-1): a finished league's page draws ONE cut line in the past tense and four rows, two qualified (tick) and two out (dash) (${doneRows
+      .map((r) => `${r.status}:${r.markers.join("/")}`)
+      .join(" ")})`,
+    donePage.status === 200 &&
+      count(donePage.body, /data-testid="qual-cut"/g) === 1 &&
+      donePage.body.includes("Top 2 went through to Finals") &&
+      doneRows.length === 4 &&
+      doneRows.filter((r) => r.status === "qualified" && r.markers.join() === "through").length === 2 &&
+      doneRows.filter((r) => r.status === "out" && r.markers.join() === "out").length === 2,
+  );
+  const doneLegend = /data-testid="qual-legend"[\s\S]*?<\/p>/.exec(donePage.body)?.[0] ?? "";
+  check(
+    `frozen cut (X-QS-1): its legend keys Qualified and Out only - no "Still open" (${count(doneLegend, /data-qual-marker="/g)} keys)`,
+    doneLegend.includes("Qualified") &&
+      !doneLegend.includes("Still open") &&
+      count(doneLegend, /data-qual-marker="/g) === 2 &&
+      count(donePage.body, /data-qual-marker="/g) === 4 + 2,
+  );
+
   // --- Pool label in the org's locale (2026-10-06). `pools.name` is stored
   // once, as the English "Pool " + key (usecases/stages/), and the public
   // surfaces used to print it, so a Spanish org's pools read "Pool A". The hub

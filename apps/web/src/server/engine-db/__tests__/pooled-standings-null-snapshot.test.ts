@@ -219,6 +219,31 @@ describe.skipIf(!HAS_DB)("recomputeStandings — a pooled stage owns no null-poo
     ]);
   });
 
+  // W5 app PR B Task 1 (X-PO-1): with the stage's SEATING on the fold, a pool whose line has no result yet is a pool all the same
+  // - its members are listed, zero played, under its OWN key - and the pooled stage still owns no null row. Differential: on
+  // 6fbd5a3af2 (membership from results) pool B, unplayed, had no table at all.
+  it("X-PO-1 a seated pool with no result yet writes its level table under its own key, and still no null row", async () => {
+    const s = await seedPooledStage();
+    const [e, f] = await Promise.all([seedEntrant(s.divisionId, "B-three", 5), seedEntrant(s.divisionId, "B-four", 6)]);
+    const poolD = await seedPool(s.stageId, "D");
+    // Pool D: one line, nobody has played it (fixture_no comes from the fixtures trigger, as for the decided lines above).
+    await sql`
+      insert into fixtures (stage_id, division_id, pool_id, round_no, seq_in_round, home_entrant_id, away_entrant_id)
+      values (${s.stageId}, ${s.divisionId}, ${poolD}, 1, 3, ${e}, ${f})`;
+
+    const rows = await recomputeStandings(s.orgId, s.stageId);
+
+    const snaps = await allSnapshots(s.stageId);
+    expect([...snaps.keys()].filter((k) => k === null), "no null row").toEqual([]);
+    expect(new Set(snaps.keys()), "A, B and the unplayed D - never the line-less C").toEqual(new Set([s.poolA, s.poolB, poolD]));
+    const [d] = await sql<{ rows: { entrantId: string; played: number; level?: boolean }[] }[]>`
+      select rows from standings_snapshots where stage_id = ${s.stageId} and pool_id = ${poolD}`;
+    expect(d!.rows.map((r) => r.entrantId).sort(), "pool D lists its two seats").toEqual([e, f].sort());
+    expect(d!.rows.every((r) => r.played === 0 && r.level === true), "zero played, level").toBe(true);
+    expect(snaps.get(s.poolA), "pool A is still its own table").toEqual([s.a, s.b]);
+    expect(rows).toEqual([]);
+  });
+
   // The other half of the rule, and the over-correction guard: the function's
   // own doc comment promises `poolId` null = the single non-pool table, and
   // seedNextStage/sourceStandingsTables read that null row as the "" pool.

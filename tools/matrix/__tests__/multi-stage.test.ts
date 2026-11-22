@@ -17,7 +17,7 @@ import { fieldSizeFor } from "../lib/field-size.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
 import { toObservedOutcome, winnerOf, type CompleteObs, type ObservedRun, type ObservedStage } from "../lib/observed.ts";
 import { decideState, type CheckResult } from "../lib/results.ts";
-import { PlateFieldUnknown, SEEDING_TIE_CODE, SourcePoolsDisagree, UnknownTakeKind, takesFirstLosses, advanceSeededAsDeclared, confirmAdvance, declaredTake, firstLossersOf, plateFieldOf, sourcePoolCount, takesOf, withdrawnQualifiers, type AdvanceObs } from "../lib/scenarios/advance.ts";
+import { PlateFieldUnknown, SEEDING_TIE_CODE, SourcePoolsDisagree, UnknownTakeKind, takesFirstLosses, advanceRoundOneCrossesPools, advanceSeededAsDeclared, confirmAdvance, declaredTake, firstLossersOf, plateFieldOf, sourcePoolCount, takesOf, withdrawnQualifiers, type AdvanceObs } from "../lib/scenarios/advance.ts";
 import { Recorder, drawsDeclaredOnReached, ensureLineups, finishStage, playDivision, playStage, recordGenerate, setUpDivision, snapshot, type DivisionSetup, type StagePlay } from "../lib/scenarios/common.ts";
 import { lineupsPut } from "../lib/scenarios/assertions.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
@@ -1200,5 +1200,87 @@ describe("W4 B3: playDivision drives a firstLosses plate the way the product dra
     await playDivision(ctx, rec, setup, {});
     expect(driver.order.indexOf("generate:2"), "generated before stage 1 completed").toBeLessThan(driver.order.indexOf("complete:1"));
     expect(driver.order.indexOf("generate:2")).toBeGreaterThan(-1);
+  });
+});
+
+// W5 app PR B Task 5 part 3 (FX-G5, ruling 281; RB5-D1, X-PD-1, X-PD-7, N6): the advance's draw check. A knockout, stepladder or page
+// playoff seeded from two or more pools never pairs pool-mates in its real round one (a red by name); one seeded from a league has no
+// pools to separate and seats exactly as before - the engine's own generator over the league's finishing order.
+describe("advance-round-one-crosses-pools (FX-G5 draw check)", () => {
+  const ID = "advance-round-one-crosses-pools";
+  type Line = { roundNo: number; home: string | null; away: string | null; thirdPlace?: boolean };
+  const stage = (id: string, seq: number, kind: string, o: { standings?: ObservedStage["standings"]; fixtures?: Line[] } = {}) =>
+    ({ id, seq, kind, config: {}, field: [], fieldSource: "seeded", fixtures: (o.fixtures ?? []).map((f, i) => ({ id: `${id}-f${i}`, stageId: id, poolId: null, status: "decided", outcome: null, declared: null, ...f })), standings: o.standings ?? [], generates: [], pairRounds: [], complete: null }) as unknown as ObservedStage;
+  const advance = (seeded: string[], takes: Record<string, unknown>[]): AdvanceObs => ({ status: 200, code: null, proposalId: "p", filled: seeded.length, seeded, declared: seeded.length, takes, seats: [seeded.length], tiePicked: false });
+  const play = (s: ObservedStage, a: AdvanceObs | null): StagePlay => ({ stage: { id: s.id, seq: s.seq, kind: s.kind } as StagePlay["stage"], field: null, advance: a, complete: null });
+  const row = (entrantId: string, rank: number) => ({ entrantId, rank, points: null });
+  // Two pools of four, the top two of each: A1, A2 / B1, B2.
+  const groups = stage("g", 1, "group", { standings: [{ poolId: "A", rows: [row("a1", 1), row("a2", 2), row("a3", 3), row("a4", 4)] }, { poolId: "B", rows: [row("b1", 1), row("b2", 2), row("b3", 3), row("b4", 4)] }] });
+  const ko = (lines: Line[]) => stage("k", 2, "knockout", { fixtures: lines });
+  const judge = (src: ObservedStage, dst: ObservedStage, a: AdvanceObs) => advanceRoundOneCrossesPools([play(src, null), play(dst, a)], { stages: [src, dst] });
+
+  it("a pooled-source knockout whose round one crosses the pools passes, one item per real pair (a bye and a later round are not pairs)", () => {
+    const dst = ko([{ roundNo: 1, home: "a1", away: "b2" }, { roundNo: 1, home: "b1", away: "a2" }, { roundNo: 2, home: "a1", away: "b1" }, { roundNo: 2, home: "a2", away: "b2", thirdPlace: true }]);
+    const c = judge(groups, dst, advance(["a1", "b1", "a2", "b2"], [{ kind: "topNPerGroup", n: 2 }]));
+    expect(c).toMatchObject({ id: ID, verdict: "pass", checked: 2 });
+  });
+
+  it("a same-pool round-one pair on a pooled-source cell is a red BY NAME (differential: the fold A1 v A2, B1 v B2)", () => {
+    const dst = ko([{ roundNo: 1, home: "a1", away: "a2" }, { roundNo: 1, home: "b1", away: "b2" }]);
+    const c = judge(groups, dst, advance(["a1", "b1", "a2", "b2"], [{ kind: "topNPerGroup", n: 2 }]));
+    expect(c.verdict).toBe("fail");
+    expect(c.checked).toBe(2);
+    expect(c.evidence).toEqual(["stage 2: same-pool round-one pair a1 v a2 (pool A) - RB5-D1 / X-PD-1", "stage 2: same-pool round-one pair b1 v b2 (pool B) - RB5-D1 / X-PD-1"]);
+    // ...for a best-Nth tier too, and for a stepladder's first rung and a page playoff's round one (X-PD-7)
+    const best = judge(groups, ko([{ roundNo: 1, home: "a1", away: "a2" }]), advance(["a1", "b1", "a2"], [{ kind: "topNPerGroup", n: 1 }, { kind: "bestNth", nth: 2, count: 1 }]));
+    expect(best).toMatchObject({ verdict: "fail", checked: 1 });
+    for (const kind of ["stepladder", "page_playoff"]) {
+      const c2 = judge(groups, stage("k", 2, kind, { fixtures: [{ roundNo: 1, home: "b1", away: "b2" }, { roundNo: 2, home: "a1", away: null }] }), advance(["a1", "b1", "b2"], [{ kind: "topNPerGroup", n: 1 }, { kind: "bestNth", nth: 2, count: 1 }]));
+      expect(c2, kind).toMatchObject({ verdict: "fail", checked: 1, evidence: ["stage 2: same-pool round-one pair b1 v b2 (pool B) - RB5-D1 / X-PD-1"] });
+    }
+  });
+
+  it("a pooled cell with no real round-one pair, or a pair from outside the source's pools, fails - never a silent pass", () => {
+    expect(judge(groups, ko([]), advance(["a1", "b1"], [{ kind: "topNPerGroup", n: 1 }]))).toMatchObject({ verdict: "fail", checked: 1 });
+    expect(judge(groups, ko([{ roundNo: 1, home: "a1", away: "x9" }]), advance(["a1", "x9"], [{ kind: "topNPerGroup", n: 1 }]))).toMatchObject({ verdict: "fail", evidence: ["stage 2: round one a1 v x9 seats an entrant no source pool holds"] });
+  });
+
+  it("a league-fed stepladder / page playoff seats as the league finished - the engine's own round one - and a moved seat is a red", () => {
+    // finishing order m, a, z, b (served out of order; neither id order nor its reverse), a fifth below the cut
+    const league = stage("l", 1, "league", { standings: [{ poolId: null, rows: [row("a", 2), row("m", 1), row("z", 3), row("b", 4), row("q", 5)] }] });
+    const take = [{ kind: "rankRange", from: 1, to: 4 }];
+    const seeded = ["m", "a", "z", "b"];
+    // engine: a stepladder's first rung is the bottom two seeds (z v b); a page playoff's round one is m v a and z v b
+    const ladder = stage("s", 2, "stepladder", { fixtures: [{ roundNo: 1, home: "z", away: "b" }, { roundNo: 2, home: "a", away: null }] });
+    expect(judge(league, ladder, advance(seeded, take))).toMatchObject({ verdict: "pass", checked: 1 });
+    const page = stage("pp", 2, "page_playoff", { fixtures: [{ roundNo: 1, home: "m", away: "a" }, { roundNo: 1, home: "b", away: "z" }] });
+    expect(judge(league, page, advance(seeded, take))).toMatchObject({ verdict: "pass", checked: 1 });
+    // differential: a league-fed field routed through a draw (or seated in any other order) moves a seat
+    const moved = stage("pp", 2, "page_playoff", { fixtures: [{ roundNo: 1, home: "m", away: "z" }, { roundNo: 1, home: "a", away: "b" }] });
+    expect(judge(league, moved, advance(seeded, take))).toMatchObject({ verdict: "fail", checked: 1 });
+    const movedRung = stage("s", 2, "stepladder", { fixtures: [{ roundNo: 1, home: "a", away: "b" }] });
+    expect(judge(league, movedRung, advance(seeded, take))).toMatchObject({ verdict: "fail", checked: 1 });
+  });
+
+  it("nothing judged is an abstain with its reason: a single stage, a group destination, a bracket source", () => {
+    expect(advanceRoundOneCrossesPools([play(groups, null)], { stages: [groups] })).toMatchObject({ verdict: "abstain", checked: 0 });
+    const g2 = stage("g2", 2, "group");
+    expect(judge(groups, g2, advance(["a1", "b1"], [{ kind: "topNPerGroup", n: 1 }]))).toMatchObject({ verdict: "abstain", checked: 0 });
+  });
+
+  it("on the fake's catalogue rows: the pooled rows (groups_ko, group_group_ko) cross the pools and the league rows (league_ko, group_stepladder, group_playoffs) seat as today - each judged, counted", async () => {
+    const pooled = ["groups_ko", "group_group_ko"];
+    const leagueFed = ["league_ko", "group_stepladder", "group_playoffs"];
+    expect([...FAKE_ROWS].sort()).toEqual([...pooled, ...leagueFed].sort());
+    const judged: Record<string, number> = {};
+    for (const r of FAKE_ROWS) {
+      const { checks } = await runOn(new FakeMultiStageDriver(), "LIFECYCLE", { row: r });
+      const c = checks.find((x) => x.id === ID)!;
+      expect(c, r).toMatchObject({ verdict: "pass" });
+      judged[r] = c.checked;
+    }
+    // anti-vacuity: every row judged at least one item; the league-fed rows' count is the pin's.
+    for (const r of FAKE_ROWS) expect(judged[r], `${r}: items judged`).toBeGreaterThan(0);
+    expect(leagueFed.reduce((n, r) => n + judged[r]!, 0), "league-fed cells judged").toBeGreaterThan(0);
   });
 });

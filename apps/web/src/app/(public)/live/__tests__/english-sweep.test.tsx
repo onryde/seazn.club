@@ -113,6 +113,13 @@ vi.mock("@/server/public-site/public-leaders", async (importOriginal) => ({
 }));
 // W5 T8 (RB5-W7): the hub's departure-notes read (`division_events` rows of a league or group). The sweep has no database, so the
 // read is data handed in here: ZERO rows, the answer for a division where nobody has withdrawn.
+// W5 C5 (X-ADJ-4): the division page's points-adjustment read (`loadPointsAdjustments`, SQL on `division_events`) - unmocked
+// since C5, so this file read an invalid uuid ("d1") against a local database and "DATABASE_URL is not set" in the unit job, as
+// the departures read did before W5 T8. It answers no adjustments: the footnote is not what this file tests.
+vi.mock("@/server/public-site/points-adjustments", () => ({ loadPointsAdjustments: async () => [] }));
+// W5 T4 (stated basis): the division page's best-Nth basis read (`loadBestNthBases`, SQL) - unmocked like the adjustment read
+// above. It answers no basis: a division with no cross-pool rank, which is not what this file tests.
+vi.mock("@/server/public-site/bestnth-basis", () => ({ loadBestNthBases: async () => new Map() }));
 vi.mock("@/server/public-site/table-withdrawals", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/public-site/table-withdrawals")>()),
   loadTableWithdrawals: stub.loadTableWithdrawals,

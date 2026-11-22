@@ -22,6 +22,7 @@ import { doubleElimFormatReason } from "@/lib/feature-copy";
 import { FORMAT_BOUNDS } from "@/lib/format-bounds";
 import { STAGE_TEMPLATES, type StageDraft, type StandingsCarry } from "@/lib/format-templates";
 import { thirdPlaceOffer, type FormatKnobsShown, type FormatPickerView } from "@/lib/division-builder/format-choice";
+import { crossPoolDrawCanRefuse } from "@/lib/cross-pool-draw-risk";
 import type { ThirdPlaceMode } from "@/lib/third-place";
 import { ThirdPlaceChoice } from "@/components/v2/third-place-choice";
 import type { MessageKey } from "@/lib/messages";
@@ -213,6 +214,12 @@ export function formatPickerFields({
                             .join(" · ")}
                     </span>
                   )}
+                  {/* W5 B4 (F8): the picked format's max entrants, at the knobs as they stand - what the server enforces at Start. */}
+                  {picked && view.pickedMax !== null && (
+                    <span className="mt-0.5 block text-xs text-slate-500" data-testid="division-builder-max-entrants">
+                      {msg("divBuilder.card.maxEntrants", { max: new Intl.NumberFormat(locale).format(view.pickedMax) })}
+                    </span>
+                  )}
                 </span>
               </label>
             );
@@ -321,6 +328,13 @@ export function formatPickerFields({
           </label>
         )}
       </div>
+      {/* W5 app PR B T5 part 3 (RB5-D10, X-PD-4): said before Start - the engine's cross-pool draw can refuse this field (a best-placed
+          extra qualifier from the same pool as her round-one opponent, with no ordering out). Asked of the engine over these drafts. */}
+      {shown.secondStage && crossPoolDrawCanRefuse(stages) && (
+        <p role="status" data-testid="division-builder-draw-can-refuse" className="min-w-0 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          {msg("divBuilder.format.drawCanRefuse")}
+        </p>
+      )}
       {carryLocked && <UpgradeGate feature="standings.carry_over" compact viewerPlan={viewerPlan} />}
     </>
   );

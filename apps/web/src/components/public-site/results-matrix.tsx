@@ -1,15 +1,18 @@
-// Server component: round-robin results matrix (G2) — the classic crosstable
+// Server side of the round-robin results matrix (G2) — the classic crosstable
 // for league/group stages. Rows = home side, columns = away side; a cell
 // holds the scoreline of home-vs-away (linked), a live dot while in play, or
 // a dot placeholder for an unplayed pairing. Zero per-sport code: scorelines
 // come from ScoreSummary.headline, order comes from the standings.
-import Link from "next/link";
+//
+// W5 B4 (stress S4): `resultsGridData` resolves every cell's words here (the dictionary, the forfeit ledger, the fixture's
+// href) into the compact `ResultsGridData` - the axis and one line per played pairing, never n x n - and the table is drawn
+// by `ResultsGrid` (results-grid.tsx). The division pages hand that data to `ResultsGridDisclosure`, which draws the table
+// only once it is opened; `ResultsMatrix` draws it straight away.
 import type { PublicFixture } from "@/server/public-site/data";
 import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
-import { EntityLogo } from "@/components/ui/entity-logo";
-import { forfeitLedgerOfReason, forfeitTag, forfeitWords, type ForfeitWords } from "@/lib/forfeit-tag";
-import { ForfeitTagChip } from "./forfeit-tag-chip";
+import { forfeitLedgerOfReason, forfeitTag, forfeitWords } from "@/lib/forfeit-tag";
+import { ResultsGrid, type ResultsGridData, type ResultsGridLine } from "./results-grid";
 
 interface Props {
   /** Row/column order — pass the standings rank order. */
@@ -30,144 +33,52 @@ interface Props {
 
 const DONE = new Set(["decided", "finalized", "forfeited", "abandoned"]);
 
-export function ResultsMatrix({
+/** The grid's cells as data, or null for fewer than two entrants (no grid). One entry per pairing that holds a line (a
+ *  double round robin stacks two), so its size follows the fixtures, never the square of the field. */
+export function resultsGridData({
   entrantIds,
   entrantNames,
   entrantStatuses,
   entrantLogos,
   fixtures,
   fixtureHref,
-  caption,
   dict,
-}: Props) {
+}: Omit<Props, "caption">): ResultsGridData | null {
   if (entrantIds.length < 2) return null;
-  // home → away → fixtures (double round-robins stack two lines in a cell).
-  const byPair = new Map<string, PublicFixture[]>();
-  for (const f of fixtures) {
-    if (!f.home_entrant_id || !f.away_entrant_id) continue;
-    const key = `${f.home_entrant_id}:${f.away_entrant_id}`;
-    const list = byPair.get(key) ?? [];
-    list.push(f);
-    byPair.set(key, list);
-  }
+  const axis = new Set(entrantIds);
+  const nameOf = (id: string) => entrantNames[id] ?? "?";
   // W2b Task 13 (review I-2): a forfeited cell carries its tag and sentence, in the page's dictionary. A round robin
   // feeds no next match, so a double walkover's sentence has no next-round clause here.
-  const nameOf = (id: string) => entrantNames[id] ?? "?";
-  const forfeitOf = (f: PublicFixture): ForfeitWords | null => {
+  const lineOf = (f: PublicFixture): ResultsGridLine => {
+    if (f.status === "in_play") return { id: f.id, kind: "live", href: fixtureHref(f.id) };
+    if (!DONE.has(f.status)) return { id: f.id, kind: "pending" };
     const tag = forfeitTag(f.outcome, forfeitLedgerOfReason(f.abandon_reason), f, entrantStatuses);
-    return tag === null ? null : forfeitWords(tag, (key, vars) => t(dict, key, vars), nameOf);
+    if (tag !== null) {
+      const words = forfeitWords(tag, (key, vars) => t(dict, key, vars), nameOf);
+      // A double walkover credits nobody, so its 0 — 0 is not shown — the tag alone says what happened.
+      const headline = words.kind !== "double_walkover" && f.summary?.headline ? f.summary.headline : null;
+      return { id: f.id, kind: "forfeit", href: fixtureHref(f.id), headline, tag: words.tag, sentence: words.sentence };
+    }
+    return f.summary?.headline ? { id: f.id, kind: "result", href: fixtureHref(f.id), headline: f.summary.headline } : { id: f.id, kind: "pending" };
   };
-  const initials = (id: string) =>
-    (entrantNames[id] ?? "?")
-      .split(/\s+/)
-      .map((w) => w[0])
-      .join("")
-      .slice(0, 2)
-      .toUpperCase();
+  // home → away → lines (double round-robins stack two lines in a cell). Pairings outside the axis are ignored.
+  const cells: Record<string, ResultsGridLine[]> = {};
+  for (const f of fixtures) {
+    if (!f.home_entrant_id || !f.away_entrant_id) continue;
+    if (!axis.has(f.home_entrant_id) || !axis.has(f.away_entrant_id)) continue;
+    (cells[`${f.home_entrant_id}:${f.away_entrant_id}`] ??= []).push(lineOf(f));
+  }
+  return {
+    entrantIds,
+    names: Object.fromEntries(entrantIds.map((id) => [id, nameOf(id)])),
+    logos: entrantLogos ? Object.fromEntries(entrantIds.map((id) => [id, entrantLogos[id] ?? null])) : null,
+    cells,
+    corner: t(dict, "division.resultsGrid.corner"),
+    live: t(dict, "matchesHub.live"),
+  };
+}
 
-  return (
-    <div
-      className="overflow-x-auto rounded-xl border border-zinc-200/80 bg-surface shadow-sm"
-      data-results-matrix
-    >
-      <table className="w-full text-sm">
-        {caption ? (
-          <caption className="px-4 py-2.5 text-left font-display text-sm font-semibold text-ink">
-            {caption}
-          </caption>
-        ) : null}
-        <thead>
-          <tr className="border-b border-zinc-200/80 text-xs text-ink-muted">
-            <th scope="col" className="px-3 py-2 text-left font-medium">
-              {t(dict, "division.resultsGrid.corner")}
-            </th>
-            {entrantIds.map((id) => (
-              <th
-                key={id}
-                scope="col"
-                title={entrantNames[id] ?? "?"}
-                className="px-2 py-2 text-center font-medium"
-              >
-                {entrantLogos ? (
-                  <span className="inline-flex items-center justify-center">
-                    <EntityLogo src={entrantLogos[id] ?? null} name={entrantNames[id] ?? "?"} size={20} />
-                  </span>
-                ) : (
-                  initials(id)
-                )}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {entrantIds.map((rowId) => (
-            <tr key={rowId} className="border-b border-zinc-100 last:border-0">
-              <th
-                scope="row"
-                className="max-w-44 truncate px-3 py-2 text-left font-medium text-ink"
-              >
-                <span className="flex items-center gap-2">
-                  {entrantLogos ? (
-                    <EntityLogo src={entrantLogos[rowId] ?? null} name={entrantNames[rowId] ?? "?"} size={20} />
-                  ) : null}
-                  <span className="truncate">{entrantNames[rowId] ?? "?"}</span>
-                </span>
-              </th>
-              {entrantIds.map((colId) => {
-                if (rowId === colId) {
-                  return (
-                    <td key={colId} aria-hidden className="bg-zinc-100/70 px-2 py-2 text-center">
-                      <span className="text-zinc-300">—</span>
-                    </td>
-                  );
-                }
-                const cell = byPair.get(`${rowId}:${colId}`) ?? [];
-                return (
-                  <td key={colId} className="px-2 py-2 text-center tabular-nums">
-                    {cell.length === 0 ? (
-                      <span className="text-zinc-300">·</span>
-                    ) : (
-                      <span className="flex flex-col items-center gap-0.5">
-                        {cell.map((f) => {
-                          const words = DONE.has(f.status) ? forfeitOf(f) : null;
-                          return f.status === "in_play" ? (
-                            <Link key={f.id} href={fixtureHref(f.id)} aria-label={t(dict, "matchesHub.live")}>
-                              <span className="animate-live-pulse inline-block h-2 w-2 rounded-full bg-emerald-500" />
-                            </Link>
-                          ) : words !== null ? (
-                            // A credited result: its headline and its tag; a double walkover credits nobody, so its
-                            // 0 — 0 is not shown — the tag alone says what happened.
-                            <Link
-                              key={f.id}
-                              href={fixtureHref(f.id)}
-                              className="inline-flex items-center gap-1 font-display text-[13px] font-semibold text-accent-strong hover:underline"
-                            >
-                              {words.kind !== "double_walkover" && f.summary?.headline ? f.summary.headline : null}
-                              <ForfeitTagChip tag={words.tag} sentence={words.sentence} testId="results-matrix-forfeit-tag" />
-                            </Link>
-                          ) : DONE.has(f.status) && f.summary?.headline ? (
-                            <Link
-                              key={f.id}
-                              href={fixtureHref(f.id)}
-                              className="font-display text-[13px] font-semibold text-accent-strong hover:underline"
-                            >
-                              {f.summary.headline}
-                            </Link>
-                          ) : (
-                            <span key={f.id} className="text-zinc-300">
-                              ·
-                            </span>
-                          );
-                        })}
-                      </span>
-                    )}
-                  </td>
-                );
-              })}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
+export function ResultsMatrix({ caption, ...rest }: Props) {
+  const data = resultsGridData(rest);
+  return data === null ? null : <ResultsGrid data={data} caption={caption} />;
 }

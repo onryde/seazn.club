@@ -45,7 +45,27 @@ export type RoundRobinRefusalCode =
   | "RR_REGENERATE_WOULD_DROP_ADD_MATCH"
   // Final fix wave (m1): deleting a setup-phase entrant whose line holds recorded match data (a team sheet, match rules, a result
   // voided since). A code from W5's own row set, kept without the RR_ prefix: it is the wire code the reconcile has always thrown.
-  | "ENTRANT_FIXTURES_HAVE_RESULTS";
+  | "ENTRANT_FIXTURES_HAVE_RESULTS"
+  // W5 stress fix F7: more pools than the pool-key alphabet holds (`POOL_COUNT_MAX`, A-Z) - the stage writers (create and the
+  // Format dialog's replace: `assertStageBatchGates`) and Start (generators.ts `poolCount`). Details: `max` and `pools`, the count
+  // asked; at a writer also `seq`, the stage's.
+  | "RR_TOO_MANY_POOLS"
+  // W5 app PR B Task 7 (C5; X-ADJ-3, X-ADJ-4): "Adjust points". The stage gates (preflight C5: a started, not-complete league,
+  // group or Swiss table), the engine's four `validatePointsAdjustments` reasons by name (`adjustment_zero`,
+  // `adjustment_reason_missing`, `adjustment_not_finite`, `adjustment_unknown_entrant`), and an Undo of a row already undone. The
+  // engine's `adjustment_unseated` has no code: every line-holder of a seated stage is seated (C10), so it never arises at the write,
+  // and the fold HOLDS a row whose entrant stops being a member (C8).
+  | "RR_ADJUST_NOT_TABLE"
+  | "RR_ADJUST_NOT_STARTED"
+  | "RR_ADJUST_STAGE_COMPLETE"
+  | "RR_ADJUST_ZERO"
+  | "RR_ADJUST_REASON_MISSING"
+  | "RR_ADJUST_NOT_FINITE"
+  | "RR_ADJUST_OUT_OF_RANGE"
+  | "RR_ADJUST_UNKNOWN_ENTRANT"
+  | "RR_ADJUST_ALREADY_UNDONE"
+  | "FORMAT_TOO_MANY_ENTRANTS"
+  | "DRAW_TOO_LARGE";
 
 export interface RoundRobinRefusalRow {
   status: 409 | 422;
@@ -136,6 +156,69 @@ export const ROUND_ROBIN_REFUSALS: Record<RoundRobinRefusalCode, RoundRobinRefus
     en: "This entrant's fixtures hold recorded match data. Clear it before deleting the entrant.",
     key: "roundrobin.refusal.ENTRANT_FIXTURES_HAVE_RESULTS",
   },
+  RR_TOO_MANY_POOLS: {
+    status: 422,
+    en: "A group stage can have at most {max} pools, one for each letter from A to Z.",
+    key: "roundrobin.refusal.RR_TOO_MANY_POOLS",
+  },
+  RR_ADJUST_NOT_TABLE: {
+    status: 422,
+    en: "Points can only be adjusted on a league, group or Swiss table.",
+    key: "roundrobin.refusal.RR_ADJUST_NOT_TABLE",
+  },
+  RR_ADJUST_NOT_STARTED: {
+    status: 422,
+    en: "Points can be adjusted once the stage has started.",
+    key: "roundrobin.refusal.RR_ADJUST_NOT_STARTED",
+  },
+  RR_ADJUST_STAGE_COMPLETE: {
+    status: 422,
+    en: "This table has finished, so its points can't be adjusted.",
+    key: "roundrobin.refusal.RR_ADJUST_STAGE_COMPLETE",
+  },
+  RR_ADJUST_ZERO: {
+    status: 422,
+    en: "An adjustment of 0 changes nothing. Enter the points to add or remove.",
+    key: "roundrobin.refusal.RR_ADJUST_ZERO",
+  },
+  RR_ADJUST_REASON_MISSING: {
+    status: 422,
+    en: "Give a reason. It's shown under the table for everyone.",
+    key: "roundrobin.refusal.RR_ADJUST_REASON_MISSING",
+  },
+  RR_ADJUST_NOT_FINITE: {
+    status: 422,
+    en: "Enter a number of points to add or remove.",
+    key: "roundrobin.refusal.RR_ADJUST_NOT_FINITE",
+  },
+  RR_ADJUST_OUT_OF_RANGE: {
+    status: 422,
+    en: "An adjustment moves at most {max} either way, in whole steps.",
+    key: "roundrobin.refusal.RR_ADJUST_OUT_OF_RANGE",
+  },
+  RR_ADJUST_UNKNOWN_ENTRANT: {
+    status: 422,
+    en: "That entrant isn't on this table.",
+    key: "roundrobin.refusal.RR_ADJUST_UNKNOWN_ENTRANT",
+  },
+  RR_ADJUST_ALREADY_UNDONE: {
+    status: 409,
+    en: "This adjustment has already been undone.",
+    key: "roundrobin.refusal.RR_ADJUST_ALREADY_UNDONE",
+  },
+  // W5 B4 (stress F8; owner 2026-11-21): a field past its format's max entrants (`lib/format-max-entrants.ts`), refused at the
+  // create, Generate, Rebuild and Start doors and by an organiser's promotion off the waiting list; and a draw past the line
+  // budget whatever its kind (the server's exact count, before the insert).
+  FORMAT_TOO_MANY_ENTRANTS: {
+    status: 422,
+    en: "This format allows up to {max} entrants. This division has {entrants}.",
+    key: "roundrobin.refusal.FORMAT_TOO_MANY_ENTRANTS",
+  },
+  DRAW_TOO_LARGE: {
+    status: 422,
+    en: "This draw has {lines} matches. One Start can draw at most {budget}.",
+    key: "roundrobin.refusal.DRAW_TOO_LARGE",
+  },
 };
 
 /** Whether a wire code is one of this table's — a client's branch to say a round-robin refusal in the reader's language.
@@ -147,4 +230,53 @@ export function isRoundRobinRefusalCode(code: unknown): code is RoundRobinRefusa
 /** The `ui.json` key a screen renders for `code` (`useMsg()(roundRobinRefusalKey(code))`). */
 export function roundRobinRefusalKey(code: RoundRobinRefusalCode): MessageKey {
   return ROUND_ROBIN_REFUSALS[code].key;
+}
+
+/** The sentence a screen shows for `code`, in the reader's language, its fields filled from the envelope's `extra` under the
+ *  same names the server sends (`roundRobinRefusal(code, details)`). A number is grouped the reader's way (`Intl.NumberFormat`:
+ *  4,096 / 4 096 / 4.096) — the max entrants and line counts run into the thousands. Without a locale it is written bare, never
+ *  grouped the English way for a reader of another language (B4 review I-1: "4096" beside a pre-click reason reading "4,096"). */
+export function roundRobinRefusalText(
+  code: RoundRobinRefusalCode,
+  extra: Readonly<Record<string, unknown>> | undefined,
+  msg: (key: MessageKey, vars?: Record<string, string | number>) => string,
+  locale: string | undefined,
+): string {
+  const grouping = locale === undefined ? null : new Intl.NumberFormat(locale);
+  const vars: Record<string, string | number> = {};
+  for (const [k, v] of Object.entries(extra ?? {})) {
+    if (typeof v === "number") vars[k] = grouping === null ? v : grouping.format(v);
+    else if (typeof v === "string") vars[k] = v;
+  }
+  return msg(ROUND_ROBIN_REFUSALS[code].key, vars);
+}
+
+/** B4 review m-8: an organiser's promotion refused at the format's max (`FORMAT_TOO_MANY_ENTRANTS`) says it in the promotion's own
+ *  sentence. The draw doors' "This division has {entrants}" read "up to 100 ... has 100" at the max itself, which contradicts
+ *  itself; the promotion is refused AT the max, so it says the division already holds that many. Same code, status and fields
+ *  (`max`, `entrants` = the field as it stands); the server's English is this row's `en`, the screen's is `key`. */
+export const FORMAT_MAX_PROMOTION: { en: string; key: MessageKey } = {
+  en: "This format allows up to {max} entrants and this division already has {entrants}, so no one else can be promoted.",
+  key: "reg.promote.formatMax",
+};
+
+/** B4 re-review N-3: a late add into a running table refused at the format's max (`FORMAT_TOO_MANY_ENTRANTS`) says it in its own
+ *  sentence. The add is refused and rolled back, so the draw sentence's "This division has {entrants}" would be false; `entrants` is
+ *  the field the add WOULD make. Same code, status and fields as the draw doors; the server's English is this row's `en`, the
+ *  screen's is `key` (`lateEntryRefusalText`). */
+export const FORMAT_MAX_LATE_ENTRY: { en: string; key: MessageKey } = {
+  en: "This format allows up to {max} entrants. Adding to the running table would make {entrants}.",
+  key: "roundrobin.lateEntry.formatMax",
+};
+
+/** What a late-add door (the entrants panel's add, the waiting strip's place) shows for a round-robin refusal: the late-entry sentence
+ *  for the format's max (`FORMAT_MAX_LATE_ENTRY`), else the table's own (`roundRobinRefusalText`), numbers grouped the reader's way. */
+export function lateEntryRefusalText(
+  code: RoundRobinRefusalCode,
+  extra: Readonly<Record<string, unknown>> | undefined,
+  msg: (key: MessageKey, vars?: Record<string, string | number>) => string,
+  locale: string | undefined,
+): string {
+  if (code !== "FORMAT_TOO_MANY_ENTRANTS") return roundRobinRefusalText(code, extra, msg, locale);
+  return roundRobinRefusalText(code, extra, (_key, vars) => msg(FORMAT_MAX_LATE_ENTRY.key, vars), locale);
 }

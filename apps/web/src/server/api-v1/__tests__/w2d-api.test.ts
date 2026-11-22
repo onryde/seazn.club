@@ -568,7 +568,9 @@ describe.skipIf(!HAS_DB)("W2d T13 the table rules over API v1 (route handlers, l
     expect(checked, "two stages of four on both endpoints").toBe(16);
   });
 
-  it("D11b an empty pool table stays an empty list (no rows is no table, never a level one) beside a played pool that keeps its places", async () => {
+  // W5 app PR B Task 1 (X-PO-1, ST-G5): a pool's table is its SEATS from Start (engine 10 `TableStage.pools`), so the idle pool is no
+  // longer an empty list - it is a level table of its two seats, rank null on both endpoints (was: "stays an empty list").
+  it("D11b an idle pool's table is LEVEL (its seats, rank null) beside a played pool that keeps its places", async () => {
     // single-sport: pools are a group-stage seam, sport-blind; generic is the rig's sport.
     const s = as(await tableScene({ entrants: 4, stages: { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } } } }));
     const stageId = s.stageIds[0]!;
@@ -583,14 +585,17 @@ describe.skipIf(!HAS_DB)("W2d T13 the table rules over API v1 (route handlers, l
     expect(stored, "premise: one stored table per pool").toHaveLength(2);
     const playedPool = stored.find((t) => t.rows.some((r) => r.entrantId === played.home))!;
     const idlePool = stored.find((t) => t !== playedPool)!;
-    expect(idlePool.rows, "premise: the pool with no counted fixture stores no rows at all").toEqual([]);
+    const idleSeats = fixtures.filter((f) => f !== played).flatMap((f) => [f.home, f.away]).sort();
+    expect(idlePool.rows.map((r) => r.entrantId).sort(), "the pool with no counted fixture stores its two seats").toEqual(idleSeats);
 
     const pub = (await publicTables(await publish(s.divisionId))).filter((t) => t.stage_id === stageId);
     const poolTable = (poolId: string) => pub.filter((t) => t.pool_id === poolId);
     expect([poolTable(playedPool.pool_id).length, poolTable(idlePool.pool_id).length], "one public table per pool").toEqual([1, 1]);
     expect(expectPlaces(await stageTable(stageId, playedPool.pool_id), 2, "the played pool: own") + expectPlaces(poolTable(playedPool.pool_id)[0]!.rows, 2, "the played pool: public")).toBe(4);
-    expect(await stageTable(stageId, idlePool.pool_id), "the idle pool: own").toEqual([]);
-    expect(poolTable(idlePool.pool_id)[0]!.rows, "the idle pool: public").toEqual([]);
+    expect(
+      expectRankNull(await stageTable(stageId, idlePool.pool_id), 2, "the idle pool: own") + expectRankNull(poolTable(idlePool.pool_id)[0]!.rows, 2, "the idle pool: public"),
+      "the idle pool is level on both endpoints",
+    ).toBe(4);
   });
 
   it("D11b every sport's level table serves rank null on both endpoints (registry sweep, a generated stage per sport)", async () => {

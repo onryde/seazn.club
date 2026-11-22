@@ -29,6 +29,7 @@ import { readStagePins, readStageSeating } from "../rank-override";
 import { inTheField } from "@/lib/entrant-field";
 import { roundRobinRefusal } from "../roundrobin-refusal";
 import { isRoundRobinRefusalCode } from "@/lib/roundrobin-refusals";
+import { BEST_NTH_REFUSAL_CODES, CROSS_POOL_REFUSAL_CODES } from "@/lib/seeding-error";
 
 /**
  * W4 T6 (AN-2; the app half of engine row X-CH-7): the lines of a BRACKET stage still owed a result, in bracket order
@@ -296,7 +297,11 @@ async function progressCompletedStage(
         );
         // B4 fix wave (12b m1): a round-robin refusal (RR_CUT_EXCEEDS_FIELD) rides inside the wrap by name with its own fields, so the
         // desk says that sentence in the reader's language instead of the server's English reason.
-        const cause = err instanceof HttpError && err.code !== undefined && isRoundRobinRefusalCode(err.code) ? { ...err.extra, cause: err.code } : {};
+        // W5 app PR B T4 (K19): so does a best-Nth cut nobody can supply (SEEDING_BESTNTH_NO_SUPPLIER), said in the seeding copy.
+        const cause =
+          err instanceof HttpError && err.code !== undefined && (isRoundRobinRefusalCode(err.code) || BEST_NTH_REFUSAL_CODES.has(err.code) || CROSS_POOL_REFUSAL_CODES.has(err.code))
+            ? { ...err.extra, cause: err.code }
+            : {};
         throw new HttpError(
           409,
           err instanceof Error ? err.message : String(err),
@@ -332,6 +337,14 @@ async function progressCompletedStage(
       // two sources), and progression-multi-source.test.ts's "rejects an
       // entrant qualifying through two sources" case depends on that NOT
       // being swallowed here.
+      // W5 app PR B T4 (K19; RB5-U7): engine 10's best-Nth reasons are not "another source is not ready" - they arrive here as
+      // named seeding refusals (`bestNthRefusal`, stored-progression.ts), never as the STAGE_NOT_READY swallowed below - and the
+      // completion they follow has committed, so they are said as the setup branch says its own: "completed, but", by name.
+      // W5 app PR B T5 (FX-G5, owed item 1): so is a cross-pool draw the engine refused (RB5-D10) - nobody is seated.
+      if (err instanceof HttpError && err.code !== undefined && (BEST_NTH_REFUSAL_CODES.has(err.code) || CROSS_POOL_REFUSAL_CODES.has(err.code))) {
+        log.warn({ event: "seed_next_stage_failed", stageId, nextStageId: next!.id, err: String(err) }, "stage completed, but seeding the next stage failed");
+        throw new HttpError(409, err.message, "STAGE_COMPLETED_SEEDING_FAILED", { ...err.extra, cause: err.code, stageId, nextStageId: next!.id });
+      }
       if (!EngineError.is(err, "STAGE_NOT_READY")) throw err;
       qualified = null;
     }

@@ -21,6 +21,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
+import { isLevelTable } from "@seazn/engine/competition";
 import en from "@/dictionaries/en/public.json";
 import { sql, withTenant } from "@/lib/db";
 import type { Dict } from "@/lib/i18n-constants";
@@ -287,7 +288,7 @@ describe.skipIf(!HAS_DB)("W2d concern 2 — a table stage's level table exists f
     expectLevel(await publicTablesOf(s), s.entrants, "swiss after Pair next");
   });
 
-  it("a group stage: one pool gives a level table of every entrant; two pools write no EMPTY table (the fold's pool membership comes from results)", async () => {
+  it("a group stage: one pool gives a level table of every entrant; two pools give a level table each, of the pool's seats (X-PO-1)", async () => {
     // single-sport: pools are the stage kind's (sport-agnostic)
     const one = await scene({ entrants: 4, stages: { seq: 1, kind: "group", name: "Group", config: { pools: { count: 1 } } } });
     await generateStageFixtures(one.auth, one.stageId);
@@ -297,9 +298,17 @@ describe.skipIf(!HAS_DB)("W2d concern 2 — a table stage's level table exists f
     expect(out.created, "premise: both pools were generated").toBe(12);
     const stored = await snapshotsOf(two.stageId);
     expect(stored.filter((x) => x.rows.length === 0), "no empty pool table is stored").toEqual([]);
-    // Nothing is served: every pool folds empty before a result (engine `entrantsOfPool` takes pool membership from
-    // resulted fixtures) — parked as concern-2 finding 2 (owner follow-up), so "No standings yet" until a pool result.
-    expect((await publicTablesOf(two)).tables, "a pooled stage serves no table before a result (finding 2, parked)").toEqual([]);
+    // W5 app PR B Task 1 (X-PO-1) closes concern-2 finding 2: the fold seats each pool's members (`TableStage.pools`), so every
+    // pool is a level table of its four from the generate. differential: before, every pool folded empty and nothing was served.
+    // The snake (doc 05 §1): 8 seeds into 2 pools deal A = 1, 4, 5, 8 and B = 2, 3, 6, 7 - typed from the rule.
+    const seats = [[1, 4, 5, 8], [2, 3, 6, 7]].map((seeds) => seeds.map((n) => two.entrants[n - 1]!).sort());
+    const read = await publicTablesOf(two);
+    expect(read.tables.map((t) => t.rows.map((r) => r.entrantId).sort()).sort(), "two level tables, each its snake seats").toEqual(seats.sort());
+    expect(read.tables.every((t) => isLevelTable(t.rows as never)), "each level").toBe(true);
+    for (const html of read.html) {
+      expect(html.match(new RegExp(`<span aria-hidden="true">${SPEC_LEVEL_RANK}</span>`, "g"))?.length, "every rank the dash").toBe(4);
+      expect(html, "no leader row").not.toContain("bg-amber-50");
+    }
   });
 
   it("RULING — a `timing: setup` progression's placeholder fixtures name no entrant, so they produce no table (not a table of placeholders)", async () => {
@@ -522,7 +531,7 @@ describe.skipIf(!HAS_DB)("W2d concern 2 fix round 1 — the stored table follows
     await expect(exportedStandings(s), "a table of no rows is no standings to print").rejects.toMatchObject({ status: 404, code: "STANDINGS_NOT_AVAILABLE" });
   });
 
-  it("n1: a later 2-pool group's empty tables (its Standings opened) do not displace the finished stage's table in the export", async () => {
+  it("n1: a later 2-pool group's level tables (its Standings opened) do not displace the finished stage's table in the export", async () => {
     // single-sport: the export's stage pick is the division's (sport-agnostic)
     const s = await scene({
       entrants: 8,
@@ -546,7 +555,9 @@ describe.skipIf(!HAS_DB)("W2d concern 2 fix round 1 — the stored table follows
     await generateStageFixtures(s.auth, s.stageId);
     await getStandings(s.auth, s.stageId);
     const pools = await snapshotsOf(s.stageId);
-    expect(pools.map((t) => t.rows.length), "premise: the groups' read stored two tables of no rows").toEqual([0, 0]);
+    // W5 B T1 (X-PO-1): seated, the groups' read stores two LEVEL tables of four (before: two tables of no rows).
+    expect(pools.map((t) => t.rows.length), "premise: the groups' read stored two tables of four").toEqual([4, 4]);
+    expect(pools.every((t) => isLevelTable(t.rows as never)), "premise: both level").toBe(true);
     // Phase 1's real order: the lower seed won every match — E8 7 wins down to E1 0.
     expect(await exportedStandings(s), "the export prints Phase 1's final table, not an empty one").toEqual(
       [8, 7, 6, 5, 4, 3, 2, 1].map((n, i) => ({ place: i + 1, name: `E${n}`, played: 7 })),

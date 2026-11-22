@@ -19,6 +19,9 @@ import { courtNamesById, divisionLockState } from "../schedule";
 import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
 import { fixtureHasResultSql } from "../fixture-results-sql";
 import { fixtureCalledSql, stageHasStarted } from "../fixture-started-sql";
+import { insertFixtureRows } from "../fixture-insert";
+import { formatMaxEntrants, formatMaxGate, START_LINE_BUDGET } from "@/lib/format-max-entrants";
+import { roundRobinRefusal } from "../roundrobin-refusal";
 // W4 T8 (FX-G2): a root knockout's Generate over existing lines reconciles them (bracket-reconcile.ts).
 import { reconcileRootBracket } from "../bracket-reconcile";
 import { carriedSlotCounts, carrySlots, carrySlotsByPair } from "@/lib/rebuild-slots";
@@ -50,6 +53,7 @@ import {
   poolCount,
   generateForStage,
   roundRobinStagePlan,
+  seededSnake,
   type RoundBye,
 } from "./generators";
 import { reconcileRoundRobinLines, writeRoundByes } from "./roundrobin-reconcile";
@@ -57,7 +61,8 @@ import { isEmptySwissReshape } from "./swiss-reconcile";
 import { swissActiveEntrants, swissGen } from "./swiss-gen";
 import { lockBoardsRefusingOnlineGames } from "./swiss-boards";
 import { stageAttachmentCounts } from "./roster-drift";
-import { poolRemedy, poolSizeIssue } from "@/lib/pool-size-gate";
+import { c38SuggestedOf, poolRemedy } from "@/lib/pool-size-gate";
+import { validatePoolSizes } from "@seazn/engine/competition";
 import { fillSlot, resolveBracketSeats } from "./bracket-seats";
 import { dropPinsOfChangedPools, readPoolMembers } from "../rank-override";
 
@@ -290,6 +295,23 @@ async function reconcileRoundRobinGenerate(
 }
 
 /**
+ * W5 B4 review m-1: Start's own ask of the format's max. A first stage drawn BEFORE Start (a Generate in setup) is not drawn again by
+ * Start (`startDivision` generates only an undrawn stage, or reconciles a drifted root knockout), so the draw's gate in
+ * `generateStageFixturesTx` never runs for it - and sign-ups since the draw can have taken the field past the max. The division
+ * page disables Start for that field (launch-actions.tsx); this is the server agreeing, by the same name, before any write. Before
+ * Start only (the caller asks it for an unstarted division): a started table takes late entries and is never refused for its size.
+ * The field is the division's active roster, as the draw counts it; the first stage by `seq` is the one Start opens.
+ */
+export async function refuseFormatTooManyAtStart(tx: Tx, divisionId: string): Promise<void> {
+  const stages = await tx<{ kind: string; config: Record<string, unknown> }[]>`
+    select kind, config from stages where division_id = ${divisionId} order by seq`;
+  const [{ n }] = await tx<{ n: number }[]>`
+    select count(*)::int as n from entrants where division_id = ${divisionId} and status in ('registered', 'confirmed')`;
+  const gate = formatMaxGate(stages, n);
+  if (gate !== null) throw roundRobinRefusal("FORMAT_TOO_MANY_ENTRANTS", { max: gate.max, entrants: gate.entrants });
+}
+
+/**
  * The main write of a Generate (doc 08 §3), in the CALLER's transaction: everything `generateStageFixtures` does
  * between its pre-flight and its post-commit work, unchanged in behaviour. Extracted (W3 T1, X-RB-1) so
  * `rebuildStageFixtures` can delete and regenerate in ONE transaction — a regenerate that throws then rolls the
@@ -425,6 +447,19 @@ export async function generateStageFixturesTx(
     from fixtures where stage_id = ${stageId}
     order by round_no, seq_in_round`;
 
+  // W5 B4 (stress F8; owner 2026-11-21, max entrants per format): a FIRST draw of a field past its format's max is refused by name,
+  // before the draw is built. The max is the largest field whose draw fits the measured Start line budget (`formatMaxEntrants`,
+  // the real generators' count). First draw only - Start's, a Generate before it, Rebuild's after its delete: a stage that holds
+  // lines is reconciled or paired a round at a time, and refusing a Swiss's next Pair because late entries grew its field
+  // would strand a running event. Every door that draws runs this function, so the one check holds them all.
+  // B4 review m-1: a stage drawn BEFORE Start is still unstarted, so its reconciles are asked too - a league drawn at its max that
+  // then took sign-ups must not start (the division page's Start is disabled for that field; the server agrees). Only a started
+  // division's passes are exempt (division status, under the `division:` lock taken above).
+  if (existing.length === 0 || !(await divisionHasStarted(tx, stage.division_id))) {
+    const max = formatMaxEntrants(stage);
+    if (max !== null && entrants.length > max) throw roundRobinRefusal("FORMAT_TOO_MANY_ENTRANTS", { max, entrants: entrants.length, stageId });
+  }
+
   // W4 T8 (FX-G2, MB-004/005; spec §6.5): a ROOT knockout that already has its lines is reconciled, never inserted into
   // by `ext_key` (6 → 7 inserted nothing and said "up to date"; 8 → 9 seated the field twice beside a second final; a
   // line that became a bye 500'd on the bye-award bulk update below). Fed stages (`config.qualified`) keep their path.
@@ -532,9 +567,9 @@ export async function generateStageFixturesTx(
   if ((stage.kind === "group" || stage.kind === "league") && gen.length === 0 && !hasTable) {
     const groups = stage.kind === "group" ? poolCount(stage.config) : 1;
     const required = Math.max(2, groups * 2);
-    // W5 T12 (X-BD-1, PO-1): the group count that works, from the one rule the builder's Next reads (lib/pool-size-gate.ts). A single
-    // league (or one pool) has no count to offer: its remedy is entrants, so it carries null.
-    const suggested = groups > 1 ? (poolSizeIssue(entrants.length, groups)?.suggested ?? null) : null;
+    // W5 T12 (X-BD-1, PO-1): the group count that works - since PR B Task 1 (X-PO-2) the engine's own floor over the seating this
+    // draw deals (`drawFloorSuggested`). A single league (or one pool) has no count to offer: its remedy is entrants, so it carries null.
+    const suggested = groups > 1 ? drawFloorSuggested(entrants, groups) : null;
     throw new EngineError(
       "STAGE_NOT_READY",
       groups > 1
@@ -559,8 +594,8 @@ export async function generateStageFixturesTx(
     if (stranded.length > 0) {
       const groups = poolCount(stage.config);
       const required = groups * 2;
-      // W5 T12 (X-BD-1, PO-1): the count that works rides on this throw too, from the same rule as the empty-draw throw above.
-      const suggested = poolSizeIssue(entrants.length, groups)?.suggested ?? null;
+      // W5 T12 (X-BD-1, PO-1): the count that works rides on this throw too, from the same engine floor as the empty-draw throw above.
+      const suggested = drawFloorSuggested(entrants, groups);
       throw new EngineError(
         "STAGE_NOT_READY",
         `not enough entrants to fill ${groups} groups — each group needs at least 2 (have ${entrants.length}, need ${required}); ${poolRemedy(suggested)}`,
@@ -699,7 +734,11 @@ export async function generateStageFixturesTx(
         conditional: g.conditional === true,
       };
     });
-  if (newRows.length > 0) await tx`insert into fixtures ${tx(newRows)}`;
+  // W5 B4 (stress F8): the exact count of what this pass writes, whatever its kind, held to the Start line budget before the
+  // first line is written. A field past its format's max is refused by name before the draw is built (FORMAT_TOO_MANY_ENTRANTS, above);
+  // this catches the draws no field bounds - an americano's courts x rounds as an API client stored them.
+  if (newRows.length > START_LINE_BUDGET) throw roundRobinRefusal("DRAW_TOO_LARGE", { lines: newRows.length, budget: START_LINE_BUDGET });
+  await insertFixtureRows(tx, newRows);
   for (const r of newRows) byKey.set(r.ext_key, r.id);
   if (roundByes !== null) await writeRoundByes(tx, stageId, roundByes);
   // Loop R M-8 (R116-2's other door): F14's departed-qualifier walkover — an award over two seated sides, which a
@@ -1194,4 +1233,26 @@ export async function wireCrossFeeds(tx: Tx, divisionId: string): Promise<void> 
       }
     }
   }
+}
+
+/**
+ * W5 app PR B Task 1 (X-PO-2 <- RB5-E4/P2; K5): C38's `suggested`, from the ENGINE's floor (`validatePoolSizes`) over the very
+ * seating this first draw deals (`seededSnake`, pool keys A..), read through `c38SuggestedOf` (one pool is a League: no group
+ * count). The builder's early read (`poolSizeIssue`) answers every field the same (the 161-field parity sweep,
+ * pooled-membership.test.ts). A seating the engine accepts has no count to offer (null). Any other engine refusal is not a
+ * floor and is not C38's to word: it propagates.
+ */
+function drawFloorSuggested(entrants: readonly ActiveEntrant[], groups: number): number | null {
+  const seating = new Map<string, string>();
+  seededSnake(entrants, groups).forEach((members, i) => {
+    for (const e of members) seating.set(e.id, POOL_KEYS[i]!);
+  });
+  try {
+    validatePoolSizes(seating);
+  } catch (err) {
+    const data = err instanceof EngineError ? (err.data as { reason?: unknown; suggestedPools?: number | null } | undefined) : undefined;
+    if (data?.reason !== "pool_too_small") throw err;
+    return c38SuggestedOf(data.suggestedPools ?? null);
+  }
+  return null;
 }

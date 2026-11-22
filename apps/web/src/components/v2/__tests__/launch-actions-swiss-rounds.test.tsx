@@ -75,6 +75,7 @@ const props: LaunchProps = {
   competitionStatus: "published",
   competitionVisibility: "public",
   viewerPlan: "pro",
+  activeEntrants: 2,
 };
 
 const redLines = (tree: ReactElement[]): string[] =>

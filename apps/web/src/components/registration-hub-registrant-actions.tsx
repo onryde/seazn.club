@@ -98,11 +98,12 @@ import { useRef, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { ApiV1Error, apiV1 } from "@/lib/client-v1";
 import { useConfirm } from "@/components/ui/confirm-provider";
-import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
+import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { lichessRegistrantRefusalText } from "@/components/v2/entrants-lichess-refusal";
 import { registrantKindRefusalText } from "@/lib/entrant-kind-refusal";
 import { deriveRegistrantActionFlags } from "@/components/registration-hub-registrant-derive";
 import { PROMOTE_OVER_CAPACITY_CODE, PROMOTE_PLAN_LIMIT_CODE } from "@/lib/registration-promote";
+import { FORMAT_MAX_PROMOTION } from "@/lib/roundrobin-refusals";
 import { REMINDER_CAP_PER_DAY, REMINDER_CONFIRM_WITHIN_MS, REMINDER_LIMIT_CODE } from "@/lib/registration-reminder";
 import type { MessageKey } from "@/lib/messages";
 import type { RegistrationListRow } from "@/server/usecases/registrations";
@@ -175,6 +176,7 @@ export function RegistrationHubRegistrantActions({
   const msg = useMsg();
   // The two promote refusals say a NUMBER of places / entrants, so their sentence follows the count (`.one` / `.other`, Intl.PluralRules).
   const msgPlural = useMsgPlural();
+  const locale = useLocaleOrDefault();
   const router = useRouter();
   const confirmDialog = useConfirm();
   const [optimisticStatus, setOptimisticStatus] = useState<Status>(status);
@@ -262,6 +264,12 @@ export function RegistrationHubRegistrantActions({
     // The plan's per-division entrant limit is met: said in the organiser's language, with the limit the server read.
     if (err.code === PROMOTE_PLAN_LIMIT_CODE && typeof err.extra.limit === "number") {
       return msgPlural("reg.promote.planLimit", err.extra.limit, { limit: err.extra.limit });
+    }
+    // W5 B4 review I-1 + m-8: the format's max entrants is met (the draw doors' FORMAT_TOO_MANY_ENTRANTS, which no plan and no
+    // confirmation lifts) - in the organiser's language, in the promotion's own sentence, the numbers grouped their way.
+    if (err.code === "FORMAT_TOO_MANY_ENTRANTS" && typeof err.extra.max === "number" && typeof err.extra.entrants === "number") {
+      const n = new Intl.NumberFormat(locale);
+      return msg(FORMAT_MAX_PROMOTION.key, { max: n.format(err.extra.max), entrants: n.format(err.extra.entrants) });
     }
     const said =
       registrantKindRefusalText(err, (key, vars) => msg(key, vars)) ??

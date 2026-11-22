@@ -95,6 +95,14 @@ vi.mock("../table-withdrawals", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../table-withdrawals")>()),
   loadTableWithdrawals: tableWithdrawalsMock,
 }));
+// W5 app PR B C5 (X-ADJ-4): the points adjustments' ledger read (`division_events`) is SQL too - a real database's job
+// (`points-adjustment-surfaces-db.test.tsx` drives the hub through it, Undo included). Unmocked since C5, this file read "DATABASE_URL is
+// not set" in the unit job for every division with a table stage. Here it answers no adjustments: the footnote is not what this file tests.
+const pointsAdjustmentsMock = vi.hoisted(() => vi.fn(async (): Promise<never[]> => []));
+vi.mock("../points-adjustments", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../points-adjustments")>()),
+  loadPointsAdjustments: pointsAdjustmentsMock,
+}));
 // Observed, not silenced for its own sake: a read the hub swallows must still
 // leave a warning behind, or a broken discipline query reads as "no bans".
 const logMock = vi.hoisted(() => ({

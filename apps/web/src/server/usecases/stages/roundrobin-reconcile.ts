@@ -31,6 +31,7 @@ import { FIXTURE_DELETED_REASON } from "@/server/email-outbox/cancel";
 import { cancelBoardInvites } from "../external-play/cancel-invites";
 import { fixtureHasResultSql } from "../fixture-results-sql";
 import { stageHasStarted } from "../fixture-started-sql";
+import { insertFixtureRows } from "../fixture-insert";
 import { roundRobinRefusal } from "../roundrobin-refusal";
 import { poolSizeIssue } from "@/lib/pool-size-gate";
 import { poolCount, roundRobinStagePlan, type RoundBye } from "./generators";
@@ -223,7 +224,7 @@ export async function reconcileRoundRobinLines(
       conditional: false,
     };
   });
-  if (newRows.length > 0) await tx`insert into fixtures ${tx(newRows)}`;
+  await insertFixtureRows(tx, newRows);
   const insertedIds = newRows.map((r) => r.id);
   // Undoable generation: the lines this pass created are what Undo removes. A pass that only dropped lines creates none, but
   // still moves seats under the division's history, so a Redo waiting on the old board is cleared (as a Generate that creates

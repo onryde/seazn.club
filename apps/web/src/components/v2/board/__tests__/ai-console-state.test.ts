@@ -337,7 +337,7 @@ describe("aiUndoErrorText (a refused one-tap AI Undo → the sentence, its field
   // bound; the server sends it beside the code (`knockoutRefusal(code, { min })` → the envelope's fields).
   it("fills a knockout refusal's fields: QUALIFYING_MAIN_TOO_FEW says its {min}, never a literal hole", () => {
     expect(msg("knockout.refusal.QUALIFYING_MAIN_TOO_FEW"), "premise: the key alone prints the hole").toContain("{min}");
-    const text = aiUndoErrorText(422, "QUALIFYING_MAIN_TOO_FEW", { min: 4 }, msg);
+    const text = aiUndoErrorText(422, "QUALIFYING_MAIN_TOO_FEW", { min: 4 }, msg, "en");
     expect(text).toBe("Qualifying + Main draw needs at least 4 entrants.");
     expect(text).not.toContain("{");
   });
@@ -345,12 +345,12 @@ describe("aiUndoErrorText (a refused one-tap AI Undo → the sentence, its field
     const codes = Object.keys(SWISS_REFUSALS) as SwissRefusalCode[];
     let checked = 0;
     for (const code of codes) {
-      expect(aiUndoErrorText(SWISS_REFUSALS[code].status, code, {}, msg), code).toBe(EN[swissRefusalKey(code)]);
+      expect(aiUndoErrorText(SWISS_REFUSALS[code].status, code, {}, msg, "en"), code).toBe(EN[swissRefusalKey(code)]);
       checked++;
     }
     expect(checked, "anti-vacuity: every Swiss code checked").toBe(codes.length);
     expect(checked).toBeGreaterThan(0);
-    expect(aiUndoErrorText(409, "SEED_CONFIRM_NOT_UNDOABLE", undefined, msg)).toBe(EN["knockout.refusal.SEED_CONFIRM_NOT_UNDOABLE"]);
+    expect(aiUndoErrorText(409, "SEED_CONFIRM_NOT_UNDOABLE", undefined, msg, "en")).toBe(EN["knockout.refusal.SEED_CONFIRM_NOT_UNDOABLE"]);
   });
   it("leaves every other refusal to aiErrorKey's sentence (positive pair)", () => {
     let checked = 0;
@@ -360,7 +360,7 @@ describe("aiUndoErrorText (a refused one-tap AI Undo → the sentence, its field
       [402, "ai.credits"],
       [500, undefined],
     ] as const) {
-      expect(aiUndoErrorText(status, code, { min: 4 }, msg), `${status} ${code}`).toBe(msg(aiErrorKey(status, code)));
+      expect(aiUndoErrorText(status, code, { min: 4 }, msg, "en"), `${status} ${code}`).toBe(msg(aiErrorKey(status, code)));
       checked++;
     }
     expect(checked).toBe(4);

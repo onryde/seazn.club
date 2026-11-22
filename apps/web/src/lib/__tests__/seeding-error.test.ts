@@ -7,7 +7,9 @@
 // (api-v1/schemas/) — never i18n keys themselves. This module is the
 // ONE place a code becomes display text.
 import { describe, expect, it } from "vitest";
-import { seedingErrorMessage, SEEDING_ERROR_CODES, type SeedingErrorCode } from "@/lib/seeding-error";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { PROPOSAL_STALE_REDRAWN, PROPOSAL_STALE_SUPERSEDED, seedingErrorMessage, SEEDING_ERROR_CODES, type SeedingErrorCode } from "@/lib/seeding-error";
 import { LOCALES } from "@/lib/i18n-constants";
 
 describe("seedingErrorMessage — mechanics", () => {
@@ -28,7 +30,7 @@ describe("seedingErrorMessage — mechanics", () => {
     expect(out).not.toBe("fallback");
   });
 
-  it("SEEDING_ERROR_CODES lists exactly the 13 shipped codes, plus F3 review item 4's SEEDING_MAP_SOURCE_AMBIGUOUS, F6's SEEDING_CARRY_SOURCE_INVALID the withdrawn-qualifier refusal and the empty-draw refusal (17 total)", () => {
+  it("SEEDING_ERROR_CODES lists exactly the 13 shipped codes, plus F3 review item 4's SEEDING_MAP_SOURCE_AMBIGUOUS, F6's SEEDING_CARRY_SOURCE_INVALID the withdrawn-qualifier refusal, the empty-draw refusal and W5's two best-Nth refusals", () => {
     const expected: SeedingErrorCode[] = [
       "SEEDING_MAP_SLOT_INVALID",
       "SEEDING_MAP_SOURCE_INVALID",
@@ -64,6 +66,14 @@ describe("seedingErrorMessage — mechanics", () => {
       "SEEDING_ROUNDLOSERS_DE_SOURCE",
       // W4 app PR B (Task 8): a firstLosses take from a double-elimination source.
       "SEEDING_FIRSTLOSSES_DE_SOURCE",
+      // W5 app PR B (Task 4, K19): engine 10's best-Nth STAGE_NOT_READY reasons, named (`bestNthRefusal`).
+      "SEEDING_BESTNTH_NO_SUPPLIER",
+      "SEEDING_POOL_RESULTS_MISSING",
+      "SEEDING_POOL_SEPARATION_IMPOSSIBLE",
+      "SEEDING_PAGE_PLAYOFF_NEEDS_FOUR",
+      "SEEDING_CROSS_POOL_DRAW_INVALID",
+      // W5 app PR B D-B2-2: a cross-pool draw past the builder's bounds, refused by name before the engine's search.
+      "SEEDING_CROSS_POOL_DRAW_TOO_LARGE",
     ];
     expect([...SEEDING_ERROR_CODES].sort()).toEqual([...expected].sort());
   });
@@ -73,7 +83,9 @@ describe("seedingErrorMessage — real dictionaries, all 4 locales, every code",
   for (const locale of LOCALES) {
     for (const code of SEEDING_ERROR_CODES) {
       it(`${locale}: ${code} resolves to real copy — never the raw code, never the PREFIXED dictionary key, never empty, no leftover {placeholder}`, () => {
-        const out = seedingErrorMessage(locale, code, "SHOULD_NOT_SEE_FALLBACK");
+        // W5 app PR B T4: the two best-Nth refusals carry the engine's numbers (rank, available, pool); every code is given them
+        // and a code that names none ignores them, so the leftover-{placeholder} check still catches a misspelt name.
+        const out = seedingErrorMessage(locale, code, "SHOULD_NOT_SEE_FALLBACK", { rank: 3, available: 2, pool: "A", count: 5, entrants: 8, reason: "tier_invalid", pools: 9, maxPools: 8, maxEntrants: 32 });
         expect(out).not.toBe("SHOULD_NOT_SEE_FALLBACK");
         expect(out).not.toBe(code);
         // A genuinely missing dictionary entry does NOT fall back to the bare
@@ -98,5 +110,54 @@ describe("seedingErrorMessage — real dictionaries, all 4 locales, every code",
     const fr = seedingErrorMessage("fr", "SEEDING_TIE_UNRESOLVED", "x");
     const all = [en, nl, es, fr];
     expect(new Set(all).size).toBe(4);
+  });
+});
+
+// W5 stress fix F5: SEEDING_PROPOSAL_STALE with `reason: "superseded"` (a newer draft replaced this one) renders its own copy,
+// never "standings changed". Expected values are the dictionary files' own entries, read here, not the resolver's output.
+describe("seedingErrorMessage — a superseded draft (F5)", () => {
+  const files = Object.fromEntries(
+    LOCALES.map((l) => [l, JSON.parse(readFileSync(resolve(__dirname, `../../dictionaries/${l}/errors.json`), "utf8")) as Record<string, string>]),
+  );
+  let checked = 0;
+  for (const locale of LOCALES) {
+    it(`${locale}: reason superseded -> the superseded copy; no reason -> the standings copy`, () => {
+      const superseded = files[locale]!["seeding.proposalSuperseded"];
+      const stale = files[locale]!["seeding.SEEDING_PROPOSAL_STALE"];
+      expect(superseded, `${locale} has the copy`).toBeTypeOf("string");
+      expect(superseded).not.toBe(stale);
+      expect(seedingErrorMessage(locale, "SEEDING_PROPOSAL_STALE", "x", { reason: PROPOSAL_STALE_SUPERSEDED, newer: "p2" })).toBe(superseded);
+      expect(seedingErrorMessage(locale, "SEEDING_PROPOSAL_STALE", "x")).toBe(stale);
+      // Another code carrying the same reason is not re-routed: the variant is SEEDING_PROPOSAL_STALE's alone.
+      expect(seedingErrorMessage(locale, "SEEDING_ALREADY_CONFIRMED", "x", { reason: PROPOSAL_STALE_SUPERSEDED })).toBe(files[locale]!["seeding.SEEDING_ALREADY_CONFIRMED"]);
+      checked++;
+    });
+  }
+  it("anti-vacuity: every locale was checked", () => {
+    expect(checked).toBe(LOCALES.length);
+  });
+});
+
+// W5 app PR B review I-1: SEEDING_PROPOSAL_STALE with `reason: "redrawn"` (a tie answer re-drew round one, so the confirm's other edits
+// were stored as a new draft to make again) renders its own copy - never "standings changed", never the superseded copy. Expected
+// values are the dictionary files' own entries, read here.
+describe("seedingErrorMessage — a re-drawn draft (I-1)", () => {
+  const files = Object.fromEntries(
+    LOCALES.map((l) => [l, JSON.parse(readFileSync(resolve(__dirname, `../../dictionaries/${l}/errors.json`), "utf8")) as Record<string, string>]),
+  );
+  let checked = 0;
+  for (const locale of LOCALES) {
+    it(`${locale}: reason redrawn -> the redrawn copy, distinct from the standings and superseded copies`, () => {
+      const redrawn = files[locale]!["seeding.proposalRedrawn"];
+      expect(redrawn, `${locale} has the copy`).toBeTypeOf("string");
+      expect(redrawn).not.toBe(files[locale]!["seeding.SEEDING_PROPOSAL_STALE"]);
+      expect(redrawn).not.toBe(files[locale]!["seeding.proposalSuperseded"]);
+      expect(seedingErrorMessage(locale, "SEEDING_PROPOSAL_STALE", "x", { reason: PROPOSAL_STALE_REDRAWN, reproposed: "p2" })).toBe(redrawn);
+      checked++;
+    });
+  }
+  it("anti-vacuity: every locale was checked, and the copies differ across locales", () => {
+    expect(checked).toBe(LOCALES.length);
+    expect(new Set(LOCALES.map((l) => files[l]!["seeding.proposalRedrawn"])).size).toBe(LOCALES.length);
   });
 });

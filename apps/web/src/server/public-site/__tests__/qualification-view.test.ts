@@ -377,7 +377,12 @@ describe("stageQualMeta / divisionPointsBounds", () => {
         points_rule: undefined,
         has_rank_overrides: true,
       }),
-    ).toEqual({ qualifyCount: 4, qualifyPerGroup: false, nextStageName: "Cup", swissRounds: 5, pointsRule: null, hasRankOverrides: true, tablePointsRule: null });
+    ).toEqual({ qualifyCount: 4, qualifyPerGroup: false, nextStageName: "Cup", swissRounds: 5, pointsRule: null, hasRankOverrides: true, tablePointsRule: null, qualifyBestNth: false, qualified: null });
+    // V540 (W5 Task 6): the best-Nth flag and who went through map across; a malformed `qualified` reads as none (never a guess)
+    const v538 = { kind: "group", qualify_count: 2, qualify_per_group: true, next_stage_name: "KO", swiss_rounds: null, points_rule: null, has_rank_overrides: false };
+    expect(stageQualMeta({ ...v538, qualify_best_nth: true, qualified: ["e1", "e2"] })).toMatchObject({ qualifyBestNth: true, qualified: ["e1", "e2"] });
+    expect(stageQualMeta({ ...v538, qualify_best_nth: null, qualified: ["e1", 7] })).toMatchObject({ qualifyBestNth: false, qualified: null });
+    expect(stageQualMeta({ ...v538, qualified: { e1: true } })).toMatchObject({ qualifyBestNth: false, qualified: null });
     // a row that still carries a `table_points_rule` key (a stale reader) does not reach the rule the table is paid by
     const stale = {
       kind: "league",
@@ -389,7 +394,7 @@ describe("stageQualMeta / divisionPointsBounds", () => {
       has_rank_overrides: false,
       table_points_rule: { win: { regulation: 4 } },
     };
-    expect(stageQualMeta(stale)).toEqual({ qualifyCount: null, qualifyPerGroup: true, nextStageName: null, swissRounds: null, pointsRule: { win: { regulation: 2 } }, hasRankOverrides: false, tablePointsRule: null });
+    expect(stageQualMeta(stale)).toEqual({ qualifyCount: null, qualifyPerGroup: true, nextStageName: null, swissRounds: null, pointsRule: { win: { regulation: 2 } }, hasRankOverrides: false, tablePointsRule: null, qualifyBestNth: false, qualified: null });
   });
   // differential: today the flag reads the stored pins whatever the stage's kind
   it("X-PO-4 (RB5-P7): the public flag reports an organiser's pins only on a stage that has a table - a bracket or ladder stays false", () => {
@@ -486,11 +491,21 @@ describe("no status — stated first, each with its positive pair", () => {
     const played = rows.map((r) => (r.entrantId === "A" ? row("A", 1, 1, 1) : r.entrantId === "B" ? row("B", 4, 0, 1) : r));
     expect(view({ kind: "swiss", rows: played, fixtures: one })).not.toBeNull();
   });
-  it("stage complete (every round settled)", () => {
+  it("stage complete (every round settled): the race stops and the cut freezes - Qualified / Out from the final order (W5 X-QS-1)", () => {
+    // Re-pinned by W5 app PR B Task 6: this case asserted NO view (engine 10 answered null with no order source), which is the
+    // X-QS-1 defect - a finished table lost its cut. Expected: the final table read by hand, A and B above the line of two.
     const s = swiss4();
     const done = [won(3, "A", "C"), won(3, "B", "D")];
     const rows = [row("A", 1, 3, 3, [5, 0]), row("B", 2, 2, 3, [3, 2]), row("C", 3, 1, 3, [1, 3]), row("D", 4, 0, 3, [0, 4])];
-    expect(view({ ...s, rows, fixtures: [...s.fixtures.filter((f) => f.round_no < 3), ...done] })).toBeNull();
+    const finished = { ...s, rows, fixtures: [...s.fixtures.filter((f) => f.round_no < 3), ...done] };
+    const v = must(view(finished));
+    expect(Object.fromEntries(Object.entries(v.rows).map(([id, r]) => [id, r.status]))).toEqual({ A: "qualified", B: "qualified", C: "out", D: "out" });
+    expect(v.table.label).toBe("Top 2 went through to Finals");
+    expect(v.table.legend).toEqual({ through: "Qualified", open: null, out: "Out", hint: "Tap a rank for details." });
+    expect(v.rows.A!.headline).toBe("Went through to Finals.");
+    expect(v.rows.D!.headline).toBe("Did not go through to Finals.");
+    // a cut of one: the singular line
+    expect(must(view({ ...finished, meta: { qualifyCount: 1 } })).table.label).toBe("First place went through to Finals");
   });
   it("M1: an organiser rank override hides the status; a lots-decided tie (engine rankLocked) does NOT", () => {
     expect(view({ ...swiss4(), meta: { hasRankOverrides: true } })).toBeNull();
@@ -1961,6 +1976,8 @@ describe("a match held for settle is still open (X-AB-5; the public table reads 
     return Object.fromEntries(rows.map((r) => [r.entrantId, out.get(r.entrantId)!.status.kind]));
   };
   const kindsOf = (v: QualificationView) => Object.fromEntries(Object.entries(v.rows).map(([id, r]) => [id, r.status]));
+  /** W5 Task 6: the LAST scenes' finished table (A, C, B, D) under a cut of two, read by hand - A and C went through. */
+  const FROZEN_LAST = { A: "qualified", C: "qualified", B: "out", D: "out" };
   const DECIDED = ["through", "out"];
   /** A recorded abandon as the public read carries it: stored `abandoned`, no outcome, an active ledger entry. */
   const plain = (home: string, away: string, over: Partial<QualFixture> = {}) =>
@@ -2019,7 +2036,8 @@ describe("a match held for settle is still open (X-AB-5; the public table reads 
         const sc = build(ab, LAST);
         return { ...sc, fixtures: sc.fixtures.map((f) => (f.status === "scheduled" ? { ...won(3, "C", "D"), pool_id: f.pool_id } : f)) };
       };
-      expect(view(lastOne(plain("A", "B", { no_result: true }))), "No result: the stage is complete").toBeNull();
+      // W5 Task 6 (X-QS-1): the finished table keeps its cut, frozen (was: no view at all).
+      expect(kindsOf(must(view(lastOne(plain("A", "B", { no_result: true }))))), "No result: the stage is complete - frozen").toEqual(FROZEN_LAST);
       expect(view(lastOne(plain("A", "B"))), "plain: still open").not.toBeNull();
     });
 
@@ -2036,7 +2054,7 @@ describe("a match held for settle is still open (X-AB-5; the public table reads 
       expect(checked).toBe(3);
     });
 
-    it(`${name}: the held match is the table's LAST - the table is not complete and still shows; settled, expunged or void it is finished and shows none`, () => {
+    it(`${name}: the held match is the table's LAST - the table is not complete and still shows; settled, expunged or void it is finished and shows its frozen cut`, () => {
       // C-D is played, so A-B is the only match left: the completion check (isTableStageComplete) is what reads the status.
       const LAST = [row("A", 1, 2, 2, [2, 0]), row("C", 2, 2, 3, [2, 1]), row("B", 3, 1, 2, [1, 1]), row("D", 4, 0, 3, [0, 3])];
       const SETTLED_LAST = [row("A", 1, 3, 3, [3, 0]), row("C", 2, 2, 3, [2, 1]), row("B", 3, 1, 3, [1, 2]), row("D", 4, 0, 3, [0, 3])];
@@ -2049,10 +2067,11 @@ describe("a match held for settle is still open (X-AB-5; the public table reads 
       expect(Object.keys(shown.rows).length, "every entrant of the table is checked").toBe(4);
       let finished = 0;
       for (const done of [plain("A", "B", { expunged: true }), plain("A", "B", { has_active_abandon: false })]) {
-        expect(view(lastOne(done, LAST)), `${done.expunged ? "expunged" : "void"}: the stage is complete`).toBeNull();
+        // W5 Task 6 (X-QS-1): finished, the markers freeze from the final order (was: no view at all).
+        expect(kindsOf(must(view(lastOne(done, LAST)))), `${done.expunged ? "expunged" : "void"}: the stage is complete - frozen`).toEqual(FROZEN_LAST);
         finished++;
       }
-      expect(view(lastOne(won(3, "A", "B"), SETTLED_LAST)), "settled: the stage is complete").toBeNull();
+      expect(kindsOf(must(view(lastOne(won(3, "A", "B"), SETTLED_LAST)))), "settled: the stage is complete - frozen").toEqual(FROZEN_LAST);
       expect(finished).toBe(2);
     });
 
@@ -2131,7 +2150,7 @@ describe("copy coverage", () => {
   const placeholders = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
   const qualKeys = Object.keys(en).filter((k) => k.startsWith("table.qual."));
   it("every table.qual key exists in es/fr/nl with the same placeholders", () => {
-    expect(qualKeys.length).toBe(40); // W2d T17 (P25): + the six table.qual.whatIfWins.* sentences
+    expect(qualKeys.length).toBe(46); // W2d T17 (P25): + the six table.qual.whatIfWins.* sentences; W5 Task 6: + the six frozen ones
     for (const [name, dict] of [["es", es], ["fr", fr], ["nl", nl]] as const) {
       const d = dict as Record<string, string>;
       for (const k of qualKeys) {

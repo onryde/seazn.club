@@ -131,6 +131,20 @@ describe("matchKeyRoute", () => {
     expect(matchKeyRoute("PUT", `/api/v1/fixtures/${id}/rules`)).toEqual({ scope: "manage", pin: "fixture", resourceId: id });
   });
 
+  it("W5 C5 (X-ADJ-4): Adjust points and its Undo are manage writes on their stage; the dialog's list is a read on the same pin", () => {
+    // Expected from the handlers' own resource auth (stages/[id]/adjustments: POST and DELETE ask "write", GET asks "read").
+    const id = "5d0c7a8e-2b4f-4e1a-9c63-1f7e8a2b9d40";
+    expect(matchKeyRoute("POST", `/api/v1/stages/${id}/adjustments`)).toEqual({ scope: "manage", pin: "stage", resourceId: id });
+    expect(matchKeyRoute("DELETE", `/api/v1/stages/${id}/adjustments/7`)).toEqual({ scope: "manage", pin: "stage", resourceId: id });
+    expect(matchKeyRoute("GET", `/api/v1/stages/${id}/adjustments`)).toEqual({ scope: "read", pin: "stage", resourceId: id });
+    // A read key opens the list and moves no points; a scoring key moves none either.
+    for (const held of [["read"], ["score"]]) {
+      expect(scopeSatisfies(held, "read"), `${held} reads the list`).toBe(true);
+      expect(scopeSatisfies(held, matchKeyRoute("POST", `/api/v1/stages/${id}/adjustments`)!.scope), `${held} adjusts`).toBe(false);
+      expect(scopeSatisfies(held, matchKeyRoute("DELETE", `/api/v1/stages/${id}/adjustments/7`)!.scope), `${held} undoes`).toBe(false);
+    }
+  });
+
   it("accepts full URLs and bare paths", () => {
     expect(v1Path("https://seazn.club/api/v1/teams")).toBe("/teams");
     expect(matchKeyRoute("GET", "https://seazn.club/api/v1/teams")?.scope).toBe("read");

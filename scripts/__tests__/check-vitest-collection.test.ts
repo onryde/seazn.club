@@ -216,6 +216,11 @@ const REST = [
   // W5 app PR A whole-PR review I1: a departed entrant's public row carries no stale tie note. Begins with "t", so it belongs here
   // rather than in C_GLOBBED; this gate reddened on it in the PR's CI (listed=77 vs 76).
   "src/server/public-site/__tests__/table-withdrawal-tie-notes-db.test.ts",
+  // W5 app PR B: the points-adjustment surfaces (Task 7) and the frozen qualification view and surfaces (Task 6). None begins
+  // with "c", so all three belong here rather than in C_GLOBBED; this gate reddened on them in the PR's CI (listed=80 vs 77).
+  "src/server/public-site/__tests__/points-adjustment-surfaces-db.test.tsx",
+  "src/server/public-site/__tests__/qualification-frozen-surfaces-db.test.tsx",
+  "src/server/public-site/__tests__/qualification-view-frozen.test.ts",
 ];
 const EXCLUDE_C = "**/public-site/__tests__/c*";
 

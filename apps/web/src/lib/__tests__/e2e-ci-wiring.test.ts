@@ -23,8 +23,8 @@
 //  3. A spec added to `SERIAL_SPECS` but never removed from the parallel
 //     project's ignore list — or vice versa — is either run twice against
 //     shared org state or not at all.
-//  4. The walkthrough project is dispatched as FIVE legs — `capture`, `stream`
-//     and `sponsor` carve-outs plus `rest` sharded two ways — by the same
+//  4. The walkthrough project is dispatched as SEVEN legs — `capture`, `stream`
+//     and `sponsor` carve-outs plus `rest` sharded four ways — by the same
 //     catch-all construction (E2E_WALKTHROUGH_SLICE). The same three failure modes apply
 //     to it: a typo in a carve-out, a "rest" that stops being a catch-all, and
 //     a duplicate artifact slug that only fails when a report is needed.
@@ -969,8 +969,8 @@ describe("e2e CI wiring", () => {
     expect(yml, "the matrix must pass its project through to Playwright").toContain("--project=${{ matrix.project }}");
     // The four "rest" legs shard between themselves; the heavy leg does not.
     // Read per matrix leg rather than as a bare substring: the walkthrough
-    // legs carry `--shard=N/3`, so a bare `toContain("--shard=1/3")` would be
-    // satisfied by them and a rest leg deleted or re-cut would go unseen.
+    // rest legs carry `--shard=N/4` too, so a bare `toContain("--shard=1/4")` would
+    // be satisfied by them and a rest leg deleted or re-cut would go unseen.
     const legs = yml
       .split(/\n\s*- group: /)
       .slice(1)
@@ -993,7 +993,7 @@ describe("e2e CI wiring", () => {
     expect(midArgs[0], "the mid leg must not shard").not.toContain("--shard");
   });
 
-  it("dispatches the walkthrough project as capture, stream, sponsor and a two-way rest, each exactly once", () => {
+  it("dispatches the walkthrough project as capture, stream, sponsor and a four-way rest, each exactly once", () => {
     const yml = readFileSync(join(REPO_ROOT, ".github/workflows/e2e.yml"), "utf8")
       .split("\n")
       .map((line) => line.replace(/(^|\s)#.*$/, ""))
@@ -1026,8 +1026,9 @@ describe("e2e CI wiring", () => {
 
     // Every walkthrough leg names a slice this config understands, and the
     // parallel legs name none (the key is the walkthrough project's own).
-    expect(wt.map((l) => l.wslice).sort(), "walkthrough legs: one capture, one stream, one sponsor, rest twice").toEqual([
+    expect(wt.map((l) => l.wslice).sort(), "walkthrough legs: one capture, one stream, one sponsor, rest four times").toEqual([
       "capture",
+      "rest",
       "rest",
       "rest",
       "rest",
@@ -1040,7 +1041,7 @@ describe("e2e CI wiring", () => {
     ).toBe(true);
     expect(legs.filter((l) => l.project !== "walkthrough" && l.wslice !== undefined)).toEqual([]);
 
-    // The carve-outs run whole; "rest" is the only sharded part, three ways (two until 2026-11-13).
+    // The carve-outs run whole; "rest" is the only sharded part, four ways (three until 2026-11-19, two until 2026-11-13).
     for (const sl of ["capture", "stream", "sponsor"]) {
       const leg = wt.filter((l) => l.wslice === sl);
       expect(leg, `exactly one ${sl} leg`).toHaveLength(1);
@@ -1048,8 +1049,8 @@ describe("e2e CI wiring", () => {
     }
     expect(
       wt.filter((l) => l.wslice === "rest").map((l) => l.args).sort(),
-      "the walkthrough rest slice must shard three ways, one leg per shard",
-    ).toEqual(["--workers=3 --shard=1/3", "--workers=3 --shard=2/3", "--workers=3 --shard=3/3"]);
+      "the walkthrough rest slice must shard four ways, one leg per shard",
+    ).toEqual(["--workers=3 --shard=1/4", "--workers=3 --shard=2/4", "--workers=3 --shard=3/4", "--workers=3 --shard=4/4"]);
     expect(
       wt.filter((l) => !l.args.startsWith("--workers=3")).map((l) => l.group),
       "a walkthrough leg lost --workers=3, which every replayed leg time assumes",

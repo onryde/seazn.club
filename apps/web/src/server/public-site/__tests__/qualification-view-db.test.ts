@@ -383,7 +383,10 @@ describe.skipIf(!HAS_DB)("buildQualificationView on real reads (getPublicDivisio
     expect(view!.table.label).toBe("Top 2 go through to Finals · 2 rounds left");
   });
 
-  it("F2 on a real pooled stage: a pool member the snapshot has not folded yet hides that pool's status", async () => {
+  // W5 app PR B Task 1 (X-PO-1, ST-G5): the pooled snapshot folds every SEATED member from Start (engine 10 `TableStage.pools`,
+  // carried openings included), so F2's "a member the snapshot has not folded" no longer arises on a seated pool: the pool shows
+  // its statuses from its first result (was: "hides that pool's status" until every member had a result).
+  it("F2 on a real pooled stage: every seated member is a row from Start, so the pool shows its statuses after its first match", async () => {
     const EIGHT = [...FOUR, "Eve", "Fay", "Gus", "Hal"];
     const r = await rig("group", EIGHT);
     const pools = [...new Set((await fixturesOf(r)).map((f) => f.pool_id))].filter((p): p is string => p !== null).sort();
@@ -397,12 +400,12 @@ describe.skipIf(!HAS_DB)("buildQualificationView on real reads (getPublicDivisio
     );
     members.delete(null);
     expect(members.size).toBe(4);
-    // The premise the guard exists for: the pooled snapshot folds only
-    // members with results.
-    expect(partial.rows.length).toBeLessThan(members.size);
-    expect(partial.view).toBeNull();
-    // The rest of the round: every member has a result, the snapshot has all
-    // four, and the pool shows — with the engine's statuses on two left each.
+    // The seating: all four members are rows after one match (two of them with nothing played), and the pool shows, with the
+    // engine's own statuses over what each has left.
+    expect(partial.rows.map((x) => x.entrantId).sort()).toEqual([...members].sort());
+    expect(partial.view).not.toBeNull();
+    expectSameStatuses(partial.view!, await engineStatuses(r, partial.rows, partial.statuses, leagueLeft, 1));
+    // The rest of the round: every member has a result, and the pool shows — with the engine's statuses on two left each.
     await playRound(r, 1, EIGHT, Infinity, pool);
     const full = await load(r, pool);
     expect(full.rows.length).toBe(4);
@@ -411,7 +414,8 @@ describe.skipIf(!HAS_DB)("buildQualificationView on real reads (getPublicDivisio
     expectSameStatuses(full.view!, await engineStatuses(r, full.rows, full.statuses, leagueLeft, 1));
   });
 
-  it("F2 on a real pooled stage: a leaver the snapshot FOLDED shows the pool (expunge cascade); a status-only leaver it never folded hides it", async () => {
+  // W5 app PR B Task 1: (b) flipped with the seating - see its comment.
+  it("F2 on a real pooled stage: a leaver the snapshot FOLDED shows the pool (expunge cascade); a status-only leaver, seated, shows it too (no status of her own)", async () => {
     // Review fix rounds 1–2. Two real ways a pool member leaves before playing:
     const EIGHT = [...FOUR, "Eve", "Fay", "Gus", "Hal"];
     const scene = async () => {
@@ -450,7 +454,9 @@ describe.skipIf(!HAS_DB)("buildQualificationView on real reads (getPublicDivisio
     expect(flagged(embed.data.fixtures), "embed read").toEqual([...hers].sort());
     // …and the console's (the organiser's standings tab builds the same view from listDivisionFixtures).
     expect(flagged(await listDivisionFixtures(a.r.auth, a.r.divisionId)), "console read").toEqual([...hers].sort());
-    expect(cascaded.rows.map((x) => x.entrantId).sort()).toEqual(a.others);
+    // W5 B T1 (X-WDT-7): the seated leaver stays a row of her pool (ranked last), with no status.
+    expect(cascaded.rows.map((x) => x.entrantId).sort()).toEqual([...a.others, a.leaver].sort());
+    expect(cascaded.rows.at(-1)!.entrantId, "ranked last").toBe(a.leaver);
     expect(cascaded.view).not.toBeNull();
     expect(cascaded.view!.rows[a.leaver]).toBeUndefined();
     expect(cascaded.view!.table.label).toBe("First place goes through to Finals · 1 round left");
@@ -468,13 +474,18 @@ describe.skipIf(!HAS_DB)("buildQualificationView on real reads (getPublicDivisio
     await playRound(b.r, 2, EIGHT, Infinity, b.pool, b.leaver);
     const selfCancel = await load(b.r, b.pool);
     expect(selfCancel.statuses[b.leaver]).toBe("withdrawn");
-    expect(selfCancel.rows.map((x) => x.entrantId).sort()).toEqual(b.others);
+    // W5 B T1 ruling: the seating folds her from Start (her carried opening with her), so her points are no longer unknown, and
+    // since W4 T13 a departed entrant is no rival in the cut. Her scheduled lines stay remaining for each opponent (they may yet
+    // be walked over), so the bounds hold: the pool shows, she has no status (was: the pool failed closed, owner fix round 2).
+    expect(selfCancel.rows.map((x) => x.entrantId).sort()).toEqual([...b.others, b.leaver].sort());
     expect((await fixturesOf(b.r)).filter((f) => f.home_entrant_id === b.leaver || f.away_entrant_id === b.leaver).map((f) => f.status)).toEqual([
       "scheduled",
       "scheduled",
       "scheduled",
     ]);
-    expect(selfCancel.view).toBeNull();
+    expect(selfCancel.view).not.toBeNull();
+    expect(selfCancel.view!.rows[b.leaver], "no status for the leaver").toBeUndefined();
+    expectSameStatuses(selfCancel.view!, await engineStatuses(b.r, selfCancel.rows, selfCancel.statuses, leagueLeft, 1));
   });
 
   it("F1 award mode through the real cascade: the leaver gets no status, the rest do, walkovers counted", async () => {

@@ -12,6 +12,7 @@ import { byeAward } from "@/lib/fixture-bye";
 import { rrExtKey } from "@/lib/roundrobin-reconcile";
 import type { Tx, GenFixture, ActiveEntrant } from "./types";
 import { knockoutRefusal } from "../knockout-refusal";
+import { roundRobinRefusal } from "../roundrobin-refusal";
 import { HttpError } from "@/lib/errors";
 // The draw primitives moved to the engine-db layer (competition.ts reads them; usecases import engine-db, never the reverse).
 import { knockoutDraws, knockoutDrawOrder } from "@/server/engine-db/knockout-draw";
@@ -385,6 +386,13 @@ export function snakeDistribute<T>(ordered: readonly T[], count: number): T[][] 
   return pools;
 }
 
+/** The pools a group's first draw deals `entrants` into: by seed (unseeded last, in the order given), then the seeded snake.
+ *  The one dealing both the draw (`roundRobinStagePlan`) and Generate's engine floor check (`generate-tx.ts`, X-PO-2) read. */
+export function seededSnake<T extends { seed?: number | null }>(entrants: readonly T[], count: number): T[][] {
+  const ordered = [...entrants].sort((a, b) => (a.seed ?? Number.MAX_SAFE_INTEGER) - (b.seed ?? Number.MAX_SAFE_INTEGER));
+  return snakeDistribute(ordered, count);
+}
+
 // Exported: stage-seeding.ts's sourceShapeOf (relocated there, F2 Task 6)
 // needs the same pool-count derivation this file's own generation path uses,
 // so the two can never drift onto different pool-count rules.
@@ -393,6 +401,8 @@ export const POOL_KEYS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 export function poolCount(cfg: Record<string, unknown>): number {
   const pools = cfg.pools as { count?: unknown } | undefined;
   const count = typeof pools?.count === "number" ? pools.count : 1;
+  // W5 stress fix F7: past the alphabet is refused by NAME (a stage stored through the API before its door had this ceiling).
+  if (Number.isInteger(count) && count > POOL_KEYS.length) throw roundRobinRefusal("RR_TOO_MANY_POOLS", { max: POOL_KEYS.length, pools: count });
   if (!Number.isInteger(count) || count < 1 || count > POOL_KEYS.length) {
     throw new EngineError("CONFIG_INVALID", `invalid pool count ${String(count)}`, { count });
   }
@@ -453,10 +463,7 @@ export function roundRobinStagePlan(
   // have no pool row and keep the unprefixed key and no pool).
   const only = poolIds.get(POOL_KEYS[0]!);
   if (count === 1) return only === undefined ? roundRobinGen(entrants, legs) : roundRobinGen(entrants, legs, `p${POOL_KEYS[0]}-`, only);
-  const ordered = [...entrants].sort(
-    (a, b) => (a.seed ?? Number.MAX_SAFE_INTEGER) - (b.seed ?? Number.MAX_SAFE_INTEGER),
-  );
-  const pools = snakeDistribute(ordered, count).map((poolEntrants, i) => {
+  const pools = seededSnake(entrants, count).map((poolEntrants, i) => {
     const key = POOL_KEYS[i];
     return roundRobinGen(poolEntrants, legs, `p${key}-`, poolIds.get(key));
   });

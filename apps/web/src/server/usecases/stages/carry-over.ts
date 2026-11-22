@@ -3,9 +3,10 @@ import "server-only";
 // placement tables a progression resolves against, and `seedNextStage`.
 
 import { withTenant } from "@/lib/db";
+import { HttpError } from "@/lib/errors";
 import { EngineError } from "@seazn/engine/core";
 import { carryDeltas, placementTable, type BracketFixture, type PoolTable, type ProgressionSpec, type SourceShape, type SourceTables, type StandingsRow } from "@seazn/engine/competition";
-import { parseExtKey, bracketWinnerLoser, loadCrossGroupRules } from "@/server/engine-db/competition";
+import { parseExtKey, bracketWinnerLoser } from "@/server/engine-db/competition";
 import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "@/server/engine-db/level-seat";
 import { engineFixtureStatus as toBracketFixtureStatus } from "@/lib/fixture-engine-status";
 import { refuseCutBeyondTables } from "./cut-gate";
@@ -14,9 +15,11 @@ import { attachFeedRefs, engineRoundOf, laneDepthOf } from "@/server/engine-db/b
 import { personalPointsLeaderboard } from "../americano";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
-import { cutEligiblePools, departedLoseBestNth, resolveProgressionSource, sourceShapeOf, persistCrossGroupDraws } from "../stage-seeding";
+import { cutEligiblePools, departedLoseBestNth, resolveProgressionSource, sourceShapeOf, persistCrossGroupDraws, sourcePoolKeys } from "../stage-seeding";
+import { bestNthSourceOf, withPoolResults } from "../pool-results";
 import { STAGE_COLS, REAL_TABLE_KINDS, BRACKET_KINDS, type Tx, type StageRow } from "./types";
 import { departedEntrantIds } from "./helpers";
+import { drawAcrossPools } from "./cross-pool-draw";
 
 // F6 (#625) — carry-over has TWO application paths now: seedNextStage (below,
 // `timing:"on_complete"`) and the propose/confirm pair (computeSeedProposal /
@@ -255,14 +258,13 @@ async function tablesForCompletedStage(
   divisionId: string,
 ): Promise<SourceTables> {
   let pools: PoolTable[];
-  if (stage.kind === "americano") {
+  // Pool uuid -> spec-facing key, read once: the snapshots and the fold's pool results both take it (Task 0 review m2).
+  const keyOf = stage.kind === "americano" ? undefined : await sourcePoolKeys(tx, stage.id);
+  if (keyOf === undefined) {
     pools = await americanoPlacementTables(tx, stage.id, divisionId);
   } else {
     // Ranked tables from the completion snapshot(s); translate pool uuids
     // back to their spec-facing keys.
-    const poolRows = await tx<{ id: string; key: string }[]>`
-      select id, key from pools where stage_id = ${stage.id}`;
-    const keyOf = new Map(poolRows.map((p) => [p.id, p.key]));
     const snapshots = await tx<{ pool_id: string | null; rows: StandingsRow[] }[]>`
       select pool_id, rows from standings_snapshots where stage_id = ${stage.id}`;
     if (snapshots.length === 0) {
@@ -275,6 +277,10 @@ async function tablesForCompletedStage(
       rows: s.rows,
     }));
   }
+  // W5 app PR B T0 (G4, RB5-U1): a real table's pools carry their counted results, as on the setup path (`sourcesToTables`), so
+  // best-Nth compares a larger pool's candidate without its results against the pool's bottom k; the rules come from the same load.
+  const real = REAL_TABLE_KINDS.has(stage.kind) && keyOf !== undefined ? await bestNthSourceOf(tx, stage.id, keyOf) : undefined;
+  if (real !== undefined) pools = withPoolResults(pools, real.results, real.expunged);
   // W3 T15 Carry A (controller ruling 2026-11-02): a Swiss source's departed entrants leave its cut and the next eligible
   // entrant backfills — the same tables the `setup` path's proposal reads (stage-seeding.ts `sourcesToTables`); since W4
   // T13 (RB4-V6) a league's or a group's too (`CUT_SKIPS_DEPARTED_KINDS`). Every other kind is returned as it was:
@@ -288,7 +294,7 @@ async function tablesForCompletedStage(
   const bracket = BRACKET_KINDS.has(stage.kind) ? await loadBracketFixtures(tx, stage.id) : undefined;
   // W2d T12 (spec §5.9, X-TB-7): best-Nth compares groups by THIS stage's pinned cross-group order and its stored
   // cross-group draws — only a real table has them (an americano or bracket source has no cross-group comparison).
-  const crossGroup = REAL_TABLE_KINDS.has(stage.kind) ? await loadCrossGroupRules(tx, stage.id) : undefined;
+  const crossGroup = real?.crossGroup;
   return { pools, ...(bracket ? { bracket } : {}), ...(crossGroup ? { crossGroup } : {}) };
 }
 
@@ -362,7 +368,15 @@ export async function seedNextStage(auth: AuthCtx, completedStageId: string): Pr
     );
     // W2d T12 (spec §5.9): a cross-group draw best-Nth made is stored with its source, under the division lock held above.
     await persistCrossGroupDraws(tx, resolvedSources, newLotsDraws);
-    const entrants = qualifiers.map((q) => q.entrantId);
+    // W5 app PR B T5 (FX-G5, ruling 281; owed item 1): `config.qualified`'s order IS the seeding Generate lays out (`seed: i + 1`),
+    // so a knockout fed from two or more pools is drawn across them here, exactly as the setup proposal is (`drawAcrossPools`: null
+    // - today's order - for any other field). A refused draw (RB5-D4, RB5-D10) seats nobody: the named refusal leaves this
+    // transaction unwritten and completion says "completed, but" by name, as the setup path's confirm refuses its draft.
+    const drawn = await drawAcrossPools(tx, next, progression, qualifiers, sourceTables);
+    if (drawn?.refused !== undefined) {
+      throw new HttpError(422, "no ordering of the qualifiers keeps pool-mates apart in round one", drawn.refused.code, drawn.refused.vars);
+    }
+    const entrants = (drawn === null ? qualifiers : [...drawn.qualifiers].sort((a, b) => a.seed - b.seed)).map((q) => q.entrantId);
     log.info(
       { event: "qualification_resolved", stageId: completedStageId, nextStageId: next.id, kind: current.kind, count: entrants.length },
       "qualification_resolved",
@@ -432,7 +446,7 @@ export async function seedNextStage(auth: AuthCtx, completedStageId: string): Pr
     await tx`
       insert into division_events (division_id, seq, type, payload)
       values (${current.division_id}, ${last + 1}, 'stage_seeded',
-              ${tx.json({ stageId: next.id, from: completedStageId, entrants } as never)})`;
+              ${tx.json({ stageId: next.id, from: completedStageId, entrants, ...(drawn !== null ? { crossPoolDraw: { seed: drawn.seed } } : {}) } as never)})`;
     let seq = last + 1;
     if (carriedDeltas !== undefined && carriedMode !== undefined) {
       // auditable carry (Jul3/05 §3)

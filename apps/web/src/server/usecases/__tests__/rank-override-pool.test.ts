@@ -440,7 +440,9 @@ describe.skipIf(!HAS_DB)("X-PO-3 fix round 1: a pin waits for its pool's results
 
   // differential: today the pin below is written (rank 3 <= 4 seats), the engine then reads pool A as TWO entrants holding a result and
   // throws CONFIG_INVALID - from the pin POST's own recompute (after the commit), and from every later score in the pool.
-  it("I-1 a rank-3 pin in a pool of four waits while only two of its entrants hold a result: the pin is written, the next result scores, the pin applies once the pool has the rows", async () => {
+  // W5 app PR B Task 1 (preflight C12): the pool is its SEATING now (engine 10 `TableStage.pools`), four rows from Start, so the
+  // rank-3 pin fits the seated size at once - it no longer waits for the pool's results (was: "waits while only two hold a result").
+  it("I-1 a rank-3 pin in a pool of four applies from the first result (the pool seats four): the pin is written, the next result scores, the pin still holds", async () => {
     const r = await rig({ n: 8, kind: "group", pools: 2, sport: GENERIC });
     const ids = await poolIds(r.stageId);
     await startDivision(r.auth, r.divisionId);
@@ -454,13 +456,12 @@ describe.skipIf(!HAS_DB)("X-PO-3 fix round 1: a pin waits for its pool's results
     await expect(overrideStandings(r.auth, r.stageId, { rows: [pin(pinned, 3)] }), "the pin POST must not throw after its commit").resolves.toEqual({ overridden: 1 });
     expect(await storedOverrides(r.stageId), "stored, waiting").toEqual([{ entrant_id: pinned, rank: 3, pool_id: ids.get("A")! }]);
     let rows = ((await getStandings(r.auth, r.stageId, ids.get("A")!)).rows as { entrantId: string; rankLocked?: boolean }[]);
-    expect(rows, "two entrants hold a result").toHaveLength(2);
-    expect(rows.some((x) => x.rankLocked), "the pin waits: nothing is marked pinned yet").toBe(false);
-    await play(r, disjoint!.id, true); // before the fix: 422 CONFIG_INVALID, the score refused
+    expect(rows, "the pool's four seats are its rows (C12: the seated size)").toHaveLength(4);
+    expect([rows[2]!.entrantId, rows[2]!.rankLocked], "the pin applies at once: her place is third").toEqual([pinned, true]);
+    await play(r, disjoint!.id, true); // before the I-1 fix: 422 CONFIG_INVALID, the score refused
     rows = ((await getStandings(r.auth, r.stageId, ids.get("A")!)).rows as { entrantId: string; rankLocked?: boolean }[]);
-    expect(rows, "four entrants hold a result now").toHaveLength(4);
-    expect(rows[2]!.entrantId, "the pin applies: her place is third").toBe(pinned);
-    expect(rows[2]!.rankLocked).toBe(true);
+    expect(rows, "four rows after the second result").toHaveLength(4);
+    expect([rows[2]!.entrantId, rows[2]!.rankLocked], "the pin still holds her third").toEqual([pinned, true]);
   });
 
   // differential: today the bare flip leaves her pin in the config, ranking a withdrawn entrant above the field of an open table

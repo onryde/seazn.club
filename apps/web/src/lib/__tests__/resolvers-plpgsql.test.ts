@@ -43,6 +43,9 @@ const V306 = deltaBySuffix("entitlement_resolver_parity");
 const V475 = deltaBySuffix("w2d_table_rules");
 const V403 = deltaBySuffix("realtime_fixture_broadcast_policy");
 const V452 = deltaBySuffix("online_chess_realtime_policy");
+// W5 app PR B Task 6 (K25): a LATER definer of stage_qualification_meta - two OUT columns appended, the body otherwise V475's, in
+// this delta's plpgsql form. The applied catalog is that delta's from then on; the static claims above stay about this delta.
+const V540 = deltaBySuffix("w5_qualification_frozen_cut");
 
 const HEADERS = {
   ohf3: /create (?:or replace )?function (?:\$\{flyway:defaultSchema\}\.)?org_has_feature\(\s*p_org_id uuid,\s*p_feature_key text,\s*p_competition_id uuid\s*\)/i,
@@ -140,7 +143,7 @@ type ProcRow = {
 
 // Typed from the sources' own headers (V306 search_path; V344/V306/V475 signatures and OUT columns; V475's grants;
 // V228 never touched org_has_feature's ACL) and the brief's `rows 1`, never read back from the delta.
-const EXPECTED: { sig: string; args: string[]; modes: string[] | null; ret: string; retset: boolean; rows: number; header: RegExp }[] = [
+const EXPECTED: { sig: string; args: string[]; modes: string[] | null; ret: string; retset: boolean; rows: number; header: RegExp; source?: { text: string } }[] = [
   { sig: "org_has_feature(uuid,text)", args: ["p_org_id", "p_feature_key"], modes: null, ret: "boolean", retset: false, rows: 0, header: HEADERS.ohf2 },
   {
     sig: "org_has_feature(uuid,text,uuid)",
@@ -153,12 +156,14 @@ const EXPECTED: { sig: string; args: string[]; modes: string[] | null; ret: stri
   },
   {
     sig: "stage_qualification_meta(uuid)",
-    args: ["p_stage_id", "qualify_count", "qualify_per_group", "next_stage_name", "swiss_rounds", "points_rule", "has_rank_overrides"],
-    modes: ["i", "t", "t", "t", "t", "t", "t"],
+    // V540 appends `qualify_best_nth`, `qualified` (W5 Task 6)
+    args: ["p_stage_id", "qualify_count", "qualify_per_group", "next_stage_name", "swiss_rounds", "points_rule", "has_rank_overrides", "qualify_best_nth", "qualified"],
+    modes: ["i", "t", "t", "t", "t", "t", "t", "t", "t"],
     ret: "record",
     retset: true,
     rows: 1,
     header: HEADERS.sqm,
+    source: V540,
   },
 ];
 
@@ -188,8 +193,9 @@ describe.skipIf(!HAS_DB)("the applied resolvers (real Postgres)", () => {
       expect(r.proargnames, e.sig).toEqual(e.args);
       expect(r.modes, e.sig).toEqual(e.modes);
       expect(r.proconfig, e.sig).toEqual([`search_path=${SCHEMA}, pg_temp`]);
-      // What is applied is the delta's body, not a stale or hand-edited one.
-      expect(norm(r.prosrc), e.sig).toBe(norm(bodyAfter(THIS.text, e.header)));
+      // What is applied is the latest definer's body (this delta's, or V540's for stage_qualification_meta), not a stale or
+      // hand-edited one.
+      expect(norm(r.prosrc), e.sig).toBe(norm(bodyAfter((e.source ?? THIS).text, e.header)));
       checked++;
     }
     expect(checked).toBe(3);

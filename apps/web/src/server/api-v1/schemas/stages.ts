@@ -16,7 +16,8 @@ import { SWISS_REQUESTED_BYES_DEFERRED_MESSAGE } from "../../../lib/swiss-refusa
 import { COUNTRY_SEPARATION_NOT_OFFERED_MESSAGE } from "../../../lib/knockout-refusals.ts";
 // Match Day D1: the format fields' bounds, shared with the division builder and the Format dialog (FMT5). Import-free,
 // so the standalone generator loads it like the files above.
-import { FORMAT_BOUNDS } from "../../../lib/format-bounds.ts";
+import { FORMAT_BOUNDS, POOL_COUNT_MAX } from "../../../lib/format-bounds.ts";
+import { ADJUST_DELTA_MAX } from "../../../lib/points-adjustment-offer.ts";
 import { DEPARTED_STATUS_KEYS } from "../../../lib/departed-status-keys.ts";
 // W2c Task 13b finish-up (R-13b-1) — the deciders a stage config refuses at its top level, the engine's own set (shared
 // with the create door). RELATIVE with `.ts`; the module's only imports are the bare engine packages, which load under
@@ -249,7 +250,11 @@ export const StageConfig = z
     // (LegsChoice). The three-leg format itself is gone (ruling 287: a league with legs 3 has no template of its own and
     // reads back as a league), but the legs VALUE is not: the door must not refuse a count a stored division already holds.
     legs: z.number().int().min(FORMAT_BOUNDS.legs.min).max(8).optional(),
-    pools: z.strictObject({ count: z.number().int().min(1) }).optional(),
+    // W5 stress fix F7: one pool per key letter A-Z (`POOL_COUNT_MAX`). The ceiling is NOT this schema's: a whole count past it is
+    // a well-formed request the product refuses, by name (RR_TOO_MANY_POOLS, 422), in the stage writers' shared gate
+    // (usecases/stages/stage-graph.ts `assertStageBatchGates`) - so the ZodError branch keeps answering 400 only (the matrix
+    // harness's `zodBranchFlaws` pin).
+    pools: z.strictObject({ count: z.number().int().min(1).meta({ description: `One pool per key letter, A to Z: at most ${POOL_COUNT_MAX}. Past it the write is refused 422 RR_TOO_MANY_POOLS.` }) }).optional(),
     // Knockout shape. `byes` are entrant ids; `slotOrder` is a draw order with
     // `null` for an empty slot — the two fields §18.2 was raised about.
     thirdPlace: z.boolean().optional(),
@@ -735,3 +740,44 @@ export const FromTemplateResult = z.object({
   templateVersion: z.number().int(),
 });
 export type FromTemplateResult = z.infer<typeof FromTemplateResult>;
+
+// W5 app PR B Task 7 (C5; X-ADJ-1..4; R24 pick 15 A): "Adjust points". `delta` is in the stage's RANKING unit (the engine's
+// `PointsAdjustment.delta`, RB5-T15): table points in the points rule's stored unit (half-points on a "half" rule), or matches
+// won where the cascade ranks wins first - `unit` on every adjustment says which. Zero, a non-finite number, a missing reason or
+// an entrant the table does not hold are refused by the engine's own reasons, mapped by name (RR_ADJUST_*).
+export const AdjustPointsInput = z.object({
+  entrant_id: z.string().uuid(),
+  // B3 ruling 4 (m-6): whole steps of the stored unit, at most ADJUST_DELTA_MAX either way (the usecase refuses the same by name).
+  delta: z.number().int().min(-ADJUST_DELTA_MAX).max(ADJUST_DELTA_MAX),
+  reason: z.string().max(200),
+});
+export type AdjustPointsInput = z.infer<typeof AdjustPointsInput>;
+
+export const PointsAdjustmentWire = z.object({
+  /** The ledger row's seq: what the Undo names. */
+  seq: z.number().int(),
+  stage_id: z.string(),
+  entrant_id: z.string(),
+  delta: z.number(),
+  reason: z.string(),
+  unit: z.enum(["points", "wins"]),
+  points_unit: z.enum(["whole", "half"]),
+  /** The ledger row's date (ISO). */
+  at: z.string(),
+  /** C8: the entrant is no member of the table now (unseated), so the fold does not hold it; it comes back when they are. */
+  held: z.boolean(),
+});
+export type PointsAdjustmentWire = z.infer<typeof PointsAdjustmentWire>;
+
+/** One entrant an adjustment can be made for now (C8: a member of the table), with its pool's key on a pooled stage. */
+export const PointsAdjustmentMember = z.object({ entrant_id: z.string(), pool: z.string().nullable() });
+export const PointsAdjustmentList = z.object({
+  /** What `delta` moves on this table (engine `adjustmentUnitOf`) and its points rule's stored unit: the desk's field label. */
+  unit: z.enum(["points", "wins"]),
+  points_unit: z.enum(["whole", "half"]),
+  members: z.array(PointsAdjustmentMember),
+  adjustments: z.array(PointsAdjustmentWire),
+});
+export type PointsAdjustmentList = z.infer<typeof PointsAdjustmentList>;
+export const PointsAdjustmentResult = z.object({ adjustment: PointsAdjustmentWire });
+export const PointsAdjustmentUndone = z.object({ undone: z.number().int(), voided_by: z.number().int() });

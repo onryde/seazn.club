@@ -18,7 +18,7 @@ const ENGINE = "a match this change touches has started or finished, so it can't
 describe("undoRefusalMessage — StagesPanel's Undo-last refusal", () => {
   it("says the played refusal with the dictionary's sentence, not the engine's", () => {
     expect(typeof EN["history.error.played"], "history.error.played is missing").toBe("string");
-    const text = undoRefusalMessage(new ApiV1Error(ENGINE, 422, PLAYED_REFUSAL_CODE), msg);
+    const text = undoRefusalMessage(new ApiV1Error(ENGINE, 422, PLAYED_REFUSAL_CODE), msg, "en");
     expect(text).toBe(EN["history.error.played"]);
     expect(text).not.toBe(ENGINE);
   });
@@ -37,7 +37,7 @@ describe("undoRefusalMessage — StagesPanel's Undo-last refusal", () => {
       const local = EN[SWISS_REFUSALS[code].key];
       expect(typeof local, `${code}: en/ui.json has its sentence`).toBe("string");
       // At the status the server answers with for this code (the table's): SWISS_UNDO_ROUND_STARTED is a 422.
-      expect(undoRefusalMessage(new ApiV1Error(`server: ${code}`, SWISS_REFUSALS[code].status, code), msg), code).toBe(local);
+      expect(undoRefusalMessage(new ApiV1Error(`server: ${code}`, SWISS_REFUSALS[code].status, code), msg, "en"), code).toBe(local);
       checked++;
     }
     expect(checked).toBe(3);
@@ -48,7 +48,7 @@ describe("undoRefusalMessage — StagesPanel's Undo-last refusal", () => {
     // refusal, not a Swiss one, so a Swiss-only branch let its English through.
     const local = EN["knockout.refusal.SEED_CONFIRM_NOT_UNDOABLE"];
     expect(typeof local, "en/ui.json has its sentence").toBe("string");
-    const text = undoRefusalMessage(new ApiV1Error("server: SEED_CONFIRM_NOT_UNDOABLE", 409, "SEED_CONFIRM_NOT_UNDOABLE"), msg);
+    const text = undoRefusalMessage(new ApiV1Error("server: SEED_CONFIRM_NOT_UNDOABLE", 409, "SEED_CONFIRM_NOT_UNDOABLE"), msg, "en");
     expect(text).toBe(local);
   });
 
@@ -56,19 +56,19 @@ describe("undoRefusalMessage — StagesPanel's Undo-last refusal", () => {
     // The History panel fills these (knockoutRefusalText); Undo-last beside a notice is the same refusal and must say the same
     // sentence. The bound rides on the envelope beside the code (`knockoutRefusal(code, { min })` → `err.extra`).
     expect(msg("knockout.refusal.QUALIFYING_MAIN_TOO_FEW"), "premise: the dictionary's sentence has a hole to fill").toContain("{min}");
-    const text = undoRefusalMessage(new ApiV1Error("server: needs 4", 422, "QUALIFYING_MAIN_TOO_FEW", { min: 4 }), msg);
+    const text = undoRefusalMessage(new ApiV1Error("server: needs 4", 422, "QUALIFYING_MAIN_TOO_FEW", { min: 4 }), msg, "en");
     expect(text).toBe("Qualifying + Main draw needs at least 4 entrants.");
     expect(text).not.toContain("{");
   });
 
   it("keeps an unrecognised refusal's own message", () => {
-    expect(undoRefusalMessage(new ApiV1Error("division is mid-solve", 409, "BUSY"), msg)).toBe(
+    expect(undoRefusalMessage(new ApiV1Error("division is mid-solve", 409, "BUSY"), msg, "en")).toBe(
       "division is mid-solve",
     );
-    expect(undoRefusalMessage(new Error("network down"), msg)).toBe("network down");
+    expect(undoRefusalMessage(new Error("network down"), msg, "en")).toBe("network down");
   });
 
   it("falls back to the generic sentence for a throw that is not an Error", () => {
-    expect(undoRefusalMessage("nope", msg)).toBe(EN["schedule.error.undoFailed"]);
+    expect(undoRefusalMessage("nope", msg, "en")).toBe(EN["schedule.error.undoFailed"]);
   });
 });

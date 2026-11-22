@@ -526,12 +526,15 @@ describe("StagesPanel — Add late player and the pending-latecomer line (W3 T10
       expect(html, JSON.stringify(over)).toContain('data-testid="stage-generate"');
       expect(html, JSON.stringify(over)).not.toContain('data-testid="stage-more"');
     }
-    // Started, but nothing seated yet: the ordinary add seats them in round 1.
+    // Started, but nothing seated yet: the ordinary add seats them in round 1, so the menu offers no late-player item. (Since W5 PR B
+    // Task 7 a started Swiss table's More menu also holds "Adjust points" - `pointsAdjustmentOffered`, its own suite - so the menu
+    // itself is there; what this case owes is that the late-player item is not.)
     const unpaired = renderToStaticMarkup(
       <StagesPanel {...props} stages={[swissStage()]} fixtures={fixtures([])} divisionStatus="active" />,
     );
     expect(unpaired).toContain('data-testid="stage-generate"');
-    expect(unpaired).not.toContain('data-testid="stage-more"');
+    expect(unpaired).not.toContain('data-testid="stage-add-late-player"');
+    expect(unpaired, "the menu that is there is the table's Adjust points").toContain('data-testid="stage-adjust-points"');
   });
 
   it("counts the latecomers waiting for the next Pair and those after the last round, in the card header under the legend", () => {

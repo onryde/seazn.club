@@ -203,19 +203,27 @@ describe.runIf(HAS_DB)("X-SF-6 the private GET without pool_id returns every poo
     }, 120_000);
   }
 
-  it("X-SF-6 the empty case: a started two-pool stage nobody has played has no rows in either pool - the answer is [] and the pools are still listed", async () => {
+  it("X-SF-6 the empty case: a started two-pool stage nobody has played lists each pool's seats, level - no place in either pool", async () => {
     const { r, pools } = await pooled(BADMINTON, 2);
-    // a pool's table has no rows until something in it is decided (the engine's own rule, as the hub and the digest read it): the
-    // empty answer here is TRUTH, not ST-G28 - the cases around this one are the ones that prove rows come back
+    // W5 app PR B Task 1 (X-PO-1): the fold seats each pool's members, so a pool's table lists them from the first fold, nothing
+    // counted. differential: before, a pool had no rows until something in it was decided, and this answer was [].
     const all = await privateDoc(r);
-    expect(all.rows).toEqual([]);
     expect(all.pool_id).toBeNull();
-    for (const p of pools) expect((await privateDoc(r, p.id)).rows, `pool ${p.key} alone agrees`).toEqual([]);
+    let checked = 0;
+    for (const p of pools) {
+      const mine = all.rows.filter((x) => x.pool === p.key);
+      expect(ids(mine), `pool ${p.key}: its seats are listed`).toEqual(p.entrants);
+      expect(mine.map((x) => x.rank), `pool ${p.key}: level, no place`).toEqual(p.entrants.map(() => null));
+      expect(ids((await privateDoc(r, p.id)).rows), `pool ${p.key} alone agrees`).toEqual(p.entrants);
+      checked++;
+    }
+    expect(checked).toBe(2);
   }, 120_000);
 
   it("X-SF-6 each pool is judged level on its own rows: A decided (places), B level (rank null)", async () => {
     const { r, pools } = await pooled(BADMINTON, 2, [0]);
-    // pool B: a started pool with nothing counted whose stored table lists its entrants level (X-TB-6)
+    // pool B: a started pool with nothing counted whose stored table lists its entrants level (X-TB-6) - the product writes this
+    // itself since W5 B T1 (X-PO-1); written here as well so the case stands on the read alone
     const level = levelLeague(pools[1]!.entrants);
     const set = await sql`update standings_snapshots set rows = ${sql.json(level.rows as never)} where stage_id = ${r.stageId} and pool_id = ${pools[1]!.id} returning 1`;
     expect(set, "premise: pool B's stored table is now level").toHaveLength(1);

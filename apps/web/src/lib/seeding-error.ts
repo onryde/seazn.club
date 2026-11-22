@@ -89,7 +89,16 @@ const BY_LOCALE: Record<Locale, Dict> = { en, es, fr, nl };
  *
  *  SEEDING_FIRSTLOSSES_DE_SOURCE (W4 app PR B, Task 8): the same refusal for a `firstLosses` take. "First real loss" is defined over a
  *  single-elimination bracket's rounds; a double-elimination loser drops into a second lane and may lose again, so there is no one
- *  "first loss" round to wait on. Refused by name rather than guessed. */
+ *  "first loss" round to wait on. Refused by name rather than guessed.
+ *
+ *  SEEDING_BESTNTH_UNEQUAL_POOLS is DEPRECATED (W5 app PR B T4; ruling 286, RB5-U8; preflight C2): engine 10 never throws it -
+ *  best-Nth across unequal pools is always compared on the smallest pool's matches - but the code stays in the engine's union and
+ *  a stored seeding-failure notice or a cached API client can still carry it, so its copy is kept and still renders.
+ *
+ *  SEEDING_BESTNTH_NO_SUPPLIER and SEEDING_POOL_RESULTS_MISSING (W5 app PR B T4, K19): see BEST_NTH_REFUSAL_CODES below.
+ *
+ *  SEEDING_POOL_SEPARATION_IMPOSSIBLE, SEEDING_PAGE_PLAYOFF_NEEDS_FOUR and SEEDING_CROSS_POOL_DRAW_INVALID (W5 app PR B T5, K22):
+ *  see CROSS_POOL_REFUSAL_CODES below. */
 export const SEEDING_ERROR_CODES = [
   "SEEDING_MAP_SLOT_INVALID",
   "SEEDING_MAP_SOURCE_INVALID",
@@ -110,8 +119,48 @@ export const SEEDING_ERROR_CODES = [
   "SEEDING_NOTHING_TO_FILL",
   "SEEDING_ROUNDLOSERS_DE_SOURCE",
   "SEEDING_FIRSTLOSSES_DE_SOURCE",
+  "SEEDING_BESTNTH_NO_SUPPLIER",
+  "SEEDING_POOL_RESULTS_MISSING",
+  "SEEDING_POOL_SEPARATION_IMPOSSIBLE",
+  "SEEDING_PAGE_PLAYOFF_NEEDS_FOUR",
+  "SEEDING_CROSS_POOL_DRAW_INVALID",
+  "SEEDING_CROSS_POOL_DRAW_TOO_LARGE",
 ] as const;
 export type SeedingErrorCode = (typeof SEEDING_ERROR_CODES)[number];
+
+/** W5 app PR B T4 (K19; RB5-U7, ruling 286): engine 10's two best-Nth STAGE_NOT_READY reasons, named at the one resolve boundary
+ *  (`bestNthRefusal`, server/usecases/stored-progression.ts) so neither is read as "another source is not ready yet" and swallowed.
+ *  SEEDING_BESTNTH_NO_SUPPLIER: no pool has a rank-N finisher (expunged leavers count in no size) - the format or the field is what
+ *  to mend. SEEDING_POOL_RESULTS_MISSING: a larger pool handed best-Nth no results - no app path reaches it (both seeding builders
+ *  attach every pool's results; the sweep in pool-results-seam.test.ts pins that), mapped by name so a regression is named. A
+ *  completion that trips either carries the code as `cause` inside STAGE_COMPLETED_SEEDING_FAILED (completed-seeding-failed.ts). */
+export const BEST_NTH_REFUSAL_CODES: ReadonlySet<string> = new Set(["SEEDING_BESTNTH_NO_SUPPLIER", "SEEDING_POOL_RESULTS_MISSING"]);
+
+/** W5 app PR B T5 (K22; ruling 281, RB5-D4): the cross-pool draw's refusals (`crossPoolRefusal`, usecases/stages/cross-pool-draw.ts).
+ *  SEEDING_POOL_SEPARATION_IMPOSSIBLE: no ordering of the rank tiers keeps pool-mates apart in round one ({pool} the largest supplier,
+ *  {count} of {entrants}). SEEDING_PAGE_PLAYOFF_NEEDS_FOUR: a page playoff fed {entrants}. SEEDING_CROSS_POOL_DRAW_INVALID: the draw's
+ *  own input refusals ({reason}: tier_invalid, duplicate_entrant, ...) - the app builds that input, so these name a wiring fault.
+ *  SEEDING_CROSS_POOL_DRAW_TOO_LARGE (D-B2-2): a field of {pools} pools / {entrants} qualifiers past the builder's bounds
+ *  ({maxPools}, {maxEntrants}) - the draw's search was measured over that space only, and past it can run for minutes. A
+ *  completion that trips one carries the code as `cause` inside STAGE_COMPLETED_SEEDING_FAILED, as the best-Nth ones do. */
+export const CROSS_POOL_REFUSAL_CODES: ReadonlySet<string> = new Set([
+  "SEEDING_POOL_SEPARATION_IMPOSSIBLE",
+  "SEEDING_PAGE_PLAYOFF_NEEDS_FOUR",
+  "SEEDING_CROSS_POOL_DRAW_INVALID",
+  "SEEDING_CROSS_POOL_DRAW_TOO_LARGE",
+]);
+
+/** W5 stress fix F5: SEEDING_PROPOSAL_STALE's `reason` when a NEWER draft replaced the one being confirmed (a Recompute / POST
+ *  /seed-proposal), not a standings change; the reply also names it (`newer`). The code stays SEEDING_PROPOSAL_STALE, so every
+ *  reader that takes it as "look again" (the progression panel's refresh, plate-field, quick-match advance, match-day MD_STALE)
+ *  still does; only the copy differs (`seeding.proposalSuperseded`). */
+export const PROPOSAL_STALE_SUPERSEDED = "superseded";
+
+/** W5 app PR B review I-1: SEEDING_PROPOSAL_STALE's `reason` when a confirm answered a tie on a draft drawn across pools AND
+ *  edited a seat outside the tie. The answer re-draws round one, so the other edits - made against the draft's seats - no longer
+ *  name the seats they were meant for: the re-drawn slate is stored as a new draft (`reproposed`) for the organiser to review and
+ *  edit again (`seeding.proposalRedrawn`). */
+export const PROPOSAL_STALE_REDRAWN = "redrawn";
 
 function isSeedingErrorCode(code: string): code is SeedingErrorCode {
   return (SEEDING_ERROR_CODES as readonly string[]).includes(code);
@@ -129,5 +178,7 @@ export function seedingErrorMessage(
 ): string {
   if (!isSeedingErrorCode(code)) return fallback;
   const dict = BY_LOCALE[locale] ?? BY_LOCALE[DEFAULT_LOCALE];
+  if (code === "SEEDING_PROPOSAL_STALE" && vars?.reason === PROPOSAL_STALE_SUPERSEDED) return t(dict, "seeding.proposalSuperseded", vars);
+  if (code === "SEEDING_PROPOSAL_STALE" && vars?.reason === PROPOSAL_STALE_REDRAWN) return t(dict, "seeding.proposalRedrawn", vars);
   return t(dict, `seeding.${code}`, vars);
 }

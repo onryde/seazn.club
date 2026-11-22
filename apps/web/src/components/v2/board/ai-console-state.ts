@@ -512,8 +512,10 @@ export function aiUndoErrorText(
   code: string | undefined,
   extra: Readonly<Record<string, unknown>> | undefined,
   msg: (key: MessageKey, vars?: Record<string, string | number>) => string,
+  /** B4 re-review N-1: the reader's locale, so a round-robin sentence's numbers group their way. */
+  locale: string,
 ): string {
-  return isUndoRefusalCode(code) ? undoRefusalText(code, extra, msg) : msg(aiUndoErrorKey(status, code));
+  return isUndoRefusalCode(code) ? undoRefusalText(code, extra, msg, locale) : msg(aiUndoErrorKey(status, code));
 }
 
 /**

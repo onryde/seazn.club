@@ -98,7 +98,7 @@ import type { TableColumnT, TableViewT } from "@/server/public-site/competition-
 import { StandingsPopover } from "./standings-popover";
 import { StandingsRowMarkers } from "./standings-row-markers";
 import { QualCutRow, QualLegend, QualMarker, QualPopoverBody, TieNoteText } from "./qualification-bits";
-import { WithdrawalFootnotes } from "./withdrawal-footnotes";
+import { TableFootnotes } from "./table-footnotes";
 
 export interface StandingsTableViewProps {
   view: TableViewT;
@@ -709,10 +709,11 @@ export function StandingsTableView({
               line without the key to them (controller ruling OQ3). */}
           {/* W5 T8 (RB5-W7; R24 pick 11 A): under the legend, who left and which rule applied — the full table only, as the
               legend. ONE child slot for both: a further sibling here would renumber every `useId` above it (the no-cut golden). */}
-          {preview === undefined && (view.qualification || (view.withdrawalNotes ?? []).length > 0) ? (
+          {preview === undefined &&
+          (view.qualification || (view.withdrawalNotes ?? []).length > 0 || (view.adjustmentNotes ?? []).length > 0) ? (
             <>
               {view.qualification ? <QualLegend legend={view.qualification.legend} /> : null}
-              <WithdrawalFootnotes items={view.withdrawalNotes ?? []} />
+              <TableFootnotes withdrawals={view.withdrawalNotes ?? []} adjustments={view.adjustmentNotes ?? []} />
             </>
           ) : null}
 

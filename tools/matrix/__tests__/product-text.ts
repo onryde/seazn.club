@@ -3,6 +3,7 @@
 // moves the fake with it, and turns the model's pin red.
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
+import { runInThisContext } from "node:vm";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type * as TS from "typescript";
@@ -51,6 +52,51 @@ export function entrantMembersPkeyText(): { name: string; violation: string; sca
     .filter((f) => f.endsWith(".sql") && !f.endsWith("V213__entrant_members.sql"))
     .map((f) => ({ path: f, text: read(`db/migration/${f}`) }));
   return entrantMembersPkeyFrom(read(V213), others);
+}
+
+/** A stand-in for postgres.js's `PostgresError` (a class the matrix cannot import: it is the product's server-only driver).
+ *  The catch-all's `err instanceof postgres.PostgresError` is evaluated against THIS class, so a sample built from it is
+ *  what that arm reads as a database error. It carries no `code` on purpose: the real error's SQLSTATE would also trip
+ *  the `typeof err.code === "string"` arm, and each arm is tested alone (the second is `new Error` with a code). */
+export class StubPostgresError extends Error {}
+
+export interface CatchAllText {
+  /** The `message` the v1 catch-all builds for `err` and answers a 500 INTERNAL with: the product's own expression,
+   *  read from http.ts v1Inner and executed, with `isDriverError` the product's own predicate, executed. */
+  bodyFor(err: Error): string;
+  /** The product's `isDriverError`, executed (the scrub's predicate alone). */
+  isDriverError(err: Error): boolean;
+}
+
+/** W5 stress fix F1 (b94e171a1a; B2 m-4): the v1 catch-all (api-v1/http.ts v1Inner, the arm no earlier `instanceof`
+ *  claims) answers a database driver's or socket's error with a body that carries none of its text. Controller ruling
+ *  2026-11-22: that scrub is the product truth, so the matrix reads the 500's body from THIS text, never from a typed
+ *  copy of what it used to say (a self-pair's `entrant_members_pkey` violation is a database error, so it reaches the
+ *  wire as the scrub). Refused by name when v1Inner's catch-all or `isDriverError` is not in the shape this reads. */
+export function catchAllText(http: string = read("apps/web/src/server/api-v1/http.ts")): CatchAllText {
+  const at = http.indexOf("\nasync function v1Inner<T>(");
+  if (at < 0) throw new Error("product-text: http.ts v1Inner not found");
+  const inner = http.slice(at, http.indexOf("\n}\n", at) + 2);
+  // The arm: after the HttpError arm (an error none of the earlier arms claims reaches it), Sentry, then the message const
+  // and the INTERNAL 500 that carries exactly that const.
+  const arm = /\n {4}if \(err instanceof HttpError\) \{[\s\S]*?\n {4}\}\n {4}Sentry\.captureException\(err\);\n(?:[^\n]*\n)*? {4}const message = ([^\n]+);\n(?:[^\n]*\n)*? {4}return errorResponse\(requestId, 500, "INTERNAL", message\);\n {2}\}\n\}$/.exec(inner);
+  if (arm === null) throw new Error("product-text: http.ts v1Inner's catch-all is not in the shape [Sentry; const message = <expr>; return errorResponse(requestId, 500, \"INTERNAL\", message)] after the HttpError arm");
+  const predicate = /\nfunction isDriverError\(err: Error\): boolean \{\n {2}return ([^\n]+);\n\}\n/.exec(http);
+  if (predicate === null) throw new Error("product-text: http.ts isDriverError(err: Error): boolean is not a one-line `return <expr>;`");
+  // The only TypeScript in either expression is the `(err as { code?: unknown })` cast; any other TS is a SyntaxError here,
+  // refused by name (the expression is then no longer one this can execute, so it can no longer vouch for it).
+  const compile = (expr: string, ...params: string[]): ((...args: never[]) => unknown) => {
+    try {
+      // Same realm on purpose: the expression's `instanceof Error` must read the SAME Error the samples are built from.
+      return runInThisContext(`(function (${params.join(", ")}) { return (${expr.replace(/\(err as \{ code\?: unknown \}\)/g, "err")}); })`) as (...args: never[]) => unknown;
+    } catch (e) {
+      throw new Error(`product-text: http.ts expression is not plain JavaScript once its code cast is read (${(e as Error).message}): ${expr}`);
+    }
+  };
+  const isDriver = compile(predicate[1], "err", "postgres") as unknown as (err: Error, postgres: { PostgresError: typeof StubPostgresError }) => boolean;
+  const driverError = (err: Error): boolean => isDriver(err, { PostgresError: StubPostgresError });
+  const message = compile(arm[1], "err", "isDriverError") as unknown as (err: Error, isDriverError: (e: Error) => boolean) => string;
+  return { isDriverError: driverError, bodyFor: (err) => message(err, driverError) };
 }
 
 /** api-v1 http.ts statusCode(): the code an HttpError that carries none of its
@@ -372,7 +418,7 @@ function setMembers(m: RegExpExecArray | null, what: string): string[] {
 }
 
 /** withdrawal.ts TABLE_KINDS: the kinds the withdrawal module treats as a
- *  table (its OWN copy — engine-db/competition.ts's includes americano, this
+ *  table (its OWN copy — engine-db/competition/kinds.ts's includes americano, this
  *  one does not). W1-driving T7, false premise 16. */
 export function withdrawalTableKindsText(): string[] {
   return setMembers(/\nconst TABLE_KINDS = new Set\(\[([^\]]*)\]\);/.exec(read("apps/web/src/server/usecases/withdrawal.ts")), "withdrawal.ts TABLE_KINDS");

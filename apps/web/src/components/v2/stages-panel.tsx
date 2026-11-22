@@ -29,6 +29,8 @@ import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { isSwissRefusalCode, swissRefusalKey } from "@/lib/swiss-refusals";
 import { isUndoRefusalCode, undoRefusalText } from "@/lib/undo-refusals";
 import { isRoundRobinRefusalCode } from "@/lib/roundrobin-refusals";
+import { pointsAdjustmentOffered } from "@/lib/points-adjustment-offer";
+import { PointsAdjustmentDialog, type AdjustmentsRead } from "@/components/v2/points-adjustment-dialog";
 import { completedSeedingFailedText } from "@/lib/completed-seeding-failed";
 import { isKnockoutRefusalCode, knockoutRefusalText } from "@/lib/knockout-refusals";
 import { knockoutUpdateDrawOffered } from "@/lib/bracket-reconcile";
@@ -529,6 +531,9 @@ interface Props {
   /** W4 T20 (K5 "shown"; R24 pick 3A): each stage's draw seed, stage id -> the seed its newest Generate drew with
    *  (`listStageDrawSeeds`). A stage that drew nothing is absent; only a knockout-family card shows one. */
   drawSeeds?: Readonly<Record<string, number>>;
+  /** W5 app PR B T5 (FX-G5; R24 pick 18 A): each stage whose seats were drawn across its source's pools - the stored draw seed and
+   *  any named refusal (`listCrossPoolDraws`). Absent for a stage fed from one pool or a league. */
+  crossPoolDraws?: Readonly<Record<string, { seed: number; refused?: { code: string; vars: Record<string, string | number> } }>>;
   /** B4 T10 (C35): the stages whose newest seed proposal drew a plate WITHOUT its third-place match (`thirdPlaceDropped`). */
   thirdPlaceDropped?: readonly string[];
   /** B4 M-7: the knockout stages that have started by the server's rule (`stageHasStarted`); the Third place control is read-only there. */
@@ -685,7 +690,7 @@ function scrollIntoViewIfHidden(el: HTMLElement) {
   el.scrollIntoView({ block: "nearest", behavior: reduce ? "auto" : "smooth" });
 }
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, canSettle, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift, knockoutCutDrift, tableCutDrift, knockoutWaiting = [], tableWaiting = [], tableLatePools = null, drawSeeds = {}, thirdPlaceDropped = [], startedKnockoutStageIds = [] }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, canSettle, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift, knockoutCutDrift, tableCutDrift, knockoutWaiting = [], tableWaiting = [], tableLatePools = null, drawSeeds = {}, crossPoolDraws = {}, thirdPlaceDropped = [], startedKnockoutStageIds = [] }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -702,6 +707,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   const locale = useLocaleOrDefault();
   const confirmDialog = useConfirm();
   const router = useRouter();
+  // W5 app PR B Task 7 (C5): the stage whose "Adjust points" dialog is open, from its More menu. One dialog per panel.
+  const [adjusting, setAdjusting] = useState<{ id: string; name: string } | null>(null);
   // P9 pass 4d: id -> venue-qualified display name, reusing the SAME
   // `resolveCourtNames`/`buildCourtDirectory` rule the board's own
   // `courtNamesById` applies (schedule-board.tsx) — never a second
@@ -914,7 +921,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
       setUndoable(false);
       router.refresh();
     } catch (err) {
-      setError(undoRefusalMessage(err, msg));
+      setError(undoRefusalMessage(err, msg, locale));
     }
   }
 
@@ -1194,7 +1201,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
       } else if (blocked) {
         setWarning(blocked);
       } else {
-        setError(rebuildErrorText(err, msg, msgPlural));
+        setError(rebuildErrorText(err, msg, msgPlural, locale));
       }
     }
   }
@@ -1732,6 +1739,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         const tableWaitingHere = tableWaiting.filter((w) => w.stageId === stage.id);
         // W4 T20: a drawn knockout's seed, by the card's own stage id (`0` is a seed: an absent one is `undefined`).
         const drawSeed = ROOT_KNOCKOUT_KINDS.includes(stage.kind) ? drawSeeds[stage.id] : undefined;
+        // W5 app PR B T5: a knockout fed from groups, drawn across the pools with this stored seed (`0` is a seed).
+        const crossPool = ROOT_KNOCKOUT_KINDS.includes(stage.kind) ? crossPoolDraws[stage.id] : undefined;
         // F3 Task 5 (5a) — only ever non-empty for the one stage
         // getStageRosterDrift finds eligible (usecases/stages/roster-drift.ts); every
         // other stage's entry is absent or both arrays empty, so this is a
@@ -1840,6 +1849,9 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
             }
             swissRounds={swissRoundsRail}
             updateDraw={updateDraw}
+            onAdjustPoints={
+              pointsAdjustmentOffered(stage, divisionStatus) ? () => setAdjusting({ id: stage.id, name: stage.name }) : undefined
+            }
             toolsSlot={
               settingsTools.length > 0 ? (
                 <div data-testid="stage-sheet-tools" className="flex flex-col gap-2 md:hidden">
@@ -1999,6 +2011,25 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                         {msg("knockout.drawSeedHint")}
                       </p>
                     </>
+                  )}
+                  {/* W5 app PR B T5 (FX-G5, ruling 281; R24 pick 18 A): the same muted pair for a knockout fed from groups - the stored
+                      seed its round one was drawn across the pools with, and what that number orders. Both viewers see it. */}
+                  {!folded && crossPool !== undefined && crossPool.refused === undefined && (
+                    <>
+                      <p data-testid="stage-cross-pool-draw-seed" data-draw-seed={crossPool.seed} className="w-full min-w-0 text-xs text-slate-500">
+                        {msg("knockout.crossPoolDrawSeed", { seed: crossPool.seed })}
+                      </p>
+                      <p data-testid="stage-cross-pool-draw-seed-hint" className="w-full min-w-0 text-xs text-slate-500">
+                        {msg("knockout.crossPoolDrawSeedHint")}
+                      </p>
+                    </>
+                  )}
+                  {/* R24 pick 18 A: the refused draw as a red band inside the card, where the proposal waits - the cause and the two ways
+                      out, in the reader's language (errors.json). The confirm refuses the same code. */}
+                  {!folded && crossPool?.refused !== undefined && (
+                    <p role="alert" data-testid="stage-cross-pool-refused" data-code={crossPool.refused.code} className="w-full min-w-0 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+                      {seedingErrorMessage(locale, crossPool.refused.code, crossPool.refused.code, crossPool.refused.vars)}
+                    </p>
                   )}
                 </header>
 
@@ -2431,8 +2462,43 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           onPaywall={setPaywallFeature}
         />
       )}
+      {adjusting !== null && (
+        <PointsAdjustmentDialog
+          msg={msg}
+          locale={locale}
+          stageName={adjusting.name}
+          tz={tz}
+          names={entrantNames}
+          load={() => apiV1<AdjustmentsRead>(`/api/v1/stages/${adjusting.id}/adjustments`)}
+          adjust={async (input) => {
+            try {
+              await apiV1(`/api/v1/stages/${adjusting.id}/adjustments`, { method: "POST", json: input });
+              router.refresh();
+              return { ok: true };
+            } catch (err) {
+              return { ok: false, message: adjustRefusalText(err, msg, locale) };
+            }
+          }}
+          undo={async (seq) => {
+            try {
+              await apiV1(`/api/v1/stages/${adjusting.id}/adjustments/${seq}`, { method: "DELETE" });
+              router.refresh();
+              return { ok: true };
+            } catch (err) {
+              return { ok: false, message: adjustRefusalText(err, msg, locale) };
+            }
+          }}
+          onClose={() => setAdjusting(null)}
+        />
+      )}
     </div>
   );
+}
+
+/** W5 app PR B Task 7: an Adjust points refusal in the reader's language (the round-robin refusal table), else the server's words. */
+function adjustRefusalText(err: unknown, msg: (key: MessageKey, vars?: Record<string, string | number>) => string, locale: Locale): string {
+  if (err instanceof ApiV1Error && isRoundRobinRefusalCode(err.code)) return undoRefusalText(err.code, err.extra, msg, locale);
+  return err instanceof Error ? err.message : String(err);
 }
 
 // Follow-up stage (e.g. finals after a league). Qualification resolves from
@@ -2509,6 +2575,7 @@ export function AddStageForm({
   onPaywall: (featureKey: string) => void;
 }) {
   const msg = useMsg();
+  const locale = useLocaleOrDefault();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("Finals");
   const [kind, setKind] = useState<string>("knockout");
@@ -2550,7 +2617,7 @@ export function AddStageForm({
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
         onPaywall(String(err.extra.feature_key ?? ""));
       } else {
-        onError(addStageErrorText(err, msg));
+        onError(addStageErrorText(err, msg, locale));
       }
     } finally {
       setBusy(false);
@@ -2889,7 +2956,7 @@ export function classifyActError(
   // the next click lands on an already-complete stage.
   // B4 fix wave (12b m1): a cut the field cannot supply rides inside the wrap by name with its numbers - said in the reader's
   // language by the one home of this sentence, which the open-stages warning shares (B5 n1).
-  const completedBut = completedSeedingFailedText(err, msg);
+  const completedBut = completedSeedingFailedText(err, msg, locale);
   if (completedBut !== null) return { tone: "warning", text: completedBut, refresh: true };
   // Swiss round-1 pairing, review ruling R4 — the server refused the pick
   // (the round moved on under the desk, or the stage is not Swiss). Its
@@ -2922,14 +2989,16 @@ export function classifyActError(
   // setup-timing completion whose proposal trips it arrives wrapped as STAGE_COMPLETED_SEEDING_FAILED, carrying the code as `cause`
   // (B4 fix wave), and is said by the wrap's branch above.
   if (err instanceof ApiV1Error && err.code === "RR_CUT_EXCEEDS_FIELD") {
-    return { tone: "warning", text: undoRefusalText(err.code, err.extra, msg), refresh: true };
+    return { tone: "warning", text: undoRefusalText(err.code, err.extra, msg, locale), refresh: true };
   }
   // W5 T23 (B2 batch M2): every other round-robin refusal a stage action meets — Generate after Start (RR_GENERATE_AFTER_START, which
   // points at the waiting strip's "Add to the table"), a redraw that would clear setup or drop an Add match row — in the reader's
   // language, never the server's English. Amber: the stage stands; the sentence says what to do. A refresh: the strip it points at
   // may hold someone the desk's last read did not.
+  // W5 B4 (F8): a first draw past its format's max entrants (FORMAT_TOO_MANY_ENTRANTS) or past the line budget (DRAW_TOO_LARGE)
+  // says its numbers the reader's way (review I-1).
   if (err instanceof ApiV1Error && isRoundRobinRefusalCode(err.code)) {
-    return { tone: "warning", text: undoRefusalText(err.code, err.extra, msg), refresh: true };
+    return { tone: "warning", text: undoRefusalText(err.code, err.extra, msg, locale), refresh: true };
   }
   const precondition = generatePreconditionMessage(err, msg, stageName, matchName);
   if (precondition) return { tone: "warning", text: precondition, refresh: false };
@@ -2957,11 +3026,12 @@ export function classifyActError(
  *  locally, off the CODE — the server's sentence is English, and
  *  history-panel.tsx gives the same refusal the same sentence. Anything else
  *  keeps its own message, which is the one an organiser can quote. */
-export function undoRefusalMessage(err: unknown, msg: Msg): string {
+export function undoRefusalMessage(err: unknown, msg: Msg, locale: Locale): string {
   if (err instanceof ApiV1Error && err.code === PLAYED_REFUSAL_CODE) return msg("history.error.played");
   // W3 T5 (X-SW-28): Undo of Pair next over a started round, or across an undo barrier — a Swiss one, or since W4 T5
   // (K1) a confirmed draw (SEED_CONFIRM_NOT_UNDOABLE), each through its own family's key.
-  if (err instanceof ApiV1Error && isUndoRefusalCode(err.code)) return undoRefusalText(err.code, err.extra, msg);
+  // B4 re-review N-1: the reader's locale, so a round-robin sentence's numbers group their way (`roundRobinRefusalText`).
+  if (err instanceof ApiV1Error && isUndoRefusalCode(err.code)) return undoRefusalText(err.code, err.extra, msg, locale);
   return ruleRefusalOf(err, msg) ?? (err instanceof Error ? err.message : msg("schedule.error.undoFailed"));
 }
 
@@ -2996,17 +3066,23 @@ function ruleRefusalOf(err: unknown, msg: Msg): string | null {
  *  the reason `classifyActError` is: the panel's tests never fire the handler. A Swiss refusal (W3 T11 review I1: a
  *  Rebuild mints again, so SWISS_ROUNDS_ABOVE_MAX against today's field) is said in the reader's language with what to
  *  do next — never the server's English sentence. */
-export function rebuildErrorText(err: unknown, msg: Msg, msgPlural: MsgPlural): string {
+export function rebuildErrorText(err: unknown, msg: Msg, msgPlural: MsgPlural, locale: Locale): string {
   if (err instanceof ApiV1Error && isSwissRefusalCode(err.code)) return swissRefusalText(err.code, err.extra, msg, msgPlural);
   // W4 T15 (X-PL-1, X-QM-5): a Rebuild draws the root again, so it can be refused for the field's size.
   if (err instanceof ApiV1Error && isKnockoutRefusalCode(err.code)) return knockoutRefusalText(err.code, err.extra, msg);
+  // W5 B4 review I-1: and for the format's max entrants or the line budget (FORMAT_TOO_MANY_ENTRANTS, DRAW_TOO_LARGE) - or any other
+  // round-robin refusal a redraw meets - in the reader's language, its numbers grouped their way.
+  if (err instanceof ApiV1Error && isRoundRobinRefusalCode(err.code)) return undoRefusalText(err.code, err.extra, msg, locale);
   return ruleRefusalOf(err, msg) ?? (err instanceof Error ? err.message : msg("schedule.error.failed"));
 }
 
 /** Add stage's red line, exported pure for the reason `rebuildErrorText` is. A Top N from a knockout that is no whole round (W4 T15,
  *  X-QM-2) is said in the reader's language; any other refusal keeps its own message. */
-export function addStageErrorText(err: unknown, msg: Msg): string {
+export function addStageErrorText(err: unknown, msg: Msg, locale: Locale): string {
   if (err instanceof ApiV1Error && isKnockoutRefusalCode(err.code)) return knockoutRefusalText(err.code, err.extra, msg);
+  // W5 B4 review I-1: a division's first stage on a field past its max entrants (FORMAT_TOO_MANY_ENTRANTS, the create door), and the
+  // Generate that follows the add (FORMAT_TOO_MANY_ENTRANTS / DRAW_TOO_LARGE at the first draw), in the reader's language.
+  if (err instanceof ApiV1Error && isRoundRobinRefusalCode(err.code)) return undoRefusalText(err.code, err.extra, msg, locale);
   return err instanceof Error ? err.message : msg("schedule.error.failed");
 }
 

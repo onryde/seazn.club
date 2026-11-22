@@ -110,6 +110,8 @@ async function writeInOrder(snaps: Snap[], label: (stageId: string, poolId: stri
     try {
       await sql.begin(async (tx) => {
         await tx`lock table standings_snapshots in share row exclusive mode`;
+        // W5 app PR B Task 1: the generate now stores each pool's LEVEL table itself (the seating); the written ones replace it.
+        await tx`delete from standings_snapshots where stage_id in ${tx(stageIds)}`;
         for (const [stageId, poolId, order] of snaps) {
           await tx`
             insert into standings_snapshots (stage_id, pool_id, rows, computed_through_seq)

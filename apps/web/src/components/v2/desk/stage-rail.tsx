@@ -199,6 +199,10 @@ export interface StageRailProps {
    *  `knockoutUpdateDrawOffered`, lib/bracket-reconcile.ts). Generate is offered again, as the lead, worded "Update draw".
    *  Absent ⇒ false. */
   updateDraw?: boolean;
+  /** W5 app PR B Task 7 (C5; R24 pick 15 A): "Adjust points…" in More, opening the panel's dialog. The panel passes it ONLY where
+   *  the write is allowed (`pointsAdjustmentOffered`, lib/points-adjustment-offer.ts: a started, not-complete league, group or
+   *  Swiss table), so present ⇒ offered. A stage that offers it gets More even with no late add (a fed table, a fed Swiss). */
+  onAdjustPoints?: () => void;
 }
 
 /**
@@ -267,6 +271,7 @@ export function StageRail({
   lateEntry,
   swissRounds,
   updateDraw = false,
+  onAdjustPoints,
 }: StageRailProps) {
   const msg = useMsg();
   const msgPlural = useMsgPlural();
@@ -331,8 +336,11 @@ export function StageRail({
   });
   const moreToggleRef = useRef<HTMLButtonElement>(null);
   const [moreAlign, setMoreAlign] = useState<PopoverAlign>("start");
-  // Only the late-add More lives in this component's tree; the fed-Swiss More (`SwissMoreMenu`) owns its own dismissal.
-  const moreRoot = useStagePopover(moreOpen && lateEntryOffered, (how) => {
+  // W5 app PR B Task 7: this component's More holds the late add and/or Adjust points (and a Swiss stage's two round items beside
+  // them); the fed-Swiss More (`SwissMoreMenu`) is drawn only when neither is offered, and owns its own dismissal.
+  const lateAddShown = lateEntry !== undefined && lateEntryOffered;
+  const moreShown = lateAddShown || onAdjustPoints !== undefined;
+  const moreRoot = useStagePopover(moreOpen && moreShown, (how) => {
     setMoreOpen(false);
     if (how === "escape") moreToggleRef.current?.focus();
   });
@@ -698,7 +706,7 @@ export function StageRail({
               {msg("schedule.delete")}
             </button>
           )}
-          {lateEntry && lateEntryOffered && (
+          {moreShown && (
             // W3 T10 — More. The ROOT holds the trigger and its panel (SCF): from `md` the panel is a popover hung from the button, over
             // the content, closed by a press elsewhere, by Escape (focus back on More) or by choosing an item; below `md` it is the
             // inline disclosure it always was, the next row of the sheet's column. `hidden` rather than unmounted, as
@@ -733,16 +741,30 @@ export function StageRail({
                 className={popoverClasses(moreAlign)}
               >
                 <div className={`flex flex-col overflow-hidden rounded-xl border border-purple-200 bg-white ${POPOVER_RAISED}`}>
-                  <Link
-                    href={lateEntry.href}
-                    data-testid="stage-add-late-player"
-                    className="flex min-h-11 flex-col justify-center border-b border-purple-100 px-4 py-2 last:border-b-0 hover:bg-purple-50"
-                  >
-                    <span className="text-sm font-medium text-purple-700">
-                      {msg(knockoutLateOffered ? "knockout.addToBracket" : "stage.more.addLatePlayer")}
-                    </span>
-                    <span className="text-xs text-slate-500">{msg("stage.more.addLatePlayer.hint")}</span>
-                  </Link>
+                  {lateAddShown && (
+                    <Link
+                      href={lateEntry.href}
+                      data-testid="stage-add-late-player"
+                      className="flex min-h-11 flex-col justify-center border-b border-purple-100 px-4 py-2 last:border-b-0 hover:bg-purple-50"
+                    >
+                      <span className="text-sm font-medium text-purple-700">
+                        {msg(knockoutLateOffered ? "knockout.addToBracket" : "stage.more.addLatePlayer")}
+                      </span>
+                      <span className="text-xs text-slate-500">{msg("stage.more.addLatePlayer.hint")}</span>
+                    </Link>
+                  )}
+                  {onAdjustPoints !== undefined && (
+                    <button
+                      type="button"
+                      disabled={busy !== null}
+                      onClick={onAdjustPoints}
+                      data-testid="stage-adjust-points"
+                      className="flex min-h-11 flex-col items-start justify-center border-b border-purple-100 px-4 py-2 text-left last:border-b-0 hover:bg-purple-50 disabled:opacity-50"
+                    >
+                      <span className="text-sm font-medium text-purple-700">{msg("stage.more.adjustPoints")}</span>
+                      <span className="text-xs text-slate-500">{msg("stage.more.adjustPoints.hint")}</span>
+                    </button>
+                  )}
                   {swissRounds && <SwissAddRoundMenuItem stageId={stage.id} busy={busy} rail={swissRounds} />}
                   {swissRounds && <SwissFinishMenuItem stageId={stage.id} busy={busy} rail={swissRounds} onOpen={() => open && onToggleOpen(stage.id)} />}
                 </div>
@@ -751,7 +773,7 @@ export function StageRail({
           )}
           {/* Batch-4 ruling 3: a running Swiss with no late-add More above (a fed Swiss) still gets Add a round and Finish
               the Swiss now — its own More, the same toggle and testids, holding just those two. */}
-          {!(lateEntry && lateEntryOffered) && swissRounds && (
+          {!moreShown && swissRounds && (
             <SwissMoreMenu
               stageId={stage.id}
               busy={busy}

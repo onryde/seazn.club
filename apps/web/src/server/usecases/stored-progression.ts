@@ -72,6 +72,24 @@ export function refuseFirstLossesFromDoubleElim(spec: ProgressionSpec, sourceKin
   });
 }
 
+/** W5 app PR B T4 (K19; RB5-U7, ruling 286): engine 10's two best-Nth STAGE_NOT_READY reasons are not "wait, another source is
+ *  not ready" - every source is complete by the time a cut is resolved - so they are named seeding refusals, never the bare
+ *  engine code that completion's on_complete branch reads as "not ready yet" and swallows (a cut that seats nobody, said by
+ *  nobody). `best_nth_no_supplier`: no pool has a rank-N finisher once expunged leavers count in no size (a field the format
+ *  cannot supply). `pool_results_missing`: a larger pool handed no results - unreachable through the app's builders (both attach
+ *  every pool's results, `withPoolResults`), mapped by name so a regression says what it is. Null for anything else. */
+export function bestNthRefusal(e: unknown): HttpError | null {
+  if (!(e instanceof EngineError) || e.code !== "STAGE_NOT_READY") return null;
+  const data = (e.data ?? {}) as { reason?: unknown; rank?: unknown; available?: unknown; pool?: unknown };
+  if (data.reason === "best_nth_no_supplier") {
+    return new HttpError(422, e.message, "SEEDING_BESTNTH_NO_SUPPLIER", { rank: data.rank, available: data.available });
+  }
+  if (data.reason === "pool_results_missing") {
+    return new HttpError(422, e.message, "SEEDING_POOL_RESULTS_MISSING", { pool: data.pool });
+  }
+  return null;
+}
+
 export function resolveStoredProgression(
   spec: ProgressionSpec,
   shapes: readonly SourceShape[],
@@ -92,7 +110,7 @@ export function resolveStoredProgression(
       const stored = data.round + 1;
       throw new EngineError(e.code, e.message.replace(/bracket round \d+ /, `bracket round ${stored} `), { ...data, round: stored });
     }
-    throw e;
+    throw bestNthRefusal(e) ?? e;
   }
   return {
     ...out,

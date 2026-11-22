@@ -85,6 +85,10 @@ export {
 export {
   TakeRuleSchema,
 } from "./stages.ts";
+export {
+  AdjustPointsInput, PointsAdjustmentWire, PointsAdjustmentList,
+  PointsAdjustmentMember, PointsAdjustmentResult, PointsAdjustmentUndone,
+} from "./stages.ts";
 export type {
   TakeRuleSchemaMatchesEngine, TakeRuleSchemaMatchesEngineFields, TiebreakerKeySchemaMatchesEngine,
   TieBreakKeySchemaMatchesEngine, TieBreakNoteSchemaMatchesEngine, TableRulesSourceSchemaMatchesEngine,

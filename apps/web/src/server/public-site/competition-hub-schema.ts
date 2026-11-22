@@ -218,8 +218,7 @@ export const TableColumn = z.object({
  *  already resolved in the org's locale by `buildQualificationView`
  *  (`./qualification-view.ts`); the renderer only places them. */
 export const QualStatusKind = z.enum(["through", "win_k", "needs_help", "out", "qualified"]);
-// "qualified": engine 10.0.0's frozen marker. The builder maps it to "through"
-// (same chip, same copy); the vocabulary accepts it so a document carrying it parses.
+// "qualified": a finished table's frozen marker (engine 10, X-QS-1; W5 app PR B Task 6) - the through tick with its own words.
 /** One row's status. Named `QualRowView`, not `QualRow`: the engine's
  *  qualification input row is `QualRow` (`@seazn/engine/competition`), and
  *  both are imported side by side (controller ruling T2-C3). */
@@ -243,7 +242,8 @@ export const QualTable = z.object({
   /** Places above the line: the line renders after row `cutIndex`. */
   cutIndex: z.number().int().positive(),
   label: z.string(),
-  legend: z.object({ through: z.string(), open: z.string(), out: z.string(), hint: z.string() }),
+  /** `open` is null on a finished table (W5 Task 6, R24 pick 17 A: nothing is still open; the tick reads "Qualified"). */
+  legend: z.object({ through: z.string(), open: z.string().nullable(), out: z.string(), hint: z.string() }),
 });
 export type QualRowT = z.infer<typeof QualRowView>;
 export type QualTableT = z.infer<typeof QualTable>;
@@ -317,6 +317,8 @@ export const TableView = z.object({
    *  applied ("P1 (withdrawn):" + "left after 2 of 5, ..."), in the org's language. Optional for the same cached-document
    *  reason as `swissRound`: absent reads as "no note". Empty for a table nobody left. */
   withdrawalNotes: z.array(z.object({ entrantId: z.string(), lead: z.string(), body: z.string() })).optional(),
+  /** W5 app PR B T7 (X-ADJ-4): THIS table's points adjustments, resolved in the org's language (`adjustmentNoteText`). */
+  adjustmentNotes: z.array(z.object({ key: z.string(), entrantId: z.string(), lead: z.string(), body: z.string() })).optional(),
   updatedAt: z.string(),
   fullHref: z.string(),
 });

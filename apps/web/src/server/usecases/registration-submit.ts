@@ -46,6 +46,7 @@ import {
   playerPersonConsentsByEmail,
   anyOptedOutByRegistration,
   knownCtxOf,
+  divisionFormatMaxes,
   type RegistrationRow,
   type RegistrationSettingsRow,
   type KnownCart,
@@ -867,6 +868,9 @@ export async function submitRegistrationGroup(
     // an order the person never chose. Inserted in `prepared` order (the cart's own), the moments now carry that order.
     // The same insert order IS each entry's `cart_position`, the "-<n>" of its quoted reference: the database numbers every
     // insert into a cart 1, 2, 3… (V519 trigger, the only writer) — never reorder this loop or insert an entry elsewhere.
+    // W5 B4 (stress F8; owner 2026-11-21): each division's FORMAT max entrants (its first stage's), read under the settings
+    // locks above with the live settings - the third term of the cap, the same on every plan (./registrations/places-left.ts).
+    const formatMaxes = await divisionFormatMaxes(tx, distinctDivisionIds);
     for (const p of prepared) {
       // LIVE settings (fetched under the lock above), never the pre-lock
       // `p.settings` snapshot — review MAJOR 3.
@@ -874,6 +878,7 @@ export async function submitRegistrationGroup(
       const hardCap = Math.min(
         live.capacity ?? Number.POSITIVE_INFINITY,
         planLimit ?? Number.POSITIVE_INFINITY,
+        formatMaxes.get(p.input.division_id) ?? Number.POSITIVE_INFINITY,
       );
       // A free-agent entry never competes for a TEAM slot at all — it draws
       // against its own derived pool bound instead, and is REFUSED outright

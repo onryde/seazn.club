@@ -6,7 +6,7 @@
 // roundrobin-late-entry-matrix sweeps a second sport for the same reason).
 //
 // The scripts are OPT-IN, as W2a's, W2b's, W2e's, W4A's and W4B's are: --set w1-driving plans them only when --scenario names one
-// (w1-driving-set.ts), so no committed plan holds a cell of theirs. W5A_F4 and W5A_C5 are planned and NOT RUN (app PR B).
+// (w1-driving-set.ts), so no committed plan holds a cell of theirs. W5A_F4 runs since app PR B (K21); W5A_C5 is planned and NOT RUN (app PR B Task 7).
 import { ROW_KEYS, SPORT_KEYS, stagesForRow, type RowKey } from "./catalogue.ts";
 import type { W5aScenarioKey } from "./scenarios/types.ts";
 
@@ -34,9 +34,10 @@ export const w5aFedRows = (): readonly RowKey[] => derive().fed;
 /** The table rows with a pooled (group) stage. */
 export const w5aPooledRows = (): readonly RowKey[] => derive().pooled;
 
-/** The scripts that RUN, and the ones planned and not run (they wait for app PR B's engine major: unequal pools at k = size - min, adjust points). */
-export const W5A_RUN_KEYS: readonly W5aScenarioKey[] = Object.freeze(["W5A_R2", "W5A_R4C", "W5A_Q2", "W5A_P7", "W5A_C6A", "W5A_SURF"] as const);
-export const W5A_NOT_RUN_KEYS: readonly W5aScenarioKey[] = Object.freeze(["W5A_F4", "W5A_C5"] as const);
+/** The scripts that RUN, and the one planned and not run (it waits for app PR B Task 7: adjust points). F4 (unequal pools at k = size - min) runs
+ *  since app PR B (K21). */
+export const W5A_RUN_KEYS: readonly W5aScenarioKey[] = Object.freeze(["W5A_R2", "W5A_R4C", "W5A_Q2", "W5A_P7", "W5A_C6A", "W5A_SURF", "W5A_F4"] as const);
+export const W5A_NOT_RUN_KEYS: readonly W5aScenarioKey[] = Object.freeze(["W5A_C5"] as const);
 
 /** The rows each script plays. */
 export function w5aRows(key: W5aScenarioKey): readonly RowKey[] {
@@ -72,7 +73,9 @@ export function w5aField(key: W5aScenarioKey, row: RowKey): number {
     // a cut of four from six, or two per pool from pools of three or four: somebody is next in line
     case "W5A_Q2": case "W5A_C6A": return pools === 1 ? 6 : pools === 2 ? 8 : pools * 3;
     case "W5A_P7": return pools === 1 ? 6 : pools * 3;
-    case "W5A_SURF": case "W5A_F4": case "W5A_C5": return 8;
+    // a field the pool count does NOT divide (RB5-U1): the snake deals one pool a member more than the rest
+    case "W5A_F4": return pools * 3 + 1;
+    case "W5A_SURF": case "W5A_C5": return 8;
   }
 }
 

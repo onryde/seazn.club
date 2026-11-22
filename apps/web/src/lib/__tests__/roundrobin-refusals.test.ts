@@ -7,7 +7,8 @@ import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
 import { HttpError } from "@/lib/errors";
-import { ROUND_ROBIN_REFUSALS, isRoundRobinRefusalCode, roundRobinRefusalKey, type RoundRobinRefusalCode } from "@/lib/roundrobin-refusals";
+import { FORMAT_MAX_PROMOTION, ROUND_ROBIN_REFUSALS, isRoundRobinRefusalCode, roundRobinRefusalKey, roundRobinRefusalText, type RoundRobinRefusalCode } from "@/lib/roundrobin-refusals";
+import { t } from "@/lib/i18n-runtime";
 import { roundRobinRefusal } from "@/server/usecases/roundrobin-refusal";
 
 // The plan's table (Task 2, `lib/roundrobin-refusals.ts`), typed here rather than read from the table under test: a code
@@ -40,22 +41,41 @@ const PLAN: Record<string, { status: 409 | 422; en: string }> = {
   },
   // Final fix wave (m1): deleting a setup-phase entrant whose line holds recorded match data. Typed here, from the brief's sentence.
   ENTRANT_FIXTURES_HAVE_RESULTS: { status: 409, en: "This entrant's fixtures hold recorded match data. Clear it before deleting the entrant." },
+  // W5 stress fix F7: more pools than the pool-key alphabet holds (A-Z), at the create door and at Start. Typed here, from the
+  // fix brief's "a named refusal with copy".
+  RR_TOO_MANY_POOLS: { status: 422, en: "A group stage can have at most {max} pools, one for each letter from A to Z." },
+  // W5 app PR B Task 7 (C5; X-ADJ-3, X-ADJ-4): Adjust points - the stage gates, the engine's four reasons by name, an Undo repeated.
+  // Typed here from the task's copy.
+  RR_ADJUST_NOT_TABLE: { status: 422, en: "Points can only be adjusted on a league, group or Swiss table." },
+  RR_ADJUST_NOT_STARTED: { status: 422, en: "Points can be adjusted once the stage has started." },
+  RR_ADJUST_STAGE_COMPLETE: { status: 422, en: "This table has finished, so its points can't be adjusted." },
+  RR_ADJUST_ZERO: { status: 422, en: "An adjustment of 0 changes nothing. Enter the points to add or remove." },
+  RR_ADJUST_REASON_MISSING: { status: 422, en: "Give a reason. It's shown under the table for everyone." },
+  RR_ADJUST_NOT_FINITE: { status: 422, en: "Enter a number of points to add or remove." },
+  // B3 fix ruling 4 (m-6): the amount's bound
+  RR_ADJUST_OUT_OF_RANGE: { status: 422, en: "An adjustment moves at most {max} either way, in whole steps." },
+  RR_ADJUST_UNKNOWN_ENTRANT: { status: 422, en: "That entrant isn't on this table." },
+  RR_ADJUST_ALREADY_UNDONE: { status: 409, en: "This adjustment has already been undone." },
+  // W5 B4 (F8; owner 2026-11-21, max entrants per format): a field past its format's max, at the create, Generate and Start
+  // doors; and the server's exact count of a draw past the line budget whatever its kind. Typed here from the batch's copy.
+  FORMAT_TOO_MANY_ENTRANTS: { status: 422, en: "This format allows up to {max} entrants. This division has {entrants}." },
+  DRAW_TOO_LARGE: { status: 422, en: "This draw has {lines} matches. One Start can draw at most {budget}." },
 };
 
 const LOCALES = { en, es, fr, nl } as Record<string, Record<string, string>>;
 const placeholders = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
 
 describe("ROUND_ROBIN_REFUSALS (W5 app PR A, Task 2)", () => {
-  it("holds exactly the plan's twelve codes plus the reviews' four, each with the plan's status and sentence", () => {
+  it("holds exactly the plan's twelve codes plus the reviews' four, the stress fix's one, Task 7's eight, B3's one and B4's two, each with the plan's status and sentence", () => {
     expect(Object.keys(ROUND_ROBIN_REFUSALS).sort()).toEqual(Object.keys(PLAN).sort());
-    expect(Object.keys(PLAN).length).toBe(16);
+    expect(Object.keys(PLAN).length).toBe(28);
     let checked = 0;
     for (const [code, want] of Object.entries(PLAN)) {
       const row = ROUND_ROBIN_REFUSALS[code as RoundRobinRefusalCode];
       expect({ status: row.status, en: row.en }, code).toEqual(want);
       checked++;
     }
-    expect(checked).toBe(16);
+    expect(checked).toBe(28);
   });
 
   it("every code has a key present, translated, in all 4 dictionaries, and en says what the server says", () => {
@@ -74,7 +94,7 @@ describe("ROUND_ROBIN_REFUSALS (W5 app PR A, Task 2)", () => {
       expect(en[row.key as keyof typeof en], `${code}: en/ui.json says what the server says`).toBe(row.en);
     }
     // Anti-vacuity: every (code, locale) pair. Zero checked is a failure, not a pass.
-    expect(checked, "(code, locale) pairs checked").toBe(16 * 4);
+    expect(checked, "(code, locale) pairs checked").toBe(28 * 4);
   });
 
   it("isRoundRobinRefusalCode: true for every code, false for any other wire code or a prototype name", () => {
@@ -83,7 +103,7 @@ describe("ROUND_ROBIN_REFUSALS (W5 app PR A, Task 2)", () => {
       expect(isRoundRobinRefusalCode(code), code).toBe(true);
       yes++;
     }
-    expect(yes).toBe(16);
+    expect(yes).toBe(28);
     const others = ["KO_GENERATE_AFTER_START", "SWISS_BYE_NOT_PLACEABLE", "rr_generate_after_start", "", "toString", "__proto__", "constructor", undefined, null, 409];
     for (const other of others) expect(isRoundRobinRefusalCode(other), String(other)).toBe(false);
     expect(others.length).toBe(10);
@@ -98,5 +118,38 @@ describe("ROUND_ROBIN_REFUSALS (W5 app PR A, Task 2)", () => {
     expect(cut).toMatchObject({ status: 422, code: "RR_CUT_EXCEEDS_FIELD", message: "8 can't qualify from this field: it can supply at most 6." });
     expect(() => roundRobinRefusal("RR_CUT_EXCEEDS_FIELD")).toThrow(/RR_CUT_EXCEEDS_FIELD.*qualified/);
     expect(() => roundRobinRefusal("RR_CUT_EXCEEDS_FIELD", { qualified: 8 })).toThrow(/max/);
+  });
+
+  // W5 B4 review m-8: the promotion's own sentence for FORMAT_TOO_MANY_ENTRANTS, held to the same bar as a table row.
+  it("the promotion's FORMAT_TOO_MANY_ENTRANTS sentence: present and translated in all 4 locales with the same slots; en is the server's", () => {
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(LOCALES)) {
+      const text = dict[FORMAT_MAX_PROMOTION.key];
+      expect(typeof text === "string" && text.trim() !== "", `${locale}/ui.json has ${FORMAT_MAX_PROMOTION.key}`).toBe(true);
+      expect(placeholders(text!), `${locale} placeholders`).toEqual(["entrants", "max"]);
+      if (locale !== "en") expect(text, `${locale} is translated`).not.toBe(FORMAT_MAX_PROMOTION.en);
+      checked++;
+    }
+    expect(en[FORMAT_MAX_PROMOTION.key as keyof typeof en]).toBe(FORMAT_MAX_PROMOTION.en);
+    expect(checked).toBe(4);
+  });
+
+  // W5 B4 review I-1: a refusal's numbers are grouped the reader's way, and with no locale they are written bare - never grouped the
+  // English way for a reader of another language (a French "4,096" reads as four point zero nine six).
+  it("roundRobinRefusalText: numbers grouped per locale; no locale writes them bare; strings pass through; other values are dropped", () => {
+    const extra = { max: 4096, entrants: 12000, stageId: "s1", attachments: { officials: 3 } };
+    const msgIn = (dict: Record<string, string>) => (key: string, vars?: Record<string, string | number>) => t(dict, key, vars);
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(LOCALES)) {
+      const g = new Intl.NumberFormat(locale);
+      expect(roundRobinRefusalText("FORMAT_TOO_MANY_ENTRANTS", extra, msgIn(dict) as never, locale), locale).toBe(
+        t(dict, "roundrobin.refusal.FORMAT_TOO_MANY_ENTRANTS", { max: g.format(4096), entrants: g.format(12000) }),
+      );
+      expect(roundRobinRefusalText("FORMAT_TOO_MANY_ENTRANTS", extra, msgIn(dict) as never, undefined), `${locale} bare`).toBe(
+        t(dict, "roundrobin.refusal.FORMAT_TOO_MANY_ENTRANTS", { max: "4096", entrants: "12000" }),
+      );
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 });

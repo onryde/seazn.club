@@ -518,21 +518,37 @@ export async function passGrantsSuite(): Promise<void> {
   // ceiling, so there is no fresh division to take instead. Counting from ZERO
   // is load-bearing: an earlier draft started at seq 2 and the sibling's third
   // create was only its SECOND stage, so it proved nothing about the cap.
-  const addStage = (divisionId: string, seq: number) =>
+  //
+  // The FIRST stage is a knockout, not a league: since W5 B4 (owner 2026-11-21,
+  // max entrants per format, the same on every plan) a create that sets a
+  // division's first stage on a field past that format's max is refused by
+  // name, and the passed division seats 128 - a field no single league can
+  // start (it caps at 100), while a knockout of 128 draws 127 lines. Pinned
+  // below, so this is a witness rather than a comment: the league create is
+  // the FORMAT's 422, never the plan's 402. It writes nothing, so the count
+  // still starts from zero. Stages after the first are not asked.
+  const addStage = (divisionId: string, seq: number, kind: "league" | "knockout") =>
     v1(s, `/api/v1/divisions/${divisionId}/stages`, "POST", {
       seq,
-      kind: "league",
+      kind,
       name: `Cap Stage ${seq}`,
     });
+  const passLeagueFirst = await addStage(passCap.id, 1, "league");
+  check(
+    "pass grants/stages: a league cannot be the first stage of the passed 128 (422 FORMAT_TOO_MANY_ENTRANTS, not a 402 stage cap)",
+    passLeagueFirst.status === 422 &&
+      passLeagueFirst.json.error?.code === "FORMAT_TOO_MANY_ENTRANTS" &&
+      (passLeagueFirst.json.error as { entrants?: unknown } | undefined)?.entrants === 128,
+  );
   const passStages = [
-    await addStage(passCap.id, 1),
-    await addStage(passCap.id, 2),
-    await addStage(passCap.id, 3),
+    await addStage(passCap.id, 1, "knockout"),
+    await addStage(passCap.id, 2, "league"),
+    await addStage(passCap.id, 3, "league"),
   ];
   const plainStages = [
-    await addStage(plainCap.id, 1),
-    await addStage(plainCap.id, 2),
-    await addStage(plainCap.id, 3),
+    await addStage(plainCap.id, 1, "knockout"),
+    await addStage(plainCap.id, 2, "league"),
+    await addStage(plainCap.id, 3, "league"),
   ];
   check(
     "pass grants/stages: the passed competition takes a 3rd stage — past community's old 2",

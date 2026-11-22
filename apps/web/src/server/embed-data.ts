@@ -99,7 +99,10 @@ export async function embedDivisionData(divisionId: string): Promise<EmbedResolu
     sql<PublicStage[]>`
       select id, division_id, seq, kind, name, status,
              qualify_count, qualify_per_group, next_stage_name, swiss_rounds, points_rule,
-             has_rank_overrides
+             has_rank_overrides, qualify_best_nth, qualified,
+             -- W5 app PR B Task 1 (K8; X-SF-4): the stage's recorded byes, for the schedule widget's "Sits out" line - the same
+             -- read as the division page's (public-site/data.ts), and public: the byes are on the public fixtures list already.
+             (select x.config->'round_byes' from stages x where x.id = public_stages_v.id) as round_byes
       from public_stages_v where division_id = ${divisionId} order by seq`,
     sql<{ id: string; stage_id: string; key: string; name: string }[]>`
       select p.id, p.stage_id, p.key, p.name

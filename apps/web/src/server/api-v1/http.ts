@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { ZodError, type ZodType } from "zod";
 import * as Sentry from "@sentry/nextjs";
+import postgres from "postgres";
 import { EngineError, type EngineErrorCode } from "@seazn/engine/core";
 import { isLevelResultReason } from "@/lib/level-result-reason";
 import { isSettleRefusalReason } from "@/lib/settle-refusal-reason";
@@ -73,6 +74,8 @@ export const ENGINE_HTTP: Record<EngineErrorCode, number> = {
   SEEDING_RULES_MISSING: 422,
   SEEDING_MAP_SLOT_INVALID: 422,
   SEEDING_MAP_SOURCE_INVALID: 422,
+  // DEPRECATED (ruling 286, engine 10; W5 app PR B T4, preflight C2): never thrown since unequal pools always compare on the
+  // dropped basis. Kept so a stored or cached error still maps to its status and copy.
   SEEDING_BESTNTH_UNEQUAL_POOLS: 422,
   // F3 Task 3 (P6) — a seeded_map source ambiguous across >1 progression
   // source (placeDescriptors, progression.ts). It IS in seeding-error.ts's
@@ -375,10 +378,24 @@ async function v1Inner<T>(
       );
     }
     Sentry.captureException(err);
-    const message = err instanceof Error ? err.message : "Server error";
+    // W5 stress fix F1: a database driver's or the socket's own failure (Postgres' message names relations and constraints;
+    // the driver's names its limits; a connection error names the host and port) - and any other error carrying a string code
+    // (`isDriverError`) - is logged and paged, and never read to the caller: the body says only that the server failed, and the
+    // request id ties it to the log line. A plain app error keeps its message.
+    const message = err instanceof Error && !isDriverError(err) ? err.message : "Server error";
     log.error({ err }, "v1: unhandled error");
     return errorResponse(requestId, 500, "INTERNAL", message);
   }
+}
+
+/** W5 stress fix F1: an error the database driver or the socket raised. A Postgres refusal is a `PostgresError`; the driver's own
+ *  failures (`MAX_PARAMETERS_EXCEEDED`, `CONNECTION_CLOSED`, ...) and a socket's (`ECONNREFUSED`) are `Error`s carrying a string
+ *  `code`. Read broadly on purpose (B2 review m-4): an error THIS app wrote can carry a string `code` too (email-outbox/enqueue.ts,
+ *  youtube/end-step.ts, youtube/port.ts) and is scrubbed alike - its sentence stays in the log under the request id, never in the
+ *  body; an enumerated driver/socket code list would leak whatever code it missed. A plain app `Error` (no code) keeps its message
+ *  (fixture-insert-batches.test.ts pins both). HttpError and EngineError are answered above and never reach this. */
+function isDriverError(err: Error): boolean {
+  return err instanceof postgres.PostgresError || typeof (err as { code?: unknown }).code === "string";
 }
 
 type IssueLike = { readonly path: readonly PropertyKey[]; readonly message: string; readonly errors?: readonly (readonly IssueLike[])[] };

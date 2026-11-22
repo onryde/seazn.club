@@ -638,6 +638,8 @@ export const ENGINE_ERROR_KEY: Record<EngineErrorCode, MessageKey> = {
   SEEDING_RULES_MISSING: "engineError.SEEDING_RULES_MISSING",
   SEEDING_MAP_SLOT_INVALID: "engineError.SEEDING_MAP_SLOT_INVALID",
   SEEDING_MAP_SOURCE_INVALID: "engineError.SEEDING_MAP_SOURCE_INVALID",
+  // DEPRECATED (ruling 286, engine 10; W5 app PR B T4, preflight C2): never thrown any more, still in the engine's code union,
+  // so the copy stays and a stored or cached error still renders.
   SEEDING_BESTNTH_UNEQUAL_POOLS: "engineError.SEEDING_BESTNTH_UNEQUAL_POOLS",
   // F3 Task 3 (P6) — placeDescriptors' new ambiguous-seeded_map refusal
   // (progression.ts). Same "this file's typecheck fails until copy exists"

@@ -16,6 +16,15 @@ import { Fixture } from "./scoring.ts";
 // SEEDING_* HttpError codes this route surface actually throws).
 // ---------------------------------------------------------------------------
 
+/** W5 app PR B T4 (RB5-U1/U3, X-UP-3; engine 10 `ComparisonBasis`): how a best-Nth qualifier was compared across pools - the nth,
+ *  the matches every candidate was compared on, each larger pool's bottom entrants whose results were left out (pool KEY, entrant
+ *  ids in rank order), and the other candidates the cross-pool order left level with this one. */
+const ComparisonBasisS = z.object({
+  nth: z.number().int(),
+  matchesCounted: z.number().int(),
+  dropped: z.array(z.object({ pool: z.string(), against: z.array(Uuid) })),
+  levelWith: z.array(Uuid),
+});
 const QualifierOutS = z.object({
   rank: z.number().int(),
   source: z.object({ stageId: Uuid, group: z.string().optional(), rank: z.number().int() }),
@@ -23,6 +32,10 @@ const QualifierOutS = z.object({
   /** `"<fixtureId>:home" | "<fixtureId>:away"` — resolvable straight back to
    *  a fillSlot(tx, fixtureId, slot, entrantId) call at confirm time. */
   destinationSlot: z.string(),
+  /** W5 app PR B T4: the source pool's key (a group_rank or best_nth qualifier). */
+  pool: z.string().optional(),
+  /** W5 app PR B T4: a best_nth qualifier's comparison basis. */
+  basis: ComparisonBasisS.optional(),
 });
 const TieOutS = z.object({
   slots: z.array(z.string()),

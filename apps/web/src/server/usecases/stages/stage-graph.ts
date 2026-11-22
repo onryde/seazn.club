@@ -12,6 +12,9 @@ import { stageNeedsAdvancedFormatsGate, stageNeedsDoubleElimGate } from "../form
 import { validatedStageConfig } from "../stage-defaults";
 import { refuseNewStageTable } from "../table-rule-guards";
 import { knockoutRefusal } from "../knockout-refusal";
+import { roundRobinRefusal } from "../roundrobin-refusal";
+import { formatMaxEntrants } from "@/lib/format-max-entrants";
+import { POOL_COUNT_MAX } from "@/lib/format-bounds";
 import { standaloneStageRefusal } from "@/lib/stage-standalone";
 import { validateFeedGraph } from "@seazn/engine/scheduling";
 import type { TiebreakerKey } from "@seazn/engine/sport";
@@ -234,6 +237,13 @@ export async function assertStageBatchGates(
     const refusal = standaloneStageRefusal({ kind: s.kind, progression: s.progression ?? null });
     if (refusal !== null) throw knockoutRefusal(refusal, { seq: s.seq, kind: s.kind });
   }
+  // W5 stress fix F7: one pool per key letter, A to Z (`POOL_COUNT_MAX`). A stage of more pools is refused by NAME, the whole
+  // batch, before any plan gate - at both writers, as above - and Start refuses one stored before this gate the same way
+  // (generators.ts `poolCount`). The schema takes any whole count from 1: this is a domain refusal (422), not a malformed body.
+  for (const s of inputs) {
+    const count = (s.config as { pools?: { count?: unknown } } | undefined)?.pools?.count;
+    if (typeof count === "number" && count > POOL_COUNT_MAX) throw roundRobinRefusal("RR_TOO_MANY_POOLS", { max: POOL_COUNT_MAX, pools: count, seq: s.seq });
+  }
   // Doc 10 §1: `formats.double_elim` gates these kinds (every plan has it since V393; a plan row can still turn it off) — gate before any insert.
   if (inputs.some((s) => stageNeedsDoubleElimGate(s.kind))) {
     await requireFeature(auth.orgId, "formats.double_elim", divComp?.competition_id);
@@ -387,6 +397,18 @@ async function insertStageBatch(
     if (!s.progression) continue;
     const row = rows.find((r) => r.seq === s.seq)!;
     await validateStageProgression(tx, row, s.progression);
+  }
+  // W5 B4 (stress F8; owner 2026-11-21, max entrants per format): a batch that sets the division's FIRST stage - a new format, or
+  // a format change (`replaceStages` runs this batch after its delete) - on a field already past that format's max is refused
+  // by name, with the max and the field, as the draw doors refuse it (`generateStageFixturesTx`). A stage added after the
+  // first leaves the format's start unchanged and is not asked.
+  const [first] = await tx<{ seq: number; kind: string; config: unknown }[]>`
+    select seq, kind, config from stages where division_id = ${divisionId} order by seq limit 1`;
+  const max = first !== undefined && rows.some((r) => r.seq === first.seq) ? formatMaxEntrants(first) : null;
+  if (max !== null) {
+    const [{ field }] = await tx<{ field: number }[]>`
+      select count(*)::int as field from entrants where division_id = ${divisionId} and status in ('registered', 'confirmed')`;
+    if (field > max) throw roundRobinRefusal("FORMAT_TOO_MANY_ENTRANTS", { max, entrants: field });
   }
   // Adding a stage to a completed division (e.g. finals after the league
   // wrapped the graph) reopens it — 'completed' must mean "nothing left".

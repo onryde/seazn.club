@@ -33,11 +33,13 @@ import {
   descriptorKey,
   expandSources,
   expandTake,
+  foldResults,
   placeDescriptors,
   resolveProgression,
+  type FixtureResult,
   type SourceTables,
-  type StandingsRow,
 } from "@seazn/engine/competition";
+import type { StandingsDelta } from "@seazn/engine/core";
 import { generateSingleElim } from "@seazn/engine/scheduling";
 import enUi from "@/dictionaries/en/ui.json";
 import esUi from "@/dictionaries/es/ui.json";
@@ -417,23 +419,34 @@ describe("groups_ko — cross-pool draw (F3 owner ruling R5, placement per rulin
     expect(pools).toEqual(new Set(["A", "B", "C", "D"]));
   });
 
-  it("A1 fix: the emitted bestNth remainder actually resolves against unequal pools, not just an unequal-membership shape check", () => {
-    // The shape-check tests above only prove the JSON now carries
-    // normaliseUnequalPools:true. This pipes groups_ko's REAL output through
-    // the real engine resolver against pool sizes snakeDistribute (usecases/stages/generators.ts)
-    // actually produces for an entrant count that doesn't divide evenly by
-    // poolCount (10 entrants / 4 pools -> [3,3,2,2], sizes.size > 1) — before
-    // A1's fix, the missing flag makes this throw SEEDING_BESTNTH_UNEQUAL_
-    // POOLS: the organiser-facing bug ("sees a full bracket on day one, runs
-    // the whole group stage, and the knockout silently never fills"). See
-    // progression.test.ts's resolveProgression tests for the isolated
-    // engine-level proof (including the sibling hazard this does NOT fix).
+  it("A1 fix (+ ST-G3 seam): the emitted bestNth remainder resolves against unequal pools with their results, as both app builders now pass them", () => {
+    // The shape-check tests above only prove the JSON carries the take. This
+    // pipes groups_ko's REAL output through the real engine resolver against
+    // pool sizes snakeDistribute (usecases/stages/generators.ts) actually
+    // produces for an entrant count that doesn't divide evenly by poolCount
+    // (10 entrants / 4 pools -> [3,3,2,2], sizes.size > 1). Before A1's fix the
+    // missing flag threw SEEDING_BESTNTH_UNEQUAL_POOLS: the organiser-facing bug
+    // ("sees a full bracket on day one, runs the whole group stage, and the
+    // knockout silently never fills"). Since engine 10 (ruling 286) the
+    // normalisation is always on and the flag is ignored: a larger pool is
+    // compared without its results against its bottom k, so a pool with k > 0
+    // and NO results is STAGE_NOT_READY `pool_results_missing`. Each pool
+    // therefore carries its results here, as `sourcesToTables` and
+    // `tablesForCompletedStage` now attach them (usecases/pool-results.ts,
+    // W5 app PR B Task 0); pool-results-seam.test.ts drives the two builders.
     const stages = buildTemplateStages("groups_ko", { qualified: 7, swissRounds: 5, poolCount: 4, legs: 1 });
     const progression = stages[1]!.progression!;
-    const pool = (key: string, size: number) => ({
-      pool: key,
-      rows: Array.from({ length: size }, (_, i) => ({ entrantId: `${key}${i + 1}`, rank: i + 1 }) as StandingsRow),
-    });
+    const pool = (key: string, size: number) => {
+      const ids = Array.from({ length: size }, (_, i) => `${key}${i + 1}`);
+      const side = (entrantId: string, won: boolean): StandingsDelta => ({
+        entrantId, played: 1, won: won ? 1 : 0, drawn: 0, lost: won ? 0 : 1, points: won ? 3 : 0, metrics: {},
+      });
+      // A full round robin among the pool's rows, the higher-listed member winning every meeting, so the listed order
+      // is the rank order and every row is the fold of its own results.
+      const results: FixtureResult[] = ids.flatMap((a, i) => ids.slice(i + 1).map((b): FixtureResult => [side(a, true), side(b, false)]));
+      const rows = foldResults(ids, results).map((r) => ({ ...r, rank: ids.indexOf(r.entrantId) + 1 }));
+      return { pool: key, rows, results };
+    };
     const tables: SourceTables = { pools: [pool("A", 3), pool("B", 3), pool("C", 2), pool("D", 2)] };
     const shape = { poolKeys: ["A", "B", "C", "D"] };
     expect(() => resolveProgression(progression, [shape], [tables])).not.toThrow();

@@ -59,8 +59,11 @@ import { tableStageCompletable } from "@/server/engine-db/competition";
 import { firstOwnFormat, ownFormatLoss } from "./fixture-override-guards";
 import { fixtureHasResultSql } from "./fixture-results-sql";
 import { fixtureStartedSql, stageHasStarted } from "./fixture-started-sql";
+import { insertFixtureRows } from "./fixture-insert";
 import { afterScheduleWrite, divisionLockState } from "./schedule";
 import { swissRefusal } from "./swiss-refusal";
+import { roundRobinRefusal } from "./roundrobin-refusal";
+import { START_LINE_BUDGET } from "@/lib/format-max-entrants";
 import {
   DECIDED,
   clearSwissFixtureSeats,
@@ -355,8 +358,9 @@ async function lockedSwissStage(tx: Tx, stageId: string): Promise<SwissStageRow>
 }
 
 /** Round `round`'s shells for a field of `fieldSize`: ⌊n/2⌋ boards (`mintSwissBoardExtKeys`, the one mint rule) and a
- *  bye for an odd field, unseated and `scheduled`. `org_id` and `fixture_no` come from the BEFORE INSERT triggers, as
- *  for every Swiss shell (`reconcileSwissRoundShells`). */
+ *  bye for an odd field, unseated and `scheduled`. `org_id` comes from its BEFORE INSERT trigger and `fixture_no` from
+ *  `insertFixtureRows` (numbered once per call, under the trigger's own key), as for every Swiss shell
+ *  (`reconcileSwissRoundShells`). */
 async function mintRoundShells(tx: Tx, stage: SwissStageRow, round: number, fieldSize: number): Promise<number> {
   refuseSwissFieldUnderTwo(stage.id, fieldSize);
   const { boards, bye } = swissBoardsForField(fieldSize);
@@ -375,7 +379,7 @@ async function mintRoundShells(tx: Tx, stage: SwissStageRow, round: number, fiel
   // The round holds no row (every caller mints only a round that has none), so its keys start at b1.
   const minted = mintSwissBoardExtKeys(round, [], boards).map((key, i) => shell(key, i + 1));
   if (bye) minted.push(shell(`sw-r${round}-bye`, boards + 1));
-  if (minted.length > 0) await tx`insert into fixtures ${tx(minted)}`;
+  await insertFixtureRows(tx, minted);
   return minted.length;
 }
 
@@ -497,9 +501,16 @@ export async function patchSwissStage(auth: AuthCtx, stageId: string, body: Patc
     }
     if (to > from && rows.length > 0) {
       const entrants = (await swissStageEntrants(tx, stage)) ?? [];
-      for (let round = from + 1; round <= to; round++) {
-        const inRound = rows.filter((f) => f.round_no === round);
-        if (inRound.length > 0) continue;
+      const missing = Array.from({ length: to - from }, (_, i) => from + 1 + i).filter((round) => !rows.some((f) => f.round_no === round));
+      // W5 B4 review m-9: every added round's shells are minted in this one request, so they are held to the same budget as any
+      // draw (DRAW_TOO_LARGE, generate-tx.ts) - counted before the first write, by the one shell rule (`swissBoardsForField`).
+      // Settings bounds the count (<= 15); the API bounds it only by the field.
+      const planned = missing.reduce((sum, round) => {
+        const { boards, bye } = swissBoardsForField(swissFieldForRound(entrants, round).length);
+        return sum + boards + (bye ? 1 : 0);
+      }, 0);
+      if (planned > START_LINE_BUDGET) throw roundRobinRefusal("DRAW_TOO_LARGE", { lines: planned, budget: START_LINE_BUDGET });
+      for (const round of missing) {
         added += await mintRoundShells(tx, stage, round, swissFieldForRound(entrants, round).length);
       }
     }

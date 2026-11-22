@@ -277,7 +277,7 @@ describe("stages-panel reads the code, not the English (M1: undo, rebuild, and t
   const want = msgEs(RULE_ERROR_KEYS.FIXTURE_HAS_OWN_FORMAT, { match: msgEs(RULE_ERROR_SUPPORT_KEYS.match, { n: 3 }) });
 
   it("Undo: the refusal reads its dictionary sentence", () => {
-    expect(undoRefusalMessage(own(), msgEs as never)).toBe(want);
+    expect(undoRefusalMessage(own(), msgEs as never, "es")).toBe(want);
   });
 
   it("Rebuild: the refusal reads its dictionary sentence; an unrecognised one keeps its message, a non-Error the generic", () => {
@@ -285,9 +285,9 @@ describe("stages-panel reads the code, not the English (M1: undo, rebuild, and t
     const noPlural = () => {
       throw new Error("a rule refusal needs no plural");
     };
-    expect(rebuildErrorText(own(), msgEs as never, noPlural)).toBe(want);
-    expect(rebuildErrorText(new ApiV1Error("division is mid-solve", 409, "BUSY"), msg, noPlural)).toBe("division is mid-solve");
-    expect(rebuildErrorText("nope", msg, noPlural)).toBe(say("schedule.error.failed"));
+    expect(rebuildErrorText(own(), msgEs as never, noPlural, "es")).toBe(want);
+    expect(rebuildErrorText(new ApiV1Error("division is mid-solve", 409, "BUSY"), msg, noPlural, "en")).toBe("division is mid-solve");
+    expect(rebuildErrorText("nope", msg, noPlural, "en")).toBe(say("schedule.error.failed"));
   });
 
   it("a generate/complete/delete refusal (classifyActError) reads it too, and an unrecognised one keeps its message", () => {

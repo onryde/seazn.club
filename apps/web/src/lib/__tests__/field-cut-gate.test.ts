@@ -5,21 +5,26 @@
 // are the brief's, typed from the rulebook.
 import { describe, expect, it } from "vitest";
 import { EngineError } from "@seazn/engine/core";
-import { resolveProgression, type ProgressionSpec, type SourceTables, type StandingsRow } from "@seazn/engine/competition";
+import { foldResults, resolveProgression, type FixtureResult, type ProgressionSpec, type SourceTables } from "@seazn/engine/competition";
+import type { StandingsDelta } from "@seazn/engine/core";
 import { buildTemplateStages } from "../format-templates";
 import { cutIssue, snakeSizes, stageGraphCutIssue, takeCutIssue } from "../field-cut-gate";
 
 const CUT_TEMPLATES = ["league_ko", "groups_ko", "group_stepladder", "swiss_knockout"] as const;
 
-const row = (entrantId: string, rank: number): StandingsRow => ({ entrantId, played: 3, won: 3 - rank, drawn: 0, lost: rank, points: 9 - rank, metrics: {}, rank });
+const side = (entrantId: string, won: boolean): StandingsDelta => ({ entrantId, played: 1, won: won ? 1 : 0, drawn: 0, lost: won ? 0 : 1, points: won ? 3 : 0, metrics: {} });
 
-/** The tables a source of `sizes` pools holds: one pool per size, ranks 1..size, every entrant distinct. */
+/** The tables a source of `sizes` pools holds: one pool per size, ranks 1..size, every entrant distinct. Each pool is a full
+ *  round robin the higher-listed member wins, its rows the fold of its own `results`: since engine 10 (ruling 286) a larger
+ *  pool's best-Nth candidate is compared without her results against its bottom rows, so a pool hands its results or the
+ *  engine refuses `pool_results_missing` - the oracle must be a table the app's builders actually hand over (W5 app PR B T4). */
 function tablesOf(sizes: readonly number[], grouped: boolean): SourceTables {
   return {
-    pools: sizes.map((size, p) => ({
-      pool: grouped ? "ABCDEFGH"[p]! : "",
-      rows: Array.from({ length: size }, (_, i) => row(`e${p}-${i + 1}`, i + 1)),
-    })),
+    pools: sizes.map((size, p) => {
+      const ids = Array.from({ length: size }, (_, i) => `e${p}-${i + 1}`);
+      const results: FixtureResult[] = ids.flatMap((a, i) => ids.slice(i + 1).map((b): FixtureResult => [side(a, true), side(b, false)]));
+      return { pool: grouped ? "ABCDEFGH"[p]! : "", rows: foldResults(ids, results).map((r) => ({ ...r, rank: ids.indexOf(r.entrantId) + 1 })), results };
+    }),
   };
 }
 
@@ -48,8 +53,21 @@ describe("cutIssue (X-BD-8): the brief's pinned cases", () => {
   it("X-BD-8 groups_ko: a best-Nth cut no pool can supply is refused (2 pools of 3, qualified 7 -> max 6)", () => {
     // 6 entrants in 2 pools of 3: a top 7 is 3 per pool and the best 4th, and no pool has a 4th - and 7 is more than the field's 6.
     expect(cutIssue(6, 2, 7, "groups_ko")).toEqual({ reason: "cut_exceeds_field", qualified: 7, max: 6 });
-    // 7 entrants in pools of 4 and 3: the field holds 7, but the best 4th is only the 4-pool's - the other pool has no 4th.
-    expect(cutIssue(7, 2, 7, "groups_ko")).toEqual({ reason: "bestnth_unsuppliable", qualified: 7, max: 6 });
+  });
+
+  it("K16 RB5-U7 (ruling 286): a pool too short for the nth supplies no candidate and the others are compared - never a refusal", () => {
+    // 7 entrants in pools of 4 and 3: the best 4th is the 4-pool's own (the 3-pool has no 4th and is left out).
+    // differential: under 9.x every pool had to hold the nth, so this was refused as bestnth_unsuppliable, max 6.
+    expect(cutIssue(7, 2, 7, "groups_ko")).toBeNull();
+    // The preflight's own case (K16): 8 in pools of 3, 3, 2 and a top 7 = every winner and runner-up + the best 3rd of the two 3-pools.
+    expect(snakeSizes(8, 3)).toEqual([3, 3, 2]);
+    expect(cutIssue(8, 3, 7, "groups_ko")).toBeNull();
+    // Three best 3rds need three suppliers: pools of 4, 3 and 2 have two, so the pot of three is refused whole (max = the six).
+    expect(takeCutIssue([{ kind: "topNPerGroup", n: 2 }, { kind: "bestNth", nth: 3, count: 3 }], [4, 3, 2])).toEqual({ reason: "bestnth_unsuppliable", qualified: 9, max: 6 });
+    expect(takeCutIssue([{ kind: "topNPerGroup", n: 2 }, { kind: "bestNth", nth: 3, count: 2 }], [4, 3, 2])).toBeNull();
+    // The builder's max is the largest Top N the template resolves: 3 in pools of 2 and 1 resolves a top 3 (two winners + the
+    // best 2nd, the 2-pool's), though the top 4's own take fills only its 2 winners.
+    expect(cutIssue(3, 2, 4, "groups_ko")).toEqual({ reason: "cut_exceeds_field", qualified: 4, max: 3 });
   });
 
   it("X-BD-8 a cut equal to the field passes where the shape can supply it (pin: the off-by-one)", () => {
@@ -112,8 +130,12 @@ describe("cutIssue (X-BD-8): the engine is the oracle, over the whole table", ()
     expect(checked, "anti-vacuity: every cell").toBe(3 * 19 * 23 + 4 * 19 * 23);
     expect(refused).toBeGreaterThan(0);
     expect(supplied).toBeGreaterThan(0);
-    expect(exceeds, "both reasons reached").toBeGreaterThan(0);
-    expect(bestNth, "both reasons reached").toBeGreaterThan(0);
+    expect(exceeds, "a cut over the field is reached").toBeGreaterThan(0);
+    // K16 (RB5-U7, ruling 286): over the snake's shapes no template cut within the field is refused any more. A Top q of P pools
+    // is n = floor(q / P) per pool + a best (n+1)th for the r left over; the snake's pools hold `base` or `base + 1`, and the
+    // `extra` larger pools each supply a (base+1)th, so r <= extra exactly when q <= the field. The shape refusal is still the
+    // gate's for a REAL table (withdrawals, late entrants: the [4, 2] and [4, 3, 2] pins above), never a template's.
+    expect(bestNth, "no template cut within the field is a shape refusal under RB5-U7").toBe(0);
   });
 });
 

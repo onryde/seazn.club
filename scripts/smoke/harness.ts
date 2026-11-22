@@ -1626,6 +1626,8 @@ export async function cleanup(tag: string): Promise<void> {
     `delivered+w5a8_${tag}@resend.dev`,
     // w5a9 Task 23's public league whose division page lists a late arrival on the table card's waiting strip.
     `delivered+w5a9_${tag}@resend.dev`,
+    // w5RoundRobinBSuite's own org (W5 round-robin app PR B) — its competition, divisions, entrants and stages cascade with it.
+    `delivered+w5b_${tag}@resend.dev`,
     // youtubeConnectSuite's two orgs (YouTube Connect T21) - the connections, destinations, broadcasts, fixtures and pending grants
     // all cascade with the org (V479: on delete cascade on org_id).
     `delivered+ytconnect_${tag}@resend.dev`,

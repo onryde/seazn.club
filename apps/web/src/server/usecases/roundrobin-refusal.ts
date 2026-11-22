@@ -5,7 +5,7 @@ import "server-only";
 // (knockout-refusal.ts): a sentence with a placeholder takes its value from `details` under the same name, and a placeholder
 // `details` does not fill is a programming error, thrown by name, never a "{max}" sent to an organiser.
 import { HttpError } from "@/lib/errors";
-import { ROUND_ROBIN_REFUSALS, type RoundRobinRefusalCode } from "@/lib/roundrobin-refusals";
+import { FORMAT_MAX_LATE_ENTRY, FORMAT_MAX_PROMOTION, ROUND_ROBIN_REFUSALS, type RoundRobinRefusalCode } from "@/lib/roundrobin-refusals";
 
 export function roundRobinRefusal(code: RoundRobinRefusalCode, details?: Record<string, unknown>): HttpError {
   const { status, en } = ROUND_ROBIN_REFUSALS[code];
@@ -17,4 +17,20 @@ export function roundRobinRefusal(code: RoundRobinRefusalCode, details?: Record<
     return String(value);
   });
   return new HttpError(status, message, code, details);
+}
+
+/** B4 review m-8: an organiser's promotion refused at the format's max. The draw doors' code, status and fields, in the promotion's
+ *  own sentence (`FORMAT_MAX_PROMOTION`) - the draw sentence read "up to 100 entrants. This division has 100." at the max itself. */
+export function formatMaxPromotionRefusal(max: number, active: number): HttpError {
+  const { status } = ROUND_ROBIN_REFUSALS.FORMAT_TOO_MANY_ENTRANTS;
+  const message = FORMAT_MAX_PROMOTION.en.replace("{max}", String(max)).replace("{entrants}", String(active));
+  return new HttpError(status, message, "FORMAT_TOO_MANY_ENTRANTS", { max, entrants: active });
+}
+
+/** B4 re-review N-3: a late add into a running table refused at the format's max, in the late add's own sentence
+ *  (`FORMAT_MAX_LATE_ENTRY`): `entrants` is the field the add would make. The draw doors' code, status and fields. */
+export function formatMaxLateEntryRefusal(max: number, entrants: number): HttpError {
+  const { status } = ROUND_ROBIN_REFUSALS.FORMAT_TOO_MANY_ENTRANTS;
+  const message = FORMAT_MAX_LATE_ENTRY.en.replace("{max}", String(max)).replace("{entrants}", String(entrants));
+  return new HttpError(status, message, "FORMAT_TOO_MANY_ENTRANTS", { max, entrants });
 }

@@ -4,7 +4,8 @@ import "server-only";
 
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { type ProgressionSpec } from "@seazn/engine/competition";
+import { PROPOSAL_STALE_REDRAWN, PROPOSAL_STALE_SUPERSEDED } from "@/lib/seeding-error";
+import { type ComparisonBasis, type ProgressionSpec, type SourceShape, type SourceTables } from "@seazn/engine/competition";
 import { resolveStoredProgression } from "../stored-progression";
 import { BYE_SLOT_LABEL } from "@/lib/bye-line";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -12,12 +13,14 @@ import { log } from "@/server/logger";
 import { afterScheduleWrite, validateSchedule, courtNamesById } from "../schedule";
 import { departedLoseBestNth, descriptorKey, destinationSlotsBySeed, sourcesToTables, persistCrossGroupDraws, standingsHash, poolTableRowsAcrossSources, type SlotDescriptor } from "../stage-seeding";
 import { refuseCutBeyondTables } from "./cut-gate";
-import { STAGE_COLS, type StageRow, type FixtureRow } from "./types";
+import { STAGE_COLS, type StageRow, type FixtureRow, type Tx } from "./types";
 import { fireStageRevalidate, refoldStageTable, departedEntrantIds } from "./helpers";
 import { fillSlot, resolveBracketSeats } from "./bracket-seats";
 import { knockoutRefusal } from "../knockout-refusal";
 import { writeProgressionSetupFixtures } from "./setup-fixtures";
 import { isFirstLossProgression, reseedPlateQualifiers } from "../plate-field";
+import { drawAcrossPools, preBumpBestNthDraft, type CrossPoolRefused } from "./cross-pool-draw";
+import { answerTies, type AnsweredTie } from "@/lib/cross-pool-ties";
 import {
   nonRealCarrySource,
   carrySourceRefusal,
@@ -45,11 +48,24 @@ export interface SeedProposalOut {
       source: { stageId: string; group?: string; rank: number };
       entrantId: string;
       destinationSlot: string;
+      /** W5 app PR B T4 (engine 10 `ResolvedProgressionEntry.pool`): the source pool's key, group_rank and best_nth entries. */
+      pool?: string;
+      /** W5 app PR B T4 (RB5-U1/U3, X-UP-3): a best_nth entry's comparison basis - what the source's Standings footnote says
+       *  (`loadUnequalBasis`). Replaced with the slot by every re-proposal (a stale draft's basis is never read). */
+      basis?: ComparisonBasis;
     }[];
     ties: { slots: string[]; entrantIds: string[]; reason: string }[];
     standingsHash: string;
     /** W4 T8 (RB4-E5/T4): a plate configured with a third-place match whose field gave under two real semi-finals - drawn without it. */
     thirdPlaceDropped?: true;
+    /** W5 app PR B T5 (FX-G5, ruling 281): the seats were drawn across the source's pools with this stored draw seed
+     *  (`drawAcrossPools`); the stage card shows it (R24 pick 18 A). Absent: not a pooled field, nothing drawn. */
+    crossPoolDraw?: { seed: number; refused?: CrossPoolRefused };
+    /** W5 B3 fix (review I-1): written by the confirm, on the row it confirms - who was actually SEATED, seat by seat, once the
+     *  organiser's tie picks and edits were applied (or the re-draw over them). `qualifiers` stays the slate as proposed: the cut
+     *  drift reads (`table-cut-drift.ts` and its siblings) compare it with today's cut, and a pick against the lot is no drift.
+     *  V540's `qualified` reads this (a row confirmed before it existed falls back to `qualifiers`). Absent on drafts. */
+    seated?: { entrantId: string; rank: number; source: { stageId: string } }[];
   };
 }
 
@@ -68,6 +84,27 @@ export interface SeedProposalOut {
 function seedProposalKey(sourceIndex: number, d: SlotDescriptor): string {
   const base = d.kind === "best_nth" ? `best:${d.nth}:${d.position}` : descriptorKey(d);
   return `${sourceIndex}:${base}`;
+}
+
+type ResolvedSeat = ReturnType<typeof resolveStoredProgression>["qualifiers"][number];
+type WireQualifier = SeedProposalOut["computed"]["qualifiers"][number];
+
+/** One resolved seat as a proposal stores it: its seed, where it came from, who, and the ONE wire slot it fills. Shared by the
+ *  propose and by a confirm that re-proposes a re-drawn slate (review I-1), so the two drafts read alike. */
+function wireQualifier(q: ResolvedSeat, resolved: readonly { id: string }[], destinationSlot: string): WireQualifier {
+  return {
+    rank: q.seed,
+    source: {
+      stageId: resolved[q.sourceIndex]!.id,
+      ...(q.descriptor.kind === "group_rank" ? { group: q.descriptor.pool } : {}),
+      rank: q.rank,
+    },
+    entrantId: q.entrantId,
+    destinationSlot,
+    // W5 app PR B T4 (X-UP-3): the engine's own pool and comparison basis ride the slot; the Standings footnote reads them.
+    ...(q.pool !== undefined ? { pool: q.pool } : {}),
+    ...(q.basis !== undefined ? { basis: q.basis } : {}),
+  };
 }
 
 /**
@@ -166,7 +203,12 @@ export async function computeSeedProposal(
     // and a direct propose is refused by name rather than writing an empty draw.
     if (firstLossPlate && resolvedProgression.qualifiers.length < 2) throw knockoutRefusal("PLATE_FIELD_TOO_SMALL");
     if (firstLossPlate) await writeProgressionSetupFixtures(tx, stageId, { checkSeats: true });
-    const qualifiers = firstLossPlate ? await reseedPlateQualifiers(tx, stage, resolvedProgression.qualifiers) : resolvedProgression.qualifiers;
+    const resolvedSeats = firstLossPlate ? await reseedPlateQualifiers(tx, stage, resolvedProgression.qualifiers) : resolvedProgression.qualifiers;
+    // W5 app PR B T5 (FX-G5): a knockout fed from two or more pools seats round one across the pools, its level runs drawn with the
+    // stage's stored seed (`drawAcrossPools`; null - today's seats - for any other field). Over the FULL slate, before the departed
+    // filter below, so the drawn geometry is the one the TBD lines hold.
+    const crossPool = firstLossPlate ? null : await drawAcrossPools(tx, stage, progression, resolvedSeats, tables);
+    const qualifiers = crossPool?.qualifiers ?? resolvedSeats;
     // W2d T12 (spec §5.9): stored under the division lock held above, so a re-proposal seats the same draw.
     await persistCrossGroupDraws(tx, resolved, newLotsDraws);
 
@@ -203,21 +245,12 @@ export async function computeSeedProposal(
     // them apart. See its own doc comment.
     const seedOfKey = new Map(qualifiers.map((q) => [seedProposalKey(q.sourceIndex, q.descriptor), q.seed] as const));
 
-    const resolvedQualifiers = qualifiers.map((q) => ({
-      rank: q.seed,
-      source: {
-        stageId: resolved[q.sourceIndex]!.id,
-        ...(q.descriptor.kind === "group_rank" ? { group: q.descriptor.pool } : {}),
-        rank: q.rank,
-      },
-      entrantId: q.entrantId,
-      // Wire contract: ONE slot, for display (design's "Renderers receive
-      // {key,params}" convention extends here — first of the deterministic,
-      // order-by-id list). A bye seed's OTHER slot isn't dropped — it's
-      // filled too at confirm time via a fresh destinationSlotsBySeed() call
-      // keyed off this same `rank`; see confirmSeedProposal.
-      destinationSlot: slotBySeed.get(q.seed)?.[0] ?? "",
-    }));
+    // Wire contract: ONE slot, for display (design's "Renderers receive
+    // {key,params}" convention extends here — first of the deterministic,
+    // order-by-id list). A bye seed's OTHER slot isn't dropped — it's
+    // filled too at confirm time via a fresh destinationSlotsBySeed() call
+    // keyed off this same `rank`; see confirmSeedProposal.
+    const resolvedQualifiers = qualifiers.map((q) => wireQualifier(q, resolved, slotBySeed.get(q.seed)?.[0] ?? ""));
     // Integrity check over the FULL resolved slate, BEFORE the departed
     // filter below: it asks whether the generated TBD fixtures still match
     // the seeding rules, and filtering first would let a departed
@@ -287,6 +320,7 @@ export async function computeSeedProposal(
       standingsHash: standingsHash(poolTableRowsAcrossSources(tables)),
       // RB4-E5/T4: the plate asked for a third-place match and its field gave under two real semi-finals, so it was drawn without.
       ...(firstLossPlate && stage.config.thirdPlace === true && resolvedProgression.qualifiers.length < 4 ? { thirdPlaceDropped: true as const } : {}),
+      ...(crossPool !== null ? { crossPoolDraw: { seed: crossPool.seed, ...(crossPool.refused !== undefined ? { refused: crossPool.refused } : {}) } } : {}),
     };
 
     if (opts.refreshSameSlate) {
@@ -356,6 +390,92 @@ export async function getSeedProposal(auth: AuthCtx, stageId: string): Promise<S
   });
 }
 
+/** F11: thrown inside the confirm transaction for a pre-bump best-Nth draft; caught outside it, where the re-proposal runs. */
+class PreBumpDraft extends Error {}
+
+type DraftTie = SeedProposalOut["computed"]["ties"][number];
+
+/** W5 app PR B D-B2-1: the draft's ties this confirm answers, each as a RANKING of its entrants (best first). A `tiePicks` entry
+ *  names its tie by the tie's slot set (as the resolution check reads it; the last pick for a set wins, as when picks were placed
+ *  seat by seat) and its `order` is the ranking. The desk answers through `edits[]` (progression-panel.tsx): edits that fill every
+ *  seat of a tie no pick answers rank whoever sits in the draft's better seat first, then the tie's unseated entrants. */
+function tieAnswers(
+  computed: SeedProposalOut["computed"],
+  input: { edits?: { destinationSlot: string; entrantId: string }[]; tiePicks?: { slots: string[]; order: string[] }[] },
+): { tie: DraftTie; ranking: string[] }[] {
+  const setOf = (slots: readonly string[]) => [...slots].sort().join(",");
+  const rankOf = new Map(computed.qualifiers.map((q) => [q.destinationSlot, q.rank] as const));
+  const editOf = new Map((input.edits ?? []).map((e) => [e.destinationSlot, e.entrantId] as const));
+  return computed.ties.flatMap((tie) => {
+    const pick = (input.tiePicks ?? []).filter((p) => setOf(p.slots) === setOf(tie.slots)).at(-1);
+    if (pick !== undefined) return [{ tie, ranking: pick.order }];
+    if (!tie.slots.every((s) => editOf.has(s))) return [];
+    const seated = [...tie.slots].sort((a, b) => (rankOf.get(a) ?? 0) - (rankOf.get(b) ?? 0)).map((s) => editOf.get(s)!);
+    return [{ tie, ranking: [...seated, ...tie.entrantIds.filter((id) => !seated.includes(id))] }];
+  });
+}
+
+/** W5 app PR B D-B2-1: round one re-drawn over the picked slate, as the proposal's wire qualifiers (seed order as drawn). The
+ *  resolver's slate is read again from the same tables (the freshness check above has proved them the draft's); each answered tie's
+ *  seats - the seeds its descriptors hold, best first - go to its ranking's first entrants, in order, no longer `tied` to each other
+ *  (the organiser ordered them; the stored seed does not reshuffle them). Then the same draw, with the draft's stored seed. A slate
+ *  the draw cannot separate is the draw's named 422; a draft the tables no longer reproduce is stale; a ranking that does not fill
+ *  the tie leaves it unresolved. Each seat keeps the resolver's own comparison basis (who was level is still a fact of the table;
+ *  only the draw's input drops the answered entrants from it). */
+async function redrawAnsweredTies(
+  tx: Tx,
+  stage: StageRow,
+  progression: ProgressionSpec,
+  src: { shapes: SourceShape[]; tables: SourceTables[]; resolved: { id: string; kind: string }[] },
+  computed: SeedProposalOut["computed"],
+  answers: readonly { tie: DraftTie; ranking: readonly string[] }[],
+  seed: number,
+): Promise<WireQualifier[]> {
+  const departed = await departedEntrantIds(tx, stage.division_id);
+  const { qualifiers, ties } = resolveStoredProgression(
+    progression,
+    src.shapes,
+    departedLoseBestNth(src.tables, src.resolved, departed),
+    stage.kind,
+    src.resolved.map((r) => r.kind),
+  );
+  const stale = () => new HttpError(409, "standings changed since this proposal was computed — recompute it first", "SEEDING_PROPOSAL_STALE");
+  const sameSet = (a: readonly string[], b: readonly string[]) => [...a].sort().join(",") === [...b].sort().join(",");
+  // The draft's slate and ties, read again: anything else is a draft these tables no longer make.
+  if (!sameSet(qualifiers.map((q) => q.entrantId), computed.qualifiers.map((q) => q.entrantId))) throw stale();
+  const slate = [...qualifiers].sort((a, b) => a.seed - b.seed);
+  const atKey = new Map(slate.map((q, i) => [seedProposalKey(q.sourceIndex, q.descriptor), i] as const));
+  const answered: AnsweredTie[] = [];
+  for (const { tie, ranking } of answers) {
+    const flag = ties.find((t) => sameSet(t.entrantIds, tie.entrantIds));
+    if (flag === undefined) throw stale();
+    const seats = flag.descriptors.map((d) => atKey.get(seedProposalKey(d.sourceIndex, d.descriptor))).filter((i): i is number => i !== undefined);
+    if (seats.length !== tie.slots.length) throw stale();
+    answered.push({ members: tie.entrantIds, seats, ranking });
+  }
+  const picked = answerTies(slate, answered, (seat, entrantId) => src.tables[seat.sourceIndex]?.pools.find((p) => p.rows.some((r) => r.entrantId === entrantId))?.pool);
+  if ("unresolved" in picked) {
+    const { tie } = answers[picked.unresolved]!;
+    throw new HttpError(422, "a tie pick must rank the tied entrants, at least one per tied slot", "SEEDING_TIE_UNRESOLVED", { slots: tie.slots, entrantIds: tie.entrantIds });
+  }
+  const out = await drawAcrossPools(tx, stage, progression, picked.slate, src.tables, { seed });
+  // The draft was drawn across these pools, so its picked slate is too; null would seat it undrawn.
+  if (out === null) throw new Error(`seed proposal ${stage.id}: a slate drawn across pools no longer draws`);
+  if (out.refused !== undefined) {
+    throw new HttpError(422, "no ordering of the qualifiers keeps pool-mates apart in round one", out.refused.code, out.refused.vars);
+  }
+  const slotsBySeed = await destinationSlotsBySeed(tx, stage.id);
+  // A seat is its descriptor (keyed as `atKey` above); the picked slate only stripped the answered entrants from its basis.
+  const basisOf = new Map(slate.map((q) => [seedProposalKey(q.sourceIndex, q.descriptor), q.basis] as const));
+  return out.qualifiers.map((q) => {
+    const slot = slotsBySeed.get(q.seed)?.[0];
+    if (slot === undefined) {
+      throw new HttpError(422, "this stage's generated TBD fixtures don't match its current seeding rules — regenerate them first", "SEEDING_RULES_MISSING", { stageId: stage.id });
+    }
+    return wireQualifier({ ...q, basis: basisOf.get(seedProposalKey(q.sourceIndex, q.descriptor)) }, src.resolved, slot);
+  });
+}
+
 export interface ConfirmSeedProposalOut {
   proposalId: string;
   filled: number;
@@ -400,20 +520,49 @@ export async function confirmSeedProposal(
       );
     }
     if (proposal.status === "stale") {
+      // W5 stress fix F5: a draft a NEWER one replaced (a Recompute: the POST marks the old draft stale and inserts the new one)
+      // says so and names the newest, instead of "standings changed" when nothing had. Same code, so every look-again reader
+      // still reads it as one (`PROPOSAL_STALE_SUPERSEDED`, lib/seeding-error.ts).
+      const [newer] = await tx<{ id: string }[]>`
+        select n.id from stage_seed_proposals n join stage_seed_proposals p on p.id = ${proposal.id}
+         where n.stage_id = p.stage_id and n.created_at > p.created_at
+         order by n.created_at desc, n.id limit 1`;
+      if (newer !== undefined) {
+        throw new HttpError(409, "a newer proposal replaced this one — review the newer proposal", "SEEDING_PROPOSAL_STALE", {
+          reason: PROPOSAL_STALE_SUPERSEDED,
+          newer: newer.id,
+        });
+      }
       throw new HttpError(409, "standings changed since this proposal was computed — recompute it first", "SEEDING_PROPOSAL_STALE");
+    }
+    // W5 app PR B D-B2-1: on a draft drawn across pools, the ties this confirm answers (a pick, or the edits that fill a tie's
+    // seats) re-draw round one below; none answered, the draft's own draw stands.
+    const drawn = proposal.computed.crossPoolDraw;
+    const answers = drawn === undefined ? [] : tieAnswers(proposal.computed, input);
+    // W5 app PR B T5 (RB5-D4, RB5-D10; K22): a draft whose cross-pool draw was refused is never confirmed - same-pool round one
+    // is not seated silently. Named, with the numbers the card's band shows. A tie answered here changes the slate, so its re-draw
+    // decides instead (D-B2-1).
+    const refused = drawn?.refused;
+    if (refused !== undefined && answers.length === 0) {
+      throw new HttpError(422, "no ordering of the qualifiers keeps pool-mates apart in round one", refused.code, refused.vars);
     }
 
     // Step 1 — freshness. A standings override could have landed between the
     // draft's compute and this request; re-derive the hash rather than trust
     // the row's status alone.
-    const { tables, resolved } = await sourcesToTables(tx, stage, progression.sources);
+    const { shapes, tables, resolved } = await sourcesToTables(tx, stage, progression.sources);
     if (standingsHash(poolTableRowsAcrossSources(tables)) !== proposal.computed.standingsHash) {
       await tx`update stage_seed_proposals set status = 'stale' where id = ${proposal.id}`;
       throw new HttpError(409, "standings changed since this proposal was computed — recompute it first", "SEEDING_PROPOSAL_STALE");
     }
+    // W5 app PR B T5 (F11, Review Focus 4): a 9.x draft over unequal pools with a best-Nth seat and no basis is re-proposed, never
+    // confirmed (below, outside this transaction, which holds the division lock the re-proposal takes).
+    if (preBumpBestNthDraft(progression, resolved.map((r) => r.id), tables, proposal.computed.qualifiers)) throw new PreBumpDraft();
 
     // Step 2 — apply edits + tiePicks over the computed slate.
     const bySlot = new Map(proposal.computed.qualifiers.map((q) => [q.destinationSlot, q.entrantId] as const));
+    // The seats the final map fills: the draft's, or the re-draw's below (each slot's seed and source, for `seated`).
+    let slate: readonly WireQualifier[] = proposal.computed.qualifiers;
     for (const edit of input.edits ?? []) {
       if (!bySlot.has(edit.destinationSlot)) {
         throw new HttpError(
@@ -442,11 +591,43 @@ export async function confirmSeedProposal(
         );
       }
     }
-    for (const pick of input.tiePicks ?? []) {
-      pick.slots.forEach((slot, i) => {
-        const entrantId = pick.order[i];
-        if (entrantId) bySlot.set(slot, entrantId);
-      });
+    if (drawn !== undefined && answers.length > 0) {
+      // D-B2-1 (ruling, controller under the owner's standing "apply rec"): a pick fixes the ORDER of the tied entrants, then the
+      // draw re-runs over the picked slate with the draft's stored seed - placing the pick seat by seat over the DRAWN slate
+      // re-seated pool-mates against each other (live matrix F4: carrom, badminton). A picked slate the draw cannot separate is
+      // refused by name, like every refused draw.
+      const redrawn = await redrawAnsweredTies(tx, stage, progression, { shapes, tables, resolved }, proposal.computed, answers, drawn.seed);
+      const tiedSlots = new Set(proposal.computed.ties.flatMap((t) => t.slots));
+      // Review I-1 (ruling, controller under the owner's standing "apply rec"; F11's pattern): an edit OUTSIDE the tie was made
+      // against the draft's seats, which the re-draw has just moved - replayed by slot it seated whoever the draw put there (a
+      // replaced entrant kept her seat and the pick sat nowhere, or a clean swap read as a double assignment). So nothing is seated:
+      // the re-drawn slate is stored as the new draft, every tie answered (the check above refuses any tie left open), and the reply
+      // names it for the organiser to review and edit again. Committed, then refused below, outside this transaction.
+      if ((input.edits ?? []).some((e) => !tiedSlots.has(e.destinationSlot))) {
+        const computed: SeedProposalOut["computed"] = {
+          qualifiers: redrawn,
+          ties: [],
+          standingsHash: proposal.computed.standingsHash,
+          ...(proposal.computed.thirdPlaceDropped === true ? { thirdPlaceDropped: true as const } : {}),
+          crossPoolDraw: { seed: drawn.seed },
+        };
+        await tx`update stage_seed_proposals set status = 'stale' where stage_id = ${stageId} and status = 'draft'`;
+        const [row] = await tx<{ id: string }[]>`
+          insert into stage_seed_proposals (org_id, stage_id, computed, status)
+          values (${auth.orgId}, ${stageId}, ${tx.json(computed as never)}, 'draft')
+          returning id`;
+        return { reproposed: row!.id };
+      }
+      bySlot.clear();
+      for (const q of redrawn) bySlot.set(q.destinationSlot, q.entrantId);
+      slate = redrawn;
+    } else {
+      for (const pick of input.tiePicks ?? []) {
+        pick.slots.forEach((slot, i) => {
+          const entrantId = pick.order[i];
+          if (entrantId) bySlot.set(slot, entrantId);
+        });
+      }
     }
 
     // Step 3 — validate: bijection destinationSlot<->entrant, entrant ∈
@@ -544,6 +725,17 @@ export async function confirmSeedProposal(
       if (already !== null) {
         throw new HttpError(409, `slot ${slot} is already filled`, "SEEDING_FIXTURES_ALREADY_FILLED");
       }
+    }
+    // W5 B4 (B3 re-review N-1): every seat filled is one the slate offers - what `seated` below records (V540 publishes it and
+    // every table freezes on it). An edit is held to the proposal's slots above; a tie pick is not (its slots are applied as
+    // named), so a pick naming a REAL empty seat of this stage that no proposal slot owns - the bye line's free side - passed every
+    // check above and seated someone `seated` could not name. Refused by the edit's code, before anything is filled.
+    const slateSlots = new Set(slate.map((q) => q.destinationSlot));
+    const unoffered = finalSlots.flatMap(([slot]) => (slateSlots.has(slot) ? [] : [slot]));
+    if (unoffered.length > 0) {
+      throw new HttpError(422, `a tie pick references a slot this proposal doesn't have: ${unoffered[0]}`, "SEEDING_EDIT_UNKNOWN_SLOT", {
+        slots: unoffered,
+      });
     }
 
     // Step 4 — single transaction: fill through fillSlot, mark confirmed.
@@ -658,7 +850,19 @@ export async function confirmSeedProposal(
     for (const id of await resolveBracketSeats(tx, stageId)) filledFixtureIds.add(id);
     const [division] = await tx<{ competition_id: string }[]>`
       select competition_id from divisions where id = ${stage.division_id}`;
-    await tx`update stage_seed_proposals set status = 'confirmed', confirmed_at = now() where id = ${proposal.id}`;
+    // W5 B3 fix (review I-1): the row records who it SEATED (`seated`), not only the slate it proposed - a tie pick or an edit
+    // may seat someone the slate ranked below the cut, and who went through is what V540 publishes and every table freezes on.
+    const seatOf = new Map(slate.map((q) => [q.destinationSlot, q] as const));
+    const seated = finalSlots.map(([slot, entrantId]) => {
+      const seat = seatOf.get(slot);
+      // Unreachable: a slot the slate does not offer is refused above (SEEDING_EDIT_UNKNOWN_SLOT). Never a silent drop (N-1).
+      if (seat === undefined) throw new Error(`confirmSeedProposal: seat ${slot} is not on the slate`);
+      return { entrantId, rank: seat.rank, source: { stageId: seat.source.stageId } };
+    });
+    await tx`
+      update stage_seed_proposals
+         set status = 'confirmed', confirmed_at = now(), computed = computed || ${tx.json({ seated } as never)}
+       where id = ${proposal.id}`;
 
     const carryMode = (progression as { carry?: "none" | "points" | "full" }).carry ?? "none";
     if (carryMode !== "none") {
@@ -744,7 +948,19 @@ export async function confirmSeedProposal(
       filledFixtureIds: [...filledFixtureIds],
       kind: stage.kind,
     };
+  }).catch(async (e: unknown) => {
+    if (!(e instanceof PreBumpDraft)) throw e;
+    const fresh = await computeSeedProposal(auth, stageId);
+    throw new HttpError(409, "this draft was made before the unequal-pool comparison changed; it was re-proposed - review the new draft", "SEEDING_PROPOSAL_STALE", {
+      reproposed: fresh.id,
+    });
   });
+  if ("reproposed" in committed) {
+    throw new HttpError(409, "your tie pick re-drew round one; review the new draft and make your other changes again", "SEEDING_PROPOSAL_STALE", {
+      reason: PROPOSAL_STALE_REDRAWN,
+      reproposed: committed.reproposed,
+    });
+  }
 
   log.info(
     { event: "stage_seeded", stageId, proposalId: input.proposalId, edits: input.edits?.length ?? 0 },

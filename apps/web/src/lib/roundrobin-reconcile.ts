@@ -9,9 +9,11 @@
 // roster change always changes a round robin's key set. This planner answers `patch` instead — insert the pairs that are
 // missing, drop the pairs that are gone — and keeps `regenerate` for the changes a patch cannot express.
 //
-// The key text matches the engine's `roundRobinLineKey` shape (`rr:${lo}:${hi}:L${leg}`, lo/hi in code-unit order, a self-pair, a
-// leg outside 1..8, an empty id or an id holding ":" refused) with the pool in front of it. The engine function arrives in the
-// next engine major (app PR B), which pins this one to it; do not diverge. Client-safe and strip-types-safe: no import.
+// The key's pair-and-leg text IS the engine's `roundRobinLineKey` (`rr:${lo}:${hi}:L${leg}`; app PR B Task 3, X-RR-5): a self-pair,
+// a leg below 1, an empty id or an id holding ":" is the engine's `line_key_invalid`. The pool in front of it and the leg ceiling
+// (RR_MAX_LEG) stay app-side - the engine has no pool and no ceiling.
+import { EngineError } from "@seazn/engine/core";
+import { roundRobinLineKey } from "@seazn/engine/scheduling";
 
 /** A line of a round robin as the planner reads it, whether stored (`id`) or fresh from the engine (no `id`). */
 export interface RrLine {
@@ -59,15 +61,16 @@ export const RR_MAX_LEG = 8;
  * whichever side is home; a different leg or a different pool is a different line.
  */
 export function rrKey(a: string, b: string, leg: number, pool: string | null): string {
-  if (a === "" || b === "") throw new RrKeyError("an entrant id is empty");
-  if (a.includes(":") || b.includes(":")) throw new RrKeyError(`an entrant id holds ":" (${a === "" || a.includes(":") ? a : b})`);
-  if (a === b) throw new RrKeyError(`a pair needs two entrants, got ${a} twice`);
-  if (!Number.isInteger(leg) || leg < 1 || leg > RR_MAX_LEG) throw new RrKeyError(`leg ${String(leg)} is outside 1..${RR_MAX_LEG}`);
+  if (Number.isInteger(leg) && leg > RR_MAX_LEG) throw new RrKeyError(`leg ${String(leg)} is outside 1..${RR_MAX_LEG}`);
   if (pool !== null && (pool === "" || pool.includes("|"))) throw new RrKeyError(`pool ${JSON.stringify(pool)} is empty or holds "|"`);
-  const lo = a < b ? a : b;
-  const hi = a < b ? b : a;
-  // The engine's own `roundRobinLineKey` shape for an unpooled stage; a pooled one is prefixed `pool|` (the engine has no pool).
-  const line = `rr:${lo}:${hi}:L${leg}`;
+  let line: string;
+  try {
+    line = roundRobinLineKey(a, b, leg);
+  } catch (err) {
+    if (!EngineError.is(err) || err.code !== "CONFIG_INVALID") throw err;
+    throw new RrKeyError(`${String((err.data as { reason?: unknown } | undefined)?.reason)}: ${err.message}`);
+  }
+  // An unpooled stage's key is the engine's own; a pooled one is prefixed `pool|` (the engine has no pool).
   return pool === null ? line : `${pool}|${line}`;
 }
 

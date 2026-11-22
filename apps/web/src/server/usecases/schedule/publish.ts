@@ -18,6 +18,7 @@ import { assertNotFrozen, frozenCompetitionIds } from "../entitlement-freeze";
 import {
   generateStageFixturesTx,
   generateStageFixturesUnpublished,
+  refuseFormatTooManyAtStart,
   refuseFormatTooSmall,
   refuseSwissRoundsAboveMaxAtStart,
 } from "../stages";
@@ -301,6 +302,9 @@ export async function startDivision(
     if (division.status !== "active") await refuseSwissRoundsAboveMaxAtStart(tx, divisionId);
     // W4 T15 (X-PL-1, X-QM-5): a format this field cannot play is refused here, not after a whole qualifying stage is played.
     if (division.status !== "active") await refuseFormatTooSmall(tx, divisionId);
+    // W5 B4 review m-1: and one too LARGE - a first stage drawn before Start whose field grew past its format's max since (Start
+    // draws nothing then, so the draw's own gate never runs).
+    if (division.status !== "active") await refuseFormatTooManyAtStart(tx, divisionId);
     // Read here, ACTED ON below — see the two guards further down. The freeze
     // does not bind the start TRANSITION (that is deliberate: the design's own
     // customer story is freeze-then-publish, and `schedule-board.tsx` gates its

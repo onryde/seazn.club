@@ -18,7 +18,7 @@ import "server-only";
 //   roundrobin-reconcile.ts  a root league's or group's Generate over existing lines (patch by pair and leg), round_byes, delete cleanup
 //   bracket-seats.ts   bracket seat writes: fillSlot, departed seats, seeded byes, resolveBracketSeats
 //   setup-fixtures.ts  TBD-shape fixtures for a `timing: "setup"` progression
-//   generate-tx.ts     in-transaction generate/rebuild core, root-knockout reconcile, cross feeds
+//   generate-tx.ts     in-transaction generate/rebuild core, root-knockout reconcile, cross feeds, the format-max gates
 //   carry-over.ts      carry-over into the next stage: bracket losers, placement tables, seedNextStage
 //   generate.ts        public generate/rebuild doors: write, commit + revalidate, Unpublished, rebuild (+ its shared body)
 //   seed-proposal.ts   seed proposals: compute, read, confirm
@@ -108,7 +108,7 @@ export {
 } from "./roster-drift";
 export { fillSlot, stampDepartedSeat, writeDepartedSeat, resolveBracketSeats } from "./bracket-seats";
 export { writeProgressionSetupFixtures } from "./setup-fixtures";
-export { generateStageFixturesTx, regenerateStageInTx, wireCrossFeeds } from "./generate-tx";
+export { generateStageFixturesTx, refuseFormatTooManyAtStart, regenerateStageInTx, wireCrossFeeds } from "./generate-tx";
 export { loadBracketFixtures, americanoPlacementTables } from "./carry-over";
 export type { SeededStage } from "./carry-over";
 export {

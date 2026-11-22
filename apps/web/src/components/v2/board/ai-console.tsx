@@ -13,7 +13,7 @@ import { usePathname } from "next/navigation";
 import posthog from "posthog-js";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { track, EVENTS } from "@/lib/analytics";
-import { useMsg, usePlural } from "@/components/i18n/dict-provider";
+import { useLocaleOrDefault, useMsg, usePlural } from "@/components/i18n/dict-provider";
 import { isRung, type Rung } from "@/lib/ai-rung";
 import type { MessageKey } from "@/lib/messages";
 import { UpgradeGate } from "@/components/upgrade-gate";
@@ -443,6 +443,7 @@ export function AiConsole({
   viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
+  const locale = useLocaleOrDefault();
   const pathname = usePathname();
   const [state, dispatch] = useReducer(aiConsoleReducer, initialAiConsoleState);
   // Opened from the repair nudge (Task 16): pre-arm repair mode + the disrupted
@@ -923,12 +924,12 @@ export function AiConsole({
       const code = aiErrorCodeOf(err);
       const key = aiUndoErrorKey(status, code);
       // The sentence, not `msg(key)`: a knockout refusal's fields (`{min}`) ride on the envelope beside the code.
-      const message = aiUndoErrorText(status, code, err instanceof ApiV1Error ? err.extra : undefined, msg);
+      const message = aiUndoErrorText(status, code, err instanceof ApiV1Error ? err.extra : undefined, msg, locale);
       dispatch({ type: "APPLY_ERROR", error: { status, message, key } });
     } finally {
       setUndoing(false);
     }
-  }, [applyResult, divisionId, msg, onApplied, undoing]);
+  }, [applyResult, divisionId, locale, msg, onApplied, undoing]);
 
   // Re-run as refine: fold the organiser's proposal into a fresh Phase A pass over
   // the just-refetched board (prior = the current proposal). The mode override

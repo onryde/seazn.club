@@ -29,9 +29,12 @@ import { StandingsTable } from "@/components/public-site/standings-table";
 import { loadRrLateJoins, rowFactsFor } from "@/server/public-site/table-row-facts";
 import { loadTableWithdrawals } from "@/server/public-site/table-withdrawals";
 import { withdrawalNotesFor } from "@/lib/table-withdrawal-note";
+import { adjustmentNotesFor } from "@/lib/points-adjustment-note";
+import { loadPointsAdjustments } from "@/server/public-site/points-adjustments";
 import { inTheField } from "@/lib/entrant-field";
 import { Bracket } from "@/components/public-site/bracket";
-import { ResultsMatrix } from "@/components/public-site/results-matrix";
+import { resultsGridData } from "@/components/public-site/results-matrix";
+import { ResultsGridDisclosure } from "@/components/public-site/results-grid";
 import { SuspensionsStrip } from "@/components/public-site/suspensions-strip";
 import { publicSuspensions } from "@/server/usecases/discipline";
 import type { MetricSpecLike } from "@/lib/public-site";
@@ -40,6 +43,9 @@ import { byPoolOrder } from "@/lib/pool-order";
 import { poolNaming, poolCaption } from "@/lib/pool-label";
 import { toLocale } from "@/lib/i18n-constants";
 import { getDictionary, t } from "@/lib/i18n";
+import { stageBasisNotes } from "@/lib/bestnth-basis-note";
+import { BestNthBasisNote } from "@/components/public-site/bestnth-basis-note";
+import { loadBestNthBases } from "@/server/public-site/bestnth-basis";
 import { forfeitCopyOf } from "@/lib/forfeit-tag";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { divisionQualification, qualificationFixtures } from "@/server/public-site/division-qualification";
@@ -127,6 +133,10 @@ export default async function DivisionHomePage({ params }: Props) {
   const lateJoins = await loadRrLateJoins(division.id, fixtures);
   // W5 T8 (RB5-W7): the league/group departure notes under each table.
   const tableWithdrawals = await loadTableWithdrawals(division.id);
+  // W5 app PR B T7 (X-ADJ-4): the points adjustments under each table, with their reason and date.
+  const pointsAdjustments = await loadPointsAdjustments(division.id);
+  // W5 app PR B T4 (X-UP-3): the unequal-pool basis under each group stage whose best-Nth seats were compared across pools.
+  const bestNthBases = await loadBestNthBases(division.id);
   // Badge chips (v3/03 §5 + PROMPT-60): the entrant's own badge_url wins,
   // then team → club logo resolved by the view.
   const entrantLogos = Object.fromEntries(
@@ -341,37 +351,53 @@ export default async function DivisionHomePage({ params }: Props) {
                     rules={stage.table_rules}
                     swissFacts={rowFactsFor(stage, fixtures, snap.rows as StandingsRow[], lateJoins, entrantStatuses)}
                     withdrawalNotes={withdrawalNotesFor(stage.id, (snap.rows as StandingsRow[]).map((r) => r.entrantId), tableWithdrawals, entrantStatuses, entrantNames, snap.pool_id ?? null)}
+                    adjustmentNotes={adjustmentNotesFor(stage.id, (snap.rows as StandingsRow[]).map((r) => r.entrantId), pointsAdjustments, entrantNames)}
                     stageKind={stage.kind}
                     locale={orgLocale}
                     tz={tz}
                   />
-                  {poolFixtures.length > 0 && (
-                    <details>
-                      {/* `min-h-11 py-3.5` is the 44px tap floor (W2 contact
-                          sheet img-135, owner approved): the toggle was plain
-                          text, 16px tall at 320. The padding rather than a
-                          `flex` is deliberate — a `<summary>` is `display:
-                          list-item`, and changing its display takes the
-                          disclosure triangle with it. */}
-                      <summary className="min-h-11 cursor-pointer py-3.5 text-xs font-medium text-ink-muted hover:text-ink">
-                        {t(dict, "division.resultsGrid")}
-                      </summary>
-                      <div className="mt-2">
-                        <ResultsMatrix
-                          entrantIds={ranked.map((r) => r.entrantId)}
-                          entrantNames={entrantNames}
-                          entrantStatuses={entrantStatuses}
-                          entrantLogos={entrantLogos}
-                          fixtures={poolFixtures}
-                          fixtureHref={(id) => `${basePath}/fixtures/${id}`}
-                          dict={dict}
+                  {poolFixtures.length > 0 &&
+                    (() => {
+                      // W5 B4 (stress S4): the grid's makings only (one line per played pairing); the n x n table is drawn
+                      // in the browser when the disclosure first opens, not sent with every load of the page.
+                      const grid = resultsGridData({
+                        entrantIds: ranked.map((r) => r.entrantId),
+                        entrantNames,
+                        entrantStatuses,
+                        entrantLogos,
+                        fixtures: poolFixtures,
+                        fixtureHref: (id) => `${basePath}/fixtures/${id}`,
+                        dict,
+                      });
+                      return grid === null ? null : (
+                        <ResultsGridDisclosure
+                          data={grid}
+                          label={t(dict, "division.resultsGrid")}
+                          noScript={t(dict, "division.resultsGrid.noScript")}
+                          // `min-h-11 py-3.5` is the 44px tap floor (W2 contact sheet img-135, owner approved): the toggle was
+                          // plain text, 16px tall at 320. The padding rather than a `flex` is deliberate — a `<summary>` is
+                          // `display: list-item`, and changing its display takes the disclosure triangle with it.
+                          summaryClassName="min-h-11 cursor-pointer py-3.5 text-xs font-medium text-ink-muted hover:text-ink"
                         />
-                      </div>
-                    </details>
-                  )}
+                      );
+                    })()}
                 </div>
               );
             })}
+            {stageBasisNotes(
+              stage.id,
+              bestNthBases.get(stage.id),
+              snapshots.flatMap((snap) => {
+                const key = snap.pool_id ? poolKey.get(snap.pool_id) : null;
+                return key ? [{ key, rows: snap.rows as StandingsRow[] }] : [];
+              }),
+              entrantNames,
+              tableWithdrawals,
+              (key, vars) => t(dict, key, vars),
+              orgLocale,
+            ).map((note) => (
+              <BestNthBasisNote key={note.line} note={note} />
+            ))}
           </section>
         );
       })}

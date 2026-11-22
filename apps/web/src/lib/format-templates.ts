@@ -122,24 +122,21 @@ export const STAGE_TEMPLATES: {
       const r = q - n * poolCount;
       const take: TakeRule[] = [];
       if (n > 0) take.push({ kind: "topNPerGroup", n });
-      // normaliseUnequalPools:true (round-4 review, MAJOR — A1): pools are
-      // built by snakeDistribute (usecases/stages/generators.ts), which produces unequal-sized
-      // pools whenever entrants don't divide evenly by poolCount — the
-      // common case, not an edge case. Without this flag, bestNth's
-      // cross-pool compare throws SEEDING_BESTNTH_UNEQUAL_POOLS the moment
-      // pool sizes differ (progression.ts) — silently, at SEEDING time on
-      // real rows, long after day-one fixture generation (which runs on
-      // SHAPES, never on real row counts) looked healthy. The normalisation
-      // itself is already implemented (normalisedRow, progression.ts) — this
-      // only had to ask for it. See format-templates.test.ts and
-      // progression.test.ts for the end-to-end proof.
+      // normaliseUnequalPools:true is accepted and ignored (ruling 286, engine 10;
+      // W5 app PR B T4, K20). Pools are built by snakeDistribute
+      // (usecases/stages/generators.ts), which leaves unequal sizes whenever the
+      // entrants don't divide by poolCount - the common case. Since ruling 286
+      // the engine ALWAYS compares a best-Nth across unequal pools on the
+      // smallest SUPPLYING pool's matches (k = effective size - that minimum,
+      // each larger pool's bottom k results left out; RB5-U1/U8), whatever the
+      // flag says; it is still stamped so a stored config reads the same before
+      // and after the bump. SEEDING_BESTNTH_UNEQUAL_POOLS is no longer thrown.
       //
-      // NOT covered by this flag: nth (= n+1) can still exceed a genuinely
-      // SHORT pool's row count (e.g. a pool with fewer than n+1 entrants at
-      // all) — rowAtRank looks up rank `nth` on every pool before
-      // normalisation ever runs, so that still throws STAGE_NOT_READY
-      // regardless of this flag. Deliberately not fixed here — see
-      // progression.test.ts's "the sibling hazard" test.
+      // A pool SHORTER than nth (= n+1) is no hazard either: it supplies no
+      // candidate and is left out of the comparison (RB5-U7). Only a best-Nth
+      // that NO pool supplies is refused, by name: SEEDING_BESTNTH_NO_SUPPLIER
+      // (stored-progression.ts `bestNthRefusal`), and the builder's cut gate
+      // (field-cut-gate.ts `potSupply`) refuses it before Start.
       if (r > 0) take.push({ kind: "bestNth", nth: n + 1, count: r, normaliseUnequalPools: true });
       return [
         {

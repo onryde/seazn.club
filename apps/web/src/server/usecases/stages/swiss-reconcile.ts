@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { EngineError } from "@seazn/engine/core";
 import { isSwissBoardSeated, isSwissByeShellExtKey, mintSwissBoardExtKeys, swissBoardsForField, swissRoundHasPlayedResult } from "@/lib/swiss-shell";
 import { fixtureEvidenceSql } from "../fixture-results-sql";
+import { insertFixtureRows } from "../fixture-insert";
 import { chooseDoomedBoards } from "@/lib/rebuild-slots";
 import { firstOwnFormat, ownFormatLoss } from "../fixture-override-guards";
 import type { Tx, SwissExistingFixture, SwissReshape } from "./types";
@@ -218,8 +219,9 @@ export async function reconcileSwissRoundShells(
     kept.push({ ...byeRow, seq_in_round: boards + 1 });
   }
 
-  // `org_id` and `fixture_no` are assigned by BEFORE INSERT triggers, exactly
-  // as they are for the shell mint in generateStageFixturesTx.
+  // `org_id` comes from its BEFORE INSERT trigger; `fixture_no` is handed out
+  // by `insertFixtureRows`, once per call under the trigger's own advisory key
+  // (W5 B4, stress F8), exactly as for the shell mint in generateStageFixturesTx.
   const shell = (extKey: string, seqInRound: number) => ({
     id: randomUUID(),
     stage_id: stageId,
@@ -239,7 +241,7 @@ export async function reconcileSwissRoundShells(
   const keys = mintSwissBoardExtKeys(target, round.map((f) => f.ext_key), Math.max(0, boards - survivors.length));
   for (const [i, key] of keys.entries()) minted.push(shell(key, survivors.length + i + 1));
   if (bye && !byeRow) minted.push(shell(`sw-r${target}-bye`, boards + 1));
-  if (minted.length > 0) await tx`insert into fixtures ${tx(minted)}`;
+  await insertFixtureRows(tx, minted);
 
   for (const row of minted) {
     kept.push({

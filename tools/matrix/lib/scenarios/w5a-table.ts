@@ -1,7 +1,7 @@
 // W5 app PR A (Task 24): what the round-robin scripts read of a TABLE stage - its lines with their pool, and the drive-through helpers every
 // script shares (decide one line, finish the run). Pure where it can be; the rest is the OrganiserDriver's acts, as w4a-late-entry.ts's are.
 import { DriverMisuse, RefusedCall, type FixtureRow, type OrganiserDriver, type StagePoolsOut } from "../driver/types.ts";
-import { advanceSeededAsDeclared } from "./advance.ts";
+import { advanceRoundOneCrossesPools, advanceSeededAsDeclared } from "./advance.ts";
 import { builtAsPosted, foldParity, lineupsPut, loopBounded, resultsAsPosted, stageCompleted } from "./assertions.ts";
 import { Recorder, playDivision, snapshot, type DivisionSetup, type StagePlay } from "./common.ts";
 import { snap, toObservedOutcome, type ObservedRun, type WithdrawalObs } from "../observed.ts";
@@ -67,7 +67,7 @@ export async function finishRun(
     observed,
     events: rec.events,
     notes: rec.notes,
-    assertions: [builtAsPosted(setup.built, observed), foldParity(rec), resultsAsPosted(rec, observed), ...own, stageCompleted(observed), loopBounded(rec, observed), advanceSeededAsDeclared(plays, observed, rec.withdrawn), lineupsPut(rec, setup)],
+    assertions: [builtAsPosted(setup.built, observed), foldParity(rec), resultsAsPosted(rec, observed), ...own, stageCompleted(observed), loopBounded(rec, observed), advanceSeededAsDeclared(plays, observed, rec.withdrawn), advanceRoundOneCrossesPools(plays, observed), lineupsPut(rec, setup)],
   };
 }
 

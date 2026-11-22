@@ -22,6 +22,7 @@ import { divisionTakesKind } from "@/lib/division-entrant-kinds";
 import type { RegistrationSettingsRow } from "./types";
 import { SETTINGS_COLS, loadSettings, windowOpen } from "./lookups";
 import { placesLeft } from "./places-left";
+import { divisionFormatMaxes } from "./format-max";
 import { CARD_PAYMENTS_UNAVAILABLE, cardPaymentsBroken } from "@/lib/registration-card-payments";
 
 // ---------------------------------------------------------------------------
@@ -395,9 +396,11 @@ export async function publicRegistrationInfo(
   //
   // The plan's per-division entrant limit, read once for the panel with the same call submit makes before its
   // transaction (registration redesign B3 T11): places left is counted against the cap submit enforces (./places-left).
-  const [paidEntitled, planLimit] = await Promise.all([
+  // W5 B4 (F8): and each division's format max entrants, the third term of that cap.
+  const [paidEntitled, planLimit, formatMaxes] = await Promise.all([
     hasFeature(comp.org_id, "registration.paid", comp.id),
     getLimit(comp.org_id, "entrants.per_division.max", comp.id),
+    divisionFormatMaxes(sql, rows.map((r) => r.division_id)),
   ]);
 
   // T16: online play is stated only while the club is offered online chess — asked once, and only when a division
@@ -408,7 +411,7 @@ export async function publicRegistrationInfo(
 
   const now = new Date();
   const divisions: PublicDivisionInfo[] = rows.map((r) => {
-    const remaining = placesLeft({ capacity: r.capacity, planLimit, active: r.active });
+    const remaining = placesLeft({ capacity: r.capacity, planLimit, formatMax: formatMaxes.get(r.division_id) ?? null, active: r.active });
     // A card division can't take submissions when Connect is broken OR the
     // paid entitlement is gone — closing it with an honest reason beats
     // accepting money we can't keep (spec #9, P2-10).

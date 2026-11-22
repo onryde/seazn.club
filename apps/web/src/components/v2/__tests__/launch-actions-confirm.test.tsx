@@ -95,6 +95,7 @@ const baseProps = (over: Partial<LaunchProps> = {}): LaunchProps => ({
   competitionStatus: "published",
   competitionVisibility: "public",
   viewerPlan: "community",
+  activeEntrants: 2,
   ...over,
 });
 

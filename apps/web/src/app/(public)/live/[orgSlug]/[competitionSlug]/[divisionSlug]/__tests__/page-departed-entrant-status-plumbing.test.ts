@@ -39,6 +39,11 @@ vi.mock("@/server/usecases/discipline", () => ({ publicSuspensions: async () => 
 // field (a Reinstate the cascade did not reverse) and one for another stage, both of which the page must NOT print.
 const loadTableWithdrawals = vi.fn();
 vi.mock("@/server/public-site/table-withdrawals", () => ({ loadTableWithdrawals: (...a: unknown[]) => loadTableWithdrawals(...a) }));
+// W5 app PR B C5 (X-ADJ-4) and T4 (X-UP-3): the page's points-adjustment read (`loadPointsAdjustments`) and best-Nth basis read
+// (`loadBestNthBases`) are SQL - a real database's job (points-adjustment-surfaces-db, bestnth-unequal-pools). Unmocked, this file
+// read "DATABASE_URL is not set" in the unit job. They answer no adjustments and no basis: neither footnote is what this file tests.
+vi.mock("@/server/public-site/points-adjustments", () => ({ loadPointsAdjustments: async () => [] }));
+vi.mock("@/server/public-site/bestnth-basis", () => ({ loadBestNthBases: async () => new Map() }));
 
 import { FIELD_ENTRANT_STATUSES } from "@/lib/entrant-field";
 import { StandingsTable } from "@/components/public-site/standings-table";

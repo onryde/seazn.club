@@ -79,6 +79,8 @@ it can be too cautious, which R3 accepts.
 
 - No match in the table has been played yet.
 - The stage is complete (`isTableStageComplete`), so qualification is final.
+  *Amended 2026-11-21 (owner ruling 283; W5 X-QS-1/X-QS-2, R24 pick 17 A): a complete stage no longer shows nothing — its cut freezes as "Qualified" / "Out" from who went through (the confirmed proposal, else `config.qualified`), else the final order; the legend drops "Still open". A best-Nth cut shows no live status and freezes only from who went through.*
+  *Amended 2026-11-21 (W5 B3 fix, review I-1, controller ruling 1): before who went through is known, the rows of a tie class the engine split only by the lot (or its seed fallback) that straddles the cut carry no frozen marker — the organiser's pick may send the lot's loser through; rows clear of it keep theirs. "Who went through" is who the confirm SEATED (`computed.seated`: tie picks and edits applied), not the slate it proposed.*
 - The cut-off can't be forecast: `picks`, `bestNth`, `roundLosers`, or a
   `rankRange` that doesn't start at 1.
 - Per row, `null` for a withdrawn or disqualified entrant. That entrant still

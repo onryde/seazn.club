@@ -10070,7 +10070,7 @@
         ]
       },
       "post": {
-        "summary": "Register entrant(s) — object or bulk array. After Start a division whose Swiss is running takes a late player (W3, ruling 250): the reply's late_entry says whether the unstarted round was re-paired (a), the newcomer plays the round's bye holder (b), or joins the next round (c); with the last round started it is 409 SWISS_NO_ROUND_LEFT (details.canAddRound, and details.stageId — the Swiss to `POST /stages/{id}/swiss/add-round` on), and a finished Swiss is 422 SWISS_OVER. A division whose entry stage is a drawn knockout takes a late player into round 1 (W4, ruling 263): late_entry.format 'knockout', case 'bye' (the newcomer plays the lowest-seeded holder's bye) or 'withdrawn_slot' (a withdrawn entrant's seat, the withdrawal's walkover reversed); with neither open and nothing in the stage started, the player is KEPT and waits (201, late_entry case 'rebuild_offered', reason KO_LATE_ENTRY_NO_SLOT; no line moves and no undo barrier is written; the desk's 'Waiting to join the bracket' strip lists them and Rebuild fixtures draws the field again with them in it, RB4-L6); once any match has started it is 409 KO_LATE_ENTRY_NO_SLOT (details.can_rebuild: false) and nothing is written. A late player is never seated beyond round 1, and the add is an undo barrier (409 KO_LATE_ENTRY_NOT_UNDOABLE: withdraw instead). A pair or team entrant in a chess division is 422 CHESS_INDIVIDUAL_ONLY (chess takes individual players only). A multipart CSV/XLSX upload is the division-pinned import preview; its plan lists a blocking CHESS_INDIVIDUAL_ONLY issue for each row that would enter a team into a chess division. A person already on another entrant of the division (in the field) is 409 PERSON_ON_OTHER_TEAM, its error.conflicts naming each person and the entrant that holds them, and nothing of the batch is written: one person, one entrant per division (an americano division's rotation pairs excepted). A division with a running ladder stage adds the new entrant to the BOTTOM of the ladder in the same transaction (`stage.config.ladder_order`; the engine declares no ladder entry rule, so a newcomer is the youngest seed), so they can issue and receive challenges at once; an import commit, a confirmed registration and a reinstatement (PATCH status) do the same for an entrant the order does not already hold",
+        "summary": "Register entrant(s) — object or bulk array. After Start a division whose Swiss is running takes a late player (W3, ruling 250): the reply's late_entry says whether the unstarted round was re-paired (a), the newcomer plays the round's bye holder (b), or joins the next round (c); with the last round started it is 409 SWISS_NO_ROUND_LEFT (details.canAddRound, and details.stageId — the Swiss to `POST /stages/{id}/swiss/add-round` on), and a finished Swiss is 422 SWISS_OVER. A division whose entry stage is a drawn knockout takes a late player into round 1 (W4, ruling 263): late_entry.format 'knockout', case 'bye' (the newcomer plays the lowest-seeded holder's bye) or 'withdrawn_slot' (a withdrawn entrant's seat, the withdrawal's walkover reversed); with neither open and nothing in the stage started, the player is KEPT and waits (201, late_entry case 'rebuild_offered', reason KO_LATE_ENTRY_NO_SLOT; no line moves and no undo barrier is written; the desk's 'Waiting to join the bracket' strip lists them and Rebuild fixtures draws the field again with them in it, RB4-L6); once any match has started it is 409 KO_LATE_ENTRY_NO_SLOT (details.can_rebuild: false) and nothing is written. A late player is never seated beyond round 1, and the add is an undo barrier (409 KO_LATE_ENTRY_NOT_UNDOABLE: withdraw instead). A division whose entry stage is a running league or group takes a late player as catch-up lines (W5); an add that would take the division's active field past the format's max entrants is 422 FORMAT_TOO_MANY_ENTRANTS (details.max, details.entrants: the field the add would make) and nothing of the batch is written (B4 re-review N-3: late entry is exempt from the plan's entrant limit, never from the format's max). A pair or team entrant in a chess division is 422 CHESS_INDIVIDUAL_ONLY (chess takes individual players only). A multipart CSV/XLSX upload is the division-pinned import preview; its plan lists a blocking CHESS_INDIVIDUAL_ONLY issue for each row that would enter a team into a chess division. A person already on another entrant of the division (in the field) is 409 PERSON_ON_OTHER_TEAM, its error.conflicts naming each person and the entrant that holds them, and nothing of the batch is written: one person, one entrant per division (an americano division's rotation pairs excepted). A division with a running ladder stage adds the new entrant to the BOTTOM of the ladder in the same transaction (`stage.config.ladder_order`; the engine declares no ladder entry rule, so a newcomer is the youngest seed), so they can issue and receive challenges at once; an import commit, a confirmed registration and a reinstatement (PATCH status) do the same for an entrant the order does not already hold",
         "tags": [
           "entrants"
         ],
@@ -17872,7 +17872,8 @@
                               "count": {
                                 "type": "integer",
                                 "minimum": 1,
-                                "maximum": 9007199254740991
+                                "maximum": 9007199254740991,
+                                "description": "One pool per key letter, A to Z: at most 26. Past it the write is refused 422 RR_TOO_MANY_POOLS."
                               }
                             },
                             "required": [
@@ -18356,7 +18357,8 @@
                                 "count": {
                                   "type": "integer",
                                   "minimum": 1,
-                                  "maximum": 9007199254740991
+                                  "maximum": 9007199254740991,
+                                  "description": "One pool per key letter, A to Z: at most 26. Past it the write is refused 422 RR_TOO_MANY_POOLS."
                                 }
                               },
                               "required": [
@@ -19376,7 +19378,8 @@
                               "count": {
                                 "type": "integer",
                                 "minimum": 1,
-                                "maximum": 9007199254740991
+                                "maximum": 9007199254740991,
+                                "description": "One pool per key letter, A to Z: at most 26. Past it the write is refused 422 RR_TOO_MANY_POOLS."
                               }
                             },
                             "required": [
@@ -19860,7 +19863,8 @@
                                 "count": {
                                   "type": "integer",
                                   "minimum": 1,
-                                  "maximum": 9007199254740991
+                                  "maximum": 9007199254740991,
+                                  "description": "One pool per key letter, A to Z: at most 26. Past it the write is refused 422 RR_TOO_MANY_POOLS."
                                 }
                               },
                               "required": [
@@ -23777,7 +23781,7 @@
     },
     "/api/v1/stages/{id}/late-entrants/{entrantId}/place": {
       "post": {
-        "summary": "W4 T11 (X-LE-10, ruling 271) — the organiser's one tap on a late player WAITING to join a started root knockout: an automatic arrival (a confirmed or paid registration, a waitlist promotion, an import, a Reinstate) is never placed by the app — it waits, flagged on the desk (late_players_waiting). A knockout reads no body. Runs the cases Add late player runs: the lowest-seeded holder's bye (case 'bye'), else a withdrawn entrant's seat with the walkover reversed (case 'withdrawn_slot'); a reinstated player only gets their own walked-over seat back. Placed: the marker clears and an undo barrier is written. No slot: 200 with case 'refused', or 'rebuild_offered' when nothing in the stage has started, reason KO_LATE_ENTRY_NO_SLOT — the player keeps waiting; with nothing started but the division's schedule frozen, case 'refused' with reason KO_LATE_ENTRY_SCHEDULE_FROZEN (Rebuild refuses a frozen schedule: unfreeze first) — the player keeps waiting. 409 KO_LATE_ENTRY_NOT_WAITING when the entrant does not wait on this stage; 422 KO_LATE_ENTRY_FED_STAGE when this knockout is filled from the stage the player waits on. W5 T6 (X-CU-8): on a running root LEAGUE or GROUP the same tap places a player waiting there (table_waiting_stage_id): the catch-up lines Add late player writes (case 'catch_up', or 'rebuild_offered' when nothing in the stage has started — the lines are written either way), unscheduled, with an undo barrier; the marker clears. Optional body pool_key: the group pool to join (else the smallest). Optional body prefer_rebuild (fix round 1 I1): when nothing in the stage has started, the stage is drawn again with the player in it (Rebuild's own body; case 'rebuild_offered', reason 'rebuilt', no catch-up line); 409 STAGE_HAS_RESULTS, nothing moved, once a match has started. 409 RR_LATE_ENTRY_ALREADY_PLACED when the player already holds a line of the stage (a second tap); 409 RR_LATE_ENTRY_NOT_WAITING when they do not wait on it; 422 RR_LATE_ENTRY_UNKNOWN_POOL / RR_LATE_ENTRY_STAGE_COMPLETE / RR_LATE_ENTRY_NOTHING_TO_ADD — the player keeps waiting",
+        "summary": "W4 T11 (X-LE-10, ruling 271) — the organiser's one tap on a late player WAITING to join a started root knockout: an automatic arrival (a confirmed or paid registration, a waitlist promotion, an import, a Reinstate) is never placed by the app — it waits, flagged on the desk (late_players_waiting). A knockout reads no body. Runs the cases Add late player runs: the lowest-seeded holder's bye (case 'bye'), else a withdrawn entrant's seat with the walkover reversed (case 'withdrawn_slot'); a reinstated player only gets their own walked-over seat back. Placed: the marker clears and an undo barrier is written. No slot: 200 with case 'refused', or 'rebuild_offered' when nothing in the stage has started, reason KO_LATE_ENTRY_NO_SLOT — the player keeps waiting; with nothing started but the division's schedule frozen, case 'refused' with reason KO_LATE_ENTRY_SCHEDULE_FROZEN (Rebuild refuses a frozen schedule: unfreeze first) — the player keeps waiting. 409 KO_LATE_ENTRY_NOT_WAITING when the entrant does not wait on this stage; 422 KO_LATE_ENTRY_FED_STAGE when this knockout is filled from the stage the player waits on. W5 T6 (X-CU-8): on a running root LEAGUE or GROUP the same tap places a player waiting there (table_waiting_stage_id): the catch-up lines Add late player writes (case 'catch_up', or 'rebuild_offered' when nothing in the stage has started — the lines are written either way), unscheduled, with an undo barrier; the marker clears. Optional body pool_key: the group pool to join (else the smallest). Optional body prefer_rebuild (fix round 1 I1): when nothing in the stage has started, the stage is drawn again with the player in it (Rebuild's own body; case 'rebuild_offered', reason 'rebuilt', no catch-up line); 409 STAGE_HAS_RESULTS, nothing moved, once a match has started. 409 RR_LATE_ENTRY_ALREADY_PLACED when the player already holds a line of the stage (a second tap); 409 RR_LATE_ENTRY_NOT_WAITING when they do not wait on it; 422 RR_LATE_ENTRY_UNKNOWN_POOL / RR_LATE_ENTRY_STAGE_COMPLETE / RR_LATE_ENTRY_NOTHING_TO_ADD, or 422 FORMAT_TOO_MANY_ENTRANTS when the division's active field is past the format's max entrants (details.max, details.entrants) — the player keeps waiting",
         "tags": [
           "stages"
         ],
@@ -25268,6 +25272,1028 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      }
+    },
+    "/api/v1/stages/{id}/adjustments": {
+      "post": {
+        "summary": "W5 (C5; X-ADJ-4; RB5-T5..T9) — Adjust points: move one entrant's table points by `delta` with a required `reason`, shown under the table on every surface (\"Marsh Lane: −3 points, fielded an ineligible player, 16 Nov 2026\"). `delta` is in the stage's RANKING unit (RB5-T15): table points in the points rule's stored unit (half-points on a `half` rule), or matches won where the cascade ranks wins first; the answer's `unit` says which. One append-only ledger row; the table re-folds with it before the tie-break cascade, and a Swiss stage pairs its next round on the adjusted score (X-ADJ-5). Two adjustments of one entrant stack. Organiser-only. 422 RR_ADJUST_NOT_TABLE (a bracket, ladder or americano stage), RR_ADJUST_NOT_STARTED (before the division and the stage are under way), RR_ADJUST_STAGE_COMPLETE, RR_ADJUST_ZERO, RR_ADJUST_REASON_MISSING, RR_ADJUST_NOT_FINITE, RR_ADJUST_UNKNOWN_ENTRANT (not a member of the table)",
+        "tags": [
+          "stages"
+        ],
+        "x-required-scope": "manage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "entrant_id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "delta": {
+                    "type": "integer",
+                    "minimum": -999,
+                    "maximum": 999
+                  },
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 200
+                  }
+                },
+                "required": [
+                  "entrant_id",
+                  "delta",
+                  "reason"
+                ],
+                "additionalProperties": false
+              },
+              "example": {
+                "entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                "delta": -999,
+                "reason": "example"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "adjustment": {
+                          "type": "object",
+                          "properties": {
+                            "seq": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "stage_id": {
+                              "type": "string"
+                            },
+                            "entrant_id": {
+                              "type": "string"
+                            },
+                            "delta": {
+                              "type": "number"
+                            },
+                            "reason": {
+                              "type": "string"
+                            },
+                            "unit": {
+                              "type": "string",
+                              "enum": [
+                                "points",
+                                "wins"
+                              ]
+                            },
+                            "points_unit": {
+                              "type": "string",
+                              "enum": [
+                                "whole",
+                                "half"
+                              ]
+                            },
+                            "at": {
+                              "type": "string"
+                            },
+                            "held": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "seq",
+                            "stage_id",
+                            "entrant_id",
+                            "delta",
+                            "reason",
+                            "unit",
+                            "points_unit",
+                            "at",
+                            "held"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "adjustment"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "adjustment": {
+                      "seq": -9007199254740991,
+                      "stage_id": "example",
+                      "entrant_id": "example",
+                      "delta": 1,
+                      "reason": "example",
+                      "unit": "points",
+                      "points_unit": "whole",
+                      "at": "example",
+                      "held": true
+                    }
+                  },
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Rejected by the engine",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      },
+      "get": {
+        "summary": "W5 (X-ADJ-4) — what the desk's Adjust points dialog opens on: the table's `unit` (what `delta` moves: table points, or matches won where the cascade ranks wins first) and its points rule's stored `points_unit`; the `members` an adjustment can be made for now (each with its pool's key on a pooled stage, in pool order); and the stage's active adjustments in ledger order. `held` is true when the entrant is no member of the table now (unseated): the table does not hold that adjustment until they are again. 422 RR_ADJUST_NOT_TABLE on a stage with no table (a bracket, ladder or americano)",
+        "tags": [
+          "stages"
+        ],
+        "x-required-scope": "read",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "unit": {
+                          "type": "string",
+                          "enum": [
+                            "points",
+                            "wins"
+                          ]
+                        },
+                        "points_unit": {
+                          "type": "string",
+                          "enum": [
+                            "whole",
+                            "half"
+                          ]
+                        },
+                        "members": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "entrant_id": {
+                                "type": "string"
+                              },
+                              "pool": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "entrant_id",
+                              "pool"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "adjustments": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "seq": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "stage_id": {
+                                "type": "string"
+                              },
+                              "entrant_id": {
+                                "type": "string"
+                              },
+                              "delta": {
+                                "type": "number"
+                              },
+                              "reason": {
+                                "type": "string"
+                              },
+                              "unit": {
+                                "type": "string",
+                                "enum": [
+                                  "points",
+                                  "wins"
+                                ]
+                              },
+                              "points_unit": {
+                                "type": "string",
+                                "enum": [
+                                  "whole",
+                                  "half"
+                                ]
+                              },
+                              "at": {
+                                "type": "string"
+                              },
+                              "held": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "seq",
+                              "stage_id",
+                              "entrant_id",
+                              "delta",
+                              "reason",
+                              "unit",
+                              "points_unit",
+                              "at",
+                              "held"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "unit",
+                        "points_unit",
+                        "members",
+                        "adjustments"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "unit": "points",
+                    "points_unit": "whole",
+                    "members": [
+                      {
+                        "entrant_id": "example",
+                        "pool": "example"
+                      }
+                    ],
+                    "adjustments": [
+                      {
+                        "seq": -9007199254740991,
+                        "stage_id": "example",
+                        "entrant_id": "example",
+                        "delta": 1,
+                        "reason": "example",
+                        "unit": "points",
+                        "points_unit": "whole",
+                        "at": "example",
+                        "held": true
+                      }
+                    ]
+                  },
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Rejected by the engine",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      }
+    },
+    "/api/v1/stages/{id}/adjustments/{seq}": {
+      "delete": {
+        "summary": "W5 (X-ADJ-4) — Undo one points adjustment (`seq`, the ledger row): an append-only void row names it and the table returns. Not a division Undo step and not a barrier. Gated like the write: 422 RR_ADJUST_STAGE_COMPLETE on a finished table, RR_ADJUST_NOT_STARTED, RR_ADJUST_NOT_TABLE; 409 RR_ADJUST_ALREADY_UNDONE; 404 for a seq that is no adjustment of this stage",
+        "tags": [
+          "stages"
+        ],
+        "x-required-scope": "manage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "seq",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "undone": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "voided_by": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "undone",
+                        "voided_by"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "undone": -9007199254740991,
+                    "voided_by": -9007199254740991
+                  },
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Rejected by the engine",
             "content": {
               "application/json": {
                 "schema": {
@@ -28487,6 +29513,63 @@
                                   },
                                   "destinationSlot": {
                                     "type": "string"
+                                  },
+                                  "pool": {
+                                    "type": "string"
+                                  },
+                                  "basis": {
+                                    "type": "object",
+                                    "properties": {
+                                      "nth": {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "matchesCounted": {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "dropped": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "object",
+                                          "properties": {
+                                            "pool": {
+                                              "type": "string"
+                                            },
+                                            "against": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string",
+                                                "format": "uuid",
+                                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                              }
+                                            }
+                                          },
+                                          "required": [
+                                            "pool",
+                                            "against"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "levelWith": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string",
+                                          "format": "uuid",
+                                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "nth",
+                                      "matchesCounted",
+                                      "dropped",
+                                      "levelWith"
+                                    ],
+                                    "additionalProperties": false
                                   }
                                 },
                                 "required": [
@@ -28831,7 +29914,7 @@
     },
     "/api/v1/stages/{id}/seed-proposal/confirm": {
       "post": {
-        "summary": "Confirm a draft proposal: fills the stage's TBD fixtures via the same slot-fill pathway as intra-bracket advancement, never regenerates. 409 SEEDING_PROPOSAL_STALE/SEEDING_ALREADY_CONFIRMED/SEEDING_FIXTURES_ALREADY_FILLED/SEEDING_SOURCE_INCOMPLETE (a correction has a knockout source undecided again), 422 SEEDING_EDIT_UNKNOWN_SLOT/SEEDING_SLOT_DOUBLE_ASSIGNED/SEEDING_SLOT_FOREIGN_FIXTURE/SEEDING_ENTRANT_FOREIGN/SEEDING_ENTRANT_WITHDRAWN (an entrant about to be filled has withdrawn or been disqualified — recompute the proposal: from a Swiss, league or group source the next-ranked entrant takes her place, from a knockout source the lucky loser does (W4, RB4-V2/V6); only when nobody is left below the cut is her seat left empty)/SEEDING_TIE_UNRESOLVED. A confirm appends a `seed_confirmed` ledger row (W4 T5, K1): an undo barrier — Undo, Redo and Restore across it are 409 SEED_CONFIRM_NOT_UNDOABLE, and Recompute is 409 SEEDING_ALREADY_CONFIRMED from then on. A confirmed draw stands once it starts; before that, a correction that moves a completed knockout source's qualifiers or their seed order stales it, empties its seats and proposes again",
+        "summary": "Confirm a draft proposal: fills the stage's TBD fixtures via the same slot-fill pathway as intra-bracket advancement, never regenerates. 409 SEEDING_PROPOSAL_STALE/SEEDING_ALREADY_CONFIRMED/SEEDING_FIXTURES_ALREADY_FILLED/SEEDING_SOURCE_INCOMPLETE (a correction has a knockout source undecided again), 422 SEEDING_EDIT_UNKNOWN_SLOT/SEEDING_SLOT_DOUBLE_ASSIGNED/SEEDING_SLOT_FOREIGN_FIXTURE/SEEDING_ENTRANT_FOREIGN/SEEDING_ENTRANT_WITHDRAWN (an entrant about to be filled has withdrawn or been disqualified — recompute the proposal: from a Swiss, league or group source the next-ranked entrant takes her place, from a knockout source the lucky loser does (W4, RB4-V2/V6); only when nobody is left below the cut is her seat left empty)/SEEDING_TIE_UNRESOLVED. A 409 SEEDING_PROPOSAL_STALE names the newer draft when there is one: `{reason: 'superseded', newer}` when another proposal replaced this one; `{reproposed}` when this confirm stored a new draft itself and seated nothing - `reason: 'redrawn'` when `tiePicks` came with `edits` to a seat outside the answered tie (the pick re-draws round one across the pools, so make those edits again on the new draft; a pick alone re-draws and confirms in one call), and no reason when the draft predates the unequal-pool comparison. A confirm appends a `seed_confirmed` ledger row (W4 T5, K1): an undo barrier — Undo, Redo and Restore across it are 409 SEED_CONFIRM_NOT_UNDOABLE, and Recompute is 409 SEEDING_ALREADY_CONFIRMED from then on. A confirmed draw stands once it starts; before that, a correction that moves a completed knockout source's qualifiers or their seed order stales it, empties its seats and proposes again",
         "tags": [
           "stages"
         ],
@@ -51810,7 +52893,14 @@
                                             "type": "string"
                                           },
                                           "open": {
-                                            "type": "string"
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
                                           },
                                           "out": {
                                             "type": "string"
@@ -51893,6 +52983,33 @@
                                     }
                                   },
                                   "required": [
+                                    "entrantId",
+                                    "lead",
+                                    "body"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "adjustmentNotes": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "key": {
+                                      "type": "string"
+                                    },
+                                    "entrantId": {
+                                      "type": "string"
+                                    },
+                                    "lead": {
+                                      "type": "string"
+                                    },
+                                    "body": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "key",
                                     "entrantId",
                                     "lead",
                                     "body"
@@ -52665,7 +53782,7 @@
                           "label": "example",
                           "legend": {
                             "through": "example",
-                            "open": "example",
+                            "open": null,
                             "out": "example",
                             "hint": "example"
                           }

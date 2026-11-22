@@ -18,6 +18,11 @@ vi.mock("@/server/public-site/table-withdrawals", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/public-site/table-withdrawals")>()),
   loadTableWithdrawals: async () => [],
 }));
+// W5 app PR B C5 (X-ADJ-4) and T4 (X-UP-3): the page's points-adjustment read (`loadPointsAdjustments`) and best-Nth basis read
+// (`loadBestNthBases`) are SQL - a real database's job (points-adjustment-surfaces-db, bestnth-unequal-pools). Unmocked, this file
+// read "DATABASE_URL is not set" in the unit job. They answer no adjustments and no basis: neither footnote is what this file tests.
+vi.mock("@/server/public-site/points-adjustments", () => ({ loadPointsAdjustments: async () => [] }));
+vi.mock("@/server/public-site/bestnth-basis", () => ({ loadBestNthBases: async () => new Map() }));
 vi.mock("@/server/public-site/data", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/public-site/data")>()),
   getPublicDivision: (...a: unknown[]) => getPublicDivision(...a),

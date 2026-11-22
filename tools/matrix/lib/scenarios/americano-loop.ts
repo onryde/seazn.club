@@ -24,12 +24,6 @@ export const STALL_ROUTE = routeTo("W7", "mexicano-stalled-on-non-decided: a mex
 export const PAIR_PLAYERS_ROUTE = routeTo("W7", "mexicano-pair-entrants-counted-as-players: the active read has no kind filter (stages.ts:2290-2293), so round 1's pair entrants are players from round 2 (false premise 17)");
 export const TEAM_MEMBER_ROUTE = routeTo("W7", "americano on team entrants plays one arbitrary roster member per team (stages.ts:744-747, false premise 10)");
 
-/** T8-R1: the product's cause for a self-pair — two identical member rows for
- *  one pair entrant hit the entrant_members primary key (V213:9), and the
- *  catch-all answers 500 with the database's message (api-v1/http.ts:244-247).
- *  Only a refusal carrying it is the self-pair; any other 5xx stays unsigned. */
-export const SELF_PAIR_CAUSE = /entrant_members_pkey/;
-
 /** n placeholder players — the engine's planners read only their count and order. */
 const placeholders = (n: number): string[] => Array.from({ length: n }, (_, i) => `player-${i + 1}`);
 
@@ -143,8 +137,11 @@ export async function playMexicano(ctx: ScenarioContext, rec: Recorder, setup: D
     }
     const fixtures = await recordGenerate(ctx, rec, stage.id);
     if (fixtures === null) {
+      // A refused mexicano generate is NEVER signed from its body (controller ruling 2026-11-22). A pair entrant's person
+      // paired with their own entry raises the entrant_members key (V213:9), a database error, and the v1 catch-all
+      // answers a database error with a scrub that carries none of its text (W5 F1, b94e171a1a), so no live 5xx body can
+      // name the self-pair. The refusal is still recorded (status, code, message): I4 and I8 red an unnamed 500.
       track.exit = rec.exit = "refused_generate";
-      await noteRefusedAfterPairs(ctx, rec, setup, stage, played);
       await recordPersons(ctx, rec, setup, stage);
       return;
     }
@@ -169,26 +166,6 @@ export async function playMexicano(ctx: ScenarioContext, rec: Recorder, setup: D
   rec.facts.add("cut_short");
   rec.notes.push(`mexicano: generate still created fixtures after config.rounds=${rounds} round(s)`);
   await recordPersons(ctx, rec, setup, stage);
-}
-
-/** The sides of a stage's fixtures that are NOT division entrants: the pair
- *  entrants the product minted. */
-const pairSides = (setup: Pick<DivisionSetup, "entrantIds">, rows: readonly FixtureRow[]): string[] =>
-  [...new Set(rows.flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter((e): e is string => e !== null && !setup.entrantIds.has(e)))];
-
-/** A mexicano generate refused with a 5xx whose message is the self-pair's
- *  cause (SELF_PAIR_CAUSE, T8-R1): a pair entrant's person paired with their
- *  own individual entry reaches the entrant_members key — the path false
- *  premise 17 opens. Named with the pair entrants the earlier rounds minted.
- *  A 4xx is a refusal with a reason of its own, and any other 5xx is
- *  unexplained: neither gets the signature (normal, harness-first triage). */
-async function noteRefusedAfterPairs(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, stage: StageRef, played: number): Promise<void> {
-  const g = rec.track(stage.id).generates.at(-1)!;
-  if (g.status < 500 || !SELF_PAIR_CAUSE.test(g.message ?? "")) return;
-  const rows = (await ctx.driver.listFixtures(setup.division.id)).filter((f) => f.stage_id === stage.id);
-  const pairs = pairSides(setup, rows);
-  const after = played === 0 ? "before any round was decided" : `after round${played > 1 ? `s 1–${played}` : " 1"} created pair entrants ${pairs.join(", ")}`;
-  rec.notes.push(`mexicano-pair-entrants-counted-as-players: round ${played + 1} generate refused ${g.status} ${g.code ?? "(no code)"} (entrant_members_pkey: a person paired with themselves) ${after} → ${PAIR_PLAYERS_ROUTE.wave}`);
 }
 
 /** Every entrant seated in this stage → its persons (GET /entrants/{id}), so

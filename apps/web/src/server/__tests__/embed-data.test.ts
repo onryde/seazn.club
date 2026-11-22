@@ -9,6 +9,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import { isValidElement, type ReactElement } from "react";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
+import enPublic from "@/dictionaries/en/public.json";
 import { embedDivisionData, type EmbedPayload } from "@/server/embed-data";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { createEntrants } from "@/server/usecases/entrants";
@@ -327,5 +328,32 @@ describe.skipIf(!HAS_DB)("ST-G7 a finished knockout is not a standings table in 
     const { tables, brackets } = await widget(division.id);
     expect(tables.map((t) => t.props.caption)).toEqual(["League"]);
     expect(brackets).toEqual([]);
+  });
+});
+
+// W5 app PR B Task 1 (K8; X-SF-4): the embed reads the stage's stored byes off the REAL Start (the generator's `round_byes`), and
+// its schedule widget hands them to the Schedule as the division page's "Sits out" lines. differential: before, the embed's stage
+// read had no `round_byes`, so the widget's lines were empty for every odd round robin.
+describe.skipIf(!HAS_DB)("K8 an odd league's byes reach the embed's schedule widget", () => {
+  it("a league of three, Started: every round's sitter is on the widget's Schedule, named", async () => {
+    const { auth } = await seedOrg("pro");
+    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "K8 " + randomUUID().slice(0, 6), visibility: "public", branding: {} });
+    const division = await createDivision(auth, comp.id, { name: "Open", slug: "open-" + randomUUID().slice(0, 6), sport_key: "generic", variant_key: "score", config: GENERIC_CONFIG });
+    const made = await createEntrants(auth, division.id, ["Ann", "Bea", "Cy"].map((n, i) => ({ kind: "individual" as const, display_name: n, seed: i + 1, members: [] })));
+    await createStages(auth, division.id, { seq: 1, kind: "league", name: "League", config: { legs: 1 }, progression: null });
+    await startDivision(auth, division.id);
+    const res = await embedDivisionData(division.id);
+    if (!res.ok) throw new Error(`premise: the embed serves the division (${res.reason})`);
+    const byes = res.data.stages[0]!.round_byes as { round_no: number; entrant_id: string }[] | null;
+    // Three sides, one leg: three rounds, each with one sitter, and each side sits once (the round-robin rule, doc 05 §1).
+    expect(byes?.length, "the embed read carries the stored byes").toBe(3);
+    expect(new Set(byes!.map((b) => b.entrant_id)), "each side sits out once").toEqual(new Set(made.map((e) => e.id)));
+    const root = (await EmbedWidgetPage({ params: Promise.resolve({ id: division.id, widget: "schedule" }) })) as ReactElement<{ children: ReactElement<{ sitsOut?: Record<string, string> }> }>;
+    const lines = root.props.children.props.sitsOut ?? {};
+    const nameOf = new Map(made.map((e) => [e.id, e.display_name]));
+    expect(Object.keys(lines).length, "one line per round").toBe(3);
+    // The org's locale is English; the words are the public dictionary's.
+    const sitsOut = (enPublic as Record<string, string>)["division.sitsOut"]!;
+    for (const b of byes!) expect(lines[`${res.data.stages[0]!.id}:${b.round_no}`], `round ${b.round_no}`).toBe(sitsOut.replace("{names}", nameOf.get(b.entrant_id)!));
   });
 });

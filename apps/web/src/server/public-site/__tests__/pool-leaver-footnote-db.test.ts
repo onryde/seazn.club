@@ -1,7 +1,8 @@
 // W5 app PR A, B4 fix wave (owner 2026-11-18, "better to fix now"): an UNDER-half leaver of a pool keeps her RB5-W7 footnote.
 //
-// RB5-W2: under half played, every result she played is removed and the rest void - so no counted result names her and her
-// pool's table has no row for her (Task 20's finding). RB5-W7: the table's footnote still names the rule applied. Through the
+// RB5-W2: under half played, every result she played is removed and the rest void - so no counted result names her; since
+// W5 app PR B Task 1 (X-WDT-7, X-PO-1) she stays seated, so her pool's table still lists her: zero played, ranked last (RB5-W1).
+// (Before the seating she had no row - Task 20's finding.) RB5-W7: the table's footnote still names the rule applied. Through the
 // REAL producers: a real two-pool group, Started, scored through `scoreEvent`, the real cascade (`withdrawEntrantCascade`), then
 // the hub's own document (`loadCompetitionHub`, parsed by its schema) - and the division page's read (`getPublicDivision` +
 // `loadTableWithdrawals` + `withdrawalNotesFor`, as the page calls it).
@@ -73,7 +74,7 @@ async function twoPools() {
 const EXPUNGED_1_OF_3 = (enPublic as Record<string, string>)["table.withdrawalNote.expunged"]!.replace("{played}", "1").replace("{scheduled}", "3");
 
 describe.runIf(HAS_DB)("an under-half pool leaver keeps her footnote under her pool's table (RB5-W2, RB5-W7)", () => {
-  it("1 of 3 played in pool A, withdrawn: no pool row, the note under pool A's table on the hub and the division page; pool B has none; Reinstate takes it away", async () => {
+  it("1 of 3 played in pool A, withdrawn: her row stays, last, the note under pool A's table on the hub and the division page; pool B has none; Reinstate takes it away", async () => {
     const r = await twoPools();
     const v = r.ids[0]!;
     const mine = r.lines.filter((l) => l.home_entrant_id === v || l.away_entrant_id === v);
@@ -98,7 +99,9 @@ describe.runIf(HAS_DB)("an under-half pool leaver keeps her footnote under her p
     expect(tables, "two pool tables").toHaveLength(2);
     const tableA = tables.find((t) => t.rows.some((x) => mine.some((l) => l.home_entrant_id === x.entrantId || l.away_entrant_id === x.entrantId)))!;
     const tableB = tables.find((t) => t !== tableA)!;
-    expect(tableA.rows.map((x) => x.entrantId), "premise (RB5-W2): no counted result names her, so her pool has no row for her").not.toContain(v);
+    // X-WDT-7 (W5 B T1): she stays seated, so her pool's table lists her, ranked last (RB5-W1). differential: before, no row.
+    expect(tableA.rows.map((x) => x.entrantId), "X-WDT-7: her row stays in pool A").toContain(v);
+    expect(tableA.rows.at(-1)!.entrantId, "RB5-W1: ranked last").toBe(v);
     const pub = await getPublicDivision(r.orgSlug, r.compSlug, r.divSlug);
     const publicName = pub!.entrants.find((e) => e.id === v)!.display_name;
     expect(tableA.withdrawalNotes, "differential: today none").toEqual([{ entrantId: v, lead: `${publicName} (withdrawn):`, body: EXPUNGED_1_OF_3 }]);

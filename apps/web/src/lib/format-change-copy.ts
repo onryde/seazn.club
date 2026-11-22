@@ -11,13 +11,18 @@ import { FORMAT_CHANGE_REFUSALS, isFormatChangeCode } from "@/lib/format-change"
 import type { MessageKey } from "@/lib/messages";
 import { ONLINE_GAME_EXISTS_CODE, ONLINE_GAME_EXISTS_KEY } from "@/lib/open-round";
 import { SCHEDULE_LOCKED_CODE } from "@/lib/schedule-lock";
+import { isRoundRobinRefusalCode, roundRobinRefusalText } from "@/lib/roundrobin-refusals";
 import { SWISS_ROUNDS_REQUIRED_CODE } from "@/lib/swiss-shell";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
-/** The sentence for a refused format change. `fallback` is said for a failure that carries no code at all. */
-export function formatChangeRefusalText(err: unknown, m: Msg, fallback: string): string {
+/** The sentence for a refused format change. `fallback` is said for a failure that carries no code at all. `locale` groups a
+ *  refusal's numbers the reader's way. */
+export function formatChangeRefusalText(err: unknown, m: Msg, fallback: string, locale: string): string {
   const { code, extra } = (err ?? {}) as { code?: unknown; extra?: Record<string, unknown> };
+  // W5 B4 review I-1: a round-robin refusal the change door raises - a field past the new format's max entrants
+  // (FORMAT_TOO_MANY_ENTRANTS), more pools than A-Z (RR_TOO_MANY_POOLS) - in the reader's language, its numbers grouped.
+  if (isRoundRobinRefusalCode(code)) return roundRobinRefusalText(code, extra, m, locale);
   if (isFormatChangeCode(code)) {
     const key = FORMAT_CHANGE_REFUSALS[code].key;
     if (code !== "FORMAT_STREAM_LIVE") return m(key);

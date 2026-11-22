@@ -187,8 +187,10 @@ describe("applicability — rules cover the catalogue", () => {
 });
 
 describe("applicability — predicates against the product's own declarations", () => {
-  it("TABLE_KINDS is a text-pinned copy of the product's points-table kinds (engine-db/competition.ts)", () => {
-    const src = readFileSync(resolve(REPO, "apps/web/src/server/engine-db/competition.ts"), "utf8");
+  it("TABLE_KINDS is a text-pinned copy of the product's points-table kinds (engine-db/competition/kinds.ts)", () => {
+    // engine-db/competition.ts was split into engine-db/competition/ behind a barrel (8ddfa332e5); kinds.ts is the module
+    // that now holds the literal. Reading the barrel (index.ts) would find only a re-export, never the set.
+    const src = readFileSync(resolve(REPO, "apps/web/src/server/engine-db/competition/kinds.ts"), "utf8");
     const m = /const TABLE_KINDS = new Set\(\[([^\]]*)\]\)/.exec(src);
     expect(m, "TABLE_KINDS literal not found").not.toBeNull();
     const kinds = [...m![1]!.matchAll(/"([a-z_]+)"/g)].map((x) => x[1]);

@@ -74,9 +74,14 @@ describe("undoRefusalText — a refusal of either family said in full, its field
 
   it("says a round-robin code in full, its fields filled from the envelope (W5 T5)", () => {
     const rr = Object.keys(ROUND_ROBIN_REFUSALS) as RoundRobinRefusalCode[];
+    // The envelope carries each field its sentence names (`roundRobinRefusal` refuses to build one without), so every name any row's
+    // sentence uses is handed in - read off the table, so a new row's field (W5 B4: `{entrants}`, `{lines}`, `{budget}`) joins it.
+    const names = new Set(rr.flatMap((code) => [...ROUND_ROBIN_REFUSALS[code].en.matchAll(/\{(\w+)\}/g)].map((m) => m[1]!)));
+    expect(names.size, "premise: the table's sentences name fields").toBeGreaterThanOrEqual(5);
+    const fields = { ...Object.fromEntries([...names].map((n, i) => [n, i + 2])), nested: { no: 1 } };
     let checked = 0;
     for (const code of rr) {
-      expect(undoRefusalText(code, { qualified: 6, max: 4, nested: { no: 1 } }, msg), code).not.toMatch(HOLE);
+      expect(undoRefusalText(code, fields, msg), code).not.toMatch(HOLE);
       checked++;
     }
     expect(checked, "anti-vacuity").toBe(rr.length);

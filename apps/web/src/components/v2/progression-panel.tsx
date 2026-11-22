@@ -251,7 +251,8 @@ export function ProgressionPanel({
 
   function reportError(err: unknown) {
     setError(
-      err instanceof ApiV1Error ? seedingErrorMessage(locale, err.code, err.message) : msg("progression.genericError"),
+      // W5 app PR B T5 (K22): a cross-pool refusal names its numbers ({pool}, {count}, {entrants}); `extra` carries them.
+      err instanceof ApiV1Error ? seedingErrorMessage(locale, err.code, err.message, err.extra as Record<string, string | number> | undefined) : msg("progression.genericError"),
     );
   }
 
@@ -312,10 +313,17 @@ export function ProgressionPanel({
       // reload. Every OTHER code is the current organiser's own fixable
       // mistake (e.g. SEEDING_TIE_UNRESOLVED) — refreshing there would only
       // discard their in-progress edits for no reason.
+      //
+      // W5 app PR B review I-1: a STALE answer can name a NEW draft (a tie
+      // pick that re-drew round one, F11, a newer Recompute) whose seats
+      // moved. The local edits were made against the old seats, so they go
+      // too — kept, they would re-apply by slot over the moved seats, which
+      // is the defect the server just refused (same reasoning as recompute()).
       if (
         err instanceof ApiV1Error &&
         (err.code === "SEEDING_ALREADY_CONFIRMED" || err.code === "SEEDING_PROPOSAL_STALE")
       ) {
+        setEditsBySlot(new Map());
         router.refresh();
       }
     } finally {

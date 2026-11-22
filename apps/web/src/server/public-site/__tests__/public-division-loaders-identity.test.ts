@@ -123,11 +123,13 @@ const normalizeStandingsBefore = (s: PublicStandings): PublicStandings => ({
 async function readPublicDivisionDetailBefore(division: PublicDivision) {
   // `rules`: main's per-stage match rules (bb6523248), which landed on this read after the freeze; carried here so the
   // diff is still T4's alone. (W2d's `table_points_rule` came and went the same way: T9 review m3.) `round_byes`: W5 T3
-  // (X-SF-4, 78f8477a54), the fixtures list's "Sits out" line, landed the same way and is carried likewise.
+  // (X-SF-4, 78f8477a54), the fixtures list's "Sits out" line, landed the same way and is carried likewise. So do
+  // `qualify_best_nth` and `qualified`: W5 app PR B's V540 view columns (K25; X-QS-2, RB5-T14), the frozen cut line, read
+  // straight off public_stages_v like every other view column here.
   const stages = await sql<(PublicStage & StageProgressionRow)[]>`
     select id, division_id, seq, kind, name, status,
            qualify_count, qualify_per_group, next_stage_name, swiss_rounds, points_rule,
-           has_rank_overrides,
+           has_rank_overrides, qualify_best_nth, qualified,
            (select x.config->'rules' from stages x where x.id = public_stages_v.id) as rules,
            (select x.config->'round_byes' from stages x where x.id = public_stages_v.id) as round_byes,
            (select x.progression from stages x where x.id = public_stages_v.id) as progression
@@ -238,10 +240,13 @@ async function embedDivisionDataBefore(divisionId: string) {
     select id, slug, name, default_locale from organizations where id = ${competition.org_id}`;
   if (!org) return { ok: false, reason: "not_found" } as const;
   const [stages, pools, fixtures, standings, entrants, ssRows] = await Promise.all([
+    // W5 app PR B, carried like readPublicDivisionDetailBefore's: V540's `qualify_best_nth` and `qualified` (Task 6, K25;
+    // X-QS-2), and `round_byes` (Task 1, K8; X-SF-4) for the schedule widget's "Sits out" line.
     sql<PublicStage[]>`
       select id, division_id, seq, kind, name, status,
              qualify_count, qualify_per_group, next_stage_name, swiss_rounds, points_rule,
-             has_rank_overrides
+             has_rank_overrides, qualify_best_nth, qualified,
+             (select x.config->'round_byes' from stages x where x.id = public_stages_v.id) as round_byes
       from public_stages_v where division_id = ${divisionId} order by seq`,
     sql<{ id: string; stage_id: string; key: string; name: string }[]>`
       select p.id, p.stage_id, p.key, p.name

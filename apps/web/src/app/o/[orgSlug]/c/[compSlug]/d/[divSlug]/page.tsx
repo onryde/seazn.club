@@ -28,7 +28,7 @@ import { divisionQualification, qualificationFixtures } from "@/server/public-si
 import { formatLockedStageIds } from "@/server/usecases/stage-rules";
 import { listSwissRoundControls } from "@/server/usecases/swiss-rounds-admin";
 import { getSwissCutDrift } from "@/server/usecases/swiss-cut-drift";
-import { listKnockoutWaiting, listStageDrawSeeds, listStartedKnockoutStageIds, listThirdPlaceDropped } from "@/server/usecases/knockout-desk";
+import { listCrossPoolDraws, listKnockoutWaiting, listStageDrawSeeds, listStartedKnockoutStageIds, listThirdPlaceDropped } from "@/server/usecases/knockout-desk";
 import { listTableWaiting, readTableLatePools } from "@/server/usecases/table-desk";
 import { swissCutDriftStageIds } from "@/lib/swiss-cut-drift";
 import { listNamedPools } from "@/server/usecases/stage-table-snapshot";
@@ -108,7 +108,8 @@ import { arbiterPanelOffered } from "@/server/arbiter-panel-offered";
 import { ProgressionPanel } from "@/components/v2/progression-panel";
 import { LaunchActions } from "@/components/v2/launch-actions";
 import { StandingsTable } from "@/components/public-site/standings-table";
-import { ResultsMatrix } from "@/components/public-site/results-matrix";
+import { resultsGridData } from "@/components/public-site/results-matrix";
+import { ResultsGridDisclosure } from "@/components/public-site/results-grid";
 import { StatsPanel } from "@/components/v2/stats-panel";
 import { LadderPanel } from "@/components/v2/ladder-panel";
 import { AmericanoPanel } from "@/components/v2/americano-panel";
@@ -129,8 +130,13 @@ import type { MetricSpecLike } from "@/lib/public-site";
 import { localizedTieBreakLabel } from "@/lib/tiebreak-label";
 import { sportLedgerFamily, stageOrderNote } from "@/server/public-site/standings-view";
 import { loadRrLateJoins, rowFactsFor } from "@/server/public-site/table-row-facts";
+import { stageBasisNotes } from "@/lib/bestnth-basis-note";
+import { BestNthBasisNote } from "@/components/public-site/bestnth-basis-note";
+import { loadBestNthBases } from "@/server/public-site/bestnth-basis";
 import { loadTableWithdrawals } from "@/server/public-site/table-withdrawals";
 import { withdrawalNotesFor } from "@/lib/table-withdrawal-note";
+import { adjustmentNotesFor } from "@/lib/points-adjustment-note";
+import { loadPointsAdjustments } from "@/server/public-site/points-adjustments";
 import { formatPublicInstant } from "@/lib/public-date-locale";
 
 const TABS = ["entrants", "fixtures", "standings", "stats"] as const;
@@ -276,6 +282,10 @@ export default async function DivisionPage({
   const lateJoins = await loadRrLateJoins(division.id, fixtures);
   // W5 T8 (RB5-W7): the league/group departure notes under each table.
   const tableWithdrawals = await loadTableWithdrawals(division.id);
+  // W5 app PR B T7 (X-ADJ-4): the points adjustments under each table, with their reason and date.
+  const pointsAdjustments = await loadPointsAdjustments(division.id);
+  // W5 app PR B T4 (X-UP-3): the unequal-pool basis under each group stage whose best-Nth seats were compared across pools.
+  const bestNthBases = await loadBestNthBases(division.id);
   // Entrants who have left the field. A withdrawal is a STATUS FLIP, not a
   // delete, so these ids are still in `entrantNames` and in a ladder's
   // persisted order — which is exactly how a <select> came to offer a choice
@@ -300,6 +310,8 @@ export default async function DivisionPage({
   // else. Ids, not a count: a swiss stage carrying `config.qualified`
   // pairs only the qualifiers still in the field, which is an intersection.
   const activeEntrantIds = entrants.filter((e) => !DEPARTED_STATUSES.has(e.status)).map((e) => e.id);
+  // W5 B4 (stress S4): fixture id -> its number, once, for the results grid's links (a per-cell `fixtures.find` was O(n² x lines)).
+  const fixtureNoById = new Map(fixtures.map((f) => [f.id, f.fixture_no]));
   // Swiss round-1 pairing, review ruling R1: the menu's hint prints seed
   // NUMBERS only when the field's seeds really are 1..N in pairing order, so
   // it needs each entrant's seed. `listEntrants` already selects `seed`.
@@ -463,6 +475,10 @@ export default async function DivisionPage({
   // Information, so read for a viewer as well as an organiser; this tab only, and only where a knockout-family stage exists.
   const drawSeeds =
     tab === "fixtures" && stages.some((s) => ROOT_KNOCKOUT_KINDS.includes(s.kind)) ? await listStageDrawSeeds(auth, id) : {};
+  // W5 app PR B T5 (FX-G5; R24 pick 18 A): the stored seed a knockout fed from groups was drawn across the pools with - "Cross-pool
+  // draw · #…" under its header, or its refusal as a red band. Read for a viewer as well; this tab only, where a knockout-family stage exists.
+  const crossPoolDraws =
+    tab === "fixtures" && stages.some((s) => ROOT_KNOCKOUT_KINDS.includes(s.kind)) ? await listCrossPoolDraws(auth, id) : {};
   // B4 T10 (C35): the plate stages that drew without the third-place match they were asked for - one line on the card.
   const thirdPlaceDropped =
     tab === "fixtures" && stages.some((s) => s.kind === "knockout") ? await listThirdPlaceDropped(auth, id) : [];
@@ -577,10 +593,11 @@ export default async function DivisionPage({
                       // its stored English name (`lib/pool-label.ts`).
                       caption: poolCaption(publicDict, stage.name, p.id, named),
                       poolId: p.id as string | null,
+                      poolKey: named.get(p.id) ?? null,
                       snap: await getStandings(auth, stage.id, p.id),
                     })),
                   )
-                : [{ caption: stage.name, poolId: null as string | null, snap: await getStandings(auth, stage.id) }];
+                : [{ caption: stage.name, poolId: null as string | null, poolKey: null as string | null, snap: await getStandings(auth, stage.id) }];
             return { stage, tables };
           }),
         )
@@ -898,6 +915,8 @@ export default async function DivisionPage({
               // published — so the confirmation can say so. Same row, no query.
               competitionVisibility={competition.visibility}
               viewerPlan={viewerPlan}
+              // W5 B4 (F8): the field, so Start can say before the click that the format cannot start it. Already derived above.
+              activeEntrants={activeEntrantIds.length}
             />
           </div>
         </div>
@@ -1152,6 +1171,7 @@ export default async function DivisionPage({
               tableWaiting={tableWaiting}
               tableLatePools={tableWaitingPools}
               drawSeeds={drawSeeds}
+              crossPoolDraws={crossPoolDraws}
               thirdPlaceDropped={thirdPlaceDropped}
               startedKnockoutStageIds={startedKnockoutStageIds}
               knockoutCutDrift={knockoutCutDrift}
@@ -1235,35 +1255,50 @@ export default async function DivisionPage({
                         rules={stageOrder(stage.id)}
                         swissFacts={rowFactsFor(stage, fixtures, snap.rows as StandingsRow[], lateJoins, entrantStatuses)}
                         withdrawalNotes={withdrawalNotesFor(stage.id, (snap.rows as StandingsRow[]).map((r) => r.entrantId), tableWithdrawals, entrantStatuses, entrantNames, poolId)}
+                        adjustmentNotes={adjustmentNotesFor(stage.id, (snap.rows as StandingsRow[]).map((r) => r.entrantId), pointsAdjustments, entrantNames)}
                         stageKind={stage.kind}
                         locale={locale}
                         tz={scheduleSettings.tz}
                       />
-                      {poolFixtures.length > 0 && (
-                        <details>
-                          <summary className="cursor-pointer text-xs font-medium text-slate-500 hover:text-slate-700">
-                            {t(dict, "div.detail.resultsGrid")}
-                          </summary>
-                          <div className="mt-2">
-                            <ResultsMatrix
-                              entrantIds={ranked.map((r) => r.entrantId)}
-                              entrantNames={entrantNames}
-                              entrantLogos={entrantLogos}
-                              fixtures={poolFixtures as never}
-                              fixtureHref={(fid) => {
-                                const row = fixtures.find((f) => f.id === fid);
-                                return row
-                                  ? routes.fixture(orgSlug, compSlug, divSlug, row.fixture_no)
-                                  : "#";
-                              }}
-                              dict={publicDict}
+                      {poolFixtures.length > 0 &&
+                        (() => {
+                          // W5 B4 (stress S4): the grid's makings only; the n x n table is drawn in the browser when the
+                          // disclosure first opens. Each line's href from the one fixture-number map (it was a scan of every
+                          // fixture per cell: O(n² x lines) on a 500-entrant Swiss).
+                          const grid = resultsGridData({
+                            entrantIds: ranked.map((r) => r.entrantId),
+                            entrantNames,
+                            entrantLogos,
+                            fixtures: poolFixtures as never,
+                            fixtureHref: (fid) => {
+                              const no = fixtureNoById.get(fid);
+                              return no === undefined ? "#" : routes.fixture(orgSlug, compSlug, divSlug, no);
+                            },
+                            dict: publicDict,
+                          });
+                          return grid === null ? null : (
+                            <ResultsGridDisclosure
+                              data={grid}
+                              label={t(dict, "div.detail.resultsGrid")}
+                              noScript={t(dict, "div.detail.resultsGrid.noScript")}
+                              summaryClassName="cursor-pointer text-xs font-medium text-slate-500 hover:text-slate-700"
                             />
-                          </div>
-                        </details>
-                      )}
+                          );
+                        })()}
                     </div>
                   );
                 })}
+                {stageBasisNotes(
+                  stage.id,
+                  bestNthBases.get(stage.id),
+                  tables.flatMap(({ poolKey, snap }) => (poolKey ? [{ key: poolKey, rows: snap.rows as StandingsRow[] }] : [])),
+                  entrantNames,
+                  tableWithdrawals,
+                  (key, vars) => t(publicDict, key, vars),
+                  locale,
+                ).map((note) => (
+                  <BestNthBasisNote key={note.line} note={note} />
+                ))}
                 {/* Cascade trace (doc 05 §4): the exact tie-break order in force, per stage — and (W2d T17) where it came
                     from and whether it is pinned (X-TB-2). A stage the loader refused has no rules: no caption. */}
                 {(() => {

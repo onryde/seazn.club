@@ -91,10 +91,13 @@ export function QualLegend({ legend }: { legend: QualTableT["legend"] }) {
         <QualMarker status="through" />
         {legend.through}
       </span>
-      <span className="inline-flex items-center gap-1">
-        <QualMarker status="needs_help" />
-        {legend.open}
-      </span>
+      {/* W5 Task 6: a finished table has nothing still open (`open` null). */}
+      {legend.open !== null ? (
+        <span className="inline-flex items-center gap-1">
+          <QualMarker status="needs_help" />
+          {legend.open}
+        </span>
+      ) : null}
       <span className="inline-flex items-center gap-1">
         <QualMarker status="out" />
         {legend.out}

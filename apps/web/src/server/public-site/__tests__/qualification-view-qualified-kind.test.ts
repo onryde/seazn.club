@@ -1,13 +1,17 @@
 // Engine 10.0.0 adds `{ kind: "qualified" }` to `QualStatus` (the frozen "Qualified" marker on a
-// complete stage, engine row X-QS-1). The installed engine (9.1.0) cannot produce it, so the test
-// has the engine's own `qualificationStatus` answer with it (a cast: the type has no such member
-// yet) and drives the REAL builder and the REAL hub schema. App tolerance only: the kind renders
-// exactly as `through` (same status, label, headline, if-you-lose copy, same marker); the frozen
-// variant is a later PR.
+// complete stage, engine row X-QS-1). Here the engine's own `qualificationStatus` is forced to
+// answer it on a table it would not (so every row reads it), and the REAL builder and the REAL hub
+// schema render it.
 //
-// Mutants, each killed here: the `default` of statusLabel / headline / ifYouLoseSentence removed
-// (TypeError-free `undefined` text, or a thrown refusal at runtime), `statusKindOf` returning
-// `s.kind` (emits "qualified"), "qualified" removed from QualStatusKind (parse refused).
+// Re-pinned by W5 app PR B Task 6: this file was #1238's tolerance pin ("renders exactly as
+// `through`; the frozen variant is a later PR"). Task 6 IS that variant (R24 pick 17 A): the kind now
+// travels as "qualified" with its own words - "Qualified", "Went through to {next}." - on the same
+// through tick (qualification-bits.tsx). The finished-table scenes themselves are
+// qualification-view-frozen.test.ts; this file keeps the per-kind mapping.
+//
+// Mutants, each killed here: the `qualified` arm of statusLabel / headline removed (the through
+// words come back), `statusKindOf` mapping it to "through", "qualified" removed from QualStatusKind
+// (parse refused).
 import { describe, expect, it, vi } from "vitest";
 import type { QualStatus } from "@seazn/engine/competition";
 import { builtinModules } from "@seazn/engine/sports";
@@ -90,7 +94,7 @@ function settled(): QualificationViewInput {
   };
 }
 
-describe("engine 10.0.0 QualStatus kind \"qualified\" is tolerated as `through`", () => {
+describe("engine 10.0.0 QualStatus kind \"qualified\" renders the frozen Qualified row (W5 Task 6)", () => {
   it("premise: with the engine unforced the table has a through row (A) and an out row (D), so the forced run differs from it", () => {
     forced.on = false;
     const v = buildQualificationView(settled())!;
@@ -98,7 +102,7 @@ describe("engine 10.0.0 QualStatus kind \"qualified\" is tolerated as `through`"
     expect(v.rows.D!.status).toBe("out");
   });
 
-  it("every row the engine answers `qualified` renders as the through row did: same status, label, headline, aria, no loss case", () => {
+  it("every row the engine answers `qualified` carries the frozen kind and its own words, never the live through words, no loss case", () => {
     forced.on = false;
     const through = buildQualificationView(settled())!.rows.A!;
     forced.on = true;
@@ -107,10 +111,12 @@ describe("engine 10.0.0 QualStatus kind \"qualified\" is tolerated as `through`"
       const rows = Object.values(v.rows);
       expect(rows).toHaveLength(4); // anti-vacuity: every row was read
       for (const r of rows) {
-        expect(r.status).toBe("through");
-        expect(r.label).toBe(through.label);
-        expect(r.headline).toBe(through.headline);
-        expect(r.ariaLabel).toContain("Through");
+        expect(r.status).toBe("qualified");
+        // R24 pick 17 A's words, typed from the mock
+        expect(r.label).toBe("Qualified");
+        expect(r.label).not.toBe(through.label);
+        expect(r.headline).toBe("Went through to Finals.");
+        expect(r.ariaLabel).toContain("Qualified");
         expect(r.ifYouLose).toBeNull();
         expect(r.whatIf).toBeNull();
         expect(Object.values(r).join(" ")).not.toMatch(/table\.qual\./); // never a printed key

@@ -297,6 +297,12 @@ const RULES: RouteRule[] = [
   { method: "GET", path: "/stages/:id/standings", scope: "read", pin: "stage" },
   { method: "GET", path: "/stages/:id/pools", scope: "read", pin: "stage" },
   { method: "POST", path: "/stages/:id/standings/override", scope: "manage", pin: "stage" },
+  // W5 app PR B C5 (X-ADJ-4): Adjust points and its Undo move a table's points, as the standings override above does - organiser
+  // writes (`write` resource auth), so `manage`. The list the desk's dialog opens on is a `read`, like the stage's standings: what it
+  // carries (the table's members, each active adjustment with its reason) is what the public footnote prints under the table.
+  { method: "GET", path: "/stages/:id/adjustments", scope: "read", pin: "stage" },
+  { method: "POST", path: "/stages/:id/adjustments", scope: "manage", pin: "stage" },
+  { method: "DELETE", path: "/stages/:id/adjustments/:seq", scope: "manage", pin: "stage" },
 
   // registrations moderation (refund excluded — money moves are billing;
   // mark-paid records receipt of an OFFLINE fee, no money moves online)

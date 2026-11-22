@@ -22,7 +22,7 @@ vi.mock("next/cache", () => ({
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { DocModel } from "@seazn/engine/exports";
-import { DERIVED_METRICS } from "@seazn/engine/competition";
+import { DERIVED_METRICS, isLevelTable } from "@seazn/engine/competition";
 import { builtinModules } from "@seazn/engine/sports";
 import en from "@/dictionaries/en/public.json";
 import es from "@/dictionaries/es/public.json";
@@ -124,6 +124,28 @@ async function publicTables(s: Scene) {
   return { stage, tables: data.standings.filter((x) => x.stage_id === s.stageId) };
 }
 
+/** A pool's seats: every entrant its lines name (the fold's seating, W5 B T1). */
+const seatsOf = async (poolId: string) =>
+  (
+    await sql<{ id: string }[]>`
+      select home_entrant_id as id from fixtures where pool_id = ${poolId} and home_entrant_id is not null
+      union select away_entrant_id from fixtures where pool_id = ${poolId} and away_entrant_id is not null`
+  ).map((r) => r.id);
+
+/** X-PO-1 (W5 app PR B Task 1): every group prints in key order, headed; each lists all four of its seats (the fold's seating -
+ *  before, only the pair who played), its one winner placed first (a win's points, or the win itself, lead in every family).
+ *  The rest of each group's order is the public table's, asserted beside it - never typed here. */
+async function expectGroups(doc: DocModel, s: Scene, pools: readonly { id: string; key: string }[], winnerOf: (poolId: string) => string) {
+  const out = printed(doc);
+  expect(out.map((x) => x.heading), "every group, in the stored key order, headed by its public caption").toEqual(pools.map((p) => caption(GROUPS, p.key)));
+  for (const [i, p] of pools.entries()) {
+    const seats = await seatsOf(p.id);
+    expect(seats, `premise: group ${p.key} seats four`).toHaveLength(4);
+    expect(out[i]!.rows[0], `group ${p.key}: its winner first`).toEqual([1, s.name(winnerOf(p.id))]);
+    expect(out[i]!.rows.map((r) => r[1]).sort(), `group ${p.key}: all four seats listed`).toEqual(seats.map((id) => s.name(id)).sort());
+  }
+}
+
 /** The public table's rows as it ranks them (`standings-table.tsx` sorts by rank): names, in order. */
 const publicNames = (s: Scene, rows: readonly StandingsSnapshotRow[]) =>
   [...rows].sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99)).map((r) => s.name(r.entrantId));
@@ -208,7 +230,8 @@ describe.skipIf(!HAS_DB)("X-SF-3 the standings export prints every pool — a gr
       const s = await pooled(fam, 2);
       const played = await onePerPool(fam, s, s.pools);
       const stored = await snapshotsOf(s.stageId);
-      expect(stored.map((x) => x.rows.length).sort(), "premise: each group stored its own table of the two who played").toEqual([2, 2]);
+      // differential (W5 B T1, X-PO-1): before the seating each group's table was the two who played.
+      expect(stored.map((x) => x.rows.length).sort(), "premise: each group stored its own table of its four seats").toEqual([4, 4]);
       expect(new Set(stored.map((x) => x.updated_at)).size, "premise: one refold writes every pool, so the two tie on updated_at").toBe(1);
       // Review m1: a tie leaves the order to the database — a coin flip, which a lost sort could win. Make every order but
       // the key say B first. One table is made the newer (its updated_at moves an hour on) and the other rewritten
@@ -248,15 +271,10 @@ describe.skipIf(!HAS_DB)("X-SF-3 the standings export prints every pool — a gr
       expect(await unsorted(), "premise: the export's own read returns B first").toEqual([pb.id, pa.id]);
 
       const doc = await exportOf(s);
-      // The engine's pool membership comes from resulted fixtures (`entrantsOfPool`), so each group's table is the pair
-      // that played: its winner first, then its loser. The public read serves those same rows for each pool.
+      // The fold seats every member of a pool (W5 B T1), so each group's table is its four: its winner first. The public read
+      // serves those same rows for each pool, in the same order (below).
       const { tables } = await publicTables(s);
-      expect(printed(doc), `${fam.sport}: every group, in the stored key order, headed by its public caption`).toEqual(
-        pools.map((p) => {
-          const { winner, loser } = played.get(p.id)!;
-          return { heading: caption(GROUPS, p.key), rows: [[1, s.name(winner)], [2, s.name(loser)]] };
-        }),
-      );
+      await expectGroups(doc, s, pools, (id) => played.get(id)!.winner);
       for (const p of pools) {
         const pub = tables.find((x) => x.pool_id === p.id);
         expect(pub, `premise: the public read serves group ${p.key}`).toBeDefined();
@@ -268,69 +286,58 @@ describe.skipIf(!HAS_DB)("X-SF-3 the standings export prints every pool — a gr
     });
   }
 
-  it("X-SF-3 (a) 3 groups, results recorded C, then A, then B — three sections, A, B, C, each headed, each its own pair", async () => {
+  it("X-SF-3 (a) 3 groups, results recorded C, then A, then B — three sections, A, B, C, each headed, each its own four", async () => {
     // single-sport: the pool order and headings are the stage's (sport-agnostic); every family runs the 2-group case above
     const s = await pooled(GENERIC, 3);
     const order = [s.pools[2]!, s.pools[0]!, s.pools[1]!];
     const played = await onePerPool(GENERIC, s, order);
-    const doc = await exportOf(s);
-    expect(printed(doc)).toEqual(
-      s.pools.map((p) => ({ heading: caption(GROUPS, p.key), rows: [[1, s.name(played.get(p.id)!.winner)], [2, s.name(played.get(p.id)!.loser)]] })),
-    );
+    await expectGroups(await exportOf(s), s, s.pools, (id) => played.get(id)!.winner);
   });
 
-  it("(b) a result voided: its group's table is empty — the group still prints, headed, a header row and no rows, as the public page draws it; a level group prints its rows with no place", async () => {
+  it("(b) a result voided: its group's table is level - its four seats, every place the dash; a stored empty table still prints headed, a header row and no rows", async () => {
     // single-sport: the void and the level table are the stage's (sport-agnostic); every family runs the 2-group case above
     const s = await pooled(GENERIC, 3);
     const played = await onePerPool(GENERIC, s, s.pools);
     const [a, b, c] = s.pools as [{ id: string; key: string }, { id: string; key: string }, { id: string; key: string }];
-    // Void group B's only result: the match is back in play, and B's table holds no row.
+    // Void group B's only result: the match is back in play, and B's table is level again.
     const voided = played.get(b.id)!;
     await post(s.auth, (await between(s.stageId, voided.winner, voided.loser)).id, "core.void", { event_id: voided.voidable });
-    const stored = await snapshotsOf(s.stageId);
-    expect(stored.find((x) => x.pool_id === b.id)?.rows, "premise: the refold stored group B's table with no row").toEqual([]);
-    // The public page draws every stored table of the stage (`[divisionSlug]/page.tsx` maps them all): B's is served.
-    const pub = await publicTables(s);
-    expect(pub.tables.find((x) => x.pool_id === b.id)?.rows, "premise: the public read serves B's empty table").toEqual([]);
-
-    const doc = await exportOf(s);
-    const rowsOf = (p: { id: string }) => [[1, s.name(played.get(p.id)!.winner)], [2, s.name(played.get(p.id)!.loser)]];
-    expect(printed(doc), "RULING: an empty group prints its heading and header row, never skipped").toEqual([
-      { heading: caption(GROUPS, a.key), rows: rowsOf(a) },
-      { heading: caption(GROUPS, b.key), rows: [] },
-      { heading: caption(GROUPS, c.key), rows: rowsOf(c) },
-    ]);
-    expect(doc.sections[1]!.table!.columns.slice(0, 2), "B's header row is printed").toEqual(["#", t(EN, "table.team")]);
-    // Review m3 (and round 2): B's header is the public table's over the same rows — none — exactly: no metric any row
-    // carries, and no D, since no row holds a draw.
-    const emptyPublic = publicHeader(renderPublic(pub.stage, [], s));
-    expect(emptyPublic, "premise: the public table over no rows shows no D").not.toContain(t(EN, "table.abbr.drawn"));
-    expect(doc.sections[1]!.table!.columns.slice(2), "B's header: the public table's").toEqual(emptyPublic);
-
-    // The level guard. No product path stores a LEVEL table for one pool of a pooled stage today: pool membership comes
-    // from resulted fixtures, so an unplayed pool, a voided result and a withdrawal's expunge all store `[]` (measured
-    // 2026-10-28). The export must still never place a level row first (X-TB-6, anti-goal 3), so the state is written
-    // here: B's four members, level, in seed order, as `rankStandings` marks a table with nothing counted.
+    // differential (W5 B T1, X-PO-1): before the seating the refold stored B's table with no row (measured 2026-10-28); the
+    // level state below had to be written by hand. The product writes it now: B's four seats, nothing counted.
     const members = await sql<{ id: string }[]>`
       select e.id from entrants e
        where e.id in (select home_entrant_id from fixtures where pool_id = ${b.id} union select away_entrant_id from fixtures where pool_id = ${b.id})
        order by e.seed`;
     expect(members.length, "premise: group B has four members").toBe(4);
-    const level = members.map((m, i) => ({ entrantId: m.id, played: 0, won: 0, drawn: 0, lost: 0, points: 0, metrics: {}, rank: i + 1, level: true }));
-    await sql`update standings_snapshots set rows = ${sql.json(level)} where stage_id = ${s.stageId} and pool_id = ${b.id}`;
-    const withLevel = printed(await exportOf(s));
-    expect(withLevel[1], "RULING: a level group prints its rows, every place the spec's dash, in the table's order").toEqual({
+    const stored = (await snapshotsOf(s.stageId)).find((x) => x.pool_id === b.id)?.rows ?? [];
+    expect(stored.map((r) => r.entrantId).sort(), "the refold stored B's table of its four seats").toEqual(members.map((m) => m.id).sort());
+    expect(isLevelTable(stored as never), "level (the engine's own test)").toBe(true);
+    const pub = await publicTables(s);
+    const pubB = pub.tables.find((x) => x.pool_id === b.id)!.rows;
+
+    const doc = await exportOf(s);
+    const placed = (p: { id: string }) => printed(doc)[s.pools.indexOf(p as never)]!;
+    expect(placed(b), "RULING: a level group prints its rows, every place the spec's dash, in the table's order").toEqual({
       heading: caption(GROUPS, b.key),
-      rows: members.map((m) => [SPEC_LEVEL_RANK, s.name(m.id)]),
+      rows: publicNames(s, pubB).map((name) => [SPEC_LEVEL_RANK, name]),
     });
-    // The positive pair: the real groups beside it keep their places.
-    expect([withLevel[0], withLevel[2]], "A and C still print their places").toEqual([
-      { heading: caption(GROUPS, a.key), rows: rowsOf(a) },
-      { heading: caption(GROUPS, c.key), rows: rowsOf(c) },
-    ]);
+    // The positive pair: the real groups beside it keep their places, their winners first.
+    for (const p of [a, c]) expect(placed(p).rows[0], `group ${p.key} keeps its winner first`).toEqual([1, s.name(played.get(p.id)!.winner)]);
     // The public table draws the same: every rank of B's table the dash.
-    const html = renderPublic(pub.stage, (await publicTables(s)).tables.find((x) => x.pool_id === b.id)!.rows, s);
+    const html = renderPublic(pub.stage, pubB, s);
     expect(html.match(new RegExp(`<span aria-hidden="true">${SPEC_LEVEL_RANK}</span>`, "g"))?.length, "the public table prints the dash on each of B's rows").toBe(4);
+
+    // The empty guard. No product path stores an EMPTY table for a seated pool any more; a table stored before the seating can
+    // still hold none, so the state is written here, and the export must still print the group, headed, a header row, no rows.
+    await sql`update standings_snapshots set rows = ${sql.json([])} where stage_id = ${s.stageId} and pool_id = ${b.id}`;
+    const withEmpty = await exportOf(s);
+    expect(printed(withEmpty)[1], "RULING: an empty group prints its heading and header row, never skipped").toEqual({ heading: caption(GROUPS, b.key), rows: [] });
+    expect(withEmpty.sections[1]!.table!.columns.slice(0, 2), "B's header row is printed").toEqual(["#", t(EN, "table.team")]);
+    // Review m3 (and round 2): B's header is the public table's over the same rows — none — exactly: no metric any row
+    // carries, and no D, since no row holds a draw.
+    const emptyPublic = publicHeader(renderPublic(pub.stage, [], s));
+    expect(emptyPublic, "premise: the public table over no rows shows no D").not.toContain(t(EN, "table.abbr.drawn"));
+    expect(withEmpty.sections[1]!.table!.columns.slice(2), "B's header: the public table's").toEqual(emptyPublic);
   });
 
   it("(c) a later knockout stage with no table: the group stage is still the one printed, every group", async () => {
@@ -347,9 +354,7 @@ describe.skipIf(!HAS_DB)("X-SF-3 the standings export prints every pool — a gr
     expect(n, "premise: the knockout's bracket was generated").toBeGreaterThan(0);
     const played = await onePerPool(GENERIC, s, s.pools);
     expect(await snapshotsOf(cup), "premise: the knockout stores no table").toEqual([]);
-    expect(printed(await exportOf(s))).toEqual(
-      s.pools.map((p) => ({ heading: caption(GROUPS, p.key), rows: [[1, s.name(played.get(p.id)!.winner)], [2, s.name(played.get(p.id)!.loser)]] })),
-    );
+    await expectGroups(await exportOf(s), s, s.pools, (id) => played.get(id)!.winner);
   });
 
   it("(d) a league is unchanged: one section, no heading, every entrant ranked", async () => {
@@ -636,7 +641,7 @@ describe.skipIf(!HAS_DB)("export review I2 — the export prints D exactly as th
 // Buchholz …) after Pts, and a team nobody has played with "—" where the PDF used to print 0. Not slices: the table.
 describe.skipIf(!HAS_DB)("standings export parity — a real division's export is the public table, header and every cell", () => {
   /** A started table stage of `kind` with ONE result recorded: someone is always left unplayed (a league or Swiss of 4 has
-   *  two who never take the field; a group stage's second pool is an empty table). */
+   *  two who never take the field; a group stage's second pool is a level table of its seats, W5 B T1). */
   async function onePlayed(m: (typeof builtinModules)[number], kind: SweepKind): Promise<Scene> {
     const variant = Object.keys(m.variants)[0];
     if (variant === undefined) throw new Error(`premise: ${m.key} declares a variant`);
@@ -661,7 +666,7 @@ describe.skipIf(!HAS_DB)("standings export parity — a real division's export i
   }
 
   it("every shipped sport × league, group, Swiss, one result recorded: each exported table's header and cells are the division page's (counted)", async () => {
-    const seen = { tables: 0, headers: 0, cells: 0, derivedColumns: 0, dashCells: 0, emptyTables: 0 };
+    const seen = { tables: 0, headers: 0, cells: 0, derivedColumns: 0, dashCells: 0, levelTables: 0 };
     const derived = new Set<string>(DERIVED_METRICS.map((d) => d.key));
     for (const m of builtinModules) {
       for (const kind of SWEEP_KINDS) {
@@ -692,7 +697,7 @@ describe.skipIf(!HAS_DB)("standings export parity — a real division's export i
           seen.cells += page.rows.flat().length;
           seen.derivedColumns += tableColumns(m.metrics, tableOrderOf(stage.table_rules), pub.rows as never, tableLayoutFor(stage.table_rules)).filter((c) => derived.has(c.key)).length;
           seen.dashCells += page.rows.flat().filter((c) => c === "—").length;
-          if (pub.rows.length === 0) seen.emptyTables++;
+          if (pub.rows.length > 0 && isLevelTable(pub.rows as never)) seen.levelTables++;
         }
       }
     }
@@ -700,7 +705,8 @@ describe.skipIf(!HAS_DB)("standings export parity — a real division's export i
     expect(seen.cells, "cells compared").toBeGreaterThan(0);
     expect(seen.derivedColumns, "derived columns compared (sports whose order earns one: cricket, chess, the set sports …)").toBeGreaterThan(0);
     expect(seen.dashCells, "'—' cells compared (a team nobody has played)").toBeGreaterThan(0);
-    expect(seen.emptyTables, "the second group's empty table, header only").toBeGreaterThan(0);
+    // W5 B T1 (X-PO-1): the second group's table, unplayed, is its seated four, level - every place the dash (before: no row).
+    expect(seen.levelTables, "the second group's level table, one per sport").toBe(builtinModules.length);
     console.log("export-every-pool parity checked:", JSON.stringify(seen));
   }, 600_000);
 });

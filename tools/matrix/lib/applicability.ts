@@ -157,7 +157,7 @@ const onlyPagePlayoff: Predicate = (f) => isLonePagePlayoff(f.stages);
 const entrant = (...kinds: string[]): Predicate => (f) => f.entrantKinds.some((k) => kinds.includes(k));
 
 /** Text-pinned copy of the product's points-table kinds
- *  (apps/web/src/server/engine-db/competition.ts `TABLE_KINDS`, server-only):
+ *  (apps/web/src/server/engine-db/competition/kinds.ts `TABLE_KINDS`, server-only):
  *  americano rides the league fold. Ladder is NOT one — its order is
  *  `config.ladder_order` (engine core/types.ts StageKind note), so nothing in
  *  a ladder can tie or lose points. Pinned by applicability.test.ts.
