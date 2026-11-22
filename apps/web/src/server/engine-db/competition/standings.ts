@@ -12,9 +12,11 @@ import {
   type CrossGroupRules,
   type FixtureResult,
   type PointsRule,
+  type MembersKey,
   type StandingsRow,
+  type StoredLotsDraw,
 } from "@seazn/engine/competition";
-import { loadLotsDraws, persistLotsDraws } from "../table-rules";
+import { loadLiveLotsDraws, loadLotsDraws, loadLotsDrawsFor, persistLotsDraws } from "../table-rules";
 import type { Tx, SnapshotCause, StageInputs } from "./types";
 import { loadStageInputs, toTableStage } from "./stage-inputs";
 import { TABLE_KINDS } from "./kinds";
@@ -91,16 +93,37 @@ export async function writeSnapshot(
   through: number,
   cause: SnapshotCause,
 ): Promise<void> {
+  await writeSnapshots(tx, stageId, [{ poolId, rows }], through, cause);
+}
+
+/**
+ * W5 follow-ups B6: every pool's snapshot of one refold in ONE statement (a 26-pool group wrote 26 upserts per result, under the
+ * division lock). A pool whose table did not change keeps its stored `rows` and `previous_rows` as they are - the old datum, so
+ * its stored (toasted) table is not rewritten - and only its watermark and `updated_at` move: `GET /stages/{id}/standings` reads
+ * every pool as folded through the division's latest seq, as it did when each pool was rewritten. `previous_rows` follows the
+ * same rule as before: kept on an unchanged table, rolled by a result, rebased by anything else.
+ */
+export async function writeSnapshots(
+  tx: Tx,
+  stageId: string,
+  pools: readonly { poolId: string | null; rows: readonly StandingsRow[] }[],
+  through: number,
+  cause: SnapshotCause,
+): Promise<void> {
+  if (pools.length === 0) return;
+  const payload = pools.map((p) => ({ pool_id: p.poolId, rows: p.rows }));
   await tx`
     insert into standings_snapshots (stage_id, pool_id, rows, computed_through_seq)
-    values (${stageId}, ${poolId}, ${tx.json(rows as never)}, ${through})
+    select ${stageId}, w.pool_id, w.rows, ${through}
+      from jsonb_to_recordset(${tx.json(payload as never)}::jsonb) as w(pool_id uuid, rows jsonb)
     on conflict on constraint standings_snapshots_pkey do update set
       previous_rows = case
         when standings_snapshots.rows is not distinct from excluded.rows then standings_snapshots.previous_rows
         when ${cause}::text = 'result' then standings_snapshots.rows
         else excluded.rows
       end,
-      rows = excluded.rows, computed_through_seq = excluded.computed_through_seq, updated_at = now()
+      rows = case when standings_snapshots.rows is not distinct from excluded.rows then standings_snapshots.rows else excluded.rows end,
+      computed_through_seq = excluded.computed_through_seq, updated_at = now()
   `;
 }
 
@@ -172,12 +195,9 @@ export async function recomputeStandings(
     // table re-ranked from the stored rows (§5.8), so the snapshot is the stored order.
     const { tables } = await rankWithStoredLots(tx, inputs);
     const emptyFold = opts.emptyFold ?? "write";
-    const written: string[] = [];
-    for (const pool of tables.pools) {
-      if (emptyFold !== "write" && pool.rows.length === 0) continue;
-      await writeSnapshot(tx, stageId, pool.pool || null, pool.rows, inputs.division.seq, opts.cause ?? "roster");
-      written.push(pool.pool || "");
-    }
+    const kept = tables.pools.filter((pool) => emptyFold === "write" || pool.rows.length > 0);
+    await writeSnapshots(tx, stageId, kept.map((pool) => ({ poolId: pool.pool || null, rows: pool.rows })), inputs.division.seq, opts.cause ?? "roster");
+    const written = kept.map((pool) => pool.pool || "");
     if (emptyFold === "drop") {
       await tx`
         delete from standings_snapshots
@@ -342,14 +362,37 @@ function withDepartedRankedLast(done: CompletedTableStage, settled: ReadonlySet<
   };
 }
 
+/** Two maps of stored draws as one: `extra`'s keys over `base`'s, pool by pool. */
+function withDraws(
+  base: ReadonlyMap<string, ReadonlyMap<MembersKey, StoredLotsDraw>>,
+  extra: ReadonlyMap<string, ReadonlyMap<MembersKey, StoredLotsDraw>>,
+): ReadonlyMap<string, ReadonlyMap<MembersKey, StoredLotsDraw>> {
+  const out = new Map<string, ReadonlyMap<MembersKey, StoredLotsDraw>>(base);
+  for (const [pool, byKey] of extra) out.set(pool, new Map([...(base.get(pool) ?? []), ...byKey]));
+  return out;
+}
+
+// W5 follow-ups B6: the first pass ranks by the LIVE draws only (`loadLiveLotsDraws`, bounded by the table), never by every
+// draw the stage ever made (a Swiss 500: thousands of rows, megabytes per write, read under the division lock). A tie set the
+// live draws do not cover comes back in `newLotsDraws` with a provisional order; only those keys are then read
+// (`loadLotsDrawsFor`, newest row superseded or not), only the ones with NO stored row are stored, and the table is ranked
+// again by the draws it asked for. Lots order only WITHIN a tie set the cascade already formed, so the sets the first pass
+// names are the sets the second ranks: each is served the row the whole-history read served
+// (`__tests__/lots-draws-refold-read.test.ts` ranks both ways and compares).
 async function rankWithStoredLotsRaw(tx: Tx, inputs: StageInputs): Promise<CompletedTableStage> {
   const stageId = inputs.stage.id;
-  const first = completeTableStage(toTableStage(inputs, await loadLotsDraws(tx, stageId)), inputs.tableFixtures);
+  const live = await loadLiveLotsDraws(tx, stageId);
+  const first = completeTableStage(toTableStage(inputs, live), inputs.tableFixtures);
   if (first.newLotsDraws.length === 0) return first;
-  const byPool = new Map<string, (typeof first.newLotsDraws)[number][]>();
-  for (const draw of first.newLotsDraws) byPool.set(draw.pool, [...(byPool.get(draw.pool) ?? []), draw]);
+  const asked = first.newLotsDraws.map((d) => d.membersKey);
+  const known = await loadLotsDrawsFor(tx, stageId, asked);
+  const fresh = first.newLotsDraws.filter((d) => known.get(d.pool)?.get(d.membersKey) === undefined);
+  const byPool = new Map<string, (typeof fresh)[number][]>();
+  for (const draw of fresh) byPool.set(draw.pool, [...(byPool.get(draw.pool) ?? []), draw]);
   for (const [pool, draws] of byPool) await persistLotsDraws(tx, stageId, pool === "" ? null : pool, draws);
-  const stored = completeTableStage(toTableStage(inputs, await loadLotsDraws(tx, stageId)), inputs.tableFixtures);
+  // Re-read after a store: a racing writer's draw wins for both (`persistLotsDraws`: on conflict do nothing).
+  const served = withDraws(live, fresh.length === 0 ? known : await loadLotsDrawsFor(tx, stageId, asked));
+  const stored = completeTableStage(toTableStage(inputs, served), inputs.tableFixtures);
   if (stored.newLotsDraws.length > 0) {
     throw new EngineError("CONFIG_INVALID", `stage ${stageId}: a drawing of lots was made but not stored`, {
       stageId,

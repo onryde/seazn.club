@@ -1,0 +1,14 @@
+-- V541 - a stage's lots draws are found by member set, superseded or not.
+--
+-- WHY. A standings refold ranks by the draws of the tie sets it forms. It read EVERY draw the stage ever stored (a Swiss 500:
+-- thousands of rows, megabytes of member lists, per result write, under the division lock), with no index on `stage_id`: the
+-- only index naming the stage is `stage_lots_draws_live_key`, partial on `superseded_at is null`, so the whole-history read
+-- was a sequential scan of every stage's draws. W5 follow-ups B6 reads the live draws and then only the member sets the
+-- refold asks for (`loadLiveLotsDraws`, `loadLotsDrawsFor` in engine-db/table-rules.ts) - superseded rows included, because a
+-- set that comes back after a wider one is ordered by its first draw.
+--
+-- WHAT. A plain (non-unique, non-partial) index on the stage and md5(members_key): the same fixed-size hash V528 put in the
+-- live key, so a class of hundreds of entrants still fits a btree row. Not unique: the history of a set drawn again keeps
+-- every row (fix round 1 m5), and the newest serves. md5() is immutable, so it is allowed in an index expression. The table
+-- holds one row per tie class ever drawn; the build holds no lock of note.
+create index stage_lots_draws_stage_key on stage_lots_draws (stage_id, md5(members_key));

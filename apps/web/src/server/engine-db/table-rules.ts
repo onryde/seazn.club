@@ -1,4 +1,5 @@
 import "server-only";
+import { createHash } from "node:crypto";
 // W2d Task 9 (spec §5.4 "Resolution", "Pin at start", §5.8, §6 W1–W11; rule rows X-TB-1, X-TB-2, X-TB-4) — the ONE
 // place the web reads a stage's table rules: the points it pays, the order it ranks by and the order it is compared
 // across groups by. Every standings read, the public pages, the hub, the embed, the slideshow and the organiser console
@@ -423,15 +424,9 @@ type TableRulesInputOwn = Parameters<typeof resolveTableRules>[0]["stageOwn"];
 /** The pool key the engine names a table by: a fixture's pool id, "" for the stage's one table. */
 const poolKeyOf = (poolId: string | null): string => poolId ?? "";
 
-/** The stage's stored draws, by pool ("" for none) then members key. The NEWEST row of each (pool, members key) serves,
- *  superseded or not: a tied set that comes back after a draw for a wider set is ordered as it was first drawn, and
- *  nothing new is stored (progress ledger, T5/T9). One row per (pool, members key) is read (`distinct on`, fix round 1
- *  m5): the history of a set drawn again stays in the table, never on the wire. */
-export async function loadLotsDraws(tx: Db, stageId: string): Promise<ReadonlyMap<string, ReadonlyMap<MembersKey, StoredLotsDraw>>> {
-  const rows = await tx<{ pool_id: string | null; members_key: string; drawn_order: string[]; drawn_at: string }[]>`
-    select distinct on (pool_id, members_key) pool_id, members_key, drawn_order, to_json(drawn_at) #>> '{}' as drawn_at
-    from stage_lots_draws where stage_id = ${stageId}
-    order by pool_id, members_key, drawn_at desc, id desc`;
+type DrawRow = { pool_id: string | null; members_key: string; drawn_order: string[]; drawn_at: string };
+
+function drawsByPool(rows: readonly DrawRow[]): ReadonlyMap<string, ReadonlyMap<MembersKey, StoredLotsDraw>> {
   const out = new Map<string, Map<MembersKey, StoredLotsDraw>>();
   for (const r of rows) {
     const pool = poolKeyOf(r.pool_id);
@@ -440,6 +435,57 @@ export async function loadLotsDraws(tx: Db, stageId: string): Promise<ReadonlyMa
     out.set(pool, byKey);
   }
   return out;
+}
+
+/** The stage's stored draws, by pool ("" for none) then members key. The NEWEST row of each (pool, members key) serves,
+ *  superseded or not: a tied set that comes back after a draw for a wider set is ordered as it was first drawn, and
+ *  nothing new is stored (progress ledger, T5/T9). One row per (pool, members key) is read (`distinct on`, fix round 1
+ *  m5): the history of a set drawn again stays in the table, never on the wire.
+ *
+ *  Every key the stage ever drew - a Swiss 500 holds thousands, most of them superseded. A refold reads only the keys it
+ *  ranks by ({@link loadLiveLotsDraws}, {@link loadLotsDrawsFor}); this whole read serves the callers that do not refold. */
+export async function loadLotsDraws(tx: Db, stageId: string): Promise<ReadonlyMap<string, ReadonlyMap<MembersKey, StoredLotsDraw>>> {
+  return drawsByPool(
+    await tx<DrawRow[]>`
+      select distinct on (pool_id, members_key) pool_id, members_key, drawn_order, to_json(drawn_at) #>> '{}' as drawn_at
+      from stage_lots_draws where stage_id = ${stageId}
+      order by pool_id, members_key, drawn_at desc, id desc`,
+  );
+}
+
+/** W5 follow-ups B6: the draws of the keys that have a LIVE row - the draws a refold of an unchanged tie set ranks by. A
+ *  pool's live draws are pairwise disjoint (`persistLotsDraws` supersedes every live draw a new one intersects), so they
+ *  name each entrant at most once: the read is bounded by the table, not by the stage's history. Each key is served by its
+ *  NEWEST row, as {@link loadLotsDraws} serves it, so a key whose history holds an older live row and a newer superseded
+ *  one (fix round 1 m5) reads the same here as there. Both reads below ride `stage_lots_draws_stage_key` (V541). */
+export async function loadLiveLotsDraws(tx: Db, stageId: string): Promise<ReadonlyMap<string, ReadonlyMap<MembersKey, StoredLotsDraw>>> {
+  return drawsByPool(
+    await tx<DrawRow[]>`
+      select distinct on (d.pool_id, d.members_key) d.pool_id, d.members_key, d.drawn_order, to_json(d.drawn_at) #>> '{}' as drawn_at
+      from stage_lots_draws d
+      where d.stage_id = ${stageId}
+        and md5(d.members_key) = any(array(
+          select md5(l.members_key) from stage_lots_draws l where l.stage_id = ${stageId} and l.superseded_at is null))
+      order by d.pool_id, d.members_key, d.drawn_at desc, d.id desc`,
+  );
+}
+
+/** W5 follow-ups B6: the newest stored draw of each of these members keys, superseded or not - a refold's tie sets with
+ *  no live draw (a set that came back after a wider one, or one never drawn, which reads as absent). No keys, no read. */
+export async function loadLotsDrawsFor(
+  tx: Db,
+  stageId: string,
+  keys: readonly MembersKey[],
+): Promise<ReadonlyMap<string, ReadonlyMap<MembersKey, StoredLotsDraw>>> {
+  if (keys.length === 0) return new Map();
+  const hashes = [...new Set(keys.map((k) => createHash("md5").update(k, "utf8").digest("hex")))];
+  return drawsByPool(
+    await tx<DrawRow[]>`
+      select distinct on (pool_id, members_key) pool_id, members_key, drawn_order, to_json(drawn_at) #>> '{}' as drawn_at
+      from stage_lots_draws
+      where stage_id = ${stageId} and md5(members_key) = any(${hashes}::text[])
+      order by pool_id, members_key, drawn_at desc, id desc`,
+  );
 }
 
 // T7 m9: a draw is stored only as the engine made it — its members distinct, its key theirs (`membersKeyOf`), its order a
