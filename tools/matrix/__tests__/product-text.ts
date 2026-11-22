@@ -372,7 +372,7 @@ function setMembers(m: RegExpExecArray | null, what: string): string[] {
 }
 
 /** withdrawal.ts TABLE_KINDS: the kinds the withdrawal module treats as a
- *  table (its OWN copy — engine-db/competition.ts's includes americano, this
+ *  table (its OWN copy — engine-db/competition/kinds.ts's includes americano, this
  *  one does not). W1-driving T7, false premise 16. */
 export function withdrawalTableKindsText(): string[] {
   return setMembers(/\nconst TABLE_KINDS = new Set\(\[([^\]]*)\]\);/.exec(read("apps/web/src/server/usecases/withdrawal.ts")), "withdrawal.ts TABLE_KINDS");
