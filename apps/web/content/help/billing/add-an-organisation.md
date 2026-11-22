@@ -5,13 +5,13 @@ order: 4.1
 related: billing/groups, billing/remove-an-organisation, billing/add-ons, billing/credits
 ---
 
-When an organisation joins a bill you pay for, it runs on that bill's plan and is paid for on the same card and invoice. You need to be the person who pays for the bill and an owner of the organisation. An admin of the organisation cannot move it. See [one bill for several organisations](/help/billing/groups) for what a bill is.
+When an organisation joins a bill you pay for, it runs on that bill's plan and is paid for on the same card and invoice. You need to be the person who pays for the bill and an owner of the organisation. An admin of the organisation cannot move it.
 
 ## When you create the organisation
 
 1. On **Create an organization**, under **Billing**, choose **Add to an existing bill**.
 2. The page lists the bills you pay for, each with its plan and how many organisations it holds. Pick one.
-3. Press **Create & add to this bill**. On a paid bill the button names an amount instead, as **Create & add —** followed by the amount and "now", and the same amount appears under the list of bills.
+3. Press **Create & add to this bill**. When joining adds to a paid bill, the button names the amount instead, as **Create & add —** followed by the amount and "now". When nothing is added, as with a freed paid seat or a free trial, the button shows no amount.
 
 A bill that cannot take another organisation is greyed out, with the reason beside it: **Payment overdue**, **Scheduled to cancel**, **Not active** or **Full**. A full Pro bill also offers **Buy another slot →**, which opens its **Add-ons** page. When no bill you pay for can take one, the page says "No eligible bills — each needs an open slot on Pro."
 
@@ -32,7 +32,7 @@ The list shows the organisations on your other bills that have no paid subscript
 Nothing is charged to your card when an organisation joins. What the dialog says depends on the bill:
 
 - **A paid bill.** Your bill goes up by the rate for one more organisation (see [what it costs](/help/billing/groups#what-it-costs)), prorated to the rest of the current period and added to your next invoice. When the amount can be worked out in advance, the dialog shows it. On a yearly bill the organisation renews on the bill's own date.
-- **A paid seat is free.** If an organisation came off the bill after its free trial and you chose **Free up the seat now**, the panel says, for example, "Paid slots free until renewal: 1. Moving an organisation into one costs nothing." Moving an organisation into that seat adds nothing to your next invoice. From the next renewal it is billed like the others. Taking off the last organisation on a bill ends the subscription instead, and leaves no seat.
+- **A paid seat is free.** If an organisation came off the bill outside a free trial and you chose **Free up the seat now**, the panel says, for example, "Paid slots free until renewal: 1. Moving an organisation into one costs nothing." Moving an organisation into that seat adds nothing to your next invoice. From the next renewal it is billed like the others. Taking off the last organisation on a bill ends the subscription instead, and leaves no seat.
 - **A free trial.** The organisation rides your trial to the same end date. Nothing is charged, and it is first billed when the trial converts.
 
 If a later invoice fails, the organisation stays on the bill and the usual rules for a failed payment apply to the whole bill. If it stays unpaid for 14 days, every organisation on the bill moves to Community together. See [when a payment fails](/help/billing/change-plan#when-a-payment-fails).

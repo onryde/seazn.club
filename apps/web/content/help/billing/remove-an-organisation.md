@@ -25,7 +25,7 @@ The dialog also says that competitions which have already taken a payment keep t
 On a paid bill the dialog asks, for example, "How should Oakridge Hockey leave this bill?" and you choose one:
 
 - **Keep its plan until the period ends.** The organisation keeps the plan until the period you have already paid for runs out, then drops to Community. The paid seat leaves with it, so adding another organisation now costs a new seat.
-- **Free up the seat now.** The organisation drops to Community straight away. After the free trial, you keep the seat you paid for, and the panel says, for example, "Paid slots free until renewal: 1. Moving an organisation into one costs nothing." Another organisation can move into that seat at no extra charge until the bill renews. During a free trial there is no paid seat to keep.
+- **Free up the seat now.** The organisation drops to Community straight away. Outside a free trial, you keep the seat you paid for, and the panel says, for example, "Paid slots free until renewal: 1. Moving an organisation into one costs nothing." Another organisation can move into that seat at no extra charge until the bill renews. During a free trial there is no paid seat to keep.
 
 One seat cannot do both. If the bill has an unpaid invoice, the organisation moves to Community straight away, whichever you choose.
 
