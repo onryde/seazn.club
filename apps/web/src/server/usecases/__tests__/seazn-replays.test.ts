@@ -1,0 +1,508 @@
+// Seazn-hosted video, Phase 2 Task 24: moving a Seazn match's recordings to the replay host — discovery
+// (`discoverSeaznRecordings`), the move (`moveSeaznRecordings`) and the flag gate (`runSeaznReplays`), on the fakes.
+//
+// Every session comes from the REAL producer (the organiser's Go live, the Machine's playing beat, Stop: _seazn-session-rig.ts);
+// the recordings are the Cloudflare fake's, under the programme input's own uid. The clock is the test's: every pass is handed
+// its `now`, and the times below are offsets from the session's own end. Each pass is scoped to the test's org (`orgIds`), so
+// another suite's rows in the shared database are never claimed here. The expected values are the rulings' literals, typed here:
+// 15 min after the result (G-A), 6 h for an undecided fixture (G-F), 60 min after verification for the Cloudflare delete (G-D),
+// 15 min between polls, 30 min for a lost fetch, min(2^attempts, 60) min of backoff.
+//
+// ONE SPORT, on purpose (TEST-STRATEGY rule 6): the move never reads a sport rule; every rig rides `generic`.
+import { randomUUID } from "node:crypto";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@/lib/sentry", () => ({ captureError: vi.fn() }));
+
+import { sql } from "@/lib/db";
+import { log } from "@/server/logger";
+import { FakeIngest } from "@/server/relay/fakes";
+import { FINALISATION_GRACE_SECONDS } from "@/server/relay/config";
+import { createPlaybackTokenCache } from "@/server/video/cf-playback";
+import { FAKE_REPLAY_LENGTH_SECONDS, FakeReplayHost } from "@/server/video/replay-fake";
+import { installSeaznEnv, live, seaznRig, stopAndSettle } from "@/server/video/__tests__/_seazn-session-rig";
+import { type SeaznReplayDeps, discoverSeaznRecordings, moveSeaznRecordings, runSeaznReplays } from "../seazn-replays";
+
+const HAS_DB = !!process.env.DATABASE_URL;
+const MIN = 60_000;
+const BUDGET = 8_000;
+
+installSeaznEnv("t24-replays");
+beforeEach(() => { vi.stubEnv("SEAZN_HOSTED_REPLAY", "true"); });
+
+async function world() {
+  const r = await seaznRig();
+  const ingest = r.deps.drivers.ingest as FakeIngest;
+  const host = new FakeReplayHost();
+  const deps: SeaznReplayDeps = { ingest, replay: host, tokenCache: createPlaybackTokenCache() };
+  return { ...r, ingest, host, replayDeps: deps };
+}
+type World = Awaited<ReturnType<typeof world>>;
+interface Rec { at?: number; duration?: number; height?: number; inProgress?: boolean }
+
+/** A session on `target` that recorded `recs` on its programme input and then ended. The recordings default to the replay fake's
+ *  own length and a 1080p source, so the copy passes the check unless a case says otherwise. */
+async function endedWith(w: World, fixtureId: string, recs: Rec[], target: string = w.seazn) {
+  const sid = await live(w, fixtureId, target);
+  const [prog] = await sql<{ id: string; uid: string }[]>`
+    select id, ingest_input_id as uid from fixture_stream_inputs where session_id = ${sid} and role = 'programme'`;
+  expect(prog?.uid, "PREMISE: the programme input has a uid").toBeTruthy();
+  const base = w.deps.now().getTime();
+  const ids = recs.map((rec, k) => {
+    const videoId = `v-${k}-${randomUUID()}`;
+    w.ingest.addVideo({ videoId, inputId: prog!.uid, createdAt: new Date(rec.at ?? base + k * MIN).toISOString(), inProgress: rec.inProgress ?? false,
+      durationSeconds: rec.duration ?? FAKE_REPLAY_LENGTH_SECONDS, height: rec.height ?? 1080 });
+    return videoId;
+  });
+  await stopAndSettle(w, fixtureId, sid);
+  const [{ ended_at }] = await sql<{ ended_at: Date }[]>`select ended_at from fixture_stream_sessions where id = ${sid}`;
+  return { sid, prog: prog!, ids, endedAt: new Date(ended_at).getTime() };
+}
+const decide = (fixtureId: string, at: number | null) => sql`update fixtures set finished_at = ${at === null ? null : new Date(at)} where id = ${fixtureId}`;
+const discover = (w: World, now: number) => discoverSeaznRecordings(w.replayDeps, { now: new Date(now), budgetMs: BUDGET, orgIds: [w.auth.orgId] });
+const move = (w: World, now: number) => moveSeaznRecordings(w.replayDeps, { now: new Date(now), budgetMs: BUDGET, orgIds: [w.auth.orgId] });
+interface Row {
+  cf_video_id: string; part_no: number; state: string; bunny_video_id: string | null; attempts: number; next_attempt_at: Date;
+  verified_at: Date | null; cf_deleted_at: Date | null; bunny_cleaned_at: Date | null; recorded_at: Date; session_id: string;
+  cf_duration_seconds: number | null; cf_height: number | null; length_seconds: number | null;
+}
+const rowsOf = (fixtureId: string) => sql<Row[]>`select * from fixture_video_replays where fixture_id = ${fixtureId} order by part_no`;
+const rowOf = async (cf: string) => (await sql<Row[]>`select * from fixture_video_replays where cf_video_id = ${cf}`)[0]!;
+const ms = (d: Date | null) => (d === null ? null : new Date(d).getTime());
+/** Spies on the calls the move makes; each is counted. */
+function spies(w: World) {
+  return {
+    list: vi.spyOn(w.ingest, "listInputVideos"),
+    del: vi.spyOn(w.ingest, "deleteVideo"),
+    fetch: vi.spyOn(w.host, "fetchFromUrl"),
+    poll: vi.spyOn(w.host, "video"),
+    collection: vi.spyOn(w.host, "createCollection"),
+  };
+}
+/** Discovered and moved to `encoding` (the fetch made): the rows of `fixtureId`, each holding its host copy. */
+async function toEncoding(w: World, fixtureId: string, recs: Rec[]) {
+  const s = await endedWith(w, fixtureId, recs);
+  await decide(fixtureId, s.endedAt);
+  const t0 = s.endedAt + 15 * MIN;
+  await discover(w, t0);
+  await move(w, t0);
+  const rows = await rowsOf(fixtureId);
+  expect(rows.map((r) => r.state), "PREMISE: every row reached encoding in one run").toEqual(recs.map(() => "encoding"));
+  return { ...s, t0, rows };
+}
+
+describe.skipIf(!HAS_DB)("Task 24 — discovery and the move, on the fakes", () => {
+  it("Review Focus 4: a stopped and restarted Seazn match (two sessions) yields two parts in recording order, moved to the host under the plan's title and a 6 h download URL; a second discovery lists nothing", async () => {
+    const w = await world();
+    const f = w.fixtureIds[0];
+    const first = await endedWith(w, f, [{}]);
+    const second = await endedWith(w, f, [{ at: first.endedAt + 2 * MIN }]);
+    await decide(f, second.endedAt);
+    const s = spies(w);
+    const t0 = second.endedAt + 15 * MIN;
+    expect(await discover(w, t0)).toMatchObject({ discovered: 2, refused: 0, failed: 0, deferred: 0 });
+    expect(s.list, "both programme inputs listed once").toHaveBeenCalledTimes(2);
+    const rows = await rowsOf(f);
+    expect(rows.map((r) => [r.part_no, r.cf_video_id, r.session_id, r.state])).toEqual([
+      [1, first.ids[0], first.sid, "found"], [2, second.ids[0], second.sid, "found"],
+    ]);
+    expect(ms(rows[0]!.recorded_at)! < ms(rows[1]!.recorded_at)!, "ordered by recorded_at").toBe(true);
+    expect(rows.map((r) => [r.cf_duration_seconds, r.cf_height]), "the listing's duration and height, stored").toEqual([[120, 1080], [120, 1080]]);
+    expect(await discover(w, t0 + MIN)).toMatchObject({ discovered: 0 });
+    expect(s.list, "replays_discovered_at set: never listed again").toHaveBeenCalledTimes(2);
+
+    expect(await move(w, t0)).toMatchObject({ moved: 6, playable: 0, failed: 0 });   // found→downloading→fetching→encoding, twice
+    const moved = await rowsOf(f);
+    expect(moved.map((r) => r.state)).toEqual(["encoding", "encoding"]);
+    expect(w.ingest.downloadCalls.sort(), "one download per recording").toEqual([first.ids[0], second.ids[0]].sort());
+    expect(s.collection, "one collection for the org").toHaveBeenCalledTimes(1);
+    for (const r of moved) {
+      const copy = await w.host.video(r.bunny_video_id!);
+      expect(copy.title).toBe(`seazn:${r.session_id}:${r.cf_video_id}`);
+      const url = new URL(w.host.sourceOf(r.bunny_video_id!)!);
+      expect(url.pathname, "Cloudflare's MP4 download, on a downloadable token for THIS recording").toMatch(new RegExp(`^/fake\\.${r.cf_video_id}\\.(\\d+)\\.dl/downloads/default\\.mp4$`));
+      const exp = Number(/\.(\d+)\.dl\//.exec(url.pathname)![1]) * 1000;
+      expect(exp - Math.floor(t0 / 1000) * 1000, "the token lives 6 h").toBe(6 * 3600 * 1000);
+    }
+  });
+
+  it("G-D: the Cloudflare copy is deleted only at verified_at + 60 min — none at 59, exactly one per recording at 60, each AFTER its row went playable; by the row's own id", async () => {
+    const w = await world();
+    const f = w.fixtureIds[0];
+    const e = await toEncoding(w, f, [{}]);
+    const cf = e.ids[0]!;
+    const events: string[] = [];
+    vi.spyOn(w.ingest, "deleteVideo").mockImplementation(async (id) => { events.push(`delete:${id}`); return "deleted"; });
+    w.host.advance(e.rows[0]!.bunny_video_id!);
+    const v = e.t0 + 15 * MIN;   // the poll backstop
+    expect(await move(w, v)).toMatchObject({ playable: 1, failed: 0 });
+    const playable = await rowOf(cf);
+    events.push(`state:${playable.state}`);
+    expect([playable.state, ms(playable.verified_at), playable.length_seconds]).toEqual(["playable", v, FAKE_REPLAY_LENGTH_SECONDS]);
+    expect(ms(playable.next_attempt_at), "due again at verified_at + 60 min").toBe(v + 60 * MIN);
+    await move(w, v + 59 * MIN);
+    expect(events.filter((x) => x.startsWith("delete:")), "59 min: no delete").toEqual([]);
+    expect((await rowOf(cf)).cf_deleted_at).toBeNull();
+    await move(w, v + 60 * MIN);
+    expect(events.filter((x) => x.startsWith("delete:")), "60 min: exactly one, of the stored id").toEqual([`delete:${cf}`]);
+    expect(events.indexOf(`delete:${cf}`)).toBeGreaterThan(events.indexOf("state:playable"));
+    expect(ms((await rowOf(cf)).cf_deleted_at)).toBe(v + 60 * MIN);
+    await move(w, v + 2 * 60 * MIN);
+    expect(events.filter((x) => x.startsWith("delete:")), "settled: never again").toHaveLength(1);
+  });
+
+  it("Review Focus 5: a copy the host fails is removed, the Cloudflare video is NEVER deleted, and attempts grow with the backoff (1 min, then 2 min)", async () => {
+    const w = await world();
+    const f = w.fixtureIds[0];
+    const e = await toEncoding(w, f, [{}]);
+    const s = spies(w);
+    const firstCopy = e.rows[0]!.bunny_video_id!;
+    w.host.fail(firstCopy);
+    const p1 = e.t0 + 15 * MIN;
+    expect(await move(w, p1)).toMatchObject({ failed: 1, playable: 0 });
+    let row = await rowOf(e.ids[0]!);
+    expect([row.state, row.bunny_video_id, row.attempts, ms(row.next_attempt_at)]).toEqual(["failed", null, 1, p1 + 1 * MIN]);
+    expect(w.host.videoIds(), "the failed copy is removed").not.toContain(firstCopy);
+    // The retry: from found, through a new copy, which fails too.
+    await move(w, p1 + 1 * MIN);
+    row = await rowOf(e.ids[0]!);
+    expect(row.state, "restarted from found and fetched again").toBe("encoding");
+    expect(row.bunny_video_id).not.toBe(firstCopy);
+    w.host.fail(row.bunny_video_id!);
+    const p2 = p1 + 1 * MIN + 15 * MIN;
+    await move(w, p2);
+    row = await rowOf(e.ids[0]!);
+    expect([row.state, row.attempts, ms(row.next_attempt_at)], "2^1 = 2 min").toEqual(["failed", 2, p2 + 2 * MIN]);
+    expect(s.del, "a failed copy is never followed by a Cloudflare delete").not.toHaveBeenCalled();
+    expect(w.host.videoIds(), "nothing left on the host").toEqual([]);
+  });
+
+  it("G-C in the usecase: a copy whose length is off by more than 2 s fails the check (Cloudflare kept, copy removed, failed with backoff, then restarts from found); a clean one is playable with verified_at = now", async () => {
+    const w = await world();
+    const f = w.fixtureIds[0];
+    // 3600 s on Cloudflare; the host's copy reads FAKE_REPLAY_LENGTH_SECONDS (120): a length failure. The other matches.
+    const e = await toEncoding(w, f, [{ duration: 3600 }, {}]);
+    const s = spies(w);
+    const [bad, good] = e.ids as [string, string];
+    for (const r of e.rows) w.host.advance(r.bunny_video_id!);
+    const v = e.t0 + 15 * MIN;
+    expect(await move(w, v)).toMatchObject({ playable: 1, failed: 1 });
+    const b = await rowOf(bad);
+    expect([b.state, b.bunny_video_id, b.attempts, ms(b.next_attempt_at)]).toEqual(["failed", null, 1, v + MIN]);
+    expect(w.host.videoIds(), "the failed copy is removed; the clean one stays").toEqual([(await rowOf(good)).bunny_video_id]);
+    const g = await rowOf(good);
+    expect([g.state, ms(g.verified_at)]).toEqual(["playable", v]);
+    await move(w, v + MIN);
+    expect((await rowOf(bad)).state, "restarted from found").toBe("encoding");
+    expect(s.del, "no Cloudflare delete for the failed copy").not.toHaveBeenCalledWith(bad);
+  });
+
+  it("C6 (Review Focus 11): the programme listing also answers another session's programme recording of the same org and one of an unknown input — no row for either, and no download, fetch or delete ever names them", async () => {
+    const w = await world();
+    const [f, other] = w.fixtureIds;
+    // The external session: a YouTube programme input of the same org, with its own recording.
+    const ext = await endedWith(w, other, [{}], w.pasted);
+    const unknownVideo = `v-unknown-${randomUUID()}`;
+    w.ingest.addVideo({ videoId: unknownVideo, inputId: `in-unknown-${randomUUID()}`, createdAt: new Date().toISOString(), inProgress: false, durationSeconds: 120, height: 1080 });
+    const own = await endedWith(w, f, [{}]);
+    w.ingest.seedInputListing(own.prog.uid, [ext.ids[0]!, unknownVideo]);
+    expect((await w.ingest.listInputVideos(own.prog.uid)).length, "PREMISE: the listing answers three").toBe(3);
+    const foreign = [ext.ids[0]!, unknownVideo];
+    await decide(f, own.endedAt);
+    await decide(other, own.endedAt);
+    const t0 = own.endedAt + 15 * MIN;
+    expect(await discover(w, t0), "anti-vacuity: both foreign recordings were seen and refused").toMatchObject({ discovered: 1, refused: 2 });
+    expect((await sql`select 1 from fixture_video_replays where cf_video_id in ${sql(foreign)}`).length).toBe(0);
+    const s = spies(w);
+    await move(w, t0);
+    const [row] = await rowsOf(f);
+    w.host.advance(row!.bunny_video_id!);
+    await move(w, t0 + 15 * MIN);
+    await move(w, t0 + 75 * MIN);
+    expect(s.del.mock.calls.map(([id]) => id), "only the programme's own recording is deleted").toEqual([own.ids[0]]);
+    const touched = [...w.ingest.downloadCalls, ...s.fetch.mock.calls.map(([a]) => a.url), ...s.del.mock.calls.map(([id]) => id)];
+    expect(touched.length, "anti-vacuity: calls were made").toBeGreaterThan(0);
+    for (const id of foreign) expect(touched.join(" "), id).not.toContain(id);
+  });
+
+  it("REPLAY off: zero discovery and zero move calls, even with a due row; on, the same row moves", async () => {
+    const w = await world();
+    const f = w.fixtureIds[0];
+    const s0 = await endedWith(w, f, [{}]);
+    await decide(f, s0.endedAt);
+    const t0 = s0.endedAt + 15 * MIN;
+    await discover(w, t0);   // a due row, made directly
+    const s = spies(w);
+    vi.stubEnv("SEAZN_HOSTED_REPLAY", "false");
+    const off = await runSeaznReplays(w.replayDeps, { now: new Date(t0), budgetMs: BUDGET, orgIds: [w.auth.orgId] });
+    expect(off).toEqual({ discovered: 0, moved: 0, playable: 0, refused: 0, failed: 0, deferred: 0 });
+    expect([s.list.mock.calls.length, w.ingest.downloadCalls.length, s.fetch.mock.calls.length]).toEqual([0, 0, 0]);
+    expect((await rowOf(s0.ids[0]!)).state).toBe("found");
+    vi.stubEnv("SEAZN_HOSTED_REPLAY", "true");
+    const on = await runSeaznReplays(w.replayDeps, { now: new Date(t0), budgetMs: BUDGET, orgIds: [w.auth.orgId] });
+    expect(on).toMatchObject({ moved: 3, failed: 0 });
+    expect(w.ingest.downloadCalls).toEqual([s0.ids[0]]);
+  });
+
+  it("overlap: a run blocked inside createDownload holds its claim — a second run makes no call for that row; exactly one createDownload in all", async () => {
+    const w = await world();
+    const f = w.fixtureIds[0];
+    const s0 = await endedWith(w, f, [{}]);
+    await decide(f, s0.endedAt);
+    const t0 = s0.endedAt + 15 * MIN;
+    await discover(w, t0);
+    let release!: () => void;
+    const gate = new Promise<void>((res) => { release = res; });
+    let entered!: () => void;
+    const inside = new Promise<void>((res) => { entered = res; });
+    const real = w.ingest.createDownload.bind(w.ingest);
+    let calls = 0;
+    w.ingest.createDownload = async (id: string) => { calls++; entered(); await gate; return real(id); };
+    const a = move(w, t0);
+    await inside;
+    const b = await move(w, t0);
+    expect(b, "run B found nothing to claim").toEqual({ discovered: 0, moved: 0, playable: 0, refused: 0, failed: 0, deferred: 0 });
+    expect(calls, "run B made no call").toBe(1);
+    release();
+    await a;
+    expect(calls).toBe(1);
+    expect((await rowOf(s0.ids[0]!)).state).toBe("encoding");
+  });
+
+  it("a Cloudflare delete answered in_progress leaves cf_deleted_at null; the next run deletes the stored id and sets it", async () => {
+    const w = await world();
+    const f = w.fixtureIds[0];
+    const e = await toEncoding(w, f, [{}]);
+    const cf = e.ids[0]!;
+    w.host.advance(e.rows[0]!.bunny_video_id!);
+    const v = e.t0 + 15 * MIN;
+    await move(w, v);
+    w.ingest.scriptDeleteVideo(cf, ["in_progress"]);
+    await move(w, v + 60 * MIN);
+    let row = await rowOf(cf);
+    expect([row.cf_deleted_at, ms(row.next_attempt_at)], "kept for the next firing").toEqual([null, v + 60 * MIN]);
+    await move(w, v + 61 * MIN);
+    row = await rowOf(cf);
+    expect(ms(row.cf_deleted_at)).toBe(v + 61 * MIN);
+    expect(w.ingest.deletedVideos).toEqual([cf]);
+  });
+
+  it("G-A (owner ruling 2026-11-21): decided 14 min ago — not listed; at 15 min — listed. A session still live is never listed", async () => {
+    const w = await world();
+    const [f, g] = w.fixtureIds;
+    const s0 = await endedWith(w, f, [{}]);
+    const decidedAt = s0.endedAt + 5 * MIN;
+    expect(decidedAt + 14 * MIN - s0.endedAt > FINALISATION_GRACE_SECONDS * 1000, "PREMISE: at 14 min the grace is long past — it is not what holds it").toBe(true);
+    await decide(f, decidedAt);
+    const stillLive = await live(w, g, w.seazn);
+    await decide(g, decidedAt - 60 * MIN);
+    const s = spies(w);
+    await discover(w, decidedAt + 14 * MIN);
+    expect(s.list, "14 min: not listed").toHaveBeenCalledTimes(0);
+    await discover(w, decidedAt + 15 * MIN);
+    expect(s.list.mock.calls.map(([uid]) => uid), "15 min: listed, the live one never").toEqual([s0.prog.uid]);
+    await discover(w, decidedAt + 24 * 60 * MIN);
+    expect(s.list, "still not the live session").toHaveBeenCalledTimes(1);
+    expect(stillLive).toBeTruthy();
+  });
+
+  it("G-F (recommendation 2026-11-21): undecided — not listed 5 h 59 min after its session ended, listed at 6 h; a fixture decided 14 min ago is not rescued by a session ended 7 h ago", async () => {
+    const w = await world();
+    const [f, g] = w.fixtureIds;
+    const undecided = await endedWith(w, f, [{}]);
+    await decide(f, null);
+    const s = spies(w);
+    await discover(w, undecided.endedAt + 5 * 60 * MIN + 59 * MIN);
+    expect(s.list, "5 h 59 min: not listed").toHaveBeenCalledTimes(0);
+    await discover(w, undecided.endedAt + 6 * 60 * MIN);
+    expect(s.list.mock.calls.map(([uid]) => uid)).toEqual([undecided.prog.uid]);
+    const decided = await endedWith(w, g, [{}]);
+    const now = decided.endedAt + 7 * 60 * MIN;
+    await sql`update fixture_stream_sessions set ended_at = ${new Date(now - 7 * 60 * MIN)} where id = ${decided.sid}`;
+    await decide(g, now - 14 * MIN);
+    s.list.mockClear();
+    await discover(w, now);
+    expect(s.list, "decided 14 min ago: the fallback does not rescue it").toHaveBeenCalledTimes(0);
+    await discover(w, now + MIN);
+    expect(s.list.mock.calls.map(([uid]) => uid), "and at 15 min it is listed").toEqual([decided.prog.uid]);
+  });
+
+  it("the host no longer holds the copy (`absent`): the row clears its copy id and goes back to found", async () => {
+    const w = await world();
+    const e = await toEncoding(w, w.fixtureIds[0], [{}]);
+    await w.host.remove(e.rows[0]!.bunny_video_id!);
+    await move(w, e.t0 + 15 * MIN);
+    const row = await rowOf(e.ids[0]!);
+    expect([row.state, row.bunny_video_id, ms(row.next_attempt_at)]).toEqual(["found", null, e.t0 + 15 * MIN]);
+  });
+
+  it("a fetch whose answer was lost leaves the row fetching with no copy: no second fetch at 29 min, back to downloading and fetched again at 31 min", async () => {
+    const w = await world();
+    const f = w.fixtureIds[0];
+    const s0 = await endedWith(w, f, [{}]);
+    await decide(f, s0.endedAt);
+    const t0 = s0.endedAt + 15 * MIN;
+    await discover(w, t0);
+    const fetch = vi.spyOn(w.host, "fetchFromUrl").mockRejectedValueOnce(new Error("socket hang up"));
+    expect(await move(w, t0)).toMatchObject({ failed: 1 });
+    let row = await rowOf(s0.ids[0]!);
+    expect([row.state, row.bunny_video_id, row.attempts]).toEqual(["fetching", null, 1]);
+    await move(w, t0 + 2 * MIN);
+    await move(w, t0 + 29 * MIN);
+    expect(fetch, "no blind second fetch inside the 30 min").toHaveBeenCalledTimes(1);
+    await move(w, t0 + 31 * MIN);
+    expect(fetch, "fetched again").toHaveBeenCalledTimes(2);
+    row = await rowOf(s0.ids[0]!);
+    expect(row.state).toBe("encoding");
+    expect(w.ingest.downloadCalls, "through downloading: the download asked again").toEqual([s0.ids[0], s0.ids[0]]);
+  });
+
+  it("another actor moves the row mid-step: the organiser deletes it while its fetch is in flight — the move never writes over `deleted`, and the copy that fetch made is removed", async () => {
+    const w = await world();
+    const f = w.fixtureIds[0];
+    const s0 = await endedWith(w, f, [{}]);
+    await decide(f, s0.endedAt);
+    const t0 = s0.endedAt + 15 * MIN;
+    await discover(w, t0);
+    const cf = s0.ids[0]!;
+    const real = w.host.fetchFromUrl.bind(w.host);
+    let made: string | null = null;
+    vi.spyOn(w.host, "fetchFromUrl").mockImplementationOnce(async (a) => {
+      await sql`update fixture_video_replays set state = 'deleted', deleted_reason = 'organiser', deleted_at = ${new Date(t0)}, next_attempt_at = ${new Date(t0)} where cf_video_id = ${cf}`;
+      made = await real(a);
+      return made;
+    });
+    await move(w, t0);
+    const row = await rowOf(cf);
+    expect(made, "PREMISE: the fetch made a copy").not.toBeNull();
+    expect([row.state, row.bunny_video_id], "the organiser's delete stands").toEqual(["deleted", null]);
+    expect(w.host.videoIds(), "nothing stays on the host for the deleted row").not.toContain(made);
+  });
+
+  it("poll backstop: a copy still processing is polled again only 15 min later", async () => {
+    const w = await world();
+    const e = await toEncoding(w, w.fixtureIds[0], [{}]);
+    const poll = vi.spyOn(w.host, "video");
+    await move(w, e.t0 + 14 * MIN);
+    expect(poll, "the first poll waits 15 min after the fetch").toHaveBeenCalledTimes(0);
+    await move(w, e.t0 + 15 * MIN);
+    expect(poll).toHaveBeenCalledTimes(1);
+    await move(w, e.t0 + 29 * MIN);
+    expect(poll, "14 min after a processing poll: none").toHaveBeenCalledTimes(1);
+    await move(w, e.t0 + 30 * MIN);
+    expect(poll).toHaveBeenCalledTimes(2);
+  });
+
+  it("an organiser-deleted row: cleanup removes its copy at once; the Cloudflare copy waits for verified_at + 60 min, then goes, and bunny_cleaned_at is set", async () => {
+    const w = await world();
+    const e = await toEncoding(w, w.fixtureIds[0], [{}]);
+    const cf = e.ids[0]!;
+    const guid = e.rows[0]!.bunny_video_id!;
+    w.host.advance(guid);
+    const v = e.t0 + 15 * MIN;
+    await move(w, v);
+    await sql`update fixture_video_replays set state = 'deleted', deleted_reason = 'organiser', deleted_at = ${new Date(v + 5 * MIN)}, next_attempt_at = ${new Date(v + 5 * MIN)} where cf_video_id = ${cf}`;
+    const del = vi.spyOn(w.ingest, "deleteVideo");
+    await move(w, v + 10 * MIN);
+    let row = await rowOf(cf);
+    expect(w.host.videoIds(), "the copy is removed at once").not.toContain(guid);
+    expect([row.bunny_video_id, row.bunny_cleaned_at, ms(row.next_attempt_at)]).toEqual([null, null, v + 60 * MIN]);
+    expect(del, "10 min after verification: the Cloudflare copy waits").not.toHaveBeenCalled();
+    await move(w, v + 60 * MIN);
+    row = await rowOf(cf);
+    expect(del.mock.calls.map(([id]) => id)).toEqual([cf]);
+    expect([ms(row.cf_deleted_at), ms(row.bunny_cleaned_at)]).toEqual([v + 60 * MIN, v + 60 * MIN]);
+  });
+
+  it("an organiser-deleted row that was never verified: its copy is removed and it is cleaned, and its Cloudflare copy is NEVER deleted from here", async () => {
+    const w = await world();
+    const e = await toEncoding(w, w.fixtureIds[0], [{}]);
+    const cf = e.ids[0]!;
+    await sql`update fixture_video_replays set state = 'deleted', deleted_reason = 'organiser', deleted_at = ${new Date(e.t0)} where cf_video_id = ${cf}`;
+    const del = vi.spyOn(w.ingest, "deleteVideo");
+    await move(w, e.t0 + 2 * 24 * 60 * MIN);
+    const row = await rowOf(cf);
+    expect(w.host.videoIds()).toEqual([]);
+    expect([row.bunny_cleaned_at === null, row.cf_deleted_at]).toEqual([false, null]);
+    expect(del).not.toHaveBeenCalled();
+  });
+
+  it("two rows of one new org make ONE createCollection call, and both copies land in it", async () => {
+    const w = await world();
+    const collection = vi.spyOn(w.host, "createCollection");
+    const e = await toEncoding(w, w.fixtureIds[0], [{}, {}]);
+    expect(collection).toHaveBeenCalledTimes(1);
+    const [a, b] = e.rows.map((r) => w.host.collectionOf(r.bunny_video_id!));
+    expect(a).toBe(b);
+    expect(w.host.collectionName(a!)).toBe(`org:${w.auth.orgId}`);
+    const [stored] = await sql<{ collection_id: string }[]>`select collection_id from org_video_collections where org_id = ${w.auth.orgId}`;
+    expect(stored?.collection_id).toBe(a);
+  });
+
+  it("G1: a YouTube session's recordings are never discovered", async () => {
+    const w = await world();
+    const f = w.fixtureIds[0];
+    const yt = await endedWith(w, f, [{}], w.pasted);
+    await decide(f, yt.endedAt);
+    const s = spies(w);
+    expect(await discover(w, yt.endedAt + 24 * 60 * MIN)).toMatchObject({ discovered: 0 });
+    expect(s.list).not.toHaveBeenCalled();
+    expect(await rowsOf(f)).toEqual([]);
+  });
+
+  it("an input whose recording is still in progress is not marked: listed again on the next firing, and its row is made once it finishes", async () => {
+    const w = await world();
+    const f = w.fixtureIds[0];
+    const s0 = await endedWith(w, f, [{}, { inProgress: true }]);
+    await decide(f, s0.endedAt);
+    const t0 = s0.endedAt + 15 * MIN;
+    expect(await discover(w, t0)).toMatchObject({ discovered: 1 });
+    w.ingest.updateVideo(s0.ids[1]!, { inProgress: false, state: "ready", durationSeconds: 120, height: 1080 });
+    expect(await discover(w, t0 + MIN)).toMatchObject({ discovered: 1 });
+    expect((await rowsOf(f)).map((r) => [r.part_no, r.cf_video_id])).toEqual([[1, s0.ids[0]], [2, s0.ids[1]]]);
+    expect(await discover(w, t0 + 2 * MIN)).toMatchObject({ discovered: 0 });
+  });
+
+  it("T23 carry: a recording whose listing has no creation time falls back to its session's start, warned by its id only", async () => {
+    const w = await world();
+    const f = w.fixtureIds[0];
+    const s0 = await endedWith(w, f, [{}]);
+    w.ingest.updateVideo(s0.ids[0]!, { createdAt: "not a date" });
+    await decide(f, s0.endedAt);
+    const warn = vi.spyOn(log, "warn");
+    try {
+      await discover(w, s0.endedAt + 15 * MIN);
+      const [{ created_at }] = await sql<{ created_at: Date }[]>`select created_at from fixture_stream_sessions where id = ${s0.sid}`;
+      expect(ms((await rowOf(s0.ids[0]!)).recorded_at)).toBe(ms(created_at));
+      const lines = warn.mock.calls.filter(([, m]) => typeof m === "string" && /no creation time/.test(m));
+      expect(lines.map(([o]) => o)).toEqual([{ sid: s0.sid, videoId: s0.ids[0] }]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("secrets: a fetch refused with the signed download URL in its message — the URL's token reaches no log line and no row", async () => {
+    vi.stubEnv("STREAM_PLAYBACK_HOST", "customer-t24test.cloudflarestream.com");
+    const w = await world();
+    const f = w.fixtureIds[0];
+    const s0 = await endedWith(w, f, [{}]);
+    await decide(f, s0.endedAt);
+    const t0 = s0.endedAt + 15 * MIN;
+    await discover(w, t0);
+    let sent = "";
+    vi.spyOn(w.host, "fetchFromUrl").mockImplementationOnce(async (a) => { sent = a.url; throw new Error(`could not fetch ${a.url}`); });
+    const logs = [vi.spyOn(log, "error"), vi.spyOn(log, "warn"), vi.spyOn(log, "info")];
+    try {
+      expect(await move(w, t0)).toMatchObject({ failed: 1 });
+      const token = new URL(sent).pathname.split("/")[1]!;
+      expect(token, "PREMISE: a token was sent").toMatch(/^fake\./);
+      const logged = JSON.stringify(logs.flatMap((l) => l.mock.calls));
+      expect(logged, "PREMISE: the failure was logged").toMatch(/\[token\]/);
+      expect(logged).not.toContain(token);
+      const [{ row }] = await sql<{ row: string }[]>`select to_jsonb(r)::text as row from fixture_video_replays r where cf_video_id = ${s0.ids[0]!}`;
+      expect(row).not.toContain(token);
+    } finally {
+      for (const l of logs) l.mockRestore();
+    }
+  });
+});

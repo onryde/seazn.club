@@ -59,6 +59,18 @@ vi.mock("@/server/usecases/seazn-recordings", async (importOriginal) => {
     }),
   };
 });
+// Seazn Task 24: the replay move rides the same pass, scoped the same way (with SEAZN_HOSTED_REPLAY on it would claim every other
+// suite's replay rows through this file's fakes).
+vi.mock("@/server/usecases/seazn-replays", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/server/usecases/seazn-replays")>();
+  return {
+    ...real,
+    runSeaznReplays: vi.fn(async (deps: Parameters<typeof real.runSeaznReplays>[0], opts: Parameters<typeof real.runSeaznReplays>[1]) => {
+      if (!pass.orgIds) throw new Error("test: no org scope set for the replay move — an unscoped move would claim every other suite's rows");
+      return real.runSeaznReplays(deps, { ...opts, orgIds: pass.orgIds });
+    }),
+  };
+});
 
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
@@ -270,7 +282,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T15 — POST /api/cron/stream-tick, dr
     // The answer's shape: the session counters beside the step's five and (Task 13) the Seazn pass's five.
     expect(Object.keys(first.body.data).sort()).toEqual(["deferred", "ended", "failed", "seazn", "ticked", "youtube"]);
     expect(Object.keys(first.body.data.youtube).sort()).toEqual(["deferred", "ended", "failed", "neverLive", "orphans"]);
-    expect(first.body.data.seazn, "this file's orgs hold no Seazn input: the real pass ran and found nothing").toEqual({ locked: 0, relocked: 0, refused: 0, failed: 0, deferred: 0 });
+    expect(first.body.data.seazn, "this file's orgs hold no Seazn input: the real pass ran and found nothing").toEqual({ locked: 0, relocked: 0, refused: 0, failed: 0, deferred: 0, discovered: 0, moved: 0, playable: 0 });
     expect(pass.seaznOpts.length, "the Seazn pass ran on the firing").toBe(1);
     expect(Object.keys(pass.seaznOpts[0] as object).sort(), "the route passes a clock reading and a budget, nothing else").toEqual(["budgetMs", "now"]);
     // The replay link, written by the step the route ran.
@@ -324,7 +336,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T15 — POST /api/cron/stream-tick, dr
     expect(askedAbout(w.yt, "complete", m.ytId)).toBe(1);
     expect(pass.routeOpts, "no session pass ran on a relay-disabled deployment").toEqual([]);
     expect(pass.seaznOpts, "nor a Seazn pass").toEqual([]);
-    expect(r.body.data.seazn).toEqual({ locked: 0, relocked: 0, refused: 0, failed: 0, deferred: 0 });
+    expect(r.body.data.seazn).toEqual({ locked: 0, relocked: 0, refused: 0, failed: 0, deferred: 0, discovered: 0, moved: 0, playable: 0 });
   });
 
   it("POST-T3 (O3): the tick EXPIRES a stuck API-backed session — the warming timeout, reached through the route — and the YouTube step, which ran first, leaves its broadcast to the NEXT firing", async () => {
