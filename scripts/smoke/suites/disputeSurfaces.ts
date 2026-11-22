@@ -20,7 +20,10 @@ export async function disputeSurfacesSuite() {
   const helpCards = await html(newSession(), "/help/registration/refunds-and-disputes");
   check(
     "p55: refunds-and-disputes help states the lost-dispute outcome",
-    helpCards.status === 200 && helpCards.body.includes("recovered from your Stripe balance"),
+    // Both: the lost-dispute bullet itself, and the Connect agreement's restatement of it.
+    helpCards.status === 200 &&
+      helpCards.body.includes("taken back from your Stripe balance") &&
+      helpCards.body.includes("recovered from your Stripe balance"),
   );
   // First connect without accepting the terms is refused before any Stripe
   // call — asserts the server-side gate, not just the disabled checkbox

@@ -502,12 +502,17 @@ export const APPROVED_ADD_ONS_INVENTORY: string[] = [
  * WHAT THIS ARTICLE ASSERTS, AND WHAT DECIDES IT (re-approved in Task 14b,
  * when the 3,300-word page was split by job; adding, removing and handing over
  * now live in add-an-organisation.md, remove-an-organisation.md and
- * hand-over-a-bill.md, which make NO half-rate claim and so are off the axis):
- *  - the extra-organisation rate, once ("What it costs") — `stripe-plans.json`'s
- *    graduated tiers via `riderClaimShape`; only "no more than half" is true in
- *    all twenty plan x interval x currency combinations. No price is typed: the
- *    page links /pricing and says the attach dialog shows the amount
- *    (`previewAttachCharge`, `billing-groups.ts:129`).
+ * hand-over-a-bill.md, which make NO half-rate claim and so are off the axis;
+ * each has its own inventory further down):
+ *  - the extra-organisation rate, once ("What it costs"), BOUNDED BY THE PLAN'S
+ *    LIMIT — `stripe-plans.json`'s graduated tiers via `riderClaimShape`; only
+ *    "no more than half" is true in all twenty plan x interval x currency
+ *    combinations. Past the limit an organisation on a bought extra place is
+ *    charged twice: a seat (every organisation is counted,
+ *    `billing-groups.ts:281-284`) plus the `org_addons` add-on. The first
+ *    re-approval in Task 14b froze the unbounded sentence; fix round 1 bounded
+ *    it. No price is typed: the page links /pricing and says the attach dialog
+ *    shows the amount (`previewAttachCharge`, `billing-groups.ts:129`).
  *  - the organisation caps and the fee ladder — `{{plan:…}}` tokens, read from
  *    plan_entitlements at render.
  *  - the fee lock — first-wins stamp in
@@ -518,23 +523,30 @@ export const APPROVED_ADD_ONS_INVENTORY: string[] = [
  *  - the every-organisation-suspended answer — `groupOrgLimit`
  *    (`lib/billing-group.ts:183-221`); its two claims are also pinned by
  *    `server/__tests__/help-groups-suspension.test.ts`.
- *  - the payer deleting their account — `app/api/users/me/route.ts:104-121`.
+ *  - the payer deleting their account — `app/api/users/me/route.ts:104-121`
+ *    moves `owner_user_id` only, so the departing payer's card stays on the
+ *    Stripe customer and keeps paying (contrast `finishHandover`,
+ *    `billing-groups.ts:1955-1970`).
  *  - the Event Pass credit — `pass-credit.ts:297-330` (most recent pass of the
- *    buying org, 30 days, once per group).
+ *    buying org, 30 days, PAID — no staff grant — and in the bill's currency,
+ *    once per group).
  *
- *    THE GATE PROVES DELIBERATE, NEVER TRUE. Every surface above was re-read
- *    against the file named beside it before these digests were taken.
+ *    THE GATE PROVES DELIBERATE, NEVER TRUE. The first Task 14b re-approval
+ *    claimed every surface had been re-read and still froze an unbounded rate
+ *    claim (review 14b-1, I1). Fix round 1 re-read each surface against the
+ *    file named beside it, the rate sentence against the seat count AND the
+ *    add-on, before these digests were taken.
  */
 export const APPROVED_GROUPS_INVENTORY: string[] = [
   "70406cfe0fe3385a",
   "9b34a88bcf6b26d7",
   "82ad58f71300bb0b",
-  "100fc02796b81b33",
-  "66adfe014ecc487d",
+  "79ff0430b6bd8934",
+  "b26eebdc70d60598",
   "5598a40b219f6f07",
   "960ffcbe3004ff7a",
-  "3bf48466197914f2",
-  "4614431269bdad76",
+  "64184ba94539f225",
+  "e20c1cd957d9d775",
   "32ab7fcccdf14c08",
   "9e428b3ee9865afa",
   "f78e9f343b9dc2e8",
@@ -544,22 +556,22 @@ export const APPROVED_GROUPS_INVENTORY: string[] = [
   "fb6784c7c8704d6b",
   "ad0fc64be53f1daf",
   "ddc8366bdf93737f",
-  "6b8ffd79cfadc635",
+  "c79b2af04f0b802c",
   "28aee6c7e00e1c33",
   "15317f9c60cde9f8",
   "f5599c0a037f5c56",
   "63a4368110cb3fad",
   "6870f62c36ba5d08",
-  "1f2344a2d5e86df6",
-  "c671cb1822c10f6c",
+  "4b35ab3a3bb36666",
+  "5443214e8391453a",
   "2b57b36732a3e9fb",
-  "9ad2895503dafd61",
+  "8ed00131d3fa9ba5",
   "09c784bdca897d29",
-  "b9d586c7d2527beb",
-  "6c9da5b6c3f7231a",
-  "bdc4e8f0561e135c",
+  "b58acc6ca8ca98b8",
+  "12ebb72943dc687d",
+  "b7650ee1d51c3add",
   "408f592f5e3fed13",
-  "50ae94f06b03dedc",
+  "cf9d1c2ac0db4086",
 ];
 
 /**
@@ -673,4 +685,135 @@ export const APPROVED_PASS_ENDS_INVENTORY: string[] = [
   "bf350a0418ba9078",
   "7f889bb823d1e024",
   "72950fee3ebe84f2",
+];
+
+/** Every user-visible surface of `content/help/billing/add-an-organisation.md`,
+ *  split out of groups.md in Task 14b (2026-11-22) and gated in its fix round 1:
+ *  the attach-cost copy is where review round 5 once found "adding ALWAYS
+ *  CHARGES IMMEDIATELY". Each claim, and the code that decides it:
+ *  - payer AND owner, an admin cannot move it — `billing-groups.ts:908-920`.
+ *  - the create-org picker, its reasons and Buy another slot —
+ *    `components/create-org-form.tsx:37-57`, `:236-254`; the button's amount
+ *    and "now" — `create-org-form.tsx:98-115`, `:533-545`.
+ *  - nothing charged to the card, prorated onto the next invoice —
+ *    `create_prorations` at `billing-groups.ts:336-339`.
+ *  - a freed seat is free until renewal; no freed seat mid-trial —
+ *    `billing-groups.ts:355-374` (`quantity_paid` frozen while trialing).
+ *  - a failed invoice moves every organisation to Community after 14 days —
+ *    `lib/entitlements.ts:268-272`, `billing-events/invoices.ts:34-36`.
+ *  - the refusals — `billing-groups.ts:929`, `:934`, `:956`.
+ *  - an extra-place organisation charged twice — the seat count at
+ *    `billing-groups.ts:281-284` plus `config/stripe-plans.json` org_addons.
+ *  - credits merge only from a bill it had to itself — `billing-groups.ts:1001-1017`.
+ *  - the last organisation off ends the subscription — `billing-groups.ts:1351-1363`. */
+export const APPROVED_ADD_ORG_INVENTORY: string[] = [
+  "cb8ef08a4b41fd66",
+  "7686eb11001f7a8d",
+  "c0b1fe41ed3c50ad",
+  "c826e9200341780c",
+  "713512e1ea76588d",
+  "96cd1d13411961b7",
+  "3d2b52bce25f7488",
+  "6d69b6c87832da24",
+  "6243e07be75433df",
+  "796d223bd4ee0917",
+  "8adca19202f689f6",
+  "c9c7788d5540fd61",
+  "960ffcbe3004ff7a",
+  "59157b7d594f3619",
+  "9551555abfe89fce",
+  "13d4c0e497c53bc0",
+  "a626b583c4b6451f",
+  "0fcb433221cee9a6",
+  "47a5285d7ace2641",
+  "ef5d5525587d3c99",
+  "fd44da19dd768735",
+  "acc9fdd555c812b9",
+  "00999a97621990f3",
+  "c4dee8005d8b8a5c",
+  "1a23aefaccc463ae",
+  "8e1d5830baa12adc",
+  "830498f5a1804791",
+];
+
+/** Every user-visible surface of `content/help/billing/remove-an-organisation.md`,
+ *  split out of groups.md in Task 14b and gated in its fix round 1. Each claim,
+ *  and the code that decides it:
+ *  - only the payer has a control — the panel mounts behind `isPayer`
+ *    (`o/[orgSlug]/settings/billing/page.tsx:371`).
+ *  - the two modes, and the past-due exception — `billing-groups.ts:1236-1262`.
+ *  - the last organisation off ends the subscription at once, refused if the
+ *    payer owns it — `billing-groups.ts:1351-1363`, `:774`, `:1224-1225`.
+ *  - no way back for someone else's organisation — `billing-groups.ts:908-920`.
+ *  - the trial record carries over — `billing-groups.ts:1259`, `lib/billing.ts:223-235`.
+ *  - credits stay with the bill — `billing-groups.ts:1312-1319`.
+ *  - who is emailed — `billing-groups.ts:2049-2082`. */
+export const APPROVED_REMOVE_ORG_INVENTORY: string[] = [
+  "c9c761eadb4f29fe",
+  "8a4962e1233e38e5",
+  "76513e733834f4df",
+  "447dafaa0242ddc6",
+  "6c5778377cf1304b",
+  "6595b2984fcdc8b4",
+  "751ccd110f7a2f95",
+  "dd1916b92b00b115",
+  "d58610ce9f1d3542",
+  "e0e759d1e6793cb5",
+  "51e88cc89c9554ac",
+  "9881f94b00e1cfd7",
+  "b919a62215a16a76",
+  "a2d81e97e856fd4b",
+  "adbba485715c4619",
+  "d4ff6e86d4ccfea2",
+  "0a84530b58beb457",
+  "9d680af0ccffd7cc",
+  "a657b2e0fa2a6bc4",
+  "fa89b35a411e0bce",
+  "88ffa5a89e539bc4",
+  "becaf1af0a9a149b",
+  "adf648474c4e80f3",
+  "8185c0f21fd26a46",
+  "963a54ec2c19cfd0",
+  "b981434fba36477b",
+  "8de45fd6f1123c92",
+];
+
+/** Every user-visible surface of `content/help/billing/hand-over-a-bill.md`,
+ *  split out of groups.md in Task 14b and gated in its fix round 1. Each claim,
+ *  and the code that decides it:
+ *  - who can receive it — `lib/billing-group-view.ts:162-175`; the
+ *    nobody-eligible line — `components/billing-group-panel.tsx:518-519`.
+ *  - the offer email, 7 days, one at a time, withdraw —
+ *    `billing-groups.ts:1536`, `:1396`, `:1467-1491`, `:1652`.
+ *  - the card swap — `billing-groups.ts:1955-1970`; only name and email move to
+ *    the new payer (`:1959-1962`), so the billing address and VAT number stay
+ *    and are shown to them (`o/[orgSlug]/settings/billing/page.tsx:501-505`;
+ *    taxed via `lib/billing.ts:217-218`).
+ *  - invoices by tenure — `usecases/billing-manage.ts:87-105`, `:299-303`, `:333-339`. */
+export const APPROVED_HANDOVER_INVENTORY: string[] = [
+  "5d7678031aedc5ff",
+  "e9958d0199ba281d",
+  "1536e2332bdde647",
+  "c1120b5d7bab5db1",
+  "db96ebe57a9a6821",
+  "49b0d36583d79741",
+  "db32c00dc0971cc9",
+  "8497be6ae06f83ce",
+  "b12df74b5302f19f",
+  "0ca33696e3a1c53a",
+  "e73b618d45a18711",
+  "bc292ccfa768fc8b",
+  "4113703f47f708d3",
+  "f9b0bbfe71ddcdea",
+  "f6e144366d2b4912",
+  "955920602ef9c34c",
+  "5a31bc0dd92a9d01",
+  "36068ba39750a7ff",
+  "bcb6bad591d05b21",
+  "5e64e15ec9d531ca",
+  "9ebad4974d73fb13",
+  "4843523b81761d8f",
+  "cf54553c624a1b60",
+  "8dd73e6da354fae1",
+  "417db1ee024e03d2",
 ];

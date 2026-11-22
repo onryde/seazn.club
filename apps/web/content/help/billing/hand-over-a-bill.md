@@ -11,7 +11,7 @@ When the person who pays changes, the whole bill can change hands. Every organis
 
 You can hand a bill only to someone who owns one of the organisations on it. Under **Settings → Plan & Billing**, **Hand this bill to someone else** lists those people by name, with the organisation they own.
 
-If the person is not there, the panel says "You can only hand this bill to someone who owns one of the organisations on it. To hand it to somebody else, invite them into one of these organisations and make them its owner first — that is separate from billing." See [inviting your team](/help/getting-started/invite-your-team).
+When nobody on the bill can take it, the panel says "You can only hand this bill to someone who owns one of the organisations on it. To hand it to somebody else, invite them into one of these organisations and make them its owner first — that is separate from billing." See [inviting your team](/help/getting-started/invite-your-team).
 
 ## Hand over a paid bill
 
@@ -39,12 +39,14 @@ Choose the person, type **CONFIRM** in the dialog and press **Offer the bill**. 
 Each payer sees only the invoices sent while they paid.
 
 - **The new payer sees the invoices from the handover on.** They never see yours.
-- **You keep yours.** On **Plan & Billing** of an organisation on the bill that you are a member of, **Your past invoices** lists them: "From when you paid for this group. Newer invoices belong to the current payer."
+- **If you are a member of an organisation on the bill, you keep yours.** On its **Plan & Billing** page, **Your past invoices** lists them: "From when you paid for this group. Newer invoices belong to the current payer." If you are not a member of any, no page in Seazn Club shows them to you.
 - **If the bill comes back to you later,** you see both of your own stretches, and still none of the invoices from whoever paid in between.
 
 ## What does not change
 
-The organisations keep their plan, their limits, their entry-fee rates and their payouts. Each one keeps its own Stripe account and bank details. Only the payer, the card and who sees which invoices move.
+The organisations keep their plan, their limits, their entry-fee rates and their payouts. Each one keeps its own Stripe account and bank details. The payer, the card and who sees which invoices move to the new payer.
+
+The billing address and VAT number on the bill do not change hands. They stay as the previous payer left them, and the new payer sees them under **Billing details**. Until they are changed, new invoices carry them. If you take over a bill, update them straight away under [cards, address and invoices](/help/billing/change-plan#cards-address-and-invoices).
 
 > **Example**
 > Alex Morgan has paid for a Pro bill for three clubs and is stepping down as treasurer. Sam Patel owns Meadow Cricket Club, one of the three. Alex offers the bill to Sam. Until Sam adds a card, Alex's card still pays. Sam opens **Plan & Billing**, takes over the bill and confirms a card. From then on Sam pays for all three clubs, and Alex's own **Plan & Billing** page says the clubs are covered by Sam Patel's subscription.

@@ -43,4 +43,4 @@ You can purge an archived division permanently. **Purge…** unlocks after a 30-
 
 Registration must be closed before you delete, as it must before you archive.
 
-Delete is also refused while card payments for entries in the division are not fully refunded. The message says to refund them first, or to archive the division instead. Archive stays available when delete is refused for this reason. Refunds are covered in [card entry fees](/help/registration/card-payments).
+Delete is also refused while card payments for entries in the division are not fully refunded. The message says to refund them first, or to archive the division instead. Archive stays available when delete is refused for this reason. Refunds are covered in [refunds and disputes](/help/registration/refunds-and-disputes#refunds).

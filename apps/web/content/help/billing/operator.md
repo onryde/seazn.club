@@ -21,7 +21,7 @@ It shows:
 ## Set a monthly cap
 
 1. On the organisation's row, press **Edit** beside its cap.
-2. In **Allocate — {org}**, choose **Unlimited share of the pool**, or **Limit to** and type a whole number of credits.
+2. In the dialog headed **Allocate —** and the organisation's name, choose **Unlimited share of the pool**, or **Limit to** and type a whole number of credits.
 3. Press **Save**.
 
 ![The Allocate dialog for Lakeside Tennis League, with Limit to chosen](/help/billing/operator-cap.webp "Setting a monthly cap of 4 credits for one organisation, with what it has used this period")
@@ -30,7 +30,7 @@ The editor shows **Used this period**, what the organisation has spent so far th
 
 An organisation with no cap spends freely from the pool. That is how every organisation starts. An organisation with a cap can spend up to that many credits in a month. Once a run would take it over the cap, it cannot start that run until the month resets or you raise the cap, even when the pool still has credits. A run that fails and gives its credits back does not count toward the cap.
 
-The month runs from the first day of each calendar month. The cap limits what one organisation spends; it does not take credits out of the pool or set any aside.
+The month runs from the first day of each calendar month, counted in UTC. The cap limits what one organisation spends; it does not take credits out of the pool or set any aside.
 
 ## Top up the pool
 

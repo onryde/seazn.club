@@ -103,6 +103,9 @@ import {
   APPROVED_PLANS_INVENTORY,
   APPROVED_ADD_ONS_INVENTORY,
   APPROVED_GROUPS_INVENTORY,
+  APPROVED_ADD_ORG_INVENTORY,
+  APPROVED_REMOVE_ORG_INVENTORY,
+  APPROVED_HANDOVER_INVENTORY,
   APPROVED_CREATE_ORG_INVENTORY,
 } from "./_approved-copy";
 
@@ -214,6 +217,23 @@ describe("billing help articles say what the resolver enforces", () => {
     expect(
       inventoryFaults("plans.md", plans, APPROVED_PLANS_INVENTORY),
     ).toEqual([]);
+  });
+
+  // Task 14b fix round 1: the three pages split out of groups.md carry its
+  // attach, detach and handover money copy, so each is pinned word for word
+  // like the pass split above. NOT in GATED_ARTICLES: that set is the half-rate
+  // axis, and none of these pages makes the half-rate claim.
+  it("the bill pages split out of groups.md are the copy that was approved", () => {
+    const pages = [
+      ["add-an-organisation.md", helpArticle("add-an-organisation"), APPROVED_ADD_ORG_INVENTORY],
+      ["remove-an-organisation.md", helpArticle("remove-an-organisation"), APPROVED_REMOVE_ORG_INVENTORY],
+      ["hand-over-a-bill.md", helpArticle("hand-over-a-bill"), APPROVED_HANDOVER_INVENTORY],
+    ] as const;
+    for (const [label, text, approved] of pages) {
+      expect(approved.length, `${label}: an inventory this short gates nothing`).toBeGreaterThan(8);
+      expect(inventoryFaults(label, text, [...approved])).toEqual([]);
+    }
+    expect(pages.length).toBe(3);
   });
 
   it("the approved paragraphs still say exactly what was approved", () => {
