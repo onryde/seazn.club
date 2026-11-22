@@ -32,7 +32,7 @@ Open **Settings** and choose **Plan & Billing**.
 
 A competition stops counting as active once you mark it completed or archive it. A competition covered by an [Event Pass](/help/billing/event-pass) does not count either, while the pass applies.
 
-When you reach a limit, the thing that would go over it is refused. Nothing you already have is removed.
+When you reach a limit, adding one more is refused. Public dashboards are the exception: a competition you create as public past that limit is created private instead. Nothing you already have is removed.
 
 ## Community, the free plan
 
@@ -58,7 +58,7 @@ Pro lifts every competition in your organisation to {{plan:divisions.per_competi
 - automatic officials assignment, automatic suspension tracking and auto-drafted result posts
 - career stats across competitions, embeds and read-only API keys
 
-Pro starts with a 14-day free trial. See [start, switch or cancel Pro](/help/billing/change-plan).
+An organisation that has not had a trial starts Pro with a 14-day free trial. See [start, switch or cancel Pro](/help/billing/change-plan).
 
 ## Enterprise for federations and platforms
 
@@ -82,4 +82,4 @@ Taking entry fees is free on every plan. What your plan changes is the fee we ke
 The Event Pass row is for the competition a pass covers. Stripe's own card processing fee is separate. Once a competition takes its first paid entry, its rate is locked for that competition. See [the entry-fee rate locks when sales start](/help/billing/groups#the-entry-fee-rate-locks-when-sales-start) and [how card entry fees flow](/help/registration/card-payments).
 
 > **Example**
-> Riverside Racquets is on Community and runs Autumn Open and Club Championship. **Usage** shows **Active competitions 2 / {{plan:competitions.max_active:community}}**. They buy an Event Pass for Autumn Open, and the count drops to 1, because a competition with a pass does not count. They can now create two more competitions. Creating one more after that is refused until they finish or archive one.
+> Riverside Racquets is on Community and runs Autumn Open and Club Championship. **Usage** shows **Active competitions 2 / {{plan:competitions.max_active:community}}**. They buy an Event Pass for Autumn Open, and the count drops to 1, because a competition with a pass does not count. They can now create more competitions until **Usage** is back at the limit. Creating one more after that is refused until they finish or archive one.

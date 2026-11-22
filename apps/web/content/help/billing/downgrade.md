@@ -7,11 +7,11 @@ related: billing/change-plan, billing/plans, billing/event-pass-ends, billing/gr
 
 Your organisation moves to Community when you cancel Pro and the period ends, when you choose **Downgrade to Community**, when a trial ends without a card, or when a failed payment stays unpaid for 14 days. See [start, switch or cancel Pro](/help/billing/change-plan).
 
-Nothing is deleted. What is over a Community limit becomes **read-only** until you make room.
+Nothing is deleted. Two limits can make things **read-only** until you make room: active competitions and team members. Over any other limit, what you have keeps working, and you cannot add more until you are back under it.
 
 ## Competitions over the limit
 
-Community allows {{plan:competitions.max_active:community}} active competitions. If you have more, the ones used least recently become read-only, and their card in your competition list shows **Read-only**. The ones used most recently stay fully editable. A competition's most recent score decides how recently it was used, or the day it was created if nothing has been scored yet.
+Community allows {{plan:competitions.max_active:community}} active competitions. If you have more, the ones used least recently become read-only, and their card in your competition list shows **Read-only**. The ones used most recently stay fully editable. How recently a competition was used is the later of its most recent score and the day it was created.
 
 ![A competition card in the list with the Read-only chip beside the sport, its progress bar at 0 of 6 played, the next match and the line 1 division, 4 entrants.](/help/billing/downgrade-readonly.webp "A frozen competition still shows its progress and next match.")
 
@@ -25,11 +25,17 @@ In a read-only competition:
 
 A competition with an Event Pass is not counted, so it is never frozen while its pass applies.
 
+## Divisions, entrants and public pages
+
+These do not freeze. A competition with more divisions or entrants than Community allows keeps them all, and you can still edit them. You cannot add a division or an entrant past Community's limit.
+
+Public competitions stay public. While you are at the public-dashboard limit, a new competition you create as public is created private.
+
 ## Team members over the limit
 
 Community allows {{plan:members.max:community}} team members. If you have more, the members who joined earliest are frozen first, until the rest fit inside the limit. Owners are never frozen.
 
-The freeze applies to admins. A frozen admin can still see everything, but their changes are refused. Nothing on screen marks them in advance. They find out when they try to save, and they are blocked across most of the app: the schedule board, entrants, officials and settings among them. API keys are not affected.
+The freeze applies to admins. A frozen admin can still see everything, but their changes are refused. Nothing on screen marks them in advance. They find out when they try to save, and they are blocked across most of the app: the schedule board, entrants, officials and settings among them. The freeze is separate from API keys, which stop working on Community anyway.
 
 An invitation that would take you past the limit is refused.
 
@@ -47,4 +53,4 @@ Card entry fees keep working on Community. Your Stripe connection stays linked a
 - **Go back to Pro**, and everything is editable again.
 
 > **Example**
-> Harbour Hockey Club has four competitions running when it moves from Pro to Community: Autumn Open, Winter Cup, Spring Ladder and Summer Slam. Only Autumn Open has a match scored. With no scores to compare, the competition created earliest among the other three counts as the least recently used, so Winter Cup becomes **Read-only**. Adding an entrant to Winter Cup is refused. Scoring its match still works, and Winter Cup stays read-only after that. Then the club archives Spring Ladder, and Winter Cup is editable again.
+> Harbour Hockey Club has four competitions running when it moves from Pro to Community: Autumn Open, Winter Cup, Spring Ladder and Summer Slam. Autumn Open had a match scored yesterday. The other three have never been scored, so each one counts from the day it was created. Winter Cup was created first, so it is the least recently used and becomes **Read-only**. Adding an entrant to Winter Cup is refused. Scoring its match still works, and Winter Cup stays read-only after that. Then the club archives Spring Ladder, and Winter Cup is editable again.

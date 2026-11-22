@@ -189,8 +189,14 @@ export const APPROVED_PLANS_PASS: ApprovedParagraph[] = [
 /*
  * RE-PINNED 2026-11-22 (help programme, Task 14a — the billing rewrite). Every
  * surface of event-pass.md, plans.md and add-ons.md was rewritten in the house
- * voice and proven against the product on the helpview environment; see the
- * Task 14a claim sheet (BL rows) for each sentence's setup. Plan
+ * voice and checked sentence by sentence: driven on the helpview environment
+ * where a screen could be reached, code-read (file and line on the Task 14a
+ * claim sheet, BL rows) where it could not — every checkout, invoice and
+ * proration claim is code-read, because no Stripe sandbox was reachable. A
+ * digest proves the wording was CHOSEN, not that it is true: review 1 found
+ * three approved paragraphs false (API refusal text quoted as screen copy, a
+ * finished competition said to stay finished, the extra organisation priced
+ * without its seat), all corrected and re-pinned in fix round 1. Plan
  * figures are now `{{plan:<feature>:<plan>}}` tokens, resolved from
  * plan_entitlements at render, so no digest here pins a number.
  *
@@ -245,7 +251,7 @@ export const APPROVED_EVENT_PASS_INVENTORY: string[] = [
   "2c71ecc7e7b6fd93",
   "a0aa3d50e6ac79e4",
   "bf30ae9cd2bdbde8",
-  "18ed43a7b1380bc3",
+  "79fe07dbdd2047af",
   "5ca9255bef66b31f",
   "2cbb33072d1f7a5b",
   "5c8fc0ddc9ef6839",
@@ -289,7 +295,7 @@ export const APPROVED_PLANS_INVENTORY: string[] = [
   "b367086d899ca871",
   "bf503dea252a6126",
   "ef60e59e66b125f2",
-  "dd1d3e97da7af8bb",
+  "b3d6a35eb89bf4aa",
   "8d492ed84863d364",
   "f5efc5625de91596",
   "a07947b88760f99c",
@@ -305,7 +311,7 @@ export const APPROVED_PLANS_INVENTORY: string[] = [
   "fb9eba15c72d7d99",
   "27d809e44bcd0c50",
   "de40e564e0c514b0",
-  "8f14ef3babe4a1f7",
+  "85507f8c30071ee8",
   "1335362aa1c1d4ae",
   "fcfdfee6d9ddaac2",
   "64292216a6fb9bd2",
@@ -319,7 +325,7 @@ export const APPROVED_PLANS_INVENTORY: string[] = [
   "050378df2e0b9f83",
   "fb6784c7c8704d6b",
   "e099a23869b52e2c",
-  "96ee30fe171444aa",
+  "bf4cd5d95fc08c3d",
 ];
 
 /**
@@ -455,7 +461,10 @@ export const APPROVED_ADD_ONS_INVENTORY: string[] = [
   "ba8d5bf6b0572fb2",
   "e614b13437ed5dc8",
   "bb63ca797ef10b05",
-  "c0e884eff815c57b",
+  "28f12b2b834df2df",
+  "d605cb02846fae86",
+  "645896687d211be4",
+  "bd670d22e1287fc6",
   "50f9b1680c2878b4",
   "10c158b6c7afaa0a",
   "8f551ce862d16274",
@@ -473,7 +482,7 @@ export const APPROVED_ADD_ONS_INVENTORY: string[] = [
   "16ff7beb0cc8f08f",
   "fc28ee19aff958ad",
   "b121e1d12d78af05",
-  "cada7e2bee4e4ad7",
+  "62b8b329eb1d0fb5",
 ];
 
 /**
@@ -671,10 +680,11 @@ export const APPROVED_BUY_PASS_INVENTORY: string[] = [
   "d6bb793bdd9153a7",
   "676b8f60a1cf656c",
   "99472764b41be9b0",
-  "39c80db6883c8a0a",
-  "d2e23030f765a8d4",
-  "e3984229ca58ed35",
+  "ddb02a507c342d14",
+  "141f98762fb2f282",
+  "9b6c68dd4b483249",
   "a75386d8147ad724",
+  "83a8e47b6c695587",
   "95247b4cc6e5b740",
   "93743129913b6a1d",
   "a283bab1ba1b5a75",
@@ -682,7 +692,7 @@ export const APPROVED_BUY_PASS_INVENTORY: string[] = [
   "b732633a6a2698b6",
   "dc372937dae68303",
   "18eeab7c0d735ce0",
-  "54436e8e5eef7bc2",
+  "f1431f56abbc20c2",
   "487e95de5aeef702",
   "73a088018b4b2fc5",
 ];
@@ -705,7 +715,7 @@ export const APPROVED_PASS_ENDS_INVENTORY: string[] = [
   "7282a075449b6ef1",
   "d6bba59d1dfa2139",
   "c1c461919a1ffc35",
-  "2f6df0986c1d098c",
+  "84d194ba50ecd90e",
   "de0809717f04dae5",
   "abb5cd5edd3443f2",
   "ca66f34c629d7358",
@@ -715,7 +725,8 @@ export const APPROVED_PASS_ENDS_INVENTORY: string[] = [
   "e31f9a2f6ea1ce2b",
   "67e0474fba7fabcb",
   "d8bcc184595b57d8",
-  "b6fa64f6a24dea4a",
+  "378fc7163d1779f2",
+  "c6170f9ab947f596",
   "bf350a0418ba9078",
   "7f889bb823d1e024",
   "72950fee3ebe84f2",

@@ -10,22 +10,22 @@ Everything here happens on **Settings → Plan & Billing**, and only the person 
 ## Start the free trial
 
 1. On **Plan & Billing**, find **Upgrade to Pro**. It shows while your organisation is on Community, or after a paid plan has lapsed.
-2. Choose **Start free trial** for yearly billing, or the monthly button beside it. Both buttons show the price.
+2. Choose **Start free trial** for yearly billing, or the monthly button beside it. Both buttons show the price. If your organisation has used its trial, the button reads **Go Pro** instead.
 3. Complete the checkout.
 
 The trial lasts 14 days. Each organisation gets one trial. If your organisation has had one before, the line under the plans reads **Billed from day one — your free trial has already been used · cancel anytime**.
 
 No card is needed to start, with one exception: if your organisation holds an Event Pass, the checkout asks for a card.
 
-While the trial runs, **Current plan** shows **Pro**, the days left, for example **10 days remaining in trial**, and **Add a card to keep Pro →**. If the trial ends with no card on file, your organisation moves to Community. Nothing is deleted. See [downgrading to Community](/help/billing/downgrade).
+While the trial runs, **Current plan** shows **Pro** and the days left, for example **10 days remaining in trial**. With no card on file it also shows **Add a card to keep Pro →**. With a card on file it says **Card on file — Pro continues after the trial.** If the trial ends with no card on file, your organisation moves to Community. Nothing is deleted. See [downgrading to Community](/help/billing/downgrade).
 
-If you bought an Event Pass in the 30 days before you subscribe, it comes off your first Pro invoice. This happens once per billing group, the first time the group subscribes.
+If your most recent Event Pass was bought in the 30 days before you subscribe, it comes off your Pro invoice. This happens once per billing group.
 
 ## Switch between monthly and yearly
 
 When you pay by card for Pro, **Plan & Billing** offers **Switch to yearly billing** or **Switch to monthly billing**.
 
-1. Choose the switch. A breakdown appears before anything changes: **New billing period**, **Credit for unused time**, **Subtotal**, **Tax**, and either **Charged today** or **Credit to your balance**.
+1. Choose the switch. A breakdown appears before anything changes. It shows **New billing period** and either **Charged today** or **Credit to your balance**, and can include **Credit for unused time**, **Subtotal** and **Tax**.
 2. Choose **Confirm switch**, or **Keep current billing** to leave it.
 
 The switch takes effect straight away, and the unused part of your current period is credited. If the credit is bigger than the new charge, the breakdown says **No charge today — this credit pays your future invoices.** During the trial, it says there is no charge today and gives the date of your first charge.
@@ -35,7 +35,7 @@ The switch does not show while a cancellation is pending or a payment is past du
 ## Cancel Pro
 
 1. On **Plan & Billing**, choose **Cancel subscription**.
-2. The dialog **Cancel your Pro subscription?** names the date Pro stays active until. You can pick a reason from **What made you cancel?**. It is optional.
+2. The dialog **Cancel your Pro subscription?** names the date Pro stays active until. You can pick a reason under **What made you cancel? (optional)**.
 3. Choose **Cancel at period end**.
 
 ![The cancel dialog: Cancel your Pro subscription?, a line saying Pro stays active until 12 Dec 2026 and that nothing is deleted, an optional reason list, and the Cancel at period end and Cancel buttons.](/help/billing/cancel-dialog.webp "Cancelling keeps Pro until the end of the period you paid for.")

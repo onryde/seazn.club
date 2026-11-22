@@ -23,11 +23,13 @@ When the payment goes through, the competition's overview shows **Event Pass act
 - Prices are in your billing currency. Your first purchase of any kind, a pass or a subscription, sets that currency for later purchases.
 - If the same pass is paid for twice, for example by two people at once, the second payment is refunded automatically.
 
-## When it is refused
+## When there is no Buy button
 
-- **The competition already has a pass.** You see **This competition already has an Event Pass on file. Passes are one-time and can't be bought again for the same competition.**
-- **Your plan already covers it.** On Pro, the checkout is refused with **Your plan already includes everything this Event Pass adds.**
+- **The competition already has a pass.** The upgrade page shows **Event Pass active** instead. A competition holds one pass.
+- **Your plan already covers it.** On Pro and Enterprise, the upgrade page says **Your plan already includes every Event Pass feature, on every competition in** your organisation's name **— not just this one.**
 - **The competition is closed to passes.** See below.
+
+If something changed after the page loaded, for example someone else bought the pass a moment ago, choosing **Buy the pass** shows **This purchase can’t go ahead — the page may be out of date. Reload and try again.**
 
 ## When a competition closes to passes
 
@@ -42,7 +44,7 @@ If the end date has passed but the event is still being played, the upgrade page
 
 ## Starting Pro after a pass
 
-If you start Pro within 30 days of buying a pass, the pass comes off your first Pro invoice. This happens once per billing group, the first time it subscribes.
+If you start Pro within 30 days of buying your most recent pass, the pass comes off your Pro invoice. This happens once per billing group.
 
 A competition with a pass cannot be deleted, because the pass is a payment record. Archive it instead. Nothing is lost.
 

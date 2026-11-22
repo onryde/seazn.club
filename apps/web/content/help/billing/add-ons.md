@@ -19,7 +19,12 @@ To buy:
 
 ![The Add-ons page on a Pro bill: the intro line, the count of organisations on the bill against its limit, and the Extra organisations card with its explanation, the minus and plus buttons around a count of 0, and the price for each per month.](/help/billing/add-ons.webp "The Add-ons page as the payer of a Pro bill sees it.")
 
-Extra organisations are charged every month, even when your plan is billed yearly. So on a monthly bill it matches that half rate exactly, and on an annual bill it does not: on a yearly bill, an extra organisation costs at least a sixth more over a year than a place inside the plan's limit. If you are on a yearly bill and expect to stay over the limit, compare it with moving up a plan.
+An organisation that joins through an extra place is charged twice:
+
+- **As an organisation on the bill.** Like every organisation after the first, it is charged at the plan's rate for each extra organisation, on your bill's own monthly or yearly cycle.
+- **For the extra place.** The price beside the control, charged every month, even when your plan is billed yearly.
+
+So an organisation past the plan's limit costs more than one inside it.
 
 - **Adding** one: you pay the difference for the rest of this billing period, **added to your next invoice** rather than charged on the spot.
 - **Removing** one: it takes effect now, and there is no refund for the rest of the period.
@@ -50,4 +55,4 @@ Packs are one-time purchases and never expire.
 There is no add-on for more team members, or for more entrants or divisions in one competition. For one competition, an [Event Pass](/help/billing/event-pass) raises its divisions and entrants. For every competition, see [plans](/help/billing/plans).
 
 > **Example**
-> Riverside Racquets is on Pro, and its bill is full: it holds {{plan:orgs.max_owned:pro}} organisations, the club and its junior sections. The club starts one more section. The payer opens **Add-ons**, uses **+** to set **Extra organisations** to 1 and chooses **Save**. The new section can now join the bill. The extra organisation is charged every month from now on, and the payer also pays the difference for the days left in this billing period.
+> Riverside Racquets is on Pro, and its bill is full: it holds {{plan:orgs.max_owned:pro}} organisations, the club and its junior sections. The club starts one more section. The payer opens **Add-ons**, uses **+** to set **Extra organisations** to 1 and chooses **Save**. The new section can now join the bill. It is charged like the other organisations on the bill, and the extra place is charged every month on top. For the days left in this billing period, the payer pays the difference on the next invoice.

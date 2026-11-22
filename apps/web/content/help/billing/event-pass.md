@@ -55,7 +55,7 @@ On Community, the pass is offered:
 
 Once a competition holds a pass, its overview shows **Event Pass active**, and the pass is listed on **Plan & Billing** under **Event Pass purchases**.
 
-On Pro and Enterprise, the pass is not offered. The upgrade page says **Your plan already includes every Event Pass feature, on every competition in** your organisation.
+On Pro and Enterprise, the pass is not offered. The upgrade page says **Your plan already includes every Event Pass feature, on every competition in** your organisation's name **— not just this one.**
 
 ## One pass, one competition
 

@@ -21,7 +21,7 @@ The competition's overview and its upgrade page show **Event Pass ended**, with 
 
 On **Plan & Billing**, the pass stays under **Event Pass purchases**, marked **Event Pass ended**, with its invoice.
 
-The overview offers **Create the next edition** and **Go Pro — 14-day free trial**.
+The overview offers **Create the next edition** and **Go Pro — 14-day free trial**. If your organisation has used its trial, the second button reads **Go Pro**.
 
 ![The upgrade page of a finished competition: the Event Pass ended heading with the line saying nothing is deleted and the competition is finished or archived, and the pass panel marked Event Pass ended.](/help/billing/pass-ended.webp "A pass on a competition that has been marked completed.")
 
@@ -37,7 +37,8 @@ The overview offers **Create the next edition** and **Go Pro — 14-day free tri
 The reason is read from the competition each time, so correcting it brings the pass back:
 
 - If the end date has passed but the event is still being played, move the end date forward. The overview's notice **This competition's end date has passed** has a **Change the end date** button. The pass applies again.
-- A finished competition stays finished. For the next one, choose **Create the next edition**. A new competition needs its own pass.
+- Marked it completed or archived by mistake? Open the competition's settings, set **Status** back to **live** and choose **Save changes**. The pass applies again.
+- For a truly finished event, choose **Create the next edition** for the next one. A new competition needs its own pass.
 
 ## When a pass is refunded
 

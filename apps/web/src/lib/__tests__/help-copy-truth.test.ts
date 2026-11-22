@@ -40,7 +40,6 @@ import {
   LOCALE_CLAIMS,
   localeHalfClaimFaults,
   riderClaimShape,
-  SEED_CURRENCIES,
   type LocalisedValue,
   unapprovedClaimFaults,
   lockedRateConstantFaults,
@@ -977,11 +976,16 @@ describe.skipIf(!HAS_DB)("billing help articles quote the numbers the matrix enf
         header = cells;
         continue;
       }
-      const feature = ROW_FEATURES.find(([re]) => re.test(cells[0] ?? ""))?.[1];
-      if (!feature) continue;
+      // Two shapes (review m12): a FEATURE per row with a PLAN per column
+      // (plans.md's limits, event-pass.md's comparison), or a PLAN per row with
+      // a FEATURE per column (credits.md, match-credits.md, the fee ladder).
+      const rowFeature = ROW_FEATURES.find(([re]) => re.test(cells[0] ?? ""))?.[1];
+      const rowPlan = PLAN_KEY_BY_LABEL[cells[0] ?? ""];
+      if (!rowFeature && !rowPlan) continue;
       for (let col = 1; col < cells.length; col++) {
-        const planKey = PLAN_KEY_BY_LABEL[header[col] ?? ""];
-        if (!planKey) continue;
+        const feature = rowFeature ?? ROW_FEATURES.find(([re]) => re.test(header![col] ?? ""))?.[1];
+        const planKey = rowFeature ? PLAN_KEY_BY_LABEL[header[col] ?? ""] : rowPlan;
+        if (!feature || !planKey) continue;
         const cell = cells[col]!;
         const where = `${label}: "${cells[0]}" / ${header[col]}`;
         compared.push(where);
@@ -990,7 +994,9 @@ describe.skipIf(!HAS_DB)("billing help articles quote the numbers the matrix enf
           if (!/^no limit$/i.test(cell)) faults.push(`${where} says "${cell}", but ${feature} is unlimited on ${planKey}`);
           continue;
         }
-        const token = /^\{\{plan:([\w.]+):(\w+)\}\}%?$/.exec(cell);
+        // A token may be followed by words ("… for each organisation the
+        // subscription pays for"), never preceded by a figure.
+        const token = /^\{\{plan:([\w.]+):(\w+)\}\}%?(?:\s.*)?$/.exec(cell);
         if (!token) {
           faults.push(`${where} says "${cell}" — a figure here must be the {{plan:${feature}:${planKey}}} token`);
         } else if (token[1] !== feature || token[2] !== planKey) {
@@ -1026,8 +1032,17 @@ describe.skipIf(!HAS_DB)("billing help articles quote the numbers the matrix enf
   it("plans.md's limits table pairs every cell with its own plan's live value", async () => {
     const { faults, compared } = await tokenTableCells("plans.md", plans);
     expect(faults).toEqual([]);
-    // Eight rows by three plans, nothing skipped.
-    expect(compared.length, "the limits table was not read").toBe(24);
+    // Eight rows by three plans, plus the fee ladder's four plan rows.
+    expect(compared.length, "the limits table was not read").toBe(28);
+  });
+
+  it("the per-plan credit tables pair every cell with its own plan's live value (review m12)", async () => {
+    for (const slug of ["credits", "match-credits"]) {
+      const { faults, compared } = await tokenTableCells(`${slug}.md`, helpArticle(slug));
+      expect(faults, slug).toEqual([]);
+      // Community, Pro and Enterprise, one column each.
+      expect(compared.length, `${slug}: the per-plan table was not read`).toBe(3);
+    }
   });
 
   it("the Event Pass articles quote the live caps of the rungs on sale, and no others", async () => {
@@ -2596,7 +2611,12 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
     // In house voice: "admins" for the signed-in role check, "API keys are
     // not affected" for the bearer branch that returns before it.
     expect(downgradeCopy, "…and must say where it IS enforced").toMatch(/The freeze applies to admins\./);
-    expect(downgradeCopy, "…and that API-key clients are exempt").toMatch(/API keys are not affected\./);
+    // Review m1: "API keys are not affected" read as a contradiction beside
+    // "API keys stop working" — the freeze only bites on Community, where
+    // api.access is false. The page now says both halves in one sentence.
+    expect(downgradeCopy, "…and that API-key clients are exempt").toMatch(
+      /The freeze is separate from API keys, which stop working on Community anyway\./,
+    );
     expect(downgradeCopy, "'blocks only …' understates the reach").not.toMatch(
       /blocks only signed-in admins/i,
     );
@@ -3048,71 +3068,31 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
     ).toHaveLength(1);
   });
 
-  // CLAIM: the rider matches the half rate monthly but NOT annually — "about a
-  // third more over a year". Round 1 said "charged at exactly that same rate".
-  it("says the annual rider costs more, and by the factor the seed actually charges", () => {
-    const ratios: string[] = [];
-    for (const addon of orgAddons) {
-      const plan = stripePlans.plans.find((p) => p.key === addon.plan_key)!;
-      const annualRider = plan.prices.annual.tiers!.find((t) => t.up_to === "inf")!;
-      for (const currency of SEED_CURRENCIES) {
-        const perMonth =
-          currency === "usd"
-            ? addon.price.unit_amount
-            : (addon.price.currency_options as Record<string, number>)[currency]!;
-        const inPlanPerYear =
-          currency === "usd"
-            ? annualRider.unit_amount
-            : (annualRider.currency_options as Record<string, number>)![currency]!;
-        const ratio = (perMonth * 12) / inPlanPerYear;
-        // The add-on must be DEARER annually — that is the whole claim. If a
-        // price move ever made them equal, "and on an annual bill it does not"
-        // becomes false and the sentence has to change.
-        if (ratio <= 1.001) ratios.push(`${addon.key} ${currency}: ratio ${ratio.toFixed(3)} — no longer dearer`);
-        // THE FLOOR IS CHOSEN, THE RATIOS ARE DERIVED. `4/3` is a constant
-        // picked to match the wording, not a number computed from the seed —
-        // an earlier report described it as "derived from the seed" and that
-        // was wrong. What the seed decides is every `ratio` above; this line
-        // only asks whether the sentence pinned three lines down is still a
-        // true description of them. Changing the wording means changing this
-        // constant, deliberately, in the same edit.
-        //
-        // "AT LEAST a sixth more" is a FLOOR, and it is a floor because the
-        // gap is not one number: measured across the seed it runs 1.195 (inr)
-        // to 1.469 (usd). The review that caught the original "exactly that
-        // same rate" quoted usd alone, and a sentence tuned to usd would have
-        // been false in gbp and inr by the same mechanism that made "half the
-        // base rate" false — the third time this wave has met a comparative
-        // that only holds in one currency. So the claim is the LOWER bound
-        // over every (add-on x currency) combination, and this is what keeps
-        // it honest if a price moves.
-        //
-        // 4/3 -> 7/6 at the entitlements v18 reprice (2026-09-03). The gap
-        // NARROWED because the monthly rider fell further than the annual one
-        // ($9 -> $6 against $79 -> $49 a year), and INR narrowed most of all:
-        // its x99 rounding takes the monthly rider to 40% of base while the
-        // annual rider is a clean half. "A third" became false in gbp (1.231)
-        // and inr (1.195) on the day the prices moved, which is precisely the
-        // drift this constant exists to force somebody to read.
-        if (ratio < 7 / 6)
-          ratios.push(
-            `${addon.key} ${currency}: ratio ${ratio.toFixed(3)} is below a sixth more — "at least a sixth more over a year" is now false`,
-          );
-        // …and a floor that has drifted absurdly far below the truth is also a
-        // defect: it under-warns a customer the sentence exists to warn.
-        if (ratio > 1.8)
-          ratios.push(
-            `${addon.key} ${currency}: ratio ${ratio.toFixed(3)} — the floor is now so far below the real gap that the wording under-warns`,
-          );
-      }
-    }
-    expect(ratios).toEqual([]);
-    expect(addOns, "the annual divergence is stated").toMatch(
-      /on a monthly bill it matches that half rate exactly, and on an annual bill it does not/i,
+  // CLAIM (Task 14a fix round 1, review I5): an organisation that joins
+  // through an extra place is charged TWICE — as a seat on the plan item, like
+  // every organisation on the bill, and again as the recurring add-on. The
+  // "annual rider costs at least a sixth more" sentence this test used to pin
+  // priced only the add-on, and was retired with it; its seed-ratio loop went
+  // too, because no sentence now makes that comparison. Code-read only: no
+  // Stripe sandbox was reachable to drive it (owner question in the report).
+  it("says an extra organisation pays its seat AND the add-on, because the code charges both", () => {
+    const groups = webSource("server/usecases/billing-groups.ts");
+    // KNOWN-POSITIVE: the plan item's quantity counts EVERY live organisation on
+    // the group, extra-place ones included — there is no subtraction of riders.
+    expect(groups, "syncGroupQuantity no longer counts every organisation — re-read the double charge").toMatch(
+      /select count\(\*\)::text as n from organizations\s+where subscription_id = \$\{subscriptionId\} and deleted_at is null/,
     );
-    expect(addOns).toMatch(/at least a sixth more over a year/i);
-    // …and the false round-1 clause cannot come back.
-    expect(addOns).not.toMatch(/charged at exactly that same rate/i);
+    // …and the add-on is a SEPARATE recurring monthly item.
+    expect(orgAddons.length, "no extra-organisation add-on to describe").toBeGreaterThan(0);
+    for (const addon of orgAddons) {
+      expect(addon.price.interval, `${addon.key} is no longer monthly`).toBe("month");
+    }
+    expect(addOns, "the double charge is stated").toMatch(/An organisation that joins through an extra place is charged twice:/);
+    expect(addOns).toContain("**As an organisation on the bill.**");
+    expect(addOns).toContain("**For the extra place.**");
+    expect(addOns).toMatch(/charged every month, even when your plan is billed yearly/);
+    // …and the add-on-only comparisons cannot come back.
+    expect(addOns).not.toMatch(/matches that half rate exactly|a sixth more|charged at exactly that same rate/i);
   });
 });
 

@@ -20,7 +20,7 @@ You see:
 - **Auto-topup**: marked **Coming soon**. Nothing tops up on its own yet.
 - **Run history**: every grant, pack and AI run, newest first, with the change in credits. **Export** downloads it as a spreadsheet file.
 
-![The AI side of the Credits page: the balance, the month's grant meter with the days until it resets, packs marked never expire, the Buy credits button and the run history with one monthly grant.](/help/billing/credits-ai.webp "A Community organisation right after its monthly grant arrived. The meter counts up as AI runs spend the grant.")
+![The AI side of the Credits page: the balance, the month's grant meter with the days until it resets, packs marked never expire, the Buy credits button and Auto-topup marked Coming Soon.](/help/billing/credits-ai.webp "A Community organisation right after its monthly grant arrived. The meter counts up as AI runs spend the grant.")
 
 ## The monthly grant
 
@@ -34,13 +34,15 @@ Each calendar month your organisation gets a grant of AI credits:
 
 The grant does not roll over. A new grant arrives at the start of each calendar month, counted in UTC, and any grant credits left from the month before are removed then.
 
+If you move to Pro partway through a month, the Pro grant starts at the next calendar month. The one exception is your organisation's first Pro subscription, which brings a one-time trial grant straight away.
+
 An Event Pass adds a one-time top-up of AI credits when it is bought. Those credits go with your packs and never expire. The size of the top-up is on the [pricing page](/pricing).
 
 If your plan stops being paid for, for example after a failed renewal runs out its grace period, the grant drops to the Community amount until the plan is back in good standing.
 
 ## Which credits a run spends
 
-A run costs 1, 2 or 3 credits, and the credits buy the model a thinking budget: 1 credit → up to 32K tokens, 2 → 64K, 3 → 128K. You choose the number before the run starts.
+A run on one division costs 1, 2 or 3 credits, and the credits buy the model a thinking budget: 1 credit → up to 32K tokens, 2 → 64K, 3 → 128K. You choose the number before the run starts. A run over several divisions is priced per division, less one credit, so it can cost more than 3. See [several divisions](/help/scheduling/ai-several-divisions).
 
 An AI run spends this month's grant first. It touches your packs only when the grant is used up, so a pack is never spent while free credits remain.
 
