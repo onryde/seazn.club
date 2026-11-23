@@ -457,7 +457,7 @@ export async function loadLotsDraws(tx: Db, stageId: string): Promise<ReadonlyMa
  *  pool's live draws are pairwise disjoint (`persistLotsDraws` supersedes every live draw a new one intersects), so they
  *  name each entrant at most once: the read is bounded by the table, not by the stage's history. Each key is served by its
  *  NEWEST row, as {@link loadLotsDraws} serves it, so a key whose history holds an older live row and a newer superseded
- *  one (fix round 1 m5) reads the same here as there. Both reads below ride `stage_lots_draws_stage_key` (V541). */
+ *  one (fix round 1 m5) reads the same here as there. Both reads below ride `stage_lots_draws_stage_key` (V546). */
 export async function loadLiveLotsDraws(tx: Db, stageId: string): Promise<ReadonlyMap<string, ReadonlyMap<MembersKey, StoredLotsDraw>>> {
   return drawsByPool(
     await tx<DrawRow[]>`

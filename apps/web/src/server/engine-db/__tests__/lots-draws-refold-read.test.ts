@@ -193,7 +193,7 @@ describe.skipIf(!HAS_DB)("B6 a refold reads the live draws and the tie sets it r
     expect(rows, "the table the draws stored BEFORE the void rank").toEqual(await rankedByEveryDraw(t.stageId, drawsBefore));
   }, 240_000);
 
-  it("both refold reads find their rows through stage_lots_draws_stage_key (V541), never a scan of every stage's draws", async () => {
+  it("both refold reads find their rows through stage_lots_draws_stage_key (V546), never a scan of every stage's draws", async () => {
     // The statements explained are the loaders' own, as the driver sent them (`statementTexts`), planned GENERIC (no value bound).
     // Sequential scans are off so the answer does not depend on how many rows the test table holds; the pin is that the index on
     // (stage_id, md5(members_key)) serves the md5 condition - the expression the statement and the index must share.

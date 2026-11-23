@@ -1,4 +1,4 @@
--- V541 - a stage's lots draws are found by member set, superseded or not.
+-- V546 - a stage's lots draws are found by member set, superseded or not.
 --
 -- WHY. A standings refold ranks by the draws of the tie sets it forms. It read EVERY draw the stage ever stored (a Swiss 500:
 -- thousands of rows, megabytes of member lists, per result write, under the division lock), with no index on `stage_id`: the
