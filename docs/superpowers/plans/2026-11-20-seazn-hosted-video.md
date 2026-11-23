@@ -1136,3 +1136,13 @@ Bunny calls a library's webhook on every status change (B6). It is the primary "
 - Phase 3:
   - an analytics-read Cloudflare token;
   - then `SEAZN_HOSTED_COST=true`.
+- Live-input notifications (Task 27b; independent of the three flags, the secret is the on-switch):
+  - per environment, a random secret (`openssl rand -hex 32`) in `CLOUDFLARE_LIVE_WEBHOOK_SECRET` (server env only);
+  - Cloudflare dashboard > Notifications > Destinations > Webhooks: one destination per environment, URL
+    `https://<host>/api/webhooks/cloudflare-stream-live`, Secret = that environment's value; "Save and Test" is answered
+    200 `{ ignored: true }`;
+  - Notifications > Add > Stream > Stream Live Input: input IDs BLANK (every input: they are made per session), events
+    `live_input.connected`, `live_input.disconnected` and `live_input.errored` (errored is opt-in), delivered to BOTH
+    environments' destinations. stg and prod share the account, so each receives the other's inputs too and acks them
+    unread (200 `unknown_input`);
+  - after the first staging stream, check that the route logged `cloudflare-live-webhook: notification handled` for its input.

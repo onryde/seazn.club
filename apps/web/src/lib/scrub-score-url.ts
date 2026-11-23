@@ -640,9 +640,12 @@ const stampKey = (k: string): string => k.toLowerCase().replace(/_/g, "-");
  * The webhook signature headers the routes verify: a vendor's MAC over the request body (Stripe's, Resend's Svix, RealtimeKit's,
  * Bunny Stream's). Not usable without the body, which Sentry does not hold, but the rule is "no signature in a record" (Task 27
  * review m1), and "signature" is not in the SDK's own deny list, so each signed delivery sent its signature to Sentry in clear.
- * scrub-sentry-signatures.test.ts holds this list equal to the `*-signature` headers the route files read.
+ * Task 27b adds Cloudflare Notifications' `cf-webhook-auth`, which is no MAC: it is the destination's SECRET, verbatim, so a
+ * copy of it is the credential itself. The SDK's span-attribute filter happens to catch it ("auth" is on its deny list); the
+ * request headers it does not, and the rule is ours to keep either way.
+ * scrub-sentry-signatures.test.ts holds this list equal to the `*-signature` and `*-auth` headers the route files read.
  */
-export const SIGNATURE_HEADERS = ["stripe-signature", "svix-signature", "rtk-signature", "x-bunnystream-signature"] as const;
+export const SIGNATURE_HEADERS = ["stripe-signature", "svix-signature", "rtk-signature", "x-bunnystream-signature", "cf-webhook-auth"] as const;
 const SIGNATURE_ATTRIBUTES = SIGNATURE_HEADERS.map((h) => stampKey(`http.request.header.${h}`));
 
 /** A request header that never reaches Sentry in clear: the origin stamp (any name starting with its prefix) or a signature. */

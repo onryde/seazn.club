@@ -14,8 +14,11 @@ import { SIGNATURE_HEADERS, scrubSentryEvent } from "../scrub-score-url";
 import { sentryBeforeSendTransaction } from "../sentry-transactions";
 import { requestHeaderSpanAttributes, transaction } from "./_sdk-span-data";
 
-/** The headers the webhook routes verify, as each route reads it: Stripe's, Resend's (Svix), RealtimeKit's, Bunny Stream's. */
-const ROUTE_SIGNATURE_HEADERS = ["stripe-signature", "svix-signature", "rtk-signature", "x-bunnystream-signature"];
+/** The headers the webhook routes verify, as each route reads it: Stripe's, Resend's (Svix), RealtimeKit's, Bunny Stream's, and
+ *  Cloudflare Notifications' (Task 27b: the destination's secret, verbatim, in `cf-webhook-auth`). */
+const ROUTE_SIGNATURE_HEADERS = ["stripe-signature", "svix-signature", "rtk-signature", "x-bunnystream-signature", "cf-webhook-auth"];
+/** The one header above whose span attribute the SDK itself filters: "auth" is on its sensitive-key list, "signature" is not. */
+const SDK_FILTERED = ["cf-webhook-auth"];
 /** A signature's shape (hex HMAC-SHA256): no URL or token rule matches it, so only the header rule can hide it. */
 const SIG = "9f4ae2968561d162ef7f70284efa6108d29130513d59e423f6b4ffadfa895d39";
 
@@ -75,11 +78,12 @@ describe("Sentry scrub: webhook signature headers (Task 27 review m1)", () => {
         }
       }
     }
-    expect(checked, "4 headers x 2 cases x 2 hooks").toBe(16);
-    expect(sdkInClear, "the SDK's deny list passes every signature header in clear: this test witnesses the scrub").toBe(8);
+    expect(checked, "5 headers x 2 cases x 2 hooks").toBe(20);
+    expect(sdkInClear, "the SDK's deny list passes every signature header but cf-webhook-auth in clear: this test witnesses the scrub")
+      .toBe((ROUTE_SIGNATURE_HEADERS.length - SDK_FILTERED.length) * 2);
   });
 
-  it("the list is the routes' own: every `*-signature` header a route reads is on it, and every name on it is read by a route (counts reported)", () => {
+  it("the list is the routes' own: every `*-signature` or `*-auth` header a route reads is on it, and every name on it is read by a route (counts reported)", () => {
     const root = path.resolve(__dirname, "../../app/api");
     const reads = new Set<string>();
     let files = 0;
@@ -90,7 +94,7 @@ describe("Sentry scrub: webhook signature headers (Task 27 review m1)", () => {
           if (e.name !== "__tests__") walk(p);
         } else if (e.name === "route.ts") {
           files++;
-          for (const m of readFileSync(p, "utf8").matchAll(/headers\.get\(\s*["']([A-Za-z0-9-]*signature)["']\s*\)/gi)) reads.add(m[1]!.toLowerCase());
+          for (const m of readFileSync(p, "utf8").matchAll(/headers\.get\(\s*["']([A-Za-z0-9-]*(?:signature|-auth))["']\s*\)/gi)) reads.add(m[1]!.toLowerCase());
         }
       }
     };

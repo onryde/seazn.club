@@ -521,6 +521,17 @@ export function bunnyConfig(env: Record<string, string | undefined> = process.en
   if (!HOST_RE.test(config.cdnHost)) throw new Error(`${BUNNY_ENV.cdnHost} must be a bare hostname (no scheme, port or path)`);
   return config;
 }
+/** Task 27b: the env variable holding the secret Cloudflare Notifications sends VERBATIM in `cf-webhook-auth` with every live-input
+ *  notification (the webhook destination's "Secret"; https://developers.cloudflare.com/notifications/get-started/configure-webhooks/).
+ *  Server env only, never `NEXT_PUBLIC_`, never a database column. Per DEPLOYMENT: stg and prod share one Cloudflare account, so
+ *  each environment's destination carries its own secret, and each route checks only its own. */
+export const CF_LIVE_WEBHOOK_SECRET_ENV = "CLOUDFLARE_LIVE_WEBHOOK_SECRET";
+/** The live-input notification secret, trimmed; null when unset or blank, and then the route refuses every delivery (401). No
+ *  feature flag: the secret is the on-switch. */
+export function cfLiveWebhookSecret(env: Record<string, string | undefined> = process.env): string | null {
+  const value = env[CF_LIVE_WEBHOOK_SECRET_ENV]?.trim();
+  return value ? value : null;
+}
 /** C9: simulcast outputs bill as delivery; Cloudflare caps 5 per input. */
 export const MAX_OUTPUTS_PER_INPUT = 5;
 
