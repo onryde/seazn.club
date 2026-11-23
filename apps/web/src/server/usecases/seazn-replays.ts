@@ -7,7 +7,8 @@ import "server-only";
 // finalisation grace AND its fixture was decided SEAZN_REPLAY_DELAY_MINUTES ago (owner ruling 2026-11-21, G-A) — or, for a fixture
 // never decided, once the session ended SEAZN_REPLAY_UNDECIDED_FALLBACK_HOURS ago (recommendation 2026-11-21, G-F). Each listed
 // recording must name the input itself (C6); one that does not is counted `refused` and never touched. A finished recording
-// becomes a `found` row with its part number (V542: the fixture's highest + 1, in recording order, assigned once); once every
+// becomes a `found` row with its part number (the number the match page already shows for it: domain/replay-parts.ts
+// `partNumbers` over the video read's own entries, assigned once, review I1); once every
 // recording of the input is finished, on a listing short of a full page, the input is marked and never listed again.
 //
 // THE MOVE (`moveSeaznRecordings`): due rows are claimed in one statement that leases them (`replayClaimQuery`), then each row's
@@ -41,6 +42,8 @@ import {
   REPLAY_PARKED_AT, type ReplayRow, type ReplayRowState, type ReplayStep, nextReplayStep, pollOutcome, replayFailure,
   replayFailureOutcome,
 } from "@/server/video/domain/replay-move";
+import { partNumbers } from "@/server/video/domain/replay-parts";
+import { readReplayEntries } from "@/server/video/replay-entries";
 import type { ReplayHost } from "@/server/video/replay-ports";
 import { SEAZN_PASS_CALL_FLOOR_MS, SEAZN_PASS_LOGGED_IDS_MAX } from "./seazn-recordings";
 
@@ -131,28 +134,45 @@ function recordedAtOf(v: IngestVideo, input: DiscoveryInput, now: Date): Date {
   return Number.isFinite(session) ? new Date(session) : new Date(now);
 }
 
-/** The new parts of one fixture, numbered under the fixture's own lock: its highest part_no + 1, in recording order. A recording
+/** The new parts of one fixture, numbered under the fixture's own lock by the ONE numbering rule (review I1): the fixture's entries
+ *  are read through the video read's own query (replay-entries.ts), this input's new recordings among them, and each new row stores
+ *  exactly the number `partNumbers` gives it — the number the match page already shows for a locked recording. So a recording this
+ *  run skips (an errored one, an input whose listing failed) or a later session listed first moves no part's number. A recording
  *  already held keeps its row and its number. */
 async function insertParts(input: DiscoveryInput, videos: IngestVideo[], now: Date): Promise<number> {
   return sql.begin(async (tx: Tx) => {
     await tx`select pg_advisory_xact_lock(hashtext(${"fixture-replays:" + input.fixture_id}))`;
     const known = new Set((await tx<{ cf_video_id: string }[]>`
       select cf_video_id from fixture_video_replays where cf_video_id in ${tx(videos.map((v) => v.videoId))}`).map((r) => r.cf_video_id));
-    const fresh = videos.filter((v) => !known.has(v.videoId)).map((v) => ({ v, at: recordedAtOf(v, input, now) }))
-      .sort((a, b) => a.at.getTime() - b.at.getTime() || a.v.videoId.localeCompare(b.v.videoId));
-    if (fresh.length === 0) return 0;
-    const [{ top }] = await tx<{ top: number }[]>`
-      select coalesce(max(part_no), 0)::int as top from fixture_video_replays where fixture_id = ${input.fixture_id}`;
+    const fresh = new Map(videos.filter((v) => !known.has(v.videoId)).map((v) => [v.videoId, { v, at: recordedAtOf(v, input, now) }]));
+    if (fresh.size === 0) return 0;
+    const entries = await readReplayEntries(tx, {
+      fixtureId: input.fixture_id,
+      orgId: null,
+      pending: {
+        sessionId: input.session_id,
+        sessionCreatedAt: new Date(input.session_created_at),
+        recordings: [...fresh.values()].map(({ v, at }) => ({ cfVideoId: v.videoId, recordedAt: at })),
+      },
+    });
+    const numbers = partNumbers(entries.map((e) => ({ stored: e.row === null ? null : e.row.partNo })));
     let inserted = 0;
-    for (const [k, { v, at }] of fresh.entries()) {
+    let numbered = 0;
+    for (const [i, e] of entries.entries()) {
+      const f = fresh.get(e.cfVideoId);
+      if (f === undefined || e.row !== null) continue;
+      numbered++;
+      const { v, at } = f;
       const rows = await tx`
         insert into fixture_video_replays
           (org_id, session_id, fixture_id, cf_video_id, recorded_at, part_no, state, state_at, next_attempt_at, cf_duration_seconds, cf_height)
-        values (${input.org_id}, ${input.session_id}, ${input.fixture_id}, ${v.videoId}, ${at}, ${top! + 1 + k}, 'found', ${now}, ${now},
+        values (${input.org_id}, ${input.session_id}, ${input.fixture_id}, ${v.videoId}, ${at}, ${numbers[i]!}, 'found', ${now}, ${now},
                 ${v.durationSeconds === null ? null : Math.round(v.durationSeconds)}, ${v.height === null ? null : Math.round(v.height)})
         on conflict (cf_video_id) do nothing returning id`;
       inserted += rows.length;
     }
+    // Every new recording is an entry (held by the lock, or pending): one that is not would never be stored. Never guessed past.
+    if (numbered !== fresh.size) throw new Error(`seazn replays: ${fresh.size - numbered} new recording(s) missing from the fixture's entries`);
     return inserted;
   });
 }

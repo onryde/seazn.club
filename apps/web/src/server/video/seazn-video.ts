@@ -21,9 +21,9 @@ import "server-only";
 //     on the host (no row, a row on its way, or a failed one), is an `hls` part, its signed HLS (`signRecordingPlayback`).
 //   ORDER: recording order. The session's (created_at, id), then, within one session, when the recording began (recorded_at,
 //     V542: the lock pass stores the listing's creation, the row stores discovery's; null sorts last), then the lock (locked_at,
-//     cf_video_id). NUMBER: a row's stored part_no; a locked recording with no row yet is numbered after the fixture's highest
-//     stored one, by its place among those not listed yet (with no row at all this is Task 14's numbering, 1..n). Numbers never
-//     move; a part left out leaves a gap.
+//     cf_video_id) (replay-entries.ts, the one read discovery numbers from too). NUMBER: a row's stored part_no; a locked recording
+//     with no row yet takes the number `partNumbers` gives it (domain/replay-parts.ts: with no row at all Task 14's 1..n), which is
+//     the number discovery stores (review I1). Numbers never move; a part left out leaves a gap.
 //   LEFT OUT: an `hls` part whose session began DELETE_RECORDING_AFTER_DAYS or more before `now` (Cloudflare deletes a recording
 //     that long after it is ready, which is never before its session began, so this never lists a deleted one; the bound is
 //     Cloudflare's, so an `embed` part never meets it), and a part whose URL cannot be made right now (logged by uid or the error's
@@ -50,11 +50,11 @@ import "server-only";
 import { sql } from "@/lib/db";
 import type { PublicFixtureVideo } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
-import { REPLAY_EMBED_TOKEN_TTL_SECONDS } from "@/server/relay/config";
+import { REPLAY_EMBED_TOKEN_TTL_SECONDS, SEAZN_TOKEN_FAILURE_CACHE_SECONDS } from "@/server/relay/config";
 import { relayDrivers } from "@/server/relay/drivers";
-import { TERMINAL_STATES } from "@/server/relay/domain/session";
 import { type PlaybackDeps, PlaybackTokenRecentlyFailed, processPlaybackTokenCache, signLivePlayback, signRecordingPlayback } from "./cf-playback";
-import { type ReplayEntry, type ReplayPart, replayParts } from "./domain/replay-parts";
+import { type ReplayPart, replayParts } from "./domain/replay-parts";
+import { readReplayEntries } from "./replay-entries";
 import { replayDriver } from "./replay-driver";
 import type { ReplayHost } from "./replay-ports";
 
@@ -85,11 +85,6 @@ export async function seaznFixtureVideoForOrg(orgId: string, fixtureId: string, 
 }
 
 interface LatestSession { id: string; state: string; destination_kind: string; programme_uid: string | null }
-/** One recording, as the merge reads it: the locked side and the replay row side of a full join on the Cloudflare id. */
-interface EntryRow {
-  cf_video_id: string; session_id: string; session_created_at: Date | string; locked: boolean;
-  part_no: number | null; state: string | null; removed: boolean | null; listed_video: string | null;
-}
 
 /** What a rejected mint is logged as: its class alone. A message could quote a request, and a request can carry a token. */
 const errorClass = (e: unknown): string => (e instanceof Error ? e.name : typeof e);
@@ -108,44 +103,9 @@ const freshFailure = (e: unknown): boolean => !(e instanceof PlaybackTokenRecent
  *  signs these, and the match page's plan reads their numbers (`seaznReplayPartNos`) to hold the picker's row before the first read.
  *  `orgId` null is the PUBLIC reader: a playable copy is listed only through `public_fixture_seazn_replays_v`. Otherwise the
  *  organiser's, scoped to that org: its own playable, not removed, rows. Every row of the fixture is read for the numbering, a
- *  removed one's included (discovery's `max(part_no)` counts it). */
+ *  removed one's included (its number stays taken), through the same read discovery numbers from (replay-entries.ts). */
 async function listedParts(fixtureId: string, orgId: string | null, now: Date): Promise<ReplayPart[]> {
-  const inOrg = orgId === null ? sql`` : sql`and s.org_id = ${orgId}`;
-  const rowInOrg = orgId === null ? sql`` : sql`and r.org_id = ${orgId}`;
-  const listedVideo = orgId === null
-    ? sql`(select pv.bunny_video_id from public_fixture_seazn_replays_v pv where pv.fixture_id = r.fixture_id and pv.part_no = r.part_no)`
-    : sql`case when r.state = 'playable' and r.deleted_at is null then r.bunny_video_id end`;
-  const rows = await sql<EntryRow[]>`
-    with locked as (
-      select v.cf_video_id, s.id as session_id, s.created_at as session_created_at, v.recorded_at, v.locked_at
-        from seazn_locked_videos v
-        join fixture_stream_inputs i on i.id = v.input_row_id
-        join fixture_stream_sessions s on s.id = i.session_id
-       where s.fixture_id = ${fixtureId} ${inOrg}
-         and s.destination_kind = 'seazn' and i.role = 'programme' and s.state in ${sql([...TERMINAL_STATES])}
-    ), listed as (
-      select r.cf_video_id, r.session_id, s.created_at as session_created_at, r.recorded_at, r.part_no, r.state,
-             (r.state = 'deleted' or r.deleted_at is not null) as removed, ${listedVideo} as listed_video
-        from fixture_video_replays r
-        join fixture_stream_sessions s on s.id = r.session_id
-       where r.fixture_id = ${fixtureId} ${rowInOrg}
-    )
-    select coalesce(l.cf_video_id, p.cf_video_id) as cf_video_id,
-           coalesce(l.session_id, p.session_id) as session_id,
-           coalesce(l.session_created_at, p.session_created_at) as session_created_at,
-           l.cf_video_id is not null as locked,
-           p.part_no, p.state, p.removed, p.listed_video
-      from locked l full join listed p on p.cf_video_id = l.cf_video_id
-     order by coalesce(l.session_created_at, p.session_created_at), coalesce(l.session_id, p.session_id),
-              coalesce(l.recorded_at, p.recorded_at) nulls last, l.locked_at nulls last, coalesce(l.cf_video_id, p.cf_video_id)`;
-  const entries: ReplayEntry[] = rows.map((r) => ({
-    cfVideoId: r.cf_video_id,
-    sessionId: r.session_id,
-    sessionCreatedAt: new Date(r.session_created_at),
-    locked: r.locked,
-    row: r.part_no === null ? null : { partNo: r.part_no, state: r.state!, removed: r.removed!, listedVideo: r.listed_video },
-  }));
-  return replayParts(entries, now);
+  return replayParts(await readReplayEntries(sql, { fixtureId, orgId }), now);
 }
 
 /** The part numbers the PUBLIC read would offer for a fixture right now, with no signing (no relay, no token): the match page's plan
@@ -156,14 +116,27 @@ export async function seaznReplayPartNos(fixtureId: string, now: Date): Promise<
   return (await listedParts(fixtureId, null, now)).map((p) => p.partNo);
 }
 
-/** The replay host this answer signs with, or null when it cannot be built (logged once, by the error's class). */
-function hostOf(playback: VideoDeps | undefined): ReplayHost | null {
+/** Review m2: when the replay host last failed to build, logged. A host that cannot be built fails on EVERY viewer read, so it is
+ *  logged once per failure window per process (client-ip.ts's throttle; the window is the mint's own, SEAZN_TOKEN_FAILURE_CACHE_SECONDS),
+ *  never once per read. */
+let hostFailureLoggedAtMs: number | null = null;
+
+/** The replay host this answer signs with, or null when it cannot be built (logged by the error's class, once per window). */
+function hostOf(playback: VideoDeps | undefined, now: Date): ReplayHost | null {
   try {
     return playback?.replay ?? replayDriver();
   } catch (err) {
-    log.warn({ err: errorClass(err) }, "seazn video: the replay host could not be built; its parts are left out of this answer");
+    const nowMs = now.getTime();
+    if (hostFailureLoggedAtMs === null || nowMs - hostFailureLoggedAtMs >= SEAZN_TOKEN_FAILURE_CACHE_SECONDS * 1000) {
+      hostFailureLoggedAtMs = nowMs;
+      log.warn({ err: errorClass(err) }, "seazn video: the replay host could not be built; its parts are left out of this answer");
+    }
     return null;
   }
+}
+/** Tests only: a fresh process's throttle. */
+export function __resetReplayHostLogForTests(): void {
+  hostFailureLoggedAtMs = null;
 }
 
 async function videoOf(fixtureId: string, orgId: string | null, now: Date, playback: VideoDeps | undefined): Promise<PublicFixtureVideo> {
@@ -191,13 +164,13 @@ async function videoOf(fixtureId: string, orgId: string | null, now: Date, playb
   const interim = parts.filter((p) => p.player === "hls");
   // The relay is built only for a live or an interim part; the replay host only for an embed part.
   const deps = liveUid === null && interim.length === 0 ? null : (playback ?? { ingest: relayDrivers().ingest, tokenCache: processPlaybackTokenCache() });
-  const host = parts.some((p) => p.player === "embed") ? hostOf(playback) : null;
+  const host = parts.some((p) => p.player === "embed") ? hostOf(playback, now) : null;
   // The live and each part are signed on their own: one that cannot be minted is left out of this answer, never the answer.
   const [liveSigned, signed] = await Promise.all([
     liveUid === null ? null : signLivePlayback(deps!, liveUid, now).then((v) => ({ ok: v }), (err: unknown) => ({ err })),
     Promise.allSettled(parts.map(async (p) => {
       if (p.player === "hls") return signRecordingPlayback(deps!, p.cfVideoId, now);
-      if (host === null) return null;   // logged once by hostOf
+      if (host === null) return null;   // logged by hostOf, once per window
       return host.signedEmbed(p.bunnyVideoId, now, REPLAY_EMBED_TOKEN_TTL_SECONDS);
     })),
   ]);
