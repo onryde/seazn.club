@@ -1,17 +1,17 @@
 import "server-only";
 // The ports the application layer works through: SessionDeps and the process defaults (see ./index.ts).
-import { relayDrivers, type RelayDrivers } from "@/server/relay/drivers";
+import { dbRecorder, relayDrivers, type RelayDrivers } from "@/server/relay/drivers";
 import { youtubeDriver } from "@/server/youtube/driver";
 import type { YouTubePort } from "@/server/youtube/port";
 import { replayDriver } from "@/server/video/replay-driver";
 import type { ReplayHost } from "@/server/video/replay-ports";
-import type { LiveMinutesReader } from "@/server/video/cf-analytics";
+import { type LiveMinutesReader, liveMinutesViewed } from "@/server/video/cf-analytics";
 
 /** `youtube` (YouTube Connect T11): the port a Go live on an API-backed destination prepares its broadcast through. Optional
  *  so a rig that streams only to pasted keys need not name one; absent, it is the process's driver (`youtubeOf`).
  *  `replay` (Seazn-hosted video, Task 21) is the same for the host a finished recording is moved to and played from (`replayOf`),
  *  but it is NOT a getter on the process defaults (see `defaultDeps`). `liveMinutes` (Task 31) is Cloudflare's minutes-viewed
- *  reader the daily sweep measures Seazn delivery with; absent, it is the real one (relay-sweep.ts step 7e). */
+ *  reader the daily sweep measures Seazn delivery with; absent, it is the real one (`liveMinutesOf`; the daily sweep's step 7e). */
 export interface SessionDeps {
   drivers: RelayDrivers; now: () => Date; appUrl: string; youtube?: YouTubePort; replay?: ReplayHost; liveMinutes?: LiveMinutesReader;
 }
@@ -25,3 +25,6 @@ export function defaultDeps(appUrl: string): SessionDeps {
 }
 export const youtubeOf = (deps: SessionDeps): YouTubePort => deps.youtube ?? youtubeDriver();
 export const replayOf = (deps: SessionDeps): ReplayHost => deps.replay ?? replayDriver();
+/** Cloudflare's minutes-viewed reader: the deps' own, else the real one, its calls recorded as every Cloudflare call is (Task 31). */
+export const liveMinutesOf = (deps: SessionDeps): LiveMinutesReader =>
+  deps.liveMinutes ?? ((uids, from, to) => liveMinutesViewed(uids, from, to, { recorder: dbRecorder }));

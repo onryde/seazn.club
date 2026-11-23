@@ -44,13 +44,11 @@ import type { IngestVideo, RunnerListing } from "@/server/relay/ports";
 import { recordEvent, recordStorageSnapshot } from "@/server/relay/telemetry";
 import { framesBucketIsPublic } from "@/lib/supabase-storage";
 import { purgeOrphanFrames } from "@/server/sponsors/airings";
-import { dbRecorder } from "@/server/relay/drivers";
-import { liveMinutesViewed } from "@/server/video/cf-analytics";
 import { replayDriver } from "@/server/video/replay-driver";
 import { type SeaznCostDeps, measureSeaznDelivery, purgeDeletedOrgReplays, seaznCostArmed } from "./seazn-cost";
 import {
   ACTIVE_STATES, TERMINAL_STATES, type SessionDeps,
-  apply, destroyListedMachine, estimateCostMinor, reconcileSession, releaseOutput, storageHeadroomMinutes, storageUsageForColumns, tickSession,
+  apply, destroyListedMachine, estimateCostMinor, liveMinutesOf, reconcileSession, releaseOutput, storageHeadroomMinutes, storageUsageForColumns, tickSession,
 } from "./stream-sessions";
 
 export interface SweepResult {
@@ -802,7 +800,7 @@ export async function sweepStreamSessions(
   //     other pass and step 8 still run. The minutes are never worth the sweep.
   if (seaznCostArmed()) {
     const costDeps: SeaznCostDeps = {
-      liveMinutes: deps.liveMinutes ?? ((uids, from, to) => liveMinutesViewed(uids, from, to, { recorder: dbRecorder })),
+      liveMinutes: liveMinutesOf(deps),
       // Resolved when read: `replayDriver()` throws on an unset REPLAY_DRIVER under a live relay (stream-sessions/deps.ts).
       get replay() { return deps.replay ?? replayDriver(); },
     };
