@@ -61,7 +61,7 @@ function post(raw: string, auth: string | null = SECRET) {
 /** Every row any delivery of this input wrote: the event and the sample. "Nothing written" is this, zero. */
 const writtenFor = async (uid: string) => {
   const [{ n }] = await sql<{ n: number }[]>`
-    select (select count(*) from fixture_stream_events where payload->>'via' = 'notification' and payload->>'inputUid' = ${uid})
+    select (select count(*) from fixture_stream_events where source = 'webhook' and payload->>'inputUid' = ${uid})
          + (select count(*) from fixture_stream_samples where source = 'notification' and raw->>'inputUid' = ${uid}) as n`;
   return Number(n);
 };
@@ -117,6 +117,22 @@ describe.skipIf(!HAS_DB)("POST /api/webhooks/cloudflare-stream-live (Task 27b)",
     expect(logMock.warn.mock.calls.map(([f]) => f)).toEqual(Array.from({ length: 5 }, () => ({ reason: "auth" })));
     expect(await (await post(raw)).json()).toEqual({ received: true, outcome: "recorded" });
     expect(await writtenFor(uid), "one event and one sample").toBe(2);
+    noSecretLogged();
+  });
+
+  it("Task 27b review m1: the secret is checked BEFORE the body is parsed — a malformed or non-notification body without the secret is 401, never 200 `ignored`, and no field warn is written", async () => {
+    let checked = 0;
+    for (const [label, configured, header] of [["a wrong secret", SECRET, "wrong"], ["no header", SECRET, null], ["no secret configured", undefined, SECRET]] as const) {
+      vi.stubEnv("CLOUDFLARE_LIVE_WEBHOOK_SECRET", configured);
+      for (const raw of ["not json", "", JSON.stringify({ text: "Hello World!" })]) {
+        const res = await post(raw, header);
+        expect([label, raw, res.status, await res.json()]).toEqual([label, raw, 401, { error: "Invalid signature" }]);
+        checked++;
+      }
+    }
+    expect(checked).toBe(9);
+    expect(logMock.warn.mock.calls.filter(([f]) => "field" in (f as object)), "nothing was parsed").toEqual([]);
+    expect(logMock.warn.mock.calls.map(([f]) => (f as { reason: string }).reason).sort()).toEqual([...Array(6).fill("auth"), ...Array(3).fill("no_secret_configured")].sort());
     noSecretLogged();
   });
 
