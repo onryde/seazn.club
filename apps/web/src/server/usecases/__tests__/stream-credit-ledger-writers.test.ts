@@ -5,7 +5,9 @@
 //   1. THE NINE INSERT SITES. `org_stream_credits` is written from nine statements in stream-credits.ts. The history names a
 //      row by its shape, so a tenth writer (or a renamed one) must fail HERE, by name, before it can ship a row the
 //      classifier labels wrongly. The sites are held to `LEDGER_WRITER_SITES` (_ledger-writer-sites.ts — an oracle typed from
-//      the writers' contract) in both directions, and no other production file may write the table at all.
+//      the writers' contract) in both directions, and no other production file may write the table at all — save the Online
+//      Chess package writer (online-package/ledger.ts), whose inserts are held to its own two sites the same way
+//      (`PACKAGE_LEDGER_WRITER_SITES`), until Online Chess Task 10 folds them into the registry with their history kinds.
 //   2. WHAT "Refund: camera never connected" MEANS. The label is read off a refund row with no author and a session — a shape
 //      the classifier cannot tell from any other author-less refund. It is honest because exactly ONE thing in production
 //      writes such a row: `refundConsumeForSession`, called from exactly one place (the use-case's `refund_credit` effect
@@ -17,6 +19,7 @@
 //   W1 tenth site     add an `insert into org_stream_credits` to any function                  -> "the insert sites ARE the nine"
 //   W2 renamed site   move a site's insert into a differently named function                   -> same test
 //   W3 other file     write the table (insert / update / delete) from any other production file -> "no other production file writes"
+//   W3b package file  add, rename or turn into an update a write in online-package/ledger.ts  -> same test
 //   W4 second caller  call refundConsumeForSession a second time, under any alias               -> "one caller, under any alias"
 //   W5 re-export      re-export or namespace-access refundConsumeForSession                      -> same test
 //   W6 caller guard   call it outside the `refund_credit` branch                                 -> same test
@@ -26,7 +29,8 @@
 //   W10 wrapped       drop the as/satisfies/cast/non-null/paren unwrapping, or the computed-key reading -> "an emission is found however the literal is wrapped"
 import { describe, expect, it } from "vitest";
 import {
-  LEDGER_WRITER_SITES, ledgerWrites, nameUses, parseSource, productionSourceFiles, readSource, refundEmissions,
+  LEDGER_WRITER_SITES, PACKAGE_LEDGER_WRITER_SITES, PACKAGE_WRITER_FILE, ledgerWrites, nameUses, parseSource, productionSourceFiles,
+  readSource, refundEmissions,
 } from "./_ledger-writer-sites";
 import { STREAM_HISTORY_KINDS } from "../stream-credit-history";
 
@@ -184,19 +188,27 @@ describe("the nine ledger writers", () => {
     }
   });
 
-  it("no other production file writes the table — insert, update, delete, truncate, merge or copy (W3)", () => {
+  it("no other production file writes the table — insert, update, delete, truncate, merge or copy (W3); the Online Chess package writer inserts at exactly its two sites (W3b)", () => {
     const files = productionSourceFiles();
     expect(files.length, "the scan walked the source tree").toBeGreaterThan(200);
     expect(files, "…and it included the writer").toContain(WRITER_FILE);
+    expect(files, "…and the package writer").toContain(PACKAGE_WRITER_FILE);
     const strangers: string[] = [];
     let scanned = 0;
     for (const f of files) {
-      if (f === WRITER_FILE) continue;
+      if (f === WRITER_FILE || f === PACKAGE_WRITER_FILE) continue;
       scanned += 1;
       for (const w of ledgerWrites(parseSource(f, readSource(f)))) strangers.push(`${f}:${w.line} ${w.verb} in ${w.fn}()`);
     }
-    expect(scanned).toBe(files.length - 1);
+    expect(scanned).toBe(files.length - 2);
     expect(strangers).toEqual([]);
+    // The package writer, both directions: every write it holds is an INSERT matching exactly one of its sites, and every
+    // site is matched by exactly one write (one line per write, so a second statement for a site shows as a duplicate).
+    const pkg = ledgerWrites(parseSource(PACKAGE_WRITER_FILE, readSource(PACKAGE_WRITER_FILE)));
+    expect(pkg.length, "anti-vacuity: the package writer's inserts were found").toBeGreaterThan(0);
+    const judged = pkg.map((w) => `${w.verb} in ${w.fn}() = ${PACKAGE_LEDGER_WRITER_SITES.filter((s) => s.fn === w.fn && w.raw.includes(s.needle)).map((s) => s.key).join(" & ") || "no site"}`);
+    expect(judged.sort()).toEqual(PACKAGE_LEDGER_WRITER_SITES.map((s) => `insert into in ${s.fn}() = ${s.key}`).sort());
+    expect(PACKAGE_LEDGER_WRITER_SITES).toHaveLength(2);
   });
 
   it("every history kind but `other` is some writer's, and every writer's kinds are real — no kind is orphaned, none invented", () => {

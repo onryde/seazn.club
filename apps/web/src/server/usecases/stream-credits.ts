@@ -975,6 +975,20 @@ export async function projectMonthlyRollDelta(exec: Executor, orgId: string, rat
   return plan.grant - plan.expire;
 }
 
+/** The rollover for a caller that ALREADY runs its own money transaction and must not open a second one (Online Chess:
+ *  the package payment, spec 2026-11-23 §7.4 — "the monthly rollover runs under the money lock before the balance is
+ *  read, as consumeForSession does"). The body is `rollMonthlyLocked`, unchanged: `rate` is the org's resolved plan rate,
+ *  a POOLED read the caller makes before its transaction (`streamMonthlyRate`; lib/db.ts refuses one nested inside), and
+ *  `now` picks the UTC month. Unlike consumeForSession it does NOT swallow a failed rollover in a savepoint: a refusal
+ *  (`ledger_negative`, `monthly_rate_invalid`) reaches the caller, whose transaction it rolls back.
+ *  The org's money lock is taken here too. The caller already holds it (lock order: `division:`, then this lock, then the
+ *  package row), and an advisory lock is re-entrant within one transaction, so the second take never waits; a caller that
+ *  forgot it still cannot race another writer of the org. */
+export async function rollMonthlyUnderLock(tx: Tx, orgId: string, rate: number, now: Date): Promise<void> {
+  await lockOrg(tx, orgId);
+  await rollMonthlyLocked(tx, orgId, rate, now);
+}
+
 async function rollMonthlyLocked(tx: Tx, orgId: string, rate: number, now: Date): Promise<number> {
   assertMonthlyRate(rate);
   const period = streamMonthlyPeriod(now);

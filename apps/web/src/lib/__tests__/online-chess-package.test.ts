@@ -12,6 +12,7 @@ import {
   ONLINE_SIZES,
   ONLINE_SIZE_DOORS,
   includedRounds,
+  isOnlineSize,
   nextSize,
   packagePrice,
   sizeAllowedByPlan,
@@ -67,6 +68,24 @@ describe("the sizes", () => {
       checked += 1;
     }
     expect(checked, "ladder steps checked").toBe(5);
+  });
+
+  it("isOnlineSize answers yes for the five ladder sizes and no for every number off the ladder (a stored size is asserted before it is priced)", () => {
+    // The ladder is typed from decision 2, never read from ONLINE_SIZES: the module is the thing under test.
+    const on = [16, 32, 64, 128, 256];
+    // Off the ladder: zero, a half and a double of a size, the size-pack cap 96 (P17), neighbours of 16, a negative, a fraction,
+    // and the non-finite numbers. packagePrice(0) would price at 0 and 48 at 3: either reaching a quote is money from nowhere.
+    const off = [0, 8, 15, 17, 48, 96, 512, -16, 16.5, Number.NaN, Number.POSITIVE_INFINITY];
+    let checked = 0;
+    for (const n of on) {
+      expect(isOnlineSize(n), String(n)).toBe(true);
+      checked += 1;
+    }
+    for (const n of off) {
+      expect(isOnlineSize(n), String(n)).toBe(false);
+      checked += 1;
+    }
+    expect(checked, "sizes judged").toBe(on.length + off.length);
   });
 });
 
