@@ -41,7 +41,7 @@ describe("held posts #22 and #23: tripwires that go red when the product defect 
     expect(offered, "anti-vacuity: americano is offered in the catch-all sport").toContain("generic");
     const others = offered.filter((k) => k !== "generic");
     expect(others.length, "anti-vacuity: americano is offered in sports other than the catch-all").toBeGreaterThan(0);
-    const declares = (key: string) => "generic.result" in builtinModules.find((m) => m.key === key)!.eventSchemas;
+    const declares = (key: string) => "generic.result" in (builtinModules.find((m) => m.key === key)!.eventSchemas ?? {});
     expect(declares("generic"), "the catch-all sport declares the event the boxes post").toBe(true);
     const source = readFileSync(PANEL, "utf8");
     const posts = (source.match(/type:\s*"generic\.result"/g) ?? []).length;
