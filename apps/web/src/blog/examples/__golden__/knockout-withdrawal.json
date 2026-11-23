@@ -1,0 +1,68 @@
+{
+  "facts": {
+    "withdrawn": "Dev",
+    "withdrawnSeed": 4,
+    "opponent": "Ana",
+    "walkovers": 1,
+    "playedResults": 4,
+    "footballOutcome": "award:withdrew",
+    "cricketOutcome": "award:withdrew",
+    "boardgameOutcome": "award:withdrew",
+    "carromOutcome": "award:withdrew",
+    "genericOutcome": "award:withdrew",
+    "volleyballOutcome": "award:withdrew",
+    "badmintonOutcome": "award:withdrew",
+    "tabletennisOutcome": "award:withdrew",
+    "tennisOutcome": "award:withdrew",
+    "icehockeyOutcome": "award:withdrew",
+    "hockeyOutcome": "award:withdrew",
+    "sportCount": 11,
+    "opponentAdvancesIn": 11
+  },
+  "table": {
+    "caption": "An eight-player knockout after round one. Dev, the fourth seed, withdraws before the semi-final.",
+    "columns": [
+      "Match",
+      "Before the withdrawal",
+      "After it"
+    ],
+    "rows": [
+      [
+        "Quarter-final 1",
+        "Ana against Hal: Ana won",
+        "Unchanged: the result stands"
+      ],
+      [
+        "Quarter-final 2",
+        "Eli against Dev: Dev won",
+        "Unchanged: the result stands"
+      ],
+      [
+        "Quarter-final 3",
+        "Cy against Fay: Cy won",
+        "Unchanged: the result stands"
+      ],
+      [
+        "Quarter-final 4",
+        "Gus against Ben: Ben won",
+        "Unchanged: the result stands"
+      ],
+      [
+        "Semi-final 1",
+        "Ana against Dev",
+        "Walkover: Ana goes through"
+      ],
+      [
+        "Semi-final 2",
+        "Cy against Ben",
+        "Unchanged"
+      ],
+      [
+        "Final",
+        "Not drawn yet",
+        "Unchanged"
+      ]
+    ]
+  },
+  "text": []
+}
