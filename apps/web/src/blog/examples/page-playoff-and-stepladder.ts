@@ -59,8 +59,8 @@ function build(): ExampleResult {
     `Stepladder: ${withSeed(bottom)} wins ${stepBottomWins} matches in a row from the bottom rung, then loses the final to ${withSeed(PLAYERS[0]!)}, who has played only that one match.`;
   const diagram = mergeBrackets(
     title,
-    bracketModel("", pageLines, { seat, lane: PAGE, idPrefix: "pp:" }),
-    bracketModel("", stepLines, { seat, lane: STEP, idPrefix: "sl:" }),
+    bracketModel("", pageLines, { seatName: seat, lane: PAGE, idPrefix: "pp:" }),
+    bracketModel("", stepLines, { seatName: seat, lane: STEP, idPrefix: "sl:" }),
   );
 
   return {

@@ -179,7 +179,7 @@ export type BracketModel = Extract<DiagramModel, { kind: "bracket" }>;
 
 export interface BracketModelOptions {
   /** How a seat's player is printed ("Ana (1)"); the diagram's winner and tags are keyed by this string. */
-  seat: (player: string) => string;
+  seatName: (player: string) => string;
   /** A short word to print beside a player in one line ("plate"), keyed by player. */
   tags?: (line: PlayedLine) => Record<string, string>;
   /** Stacks this bracket in its own headed block when a figure draws two (`mergeBrackets`). */
@@ -213,15 +213,15 @@ export function bracketModel(title: string, lines: readonly PlayedLine[], opts: 
     columns[d] ??= { labels: [], matches: [] };
     if (!columns[d]!.labels.includes(l.roundName)) columns[d]!.labels.push(l.roundName);
     const tags = opts.tags?.(l) ?? {};
-    const home = l.row.home === undefined ? null : opts.seat(l.row.home);
-    const away = l.row.away === undefined ? null : opts.seat(l.row.away);
+    const home = l.row.home === undefined ? null : opts.seatName(l.row.home);
+    const away = l.row.away === undefined ? null : opts.seatName(l.row.away);
     const seatTags: Record<string, string> = {};
-    for (const [player, tag] of Object.entries(tags)) seatTags[opts.seat(player)] = tag;
+    for (const [player, tag] of Object.entries(tags)) seatTags[opts.seatName(player)] = tag;
     columns[d]!.matches.push({
       id: `${prefix}${l.gen.id}`,
       home,
       away,
-      ...(l.row.winner === undefined ? {} : { winner: opts.seat(l.row.winner) }),
+      ...(l.row.winner === undefined ? {} : { winner: opts.seatName(l.row.winner) }),
       label: l.roundName,
       ...(opts.lane === undefined ? {} : { lane: opts.lane }),
       ...(l.gen.homeFrom === undefined ? {} : { homeFrom: { id: `${prefix}${l.gen.homeFrom.fixtureId}`, side: l.gen.homeFrom.side } }),

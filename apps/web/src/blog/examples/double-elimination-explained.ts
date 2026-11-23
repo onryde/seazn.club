@@ -72,7 +72,7 @@ function build(): ExampleResult {
   const diagram = bracketModel(
     `${withSeed(wbChampion)} wins the winners bracket but loses the grand final, so both finalists have lost once and the reset is played: ${withSeed(champ)} wins it too, and ${withSeed(wbChampion)} finishes ${ordinal(places.get(wbChampion)!)} after ${defeats.get(wbChampion) ?? 0} defeats. A dashed line is a winners bracket loser dropping into the losers bracket.`,
     lines,
-    { seat: withSeed },
+    { seatName: withSeed },
   );
 
   return {

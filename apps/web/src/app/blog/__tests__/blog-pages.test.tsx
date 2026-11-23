@@ -503,7 +503,8 @@ describe("pieces that guard themselves", () => {
             expect(classes.length, `${id}: ${side} is drawn`).toBeGreaterThan(0);
             const vacant = (m.vacant ?? []).includes(side);
             for (const c of classes) expect(/\bitalic\b/.test(c), `${id}: ${side} ${vacant ? "is italic" : "is not italic"}`).toBe(vacant);
-            vacant ? vacantSeen++ : namesSeen++;
+            if (vacant) vacantSeen++;
+            else namesSeen++;
           }
         expect(vacantSeen, `${id}: a vacant seat is drawn`).toBeGreaterThan(0);
         expect(namesSeen, `${id}: a player is drawn`).toBeGreaterThan(0);

@@ -66,17 +66,17 @@ function build(): ExampleResult {
   const rows: (string | number)[][] = [];
   const facts: Record<string, string | number> = {};
   const visited = forEachSport(({ key }) => {
-    const module = builtinModules.find((m) => m.key === key)!;
-    const start = startingVariantKey(module);
-    const variants = variantsOf(module);
+    const sport = builtinModules.find((m) => m.key === key)!;
+    const start = startingVariantKey(sport);
+    const variants = variantsOf(sport);
     const first = variants.find((v) => v.key === start)!;
-    const [d0, s0] = cells(module, first.key, first.cfg);
+    const [d0, s0] = cells(sport, first.key, first.cfg);
     rows.push([sportLabel(key), d0, s0]);
     facts[`${key}Decider`] = d0;
     facts[`${key}StillLevel`] = s0;
     for (const v of variants) {
       if (v.key === start) continue;
-      const [d, s] = cells(module, v.key, v.cfg);
+      const [d, s] = cells(sport, v.key, v.cfg);
       if (d === d0 && s === s0) continue;
       rows.push([`${sportLabel(key)} (${variantLabel(key, v.key)})`, d, s]);
       const tag = `${key}${v.key.replace(/[^a-z0-9]/gi, "").replace(/^./, (c) => c.toUpperCase())}`;

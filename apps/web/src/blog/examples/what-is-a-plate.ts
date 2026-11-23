@@ -67,7 +67,7 @@ function build(): ExampleResult {
     `${names2([...inPlate])} lost their first real match, so they go to the plate. ${names2(field.excluded.map((l) => l.entrantId))} lost by walkover without playing, so ${names2(field.excluded.map((l) => l.entrantId))} ${field.excluded.length === 1 ? "does" : "do"} not. ${walkoverWinner} won that walkover, so ${walkoverWinner}'s first match was the next one, and losing it puts ${walkoverWinner} in the plate too.`,
     lines,
     {
-      seat,
+      seatName: seat,
       tags: (l) => {
         const out: Record<string, string> = {};
         if (l.row.walkedOver === "loser" && l.row.loser !== undefined) out[l.row.loser] = "w/o";

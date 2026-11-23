@@ -75,7 +75,7 @@ export function buildFrom(draw: typeof drawn): ExampleResult {
   const diagram = bracketModel(
     `With a third-place match, ${tp.row.home} and ${tp.row.away}, who both lost their semi-finals, play each other once more. ${tp.row.winner}, the lower seed, wins it and is placed ${ordinal(playoffPlaces.get(tp.row.winner!)!)}, and ${tp.row.loser} is placed ${ordinal(playoffPlaces.get(tp.row.loser!)!)}. Without the match, both would share ${ordinal(sharedPlaces.get(semiLosers[0]!)!)}.`,
     playoffLines,
-    { seat },
+    { seatName: seat },
   );
 
   return {
