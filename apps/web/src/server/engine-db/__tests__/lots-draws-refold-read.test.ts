@@ -195,26 +195,39 @@ describe.skipIf(!HAS_DB)("B6 a refold reads the live draws and the tie sets it r
 
   it("both refold reads find their rows through stage_lots_draws_stage_key (V546), never a scan of every stage's draws", async () => {
     // The statements explained are the loaders' own, as the driver sent them (`statementTexts`), planned GENERIC (no value bound).
-    // Sequential scans are off so the answer does not depend on how many rows the test table holds; the pin is that the index on
-    // (stage_id, md5(members_key)) serves the md5 condition - the expression the statement and the index must share.
+    // Sequential scans are off so the answer does not depend on how many rows the test table holds: each plan must reach its rows
+    // through the V546 index. WHICH conditions the planner then puts in that index's Index Cond is a cost choice that differs by
+    // Postgres build (17 puts the md5 there on this table; CI's 16 descends on stage_id and filters the md5), so the expression the
+    // statement and the index must share is pinned from the catalogue instead: every key column of the index, as Postgres itself
+    // prints it, is a condition of every loader statement.
     const t = await started(4);
     const [A, B] = t.entrants as [string, string];
     await genericResult(t.auth, t.stageId, A, B, 0, 0);
     type PlanRow = { "QUERY PLAN": string };
-    const plans = await sql.begin(async (tx) => {
+    const { sent, plans } = await sql.begin(async (tx) => {
       await tx`set local enable_seqscan = off`;
       const from = statementTexts().length;
       await loadLiveLotsDraws(tx as never, t.stageId);
       await loadLotsDrawsFor(tx as never, t.stageId, [membersKeyOf([A, B])]);
-      const sent = statementTexts().slice(from).filter((s) => /from stage_lots_draws/.test(s));
+      const texts = statementTexts().slice(from).filter((s) => /from stage_lots_draws/.test(s));
       const out: string[] = [];
-      for (const text of sent) out.push((await tx.unsafe<PlanRow[]>(`explain (generic_plan) ${text}`)).map((r) => r["QUERY PLAN"]).join("\n"));
-      return out;
+      for (const text of texts) out.push((await tx.unsafe<PlanRow[]>(`explain (generic_plan) ${text}`)).map((r) => r["QUERY PLAN"]).join("\n"));
+      return { sent: texts, plans: out };
     });
     expect(plans.length, "anti-vacuity: both loaders' statements were explained").toBe(2);
-    for (const plan of plans) {
-      expect(plan, plan).toMatch(/stage_lots_draws_stage_key/);
-      expect(plan, plan).toMatch(/Index Cond: \(\(stage_id = \$1\) AND \(md5\(members_key\) = ANY/);
+    for (const plan of plans) expect(plan, plan).toMatch(/stage_lots_draws_stage_key/);
+
+    const keyColumns = (
+      await sql<{ col: string }[]>`
+        select pg_get_indexdef(i.indexrelid, k, true) as col
+          from pg_index i, generate_series(1, i.indnkeyatts) k
+         where i.indexrelid = 'stage_lots_draws_stage_key'::regclass
+         order by k`
+    ).map((r) => r.col);
+    expect(keyColumns, "V546 declares the index on the stage and the md5 of the members key").toEqual(["stage_id", "md5(members_key)"]);
+    for (const text of sent) {
+      const unaliased = text.replace(/\b[a-z]\.(?=[a-z_])/g, ""); // `d.members_key` -> `members_key`: the planner matches the column
+      for (const col of keyColumns) expect(unaliased, `${col} is a condition of:\n${text}`).toContain(`${col} = `);
     }
   }, 120_000);
 
