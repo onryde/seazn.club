@@ -65,9 +65,9 @@ interface RouteSpec {
   /** A bare route's own refusal twin (capture-record.v1, Q2: the record's `too_large` stays out of the shared
    *  CaptureRefusalCode). Default: S.CaptureRefusal. */
   refusal?: ZodType;
-  /** The request body's media type. Default application/json; the record upload is NDJSON, and its `request` is ONE
-   *  line (the contract's root). */
-  requestContentType?: string;
+  /** The request body's media type(s). Default application/json; the record upload is NDJSON, and its `request` is ONE
+   *  line (the contract's root); the client-report beacon takes the same body as JSON or as `navigator.sendBeacon`'s text/plain. */
+  requestContentType?: string | readonly string[];
 }
 
 const PAGE_QUERY = {
@@ -359,7 +359,7 @@ export const ROUTES: RouteSpec[] = [
   { path: "/public/fixtures/{id}", method: "get", summary: "Public live fixture summary", tag: "public", public: true, response: S.PublicFixtureSummary },
   { path: "/public/fixtures/{id}/realtime-token", method: "get", summary: "Realtime subscriber token with the public `url` and `apikey` a phone configures its client from (403 unless the org has the realtime entitlement; ?purpose=overlay is also granted when ?key= is the fixture's signed overlay key from the organiser's OBS URL and the org has streaming.overlay)", tag: "public", public: true, response: S.RealtimeTokenOut, query: { purpose: { schema: { type: "string", enum: ["overlay"] } }, key: { schema: { type: "string" } } } },
   { path: "/public/fixtures/{id}/video", method: "get", summary: "A fixture's Seazn-hosted video for the match page's player: `live`, while the fixture's latest stream session is on air to Seazn, and `replay`, its finished recordings in recording order, each numbered by its place among them all (one past the recording host's own delete, or one that cannot be signed right now, is left out and leaves a gap); each a signed playback URL (the token is a path segment) with the time its token expires. Answered `Cache-Control: private, no-store`. A fixture with no Seazn video, or one the public cannot see, answers `{ live: null, replay: [] }`", tag: "public", public: true, response: S.PublicFixtureVideo },
-  { path: "/public/client-reports", method: "post", summary: "A browser's report of a failure it saw (Task 25b; the match page's video player and its read of the video route, kind `video`), sent by `navigator.sendBeacon` (text/plain) or a keepalive fetch, for the server's log and its Sentry. The body is exactly one registered kind, closed and made of codes: a string shaped like an address, a query or a credential's name is a 400. At most 2 KiB (413). Every accepted body answers 204 with nothing said of what became of it: a report past its per-IP limit, or about a fixture with no Seazn stream, is dropped", tag: "public", public: true, request: ClientReport, status: 204, errors: [413] },
+  { path: "/public/client-reports", method: "post", summary: "A browser's report of a failure it saw (Task 25b; the match page's video player and its read of the video route, kind `video`), sent by `navigator.sendBeacon` (text/plain) or a keepalive fetch, for the server's log and its Sentry. The body is exactly one registered kind, closed and made of codes: a string shaped like an address, a query or a credential's name is a 400. At most 2 KiB (413). Every accepted body answers 204 with nothing said of what became of it: a report past its per-IP limits (one per IP, one per IP and fixture), or about a fixture with no Seazn stream, is dropped, and one past its kind's Sentry budget is logged to the server only", tag: "public", public: true, request: ClientReport, requestContentType: ["application/json", "text/plain"], status: 204, errors: [413] },
   { path: "/public/fixtures/{id}/board", method: "get", summary: "An online chess board's view-only state, polled by the public fixture page: whether the fixture's round is open, and the board's public snapshot (status; the position the move ledger stands at, the last move, whose turn, the ply, the clocks as of the last move and whether they run, whether the game is over, and which entrant plays White), or null before the board has one. Never a Lichess id, link or draw offer. 404 for a fixture the public cannot see. Spends the 300-a-minute poll bucket", tag: "public", public: true },
   { path: "/public/fixtures/{id}/overlay", method: "get", summary: "Stream overlay payload: the public live summary, the folded-state clock (football family) and innings numbers (cricket), the last eight surviving ledger events with consent-resolved person names, and the sponsor plan (`sponsorPlan`; null, and the stream shows no sponsor cards, when no sponsor is ticked for the stream, the rotation is off for the fixture's competition, the planner refused its input, or the plan could not be read). Planning the sponsor plan hands each new natural break its sponsor and mints the cards' short codes; `?preview=1` answers the same payload read-only, writing neither", tag: "public", public: true, query: { preview: { schema: { type: "string", enum: ["1"] } } } },
   { path: "/public/discovery", method: "get", summary: "Discovery directory (doc 15 §4): opted-in public competitions, listed once published (a draft never is), cursor-paginated", tag: "public", public: true, query: { sport: { schema: { type: "string" } }, country: { schema: { type: "string" } }, status: { schema: { type: "string", enum: ["live", "upcoming"] } }, q: { schema: { type: "string" } }, cursor: { schema: { type: "string" } }, limit: { schema: { type: "integer", minimum: 1, maximum: 48 } } } },
@@ -1106,12 +1106,9 @@ function operation(route: RouteSpec): Record<string, unknown> {
       ? {
           requestBody: {
             required: !route.requestOptional,
-            content: {
-              [route.requestContentType ?? "application/json"]: {
-                schema: toSchema(route.request),
-                example: requestExampleOf(route),
-              },
-            },
+            content: Object.fromEntries(
+              [route.requestContentType ?? "application/json"].flat().map((type) => [type, { schema: toSchema(route.request!), example: requestExampleOf(route) }]),
+            ),
           },
         }
       : {}),

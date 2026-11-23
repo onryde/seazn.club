@@ -4,12 +4,13 @@
 //   - its body is CLOSED (no additional properties, an unknown key a refusal) — swept per kind, by injecting a key;
 //   - every string it can carry is an enum, a literal, a uuid or a code (lib/client-reports.ts's pattern, the secret-word refusal on
 //     top): read from the PUBLISHED JSON schema, so a free `z.string()` slipped into a kind fails here before it can carry an address;
-//   - its facts are read through its own schema (a body of another shape throws), and a name with no entry is refused by name.
+//   - its facts are read through its own schema (a body of another shape throws), and a name with no entry is refused by name;
+//   - its Sentry budget (fix round 1, review I1) is the registry default unless it names its own, and a budget is whole and positive.
 // Sport: not applicable. A client's failure report is sport-agnostic.
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { CLIENT_REPORT_CODE, isClientReportCode } from "@/lib/client-reports";
-import { ReportCode } from "../define";
+import { CLIENT_REPORT_SENTRY_BUDGET, defineClientReportKind, ReportCode } from "../define";
 import { CLIENT_REPORT_KINDS, ClientReport, clientReportKind, UnknownClientReportKind } from "../kinds";
 import { VideoClientReport } from "../video";
 
@@ -92,6 +93,23 @@ describe("the client-report registry", () => {
       checked++;
     }
     expect(checked).toBe(refused.length + taken.length);
+  });
+
+  it("every kind's Sentry budget: the registry default unless it names its own (an override is kept); a budget is whole and positive", () => {
+    let checked = 0;
+    for (const k of CLIENT_REPORT_KINDS) {
+      expect(Number.isInteger(k.sentryBudget.max) && k.sentryBudget.max >= 1 && Number.isInteger(k.sentryBudget.windowSeconds) && k.sentryBudget.windowSeconds >= 1, k.kind).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(CLIENT_REPORT_KINDS.length);
+    expect(clientReportKind("video").sentryBudget, "video names none: the default itself").toBe(CLIENT_REPORT_SENTRY_BUDGET);
+    const schema = z.strictObject({ kind: z.literal("probe") });
+    const facts = () => ({ rateSubject: "s", dedupeSubject: "s", subjectExists: async () => true, message: "m", tags: {}, fields: {} });
+    const own = { max: 5, windowSeconds: 30 };
+    expect(defineClientReportKind(schema, facts, { sentryBudget: own }).sentryBudget).toBe(own);
+    expect(defineClientReportKind(schema, facts).sentryBudget).toBe(CLIENT_REPORT_SENTRY_BUDGET);
+    const refused = [{ max: 0, windowSeconds: 60 }, { max: 1.5, windowSeconds: 60 }, { max: 5, windowSeconds: 0 }, { max: 5, windowSeconds: -1 }, { max: Number.NaN, windowSeconds: 60 }];
+    for (const b of refused) expect(() => defineClientReportKind(schema, facts, { sentryBudget: b }), JSON.stringify(b)).toThrow(RangeError);
   });
 
   it("a kind reads its facts through its own schema: a body of another shape throws; a name with no entry is refused by name", () => {

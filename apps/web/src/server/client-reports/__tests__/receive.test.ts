@@ -7,7 +7,11 @@
 //   - a fixture that never streamed to Seazn (no session, or only a pasted-key one) is dropped the same way;
 //   - a Seazn fixture's first report is logged once and sent once (level warning, its codes as tags and extras);
 //   - a SECOND report in the window, from any viewer, is logged and not sent; another reason is sent; after the window it is sent again;
-//   - past the per-IP limit a report is dropped silently; another IP is not; the cap on one fixture does not cap another; it reopens.
+//   - past the per-IP-and-fixture limit a report is dropped silently; another IP is not; the cap on one fixture does not cap another; it
+//     reopens;
+//   - past the per-IP limit across EVERY fixture (fix round 1, review I1) a report is dropped before its fixture is looked up, on a
+//     fixture that IP never named; another IP is not capped by it.
+// What reaches Sentry's events and Logs, the kind's Sentry budget and a Redis outage are receive-sentry.test.ts (the real SDK).
 // Expected values come from the report the test sent and from the declarations (CLIENT_REPORT_LIMIT, the window), never from the code.
 // ONE SPORT, on purpose: the pipeline reads no sport rule; the rig rides `generic`.
 import { randomUUID } from "node:crypto";
@@ -15,10 +19,12 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 
 const clock = vi.hoisted(() => ({ now: 0 }));
 const counter = vi.hoisted(() => ({ off: false, windows: new Map<string, { count: number; until: number }>() }));
+// `off` = no Redis configured at all (the dev-box fallback), so `cacheEnabled` reads it too.
 vi.mock("@/lib/cache", async (orig) => {
   const actual = await orig<typeof import("@/lib/cache")>();
   return {
     ...actual,
+    cacheEnabled: () => !counter.off,
     incrWindow: async (key: string, windowSeconds: number) => {
       if (counter.off) return null;
       const held = counter.windows.get(key);
@@ -35,7 +41,8 @@ vi.mock("@sentry/nextjs", async (orig) => ({
   captureMessage: (message: string, context: unknown) => void sentry.messages.push({ message, context }),
 }));
 
-import { __setRateLimitCounterForTests, CLIENT_REPORT_LIMIT } from "@/lib/rate-limit";
+import { __setRateLimitCounterForTests, CLIENT_REPORT_IP_LIMIT, CLIENT_REPORT_LIMIT } from "@/lib/rate-limit";
+import { sql } from "@/lib/db";
 import { incrWindow } from "@/lib/cache";
 import { log } from "@/server/logger";
 import { rigUser } from "@/server/relay/__tests__/_session-rig";
@@ -151,6 +158,23 @@ describe.skipIf(!HAS_DB)("receiveClientReport — the video kind, over a real da
     expect(await receiveClientReport(route(fx.none), IP), "the same IP on another fixture: its own bucket (and unknown)").toBe("unknown");
     clock.now += CLIENT_REPORT_LIMIT.windowSeconds * 1000;
     expect(await receiveClientReport(route(fx.seazn), IP), "the limit's window over").toBe("logged");
+  });
+
+  it("past the IP's limit across every fixture, a report is dropped BEFORE its fixture is looked up — one the IP never named; another IP is not", async () => {
+    // A counting wrapper over the real tag: every lookup the pipeline makes goes through it.
+    let lookups = 0;
+    const db = ((...args: Parameters<typeof sql>) => {
+      lookups++;
+      return sql(...args);
+    }) as unknown as typeof sql;
+    for (let i = 0; i < CLIENT_REPORT_IP_LIMIT.max; i++) {
+      expect(await receiveClientReport(route(randomUUID()), IP, { db }), `report ${i + 1}: a fresh id, under every cap`).toBe("unknown");
+    }
+    expect(lookups, "each was looked up").toBe(CLIENT_REPORT_IP_LIMIT.max);
+    expect(await receiveClientReport(route(fx.seazn), IP, { db }), "a real Seazn fixture this IP never named").toBe("capped");
+    expect(lookups, "and it was not looked up").toBe(CLIENT_REPORT_IP_LIMIT.max);
+    expect([lines(warn).length, sentry.messages.length]).toEqual([0, 0]);
+    expect(await receiveClientReport(route(fx.seazn), OTHER_IP, { db }), "another IP").toBe("sent");
   });
 
   it("with no Redis to count in (the limiter inert, no window), every report is logged and sent — the documented fallback", async () => {

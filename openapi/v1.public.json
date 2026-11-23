@@ -58457,7 +58457,7 @@
     },
     "/api/v1/public/client-reports": {
       "post": {
-        "summary": "A browser's report of a failure it saw (Task 25b; the match page's video player and its read of the video route, kind `video`), sent by `navigator.sendBeacon` (text/plain) or a keepalive fetch, for the server's log and its Sentry. The body is exactly one registered kind, closed and made of codes: a string shaped like an address, a query or a credential's name is a 400. At most 2 KiB (413). Every accepted body answers 204 with nothing said of what became of it: a report past its per-IP limit, or about a fixture with no Seazn stream, is dropped",
+        "summary": "A browser's report of a failure it saw (Task 25b; the match page's video player and its read of the video route, kind `video`), sent by `navigator.sendBeacon` (text/plain) or a keepalive fetch, for the server's log and its Sentry. The body is exactly one registered kind, closed and made of codes: a string shaped like an address, a query or a credential's name is a 400. At most 2 KiB (413). Every accepted body answers 204 with nothing said of what became of it: a report past its per-IP limits (one per IP, one per IP and fixture), or about a fixture with no Seazn stream, is dropped, and one past its kind's Sentry budget is logged to the server only",
         "tags": [
           "public"
         ],
@@ -58466,6 +58466,160 @@
           "required": true,
           "content": {
             "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "video"
+                      },
+                      "fixtureId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "stage": {
+                        "type": "string",
+                        "enum": [
+                          "player",
+                          "route"
+                        ]
+                      },
+                      "source": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "live",
+                              "replay"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "partNo": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9999
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "player": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "hls",
+                              "embed"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "reason": {
+                        "type": "string",
+                        "enum": [
+                          "hls",
+                          "unsupported",
+                          "bundle",
+                          "element",
+                          "unsigned",
+                          "http",
+                          "network",
+                          "timeout",
+                          "answer"
+                        ]
+                      },
+                      "hlsType": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "hlsDetails": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "httpStatus": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 100,
+                            "maximum": 599
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "mediaCode": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 4
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "fixtureId",
+                      "stage",
+                      "source",
+                      "partNo",
+                      "player",
+                      "reason",
+                      "hlsType",
+                      "hlsDetails",
+                      "httpStatus",
+                      "mediaCode"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "example": {
+                "kind": "video",
+                "fixtureId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                "stage": "player",
+                "source": "live",
+                "partNo": 1,
+                "player": "hls",
+                "reason": "hls",
+                "hlsType": "example",
+                "hlsDetails": "example",
+                "httpStatus": 100,
+                "mediaCode": 1
+              }
+            },
+            "text/plain": {
               "schema": {
                 "oneOf": [
                   {

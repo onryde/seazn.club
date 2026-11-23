@@ -4,9 +4,12 @@
 //   - the body is read whatever its Content-Type (sendBeacon sends a string as text/plain) and handed over parsed, with the client IP;
 //   - a body that is not exactly one registered kind, closed, is a 400: an unknown kind, an unknown key, a field of the wrong type, and
 //     ANY string shaped like an address, a query, a path or a credential's name. The 400 never echoes what it refused;
-//   - a body over the cap is a 413: by its Content-Length before a byte is read, and by its bytes when it declares none;
+//   - a body over the cap is a 413: by its Content-Length before the handler reads a byte, and by its bytes when it declares none
+//     (proxy.ts runs on this path in production, where Next has buffered up to 10 MB before the handler: the cap bounds the handler);
 //   - every outcome of the pipeline answers the same empty 204, so the answer never says which one a report met.
 // Sport: not applicable. A client's failure report is sport-agnostic.
+import fs from "node:fs";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const receive = vi.hoisted(() => ({ fn: vi.fn<(report: unknown, ip: string) => Promise<string>>(async () => "sent") }));
@@ -16,7 +19,8 @@ vi.mock("@/server/client-reports", async (orig) => ({
 }));
 
 import { CLIENT_REPORTS_PATH } from "@/lib/client-reports";
-import { CLIENT_REPORT_MAX_BYTES } from "@/server/client-reports";
+import { buildOpenApiDocument, ROUTES } from "@/server/api-v1/openapi";
+import { CLIENT_REPORT_MAX_BYTES, ClientReport, type ClientReportOutcome } from "@/server/client-reports";
 import { POST } from "../route";
 
 const FIXTURE = "8c4f7a52-1f3e-4b9a-9d2c-3e5f6a7b8c9d";
@@ -50,7 +54,9 @@ describe("POST /api/v1/public/client-reports: a valid report", () => {
   });
 
   it("every outcome the pipeline can meet answers the same empty 204: the answer never says which (nor whether the fixture exists)", async () => {
-    const outcomes = ["capped", "unknown", "logged", "sent"] as const;
+    // Keyed by the outcome type, so an outcome added to the pipeline and missing here fails to compile.
+    const every: Record<ClientReportOutcome, true> = { capped: true, unknown: true, "over-budget": true, uncounted: true, logged: true, sent: true };
+    const outcomes = Object.keys(every) as ClientReportOutcome[];
     let checked = 0;
     for (const outcome of outcomes) {
       receive.fn.mockResolvedValueOnce(outcome);
@@ -59,6 +65,25 @@ describe("POST /api/v1/public/client-reports: a valid report", () => {
       checked++;
     }
     expect(checked).toBe(outcomes.length);
+  });
+});
+
+describe("the path the browser beacons to IS this route (review m3: a typo would 404 every beacon, and a beacon reads no answer)", () => {
+  it("the route file at CLIENT_REPORTS_PATH exists and is this handler; the published row at that path takes the route's own body", async () => {
+    const appDir = path.resolve(import.meta.dirname, "../../../../..");
+    const file = path.join(appDir, CLIENT_REPORTS_PATH, "route.ts");
+    expect(fs.existsSync(file), `${file} exists`).toBe(true);
+    expect(((await import(file)) as { POST: unknown }).POST).toBe(POST);
+    const rows = ROUTES.filter((r) => r.method === "post" && `/api/v1${r.path}` === CLIENT_REPORTS_PATH);
+    expect(rows).toHaveLength(1);
+    expect([rows[0]!.public, rows[0]!.request === ClientReport]).toEqual([true, true]);
+  });
+
+  it("the PUBLISHED spec takes the body as JSON and as sendBeacon's text/plain, each with the same schema (review m6)", () => {
+    type Doc = { paths: Record<string, { post?: { requestBody?: { content: Record<string, { schema: unknown }> } } }> };
+    const content = (buildOpenApiDocument({ published: true }) as Doc).paths[CLIENT_REPORTS_PATH]?.post?.requestBody?.content ?? {};
+    expect(Object.keys(content).sort()).toEqual(["application/json", "text/plain"]);
+    expect(content["text/plain"]!.schema).toEqual(content["application/json"]!.schema);
   });
 });
 
@@ -147,7 +172,7 @@ describe("POST /api/v1/public/client-reports: the size cap", () => {
     expect(receive.fn).toHaveBeenCalledTimes(1);
   });
 
-  it("a Content-Length over the cap is a 413 before a byte of the body is read", async () => {
+  it("a Content-Length over the cap is a 413 before the handler reads a byte of the body", async () => {
     // A body that fails if anyone reads it (pulled only on a read: highWaterMark 0): a read would make the answer the unreadable 400.
     const seen = { pulled: false };
     const stream = new ReadableStream<Uint8Array>({ pull(c) { seen.pulled = true; c.error(new Error("the body was read")); } }, { highWaterMark: 0 });
