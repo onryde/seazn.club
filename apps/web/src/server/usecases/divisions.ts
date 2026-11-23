@@ -79,7 +79,7 @@ import {
 import { anyRoundOpened } from "@/server/external-play/round-open";
 import { assertTimeControl } from "@/server/external-play/time-controls";
 import type { BoardgameClockInput } from "@/server/external-play/clock";
-import { assertOnlinePlayFits, countOnlineHeld, openOnlineCapGuard } from "@/server/external-play/online-entrant-cap";
+import { assertOnlinePlayFits, countOnlineHeld, openOnlineCapGuard, readPlanLimit } from "@/server/external-play/online-entrant-cap";
 import { assertOnlineChessOffered, onlineChessDisabled, onlineChessOffered } from "./external-play/online-chess-flag";
 import { audit } from "./audit";
 
@@ -1275,7 +1275,8 @@ export async function patchDivision(
         // plus sign-ups already let in (review C1: 200 pending sign-ups and no entrants used to pass, then materialise made 200). The
         // `division:` lock is held here (the config save and the camera gate both took it above), so the count cannot move under it.
         if (readOnlinePlay(nextConfig) === "lichess" && readOnlinePlay(currentConfig) !== "lichess") {
-          assertOnlinePlayFits(await countOnlineHeld(tx, id), onlineCapGuard?.planLimit ?? null);
+          // Fails closed when the plan was never read (re-review n2): an unread plan is not an unlimited one.
+          assertOnlinePlayFits(await countOnlineHeld(tx, id), readPlanLimit(onlineCapGuard));
         }
         const clockOrOnlineChanged =
           canonicalJson(nextConfig.clock ?? null) !== canonicalJson(currentConfig.clock ?? null) ||

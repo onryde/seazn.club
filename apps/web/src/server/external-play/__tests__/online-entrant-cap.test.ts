@@ -26,6 +26,8 @@ import {
   onlineCapBinds,
   onlineDivisionFullError,
   onlineRoomLeft,
+  PLAN_LIMIT_NOT_READ,
+  readPlanLimit,
 } from "../online-entrant-cap";
 import { supportsOnlinePlay } from "../online-play";
 
@@ -259,6 +261,15 @@ describe("assertOnlinePlayFits: turning online play on", () => {
       checked += 1;
     }
     expect(checked, "rows checked").toBe(table.length);
+  });
+});
+
+describe("readPlanLimit: a plan never read fails closed (cap-256 re-review n2)", () => {
+  it("an unopened guard throws by name; an unlimited plan (null) and a plan's number come back as read", () => {
+    expect(() => readPlanLimit(undefined), "never read is not unlimited").toThrow(PLAN_LIMIT_NOT_READ);
+    expect(PLAN_LIMIT_NOT_READ).toContain("plan limit not read");
+    expect(readPlanLimit({ planLimit: null }), "null IS an unlimited plan: only an unread guard is refused").toBeNull();
+    expect(readPlanLimit({ planLimit: 128 })).toBe(128);
   });
 });
 

@@ -43,6 +43,7 @@ import {
   countOnlineHeld,
   lockDivisionForCap,
   openOnlineCapGuard,
+  readPlanLimit,
 } from "@/server/external-play/online-entrant-cap";
 import { assertChessKindIndividual } from "@/lib/chess-individual-only";
 import { onlineChessOffered } from "./external-play/online-chess-flag";
@@ -1197,7 +1198,8 @@ export async function writeEntrantPatch(
       const [division] = await tx<{ sport_key: string; config: unknown }[]>`
         select sport_key, config from divisions where id = ${prior!.division_id}`;
       if (division && divisionPlaysOnline(division)) {
-        assertOnlineHeldRoom(capGuard?.planLimit ?? null, (await countOnlineHeld(tx, prior!.division_id)) + 1);
+        // Fails closed when the plan was never read (re-review n2): an unread plan is not an unlimited one.
+        assertOnlineHeldRoom(readPlanLimit(capGuard), (await countOnlineHeld(tx, prior!.division_id)) + 1);
       }
     }
     let row: EntrantRow | undefined;

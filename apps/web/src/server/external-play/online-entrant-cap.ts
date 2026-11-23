@@ -211,6 +211,18 @@ export async function openOnlineCapGuard(divisionId: string): Promise<OnlineCapG
   return { planLimit: await getLimit(d.org_id, "entrants.per_division.max", d.competition_id) };
 }
 
+/** The message a door fails with when it judges an online division and its plan was never read (cap-256 re-review n2). */
+export const PLAN_LIMIT_NOT_READ = "online entrant cap: plan limit not read";
+
+/** The plan limit a door judging an ONLINE division read before its transaction (Reinstate, the online switch). Fails closed (cap-256
+ *  re-review n2): a guard that was never opened is NOT an unlimited plan - `planLimit: null` is - so reading one as `null` would put the
+ *  flat 256 back where a lower plan binds (the m1 hole). An assertion, not a refusal: no state the product reaches gets here (the
+ *  guard is undefined only for a sport that cannot play online, and both doors ask only of a division that plays online). */
+export function readPlanLimit(guard: OnlineCapGuard | undefined): number | null {
+  if (guard === undefined) throw new Error(PLAN_LIMIT_NOT_READ);
+  return guard.planLimit;
+}
+
 /** Take the division lock a promotion will need, EARLY: right after the caller's registration row lock and before any entrant row
  *  is written, so the order is registration row -> `division:` -> entrants (the edge materialise's late entry already makes), never
  *  an entrant row and then `division:` against a Reinstate going the other way. A no-op without a guard. */
