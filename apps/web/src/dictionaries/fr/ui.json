@@ -2581,6 +2581,8 @@
   "schedule.notice.alreadyComplete": "La phase était déjà terminée : rien n'a changé.",
   "schedule.notice.stageAdded": "Phase ajoutée — {n} match(s) généré(s) pour les {topN} premiers.",
   "schedule.notice.stageAddedLater": "Phase ajoutée — les matchs seront générés à la fin de la phase précédente.",
+  "schedule.notice.stageAddedRefused": "{name} a été ajoutée, mais ses matchs ne peuvent pas être créés : {reason} Supprimez-la, ou gardez-la et modifiez la phase précédente.",
+  "schedule.addStage.keepRefused": "La garder",
   "schedule.error.tooFewGroupEntrants": "Impossible de générer les matchs pour l'instant — {groups} groupes nécessitent au moins {required} participants au total, soit 2 par groupe (actuellement {have}). Utilisez moins de groupes ou ajoutez des participants.",
   "schedule.error.tooFewGroupEntrantsSuggest": "Impossible de générer les matchs pour l'instant — {groups} groupes nécessitent au moins {required} participants au total, soit 2 par groupe (actuellement {have}). Réglez le nombre de groupes sur {suggested} ou ajoutez des participants.",
   "schedule.error.tooFewGroupEntrantsAdd": "Impossible de générer les matchs pour l'instant — {groups} groupes nécessitent au moins {required} participants au total, soit 2 par groupe (actuellement {have}). Ajoutez des participants.",

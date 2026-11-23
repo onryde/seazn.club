@@ -2581,6 +2581,8 @@
   "schedule.notice.alreadyComplete": "Stage was already complete: nothing changed.",
   "schedule.notice.stageAdded": "Stage added — {n} fixture(s) generated for the top {topN}.",
   "schedule.notice.stageAddedLater": "Stage added — fixtures will generate when the previous stage completes.",
+  "schedule.notice.stageAddedRefused": "{name} was added, but its fixtures can't be made: {reason} Delete it, or keep it and change the stage before it.",
+  "schedule.addStage.keepRefused": "Keep it",
   "schedule.error.tooFewGroupEntrants": "Can't generate matches yet — {groups} groups need at least {required} entrants in total, 2 per group (have {have}). Use fewer groups or add entrants.",
   "schedule.error.tooFewGroupEntrantsSuggest": "Can't generate matches yet — {groups} groups need at least {required} entrants in total, 2 per group (have {have}). Set the number of groups to {suggested}, or add entrants.",
   "schedule.error.tooFewGroupEntrantsAdd": "Can't generate matches yet — {groups} groups need at least {required} entrants in total, 2 per group (have {have}). Add entrants.",

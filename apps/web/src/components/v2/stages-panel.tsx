@@ -2461,6 +2461,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           }}
           onError={setError}
           onPaywall={setPaywallFeature}
+          onRefresh={() => router.refresh()}
         />
       )}
       {adjusting !== null && (
@@ -2521,6 +2522,14 @@ const ADD_KINDS = [
  *  immediately after creating the stage, falling back to "seed on
  *  completion" only via STAGE_NOT_READY below — exactly on_complete
  *  semantics (F2 plan Decision 1), never the propose/confirm "setup" flow. */
+/** W5 follow-ups fix round 1 (review I2): whether a Generate refused right after Add stage is the one wait the stage is built for -
+ *  its previous stage not complete yet, whose completion seeds and generates it (generate.ts, `previous_stage_incomplete`). Every
+ *  other refusal, STAGE_NOT_READY of another kind included (the engine's "takes rank 5, but only 4 are available"), is said by name:
+ *  promising fixtures "when the previous stage completes" for a stage that never fills was the defect. Pure, for the no-DOM tests. */
+export function addStageWaitsForPrevious(err: unknown): boolean {
+  return err instanceof ApiV1Error && err.code === "STAGE_NOT_READY" && err.extra.reason === "previous_stage_incomplete";
+}
+
 export function addStageProgression(topN: number) {
   return {
     sources: [{ stage: "previous" as const, take: [{ kind: "rankRange" as const, from: 1, to: topN }] }],
@@ -2568,12 +2577,15 @@ export function AddStageForm({
   onDone,
   onError,
   onPaywall,
+  onRefresh,
 }: {
   divisionId: string;
   nextSeq: number;
   onDone: (msg: string) => void;
   onError: (msg: string) => void;
   onPaywall: (featureKey: string) => void;
+  /** Re-read the board without a notice: a saved stage whose Generate was refused shows on it. */
+  onRefresh: () => void;
 }) {
   const msg = useMsg();
   const locale = useLocaleOrDefault();
@@ -2582,6 +2594,8 @@ export function AddStageForm({
   const [kind, setKind] = useState<string>("knockout");
   const [topN, setTopN] = useState(4);
   const [busy, setBusy] = useState(false);
+  // I2: a stage saved whose Generate was then refused by name - shown with the refusal, and Delete offered.
+  const [refused, setRefused] = useState<{ id: string; text: string } | null>(null);
 
   async function add() {
     setBusy(true);
@@ -2607,8 +2621,14 @@ export function AddStageForm({
       } catch (err) {
         // Previous stage not complete yet — the stage exists; completion will
         // seed + generate it.
-        if (err instanceof ApiV1Error && err.code === "STAGE_NOT_READY") {
+        if (addStageWaitsForPrevious(err)) {
           onDone(msg("schedule.notice.stageAddedLater"));
+        } else if (err instanceof ApiV1Error && err.code !== "PAYMENT_REQUIRED") {
+          // The stage exists and will not fill on its own: say why, and offer to delete it (the board shows it once refreshed).
+          const stageName = name.trim() || "Finals";
+          setRefused({ id: stage.id, text: msg("schedule.notice.stageAddedRefused", { name: stageName, reason: addStageErrorText(err, msg, locale) }) });
+          onRefresh();
+          return;
         } else {
           throw err;
         }
@@ -2630,6 +2650,45 @@ export function AddStageForm({
       <button type="button" onClick={() => setOpen(true)} className="btn btn-ghost text-xs">
         {msg("schedule.addStage")}
       </button>
+    );
+  }
+
+  async function deleteRefused(id: string) {
+    setBusy(true);
+    onError("");
+    try {
+      await apiV1(`/api/v1/stages/${id}`, { method: "DELETE" });
+      setRefused(null);
+      setOpen(false);
+      onDone(msg("schedule.notice.stageDeleted"));
+    } catch (err) {
+      onError(addStageErrorText(err, msg, locale));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (refused !== null) {
+    return (
+      <section data-testid="add-stage-refused" className="card flex min-w-0 flex-wrap items-center gap-3 p-4">
+        <p role="alert" className="min-w-0 basis-full text-sm text-red-600">
+          {refused.text}
+        </p>
+        <button type="button" disabled={busy} onClick={() => void deleteRefused(refused.id)} className="btn btn-danger text-xs">
+          {msg("confirm.deleteStage.label")}
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            setRefused(null);
+            setOpen(false);
+          }}
+          className="btn btn-ghost text-xs"
+        >
+          {msg("schedule.addStage.keepRefused")}
+        </button>
+      </section>
     );
   }
 

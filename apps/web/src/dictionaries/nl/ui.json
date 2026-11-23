@@ -2581,6 +2581,8 @@
   "schedule.notice.alreadyComplete": "Fase was al afgerond: er is niets gewijzigd.",
   "schedule.notice.stageAdded": "Fase toegevoegd — {n} wedstrijd(en) gegenereerd voor de top {topN}.",
   "schedule.notice.stageAddedLater": "Fase toegevoegd — wedstrijden worden gegenereerd wanneer de vorige fase is afgerond.",
+  "schedule.notice.stageAddedRefused": "{name} is toegevoegd, maar de wedstrijden kunnen niet worden aangemaakt: {reason} Verwijder de fase, of houd hem en pas de vorige fase aan.",
+  "schedule.addStage.keepRefused": "Behouden",
   "schedule.error.tooFewGroupEntrants": "Kan nog geen wedstrijden genereren — {groups} groepen hebben in totaal minstens {required} deelnemers nodig, 2 per groep (nu {have}). Gebruik minder groepen of voeg deelnemers toe.",
   "schedule.error.tooFewGroupEntrantsSuggest": "Kan nog geen wedstrijden genereren — {groups} groepen hebben in totaal minstens {required} deelnemers nodig, 2 per groep (nu {have}). Zet het aantal groepen op {suggested} of voeg deelnemers toe.",
   "schedule.error.tooFewGroupEntrantsAdd": "Kan nog geen wedstrijden genereren — {groups} groepen hebben in totaal minstens {required} deelnemers nodig, 2 per groep (nu {have}). Voeg deelnemers toe.",

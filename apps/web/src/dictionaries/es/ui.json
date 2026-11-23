@@ -2581,6 +2581,8 @@
   "schedule.notice.alreadyComplete": "La fase ya estaba completada: no ha cambiado nada.",
   "schedule.notice.stageAdded": "Fase añadida: se generaron {n} enfrentamiento(s) para los {topN} primeros.",
   "schedule.notice.stageAddedLater": "Fase añadida: los enfrentamientos se generarán cuando se complete la fase anterior.",
+  "schedule.notice.stageAddedRefused": "Se añadió {name}, pero no se pueden crear sus enfrentamientos: {reason} Elimínala, o consérvala y cambia la fase anterior.",
+  "schedule.addStage.keepRefused": "Conservarla",
   "schedule.error.tooFewGroupEntrants": "Aún no se pueden generar los partidos — {groups} grupos necesitan al menos {required} participantes en total, 2 por grupo (hay {have}). Usa menos grupos o añade más participantes.",
   "schedule.error.tooFewGroupEntrantsSuggest": "Aún no se pueden generar los partidos — {groups} grupos necesitan al menos {required} participantes en total, 2 por grupo (hay {have}). Pon el número de grupos en {suggested} o añade participantes.",
   "schedule.error.tooFewGroupEntrantsAdd": "Aún no se pueden generar los partidos — {groups} grupos necesitan al menos {required} participantes en total, 2 por grupo (hay {have}). Añade participantes.",
