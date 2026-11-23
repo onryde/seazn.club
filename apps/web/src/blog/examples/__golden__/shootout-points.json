@@ -36,7 +36,8 @@
     "beyondList": "Football, Cricket, Ice hockey and Hockey",
     "leagueOffFromStart": "football, cricket and hockey",
     "leagueOnFromStart": "Ice hockey",
-    "leagueOnVariants": "Hockey (FIH with shoot-out)"
+    "leagueOnVariants": "Hockey (FIH with shoot-out)",
+    "leagueBoardSports": "Carrom"
   },
   "table": {
     "caption": "What a win settled beyond regulation earns each side in a league, by sport and by way of settling it.",

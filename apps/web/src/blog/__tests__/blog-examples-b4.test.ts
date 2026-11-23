@@ -13,6 +13,7 @@ import { sportLabel } from "@/blog/labels";
 import { FORFEIT_REASONS } from "@seazn/engine/core";
 import { appDraw, betterSeedWins, forfeitOutClaim, playBracket } from "@/blog/examples/bracket-play-b4";
 import { declaredLeagueStages, leagueListsProblem } from "@/blog/examples/knockout-match-ends-level";
+import { boardListProblem } from "@/blog/examples/shootout-points";
 import { tooFewCopyProblem } from "@/blog/examples/third-place-match";
 import { THIRD_PLACE_MIN } from "@/lib/third-place";
 
@@ -120,6 +121,38 @@ describe("knockout-match-ends-level", () => {
     expect(failing(id, mutate(id, (r) => { rowWhere(r, 0, "Football")[1] = "Extra time, penalties"; })).length).toBeGreaterThan(0);
     expect(failing(id, mutate(id, (r) => { r.facts.leagueRulesPresetCount = 2; }))).toHaveLength(1);
     expect(failing(id, mutate(id, (r) => { r.table!.rows = r.table!.rows.filter((row) => row[0] !== "Tennis"); })).length).toBeGreaterThan(0);
+  });
+});
+
+describe("shootout-points: the sports that break a level league match with an extra board are named apart", () => {
+  const id = "shootout-points";
+  it("a missing, extra or renamed sport in the list is caught by the one claim, and the list is not empty", () => {
+    const r0 = mutate(id, () => undefined);
+    expect(failing(id, r0), "the committed result passes every claim before it is corrupted").toHaveLength(0);
+    const listed = String(r0.facts.leagueBoardSports);
+    expect(listed, "the fact exists").not.toBe("undefined");
+    expect(listed.length, "sports named").toBeGreaterThan(0);
+    // The list names no sport that the beyond-regulation list names: the two lists are apart.
+    expect(String(r0.facts.beyondList).toLowerCase(), "the beyond list holds none of them").not.toContain(listed.toLowerCase());
+    let caught = 0;
+    for (const v of ["", `${listed} and football`, "ice hockey", listed.toLowerCase()]) {
+      expect(failing(id, mutate(id, (r) => { r.facts.leagueBoardSports = v; })), `leagueBoardSports = '${v}'`).toHaveLength(1);
+      caught++;
+    }
+    expect(caught, "mutants run").toBe(4);
+  });
+  it("the claim refuses a sweep that saw nothing, a sport that decides some other way, a renamed decider word and a wrong list", () => {
+    const ok = { visited: builtinModules.length, board: ["Carrom"], other: [] as string[], word: "extra board", fact: "Carrom" };
+    expect(boardListProblem(ok), "a sound sweep").toBe(true);
+    const refused: [string, Parameters<typeof boardListProblem>[0], RegExp][] = [
+      ["no sport visited", { ...ok, visited: 0 }, /visited no sport/],
+      ["nobody breaks a tie with a board", { ...ok, board: [], fact: "" }, /nothing to name/],
+      ["a sport that decides some other way", { ...ok, other: ["Tennis"] }, /some other way/],
+      ["the product renames the decider", { ...ok, word: "tie board" }, /the post says 'extra board'/],
+      ["a list with another sport", { ...ok, fact: "Carrom and football" }, /leagueBoardSports is/],
+    ];
+    for (const [what, doctored, why] of refused) expect(boardListProblem(doctored), what).toMatch(why);
+    expect(refused.length, "cases refused").toBe(5);
   });
 });
 

@@ -12,9 +12,10 @@
 // (`reachableDecidedIn`, the sport's points rule, `shootoutAs`, `soBonus`), with the cfg composed straight from the schema,
 // in code that shares no formatter with `build()`, and compare the committed result to it. None reads `build()`.
 import { decidedInFor, pointsText } from "@seazn/engine/competition";
-import { stageDefaultsFor } from "@seazn/engine/sport";
+import { deciderKeysFor, stageDefaultsFor } from "@seazn/engine/sport";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { forEachSport } from "@seazn/engine/testkit";
+import publicDict from "@/dictionaries/en/public.json";
 import { sportLabel, variantLabel } from "@/blog/labels";
 import { NAMES, compact, leagueCfg, play, sentenceList, upperFirst, variantsOf, winnerLoserPoints, type Cfg, type StageRules, declaredLeaguePoints, joinAnd } from "./kit";
 import { startingVariantKey } from "./starting-variant";
@@ -143,6 +144,9 @@ function build(): ExampleResult {
   facts.leagueOffFromStart = lowerFirst(sentenceList(among(league.level)));
   facts.leagueOnFromStart = sentenceList(among(league.decides));
   facts.leagueOnVariants = sentenceList(among(league.decidesVariants));
+  // The sports that decide a level league match from the first match but settle nothing beyond regulation: their decider is an extra
+  // board (carrom), whose win is an ordinary one, so they are not in the list above.
+  facts.leagueBoardSports = sentenceList(league.decides.filter((l) => !beyondSports.includes(l)));
   return {
     facts,
     table: { caption: "What a win settled beyond regulation earns each side in a league, by sport and by way of settling it.", columns: COLUMNS, rows },
@@ -262,6 +266,17 @@ function claimsFor(module: AnySportModule): Claim[] {
   ];
 }
 
+/** What the post's "extra board" clause needs from the declarations, as a pure function so a test can hand it a sweep that saw nothing, a
+ *  sport that decides some other way, the wrong product word or the wrong list. `true`, or why not. */
+export function boardListProblem(d: { visited: number; board: string[]; other: string[]; word: string; fact: unknown }): string | true {
+  if (d.visited === 0) return "anti-vacuity: the sweep visited no sport";
+  if (d.board.length === 0) return "anti-vacuity: no sport breaks a level league match with an extra board, so the post's clause has nothing to name";
+  if (d.other.length > 0) return `${d.other.join(", ")} decide a level league match some other way than an extra board and settle nothing beyond regulation: the post needs a clause for them`;
+  if (d.word !== "extra board") return `the product calls the decider '${d.word}', the post says 'extra board'`;
+  const want = sentenceList(d.board);
+  return d.fact === want || `leagueBoardSports is '${String(d.fact)}', the declarations give '${want}'`;
+}
+
 function acrossSports(): Claim[] {
   return [
     {
@@ -303,6 +318,22 @@ function acrossSports(): Claim[] {
         ];
         for (const [k, v] of want) if (result.facts[k] !== v) return `${k} is '${String(result.facts[k])}', the declarations give '${v}'`;
         return true;
+      },
+    },
+    {
+      says: "the sports that break a level league match with an extra board are named apart: each settles nothing beyond regulation, so its board win is an ordinary win and it is not in the beyond-regulation list, and the extra board is the way each of them decides",
+      source: "deciderKeysFor of every sport's league stage under its starting variant (ENG/sport/module.d.ts), the sports that settle beyond regulation (reachableDecidedIn, as the claim above), and the public dictionary's decider word (format.rules.decider.extraBoard)",
+      check(result) {
+        const d = declaredLeagueStages();
+        const board: string[] = [];
+        const other: string[] = [];
+        const visited = forEachSport(({ module }) => {
+          const label = sportLabel(module.key);
+          if (expectedFor(module).length > 0 || !d.decides.includes(label)) return;
+          const keys = deciderKeysFor(module, "league", startingVariantKey(module));
+          (keys.length === 1 && keys[0] === "tieBoard" ? board : other).push(label);
+        });
+        return boardListProblem({ visited, board, other, word: String((publicDict as Record<string, unknown>)["format.rules.decider.extraBoard"]), fact: result.facts.leagueBoardSports });
       },
     },
   ];
