@@ -48,7 +48,6 @@ export const BLOG_PLANNED_SLUGS: ReadonlySet<string> = new Set([
   "swiss-chess-bye",
   "joining-or-leaving-a-swiss",
   "knockout-seeds-and-byes",
-  "what-is-a-plate",
   "how-americano-works",
   "how-mexicano-works",
   "how-a-ladder-works",

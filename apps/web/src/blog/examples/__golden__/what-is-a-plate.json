@@ -1,0 +1,75 @@
+{
+  "facts": {
+    "players": 7,
+    "plateSize": 3,
+    "plateNames": "Dev, Gus, Ana",
+    "excludedNames": "Fay",
+    "byeHolder": "Ana",
+    "sportsOffered": 11,
+    "sportCount": 11
+  },
+  "table": {
+    "caption": "A seven-player main draw after its first two rounds. The plate takes every player who lost their first real match. The top seed had a bye, so their first match was in round two; a player who did not turn up is left out.",
+    "columns": [
+      "Player (seed)",
+      "First match",
+      "First match result",
+      "Later",
+      "In the plate?"
+    ],
+    "rows": [
+      [
+        "Ana (1)",
+        "Semi-finals",
+        "Lost",
+        "Out",
+        "Yes"
+      ],
+      [
+        "Ben (2)",
+        "Quarter-finals",
+        "Won",
+        "Lost a later match",
+        "No"
+      ],
+      [
+        "Cy (3)",
+        "Semi-finals",
+        "Won",
+        "Still in",
+        "No"
+      ],
+      [
+        "Dev (4)",
+        "Quarter-finals",
+        "Lost",
+        "Out",
+        "Yes"
+      ],
+      [
+        "Eli (5)",
+        "Quarter-finals",
+        "Won",
+        "Still in",
+        "No"
+      ],
+      [
+        "Fay (6)",
+        "Quarter-finals",
+        "Did not play: lost by walkover",
+        "Out",
+        "No"
+      ],
+      [
+        "Gus (7)",
+        "Quarter-finals",
+        "Lost",
+        "Out",
+        "Yes"
+      ]
+    ]
+  },
+  "text": [
+    "The plate's field is Dev, Gus, Ana."
+  ]
+}

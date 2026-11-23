@@ -7,7 +7,8 @@ import { thirdPlaceMatch } from "./third-place-match";
 import { knockoutMatchEndsLevel } from "./knockout-match-ends-level";
 import { pagePlayoffAndStepladder } from "./page-playoff-and-stepladder";
 import { doubleEliminationExplained } from "./double-elimination-explained";
-const BATCH_4: readonly BlogExample[] = [thirdPlaceMatch, knockoutMatchEndsLevel, pagePlayoffAndStepladder, doubleEliminationExplained];
+import { whatIsAPlate } from "./what-is-a-plate";
+const BATCH_4: readonly BlogExample[] = [thirdPlaceMatch, knockoutMatchEndsLevel, pagePlayoffAndStepladder, doubleEliminationExplained, whatIsAPlate];
 // --- end blog batch 4 ---
 
 export const BLOG_EXAMPLES: readonly BlogExample[] = [standingsPoints, ...BATCH_4];

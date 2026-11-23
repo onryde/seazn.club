@@ -9,7 +9,7 @@ import { BLOG_GOLDENS } from "@/blog/examples/goldens";
 import type { ExampleResult } from "@/blog/examples/types";
 import { sportLabel } from "@/blog/labels";
 
-const B4 = ["third-place-match", "knockout-match-ends-level", "page-playoff-and-stepladder", "double-elimination-explained"];
+const B4 = ["third-place-match", "knockout-match-ends-level", "page-playoff-and-stepladder", "double-elimination-explained", "what-is-a-plate"];
 
 function failing(id: string, r: ExampleResult): string[] {
   return blogExample(id)!.claims.filter((c) => c.check(r) !== true).map((c) => c.says);
@@ -103,7 +103,7 @@ describe("double-elimination-explained", () => {
   });
 });
 
-describe(() => {
+describe("what-is-a-plate", () => {
   const id = "what-is-a-plate";
   it("a walkover loser in the plate, the bye holder left out, or a later loser drawn in is caught", () => {
     expect(failing(id, mutate(id, (r) => { rowWhere(r, 0, "Fay")[4] = "Yes"; })).length).toBeGreaterThan(0);
