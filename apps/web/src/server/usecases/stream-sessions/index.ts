@@ -42,6 +42,7 @@ import "server-only";
 //   stop          the organiser's Stop: the automatic-start block stamp and stopSession
 //   heartbeat     the Machine's beat: stored beat, programme-phase log, airings, sizing alarm, beat sample
 //   job-facts     the relay job's facts: the session as the Machine reads it
+//   live-notification  a Cloudflare live-input notification, RECORDED (an ingest_status event and a sample; never a decision)
 
 export { ACTIVE_STATES, TERMINAL_STATES } from "./session-row";
 export { defaultDeps } from "./deps";
@@ -72,3 +73,5 @@ export { currentSession } from "./current";
 export { stopSession } from "./stop";
 export { heartbeat } from "./heartbeat";
 export { sessionFactsForJob } from "./job-facts";
+export { recordLiveNotification } from "./live-notification";
+export type { LiveNotification, LiveNotificationOutcome } from "./live-notification";

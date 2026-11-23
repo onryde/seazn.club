@@ -173,6 +173,7 @@ const CAPTURE_TABLES = /\b(fixture_stream_events|fixture_stream_samples|stream_p
 const STREAM_SESSIONS_WRITERS = [
   "server/usecases/stream-sessions/heartbeat.ts",
   "server/usecases/stream-sessions/ingest-poll.ts",
+  "server/usecases/stream-sessions/live-notification.ts",
   "server/usecases/stream-sessions/persist.ts",
   "server/usecases/stream-sessions/phone-lost.ts",
 ];

@@ -64,7 +64,8 @@ export async function recordEvent(tx: Tx, e: EventInput): Promise<number> {
 
 export interface SampleInput {
   sessionId: string;
-  source: "heartbeat" | "poll";
+  /** `notification`: a Cloudflare live-input notification (V543; usecases/stream-sessions/live-notification.ts). */
+  source: "heartbeat" | "poll" | "notification";
   ingestState?: string | null;
   bitrateKbps?: number | null;
   fps?: number | null;

@@ -24,16 +24,20 @@ type PollSample = { ingest_state: string | null; output_state: string | null; sa
  *  reconnect. `ok` says which side of ok the timed word is on: a literal for a poll that READ, or the sample's own column
  *  for a coalesced poll, so one rule serves both and the coalesced word and its since share a statement (I-1). */
 export function outputSinceExpr(sessionId: string, ok: boolean | postgres.Fragment): postgres.Fragment {
+  // Task 27b: the POLL's events only. A Cloudflare live-input notification records an ingest_status event too
+  // (live-notification.ts, `payload.via = 'notification'`), but it carries no output word, so read here it would be a non-ok
+  // event that split an ok run, and its reconnect a clamp the poll never saw. The notification is a record, never a clock.
+  const polled = sql`coalesce(payload->>'via', '') <> 'notification'`;
   return sql`greatest(
     (select occurred_at from fixture_stream_events
-      where session_id = ${sessionId} and type = 'ingest_status'
+      where session_id = ${sessionId} and type = 'ingest_status' and ${polled}
         and seq > coalesce((select max(seq) from fixture_stream_events
-                             where session_id = ${sessionId} and type = 'ingest_status'
+                             where session_id = ${sessionId} and type = 'ingest_status' and ${polled}
                                and (coalesce(payload->>'outputState', '') = 'ok') <> ${ok}), 0)
       order by seq asc limit 1),
     (select live_at from fixture_stream_sessions where id = ${sessionId}),
     (select max(occurred_at) from fixture_stream_events
-      where not ${ok} and session_id = ${sessionId} and type = 'ingest_status'
+      where not ${ok} and session_id = ${sessionId} and type = 'ingest_status' and ${polled}
         and to_state = 'connected' and coalesce(from_state, '') <> 'connected'))`;
 }
 
