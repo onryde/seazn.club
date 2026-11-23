@@ -16,7 +16,7 @@ Yes, both. A Swiss is paired one round at a time, so a player can join late or l
 
 A round robin fixes its matches in advance. A newcomer needs extra matches to catch up, and a team that leaves halfway has played some opponents and not others. A Swiss has no fixed schedule. Each round is paired from the field and the scores at that moment, so a player who arrives is simply one more name in the next pairing, and a player who leaves is one fewer.
 
-Here is a {{fact:swiss-late-and-withdraw.roundCount}}-round chess Swiss that starts with {{fact:swiss-late-and-withdraw.playerCount}} players. {{fact:swiss-late-and-withdraw.leaverName}} leaves once round {{fact:swiss-late-and-withdraw.leaverRound}} has been paired, and {{fact:swiss-late-and-withdraw.lateName}} joins from round {{fact:swiss-late-and-withdraw.lateFirstRound}}.
+Here is a {{fact:swiss-late-and-withdraw.roundCount}}-round chess Swiss that starts with {{fact:swiss-late-and-withdraw.playerCount}} players, listed best seed first. {{fact:swiss-late-and-withdraw.leaverName}} leaves once round {{fact:swiss-late-and-withdraw.leaverRound}} has been paired, and {{fact:swiss-late-and-withdraw.lateName}} joins from round {{fact:swiss-late-and-withdraw.lateFirstRound}}.
 
 {{example:swiss-late-and-withdraw}}
 
@@ -36,9 +36,9 @@ When the organiser adds a player, it depends on how far the round that is alread
 
 Players who arrive without the organiser pressing anything, such as a paid registration, a player promoted from a waiting list or an import, always take the last case. Nothing the organiser did not do moves a pairing that is already published.
 
-The first case is a deliberate difference from the chess federation, whose handling rules say published pairings are not changed and a late entrant joins the next round. Seazn lets the organiser re-pair a round that has not started because it costs nobody a game, and follows the federation's rule in every other case.
+The first two cases are deliberate differences from the chess federation, whose handling rules say published pairings are not changed and a late entrant joins the next round. Seazn lets the organiser re-pair a round that has not started, or seat the newcomer against the player who has the bye, because neither costs anybody a game. In every other case it follows the federation's rule.
 
-Once the last round has started and no bye is left to play, nobody else can join: the app says so ("The last round has started, so there is no round left to join."). When the whole Swiss is over, it says so as well.
+Once the last round has started and no bye is left to play, there is no round left to join, and the app says so ("The last round has started, so there is no round left to join."). Under that message the organiser is offered "Add a round", and once the round is added ("Add the player again to seat them in it") the player is added again and joins from the new round. When the Swiss has been finished, the Entrants tab is locked: "no one new can be added".
 
 ## Leaving
 
@@ -48,4 +48,4 @@ A round that is already paired is not paired again when someone leaves, so {{fac
 
 ## In every sport
 
-These two rules do not depend on the sport. The Swiss format is offered in all {{fact:swiss-late-and-withdraw.sportCount}} sports, and a late player or a player who leaves is handled the same way in each.
+These two rules do not depend on the sport. The Swiss format is offered in all {{fact:swiss-late-and-withdraw.sportCount}} sports. Which round a late player joins reads nothing about the sport, and a player who leaves hands their opponent a win in every sport, worth what a win is worth there.

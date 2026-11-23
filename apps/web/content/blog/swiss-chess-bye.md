@@ -22,7 +22,7 @@ Here are {{fact:swiss-bye-rounds.playerCount}} chess players over {{fact:swiss-b
 
 In round 1 nobody has a score, so the bye goes to the lowest seed, {{fact:swiss-bye-rounds.r1Bye}}. In round 2 the lowest score is shared by {{fact:swiss-bye-rounds.r2Lowest}}, and the bye goes to the lower seed, {{fact:swiss-bye-rounds.r2Bye}}. In round 3 {{fact:swiss-bye-rounds.r3Lowest}} are level on the lowest score. {{fact:swiss-bye-rounds.r1Bye}} and {{fact:swiss-bye-rounds.r2Bye}} have already had a bye, so it goes to {{fact:swiss-bye-rounds.r3Bye}}, and a rule that let a player have it twice would have chosen differently. Each bye is worth {{fact:swiss-bye-rounds.byeWorth}}, the same as a win.
 
-The bye also has to leave the rest of the field a legal set of boards. If the lowest-placed player sitting out would leave the others with no pairing that avoids a rematch, the bye moves up to the next player. A round is never left unpairable for the sake of giving the bye to the lowest player.
+The bye also has to leave the rest of the field a legal set of boards. If the lowest-placed player sitting out would leave the others with no pairing that avoids a rematch, or in chess one the colour limits allow, the bye moves up to the next player. A round is never left unpairable for the sake of giving the bye to the lowest player.
 
 ## A bye is a clean win
 
@@ -32,7 +32,7 @@ On the Standings tab the bye shows as one game played and one win, with a "Bye" 
 
 ## A bye in the tie-breaks
 
-Chess Swiss tables are often split by Buchholz, which adds up the scores of your opponents. A bye has no opponent. Seazn follows the chess federation's tie-break rules, which give the round a stand-in: an imaginary opponent on your own score. So a bye adds your own score to your Buchholz, and never the score of an opponent you did not play.
+Chess Swiss tables are often split by Buchholz, which adds up the scores of your opponents. A bye has no opponent. Seazn follows the chess federation's tie-break rules, which give the round a stand-in: an imaginary opponent on your own score. So a bye adds a score of your own to your Buchholz, and never the score of an opponent you did not play. That score is your own final score, but never more than drawing every game would have given you: {{fact:swiss-bye-rounds.byeBuchholzCap}} points over {{fact:swiss-bye-rounds.roundCount}} rounds. A player who finishes above that adds the cap, not their score.
 
 ## What a bye earns in each sport
 
