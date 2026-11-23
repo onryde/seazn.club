@@ -23,7 +23,7 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
-import { createStages, generateStageFixtures, pairSwissNextRound, previewSwissNextRound } from "../stages";
+import { createStages, generateStageFixtures, pairSwissNextRound, previewSwissNextRound, swissInputHash } from "../stages";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOrg } from "./_seed";
 
@@ -212,6 +212,21 @@ describe.skipIf(!HAS_DB)("MD-1 Task 5: Swiss next-round preview and stale-checke
 
     expect(await refusalOf(pairSwissNextRound(r.auth, r.stageId, preview.inputHash, preview.round))).toEqual({ status: 409, code: "MD_STALE" });
     expect(await seatedIn(r.stageId, 2), "nothing was seated").toBe(0);
+  }, 180_000);
+
+  it("a preview hashed before the float history (input hash v2) is MD_STALE after it: the round may pair differently now", async () => {
+    // PR #1291: the Pair reads the float history since v3, so a proposal shown before the deploy may not be what the approve
+    // seats after it. The v2 hash is the very one a pre-deploy preview carried: the material did not change, only its version.
+    const r = await chessSwiss({ players: 6, seeded: true });
+    expect(await decideRoundOne(r, (b) => chessWin(r.auth, b, b.home_entrant_id!)), "rig: round 1 decided").toBe(3);
+    const v2 = await withTenant(r.auth.orgId, (tx) => swissInputHash(tx, r.stageId, 2));
+    const preview = await previewSwissNextRound(r.auth, r.stageId);
+    expect(v2, "premise: a v2 hash is a hash").toMatch(/^[0-9a-f]{64}$/);
+
+    expect(await refusalOf(pairSwissNextRound(r.auth, r.stageId, v2, preview.round))).toEqual({ status: 409, code: "MD_STALE" });
+    expect(await seatedIn(r.stageId, 2), "nothing was seated").toBe(0);
+    // Positive pair: today's preview, over the same inputs, pairs.
+    expect(await pairSwissNextRound(r.auth, r.stageId, preview.inputHash, preview.round)).toEqual({ round: 2 });
   }, 180_000);
 
   it("pair twice: the second is MD_ALREADY", async () => {

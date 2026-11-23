@@ -21,7 +21,7 @@ import { maxRoundPoints } from "@/server/engine-db/swiss-max-round-points";
 // but these two ARE exported from the module itself (pass 2); reuse them
 // rather than re-deriving lane/thirdPlace from round/position (never
 // arithmetic — see parseExtKey's own comment).
-import { rankedStageStandings, stageTablePoints } from "@/server/engine-db/competition";
+import { rankedStageStandings, stageTablePoints, stageTablePointsBefore } from "@/server/engine-db/competition";
 import { forfeitPlayedFacts, playedFor } from "@/server/engine-db/forfeit-played";
 import { isSwissBoardSeated, isSwissByeShellExtKey, latestSeatedSwissRound, nextUnseatedSwissRound, planSwissShells } from "@/lib/swiss-shell";
 import { inSwissRoundField, swissFirstRoundIn } from "@/lib/swiss-late-entry";
@@ -284,6 +284,81 @@ export function buildSwissHistory(
     }
   }
   return { played, colours, byes };
+}
+
+/** The columns of a stage row the float history reads. */
+type SwissFloatRow = Pick<SwissExistingFixture, "round_no" | "home_entrant_id" | "away_entrant_id">;
+
+/** A two-seated row of a round before `target`: a board the float history reads. A bye row has one seat and is no board. */
+const isFloatBoard = (f: SwissFloatRow, target: number): boolean =>
+  f.round_no < target && f.home_entrant_id !== null && f.away_entrant_id !== null;
+
+/** The rounds whose boards `swissFloatHistory` reads for a Pair of `target` - the cuts `stageTablePointsBefore` is asked for. */
+export function swissFloatRounds(existing: readonly SwissFloatRow[], target: number): number[] {
+  return [...new Set(existing.filter((f) => isFloatBoard(f, target)).map((f) => f.round_no))].sort((a, b) => a - b);
+}
+
+/** Each of `rounds`' newest pairing row on the ledger (its `division_events.seq`): the Pair that seated the boards it holds now
+ *  (`fixtures_generated`, a Redo's step row included, or a late entry's re-Pair, `swiss_late_entry` case (a)) - the rows
+ *  `swissFinalMaxSentEarlier` reads. A round with no such row (paired before the rows named their round) is null.
+ *  No rounds asked, no read. */
+async function swissRoundPairSeqs(
+  tx: Tx,
+  stageId: string,
+  divisionId: string,
+  rounds: readonly number[],
+): Promise<Map<number, number | null>> {
+  const out = new Map<number, number | null>();
+  if (rounds.length === 0) return out;
+  const rows = await tx<{ round: number; seq: number }[]>`
+    select distinct on (payload->>'round') (payload->>'round')::int as round, seq::int as seq
+      from division_events
+     where division_id = ${divisionId} and payload->>'stage_id' = ${stageId} and payload ? 'round'
+       and (type = 'fixtures_generated' or (type = 'swiss_late_entry' and payload->>'case' = 'a'))
+     order by payload->>'round', seq desc`;
+  const newest = new Map(rows.map((r) => [r.round, r.seq]));
+  for (const round of rounds) out.set(round, newest.get(round) ?? null);
+  return out;
+}
+
+/**
+ * The engine's `SwissHistory.floats` for a Pair of round `target` (owner-approved 2026-11-23). Before this the Pair sent no
+ * floats, the engine read every player as never floated (`floatCountOf` = 0), and its "avoid repeat floats" ordering never
+ * applied: FIDE C.04.3 (1 Feb 2026) C14/C16 ("minimise resident downfloaters who received a downfloat the previous round /
+ * two rounds before") could not hold.
+ *
+ * The contract is the engine's own (seazn.club.engine src/scheduling/swiss.ts:61, "downfloat count"; :121, `floated`,
+ * "entrants that downfloated this round (merge into history.floats)"; its producer src/testkit/simulation.ts:658 adds 1 per
+ * listed id per round): per entrant, how many earlier rounds of the stage it floated DOWN in. The engine lists a round's
+ * downfloater when it seats a board (swiss.ts `seat`): the stronger side of a board whose two sides came into the round on
+ * different scores. So, from the stage's own rows: every two-seated row of a round before `target` whose sides' points going
+ * into that round (`pointsBefore`, the stage table's own fold over the earlier rounds and the points adjustments written
+ * before the round was paired: `stageTablePointsBefore`) differ adds one to the side on more. Level boards add nothing; the upfloater has no field. A bye row (one seat) is never in `floated`,
+ * so a pairing-allocated bye is no float - FIDE 1.4.3 counts one, the engine does not. A walkover or double walkover was a
+ * board when paired, so its stronger side floated then, whatever came of it (FIDE 1.4.3 instead gives the forfeit WINNER the
+ * downfloat). An entrant the cut does not list (seated for the first time) came in on 0.
+ *
+ * A board whose round has no cut in `pointsBefore` is refused by name, never read as level.
+ */
+export function swissFloatHistory(
+  existing: readonly SwissFloatRow[],
+  target: number,
+  pointsBefore: ReadonlyMap<number, ReadonlyMap<string, number>>,
+): Map<string, number> {
+  const floats = new Map<string, number>();
+  for (const f of existing) {
+    if (!isFloatBoard(f, target)) continue;
+    const points = pointsBefore.get(f.round_no);
+    if (points === undefined) {
+      throw new EngineError("CONFIG_INVALID", `swiss float history: no table points before round ${f.round_no}`, { round: f.round_no, target });
+    }
+    const home = points.get(f.home_entrant_id!) ?? 0;
+    const away = points.get(f.away_entrant_id!) ?? 0;
+    if (home === away) continue;
+    const down = home > away ? f.home_entrant_id! : f.away_entrant_id!;
+    floats.set(down, (floats.get(down) ?? 0) + 1);
+  }
+  return floats;
 }
 
 /** W3 app-B T7 (X-SW-11, engine T4c re-review): whether an EARLIER round of this stage was paired with `finalRoundMaxScore`.
@@ -552,6 +627,12 @@ export async function swissGen(
   // (app-B T7) is measured under it, so the topscorer line and the scores it is compared with are in one unit.
   const { points, rule } = await stageTablePoints(tx, stageId);
   const score = new Map(field.map((e) => [e.id, points.get(e.id) ?? 0]));
+  // The float history (engine `SwissHistory.floats`; FIDE C.04.3 C14): who floated down in which earlier round, off the
+  // same table read at each earlier round's start - its results before that round, and the points adjustments written
+  // before that round's Pair (`swissRoundPairSeqs`). Every Pair reaches it here - Generate, Pair next, the Match Day preview
+  // and a late entry's re-Pair all run this function.
+  const floatCuts = await swissRoundPairSeqs(tx, stageId, divisionId, swissFloatRounds(existing, target));
+  const floats = swissFloatHistory(existing, target, await stageTablePointsBefore(tx, stageId, floatCuts));
 
   const cascadeRank = new Map<string, number>();
   if (swissPairRanksTable(pairing, existing)) {
@@ -606,7 +687,7 @@ export async function swissGen(
   }
   const paired = pairRound(
     standings,
-    { played, colours, byes },
+    { played, colours, byes, floats },
     {
       chess,
       ...(rankAdjacent ? { pairing: "rank_adjacent" as const } : {}),

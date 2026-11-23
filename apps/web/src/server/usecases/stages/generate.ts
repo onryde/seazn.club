@@ -428,8 +428,13 @@ class SwissPreviewRollback extends Error {
   }
 }
 
+/** The material version `swissInputHash` hashes under. A bump refuses every preview hashed before it as stale (MD_STALE), as
+ *  a change to how the Pair reads the same inputs must: v3 (2026-11-23) is the float history (`swissFloatHistory`), with which
+ *  a round previewed before the deploy can pair differently after it. Only the version moved: the material is v2's. */
+const SWISS_INPUT_HASH_VERSION = 3;
+
 /**
- * The INPUTS of the next Swiss round, as one sha256 (hex) over (v: 2):
+ * The INPUTS of the next Swiss round, as one sha256 (hex) over (v: `SWISS_INPUT_HASH_VERSION`):
  *  - the stage's fixtures in id order, each by id, status and result version (its score ledger's head `seq`, and its
  *    stored outcome, which a bye award or a decision written off the ledger moves);
  *  - the division's active entrants as the Swiss reads them (`swissActiveEntrants`: id, seed and first round), in id
@@ -442,7 +447,7 @@ class SwissPreviewRollback extends Error {
  * the preview hashes (`previewSwissNextRound`), so it is an input both sides read, never one the pair draws afresh. Read
  * it under the division lock, so it describes the state the Generate after it pairs.
  */
-export async function swissInputHash(tx: Tx, stageId: string): Promise<string> {
+export async function swissInputHash(tx: Tx, stageId: string, version: number = SWISS_INPUT_HASH_VERSION): Promise<string> {
   const [stage] = await tx<{ division_id: string; config: string; table_rules_pinned: string | null; division_config: string | null }[]>`
     select s.division_id, s.config::text as config, s.table_rules_pinned::text as table_rules_pinned,
            d.config::text as division_config
@@ -465,7 +470,7 @@ export async function swissInputHash(tx: Tx, stageId: string): Promise<string> {
     a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
   );
   const material = {
-    v: 2,
+    v: version,
     stage: [stage.config, stage.table_rules_pinned, stage.division_config],
     fixtures: fixtures.map((f) => [f.id, f.status, f.ledger_head, f.outcome]),
     entrants: entrants.map((e) => [e.id, e.seed, e.swiss_first_round]),

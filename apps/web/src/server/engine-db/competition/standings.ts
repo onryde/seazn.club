@@ -229,10 +229,66 @@ export async function stageTablePoints(
   stageId: string,
 ): Promise<{ points: ReadonlyMap<string, number>; rule: PointsRule }> {
   const inputs = await loadStageInputs(tx, stageId);
-  const { tables } = completeTableStage(toTableStage(inputs, await loadLotsDraws(tx, stageId)), inputs.tableFixtures);
+  return { points: tablePointsOf(inputs, await loadLotsDraws(tx, stageId)), rule: inputs.rules.points };
+}
+
+/**
+ * Swiss float history (engine `SwissHistory.floats`; FIDE C.04.3 C14): each entrant's points on the stage's own table as they
+ * stood going INTO each round of `cuts` - the score that round's boards were paired on, so the Pair can tell which earlier board
+ * was between different scores (`swissFloatHistory`, usecases/stages/swiss-gen.ts). The same load and the same fold as
+ * `stageTablePoints` (`tablePointsOf`), over the fixtures of the rounds before each one only: one authority for the number,
+ * never a second count of the results. Read-only, like `stageTablePoints` (no lots draw is stored).
+ *
+ * A points adjustment names no round, so it is cut by when it was WRITTEN: only one whose ledger row comes before the round's
+ * ledger seq in `cuts` (the round's newest pairing row, from the caller) is folded. An adjustment written after a round was
+ * paired moved the table after its boards were seated, so it is not in that round's score. A round whose seq is null (no
+ * such row known) folds every adjustment in force: the table as it stands. `division_events.seq` is the ordered field: gapless
+ * per division and unique with it (db V220__division_events.sql), each row appended at the division's next seq under the
+ * division lock (the adjustment's writer: usecases/points-adjustments.ts `appendRow`; the Pair's: usecases/stages/helpers.ts
+ * `appendDivisionEvent`). `created_at` is not: every row of one transaction shares its `now()`.
+ *
+ * Otherwise the table is read as it stands now: a result corrected, or an adjustment undone, after a later round was paired is
+ * read corrected. No cuts asked, no read.
+ */
+export async function stageTablePointsBefore(
+  tx: Tx,
+  stageId: string,
+  /** round -> the ledger seq its adjustments are cut at (null: every adjustment in force). */
+  cuts: ReadonlyMap<number, number | null>,
+): Promise<ReadonlyMap<number, ReadonlyMap<string, number>>> {
+  const out = new Map<number, ReadonlyMap<string, number>>();
+  if (cuts.size === 0) return out;
+  const inputs = await loadStageInputs(tx, stageId);
+  const lotsDraws = await loadLotsDraws(tx, stageId);
+  for (const [round, ledgerSeq] of cuts) out.set(round, tablePointsOf(inputsBefore(inputs, round, ledgerSeq), lotsDraws));
+  return out;
+}
+
+/** Every entrant's points on the stage's table: the published table's fold (`completeTableStage`), its rows' `points`. */
+function tablePointsOf(inputs: StageInputs, lotsDraws: Awaited<ReturnType<typeof loadLotsDraws>>): Map<string, number> {
+  const { tables } = completeTableStage(toTableStage(inputs, lotsDraws), inputs.tableFixtures);
   const points = new Map<string, number>();
   for (const pool of tables.pools) for (const row of pool.rows) points.set(row.entrantId, row.points);
-  return { points, rule: inputs.rules.points };
+  return points;
+}
+
+/** The stage as it stood going into `round`: its fixtures of earlier rounds only, a declared absence only from an earlier
+ *  round (the engine's map omits an entrant with none), and the adjustments written before `ledgerSeq` (all, when null).
+ *  The entrants are kept whole: one seated only later reads 0, and one who has since left keeps what he held. */
+function inputsBefore(inputs: StageInputs, round: number, ledgerSeq: number | null): StageInputs {
+  const before = (r: number | null | undefined): boolean => r != null && r < round;
+  const swissAbsentRounds = new Map<string, readonly number[]>();
+  for (const [entrantId, absent] of inputs.swissAbsentRounds) {
+    const earlier = absent.filter(before);
+    if (earlier.length > 0) swissAbsentRounds.set(entrantId, earlier);
+  }
+  return {
+    ...inputs,
+    fixtures: inputs.fixtures.filter((f) => before(f.round_no)),
+    tableFixtures: inputs.tableFixtures.filter((f) => before(f.roundNo)),
+    swissAbsentRounds,
+    adjustments: ledgerSeq === null ? inputs.adjustments : inputs.adjustments.filter((a) => a.seq < ledgerSeq),
+  };
 }
 
 /**
