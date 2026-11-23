@@ -24,7 +24,7 @@ import { POST } from "../route";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 /** A replay fake whose copy ids are this test's own: the webhook looks a copy up by its id across the whole table (Bunny's guids are
- *  unique in the library), and every other test's fake counts `fake-video-1, -2, …` in the same database. */
+ *  unique in the library, and one row per copy since V543), so a readable prefix of this test's own keeps its ids apart. */
 const freshHost = () => new FakeReplayHost({ idPrefix: `t27-${randomUUID()}` });
 const URL_ = "https://test.local/api/webhooks/bunny-stream";
 const SETTINGS = {

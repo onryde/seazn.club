@@ -71,14 +71,10 @@ export async function applyBunnyEvent(deps: BunnyWebhookDeps, ev: BunnyEvent, no
 interface HeldRow { id: string; state: string; cf_duration_seconds: number | null; cf_height: number | null; attempts: number }
 
 async function act(deps: BunnyWebhookDeps, ev: BunnyEvent, outcome: "playable" | "failed", now: Date): Promise<BunnyEventResult> {
-  const held = await sql<HeldRow[]>`
-    select id, state, cf_duration_seconds, cf_height, attempts from fixture_video_replays where bunny_video_id = ${ev.videoId} limit 2`;
-  if (held.length > 1) {
-    // Every write names one row's own copy: two rows naming one copy is a write nothing makes. Refused by name, never guessed at.
-    log.error({ guid: ev.videoId, replayIds: held.map((r) => r.id) }, "seazn replay webhook: a copy is named by more than one row — refused, nothing written");
-    return "ignored";
-  }
-  if (held.length === 1) return heldCopy(deps, held[0]!, ev, outcome, now);
+  // At most one row names a copy: V543's unique index (fixture_video_replays_bunny_video_id_key), which this read also rides.
+  const [held] = await sql<HeldRow[]>`
+    select id, state, cf_duration_seconds, cf_height, attempts from fixture_video_replays where bunny_video_id = ${ev.videoId}`;
+  if (held) return heldCopy(deps, held, ev, outcome, now);
   return strayCopy(deps, ev);
 }
 

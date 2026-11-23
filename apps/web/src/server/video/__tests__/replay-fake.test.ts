@@ -35,6 +35,17 @@ describe("FakeReplayHost: collections and ids", () => {
     expect(fake.collectionName("never-made")).toBeNull();
   });
 
+  it("Task 27b: two fakes never name the same copy — a copy's id is unique across the replay table (V543), and every test in a shared database, or a restarted `next dev`, makes its own fake; a named prefix is kept as given (counts reported)", async () => {
+    const fakes = [new FakeReplayHost(), new FakeReplayHost(), new FakeReplayHost()];
+    const ids: string[] = [];
+    for (const fake of fakes) for (let i = 0; i < 3; i++) ids.push(await fetchOne(fake));
+    expect(ids).toHaveLength(9);
+    expect(new Set(ids).size, "nine fetches over three fakes, nine ids").toBe(9);
+    for (const id of ids) expect(id).toMatch(/^fake-video-[0-9a-f]{8}-\d+$/);
+    const named = new FakeReplayHost({ idPrefix: "t-readable" });
+    expect(await fetchOne(named)).toBe("t-readable-1");
+  });
+
   it("answers a different id for every fetch, even of one title, and reads the title and collection it was sent", async () => {
     const fake = new FakeReplayHost();
     const ids = [
@@ -52,12 +63,14 @@ describe("FakeReplayHost: collections and ids", () => {
     expect(fake.sourceOf("never-stored")).toBeNull();
   });
 
-  it("is deterministic: two fresh fakes issue the same ids in the same order", async () => {
+  it("is deterministic under a named prefix: two fresh fakes given one prefix issue the same ids in the same order (the default prefix is per instance, Task 27b)", async () => {
     const seq = async () => {
-      const f = new FakeReplayHost();
+      const f = new FakeReplayHost({ idPrefix: "t-same" });
       return [await f.createCollection("o"), await fetchOne(f), await fetchOne(f)];
     };
-    expect(await seq()).toEqual(await seq());
+    const first = await seq();
+    expect(first).toEqual(["fake-collection-1", "t-same-2", "t-same-3"]);
+    expect(await seq()).toEqual(first);
   });
 });
 

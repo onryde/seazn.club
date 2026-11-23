@@ -13,7 +13,6 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/sentry", () => ({ captureError: vi.fn() }));
 
 import { sql } from "@/lib/db";
-import { log } from "@/server/logger";
 import { setRelayDriversForTest } from "@/server/relay/drivers";
 import type { FakeIngest } from "@/server/relay/fakes";
 import type { BunnyEvent } from "@/server/video/bunny-webhook";
@@ -25,7 +24,7 @@ import { type BunnyWebhookDeps, applyBunnyEvent } from "../seazn-replay-webhook"
 
 const HAS_DB = !!process.env.DATABASE_URL;
 /** A replay fake whose copy ids are this test's own: the webhook looks a copy up by its id across the whole table (Bunny's guids are
- *  unique in the library), and every other test's fake counts `fake-video-1, -2, …` in the same database. */
+ *  unique in the library, and one row per copy since V543), so a readable prefix of this test's own keeps its ids apart. */
 const freshHost = () => new FakeReplayHost({ idPrefix: `t27-${randomUUID()}` });
 const MIN = 60_000;
 /** BUNNY_STREAM_LIBRARY_ID as the route hands it over. */
@@ -311,17 +310,18 @@ describe.skipIf(!HAS_DB)("applyBunnyEvent — the Bunny Stream webhook (Task 27)
     expect(await applyBunnyEvent(deps, event(made!, 4), now), "a later event for the removed copy").toBe("ignored");
   });
 
-  it("guard: a copy two rows name is a write nothing makes — refused by name, nothing written, the host never asked", async () => {
+  it("one row per copy (V543's unique index, the Task 27 review's m4): a second row naming a held copy is refused by the database, so the webhook's lookup can only find one", async () => {
     const w = await world(2);
     const [a, b] = w.rows as [typeof w.rows[0], typeof w.rows[0]];
-    await sql`update fixture_video_replays set bunny_video_id = ${a.bunny_video_id} where id = ${b.id}`;
     const before = [await rowOf(a.id), await rowOf(b.id)];
-    const video = vi.spyOn(w.host, "video");
-    const errors = vi.spyOn(log, "error");
-    expect(await applyBunnyEvent(w.hook, event(a.bunny_video_id!, 3), w.now)).toBe("ignored");
-    expect(video).not.toHaveBeenCalled();
-    expect([await rowOf(a.id), await rowOf(b.id)]).toEqual(before);
-    expect(errors.mock.calls.some(([, msg]) => typeof msg === "string" && /more than one row/.test(msg)), "logged by name").toBe(true);
+    const refused = await sql`update fixture_video_replays set bunny_video_id = ${a.bunny_video_id} where id = ${b.id}`.then(
+      () => "landed", (e: { code?: string; constraint_name?: string }) => `${e.code}:${e.constraint_name}`);
+    expect(refused).toBe("23505:fixture_video_replays_bunny_video_id_key");
+    expect([await rowOf(a.id), await rowOf(b.id)], "both rows as they were").toEqual(before);
+    // The positive pair: the copy the one row names is acted on.
+    w.host.advance(a.bunny_video_id!);
+    expect(await applyBunnyEvent(w.hook, event(a.bunny_video_id!, 3), w.now)).toBe("applied");
+    expect((await rowOf(a.id)).state).toBe("playable");
   });
 
   it("C6 (recommendation 2026-11-21): no event of any kind or outcome makes a Cloudflare call — no delete, no listing, no download — and the Cloudflare videos of OTHER inputs are untouched", async () => {
