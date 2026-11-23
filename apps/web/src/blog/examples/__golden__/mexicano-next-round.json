@@ -1,22 +1,15 @@
 {
   "facts": {
-    "players": 8,
-    "courts": 2,
-    "leader": "Ana",
+    "leader": "Dev",
     "leaderPoints": 24,
-    "leaderPartnerOne": "Dev",
-    "second": "Dev",
-    "fourth": "Gus",
-    "fifth": "Ben",
-    "last": "Hal",
-    "lastPoints": 17,
-    "topCourtMatch": "Ana and Gus against Dev and Fay",
-    "bottomCourtMatch": "Ben and Hal against Cy and Eli",
-    "roundOneFirstMatch": "Ana and Dev against Ben and Cy",
+    "leaderPartnerOne": "Hal",
+    "topCourtMatch": "Dev and Gus against Hal and Eli",
+    "bottomCourtMatch": "Fay and Cy against Ben and Ana",
+    "roundOneFirstMatch": "Dev and Hal against Fay and Ben",
     "roundOneFirstScore": "24-20"
   },
   "table": {
-    "caption": "8 players on 2 courts. Round one is drawn with everyone on zero; round two is drawn from the points each player's pair scored in round one.",
+    "caption": "8 players on 2 courts. Round one is drawn with everyone on zero; round two is drawn from the points each player's pair scored in round one. Players level on points are listed in the order the draw uses.",
     "columns": [
       "Player",
       "Round 1 partner",
@@ -26,64 +19,62 @@
     ],
     "rows": [
       [
-        "Ana",
         "Dev",
+        "Hal",
         24,
         "Court 1",
         "Gus"
       ],
       [
+        "Hal",
         "Dev",
-        "Ana",
         24,
         "Court 1",
-        "Fay"
+        "Eli"
       ],
       [
-        "Fay",
+        "Eli",
         "Gus",
+        21,
+        "Court 1",
+        "Hal"
+      ],
+      [
+        "Gus",
+        "Eli",
         21,
         "Court 1",
         "Dev"
       ],
       [
-        "Gus",
         "Fay",
-        21,
-        "Court 1",
-        "Ana"
-      ],
-      [
-        "Ben",
-        "Cy",
-        20,
-        "Court 2",
-        "Hal"
-      ],
-      [
-        "Cy",
         "Ben",
         20,
-        "Court 2",
-        "Eli"
-      ],
-      [
-        "Eli",
-        "Hal",
-        17,
         "Court 2",
         "Cy"
       ],
       [
-        "Hal",
-        "Eli",
+        "Ben",
+        "Fay",
+        20,
+        "Court 2",
+        "Ana"
+      ],
+      [
+        "Ana",
+        "Cy",
         17,
         "Court 2",
         "Ben"
+      ],
+      [
+        "Cy",
+        "Ana",
+        17,
+        "Court 2",
+        "Fay"
       ]
     ]
   },
-  "text": [
-    "Round one court 1: 24-20, 17-21"
-  ]
+  "text": []
 }

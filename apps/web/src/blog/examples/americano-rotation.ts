@@ -11,7 +11,7 @@ import { generateAmericano } from "@seazn/engine/scheduling";
 import { effectiveEntrantModel } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { forEachSport } from "@seazn/engine/testkit";
-import { sportLabel } from "@/blog/labels";
+import { pickerSportName } from "./sport-name";
 import { buildTemplateStages, templatesForSport } from "@/lib/format-templates";
 import { CHESS_SPORT_KEY, PAIR_MINTING_NEEDS_KINDS } from "@/lib/chess-individual-only-rule";
 import type { Claim, DiagramModel, EngineExample, ExampleResult } from "./types";
@@ -20,7 +20,8 @@ export const AMERICANO_ROTATION_ID = "americano-rotation";
 
 /** Fictional players, in the order the stage hands them to the rotation (the division's entrant order). */
 export const AMERICANO_PLAYERS = ["Ana", "Ben", "Cy", "Dev", "Eli", "Fay", "Gus", "Hal"] as const;
-const NINTH = "Ivy";
+export const AMERICANO_NINTH = "Ivy";
+const NINTH = AMERICANO_NINTH;
 const KNOBS = { qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 } as const;
 
 /** The americano stage the builder makes: its own declared courts and rounds. */
@@ -52,9 +53,9 @@ function offeredSports(): { offered: string[]; refused: string[] } {
   return { offered, refused };
 }
 
-/** The generic sport reads as "any other sport" in prose; every other sport as its product name. */
+/** A sport as a sentence writes it: the picker's own name in lower case ("any other game" for the catch-all sport, M10). */
 function sportWords(key: string): string {
-  return key === "generic" ? "any other sport" : sportLabel(key).toLowerCase();
+  return pickerSportName(key).toLowerCase();
 }
 
 function build(): ExampleResult {
@@ -107,7 +108,6 @@ function build(): ExampleResult {
       players: players.length,
       courts: courtCount,
       rounds,
-      matchesPerRound: draw[0]?.matches.length ?? 0,
       partnerPairs: partnered.size,
       allPairs: allPairs.length,
       neverPartnered: never.length,
@@ -256,6 +256,53 @@ const claims: Claim[] = [
       if (r.facts.offeredCount !== expected.length || r.facts.refusedCount !== refused.length) return "offer counts differ from the declarations";
       if (r.facts.offeredSports !== listWords(expected)) return `offered '${String(r.facts.offeredSports)}', declarations give '${listWords(expected)}'`;
       return r.facts.refusedSports === listWords(refused) || `refused '${String(r.facts.refusedSports)}'`;
+    },
+  },
+  {
+    says: "each row of the table is its round, in order, and the facts name the field: how many players the table seats",
+    source: "the table's own rows (Round N, N counted from one) and the players the stage hands the rotation",
+    check(r) {
+      const rows = r.table?.rows ?? [];
+      if (rows.length === 0) return "the table has no rounds";
+      for (const [i, row] of rows.entries()) if (String(row[0]) !== `Round ${i + 1}`) return `row ${i + 1} is '${String(row[0])}'`;
+      const seated = new Set<string>();
+      for (const row of rows) for (const cell of row.slice(1)) cellPairs(String(cell))?.flat().forEach((p) => seated.add(p));
+      return (r.facts.players === seated.size && seated.size === AMERICANO_PLAYERS.length) || `players ${String(r.facts.players)}, the table seats ${seated.size}`;
+    },
+  },
+  {
+    says: "the pair that partners twice and the pair that never partners, as the facts name them, are the first such pair in the table, with the rounds they met in",
+    source: "a recount of the table's pairs in player order (the claim's own loops, no value read from the build)",
+    check(r) {
+      const rounds = tablePairs(r);
+      if (typeof rounds === "string") return rounds;
+      const seen = new Map<string, number[]>();
+      rounds.forEach((pairs, i) => pairs.forEach(([a, b]) => seen.set(pairKey(a, b), [...(seen.get(pairKey(a, b)) ?? []), i + 1])));
+      let twice: [string, string, number[]] | null = null;
+      let never: [string, string] | null = null;
+      const ps = AMERICANO_PLAYERS;
+      for (let i = 0; i < ps.length; i++)
+        for (let j = i + 1; j < ps.length; j++) {
+          const hit = seen.get(pairKey(ps[i]!, ps[j]!)) ?? [];
+          if (hit.length > 1 && twice === null) twice = [ps[i]!, ps[j]!, hit];
+          if (hit.length === 0 && never === null) never = [ps[i]!, ps[j]!];
+        }
+      if (twice === null || never === null) return "anti-vacuity: the example needs a pair that repeats and one that never meets";
+      if (r.facts.twicePair !== pairWords([twice[0], twice[1]])) return `twicePair '${String(r.facts.twicePair)}', the table has '${pairWords([twice[0], twice[1]])}'`;
+      if (r.facts.twiceRounds !== listWords(twice[2].map(String))) return `twiceRounds '${String(r.facts.twiceRounds)}'`;
+      return r.facts.neverPair === pairWords(never) || `neverPair '${String(r.facts.neverPair)}', the table has '${pairWords(never)}'`;
+    },
+  },
+  {
+    says: "the ninth player is not one of the eight, and the first three rounds' sit-outs are the ones the engine's rotation gives that field",
+    source: "the engine's own rotation (generateAmericano) run for nine players on the template's courts, read for its byes",
+    check(r) {
+      const { courtCount, rounds } = americanoTemplateConfig();
+      if (r.facts.ninthPlayer !== AMERICANO_NINTH || (AMERICANO_PLAYERS as readonly string[]).includes(AMERICANO_NINTH)) return `ninthPlayer '${String(r.facts.ninthPlayer)}'`;
+      const nine = generateAmericano([...AMERICANO_PLAYERS, AMERICANO_NINTH], { mode: "americano", courtCount, rounds });
+      const first = nine.slice(0, 3).map((x, i) => `${x.byes.join(", ")} in round ${i + 1}`);
+      if (nine.slice(0, 3).some((x) => x.byes.length === 0)) return "anti-vacuity: a round with nobody sitting out";
+      return r.facts.sitOutFirstRounds === listWords(first) || `sitOutFirstRounds '${String(r.facts.sitOutFirstRounds)}', the rotation gives '${listWords(first)}'`;
     },
   },
 ];

@@ -15,11 +15,11 @@ import type { ExampleResult } from "./types";
 export const BLOG_GOLDENS: Record<string, ExampleResult> = {
   "standings-points": standingsPoints as ExampleResult,
   // ---- batch 5 (Task 11) ----
-  "americano-rotation": americanoRotation as ExampleResult,
+  "americano-rotation": americanoRotation as unknown as ExampleResult,
   "mexicano-next-round": mexicanoNextRound as ExampleResult,
   "ladder-challenge": ladderChallenge as ExampleResult,
-  "knockout-withdrawal": knockoutWithdrawal as ExampleResult,
+  "knockout-withdrawal": knockoutWithdrawal as unknown as ExampleResult,
   "forfeit-scores": forfeitScores as ExampleResult,
-  "double-walkover": doubleWalkover as ExampleResult,
+  "double-walkover": doubleWalkover as unknown as ExampleResult,
   // ---- end batch 5 ----
 };

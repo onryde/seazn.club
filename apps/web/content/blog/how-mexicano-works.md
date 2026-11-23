@@ -26,12 +26,12 @@ Pairing the first with the fourth is the point of the format. The two leaders, w
 
 ## Round one, and players level on points
 
-Before round one nobody has any points, so there is nothing to rank. Seazn draws round one in a fixed order of its own, not by the seeds you set. The same order decides between players who are level on points later on. That is why two partners on the same total can end up in either order.
+Before round one nobody has any points, so there is nothing to rank. Seazn draws round one in a fixed order of its own, not by the seeds you set. In the example the players are listed from Ana to Hal, and round one still opens with {{fact:mexicano-next-round.roundOneFirstMatch}}. The same order decides between players who are level on points later on, which is why two partners on the same total are listed in one order or the other.
 
 ## Which sports can play it
 
-Mexicano is offered in the same sports as americano. The ranking needs a score for each side of every match, and Seazn reads that score only when the match is scored as any other sport, where you type both sides' scores at the end.
+Mexicano is offered in the same sports as americano. The ranking needs a score for each side of every match, and Seazn reads that score only when the match is scored as any other game, where you type both sides' scores at the end.
 
 ## What does not work yet
 
-Two parts of mexicano are not finished, and both matter if you plan an evening around it. On the division page, Seazn draws round one, but once round one is scored the page offers to complete the stage and has no way to draw round two. And the score boxes next to each match take a score only in a division of any other sport: in badminton, table tennis, tennis and carrom the score is refused. Until both are fixed, an americano of any other sport, whose rounds are all drawn at the start, is the format to run.
+Two parts of mexicano are not finished, and both matter if you plan an evening around it. On the division page, Seazn draws round one, but once round one is scored the page offers to complete the stage and has no way to draw round two. And scores are entered properly only in a division of any other game: in badminton, table tennis, tennis and carrom a score typed in the boxes is refused, and a match scored on the pad leaves every player on 0 points. Until both are fixed, an americano of any other game, whose rounds are all drawn at the start, is the format to run.

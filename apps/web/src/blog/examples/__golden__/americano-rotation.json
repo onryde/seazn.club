@@ -3,7 +3,6 @@
     "players": 8,
     "courts": 2,
     "rounds": 7,
-    "matchesPerRound": 2,
     "partnerPairs": 21,
     "allPairs": 28,
     "neverPartnered": 7,
@@ -16,7 +15,7 @@
     "ninthPlayer": "Ivy",
     "sitOutsPerRound": 1,
     "sitOutFirstRounds": "Ivy in round 1, Ben in round 2 and Cy in round 3",
-    "offeredSports": "carrom, any other sport, badminton, table tennis and tennis",
+    "offeredSports": "carrom, any other game, badminton, table tennis and tennis",
     "offeredCount": 5,
     "refusedSports": "football, cricket, chess, volleyball, ice hockey and hockey",
     "refusedCount": 6

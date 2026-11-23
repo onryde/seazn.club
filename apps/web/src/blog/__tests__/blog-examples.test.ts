@@ -441,7 +441,7 @@ describe("the registry is server-only: nothing a page loads imports the engine's
     new RegExp(spec + String.raw`@/blog/examples["']`),
     new RegExp(spec + String.raw`@/blog/examples/(?:index|standings-points|starting-variant)["']`),
     // ---- batch 5 (Task 11) ----
-    new RegExp(spec + String.raw`@/blog/examples/(?:americano-rotation|mexicano-next-round|ladder-challenge|knockout-withdrawal|forfeit-scores|double-walkover)["']`),
+    new RegExp(spec + String.raw`@/blog/examples/(?:americano-rotation|mexicano-next-round|ladder-challenge|knockout-withdrawal|forfeit-scores|double-walkover|sport-name)["']`),
     // ---- end batch 5 ----
     new RegExp(spec + String.raw`@seazn/engine/testkit["']`),
     new RegExp(spec + String.raw`@/blog/labels["']`),

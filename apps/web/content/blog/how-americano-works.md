@@ -10,7 +10,7 @@ related: how-mexicano-works, how-a-ladder-works
 examples: americano-rotation
 ---
 
-Americano is a doubles evening for players who come on their own. You play every round with a different partner, and the points you win are yours, not your pair's. Seazn draws every round before the first match starts, so everyone knows from the start who they play with and against.
+Americano is a doubles evening for players who come on their own. You play every round with a different partner, and the points your pair scores in a match count for you. Seazn draws every round before the first match starts.
 
 {{example:americano-rotation}}
 
@@ -18,7 +18,7 @@ Americano is a doubles evening for players who come on their own. You play every
 
 Picture the players standing in a circle. {{fact:americano-rotation.pivot}} stays where she is, and everyone else moves one place round the circle after each round. Each round the circle is cut into groups of four, one group for each court. Inside a group, the first and the fourth player play against the second and the third.
 
-That is why {{fact:americano-rotation.pivot}} partners each of the other {{fact:americano-rotation.pivotPartners}} players exactly once in {{fact:americano-rotation.rounds}} rounds. The draw is known in advance, so you can print it, put it on a screen at the venue, and nobody waits for the next round to be worked out.
+That is why {{fact:americano-rotation.pivot}} partners each of the other {{fact:americano-rotation.pivotPartners}} players exactly once in {{fact:americano-rotation.rounds}} rounds. The whole draw is made before play starts, so no round waits for the one before it to be worked out.
 
 ## Why some pairs never partner
 
@@ -32,4 +32,4 @@ Each court takes four players. Add {{fact:americano-rotation.ninthPlayer}} as a 
 
 Americano needs players who enter on their own, because Seazn makes a new pair for every match. You can choose it in {{fact:americano-rotation.offeredSports}}. It is not offered in {{fact:americano-rotation.refusedSports}}: chess is always one player against one, and the other sports are entered as teams or fixed pairs.
 
-One limit today: the score boxes next to each match take a score only in a division of any other sport. In badminton, table tennis, tennis and carrom the rounds are drawn, but a score typed there is refused, so the points table stays empty. Until that is fixed, run an americano as any other sport.
+One limit today: scores are entered properly only in a division of any other game. In badminton, table tennis, tennis and carrom the rounds are drawn, but a score typed in the boxes next to a match is refused, and a match scored on the scoring pad leaves every player on 0 points, so the panel shows no points table. Until that is fixed, run an americano as any other game.
