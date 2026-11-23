@@ -1,0 +1,77 @@
+{
+  "facts": {
+    "reach": 3,
+    "offeredIn": 11,
+    "players": 6,
+    "top": "Ana",
+    "bottom": "Fay",
+    "winChallenger": "Eli",
+    "winTarget": "Ben",
+    "winPlacesUp": 3,
+    "rangeChallenger": "Fay",
+    "rangeTarget": "Eli",
+    "rangePlacesUp": 4,
+    "lossChallenger": "Fay",
+    "lossTarget": "Dev",
+    "walkoverChallenger": "Dev",
+    "walkoverTarget": "Cy",
+    "finalOrder": "Ana, Eli, Dev, Cy, Ben, Fay"
+  },
+  "table": {
+    "caption": "A ladder of 6 players, seeded Ana, Ben, Cy, Dev, Eli, Fay, where a player may challenge up to 3 places above. Each row is one challenge, and the ladder after it, top first.",
+    "columns": [
+      "Step",
+      "Challenge",
+      "What happened",
+      "Ladder after, top first"
+    ],
+    "rows": [
+      [
+        "1",
+        "Eli challenges Ben",
+        "Eli won; they swap places",
+        "Ana, Eli, Cy, Dev, Ben, Fay"
+      ],
+      [
+        "2",
+        "Fay challenges Eli",
+        "Refused: Eli is 4 places up",
+        "Ana, Eli, Cy, Dev, Ben, Fay"
+      ],
+      [
+        "3",
+        "Fay challenges Dev",
+        "Dev won; nobody moves",
+        "Ana, Eli, Cy, Dev, Ben, Fay"
+      ],
+      [
+        "4",
+        "Dev challenges Cy",
+        "Cy did not turn up; they swap places",
+        "Ana, Eli, Dev, Cy, Ben, Fay"
+      ],
+      [
+        "5",
+        "Ben challenges Fay",
+        "Refused: Fay is below Ben",
+        "Ana, Eli, Dev, Cy, Ben, Fay"
+      ]
+    ]
+  },
+  "diagram": {
+    "kind": "ladder",
+    "title": "Left, the ladder before Eli challenges Ben; right, after Eli wins. The two swap places and nobody else moves.",
+    "rungs": [
+      "Ana",
+      "Ben",
+      "Cy",
+      "Dev",
+      "Eli",
+      "Fay"
+    ],
+    "challenger": "Eli",
+    "target": "Ben",
+    "swapped": true
+  },
+  "text": []
+}
