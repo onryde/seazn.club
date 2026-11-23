@@ -22,6 +22,7 @@ import { forEachSport } from "@seazn/engine/testkit";
 import publicDict from "@/dictionaries/en/public.json";
 import { forfeitBaseState, forfeitDialogModel } from "@/components/v2/forfeit-dialog";
 import { doubleWalkoverRefused } from "@/lib/double-walkover-next-match";
+import { finalTitleTag } from "@/lib/final-title-tag";
 import { creditsNobody, forfeitTag, forfeitWords, FORFEIT_SENTENCE_KEY, FORFEIT_TAG_KEY, NO_LEDGER } from "@/lib/forfeit-tag";
 import { tableRulesOf } from "@/server/engine-db/table-rules";
 import { bracketAfterRoundOne, KNOCKOUT_PLAYERS } from "./knockout-withdrawal";
@@ -214,6 +215,26 @@ const claims: Claim[] = [
       if (!(playedLoss > 0)) return "anti-vacuity: a table tennis played loss must pay something for this witness";
       if (r.facts.tabletennisPlayedLoss !== playedLoss) return `the played loss is ${String(r.facts.tabletennisPlayedLoss)}, the rule declares ${playedLoss}`;
       return (r.facts.tabletennisPoints === 0 && r.facts.tabletennisWalkoverLoss === 0) || "table tennis pays a double walkover or a walkover loss";
+    },
+  },
+  {
+    says: "a deciding final that carries a double walkover reads as a vacant title (the way two withdrawn finalists leave it), a third-place match or a played final that does not",
+    source: "finalTitleTag (lib/final-title-tag.ts), the one reader every bracket tile asks; the product writes the final's double walkover when both finalists withdraw (usecases/__tests__/vacant-title.test.ts)",
+    check(r) {
+      // Read the result, so an empty one fails: the example must have swept every sport the rule is the same in.
+      if (r.facts.sportCount !== builtinModules.length) return `sportCount ${String(r.facts.sportCount)}, the registry holds ${builtinModules.length}`;
+      const dw = { kind: "double_walkover" };
+      const tag = (f: { is_final: boolean; third_place: boolean; status?: string; outcome: unknown }) => finalTitleTag({ status: "forfeited", ...f });
+      const seen = {
+        final: tag({ is_final: true, third_place: false, outcome: dw }),
+        bronze: tag({ is_final: false, third_place: true, outcome: dw }),
+        bronzeFlaggedFinal: tag({ is_final: true, third_place: true, outcome: dw }),
+        semi: tag({ is_final: false, third_place: false, outcome: dw }),
+        notSettled: tag({ is_final: true, third_place: false, status: "scheduled", outcome: dw }),
+        played: finalTitleTag({ is_final: true, third_place: false, status: "decided", outcome: { kind: "win", winner: "a", loser: "b" } }),
+      };
+      const want = { final: "vacant", bronze: null, bronzeFlaggedFinal: null, semi: null, notSettled: null, played: null };
+      return JSON.stringify(seen) === JSON.stringify(want) || `title tags are ${JSON.stringify(seen)}, expected ${JSON.stringify(want)}`;
     },
   },
   {

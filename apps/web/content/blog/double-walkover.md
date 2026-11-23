@@ -26,7 +26,9 @@ It is not the same as each side losing a played match. In table tennis a played 
 
 In a knockout a match has to send someone on, and here there is nobody to send. So nobody goes through, and the player waiting in the next round gets a walkover instead. This is the same in all {{fact:double-walkover.sportCount}} sports.
 
-That is also why a match that feeds no next match cannot end this way: a final, a third-place match, or the last step of a stepladder. Someone has to be left standing there, so Seazn does not offer "neither" on those matches. Reschedule it, or record a walkover if one side did turn up.
+That is also why you cannot enter "neither side turned up" as the result of a match that feeds no next match: a final, a third-place match, or the last step of a stepladder. Someone has to be left standing there, so Seazn does not offer "neither" on those matches. Reschedule it, or record a walkover if one side did turn up.
+
+A withdrawal is the one way a final can still end this way. If both finalists have withdrawn, the final is booked as a double walkover, and nobody wins the title: it is left vacant, and the final's tile reads that way. The withdrawal post for knockouts tells that case. A third-place match is booked the same way when both of its players have gone, and it leaves the title alone.
 
 ## On a ladder
 
