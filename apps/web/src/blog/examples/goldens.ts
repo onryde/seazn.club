@@ -3,6 +3,7 @@
 // blog-examples.test.ts fails on a golden file with no line, and on a line with no registered example.
 import standingsPoints from "./__golden__/standings-points.json";
 // ---- batch 3 (Swiss and seeding) ----
+import knockoutSeeds from "./__golden__/knockout-seeds.json";
 import swissBye from "./__golden__/swiss-bye.json";
 import swissByeRounds from "./__golden__/swiss-bye-rounds.json";
 import swissLateAndWithdraw from "./__golden__/swiss-late-and-withdraw.json";
@@ -17,5 +18,6 @@ export const BLOG_GOLDENS: Record<string, ExampleResult> = {
   "swiss-bye": swissBye as ExampleResult,
   "swiss-bye-rounds": swissByeRounds as ExampleResult,
   "swiss-late-and-withdraw": swissLateAndWithdraw as ExampleResult,
+  "knockout-seeds": knockoutSeeds as ExampleResult,
   // ---- end batch 3 ----
 };

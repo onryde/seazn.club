@@ -44,7 +44,8 @@ export const BLOG_PLANNED_SLUGS: ReadonlySet<string> = new Set([
   "set-ratio-or-set-difference",
   "buchholz-and-sonneborn-berger",
   "when-lots-decide-a-tie",
-  "knockout-seeds-and-byes",
+  // batch 3 (Swiss and seeding): how-swiss-pairing-works, swiss-chess-bye, joining-or-leaving-a-swiss and
+  // knockout-seeds-and-byes are written (blog-tree.test.ts: posts + planned = 33), so they are no longer planned.
   "third-place-match",
   "knockout-match-ends-level",
   "page-playoff-and-stepladder",

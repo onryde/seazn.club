@@ -2,6 +2,7 @@
 // file is what the regenerate and claims tests walk, and is never imported by a page (it pulls in the engine).
 import { standingsPoints } from "./standings-points";
 // ---- batch 3 (Swiss and seeding) ----
+import { knockoutSeeds } from "./knockout-seeds";
 import { swissBye, swissByeRounds } from "./swiss-bye";
 import { swissLateAndWithdraw } from "./swiss-late-and-withdraw";
 import { swissPairing } from "./swiss-pairing";
@@ -15,6 +16,7 @@ export const BLOG_EXAMPLES: readonly BlogExample[] = [
   swissBye,
   swissByeRounds,
   swissLateAndWithdraw,
+  knockoutSeeds,
   // ---- end batch 3 ----
 ];
 
