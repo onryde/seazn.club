@@ -99,7 +99,12 @@ vi.mock("@/server/usecases/discipline", () => ({
 const tx = () => Promise.resolve([]);
 vi.mock("@/lib/db", () => ({
   sql: () => Promise.resolve([]),
-  withTenant: (_orgId: string, fn: (t: unknown) => unknown) => fn(tx),
+  // As the real one: a `privilegedPrelude` (match-day's sealed read of the round opens, `withRoundOpensToday`) runs first, on the
+  // same transaction, before `fn`.
+  withTenant: async (_orgId: string, fn: (t: unknown) => unknown, opts?: { privilegedPrelude?: (t: unknown) => Promise<void> }) => {
+    await opts?.privilegedPrelude?.(tx);
+    return fn(tx);
+  },
   statementCount: () => 0,
 }));
 // Spec 2026-09-30 §2 (T6): the fixtures tab's one stream read is `openStreamStates` (the run sheet's chip) — this page

@@ -85,7 +85,12 @@ vi.mock("@/server/usecases/discipline", () => ({
 const tx = () => Promise.resolve([]);
 vi.mock("@/lib/db", () => ({
   sql: () => Promise.resolve([]),
-  withTenant: (_orgId: string, fn: (t: unknown) => unknown) => fn(tx),
+  // As the real one: a `privilegedPrelude` (match-day's sealed read of the round opens, `withRoundOpensToday`) runs first, on the
+  // same transaction, before `fn`.
+  withTenant: async (_orgId: string, fn: (t: unknown) => unknown, opts?: { privilegedPrelude?: (t: unknown) => Promise<void> }) => {
+    await opts?.privilegedPrelude?.(tx);
+    return fn(tx);
+  },
   statementCount: () => 0,
 }));
 vi.mock("@/server/usecases/stream-sessions", () => ({ openStreamStates: async () => ({}) }));
