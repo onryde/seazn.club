@@ -17,6 +17,7 @@ import "server-only";
 // Creation alone splits its failures in two (Task 3-5 review T3-I2): a 4xx is
 // lila REFUSING, so nothing exists; a timeout, network error, 5xx, or a 2xx
 // with no usable id is `outcome_unknown`, because a challenge may exist.
+import { LICHESS_USER_AGENT } from "@/lib/oauth";
 import { LICHESS_TIMEOUT_MS } from "../window";
 import { UCI_RE, assertUci } from "./uci";
 import {
@@ -346,7 +347,7 @@ export function createBoardApi(deps: BoardApiDeps = {}) {
     try {
       const r = await fetchFn(`${base}${path}`, {
         method: init.method,
-        headers,
+        headers: { ...headers, "User-Agent": LICHESS_USER_AGENT },
         ...(init.body ? { body: init.body.toString() } : {}),
         signal: AbortSignal.timeout(LICHESS_TIMEOUT_MS),
       });
@@ -583,7 +584,7 @@ export function createBoardApi(deps: BoardApiDeps = {}) {
         try {
           r = await fetchFn(`${base}/api/board/game/stream/${encodeURIComponent(a.gameId)}`, {
             method: "GET",
-            headers: { Accept: "application/x-ndjson", Authorization: `Bearer ${a.token}` },
+            headers: { Accept: "application/x-ndjson", Authorization: `Bearer ${a.token}`, "User-Agent": LICHESS_USER_AGENT },
             signal,
           });
         } catch {

@@ -42,6 +42,7 @@ import { sql, statementCount } from "@/lib/db";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { streamRig } from "@/server/relay/__tests__/_session-rig";
 import { PASS_KEYS } from "@/lib/currency";
+import { declaredPlanKeys } from "@/lib/__tests__/_plan-catalogue";
 import { CREDIT_REUSE_HOURS } from "@/server/relay/config";
 import {
   NoCreditsError, consumeForSession, creditBalance, creditBreakdown, ensureMonthlyStreamGrant,
@@ -136,7 +137,9 @@ describe.skipIf(!HAS_DB)("monthly stream credits — the grant", () => {
     // Every plan has a V426 row (the catalogue half of the sweep). The two pass keys' rows are ONE-OFF amounts granted
     // when a pass is bought (addendum P, lib/__tests__/billing-pass-stream-credits.test.ts), so they are swept for the
     // row and then skipped here — the monthly path refusing to read them is "addendum P: a PASS key … (p9)" below.
-    const plans = await sql<{ key: string }[]>`select key from plans order by key`;
+    // The declared catalogue, each key proven a `plans` row - never the raw table, which the billing tests' temporary rows
+    // reach (_plan-catalogue.ts).
+    const plans = (await declaredPlanKeys(sql)).map((key) => ({ key }));
     const rates = await ratesByPlan();
     let checked = 0;
     let passKeys = 0;

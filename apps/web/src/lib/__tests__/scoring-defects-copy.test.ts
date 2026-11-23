@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
+import { declaredPlanKeys } from "./_plan-catalogue";
 import en from "@/dictionaries/en/ui.json";
 import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
@@ -155,7 +156,9 @@ afterAll(async () => {
 // plan but Community grants the audit download, so "a paid plan or an Event Pass" is exactly the gate.
 describe.skipIf(!HAS_DB)("item 4: the plan catalogue behind the signed-audit copy", () => {
   it("Community is the only plan without scoring.audit_export, and every other plan, passes included, has it", async () => {
-    const plans = await sql<{ key: string }[]>`select key from plans`;
+    // The declared catalogue, each key proven a `plans` row - never the raw table, which the billing tests' temporary rows
+    // reach (_plan-catalogue.ts).
+    const plans = (await declaredPlanKeys(sql)).map((key) => ({ key }));
     const rows = await sql<{ plan_key: string; bool_value: boolean | null }[]>`
       select plan_key, bool_value from plan_entitlements where feature_key = 'scoring.audit_export'`;
     const granted = new Set(rows.filter((r) => r.bool_value === true).map((r) => r.plan_key));

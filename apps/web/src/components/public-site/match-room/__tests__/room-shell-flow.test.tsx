@@ -11,10 +11,12 @@ vi.mock("@/components/i18n/dict-provider", () => ({
   usePlural: () => (k: string, n: number) => `${k}:${n}`,
   useLocale: () => "en",
 }));
-const join = vi.hoisted(() => ({ fn: vi.fn() }));
+const join = vi.hoisted(() => ({ fn: vi.fn(), where: [] as unknown[] }));
 vi.mock("../camera-loader", async (actual) => ({
   ...(await actual<typeof import("../camera-loader")>()),
-  joinOwnCamera: (token: string) => join.fn(token),
+  // The room the shell names for the drop report (camera-loader.ts watchRoomDrops) is recorded apart, so every
+  // `join.fn` assertion below still reads the token alone.
+  joinOwnCamera: (token: string, where?: unknown) => (join.where.push(where), join.fn(token)),
 }));
 
 import { RoomShell, Screen } from "../room-shell";
@@ -82,6 +84,7 @@ beforeEach(() => {
   tick = 0;
   getAnswer = () => snap();
   join.fn.mockReset();
+  join.where = [];
   vi.stubGlobal(
     "MediaStream",
     class {
@@ -172,6 +175,7 @@ describe("camera required: check in → refused for camera → the camera joins 
     await roomOf(island).claim(); // Check in
     await settle();
     expect(join.fn.mock.calls).toEqual([["own-rtk-token"]]);
+    expect(join.where, "the drop report names this board and the player's colour").toEqual([{ fixtureId: "f1", side: "white" }]);
     expect(screenOf(island), "camera up, seat being re-asked: still the check-in, not card 2").toBe("checkin");
     expect(seatPosts()).toBe(1);
 
@@ -179,6 +183,19 @@ describe("camera required: check in → refused for camera → the camera joins 
     expect(seatPosts(), "the seat is asked again once the camera is live").toBe(2);
     expect(screenOf(island)).toBe("creating");
     expect(calls.every((c) => c.url.includes("t=tok")), "every call carries the personal link").toBe(true);
+    island.unmount();
+  });
+
+  it("the drop report's side is the VIEWER's colour as the snapshot says it - Black here, not a constant", async () => {
+    const black = { colour: "black" as const, name: "Bo Lind", checkedIn: false };
+    getAnswer = () => snap({ you: black });
+    seatAnswers = [() => ({ snapshot: snap({ you: black }), seat: { seated: false, reason: "camera_required", participant: PARTICIPANT } })];
+    join.fn.mockResolvedValue(liveCamera());
+    const island = renderIsland(RoomShell, { initial: snap({ you: black }), token: "tok", selfPath: "/x" });
+    await roomOf(island).claim();
+    await settle();
+    expect(join.fn.mock.calls).toEqual([["own-rtk-token"]]);
+    expect(join.where).toEqual([{ fixtureId: "f1", side: "black" }]);
     island.unmount();
   });
 

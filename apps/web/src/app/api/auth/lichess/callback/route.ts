@@ -5,6 +5,7 @@ import {
   LICHESS_OAUTH_STATE_COOKIE,
   LICHESS_OAUTH_VERIFIER_COOKIE,
   LICHESS_TOKEN_URL,
+  LICHESS_USER_AGENT,
   lichessConfigured,
   lichessRedirectUri,
   type LichessAccount,
@@ -65,7 +66,7 @@ export async function GET(req: Request) {
     try {
       const tokenRes = await fetch(LICHESS_TOKEN_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        headers: { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": LICHESS_USER_AGENT },
         body: new URLSearchParams({
           grant_type: "authorization_code",
           code,
@@ -88,7 +89,7 @@ export async function GET(req: Request) {
     let account: LichessAccount;
     try {
       const accountRes = await fetch(LICHESS_ACCOUNT_URL, {
-        headers: { Authorization: `Bearer ${accessToken}` },
+        headers: { Authorization: `Bearer ${accessToken}`, "User-Agent": LICHESS_USER_AGENT },
         signal: AbortSignal.timeout(LICHESS_TIMEOUT_MS),
       });
       if (!accountRes.ok) return fail(next, "account");
@@ -139,7 +140,7 @@ export async function GET(req: Request) {
     if (accessToken && !linked) {
       await fetch(LICHESS_TOKEN_URL, {
         method: "DELETE",
-        headers: { Authorization: `Bearer ${accessToken}` },
+        headers: { Authorization: `Bearer ${accessToken}`, "User-Agent": LICHESS_USER_AGENT },
         signal: AbortSignal.timeout(LICHESS_TIMEOUT_MS),
       }).catch(() => undefined);
     }

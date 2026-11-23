@@ -361,6 +361,15 @@ jobs:
             const fl = get(c.report, "failures");
             if (Array.isArray(fl) && fl.length) console.log(`\n**${n} failures:**\n` + fl.map((x) => `- ${typeof x === "string" ? x : JSON.stringify(x)}`).join("\n"));
           }
+          // The policy mix and one row per seeded division, so the page tells a two-division run from a one-division run.
+          for (const [n, c] of Object.entries(cols)) {
+            const mix = get(c.report, "config.policyMix");
+            const divs = get(c.report, "byDivision");
+            console.log(`\n**${n}: policy mix** ${Array.isArray(mix) ? mix.map((m) => `${m.policy}:${m.boards}`).join(", ") : "n/a"}\n`);
+            if (!Array.isArray(divs) || divs.length === 0) { console.log("byDivision: n/a"); continue; }
+            console.log("| division | policy | boards | players | games seen | boards without game | seat p50 ms | seat p95 ms |\n| --- | --- | --- | --- | --- | --- | --- | --- |");
+            for (const d of divs) console.log(`| ${f(d.division)} | ${f(d.policy)} | ${f(d.boards)} | ${f(d.players)} | ${f(d.gamesSeen)} | ${f(d.boardsWithoutGame)} | ${f(get(d, "arrivalToSeatedMs.p50"))} | ${f(get(d, "arrivalToSeatedMs.p95"))} |`);
+          }
           JS
         env:
           R_BASE: ${{ needs.baseline.result }}

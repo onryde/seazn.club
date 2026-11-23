@@ -405,3 +405,33 @@ describe("every step is bounded, and the chain's other sequences", () => {
     expect(r.posts()).toEqual(["POST fx:home", "POST fx:home"]);
   });
 });
+
+describe("the connect names its meeting (the connection-drop report, camera-loader.ts watchRoomDrops)", () => {
+  it("a fresh POST's connect and a kept token's reconnect both carry the board and the side the pane opened", async () => {
+    const seen: { authToken: string; fixtureId?: string; side?: string }[] = [];
+    let n = 0;
+    const serial = makeArbiterSerial({
+      join: async (_fixtureId, side) => {
+        n += 1;
+        return { authToken: `t-${n}`, participantId: `p-${n}`, side, players: ["x"], reused: false };
+      },
+      connect: async (a) => {
+        seen.push({ authToken: a.authToken, fixtureId: a.fixtureId, side: a.side });
+        return fakeCameras([], a.authToken);
+      },
+    });
+    const h = { onCameras: () => undefined, onError: () => undefined };
+    const first = serial.open("fx-9", "away", h);
+    await flush();
+    first.close();
+    await flush();
+    serial.open("fx-9", "away", h); // the kept token, reconnected
+    serial.open("fx-7", "home", h); // another board's meeting, a fresh POST
+    await flush();
+    expect(seen).toEqual([
+      { authToken: "t-1", fixtureId: "fx-9", side: "away" },
+      { authToken: "t-1", fixtureId: "fx-9", side: "away" },
+      { authToken: "t-2", fixtureId: "fx-7", side: "home" },
+    ]);
+  });
+});

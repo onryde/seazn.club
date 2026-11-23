@@ -14,6 +14,7 @@
 import { describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
+import { declaredPlanKeys } from "./_plan-catalogue";
 import { hasFeature, invalidateOrgEntitlements } from "@/lib/entitlements";
 import { ENTITLEMENT_DOMAINS } from "@/lib/entitlement-domains";
 import { seedOrg } from "@/server/usecases/__tests__/_rig";
@@ -54,7 +55,7 @@ describe.skipIf(!HAS_DB)("streaming on every plan (V426)", () => {
   it.each(STREAM_KEYS)("carries a catalogue row for EVERY plan for %s, and every one is TRUE", async (key) => {
     const rows = await sql<{ plan_key: string; bool_value: boolean | null }[]>`
       select plan_key, bool_value from plan_entitlements where feature_key = ${key}`;
-    const plans = await sql<{ key: string }[]>`select key from plans`;
+    const plans = (await declaredPlanKeys(sql)).map((key) => ({ key })); // never the raw table (_plan-catalogue.ts)
     // Anti-vacuity: zero plans would make every "is true" below pass on nothing.
     expect(plans.length, "the plans table is empty — nothing was checked").toBeGreaterThan(0);
     expect(rows.map((r) => r.plan_key).sort(), "one row per plan, no plan missing").toEqual(plans.map((p) => p.key).sort());
@@ -69,7 +70,7 @@ describe.skipIf(!HAS_DB)("streaming on every plan (V426)", () => {
   it(`carries ${MONTHLY} for EVERY plan as a numeric row (bool null, int ≥ 1) — the ai.credits.monthly storage shape — and the ladder the owner approved rises with the tier`, async () => {
     const rows = await sql<{ plan_key: string; bool_value: boolean | null; int_value: number | null }[]>`
       select plan_key, bool_value, int_value from plan_entitlements where feature_key = ${MONTHLY}`;
-    const plans = await sql<{ key: string }[]>`select key from plans`;
+    const plans = (await declaredPlanKeys(sql)).map((key) => ({ key })); // never the raw table (_plan-catalogue.ts)
     expect(plans.length).toBeGreaterThan(0);
     expect(rows.map((r) => r.plan_key).sort(), "one row per plan: a plan without one would grant nothing, silently").toEqual(
       plans.map((p) => p.key).sort(),

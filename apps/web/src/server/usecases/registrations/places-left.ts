@@ -35,7 +35,8 @@ export type PromotionVerdict =
 
 /** Whether an ORGANISER's manual promotion off the waitlist may seat one more team entry (registration defects, item 1). A promotion
  *  adds one place, so it passes the plan's limit when `active >= planLimit` and the division's capacity when `active >= capacity`.
- *  The plan is judged first: it is the limit sign-up itself honours (`placesLeft`, submit's `hardCap`), and no confirmation lifts it.
+ *  The format's max is judged first (W5 B4: no plan raises it), then the plan: the limit sign-up itself honours (`placesLeft`,
+ *  submit's `hardCap`), and no confirmation lifts it. Capacity last.
  *  `active` is the count `placesLeft` takes - team entries holding a place, never a solo sign-up. Automatic promotion (a withdrawal,
  *  rejection or expiry freeing a place) does not ask: it fills a place that was just made. */
 export function promotionVerdict({ capacity, planLimit, formatMax, active }: PlacesLeftInput): PromotionVerdict {

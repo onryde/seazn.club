@@ -472,8 +472,8 @@ describe.skipIf(!HAS_DB)("door: the organiser's Promote, Confirm and Waive check
 //
 // An online division whose first stage is a single round robin: its format's max (the largest field whose draw fits the Start line
 // budget, lib/format-max-entrants.ts) is below the online cap, so the doors above never reach it. The organiser's room check
-// (`assertOrganiserPromotionHasRoom`, registrations/waitlist.ts) asks, in order: the online room (on the places HELD), then the
-// format's max, then the plan's limit (both on the sign-ups holding a place). Two orderings are pinned here, each by a state the
+// (`assertOrganiserPromotionHasRoom`, registrations/waitlist.ts) asks, in order: the format's max (on the sign-ups holding a place),
+// then the online room (on the places HELD), then the plan's limit (on the sign-ups holding a place). Two orderings are pinned here, each by a state the
 // product can reach: past BOTH the online cap and the format's max (M sign-ups, then the organiser adds the rest by hand - the add
 // door has no format gate, and the league was set on the empty division first, so the stage door never saw the field) the format
 // answers, the tighter real limit (owner "apply rec" 2026-11-22: its sentence says what to change); past BOTH the format's max and a LOWER plan limit (a plan lowered under the entries already in) the format answers.

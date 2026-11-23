@@ -26,7 +26,7 @@
 // consumer sync — nothing heard — and tells the panel, which offers a rejoin.
 import type RealtimeKitClient from "@cloudflare/realtimekit";
 import * as Sentry from "@sentry/nextjs";
-import { loadRealtimeKitSdk, type RealtimeKitSdk } from "@/components/public-site/match-room/camera-loader";
+import { loadRealtimeKitSdk, watchRoomDrops, type RealtimeKitSdk } from "@/components/public-site/match-room/camera-loader";
 
 /** A colour, as the panel labels a pane and its switch. The meeting is the SIDE's; the colour is only its label. */
 export type ArbiterSeat = "white" | "black";
@@ -51,8 +51,9 @@ export type ArbiterCameras = {
   leave(): Promise<void>;
 };
 
-/** `players`: the participant ids of the PLAYERS in this meeting (the peers' `userId`) - usually one. Every other peer is refused. */
-export type JoinArbiter = (a: { authToken: string; players: readonly string[] }) => Promise<ArbiterCameras>;
+/** `players`: the participant ids of the PLAYERS in this meeting (the peers' `userId`) - usually one. Every other peer is refused.
+ *  `fixtureId` / `side`: the meeting this is, named on a connection-drop report (camera-loader.ts `watchRoomDrops`). */
+export type JoinArbiter = (a: { authToken: string; players: readonly string[]; fixtureId?: string; side?: string }) => Promise<ArbiterCameras>;
 
 export const ARBITER_MAX_ATTEMPTS = 3;
 /** With nothing harmful subscribed, a failing guard retries after these. */
@@ -87,7 +88,7 @@ export function makeJoinArbiter(
     return () => clearTimeout(id);
   },
 ): JoinArbiter {
-  return async ({ authToken, players }) => {
+  return async ({ authToken, players, fixtureId, side }) => {
     const isPlayer = (userId: string): boolean => players.includes(userId);
     const { default: RealtimeKitClient } = await load();
     const meeting: Meeting = await RealtimeKitClient.init({ authToken, defaults: { audio: false, video: false } });
@@ -180,11 +181,15 @@ export function makeJoinArbiter(
       changed();
     };
 
+    // Drops are reported (never acted on here); every leave below is ours. Declared before failClosed, which calls it
+    // (review m2): a `const` read before its line is a TDZ ReferenceError, thrown before `meeting.leave()`.
+    const ourLeave = watchRoomDrops(meeting, "arbiter", { fixtureId: fixtureId ?? null, side: side ?? null });
     const faultListeners = new Set<() => void>();
     let leaving: Promise<void> | null = null;
     async function failClosed(err: unknown): Promise<void> {
       closed = true;
       report("arbiter_fail_closed", err);
+      ourLeave();
       leaving = Promise.resolve()
         .then(() => meeting.leave())
         .catch((leaveErr: unknown) => report("arbiter_leave_failed", leaveErr));
@@ -245,6 +250,7 @@ export function makeJoinArbiter(
         cancelRetry = null;
         if (leaving !== null) return leaving;
         closed = true;
+        ourLeave();
         await meeting.leave();
         changed();
       },
