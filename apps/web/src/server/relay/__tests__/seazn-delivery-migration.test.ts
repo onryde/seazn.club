@@ -153,6 +153,29 @@ describe.skipIf(!HAS_DB)("V546: the schema", () => {
     expect(checked, "minute probes run (seven per column)").toBe(7 * MINUTES.length);
   });
 
+  // Controller ruling 2026-11-23: a minute count is never negative, so a negative analytics answer is refused by the schema,
+  // by a constraint NAMED for its column (the refusal says which reading was wrong).
+  it("neither minute column holds a negative: -0.1 and -15.5 are refused by that column's own constraint (23514), on insert and update; 0 lands", async () => {
+    let checked = 0;
+    await rolledBack(async (tx) => {
+      const { orgId, sessionIds: [a, b] } = await sessions(tx, 2);
+      await tx`insert into fixture_video_delivery (session_id, org_id) values (${a!}, ${orgId})`;
+      for (const col of MINUTES) {
+        const constraint = `${TABLE}_${col}_nonnegative`;
+        // The accepted twin first: zero is a real measurement (nobody watched).
+        expect(await probe(tx, (sp) => sp`update fixture_video_delivery set ${sp(col)} = 0 where session_id = ${a!}`), `${col} = 0`).toBe("landed");
+        for (const v of ["-0.1", "-15.5"]) {
+          expect(await probe(tx, (sp) => sp`update fixture_video_delivery set ${sp(col)} = ${v}::numeric where session_id = ${a!}`), `update ${col} = ${v}`)
+            .toBe(`23514:${constraint}`);
+          expect(await probe(tx, (sp) => sp`insert into fixture_video_delivery (session_id, org_id, ${sp(col)}) values (${b!}, ${orgId}, ${v}::numeric)`), `insert ${col} = ${v}`)
+            .toBe(`23514:${constraint}`);
+          checked += 2;
+        }
+      }
+    });
+    expect(checked, "negative probes run (four per column)").toBe(4 * MINUTES.length);
+  });
+
   it("org_id is required (23502); a session that does not exist is refused (23503)", async () => {
     await rolledBack(async (tx) => {
       const { orgId, sessionIds: [sid] } = await sessions(tx, 1);
