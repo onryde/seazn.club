@@ -7,7 +7,7 @@
 //   * `heights` never exceed 720 and are NOT in order, as the real list is not: the best rendition is the maximum.
 //   * `remove` reads the fake's own state, never a status: after it the video reads `absent`, and a second remove says so.
 //   * Ids are a counter under a prefix of the fake's own (`fake-video-<8 hex>-1`, …). The prefix is per INSTANCE because a copy's id
-//     is unique across the whole replay table (V543's unique index, Task 27b), as Bunny's guids are across the library: every test
+//     is unique across the whole replay table (V545's unique index, Task 27b), as Bunny's guids are across the library: every test
 //     in a shared database, and a `next dev` restarted against one, makes its own fake, and a bare counter would name the same
 //     copy twice. A test that wants a readable id names its own prefix (`{ idPrefix }`).
 import { createHash, randomUUID } from "node:crypto";

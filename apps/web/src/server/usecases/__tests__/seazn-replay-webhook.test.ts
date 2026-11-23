@@ -24,7 +24,7 @@ import { type BunnyWebhookDeps, applyBunnyEvent } from "../seazn-replay-webhook"
 
 const HAS_DB = !!process.env.DATABASE_URL;
 /** A replay fake whose copy ids are this test's own: the webhook looks a copy up by its id across the whole table (Bunny's guids are
- *  unique in the library, and one row per copy since V543), so a readable prefix of this test's own keeps its ids apart. */
+ *  unique in the library, and one row per copy since V545), so a readable prefix of this test's own keeps its ids apart. */
 const freshHost = () => new FakeReplayHost({ idPrefix: `t27-${randomUUID()}` });
 const MIN = 60_000;
 /** BUNNY_STREAM_LIBRARY_ID as the route hands it over. */
@@ -310,7 +310,7 @@ describe.skipIf(!HAS_DB)("applyBunnyEvent — the Bunny Stream webhook (Task 27)
     expect(await applyBunnyEvent(deps, event(made!, 4), now), "a later event for the removed copy").toBe("ignored");
   });
 
-  it("one row per copy (V543's unique index, the Task 27 review's m4): a second row naming a held copy is refused by the database, so the webhook's lookup can only find one", async () => {
+  it("one row per copy (V545's unique index, the Task 27 review's m4): a second row naming a held copy is refused by the database, so the webhook's lookup can only find one", async () => {
     const w = await world(2);
     const [a, b] = w.rows as [typeof w.rows[0], typeof w.rows[0]];
     const before = [await rowOf(a.id), await rowOf(b.id)];

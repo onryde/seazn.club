@@ -35,7 +35,7 @@ describe("FakeReplayHost: collections and ids", () => {
     expect(fake.collectionName("never-made")).toBeNull();
   });
 
-  it("Task 27b: two fakes never name the same copy — a copy's id is unique across the replay table (V543), and every test in a shared database, or a restarted `next dev`, makes its own fake; a named prefix is kept as given (counts reported)", async () => {
+  it("Task 27b: two fakes never name the same copy — a copy's id is unique across the replay table (V545), and every test in a shared database, or a restarted `next dev`, makes its own fake; a named prefix is kept as given (counts reported)", async () => {
     const fakes = [new FakeReplayHost(), new FakeReplayHost(), new FakeReplayHost()];
     const ids: string[] = [];
     for (const fake of fakes) for (let i = 0; i < 3; i++) ids.push(await fetchOne(fake));

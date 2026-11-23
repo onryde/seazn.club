@@ -1,4 +1,4 @@
-// V543 (Seazn-hosted video, Task 27b): two schema facts.
+// V545 (Seazn-hosted video, Task 27b): two schema facts.
 //  1. `fixture_stream_samples.source` admits `notification`: a Cloudflare live-input notification (live_input.connected,
 //     .disconnected, .errored) is recorded as a sample beside the poll's, so a drop and a reconnect inside one poll gap leave a
 //     trace (usecases/stream-sessions/live-notification.ts). The two old sources stay; anything else is still refused.
@@ -6,6 +6,10 @@
 //     bunny_video_id is not null` (the Task 27 review's m4 carry). The webhook looks a copy up by its id on every acted event, so
 //     the index serves that read, and the "two rows name one copy" invariant becomes a constraint instead of a code guard. Built
 //     PLAIN, never CONCURRENTLY: Flyway runs each delta in a transaction, where CONCURRENTLY is refused.
+//  3. (Task 27b review m3) A plain partial index on `fixture_stream_inputs (ingest_input_id)`: every notification delivery, from
+//     both environments and for every input on the shared account, looks its input up by uid, as relay-sweep does. Not UNIQUE:
+//     the uid mapping's one-row rule is a named code guard (live-notification.ts `ambiguous_input`), never a constraint a
+//     prod row could fail.
 //
 // Each refusal has its accepted twin in the same `it`, so an empty schema cannot pass: the twin fails first. Real Postgres
 // required; skipped without DATABASE_URL like every DB suite here. Every probe runs in a transaction that is always rolled back.
@@ -19,10 +23,11 @@ import { stripSqlComments } from "./_stream-migration";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const DELTAS = resolve(import.meta.dirname, "../../../../../../db/migration/deltas");
-const V543 = readdirSync(DELTAS).find((f) => /^V543__.+\.sql$/.test(f));
-const V543_SQL = V543 ? stripSqlComments(readFileSync(join(DELTAS, V543), "utf8")) : "";
+const V545 = readdirSync(DELTAS).find((f) => /^V545__.+\.sql$/.test(f));
+const V545_SQL = V545 ? stripSqlComments(readFileSync(join(DELTAS, V545), "utf8")) : "";
 /** The index's name, typed here (the migration names it; this test pins that name). */
 const GUID_INDEX = "fixture_video_replays_bunny_video_id_key";
+const INPUT_UID_INDEX = "fixture_stream_inputs_ingest_input_id_idx";
 
 const failure = async (p: PromiseLike<unknown>): Promise<string> => {
   try {
@@ -51,9 +56,9 @@ async function sessionRow(tx: Tx): Promise<{ orgId: string; fixtureId: string; s
   const { auth } = await seedOrg();
   const { fixtureIds } = await divisionRig(auth, { entrants: 2 });
   const fixtureId = fixtureIds[0]!;
-  const [u] = await tx<{ id: string }[]>`insert into users (email, display_name, email_verified) values (${`v543-${randomUUID()}@test.local`}, 'V543', true) returning id`;
+  const [u] = await tx<{ id: string }[]>`insert into users (email, display_name, email_verified) values (${`v545-${randomUUID()}@test.local`}, 'V545', true) returning id`;
   const [t] = await tx<{ id: string }[]>`
-    insert into org_stream_targets (org_id, kind, label, rtmp_enc) values (${auth.orgId}, 'youtube', 'V543', ${Buffer.from("not-a-real-envelope")}) returning id`;
+    insert into org_stream_targets (org_id, kind, label, rtmp_enc) values (${auth.orgId}, 'youtube', 'V545', ${Buffer.from("not-a-real-envelope")}) returning id`;
   const [s] = await tx<{ id: string }[]>`
     insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by, sport_key, competition_id, division_id, entitlement_via_override, ended_at)
     select f.id, ${auth.orgId}, 'passthrough', 'completed', ${t!.id}, ${u!.id}, d.sport_key, d.competition_id, f.division_id, true, now()
@@ -62,15 +67,16 @@ async function sessionRow(tx: Tx): Promise<{ orgId: string; fixtureId: string; s
   return { orgId: auth.orgId, fixtureId, sessionId: s!.id };
 }
 
-describe("V543: the migration text", () => {
+describe("V545: the migration text", () => {
   it("exists, builds the guid index PLAIN (Flyway's transaction refuses CONCURRENTLY), and names it", () => {
-    expect(V543, "V543's delta file").toBeDefined();
-    expect(V543_SQL).not.toMatch(/\bconcurrently\b/i);
-    expect(V543_SQL).toMatch(new RegExp(`create\\s+unique\\s+index\\s+${GUID_INDEX}\\b`, "i"));
+    expect(V545, "V545's delta file").toBeDefined();
+    expect(V545_SQL).not.toMatch(/\bconcurrently\b/i);
+    expect(V545_SQL).toMatch(new RegExp(`create\\s+unique\\s+index\\s+${GUID_INDEX}\\b`, "i"));
+    expect(V545_SQL, "the input-uid index is plain, never unique").toMatch(new RegExp(`create\\s+index\\s+${INPUT_UID_INDEX}\\b`, "i"));
   });
 });
 
-describe.skipIf(!HAS_DB)("V543: the schema", () => {
+describe.skipIf(!HAS_DB)("V545: the schema", () => {
   it("fixture_stream_samples.source admits `notification` beside `heartbeat` and `poll`, and still refuses any other word (counts reported)", async () => {
     await rolledBack(async (tx) => {
       const { sessionId } = await sessionRow(tx);
@@ -111,6 +117,12 @@ describe.skipIf(!HAS_DB)("V543: the schema", () => {
       }
       expect(refused).toBe(4);
     });
+  });
+
+  it("Task 27b review m3: the input-uid index is plain (not unique), partial on a set uid, and on ingest_input_id alone (pg_indexes)", async () => {
+    const [ix] = await sql<{ indexdef: string }[]>`select indexdef from pg_indexes where indexname = ${INPUT_UID_INDEX}`;
+    expect(ix, "the index exists").toBeDefined();
+    expect(ix!.indexdef).toMatch(/^CREATE INDEX \S+ ON \S*fixture_stream_inputs USING btree \(ingest_input_id\) WHERE \(ingest_input_id IS NOT NULL\)$/);
   });
 
   it("the index is unique, partial on a named copy, and on bunny_video_id alone (pg_indexes)", async () => {

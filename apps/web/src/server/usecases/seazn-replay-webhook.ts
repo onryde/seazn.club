@@ -71,7 +71,7 @@ export async function applyBunnyEvent(deps: BunnyWebhookDeps, ev: BunnyEvent, no
 interface HeldRow { id: string; state: string; cf_duration_seconds: number | null; cf_height: number | null; attempts: number }
 
 async function act(deps: BunnyWebhookDeps, ev: BunnyEvent, outcome: "playable" | "failed", now: Date): Promise<BunnyEventResult> {
-  // At most one row names a copy: V543's unique index (fixture_video_replays_bunny_video_id_key), which this read also rides.
+  // At most one row names a copy: V545's unique index (fixture_video_replays_bunny_video_id_key), which this read also rides.
   const [held] = await sql<HeldRow[]>`
     select id, state, cf_duration_seconds, cf_height, attempts from fixture_video_replays where bunny_video_id = ${ev.videoId}`;
   if (held) return heldCopy(deps, held, ev, outcome, now);
