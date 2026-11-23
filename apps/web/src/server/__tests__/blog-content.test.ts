@@ -258,8 +258,10 @@ describe("related: slugs planned but not yet written", () => {
     const self = new Map(valid).set("related-self", { ...parse("related-missing.md"), slug: "related-self", related: ["related-self", "how-swiss-pairs-round-two"] });
     expect(blogRelatedProblems(self, new Set(["related-self"]))).toEqual(["related-self: related 'related-self' is the post itself"]);
   });
-  it("the planned list is the approved topic list: kebab slugs, no duplicates, 32 posts after the pilot", () => {
-    expect(BLOG_PLANNED_SLUGS.size, "anti-vacuity: planned slugs").toBe(32);
+  it("the planned list is the approved topic list: kebab slugs, no duplicates, and with the posts written it is 33", () => {
+    expect(BLOG_PLANNED_SLUGS.size, "anti-vacuity: planned slugs").toBeGreaterThan(0);
+    // The size is read off the tree, so a post landing moves it by itself (blog-tree.test.ts pins the same total).
+    expect(BLOG_PLANNED_SLUGS.size + allBlogPosts().length, "posts written + still planned = the approved list").toBe(33);
     for (const s of BLOG_PLANNED_SLUGS) expect(s, s).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
     expect(BLOG_PLANNED_SLUGS.has("how-standings-points-work"), "the pilot is a post, not planned").toBe(false);
   });

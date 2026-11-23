@@ -1,9 +1,20 @@
 // The registry: every example a post can place. The goldens (__golden__/<id>.json) are what a page reads; this
 // file is what the regenerate and claims tests walk, and is never imported by a page (it pulls in the engine).
 import { standingsPoints } from "./standings-points";
+// ---- batch 3 (Swiss and seeding) ----
+import { swissBye, swissByeRounds } from "./swiss-bye";
+import { swissPairing } from "./swiss-pairing";
+// ---- end batch 3 ----
 import type { BlogExample } from "./types";
 
-export const BLOG_EXAMPLES: readonly BlogExample[] = [standingsPoints];
+export const BLOG_EXAMPLES: readonly BlogExample[] = [
+  standingsPoints,
+  // ---- batch 3 (Swiss and seeding) ----
+  swissPairing,
+  swissBye,
+  swissByeRounds,
+  // ---- end batch 3 ----
+];
 
 export function blogExample(id: string): BlogExample | null {
   return BLOG_EXAMPLES.find((e) => e.id === id) ?? null;

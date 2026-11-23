@@ -1,0 +1,108 @@
+{
+  "facts": {
+    "playerCount": 6,
+    "roundCount": 3,
+    "boardCount": 3,
+    "sportCount": 11,
+    "r2TopPair": "Dev and Fay",
+    "r2TopScore": "1",
+    "r1DrawPair": "Ben and Eve",
+    "r1DrawScore": "½"
+  },
+  "table": {
+    "caption": "Six chess players, three Swiss rounds: who met whom, with which colour, and the points each had going in.",
+    "columns": [
+      "Round",
+      "Board",
+      "White",
+      "Black",
+      "Points before (White, Black)",
+      "Result"
+    ],
+    "rows": [
+      [
+        1,
+        1,
+        "Dev",
+        "Ana",
+        "0, 0",
+        "1 — 0"
+      ],
+      [
+        1,
+        2,
+        "Ben",
+        "Eve",
+        "0, 0",
+        "½ — ½"
+      ],
+      [
+        1,
+        3,
+        "Fay",
+        "Cy",
+        "0, 0",
+        "1 — 0"
+      ],
+      [
+        2,
+        1,
+        "Fay",
+        "Dev",
+        "1, 1",
+        "0 — 1"
+      ],
+      [
+        2,
+        2,
+        "Eve",
+        "Ana",
+        "½, 0",
+        "½ — ½"
+      ],
+      [
+        2,
+        3,
+        "Cy",
+        "Ben",
+        "0, ½",
+        "0 — 1"
+      ],
+      [
+        3,
+        1,
+        "Dev",
+        "Ben",
+        "2, 1½",
+        "1 — 0"
+      ],
+      [
+        3,
+        2,
+        "Eve",
+        "Fay",
+        "1, 1",
+        "½ — ½"
+      ],
+      [
+        3,
+        3,
+        "Ana",
+        "Cy",
+        "½, 0",
+        "1 — 0"
+      ]
+    ]
+  },
+  "text": [
+    "Round 1, board 1: Dev has White against Ana, 1 — 0.",
+    "Round 1, board 2: Ben has White against Eve, ½ — ½.",
+    "Round 1, board 3: Fay has White against Cy, 1 — 0.",
+    "Round 2, board 1: Fay has White against Dev, 0 — 1.",
+    "Round 2, board 2: Eve has White against Ana, ½ — ½.",
+    "Round 2, board 3: Cy has White against Ben, 0 — 1.",
+    "Round 3, board 1: Dev has White against Ben, 1 — 0.",
+    "Round 3, board 2: Eve has White against Fay, ½ — ½.",
+    "Round 3, board 3: Ana has White against Cy, 1 — 0."
+  ]
+}
