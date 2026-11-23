@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { FORMAT_FAMILIES } from "@/config/format-gallery";
 import { BLOG_EXAMPLES } from "@/blog/examples";
 import { BLOG_GOLDENS } from "@/blog/examples/goldens";
-import { blogLeakText, findBlogLeaks } from "@/blog/leaks";
+import { blogLeakText, findBlogLeaks, withoutDiagramKind } from "@/blog/leaks";
 import { BLOG_ROOT, BLOG_PLANNED_SLUGS, allBlogPosts, blogHelpHref, type BlogPost } from "@/server/blog-content";
 import { renderBlogPost } from "@/server/blog-render";
 import { allHelpArticles } from "@/server/help-content";
@@ -22,7 +22,8 @@ function leaves(v: unknown): string[] {
   if (v === null || typeof v !== "object") return v === undefined ? [] : [String(v)];
   return Object.values(v as Record<string, unknown>).flatMap(leaves);
 }
-const exampleStrings = (id: string): string[] => leaves(BLOG_GOLDENS[id]!);
+// The diagram's `kind` names the drawing component (`swissRound`), never a word a reader sees: left out of the scan, every other string stays in.
+const exampleStrings = (id: string): string[] => leaves(withoutDiagramKind(BLOG_GOLDENS[id]!));
 
 describe("the tree", () => {
   it("every file in content/blog parses (allBlogPosts throws on one that does not), and the folder is not empty", () => {

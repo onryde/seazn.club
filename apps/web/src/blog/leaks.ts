@@ -7,6 +7,7 @@
 // `h2h_reapply` reads "h2h reapply" and the snake_case rule is blind to it. Use blogLeakText(markdown),
 // which keeps underscores and drops what is not prose (link targets, image paths, blog tokens).
 import { findLeaks, type Leak, type LeakRule } from "@/lib/copy-leaks";
+import type { ExampleResult } from "./examples/types";
 
 export type BlogLeakRule = LeakRule | "code-identifier";
 
@@ -70,4 +71,13 @@ export function blogLeakText(markdown: string): string {
     // A picture's or link's quoted title is text a reader sees (help-figures.ts renders it as the <figcaption>): keep it.
     .replace(/!\[([^\]]*)\]\([^)\s]*(?:\s+"([^"]*)")?\s*\)/g, "$1 $2")
     .replace(/\[([^\]]*)\]\([^)\s]*(?:\s+"([^"]*)")?\s*\)/g, "$1 $2");
+}
+
+/** A golden without its diagram's `kind`: the discriminant (`swissRound`, `roundRobinWheel`) is the name of the drawing
+ *  component, never a word a reader sees, and the type union fixes its values. Every other string of the diagram is copy. */
+export function withoutDiagramKind(g: ExampleResult): ExampleResult {
+  if (g.diagram === undefined) return g;
+  const rest: Record<string, unknown> = { ...g.diagram };
+  delete rest.kind;
+  return { ...g, diagram: rest as unknown as ExampleResult["diagram"] };
 }

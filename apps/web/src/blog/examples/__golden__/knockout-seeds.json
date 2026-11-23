@@ -3,7 +3,7 @@
     "fieldSize": 6,
     "bracketSize": 8,
     "byeCount": 2,
-    "byeHolders": "Ana and Ben",
+    "byeHolders": "Fay and Ana",
     "lineOrder16": "1, 16, 9, 8, 5, 12, 13, 4, 3, 14, 11, 6, 7, 10, 15, 2",
     "largeSize": 16,
     "sportCount": 11
@@ -18,30 +18,30 @@
     "rows": [
       [
         1,
-        "Ana (seed 1)",
+        "Fay (seed 1)",
         "Bye"
       ],
       [
         2,
-        "Eve (seed 5)",
-        "Dev (seed 4)"
+        "Ben (seed 5)",
+        "Cy (seed 4)"
       ],
       [
         3,
-        "Cy (seed 3)",
-        "Fay (seed 6)"
+        "Eve (seed 3)",
+        "Dev (seed 6)"
       ],
       [
         4,
-        "Ben (seed 2)",
-        "Bye"
+        "Bye",
+        "Ana (seed 2)"
       ]
     ]
   },
   "text": [
-    "Match 1: Ana (seed 1) against Bye.",
-    "Match 2: Eve (seed 5) against Dev (seed 4).",
-    "Match 3: Cy (seed 3) against Fay (seed 6).",
-    "Match 4: Ben (seed 2) against Bye."
+    "Match 1: Fay (seed 1) against Bye.",
+    "Match 2: Ben (seed 5) against Cy (seed 4).",
+    "Match 3: Eve (seed 3) against Dev (seed 6).",
+    "Match 4: Bye against Ana (seed 2)."
   ]
 }

@@ -4,13 +4,13 @@
     "roundCount": 3,
     "boardCount": 3,
     "sportCount": 11,
-    "r2TopPair": "Dev and Fay",
+    "r2TopPair": "Ana and Eve",
     "r2TopScore": "1",
-    "r1DrawPair": "Ben and Eve",
+    "r1DrawPair": "Dev and Fay",
     "r1DrawScore": "½"
   },
   "table": {
-    "caption": "Six chess players, three Swiss rounds: who met whom, with which colour, and the points each had going in.",
+    "caption": "Six chess players, three Swiss rounds: who met whom, with which colour, and the points each had going in. The number in brackets is the seed.",
     "columns": [
       "Round",
       "Board",
@@ -23,86 +23,124 @@
       [
         1,
         1,
-        "Dev",
-        "Ana",
+        "Eve (4)",
+        "Cy (1)",
         "0, 0",
         "1 — 0"
       ],
       [
         1,
         2,
-        "Ben",
-        "Eve",
+        "Fay (2)",
+        "Dev (5)",
         "0, 0",
         "½ — ½"
       ],
       [
         1,
         3,
-        "Fay",
-        "Cy",
+        "Ana (6)",
+        "Ben (3)",
         "0, 0",
         "1 — 0"
       ],
       [
         2,
         1,
-        "Fay",
-        "Dev",
+        "Ana (6)",
+        "Eve (4)",
         "1, 1",
         "0 — 1"
       ],
       [
         2,
         2,
-        "Eve",
-        "Ana",
+        "Dev (5)",
+        "Cy (1)",
         "½, 0",
         "½ — ½"
       ],
       [
         2,
         3,
-        "Cy",
-        "Ben",
+        "Ben (3)",
+        "Fay (2)",
         "0, ½",
         "0 — 1"
       ],
       [
         3,
         1,
-        "Dev",
-        "Ben",
+        "Eve (4)",
+        "Fay (2)",
         "2, 1½",
         "1 — 0"
       ],
       [
         3,
         2,
-        "Eve",
-        "Fay",
+        "Dev (5)",
+        "Ana (6)",
         "1, 1",
         "½ — ½"
       ],
       [
         3,
         3,
-        "Ana",
-        "Cy",
+        "Cy (1)",
+        "Ben (3)",
         "½, 0",
         "1 — 0"
       ]
     ]
   },
+  "diagram": {
+    "kind": "swissRound",
+    "title": "Round 2: Ana and Eve are level at the top and meet on board 1. Dev and Fay drew each other in round 1, so each plays a player from the score below, and those boards are marked as floats.",
+    "round": 2,
+    "pairings": [
+      {
+        "board": 1,
+        "first": "Ana (6)",
+        "second": "Eve (4)",
+        "firstScore": "1",
+        "secondScore": "1",
+        "result": "0 — 1",
+        "firstWhite": true,
+        "float": false
+      },
+      {
+        "board": 2,
+        "first": "Dev (5)",
+        "second": "Cy (1)",
+        "firstScore": "½",
+        "secondScore": "0",
+        "result": "½ — ½",
+        "firstWhite": true,
+        "float": true
+      },
+      {
+        "board": 3,
+        "first": "Ben (3)",
+        "second": "Fay (2)",
+        "firstScore": "0",
+        "secondScore": "½",
+        "result": "0 — 1",
+        "firstWhite": true,
+        "float": true
+      }
+    ],
+    "byes": []
+  },
   "text": [
-    "Round 1, board 1: Dev has White against Ana, 1 — 0.",
-    "Round 1, board 2: Ben has White against Eve, ½ — ½.",
-    "Round 1, board 3: Fay has White against Cy, 1 — 0.",
-    "Round 2, board 1: Fay has White against Dev, 0 — 1.",
-    "Round 2, board 2: Eve has White against Ana, ½ — ½.",
-    "Round 2, board 3: Cy has White against Ben, 0 — 1.",
-    "Round 3, board 1: Dev has White against Ben, 1 — 0.",
-    "Round 3, board 2: Eve has White against Fay, ½ — ½.",
-    "Round 3, board 3: Ana has White against Cy, 1 — 0."
+    "Round 1, board 1: Eve has White against Cy, 1 — 0.",
+    "Round 1, board 2: Fay has White against Dev, ½ — ½.",
+    "Round 1, board 3: Ana has White against Ben, 1 — 0.",
+    "Round 2, board 1: Ana has White against Eve, 0 — 1.",
+    "Round 2, board 2: Dev has White against Cy, ½ — ½.",
+    "Round 2, board 3: Ben has White against Fay, 0 — 1.",
+    "Round 3, board 1: Eve has White against Fay, 1 — 0.",
+    "Round 3, board 2: Dev has White against Ana, ½ — ½.",
+    "Round 3, board 3: Cy has White against Ben, 1 — 0."
   ]
 }

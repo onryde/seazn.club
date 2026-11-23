@@ -85,6 +85,8 @@ const PUBLIC_VIA = [
   { file: "src/components/public-site/bracket.tsx", decl: "FixtureCard" },
 ];
 const EXEMPT: readonly Exemption[] = [
+  // Blog examples print the table cell of an odd field's bye, drawn from the engine's own pairing; no seat, no forfeit loser.
+  { file: "src/blog/examples/swiss-claims.ts", fn: "<module>", sites: 1, reason: "the blog examples' one declaration of the cell they print for a board with a bye (BYE_CELL); it names no seat, and the examples read the pairing's own bye, never a withdrawn player's" },
   // The public seat namer's own fallback: library code its callers (namer sites, checked) sit above.
   { file: "src/server/public-site/feeder-slot-label.ts", fn: "publicSlotLabel", sites: 1, reason: "the public seat namer's own fallback; its callers are checked as namer sites" },
   // Fallback namers handed to a reader that names her first.

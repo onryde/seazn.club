@@ -30,6 +30,7 @@ import { awardByeDelta } from "@/server/engine-db/competition";
 import { buildSwissHistory, swissFieldForRound } from "@/server/usecases/stages/swiss-gen";
 import type { ActiveEntrant, SwissExistingFixture } from "@/server/usecases/stages/types";
 import { startingVariantKey } from "./starting-variant";
+import type { DiagramModel } from "./types";
 
 const MAX_SEEDS = 20000;
 const MAX_EVENTS = 3000;
@@ -77,6 +78,9 @@ export interface SwissRunRound {
   bye: { entrant: string; before: number; paid: number } | null;
   /** Table points after the round, every entrant who has been in a field so far. */
   after: Map<string, number>;
+  /** What the round was paired from: the app's history (who met, colours, who may no longer take the bye) and the standings the
+   *  engine saw. A test re-pairs the round from them with one thing changed, to show what that thing did. */
+  paired: { standings: SwissStanding[]; history: Parameters<typeof pairRound>[1] };
 }
 
 export interface SwissRun {
@@ -149,7 +153,7 @@ function play(module: AnySportModule, cfg: unknown, rules: LoadedTableRules, hom
 
 /** A board the withdrawal rule walks over: the leaver's side forfeits on an empty ledger, as the withdrawal cascade writes
  *  it (`core.forfeit{by, reason: "withdrew"}`), read back through the app's read fold and paid as nothing played. */
-function walkover(module: AnySportModule, cfg: unknown, rules: LoadedTableRules, home: string, away: string, leaver: string): Played {
+export function walkover(module: AnySportModule, cfg: unknown, rules: LoadedTableRules, home: string, away: string, leaver: string): Played {
   const catalog = resolvePositions(module, cfg as never);
   const lineups = { home: lineupFromCatalog(catalog, home), away: lineupFromCatalog(catalog, away) };
   const envelope = { id: "e-0", fixtureId: "blog-swiss-walkover", seq: 0, type: "core.forfeit", payload: { by: leaver, reason: "withdrew" }, recordedAt: "2026-01-01T00:00:00.000Z", recordedBy: "blog" };
@@ -253,7 +257,40 @@ export function runSwiss(input: SwissRunInput): SwissRun {
       bye = { entrant: paired.bye, before, paid: credit.points };
     }
     for (const e of field) if (!total.has(e.id)) total.set(e.id, 0);
-    rounds.push({ round: r, field: field.map((e) => e.id), boards, bye, after: new Map(total) });
+    rounds.push({ round: r, field: field.map((e) => e.id), boards, bye, after: new Map(total), paired: { standings, history: { played, colours, byes } } });
   }
   return { module: sportModule, cfg, rules, unit, chess, rounds, withdrawal, name, points: (n: number) => pointsText(n, unit) };
+}
+
+/**
+ * One round of a run as the Swiss round grid draws it (`DiagramModel` `swissRound`): every board, side and score is read
+ * off the run's own round, never typed. `label` is how the example names a player (the table's own cell), `result` how it
+ * prints a board's result (the table's own cell).
+ */
+export function roundDiagram(
+  run: SwissRun,
+  roundNo: number,
+  title: string,
+  label: (id: string) => string,
+  opts: { result?: (b: SwissRunBoard) => string; notSeated?: { name: string; why: string }[] } = {},
+): Extract<DiagramModel, { kind: "swissRound" }> {
+  const round = run.rounds.find((r) => r.round === roundNo);
+  if (round === undefined) throw new Error(`swiss-run: no round ${roundNo} to draw`);
+  return {
+    kind: "swissRound",
+    title,
+    round: roundNo,
+    pairings: round.boards.map((b) => ({
+      board: b.board,
+      first: label(b.home),
+      second: label(b.away),
+      firstScore: run.points(b.before[0]),
+      secondScore: run.points(b.before[1]),
+      result: (opts.result ?? ((x) => x.headline))(b),
+      ...(run.chess ? { firstWhite: true } : {}),
+      float: b.before[0] !== b.before[1],
+    })),
+    byes: round.bye === null ? [] : [label(round.bye.entrant)],
+    ...(opts.notSeated !== undefined && opts.notSeated.length > 0 ? { notSeated: opts.notSeated } : {}),
+  };
 }
