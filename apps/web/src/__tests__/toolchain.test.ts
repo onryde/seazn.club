@@ -333,6 +333,48 @@ describe("toolchain: Turbopack build cache is opt-in and env-gated", () => {
     const turbo = JSON.parse(jsonc) as { tasks: { build: { env?: string[] } } };
     expect(turbo.tasks.build.env).toContain("NEXT_BUILD_FS_CACHE");
     expect(turbo.tasks.build.env).toContain("SKIP_TYPECHECK");
+    // NEXT_LEAN_BUILD sat in seazn-env for a week reaching nothing: unlisted
+    // here, strict env mode strips it before next.config.js runs.
+    expect(turbo.tasks.build.env).toContain("NEXT_LEAN_BUILD");
+  });
+
+  /**
+   * NEXT_LEAN_BUILD=1 turns Turbopack's source maps off for local builds.
+   * The key must be ABSENT (not `true`) when the flag is off, so a deploy
+   * build's config is exactly what it was before the flag existed.
+   */
+  async function leanExperimental(): Promise<Record<string, unknown>> {
+    vi.resetModules();
+    const mod = (await import("../../next.config.js")) as {
+      nextConfig: { experimental?: Record<string, unknown> };
+    };
+    return mod.nextConfig.experimental ?? {};
+  }
+
+  it("premise: Next emits Turbopack source maps unless told otherwise", async () => {
+    const { defaultConfig } = await import("next/dist/server/config-shared");
+    // undefined = Next's documented default ("Enable source maps. Defaults to true").
+    expect(defaultConfig.experimental?.turbopackSourceMaps).not.toBe(false);
+  });
+
+  it("next.config.js leaves source maps alone when NEXT_LEAN_BUILD is unset", async () => {
+    vi.stubEnv("NEXT_LEAN_BUILD", "");
+    vi.stubEnv("SENTRY_AUTH_TOKEN", "");
+    expect(await leanExperimental()).not.toHaveProperty("turbopackSourceMaps");
+    vi.stubEnv("NEXT_LEAN_BUILD", "true");
+    expect(await leanExperimental()).not.toHaveProperty("turbopackSourceMaps");
+  });
+
+  it("next.config.js drops source maps for NEXT_LEAN_BUILD=1", async () => {
+    vi.stubEnv("NEXT_LEAN_BUILD", "1");
+    vi.stubEnv("SENTRY_AUTH_TOKEN", "");
+    expect((await leanExperimental()).turbopackSourceMaps).toBe(false);
+  });
+
+  it("a build that uploads to Sentry is never lean, whatever the flag says", async () => {
+    vi.stubEnv("NEXT_LEAN_BUILD", "1");
+    vi.stubEnv("SENTRY_AUTH_TOKEN", "sntrys_test");
+    expect(await leanExperimental()).not.toHaveProperty("turbopackSourceMaps");
   });
 });
 

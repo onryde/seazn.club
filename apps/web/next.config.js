@@ -39,6 +39,8 @@ const securityHeaders = [
   { key: "X-DNS-Prefetch-Control", value: "off" },
 ];
 
+const LEAN_BUILD = process.env.NEXT_LEAN_BUILD === "1" && !process.env.SENTRY_AUTH_TOKEN;
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: "standalone",
@@ -71,6 +73,15 @@ const nextConfig = {
   // hash. toolchain.test.ts pins both halves.
   experimental: {
     turbopackFileSystemCacheForBuild: process.env.NEXT_BUILD_FS_CACHE === "1",
+    // NEXT_LEAN_BUILD=1 (local seazn-env builds): emit no source maps. They
+    // are on by default and were 6,521 files / 549 MB of an 895 MB
+    // .next/server on a local build that uploads them nowhere. The key is
+    // ABSENT otherwise, so CI, Docker and the deploy workflows keep Next's
+    // default — and a build holding SENTRY_AUTH_TOKEN is never lean, because
+    // that build's maps are what Sentry symbolicates with. turbo.json lists
+    // the var in build.env (strict env mode strips it otherwise, which is
+    // how it sat inert in seazn-env for a week). toolchain.test.ts pins it.
+    ...(LEAN_BUILD ? { turbopackSourceMaps: false } : {}),
     // Do not load every page's JS at boot: idle RSS 266 -> 145 MB measured
     // (docs: guides/memory-usage). Pinned by next-config-memory.test.ts.
     preloadEntriesOnStart: false,

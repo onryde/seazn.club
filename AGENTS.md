@@ -51,6 +51,16 @@ tool, or just read the file; it is machine-local, so a fresh clone on
 another machine will not have it). Its §5 also lists the environmental
 red signatures here, so an environment fault is not reported as a defect.
 
+**Never run a bare `pnpm run build` / `npm run build` / `next build` locally,
+and never put one in a dispatch brief** (owner, 2026-11-23). Build through the
+skill's script — `seazn-env up --server`, `seazn-env rebuild --label X`, or
+`seazn-env heavy -- <cmd>` for anything else heavy. It holds one machine-wide
+lock, so a second build WAITS for the first instead of running beside it, and
+it sets `SKIP_TYPECHECK=1` and `NEXT_LEAN_BUILD=1`. Two bare cold builds in two
+worktrees took 9.5 GB of a 16 GB machine and were both still compiling after 46
+minutes; alone, one takes about five. A queued build looks idle — run it in the
+background and wait for it; do not kill it as hung.
+
 The two that cost the most, if you read nothing else: `db:apply` alone is
 NOT a fresh schema (it needs `sync:sports`, or `funnel.test.ts` fails
 `expected 'generic' to be 'badminton'`), and a `pg_ctl` that fails with
