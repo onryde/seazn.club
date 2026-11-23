@@ -10,7 +10,7 @@ import { CompetitionHubDoc, type CompetitionHubDocT, type HubMatchT } from "@/se
 import { hubBucketTotals, hubRoundKey, hubRoundMatches, windowHubDoc } from "@/lib/hub-round-paging";
 import { MatchesTab } from "../matches-hub/matches-tab";
 import { hubRoundsFor } from "../matches-hub/hub-rounds";
-import { hubDoc, koRound, m } from "./hub-fixtures";
+import { hubDoc, knockoutView, koRound, m } from "./hub-fixtures";
 
 vi.mock("@/server/usecases/public", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/usecases/public")>()),
@@ -133,6 +133,26 @@ describe("C: the hub serves a big division by round", () => {
       [...renderToStaticMarkup(<MatchesTab doc={served} dict={en as Dict} locale="en" now={NOW} initialFilter={filter} initialDivision="premier" />).matchAll(/\/fixtures\/(L72-\d+)"/g)].map((x) => x[1]);
     expect(draw("upcoming").length).toBe(30);
     expect(draw("completed").sort()).toEqual(["L72-1", "L72-2", "L72-3", "L72-4", "L72-5"]);
+  });
+
+  it("C1: a big division's knockout stays on the Matches TAB: a live final is listed under Live, and the chip counts what is listed", () => {
+    // A groups-then-knockout shape: the 4,970-card league, then a play-off stage whose final is being played.
+    const final = m("F1", "live", "2026-09-05T11:00:00Z", "premier", { stageName: "Play-offs", roundNo: 1 });
+    const semi = m("S1", "completed", "2026-09-04T11:00:00Z", "premier", { stageName: "Play-offs", roundNo: 0 });
+    const full = hubDoc({
+      matches: [...bigLeague(), semi, final, ...smallCup()],
+      knockouts: [knockoutView("ko", "premier", [koRound("sf", "Semi-final", ["S1"]), koRound("final", "Final", ["F1"])])],
+    });
+    const served = windowHubDoc(full);
+    const tab = (filter: "live" | "completed") =>
+      renderToStaticMarkup(<MatchesTab doc={served} dict={en as Dict} locale="en" now={NOW} initialFilter={filter} initialDivision="premier" />);
+    const live = tab("live");
+    expect(live, "the Live chip names one match").toContain(`${(en as Dict)["matchesHub.filter.live"]} 1`);
+    const liveCards = [...live.matchAll(/\/fixtures\/([A-Z]\d[^"]*)"/g)].map((x) => x[1]);
+    expect(liveCards, "and the tab lists that one match: the final").toEqual(["F1"]);
+    expect(live).not.toContain('data-testid="mh-matches-empty-filter"');
+    // Under Results the semi-final is listed beside the league's finished rounds (their headers).
+    expect(tab("completed")).toContain("/fixtures/S1\"");
   });
 
   it("Results lists the finished rounds most recent first", () => {

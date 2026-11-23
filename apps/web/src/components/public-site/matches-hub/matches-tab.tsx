@@ -28,7 +28,7 @@ import {
 import type { CompetitionHubDocT } from "@/server/public-site/competition-hub-schema";
 import { MatchCard } from "./match-card";
 import { HubRounds, pageCount } from "./hub-rounds";
-import { hubBucketTotals, type HubRoundPage } from "@/lib/hub-round-paging";
+import { hubBucketTotals, hubRoundKey, type HubRoundPage } from "@/lib/hub-round-paging";
 import { HUB_RAIL_CLASS, hubChip } from "./hub-chip";
 import { writeDivisionParam } from "../use-tab-param";
 
@@ -259,13 +259,16 @@ export function MatchesTab({
   for (const p of doc.roundPages ?? []) pagesOf.set(p.divisionId, [...(pagesOf.get(p.divisionId) ?? []), p]);
   const pagedInScope = divisions.filter((d) => pagesOf.has(d.id) && (division === null || d.slug === division));
   const pagedHasRows = pagedInScope.some((d) => pagesOf.get(d.id)!.some((p) => pageCount(p, filter) > 0));
+  // A match a round page heads is drawn by `HubRounds`; every other match of a paged division - its knockout's, never paged - stays in
+  // the list by day, so the chips (which count it) and the list agree.
+  const pagedRounds = new Set((doc.roundPages ?? []).map((p) => p.key));
 
   const shown = sortHubMatches(
     doc.matches.filter(
       (match) =>
         match.bucket === filter &&
         (division === null || match.divisionSlug === division) &&
-        !pagesOf.has(match.divisionId),
+        !pagedRounds.has(hubRoundKey(match)),
     ),
   );
   // `sortHubMatches` reads completed newest-first and `groupByDay` then re-sorts
