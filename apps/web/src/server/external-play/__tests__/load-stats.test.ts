@@ -109,7 +109,7 @@ describe("normalisePath / groupCalls: the vendor's endpoints, not one row per ga
 });
 
 describe("LOAD_LIMITS: the run is judged against the budget the platform actually enforces", () => {
-  it("the RealtimeKit limits are video/budget.ts's own (a runner cannot import it, so the copy is pinned here)", () => {
+  it("the RealtimeKit limits are the ones video/budget.ts spends by (read from its import-free leaf, budget-limits.ts)", () => {
     expect(LOAD_LIMITS.rtkVendor).toBe(RTK_VENDOR_LIMIT_PER_WINDOW);
     expect(LOAD_LIMITS.rtkCeiling).toBe(RTK_CALLS_PER_WINDOW);
     expect(LOAD_LIMITS.windowMs).toBe(RTK_BUDGET_WINDOW_MS);

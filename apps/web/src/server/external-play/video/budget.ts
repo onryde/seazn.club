@@ -1,12 +1,13 @@
 import "server-only";
 // The platform-wide RealtimeKit call budget (T17B fix 2, D21; review I2).
 //
-// RealtimeKit's REST API has its own limit, DOCUMENTED at 3,500 requests per five minutes for the WHOLE account (Cloudflare's
-// RealtimeKit "Limits" page, developers.cloudflare.com/realtime/realtimekit/platform/limits/). 3,500 is that page's figure, not
-// one anyone here has observed being enforced. What WAS measured (2026-11-21, one staging token) is only that LIST READS are
-// not held to Cloudflare's global API limit of 1,200 per five minutes per user: 1,300 and then 3,700 list reads inside a single
-// five-minute window, zero 429s. Writes (the meetings and participants this budget mostly spends on) were NOT measured: nothing
-// says they share a read's headroom, so the ceiling below rests on the documented figure and the burst is kept small for them.
+// RealtimeKit's REST API is held to its OWN limit, DOCUMENTED at 3,500 requests per five minutes for the WHOLE account (Cloudflare's
+// RealtimeKit "Limits" page, developers.cloudflare.com/realtime/realtimekit/platform/limits/), not to Cloudflare's global API limit
+// of 1,200 per five minutes per user. MEASURED 2026-11-21 (one staging token, list-meetings reads): 1,300 calls in 97 s, then
+// 3,700 in 270 s, zero 429s - so the global 1,200 does not bind these calls. The second figure is past even the documented 3,500,
+// so that number has not been seen ENFORCED either (it was not tripped on purpose: a trip blocks the account for five minutes);
+// the ceiling below plans on the documented figure regardless. Writes (the meetings and participants this budget mostly spends
+// on) were NOT measured: nothing says they share a read's headroom, so the burst is kept small for them.
 // Other Cloudflare API callers - relay/ingest-cf.ts, the Stream live inputs - ARE on the global limit, and are not metered here:
 // that is a separate resource, and a RealtimeKit call neither spends from it nor is spent from by it.
 //
@@ -17,8 +18,12 @@ import "server-only";
 //
 // WHY A BUCKET. A bucket of capacity B refilled at r per second can pass at most B + r*W calls in ANY window W (the burst
 // plus the window's refill) - a sliding-window bound, which a per-minute counter does not give (it passes twice the limit
-// across a minute boundary). The ceiling is 2,625, 75% of the documented limit: the margin is for the calls this process
-// does not meter (none today) and the vendor's own window not being ours. It is split as a burst of 525 (a round of boards
+// across a minute boundary). The ceiling is 2,625, 75% of the documented limit. The 875 left over is for two things. First,
+// RealtimeKit calls on the same Cloudflare ACCOUNT that this bucket never sees: the bucket is a row in THIS environment's
+// database, so it meters every machine of one deployment and nothing else - another environment holding a token on the same
+// account (staging, if it shares prod's account: unsettled, costing paper 2026-11-21 §5.1), a developer's server with real
+// credentials, or a hand measurement like the one above spends from the same 3,500 without passing through here. Second, the
+// vendor's own window not being ours. It is split as a burst of 525 (a round of boards
 // opening at once must not queue behind a trickle) plus 7 per second. The burst is deliberately the smaller share, a fifth of
 // the ceiling (the old 900 was 300 + 2 a second, a third): writes are unmeasured, so a burst of them is the part most worth
 // keeping modest, and the cost of being wrong the cautious way is small - a 64-board burst queues a few seconds behind the
@@ -32,20 +37,20 @@ import "server-only";
 // never spend the same token; the row lock serialises them. The clock is the DATABASE's, so machine clock skew
 // cannot mint tokens.
 //
-// What is stored is the bucket's STATE only. Its size and rate are the constants below, applied on every use, so
+// What is stored is the bucket's STATE only. Its size and rate are the constants (budget-limits.ts), applied on every use, so
 // retuning is a code change and needs no migration.
 import type postgres from "postgres";
 import { sql } from "@/lib/db";
+// The numbers live in a client-safe leaf (no imports) so the load harness reads the SAME constants this bucket spends by.
+import { RTK_BUDGET_BURST, RTK_BUDGET_REFILL_PER_S } from "./budget-limits";
 
-/** The vendor's published limit: RealtimeKit REST calls per account per five minutes (the "Limits" page cited above). */
-export const RTK_VENDOR_LIMIT_PER_WINDOW = 3_500;
-export const RTK_BUDGET_WINDOW_MS = 5 * 60_000;
-/** What this process lets through in ANY five-minute window: 75% of the vendor's limit. */
-export const RTK_CALLS_PER_WINDOW = 2_625;
-/** The bucket's capacity. B + r*W = RTK_CALLS_PER_WINDOW, so the burst is spent out of the same ceiling. */
-export const RTK_BUDGET_BURST = 525;
-/** Tokens per second: what is left of the ceiling after the burst, over the window. */
-export const RTK_BUDGET_REFILL_PER_S = (RTK_CALLS_PER_WINDOW - RTK_BUDGET_BURST) / (RTK_BUDGET_WINDOW_MS / 1_000);
+export {
+  RTK_BUDGET_BURST,
+  RTK_BUDGET_REFILL_PER_S,
+  RTK_BUDGET_WINDOW_MS,
+  RTK_CALLS_PER_WINDOW,
+  RTK_VENDOR_LIMIT_PER_WINDOW,
+} from "./budget-limits";
 
 /** A spender: true = the call may be made. realtimekit.ts takes one per request. */
 export type CallBudget = (key: string) => Promise<boolean>;
