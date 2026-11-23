@@ -60,6 +60,9 @@ export async function POST(req: Request): Promise<NextResponse> {
       return NextResponse.json({ ignored: true });
     }
     const outcome = await applyBunnyEvent({ libraryId: s.libraryId, replay: replayDriver() }, ev, new Date());
+    // One line per handled event (Task 27 review m7: the stg runbook's check), its ids, status and outcome only: never a header,
+    // the body or a key.
+    log.info({ eventId: ev.eventId, videoId: ev.videoId, status: ev.status, outcome }, "bunny-webhook: event handled");
     return NextResponse.json({ received: true, outcome });
   } catch (err) {
     // The class and the event's own ids only: never the body, a header or a key.

@@ -491,14 +491,15 @@ describe.skipIf(!HAS_DB)("seaznReplayDownload — the organiser downloads a part
     expect(counts()).toEqual({ info: 0, warn: 0, error: 0 });
 
     type Level = "info" | "warn" | "error";
+    let refusals = 0;
     const cases: [string, Error, boolean, [number, string], Level][] = [
       ["no answer in the 4 s (or a network fault, a 5xx, a 429)", new ReplayHostUnavailable(quoted("openDownload: no response within 4000 ms")), false, [503, "replay_host_unavailable"], "warn"],
-      ["the CDN refused our token or Referer (403)", new ReplayHostRefused(403, quoted("openDownload: HTTP 403")), false, [500, "replay_host_refused"], "error"],
-      ["the API refused our key (401)", new ReplayHostRefused(401, quoted("video: HTTP 401")), false, [500, "replay_host_refused"], "error"],
+      ["the CDN refused our token or Referer (403)", new ReplayHostRefused(403, "delivery_token", quoted("openDownload: HTTP 403")), false, [500, "replay_host_refused"], "error"],
+      ["the API refused our key (401)", new ReplayHostRefused(401, "api_key", quoted("video: HTTP 401")), false, [500, "replay_host_refused"], "error"],
       ["anything else (no allowed origin configured)", new Error(quoted("openDownload: SEAZN_VIDEO_ORIGINS is not set")), false, [500, "replay_download_failed"], "error"],
       ["the viewer left, and the host's request was cancelled", new Error(quoted("openDownload: cancelled before a response")), true, [499, "download_cancelled"], "info"],
       ["the viewer left, and the host then failed to answer", new ReplayHostUnavailable(quoted("openDownload: no response within 4000 ms")), true, [499, "download_cancelled"], "info"],
-      ["the viewer left, and the host then refused", new ReplayHostRefused(403, quoted("openDownload: HTTP 403")), true, [499, "download_cancelled"], "info"],
+      ["the viewer left, and the host then refused", new ReplayHostRefused(403, "delivery_token", quoted("openDownload: HTTP 403")), true, [499, "download_cancelled"], "info"],
     ];
     let checked = 0;
     for (const [label, thrown, cancelled, want, level] of cases) {
@@ -515,16 +516,24 @@ describe.skipIf(!HAS_DB)("seaznReplayDownload — the organiser downloads a part
       expect(message, `${label}: the host's words stay in the log`).not.toMatch(new RegExp(`${guid}|bunny|b-cdn|4000|40[13]`));
       if (want[0] === 500) expect(message, `${label}: a fault on our side never says try again`).not.toMatch(/try|again|moment/i);
       expect(counts(), label).toEqual({ info: 0, warn: 0, error: 0, [level]: 1 });
-      const [fields] = about(spies[level])[0]! as [{ detail?: unknown; status?: unknown }];
+      const [fields, line] = about(spies[level])[0]! as [{ detail?: unknown; status?: unknown; credential?: unknown }, string];
       expect(typeof fields.detail, `${label}: the host's words are in the line`).toBe("string");
       const detail = fields.detail as string;
       expect(detail.length, `${label}: capped at 200`).toBeLessThanOrEqual(200);
       expect(detail, `${label}: through the shared scrubber`).not.toContain(TOKEN);
       expect(detail).toContain("bcdn_token=[token]");
-      if (thrown instanceof ReplayHostRefused && !cancelled) expect(fields.status, `${label}: the line names the refusal's status`).toBe(thrown.status);
+      if (thrown instanceof ReplayHostRefused && !cancelled) {
+        expect([fields.status, fields.credential], `${label}: the line names the refusal's status and credential`).toEqual([thrown.status, thrown.credential]);
+        // Task 27 review m3: the line names the setting that was actually refused, never the other one.
+        const [named, other] = thrown.credential === "api_key" ? ["BUNNY_STREAM_API_KEY", "BUNNY_TOKEN_KEY"] : ["BUNNY_TOKEN_KEY", "BUNNY_STREAM_API_KEY"];
+        expect(line, label).toContain(named);
+        expect(line, label).not.toContain(other);
+        refusals++;
+      }
       checked++;
     }
     expect(checked).toBe(7);
+    expect(refusals, "both credentials' lines read").toBe(2);
   });
 
   it("review m1: the caller's cancel (the route's request.signal) is handed to the host with the video, so an abandoned download stops pulling from it; none given, none passed", async () => {

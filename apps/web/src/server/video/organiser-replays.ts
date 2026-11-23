@@ -41,7 +41,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
 import type { ReplayRowState } from "./domain/replay-move";
 import { replayDriver } from "./replay-driver";
-import { type ReplayHost, ReplayHostRefused, ReplayHostUnavailable, ReplayNotDownloadable } from "./replay-ports";
+import { type ReplayCredential, type ReplayHost, ReplayHostRefused, ReplayHostUnavailable, ReplayNotDownloadable } from "./replay-ports";
 
 export type OrganiserReplayState = "processing" | "playable" | "failed";
 export interface OrganiserReplay {
@@ -118,6 +118,12 @@ export const REPLAY_HOST_UNAVAILABLE = "The video host did not answer. Try the d
 /** The answer when the download fails for a reason on OUR side — the host refused our credentials or address (a configuration
  *  fault: T26 re-review m1 a), or anything else unexpected: never "try again", which would not help. Both are reported. */
 export const REPLAY_DOWNLOAD_FAULT = "The download could not start because of a fault on our side. It has been reported";
+/** The refusal's log line names the one setting to fix: the credential the host refused (Task 27 review m3). */
+const REFUSED_LINE: Record<ReplayCredential, string> = {
+  api_key: "seazn replay: the host refused our API key — a configuration fault: check BUNNY_STREAM_API_KEY",
+  delivery_token:
+    "seazn replay: the host's file delivery refused our token or address — a configuration fault: check BUNNY_TOKEN_KEY and the library's allowed referrers (SEAZN_VIDEO_ORIGINS)",
+};
 /** A download the viewer left before the host answered (T26 re-review m1 b): nobody reads this answer, and it is not an error. */
 const REPLAY_DOWNLOAD_CANCELLED = "The download was cancelled";
 
@@ -212,7 +218,7 @@ export async function seaznReplayDownload(auth: AuthCtx, fixtureId: string, repl
       throw new HttpError(503, REPLAY_HOST_UNAVAILABLE, "replay_host_unavailable");
     }
     if (err instanceof ReplayHostRefused) {
-      log.error({ ...fields, status: err.status }, "seazn replay: the host refused our credentials — a configuration fault: check BUNNY_TOKEN_KEY and the library's allowed referrers (SEAZN_VIDEO_ORIGINS)");
+      log.error({ ...fields, status: err.status, credential: err.credential }, REFUSED_LINE[err.credential]);
       throw new HttpError(500, REPLAY_DOWNLOAD_FAULT, "replay_host_refused");
     }
     log.error(fields, "seazn replay: the download failed to start");

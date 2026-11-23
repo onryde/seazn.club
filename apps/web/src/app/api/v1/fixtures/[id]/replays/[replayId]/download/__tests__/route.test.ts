@@ -183,7 +183,7 @@ describe.skipIf(!HAS_DB)("GET …/fixtures/{id}/replays/{replayId}/download over
     privateNoStore(left, "499");
     expect(sentry.captured, "a viewer who left is not an error").toEqual([]);
 
-    vi.spyOn(o.host, "openDownload").mockRejectedValueOnce(new ReplayHostRefused(403, "bunny openDownload: HTTP 403 (video x)"));
+    vi.spyOn(o.host, "openDownload").mockRejectedValueOnce(new ReplayHostRefused(403, "delivery_token", "bunny openDownload: HTTP 403 (video x)"));
     const refused = await get(o.fixtures[0], o.playable.id);
     const body = (await refused.json()) as Envelope;
     expect([refused.status, body.error?.code]).toEqual([500, "replay_host_refused"]);

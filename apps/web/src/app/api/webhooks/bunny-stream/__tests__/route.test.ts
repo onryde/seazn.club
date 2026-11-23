@@ -182,4 +182,21 @@ describe.skipIf(!HAS_DB)("POST /api/webhooks/bunny-stream", () => {
     expect(await marksOf(eventIdOf(raw))).toBe(1);
     noSecretLogged();
   });
+
+  it("Task 27 review m7: every event the route hands over is logged at info, with its event id, video id, status and outcome and nothing else (the stg runbook's check); a refused or unparsed delivery is not", async () => {
+    const w = await encodingRow();
+    const handled = () => logMock.info.mock.calls.filter(([, msg]) => msg === "bunny-webhook: event handled").map(([fields]) => fields);
+    // EMPTY CASE FIRST: a refused delivery and a signed body that is not an event log no such line.
+    const early = bodyOf({ guid: w.row.bunny_video_id!, status: 2 });
+    expect((await post(early, { signature: "0".repeat(64) })).status).toBe(401);
+    await post("not json");
+    expect(handled()).toEqual([]);
+    const finished = bodyOf({ guid: w.row.bunny_video_id!, status: 3 });
+    const sent: [string, string][] = [[early, "ignored"], [finished, "applied"], [finished, "duplicate"]];
+    for (const [raw, outcome] of sent) expect(await (await post(raw)).json()).toEqual({ received: true, outcome });
+    expect(handled(), "one line per event, these four fields exactly").toEqual(
+      sent.map(([raw, outcome]) => ({ eventId: eventIdOf(raw), videoId: w.row.bunny_video_id, status: (JSON.parse(raw) as { Status: number }).Status, outcome })),
+    );
+    expect(noSecretLogged()).toBeGreaterThan(0);
+  });
 });
