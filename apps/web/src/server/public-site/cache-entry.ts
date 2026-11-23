@@ -8,9 +8,14 @@ import "server-only";
 // of what the loader returned - on a MISS too. A value written before this existed (a raw document, no `gz`) still reads as
 // itself, so the key needs no bump.
 import { gunzipSync, gzipSync } from "node:zlib";
+import { log } from "@/server/logger";
 
 /** Next's `unstable_cache` item limit (incremental-cache: "items over 2MB can not be cached"). */
 export const NEXT_CACHE_ITEM_LIMIT_BYTES = 2 * 1024 * 1024;
+
+/** Review M3: an entry past this (three quarters of the limit) logs its size, so a document growing toward the point where
+ *  Next quietly refuses it - and the cache is off again - is seen before it gets there. */
+const LARGE_ENTRY_BYTES = (NEXT_CACHE_ITEM_LIMIT_BYTES * 3) / 4;
 
 /** What is stored: the document's JSON, gzipped, base64. */
 export interface CompressedEntry<T> {
@@ -19,8 +24,17 @@ export interface CompressedEntry<T> {
   readonly __doc?: T;
 }
 
-export function compressEntry<T>(doc: T): CompressedEntry<T> {
-  return { gz: gzipSync(JSON.stringify(doc)).toString("base64") };
+/** `entry` names the cache key's prefix, for the size warning. */
+export function compressEntry<T>(doc: T, entry: string): CompressedEntry<T> {
+  const out: CompressedEntry<T> = { gz: gzipSync(JSON.stringify(doc)).toString("base64") };
+  const bytes = JSON.stringify(out).length;
+  if (bytes > LARGE_ENTRY_BYTES) {
+    log.warn(
+      { event: "public_cache_entry_large", entry, bytes, limit: NEXT_CACHE_ITEM_LIMIT_BYTES },
+      "public-site: a compressed cache entry is near Next's 2 MB item limit (over it, Next stores nothing and every regeneration rebuilds from Postgres)",
+    );
+  }
+  return out;
 }
 
 function isCompressed(value: unknown): value is CompressedEntry<unknown> {

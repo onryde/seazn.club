@@ -1158,7 +1158,7 @@ export async function getPublicDivision(
   // W5 follow-ups B5: stored compressed (`cache-entry.ts`) - at the caps the raw document is over Next's 2 MB item limit and was
   // never stored. The entry inflates to the parsed JSON of the document, which is what a HIT always handed back.
   const detail = inflateEntry(await unstable_cache(
-    async () => compressEntry(await readPublicDivisionDetail(division, read)),
+    async () => compressEntry(await readPublicDivisionDetail(division, read), "pub-div-v5"),
     // v2 (privacy hotfix, 2026-09-16): a member the division's name policy
     // masks now carries no `person_id` and no `photo` (maskPublicEntrantNames).
     // v3 (V414): every stage carries the qualification columns; a v2 entry

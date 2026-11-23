@@ -1354,7 +1354,7 @@ export async function getPublicCompetitionHub(
   // was never stored. The entry inflates to the parsed JSON of the document, what a HIT always handed back.
   const entry = await cachedIfFound(async () => {
     const doc = await loadCompetitionHub(orgSlug, compSlug);
-    return doc === null ? null : compressEntry(doc);
+    return doc === null ? null : compressEntry(doc, "pub-hub-v5");
   }, ["pub-hub-v5", shell.competition.id], {
     tags: [
       orgTag(orgSlug),

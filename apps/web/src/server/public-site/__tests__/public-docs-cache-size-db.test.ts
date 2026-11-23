@@ -83,9 +83,9 @@ describe.skipIf(!HAS_DB)("B5 both public docs go to the data cache compressed, u
     const capped = { ...doc, fixtures };
     const raw = JSON.stringify(capped).length;
     expect(raw, "premise: the raw document is over Next's limit").toBeGreaterThan(NEXT_CACHE_ITEM_LIMIT_BYTES);
-    const entry = JSON.stringify(compressEntry(capped)).length;
+    const entry = JSON.stringify(compressEntry(capped, "pub-div-v5")).length;
     expect(entry, `stored entry ${entry} B of a ${raw} B document`).toBeLessThan(NEXT_CACHE_ITEM_LIMIT_BYTES);
-    expect(inflateEntry(compressEntry(capped)), "lossless").toEqual(JSON.parse(JSON.stringify(capped)));
+    expect(inflateEntry(compressEntry(capped, "pub-div-v5")), "lossless").toEqual(JSON.parse(JSON.stringify(capped)));
   }, 240_000);
 
   it("an entry stored before B5 (the raw document) still reads as itself", () => {
