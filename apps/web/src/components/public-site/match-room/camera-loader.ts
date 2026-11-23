@@ -55,7 +55,10 @@
 // read back from the room read (§5.6.3).
 import type RealtimeKitClient from "@cloudflare/realtimekit";
 import type { LeaveRoomState, MediaConnectionUpdate, SocketConnectionState } from "@cloudflare/realtimekit";
+import { isRoomDropState, ROOM_DROP_STATES, ROOM_REPORT_SIDES } from "@/lib/chess-room-report-codes";
+import { beaconClientReport } from "@/lib/client-report-beacon";
 import * as Sentry from "@/lib/sentry-browser";
+import type { ChessRoomClientReport } from "@/server/client-reports/chess-room";
 
 export type OwnCamera = {
   /** The local camera track while publishing, else null. */
@@ -125,29 +128,44 @@ type SdkModule = RealtimeKitSdk;
  *  the caller did not say. */
 export type RoomWhere = { fixtureId: string | null; side: string | null };
 
-/** The leave states that are a lost connection (a warning); every other state is a planned leave (a breadcrumb). */
-const DROP_STATES: ReadonlySet<LeaveRoomState> = new Set<LeaveRoomState>(["disconnected", "failed", "left"]);
+/** The leave states that are a lost connection (a report); every other state is a planned leave (a breadcrumb). The list is
+ *  lib/chess-room-report-codes.ts's, the one the `chess-room` report takes; typed here against the SDK's own union, so a state
+ *  the SDK stops declaring is a compile error, not a report the route would refuse. */
+const DROP_STATES: ReadonlySet<LeaveRoomState> = new Set<LeaveRoomState>(ROOM_DROP_STATES);
+
+/** The `chess-room` client report of one drop (server/client-reports/chess-room.ts), or null when there is nothing to name it by:
+ *  a caller that gave no board, or a state that is no drop. A side outside the route's list goes as null, never as a string the
+ *  route would refuse. */
+export function roomDropReport(surface: "player" | "arbiter", where: RoomWhere, leaveState: string): ChessRoomClientReport | null {
+  if (where.fixtureId === null || !isRoomDropState(leaveState)) return null;
+  const side = ROOM_REPORT_SIDES.find((s) => s === where.side) ?? null;
+  return { kind: "chess-room", fixtureId: where.fixtureId, surface, side, leaveState };
+}
 
 /** Connection drops, reported with what we already have (owner 2026-11-22: "we have logger and sentry"; no table, no
  *  endpoint).
  *
- *  Sent through the browser Sentry client (lib/sentry-browser.ts, owner 2026-11-23; review I2), as the D7 guard's own
- *  browser reports are: only where NEXT_PUBLIC_SENTRY_DSN is set, and only for a visitor who has accepted analytics (the SDK
- *  is not even loaded until then; a report made while it loads is queued, one made without consent is dropped). What follows
- *  is what is sent.
+ *  A DROP goes to OUR server as a `chess-room` client report (owner 2026-11-23: POST /api/v1/public/client-reports,
+ *  server/client-reports/chess-room.ts), NOT to the browser's own Sentry: that runs only for a visitor who accepted analytics,
+ *  loads late and can be stopped by an ad-blocker, and the server's report reaches its log for EVERY player and arbiter, under
+ *  the server's own dedupe and Sentry budgets. A drop is therefore sent ONCE, here, and never through lib/sentry-browser.ts too.
+ *  What is NOT a drop stays a browser breadcrumb (below), as the D7 guard's own browser reports stay: only where
+ *  NEXT_PUBLIC_SENTRY_DSN is set and only for a visitor who has accepted analytics, and carried by whatever browser report
+ *  follows it.
  *
  *  For one joined meeting, on either surface:
  *   - a `roomLeft` that is NOT our own leave and is a DROP - "disconnected" (a socket or media-node drop), "failed" (the
- *     SDK gave up) or "left" (the SDK leaving on its own) - is a Sentry WARNING, "realtimekit: room dropped", tagged with
- *     the surface, the board, the side and the SDK's leave state (`{ state: LeaveRoomState }`, the event's only field in
- *     2.0.2);
+ *     SDK gave up) or "left" (the SDK leaving on its own) - is a `chess-room` report naming the surface, the board, the
+ *     side and the SDK's leave state (`{ state: LeaveRoomState }`, the event's only field in 2.0.2), "realtimekit: room
+ *     dropped" in the server's log and Sentry. A caller that gave no board (`fixtureId` null) has nothing to name it by: no
+ *     report;
  *   - any other leave state - "kicked" and "ended" are OUR server's doing (the arbiter revocation removes a participant;
  *     the teardown and the retire end the meeting, realtimekit.ts), and "rejected", "connected-meeting", "stageLeft" are no
- *     connection loss - is a breadcrumb, "realtimekit: room left", never a warning (review m1);
+ *     connection loss - is a breadcrumb, "realtimekit: room left", never a report (review m1);
  *   - the next `roomJoined` after a drop is a breadcrumb, "realtimekit: room rejoined", carrying the gap in ms from the
  *     FIRST drop since the last join and the SDK's `reconnected`; the join's own roomJoined is no rejoin;
  *   - the SDK's socket and media connection updates (`meta`'s socketConnectionUpdate / mediaConnectionUpdate) are
- *     breadcrumbs, so a drop's report carries what led to it.
+ *     breadcrumbs, for the browser report that follows them.
  *  Returns `ours`: the loader calls it just before EVERY leave it makes (the owner's leave, a guard failing closed), so
  *  that leave is never read as a drop. It is the flag, not the state, that decides: the SDK can leave with "left" on its
  *  own (its picture-in-picture hang-up), and that is reported. camera-drops.test.ts drives both loaders through it. */
@@ -166,10 +184,8 @@ export function watchRoomDrops(meeting: Pick<Meeting, "self" | "meta">, surface:
       return;
     }
     droppedAt ??= Date.now();
-    Sentry.captureMessage("realtimekit: room dropped", {
-      level: "warning",
-      tags: { area: "realtimekit", surface, fixtureId: where.fixtureId, side: where.side, leaveState: state },
-    });
+    const report = roomDropReport(surface, where, state);
+    if (report !== null) beaconClientReport(report);
   });
   meeting.self.on("roomJoined", ({ reconnected }: { reconnected: boolean }) => {
     if (droppedAt === null) return;
