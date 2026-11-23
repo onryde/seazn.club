@@ -3,7 +3,7 @@ import { negotiateLocale } from "@/lib/i18n-negotiate";
 import { hasLocale } from "@/lib/i18n-constants";
 import { SESSION_HINT_COOKIE, SESSION_MAX_AGE_S, hasSessionHint } from "@/lib/session-hint";
 import { RELAY_PHASE_PORT } from "@/lib/relay-phase";
-import { isPublicHubPath } from "@/lib/routes";
+import { PUBLIC_HUB_ROOT, isPublicHubPath, routes } from "@/lib/routes";
 import { isStagingOrigin } from "@/lib/robots-policy";
 import { siteOrigin } from "@/lib/site-origin";
 import { revshareEnabled } from "@/lib/revshare-shared";
@@ -217,7 +217,8 @@ export function gamesHostRewrite(request: NextRequest): URL | null {
  *  `src/__tests__/proxy-division-tab.test.ts` sweeps `app/(public)/live` so a new static route cannot be missed here. */
 const NOT_A_DIVISION = new Set(["present", "poster", "poster.pdf", "register", "players"]);
 const NOT_A_COMPETITION = new Set(["news"]);
-const DIVISION_HOME = /^\/live\/([^/]+)\/([^/]+)\/([^/]+)\/?$/;
+/** A division home, `{hub root}/{org}/{comp}/{division}` (LIVE1: the root is read, never spelled). */
+const DIVISION_HOME = new RegExp(`^${PUBLIC_HUB_ROOT}/([^/]+)/([^/]+)/([^/]+)/?$`);
 
 /**
  * W5 follow-ups B3 (perf-measure-report P3): the public division page server-renders only its ACTIVE tab, and the page is
@@ -232,7 +233,7 @@ export function divisionTabRewrite(request: NextRequest): URL | null {
   const m = DIVISION_HOME.exec(request.nextUrl.pathname);
   if (m === null || NOT_A_COMPETITION.has(m[2]!) || NOT_A_DIVISION.has(m[3]!)) return null;
   const url = request.nextUrl.clone();
-  url.pathname = `/live/${m[1]}/${m[2]}/${m[3]}/tab/${tab}`;
+  url.pathname = `${routes.publicHub(m[1]!, m[2]!, m[3]!)}/tab/${tab}`;
   return url;
 }
 

@@ -41,7 +41,8 @@ vi.mock("@/lib/cache", async (importOriginal) => ({
 }));
 const usecase = vi.hoisted(() => ({
   publicFixture: vi.fn(async () => ({ id: "f1" })),
-  publicCompetitionHub: vi.fn(async () => ({ competitionId: "c1" })),
+  // The fields the hub route itself reads (W5 B4: its ETag hashes the document, matches included); the rest is not under test.
+  publicCompetitionHub: vi.fn(async () => ({ competitionId: "c1", generatedAt: "2026-11-22T10:00:00.000Z", matches: [] })),
   publicPlayerMatches: vi.fn(async () => ({ matches: [] })),
   publicOrgLive: vi.fn(async () => ({ competitions: [] })),
   // The usecase's own document shape (`{ division_id, standings }`): the route reads each table's rows (D11 b, rank null).
