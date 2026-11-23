@@ -30,7 +30,7 @@ import { log } from "@/server/logger";
 import { REPLAY_PARKED_AT } from "../domain/replay-move";
 import { UnknownOrganiserReplayState, deleteSeaznReplay, fixtureSeaznReplays, organiserReplayState, seaznReplayDownload } from "../organiser-replays";
 import { FAKE_REPLAY_FILE, FAKE_REPLAY_LENGTH_SECONDS, FakeReplayHost } from "../replay-fake";
-import { ReplayNotDownloadable } from "../replay-ports";
+import { ReplayHostRefused, ReplayHostUnavailable, ReplayNotDownloadable } from "../replay-ports";
 import { seaznFixtureVideo } from "../seazn-video";
 import { discoveredReplays, movedReplays, replayRowsOf } from "./_seazn-replay-rig";
 import { installSeaznEnv, live, seaznRig, stopAndSettle } from "./_seazn-session-rig";
@@ -456,7 +456,7 @@ describe.skipIf(!HAS_DB)("seaznReplayDownload — the organiser downloads a part
     expect(open).not.toHaveBeenCalled();
   });
 
-  it("T22 m6: a row that reads playable while the host cannot hand the file over (the host's refusal) is a retryable 409, never a 500; any other host failure (a timeout, a network fault — review m1) is a clean 503 replay_host_unavailable, never dressed up as the refusal and never quoting the host", async () => {
+  it("T22 m6: a row that reads playable while the host cannot hand the file over (the host's refusal) is a retryable 409, never a 500; the host not answering (a timeout, a network fault — review m1) is a clean 503 replay_host_unavailable, never dressed up as the refusal and never quoting the host", async () => {
     const w = await world();
     const row = w.rows[0]!;
     await w.host.remove(row.bunny_video_id!);
@@ -464,7 +464,7 @@ describe.skipIf(!HAS_DB)("seaznReplayDownload — the organiser downloads a part
     expect(err).toBeInstanceOf(HttpError);
     expect((err as HttpError).status).toBe(409);
     expect((err as HttpError).message).not.toContain(row.bunny_video_id!);
-    const boom = new Error(`bunny openDownload: no response within 4000 ms (video ${row.bunny_video_id})`);
+    const boom = new ReplayHostUnavailable(`bunny openDownload: no response within 4000 ms (video ${row.bunny_video_id})`);
     vi.spyOn(w.host, "openDownload").mockRejectedValueOnce(boom);
     const failed = await seaznReplayDownload(w.auth, w.f, row.id, { replay: w.host }).then(() => null, (e: unknown) => e);
     expect(failed).toBeInstanceOf(HttpError);
@@ -473,6 +473,58 @@ describe.skipIf(!HAS_DB)("seaznReplayDownload — the organiser downloads a part
     expect((failed as HttpError).message).not.toMatch(/bunny|4000/);
     // The refusal itself is the port's typed one (both hosts throw it; replay-bunny.test.ts and replay-fake.test.ts).
     expect(await w.host.openDownload(row.bunny_video_id!).then(() => null, (e: unknown) => e)).toBeInstanceOf(ReplayNotDownloadable);
+  });
+
+  it("T26 re-review m1 (a, b, d): each way the host can fail to start the file has its own answer and its own log level — not answering is 503 (warn: try again), refusing our key or Referer 500 replay_host_refused (error: a configuration fault, never 'try again'), anything else 500 replay_download_failed (error), the viewer having left 499 download_cancelled (info only, whatever the host threw) — and every line's detail goes through the file's scrubber", async () => {
+    const w = await world();
+    const row = w.rows[0]!;
+    const guid = row.bunny_video_id!;
+    // A host message that quotes a signed CDN address (the shared scrubber's `bcdn_token=` rule) and runs past the 200-character cap.
+    const TOKEN = "Zm9vYmFyYmF6cXV4LXNpZ25lZC1jZG4tdG9rZW4tdmFsdWU";
+    const quoted = (head: string) => `bunny ${head}: https://vz-x.b-cdn.net/bcdn_token=${TOKEN}&expires=1795255500/${guid}/play_720p.mp4 ${"x".repeat(300)}`;
+    const spies = { info: vi.spyOn(log, "info"), warn: vi.spyOn(log, "warn"), error: vi.spyOn(log, "error") };
+    const about = (s: { mock: { calls: unknown[][] } }) => s.mock.calls.filter(([f]) => typeof f === "object" && f !== null && (f as { replayId?: string }).replayId === row.id);
+    const counts = () => ({ info: about(spies.info).length, warn: about(spies.warn).length, error: about(spies.error).length });
+    // EMPTY CASE FIRST: the host starts the file — no line about it at any level.
+    const file = await seaznReplayDownload(w.auth, w.f, row.id, { replay: w.host });
+    expect(file.fileName).toMatch(/\.mp4$/);
+    expect(counts()).toEqual({ info: 0, warn: 0, error: 0 });
+
+    type Level = "info" | "warn" | "error";
+    const cases: [string, Error, boolean, [number, string], Level][] = [
+      ["no answer in the 4 s (or a network fault, a 5xx, a 429)", new ReplayHostUnavailable(quoted("openDownload: no response within 4000 ms")), false, [503, "replay_host_unavailable"], "warn"],
+      ["the CDN refused our token or Referer (403)", new ReplayHostRefused(403, quoted("openDownload: HTTP 403")), false, [500, "replay_host_refused"], "error"],
+      ["the API refused our key (401)", new ReplayHostRefused(401, quoted("video: HTTP 401")), false, [500, "replay_host_refused"], "error"],
+      ["anything else (no allowed origin configured)", new Error(quoted("openDownload: SEAZN_VIDEO_ORIGINS is not set")), false, [500, "replay_download_failed"], "error"],
+      ["the viewer left, and the host's request was cancelled", new Error(quoted("openDownload: cancelled before a response")), true, [499, "download_cancelled"], "info"],
+      ["the viewer left, and the host then failed to answer", new ReplayHostUnavailable(quoted("openDownload: no response within 4000 ms")), true, [499, "download_cancelled"], "info"],
+      ["the viewer left, and the host then refused", new ReplayHostRefused(403, quoted("openDownload: HTTP 403")), true, [499, "download_cancelled"], "info"],
+    ];
+    let checked = 0;
+    for (const [label, thrown, cancelled, want, level] of cases) {
+      for (const spy of Object.values(spies)) spy.mockClear();
+      const viewer = new AbortController();
+      vi.spyOn(w.host, "openDownload").mockImplementationOnce(async () => {
+        if (cancelled) viewer.abort(new Error("the viewer left"));
+        throw thrown;
+      });
+      const err = await seaznReplayDownload(w.auth, w.f, row.id, { replay: w.host, signal: viewer.signal }).then(() => null, (e: unknown) => e);
+      expect(err, label).toBeInstanceOf(HttpError);
+      expect([(err as HttpError).status, (err as HttpError).code], label).toEqual(want);
+      const message = (err as HttpError).message;
+      expect(message, `${label}: the host's words stay in the log`).not.toMatch(new RegExp(`${guid}|bunny|b-cdn|4000|40[13]`));
+      if (want[0] === 500) expect(message, `${label}: a fault on our side never says try again`).not.toMatch(/try|again|moment/i);
+      expect(counts(), label).toEqual({ info: 0, warn: 0, error: 0, [level]: 1 });
+      const [fields] = about(spies[level])[0]! as [{ detail?: unknown; status?: unknown }];
+      expect(typeof fields.detail, `${label}: the host's words are in the line`).toBe("string");
+      const detail = fields.detail as string;
+      expect(detail.length, `${label}: capped at 200`).toBeLessThanOrEqual(200);
+      expect(detail, `${label}: through the shared scrubber`).not.toContain(TOKEN);
+      expect(detail).toContain("bcdn_token=[token]");
+      if (thrown instanceof ReplayHostRefused && !cancelled) expect(fields.status, `${label}: the line names the refusal's status`).toBe(thrown.status);
+      checked++;
+    }
+    expect(checked).toBe(7);
   });
 
   it("review m1: the caller's cancel (the route's request.signal) is handed to the host with the video, so an abandoned download stops pulling from it; none given, none passed", async () => {
