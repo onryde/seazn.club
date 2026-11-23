@@ -1627,6 +1627,17 @@ const NOT_RENDERED: Record<string, NotRendered> = {
     reason: "a route handler returning text/calendar, read in a calendar app rather than a page: event titles and the time-to-be-confirmed copy are written in the org's locale",
     provenBy: [`${SHARED_SRC}/[orgSlug]/[competitionSlug]/[divisionSlug]/calendar.ics/__tests__/route.test.ts`],
   },
+  // W5 follow-ups C (Option A, "by round"): the two loaders a big division's paged views read on a tap.
+  "[orgSlug]/[competitionSlug]/[divisionSlug]/rounds/route.ts": {
+    reason:
+      "a route handler returning JSON rows for the paged Schedule (one folded round, or one team's rounds): its words (round labels, slot labels, forfeit lines) are built by the same schedule-paging builder in the org's locale as the page's own rounds, and the client draws them with the page's copy",
+    provenBy: [`${SHARED_SRC}/[orgSlug]/[competitionSlug]/[divisionSlug]/__tests__/page-paged-schedule.test.ts`],
+  },
+  "[orgSlug]/[competitionSlug]/[divisionSlug]/hub-rounds/route.ts": {
+    reason:
+      "a route handler returning one folded round's match cards as JSON, cut out of the cached hub document whole: it adds no words of its own, every card carries the document's wording, and the hub's Matches tab draws them",
+    provenBy: ["components/public-site/__tests__/hub-round-paging.test.tsx"],
+  },
   "[orgSlug]/[competitionSlug]/poster.pdf/route.ts": {
     reason: "a route handler returning application/pdf: the printed poster's copy and month names are written in the org's locale",
     provenBy: [`${SHARED_SRC}/[orgSlug]/[competitionSlug]/poster.pdf/__tests__/route.test.ts`],
