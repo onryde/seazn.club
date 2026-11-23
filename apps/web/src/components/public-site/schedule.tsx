@@ -19,6 +19,7 @@ import { finalTitleTag } from "@/lib/final-title-tag";
 import { ForfeitTagChip } from "./forfeit-tag-chip";
 import { bracketForfeitWords } from "@/lib/bracket-forfeit-words";
 import { isCatchUpRoundExtKey } from "@/lib/roundrobin-late-entry";
+import { scheduleRoundGroups, sharedRoundNames } from "@/lib/schedule-round-groups";
 // Every word here arrives finished, in the ORG's locale (P6 fix round 1 #2,
 // N1d d5, N1e e5). This is a Client Component ("use client" above) with no
 // locale or <DictProvider> in its tree, and msgFor() carries `server-only`, so
@@ -181,34 +182,9 @@ export const timeOf = (iso: string, tz: string) => fmtTime(tz, iso);
 export const shortDate = (iso: string, tz: string, dateTag: string) =>
   dayDateShort(dayKey(iso, tz), dateTag);
 
-/** A fixture's round NAME as the round view heads it: the public round namer's
- *  label, or its round number when the caller has none for it. */
-export const roundNameOf = (f: Pick<PublicFixture, "id" | "round_no">, roundLabels: Record<string, string>) =>
-  roundLabels[f.id] ?? String(f.round_no);
-
-/** N1g g1 (review-n1f I1) — every round name that more than one STAGE of the
- *  division produces (a knockout and its plate both ending in a "Final"). The
- *  round view names the stage in front of exactly these headings.
- *
- *  Pass the division's WHOLE fixture list. Whether a name is shared is a fact
- *  about the division, not about what is on screen: decided over the
- *  entrant-filtered list, a spectator filtered to a plate finalist saw a bare
- *  "Final" — reading as THE final — and the heading changed identity as the
- *  filter changed. Stages are counted, not fixtures: a name repeated inside one
- *  stage is not shared. */
-export function sharedRoundNames(
-  fixtures: readonly Pick<PublicFixture, "id" | "stage_id" | "round_no">[],
-  roundLabels: Record<string, string>,
-): Set<string> {
-  const stagesByName = new Map<string, Set<string>>();
-  for (const f of fixtures) {
-    const name = roundNameOf(f, roundLabels);
-    const stages = stagesByName.get(name) ?? new Set<string>();
-    stages.add(f.stage_id);
-    stagesByName.set(name, stages);
-  }
-  return new Set([...stagesByName].filter(([, stages]) => stages.size > 1).map(([name]) => name));
-}
+// The round view's naming and grouping live in `@/lib/schedule-round-groups` (W5 follow-ups C: one authority for this view and the
+// by-round paging of a big schedule); re-exported here for the callers that always imported them from this file.
+export { roundNameOf, sharedRoundNames } from "@/lib/schedule-round-groups";
 
 /** Per-side score lines fit the stacked layout only when short ("3", "21").
     Long lines (cricket innings, set strings) fall back to the headline chip.
@@ -285,7 +261,8 @@ function WatchChip({ link, copy }: { link: PublicWatchLink; copy: ScheduleWatchC
   );
 }
 
-function ScorebugRow({
+/** One schedule row. Exported for the paged Schedule (W5 follow-ups C), which paints the same row. */
+export function ScorebugRow({
   fixture: f,
   entrantNames,
   href,
@@ -493,32 +470,25 @@ export function Schedule({
   const anyScheduled = fixtures.some((f) => f.scheduled_at);
   const mode = anyScheduled ? view : "round";
 
-  // Round view (N1d d5, N1e e1): one group per round NAME within a stage, in
-  // play order. Groups are opened walking the fixtures by the stage's seq, then
-  // (round_no, seq_in_round), so each lands at its stage's place and its
-  // earliest match whatever order the caller passed. `round_no` restarts in
-  // every stage: without the stage first, a league's rounds interleaved with
-  // the knockout it feeds, and two stages' "Round 1" merged into one group.
-  const stageRank = (f: PublicFixture) => stageOrder[f.stage_id] ?? Number.POSITIVE_INFINITY;
-  const inPlayOrder = [...shown].sort(
-    (a, b) => stageRank(a) - stageRank(b) || a.round_no - b.round_no || a.seq_in_round - b.seq_in_round,
-  );
+  // N1f f2, N1g g1: a round name two stages share ("Final" in a knockout and
+  // in its plate) is headed with its stage. Decided over the division's WHOLE
+  // fixture list — `fixtures`, never the entrant-filtered `shown` — so a
+  // heading reads the same whoever the filter is on.
+  const shared = sharedRoundNames(fixtures, roundLabels);
+  // Round view (N1d d5, N1e e1): one group per round NAME within a stage, in play order (`scheduleRoundGroups`, the one
+  // grouping the by-round paging of a big schedule shares).
+  const roundGroups = mode === "round" ? scheduleRoundGroups(shown, { roundLabels, stageOrder, stageNames, shared }) : [];
+  const roundLabelOf = new Map(roundGroups.map((g) => [g.key, g.label]));
   const groups = new Map<string, PublicFixture[]>();
-  const roundNames = new Map<string, string>();
-  const groupStage = new Map<string, string>();
-  for (const f of mode === "day" ? shown : inPlayOrder) {
-    let key: string;
-    if (mode === "day") {
-      key = f.scheduled_at ? dayKey(f.scheduled_at, tz) : UNSCHEDULED;
-    } else {
-      const name = roundNameOf(f, roundLabels);
-      key = JSON.stringify([f.stage_id, name]);
-      roundNames.set(key, name);
-      groupStage.set(key, f.stage_id);
+  if (mode === "day") {
+    for (const f of shown) {
+      const key = f.scheduled_at ? dayKey(f.scheduled_at, tz) : UNSCHEDULED;
+      const list = groups.get(key) ?? [];
+      list.push(f);
+      groups.set(key, list);
     }
-    const list = groups.get(key) ?? [];
-    list.push(f);
-    groups.set(key, list);
+  } else {
+    for (const g of roundGroups) groups.set(g.key, g.fixtures);
   }
 
   const orderedGroups =
@@ -530,23 +500,8 @@ export function Schedule({
         })
       : [...groups.entries()];
 
-  // N1f f2, N1g g1: a round name two stages share ("Final" in a knockout and
-  // in its plate) is headed with its stage. Decided over the division's WHOLE
-  // fixture list — `fixtures`, never the entrant-filtered `shown` — so a
-  // heading reads the same whoever the filter is on.
-  const shared = sharedRoundNames(fixtures, roundLabels);
-
   const groupLabel = (key: string): string => {
-    if (mode === "round") {
-      const name = roundNames.get(key);
-      if (name == null) return key;
-      if (!shared.has(name)) return name;
-      const stageId = groupStage.get(key);
-      const stageName = stageId != null ? stageNames[stageId] : undefined;
-      // No name for the stage means nothing to tell them apart WITH, so the
-      // round name goes out alone rather than with a dangling separator.
-      return stageName ? `${stageName} · ${name}` : name;
-    }
+    if (mode === "round") return roundLabelOf.get(key) ?? key;
     if (key === UNSCHEDULED) return copy.timeTbd;
     return dayLabelLong(key, dateTag);
   };
