@@ -1,16 +1,20 @@
 // server/client-reports/define.ts — what ONE kind of client report is (Task 25b). Pure zod: no database, no network, nothing
-// server-only at run time (the `ReportDb` type is erased), so the bare OpenAPI generator loads every kind through kinds.ts.
+// server-only, and no app alias: the bare OpenAPI generator loads every kind through kinds.ts, and the scripts program
+// (tsconfig.scripts.json, nodenext) type-checks them on that path, so even a type-only import of the database module is out.
 //
 // A kind is its closed body schema and the facts the shared pipeline (receive.ts) reads off one report of it: the subject a client's
 // reports are limited per (with its IP), the key one Sentry event per window stands for, whether the subject exists, and the message,
 // tags and fields the log line and the Sentry event carry, and (optionally) its own Sentry budget. Adding a kind is one file that calls
 // `defineClientReportKind`, plus its entry in kinds.ts.
 import { z } from "zod";
-import type { sql } from "@/lib/db";
 import { CLIENT_REPORT_CODE, CLIENT_REPORT_SECRET_WORD } from "../../lib/client-reports.ts";
 
-/** The database a kind checks its subject in: the privileged `sql` tag (the caller hands it over, so a kind imports no client). */
-export type ReportDb = typeof sql;
+/** The database a kind checks its subject in: ONE tagged-template read, its values plain scalars. Typed by shape, not by importing
+ *  the client (see the header): the caller, receive.ts, hands over the privileged `sql` tag, which this shape accepts. */
+export type ReportDb = <T extends readonly object[]>(
+  template: TemplateStringsArray,
+  ...values: readonly (string | number | boolean | null)[]
+) => PromiseLike<T>;
 
 /** A report's code field: a bare word that names no credential (lib/client-reports.ts). Every free string of a kind is one. */
 export const ReportCode = z
