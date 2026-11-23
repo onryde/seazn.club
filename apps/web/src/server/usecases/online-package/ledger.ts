@@ -47,8 +47,8 @@ export class OnlineChessNoCreditsError extends HttpError {
 const RETURN_EXCEEDS_DEBIT = "online_package_return_exceeds_debit";
 
 /** The transaction's own clock: `now()` is fixed at the transaction's start, and it is what every row written in it is
- *  dated by. */
-async function transactionNow(tx: Tx): Promise<Date> {
+ *  dated by. Exported for the quote (quote.ts), which dates "this month" and the month's expiry by the same clock. */
+export async function transactionNow(tx: Tx): Promise<Date> {
   const [r] = await tx<{ now: Date }[]>`select now() as now`;
   return r!.now;
 }

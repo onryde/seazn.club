@@ -44,3 +44,9 @@ export type Returnable = { pack: number; monthlyThisMonth: number; monthlyExpire
 /** A return of `credits` in P21's order: `pack` and `monthly` are written back to their buckets; `forfeited` is counted
  *  on the package row and writes nothing. */
 export type ReturnPlan = { pack: number; monthly: number; forfeited: number };
+
+/** What the server derives about a division before it prices or checks a size (spec §7.4 item 1): the client sends a size and
+ *  nothing else. `cameras` is P9 (the effective camera policy of any stage is not `off`), `rounds` P15 (the Swiss stages'
+ *  round counts, summed), `held` the places held (`countOnlineHeld`), `planCap` the plan's `entrants.per_division.max`
+ *  (null = unlimited), read BEFORE the transaction. `readPackageFacts` (quote.ts) reads all four. */
+export type PackageFacts = { cameras: boolean; rounds: number; held: number; planCap: number | null };
