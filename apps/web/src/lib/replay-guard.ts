@@ -1,5 +1,12 @@
 // Sentry Replay and the credentials in a page's URL.
 //
+// NO REPLAY RUNS TODAY: the browser client is initialised without a Replay integration (owner 2026-11-23: errors and warnings
+// only; src/instrumentation-client.ts, lib/sentry-browser.ts). The router hook still calls `stopReplayBeforeNavigatingTo`, which
+// finds no Replay and does nothing. `replayMayRunAt`, `REPLAY_BLOCK_SELECTORS` and `recordingEventHook` have no production
+// caller: they are what a replay must be wired with if one is ever turned on (the deleted sentry.client.config.ts did it:
+// `replayIntegration({ maskAllText, blockAllMedia, block: REPLAY_BLOCK_SELECTORS, beforeAddRecordingEvent: recordingEventHook })`,
+// built only when `replayMayRunAt(window.location.href)`). The rest of this header is that design.
+//
 // A replay records the page's URL in places no Sentry hook reaches (@sentry/replay 10.62, read from the installed source and
 // pinned in __tests__/sentry-replay-guard.test.ts):
 //  - rrweb's Meta frame (`href: window.location.href`), written at the first full snapshot and at every checkout (every 60 s in
@@ -33,8 +40,8 @@ type ClientIntegration = NonNullable<ReturnType<NonNullable<ReturnType<typeof ge
 export const REPLAY_INTEGRATION_NAME = "Replay";
 
 /**
- * The Replay integration of the initialised client, or undefined when Sentry is not initialised (the case today: see
- * instrumentation-client.ts). This is `getReplay()`'s own body, spelled out on purpose: importing `getReplay` references
+ * The Replay integration of the initialised client, or undefined when Sentry is not initialised (no DSN) or, as today, the
+ * client has no Replay (see instrumentation-client.ts). This is `getReplay()`'s own body, spelled out on purpose: importing `getReplay` references
  * @sentry/replay and rrweb (~23 KB gzipped), and this module is in the first-load chunk of every page through
  * instrumentation-client.ts. `getClient` and the integration lookup pull none of it.
  */

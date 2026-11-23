@@ -149,7 +149,7 @@ describe("premises: where @sentry/replay writes a page URL (pinned to the instal
     expect(REPLAY_SRC).toMatch(/async stop\(\{\s*forceFlush = false,\s*reason\s*\} = \{\}\) \{\s*if \(!this\._isEnabled\) \{\s*return;\s*\}/);
   });
 
-  it("is reachable from @sentry/nextjs's client entry: getClient (the guard) and replayIntegration (a client init, which is not wired today)", () => {
+  it("is reachable from @sentry/nextjs's client entry: getClient (the guard) and replayIntegration (which the browser init does not build: no replay, owner 2026-11-23)", () => {
     expect(typeof nextjsClientEntry.getClient).toBe("function");
     expect(typeof nextjsClientEntry.replayIntegration).toBe("function");
   });
@@ -367,7 +367,7 @@ describe("stopReplayBeforeNavigatingTo (onRouterTransitionStart)", () => {
     expect(stop).toHaveBeenCalledTimes(2);
   });
 
-  it("does nothing, and does not throw, when Sentry has no client (not initialised: today's state) or the client has no Replay", async () => {
+  it("does nothing, and does not throw, when Sentry has no client (no DSN) or the client has no Replay (the browser client's state today)", async () => {
     const { getClient } = await import("@sentry/nextjs");
     const [first] = await credentialPages();
     setReplay(undefined);

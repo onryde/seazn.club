@@ -8,9 +8,9 @@
 // `roomJoined` carries `{ reconnected }` (index.d.ts l.2358-2363), a socket drop emits roomLeft "disconnected"
 // (index.es.js l.24413-24423) and the client's own leave() emits roomLeft "left" (l.24497-24500).
 //
-// What these tests prove is what the code HANDS to Sentry. In production it SENDS NOTHING yet: the browser Sentry client is
-// never initialised (instrumentation-client.ts - sentry.client.config.ts is webpack-only and the app builds with
-// Turbopack), so every capture below is a no-op until the owner has the client init wired (review I2).
+// What these tests prove is what the code HANDS to Sentry. The browser client that sends it is initialised in
+// src/instrumentation-client.ts (owner 2026-11-23; review I2) and sends only with the visitor's analytics consent: that
+// init and its consent gate are proven in lib/__tests__/sentry-browser-init.test.ts.
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -101,7 +101,7 @@ const drops = () => sentry.captureMessage.mock.calls.filter((c) => c[0] === "rea
 const crumbs = (message: string) =>
   sentry.addBreadcrumb.mock.calls.map((c) => c[0] as { message: string; data: Record<string, unknown> }).filter((b) => b.message === message);
 
-describe("realtimekit drops: a warning per unplanned roomLeft, a breadcrumb per rejoin (both surfaces) - handed to a Sentry client the browser does not initialise yet, so nothing is SENT until it is wired", () => {
+describe("realtimekit drops: a warning per unplanned roomLeft, a breadcrumb per rejoin (both surfaces) - handed to the browser Sentry client, which sends them with analytics consent", () => {
   it("the join's own roomJoined is no rejoin: nothing reported (the empty case)", async () => {
     let checked = 0;
     for (const s of SURFACES) {
