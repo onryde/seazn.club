@@ -45,8 +45,11 @@ export type PackageQuote = {
    *  return, 0 nothing. */
   owed: number;
   /** When `owed` > 0, no refusal, and the balance covers it: how the debit splits (the included credits first, P4). Null otherwise
-   *  — including a SHORT balance (`owed` > 0, `take` null, no refusal: the receipt offers Buy credits). */
+   *  — including a SHORT balance (`owed` > 0, `take` null, no refusal: the receipt offers Buy credits, and `shortBy` says how many). */
   take: BucketSplit | null;
+  /** The credits the balance is missing: `owed` − `balance` when `owed` > 0, there is no refusal and the balance is short; null
+   *  otherwise. Exactly one of `take` and `shortBy` is set for a payable quote, and neither for anything else. */
+  shortBy: number | null;
   /** When `owed` < 0 and no refusal: how the return splits (P21): bought credits, included credits of this month, and included
    *  credits of an earlier month, which are forfeited (counted on the row, never written). Null otherwise. */
   back: ReturnPlan | null;
@@ -58,12 +61,30 @@ export type PackageQuote = {
   held: number;
   rounds: number;
   refusal: null | "below_held" | "plan" | "rounds" | "rounds_above_max" | "frozen";
+  /** Whether the row's PAID package covers the division as it stands (spec §7.6: places held, counted rounds and cameras, and
+   *  nothing else): a live paid row, not frozen, whose own size holds the places and includes the rounds, and whose camera price
+   *  is paid when the policy needs cameras. A fact about the package, not about the size asked: it is the same for every `size`
+   *  and ignores the `addCameras` intent, which only raises what a payment owes. The PLAN does not enter it: a paid organiser
+   *  whose plan was downgraded can still open round 1, so a `plan` refusal never breaks it (and, `plan` coming before the rounds
+   *  refusals in the order, it is not derived from `refusal`). */
+  covers: boolean;
 };
 
 /** The last day of the UTC month of `now`, as an ISO date. UTC on purpose: the ledger's month is the UTC month
  *  (`streamMonthlyPeriod`), and the database runs in Europe/London. */
 export function lastDayOfUtcMonth(now: Date): string {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+}
+
+/** The first refusal that holds for `size`, in ONE order: frozen, below_held, plan, rounds_above_max, rounds. A caller that must
+ *  judge the places and rounds without the plan passes `planCap: null` (the plan allows every size). */
+function refusalFor(size: OnlineSize, facts: PackageFacts, frozen: boolean): PackageQuote["refusal"] {
+  if (frozen) return "frozen";
+  if (size < facts.held) return "below_held";
+  if (!sizeAllowedByPlan(size, facts.planCap)) return "plan";
+  if (sizeForRounds(facts.rounds) === null) return "rounds_above_max";
+  if (facts.rounds > includedRounds(size)) return "rounds";
+  return null;
 }
 
 /** A count the caller passed in must be a whole number of at least 0: a NaN or a negative reaching a money quote is a bug upstream
@@ -130,25 +151,25 @@ export async function quoteLocked(
   // `paid_at`: a paid row always says whether its cameras were paid.
   const owed = paid === null ? price : price - packagePrice(paid.size, paid.camerasPaid === true);
 
-  const refusal: PackageQuote["refusal"] =
-    row !== null && row.frozenAt !== null
-      ? "frozen"
-      : a.size < facts.held
-        ? "below_held"
-        : !sizeAllowedByPlan(a.size, facts.planCap)
-          ? "plan"
-          : sizeForRounds(facts.rounds) === null
-            ? "rounds_above_max"
-            : facts.rounds > includedRounds(a.size)
-              ? "rounds"
-              : null;
+  const frozen = row !== null && row.frozenAt !== null;
+  const refusal = refusalFor(a.size, facts, frozen);
+  // Covers: the PAID package at ITS OWN size, whatever size is asked, judged without the plan and without the intent: the
+  // places and rounds the size holds, and the camera price when the policy needs it (the same arithmetic as `owed`, at the row's
+  // own size and the policy's cameras alone).
+  const covers =
+    paid !== null &&
+    refusalFor(paid.size, { ...facts, planCap: null }, frozen) === null &&
+    packagePrice(paid.size, facts.cameras || paid.camerasPaid === true) - packagePrice(paid.size, paid.camerasPaid === true) <= 0;
 
   const balance = await projectedSplit(tx, a.orgId, a.rate, now);
   let take: BucketSplit | null = null;
   let back: ReturnPlan | null = null;
+  let shortBy: number | null = null;
   if (refusal === null) {
-    if (owed > 0 && balance.total >= owed) take = planDebit(balance, owed);
-    else if (owed < 0 && paid !== null) back = await backFor(tx, paid, -owed);
+    if (owed > 0) {
+      if (balance.total >= owed) take = planDebit(balance, owed);
+      else shortBy = owed - balance.total;
+    } else if (owed < 0 && paid !== null) back = await backFor(tx, paid, -owed);
   }
 
   return {
@@ -157,12 +178,14 @@ export async function quoteLocked(
     price,
     owed,
     take,
+    shortBy,
     back,
     monthlyExpiresOn: lastDayOfUtcMonth(now),
     balance: balance.total,
     held: facts.held,
     rounds: facts.rounds,
     refusal,
+    covers,
   };
 }
 

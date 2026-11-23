@@ -39,7 +39,7 @@
 //   Q13  the forfeits already on the row are not netted          -> "forfeits already recorded"
 //   Q14  the forfeited-exceeds-expired guard removed             -> "forfeits already recorded"
 //   Q15  the monthly rollover is not projected                   -> "an unrolled month"
-//   Q16  a short balance throws instead of answering take null   -> "a short balance"
+//   Q16  the balance check removed (a short balance still takes) -> "a short balance", "shortBy sweep"
 //   Q17  the non-ladder size guard removed                       -> "a size off the ladder"
 //   Q18  the division-of-this-org guard removed                  -> "a division of another org"
 //   Q19  the package-of-this-org guard removed                   -> "a division of another org"
@@ -56,6 +56,18 @@
 //   Q30  onlinePackageQuote's org check removed                  -> "who may ask"
 //   Q31..Q34 readPackageFacts hard-codes held / rounds / cameras / planCap -> "derives every fact from the division itself"
 //   Q35  livePackage reads a refunded row as live                -> "after a full refund the package is history"
+//   M1   the roll projection drops the database's `now`          -> "the roll is judged at the DATABASE's month" (JS clock in 2020)
+//   S1   shortBy = owed (the balance not subtracted)             -> "a short balance", "shortBy sweep"
+//   S3   a balance exactly equal to owed is short (> for >=)     -> "a short balance" (exactly enough), "shortBy sweep"
+//   S4   shortBy never set                                       -> "a short balance", "shortBy sweep", the split invariant
+//   S5   a refusal still answers a take / shortBy                -> the split invariant on every quote
+//   C1   covers ignores the held / rounds refusals               -> "covers sweep"
+//   C2   covers lets the PLAN refusal break it                   -> "a plan downgrade does not break covers"
+//   C3   covers judged at the size ASKED, not the row's own      -> "covers sweep" (asked at another size)
+//   C4   covers ignores the camera price the policy needs        -> "covers sweep", "covers is a fact about the PACKAGE"
+//   C5   covers true for an unpaid row                           -> "covers is false without a paid live package"
+//   C6   covers ignores a frozen row                             -> "covers is false without a paid live package"
+//   C7   covers takes the addCameras intent                      -> "covers is a fact about the PACKAGE"
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { sql, statementTexts, type Tx } from "@/lib/db";
@@ -243,8 +255,24 @@ async function paidRig(o: { size: OnlineSize; cameras: boolean; monthly?: number
 }
 
 const FACTS0: PackageFacts = { cameras: false, rounds: 0, held: 0, planCap: null };
-const quote = (r: Rig, size: OnlineSize, o: { addCameras?: boolean; facts?: Partial<PackageFacts>; rate?: number } = {}): Promise<PackageQuote> =>
-  inTx((tx) => quoteLocked(tx, { orgId: r.orgId, divisionId: r.divisionId, size, addCameras: o.addCameras, rate: o.rate ?? r.rate }, { ...FACTS0, ...o.facts }));
+/** Exactly one of `take` and `shortBy` answers an owed > 0 with no refusal (the balance covers it, or it does not and by how much);
+ *  neither answers anything else. Every quote this file asks is judged by it. */
+function expectSplitInvariant(q: PackageQuote): void {
+  const label = `size ${q.size} owed ${q.owed} balance ${q.balance} refusal ${q.refusal}`;
+  const pays = q.owed > 0 && q.refusal === null;
+  expect(q.take !== null || q.shortBy !== null, `${label}: a payable quote has a take or a shortfall`).toBe(pays);
+  expect(q.take !== null && q.shortBy !== null, `${label}: never both`).toBe(false);
+  if (q.take !== null) expect(q.take.monthly + q.take.pack, `${label}: the take is the owed credits`).toBe(q.owed);
+  if (q.shortBy !== null) expect(q.balance + q.shortBy, `${label}: balance plus the shortfall is the owed credits`).toBe(q.owed);
+}
+
+const quote = async (
+  r: Rig, size: OnlineSize, o: { addCameras?: boolean; facts?: Partial<PackageFacts>; rate?: number } = {},
+): Promise<PackageQuote> => {
+  const q = await inTx((tx) => quoteLocked(tx, { orgId: r.orgId, divisionId: r.divisionId, size, addCameras: o.addCameras, rate: o.rate ?? r.rate }, { ...FACTS0, ...o.facts }));
+  expectSplitInvariant(q);
+  return q;
+};
 
 class Rollback extends Error {
   constructor(readonly value: unknown) {
@@ -516,24 +544,63 @@ describe.skipIf(!HAS_DB)("quoteLocked: price and what is owed", () => {
   it("a short balance answers take null and the true balance — no throw, nothing written; exactly enough takes", async () => {
     const short = await rig({ monthly: 0, pack: 1, size: 64 }); // 64 costs 4
     const q = await quote(short, 64);
-    expect(q).toMatchObject({ owed: 4, take: null, balance: 1, refusal: null });
+    expect(q).toMatchObject({ owed: 4, take: null, shortBy: 3, balance: 1, refusal: null });
     expect(await ledgerCount(short.orgId), "one purchase row, nothing more").toBe(1);
     const exact = await rig({ monthly: 1, pack: 3, size: 64 });
-    expect(await quote(exact, 64)).toMatchObject({ owed: 4, take: { monthly: 1, pack: 3 }, balance: 4 });
+    expect(await quote(exact, 64)).toMatchObject({ owed: 4, take: { monthly: 1, pack: 3 }, shortBy: null, balance: 4 });
     // The empty ledger: an org that never held a credit, at a rate of 0.
     const empty = await rig({ size: 16 });
-    expect(await quote(empty, 16)).toMatchObject({ owed: 1, take: null, balance: 0 });
+    expect(await quote(empty, 16)).toMatchObject({ owed: 1, take: null, shortBy: 1, balance: 0 });
+  });
+
+  it("shortBy sweep: every balance 0..8 × the sizes 16, 32, 64 — the credits missing, null once the balance covers the owed", async () => {
+    let checked = 0;
+    let short = 0;
+    let covered = 0;
+    for (let held = 0; held <= 8; held += 1) {
+      const r = await rig({ pack: held, size: 16 });
+      for (const [size, owed] of [[16, 1], [32, 2], [64, 4]] as const) {
+        const q = await quote(r, size);
+        expect(q.owed, `size ${size}`).toBe(owed);
+        expect(q.shortBy, `balance ${held}, owed ${owed}`).toBe(held < owed ? owed - held : null);
+        expect(q.take === null, `balance ${held}, owed ${owed}: a take exactly when nothing is missing`).toBe(held < owed);
+        checked += 1;
+        if (q.shortBy === null) covered += 1;
+        else short += 1;
+      }
+    }
+    expect(checked, "cases judged").toBe(9 * 3);
+    expect(short, "short cases").toBeGreaterThan(5);
+    expect(covered, "covered cases").toBeGreaterThan(5);
+  });
+
+  it("shortBy is null whenever nothing is payable: a refusal, a move down, the row's own size", async () => {
+    // A short org (balance 0) asked for what its plan refuses: no shortfall to show, the refusal is the answer.
+    const empty = await rig({ size: 16 });
+    expect(await quote(empty, 128, { facts: { planCap: 64 } })).toMatchObject({ owed: 8, refusal: "plan", take: null, shortBy: null });
+    expect(await quote(empty, 16, { facts: { held: 20 } })).toMatchObject({ owed: 1, refusal: "below_held", take: null, shortBy: null });
+    // A paid row owes nothing at its own size and returns on a move down: neither is short, whatever the balance.
+    const paid = await paidRig({ size: 64, cameras: false, pack: 4 }); // balance 0 after paying
+    expect(await quote(paid, 64)).toMatchObject({ owed: 0, balance: 0, shortBy: null, take: null });
+    expect(await quote(paid, 32)).toMatchObject({ owed: -2, balance: 0, shortBy: null, take: null, back: { pack: 2, monthly: 0, forfeited: 0 } });
+    // ...and a raise it cannot afford IS short.
+    expect(await quote(paid, 128)).toMatchObject({ owed: 4, balance: 0, shortBy: 4, take: null });
   });
 });
 
 // ─── quoteLocked: the month, projected and never rolled ───────────────────────────────────────────────────────────────
 
 describe.skipIf(!HAS_DB)("quoteLocked: an unrolled month", () => {
-  /** A quote's `take` against what the REAL debit takes from the same org, in a transaction that is rolled back. */
+  /** A quote's `take` and `balance` against what the REAL debit does to the same org, in a transaction that is rolled back: the
+   *  split it takes, and the total it leaves (the quote's balance less the owed credits, after the debit's own rollover). */
   async function expectTakeIsWhatTheDebitTakes(r: Rig, q: PackageQuote, rate: number): Promise<void> {
     expect(q.take, "premise: the quote has a take to compare").not.toBeNull();
-    const real = await rolledBack((tx) => debitForPackage(tx, { orgId: r.orgId, packageId: r.packageId, credits: q.owed, rate }));
-    expect(real, "the real debit takes what the quote said").toEqual(q.take);
+    const real = await rolledBack(async (tx) => {
+      const took = await debitForPackage(tx, { orgId: r.orgId, packageId: r.packageId, credits: q.owed, rate });
+      return { took, left: (await creditBreakdown(tx, r.orgId)).total };
+    });
+    expect(real.took, "the real debit takes what the quote said").toEqual(q.take);
+    expect(real.left, "the real debit leaves what the quote's balance less the owed predicts").toBe(q.balance - q.owed);
   }
 
   it("an unrolled month: an org that never touched the ledger, on a plan of 1 a month, can pay 1 — and the quote writes no grant", async () => {
@@ -569,7 +636,46 @@ describe.skipIf(!HAS_DB)("quoteLocked: an unrolled month", () => {
 
   it("an unrolled month: a rolled month projects nothing (the rate equals what was granted)", async () => {
     const r = await rig({ monthly: 2, pack: 4, size: 64 });
-    expect(await quote(r, 64, { rate: 2 })).toMatchObject({ owed: 4, take: { monthly: 2, pack: 2 }, balance: 6 });
+    const q = await quote(r, 64, { rate: 2 });
+    expect(q).toMatchObject({ owed: 4, take: { monthly: 2, pack: 2 }, balance: 6 });
+    // The real debit rolls nothing here either, and takes the same.
+    await expectTakeIsWhatTheDebitTakes(r, q, 2);
+  });
+
+  it("an unrolled month: a rate of 0 on last month's leftover expires it with no grant — the quote holds the bought credits only", async () => {
+    // Last month: 3 included (unspent) + 2 bought. This month the plan grants nothing: the roll expires the 3 and writes no grant.
+    const r = await rig({ monthly: 3, pack: 2, size: 32, lastMonth: true });
+    const q = await quote(r, 32, { rate: 0 });
+    expect(q).toMatchObject({ owed: 2, take: { monthly: 0, pack: 2 }, balance: 2 });
+    await expectTakeIsWhatTheDebitTakes(r, q, 0);
+    expect((await creditBreakdown(sql, r.orgId)).total, "the quote rolled nothing").toBe(5);
+    // A rate of 0 on an org with bought credits and an untouched ledger changes nothing.
+    const bought = await rig({ pack: 5, size: 16 });
+    const q2 = await quote(bought, 16, { rate: 0 });
+    expect(q2).toMatchObject({ owed: 1, take: { monthly: 0, pack: 1 }, balance: 5 });
+    await expectTakeIsWhatTheDebitTakes(bought, q2, 0);
+  });
+
+  it("an unrolled month: the roll is judged at the DATABASE's month, never the JS clock — a month already spent stays spent whatever the JS clock says", async () => {
+    // This month's 3 included credits were granted and all spent (on another division of the org): the month is rolled, its
+    // bucket is empty, and the plan's rate of 3 is already granted. The database's roll adds nothing (delta 0).
+    const r = await rig({ monthly: 3, pack: 0, size: 16 });
+    const otherDivision = await seedDivision(r.orgId);
+    const otherPackage = await seedPackage(r.orgId, otherDivision, 16);
+    await inTx((tx) => debitForPackage(tx, { orgId: r.orgId, packageId: otherPackage, credits: 3, rate: 3 }));
+    expect(await creditBreakdown(sql, r.orgId), "premise: this month's credits are spent").toMatchObject({ monthly: 0, pack: 0, total: 0 });
+    const real = await quote(r, 16, { rate: 3 });
+    expect(real, "the database's month: nothing to grant, nothing to take, 1 short").toMatchObject({ owed: 1, take: null, shortBy: 1, balance: 0 });
+    // A JS clock in ANOTHER month would read the same ledger as a new month and project this month's 3 as a grant to come.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2020-01-15T12:00:00Z"));
+      expect(new Date().getUTCFullYear(), "premise: the JS clock is in another month").toBe(2020);
+      const skewed = await quote(r, 16, { rate: 3 });
+      expect(skewed, "a skewed JS clock changes nothing").toMatchObject({ owed: 1, take: null, shortBy: 1, balance: 0 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("an unrolled month: a rate that is not a whole number is refused by name, as the writer refuses it", async () => {
@@ -876,6 +982,93 @@ describe.skipIf(!HAS_DB)("quoteLocked: the return (P21) and the sequence", () =>
   it("held = size exactly is not refused, at every size", async () => {
     const r = await rig({ pack: 100 });
     for (const size of ONLINE_SIZES) expect((await quote(r, size, { facts: { held: size } })).refusal, `held ${size} on ${size}`).toBeNull();
+  });
+});
+
+// ─── covers (spec §7.6: the gate's question) ──────────────────────────────────────────────────────────────────────────
+
+describe.skipIf(!HAS_DB)("quoteLocked: covers — the paid package covers the division as it stands (held, rounds and cameras ONLY)", () => {
+  it("covers sweep: every paid size × cameras paid × held × rounds × camera policy, asked at the row's own size and at another size", async () => {
+    let checked = 0;
+    let covered = 0;
+    let uncovered = 0;
+    for (const size of ONLINE_SIZES) {
+      for (const camerasPaid of [false, true]) {
+        const r = await paidRig({ size, cameras: camerasPaid, pack: 100 });
+        const other: OnlineSize = size === 16 ? 32 : 16;
+        for (const held of [0, size, size + 1]) {
+          for (const rounds of [0, INCLUDED[size], INCLUDED[size] + 1, MOST_ROUNDS + 1]) {
+            for (const policy of [false, true]) {
+              // Spec §7.6: "the row must be paid AND cover the places held, the counted rounds and the cameras".
+              const want = held <= size && rounds <= INCLUDED[size] && (camerasPaid || !policy);
+              for (const asked of [size, other]) {
+                const q = await quote(r, asked, { facts: { held, rounds, cameras: policy } });
+                expect(q.covers, `paid ${size}/${camerasPaid} asked ${asked}; held ${held}, rounds ${rounds}, policy cameras ${policy}`).toBe(want);
+                checked += 1;
+                if (q.covers) covered += 1;
+                else uncovered += 1;
+              }
+            }
+          }
+        }
+      }
+    }
+    expect(checked, "cases judged").toBe(5 * 2 * 3 * 4 * 2 * 2);
+    expect(covered, "covered cases").toBeGreaterThan(50);
+    expect(uncovered, "uncovered cases").toBeGreaterThan(50);
+  });
+
+  it("a plan downgrade does not break covers: a paid organiser can still open round 1 (the refusal says `plan`, covers stays true)", async () => {
+    const r = await paidRig({ size: 64, cameras: false, pack: 10 });
+    // The plan now caps at 32: asking for 64 is refused for the PLAN, and the package still covers 20 held and 8 rounds.
+    const down = await quote(r, 64, { facts: { planCap: 32, held: 20, rounds: 8 } });
+    expect(down).toMatchObject({ refusal: "plan", owed: 0, take: null, back: null, covers: true });
+    // The refusal order puts `plan` before the rounds refusals, so the refusal alone would hide an uncovered package: 9 rounds
+    // do not fit a 64's 8, and covers says so while the refusal still reads `plan`.
+    const masked = await quote(r, 64, { facts: { planCap: 32, held: 20, rounds: 9 } });
+    expect(masked).toMatchObject({ refusal: "plan", covers: false });
+    const maskedHeld = await quote(r, 64, { facts: { planCap: 16, held: 65, rounds: 0 } });
+    expect(maskedHeld).toMatchObject({ refusal: "below_held", covers: false });
+    // The same package without the downgrade.
+    expect(await quote(r, 64, { facts: { held: 20, rounds: 8 } })).toMatchObject({ refusal: null, covers: true });
+  });
+
+  it("covers is a fact about the PACKAGE, not about the size asked: the intent addCameras raises what is owed and never uncovers", async () => {
+    const r = await paidRig({ size: 64, cameras: false, pack: 20 });
+    // Asking to add cameras at its own size owes 4, and the package still covers a division whose policy needs none.
+    expect(await quote(r, 64, { addCameras: true })).toMatchObject({ owed: 4, covers: true });
+    // A policy that now needs cameras the package has not paid: not covered, and nothing but the cameras is missing.
+    expect(await quote(r, 64, { facts: { cameras: true } })).toMatchObject({ owed: 4, refusal: null, covers: false });
+    // Cameras paid: the policy on or off, the package covers.
+    const withCams = await paidRig({ size: 64, cameras: true, pack: 20 });
+    for (const policy of [false, true]) expect(await quote(withCams, 64, { facts: { cameras: policy } }), `policy ${policy}`).toMatchObject({ covers: true });
+  });
+
+  it("covers is false without a paid live package: unpaid, no row, refunded, grandfathered-frozen and frozen", async () => {
+    // Unpaid, with the money to pay it.
+    const unpaid = await rig({ pack: 100, size: 64 });
+    expect(await quote(unpaid, 64)).toMatchObject({ owed: 4, refusal: null, covers: false });
+    // No row at all.
+    const orgId = await seedOrg();
+    const division = await seedDivision(orgId);
+    expect(await quote({ orgId, divisionId: division.id, division, packageId: "", rate: 0 }, 64)).toMatchObject({ covers: false });
+    // A full refund leaves history, not a package.
+    const refunded = await paidRig({ size: 64, cameras: false, pack: 10 });
+    await inTx(async (tx) => {
+      await refundForPackage(tx, { orgId: refunded.orgId, packageId: refunded.packageId, pack: 4, monthly: 0 });
+      await tx`update division_online_packages set credits_refunded = 4, refunded_at = now() where id = ${refunded.packageId}`;
+    });
+    expect(await quote(refunded, 64)).toMatchObject({ covers: false });
+    // The backfill's grandfathered row (frozen, unpaid) and a paid row that has opened a round: frozen is not covered.
+    const old = await rig({ pack: 100, size: 256 });
+    await sql`update division_online_packages set frozen_at = created_at where id = ${old.packageId}`;
+    expect(await quote(old, 256)).toMatchObject({ refusal: "frozen", covers: false });
+    const frozen = await paidRig({ size: 64, cameras: false, pack: 10 });
+    await sql`update division_online_packages set frozen_at = now() where id = ${frozen.packageId}`;
+    expect(await quote(frozen, 64)).toMatchObject({ refusal: "frozen", covers: false });
+    // The premise that the false answers above are the guards': the same paid package, unfrozen, covers.
+    const live = await paidRig({ size: 64, cameras: false, pack: 10 });
+    expect(await quote(live, 64)).toMatchObject({ refusal: null, covers: true });
   });
 });
 
