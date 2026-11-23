@@ -69,13 +69,30 @@ export interface Claim {
   check(result: ExampleResult): boolean | string;
 }
 
-export interface BlogExample {
+interface BlogExampleBase {
   id: string;
-  /** `engine`: a pure call into the engine. `server`: a rule the app owns, checked by an env-gated DB test. */
-  kind: "engine" | "server";
   /** The sports it sweeps. A single-sport example says why it is one. */
   sports: SportKey[] | "all";
   singleSportReason?: string;
-  build(): ExampleResult;
   claims: Claim[];
 }
+
+/** `engine`: a pure call into the engine (and the app's pure readers); `build()` regenerates the golden in the unit run. */
+export interface EngineExample extends BlogExampleBase {
+  kind: "engine";
+  build(): ExampleResult;
+}
+
+/**
+ * `server` (batch 5, Task 11): a rule the APP owns, run inside a database transaction with no pure function to call (the
+ * ladder's challenge reach and swap). Its golden is regenerated and compared by the env-gated DB test named in `runner`,
+ * which drives the real usecases; the unit harness checks the claims against the committed golden, and that the runner
+ * exists and names this example. There is no `build()`: without a database there is nothing to run.
+ */
+export interface ServerExample extends BlogExampleBase {
+  kind: "server";
+  /** The DB test that runs the example through the real usecases, relative to apps/web. */
+  runner: string;
+}
+
+export type BlogExample = EngineExample | ServerExample;

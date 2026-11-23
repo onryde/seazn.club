@@ -22,7 +22,12 @@ function leaves(v: unknown): string[] {
   if (v === null || typeof v !== "object") return v === undefined ? [] : [String(v)];
   return Object.values(v as Record<string, unknown>).flatMap(leaves);
 }
-const exampleStrings = (id: string): string[] => leaves(BLOG_GOLDENS[id]!);
+/** Batch 5: a diagram's `kind` is the model's discriminator ("partnerGrid"), read by the drawing's switch and never shown;
+ *  every other string of the diagram is scanned. */
+const exampleStrings = (id: string): string[] => {
+  const g = BLOG_GOLDENS[id]!;
+  return leaves(g.diagram === undefined ? g : { ...g, diagram: { ...g.diagram, kind: undefined } });
+};
 
 describe("the tree", () => {
   it("every file in content/blog parses (allBlogPosts throws on one that does not), and the folder is not empty", () => {

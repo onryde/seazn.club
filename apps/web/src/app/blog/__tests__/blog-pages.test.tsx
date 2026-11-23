@@ -450,10 +450,29 @@ describe("the share card", () => {
 
 describe("pieces that guard themselves", () => {
   it("a diagram model has no drawing yet, so an example that gains one fails the build instead of printing a caption alone", () => {
-    const model: DiagramModel = { kind: "ladder", title: "t", rungs: [], challenger: "a", target: "b", swapped: false };
-    expect(() => renderToStaticMarkup(<BlogDiagram model={model} />)).toThrow(/no drawing for 'ladder'/);
+    // A kind no batch draws (the drawn set grows batch by batch, so the refusal is pinned on a kind that never will be).
+    const model = { kind: "no-drawing-ever", title: "t" } as unknown as DiagramModel;
+    expect(() => renderToStaticMarkup(<BlogDiagram model={model} />)).toThrow(/no drawing for 'no-drawing-ever'/);
     expect(() => renderToStaticMarkup(<BlogExample id="x" result={{ facts: {}, text: [], diagram: model }} swipeHint="s" />)).toThrow(/no drawing/);
   });
+
+  // ---- batch 5 (Task 11) ----
+  it("batch 5's two drawings render their golden's model: an SVG whose title is the model's title, naming every player", () => {
+    let drawn = 0;
+    for (const id of ["americano-rotation", "ladder-challenge"]) {
+      const model = BLOG_GOLDENS[id]?.diagram;
+      expect(model, `${id} carries a diagram`).toBeDefined();
+      const html = renderToStaticMarkup(<BlogDiagram model={model!} />);
+      expect(html, id).toContain("<svg");
+      expect(html, id).toContain(`>${model!.title}</title>`);
+      const names = model!.kind === "ladder" ? model!.rungs : model!.kind === "partnerGrid" ? model!.players : [];
+      expect(names.length, `${id}: anti-vacuity`).toBeGreaterThan(0);
+      for (const n of names) expect(html, `${id} names ${n}`).toContain(`>${n}<`);
+      drawn++;
+    }
+    expect(drawn).toBe(2);
+  });
+  // ---- end batch 5 ----
 
   it("an example with no table draws nothing (and the page's example guard lives in the renderer)", () => {
     expect(renderToStaticMarkup(<BlogExample id="x" result={{ facts: {}, text: [] }} swipeHint="s" />)).toBe("");
