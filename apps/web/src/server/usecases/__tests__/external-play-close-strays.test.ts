@@ -62,7 +62,7 @@ afterAll(async () => {
   if (DB) await sql.end({ timeout: 2 }).catch(() => undefined);
 });
 
-let warn: ReturnType<typeof vi.spyOn>;
+let warn: { mock: { calls: unknown[][] }; mockRestore: () => void };
 beforeEach(() => {
   vi.clearAllMocks();
   __resetCreationQueue();
