@@ -344,6 +344,15 @@ const claims: Claim[] = [
         if (p.float !== (round.score.get(first) !== round.score.get(second))) return `board ${p.board}: float drawn ${String(p.float)}`;
       }
       const g = gridOf(r);
+      // The caption says the late player plays a FIRST game: the round drawn is the one they are first seated in, never an earlier one
+      // (they are not entered yet) and never a later one (they have played before), and a board of the diagram seats them.
+      const lateName = String(r.facts.lateName);
+      const lateCells = g.get(lateName)?.rounds;
+      if (lateCells === undefined) return `the grid has no row for ${lateName}`;
+      const [here, before] = [lateCells[d.round - 1], lateCells[d.round - 2]];
+      if (here === undefined || here === NOT_YET || here.startsWith(LEFT)) return `${lateName} is not seated in the round drawn (round ${d.round}): '${String(here)}'`;
+      if (d.round < 2 || before !== NOT_YET) return `${lateName} has already played before round ${d.round} ('${String(before)}'), so the round drawn is not their first`;
+      if (!d.pairings.some((p) => parseSeededLabel(p.first).name === lateName || parseSeededLabel(p.second ?? "").name === lateName)) return `no board of the diagram seats ${lateName}`;
       const absent = [...g].filter(([, row]) => row.rounds[d.round - 1] === LEFT || row.rounds[d.round - 1] === NOT_YET).map(([p]) => p);
       // The strip carries the player's full label (name and the grid's own printed seed) and says why in the leaver's round.
       const outLabels = (d.notSeated ?? []).map((n) => n.name).sort();
@@ -358,6 +367,7 @@ const claims: Claim[] = [
       // The caption's names, rounds and count are the facts the post prints, and the boards drawn.
       const others = d.pairings.length * 2 - 1;
       const t = String(d.title);
+      if (!t.startsWith(`Round ${d.round}: `)) return `the diagram draws round ${d.round}, the caption starts '${t.slice(0, 12)}'`;
       const wanted = [`Round ${String(r.facts.lateFirstRound)}`, String(r.facts.lateName), String(r.facts.leaverName), `once round ${String(r.facts.leaverRound)} was paired`, `The other ${others} players`];
       const missing = wanted.filter((w) => !t.includes(w));
       return missing.length === 0 || `the diagram's caption does not say '${missing.join("', '")}'`;
