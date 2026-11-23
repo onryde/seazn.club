@@ -8,7 +8,7 @@
 // over the match's opening state) and from the named rulebooks for the sports that fix a number (football 3-0, hockey and
 // ice hockey 5-0, chess 1-0), in code that shares nothing with `build()`'s wording. A volleyball set credit is checked
 // against the variant's own set target, a cricket charge against its own innings length.
-import type { EventEnvelope, MatchOutcome } from "@seazn/engine/core";
+import type { EventEnvelope, ForfeitReason, MatchOutcome } from "@seazn/engine/core";
 import { setsToWinOf } from "@seazn/engine/competition";
 import { resolvePositions, type AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
@@ -43,7 +43,7 @@ export function lineupsFor(module: AnySportModule, cfg: unknown) {
 }
 
 /** One match decided by a single `core.forfeit` (nothing played), folded by the app's read fold. */
-export function forfeitFold(module: AnySportModule, by: string, reason: string, variantCfg?: unknown) {
+export function forfeitFold(module: AnySportModule, by: string, reason: ForfeitReason, variantCfg?: unknown) {
   const cfg = variantCfg ?? startingCfg(module);
   const lineups = lineupsFor(module, cfg);
   const envelopes: EventEnvelope[] = [
