@@ -1,0 +1,49 @@
+{
+  "lighthouseVersion": "13.4.0",
+  "requestedUrl": "http://localhost:3000/help/formats/swiss",
+  "finalUrl": "http://localhost:3000/help/formats/swiss",
+  "finalDisplayedUrl": "http://localhost:3000/help/formats/swiss",
+  "fetchTime": "2026-11-23T21:49:29.747Z",
+  "configSettings": {
+    "formFactor": "mobile",
+    "throttlingMethod": "simulate",
+    "screenEmulation": {
+      "mobile": true,
+      "width": 412,
+      "height": 823,
+      "deviceScaleFactor": 1.75,
+      "disabled": false
+    }
+  },
+  "environment": {
+    "benchmarkIndex": 309
+  },
+  "categories": {
+    "performance": {
+      "id": "performance",
+      "title": "Performance",
+      "score": 0.61
+    },
+    "accessibility": {
+      "id": "accessibility",
+      "title": "Accessibility",
+      "score": 0.99
+    },
+    "best-practices": {
+      "id": "best-practices",
+      "title": "Best Practices",
+      "score": 1
+    },
+    "seo": {
+      "id": "seo",
+      "title": "SEO",
+      "score": 1
+    },
+    "agentic-browsing": {
+      "id": "agentic-browsing",
+      "title": "Agentic Browsing",
+      "score": 1
+    }
+  },
+  "runtimeError": null
+}
