@@ -16,9 +16,11 @@ import { declaredCfgs, forEachSport } from "@seazn/engine/testkit";
 import publicDict from "@/dictionaries/en/public.json";
 import { sportLabel, variantLabel } from "@/blog/labels";
 import { rulesLineText } from "@/lib/rules-line";
+import { postedStageCfg } from "@/lib/stage-decider-off";
 import { quickMatchKnockoutCfg } from "@/server/usecases/quick-match-sports";
 import { describeDeciders } from "@/server/public-site/describe-rules";
 import { withStageDefaults } from "@/server/usecases/stage-defaults";
+import { sentenceList } from "./kit";
 import { startingVariantKey } from "./starting-variant";
 import type { BlogExample, Claim, ExampleResult } from "./types";
 
@@ -62,6 +64,44 @@ function cells(module: AnySportModule, variant: string, variantCfg: Cfg): [strin
   return [decider, still];
 }
 
+export const lowerFirst = (t: string): string => t.charAt(0).toLowerCase() + t.slice(1);
+
+/** Whether a league match of this cfg can still finish level once its deciders have been played: the sport's own declaration where it
+ *  makes one (`canEndLevel`; hockey's shoot-out is booked as a draw, but the match is settled), else whether a level result is reachable. */
+function staysLevel(module: AnySportModule, cfg: Cfg): boolean {
+  return typeof module.canEndLevel === "function" ? module.canEndLevel(cfg as never) : canBeLevel(module, cfg);
+}
+
+/**
+ * A new LEAGUE stage of every variant of every sport, as the app creates one: the stage preset (`withStageDefaults`, which is empty
+ * for a league) laid over the division variant through the resolver's own composition (`postedStageCfg`). Per sport's STARTING variant:
+ * `level` when a league match can still finish level (a draw, a cricket tie), `decides` when the variant plays a decider there that
+ * keeps it from finishing level (the sport declares league deciders and the sport's own answer is that it cannot end level). A sport
+ * whose starting variant does not decide but another variant does is in `decidesVariants`, named like the table's rows ("Hockey (FIH
+ * with shoot-out)").
+ */
+export function leagueStages(): { presetKeys: number; level: string[]; decides: string[]; decidesVariants: string[] } {
+  const out = { presetKeys: 0, level: [] as string[], decides: [] as string[], decidesVariants: [] as string[] };
+  const other: string[] = [];
+  forEachSport(({ module }) => {
+    const start = startingVariantKey(module);
+    for (const v of variantsOf(module)) {
+      const rules = withStageDefaults(module, "league" as StageKind, v.key, {}).rules as Cfg | undefined;
+      out.presetKeys += Object.keys(rules ?? {}).length;
+      const cfg = postedStageCfg(module, v.cfg, "league" as StageKind, v.key, rules) as Cfg;
+      const level = staysLevel(module, cfg) && module.reachableResultKinds(cfg as never, "league").size > 0;
+      const decides = !staysLevel(module, cfg) && deciderKeysFor(module, "league" as StageKind, v.key).length > 0;
+      if (v.key === start) {
+        if (level) out.level.push(sportLabel(module.key));
+        else if (decides) out.decides.push(sportLabel(module.key));
+      } else if (decides) other.push(`${sportLabel(module.key)} (${variantLabel(module.key, v.key)})`);
+    }
+    if (!out.decides.includes(sportLabel(module.key))) out.decidesVariants.push(...other.splice(0));
+    other.length = 0;
+  });
+  return out;
+}
+
 function build(): ExampleResult {
   const rows: (string | number)[][] = [];
   const facts: Record<string, string | number> = {};
@@ -92,11 +132,14 @@ function build(): ExampleResult {
   facts.footballExtraTimeHalf = Number((adult.extraTime as Cfg).halfMinutes);
   facts.footballKicks = Number(adult.shootoutAttempts);
   facts.footballYouthKicks = Number(fcfg("youth").shootoutAttempts);
-  // The same football variant in a LEAGUE stage: no preset decider, so a level match is a draw there.
-  const football = builtinModules.find((m) => m.key === "football")!;
-  const fv = startingVariantKey(football);
-  const leagueStage = withStageDefaults(football, "league", fv, {});
-  facts.footballLeagueRulesPreset = Object.keys((leagueStage.rules as Cfg | undefined) ?? {}).length;
+  // What a NEW league stage of every sport plays, through the app's own door (`withStageDefaults`, then the stage's cfg as the
+  // resolver composes it): no stage preset, so the division variant's own deciders. A sport whose starting variant can still finish a
+  // league match level keeps it level; one whose variant plays a decider there cannot (ice hockey's IIHF overtime and shoot-out).
+  const league = leagueStages();
+  facts.leagueRulesPresetCount = league.presetKeys;
+  facts.leagueLevelSports = lowerFirst(sentenceList(league.level));
+  facts.leagueDecidesSports = sentenceList(league.decides);
+  facts.leagueDecidesVariants = sentenceList(league.decidesVariants);
   return {
     facts,
     table: {
@@ -104,7 +147,7 @@ function build(): ExampleResult {
       columns: COLUMNS,
       rows,
     },
-    text: [`A new football league stage starts with ${facts.footballLeagueRulesPreset} preset deciders.`],
+    text: [`A new league stage starts with ${facts.leagueRulesPresetCount} preset deciders in any of the ${visited} sports.`],
   };
 }
 
@@ -214,6 +257,57 @@ function sportClaims(module: AnySportModule): Claim[] {
   return out;
 }
 
+/**
+ * What a new LEAGUE stage of each sport plays, read from the engine's declarations only: the variant's own config straight from the
+ * schema with the league preset laid over it (no stage rules of the app's), and the sport's own answers about it. The CLAIM side of
+ * `leagueStages` (which goes through the app's door); the two share nothing but the registry. `swept` counts sports, `variants` the
+ * variants looked at: a caller treats zero as a failure.
+ */
+export function declaredLeagueStages(): { presetKeys: number; level: string[]; decides: string[]; decidesVariants: string[]; swept: number; variants: number } {
+  const out = { presetKeys: 0, level: [] as string[], decides: [] as string[], decidesVariants: [] as string[], swept: 0, variants: 0 };
+  forEachSport(({ module }) => {
+    const start = startingVariantKey(module);
+    const elsewhere: string[] = [];
+    let startDecides = false;
+    for (const name of Object.keys(module.variants)) {
+      const preset = stageDefaultsFor(module, "league" as StageKind, name) as Cfg;
+      out.presetKeys += Object.keys(preset).length;
+      const cfg = { ...(module.configSchema.parse(module.variants[name]) as Cfg), ...preset };
+      const endsLevel = typeof module.canEndLevel === "function" ? module.canEndLevel(cfg as never) : module.reachableResultKinds(cfg as never, "league").size > 0;
+      const plays = !endsLevel && deciderKeysFor(module, "league" as StageKind, name).length > 0;
+      if (name === start) {
+        if (endsLevel && module.reachableResultKinds(cfg as never, "league").size > 0) out.level.push(sportLabel(module.key));
+        else if (plays) {
+          out.decides.push(sportLabel(module.key));
+          startDecides = true;
+        }
+      } else if (plays) elsewhere.push(`${sportLabel(module.key)} (${variantLabel(module.key, name)})`);
+      out.variants++;
+    }
+    if (!startDecides) out.decidesVariants.push(...elsewhere);
+    out.swept++;
+  });
+  return out;
+}
+
+export type DeclaredLeagueStages = ReturnType<typeof declaredLeagueStages>;
+
+/** The league-lists claim, apart from the registry read, so a test can hand it a registry that is empty, short or wrong: `true`, or why not. */
+export function leagueListsProblem(d: DeclaredLeagueStages, facts: ExampleResult["facts"], registrySize: number): string | true {
+  if (d.swept === 0 || d.swept !== registrySize) return `${d.swept} sports swept of ${registrySize}`;
+  if (d.variants < d.swept) return `${d.variants} variants swept over ${d.swept} sports`;
+  // The right answer differs from the wrong one: the post must name a sport that decides in a league, and one that stays level.
+  if (d.decides.length === 0 || d.level.length === 0) return `anti-vacuity: ${d.level.length} sports stay level, ${d.decides.length} decide, so the lists cannot show the difference`;
+  if (d.presetKeys !== 0 || facts.leagueRulesPresetCount !== 0) return `a league stage presets ${d.presetKeys} decider keys (the result says ${String(facts.leagueRulesPresetCount)})`;
+  const want: [string, string][] = [
+    ["leagueLevelSports", lowerFirst(sentenceList(d.level))],
+    ["leagueDecidesSports", sentenceList(d.decides)],
+    ["leagueDecidesVariants", sentenceList(d.decidesVariants)],
+  ];
+  for (const [k, v] of want) if (facts[k] !== v) return `${k} is '${String(facts[k])}', the declarations give '${v}'`;
+  return true;
+}
+
 const claims: Claim[] = [
   ...builtinModules.flatMap(sportClaims),
   {
@@ -239,15 +333,9 @@ const claims: Claim[] = [
     },
   },
   {
-    says: "a knockout preset differs from a league's: a new football league stage presets no decider, so a level league match stays a draw",
-    source: "stageDefaults('league') is empty for football (ENG/sports/football/football.js stageDefaults); a draw pays tablePointsRule's draw",
-    check: (r) => {
-      const football = builtinModules.find((m) => m.key === "football")!;
-      const league = Object.keys(stageDefaultsFor(football, "league" as StageKind, startingVariantKey(football))).length;
-      const knockout = Object.keys(stageDefaultsFor(football, "knockout" as StageKind, startingVariantKey(football))).length;
-      if (knockout === 0 || league !== 0) return `football presets: knockout ${knockout}, league ${league}`;
-      return r.facts.footballLeagueRulesPreset === league || `the league stage was written with ${r.facts.footballLeagueRulesPreset} deciders`;
-    },
+    says: "a new league stage presets no decider in any sport, so it plays its variant's own: the sports whose starting variant can still finish a league match level, the ones whose starting variant plays a decider there, and the other variants that do, are the post's lists",
+    source: "stageDefaults('league') of every sport (ENG/sport/module.d.ts); the variant's own config; canEndLevel and reachableResultKinds(cfg, 'league') (module.d.ts:655,698); deciderKeysFor (rule-keys.d.ts:19), swept over the registry",
+    check: (r) => leagueListsProblem(declaredLeagueStages(), r.facts, builtinModules.length),
   },
 ];
 

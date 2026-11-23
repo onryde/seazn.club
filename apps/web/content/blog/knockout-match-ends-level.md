@@ -31,9 +31,11 @@ Some deciders can end level too. Extra time can finish level, which is why penal
 
 A Test match has no decider at all: a drawn Test in a knockout waits for the organiser. A generic division has none either. Its results are entered by hand, so a knockout result has to name a winner when you enter it.
 
-## Why a knockout has deciders and a league does not
+## Why a knockout has deciders and a league usually does not
 
-The same sport can treat a level match two ways, because the two stages ask different questions. A league asks "how many points did each side earn?", and a draw answers it. A knockout asks "who goes through?", and a draw does not. So a new knockout stage starts with its sport's deciders on, while a new league stage starts with none and a level match stays a draw.
+The same sport can treat a level match two ways, because the two stages ask different questions. A league asks "how many points did each side earn?", and a draw answers it. A knockout asks "who goes through?", and a draw does not. So a new knockout stage starts with its sport's deciders on, while a new league stage presets none of its own and plays whatever the division's variant plays.
+
+For {{fact:knockout-match-ends-level.leagueLevelSports}}, the variant a new division starts on plays no decider in a league, so a level match stays level: a draw, or a tie in cricket. {{fact:knockout-match-ends-level.leagueDecidesSports}} are the exceptions. The variant a new division starts on already plays its decider in a league, so a level league match there is settled in the match itself. Another variant does the same: {{fact:knockout-match-ends-level.leagueDecidesVariants}}.
 
 ## Where to find it in Seazn
 

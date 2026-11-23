@@ -12,6 +12,7 @@ import type { ExampleResult } from "@/blog/examples/types";
 import { sportLabel } from "@/blog/labels";
 import { FORFEIT_REASONS } from "@seazn/engine/core";
 import { appDraw, betterSeedWins, forfeitOutClaim, playBracket } from "@/blog/examples/bracket-play-b4";
+import { declaredLeagueStages, leagueListsProblem } from "@/blog/examples/knockout-match-ends-level";
 
 const B4 = ["third-place-match", "knockout-match-ends-level", "page-playoff-and-stepladder", "double-elimination-explained", "what-is-a-plate"];
 
@@ -77,8 +78,57 @@ describe("knockout-match-ends-level", () => {
   it("a youth shoot-out typed as the adult count, a missing kick number, or a league preset with deciders is caught", () => {
     expect(failing(id, mutate(id, (r) => { r.facts.footballYouthKicks = r.facts.footballKicks!; }))).toHaveLength(1);
     expect(failing(id, mutate(id, (r) => { rowWhere(r, 0, "Football")[1] = "Extra time, penalties"; })).length).toBeGreaterThan(0);
-    expect(failing(id, mutate(id, (r) => { r.facts.footballLeagueRulesPreset = 2; }))).toHaveLength(1);
+    expect(failing(id, mutate(id, (r) => { r.facts.leagueRulesPresetCount = 2; }))).toHaveLength(1);
     expect(failing(id, mutate(id, (r) => { r.table!.rows = r.table!.rows.filter((row) => row[0] !== "Tennis"); })).length).toBeGreaterThan(0);
+  });
+});
+
+describe("knockout-match-ends-level: what a new LEAGUE stage plays, swept over every sport", () => {
+  const id = "knockout-match-ends-level";
+  it("a league list that drops a sport that decides, adds one that does not, or forgets the variant that does, is caught by the one sweep claim", () => {
+    const r0 = mutate(id, () => undefined);
+    // The committed lists are non-trivial: each names at least one sport, and the three lists share none (the anti-vacuity of the cases below).
+    const [level, decides, variants] = ["leagueLevelSports", "leagueDecidesSports", "leagueDecidesVariants"].map((k) => String(r0.facts[k]));
+    expect(level!.length, "sports that stay level").toBeGreaterThan(0);
+    expect(decides!.length, "sports that decide in a league").toBeGreaterThan(0);
+    expect(variants!.length, "variants that decide in a league").toBeGreaterThan(0);
+    let caught = 0;
+    for (const [k, v] of [
+      ["leagueDecidesSports", "Ice hockey"],
+      ["leagueDecidesSports", `${decides!} and football`],
+      ["leagueDecidesVariants", ""],
+      ["leagueLevelSports", `${level!} and ice hockey`],
+      ["leagueLevelSports", "football"],
+    ] as const) {
+      expect(failing(id, mutate(id, (r) => { r.facts[k] = v; })), `${k} = '${v}'`).toHaveLength(1);
+      caught++;
+    }
+    expect(caught, "mutants run").toBe(5);
+  });
+  it("the claim refuses a registry it cannot read anything from: no sport, a short sweep, nobody deciding, nobody level, a league preset, a wrong list", () => {
+    const d = declaredLeagueStages();
+    const facts = mutate(id, () => undefined).facts;
+    expect(leagueListsProblem(d, facts, builtinModules.length), "the committed lists").toBe(true);
+    expect(d.swept, "sports swept").toBe(builtinModules.length);
+    expect(d.variants, "variants swept").toBeGreaterThanOrEqual(builtinModules.length);
+    const refused: [string, ReturnType<typeof declaredLeagueStages>, RegExp][] = [
+      ["no sport swept", { ...d, swept: 0 }, /0 sports swept/],
+      ["a short sweep", { ...d, swept: d.swept - 1 }, /sports swept of/],
+      ["fewer variants than sports", { ...d, variants: d.swept - 1 }, /variants swept over/],
+      ["nobody decides in a league", { ...d, decides: [] }, /anti-vacuity/],
+      ["nobody stays level", { ...d, level: [] }, /anti-vacuity/],
+      ["a league stage with a preset decider", { ...d, presetKeys: 1 }, /presets 1 decider keys/],
+      ["a list that names a sport more", { ...d, decides: [...d.decides, "Football"] }, /leagueDecidesSports is/],
+    ];
+    for (const [what, doctored, why] of refused) expect(leagueListsProblem(doctored, facts, builtinModules.length), what).toMatch(why);
+    expect(refused.length, "cases refused").toBe(7);
+  });
+  it("the hockey rows say what the declarations say: ice hockey's starting variant decides a league match, hockey's starting variant does not, its FIH shoot-out variant does", () => {
+    const r0 = mutate(id, () => undefined);
+    expect(String(r0.facts.leagueDecidesSports)).toContain("ice hockey");
+    expect(String(r0.facts.leagueLevelSports)).toContain("hockey");
+    expect(String(r0.facts.leagueLevelSports)).not.toContain("ice hockey");
+    expect(String(r0.facts.leagueDecidesVariants)).toContain("Hockey");
   });
 });
 

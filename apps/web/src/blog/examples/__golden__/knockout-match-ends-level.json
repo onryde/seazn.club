@@ -34,7 +34,10 @@
     "footballExtraTimeHalf": 15,
     "footballKicks": 5,
     "footballYouthKicks": 3,
-    "footballLeagueRulesPreset": 0
+    "leagueRulesPresetCount": 0,
+    "leagueLevelSports": "football, cricket, chess, a generic division and hockey",
+    "leagueDecidesSports": "Carrom and ice hockey",
+    "leagueDecidesVariants": "Hockey (FIH with shoot-out)"
   },
   "table": {
     "caption": "What a level match goes to in a new knockout stage, in all 11 sports. A variant gets its own row when its answer differs.",
@@ -122,6 +125,6 @@
     ]
   },
   "text": [
-    "A new football league stage starts with 0 preset deciders."
+    "A new league stage starts with 0 preset deciders in any of the 11 sports."
   ]
 }

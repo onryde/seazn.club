@@ -18,6 +18,7 @@ import { forEachSport } from "@seazn/engine/testkit";
 import { sportLabel, variantLabel } from "@/blog/labels";
 import { NAMES, compact, leagueCfg, play, sentenceList, upperFirst, variantsOf, winnerLoserPoints, type Cfg, type StageRules, declaredLeaguePoints } from "./kit";
 import { startingVariantKey } from "./starting-variant";
+import { declaredLeagueStages, leagueStages, lowerFirst } from "./knockout-match-ends-level";
 import type { BlogExample, Claim, ExampleResult } from "./types";
 
 export const SHOOTOUT_POINTS_ID = "shootout-points";
@@ -135,6 +136,13 @@ function build(): ExampleResult {
   facts.sportsRegulationOnly = regulationOnly.length;
   facts.regulationOnlyList = sentenceList(regulationOnly);
   facts.beyondList = joinAnd(beyondSports);
+  // Which of those sports play their deciders in a NEW league stage from the first match (the division variant's own, since a league
+  // stage presets none): through the app's door, as post #18 reads it.
+  const league = leagueStages();
+  const among = (labels: string[]) => labels.filter((l) => beyondSports.includes(l.replace(/ \(.*$/, "")));
+  facts.leagueOffFromStart = lowerFirst(sentenceList(among(league.level)));
+  facts.leagueOnFromStart = sentenceList(among(league.decides));
+  facts.leagueOnVariants = sentenceList(among(league.decidesVariants));
   return {
     facts,
     table: { caption: "What a win settled beyond regulation earns each side in a league, by sport and by way of settling it.", columns: COLUMNS, rows },
@@ -276,6 +284,29 @@ function acrossSports(): Claim[] {
         if (beyond.length + never.length !== visited) return "the two groups do not add up to the registry";
         if (f.beyondList !== joinAnd(beyond)) return `beyondList is '${String(f.beyondList)}', the declarations give '${joinAnd(beyond)}'`;
         return f.regulationOnlyList === sentenceList(never) || `regulationOnlyList is '${String(f.regulationOnlyList)}', the declarations give '${sentenceList(never)}'`;
+      },
+    },
+    {
+      says: "of the sports that settle a league match beyond regulation, the post names the ones whose starting variant already plays its deciders in a new league stage, the ones that need them switched on, and the other variant that plays them from the start",
+      source: "the variant's own config with the league stage preset (empty) laid over it, canEndLevel and deciderKeysFor of every sport (ENG/sport/module.d.ts), swept with forEachSport",
+      check(result) {
+        const beyond: string[] = [];
+        forEachSport(({ module }) => {
+          if (expectedFor(module).length > 0) beyond.push(sportLabel(module.key));
+        });
+        const d = declaredLeagueStages();
+        if (d.swept === 0 || beyond.length === 0) return `anti-vacuity: ${d.swept} sports swept, ${beyond.length} settle beyond regulation`;
+        const among = (labels: string[]) => labels.filter((l) => beyond.includes(l.replace(/ \(.*$/, "")));
+        const [off, on, variants] = [among(d.level), among(d.decides), among(d.decidesVariants)];
+        // Each list has something to say, and no sport is in two of them: the answer differs from a list that names everyone.
+        if (off.length === 0 || on.length === 0 || variants.length === 0) return `anti-vacuity: ${off.length} sports start with deciders off, ${on.length} on, ${variants.length} variants on`;
+        const want: [string, string][] = [
+          ["leagueOffFromStart", lowerFirst(sentenceList(off))],
+          ["leagueOnFromStart", sentenceList(on)],
+          ["leagueOnVariants", sentenceList(variants)],
+        ];
+        for (const [k, v] of want) if (result.facts[k] !== v) return `${k} is '${String(result.facts[k])}', the declarations give '${v}'`;
+        return true;
       },
     },
   ];

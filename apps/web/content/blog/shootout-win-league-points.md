@@ -10,9 +10,9 @@ related: how-standings-points-work, cricket-points-ties-no-results, knockout-mat
 examples: shootout-points
 ---
 
-It depends on the sport. When a league match is level and the rules play on, the win can count as a full win, as a smaller win that still pays the loser something, or as a draw with a bonus for the winner. The table below shows what a new division of each of those sports pays.
+It depends on the sport. When a league match is level and the rules play on, the win can count as a full win, as a smaller win that still pays the loser something, or as a draw with a bonus for the winner. The table below shows what each of those sports pays when its deciders are on.
 
-Only {{fact:shootout-points.sportsBeyond}} of the {{fact:shootout-points.sportCount}} sports can, with deciders switched on, settle a league match beyond normal time: {{fact:shootout-points.beyondList}}. The table below was made by playing real matches in each of them.
+Only {{fact:shootout-points.sportsBeyond}} of the {{fact:shootout-points.sportCount}} sports can settle a league match beyond normal time: {{fact:shootout-points.beyondList}}. Whether a new league stage does depends on the sport. In {{fact:shootout-points.leagueOffFromStart}}, the variant a new division starts on plays no decider in a league until you switch one on. {{fact:shootout-points.leagueOnFromStart}} already plays its deciders in a league from the first match, and so does {{fact:shootout-points.leagueOnVariants}}. The table below was made by playing real matches in each of them, with the deciders on.
 
 {{example:shootout-points}}
 
