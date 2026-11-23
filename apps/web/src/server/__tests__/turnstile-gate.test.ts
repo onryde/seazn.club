@@ -357,6 +357,8 @@ const EXEMPT: Record<string, string> = {
     "pay: needs the registrant's own token for an existing registration, per-IP CHECKOUT_LIMIT; revisit if Checkout Session spend becomes a target",
   "webhooks/realtimekit/route.ts POST":
     "Cloudflare RealtimeKit's webhook: the vendor's RSA-SHA256 `rtk-signature` over the raw request bytes is the credential, verified in server/external-play/video/webhook.ts before any write (the verifier sits two hops from the handler, past what the one-hop reader follows); a vendor cannot solve a browser challenge; a bad or missing signature is a 401 that writes nothing",
+  "webhooks/bunny-stream/route.ts POST":
+    "Bunny Stream's library webhook: its hex HMAC-SHA256 `X-BunnyStream-Signature` over the raw request bytes, keyed with the library's Read-Only key, is the credential, checked in the handler (verifyBunnySignature, server/video/bunny-webhook.ts — a name the classifier's constructEvent/verifySignature reader does not know) before any read or write; a vendor cannot solve a browser challenge; a bad or missing signature, or no key configured, is a 401 that writes nothing",
   "v1/match-day-code/approvals/[kind]/[stageId]/route.ts POST":
     "the Seazn Club app's call, bearing a Match Day code (md_, 256 bits, one day, withdrawable): the code is the credential and a phone cannot solve a browser challenge; per-code MD_REVIEW_LIMIT / MD_APPROVE_LIMIT and per-IP MD_FAIL_LIMIT on failed lookups",
   "v1/match-day-code/fixtures/[id]/call/route.ts POST":

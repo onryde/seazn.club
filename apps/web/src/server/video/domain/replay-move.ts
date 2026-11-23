@@ -139,6 +139,19 @@ export function replayFailureOutcome(row: Pick<ReplayRow, "state" | "attempts" |
   return { kind: "give_up", state: KEPT_WHEN_PARKED.has(row.state) ? row.state : "failed", attempts: f.attempts, nextAttemptAt: REPLAY_PARKED_AT };
 }
 
+/** The title a copy is stored under on the replay host (the plan's form, `seazn:{sessionId}:{cfVideoId}`). Nothing searches the
+ *  host by it: the webhook (Task 27) reads it back, through `parseReplayCopyTitle`, only for a copy no row holds, to tell a stray copy
+ *  of ours from another video in the library. One authority for both directions. */
+export function replayCopyTitle(sessionId: string, cfVideoId: string): string {
+  return `seazn:${sessionId}:${cfVideoId}`;
+}
+const COPY_TITLE = /^seazn:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):([^\s:]+)$/i;
+/** The session and the recording a title of `replayCopyTitle`'s form names; null for any other title (or none). */
+export function parseReplayCopyTitle(title: string | null): { sessionId: string; cfVideoId: string } | null {
+  const m = title === null ? null : COPY_TITLE.exec(title);
+  return m ? { sessionId: m[1]!, cfVideoId: m[2]! } : null;
+}
+
 /** The renditions the host makes, smallest first; it never makes one above 720 (B2). */
 const RUNGS = [240, 360, 480, 720] as const;
 /** The rung a clean copy must list: the largest one not above the source's height. Null for a source with no height or under
