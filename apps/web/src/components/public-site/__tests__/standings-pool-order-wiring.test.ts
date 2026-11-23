@@ -49,7 +49,8 @@ import esPublic from "@/dictionaries/es/public.json";
 import frPublic from "@/dictionaries/fr/public.json";
 import nlPublic from "@/dictionaries/nl/public.json";
 import EmbedWidgetPage from "@/app/embed/divisions/[id]/[widget]/page";
-import DivisionHomePage from "@/app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/page";
+// W5 follow-ups B3: the division page is one document per tab; "the page" is all three (`_every-tab.ts`).
+import { renderEveryTab } from "@/app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/__tests__/_every-tab";
 import { StandingsTable } from "../standings-table";
 import { builtinModules } from "@seazn/engine/sports";
 import { unpinnedRulesDoc } from "@/server/engine-db/__tests__/helpers/table-rules-doc";
@@ -150,9 +151,7 @@ function tables(node: unknown, out: ReactElement<TableProps>[] = []): ReactEleme
 describe("pool order on the pages that draw one standings table per pool", () => {
   it("public division page: pool A, then pool B", async () => {
     getPublicDivision.mockResolvedValue(payload());
-    const root = await DivisionHomePage({
-      params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" }),
-    });
+    const root = await renderEveryTab({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" });
     const drawn = tables(root);
     expect(drawn.map((el) => el.props.caption)).toEqual(enCaptions("Groups"));
     // Each caption over its OWN pool's rows — the order moved the tables,
@@ -188,9 +187,7 @@ describe("pool order on the pages that draw one standings table per pool", () =>
 
       getPublicDivision.mockResolvedValue(withLocale(locale));
       const page = tables(
-        await DivisionHomePage({
-          params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" }),
-        }),
+        await renderEveryTab({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" }),
       );
       expect(page.map((el) => el.props.caption), `division page (${locale})`).toEqual(want);
 
@@ -222,7 +219,7 @@ describe("pool order on the pages that draw one standings table per pool", () =>
     };
     getPublicDivision.mockResolvedValue(withRules);
     const page = tables(
-      await DivisionHomePage({ params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" }) }),
+      await renderEveryTab({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" }),
     );
     embedDivisionData.mockResolvedValue({ ok: true, data: { ...withRules, sponsors: [] } });
     const embed = tables(await EmbedWidgetPage({ params: Promise.resolve({ id: "d1", widget: "standings" }) }));

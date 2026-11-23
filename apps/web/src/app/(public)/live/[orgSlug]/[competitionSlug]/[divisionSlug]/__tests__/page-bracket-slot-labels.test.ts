@@ -36,7 +36,8 @@ import { t } from "@/lib/i18n-runtime";
 import { msgFor } from "@/lib/messages-i18n";
 import { LOCALES } from "@/lib/i18n-constants";
 import { Bracket } from "@/components/public-site/bracket";
-import { Schedule } from "@/components/public-site/schedule";
+// W5 follow-ups B3: the page hands its Schedule over packed (`PackedSchedule`, the same props, fixtures as columns).
+import { PackedSchedule } from "@/components/public-site/packed-schedule";
 import type { PublicFixture, PublicEntrant } from "@/server/public-site/data";
 import DivisionHomePage from "../page";
 
@@ -137,7 +138,7 @@ describe("public division page — its Bracket names a waiting side's feeder ROU
     getPublicDivision.mockResolvedValue(divisionData());
 
     const root = await DivisionHomePage({
-      params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" }),
+      params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open", tab: "standings" }),
     });
     const brackets = findElements(root, Bracket);
     expect(brackets, "the page builds one Bracket for its one knockout stage").toHaveLength(1);
@@ -163,10 +164,14 @@ describe("public division page — its Bracket names a waiting side's feeder ROU
     const root = await DivisionHomePage({
       params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" }),
     });
-    const schedules = findElements(root, Schedule);
+    const schedules = findElements(root, PackedSchedule);
     expect(schedules, "the page builds one Schedule").toHaveLength(1);
     const scheduleHtml = renderToStaticMarkup(schedules[0]!);
-    const brackets = findElements(root, Bracket);
+    // W5 follow-ups B3: the Bracket is in the Standings tab's own document (`?tab=standings`, rewritten to `tab/standings`).
+    const standingsRoot = await DivisionHomePage({
+      params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open", tab: "standings" }),
+    });
+    const brackets = findElements(standingsRoot, Bracket);
     expect(brackets, "the page builds one Bracket").toHaveLength(1);
     const bracketHtml = renderToStaticMarkup(brackets[0]!);
     const { slotLabels } = schedules[0]!.props as { slotLabels: Record<string, string> };
@@ -193,7 +198,7 @@ describe("public division page — its Bracket names a waiting side's feeder ROU
     const root = await DivisionHomePage({
       params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" }),
     });
-    const schedules = findElements(root, Schedule);
+    const schedules = findElements(root, PackedSchedule);
     expect(schedules, "the page builds one Schedule").toHaveLength(1);
     const { roundLabels, copy, locale } = schedules[0]!.props as {
       roundLabels: Record<string, string>;
@@ -231,7 +236,7 @@ describe("public division page — its Bracket names a waiting side's feeder ROU
     const root = await DivisionHomePage({
       params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" }),
     });
-    const schedules = findElements(root, Schedule);
+    const schedules = findElements(root, PackedSchedule);
     expect(schedules, "the page builds one Schedule").toHaveLength(1);
     const { stageOrder, stageNames } = schedules[0]!.props as {
       stageOrder: Record<string, number>;
@@ -282,7 +287,7 @@ describe("public division page — its Bracket's card footers are in the org's l
       getPublicDivision.mockResolvedValue({ ...data, org: { ...data.org, default_locale: locale }, fixtures });
 
       const root = await DivisionHomePage({
-        params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" }),
+        params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open", tab: "standings" }),
       });
       const brackets = findElements(root, Bracket);
       expect(brackets, "the page builds one Bracket for its one knockout stage").toHaveLength(1);
@@ -314,7 +319,7 @@ describe("public division page — its Bracket's card footers are in the org's l
     getPublicDivision.mockResolvedValue({ ...divisionData(), tz: venue });
 
     const root = await DivisionHomePage({
-      params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" }),
+      params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open", tab: "standings" }),
     });
     const brackets = findElements(root, Bracket);
     expect(brackets, "the page builds one Bracket for its one knockout stage").toHaveLength(1);

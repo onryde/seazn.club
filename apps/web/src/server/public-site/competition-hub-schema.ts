@@ -195,6 +195,10 @@ export const HubMatch = z.object({
    *  names struck, no time and no score, "Abandoned" in the status slot — never "Ended". Optional: a document cached before the
    *  field existed reads as not expunged. */
   expunged: z.boolean().optional(),
+  /** W5 follow-ups C (review C2): a line of a late entrant's APPENDED catch-up round (`isCatchUpRoundExtKey`): numbered after the
+   *  draw's last round, played alongside the season, so it never marks how far the season has come (`planRounds`). Absent unless
+   *  true; a document cached before the field existed reads as no catch-up. */
+  catchUp: z.boolean().optional(),
   /** W2b Task 13 (UI-2 option A): a credited result's short tag ("w/o", "ret.", "2× w/o", "Aband. · DLS") and the
    *  full sentence that is its tooltip and accessible name, pre-resolved in the org's locale by `hubForfeit`
    *  (lib/forfeit-tag.ts is the one reader). `kind` is the reader's own (`ForfeitTagKind`). Null for a played result
@@ -457,6 +461,11 @@ export const TeamCard = z.object({
    *  `?entrant=` filter, which also carries every still-unresolved fixture in
    *  the division (the route's own owner ruling, 2026-08-24). */
   calendarHref: z.string().optional(),
+  /** W5 follow-ups C (review I4): this entrant has a DATED match the served `matches` do not hold - a big division's folded round
+   *  (`windowHubDoc`). An odd-sized league or pool sits a team out every round, so a window serving one round can hold none of its
+   *  matches. The Teams tab offers the calendar when this is true OR a served match dates the entrant. Set only on a windowed
+   *  document; absent: the served matches say it all. */
+  datedElsewhere: z.boolean().optional(),
 });
 
 export const HubInfo = z.object({
@@ -519,6 +528,28 @@ export const CompetitionHubDoc = z.object({
   generatedAt: z.string(),
   divisions: z.array(HubDivision),
   matches: z.array(HubMatch),
+  /** W5 follow-ups C (Option A, "by round"): a BIG division's rounds as the served document heads them (`lib/hub-round-paging.ts`):
+   *  an open round's matches are in `matches`, a folded one's are read on a tap. OPTIONAL: the cached document never carries it (the
+   *  window is applied when the document is served: to the landing page, and to the v1 hub route only on `?window=rounds`, review
+   *  I3), and absent reads as "every match is here". */
+  roundPages: z
+    .array(
+      z.object({
+        key: z.string(),
+        state: z.enum(["finished", "live", "inProgress", "next", "upcoming"]),
+        open: z.boolean(),
+        total: z.number(),
+        live: z.number(),
+        upcoming: z.number(),
+        result: z.number(),
+        divisionId: z.string(),
+        divisionSlug: z.string(),
+        stageName: z.string(),
+        roundNo: z.number(),
+        label: z.string().nullable(),
+      }),
+    )
+    .optional(),
   tables: z.array(TableView),
   /** One per bracket stage with fixtures, division order then stage `seq`. */
   knockouts: z.array(KnockoutView),

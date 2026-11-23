@@ -37,7 +37,8 @@ vi.mock("@/server/public-site/table-row-facts", async (importOriginal) => ({
 
 import { StandingsTable } from "@/components/public-site/standings-table";
 import type { PublicEntrant } from "@/server/public-site/data";
-import DivisionHomePage from "../page";
+// W5 follow-ups B3: the page is one document per tab; "the page" is all three (`_every-tab.ts`).
+import { renderEveryTab } from "./_every-tab";
 
 const NAMES = { a: "Ada Early", b: "Bo Bye", c: "Cyd Late" } as const;
 const entrant = (id: string, name: string, seed: number): PublicEntrant =>
@@ -106,9 +107,7 @@ function elements(node: unknown, out: ReactElement[] = []): ReactElement[] {
 
 async function standingsTable(fixtures: unknown[]) {
   getPublicDivision.mockResolvedValue(divisionData(fixtures));
-  const root = await DivisionHomePage({
-    params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" }),
-  });
+  const root = await renderEveryTab({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" });
   const tables = elements(root).filter((el) => el.type === StandingsTable);
   expect(tables, "the page builds one StandingsTable for its one Swiss stage").toHaveLength(1);
   return tables[0]!;
@@ -161,7 +160,7 @@ describe("public division page - a league's late entrant reads Joined round N wh
   };
   const html = async (status: string) => {
     getPublicDivision.mockResolvedValue(leagueData(status));
-    const root = await DivisionHomePage({ params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" }) });
+    const root = await renderEveryTab({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" });
     const tables = elements(root).filter((el) => el.type === StandingsTable);
     expect(tables).toHaveLength(1);
     return renderToStaticMarkup(tables[0]!);

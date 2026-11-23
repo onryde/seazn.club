@@ -25,8 +25,10 @@ import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import type { MessageKey } from "@/lib/messages";
 import { msgFor } from "@/lib/messages-i18n";
-import { Schedule } from "@/components/public-site/schedule";
-import DivisionHomePage from "@/app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/page";
+// W5 follow-ups B3: the page hands its Schedule over packed (`PackedSchedule`: the same props, fixtures as columns).
+import { PackedSchedule } from "@/components/public-site/packed-schedule";
+// W5 follow-ups B3: the division page is one document per tab; "the page" is all three (`_every-tab.ts`).
+import { renderEveryTab } from "@/app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/__tests__/_every-tab";
 import { loadCompetitionHub } from "@/server/public-site/competition-hub";
 import { getPublicDivision, type PublicFixture } from "@/server/public-site/data";
 import { loadMatchCentre, type MatchCentreLoadCtx } from "@/server/public-site/match-centre-load";
@@ -510,10 +512,8 @@ describe.runIf(HAS_DB)("W3 T15 I4: a disqualified entrant's walkover reads as a 
       expect(en(BOARDS[0].sentenceKey, { loser: names[dq]! }), "premise: the plain sentence says no withdrawal").not.toMatch(/withdr/i);
       expect(en(BOARDS[1].sentenceKey, { loser: names[wd]! }), "premise: the withdrawal sentence says so").toMatch(/withdr/i);
 
-      const root = await DivisionHomePage({
-        params: Promise.resolve({ orgSlug: slugs!.org, competitionSlug: slugs!.comp, divisionSlug: slugs!.div }),
-      });
-      const schedules = findElements(root, Schedule);
+      const root = await renderEveryTab({ orgSlug: slugs!.org, competitionSlug: slugs!.comp, divisionSlug: slugs!.div });
+      const schedules = findElements(root, PackedSchedule);
       expect(schedules.length, "rig: the division page builds a Schedule").toBeGreaterThan(0);
       const scheduleHtml = schedules.map((el) => renderToStaticMarkup(el)).join("");
       const hub = (await loadCompetitionHub(slugs!.org, slugs!.comp))!;

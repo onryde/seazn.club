@@ -33,7 +33,8 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
 import { createEntrants } from "@/server/usecases/entrants";
-import DivisionHomePage from "../page";
+// W5 follow-ups B3: the page is one document per tab; "the page" is all three (`_every-tab.ts`).
+import { renderEveryTab } from "./_every-tab";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -156,9 +157,7 @@ const textOf = (el: ReactElement) => renderToStaticMarkup(el).replace(/<[^>]+>/g
 /** The division page's player links and the markup of the member line that
  *  carries `name`. */
 async function renderDivision(divisionSlug: string, name: string) {
-  const root = await DivisionHomePage({
-    params: Promise.resolve({ orgSlug: scene.orgSlug, competitionSlug: scene.compSlug, divisionSlug }),
-  });
+  const root = await renderEveryTab({ orgSlug: scene.orgSlug, competitionSlug: scene.compSlug, divisionSlug });
   const all = elements(root);
   const playerLinks = all
     .filter((el) => el.type === Link && String((el.props as { href?: unknown }).href).includes("/players/"))

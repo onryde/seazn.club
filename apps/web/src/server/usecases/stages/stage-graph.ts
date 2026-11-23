@@ -29,6 +29,7 @@ import type { CreateStages } from "@/server/api-v1/schemas";
 // `buildCourtDirectory`) — a bare joined `courts.name` can't tell apart two
 // venues that legally share one court name.
 import { afterScheduleWrite, divisionLockState } from "../schedule";
+import { refuseUnfillableFromFinishedSources } from "./carry-over";
 import { schedulePlayerStatsRefresh } from "../player-stats-refresh";
 // The division freeze (`divisions.schedule_locked`), said the same way here as
 // at every other refusing site. IMPORT the constants, never retype the
@@ -397,6 +398,8 @@ async function insertStageBatch(
     if (!s.progression) continue;
     const row = rows.find((r) => r.seq === s.seq)!;
     await validateStageProgression(tx, row, s.progression);
+    // W5 follow-ups fix round 1 (I2): a source that has already finished is asked now what its completion would have been.
+    await refuseUnfillableFromFinishedSources(tx, row, s.progression as never);
   }
   // W5 B4 (stress F8; owner 2026-11-21, max entrants per format): a batch that sets the division's FIRST stage - a new format, or
   // a format change (`replaceStages` runs this batch after its delete) - on a field already past that format's max is refused

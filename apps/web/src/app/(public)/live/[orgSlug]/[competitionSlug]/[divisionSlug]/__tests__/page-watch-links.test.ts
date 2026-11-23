@@ -35,6 +35,7 @@ import { msgFor } from "@/lib/messages-i18n";
 import { builtinModules } from "@seazn/engine/sports";
 import { resolveLatestModule } from "@/server/engine-db";
 import { Schedule } from "@/components/public-site/schedule";
+import { PackedSchedule } from "@/components/public-site/packed-schedule";
 import DivisionHomePage from "../page";
 
 const divisionData = (sportKey: string, config: unknown) => {
@@ -64,7 +65,8 @@ function elements(node: unknown, out: ReactElement[] = []): ReactElement[] {
 async function scheduleProps(sportKey: string, config: unknown) {
   getPublicDivision.mockResolvedValue(divisionData(sportKey, config));
   const root = await DivisionHomePage({ params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "cup", divisionSlug: "open" }) });
-  const s = elements(root).filter((el) => el.type === Schedule);
+  // W5 follow-ups B3: the page hands its Schedule over packed (`PackedSchedule`: the same props, fixtures as columns).
+  const s = elements(root).filter((el) => el.type === PackedSchedule);
   expect(s, "anti-vacuity: the Fixtures list is on the page").toHaveLength(1);
   return s[0]!.props as Parameters<typeof Schedule>[0];
 }

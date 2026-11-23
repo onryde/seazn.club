@@ -27,6 +27,8 @@ import {
 } from "@/lib/matches-hub";
 import type { CompetitionHubDocT } from "@/server/public-site/competition-hub-schema";
 import { MatchCard } from "./match-card";
+import { HubRounds, pageCount } from "./hub-rounds";
+import { hubBucketTotals, hubRoundKey, type HubRoundPage } from "@/lib/hub-round-paging";
 import { HUB_RAIL_CLASS, hubChip } from "./hub-chip";
 import { writeDivisionParam } from "../use-tab-param";
 
@@ -179,8 +181,8 @@ export function MatchesTab({
   // not change under the division filter. A count that fell to zero while its
   // own chip stayed on screen would read as "this filter is broken" rather
   // than "this division has none of those".
-  const counts: BucketCounts = { live: 0, upcoming: 0, completed: 0 };
-  for (const match of doc.matches) counts[match.bucket] += 1;
+  // W5 follow-ups C: a big division's folded rounds (`roundPages`) are not in `matches`; their counts are.
+  const counts: BucketCounts = hubBucketTotals(doc);
 
   // RECONCILED against what is renderable, not merely remembered (review F1).
   // A chip exists only while its bucket has matches, so a chosen bucket that
@@ -201,7 +203,9 @@ export function MatchesTab({
   // `defaultMatchesFilter`'s own rule, repeated here because it is the same
   // rule: a competition with no fixtures has nothing to filter, and three
   // chips reading zero above an empty list is worse than one sentence.
-  if (doc.matches.length === 0) {
+  // `filter` is null exactly when every count is zero - no match served and none folded (`hubBucketTotals`), which for a document
+  // without `roundPages` is `matches.length === 0`, as before.
+  if (filter === null) {
     return (
       // The panel ROOT is inside this branch too — see the root's own note
       // below. A handle that exists on one arm and not the other is not a
@@ -250,10 +254,21 @@ export function MatchesTab({
   // for exactly this caller.
   const showDivisionOnCards = showDivisionRail && division === null;
 
+  // W5 follow-ups C (Option A, "by round"): a big division reads by round (`HubRounds`), every other one by day as before.
+  const pagesOf = new Map<string, HubRoundPage[]>();
+  for (const p of doc.roundPages ?? []) pagesOf.set(p.divisionId, [...(pagesOf.get(p.divisionId) ?? []), p]);
+  const pagedInScope = divisions.filter((d) => pagesOf.has(d.id) && (division === null || d.slug === division));
+  const pagedHasRows = pagedInScope.some((d) => pagesOf.get(d.id)!.some((p) => pageCount(p, filter) > 0));
+  // A match a round page heads is drawn by `HubRounds`; every other match of a paged division - its knockout's, never paged - stays in
+  // the list by day, so the chips (which count it) and the list agree.
+  const pagedRounds = new Set((doc.roundPages ?? []).map((p) => p.key));
+
   const shown = sortHubMatches(
     doc.matches.filter(
       (match) =>
-        match.bucket === filter && (division === null || match.divisionSlug === division),
+        match.bucket === filter &&
+        (division === null || match.divisionSlug === division) &&
+        !pagedRounds.has(hubRoundKey(match)),
     ),
   );
   // `sortHubMatches` reads completed newest-first and `groupByDay` then re-sorts
@@ -323,7 +338,7 @@ export function MatchesTab({
         </div>
       ) : null}
 
-      {shown.length === 0 ? (
+      {shown.length === 0 && !pagedHasRows ? (
         <p
           data-testid="mh-matches-empty-filter"
           className="py-8 text-center text-sm text-ink-muted"
@@ -387,6 +402,21 @@ export function MatchesTab({
               </section>
             );
           })}
+          {pagedInScope.map((d) => (
+            <HubRounds
+              key={d.id}
+              doc={doc}
+              divisionSlug={d.slug}
+              divisionName={d.name}
+              pages={pagesOf.get(d.id)!}
+              matches={doc.matches.filter((m) => m.divisionId === d.id)}
+              bucket={filter}
+              dict={dict}
+              locale={locale}
+              now={now}
+              showDivision={showDivisionOnCards}
+            />
+          ))}
         </div>
       )}
     </div>

@@ -41,6 +41,9 @@ interface Props {
    *  placeholder reads "TBD vs TBD" rather than "Winner of QF1", which is not
    *  worth a second query on every division page load. */
   fixtures: BoardFixture[];
+  /** W5 follow-ups B1 (perf P1): whether the division has any fixture - the confirmation's one question about them. The page
+   *  sends `fixtures` only while Start is offered (status setup|scheduled), so this cannot be read off the list's length. */
+  fixturesExist: boolean;
   entrantNames: Record<string, string>;
   /** Every stage in this division (kind, progression, config) — the
    *  confirmation has to know whether starting really closes the entrant list
@@ -75,6 +78,7 @@ export function LaunchActions({
   status,
   canEdit,
   fixtures,
+  fixturesExist,
   entrantNames,
   stages,
   competitionStatus,
@@ -213,9 +217,9 @@ export function LaunchActions({
         open={confirming}
         entrantsLine={startEntrantsLine(stages)}
         competitionPromotes={startPromotesCompetition(competitionStatus)}
-        // The page already holds this division's fixtures for the gate sheet, so
-        // this costs no extra read — see `fixtures` above.
-        fixturesExist={fixtures.length > 0}
+        // The page already holds this division's fixtures, so this costs no extra
+        // read — see `fixturesExist` above.
+        fixturesExist={fixturesExist}
         unlistedDraft={publishWouldList({ visibility: competitionVisibility, status: competitionStatus })}
         settingsHref={routes.competitionSettings(orgSlug, compSlug)}
         busy={busy}

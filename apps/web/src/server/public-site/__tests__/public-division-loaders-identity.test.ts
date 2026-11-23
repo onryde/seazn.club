@@ -479,9 +479,15 @@ describe.skipIf(!HAS_DB)("readPublicDivisionDetail — identical to the pre-T4 r
     const before = await readPublicDivisionDetailBefore(divisions.cup);
     const after = await getPublicDivision(scene.orgSlug, scene.compSlug, "cup");
     expect(after).not.toBeNull();
+    // W5 follow-ups B5 (56cfaaeb19): the division's detail is cached COMPRESSED and inflates to the parsed JSON of the document -
+    // what a cache HIT always handed back - so the body is the JSON round-trip of the read, even on a MISS. `toStrictEqual` tells a
+    // postgres `Result` (the array subclass the driver returns) from the plain array JSON gives back, though the serialised bytes are
+    // identical (the second half of `expectIdentical`). The expected body is round-tripped the same way; the shell is not cached
+    // with it, and is compared as read.
+    const detail = JSON.parse(JSON.stringify(before)) as typeof before;
     expectIdenticalInFullOrder(
       after!,
-      { org: shell.org, competition: shell.competition, division: divisions.cup, ...before },
+      { org: shell.org, competition: shell.competition, division: divisions.cup, ...detail },
       "getPublicDivision(cup)",
     );
   });

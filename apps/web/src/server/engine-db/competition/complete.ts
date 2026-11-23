@@ -113,8 +113,15 @@ export async function completeStageIfReady(
   } = {},
 ): Promise<CompleteResult> {
   return withTenant(orgId, async (tx) => {
+    // W5 follow-ups fix round 1 (review I4), B7's shape: the division lock is taken BEFORE the inputs are read. Read first,
+    // two completions (two final results landing together, each result's auto-advance asking the stage) could both load
+    // "not complete", queue on the lock and both complete - `stage_completed` and every `rank_lock` appended twice - and a
+    // correction committed between a completion's load and its lock had its newer table overwritten by the stale snapshot.
+    // The one lock order is unchanged (`division:` first; scoring.ts takes stage seats, `fixture:` and `division-config:`
+    // after it). `engine-db/__tests__/stage-complete-race.test.ts`.
+    const [owner] = await tx<{ division_id: string }[]>`select division_id from stages where id = ${stageId}`;
+    if (owner) await tx`select pg_advisory_xact_lock(hashtext(${"division:" + owner.division_id}))`;
     const inputs = await loadStageInputs(tx, stageId);
-    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + inputs.stage.division_id}))`;
 
     if (inputs.stage.status === "complete") return { completed: true, events: [], already_complete: true };
 

@@ -2581,6 +2581,8 @@
   "schedule.notice.alreadyComplete": "Fase was al afgerond: er is niets gewijzigd.",
   "schedule.notice.stageAdded": "Fase toegevoegd — {n} wedstrijd(en) gegenereerd voor de top {topN}.",
   "schedule.notice.stageAddedLater": "Fase toegevoegd — wedstrijden worden gegenereerd wanneer de vorige fase is afgerond.",
+  "schedule.notice.stageAddedRefused": "{name} is toegevoegd, maar de wedstrijden kunnen niet worden aangemaakt: {reason} Verwijder de fase, of houd hem en pas de vorige fase aan.",
+  "schedule.addStage.keepRefused": "Behouden",
   "schedule.error.tooFewGroupEntrants": "Kan nog geen wedstrijden genereren — {groups} groepen hebben in totaal minstens {required} deelnemers nodig, 2 per groep (nu {have}). Gebruik minder groepen of voeg deelnemers toe.",
   "schedule.error.tooFewGroupEntrantsSuggest": "Kan nog geen wedstrijden genereren — {groups} groepen hebben in totaal minstens {required} deelnemers nodig, 2 per groep (nu {have}). Zet het aantal groepen op {suggested} of voeg deelnemers toe.",
   "schedule.error.tooFewGroupEntrantsAdd": "Kan nog geen wedstrijden genereren — {groups} groepen hebben in totaal minstens {required} deelnemers nodig, 2 per groep (nu {have}). Voeg deelnemers toe.",
@@ -3140,6 +3142,8 @@
   "stage.addMatch.round.clashAlone": "Ronde {n} · {name} speelt al",
   "stage.addMatch.round.clashRange": "Rondes {from} tot {to} · een van beide speelt al",
   "stage.addMatch.round.pickSides": "Kies eerst beide kanten",
+  "stage.addMatch.round.loading": "De rondes van de fase lezen…",
+  "stage.addMatch.round.loadFailed": "De rondes van de fase konden niet laden, dus er kan geen ronde worden aangeboden. Sluit het formulier en open het opnieuw.",
   "stage.addMatch.hint": "Een toegevoegde wedstrijd is een echt resultaat — hij telt mee in de stand.",
   "slot.winner_group": "Winnaar van Groep {g}",
   "slot.runner_up_group": "Nummer twee van Groep {g}",
@@ -9029,5 +9033,8 @@
   "progression.rosterDrift.rebuiltCreated": "{created} wedstrijd(en) ingedeeld in hun plaats.",
   "progression.rosterDrift.pinsCleared.one": "{count} handmatige plaats is gewist: de poule is veranderd.",
   "progression.rosterDrift.pinsCleared.other": "{count} handmatige plaatsen zijn gewist: de poules zijn veranderd.",
-  "divBuilder.format.drawCanRefuse": "De loting van de knock-outfase kan bij het plaatsen worden geweigerd: een beste nummer twee (of beste nummer drie, enzovoort) kan in dezelfde poule zitten als zijn tegenstander in de eerste ronde. Laat uit elke poule evenveel doorgaan om dit te voorkomen."
+  "divBuilder.format.drawCanRefuse": "De loting van de knock-outfase kan bij het plaatsen worden geweigerd: een beste nummer twee (of beste nummer drie, enzovoort) kan in dezelfde poule zitten als zijn tegenstander in de eerste ronde. Laat uit elke poule evenveel doorgaan om dit te voorkomen.",
+  "runsheet.round.loading": "Deze ronde laden…",
+  "runsheet.round.loadFailed": "De wedstrijden van deze ronde konden niet laden.",
+  "runsheet.round.retry": "Opnieuw"
 }

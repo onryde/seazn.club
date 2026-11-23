@@ -3,11 +3,12 @@ import { negotiateLocale } from "@/lib/i18n-negotiate";
 import { hasLocale } from "@/lib/i18n-constants";
 import { SESSION_HINT_COOKIE, SESSION_MAX_AGE_S, hasSessionHint } from "@/lib/session-hint";
 import { RELAY_PHASE_PORT } from "@/lib/relay-phase";
-import { isPublicHubPath } from "@/lib/routes";
+import { PUBLIC_HUB_ROOT, isPublicHubPath, routes } from "@/lib/routes";
 import { isStagingOrigin } from "@/lib/robots-policy";
 import { siteOrigin } from "@/lib/site-origin";
 import { revshareEnabled } from "@/lib/revshare-shared";
 import { BUNNY_EMBED_HOST, FAKE_REPLAY_EMBED_HOST, replayDriverIsFake, streamPlaybackHost } from "@/server/relay/config";
+import { ROUTED_DIVISION_TABS } from "@/lib/division-tabs";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
@@ -211,6 +212,53 @@ export function gamesHostRewrite(request: NextRequest): URL | null {
 
 /** Staging is the same app on another host. robots.txt (app/robots.ts) closes it, but a page already indexed
  *  stays indexed until it is served with noindex, so every staging response carries the header. */
+/** The static routes that sit where a division slug would (`/live/{org}/{comp}/{x}`, the kiosk group included) and the
+ *  org-level tree that sits where a competition would (`/live/{org}/news/{post}`). A `?tab=` on them is not a division tab.
+ *  `src/__tests__/proxy-division-tab.test.ts` sweeps `app/(public)/live` so a new static route cannot be missed here. */
+const NOT_A_DIVISION = new Set(["present", "poster", "poster.pdf", "register", "players"]);
+const NOT_A_COMPETITION = new Set(["news"]);
+/** A division home, `{hub root}/{org}/{comp}/{division}` (LIVE1: the root is read, never spelled). */
+const DIVISION_HOME = new RegExp(`^${PUBLIC_HUB_ROOT}/([^/]+)/([^/]+)/([^/]+)/?$`);
+
+/**
+ * W5 follow-ups B3 (perf-measure-report P3): the public division page server-renders only its ACTIVE tab, and the page is
+ * ISR - reading `searchParams` would make it dynamic. So `?tab=standings` and `?tab=entrants` on a division home are
+ * rewritten to `{division}/tab/{tab}`, an ISR document of its own; the URL the spectator sees, shares and the hub links to
+ * stays `?tab=`. Returns the rewritten URL, or null when no rewrite applies (Schedule, no `tab`, an unknown one, any other
+ * path).
+ */
+export function divisionTabRewrite(request: NextRequest): URL | null {
+  const tab = request.nextUrl.searchParams.get("tab");
+  if (tab === null || !(ROUTED_DIVISION_TABS as readonly string[]).includes(tab)) return null;
+  const m = DIVISION_HOME.exec(request.nextUrl.pathname);
+  if (m === null || NOT_A_COMPETITION.has(m[2]!) || NOT_A_DIVISION.has(m[3]!)) return null;
+  const url = request.nextUrl.clone();
+  url.pathname = `${routes.publicHub(m[1]!, m[2]!, m[3]!)}/tab/${tab}`;
+  return url;
+}
+
+/** A routed tab's internal document, `{hub root}/{org}/{comp}/{division}/tab/{tab}` (the rewrite's own target). */
+const DIVISION_TAB_DOCUMENT = new RegExp(`^${PUBLIC_HUB_ROOT}/([^/]+)/([^/]+)/([^/]+)/tab/([^/]+)/?$`);
+
+/**
+ * W5 follow-ups fix round 1 (review M2): the rewrite's target is a real route, so a request NAMING it - a crawler, a pasted link -
+ * was served the same document at a second public address. Such a request is answered with a permanent redirect to the
+ * address the hub links to, `{division}?tab={tab}` (the query kept). The built server runs this proxy AGAIN on the URL it
+ * rewrote to, and the rewrite keeps the query, so that URL names the tab twice: it is let through, or every `?tab=` would
+ * redirect to itself. Null for anything else: an unknown tab there is the route's own 404.
+ */
+export function divisionTabCanonicalRedirect(request: NextRequest): URL | null {
+  const m = DIVISION_TAB_DOCUMENT.exec(request.nextUrl.pathname);
+  if (m === null || NOT_A_COMPETITION.has(m[2]!) || NOT_A_DIVISION.has(m[3]!)) return null;
+  if (!(ROUTED_DIVISION_TABS as readonly string[]).includes(m[4]!)) return null;
+  // The rewrite's own request (see above): served as it is.
+  if (request.nextUrl.searchParams.get("tab") === m[4]) return null;
+  const url = request.nextUrl.clone();
+  url.pathname = routes.publicHub(m[1]!, m[2]!, m[3]!);
+  url.searchParams.set("tab", m[4]!);
+  return url;
+}
+
 export function proxy(request: NextRequest): NextResponse {
   const response = proxyCore(request);
   // The configured origin, not the Host/X-Forwarded-Host header: a client can send that header, and a forged
@@ -316,7 +364,9 @@ function proxyCore(request: NextRequest): NextResponse {
     return rewritten;
   }
 
-  const rewriteUrl = gamesHostRewrite(request);
+  const canonical = isGamesHost ? null : divisionTabCanonicalRedirect(request);
+  if (canonical !== null) return NextResponse.redirect(canonical, 308);
+  const rewriteUrl = gamesHostRewrite(request) ?? divisionTabRewrite(request);
   const response = rewriteUrl
     ? NextResponse.rewrite(rewriteUrl, { request: { headers: requestHeaders } })
     : NextResponse.next({ request: { headers: requestHeaders } });

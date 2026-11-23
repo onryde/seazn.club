@@ -74,6 +74,8 @@ describe("seedingErrorMessage — mechanics", () => {
       "SEEDING_CROSS_POOL_DRAW_INVALID",
       // W5 app PR B D-B2-2: a cross-pool draw past the builder's bounds, refused by name before the engine's search.
       "SEEDING_CROSS_POOL_DRAW_TOO_LARGE",
+      // W5 follow-ups A2: a Top N (rankRange) take saved against a source of several groups, refused at save by name.
+      "SEEDING_TOP_N_ACROSS_GROUPS",
     ];
     expect([...SEEDING_ERROR_CODES].sort()).toEqual([...expected].sort());
   });

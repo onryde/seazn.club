@@ -565,7 +565,14 @@ describe("the Add-stage form's Top N offers FORMAT_BOUNDS.qualify (fix round 1, 
   // Was a fixed [2, 3, 4, 6, 8]: a Top 5 or a Top 16 finals stage could not be added. Kept a select (31 options read fine
   // in a native picker, and a select cannot hold a value outside its options, so it needs no refusal).
   function mountAddStage() {
-    const h = renderIsland(AddStageForm, { divisionId: "d1", nextSeq: 2, onDone: vi.fn(), onError: vi.fn(), onPaywall: vi.fn() });
+    const h = renderIsland(AddStageForm, {
+      divisionId: "d1",
+      nextSeq: 2,
+      onDone: vi.fn(),
+      onError: vi.fn(),
+      onPaywall: vi.fn(),
+      onRefresh: vi.fn(),
+    });
     press(h, uiEn["schedule.addStage"]);
     return h;
   }

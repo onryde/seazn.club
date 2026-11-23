@@ -29,6 +29,7 @@ const props = (over: Partial<LaunchProps>): LaunchProps =>
     status: "scheduled",
     canEdit: true,
     fixtures: [],
+    fixturesExist: false,
     entrantNames: {},
     stages: [LEAGUE],
     competitionStatus: "published",

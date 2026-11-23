@@ -51,6 +51,8 @@ import type { PublicFixture, PublicEntrant } from "@/server/public-site/data";
 import EmbedWidgetPage from "@/app/embed/divisions/[id]/[widget]/page";
 import DivisionHomePage from "@/app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/page";
 import { Schedule } from "../schedule";
+import { PackedSchedule } from "../packed-schedule";
+import { unpackRows, type PackedRows } from "@/lib/packed-rows";
 
 const TZ = "UTC";
 const DAY_1 = "2026-09-24";
@@ -148,6 +150,12 @@ function findSchedule(node: unknown): ReactElement<ScheduleProps> | undefined {
     }
   } else if (isValidElement(node)) {
     if (node.type === Schedule) return node as ReactElement<ScheduleProps>;
+    // W5 follow-ups B3: the division page hands its Schedule over packed - `PackedSchedule` renders `Schedule` with the
+    // same props and its fixtures unpacked, so that is the Schedule this surface builds.
+    if (node.type === PackedSchedule) {
+      const { fixtures, ...rest } = node.props as Omit<ScheduleProps, "fixtures"> & { fixtures: PackedRows<PublicFixture> };
+      return createElement(Schedule, { ...rest, fixtures: unpackRows(fixtures) } as ScheduleProps) as ReactElement<ScheduleProps>;
+    }
     for (const value of Object.values((node.props ?? {}) as Record<string, unknown>)) {
       const found = findSchedule(value);
       if (found) return found;

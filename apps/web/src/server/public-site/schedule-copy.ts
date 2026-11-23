@@ -14,6 +14,7 @@ import { t } from "@/lib/i18n-runtime";
 import type { ScheduleCopy, ScheduleWatchCopy } from "@/components/public-site/schedule";
 import { DEPARTED_STATUS_CHIPS } from "@/components/public-site/standings-table";
 import { sitsOutByRound, sitsOutByesOf } from "@/lib/sits-out";
+import type { PagedScheduleCopy } from "@/lib/schedule-paging";
 
 /**
  * @param dict the PUBLIC dictionary, in the org's locale.
@@ -89,4 +90,38 @@ export function publicSitsOutLines(
     }
   }
   return out;
+}
+
+/** W5 follow-ups C: the paged Schedule's and the hub's paged Matches tab's own words (`PagedScheduleCopy`), from the PUBLIC
+ *  dictionary in the org's locale. */
+export function pagedScheduleCopy(dict: Dict): PagedScheduleCopy {
+  return {
+    searchLabel: t(dict, "paging.search.label"),
+    searchClear: t(dict, "paging.search.clear"),
+    searchNone: t(dict, "paging.search.none"),
+    searchShowing: t(dict, "paging.search.showing"),
+    searchNoMatches: t(dict, "paging.search.noMatches"),
+    filterLabel: t(dict, "paging.filter.label"),
+    filter: {
+      all: t(dict, "paging.filter.all"),
+      live: t(dict, "paging.filter.live"),
+      upcoming: t(dict, "paging.filter.upcoming"),
+      results: t(dict, "paging.filter.results"),
+    },
+    finished: { one: t(dict, "paging.finished.one"), other: t(dict, "paging.finished.other") },
+    show: t(dict, "paging.show"),
+    hide: t(dict, "paging.hide"),
+    state: {
+      live: t(dict, "paging.state.live"),
+      next: t(dict, "paging.state.next"),
+      upcoming: t(dict, "paging.state.upcoming"),
+      finished: t(dict, "paging.state.finished"),
+      inProgress: t(dict, "paging.state.inProgress"),
+    },
+    matches: { one: t(dict, "paging.matches.one"), other: t(dict, "paging.matches.other") },
+    loading: t(dict, "paging.loading"),
+    loadFailed: t(dict, "paging.loadFailed"),
+    retry: t(dict, "paging.retry"),
+    empty: { live: t(dict, "paging.empty.live"), upcoming: t(dict, "paging.empty.upcoming"), results: t(dict, "paging.empty.results") },
+  };
 }

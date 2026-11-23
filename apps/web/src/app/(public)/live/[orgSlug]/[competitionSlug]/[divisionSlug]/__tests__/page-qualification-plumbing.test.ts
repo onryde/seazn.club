@@ -59,7 +59,8 @@ import type { QualificationView } from "@/server/public-site/qualification-view"
 import enPublic from "@/dictionaries/en/public.json";
 import { resolveModule } from "@/server/engine-db/registry";
 import { unpinnedRulesDoc } from "@/server/engine-db/__tests__/helpers/table-rules-doc";
-import DivisionHomePage from "../page";
+// W5 follow-ups B3: the page is one document per tab; "the page" is all three (`_every-tab.ts`).
+import { renderEveryTab } from "./_every-tab";
 
 /** The division's live cfg and pinned module; each stage carries the rules the one loader serves for it
  *  (`PublicStage.table_rules`, W2d Task 9) — its order, its points, its bounds. */
@@ -258,9 +259,7 @@ function twoPoolData() {
 
 async function renderTables(data: unknown) {
   getPublicDivision.mockResolvedValue(data);
-  const root = await DivisionHomePage({
-    params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" }),
-  });
+  const root = await renderEveryTab({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" });
   return elements(root)
     .filter((el) => el.type === StandingsTable)
     .map((table) => {

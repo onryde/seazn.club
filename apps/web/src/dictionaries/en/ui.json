@@ -2581,6 +2581,8 @@
   "schedule.notice.alreadyComplete": "Stage was already complete: nothing changed.",
   "schedule.notice.stageAdded": "Stage added — {n} fixture(s) generated for the top {topN}.",
   "schedule.notice.stageAddedLater": "Stage added — fixtures will generate when the previous stage completes.",
+  "schedule.notice.stageAddedRefused": "{name} was added, but its fixtures can't be made: {reason} Delete it, or keep it and change the stage before it.",
+  "schedule.addStage.keepRefused": "Keep it",
   "schedule.error.tooFewGroupEntrants": "Can't generate matches yet — {groups} groups need at least {required} entrants in total, 2 per group (have {have}). Use fewer groups or add entrants.",
   "schedule.error.tooFewGroupEntrantsSuggest": "Can't generate matches yet — {groups} groups need at least {required} entrants in total, 2 per group (have {have}). Set the number of groups to {suggested}, or add entrants.",
   "schedule.error.tooFewGroupEntrantsAdd": "Can't generate matches yet — {groups} groups need at least {required} entrants in total, 2 per group (have {have}). Add entrants.",
@@ -3140,6 +3142,8 @@
   "stage.addMatch.round.clashAlone": "Round {n} · {name} already plays",
   "stage.addMatch.round.clashRange": "Rounds {from} to {to} · a side already plays",
   "stage.addMatch.round.pickSides": "Pick both sides first",
+  "stage.addMatch.round.loading": "Reading the stage's rounds…",
+  "stage.addMatch.round.loadFailed": "The stage's rounds didn't load, so no round can be offered. Close the form and open it again.",
   "stage.addMatch.hint": "An added match is a real result — it counts in the table.",
   "slot.winner_group": "Winner of Group {g}",
   "slot.runner_up_group": "Runner-up of Group {g}",
@@ -9029,5 +9033,8 @@
   "progression.rosterDrift.rebuiltCreated": "{created} fixture(s) drawn in their place.",
   "progression.rosterDrift.pinsCleared.one": "{count} manual rank was cleared: its group changed.",
   "progression.rosterDrift.pinsCleared.other": "{count} manual ranks were cleared: their groups changed.",
-  "divBuilder.format.drawCanRefuse": "The knockout draw can be refused at seeding: a best runner-up (or best third, and so on) may share a pool with their round-one opponent. Qualify the same number from every pool to avoid it."
+  "divBuilder.format.drawCanRefuse": "The knockout draw can be refused at seeding: a best runner-up (or best third, and so on) may share a pool with their round-one opponent. Qualify the same number from every pool to avoid it.",
+  "runsheet.round.loading": "Loading this round…",
+  "runsheet.round.loadFailed": "This round’s matches didn’t load.",
+  "runsheet.round.retry": "Try again"
 }

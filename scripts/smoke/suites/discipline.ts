@@ -136,7 +136,9 @@ export async function disciplineSuite(
   );
   check("disc: ban listed active after confirm", active.length >= 1);
 
-  const pub = await html(newSession(), `/live/${proOrgSlug}/${comp.slug}/${div.slug}`);
+  // The strip sits under the standings, so it is in the Standings tab's own document (W5 follow-ups B3: the bare division
+  // route carries the Schedule only; the proxy serves `?tab=standings` from `tab/standings`).
+  const pub = await html(newSession(), `/live/${proOrgSlug}/${comp.slug}/${div.slug}?tab=standings`);
   check(
     "disc: public suspensions strip shows the ban",
     pub.status === 200 && pub.body.includes("Suspensions") && pub.body.includes("to serve"),

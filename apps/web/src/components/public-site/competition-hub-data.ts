@@ -5,21 +5,52 @@
 // unwraps the endpoint's `{ ok, data }` envelope once — the W1 history this
 // split exists to prevent repeating is that unwrapping it a SECOND time here
 // would silently replace the whole document with `undefined` on every poll.
-import { api } from "@/lib/client";
+import { ApiError, api } from "@/lib/client";
+import { HUB_BUILD_HEADER, restampHubDoc } from "@/lib/hub-doc-stamp";
+import { HUB_WINDOW_PARAM, HUB_WINDOW_ROUNDS } from "@/lib/hub-round-paging";
 import type { CompetitionHubDocT } from "@/server/public-site/competition-hub-schema";
+
+/** W5 follow-ups B4: the content tag (ETag) of each competition's document, and that document - the poll sends the tag back
+ *  (`If-None-Match`), and a 304 is answered with the document already held, re-stamped with the server's current build
+ *  (`restampHubDoc`: the SAME object when the build has not moved). Keyed per competition URL; one entry each. */
+const held = new Map<string, { etag: string; doc: CompetitionHubDocT }>();
 
 export async function fetchCompetitionHub(
   orgSlug: string,
   competitionSlug: string,
 ): Promise<CompetitionHubDocT> {
-  // R10 H1: never the browser's HTTP cache. The route answers `Cache-Control:
-  // public, s-maxage=30, stale-while-revalidate=300`, which is meant for the
-  // CDN in front of share-link traffic and stays as it is. Chromium applies
-  // stale-while-revalidate to its own private cache as well, though. Measured
-  // on spectw2: a push-triggered refetch came back from that cache with a
-  // document built BEFORE the score, and the page never moved. PR #782 made the
-  // same fix for `fetchLiveFixture`.
-  return api<CompetitionHubDocT>(`/api/v1/public/orgs/${orgSlug}/competitions/${competitionSlug}/hub`, {
-    cache: "no-store",
-  });
+  // W5 follow-ups C, review I3: the page polls the WINDOWED document it was rendered from (`windowHubDoc`); the route answers every
+  // match to a caller that does not ask.
+  const url = `/api/v1/public/orgs/${orgSlug}/competitions/${competitionSlug}/hub?${HUB_WINDOW_PARAM}=${HUB_WINDOW_ROUNDS}`;
+  const seen = held.get(url);
+  let etag: string | null = null;
+  let build: string | null = null;
+  try {
+    // R10 H1: never the browser's HTTP cache. The route answers `Cache-Control:
+    // public, s-maxage=30, stale-while-revalidate=300`, which is meant for the
+    // CDN in front of share-link traffic and stays as it is. Chromium applies
+    // stale-while-revalidate to its own private cache as well, though. Measured
+    // on spectw2: a push-triggered refetch came back from that cache with a
+    // document built BEFORE the score, and the page never moved. PR #782 made the
+    // same fix for `fetchLiveFixture`. With `no-store` the browser holds no copy to
+    // revalidate, so a 304 reaches this code as it was sent.
+    const doc = await api<CompetitionHubDocT>(url, {
+      cache: "no-store",
+      headers: seen === undefined ? {} : { "If-None-Match": seen.etag },
+      onResponse: (res) => {
+        etag = res.headers.get("ETag");
+        build = res.headers.get(HUB_BUILD_HEADER);
+      },
+    });
+    if (etag !== null) held.set(url, { etag, doc });
+    else held.delete(url);
+    return doc;
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 304 && seen !== undefined) {
+      const doc = build === null ? seen.doc : restampHubDoc(seen.doc, build);
+      held.set(url, { etag: seen.etag, doc });
+      return doc;
+    }
+    throw err;
+  }
 }

@@ -26,11 +26,23 @@
 // link itself is booked to the post-mount e2e leg, alongside the Task 2
 // geometry debt; `e2e/walkthrough/spectator-public-2.spec.ts` already drives
 // `role="tab"` on this surface and is where it belongs.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { isValidElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Tabs } from "../tabs";
+import { DIVISION_TABS } from "@/lib/division-tabs";
+import { renderIsland } from "@/components/__tests__/_hook-harness";
+
+// W5 follow-ups B3: a tap on a panel the document does not carry loads it through the App Router. Its router is the one
+// browser seam here; the spy records where it was sent.
+const nav = vi.hoisted(() => ({ replace: vi.fn() }));
+vi.mock("next/navigation", () => ({ useRouter: () => nav }));
+// The `?tab=` a spectator arrived with. Null (the server snapshot the real hook answers here) unless a test sets it: the guard on
+// a deep link to a panel this document does not carry is otherwise unreachable without a browser (review M1).
+const deepLink = vi.hoisted(() => ({ value: null as string | null }));
+vi.mock("../use-tab-param", () => ({ useTabParam: () => deepLink.value }));
 
 const IDS = ["schedule", "standings", "entrants"];
 
@@ -40,7 +52,7 @@ const ES = ["Calendario", "Clasificación", "Participantes"];
 
 function render(labels = ES) {
   return renderToStaticMarkup(
-    <Tabs ids={IDS} labels={labels} label="Pestañas de la división">
+    <Tabs ids={IDS} labels={labels} label="Pestañas de la división" basePath="/live/o/c/d">
       {[<p key="a">SCHEDULE PANEL</p>, <p key="b">STANDINGS PANEL</p>, <p key="c">ENTRANTS PANEL</p>]}
     </Tabs>,
   );
@@ -113,7 +125,9 @@ describe("the division page's own call (source contract)", () => {
   });
 
   it("passes the URL-facing ids UNTRANSLATED — a shared link must survive the reader's locale", () => {
-    expect(src).toContain('ids={["schedule", "standings", "entrants"]}');
+    // W5 follow-ups B3: the ids live in `lib/division-tabs.ts`, shared with the proxy's `?tab=` rewrite; the page passes them.
+    expect(src).toContain("ids={[...DIVISION_TABS]}");
+    expect(DIVISION_TABS).toEqual(["schedule", "standings", "entrants"]);
   });
 
   it("resolves the dictionary from the ORG locale, never a per-visitor read", () => {
@@ -123,3 +137,191 @@ describe("the division page's own call (source contract)", () => {
     expect(src).toContain("export const revalidate = 30");
   });
 });
+
+// W5 follow-ups B3 (perf-measure-report P3): the division page server-renders only the ACTIVE tab's panel and hands the
+// others as null. The bar the server rendered must name that panel (so hydration matches), and a tap on a missing panel
+// must load it from its own URL, while a tap on one that is here still only toggles.
+describe("Tabs - only the active panel is in the document (B3)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    nav.replace.mockReset();
+    deepLink.value = null;
+  });
+
+  const standingsOnly = () => [null, <p key="b">STANDINGS PANEL</p>, null];
+
+  it("the server's `initial` panel is the one shown and selected; the absent panels are empty and hidden", () => {
+    const h = renderToStaticMarkup(
+      <Tabs ids={IDS} labels={ES} label="x" basePath="/live/o/c/d" initial={1}>
+        {standingsOnly()}
+      </Tabs>,
+    );
+    expect(h).toMatch(/id="tab-standings"[^>]*aria-selected="true"|aria-selected="true"[^>]*id="tab-standings"/);
+    expect(h).toMatch(/<div id="panel-standings" role="tabpanel" aria-labelledby="tab-standings">/);
+    expect(h).toMatch(/<div id="panel-schedule" role="tabpanel" aria-labelledby="tab-schedule" hidden="">/);
+    expect(h).toContain("STANDINGS PANEL");
+  });
+
+  it("a tap on an absent panel loads its URL through the router; a tap on the present one only toggles; Schedule drops ?tab", () => {
+    const replaceState = vi.fn();
+    vi.stubGlobal("window", { location: { href: "https://seazn.club/live/o/c/d?tab=standings#top" }, history: { replaceState } });
+    const island = renderIsland(Tabs, { ids: IDS, labels: ES, label: "x", basePath: BASE, initial: 1, children: standingsOnly() });
+    const tab = (id: string) => island.tree().find((el) => (el.props as { id?: string }).id === `tab-${id}`)!;
+    let taps = 0;
+    (tab("entrants").props as { onClick: () => void }).onClick();
+    taps += 1;
+    expect(nav.replace).toHaveBeenCalledWith("/live/o/c/d?tab=entrants#top", { scroll: false });
+    expect(replaceState, "an absent panel is a load, not a toggle").not.toHaveBeenCalled();
+    // Until that document arrives the panel on screen stays - never an empty one.
+    expect((tab("standings").props as { "aria-selected"?: boolean })["aria-selected"], "the shown tab stays selected").toBe(true);
+    expect((tab("entrants").props as { "aria-selected"?: boolean })["aria-selected"]).toBe(false);
+    (tab("schedule").props as { onClick: () => void }).onClick();
+    taps += 1;
+    expect(nav.replace).toHaveBeenLastCalledWith("/live/o/c/d#top", { scroll: false });
+    nav.replace.mockClear();
+    (tab("standings").props as { onClick: () => void }).onClick();
+    taps += 1;
+    expect(nav.replace, "the present panel never navigates").not.toHaveBeenCalled();
+    expect(replaceState).toHaveBeenCalledTimes(1);
+    expect(taps, "anti-vacuity").toBe(3);
+  });
+
+  it("every panel present (the empty case of B3): no tap ever navigates", () => {
+    const replaceState = vi.fn();
+    vi.stubGlobal("window", { location: { href: "https://seazn.club/live/o/c/d" }, history: { replaceState } });
+    const island = renderIsland(Tabs, { ids: IDS, labels: ES, label: "x", basePath: BASE, children: [<p key="a">A</p>, <p key="b">B</p>, <p key="c">C</p>] });
+    for (const id of IDS) ((island.tree().find((el) => (el.props as { id?: string }).id === `tab-${id}`)!.props) as { onClick: () => void }).onClick();
+    expect(nav.replace).not.toHaveBeenCalled();
+    expect(replaceState).toHaveBeenCalledTimes(3);
+  });
+
+  // Review M2: the target was `window.location.pathname` + `?tab=`. A document served at another address (the internal
+  // `tab/[tab]` path, reached directly) then sent the spectator to `.../tab/standings?tab=entrants`.
+  it("the target is built from the division's base path, never the address the document was served at (M2)", () => {
+    vi.stubGlobal("window", { location: { href: "https://seazn.club/live/o/c/d/tab/standings?ref=hub#top" }, history: { replaceState: vi.fn() } });
+    const island = renderIsland(Tabs, { ids: IDS, labels: ES, label: "x", basePath: BASE, initial: 1, children: standingsOnly() });
+    tabOf(island, "entrants").onClick();
+    expect(nav.replace).toHaveBeenCalledWith("/live/o/c/d?ref=hub&tab=entrants#top", { scroll: false });
+    tabOf(island, "schedule").onClick();
+    expect(nav.replace).toHaveBeenLastCalledWith("/live/o/c/d?ref=hub#top", { scroll: false });
+  });
+
+  // Review I3: B3 made a tap on an absent panel a navigation, and the tapped tab did nothing visible until the document arrived.
+  it("a tap on an absent panel shows at once: the tapped tab takes the active style and aria-busy while its document loads (I3)", () => {
+    vi.stubGlobal("window", { location: { href: "https://seazn.club/live/o/c/d?tab=standings" }, history: { replaceState: vi.fn() } });
+    const island = renderIsland(Tabs, { ids: IDS, labels: ES, label: "x", basePath: BASE, initial: 1, children: standingsOnly() }, undefined, {
+      transitionPending: true,
+    });
+    const ACTIVE = /(^|\s)bg-accent(\s|$)/;
+    expect(IDS.filter((id) => tabOf(island, id)["aria-busy"] === true), "nothing is loading before a tap").toEqual([]);
+    tabOf(island, "entrants").onClick();
+    expect(tabOf(island, "entrants")["aria-busy"], "the tapped tab says it is loading").toBe(true);
+    expect(tabOf(island, "entrants").className, "and looks active").toMatch(ACTIVE);
+    expect(tabOf(island, "schedule")["aria-busy"]).not.toBe(true);
+    expect(tabOf(island, "standings")["aria-selected"], "the panel on screen is still the one selected").toBe(true);
+    expect(tabOf(island, "standings").className, "only one tab looks active").not.toMatch(ACTIVE);
+  });
+
+  // Owner option 2 (2026-11-23): while the tapped tab's document loads, the panel still on screen dims (aria-busy, opacity .45)
+  // and the tapped tab shows a small spinner. Pending only: the same tap once the transition has settled leaves neither.
+  it("the panel on screen dims and the tapped tab spins ONLY while its document is pending (I3, owner option 2)", () => {
+    vi.stubGlobal("window", { location: { href: "https://seazn.club/live/o/c/d?tab=standings" }, history: { replaceState: vi.fn() } });
+    const DIM = /(^|\s)opacity-\[0\.45\](\s|$)/;
+    const props = { ids: IDS, labels: ES, label: "x", basePath: BASE, initial: 1, children: standingsOnly() };
+    const pending = renderIsland(Tabs, props, undefined, { transitionPending: true });
+    const dimmed = (island: typeof pending) => IDS.filter((id) => panelOf(island, id)["aria-busy"] === true || DIM.test(panelOf(island, id).className ?? ""));
+    expect(dimmed(pending), "nothing dims before a tap").toEqual([]);
+    expect(IDS.filter((id) => spins(tabOf(pending, id))), "and nothing spins").toEqual([]);
+    tabOf(pending, "entrants").onClick();
+    expect(panelOf(pending, "standings")["aria-busy"], "the panel on screen says it is being replaced").toBe(true);
+    expect(panelOf(pending, "standings").className, "and is dimmed").toMatch(DIM);
+    expect(dimmed(pending), "only that one").toEqual(["standings"]);
+    expect(IDS.filter((id) => spins(tabOf(pending, id))), "the tapped tab spins, alone").toEqual(["entrants"]);
+    // Settled: the transition is no longer pending (its document has landed, or this tap never loaded one).
+    const settled = renderIsland(Tabs, props, undefined, { transitionPending: false });
+    tabOf(settled, "entrants").onClick();
+    expect(nav.replace, "the tap was a load").toHaveBeenCalledTimes(2);
+    expect(dimmed(settled), "nothing stays dimmed").toEqual([]);
+    expect(IDS.filter((id) => spins(tabOf(settled, id))), "nothing keeps spinning").toEqual([]);
+    expect(IDS.map((id) => panelOf(settled, id)).length, "anti-vacuity: every panel was read").toBe(3);
+  });
+
+  it("the sequence without a load: a tap on the present panel never marks a tab busy (I3)", () => {
+    vi.stubGlobal("window", { location: { href: "https://seazn.club/live/o/c/d?tab=standings" }, history: { replaceState: vi.fn() } });
+    const island = renderIsland(Tabs, { ids: IDS, labels: ES, label: "x", basePath: BASE, initial: 1, children: standingsOnly() }, undefined, {
+      transitionPending: true,
+    });
+    tabOf(island, "standings").onClick();
+    expect(IDS.filter((id) => tabOf(island, id)["aria-busy"] === true)).toEqual([]);
+    expect(nav.replace).not.toHaveBeenCalled();
+  });
+
+  // Round 2 (R3): a tap on a panel that IS here, made while another panel's document is still loading, used to only toggle and
+  // `replaceState` - and the load then landed on top of it, overwriting the URL and the panel the spectator had just chosen.
+  // While a load is pending, such a tap goes through the router too (`startTransition(router.replace)`): the newest tap wins.
+  it("a tap on a panel that is here, while another loads, shows at once AND navigates, so the newest tap wins (R3)", () => {
+    const replaceState = vi.fn();
+    vi.stubGlobal("window", { location: { href: "https://seazn.club/live/o/c/d?tab=standings#top" }, history: { replaceState } });
+    const here = [<p key="a">SCHEDULE PANEL</p>, <p key="b">STANDINGS PANEL</p>, null];
+    const props = { ids: IDS, labels: ES, label: "x", basePath: BASE, initial: 1, children: here };
+    const island = renderIsland(Tabs, props, undefined, { transitionPending: true });
+    let taps = 0;
+    tabOf(island, "entrants").onClick();
+    taps += 1;
+    expect(nav.replace).toHaveBeenCalledTimes(1);
+    expect(nav.replace).toHaveBeenLastCalledWith("/live/o/c/d?tab=entrants#top", { scroll: false });
+    expect(tabOf(island, "entrants")["aria-busy"], "the premise: the entrants load is pending").toBe(true);
+
+    tabOf(island, "schedule").onClick();
+    taps += 1;
+    // The newest tap wins: the router is told Schedule too (it supersedes the pending Entrants navigation)...
+    expect(nav.replace, "the tap on the present panel is a navigation while a load is pending").toHaveBeenCalledTimes(2);
+    expect(nav.replace).toHaveBeenLastCalledWith("/live/o/c/d#top", { scroll: false });
+    // ...and the spectator sees it at once, with nothing left saying Entrants is on its way.
+    expect(tabOf(island, "schedule")["aria-selected"], "Schedule shows now").toBe(true);
+    expect(tabOf(island, "standings")["aria-selected"]).toBe(false);
+    expect(IDS.filter((id) => tabOf(island, id)["aria-busy"] === true), "the stale Entrants spinner is gone").toEqual([]);
+    expect(IDS.filter((id) => spins(tabOf(island, id))), "and no spinner").toEqual([]);
+    expect(IDS.filter((id) => panelOf(island, id)["aria-busy"] === true), "nothing dims").toEqual([]);
+
+    // Positive pair: the same tap with NOTHING loading only toggles, as before.
+    nav.replace.mockClear();
+    const idle = renderIsland(Tabs, props, undefined, { transitionPending: true });
+    tabOf(idle, "schedule").onClick();
+    taps += 1;
+    expect(nav.replace, "no load pending: the present panel never navigates").not.toHaveBeenCalled();
+    expect(replaceState, "it only toggles").toHaveBeenCalledTimes(1);
+    expect(taps, "anti-vacuity").toBe(3);
+  });
+
+  // Review M1: `children[fromUrl] != null` kept a deep link from selecting a panel this document does not carry, and no test
+  // reached it. The positive pair proves the link is read at all.
+  it("a ?tab= deep link to a panel this document does not carry leaves the server's panel shown; to one it carries, selects it (M1)", () => {
+    vi.stubGlobal("window", { location: { href: "https://seazn.club/live/o/c/d?tab=standings" }, history: { replaceState: vi.fn() } });
+    deepLink.value = "standings";
+    const scheduleOnly = renderIsland(Tabs, { ids: IDS, labels: ES, label: "x", basePath: BASE, initial: 0, children: [<p key="a">A</p>, null, null] });
+    expect(tabOf(scheduleOnly, "schedule")["aria-selected"], "the document's own panel stays").toBe(true);
+    expect(tabOf(scheduleOnly, "standings")["aria-selected"], "never an empty one").toBe(false);
+    const every = renderIsland(Tabs, { ids: IDS, labels: ES, label: "x", basePath: BASE, children: [<p key="a">A</p>, <p key="b">B</p>, <p key="c">C</p>] });
+    expect(tabOf(every, "standings")["aria-selected"], "the link is read").toBe(true);
+    deepLink.value = null;
+  });
+});
+
+const BASE = "/live/o/c/d";
+type TabProps = { onClick: () => void; "aria-busy"?: boolean; "aria-selected"?: boolean; className: string; children?: unknown };
+function tabOf(island: { tree(): { props: unknown }[] }, id: string): TabProps {
+  const el = island.tree().find((e) => (e.props as { id?: string }).id === `tab-${id}`);
+  if (!el) throw new Error(`no tab-${id}`);
+  return el.props as TabProps;
+}
+type PanelProps = { "aria-busy"?: boolean; className?: string; hidden?: boolean };
+function panelOf(island: { tree(): { props: unknown }[] }, id: string): PanelProps {
+  const el = island.tree().find((e) => (e.props as { id?: string }).id === `panel-${id}`);
+  if (!el) throw new Error(`no panel-${id}`);
+  return el.props as PanelProps;
+}
+/** The tab's own spinner, among its children (never a spinner elsewhere on the page). */
+function spins(tab: TabProps): boolean {
+  return ([] as unknown[]).concat(tab.children).some((k) => isValidElement(k) && (k.props as Record<string, unknown>)["data-testid"] === "tab-spinner");
+}

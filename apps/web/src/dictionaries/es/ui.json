@@ -2581,6 +2581,8 @@
   "schedule.notice.alreadyComplete": "La fase ya estaba completada: no ha cambiado nada.",
   "schedule.notice.stageAdded": "Fase añadida: se generaron {n} enfrentamiento(s) para los {topN} primeros.",
   "schedule.notice.stageAddedLater": "Fase añadida: los enfrentamientos se generarán cuando se complete la fase anterior.",
+  "schedule.notice.stageAddedRefused": "Se añadió {name}, pero no se pueden crear sus enfrentamientos: {reason} Elimínala, o consérvala y cambia la fase anterior.",
+  "schedule.addStage.keepRefused": "Conservarla",
   "schedule.error.tooFewGroupEntrants": "Aún no se pueden generar los partidos — {groups} grupos necesitan al menos {required} participantes en total, 2 por grupo (hay {have}). Usa menos grupos o añade más participantes.",
   "schedule.error.tooFewGroupEntrantsSuggest": "Aún no se pueden generar los partidos — {groups} grupos necesitan al menos {required} participantes en total, 2 por grupo (hay {have}). Pon el número de grupos en {suggested} o añade participantes.",
   "schedule.error.tooFewGroupEntrantsAdd": "Aún no se pueden generar los partidos — {groups} grupos necesitan al menos {required} participantes en total, 2 por grupo (hay {have}). Añade participantes.",
@@ -3140,6 +3142,8 @@
   "stage.addMatch.round.clashAlone": "Ronda {n} · {name} ya juega",
   "stage.addMatch.round.clashRange": "Rondas {from} a {to} · un equipo ya juega",
   "stage.addMatch.round.pickSides": "Elige primero los dos lados",
+  "stage.addMatch.round.loading": "Leyendo las rondas de la fase…",
+  "stage.addMatch.round.loadFailed": "No se pudieron cargar las rondas de la fase, así que no se puede ofrecer ninguna ronda. Cierra el formulario y vuelve a abrirlo.",
   "stage.addMatch.hint": "Un partido añadido es un resultado real: cuenta en la clasificación.",
   "slot.winner_group": "Ganador del Grupo {g}",
   "slot.runner_up_group": "Subcampeón del Grupo {g}",
@@ -9029,5 +9033,8 @@
   "progression.rosterDrift.rebuiltCreated": "{created} enfrentamiento(s) sorteado(s) en su lugar.",
   "progression.rosterDrift.pinsCleared.one": "Se ha borrado {count} posición manual: su grupo cambió.",
   "progression.rosterDrift.pinsCleared.other": "Se han borrado {count} posiciones manuales: sus grupos cambiaron.",
-  "divBuilder.format.drawCanRefuse": "El sorteo de la eliminatoria puede rechazarse al sembrarlo: un mejor segundo (o mejor tercero, etc.) puede compartir grupo con su rival de primera ronda. Clasifica el mismo número de cada grupo para evitarlo."
+  "divBuilder.format.drawCanRefuse": "El sorteo de la eliminatoria puede rechazarse al sembrarlo: un mejor segundo (o mejor tercero, etc.) puede compartir grupo con su rival de primera ronda. Clasifica el mismo número de cada grupo para evitarlo.",
+  "runsheet.round.loading": "Cargando esta ronda…",
+  "runsheet.round.loadFailed": "No se pudieron cargar los partidos de esta ronda.",
+  "runsheet.round.retry": "Reintentar"
 }

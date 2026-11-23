@@ -21,10 +21,13 @@ import { CompetitionProse } from "@/components/public-site/competition-prose";
 import { ShareButton } from "@/components/share-button";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { Tabs } from "@/components/public-site/tabs";
-import { Schedule } from "@/components/public-site/schedule";
-import { publicScheduleCopy, publicSitsOutLines, publicWatchCopy } from "@/server/public-site/schedule-copy";
-import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
-import { loadDivisionWatch } from "@/server/usecases/external-play-read";
+import { PackedSchedule } from "@/components/public-site/packed-schedule";
+import { packRows } from "@/lib/packed-rows";
+import { DIVISION_TABS, divisionTabOf } from "@/lib/division-tabs";
+import { pagedScheduleCopy } from "@/server/public-site/schedule-copy";
+import { pagedScheduleData, publicScheduleContext } from "@/server/public-site/schedule-paging";
+import { PagedSchedule } from "@/components/public-site/paged-schedule";
+import { pagesByRound } from "@/lib/round-paging";
 import { StandingsTable } from "@/components/public-site/standings-table";
 import { loadRrLateJoins, rowFactsFor } from "@/server/public-site/table-row-facts";
 import { loadTableWithdrawals } from "@/server/public-site/table-withdrawals";
@@ -46,12 +49,10 @@ import { getDictionary, t } from "@/lib/i18n";
 import { stageBasisNotes } from "@/lib/bestnth-basis-note";
 import { BestNthBasisNote } from "@/components/public-site/bestnth-basis-note";
 import { loadBestNthBases } from "@/server/public-site/bestnth-basis";
-import { forfeitCopyOf } from "@/lib/forfeit-tag";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { divisionQualification, qualificationFixtures } from "@/server/public-site/division-qualification";
 import { msgFor } from "@/lib/messages-i18n";
 import { rulesLineText } from "@/lib/rules-line";
-import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 import { variantLabel } from "@/server/public-site/variant-label";
 import { stageFormatLines } from "@/server/public-site/stage-format-lines";
 import { sportLabel } from "@/lib/scoring-vocab";
@@ -68,16 +69,23 @@ export async function generateStaticParams() {
 }
 
 type Props = {
-  params: Promise<{ orgSlug: string; competitionSlug: string; divisionSlug: string }>;
+  /** `tab` only on `tab/[tab]` - the route `?tab=standings` / `?tab=entrants` is rewritten to (W5 follow-ups B3). */
+  params: Promise<{ orgSlug: string; competitionSlug: string; divisionSlug: string; tab?: string }>;
 };
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  const { orgSlug, competitionSlug, divisionSlug } = await params;
+  const { orgSlug, competitionSlug, divisionSlug, tab } = await params;
   const data = await getPublicDivision(orgSlug, competitionSlug, divisionSlug);
   if (!data) return {};
   // The org's language, like every word on the page (ISR: never the viewer's).
   const dict = await getDictionary(toLocale(data.org.default_locale), "public");
+  // Round 2 (R4): a tab's document is `tab/{tab}`, but its ONE public address is `{division}?tab={tab}` (the hub's link, and where
+  // the proxy redirects the internal path). The rewrite's own request - `tab/{tab}?tab={tab}` - is served as it is, so each
+  // document names that address: it is then no second page. Relative, resolved against the root layout's `metadataBase`.
+  const division = routes.publicHub(orgSlug, competitionSlug, divisionSlug);
+  const routed = divisionTabOf(tab);
   return {
+    alternates: { canonical: routed !== null && routed !== "schedule" ? `${division}?tab=${routed}` : division },
     title: `${data.division.name} — ${data.competition.name}`,
     description: t(dict, "division.metaDescription", {
       division: data.division.name,
@@ -90,7 +98,12 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 }
 
 export default async function DivisionHomePage({ params }: Props) {
-  const { orgSlug, competitionSlug, divisionSlug } = await params;
+  const { orgSlug, competitionSlug, divisionSlug, tab: tabParam } = await params;
+  // W5 follow-ups B3: which panel THIS document carries. The bare route is Schedule; `?tab=standings` and `?tab=entrants`
+  // are rewritten by the proxy (`divisionTabRewrite`) to `tab/[tab]`, an ISR document of their own. Any other `tab` there is
+  // no page.
+  const tab = divisionTabOf(tabParam);
+  if (tab === null) notFound();
   const data = await getPublicDivision(orgSlug, competitionSlug, divisionSlug);
   if (!data) {
     const renamed = await sharedRenameTarget(orgSlug, competitionSlug, divisionSlug);
@@ -200,50 +213,12 @@ export default async function DivisionHomePage({ params }: Props) {
   const ui = pickDictPrefixes(await getDictionary(orgLocale, "ui"), ["share."]);
   const lookup = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) =>
     msgFor(orgLocale, k, v);
-  // R10d n4: the Bracket names a side still waiting on a match through the
-  // public round namer ("Winner of Semi-finals, match 1"), as the hub, the
-  // match centre and the embed widgets do.
-  const namer = publicRoundNamer({
-    ui: lookup,
-    dict,
-    fixtures,
-    stageKind: (stageId) => stageById.get(stageId)?.kind,
-  });
-  // <Schedule> is a Client Component — it cannot call msgFor() itself
-  // (server-only), so every unfilled slot's text is pre-resolved HERE and
-  // handed down as a plain Record<string,string>, same shape as
-  // `entrantNames` above. N1c c5: through the SAME namer as the Bracket, so the
-  // schedule tab and the bracket name one waiting side with one text.
-  const slotLabels: Record<string, string> = {};
-  for (const f of fixtures) {
-    // `seat`, not `slot`: a sibling-fed seat of a `timing: "setup"` bracket
-    // carries no stored label, so the stored-only path printed "TBD".
-    if (!f.home_entrant_id) slotLabels[`${f.id}:home`] = namer.seat(f.id, "home", f.home_slot_label);
-    if (!f.away_entrant_id) slotLabels[`${f.id}:away`] = namer.seat(f.id, "away", f.away_slot_label);
-  }
-  // N1d d5: the schedule tab's round view heads each group with the round's
-  // NAME from the same namer ("Round {n}" in the org's locale only for a
-  // fixture whose stage the namer does not know). N1e e5: every other word it
-  // shows or announces comes from the page's org-locale dictionaries, and its
-  // dates are written in the org's locale, as the embed schedule widget does.
-  const roundLabels = Object.fromEntries(
-    fixtures.map((f) => [f.id, namer.roundLabel(f.id) ?? lookup("schedule.round", { n: f.round_no })]),
-  );
-  // W2b Task 13 (review I-2): the forfeit tags and sentences ride the schedule copy, so the schedule rows AND the
-  // bracket tiles tag a credited result — in the org's locale like the rest of the copy.
-  const scheduleCopy = { ...publicScheduleCopy(dict, lookup), forfeit: forfeitCopyOf((k) => t(dict, k)) };
-  // T16 fix round 1, I4: an online chess division's Fixtures list says which boards can be watched — one read, and
-  // none at all for a division that does not play online.
-  const watch =
-    supportsOnlinePlay(division.sport_key) && readOnlinePlay(division.config) === "lichess"
-      ? { ...(await loadDivisionWatch(division.id)), copy: publicWatchCopy(lookup) }
-      : undefined;
-  // N1e e1: round_no restarts in every stage, so the round view orders its
-  // groups by each stage's seq first, as the embed schedule widget does.
-  const stageOrder = Object.fromEntries(stages.map((s) => [s.id, s.seq]));
-  // N1f f2: two stages can name a round the same ("Final" in a knockout and in
-  // its plate); the round view heads those groups with the stage as well.
-  const stageNames = Object.fromEntries(stages.map((s) => [s.id, s.name]));
+  // The Schedule's words and per-fixture labels (the round namer, every unfilled seat's text, every round's name, the
+  // forfeit copy, an online chess division's watch links) - built in `publicScheduleContext`, the one place the round loader
+  // beside this page builds them too (W5 follow-ups C), so a round loaded on a tap reads as the rounds this page sent.
+  const sc = await publicScheduleContext(data, { locale: orgLocale, dict });
+  const { namer, slotLabels, roundLabels, stageOrder, stageNames, watch } = sc;
+  const scheduleCopy = sc.copy;
 
   // SPEC-1: active suspensions under the standings (consent-gated names). Public
   // read; a published ban is public information. Never throws the page down.
@@ -572,8 +547,13 @@ export default async function DivisionHomePage({ params }: Props) {
             were English in every locale until now: the four keys have shipped in
             en/es/fr/nl all along and nothing rendered them, so their only
             consumer was the coverage test asserting they exist. */}
+        {/* W5 follow-ups B3: only the active tab's panel is rendered (the others are null and load on a tap, `Tabs`); at
+            the caps the hidden Fixtures panel was 43k of the Standings view's 45k DOM nodes. The schedule's fixtures go
+            over packed as columns (`PackedSchedule`), the same rows. */}
         <Tabs
-          ids={["schedule", "standings", "entrants"]}
+          initial={DIVISION_TABS.indexOf(tab)}
+          basePath={basePath}
+          ids={[...DIVISION_TABS]}
           labels={[
             t(dict, "division.tab.schedule"),
             t(dict, "division.tab.standings"),
@@ -582,24 +562,40 @@ export default async function DivisionHomePage({ params }: Props) {
           label={t(dict, "division.tabsLabel")}
         >
           {[
-            <Schedule
-              key="schedule"
-              fixtures={fixtures}
-              entrantNames={entrantNames}
-              entrantStatuses={entrantStatuses}
-              divisionPath={basePath}
-              tz={tz}
-              slotLabels={slotLabels}
-              roundLabels={roundLabels}
-              stageOrder={stageOrder}
-              stageNames={stageNames}
-              sitsOut={publicSitsOutLines(dict, stages, entrantNames, entrantStatuses)}
-              copy={scheduleCopy}
-              locale={orgLocale}
-              {...(watch ? { watch } : {})}
-            />,
-            standingsPanel,
-            entrantsPanel,
+            tab !== "schedule" ? null : pagesByRound(fixtures.length) ? (
+              // W5 follow-ups C (owner 2026-11-23, Option A): a big schedule is laid out by round - the live and the next
+              // round's rows ship with the page, every other round is a header whose rows load on a tap (`rounds/route.ts`).
+              <PagedSchedule
+                key="schedule"
+                data={pagedScheduleData(data, sc)}
+                entrantNames={entrantNames}
+                divisionPath={basePath}
+                tz={tz}
+                copy={scheduleCopy}
+                pagedCopy={pagedScheduleCopy(dict)}
+                locale={orgLocale}
+                {...(watch ? { watchCopy: watch.copy } : {})}
+              />
+            ) : (
+              <PackedSchedule
+                key="schedule"
+                fixtures={packRows(fixtures)}
+                entrantNames={entrantNames}
+                entrantStatuses={entrantStatuses}
+                divisionPath={basePath}
+                tz={tz}
+                slotLabels={slotLabels}
+                roundLabels={roundLabels}
+                stageOrder={stageOrder}
+                stageNames={stageNames}
+                sitsOut={sc.sitsOut}
+                copy={scheduleCopy}
+                locale={orgLocale}
+                {...(watch ? { watch } : {})}
+              />
+            ),
+            tab === "standings" ? standingsPanel : null,
+            tab === "entrants" ? entrantsPanel : null,
           ]}
         </Tabs>
       </div>

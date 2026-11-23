@@ -223,6 +223,8 @@ import * as NewsPost from "../[orgSlug]/news/[postSlug]/page";
 import * as Poster from "../[orgSlug]/[competitionSlug]/poster/page";
 import * as Competition from "../[orgSlug]/[competitionSlug]/page";
 import * as Division from "../[orgSlug]/[competitionSlug]/[divisionSlug]/page";
+import * as DivisionTab from "../[orgSlug]/[competitionSlug]/[divisionSlug]/tab/[tab]/page";
+import { DIVISION_TABS } from "@/lib/division-tabs";
 import * as Fixture from "../[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/page";
 import * as Player from "../[orgSlug]/[competitionSlug]/players/[personId]/page";
 import PlayerCardLayout from "../[orgSlug]/[competitionSlug]/players/[personId]/layout";
@@ -1071,12 +1073,19 @@ async function renderDivisions(): Promise<Segment[]> {
   const out: Segment[] = [];
   for (const [name, detail] of cases) {
     stub.getPublicDivision.mockResolvedValue(detail);
-    const p = params({ orgSlug: ORG_SLUG, competitionSlug: COMP_SLUG, divisionSlug: detail.division.slug });
-    const markup = renderToStaticMarkup((await Division.default(p)) as ReactElement);
-    for (const panel of ["schedule", "standings", "entrants"]) {
-      expect(markup, `${name}: the ${panel} panel rendered`).toContain(`id="panel-${panel}"`);
+    // W5 follow-ups B3: one document per tab - the bare route carries Schedule, `tab/[tab]` (the proxy's rewrite of
+    // `?tab=`) carries Standings and Entrants. Every tab's document is swept, each with its own panel filled.
+    for (const tab of DIVISION_TABS) {
+      const doc = tab === "schedule" ? Division : DivisionTab;
+      const base = { orgSlug: ORG_SLUG, competitionSlug: COMP_SLUG, divisionSlug: detail.division.slug };
+      const p = params(tab === "schedule" ? base : { ...base, tab });
+      const markup = renderToStaticMarkup((await doc.default(p as never)) as ReactElement);
+      for (const panel of DIVISION_TABS) {
+        expect(markup, `${name} (${tab}): the ${panel} panel is in the bar`).toContain(`id="panel-${panel}"`);
+      }
+      expect(markup, `${name} (${tab}): its own panel is not empty`).not.toMatch(new RegExp(`id="panel-${tab}"[^>]*></div>`));
+      out.push(...extractSegments(markup), ...(await served(doc, p)));
     }
-    out.push(...extractSegments(markup), ...(await served(Division, p)));
   }
   return out;
 }
@@ -1444,7 +1453,7 @@ const SCENES: Scene[] = [
   },
   {
     name: "division page (schedule, standings with a results grid and a bracket, entrants; four states)",
-    files: ["[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx"],
+    files: ["[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx", "[orgSlug]/[competitionSlug]/[divisionSlug]/tab/[tab]/page.tsx"],
     minDictValues: 12,
     render: renderDivisions,
   },
@@ -1617,6 +1626,17 @@ const NOT_RENDERED: Record<string, NotRendered> = {
   "[orgSlug]/[competitionSlug]/[divisionSlug]/calendar.ics/route.ts": {
     reason: "a route handler returning text/calendar, read in a calendar app rather than a page: event titles and the time-to-be-confirmed copy are written in the org's locale",
     provenBy: [`${SHARED_SRC}/[orgSlug]/[competitionSlug]/[divisionSlug]/calendar.ics/__tests__/route.test.ts`],
+  },
+  // W5 follow-ups C (Option A, "by round"): the two loaders a big division's paged views read on a tap.
+  "[orgSlug]/[competitionSlug]/[divisionSlug]/rounds/route.ts": {
+    reason:
+      "a route handler returning JSON rows for the paged Schedule (one folded round, or one team's rounds): its words (round labels, slot labels, forfeit lines) are built by the same schedule-paging builder in the org's locale as the page's own rounds, and the client draws them with the page's copy",
+    provenBy: [`${SHARED_SRC}/[orgSlug]/[competitionSlug]/[divisionSlug]/__tests__/page-paged-schedule.test.ts`],
+  },
+  "[orgSlug]/[competitionSlug]/[divisionSlug]/hub-rounds/route.ts": {
+    reason:
+      "a route handler returning one folded round's match cards as JSON, cut out of the cached hub document whole: it adds no words of its own, every card carries the document's wording, and the hub's Matches tab draws them",
+    provenBy: ["components/public-site/__tests__/hub-round-paging.test.tsx"],
   },
   "[orgSlug]/[competitionSlug]/poster.pdf/route.ts": {
     reason: "a route handler returning application/pdf: the printed poster's copy and month names are written in the org's locale",

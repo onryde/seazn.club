@@ -22,6 +22,7 @@
 // rather than syncing in an effect, and it is exported and unit-tested because
 // its deep-link arm is unreachable from any render in a DOM-less environment.
 import { useCallback, useState, type ReactNode } from "react";
+import { unpackHubDoc, type PackedHubDoc } from "../packed-hub-doc";
 import type { Dict as PublicDict, Locale } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import type {
@@ -161,8 +162,9 @@ export function arrivalTab(deepLinked: string | null, selfWritten: string | null
 
 export interface CompetitionLandingProps {
   /** The server-rendered document. Also the poll's seed and its fallback: a
-   *  failed refresh keeps the last good one rather than throwing to the UI. */
-  initial: CompetitionHubDocT;
+   *  failed refresh keeps the last good one rather than throwing to the UI.
+   *  W5 follow-ups B4: the page sends its matches packed (`packHubDoc`); either form is read. */
+  initial: CompetitionHubDocT | PackedHubDoc;
   /**
    * ONE dictionary and ONE locale, handed to every panel.
    *
@@ -209,12 +211,15 @@ export interface CompetitionLandingProps {
 const NOW_TICK_MS = 30_000;
 
 export function CompetitionLanding({
-  initial,
+  initial: sent,
   dict,
   locale,
   descriptionSlot,
   shareSlot,
 }: CompetitionLandingProps) {
+  // Unpacked ONCE: the first value is the poll's seed (`useLiveCompetition` holds it by identity), so a re-render must not
+  // hand it a fresh copy.
+  const [initial] = useState(() => unpackHubDoc(sent));
   const { doc, transport } = useLiveCompetition({
     // From the DOCUMENT, not from props of their own: the two slugs and the
     // realtime flag are already on it, and a second way to say them is a second

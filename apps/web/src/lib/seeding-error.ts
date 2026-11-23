@@ -98,7 +98,11 @@ const BY_LOCALE: Record<Locale, Dict> = { en, es, fr, nl };
  *  SEEDING_BESTNTH_NO_SUPPLIER and SEEDING_POOL_RESULTS_MISSING (W5 app PR B T4, K19): see BEST_NTH_REFUSAL_CODES below.
  *
  *  SEEDING_POOL_SEPARATION_IMPOSSIBLE, SEEDING_PAGE_PLAYOFF_NEEDS_FOUR and SEEDING_CROSS_POOL_DRAW_INVALID (W5 app PR B T5, K22):
- *  see CROSS_POOL_REFUSAL_CODES below. */
+ *  see CROSS_POOL_REFUSAL_CODES below.
+ *
+ *  SEEDING_TOP_N_ACROSS_GROUPS (W5 follow-ups A2): a Top N take (`rankRange`, the Add stage form's take) saved against a source of
+ *  {pools} groups - the engine reads that take from one table only, so the stage would never fill. Refused at save
+ *  (`refuseTopNAcrossGroups`, server/usecases/stage-seeding.ts); a group-aware Add stage is W6. */
 export const SEEDING_ERROR_CODES = [
   "SEEDING_MAP_SLOT_INVALID",
   "SEEDING_MAP_SOURCE_INVALID",
@@ -125,6 +129,7 @@ export const SEEDING_ERROR_CODES = [
   "SEEDING_PAGE_PLAYOFF_NEEDS_FOUR",
   "SEEDING_CROSS_POOL_DRAW_INVALID",
   "SEEDING_CROSS_POOL_DRAW_TOO_LARGE",
+  "SEEDING_TOP_N_ACROSS_GROUPS",
 ] as const;
 export type SeedingErrorCode = (typeof SEEDING_ERROR_CODES)[number];
 

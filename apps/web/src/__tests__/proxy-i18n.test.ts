@@ -49,12 +49,16 @@ describe("marketing [lang] rewrite honors the resolved locale", () => {
     expect(rewriteTarget(proxy(req("/live")))).toBe("/en/live");
     expect(rewriteTarget(proxy(req("/live", { cookie: "seazn_locale=fr" })))).toBe("/fr/live");
     // The hub: a `/live/` prefix is NOT marketing. A rewrite here would swallow every spectator page into [lang].
-    const hub = ["/live/riverside", "/live/riverside/summer-cup", "/live/riverside/summer-cup/open?tab=standings"];
+    const hub = ["/live/riverside", "/live/riverside/summer-cup", "/live/riverside/summer-cup/open"];
     for (const path of hub) {
       const res = proxy(req(path, { cookie: "seazn_locale=fr" }));
       expect(res.headers.get("x-middleware-rewrite"), `${path}: not rewritten`).toBeNull();
     }
     expect(hub.length, "anti-vacuity: hub paths").toBe(3);
+    // W5 follow-ups B3: a division's `?tab=standings` IS rewritten now - to that tab's own document under the same hub
+    // path, never into the marketing [lang] tree.
+    const tabbed = proxy(req("/live/riverside/summer-cup/open?tab=standings", { cookie: "seazn_locale=fr" }));
+    expect(new URL(tabbed.headers.get("x-middleware-rewrite")!).pathname).toBe("/live/riverside/summer-cup/open/tab/standings");
   });
 
   it("product and sport pages: unprefixed serves the resolved locale without a redirect; a prefixed URL is left alone", () => {

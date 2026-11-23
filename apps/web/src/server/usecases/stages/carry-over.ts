@@ -5,10 +5,11 @@ import "server-only";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { EngineError } from "@seazn/engine/core";
-import { carryDeltas, placementTable, type BracketFixture, type PoolTable, type ProgressionSpec, type SourceShape, type SourceTables, type StandingsRow } from "@seazn/engine/competition";
+import { carryDeltas, placementTable, progressionSize, type BracketFixture, type PoolTable, type ProgressionSpec, type SourceShape, type SourceTables, type StandingsRow } from "@seazn/engine/competition";
 import { parseExtKey, bracketWinnerLoser } from "@/server/engine-db/competition";
 import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "@/server/engine-db/level-seat";
 import { engineFixtureStatus as toBracketFixtureStatus } from "@/lib/fixture-engine-status";
+import { takeCutIssue } from "@/lib/field-cut-gate";
 import { refuseCutBeyondTables } from "./cut-gate";
 import { resolveStoredProgression } from "../stored-progression";
 import { attachFeedRefs, engineRoundOf, laneDepthOf } from "@/server/engine-db/bracket-rounds";
@@ -20,6 +21,7 @@ import { bestNthSourceOf, withPoolResults } from "../pool-results";
 import { STAGE_COLS, REAL_TABLE_KINDS, BRACKET_KINDS, type Tx, type StageRow } from "./types";
 import { departedEntrantIds } from "./helpers";
 import { drawAcrossPools } from "./cross-pool-draw";
+import { roundRobinRefusal } from "../roundrobin-refusal";
 
 // F6 (#625) — carry-over has TWO application paths now: seedNextStage (below,
 // `timing:"on_complete"`) and the propose/confirm pair (computeSeedProposal /
@@ -244,6 +246,58 @@ export async function americanoPlacementTables(
     .map((row) => entrantOf.get(row.person_id))
     .filter((id): id is string => id !== undefined);
   return [placementTable(ordered)];
+}
+
+/** W5 follow-ups fix round 1 (review I2): the stage SAVE asks what the completion would. A progression whose every source has
+ *  already finished is resolved now, against the tables those sources finished with, the way `seedNextStage` below resolves it -
+ *  so a Top N the finished tables cannot supply (a complete six-entrant league asked for its top 8) is refused by name at the save
+ *  and writes nothing, instead of saving a stage that never fills (its Generate seeds it at once and is refused). The shortfall
+ *  is counted by the doors seeding uses: the cut gate's table supply (`refuseCutBeyondTables`, RR_CUT_EXCEEDS_FIELD) and, for a
+ *  source that gate does not judge (a knockout's placement table), the engine's own resolve, whose STAGE_NOT_READY names the
+ *  table's `available` rows - said with the same code and numbers. A source not complete yet is the completion's to judge: nothing
+ *  is asked. Runs inside the batch's transaction, under its division lock (`insertStageBatch`). */
+export async function refuseUnfillableFromFinishedSources(
+  tx: Tx,
+  target: { division_id: string; seq: number; kind: string },
+  progression: ProgressionSpec,
+): Promise<void> {
+  const resolved: { id: string; kind: string }[] = [];
+  const shapes: SourceShape[] = [];
+  const tables: SourceTables[] = [];
+  for (const s of progression.sources) {
+    const source = await resolveProgressionSource(tx, target, s.stage);
+    const [row] = await tx<{ status: string }[]>`select status from stages where id = ${source.id}`;
+    if (row?.status !== "complete") return;
+    resolved.push(source);
+    shapes.push(await sourceShapeOf(tx, source, s.take));
+    tables.push(await tablesForCompletedStage(tx, source, target.division_id));
+  }
+  if (resolved.length === 0) return;
+  refuseCutBeyondTables(progression.sources, shapes, tables, resolved);
+  try {
+    resolveStoredProgression(
+      progression,
+      shapes,
+      departedLoseBestNth(tables, resolved, await departedEntrantIds(tx, target.division_id)),
+      target.kind,
+      resolved.map((r) => r.kind),
+    );
+  } catch (err) {
+    const available = EngineError.is(err) && err.code === "STAGE_NOT_READY" ? (err.data as { available?: unknown } | undefined)?.available : undefined;
+    // One source: its take is the whole cut, so the numbers read as the cut gate's do. Several: the engine names one table's rows,
+    // not the cut's supply, so its own refusal stands.
+    if (typeof available === "number" && progression.sources.length === 1) {
+      const take = progression.sources[0]!.take;
+      const qualified = progressionSize(take);
+      // `max` is what THIS take can fill from the table's `available` rows - the positions of its own that fall within them
+      // (`takeCutIssue`, the cut gate's count) - not the row count: ranks 3-8 of a four-entrant knockout fill 2 seats, not "at most 4".
+      // A take that gate cannot judge keeps the engine's row count.
+      const max = takeCutIssue(take, [available])?.max ?? available;
+      throw roundRobinRefusal("RR_CUT_EXCEEDS_FIELD", { qualified, max, reason: "cut_exceeds_field", stageId: resolved[0]!.id });
+    }
+    if (EngineError.is(err)) throw new HttpError(422, err.message, err.code, err.data as never);
+    throw err;
+  }
 }
 
 /** Build the SourceTables (pools + bracket) a COMPLETED stage offers a

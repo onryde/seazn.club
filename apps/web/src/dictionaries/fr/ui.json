@@ -2581,6 +2581,8 @@
   "schedule.notice.alreadyComplete": "La phase était déjà terminée : rien n'a changé.",
   "schedule.notice.stageAdded": "Phase ajoutée — {n} match(s) généré(s) pour les {topN} premiers.",
   "schedule.notice.stageAddedLater": "Phase ajoutée — les matchs seront générés à la fin de la phase précédente.",
+  "schedule.notice.stageAddedRefused": "{name} a été ajoutée, mais ses matchs ne peuvent pas être créés : {reason} Supprimez-la, ou gardez-la et modifiez la phase précédente.",
+  "schedule.addStage.keepRefused": "La garder",
   "schedule.error.tooFewGroupEntrants": "Impossible de générer les matchs pour l'instant — {groups} groupes nécessitent au moins {required} participants au total, soit 2 par groupe (actuellement {have}). Utilisez moins de groupes ou ajoutez des participants.",
   "schedule.error.tooFewGroupEntrantsSuggest": "Impossible de générer les matchs pour l'instant — {groups} groupes nécessitent au moins {required} participants au total, soit 2 par groupe (actuellement {have}). Réglez le nombre de groupes sur {suggested} ou ajoutez des participants.",
   "schedule.error.tooFewGroupEntrantsAdd": "Impossible de générer les matchs pour l'instant — {groups} groupes nécessitent au moins {required} participants au total, soit 2 par groupe (actuellement {have}). Ajoutez des participants.",
@@ -3140,6 +3142,8 @@
   "stage.addMatch.round.clashAlone": "Tour {n} · {name} joue déjà",
   "stage.addMatch.round.clashRange": "Tours {from} à {to} · une équipe joue déjà",
   "stage.addMatch.round.pickSides": "Choisissez d'abord les deux côtés",
+  "stage.addMatch.round.loading": "Lecture des tours de la phase…",
+  "stage.addMatch.round.loadFailed": "Les tours de la phase n’ont pas pu être chargés : aucun tour ne peut être proposé. Fermez le formulaire et rouvrez-le.",
   "stage.addMatch.hint": "Un match ajouté est un vrai résultat — il compte au classement.",
   "slot.winner_group": "Vainqueur du Groupe {g}",
   "slot.runner_up_group": "Deuxième du Groupe {g}",
@@ -9029,5 +9033,8 @@
   "progression.rosterDrift.rebuiltCreated": "{created} match(s) tiré(s) à la place.",
   "progression.rosterDrift.pinsCleared.one": "{count} rang manuel a été effacé : sa poule a changé.",
   "progression.rosterDrift.pinsCleared.other": "{count} rangs manuels ont été effacés : leurs poules ont changé.",
-  "divBuilder.format.drawCanRefuse": "Le tirage de la phase finale peut être refusé au placement : un meilleur deuxième (ou meilleur troisième, etc.) peut partager la poule de son adversaire du premier tour. Qualifiez le même nombre dans chaque poule pour l'éviter."
+  "divBuilder.format.drawCanRefuse": "Le tirage de la phase finale peut être refusé au placement : un meilleur deuxième (ou meilleur troisième, etc.) peut partager la poule de son adversaire du premier tour. Qualifiez le même nombre dans chaque poule pour l'éviter.",
+  "runsheet.round.loading": "Chargement de ce tour…",
+  "runsheet.round.loadFailed": "Les matchs de ce tour n’ont pas pu être chargés.",
+  "runsheet.round.retry": "Réessayer"
 }

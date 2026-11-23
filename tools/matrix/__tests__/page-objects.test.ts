@@ -120,7 +120,11 @@ describe("paths: the routes the product serves", () => {
 
   it("the tabs a page object asks for are the tabs each page honours (the organiser's TABS, the public page's ids)", () => {
     const organiser = literalList(ORG_DIV_PAGE, /const TABS = \[([^\]]*)\] as const;/);
-    const publicIds = literalList(PUBLIC_DIV_PAGE, /ids=\{\[([^\]]*)\]\}/);
+    // W5 follow-ups B3: the public page's Tabs take their ids from lib/division-tabs.ts (shared with the proxy's `?tab=`
+    // rewrite), so the ids are read where they are declared - and the page is held to passing exactly that list.
+    expect(src(PUBLIC_DIV_PAGE)).toMatch(/import \{[^}]*\bDIVISION_TABS\b[^}]*\} from "@\/lib\/division-tabs";/);
+    expect(src(PUBLIC_DIV_PAGE)).toMatch(/\bids=\{\[\.\.\.DIVISION_TABS\]\}/);
+    const publicIds = literalList("apps/web/src/lib/division-tabs.ts", /export const DIVISION_TABS = \[([^\]]*)\] as const;/);
     expect(organiser.length).toBeGreaterThan(0);
     expect(publicIds.length).toBeGreaterThan(0);
     expect(ORGANISER_TABS.length).toBeGreaterThan(0);

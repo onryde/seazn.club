@@ -94,6 +94,7 @@ import { EntrantKindsSettings } from "@/components/v2/entrant-kinds-settings";
 import { ROOT_KNOCKOUT_KINDS, TABLE_STAGE_KINDS, divisionTakesKnockoutLateEntry, divisionTakesSwissLateEntry, entrantListLocked } from "@/lib/open-entry-stages";
 import { roundOpensOfDivisions } from "@/server/external-play/round-open";
 import { StagesPanel } from "@/components/v2/stages-panel";
+import { windowRunSheet } from "@/lib/run-sheet-paging";
 import { ArbiterEntryCard } from "@/components/v2/arbiter-entry-card";
 import { ExternalPlayNeedsResultQueue } from "@/components/v2/external-play-needs-result-queue";
 import { attentionCount, entryLine, entryStatus } from "@/lib/round-column";
@@ -230,6 +231,15 @@ export default async function DivisionPage({
   // only `if (canEdit)`, so a viewer would never have it, and `ScheduleConfig`
   // lives under `@/server` where a client component cannot import it.
   const matchMinutes = scheduleSettings.config.matchMinutes ?? defaultMatchMinutes();
+  // W5 follow-ups C (owner 2026-11-23, Option A "by round"): a big division's run sheet ships the rounds a person reads now; every
+  // other round of a league or group stage goes as its tally and loads when its bar is opened (`lib/run-sheet-paging.ts`,
+  // `./rounds/route.ts`). The Fixtures tab only: no other tab mounts the run sheet. A board-game division ships whole: its run sheet
+  // carries each row's online-play state and counts the boards not yet opened over every row (`stageNotOpened`), which a tally
+  // does not carry.
+  const runSheetWindow =
+    tab === "fixtures" && division.sport_key !== "boardgame"
+      ? windowRunSheet(fixtures, stages, { held: new Set(awaitingSettle), nowMs: new Date().getTime(), matchMinutes, tz: scheduleSettings.tz })
+      : null;
   // Review wave 3: the panel gets court IDENTITY and display only — same trim
   // the schedule page does, and for the same reason. `listVenues` rows carry
   // every court's weekly `hours` and dated `exceptions` (the Directory calendar
@@ -899,7 +909,11 @@ export default async function DivisionPage({
               // Starting publishes the schedule, so it can be refused on
               // conflicts; these two let the refusal sheet name the matches it
               // is about. Both are already loaded above for the tabs.
-              fixtures={fixtures}
+              // W5 follow-ups B1 (perf P1): the list only while Start is offered
+              // (`divisionScoringClosed`). Once started, the sheet cannot open, and
+              // the whole list was ~5 MB of flight on every tab at the caps.
+              fixtures={divisionScoringClosed(division.status) ? fixtures : []}
+              fixturesExist={fixtures.length > 0}
               entrantNames={entrantNames}
               // Whether starting really closes the entrant list — open-format
               // stages (ladder/americano) and a root Swiss keep it open, so the
@@ -1124,7 +1138,8 @@ export default async function DivisionPage({
               compSlug={compSlug}
               divSlug={divSlug}
               stages={stages}
-              fixtures={fixtures}
+              fixtures={runSheetWindow?.shipped ?? fixtures}
+              foldedRounds={runSheetWindow?.folded ?? []}
               entrantNames={entrantNames}
               // W3 T15 ruling 2: the run sheet words a DISQUALIFIED entrant's cascade walkover as the disqualification.
               entrantStatuses={entrantStatuses}

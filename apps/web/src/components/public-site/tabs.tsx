@@ -23,7 +23,24 @@
 // mechanism (why not `useSearchParams`, why not `useState` + an effect, and
 // what W1's match centre still does instead) moved there with it, because that
 // is now where a reader meets it first.
-import { useState, type ReactNode } from "react";
+//
+// W5 follow-ups B3 (perf-measure-report P3): the division page no longer ships every panel. At the caps the hidden Fixtures
+// panel was 43k of a Standings view's 45k DOM nodes and most of its 12 MB. The page server-renders ONLY the active tab's
+// panel - `?tab=standings` / `?tab=entrants` reach their own ISR document through the proxy (`src/proxy.ts`
+// `divisionTabRewrite`) - and hands the others as `null`. A tap on a panel that is not here navigates to its URL
+// (`router.replace`, no history entry, scroll kept), which loads it from the server; a tap on one that is here only toggles,
+// as before. `initial` is the panel the server rendered, so hydration matches whichever tab the URL named.
+//
+// Fix round 1 (review I3, M2; owner option 2, 2026-11-23): such a tap is a document load, and it says so at once - never a
+// dead tap. While the transition is pending the tapped tab takes the active style, `aria-busy` and a small spinner, and the
+// panel still on screen dims (`aria-busy`, opacity .45) until the new document lands. No prefetch: Next 16.3 sends nothing for
+// `router.prefetch` of a same-path `?tab=` URL (measured in the browser), so one here would be an inert seam. The target is
+// built from the division's own `basePath`, never from the address this document was served at.
+//
+// Round 2 (R3): a tap on a panel that IS here while another's document is still loading also goes through the router, so the
+// newest tap wins - a bare toggle would be overwritten by the load landing on top of it.
+import { useState, useTransition, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import { useTabParam } from "./use-tab-param";
 
 interface Props {
@@ -37,10 +54,19 @@ interface Props {
   labels: string[];
   /** Accessible name for the tablist (`division.tabsLabel`). */
   label: string;
-  children: ReactNode[]; // one panel per label, same order
+  /** One panel per label, same order. `null` for a panel this document does not carry: tapping it loads it (B3). */
+  children: ReactNode[];
+  /** The panel the server rendered as active (B3); 0 when omitted. */
+  initial?: number;
+  /** The division home's path (`routes.publicHub(org, comp, division)`): every tab's URL is this plus `?tab=` (M2). */
+  basePath: string;
 }
 
-export function Tabs({ ids, labels, label, children }: Props) {
+export function Tabs({ ids, labels, label, children, initial = 0, basePath }: Props) {
+  const router = useRouter();
+  const [isPending, startTransition] = useTransition();
+  // The absent panel a tap is loading (I3); shown only while that transition is pending.
+  const [loading, setLoading] = useState<number | null>(null);
   // `picked` stays null until the spectator actually taps something, and that
   // is what makes the precedence right in BOTH directions: before a tap the URL
   // wins, and after one the tap wins for good — no later re-render can drag
@@ -49,18 +75,47 @@ export function Tabs({ ids, labels, label, children }: Props) {
   const deepLinked = useTabParam();
   // `> 0` and not `>= 0`: an unknown or absent `?tab=` yields -1, which has to
   // fall through to the first tab rather than select nothing.
+  // A panel this document does not carry is never shown from the URL: the server picked `initial` for this document.
   const fromUrl = deepLinked === null ? -1 : ids.indexOf(deepLinked);
-  const active = picked ?? (fromUrl > 0 ? fromUrl : 0);
+  const active = picked ?? (fromUrl >= 0 && children[fromUrl] != null ? fromUrl : initial);
+
+  /** Tab `i`'s URL: the division's own path (M2), the query this page has with `tab` set (absent for the first tab). */
+  function urlOf(i: number): URL {
+    const url = new URL(window.location.href);
+    url.pathname = basePath;
+    if (i === 0) url.searchParams.delete("tab");
+    else url.searchParams.set("tab", ids[i]!);
+    return url;
+  }
+
+  // I3: the tab whose document is on its way, while it is. Null otherwise - including once it has landed.
+  const busy = isPending && loading !== null ? loading : null;
 
   function select(i: number) {
-    setPicked(i);
     // Put the choice back in the URL so what a spectator shares is what they
     // are looking at. `replaceState`, not `pushState`: a tab is not a page, and
     // stacking history entries would make Back walk the tab bar instead of
     // leaving the division.
-    const url = new URL(window.location.href);
-    if (i === 0) url.searchParams.delete("tab");
-    else url.searchParams.set("tab", ids[i]!);
+    const url = urlOf(i);
+    const target = url.pathname + url.search + url.hash;
+    // B3: a panel this document does not carry is loaded from its own URL - `router.replace`, so still no history entry.
+    // The panel on screen stays until that document arrives (it opens on the tapped panel), never an empty one; the tapped
+    // tab shows it is coming meanwhile (I3).
+    if (children[i] == null) {
+      setLoading(i);
+      startTransition(() => router.replace(target, { scroll: false }));
+      return;
+    }
+    // Round 2 (R3): a panel that IS here, tapped while another's document is still loading. A bare toggle would be overwritten
+    // when that load lands (its URL and its panel win), swallowing this newer tap. So it shows at once, nothing is left saying the
+    // other is on its way, and the router is told too: the later navigation supersedes the pending one, the newest tap wins.
+    if (busy !== null) {
+      setLoading(null);
+      setPicked(i);
+      startTransition(() => router.replace(target, { scroll: false }));
+      return;
+    }
+    setPicked(i);
     window.history.replaceState(null, "", url);
   }
 
@@ -79,14 +134,22 @@ export function Tabs({ ids, labels, label, children }: Props) {
               role="tab"
               aria-selected={i === active}
               aria-controls={`panel-${ids[i]}`}
+              aria-busy={busy === i ? true : undefined}
               onClick={() => select(i)}
               className={
-                i === active
+                i === (busy ?? active)
                   ? "shrink-0 rounded-full bg-accent px-4 py-1.5 text-sm font-semibold text-accent-ink shadow-sm"
                   : "shrink-0 rounded-full px-4 py-1.5 text-sm font-medium text-ink-muted transition hover:bg-accent-soft hover:text-accent-strong"
               }
             >
               {label}
+              {busy === i ? (
+                <span
+                  data-testid="tab-spinner"
+                  aria-hidden="true"
+                  className="ml-1.5 inline-block size-2.5 animate-spin rounded-full border-2 border-current border-t-transparent align-[-1px] motion-reduce:animate-none"
+                />
+              ) : null}
             </button>
           ))}
         </div>
@@ -98,6 +161,9 @@ export function Tabs({ ids, labels, label, children }: Props) {
           role="tabpanel"
           aria-labelledby={`tab-${ids[i]}`}
           hidden={i !== active}
+          // I3: the panel on screen is not the one asked for while another loads; dimmed, never emptied.
+          aria-busy={busy !== null && i === active ? true : undefined}
+          className={busy !== null && i === active ? "opacity-[0.45] transition-opacity" : undefined}
         >
           {panel}
         </div>

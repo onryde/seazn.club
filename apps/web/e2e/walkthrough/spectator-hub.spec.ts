@@ -538,7 +538,8 @@ test("HB2: a boundary moves the live card in place; the match ending updates Mat
 
   const lined = await lineUpOnHubTransport(page, hubApi, lineUpMs);
   expect(lined, "neither a realtime subscription nor a poll tick").not.toBeNull();
-  await primeBrowserCache(page, hubApi);
+  // At the URL the page polls (W5 follow-ups C, review I3/N2: `?window=rounds`); a copy at the bare route is never read by the page.
+  await primeBrowserCache(page, `${hubApi}?window=rounds`);
   await bowl(request, matchA, innA, [4]);
 
   await expect.poll(() => cardScores(card), { message: `the boundary never reached the card (lined up on ${lined})`, timeout: landMs }).not.toEqual(before);
@@ -566,7 +567,7 @@ test("HB2: a boundary moves the live card in place; the match ending updates Mat
   // The rest of innings one, then a chase of dots: the side batting first wins.
   const lined2 = await lineUpOnHubTransport(page, hubApi, lineUpMs);
   expect(lined2).not.toBeNull();
-  await primeBrowserCache(page, hubApi);
+  await primeBrowserCache(page, `${hubApi}?window=rounds`);
   await bowl(request, matchA, innA, A_REST_OF_INNINGS_ONE);
   await bowl(request, matchA, new Innings(aChase.batting, aChase.bowling), A_CHASE);
   const ended = await apiJson<{ status: string }>(request, `/api/v1/fixtures/${matchA}`);

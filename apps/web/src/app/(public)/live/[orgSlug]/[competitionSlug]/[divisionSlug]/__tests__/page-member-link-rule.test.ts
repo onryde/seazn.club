@@ -35,7 +35,8 @@ vi.mock("@/server/public-site/data", async (importOriginal) => ({
 vi.mock("@/server/usecases/discipline", () => ({ publicSuspensions: async () => [] }));
 
 import Link from "next/link";
-import DivisionHomePage from "../page";
+// W5 follow-ups B3: the page is one document per tab; "the page" is all three (`_every-tab.ts`).
+import { renderEveryTab } from "./_every-tab";
 
 /** Every element anywhere in a server component's returned tree. */
 function elements(node: unknown, out: ReactElement[] = []): ReactElement[] {
@@ -102,9 +103,7 @@ const divisionData = (policy: { youth: boolean; player_name_display: string | nu
 
 async function playerLinks(policy: { youth: boolean; player_name_display: string | null }) {
   getPublicDivision.mockResolvedValue(divisionData(policy));
-  const root = await DivisionHomePage({
-    params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" }),
-  });
+  const root = await renderEveryTab({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" });
   return elements(root)
     .filter((el) => el.type === Link && String((el.props as { href?: unknown }).href).includes("/players/"))
     .map((el) => renderToStaticMarkup(el));

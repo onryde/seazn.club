@@ -29,6 +29,8 @@ import { createLoginLink } from "@/lib/login-link";
 import { createVerificationToken } from "@/lib/verification";
 import { generateRefCode } from "@/lib/ref-code";
 import { mintMatchRoomToken } from "@/server/usecases/match-room-token";
+import { hubRoundKey } from "@/lib/hub-round-paging";
+import { hubRoundsUrl } from "@/components/public-site/matches-hub/hub-rounds";
 import { scrubScoreUrl } from "../scrub-score-url";
 
 const ORIGIN = "https://seazn.club";
@@ -83,6 +85,9 @@ const QUERY_VERDICTS: Record<string, true | string> = {
   "(public)/live/[orgSlug]/[competitionSlug]/register/join/page.tsx:join_code": true,
   "(public)/live/[orgSlug]/[competitionSlug]/register/page.tsx:join": true,
   "api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/join/route.ts:join_code": true,
+  // W5 follow-ups C: a folded round's key on the hub's Matches tab (`hubRoundKey`) - not a credential, but the overlay key's rule
+  // takes EVERY `key=` value, whatever it holds, so the scrubber removes it. No witness in the pool: the real URL is pinned below.
+  "(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/hub-rounds/route.ts:key": true,
   "(public)/r/[ref]/page.tsx:token": CART_TOKEN,
   "(public)/live/[orgSlug]/[competitionSlug]/register/status/page.tsx:token": CART_TOKEN,
   "api/v1/public/registrations/[id]/route.ts:token": CART_TOKEN,
@@ -202,6 +207,28 @@ describe("each verdict is what the scrubber does", () => {
       }
     }
     expect(checked).toBeGreaterThanOrEqual(30);
+  });
+});
+
+// The hub's round loader (`hub-rounds/route.ts:key`) is `true` with no witness in the pool: its key is not a credential, and the
+// overlay key's rule takes every `key=` value. Pinned on the URL the Matches tab really asks for (`hubRoundsUrl`, a real
+// `hubRoundKey`), so the verdict is what happens to that URL, not to a stand-in.
+describe("the hub round loader's key (a `key=` that is not a credential)", () => {
+  it("the scrubber takes the round's key from the real loader URL, bare and with an origin, and keeps the document build (at=)", () => {
+    const divisionId = randomUUID();
+    const generatedAt = "2026-11-23T10:00:00.000Z";
+    const key = hubRoundKey({ divisionId, stageName: "Group stage", roundNo: 3 });
+    const url = hubRoundsUrl({ orgSlug: "club", competitionSlug: "cup", generatedAt }, "open", key);
+    expect(url, "premise: the loader URL carries the round's key").toContain(`?key=${encodeURIComponent(key)}&`);
+    let checked = 0;
+    for (const input of [url, `${ORIGIN}${url}`]) {
+      const out = scrubScoreUrl(input);
+      expect(out, input).not.toContain(divisionId);
+      expect(out, input).toContain("/hub-rounds?key=[key]&");
+      expect(out, input).toContain(`at=${encodeURIComponent(generatedAt)}`);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 });
 

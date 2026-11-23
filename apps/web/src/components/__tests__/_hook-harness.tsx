@@ -103,6 +103,9 @@ interface HookDispatcher {
    *  (`«h0»`, `«h1»`, …) — unique within one island, which is all an
    *  `aria-controls` / `id` pairing needs. */
   useId: () => string;
+  /** `[isPending, startTransition]`: the callback runs at once (there is no scheduler here), and `isPending` is the
+   *  island's `transitionPending` option - false unless a test asks to see the pending render (W5 follow-ups I3). */
+  useTransition: () => [boolean, (callback: () => void) => void];
 }
 
 export type Props = Record<string, unknown>;
@@ -208,7 +211,7 @@ export function renderIsland<P>(
    * pass — which `hydrate: true` can never reach, because it always renders the
    * server snapshot first.
    */
-  options: { hydrate?: boolean; clientMount?: boolean } = {},
+  options: { hydrate?: boolean; clientMount?: boolean; transitionPending?: boolean } = {},
 ) {
   const slot = hookDispatcherSlot();
   let props = initialProps;
@@ -304,6 +307,9 @@ export function renderIsland<P>(
   const dispatcher: HookDispatcher = {
     useId() {
       return `«h${idCursor++}»`;
+    },
+    useTransition() {
+      return [options.transitionPending === true, (callback: () => void) => callback()];
     },
     useState(initial) {
       const index = cursor++;
@@ -667,6 +673,9 @@ export function expandWithHooks<P>(Component: (props: P) => ReactNode, props: P)
     },
     useSyncExternalStore() {
       throw new Error("expandWithHooks: useSyncExternalStore is not supported — this helper is read-only hooks (useContext/useMemo/useCallback) only.");
+    },
+    useTransition() {
+      throw new Error("expandWithHooks: useTransition is not supported — this helper is read-only hooks (useContext/useMemo/useCallback) only.");
     },
     useId() {
       throw new Error("expandWithHooks: useId is not supported — this helper is read-only hooks (useContext/useMemo/useCallback) only.");

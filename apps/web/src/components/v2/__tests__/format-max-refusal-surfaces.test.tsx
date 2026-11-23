@@ -275,6 +275,7 @@ describe("Start - on the division page and on the schedule board - says both dra
     status: "scheduled",
     canEdit: true,
     fixtures: [],
+    fixturesExist: false,
     entrantNames: {},
     // The page's field read is stale (a registration landed after it rendered), so Start is live and the SERVER refuses.
     stages: [{ kind: "knockout", progression: null, config: {} }],

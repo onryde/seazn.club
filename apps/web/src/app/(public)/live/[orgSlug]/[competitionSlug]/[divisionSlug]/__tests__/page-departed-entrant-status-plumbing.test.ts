@@ -48,7 +48,8 @@ vi.mock("@/server/public-site/bestnth-basis", () => ({ loadBestNthBases: async (
 import { FIELD_ENTRANT_STATUSES } from "@/lib/entrant-field";
 import { StandingsTable } from "@/components/public-site/standings-table";
 import type { PublicEntrant } from "@/server/public-site/data";
-import DivisionHomePage from "../page";
+// W5 follow-ups B3: the page is one document per tab; "the page" is all three (`_every-tab.ts`).
+import { renderEveryTab } from "./_every-tab";
 
 /** One entrant per status `entrants.status` allows, so both halves of the
  *  departed vocabulary are in the scene. A filter narrowed to `withdrawn`
@@ -152,9 +153,7 @@ const W = (seq: number, entrant_id: string, stage_id: string, policy: "expunge" 
 async function renderPage() {
   getPublicDivision.mockResolvedValue(divisionData());
   loadTableWithdrawals.mockResolvedValue([W(1, "e-dsq", "lg", "walkover", 2), W(2, "e-wit", "lg", "expunge", 1), W(3, "e-reg", "lg", "expunge", 0), W(4, "e-con", "other", "expunge", 1)]);
-  const root = await DivisionHomePage({
-    params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" }),
-  });
+  const root = await renderEveryTab({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" });
   const all = elements(root);
 
   const tables = all.filter((el) => el.type === StandingsTable);

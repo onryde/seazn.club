@@ -19,7 +19,8 @@ vi.mock("next/cache", () => ({
 }));
 
 import Link from "next/link";
-import DivisionHomePage from "../page";
+// W5 follow-ups B3: the page is one document per tab; "the page" is all three (`_every-tab.ts`).
+import { renderEveryTab } from "./_every-tab";
 import {
   closeSql,
   OPEN_FULL,
@@ -41,9 +42,7 @@ function elements(node: unknown, out: ReactElement[] = []): ReactElement[] {
 }
 
 async function renderDivision(s: YouthNameScene, divisionSlug: string) {
-  const root = await DivisionHomePage({
-    params: Promise.resolve({ orgSlug: s.orgSlug, competitionSlug: s.compSlug, divisionSlug }),
-  });
+  const root = await renderEveryTab({ orgSlug: s.orgSlug, competitionSlug: s.compSlug, divisionSlug });
   const all = elements(root);
   const playerLinks = all
     .filter((el) => el.type === Link && String((el.props as { href?: unknown }).href).includes("/players/"))
