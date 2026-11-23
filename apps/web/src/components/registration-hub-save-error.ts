@@ -130,7 +130,7 @@ export function mapSaveError(err: unknown): SaveErrorInfo {
   if ((err as Partial<ApiV1Error>)?.code === CHESS_INDIVIDUAL_ONLY) {
     return { field: "entrant_kind", message, code: CHESS_INDIVIDUAL_ONLY };
   }
-  // A capacity above what an online chess division holds (128, on every plan): it belongs against the capacity field.
+  // A capacity above what an online chess division holds (256, on every plan): it belongs against the capacity field.
   if ((err as Partial<ApiV1Error>)?.code === ONLINE_DIVISION_FULL) {
     return { field: "capacity", message, code: ONLINE_DIVISION_FULL };
   }

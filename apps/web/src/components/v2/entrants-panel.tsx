@@ -414,7 +414,7 @@ export function EntrantsPanel({
         setError(lateEntryRefusalText(err.code, err.extra, msg, locale));
         return;
       }
-      // An online chess division is full (128 entrants, on every plan): said by its code in the organiser's language. A capacity
+      // An online chess division is full (256 entrants, on every plan): said by its code in the organiser's language. A capacity
       // limit, not a plan one - so no upgrade gate, and never the server's English.
       const capText = err instanceof ApiV1Error ? onlineEntrantCapText(err, (key, vars) => msg(key as MessageKey, vars)) : null;
       if (capText !== null) {

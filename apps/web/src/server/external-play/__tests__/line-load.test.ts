@@ -519,9 +519,14 @@ describe("which pass bars a capacity scenario owes, by the shape of its run (har
 });
 
 describe("B-dry's arrival spread is derived: demand exceeds the bucket's supply by a margin made of the product's own constants", () => {
-  // A FULL online division: 128 players, 64 boards - the largest run the platform takes (ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION). The
-  // old 60 (30 boards, as B) no longer exceed the bucket's burst, so there is nothing for B-dry to run dry at that size.
-  const PLAYERS = ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION;
+  // B-dry's recipe size (the harness header: LOAD_BOARDS=64): 128 players, 64 boards, one division. It was the FULL online division
+  // while the cap was 128; the cap is 256 now (2026-11-23), and at 256 players B's own 60 s spread already outruns the bucket, so the
+  // recipe stays at 128 - still a division the platform takes (the premise below). The old 60 (30 boards, as B) no longer exceed the
+  // bucket's burst, so there is nothing for B-dry to run dry at that size.
+  const PLAYERS = 128;
+  it("premise: B-dry's 128 players are a division the platform takes", () => {
+    expect(PLAYERS).toBeLessThanOrEqual(ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION);
+  });
   const c = LINE_LOAD.instantCallsPerPlayer;
   const supply = (spreadS: number) => RTK_BUDGET_BURST + RTK_BUDGET_REFILL_PER_S * spreadS;
   const input = { players: PLAYERS, perPlayerCalls: c, burst: RTK_BUDGET_BURST, refillPerS: RTK_BUDGET_REFILL_PER_S, marginCalls: DRY_MARGIN_CALLS };

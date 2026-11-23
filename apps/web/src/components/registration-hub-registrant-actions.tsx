@@ -272,7 +272,7 @@ export function RegistrationHubRegistrantActions({
       const n = new Intl.NumberFormat(locale);
       return msg(FORMAT_MAX_PROMOTION.key, { max: n.format(err.extra.max), entrants: n.format(err.extra.entrants) });
     }
-    // An online chess division is full (128, on every plan; a capacity limit, so no plan to raise): said by its code.
+    // An online chess division is full (256, on every plan; a capacity limit, so no plan to raise): said by its code.
     const said =
       onlineEntrantCapText(err, (key, vars) => msg(key as MessageKey, vars)) ??
       registrantKindRefusalText(err, (key, vars) => msg(key, vars)) ??

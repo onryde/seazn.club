@@ -465,7 +465,7 @@ export async function createEntrants(
 
     // Doc 10 §1: `entrants.per_division.max` (V311: 32/64/256/∞) — the whole batch
     // must fit; count in the same tx as the inserts (doc 10 §2 rule 1). A division that plays
-    // online holds at most min(that cap, 128) (owner ruling 2026-11-21): `assertEntrantRoom`
+    // online holds at most min(that cap, 256) (owner ruling 2026-11-21, 256 since 2026-11-23): `assertEntrantRoom`
     // answers with the plan's 402 where the plan binds, the online cap's own 422 where it does.
     // The online cap counts what the division HOLDS (live entrants + sign-ups let in, `countOnlineHeld`), the plan's cap every row,
     // as ever; the `division:` lock is taken first so two adds cannot both pass on the last place (review C1 / I2).
@@ -1183,7 +1183,7 @@ export async function writeEntrantPatch(
     // Owner ruling 2026-11-21 (review I1): bringing a withdrawn / disqualified entrant back is a door that grows an online chess
     // division - it holds a place again - judged by the same count as every other door, under the lock just taken. A division that
     // filled while they were away (a waitlisted sign-up was promoted into their place) refuses them, ONLINE_DIVISION_FULL. A plan
-    // lower than the cap has no say here: no plan door guards a Reinstate (the rows do not change), and 128 bounds every plan.
+    // lower than the cap has no say here: no plan door guards a Reinstate (the rows do not change), and the online cap bounds every plan.
     if (reinstating) {
       const [division] = await tx<{ sport_key: string; config: unknown }[]>`
         select sport_key, config from divisions where id = ${prior!.division_id}`;

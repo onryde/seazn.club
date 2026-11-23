@@ -1265,7 +1265,7 @@ export async function patchDivision(
         ) {
           throw onlineChessDisabled();
         }
-        // Owner ruling 2026-11-21: an online chess division holds at most 128 entrants, so a division already holding more cannot be turned
+        // Owner ruling 2026-11-21 (256 since 2026-11-23): an online chess division holds at most 256 entrants, so a division already holding more cannot be turned
         // online. Only the same off -> lichess transition (a re-send of a stored 'lichess' or turning it off is never gated, for a division
         // saved before the cap must still save), counted as every online-cap door counts: the places the division HOLDS - live entrants
         // plus sign-ups already let in (review C1: 200 pending sign-ups and no entrants used to pass, then materialise made 200). The

@@ -191,7 +191,7 @@ export async function putRegistrationSettings(
   // confirm would hit the wall after money changed hands.
   if (input.capacity != null) {
     const limit = await getLimit(auth.orgId, "entrants.per_division.max", regDiv?.competition_id);
-    // A division that plays online holds at most min(plan limit, 128) (owner ruling 2026-11-21): a capacity above it promises places
+    // A division that plays online holds at most min(plan limit, 256) (owner ruling 2026-11-21, 256 since 2026-11-23): a capacity above it promises places
     // the division cannot hold. Where the PLAN is what binds the old sentence stands; where the online cap is, it says so instead
     // (a capacity limit - no plan lifts it, so no "raise the plan").
     const online = regDiv ? divisionPlaysOnline(regDiv) : false;
@@ -437,7 +437,7 @@ export async function publicRegistrationInfo(
   const now = new Date();
   const divisions: PublicDivisionInfo[] = rows.map((r) => {
     // Counted against the cap submit enforces: the plan's limit and the division's capacity by their own count, and for a division that
-    // plays online also what is left of min(plan limit, 128) by the online count (online-entrant-cap.ts; a plan below 128 counts the SAME
+    // plays online also what is left of min(plan limit, 256) by the online count (online-entrant-cap.ts; a plan below 256 counts the SAME
     // places, re-review N2) - whichever is tighter.
     const planSide = placesLeft({ capacity: r.capacity, planLimit, formatMax: formatMaxes.get(r.division_id) ?? null, active: r.active });
     const remaining = divisionPlaysOnline(r)

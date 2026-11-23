@@ -934,7 +934,7 @@ export async function submitRegistrationGroup(
           where division_id = ${p.input.division_id} and status in ${tx([...SPOT_HOLDERS])}
             and free_agent = false`;
         waitlisted = taken >= hardCap;
-        // A division that plays online holds at most min(plan limit, 128) places (owner ruling 2026-11-21; online-entrant-cap.ts), counted
+        // A division that plays online holds at most min(plan limit, 256) places (owner ruling 2026-11-21, 256 since 2026-11-23; online-entrant-cap.ts), counted
         // as every online-cap door counts - live entrants plus sign-ups let in, `countOnlineHeld` - under the `division:` lock taken
         // above, with this cart's own earlier entries already in. Past it the entry waits, exactly as it does past the plan's limit.
         // Whatever the plan: a plan below the online cap (a size pack's 96) judges the SAME count against ITS limit, so direct adds
