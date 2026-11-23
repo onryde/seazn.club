@@ -22,6 +22,13 @@ import buchholzSonnebornBerger from "./__golden__/buchholz-sonneborn-berger.json
 import buchholzBye from "./__golden__/buchholz-bye.json";
 import drawingLots from "./__golden__/drawing-lots.json";
 // ---- end blog batch 2 ----
+// ---- batch 3 (Swiss and seeding) ----
+import knockoutSeeds from "./__golden__/knockout-seeds.json";
+import swissBye from "./__golden__/swiss-bye.json";
+import swissByeRounds from "./__golden__/swiss-bye-rounds.json";
+import swissLateAndWithdraw from "./__golden__/swiss-late-and-withdraw.json";
+import swissPairing from "./__golden__/swiss-pairing.json";
+// ---- end batch 3 ----
 import type { ExampleResult } from "./types";
 // --- blog batch 4 (knockouts) ---
 import thirdPlaceMatch from "./__golden__/third-place-match.json";
@@ -61,4 +68,11 @@ export const BLOG_GOLDENS: Record<string, ExampleResult> = {
   "buchholz-bye": buchholzBye as ExampleResult,
   "drawing-lots": drawingLots as ExampleResult,
   // ---- end blog batch 2 ----
+  // ---- batch 3 (Swiss and seeding) ----
+  "swiss-pairing": swissPairing as ExampleResult,
+  "swiss-bye": swissBye as ExampleResult,
+  "swiss-bye-rounds": swissByeRounds as ExampleResult,
+  "swiss-late-and-withdraw": swissLateAndWithdraw as ExampleResult,
+  "knockout-seeds": knockoutSeeds as ExampleResult,
+  // ---- end batch 3 ----
 };

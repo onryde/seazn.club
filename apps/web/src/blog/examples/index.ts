@@ -21,6 +21,12 @@ import { buchholzSonnebornBerger } from "./buchholz-sonneborn-berger";
 import { buchholzBye } from "./buchholz-bye";
 import { drawingLots } from "./drawing-lots";
 // ---- end blog batch 2 ----
+// ---- batch 3 (Swiss and seeding) ----
+import { knockoutSeeds } from "./knockout-seeds";
+import { swissBye, swissByeRounds } from "./swiss-bye";
+import { swissLateAndWithdraw } from "./swiss-late-and-withdraw";
+import { swissPairing } from "./swiss-pairing";
+// ---- end batch 3 ----
 import type { BlogExample } from "./types";
 // --- blog batch 4 (knockouts) ---
 import { thirdPlaceMatch } from "./third-place-match";
@@ -42,6 +48,13 @@ export const BLOG_EXAMPLES: readonly BlogExample[] = [
   forfeitScores,
   doubleWalkover,
   // ---- end batch 5 ----
+  // ---- batch 3 (Swiss and seeding) ----
+  swissPairing,
+  swissBye,
+  swissByeRounds,
+  swissLateAndWithdraw,
+  knockoutSeeds,
+  // ---- end batch 3 ----
 ];
 
 export function blogExample(id: string): BlogExample | null {

@@ -51,11 +51,27 @@ export type DiagramModel =
       rounds: { name: string; matches: BracketMatchModel[] }[];
     }
   | {
+      // Batch 3 widened this (the Swiss round grid, components/blog/swiss-round-diagram.tsx): one round's boards with each
+      // side's score going in, the colours (chess), the boards that pair across scores (a float), the byes, and the players
+      // the round did not seat (a late entrant not yet in, a player who has left).
       kind: "swissRound";
       title: string;
       round: number;
-      pairings: { board: number; first: string; second: string | null; result?: string }[];
+      pairings: {
+        board: number;
+        first: string;
+        second: string | null;
+        result?: string;
+        /** Points each side takes into the round, as the table prints them. */
+        firstScore?: string;
+        secondScore?: string;
+        /** Chess only: `first` has White. Absent, the diagram draws no colours. */
+        firstWhite?: boolean;
+        /** The board seats two different scores. */
+        float?: boolean;
+      }[];
       byes: string[];
+      notSeated?: { name: string; why: string }[];
     }
   | { kind: "roundRobinWheel"; title: string; fixed: string; rotating: string[]; round: number }
   | {

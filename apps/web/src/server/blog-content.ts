@@ -33,12 +33,10 @@ export type BlogPost = BlogPostMeta & { markdown: string };
  * pages that print related links must show only the slugs `blogPost()` resolves. It is deleted with the last batch.
  */
 export const BLOG_PLANNED_SLUGS: ReadonlySet<string> = new Set([
-  "how-swiss-pairing-works",
-  "swiss-chess-bye",
-  "joining-or-leaving-a-swiss",
-  "knockout-seeds-and-byes",
   // batch 5 (#22 to #27) is written, except the two HELD posts below (owner ruling 2026-11-23: until W7 fixes score entry
   // and mexicano round two; text and examples are kept beside the SDD ledger, held-22-* / held-23-*).
+  // batch 3 (Swiss and seeding): how-swiss-pairing-works, swiss-chess-bye, joining-or-leaving-a-swiss and
+  // knockout-seeds-and-byes are written (blog-tree.test.ts: posts + planned = 33), so they are no longer planned.
   "how-americano-works",
   "how-mexicano-works",
   "round-robin-schedule",

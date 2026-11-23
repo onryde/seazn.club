@@ -9,6 +9,7 @@ import type { DiagramModel } from "@/blog/examples/types";
 import { BracketDiagram } from "@/components/blog/diagrams/bracket";
 import { LadderSwap } from "@/components/blog/diagrams/ladder-swap";
 import { ScoreTiles } from "@/components/blog/diagrams/score-tiles";
+import { SwissRoundDiagram } from "@/components/blog/swiss-round-diagram";
 import { WalkoverBracket } from "@/components/blog/diagrams/walkover-bracket";
 
 export function BlogDiagram({ model }: { model: DiagramModel }) {
@@ -26,6 +27,10 @@ export function BlogDiagram({ model }: { model: DiagramModel }) {
     case "scoreTiles":
       return <ScoreTiles model={model} />;
     // ---- end batch 5 ----
+    // ---- batch 3 (Swiss and seeding): how-swiss-pairing-works, swiss-chess-bye, joining-or-leaving-a-swiss ----
+    case "swissRound":
+      return <SwissRoundDiagram model={model} />;
+    // ---- end batch 3 ----
     default:
       throw new Error(`blog diagram: there is no drawing for '${model.kind}' yet (add it to components/blog/blog-diagram.tsx with the first post that uses it)`);
   }

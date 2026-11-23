@@ -1,0 +1,134 @@
+{
+  "facts": {
+    "playerCount": 6,
+    "roundCount": 4,
+    "sportCount": 11,
+    "lateName": "Gil",
+    "lateFirstRound": 3,
+    "lateMissedRounds": 2,
+    "lateScoreBeforeFirst": "0",
+    "lateTotal": "0",
+    "leaverName": "Fay",
+    "leaverRound": 2,
+    "leaverTotal": "1",
+    "walkoverWinner": "Cy",
+    "fieldAfterLeaving": 6,
+    "regularsAfterLeaving": 5
+  },
+  "table": {
+    "caption": "A 4-round chess Swiss: Fay leaves once round 2 is paired, and Gil joins from round 3. Players are listed best seed first, and the number in brackets is the seed.",
+    "columns": [
+      "Player",
+      "Round 1",
+      "Round 2",
+      "Round 3",
+      "Round 4",
+      "Total"
+    ],
+    "rows": [
+      [
+        "Fay (1)",
+        "Beat Ben",
+        "Left: Cy wins without playing",
+        "Left",
+        "Left",
+        "1"
+      ],
+      [
+        "Eve (2)",
+        "Drew with Ana",
+        "Beat Ben",
+        "Beat Cy",
+        "Drew with Dev",
+        "3"
+      ],
+      [
+        "Dev (3)",
+        "Lost to Cy",
+        "Beat Ana",
+        "Drew with Ben",
+        "Drew with Eve",
+        "2"
+      ],
+      [
+        "Gil (4)",
+        "Not entered yet",
+        "Not entered yet",
+        "Lost to Ana",
+        "Lost to Ben",
+        "0"
+      ],
+      [
+        "Ben (5)",
+        "Lost to Fay",
+        "Lost to Eve",
+        "Drew with Dev",
+        "Beat Gil",
+        "1½"
+      ],
+      [
+        "Ana (6)",
+        "Drew with Eve",
+        "Lost to Dev",
+        "Beat Gil",
+        "Lost to Cy",
+        "1½"
+      ],
+      [
+        "Cy (7)",
+        "Beat Dev",
+        "Won without playing (Fay left)",
+        "Lost to Eve",
+        "Beat Ana",
+        "3"
+      ]
+    ]
+  },
+  "diagram": {
+    "kind": "swissRound",
+    "title": "Round 3: Gil plays a first game, and Fay, who left once round 2 was paired, is not seated. The other 5 players are paired as usual.",
+    "round": 3,
+    "pairings": [
+      {
+        "board": 1,
+        "first": "Cy (7)",
+        "second": "Eve (2)",
+        "firstScore": "2",
+        "secondScore": "1½",
+        "result": "0 — 1",
+        "firstWhite": true,
+        "float": true
+      },
+      {
+        "board": 2,
+        "first": "Ana (6)",
+        "second": "Gil (4)",
+        "firstScore": "½",
+        "secondScore": "0",
+        "result": "1 — 0",
+        "firstWhite": true,
+        "float": true
+      },
+      {
+        "board": 3,
+        "first": "Ben (5)",
+        "second": "Dev (3)",
+        "firstScore": "0",
+        "secondScore": "1",
+        "result": "½ — ½",
+        "firstWhite": true,
+        "float": true
+      }
+    ],
+    "byes": [],
+    "notSeated": [
+      {
+        "name": "Fay (1)",
+        "why": "left after round 2 was paired"
+      }
+    ]
+  },
+  "text": [
+    "Round 2: Fay left after the round was paired, so Cy wins that board without playing."
+  ]
+}

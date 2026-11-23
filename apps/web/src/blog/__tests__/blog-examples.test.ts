@@ -19,7 +19,7 @@ import { sportLabel, tiebreakLabel, variantLabel } from "@/blog/labels";
 import { DECLARED_BUT_UNREACHABLE, rankingKeyProblem } from "@/blog/examples/standings-points";
 import { pageVariantRows, startingVariantKey, syncedVariantName } from "@/blog/examples/starting-variant";
 import { PREFERRED_VARIANT } from "@/lib/preferred-variant";
-import { findBlogLeaks } from "@/blog/leaks";
+import { findBlogLeaks, withoutDiagramKind } from "@/blog/leaks";
 
 const GOLDEN_DIR = join(process.cwd(), "src", "blog", "examples", "__golden__");
 const UPDATE = process.env.UPDATE_BLOG_EXAMPLES === "1";
@@ -284,12 +284,6 @@ function stringLeaves(v: unknown): string[] {
   return Object.values(v as Record<string, unknown>).flatMap(stringLeaves);
 }
 
-/** Batch 5: a diagram's `kind` is the model's discriminator ("walkoverBracket"), read by the drawing's switch and never shown, so
- *  the copy scan skips that one field; every other string of the diagram is still scanned. */
-function withoutDiagramKind(g: ExampleResult): unknown {
-  return g.diagram === undefined ? g : { ...g, diagram: { ...g.diagram, kind: undefined } };
-}
-
 describe("the pilot's result reads like copy: no key, no identifier, no developer word", () => {
   it("every string leaf of every golden passes the leak scan", () => {
     let strings = 0;
@@ -311,6 +305,17 @@ describe("the pilot's result reads like copy: no key, no identifier, no develope
     const leaves = stringLeaves(g);
     expect(leaves).toEqual(expect.arrayContaining(["fact_leak", "rung_leak", "A title", "ladder", "plain"]));
     expect(leaves.flatMap((x) => findBlogLeaks(x).map((l) => l.match)).sort()).toEqual(["fact_leak", "rung_leak"]);
+  });
+  it("the scan skips a diagram's discriminant and nothing else: a camel-case kind passes, a leak in its title or a name does not", () => {
+    const g: ExampleResult = {
+      facts: {},
+      diagram: { kind: "swissRound", title: "Round 2: title_leak", round: 2, pairings: [{ board: 1, first: "first_leak", second: null }], byes: [] },
+      text: [],
+    };
+    const leaves = stringLeaves(withoutDiagramKind(g));
+    expect(leaves).not.toContain("swissRound");
+    expect(leaves.flatMap((x) => findBlogLeaks(x).map((l) => l.match)).sort()).toEqual(["first_leak", "title_leak"]);
+    expect(stringLeaves(g).flatMap((x) => findBlogLeaks(x).map((l) => l.match))).toContain("swissRound");
   });
 });
 

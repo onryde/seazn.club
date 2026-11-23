@@ -15,6 +15,7 @@ export {
   type SnapshotCause,
 } from "./types";
 export {
+  awardByeDelta,
   foldedAdjustments,
   gamePointsReader,
   scheduledPairsOf,
