@@ -135,27 +135,28 @@ describe("the tree", () => {
     expect(withExample, "posts with a generated example").toBeGreaterThan(0);
   });
 
-  // Blog batch 2: a generated table is not a picture. The review found six posts passing the test above on their table alone,
-  // so each batch 2 post owes a product picture too, which the table does not stand in for.
-  it("blog batch 2: every tie-break post carries a picture as well as its generated table", () => {
-    const BATCH_2_SLUGS = [
-      "level-on-points-who-finishes-higher",
-      "three-way-tie-head-to-head",
-      "net-run-rate-explained",
-      "set-ratio-or-set-difference",
-      "buchholz-and-sonneborn-berger",
-      "when-lots-decide-a-tie",
-    ];
+  // Brief gate 4: every post owes one diagram OR screenshot, and a table does not count as one. A picture is a generated
+  // diagram (an example of the post whose result carries a `diagram`, which the page draws) or a `/help/blog/` screenshot.
+  it("every post carries a picture besides its table: a generated diagram or a /help/blog/ screenshot", () => {
+    const SCREENSHOT = /!\[[^\]]*\]\(\/help\/blog\/[^)]+\)/g;
     let checked = 0;
-    for (const slug of BATCH_2_SLUGS) {
-      const p = posts.find((x) => x.slug === slug);
-      expect(p, `${slug}: the post exists`).toBeDefined();
-      const pictures = p!.markdown.match(/!\[[^\]]*\]\(\/help\/blog\/[^)]+\)/g) ?? [];
-      expect(pictures.length, `${slug}: a picture besides the table`).toBeGreaterThanOrEqual(1);
-      expect(p!.examples.some((id) => BLOG_GOLDENS[id]?.table !== undefined), `${slug}: still has its generated table`).toBe(true);
+    let diagrams = 0;
+    let screenshots = 0;
+    const without: string[] = [];
+    for (const p of posts) {
+      const drawn = p.examples.filter((id) => BLOG_GOLDENS[id]?.diagram !== undefined).length;
+      const shots = (p.markdown.match(SCREENSHOT) ?? []).length;
+      diagrams += drawn;
+      screenshots += shots;
+      if (drawn + shots === 0) without.push(p.slug);
       checked++;
     }
-    expect(checked, "anti-vacuity: batch 2 posts checked").toBe(BATCH_2_SLUGS.length);
+    expect(checked, "anti-vacuity: posts checked").toBe(posts.length);
+    expect(checked, "anti-vacuity: posts checked").toBeGreaterThan(0);
+    // Both kinds are in the tree today, so a reader that stopped seeing one of them would show here instead of passing.
+    expect(diagrams, "anti-vacuity: generated diagrams seen").toBeGreaterThan(0);
+    expect(screenshots, "anti-vacuity: screenshots seen").toBeGreaterThan(0);
+    expect(without, `posts with neither a generated diagram nor a /help/blog/ picture (a table alone is not one), of ${checked} checked`).toEqual([]);
   });
 
   it("every post renders end to end: fact tokens resolved, one example part per listed example, no brace left in the HTML", async () => {
