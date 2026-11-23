@@ -36,6 +36,9 @@ const SCRIPT = "scripts/check-vitest-collection.ts";
 // gate proves is the arithmetic between listing and execution, and that only
 // holds if this set really is everything `c*` matches.
 const C_GLOBBED = [
+  // W5 follow-ups B5: a public cache entry near Next's item limit logs its size. Begins with "c", so the `c*` glob removes it
+  // (listed first, so `consent` stays last: CONSENT below reads the last entry).
+  "src/server/public-site/__tests__/cache-entry-size-log.test.ts",
   // W4 app B (champion by title tag / joint winners): both begin with "c", so the `c*` glob removes them.
   "src/server/public-site/__tests__/champion-division-db.test.ts",
   "src/server/public-site/__tests__/champion-title-engine-parity.test.ts",
@@ -221,6 +224,11 @@ const REST = [
   "src/server/public-site/__tests__/points-adjustment-surfaces-db.test.tsx",
   "src/server/public-site/__tests__/qualification-frozen-surfaces-db.test.tsx",
   "src/server/public-site/__tests__/qualification-view-frozen.test.ts",
+  // W5 follow-ups: a late entrant's catch-up rounds never move the hub's paging frontier (C), and both public documents go to
+  // the data cache compressed (B5). Neither begins with "c", so both belong here; this gate reddened on them in PR #1294's CI
+  // (listed=82 vs 80).
+  "src/server/public-site/__tests__/hub-catch-up-flag-db.test.ts",
+  "src/server/public-site/__tests__/public-docs-cache-size-db.test.ts",
 ];
 const EXCLUDE_C = "**/public-site/__tests__/c*";
 
