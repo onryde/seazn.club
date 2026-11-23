@@ -112,11 +112,15 @@ const EXEMPT: readonly Exemption[] = [
     reason: "buildDrawModel's `seatText` names only a seat with no id, after `id ?? unseatedForfeitLoser(...)`",
     via: [{ file: "src/lib/poster-draw.ts", decl: "buildDrawModel" }],
   },
+  // W5 follow-ups C moved the division page's two seat-namer calls here, so the round loader (`rounds/route.ts`) names an unfilled
+  // seat exactly as the page does. The Bracket takes `namer.slot`, not these labels.
   {
-    file: "src/app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx",
-    fn: "DivisionHomePage", sites: 2,
-    reason: "`slotLabels` feeds <Schedule>/<Bracket>, which ask the reader before reading it",
-    via: PUBLIC_VIA,
+    file: "src/server/public-site/schedule-paging.ts",
+    fn: "publicScheduleContext", sites: 2,
+    reason:
+      "`slotLabels` feeds only the Schedule's rows - the division page's <PackedSchedule>/<PagedSchedule> and the round loader's rows - " +
+      "all drawn by <Schedule>'s ScorebugRow, which asks the reader before reading a label",
+    via: [{ file: "src/components/public-site/schedule.tsx", decl: "ScorebugRow" }],
   },
   {
     file: "src/app/embed/divisions/[id]/[widget]/page.tsx",
