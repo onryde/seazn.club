@@ -10,11 +10,14 @@ import { describe, expect, it } from "vitest";
 const WEB = join(import.meta.dirname, "..", "..", "..", "..");
 const REPO = join(WEB, "..", "..");
 
-/** [the leaf, under apps/web/src; the runner that imports it, from the repo root; the specifier that runner names] */
-const LEAVES: [leaf: string, runner: string, specifier: string][] = [
+/** [the leaf, under apps/web/src; the runner that imports it, from the repo root; the specifier that runner names]. A leaf whose runner
+ *  has not landed yet carries `null` for both: it is still scanned for imports, and the runner half is owed by the task that adds the runner
+ *  (online-chess-package.ts: scripts/smoke/suites/onlineChessDesk.ts, extended by Task 7 Step 5 of the Online Chess credits plan, which must replace the nulls with its path and specifier). */
+const LEAVES: [leaf: string, runner: string | null, specifier: string | null][] = [
   ["server/usecases/external-play/sweep/pass-limits.ts", "apps/web/e2e/load/chess-30-boards.load.ts", "../../src/server/usecases/external-play/sweep/pass-limits"],
   ["server/external-play/video/budget-limits.ts", "apps/web/e2e/load/load-stats.ts", "../../src/server/external-play/video/budget-limits"],
   ["lib/online-chess-cap.ts", "scripts/smoke/suites/onlineChessDesk.ts", "../../../apps/web/src/lib/online-chess-cap.ts"],
+  ["lib/online-chess-package.ts", null, null], // the price leaf; onlineChessDesk.ts starts importing it in Task 7 Step 5
 ];
 
 /** Every module a source depends on: a static import (bare, with bindings, or type-only), a re-export from, a dynamic import, a require.
@@ -57,14 +60,19 @@ describe("the import-free leaves import nothing (cap-256 review m2)", () => {
 
   it("each leaf is read, declares an export, and depends on nothing; each runner imports the leaf by that path", () => {
     let checked = 0;
+    let withRunner = 0;
     for (const [leaf, runner, specifier] of LEAVES) {
       const source = readFileSync(join(WEB, "src", leaf), "utf8");
       expect(source, `${leaf}: anti-vacuity - the file read declares a constant`).toMatch(/^export const \w+/m);
-      expect(moduleDependencies(source), `${leaf} must import nothing: ${runner} cannot load what it would pull in`).toEqual([]);
-      const runnerSource = readFileSync(join(REPO, runner), "utf8");
-      expect(moduleDependencies(runnerSource), `${runner} reads the leaf itself`).toContain(specifier);
+      expect(moduleDependencies(source), `${leaf} must import nothing: ${runner ?? "its smoke runner"} cannot load what it would pull in`).toEqual([]);
+      if (runner !== null && specifier !== null) {
+        const runnerSource = readFileSync(join(REPO, runner), "utf8");
+        expect(moduleDependencies(runnerSource), `${runner} reads the leaf itself`).toContain(specifier);
+        withRunner += 1;
+      }
       checked += 1;
     }
-    expect(checked, "leaves scanned").toBe(3);
+    expect(checked, "leaves scanned").toBe(4);
+    expect(withRunner, "leaves whose runner was checked").toBe(3);
   });
 });
