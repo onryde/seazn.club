@@ -67,6 +67,7 @@ afterAll(async () => {
 });
 
 async function league(): Promise<{ auth: AuthCtx; divId: string; stageId: string; fixtures: { id: string }[] }> {
+  // single-sport: generic - the race is in the refold's lock order, not in any sport's scoring.
   const { auth } = await seedOrg("pro");
   const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Race", visibility: "private", branding: {} });
   const [variant] = await sql<{ key: string; config: Record<string, unknown> }[]>`
