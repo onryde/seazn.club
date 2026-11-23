@@ -53,8 +53,6 @@ export const ALLOWED_KEYS: ReadonlySet<string> = new Set([
   // YouTube live status (2026-11-14): what YouTube said of a YouTube Connect broadcast and its stream - enum words only
   // (LifeCycle, StreamStatus, StreamHealth in server/youtube/port.ts); a `youtube_status` event carries them.
   "broadcastLife", "streamStatus", "healthStatus",
-  // Task 27b: an ingest_status event's channel — `notification` for a Cloudflare live-input notification's (an enum word).
-  "via",
   // nesting containers
   "outputs", "inputs", "samples", "summary",
 ]);

@@ -15,6 +15,7 @@ vi.mock("@/lib/sentry", () => ({ captureError: vi.fn() }));
 
 import { sql } from "@/lib/db";
 import { STREAM_POLL_MS } from "@/lib/stream-session-view";
+import { SAMPLES_PER_SESSION_CAP } from "@/server/relay/config";
 import { log } from "@/server/logger";
 import type { IngestState } from "@/server/relay/ports";
 import { pairPresentPhone } from "@/server/relay/__tests__/_session-rig";
@@ -47,7 +48,7 @@ const samplesOf = async (sid: string, source: string) => sql<SampleRow[]>`
   select source, ingest_state, ingest_reason, sampled_at, raw from fixture_stream_samples where session_id = ${sid} and source = ${source} order by id`;
 /** Every row anywhere that names this input uid as a notification's — "nothing written" is this, zero. */
 const notedAnywhere = async (uid: string) => {
-  const [{ e }] = await sql<{ e: number }[]>`select count(*)::int as e from fixture_stream_events where payload->>'inputUid' = ${uid} and payload->>'via' = 'notification'`;
+  const [{ e }] = await sql<{ e: number }[]>`select count(*)::int as e from fixture_stream_events where payload->>'inputUid' = ${uid} and source = 'webhook'`;
   const [{ s }] = await sql<{ s: number }[]>`select count(*)::int as s from fixture_stream_samples where source = 'notification' and raw->>'inputUid' = ${uid}`;
   return e + s;
 };
@@ -82,12 +83,12 @@ describe.skipIf(!HAS_DB)("recordLiveNotification — a Cloudflare live-input not
 
     const added = (await ingestEvents(sid)).slice(before.length);
     expect(added.map((e) => [e.source, e.kind, e.from_state, e.to_state, e.occurred_at.getTime()])).toEqual([
-      ["ingest", "observed", "connected", "disconnected", tDrop.getTime()],
-      ["ingest", "observed", "disconnected", "connected", tBack.getTime()],
+      ["webhook", "observed", "connected", "disconnected", tDrop.getTime()],
+      ["webhook", "observed", "disconnected", "connected", tBack.getTime()],
     ]);
     expect(added.map((e) => e.payload)).toEqual([
-      { via: "notification", event: "live_input.disconnected", reason: null, role: "camera", inputUid: camera.uid },
-      { via: "notification", event: "live_input.connected", reason: null, role: "camera", inputUid: camera.uid },
+      { event: "live_input.disconnected", reason: null, role: "camera", inputUid: camera.uid },
+      { event: "live_input.connected", reason: null, role: "camera", inputUid: camera.uid },
     ]);
     expect((await samplesOf(sid, "notification")).map((s) => [s.ingest_state, s.ingest_reason, s.sampled_at.getTime(), s.raw.event])).toEqual([
       ["disconnected", null, tDrop.getTime(), "live_input.disconnected"],
@@ -227,6 +228,69 @@ describe.skipIf(!HAS_DB)("recordLiveNotification — a Cloudflare live-input not
     await stopAndSettle(r, f, sid);
     expect(await recordLiveNotification(note(camera.uid, "disconnected", new Date(r.clock.now + 1_000)), new Date())).toMatchObject({ outcome: "recorded", sessionId: sid });
     expect(await stateOf(sid)).toBe("completed");
+  });
+
+  it("Task 27b review I1, out of order: each notification chains from the input's word AS OF ITS OWN MOMENT — never a later notification's, never a poll sample read after it — and an earlier record is never rewritten", async () => {
+    const r = await rig();
+    const f = r.fixtureIds[0];
+    const sid = await passthroughLive(r, f);
+    const camera = await inputOf(sid, "camera");
+    const t = r.deps.now().getTime();   // the go-live poll's sample: connected, at t
+    const sinceBefore = (await currentSession(r.auth, f, r.deps))!.output?.since;
+    expect(sinceBefore, "PREMISE: D3 has a since").toBeTruthy();
+    const at = (s: number) => new Date(t + s * 1_000);
+    const deliver = async (event: "connected" | "disconnected" | "errored", s: number) => {
+      const out = await recordLiveNotification(note(camera.uid, event, at(s)), new Date());
+      expect(out, `${event}@+${s}s`).toMatchObject({ outcome: "recorded", sessionId: sid });
+      return (out as { from: string | null }).from;
+    };
+    // Each expected `from` is read off this timeline by hand: the newest word at or before the notification's moment.
+    expect(await deliver("disconnected", 5), "@+5: the poll's word at t").toBe("connected");
+    expect(await deliver("connected", 20), "@+20: the drop at +5").toBe("disconnected");
+    expect(await deliver("disconnected", 10), "@+10, delivered after +20: the drop at +5, never the later +20").toBe("disconnected");
+    expect(await deliver("connected", 3), "@+3, delivered late: the poll's word at t").toBe("connected");
+    // +12: the newest by MOMENT at or before it is the drop at +10; the newest by ARRIVAL among those is the +3 connect.
+    expect(await deliver("errored", 12), "@+12: the +10 drop (moment order, not arrival order)").toBe("disconnected");
+    // The next poll lands at +60 (connected, no change against the last POLL sample, so no event of its own).
+    r.clock.now = t + 60_000;
+    await pairPresentPhone(f, { at: r.deps.now() });
+    const after = (await currentSession(r.auth, f, r.deps))!;
+    expect((await samplesOf(sid, "poll")).at(-1)!.sampled_at.getTime(), "PREMISE: a poll sample newer than what follows").toBe(t + 60_000);
+    expect(await deliver("connected", 15), "@+15, delivered after the +60 poll: the +12 error, never the newer poll sample").toBe("unknown");
+    // Six recorded, nothing deduped; the +20 connect keeps the `from` it was recorded with (the drop at +5) although the late
+    // +10/+12/+15 arrivals now sit between: a record states what was known when it was written.
+    const notes = (await ingestEvents(sid)).filter((e) => e.source === "webhook");
+    expect(notes).toHaveLength(6);
+    expect(notes.find((e) => e.occurred_at.getTime() === t + 20_000)!.from_state).toBe("disconnected");
+    expect(await stateOf(sid)).toBe("live");
+    expect(after.state).toBe("live");
+    expect(after.output?.since, "D3's since is the poll's: untouched by six notifications").toBe(sinceBefore);
+  });
+
+  it("Task 27b review m2: a notification sample over the session's sample cap is `capped` and the session gets ONE `samples_capped` event (as a beat's does); the notification's own event is still written", async () => {
+    const r = await rig();
+    const sid = await passthroughLive(r, r.fixtureIds[0]);
+    const camera = await inputOf(sid, "camera");
+    const cappedEvents = async () => (await sql<{ n: number }[]>`
+      select count(*)::int as n from fixture_stream_events where session_id = ${sid} and type = 'samples_capped'`)[0]!.n;
+    // EMPTY CASE FIRST: under the cap, a notification writes its sample and no cap event.
+    expect(await recordLiveNotification(note(camera.uid, "disconnected", new Date(r.clock.now + 1_000)), new Date())).toMatchObject({ sample: "written" });
+    expect(await cappedEvents()).toBe(0);
+    const [{ n: have }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_samples where session_id = ${sid}`;
+    await sql`insert into fixture_stream_samples (session_id, source, sampled_at)
+              select ${sid}, 'heartbeat', now() from generate_series(1, ${SAMPLES_PER_SESSION_CAP - have}::int)`;
+    let checked = 0;
+    for (const s of [2, 3]) {
+      expect(await recordLiveNotification(note(camera.uid, "connected", new Date(r.clock.now + s * 1_000)), new Date()), `+${s}s`)
+        .toMatchObject({ outcome: "recorded", sample: "capped" });
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(await cappedEvents(), "one cap event, not one per capped sample").toBe(1);
+    const [cap] = await sql<{ source: string; kind: string; payload: unknown }[]>`
+      select source, kind, payload from fixture_stream_events where session_id = ${sid} and type = 'samples_capped'`;
+    expect(cap).toEqual({ source: "webhook", kind: "event", payload: { count: SAMPLES_PER_SESSION_CAP } });
+    expect((await ingestEvents(sid)).filter((e) => e.source === "webhook"), "every notification's own event").toHaveLength(3);
   });
 
   it("guard: an input uid two input rows name is a record nothing can place — refused by name, nothing written", async () => {
