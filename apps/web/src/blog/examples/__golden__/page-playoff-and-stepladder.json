@@ -1,0 +1,83 @@
+{
+  "facts": {
+    "pageField": 4,
+    "pageMatches": 4,
+    "pageQ1Loser": "Ana",
+    "pageChampion": "Ana",
+    "stepPlayers": 4,
+    "stepMatches": 3,
+    "stepBottom": "Dev",
+    "stepBottomWins": 2,
+    "stepTop": "Ana",
+    "stepTopMatches": 1,
+    "stepChampion": "Ana",
+    "stepBottomPlace": "2nd",
+    "sportsOfferedPage": 11,
+    "sportsOfferedStep": 11,
+    "sportCount": 11
+  },
+  "table": {
+    "caption": "The same four players through both finals series. In the Page playoff the top seed loses its first match and still wins the title; in the stepladder the bottom seed wins two matches and loses the final.",
+    "columns": [
+      "Series",
+      "Match",
+      "Players (seed)",
+      "Winner",
+      "Where the loser finished"
+    ],
+    "rows": [
+      [
+        "Page playoff",
+        "Qualifier 1",
+        "Ana (1) v Ben (2)",
+        "Ben (2)",
+        "1st"
+      ],
+      [
+        "Page playoff",
+        "Eliminator",
+        "Cy (3) v Dev (4)",
+        "Cy (3)",
+        "4th"
+      ],
+      [
+        "Page playoff",
+        "Qualifier 2",
+        "Ana (1) v Cy (3)",
+        "Ana (1)",
+        "3rd"
+      ],
+      [
+        "Page playoff",
+        "Final",
+        "Ben (2) v Ana (1)",
+        "Ana (1)",
+        "2nd"
+      ],
+      [
+        "Stepladder",
+        "Rung 1",
+        "Cy (3) v Dev (4)",
+        "Dev (4)",
+        "4th"
+      ],
+      [
+        "Stepladder",
+        "Rung 2",
+        "Ben (2) v Dev (4)",
+        "Dev (4)",
+        "3rd"
+      ],
+      [
+        "Stepladder",
+        "Final",
+        "Ana (1) v Dev (4)",
+        "Ana (1)",
+        "2nd"
+      ]
+    ]
+  },
+  "text": [
+    "The Page playoff is drawn for 4 players only."
+  ]
+}

@@ -9,7 +9,7 @@ import { BLOG_GOLDENS } from "@/blog/examples/goldens";
 import type { ExampleResult } from "@/blog/examples/types";
 import { sportLabel } from "@/blog/labels";
 
-const B4 = ["third-place-match", "knockout-match-ends-level"];
+const B4 = ["third-place-match", "knockout-match-ends-level", "page-playoff-and-stepladder", "double-elimination-explained"];
 
 function failing(id: string, r: ExampleResult): string[] {
   return blogExample(id)!.claims.filter((c) => c.check(r) !== true).map((c) => c.says);
@@ -78,7 +78,7 @@ describe("knockout-match-ends-level", () => {
   });
 });
 
-describe(() => {
+describe("page-playoff-and-stepladder", () => {
   const id = "page-playoff-and-stepladder";
   it("a Page playoff that knocks out the Qualifier 1 loser, pairs 1 v 3, or keeps the Eliminator loser is caught", () => {
     expect(failing(id, mutate(id, (r) => { rowWhere(r, 1, "Qualifier 2")[2] = "Ben (2) v Cy (3)"; })).length).toBeGreaterThan(0);
@@ -92,7 +92,7 @@ describe(() => {
   });
 });
 
-describe(() => {
+describe("double-elimination-explained", () => {
   const id = "double-elimination-explained";
   it("a player out after one defeat, a winners' loser who never plays again, or a reset after the unbeaten player won is caught", () => {
     expect(failing(id, mutate(id, (r) => { r.table!.rows = r.table!.rows.filter((row) => row[1] !== "Losers' round 1"); })).length).toBeGreaterThan(0);

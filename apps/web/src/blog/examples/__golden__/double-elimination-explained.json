@@ -1,0 +1,81 @@
+{
+  "facts": {
+    "players": 4,
+    "matchesWithReset": 7,
+    "matchesNoReset": 6,
+    "champion": "Ben",
+    "championDefeats": 1,
+    "wbChampion": "Ana",
+    "wbChampionPlace": "2nd",
+    "wbChampionDefeats": 2,
+    "noResetChampion": "Ben",
+    "noResetRunnerUp": "Ana",
+    "noResetRunnerUpDefeats": 1,
+    "sportsOffered": 11,
+    "sportCount": 11
+  },
+  "table": {
+    "caption": "Four players, double elimination with the grand final reset on. The losers' bracket champion wins the grand final, so the reset is played, and every player but the champion leaves with two defeats.",
+    "columns": [
+      "Bracket",
+      "Match",
+      "Players (seed)",
+      "Winner",
+      "Loser's defeats so far"
+    ],
+    "rows": [
+      [
+        "Winners bracket",
+        "Semi-finals",
+        "Ana (1) v Dev (4)",
+        "Ana (1)",
+        1
+      ],
+      [
+        "Winners bracket",
+        "Semi-finals",
+        "Cy (3) v Ben (2)",
+        "Ben (2)",
+        1
+      ],
+      [
+        "Winners bracket",
+        "Winners' final",
+        "Ana (1) v Ben (2)",
+        "Ana (1)",
+        1
+      ],
+      [
+        "Losers bracket",
+        "Losers' round 1",
+        "Dev (4) v Cy (3)",
+        "Cy (3)",
+        2
+      ],
+      [
+        "Losers bracket",
+        "Losers' final",
+        "Cy (3) v Ben (2)",
+        "Ben (2)",
+        2
+      ],
+      [
+        "Grand final",
+        "Grand final",
+        "Ana (1) v Ben (2)",
+        "Ben (2)",
+        1
+      ],
+      [
+        "Grand final",
+        "Grand final (reset)",
+        "Ben (2) v Ana (1)",
+        "Ben (2)",
+        2
+      ]
+    ]
+  },
+  "text": [
+    "With the reset off, the same results end after 6 matches."
+  ]
+}
