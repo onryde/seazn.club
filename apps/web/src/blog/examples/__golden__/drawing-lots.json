@@ -1,0 +1,78 @@
+{
+  "facts": {
+    "lotsFirst": "Larks",
+    "lotsSecond": "Owls",
+    "seedingFirst": "Owls",
+    "storedFirst": "Larks",
+    "storedDrawsMade": 0,
+    "lotsSplitBy": "drawing of lots",
+    "seedingSplitBy": "seeding",
+    "levelPoints": 4,
+    "larksOwlsDraw": "1 — 1",
+    "genericOrder": "difference, total scored, head-to-head, drawing of lots",
+    "footballLastSteps": "lots",
+    "cricketLastSteps": "seeding first, then lots",
+    "boardgameLastSteps": "lots",
+    "carromLastSteps": "lots",
+    "genericLastSteps": "lots",
+    "volleyballLastSteps": "lots",
+    "badmintonLastSteps": "lots",
+    "tabletennisLastSteps": "lots",
+    "tennisLastSteps": "seeding first, then lots",
+    "icehockeyLastSteps": "seeding first, then lots",
+    "hockeyLastSteps": "lots",
+    "sportCount": 11,
+    "seedSports": "Cricket, Tennis and Ice hockey",
+    "seedSportCount": 3
+  },
+  "table": {
+    "caption": "Larks and Owls are level on everything a generic table checks, so a drawing of lots decides. With a seeding step first, the better seed goes higher instead.",
+    "columns": [
+      "Team",
+      "Seed",
+      "Points",
+      "Difference",
+      "Scored",
+      "Points in their own match",
+      "Place, by drawing lots",
+      "Place, seeding before lots"
+    ],
+    "rows": [
+      [
+        "Larks",
+        2,
+        4,
+        "+2",
+        3,
+        1,
+        "1st",
+        "2nd"
+      ],
+      [
+        "Owls",
+        1,
+        4,
+        "+2",
+        3,
+        1,
+        "2nd",
+        "1st"
+      ],
+      [
+        "Wrens",
+        3,
+        0,
+        "-4",
+        0,
+        "Not in it",
+        "3rd",
+        "3rd"
+      ]
+    ]
+  },
+  "text": [
+    "Larks 1 — 1 Owls.",
+    "Larks 2 — 0 Wrens.",
+    "Owls 2 — 0 Wrens."
+  ]
+}

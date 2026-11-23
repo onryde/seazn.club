@@ -6,11 +6,13 @@ import { levelOnPoints } from "./level-on-points";
 import { threeWayTie } from "./three-way-tie";
 import { netRunRate } from "./net-run-rate";
 import { setRatioOrDifference } from "./set-ratio-or-difference";
+import { buchholzSonnebornBerger } from "./buchholz-sonneborn-berger";
+import { drawingLots } from "./drawing-lots";
 // ---- end blog batch 2 ----
 import type { BlogExample } from "./types";
 
 /** Blog batch 2's examples (tie-breaks), in post order. */
-const BATCH_2: readonly BlogExample[] = [levelOnPoints, threeWayTie, netRunRate, setRatioOrDifference];
+const BATCH_2: readonly BlogExample[] = [levelOnPoints, threeWayTie, netRunRate, setRatioOrDifference, buchholzSonnebornBerger, drawingLots];
 
 export const BLOG_EXAMPLES: readonly BlogExample[] = [standingsPoints, ...BATCH_2];
 

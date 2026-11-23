@@ -7,6 +7,8 @@ import levelOnPoints from "./__golden__/level-on-points.json";
 import threeWayTie from "./__golden__/three-way-tie.json";
 import netRunRate from "./__golden__/net-run-rate.json";
 import setRatioOrDifference from "./__golden__/set-ratio-or-difference.json";
+import buchholzSonnebornBerger from "./__golden__/buchholz-sonneborn-berger.json";
+import drawingLots from "./__golden__/drawing-lots.json";
 // ---- end blog batch 2 ----
 import type { ExampleResult } from "./types";
 
@@ -17,5 +19,7 @@ export const BLOG_GOLDENS: Record<string, ExampleResult> = {
   "three-way-tie": threeWayTie as ExampleResult,
   "net-run-rate": netRunRate as ExampleResult,
   "set-ratio-or-difference": setRatioOrDifference as ExampleResult,
+  "buchholz-sonneborn-berger": buchholzSonnebornBerger as ExampleResult,
+  "drawing-lots": drawingLots as ExampleResult,
   // ---- end blog batch 2 ----
 };
