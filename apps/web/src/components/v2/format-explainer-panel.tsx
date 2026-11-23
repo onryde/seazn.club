@@ -103,7 +103,7 @@ export function FormatExplainerPanel({
             {phases === null ? (
               <p className="text-sm text-slate-400">{t("format.explainer.generating")}</p>
             ) : (
-              <FormatPreviewView phases={phases} />
+              <FormatPreviewView phases={phases} level={4} />
             )}
           </div>
 
