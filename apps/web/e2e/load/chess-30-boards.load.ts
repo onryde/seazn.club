@@ -96,8 +96,8 @@
  *
  * The recipes below, and the measurements quoted beside them, were drawn against the 900-call ceiling (a bucket of 300 + 2 a second). The
  * ceiling is now 2,625 (525 + 7 a second, video/budget.ts): thirty boards (60 players) no longer exceed it, so a leg that depends on the
- * bucket running dry or a line forming - `B`, `B-honest`, `B-dry`, `B-slow-*` - needs a bigger run (LOAD_BOARDS=64, a full 128-player online
- * division) and its own fresh measurement before its figures are quoted. `B-dry` says so itself: it refuses a run too small to run dry.
+ * bucket running dry or a line forming - `B`, `B-honest`, `B-dry`, `B-slow-*` - needs a bigger run (LOAD_BOARDS=64, 128 players: half a
+ * full online division since the cap went to 256) and its own fresh measurement before its figures are quoted. `B-dry` says so itself: it refuses a run too small to run dry.
  *
  *   A           LOAD_SCENARIO=A LOAD_BOARDS=30 LOAD_ARRIVAL_SPREAD_S=20 LOAD_OPENED_AGO_S=0
  *               (all 60 on the page before the batches open; the harness's own 1-3 s cameras; strict)
