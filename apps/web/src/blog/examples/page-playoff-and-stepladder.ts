@@ -5,11 +5,15 @@
 // names are the product's, and the places are the engine's `bracketRanks`. Every field size from 2 to 8 is offered to the
 // Page playoff, so the one size it takes is the producer's answer, never a typed number.
 //
+// The figure draws both series in one picture, each in its own headed block: a solid line carries a winner on, a dashed one
+// carries the Qualifier 1 loser to Qualifier 2. Its feeds are the generator's own.
+//
 // WHAT CHECKS IT: the claims check the result against the Page playoff system (1 v 2 and 3 v 4; the loser of the first
 // meets the winner of the second; then the final) and the stepladder (the two lowest seeds play first, each winner meets
-// the next seed up; k players play k - 1 matches), and the registry's size. None reads `build()`.
+// the next seed up; k players play k - 1 matches), the app's forfeit rule (a forfeit loser never reaches Qualifier 2), the
+// figure's wiring, and the registry's size. None reads `build()`.
 import { builtinModules } from "@seazn/engine/sports";
-import { appDraw, betterSeedWins, offeredSweep, ordinal, placesOf, playBracket, type PlayedLine } from "./bracket-play-b4";
+import { appDraw, betterSeedWins, bracketModel, forfeitOutClaim, mergeBrackets, offeredSweep, ordinal, placesOf, playBracket, type PlayedLine } from "./bracket-play-b4";
 import type { BlogExample, Claim, ExampleResult } from "./types";
 
 export const PAGE_STEPLADDER_ID = "page-playoff-and-stepladder";
@@ -48,6 +52,16 @@ function build(): ExampleResult {
   const bottom = PLAYERS[PLAYERS.length - 1]!;
   const offeredPage = offeredSweep("group_playoffs");
   const offeredStep = offeredSweep("group_stepladder");
+  const seat = (p: string) => withSeed(p);
+  const stepBottomWins = stepLines.filter((l) => l.row.winner === bottom).length;
+  const title =
+    `Page playoff: ${withSeed(q1.row.loser!)} loses Qualifier 1, wins Qualifier 2 and then the final, so the top seed can lose once and still take the title. ` +
+    `Stepladder: ${withSeed(bottom)} wins ${stepBottomWins} matches in a row from the bottom rung, then loses the final to ${withSeed(PLAYERS[0]!)}, who has played only that one match.`;
+  const diagram = mergeBrackets(
+    title,
+    bracketModel("", pageLines, { seat, lane: PAGE, idPrefix: "pp:" }),
+    bracketModel("", stepLines, { seat, lane: STEP, idPrefix: "sl:" }),
+  );
 
   return {
     facts: {
@@ -58,7 +72,7 @@ function build(): ExampleResult {
       stepPlayers: PLAYERS.length,
       stepMatches: stepLines.length,
       stepBottom: bottom,
-      stepBottomWins: stepLines.filter((l) => l.row.winner === bottom).length,
+      stepBottomWins,
       stepTop: PLAYERS[0]!,
       stepTopMatches: stepLines.filter((l) => l.row.home === PLAYERS[0] || l.row.away === PLAYERS[0]).length,
       stepChampion: champion(stepLines),
@@ -72,6 +86,7 @@ function build(): ExampleResult {
       columns: COLUMNS,
       rows: [...rowsOf(PAGE, pageLines, pagePlaces), ...rowsOf(STEP, stepLines, stepPlaces)],
     },
+    diagram,
     text: [`The Page playoff is drawn for ${pageSizes[0]} players only.`],
   };
 }
@@ -83,6 +98,7 @@ const byMatch = (r: ExampleResult, s: string, name: string) => series(r, s).find
 const loserOf = (row: (string | number)[]) => String(row[C.players]).split(" v ").find((x) => x !== row[C.winner])!;
 
 const claims: Claim[] = [
+  forfeitOutClaim(),
   {
     says: "Page playoff: Qualifier 1 is the 1 seed against the 2 seed, and the Eliminator the 3 seed against the 4 seed",
     source: "Page playoff system (top four: 1 v 2, 3 v 4); ENG/scheduling/bracket.js:419-434",
@@ -153,6 +169,59 @@ const claims: Claim[] = [
       if (r.facts.stepTopMatches !== 1) return `the top seed plays ${r.facts.stepTopMatches} matches`;
       const bottomRows = series(r, STEP).filter((row) => String(row[C.players]).includes(`(${k})`) || String(row[C.players]).includes(`${r.facts.stepBottom} (`));
       return bottomRows.length === k - 1 || `the bottom seed plays ${bottomRows.length} of the ${k - 1} matches it must win`;
+    },
+  },
+  {
+    says: "the post's Page playoff story holds: the player it names as losing Qualifier 1 is that match's loser and the title's winner, and the champion won the Final",
+    source: "Page playoff system: the Qualifier 1 loser has a second chance in Qualifier 2 (ENG/scheduling/bracket.js:430); the Final's winner is the champion",
+    check: (r) => {
+      const q1 = byMatch(r, PAGE, "Qualifier 1");
+      const fin = byMatch(r, PAGE, "Final");
+      if (q1 === undefined || fin === undefined) return "Qualifier 1 or the Final is missing";
+      const loser = nameOf(loserOf(q1));
+      if (r.facts.pageQ1Loser !== loser) return `the post names ${r.facts.pageQ1Loser} as the Qualifier 1 loser; the table says ${loser}`;
+      if (r.facts.pageChampion !== nameOf(fin[C.winner])) return `the post names ${r.facts.pageChampion} as champion; the Final's winner is ${nameOf(fin[C.winner])}`;
+      // The example's point: the champion LOST a match on the way (right answer differs from a one-loss knockout's).
+      return r.facts.pageChampion === r.facts.pageQ1Loser || `the Qualifier 1 loser (${r.facts.pageQ1Loser}) is not the champion (${r.facts.pageChampion}), so the example cannot show the second chance`;
+    },
+  },
+  {
+    says: "the post's stepladder story holds: the bottom seed wins every rung before the final, loses the Final, and is placed 2nd; the top seed is the champion",
+    source: "stepladder final (bowling's step-ladder); ENG/scheduling/bracket.js:436-461; the Final's loser is the runner-up (ENG/competition/stage.js bracketRanks title)",
+    check: (r) => {
+      const rows = series(r, STEP);
+      const k = Number(r.facts.stepPlayers);
+      const fin = rows[rows.length - 1];
+      if (rows.length !== k - 1 || fin === undefined) return `${rows.length} stepladder matches for ${k} players`;
+      const bottom = String(r.facts.stepBottom);
+      const wins = rows.filter((row) => nameOf(row[C.winner]) === bottom).length;
+      if (r.facts.stepBottomWins !== wins) return `the post says ${r.facts.stepBottomWins} wins; the table has ${wins}`;
+      if (wins !== k - 2) return `${wins} wins, but the rungs before the Final number ${k - 2}`;
+      if (nameOf(fin[C.winner]) === bottom) return "the bottom seed won the Final, so the example cannot show the climb ending";
+      return (fin[C.loserPlace] === "2nd" && r.facts.stepBottomPlace === "2nd" && nameOf(fin[C.winner]) === r.facts.stepTop && r.facts.stepChampion === r.facts.stepTop) ||
+        `Final loser placed ${fin[C.loserPlace]}, fact ${r.facts.stepBottomPlace}, champion ${r.facts.stepChampion}`;
+    },
+  },
+  {
+    says: "the figure draws both series: Qualifier 2 is fed by the Qualifier 1 loser (a dashed line) and the Eliminator winner, and each stepladder rung is fed by the winner of the rung before it",
+    source: "Page playoff system and stepladder final; ENG/scheduling/bracket.js:419-461",
+    check: (r) => {
+      const matches = r.diagram?.kind === "bracket" ? r.diagram.rounds.flatMap((x) => x.matches) : [];
+      if (matches.length === 0) return "no bracket diagram";
+      const lane = (name: string) => matches.filter((m) => m.lane === name);
+      const find = (name: string, label: string) => lane(name).find((m) => m.label === label);
+      const q1 = find(PAGE, "Qualifier 1");
+      const q2 = find(PAGE, "Qualifier 2");
+      const el = find(PAGE, "Eliminator");
+      if (q1 === undefined || q2 === undefined || el === undefined) return "a Page playoff match is not drawn";
+      const feeds = [q2.homeFrom, q2.awayFrom];
+      const loserFeed = feeds.find((f) => f?.side === "loser");
+      const winnerFeed = feeds.find((f) => f?.side === "winner");
+      if (loserFeed?.id !== q1.id || winnerFeed?.id !== el.id) return "Qualifier 2 is not fed by the Qualifier 1 loser and the Eliminator winner";
+      const rungs = lane(STEP);
+      if (rungs.length !== Number(r.facts.stepMatches)) return `${rungs.length} stepladder matches drawn, ${r.facts.stepMatches} played`;
+      const chained = rungs.slice(1).every((m, i) => [m.homeFrom, m.awayFrom].some((f) => f?.side === "winner" && f.id === rungs[i]!.id));
+      return chained || "a stepladder rung is not fed by the winner of the rung before it";
     },
   },
   {

@@ -5,12 +5,16 @@
 // title is decided there and the winners' bracket champion finishes second after one defeat. Lanes and round names are the
 // product's words, and the places are the engine's `bracketRanks`.
 //
+// The figure draws the with-reset bracket as played: a solid line carries a winner on, a dashed one carries a winners' bracket
+// loser down to the losers' bracket. Its feeds are the generator's own.
+//
 // WHAT CHECKS IT: the claims check the result against double elimination itself (out after two defeats; a winners'
 // bracket loser drops to the losers' bracket; the grand final is the two bracket champions; a reset is played only after
-// the winners' bracket champion's first defeat), and the registry's size. None reads `build()`.
+// the winners' bracket champion's first defeat), the app's forfeit rule (a forfeit loser does NOT drop), the figure's wiring,
+// and the registry's size. None reads `build()`.
 import { builtinModules } from "@seazn/engine/sports";
 import { msg } from "@/lib/messages";
-import { appDraw, betterSeedWins, offeredSweep, ordinal, placesOf, playBracket, type Pick, type PlayedLine } from "./bracket-play-b4";
+import { appDraw, betterSeedWins, bracketModel, forfeitOutClaim, offeredSweep, ordinal, placesOf, playBracket, type Pick, type PlayedLine } from "./bracket-play-b4";
 import type { BlogExample, Claim, ExampleResult } from "./types";
 
 export const DOUBLE_ELIM_ID = "double-elimination-explained";
@@ -65,6 +69,11 @@ function build(): ExampleResult {
   const runnerUpNo = [...placesNo].find(([, r]) => r === 2)![0];
   const wbChampion = lines.find((l) => l.gen.bracket === "GF" && l.gen.conditional !== true)!.row.home!;
   const offered = offeredSweep("double_elim");
+  const diagram = bracketModel(
+    `${withSeed(wbChampion)} wins the winners bracket but loses the grand final, so both finalists have lost once and the reset is played: ${withSeed(champ)} wins it too, and ${withSeed(wbChampion)} finishes ${ordinal(places.get(wbChampion)!)} after ${defeats.get(wbChampion) ?? 0} defeats. A dashed line is a winners bracket loser dropping into the losers bracket.`,
+    lines,
+    { seat: withSeed },
+  );
 
   return {
     facts: {
@@ -87,6 +96,7 @@ function build(): ExampleResult {
       columns: COLUMNS,
       rows,
     },
+    diagram,
     text: [`With the reset off, the same results end after ${linesNo.filter((l) => l.row.status === "decided").length} matches.`],
   };
 }
@@ -97,6 +107,7 @@ const loser = (row: (string | number)[]) => sides(row).find((p) => p !== nameOf(
 const rowsIn = (r: ExampleResult, lane: string) => r.table?.rows.filter((row) => row[C.lane] === lane) ?? [];
 
 const claims: Claim[] = [
+  forfeitOutClaim(),
   {
     says: "every player except the champion leaves with exactly two defeats, and the champion has at most one",
     source: "double elimination: a player is out after a second defeat (ENG/scheduling/bracket.js:323-330)",
@@ -154,6 +165,42 @@ const claims: Claim[] = [
       // The right answer differs from the wrong one: without the reset the player out is out after ONE defeat.
       return (r.facts.noResetRunnerUp === r.facts.wbChampion && r.facts.noResetRunnerUpDefeats === 1 && r.facts.wbChampionDefeats === 2) ||
         `no reset: runner-up ${r.facts.noResetRunnerUp} with ${r.facts.noResetRunnerUpDefeats}; reset: ${r.facts.wbChampion} with ${r.facts.wbChampionDefeats}`;
+    },
+  },
+  {
+    says: "the post's grand final story holds: the winners bracket champion lost the first grand final to the champion, played the reset, lost it, and finishes 2nd with two defeats",
+    source: "double elimination: a player is out after a second defeat; the final's loser is the runner-up (ENG/competition/stage.js bracketRanks title)",
+    check: (r) => {
+      const gf = rowsIn(r, LANE.GF!);
+      if (gf.length !== 2) return `${gf.length} grand finals`;
+      const last = gf[1]!;
+      if (nameOf(last[C.winner]) !== r.facts.champion) return `the reset's winner is ${nameOf(last[C.winner])}, the post names ${r.facts.champion} as champion`;
+      if (loser(last) !== r.facts.wbChampion) return `the reset's loser is ${loser(last)}, the post names ${r.facts.wbChampion} as the winners bracket champion`;
+      if (r.facts.wbChampionPlace !== "2nd") return `the winners bracket champion is placed ${r.facts.wbChampionPlace}`;
+      return (Number(last[C.losses]) === 2 && r.facts.wbChampionDefeats === 2 && r.facts.championDefeats === 1) || `defeats: reset loser ${last[C.losses]}, fact ${r.facts.wbChampionDefeats}, champion ${r.facts.championDefeats}`;
+    },
+  },
+  {
+    says: "the figure draws the winners bracket losers dropping into the losers bracket (dashed lines), and the grand final fed by the two bracket champions",
+    source: "ENG/scheduling/bracket.js:340-399 (winners' round losers drop; the grand final is the winners' champion v the losers' champion)",
+    check: (r) => {
+      const matches = r.diagram?.kind === "bracket" ? r.diagram.rounds.flatMap((x) => x.matches) : [];
+      if (matches.length === 0) return "no bracket diagram";
+      const byId = new Map(matches.map((m) => [m.id, m] as const));
+      const feeds = (m: (typeof matches)[number]) => [m.homeFrom, m.awayFrom].filter((f) => f !== undefined);
+      const winnersLabels = new Set([msg("bracket.round.semi"), msg("bracket.round.winnersFinal")]);
+      const loserEdges = matches.flatMap((m) => feeds(m).filter((f) => f.side === "loser").map((f) => ({ from: byId.get(f.id)!, to: m })));
+      const drops = loserEdges.filter((e) => winnersLabels.has(String(e.from.label)));
+      if (drops.length === 0) return "no winners bracket loser is drawn dropping anywhere";
+      // A winners bracket loser lands in a match of the losers bracket, never back in the winners bracket.
+      if (drops.some((e) => winnersLabels.has(String(e.to.label)))) return "a winners bracket loser is drawn dropping into the winners bracket";
+      // The only other loser edge is the first grand final's loser, who plays the reset.
+      const rest = loserEdges.filter((e) => !winnersLabels.has(String(e.from.label)));
+      if (!rest.every((e) => e.from.label === msg("bracket.round.grandFinal") && e.to.label === msg("bracket.round.grandFinalReset"))) return "a loser edge comes from a match that is not in the winners bracket";
+      const gf = matches.find((m) => m.label === msg("bracket.round.grandFinal"));
+      if (gf === undefined) return "no grand final drawn";
+      const gfFrom = feeds(gf).map((f) => byId.get(f.id)?.label);
+      return (feeds(gf).length === 2 && feeds(gf).every((f) => f.side === "winner") && gfFrom.includes(msg("bracket.round.winnersFinal")) && gfFrom.includes(msg("bracket.round.losersFinal"))) || `the grand final is fed by ${gfFrom.join(", ")}`;
     },
   },
   {

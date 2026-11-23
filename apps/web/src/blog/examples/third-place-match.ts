@@ -5,13 +5,17 @@
 // are the engine's `bracketRanks`. The app's own refusal of a play-off below four players is asked of `generate` for every
 // field from 2 to 8, so the smallest field that can have one comes from the producer, never a typed number.
 //
+// The figure is the play-off draw as played: every match a box, a solid line for a winner going on, a dashed one for the two
+// semi-final losers going to the third-place match. Its feeds are the generator's own.
+//
 // WHAT CHECKS IT: the claims read the engine's shared-place declaration (`BRACKET_SHARED_RANKS`), the app's size rule
-// (`THIRD_PLACE_MIN`), standard competition ranking (a shared 3rd uses up 4th, so the next place is 5th), and the
-// registry's size. None reads `build()`.
+// (`THIRD_PLACE_MIN`), standard competition ranking (a shared 3rd uses up 4th, so the next place is 5th), the app's forfeit
+// rule (a forfeit loser never drops to the play-off), the figure's own wiring, and the registry's size. None reads `build()`.
 import { BRACKET_SHARED_RANKS } from "@seazn/engine/competition";
 import { builtinModules } from "@seazn/engine/sports";
 import { THIRD_PLACE_MIN } from "@/lib/third-place";
-import { appDraw, betterSeedWins, offeredSweep, ordinal, placesOf, playBracket } from "./bracket-play-b4";
+import { msg } from "@/lib/messages";
+import { appDraw, betterSeedWins, bracketModel, forfeitOutClaim, offeredSweep, ordinal, placesOf, playBracket } from "./bracket-play-b4";
 import type { BlogExample, Claim, ExampleResult } from "./types";
 
 export const THIRD_PLACE_MATCH_ID = "third-place-match";
@@ -67,6 +71,12 @@ export function buildFrom(draw: typeof drawn): ExampleResult {
   const semiLosers = semis.map((l) => l.row.loser!).sort((a, b) => SEEDS.get(a)! - SEEDS.get(b)!);
   const tp = playoffLines.find((l) => l.gen.thirdPlace === true)!;
   const offered = offeredSweep("knockout");
+  const seat = (p: string) => `${p} (${SEEDS.get(p)})`;
+  const diagram = bracketModel(
+    `With a third-place match, ${tp.row.home} and ${tp.row.away}, who both lost their semi-finals, play each other once more. ${tp.row.winner}, the lower seed, wins it and is placed ${ordinal(playoffPlaces.get(tp.row.winner!)!)}, and ${tp.row.loser} is placed ${ordinal(playoffPlaces.get(tp.row.loser!)!)}. Without the match, both would share ${ordinal(sharedPlaces.get(semiLosers[0]!)!)}.`,
+    playoffLines,
+    { seat },
+  );
 
   return {
     facts: {
@@ -90,6 +100,7 @@ export function buildFrom(draw: typeof drawn): ExampleResult {
       columns: COLUMNS,
       rows,
     },
+    diagram,
     text: [
       `Fields of ${Object.entries(fieldRefusals).filter(([, r]) => r !== null).map(([n]) => n).join(", ")} players are refused a third-place match.`,
       `The third-place match is ${tp.row.home} against ${tp.row.away}.`,
@@ -99,10 +110,16 @@ export function buildFrom(draw: typeof drawn): ExampleResult {
 
 const rowOf = (r: ExampleResult, player: string) => r.table?.rows.find((row) => String(row[C.player]).startsWith(`${player} (`));
 const place = (cell: unknown) => (typeof cell === "string" ? Number.parseInt(cell, 10) : Number.NaN);
-const semiName = "Semi-finals";
-const quarterName = "Quarter-finals";
+// The product's own round names (the table's and the figure's labels are `roundRoleLabel`'s, which reads these keys).
+const semiName = msg("bracket.round.semi");
+const quarterName = msg("bracket.round.quarter");
+const finalName = msg("bracket.round.final");
+const thirdName = msg("bracket.round.thirdPlace");
+
+const nameOf = (cell: unknown) => String(cell).replace(/ \(\d+\)$/, "");
 
 const claims: Claim[] = [
+  forfeitOutClaim(),
   {
     says: "with third place shared, both beaten semi-finalists are placed 3rd, a place the engine declares may be shared",
     source: "BRACKET_SHARED_RANKS (ENG/competition/stage.js:40); bracketRanks third-place block (stage.js:808-822)",
@@ -168,6 +185,50 @@ const claims: Claim[] = [
     says: "the third-place match adds exactly one match to the draw",
     source: "ENG/scheduling/bracket.js:157-163 (one play-off line, fed by the two semi-final losers)",
     check: (r) => Number(r.facts.matchesPlayoff) - Number(r.facts.matchesShared) === 1 || `${r.facts.matchesShared} and ${r.facts.matchesPlayoff}`,
+  },
+  {
+    says: "the two players the post names as sharing third are the two beaten semi-finalists, placed 3rd, and the same two play the third-place match for 3rd and 4th",
+    source: "bracketRanks third-place block (ENG/competition/stage.js:808-829): the play-off is fed by the two semi-final losers; BRACKET_SHARED_RANKS has 3",
+    check: (r) => {
+      const semi = (r.table?.rows.filter((row) => row[C.out] === semiName) ?? []).map((row) => nameOf(row[C.player])).sort();
+      if (semi.length !== 2) return `expected two semi-final losers, found ${semi.length}`;
+      const named = [String(r.facts.semiLoserA), String(r.facts.semiLoserB)].sort();
+      if (JSON.stringify(named) !== JSON.stringify(semi)) return `the post names ${named.join(", ")}; the semi-final losers are ${semi.join(", ")}`;
+      if (r.facts.sharedPlace !== "3rd") return `the shared place is ${r.facts.sharedPlace}`;
+      const pair = [String(r.facts.playoffWinner), String(r.facts.playoffLoser)].sort();
+      return JSON.stringify(pair) === JSON.stringify(semi) || `the play-off is ${pair.join(" v ")}, not the semi-final losers ${semi.join(" v ")}`;
+    },
+  },
+  {
+    says: "the post's play-off places are 3rd for the winner and 4th for the loser, and they agree with the table",
+    source: "ENG/competition/stage.js:823-829 (a decided play-off gives its winner 3rd and its loser 4th)",
+    check: (r) => {
+      if (r.facts.playoffWinnerPlace !== "3rd" || r.facts.playoffLoserPlace !== "4th") return `facts say ${r.facts.playoffWinnerPlace} and ${r.facts.playoffLoserPlace}`;
+      const w = rowOf(r, String(r.facts.playoffWinner));
+      const l = rowOf(r, String(r.facts.playoffLoser));
+      if (w === undefined || l === undefined) return "play-off players missing from the table";
+      return (w[C.playoff] === r.facts.playoffWinnerPlace && l[C.playoff] === r.facts.playoffLoserPlace) || `table says ${w[C.playoff]} and ${l[C.playoff]}`;
+    },
+  },
+  {
+    says: "the figure draws the third-place match between the two beaten semi-finalists, fed by their losses (a dashed line each), and draws the final from the semi-final winners",
+    source: "ENG/scheduling/bracket.js:157-163 (the play-off is fed by the semi-final losers); the final is fed by their winners",
+    check: (r) => {
+      const matches = r.diagram?.kind === "bracket" ? r.diagram.rounds.flatMap((x) => x.matches) : [];
+      if (matches.length === 0) return "no bracket diagram";
+      const third = matches.filter((m) => m.label === thirdName);
+      if (third.length !== 1) return `${third.length} third-place matches drawn`;
+      const final = matches.find((m) => m.label === finalName);
+      if (final === undefined) return "no final drawn";
+      const feeds = (m: (typeof matches)[number]) => [m.homeFrom, m.awayFrom];
+      const fromSemis = (m: (typeof matches)[number], side: "winner" | "loser") =>
+        feeds(m).length === 2 && feeds(m).every((f) => f !== undefined && f.side === side && matches.find((x) => x.id === f.id)?.label === semiName);
+      if (!fromSemis(third[0]!, "loser")) return "the third-place match is not fed by the two semi-final losers";
+      if (!fromSemis(final, "winner")) return "the final is not fed by the two semi-final winners";
+      const semiNames = matches.filter((m) => m.label === semiName).flatMap((m) => [m.home, m.away].filter((p) => p !== null && p !== m.winner)).map((p) => nameOf(p)).sort();
+      const thirdNames = [third[0]!.home, third[0]!.away].map((p) => nameOf(p)).sort();
+      return JSON.stringify(semiNames) === JSON.stringify(thirdNames) || `semi-final losers ${semiNames.join(", ")}, third-place match ${thirdNames.join(", ")}`;
+    },
   },
   {
     says: "a knockout is offered to a new division of every sport in the registry (the draw reads no sport)",

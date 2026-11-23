@@ -1,15 +1,17 @@
 {
   "facts": {
     "players": 7,
-    "plateSize": 3,
-    "plateNames": "Dev, Gus, Ana",
+    "plateSize": 4,
+    "plateNames": "Dev, Gus, Ana, Cy",
     "excludedNames": "Fay",
     "byeHolder": "Ana",
+    "walkoverWinner": "Cy",
+    "walkoverWinnerRound": "Semi-finals",
     "sportsOffered": 11,
     "sportCount": 11
   },
   "table": {
-    "caption": "A seven-player main draw after its first two rounds. The plate takes every player who lost their first real match. The top seed had a bye, so their first match was in round two; a player who did not turn up is left out.",
+    "caption": "A seven-player main draw, played to the end. The plate takes every player who lost their first real match. The top seed had a bye, so their first match was in round two; a player who did not turn up is left out, and the player who won that walkover plays their first match in round two.",
     "columns": [
       "Player (seed)",
       "First match",
@@ -29,15 +31,15 @@
         "Ben (2)",
         "Quarter-finals",
         "Won",
-        "Lost a later match",
+        "Won the draw",
         "No"
       ],
       [
         "Cy (3)",
         "Semi-finals",
-        "Won",
-        "Still in",
-        "No"
+        "Lost",
+        "Out",
+        "Yes"
       ],
       [
         "Dev (4)",
@@ -50,7 +52,7 @@
         "Eli (5)",
         "Quarter-finals",
         "Won",
-        "Still in",
+        "Lost a later match",
         "No"
       ],
       [
@@ -69,7 +71,116 @@
       ]
     ]
   },
+  "diagram": {
+    "kind": "bracket",
+    "title": "Dev, Gus, Ana and Cy lost their first real match, so they go to the plate. Fay lost by walkover without playing, so Fay does not. Cy won that walkover, so Cy's first match was the next one, and losing it puts Cy in the plate too.",
+    "rounds": [
+      {
+        "name": "Quarter-finals",
+        "matches": [
+          {
+            "id": "se-r0-i0",
+            "home": "Ana (1)",
+            "away": null,
+            "winner": "Ana (1)",
+            "label": "Quarter-finals"
+          },
+          {
+            "id": "se-r0-i1",
+            "home": "Eli (5)",
+            "away": "Dev (4)",
+            "winner": "Eli (5)",
+            "label": "Quarter-finals",
+            "tags": {
+              "Dev (4)": "plate"
+            }
+          },
+          {
+            "id": "se-r0-i2",
+            "home": "Cy (3)",
+            "away": "Fay (6)",
+            "winner": "Cy (3)",
+            "label": "Quarter-finals",
+            "tags": {
+              "Fay (6)": "w/o"
+            }
+          },
+          {
+            "id": "se-r0-i3",
+            "home": "Gus (7)",
+            "away": "Ben (2)",
+            "winner": "Ben (2)",
+            "label": "Quarter-finals",
+            "tags": {
+              "Gus (7)": "plate"
+            }
+          }
+        ]
+      },
+      {
+        "name": "Semi-finals",
+        "matches": [
+          {
+            "id": "se-r1-i0",
+            "home": "Ana (1)",
+            "away": "Eli (5)",
+            "winner": "Eli (5)",
+            "label": "Semi-finals",
+            "homeFrom": {
+              "id": "se-r0-i0",
+              "side": "winner"
+            },
+            "awayFrom": {
+              "id": "se-r0-i1",
+              "side": "winner"
+            },
+            "tags": {
+              "Ana (1)": "plate"
+            }
+          },
+          {
+            "id": "se-r1-i1",
+            "home": "Cy (3)",
+            "away": "Ben (2)",
+            "winner": "Ben (2)",
+            "label": "Semi-finals",
+            "homeFrom": {
+              "id": "se-r0-i2",
+              "side": "winner"
+            },
+            "awayFrom": {
+              "id": "se-r0-i3",
+              "side": "winner"
+            },
+            "tags": {
+              "Cy (3)": "plate"
+            }
+          }
+        ]
+      },
+      {
+        "name": "Final",
+        "matches": [
+          {
+            "id": "se-r2-i0",
+            "home": "Eli (5)",
+            "away": "Ben (2)",
+            "winner": "Ben (2)",
+            "label": "Final",
+            "homeFrom": {
+              "id": "se-r1-i0",
+              "side": "winner"
+            },
+            "awayFrom": {
+              "id": "se-r1-i1",
+              "side": "winner"
+            }
+          }
+        ]
+      }
+    ]
+  },
   "text": [
-    "The plate's field is Dev, Gus, Ana."
+    "The plate's field is Dev, Gus, Ana, Cy."
   ]
 }
