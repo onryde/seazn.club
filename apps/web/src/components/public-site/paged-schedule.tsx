@@ -106,7 +106,14 @@ export function PagedSchedule({ data, entrantNames, divisionPath, tz, copy, page
   const [extras, setExtras] = useState<ScheduleRowExtras>(data.extras);
   const [query, setQuery] = useState("");
   const [team, setTeam] = useState<{ id: string; name: string } | null>(null);
-  const [teamLoad, setTeamLoad] = useState<{ state: "loading" } | { state: "error" } | { state: "ready"; rounds: { key: string; rows: PublicFixture[] }[] } | null>(null);
+  // The shown team's last read: whose, under which document (`from`), its rounds, or that it failed (the rounds before it kept).
+  // "Loading" is derived (a team shown with no rounds for it yet), never stored.
+  const [teamLoad, setTeamLoad] = useState<{
+    entrantId: string;
+    from: PagedScheduleData;
+    rounds?: { key: string; rows: PublicFixture[] }[];
+    failed?: true;
+  } | null>(null);
   // A new document (the page re-rendered: a poll, `router.refresh()`) brings its own extras. Review I1: what was read under the old
   // one is stale, and every OPEN folded round is read again (the effect below) - its old rows stay drawn until the new answer lands,
   // never a "Loading" line nothing will ever replace.
@@ -149,22 +156,38 @@ export function PagedSchedule({ data, entrantNames, divisionPath, tz, copy, page
 
   // The team the search is showing: an answer for an earlier pick (a slow read overtaken by a newer one) is dropped.
   const teamPick = useRef<string | null>(null);
+  // Review minor (the I1 pattern): the shown team's rounds are read when it is picked AND again under every new document, its old
+  // rounds drawn until the new answer lands. The read out, with the document it was asked under, is not asked twice.
+  const teamWanted = team !== null && !(teamLoad?.entrantId === team.id && teamLoad.from === data) ? team.id : null;
+  const teamRead = useRef<{ entrantId: string; from: PagedScheduleData } | null>(null);
+  useEffect(() => {
+    if (teamWanted === null) return;
+    const read = { entrantId: teamWanted, from: data };
+    if (teamRead.current?.entrantId === read.entrantId && teamRead.current.from === read.from) return;
+    teamRead.current = read;
+    fetchRounds(roundsUrl(divisionPath, { entrant: read.entrantId }))
+      .then((answer) => {
+        if (teamPick.current !== read.entrantId) return;
+        if (answer.kind !== "entrant" || answer.entrantId !== read.entrantId) throw new Error("rounds: not this team");
+        setExtras((prev) => mergeRowExtras(prev, answer.extras));
+        setTeamLoad({ ...read, rounds: answer.rounds });
+      })
+      .catch(() => {
+        if (teamPick.current !== read.entrantId) return;
+        setTeamLoad((prev) => ({ ...read, rounds: prev?.entrantId === read.entrantId ? prev.rounds : undefined, failed: true }));
+      })
+      .finally(() => {
+        if (teamRead.current === read) teamRead.current = null;
+      });
+  }, [teamWanted, data, divisionPath]);
   const chooseTeam = (pick: { id: string; name: string }) => {
     teamPick.current = pick.id;
     setTeam(pick);
     setQuery(pick.name);
-    setTeamLoad({ state: "loading" });
-    fetchRounds(roundsUrl(divisionPath, { entrant: pick.id }))
-      .then((answer) => {
-        if (teamPick.current !== pick.id) return;
-        if (answer.kind !== "entrant" || answer.entrantId !== pick.id) throw new Error("rounds: not this team");
-        setExtras((prev) => mergeRowExtras(prev, answer.extras));
-        setTeamLoad({ state: "ready", rounds: answer.rounds });
-      })
-      .catch(() => {
-        if (teamPick.current === pick.id) setTeamLoad({ state: "error" });
-      });
+    setTeamLoad(null);
   };
+  // Try again: forget the failed read, so the team is wanted again and the effect above reads it.
+  const retryTeam = () => setTeamLoad(null);
   const clearTeam = () => {
     teamPick.current = null;
     setTeam(null);
@@ -282,18 +305,19 @@ export function PagedSchedule({ data, entrantNames, divisionPath, tz, copy, page
 
   const teamView = () => {
     if (team === null) return null;
-    if (teamLoad === null || teamLoad.state === "loading")
-      return <p role="status" data-testid="paged-team-loading" className="text-sm text-ink-muted">{pagedCopy.loading}</p>;
-    if (teamLoad.state === "error")
+    const mine = teamLoad?.entrantId === team.id ? teamLoad : null;
+    if (mine?.rounds === undefined && mine?.failed === true && mine.from === data)
       return (
         <p role="alert" className="flex flex-wrap items-center gap-3 text-sm text-ink-muted">
           {pagedCopy.loadFailed}
-          <button type="button" onClick={() => chooseTeam(team)} className="min-h-11 font-semibold text-accent-strong hover:underline">
+          <button type="button" onClick={retryTeam} className="min-h-11 font-semibold text-accent-strong hover:underline">
             {pagedCopy.retry}
           </button>
         </p>
       );
-    const rounds = teamLoad.rounds
+    if (mine?.rounds === undefined)
+      return <p role="status" data-testid="paged-team-loading" className="text-sm text-ink-muted">{pagedCopy.loading}</p>;
+    const rounds = mine.rounds
       .map((r) => ({ group: byKey.get(r.key), rows: r.rows.filter(keep) }))
       .filter((r): r is { group: PagedScheduleGroup; rows: PublicFixture[] } => r.group !== undefined && r.rows.length > 0);
     const ordered = chip === "result" ? [...rounds].reverse() : rounds;

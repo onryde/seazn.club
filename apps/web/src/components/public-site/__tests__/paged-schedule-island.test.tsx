@@ -202,5 +202,31 @@ describe("the team search draws only the answer for the team on screen", () => {
     expect(teamRows(island)).toEqual([]);
     expect(island.tree().some((el) => propsOf(el).role === "alert"), "the failure is said").toBe(true);
   });
+
+  // Review minor (the I1 pattern): a new document (a poll, a refresh) must read the shown team's rounds again, keeping the old rows
+  // drawn until the new answer lands - never leave a stale answer, nor drop to "Loading" for good.
+  it("a new document reads the shown team's rounds again and draws the new answer", async () => {
+    let version = 1;
+    const key9 = dataOf(rows()).groups.find((g) => g.roundNo === 9)!.key;
+    vi.stubGlobal("fetch", async (url: string) => {
+      calls.push(url);
+      const entrant = new URL(url, "http://x").searchParams.get("entrant")!;
+      const body = { kind: "entrant", entrantId: entrant, rounds: [{ key: key9, rows: [F(9, "scheduled", { id: `${entrant}-row-v${version}` })] }], extras: { slotLabels: {}, forfeit: {} } };
+      return new Response(JSON.stringify({ ok: true, data: body }), { status: 200 });
+    });
+    const now = rows();
+    const island = renderIsland(PagedSchedule, props(dataOf(now)) as never) as unknown as Island;
+    pick(island, "Bravo");
+    await settle();
+    const drawn = () => island.tree().filter((el) => propsOf(el).railMode !== undefined && (propsOf(el).fixture as PublicFixture | undefined)?.id?.startsWith("e2-row")).map((el) => (propsOf(el).fixture as PublicFixture).id);
+    expect(drawn()).toEqual(["e2-row-v1"]);
+    version = 2;
+    island.rerender(props(dataOf(now)) as never);
+    expect(drawn(), "the old rows stay drawn while the new read is out").toEqual(["e2-row-v1"]);
+    await settle();
+    expect(calls.filter((u) => u.includes("entrant=e2")).length, "read again, once").toBe(2);
+    expect(drawn()).toEqual(["e2-row-v2"]);
+    expect(island.tree().some((el) => propsOf(el)["data-testid"] === "paged-team-loading"), "not stuck on Loading").toBe(false);
+  });
 });
 
