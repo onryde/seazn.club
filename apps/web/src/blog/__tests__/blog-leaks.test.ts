@@ -4,7 +4,9 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { BLOG_LEAK_ALLOW, blogLeakText, findBlogLeaks } from "@/blog/leaks";
+import { BLOG_GOLDENS } from "@/blog/examples/goldens";
+import type { ExampleResult } from "@/blog/examples/types";
+import { BLOG_LEAK_ALLOW, blogLeakText, findBlogLeaks, withoutDiagramKind } from "@/blog/leaks";
 import { helpPlainText } from "@/server/help-content";
 
 const rulesOf = (text: string) => findBlogLeaks(text).map((l) => l.rule);
@@ -150,5 +152,55 @@ describe("the valid fixture posts carry no leak", () => {
   it("a post that prints an identifier IS flagged by the same sweep", () => {
     const raw = readFileSync(join(dir, "how-swiss-pairs-round-two.md"), "utf8") + "\nThe tie-break is buchholz_cut1.\n";
     expect(findBlogLeaks(blogLeakText(raw)).map((l) => l.match)).toEqual(["buchholz_cut1"]);
+  });
+});
+
+describe("withoutDiagramKind: it drops a diagram's own `kind` and nothing else", () => {
+  const leavesOf = (v: unknown): string[] => (typeof v === "string" ? [v] : v === null || typeof v !== "object" ? [] : Object.values(v).flatMap(leavesOf));
+  // The first string leaf the tests plant a code-shaped identifier into, one leaf at a time (a path of keys and indexes).
+  const paths = (v: unknown, at: (string | number)[] = []): (string | number)[][] =>
+    typeof v === "string"
+      ? [at]
+      : v === null || typeof v !== "object"
+        ? []
+        : Object.entries(v).flatMap(([k, c]) => paths(c, [...at, Array.isArray(v) ? Number(k) : k]));
+  const planted = (g: ExampleResult, at: (string | number)[], word: string): ExampleResult => {
+    const copy = JSON.parse(JSON.stringify(g)) as ExampleResult;
+    let node: unknown = copy.diagram;
+    for (const k of at.slice(0, -1)) node = (node as Record<string | number, unknown>)[k];
+    (node as Record<string | number, unknown>)[at[at.length - 1]!] = word;
+    return copy;
+  };
+
+  it("every committed diagram keeps every string it has except its kind, and a code-shaped word planted in any other string is still found", () => {
+    let diagrams = 0;
+    let plantedLeaves = 0;
+    for (const [id, g] of Object.entries(BLOG_GOLDENS)) {
+      if (g.diagram === undefined) continue;
+      diagrams++;
+      const before = leavesOf(g.diagram);
+      const after = leavesOf(withoutDiagramKind(g).diagram);
+      // Exactly one leaf went (the kind), and it is the kind's value: a stripper that also drops a title, a caption or a nested kind fails.
+      expect(after.length, `${id}: strings left of ${before.length}`).toBe(before.length - 1);
+      const gone = [...before];
+      for (const s of after) gone.splice(gone.indexOf(s), 1);
+      expect(gone, `${id}: the one string that went`).toEqual([g.diagram.kind]);
+      // Anything else a diagram says is copy: plant an identifier into each string in turn (the kind aside) and the scan must see it.
+      expect(paths(g.diagram).map((p) => p.join(".")), `${id}: the kind is a top-level string`).toContain("kind");
+      for (const at of paths(g.diagram)) {
+        if (at.join(".") === "kind") continue;
+        plantedLeaves++;
+        const word = "anaTotalPoints";
+        const found = leavesOf(withoutDiagramKind(planted(g, at, word)).diagram).join(" ");
+        expect(findBlogLeaks(found).map((l) => l.match), `${id}: ${at.join(".")}`).toContain(word);
+      }
+    }
+    expect(diagrams, "diagrams swept").toBeGreaterThanOrEqual(5);
+    expect(plantedLeaves, "strings a word was planted into").toBeGreaterThan(50);
+  });
+
+  it("a nested field that is also called `kind` is copy: it is kept", () => {
+    const g: ExampleResult = { facts: {}, text: [], diagram: { kind: "swissRound", title: "t", rounds: [{ kind: "innerKind" }] } as unknown as ExampleResult["diagram"] };
+    expect(leavesOf(withoutDiagramKind(g).diagram)).toEqual(["t", "innerKind"]);
   });
 });
