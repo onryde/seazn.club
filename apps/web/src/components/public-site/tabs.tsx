@@ -31,11 +31,12 @@
 // (`router.replace`, no history entry, scroll kept), which loads it from the server; a tap on one that is here only toggles,
 // as before. `initial` is the panel the server rendered, so hydration matches whichever tab the URL named.
 //
-// Fix round 1 (review I3, M2): that load must read as a toggle did. Each absent panel's document is PREFETCHED on mount, so
-// a tap usually finds it already here; and while one is still on its way the tapped tab takes the active style and
-// `aria-busy` at once (the transition's pending state), never a dead tap. The target is built from the division's own
-// `basePath`, never from the address this document was served at.
-import { useEffect, useState, useTransition, type ReactNode } from "react";
+// Fix round 1 (review I3, M2; owner option 2, 2026-11-23): such a tap is a document load, and it says so at once - never a
+// dead tap. While the transition is pending the tapped tab takes the active style, `aria-busy` and a small spinner, and the
+// panel still on screen dims (`aria-busy`, opacity .45) until the new document lands. No prefetch: Next 16.3 sends nothing for
+// `router.prefetch` of a same-path `?tab=` URL (measured in the browser), so one here would be an inert seam. The target is
+// built from the division's own `basePath`, never from the address this document was served at.
+import { useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useTabParam } from "./use-tab-param";
 
@@ -84,17 +85,8 @@ export function Tabs({ ids, labels, label, children, initial = 0, basePath }: Pr
     return url;
   }
 
-  // I3: the documents a tap would load, fetched ahead of it. Effects run on the client only, after hydration.
-  useEffect(() => {
-    children.forEach((panel, i) => {
-      if (panel != null) return;
-      const url = urlOf(i);
-      router.prefetch(url.pathname + url.search);
-    });
-    // Once per document. Keyed on `initial` too: should a Standings-to-Entrants load keep this instance (the same route, another
-    // param), the new document's absent panels are fetched as well.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initial]);
+  // I3: the tab whose document is on its way, while it is. Null otherwise - including once it has landed.
+  const busy = isPending && loading !== null ? loading : null;
 
   function select(i: number) {
     // Put the choice back in the URL so what a spectator shares is what they
@@ -129,15 +121,22 @@ export function Tabs({ ids, labels, label, children, initial = 0, basePath }: Pr
               role="tab"
               aria-selected={i === active}
               aria-controls={`panel-${ids[i]}`}
-              aria-busy={isPending && loading === i ? true : undefined}
+              aria-busy={busy === i ? true : undefined}
               onClick={() => select(i)}
               className={
-                i === (isPending && loading !== null ? loading : active)
+                i === (busy ?? active)
                   ? "shrink-0 rounded-full bg-accent px-4 py-1.5 text-sm font-semibold text-accent-ink shadow-sm"
                   : "shrink-0 rounded-full px-4 py-1.5 text-sm font-medium text-ink-muted transition hover:bg-accent-soft hover:text-accent-strong"
               }
             >
               {label}
+              {busy === i ? (
+                <span
+                  data-testid="tab-spinner"
+                  aria-hidden="true"
+                  className="ml-1.5 inline-block size-2.5 animate-spin rounded-full border-2 border-current border-t-transparent align-[-1px] motion-reduce:animate-none"
+                />
+              ) : null}
             </button>
           ))}
         </div>
@@ -149,6 +148,9 @@ export function Tabs({ ids, labels, label, children, initial = 0, basePath }: Pr
           role="tabpanel"
           aria-labelledby={`tab-${ids[i]}`}
           hidden={i !== active}
+          // I3: the panel on screen is not the one asked for while another loads; dimmed, never emptied.
+          aria-busy={busy !== null && i === active ? true : undefined}
+          className={busy !== null && i === active ? "opacity-[0.45] transition-opacity" : undefined}
         >
           {panel}
         </div>
