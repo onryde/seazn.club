@@ -2,15 +2,15 @@
 // `https://<customer host>/<token>/manifest/video.m3u8` (C1), and the player (Task 15) fetches it, and every playlist and
 // segment under it, from the viewer's browser. Whoever holds the URL plays the video until the token expires (1 h; C2: the
 // token is the only protection). A browser's XHR/fetch breadcrumb, an http.client span, an error that quotes the URL, a console
-// log, a replay's performance span and a PostHog autocapture of the <video> element would each send it on. Every Sentry and
+// log and a PostHog autocapture of the <video> element would each send it on (the browser Sentry client records no replay:
+// owner 2026-11-23). Every Sentry and
 // PostHog string loses the path segment that follows a Cloudflare Stream customer host (`*.cloudflarestream.com/`) — the token,
 // or on an unsigned input a uid that plays as well as a token does — and keeps the host and the rest of the path.
 //
 // The URLs come from the REAL producer (server/video/cf-playback.ts `signLivePlayback`, `signRecordingPlayback`,
 // `signDownload`) on a Stream customer host, with a token shaped as Cloudflare mints them (an RS256 JWT: `POST
-// /stream/{uid}/token`, C1). The events go through the options the REAL client config hands the SDK (sentry.client.config.ts:
-// not loaded by the Turbopack build today, see scrub-score-url-wiring.test.ts's NOTE; pinned so the scrub is in place the day
-// it is), and once through the server config's.
+// /stream/{uid}/token`, C1). The events go through the options the REAL browser init hands the SDK (src/instrumentation-client.ts,
+// imported with a DSN; options in lib/sentry-browser.ts), and once through the server config's.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("posthog-js", () => ({ default: { init: vi.fn(), opt_in_capturing: vi.fn() } }));
@@ -66,6 +66,11 @@ async function sentryInitOptions(configPath: string): Promise<Options> {
   expect(calls, `${configPath} calls Sentry.init once`).toHaveLength(1);
   return calls[0]![0] as Options;
 }
+/** The browser client's options: src/instrumentation-client.ts imported for real, with a DSN (none means no init). */
+async function clientInitOptions(): Promise<Options> {
+  vi.stubEnv("NEXT_PUBLIC_SENTRY_DSN", "https://0123456789abcdef0123456789abcdef@o0.ingest.sentry.io/0");
+  return sentryInitOptions("../../instrumentation-client");
+}
 /** No token of `tokens` survives, and the host is still there, followed by the placeholder. */
 function expectClean(value: unknown, tokens: string[], placeholders: number): void {
   const text = JSON.stringify(value);
@@ -106,10 +111,10 @@ describe("a signed Cloudflare playback URL never reaches Sentry or PostHog with 
     ]) expect(scrubScoreUrl(untouched), untouched).toBe(untouched);
   });
 
-  it("the client config: an XHR breadcrumb, an error quoting the URL, a transaction's http.client span and a console log each lose the token", async () => {
+  it("the browser client: an XHR breadcrumb, an error quoting the URL, a transaction's http.client span and a console log each lose the token", async () => {
     const p = await produced();
     const tokens = [p.token, p.recordingToken];
-    const options = await sentryInitOptions("../../../sentry.client.config");
+    const options = await clientInitOptions();
     // hls.js (enableWorker: false) loads over XHR; the SDK's breadcrumb carries the full URL.
     expectClean(run(options.beforeBreadcrumb, { category: "xhr", type: "http", data: { method: "GET", url: p.variant, status_code: 403 } }, {}), tokens, 1);
     const error = {
@@ -126,15 +131,6 @@ describe("a signed Cloudflare playback URL never reaches Sentry or PostHog with 
     };
     expectClean(run(options.beforeSendTransaction, transaction, {}), tokens, 4);
     expectClean(run(options.beforeSendLog, { level: "error", message: `Failed to load ${p.replay}`, attributes: { src: p.replay } }), tokens, 2);
-  });
-
-  it("the client's replay: a performance span frame for the manifest loses the token", async () => {
-    const p = await produced();
-    await sentryInitOptions("../../../sentry.client.config");
-    const Sentry = await import("@sentry/nextjs");
-    const replayOptions = vi.mocked(Sentry.replayIntegration).mock.calls[0]![0] as Options;
-    const frame = { type: 5, timestamp: 1, data: { tag: "performanceSpan", payload: { op: "resource.xhr", description: p.live, startTimestamp: 1, endTimestamp: 2, data: { method: "GET" } } } };
-    expectClean(run(replayOptions.beforeAddRecordingEvent, frame), [p.token], 1);
   });
 
   it("the server config: an error quoting the download URL (the replay mover's, C5) loses its token", async () => {

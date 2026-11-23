@@ -4,12 +4,9 @@
 // `init` are run on an event that carries a device-link token. A helper nothing
 // passes to an SDK would be an inert seam, and every test here would then be red.
 //
-// NOTE: sentry.client.config.ts is only picked up by @sentry/nextjs's WEBPACK
-// integration (config/webpack.js `getClientSentryConfigFile`). This app builds
-// with Turbopack, and the prod client bundle carries none of that file's options,
-// so client-side Sentry is not initialised today. That gap predates this change
-// and is outside it. The client test below pins the file's wiring so the scrub
-// is already in place on the day client Sentry is initialised.
+// The browser client is initialised in src/instrumentation-client.ts (owner 2026-11-23: errors and warnings only, no session
+// replay; options in lib/sentry-browser.ts). The client tests below import that file for real, with a DSN, and read the
+// options it hands `Sentry.init`. The old webpack-only sentry.client.config.ts is gone (sentry-browser-init.test.ts pins that).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { routes } from "@/lib/routes";
@@ -64,12 +61,11 @@ async function sentryInitOptions(configPath: string): Promise<Options> {
   return calls[0]![0] as Options;
 }
 
-/** A performanceSpan frame as @sentry/replay's createPerformanceSpans writes it: op, description, start, end, data. */
-const replaySpanFrame = (description: string, op = "resource.fetch", data: Record<string, unknown> = { method: "GET" }) => ({
-  type: 5,
-  timestamp: 1,
-  data: { tag: "performanceSpan", payload: { op, description, startTimestamp: 1, endTimestamp: 2, data } },
-});
+/** The browser client's options: src/instrumentation-client.ts imported for real, with a DSN (none means no init). */
+async function clientInitOptions(): Promise<Options> {
+  vi.stubEnv("NEXT_PUBLIC_SENTRY_DSN", "https://0123456789abcdef0123456789abcdef@o0.ingest.sentry.io/0");
+  return sentryInitOptions("../../instrumentation-client");
+}
 
 const errorEvent = () => ({
   event_id: "e1",
@@ -212,9 +208,9 @@ describe("Sentry edge (sentry.edge.config.ts, loaded by instrumentation.ts on ed
   });
 });
 
-describe("Sentry client (sentry.client.config.ts; not loaded by the Turbopack build today, see NOTE)", () => {
+describe("Sentry client (src/instrumentation-client.ts, options from lib/sentry-browser.ts)", () => {
   it("scrubs errors, transactions, breadcrumbs and logs", async () => {
-    const options = await sentryInitOptions("../../../sentry.client.config");
+    const options = await clientInitOptions();
     expectScrubbed(run(options.beforeSend, errorEvent(), {}));
     expectScrubbed(run(options.beforeSendTransaction, transactionEvent(), {}));
     expectScrubbed(run(options.beforeBreadcrumb, { category: "navigation", data: { to: `/score/${TOKEN}` } }, {}));
@@ -222,7 +218,7 @@ describe("Sentry client (sentry.client.config.ts; not loaded by the Turbopack bu
   });
 
   it("registers an event processor that scrubs a replay_event's URL list (beforeSend never sees one)", async () => {
-    const options = await sentryInitOptions("../../../sentry.client.config");
+    const options = await clientInitOptions();
     const integrations = options.integrations as { name: string; processEvent?: unknown }[];
     const scrubbers = integrations.filter((i) => typeof i.processEvent === "function");
     expect(scrubbers.map((i) => i.name)).toEqual(["ScrubScoreTokens"]);
@@ -230,70 +226,26 @@ describe("Sentry client (sentry.client.config.ts; not loaded by the Turbopack bu
     expect(out).toEqual({ type: "replay_event", urls: ["https://seazn.club/score/[token]"] });
   });
 
-  it("gives Replay a beforeAddRecordingEvent scrub, and keeps its masking options", async () => {
-    await sentryInitOptions("../../../sentry.client.config");
-    const Sentry = await import("@sentry/nextjs");
-    const replayOptions = vi.mocked(Sentry.replayIntegration).mock.calls[0]![0] as Options;
-    expect(replayOptions.maskAllText).toBe(true);
-    expect(replayOptions.blockAllMedia).toBe(true);
-    const frame = replaySpanFrame(PAGE);
-    expectScrubbed(run(replayOptions.beforeAddRecordingEvent, frame));
-  });
-
-  // Round 3: Sentry Replay records the page URL where no hook reaches (rrweb's Meta frame, the DOM). Proven against the
-  // installed @sentry/replay in sentry-replay-guard.test.ts; this half proves the REAL config hands the guard to the SDK.
-  it("blocks the elements that paint a secret, and opens no network detail (the exact option set: a new one is a decision)", async () => {
-    await sentryInitOptions("../../../sentry.client.config");
-    const Sentry = await import("@sentry/nextjs");
-    const replayOptions = vi.mocked(Sentry.replayIntegration).mock.calls[0]![0] as Options;
-    expect(replayOptions.block).toEqual([".ph-no-capture"]);
-    expect(Object.keys(replayOptions).sort()).toEqual(["beforeAddRecordingEvent", "block", "blockAllMedia", "maskAllText"]);
-  });
-
-  it("runs the replay on an ordinary page", async () => {
-    vi.stubGlobal("window", { location: new URL("https://seazn.club/dashboard") });
-    const integrations = (await sentryInitOptions("../../../sentry.client.config")).integrations as { name: string }[];
-    expect(integrations.map((i) => i.name)).toContain("Replay");
-    const Sentry = await import("@sentry/nextjs");
-    expect(vi.mocked(Sentry.replayIntegration)).toHaveBeenCalledTimes(1);
-  });
-
-  // The page's FULL href is what the guard reads: a sign-in link's token is in the query, a hash can follow, and a claim sits
-  // under a locale prefix or in a login `next=`. Every credential page the scrubber knows, each from a fresh import of the
-  // config (the check runs once, when the module loads).
-  it("does not run the replay at all on any page whose URL holds a credential (every credential page, query and hash included)", async () => {
+  // Owner 2026-11-23: no session replay. A replay records the page URL where no hook reaches (rrweb's Meta frame, the DOM);
+  // the old config therefore skipped it on a credential page. Now it runs on NO page: an ordinary one and every credential page
+  // the scrubber knows, each from a fresh import (the init runs once, when the module loads), build the same integrations.
+  it("builds no Replay integration on any page, ordinary or holding a credential, and both replay rates are 0", async () => {
     const pages = await credentialPages();
-    expect(pages.length, "anti-vacuity: pages checked").toBeGreaterThanOrEqual(12);
-    vi.stubGlobal("window", { location: new URL("https://seazn.club/dashboard") });
-    const ordinary = ((await sentryInitOptions("../../../sentry.client.config")).integrations as { name: string }[]).map((i) => i.name);
-    expect(ordinary).toContain("Replay");
-    for (const p of pages) {
+    expect(pages.length, "anti-vacuity: credential pages").toBeGreaterThanOrEqual(12);
+    let checked = 0;
+    for (const p of [{ name: "an ordinary page", url: "https://seazn.club/dashboard" }, ...pages]) {
       vi.resetModules();
       vi.clearAllMocks();
-      // A real `Location` shape (href, origin, pathname, search, hash), so a check that read only part of it would not hide behind a stub.
-      // The one page recorded as a router href (path only) is resolved against the origin.
+      // A real `Location` shape (href, origin, pathname, search, hash); a router href (path only) is resolved against the origin.
       vi.stubGlobal("window", { location: new URL(p.url, "https://seazn.club") });
-      const integrations = (await sentryInitOptions("../../../sentry.client.config")).integrations as { name: string }[];
+      const options = await clientInitOptions();
       const Sentry = await import("@sentry/nextjs");
       expect(vi.mocked(Sentry.replayIntegration), `${p.name}: no replay is built`).not.toHaveBeenCalled();
-      // Everything else the config sets up is still there on that page: the scrubbers, the console logs.
-      expect(integrations.map((i) => i.name), p.name).toEqual(ordinary.filter((n) => n !== "Replay"));
+      expect((options.integrations as { name: string }[]).map((i) => i.name), p.name).toEqual(["ConsoleLogs", "ScrubScoreTokens"]);
+      expect([options.replaysSessionSampleRate, options.replaysOnErrorSampleRate], p.name).toEqual([0, 0]);
+      checked++;
     }
-  });
-
-  it("stops the replay when a recorded navigation names a credential page, and keeps it for any other", async () => {
-    await sentryInitOptions("../../../sentry.client.config");
-    const Sentry = await import("@sentry/nextjs");
-    const stop = vi.fn(async () => undefined);
-    setReplay({ stop });
-    const hook = (vi.mocked(Sentry.replayIntegration).mock.calls[0]![0] as Options).beforeAddRecordingEvent;
-    const nav = (to: string) => replaySpanFrame(to, "navigation.push", { previous: "/" });
-    expect(run(hook, nav("/dashboard"))).not.toBeNull();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(stop).not.toHaveBeenCalled();
-    expect(run(hook, nav(`/score/${TOKEN}`))).toBeNull();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(stop).toHaveBeenCalledTimes(1);
+    expect(checked, "anti-vacuity: pages checked").toBe(pages.length + 1);
   });
 });
 
@@ -304,6 +256,8 @@ describe("Sentry router hook (src/instrumentation-client.ts, onRouterTransitionS
     return { hook: mod.onRouterTransitionStart, Sentry };
   }
   const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+  // The browser client runs without a Replay integration (owner 2026-11-23), so in production the guard finds none and does
+  // nothing. These hand the client a stand-in Replay (setReplay) to prove the guard is still wired for the day one is turned on.
 
   it("stops the replay before the app navigates to a credential page, and still reports the transition", async () => {
     const { hook, Sentry } = await routerHook();
@@ -390,18 +344,14 @@ describe("the match-room token (review I1): every config's real hooks scrub it",
     expectScrubbedOf(run(options.beforeSendLog, { level: "error", message: `Failed to fetch RSC payload for ${room}`, attributes: {} }), token);
   });
 
-  it("Sentry client: an error, a navigation breadcrumb, a replay's URL list and a recording frame", async () => {
-    const options = await sentryInitOptions("../../../sentry.client.config");
+  it("Sentry client: an error, a navigation breadcrumb and a replay's URL list", async () => {
+    const options = await clientInitOptions();
     const { token, room, start, login } = await roomUrls();
     expectScrubbedOf(run(options.beforeSend, { event_id: "e1", request: { url: room } }, {}), token);
     expectScrubbedOf(run(options.beforeBreadcrumb, { category: "navigation", data: { from: login, to: room } }, {}), token);
     const integrations = options.integrations as { name: string; processEvent?: unknown }[];
     const scrubber = integrations.find((i) => typeof i.processEvent === "function")!;
     expectScrubbedOf(run(scrubber.processEvent, { type: "replay_event", urls: [room, start, login] }, {}, {}), token);
-    const Sentry = await import("@sentry/nextjs");
-    const replayOptions = vi.mocked(Sentry.replayIntegration).mock.calls[0]![0] as Options;
-    const frame = replaySpanFrame(start);
-    expectScrubbedOf(run(replayOptions.beforeAddRecordingEvent, frame), token);
   });
 });
 
@@ -473,18 +423,14 @@ describe("the one-time sign-in token: every config's real hooks scrub it", () =>
     expect(other.request.query_string).toBe(`token=${login}`);
   });
 
-  it("Sentry client: an error, a navigation breadcrumb, a replay's URL list and a recording frame", async () => {
-    const options = await sentryInitOptions("../../../sentry.client.config");
+  it("Sentry client: an error, a navigation breadcrumb and a replay's URL list", async () => {
+    const options = await clientInitOptions();
     const { login, verify, magicUrl, verifyUrl } = await signInUrls();
     expectGone(run(options.beforeSend, { event_id: "e1", request: { url: magicUrl, query_string: `token=${login}` } }, {}), login);
     expectGone(run(options.beforeBreadcrumb, { category: "navigation", data: { from: verifyUrl, to: magicUrl } }, {}), login, verify);
     const integrations = options.integrations as { name: string; processEvent?: unknown }[];
     const scrubber = integrations.find((i) => typeof i.processEvent === "function")!;
     expectGone(run(scrubber.processEvent, { type: "replay_event", urls: [magicUrl, verifyUrl] }, {}, {}), login, verify);
-    const Sentry = await import("@sentry/nextjs");
-    const replayOptions = vi.mocked(Sentry.replayIntegration).mock.calls[0]![0] as Options;
-    const frame = replaySpanFrame(magicUrl);
-    expectGone(run(replayOptions.beforeAddRecordingEvent, frame), login);
   });
 });
 
@@ -541,18 +487,14 @@ describe("the profile-claim secret: every config's real hooks scrub it", () => {
     expectGone(run(options.beforeSendLog, { level: "error", message: `Failed to fetch RSC payload for ${page}`, attributes: {} }), secret);
   });
 
-  it("Sentry client: an error, a navigation breadcrumb, a replay's URL list and a recording frame", async () => {
-    const options = await sentryInitOptions("../../../sentry.client.config");
+  it("Sentry client: an error, a navigation breadcrumb and a replay's URL list", async () => {
+    const options = await clientInitOptions();
     const { secret, page, accept, login } = claimUrls();
     expectGone(run(options.beforeSend, { event_id: "e1", request: { url: page } }, {}), secret);
     expectGone(run(options.beforeBreadcrumb, { category: "navigation", data: { from: login, to: page } }, {}), secret);
     const integrations = options.integrations as { name: string; processEvent?: unknown }[];
     const scrubber = integrations.find((i) => typeof i.processEvent === "function")!;
     expectGone(run(scrubber.processEvent, { type: "replay_event", urls: [page, accept, login] }, {}, {}), secret);
-    const Sentry = await import("@sentry/nextjs");
-    const replayOptions = vi.mocked(Sentry.replayIntegration).mock.calls[0]![0] as Options;
-    const frame = replaySpanFrame(accept);
-    expectGone(run(replayOptions.beforeAddRecordingEvent, frame), secret);
   });
 });
 
@@ -619,18 +561,14 @@ describe("the invite token and the check-in code: every config's real hooks scru
     expectGone(run(options.beforeSendLog, { level: "error", message: `Failed to fetch RSC payload for ${joinUrl}`, attributes: {} }), invite);
   });
 
-  it("Sentry client: an error, a navigation breadcrumb, a replay's URL list and a recording frame", async () => {
-    const options = await sentryInitOptions("../../../sentry.client.config");
+  it("Sentry client: an error, a navigation breadcrumb and a replay's URL list", async () => {
+    const options = await clientInitOptions();
     const { invite, checkin, joinUrl, claimApiUrl, checkinUrl } = await pathSecretUrls();
     expectGone(run(options.beforeSend, { event_id: "e1", request: { url: joinUrl } }, {}), invite);
     expectGone(run(options.beforeBreadcrumb, { category: "navigation", data: { from: joinUrl, to: checkinUrl } }, {}), invite, checkin);
     const integrations = options.integrations as { name: string; processEvent?: unknown }[];
     const scrubber = integrations.find((i) => typeof i.processEvent === "function")!;
     expectGone(run(scrubber.processEvent, { type: "replay_event", urls: [joinUrl, checkinUrl, claimApiUrl] }, {}, {}), invite, checkin);
-    const Sentry = await import("@sentry/nextjs");
-    const replayOptions = vi.mocked(Sentry.replayIntegration).mock.calls[0]![0] as Options;
-    const frame = replaySpanFrame(claimApiUrl);
-    expectGone(run(replayOptions.beforeAddRecordingEvent, frame), invite);
   });
 });
 
@@ -681,7 +619,7 @@ describe("a credential in a request body: every Sentry config's real hooks drop 
   }
 
   it("Sentry client: beforeSend and the event processor drop the body too", async () => {
-    const options = await sentryInitOptions("../../../sentry.client.config");
+    const options = await clientInitOptions();
     const { login, invite, consume, claim, lookup } = await bodyEvents();
     expectBodyGone(run(options.beforeSend, consume, {}), login);
     expectBodyGone(run(options.beforeSend, claim, {}), invite);
@@ -739,7 +677,7 @@ describe("a one-time token in a span's bare query, and a join code: every Sentry
   }
 
   it("Sentry client: beforeSend, beforeSendTransaction and the event processor do it too", async () => {
-    const options = await sentryInitOptions("../../../sentry.client.config");
+    const options = await clientInitOptions();
     const { login, code, tx, child, joinTx, error, joinError } = await spanEvents();
     expect(data(run(options.beforeSendTransaction, tx, {}))["http.query"]).toBe("?token=[token]&next=%2Fdashboard");
     expect(spanData(run(options.beforeSendTransaction, child, {}))["url.query"]).toBe("?token=[token]&next=%2Fdashboard");

@@ -6,17 +6,27 @@ import * as Sentry from "@sentry/nextjs";
 import { analyticsConsented } from "@/lib/consent";
 import { stopReplayBeforeNavigatingTo } from "@/lib/replay-guard";
 import { maskCapturedNetworkRequest, posthogBeforeSend } from "@/lib/scrub-score-url";
+import { browserSentryOptions } from "@/lib/sentry-browser";
 
-// Sentry.init is NOT called on the client today. The client options live in ../sentry.client.config.ts, but @sentry/nextjs
-// only picks that file up in its WEBPACK integration (config/webpack.js, getClientSentryConfigFile); this app builds with
-// Turbopack, so the file is never bundled (a prod build holds none of its options). Wiring the client init is an owner
-// decision still pending, and not part of this file. Until then the router hook below has no client to report to and the
-// replay guard finds no Replay integration to stop, so both are no-ops, in place for the day the init is wired. The
-// server/edge counterpart is NOT auto-loaded past @sentry/nextjs v9 either: ../instrumentation.ts is what runs
-// sentry.server.config / sentry.edge.config. The hook is exported because without it Sentry logs an ACTION REQUIRED at
-// build.
-// The replay is stopped before the app navigates to a page whose URL holds a credential (lib/replay-guard). Sentry's own
-// hook runs first, so the guard can never cost the navigation span.
+// The browser Sentry client (owner 2026-11-23): errors and warnings only, no session replay, no tracing; nothing is sent
+// without the visitor's analytics consent. This is its ONE init: under Turbopack, this file is the client init path Next 16 and
+// @sentry/nextjs support (the old webpack-only sentry.client.config.ts is deleted). The options, the privacy hooks and the
+// consent gate are in lib/sentry-browser.ts. No DSN (local, the CI builds that bake it blank) means no client at all: every
+// Sentry call in the browser is then a no-op. The server/edge counterpart is ../instrumentation.ts, which runs
+// sentry.server.config / sentry.edge.config.
+const sentryDsn = process.env.NEXT_PUBLIC_SENTRY_DSN;
+if (sentryDsn) {
+  try {
+    Sentry.init(browserSentryOptions(sentryDsn));
+  } catch {
+    // Error reporting must never break the app either.
+  }
+}
+
+// The hook is exported because without it Sentry logs an ACTION REQUIRED at build; with tracing at 0 its navigation span is
+// unsampled. The client runs with no Replay integration, so the replay guard (lib/replay-guard) finds none to stop and is a
+// no-op; it stays in place for the day a replay is turned on: it stops the replay before the app navigates to a page whose URL
+// holds a credential. Sentry's own hook runs first, so the guard can never cost the navigation span.
 export const onRouterTransitionStart: typeof Sentry.captureRouterTransitionStart = (href, navigationType) => {
   Sentry.captureRouterTransitionStart(href, navigationType);
   stopReplayBeforeNavigatingTo(href);
