@@ -94,7 +94,12 @@ describe.skipIf(!HAS_DB)("retired entitlement keys and plans stay retired", () =
     expect([...rows.map((r) => r.key)].sort()).toEqual([...ALL_PLAN_KEYS].sort());
   });
 
-  it(`every test that inserts a plans row names it with the excluded prefix "${TEMP_PLAN_KEY_PREFIX}"`, () => {
+  it(`every plans row a test inserts is KEYED with the excluded prefix "${TEMP_PLAN_KEY_PREFIX}" - the key it inserts, not any template in the file`, () => {
+    // Review m4: proven per INSERT, by the key it writes. Every file under src/ is scanned (tests, `_*.ts` helpers and
+    // production alike - a helper that seeds a plan is as visible to the shared database as a test), for any spelling of
+    // the statement (case, a schema prefix). For each insert, the `key` column's value is resolved: a string literal, or
+    // an identifier whose `const` in the same file is a literal or a template - and that resolved text must start with
+    // the prefix. An insert whose key cannot be resolved this way fails: a shape this scan cannot read is not proven.
     const src = join(__dirname, "../..");
     const files: string[] = [];
     const walk = (dir: string): void => {
@@ -102,18 +107,34 @@ describe.skipIf(!HAS_DB)("retired entitlement keys and plans stay retired", () =
         if (name === "node_modules") continue;
         const p = join(dir, name);
         if (statSync(p).isDirectory()) walk(p);
-        else if (/\.test\.tsx?$/.test(name)) files.push(p);
+        else if (/\.tsx?$/.test(name) && p !== __filename) files.push(p);
       }
     };
     walk(src);
-    // This file names the statement in its own scan, so it is not one of the inserters.
-    const inserting = files.filter((f) => f !== __filename && /insert into plans\b/.test(readFileSync(f, "utf8")));
-    // Anti-vacuity: the billing tests that motivated the exclusion are found.
-    expect(inserting.length, "no test file inserting into plans was found").toBeGreaterThanOrEqual(6);
-    for (const f of inserting) {
+    const INSERT = /insert\s+into\s+(?:"?\w+"?\.)?"?plans"?\s*\(([^)]*)\)\s*values\s*\(([^)]*)\)/gi;
+    const keysWritten: { file: string; key: string }[] = [];
+    let inserts = 0;
+    for (const f of files) {
       const text = readFileSync(f, "utf8");
-      // Every key a test builds for a plans row is a template starting with the prefix (`tmp_plan_${...}`).
-      expect(text, `${f}: its temporary plan key starts with "${TEMP_PLAN_KEY_PREFIX}"`).toMatch(new RegExp("`" + TEMP_PLAN_KEY_PREFIX + "[a-z_]*\\$\\{"));
+      for (const m of text.matchAll(INSERT)) {
+        inserts += 1;
+        const columns = m[1]!.split(",").map((c) => c.trim().replace(/"/g, "").toLowerCase());
+        const at = columns.indexOf("key");
+        expect(at, `${f}: an insert into plans with no key column`).toBeGreaterThanOrEqual(0);
+        // The VALUES list, split on top-level commas (a `${a + b}` holds none at the top level here).
+        const values = m[2]!.split(/,(?![^{]*})/).map((v) => v.trim());
+        const value = values[at] ?? "";
+        const ident = /^\$\{\s*(\w+)\s*\}$/.exec(value)?.[1];
+        const literal = /^'([^']*)'$/.exec(value)?.[1];
+        const defined = ident === undefined ? undefined : new RegExp(`(?:const|let)\\s+${ident}\\s*=\\s*[\`'"]([^\`'"]*)`).exec(text)?.[1];
+        const key = literal ?? defined;
+        expect(key, `${f}: the key of "${m[0].slice(0, 80)}" could not be resolved to its text`).toBeDefined();
+        keysWritten.push({ file: f.slice(src.length + 1), key: key! });
+      }
     }
+    // Anti-vacuity: the six billing tests that motivated the exclusion are found, one insert each at least.
+    expect(inserts, "no insert into plans was found").toBeGreaterThanOrEqual(6);
+    expect(keysWritten.length).toBe(inserts);
+    expect(keysWritten.filter((k) => !k.key.startsWith(TEMP_PLAN_KEY_PREFIX)), "inserted plan keys without the prefix").toEqual([]);
   });
 });
