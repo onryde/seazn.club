@@ -33,7 +33,6 @@ export type BlogPost = BlogPostMeta & { markdown: string };
  * pages that print related links must show only the slugs `blogPost()` resolves. It is deleted with the last batch.
  */
 export const BLOG_PLANNED_SLUGS: ReadonlySet<string> = new Set([
-  "why-matches-won-come-first",
   "level-on-points-who-finishes-higher",
   "three-way-tie-head-to-head",
   "net-run-rate-explained",

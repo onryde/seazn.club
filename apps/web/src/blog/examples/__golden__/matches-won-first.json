@@ -1,0 +1,76 @@
+{
+  "facts": {
+    "firstKey": "wins",
+    "winsFirstOrder": "Greens, Blues, Reds and Golds",
+    "pointsFirstOrder": "Greens, Reds, Blues and Golds",
+    "greensWon": 2,
+    "greensPoints": "6",
+    "greensPlaceWins": 1,
+    "greensPlacePoints": 1,
+    "bluesWon": 2,
+    "bluesPoints": "4",
+    "bluesPlaceWins": 2,
+    "bluesPlacePoints": 3,
+    "redsWon": 1,
+    "redsPoints": "5",
+    "redsPlaceWins": 3,
+    "redsPlacePoints": 2,
+    "goldsWon": 1,
+    "goldsPoints": "3",
+    "goldsPlaceWins": 4,
+    "goldsPlacePoints": 4,
+    "matchList": "Blues beat Reds 3-2, Reds beat Greens 3-0, Golds beat Reds 3-2, Greens beat Blues 3-0, Blues beat Golds 3-2, Greens beat Golds 3-0",
+    "sportCount": 11,
+    "sportsWinsFirst": 3,
+    "winsFirstList": "Volleyball, Badminton and Tennis",
+    "sportsWhereOrdersCanDiffer": 1,
+    "whereOrdersCanDiffer": "indoor volleyball",
+    "sportsAlwaysAgree": 2,
+    "alwaysAgreeList": "Badminton and Tennis",
+    "indoorWinThree": "3"
+  },
+  "table": {
+    "caption": "Four volleyball teams, six matches, the same results ranked twice: matches won first, then points first.",
+    "columns": [
+      "Team",
+      "Matches won",
+      "Points",
+      "Place, matches won first",
+      "Place, points first"
+    ],
+    "rows": [
+      [
+        "Greens",
+        2,
+        "6",
+        1,
+        1
+      ],
+      [
+        "Blues",
+        2,
+        "4",
+        2,
+        3
+      ],
+      [
+        "Reds",
+        1,
+        "5",
+        3,
+        2
+      ],
+      [
+        "Golds",
+        1,
+        "3",
+        4,
+        4
+      ]
+    ]
+  },
+  "text": [
+    "Four indoor volleyball teams play each other once. Each match is a real volleyball match played to the end, won by the set score the example names.",
+    "Ranked by matches won first, the table reads Greens, Blues, Reds and Golds; ranked by points first it reads Greens, Reds, Blues and Golds."
+  ]
+}
