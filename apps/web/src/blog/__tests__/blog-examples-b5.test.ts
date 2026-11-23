@@ -6,7 +6,8 @@ import { BLOG_EXAMPLES } from "@/blog/examples";
 import { BLOG_GOLDENS } from "@/blog/examples/goldens";
 import type { ExampleResult } from "@/blog/examples/types";
 
-const B5 = ["americano-rotation", "mexicano-next-round", "ladder-challenge", "knockout-withdrawal", "forfeit-scores", "double-walkover"] as const;
+// #22 americano-rotation and #23 mexicano-next-round are HELD (blog-held-posts.test.ts); their claims were swept before the hold.
+const B5 = ["ladder-challenge", "knockout-withdrawal", "forfeit-scores", "double-walkover"] as const;
 const EMPTY: ExampleResult = { facts: {}, text: [] };
 const clone = (id: string): ExampleResult => JSON.parse(JSON.stringify(BLOG_GOLDENS[id]!)) as ExampleResult;
 const claimsOf = (id: string) => BLOG_EXAMPLES.find((e) => e.id === id)!.claims;

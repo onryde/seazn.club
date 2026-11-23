@@ -38,7 +38,6 @@ export type DiagramModel =
       bracket: { name: string; matches: { home: string | null; away: string | null }[] }[];
     }
   | { kind: "ladder"; title: string; rungs: string[]; challenger: string; target: string; swapped: boolean }
-  | { kind: "partnerGrid"; title: string; players: string[]; rounds: { pairs: [string, string][] }[] }
   // ---- batch 5, fix round 1 (M9): one picture for each of the walkover posts ----
   /** A walkover in a bracket: rounds left to right, each match with its two sides (a seat not filled reads as the words the
    *  example gives it), the sides to strike (the ones that left or did not turn up), the winner, and one short result line. */

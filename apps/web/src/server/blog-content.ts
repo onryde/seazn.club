@@ -53,7 +53,10 @@ export const BLOG_PLANNED_SLUGS: ReadonlySet<string> = new Set([
   "page-playoff-and-stepladder",
   "double-elimination-explained",
   "what-is-a-plate",
-  // batch 5 (#22 to #27) is written: its slugs came off this list.
+  // batch 5 (#22 to #27) is written, except the two HELD posts below (owner ruling 2026-11-23: until W7 fixes score entry
+  // and mexicano round two; text and examples are kept beside the SDD ledger, held-22-* / held-23-*).
+  "how-americano-works",
+  "how-mexicano-works",
   "round-robin-schedule",
   "groups-into-knockout",
   "best-third-placed-teams",

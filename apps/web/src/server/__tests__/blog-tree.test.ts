@@ -22,7 +22,7 @@ function leaves(v: unknown): string[] {
   if (v === null || typeof v !== "object") return v === undefined ? [] : [String(v)];
   return Object.values(v as Record<string, unknown>).flatMap(leaves);
 }
-/** Batch 5: a diagram's `kind` is the model's discriminator ("partnerGrid"), read by the drawing's switch and never shown;
+/** Batch 5: a diagram's `kind` is the model's discriminator ("walkoverBracket"), read by the drawing's switch and never shown;
  *  every other string of the diagram is scanned. */
 const exampleStrings = (id: string): string[] => {
   const g = BLOG_GOLDENS[id]!;

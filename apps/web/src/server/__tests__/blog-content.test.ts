@@ -262,7 +262,7 @@ describe("related: slugs planned but not yet written", () => {
     // Batch 5: each batch takes its written slugs off the list, so the pin is the 32 after the pilot, counted as the
     // planned plus every post written past the pilot (none of them still planned: blog-tree.test.ts).
     const written = allBlogPosts().filter((p) => p.slug !== "how-standings-points-work").length;
-    expect(written, "anti-vacuity: batch 5's six posts are written").toBeGreaterThanOrEqual(6);
+    expect(written, "anti-vacuity: batch 5's four live posts are written (#22 and #23 are held)").toBeGreaterThanOrEqual(4);
     expect(BLOG_PLANNED_SLUGS.size + written, "anti-vacuity: planned slugs").toBe(32);
     for (const s of BLOG_PLANNED_SLUGS) expect(s, s).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
     expect(BLOG_PLANNED_SLUGS.has("how-standings-points-work"), "the pilot is a post, not planned").toBe(false);

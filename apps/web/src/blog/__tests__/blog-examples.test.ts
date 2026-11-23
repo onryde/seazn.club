@@ -270,7 +270,7 @@ function stringLeaves(v: unknown): string[] {
   return Object.values(v as Record<string, unknown>).flatMap(stringLeaves);
 }
 
-/** Batch 5: a diagram's `kind` is the model's discriminator ("partnerGrid"), read by the drawing's switch and never shown, so
+/** Batch 5: a diagram's `kind` is the model's discriminator ("walkoverBracket"), read by the drawing's switch and never shown, so
  *  the copy scan skips that one field; every other string of the diagram is still scanned. */
 function withoutDiagramKind(g: ExampleResult): unknown {
   return g.diagram === undefined ? g : { ...g, diagram: { ...g.diagram, kind: undefined } };
@@ -441,7 +441,7 @@ describe("the registry is server-only: nothing a page loads imports the engine's
     new RegExp(spec + String.raw`@/blog/examples["']`),
     new RegExp(spec + String.raw`@/blog/examples/(?:index|standings-points|starting-variant)["']`),
     // ---- batch 5 (Task 11) ----
-    new RegExp(spec + String.raw`@/blog/examples/(?:americano-rotation|mexicano-next-round|ladder-challenge|knockout-withdrawal|forfeit-scores|double-walkover|sport-name)["']`),
+    new RegExp(spec + String.raw`@/blog/examples/(?:ladder-challenge|knockout-withdrawal|forfeit-scores|double-walkover|sport-name)["']`),
     // ---- end batch 5 ----
     new RegExp(spec + String.raw`@seazn/engine/testkit["']`),
     new RegExp(spec + String.raw`@/blog/labels["']`),
