@@ -237,6 +237,25 @@ export function divisionTabRewrite(request: NextRequest): URL | null {
   return url;
 }
 
+/** A routed tab's internal document, `{hub root}/{org}/{comp}/{division}/tab/{tab}` (the rewrite's own target). */
+const DIVISION_TAB_DOCUMENT = new RegExp(`^${PUBLIC_HUB_ROOT}/([^/]+)/([^/]+)/([^/]+)/tab/([^/]+)/?$`);
+
+/**
+ * W5 follow-ups fix round 1 (review M2): the rewrite's target is a real route, so a request NAMING it - a crawler, a pasted link -
+ * was served the same document at a second public address. The proxy runs on the request a browser sends, never again on its
+ * own rewrite, so such a request is answered with a permanent redirect to the address the hub links to, `{division}?tab={tab}`
+ * (the query kept). Null for anything else: an unknown tab there is the route's own 404.
+ */
+export function divisionTabCanonicalRedirect(request: NextRequest): URL | null {
+  const m = DIVISION_TAB_DOCUMENT.exec(request.nextUrl.pathname);
+  if (m === null || NOT_A_COMPETITION.has(m[2]!) || NOT_A_DIVISION.has(m[3]!)) return null;
+  if (!(ROUTED_DIVISION_TABS as readonly string[]).includes(m[4]!)) return null;
+  const url = request.nextUrl.clone();
+  url.pathname = routes.publicHub(m[1]!, m[2]!, m[3]!);
+  url.searchParams.set("tab", m[4]!);
+  return url;
+}
+
 export function proxy(request: NextRequest): NextResponse {
   const response = proxyCore(request);
   // The configured origin, not the Host/X-Forwarded-Host header: a client can send that header, and a forged
@@ -342,6 +361,8 @@ function proxyCore(request: NextRequest): NextResponse {
     return rewritten;
   }
 
+  const canonical = isGamesHost ? null : divisionTabCanonicalRedirect(request);
+  if (canonical !== null) return NextResponse.redirect(canonical, 308);
   const rewriteUrl = gamesHostRewrite(request) ?? divisionTabRewrite(request);
   const response = rewriteUrl
     ? NextResponse.rewrite(rewriteUrl, { request: { headers: requestHeaders } })

@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { NextRequest } from "next/server";
-import { divisionTabRewrite, proxy } from "@/proxy";
+import { divisionTabCanonicalRedirect, divisionTabRewrite, proxy } from "@/proxy";
 
 const req = (pathAndQuery: string) => new NextRequest(`http://localhost:3000${pathAndQuery}`);
 
@@ -77,5 +77,50 @@ describe("B3 divisionTabRewrite", () => {
     expect(rewritten.headers.get("x-middleware-rewrite")).toContain("/live/riverside/autumn-cup/open/tab/standings");
     const bare = proxy(req("/live/riverside/autumn-cup/open"));
     expect(bare.headers.get("x-middleware-rewrite")).toBeNull();
+  });
+});
+
+// Review M2: the rewrite's target, `{division}/tab/{tab}`, is a real route, and a request for it by that path was served as a
+// second public address of the same document (a crawler could index both). The proxy runs on the request a browser or crawler
+// sends, never again on its own rewrite, so a request that NAMES the internal path is answered with a permanent redirect to the
+// address the hub links to.
+describe("M2 divisionTabCanonicalRedirect", () => {
+  it("a direct request for a routed tab's internal path goes (308) to the division's ?tab= address, keeping the query", () => {
+    let checked = 0;
+    for (const tab of ["standings", "entrants"]) {
+      for (const path of [`/live/riverside/autumn-cup/open/tab/${tab}`, `/live/riverside/autumn-cup/open/tab/${tab}/`]) {
+        const url = divisionTabCanonicalRedirect(req(`${path}?ref=share`));
+        expect(url?.pathname, path).toBe("/live/riverside/autumn-cup/open");
+        expect(url?.searchParams.get("tab"), path).toBe(tab);
+        expect(url?.searchParams.get("ref")).toBe("share");
+        checked += 1;
+      }
+    }
+    expect(checked, "anti-vacuity").toBe(4);
+  });
+
+  it("no redirect: the ?tab= address itself, an unknown tab, a static route or org tree in a division's place, a deeper path", () => {
+    const untouched = [
+      "/live/riverside/autumn-cup/open",
+      "/live/riverside/autumn-cup/open?tab=standings",
+      "/live/riverside/autumn-cup/open/tab/schedule",
+      "/live/riverside/autumn-cup/open/tab/fixtures",
+      "/live/riverside/autumn-cup/present/tab/standings",
+      "/live/riverside/news/a-post/tab/standings",
+      "/live/riverside/autumn-cup/open/tab/standings/more",
+    ];
+    for (const path of untouched) expect(divisionTabCanonicalRedirect(req(path)), path).toBeNull();
+    expect(untouched.length).toBe(7);
+  });
+
+  it("wired: the proxy answers the internal path with a 308 to the ?tab= address, and the ?tab= address with the rewrite (never a redirect loop)", () => {
+    // Premise: the internal route exists in the tree (the thing a direct request would otherwise reach).
+    expect(statSync(join(process.cwd(), "src/app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/tab/[tab]/page.tsx")).isFile()).toBe(true);
+    const direct = proxy(req("/live/riverside/autumn-cup/open/tab/entrants"));
+    expect(direct.status).toBe(308);
+    expect(direct.headers.get("location")).toBe("http://localhost:3000/live/riverside/autumn-cup/open?tab=entrants");
+    const viaTab = proxy(req("/live/riverside/autumn-cup/open?tab=entrants"));
+    expect(viaTab.status).not.toBe(308);
+    expect(viaTab.headers.get("x-middleware-rewrite")).toContain("/live/riverside/autumn-cup/open/tab/entrants");
   });
 });
