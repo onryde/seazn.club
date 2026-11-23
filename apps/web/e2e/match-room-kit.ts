@@ -404,10 +404,16 @@ export async function seedOnlineRound(
      *  really be created at the Lichess fixture server. Default: the
      *  unopenable one-byte token (nothing may reach Lichess). */
     playable?: boolean;
+    /** The load harness's real-lila backend (LOAD_LICHESS=lila): link player i to `lichessAccounts[i]` - an account and a
+     *  personal token minted in that lila - instead of a made-up id. One per name, in order; implies `playable`. */
+    lichessAccounts?: readonly { lichessId: string; token: string }[];
   } = {},
 ): Promise<SeededRound> {
+  if (opts.lichessAccounts && opts.lichessAccounts.length !== names.length) {
+    throw new Error(`seedOnlineRound: ${names.length} players but ${opts.lichessAccounts.length} Lichess accounts`);
+  }
   const people: Omit<RoundPlayer, "entrantId">[] = [];
-  for (const name of names) {
+  for (const [i, name] of names.entries()) {
     const { userId, email } = await seedUser(name);
     const person = await apiJson<{ id: string }>(request, "/api/v1/persons", "POST", {
       full_name: name,
@@ -415,9 +421,13 @@ export async function seedOnlineRound(
     });
     expect(person.status, `person ${name}: ${JSON.stringify(person.error)}`).toBeLessThan(300);
     await linkPersonToUserBySql(person.data!.id, userId);
-    const lichessId = `e2e-rnd-${randomBytes(5).toString("hex")}`;
+    const given = opts.lichessAccounts?.[i];
+    const lichessId = given ? given.lichessId : `e2e-rnd-${randomBytes(5).toString("hex")}`;
     let lichessToken: string | null = null;
-    if (opts.playable) {
+    if (given) {
+      lichessToken = given.token;
+      await linkLichessBySql(userId, lichessId, lichessToken, playScopes());
+    } else if (opts.playable) {
       lichessToken = `lio_e2e_${lichessId}`;
       await linkLichessBySql(userId, lichessId, lichessToken, playScopes());
     } else {
