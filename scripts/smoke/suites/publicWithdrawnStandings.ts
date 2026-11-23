@@ -110,7 +110,9 @@ export async function publicWithdrawnStandingsSuite(): Promise<void> {
     dq.status === 200 && v1data<{ status: string }>(dq).status === "disqualified",
   );
 
-  const page = await html(newSession(), `/live/${org.slug}/${comp.slug}/${div.slug}`);
+  // The Standings tab's own document (W5 follow-ups B3: the bare division route carries the Schedule only; the proxy serves
+  // `?tab=standings` from `tab/standings`), where the table and its chips are.
+  const page = await html(newSession(), `/live/${org.slug}/${comp.slug}/${div.slug}?tab=standings`);
   // The standings table's NAME CELLS, not the body. A whole-body grep cannot
   // make this assertion in either direction: the page carries entrant ids
   // legitimately (fixture hrefs, the embed snippet), so "no UUID in the body"
