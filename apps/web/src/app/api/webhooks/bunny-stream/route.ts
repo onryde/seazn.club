@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { log } from "@/server/logger";
 import { bunnyConfig, seaznHostedReplay } from "@/server/relay/config";
 import { applyBunnyEvent } from "@/server/usecases/seazn-replay-webhook";
-import { parseBunnyEvent, verifyBunnySignature } from "@/server/video/bunny-webhook";
+import { readBunnyEvent, verifyBunnySignature } from "@/server/video/bunny-webhook";
 import { replayDriver } from "@/server/video/replay-driver";
 
 // Seazn-hosted video, Phase 2 Task 27: Bunny Stream's library webhook, the primary "playable" signal for a replay copy (the move's
@@ -54,11 +54,13 @@ export async function POST(req: Request): Promise<NextResponse> {
     } catch {
       json = undefined;
     }
-    ev = parseBunnyEvent(json);
-    if (ev === null) {
-      log.warn({ bytes: rawBody.length }, "bunny-webhook: a signed body that is not a Bunny Stream event — ignored");
+    const read = readBunnyEvent(json);
+    if ("fault" in read) {
+      // The field's NAME (or "body"), never its value (Task 27 review m6): a format drift says which field it hit.
+      log.warn({ bytes: rawBody.length, field: read.fault }, "bunny-webhook: a signed body that is not a Bunny Stream event — ignored");
       return NextResponse.json({ ignored: true });
     }
+    ev = read.event;
     const outcome = await applyBunnyEvent({ libraryId: s.libraryId, replay: replayDriver() }, ev, new Date());
     // One line per handled event (Task 27 review m7: the stg runbook's check), its ids, status and outcome only: never a header,
     // the body or a key.

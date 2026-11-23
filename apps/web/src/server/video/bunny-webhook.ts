@@ -50,17 +50,33 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "obj
 const isCount = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 0;
 const idOf = (v: unknown): string | null => (typeof v === "string" && v.trim() !== "" && v.length <= ID_MAX ? v : null);
 
-/** The event a signed body carries, or null when any of its five fields is missing or not the shape Bunny sends: never a guess. */
-export function parseBunnyEvent(json: unknown): BunnyEvent | null {
-  if (!isRecord(json)) return null;
+/** The five fields the webhook reads, in the order they are checked (Bunny's own order). */
+export const BUNNY_EVENT_FIELDS = ["VideoLibraryId", "VideoGuid", "Status", "EventId", "Timestamp"] as const;
+/** What a body that is not an event failed on: the body itself (not an object), or the FIRST of the five fields that is missing or not
+ *  the shape Bunny sends. A name only, never a value (Task 27 review m6: the route's line can say which field drifted). */
+export type BunnyEventFault = "body" | (typeof BUNNY_EVENT_FIELDS)[number];
+
+/** The event a signed body carries, or what it failed on: never a guess. */
+export function readBunnyEvent(json: unknown): { event: BunnyEvent } | { fault: BunnyEventFault } {
+  if (!isRecord(json)) return { fault: "body" };
   const lib = json.VideoLibraryId;
   const libraryId = isCount(lib) ? String(lib) : typeof lib === "string" && /^\d+$/.test(lib) ? lib : null;
+  if (libraryId === null) return { fault: "VideoLibraryId" };
   const videoId = idOf(json.VideoGuid);
-  const eventId = idOf(json.EventId);
+  if (videoId === null) return { fault: "VideoGuid" };
   const status = isCount(json.Status) ? json.Status : null;
+  if (status === null) return { fault: "Status" };
+  const eventId = idOf(json.EventId);
+  if (eventId === null) return { fault: "EventId" };
   const at = typeof json.Timestamp === "string" ? new Date(json.Timestamp) : null;
-  if (libraryId === null || videoId === null || eventId === null || status === null || at === null || Number.isNaN(at.getTime())) return null;
-  return { libraryId, videoId, status, eventId, at };
+  if (at === null || Number.isNaN(at.getTime())) return { fault: "Timestamp" };
+  return { event: { libraryId, videoId, status, eventId, at } };
+}
+
+/** The event a signed body carries, or null when any of its five fields is missing or not the shape Bunny sends. */
+export function parseBunnyEvent(json: unknown): BunnyEvent | null {
+  const read = readBunnyEvent(json);
+  return "event" in read ? read.event : null;
 }
 
 /** The webhook's status list (B6) — NOT the video API's (Task 21), where 3 is still transcoding and 6 a failed upload. 3 Finished

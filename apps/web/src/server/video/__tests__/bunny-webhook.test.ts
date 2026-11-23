@@ -25,7 +25,7 @@ vi.mock("node:crypto", async (importOriginal) => {
   };
 });
 
-import { parseBunnyEvent, verifyBunnySignature, webhookOutcome } from "../bunny-webhook";
+import { BUNNY_EVENT_FIELDS, parseBunnyEvent, readBunnyEvent, verifyBunnySignature, webhookOutcome } from "../bunny-webhook";
 
 const KEY = "ZZ-read-only-webhook-test";
 const BODY_3 = '{"VideoLibraryId":133,"VideoGuid":"657bb740-a71b-4529-a012-528021c31a92","Status":3,"EventId":"0f8e2c52-6a3e-4c1f-9d55-2b8c4f6c2a10","Timestamp":"2026-10-01T12:30:15.1234567Z"}';
@@ -104,6 +104,9 @@ describe("parseBunnyEvent — the five fields the webhook reads (B6)", () => {
     let checked = 0;
     for (const v of [null, undefined, "x", 3, true, [], [docs()], {}]) {
       expect(parseBunnyEvent(v), JSON.stringify(v)).toBeNull();
+      // Task 27 review m6: the refusal names what failed (a NAME, never a value): the body itself, unless it is an object.
+      const read = readBunnyEvent(v);
+      expect("fault" in read && (read.fault === "body") === !(typeof v === "object" && v !== null && !Array.isArray(v)), JSON.stringify(v)).toBe(true);
       checked++;
     }
     expect(checked).toBe(8);
@@ -131,9 +134,12 @@ describe("parseBunnyEvent — the five fields the webhook reads (B6)", () => {
       const body: Record<string, unknown> = { ...docs(), ...patch };
       for (const [k, v] of Object.entries(patch)) if (v === undefined) delete body[k];
       expect(parseBunnyEvent(body), label).toBeNull();
+      // m6: the refusal names the one field this case broke (the patch's own key), never its value.
+      expect([label, readBunnyEvent(body)], label).toEqual([label, { fault: Object.keys(patch)[0] }]);
       checked++;
     }
     expect(checked).toBe(20);
+    expect(new Set(broken.map(([, patch]) => Object.keys(patch)[0])), "every one of the five fields is broken at least once").toEqual(new Set(BUNNY_EVENT_FIELDS));
     expect(parseBunnyEvent({ ...docs(), VideoLibraryId: "133" })?.libraryId, "a library id sent as digits reads the same").toBe("133");
   });
 });

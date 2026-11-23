@@ -169,10 +169,17 @@ describe.skipIf(!HAS_DB)("POST /api/webhooks/bunny-stream", () => {
   it("a SIGNED body that is not one of Bunny's events (not JSON, a field missing) is 200 `{ ignored: true }`, nothing marked; a repeat is `duplicate`; another library is `ignored`", async () => {
     const w = await encodingRow();
     const video = vi.spyOn(w.host, "video");
-    for (const raw of ["not json", "[]", JSON.stringify({ VideoLibraryId: 424242, VideoGuid: w.row.bunny_video_id, Status: 3 })]) {
+    const notAnEvent = (): unknown[] =>
+      logMock.warn.mock.calls.filter(([, msg]) => msg === "bunny-webhook: a signed body that is not a Bunny Stream event — ignored").map(([fields]) => fields);
+    logMock.warn.mockClear();
+    // Task 27 review m6: each line names what failed, a field's NAME (the five in Bunny's order), never a value. The third body lacks
+    // EventId and Timestamp; EventId comes first.
+    const fields: [string, string][] = [["not json", "body"], ["[]", "body"], [JSON.stringify({ VideoLibraryId: 424242, VideoGuid: w.row.bunny_video_id, Status: 3 }), "EventId"]];
+    for (const [raw] of fields) {
       const res = await post(raw);
       expect([raw, res.status, await res.json()]).toEqual([raw, 200, { ignored: true }]);
     }
+    expect(notAnEvent()).toEqual(fields.map(([raw, field]) => ({ bytes: raw.length, field })));
     expect(video).not.toHaveBeenCalled();
     const other = bodyOf({ guid: w.row.bunny_video_id!, status: 3, library: 999 });
     expect(await (await post(other)).json()).toEqual({ received: true, outcome: "ignored" });

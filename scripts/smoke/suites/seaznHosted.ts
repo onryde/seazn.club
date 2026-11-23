@@ -37,7 +37,8 @@ import { BASE, newSession, check, signIn, smokeDb, tag, timedFixture, v1, v1data
  * behind SEAZN_HOSTED_REPLAY, which no smoke job sets, and the fake host's videos live in the SERVER's memory, where only a test
  * can advance one. The move and the webhook are proved on the fakes in vitest (usecases/__tests__/seazn-replays.test.ts,
  * seazn-replay-webhook.test.ts, video/__tests__/seazn-video-replays.test.ts); what this proves is everything after the row, in
- * the built server: the view, the merge, the real signer, the route's headers and the organiser's delete.
+ * the built server: the view, the merge, the call that signs (its call site, TTL and URL assembly, on the fakes' signers: the replay
+ * host's is a stand-in digest, the interim's the fake relay's token), the route's headers and the organiser's delete.
  *
  * Its own Pro org and sign-in, nothing from SubsetCtx, purged by cleanup() (which empties the replay tables before the orgs).
  * One sport (hockey, as captureV2): the Seazn destination, the video route and the replay rows read no sport.
@@ -244,7 +245,8 @@ export async function seaznHostedSuite(): Promise<void> {
         Number(embed[1]) === Math.floor(expiresMs / 1000) && Math.abs(expiresMs - wantMs) <= 60_000,
     );
 
-    // 7. DELETE: the organiser's delete wins over the move, and the host is asked to remove the copy at once.
+    // 7. DELETE: the organiser's delete takes the row to deleted, and the host is asked to remove the copy at once. (That the delete
+    //    wins over a move in flight is proved on the fakes in usecases/__tests__/seazn-replays.test.ts; no move runs here.)
     type Removed = { state: string; deleted_reason: string | null; deleted_by: string | null; bunny_video_id: string | null; deleted_at: Date | null; state_at: Date };
     const removedRow = async () => (await db<Removed[]>`
       select state, deleted_reason, deleted_by, bunny_video_id, deleted_at, state_at from fixture_video_replays where id = ${replayId}`)[0];
