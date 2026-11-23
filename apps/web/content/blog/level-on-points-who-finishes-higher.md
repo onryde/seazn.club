@@ -30,6 +30,8 @@ Neither table is wrong. Head-to-head asks who was better on the day the two actu
 
 ## What each sport checks
 
+The lists below are worded as the division's **Standings** tab prints them under the table, in the line called "Tie-break cascade". The stage's **Tie-breaks** editor, shown at the end of this post, words a few steps more briefly: football's "{{fact:level-on-points.standingsGoalDifference}}" is "{{fact:level-on-points.editorGoalDifference}}" there, and "{{fact:level-on-points.standingsGoalsScored}}" is "{{fact:level-on-points.editorGoalsScored}}".
+
 - **Football.** The first check is {{fact:level-on-points.footballFirstTieBreak}}. In full: {{fact:level-on-points.footballOrder}}. Football's own order checks head-to-head before goal difference; the classic order, which football also offers, checks goal difference first.
 - **Cricket.** The first check is {{fact:level-on-points.cricketFirstTieBreak}}. In full: {{fact:level-on-points.cricketOrder}}.
 - **Chess.** The first check is {{fact:level-on-points.boardgameFirstTieBreak}}. In full: {{fact:level-on-points.boardgameOrder}}.
@@ -46,7 +48,7 @@ Drawing of lots is the last step on every list, so two teams that no check can t
 
 ## When the matches are not all played
 
-A head-to-head check only runs once every match among the level teams has been played, because a head-to-head count with a match missing would compare teams on different games. Until then the table skips it and goes on to the next check. Part way through the season, Hawks and Rockets are both on {{fact:level-on-points.midHawksPoints}} points and have not met yet, so the table uses goal difference: Rockets are {{fact:level-on-points.midRocketsPlace}} on {{fact:level-on-points.midRocketsGoalDifference}} and Hawks are {{fact:level-on-points.midHawksPlace}} on {{fact:level-on-points.midHawksGoalDifference}}, split on {{fact:level-on-points.midSplitBy}}. The public table adds a note beside them: "{{fact:level-on-points.midNote}}" When the match between them is played, head-to-head runs and, as in the football example above, the places turn round.
+A head-to-head check only runs once every match among the level teams has been played, because a head-to-head count with a match missing would compare teams on different games. Until then the table skips it and goes on to the next check, in every sport but {{fact:level-on-points.partialScheduleSports}}. That sport declares its own order for the time before the meetings are played: it ranks the level teams by {{fact:level-on-points.partialScheduleOrder}}, and whatever is still level goes on down the list. Part way through the season, Hawks and Rockets are both on {{fact:level-on-points.midHawksPoints}} points and have not met yet, so the table uses goal difference: Rockets are {{fact:level-on-points.midRocketsPlace}} on {{fact:level-on-points.midRocketsGoalDifference}} and Hawks are {{fact:level-on-points.midHawksPlace}} on {{fact:level-on-points.midHawksGoalDifference}}, split on {{fact:level-on-points.midSplitBy}}. The public table adds a note beside them: "{{fact:level-on-points.midNote}}" When the match between them is played, head-to-head runs and, as in the football example above, the places turn round.
 
 ## Which list a table uses
 

@@ -24,8 +24,9 @@ import type { AnySportModule, TiebreakerKey } from "@seazn/engine/sport";
 import { declaredCfgs, defaultOrderOf, forEachSport } from "@seazn/engine/testkit";
 import { sportLabel } from "@/blog/labels";
 import publicDict from "@/dictionaries/en/public.json";
-import { standingsLabel } from "@/blog/labels-screens";
+import { editorLabel, standingsLabel } from "@/blog/labels-screens";
 import { TIE_NOTE_KEYS } from "@/server/public-site/standings-view";
+import { partialScheduleClaim, partialScheduleFacts } from "./partial-schedule";
 import { startingVariantKey } from "./starting-variant";
 import { placeOf, placeText, playAndRank, scoreOf, rowOf, signed, stageRules, type Meeting, type MatchView } from "./tie-break-play";
 import type { BlogExample, Claim, ExampleResult } from "./types";
@@ -153,6 +154,15 @@ function build(): ExampleResult {
   });
   facts.sportCount = visited;
   facts.winsFirstSports = upperFirst(listOf(winsFirst));
+  // Two screens, two words for football's steps: the Standings tab and the public table, and the stage Tie-breaks editor.
+  facts.standingsGoalDifference = standingsLabel("diff", "football");
+  facts.standingsGoalsScored = standingsLabel("for", "football");
+  facts.editorGoalDifference = editorLabel("diff", "football");
+  facts.editorGoalsScored = editorLabel("for", "football");
+  const partial = partialScheduleFacts();
+  facts.partialScheduleSports = partial.sports;
+  facts.partialScheduleOrder = partial.order;
+  facts.partialScheduleCount = partial.count;
   worked(facts, text);
   const result: ExampleResult = { facts, table: { caption: "", columns: COLUMNS, rows }, text };
   result.table!.caption = captionOf(result);
@@ -300,7 +310,24 @@ function acrossSports(): Claim[] {
   ];
 }
 
-const claims: Claim[] = [...acrossSports()];
+const screenWordsClaim: Claim = {
+  says: "football's goal difference and goals scored are worded one way on the Standings tab and the public table and another way in the stage Tie-breaks editor, and the facts name both",
+  source: "the dictionaries the screens read: `div.detail.tiebreak.rule.*` through `localizedTieBreakLabel` (Standings, public) and `unitLabelKey` (editor, stage card, builder), via labels-screens",
+  check(r) {
+    const want = {
+      standingsGoalDifference: standingsLabel("diff", "football"),
+      standingsGoalsScored: standingsLabel("for", "football"),
+      editorGoalDifference: editorLabel("diff", "football"),
+      editorGoalsScored: editorLabel("for", "football"),
+    };
+    for (const [k, v] of Object.entries(want)) if (r.facts[k] !== v) return `${k} is '${String(r.facts[k])}', the screen says '${v}'`;
+    // Class 19: the two screens must differ, or the sentence that names both says nothing.
+    if (want.standingsGoalDifference === want.editorGoalDifference || want.standingsGoalsScored === want.editorGoalsScored) return "the two screens use the same words: the sentence that says they differ is false";
+    return true;
+  },
+};
+
+const claims: Claim[] = [...acrossSports(), screenWordsClaim, partialScheduleClaim];
 const sportsClaimed = forEachSport(({ module }) => {
   claims.push(...claimsFor(module));
 });

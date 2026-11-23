@@ -30,6 +30,7 @@ import publicDict from "@/dictionaries/en/public.json";
 import ui from "@/dictionaries/en/ui.json";
 import { standingsLabel } from "@/blog/labels-screens";
 import { TIE_NOTE_KEYS } from "@/server/public-site/standings-view";
+import { partialScheduleClaim, partialScheduleFacts } from "./partial-schedule";
 import { startingVariantKey } from "./starting-variant";
 import { factsRepeatTheTable, placeOf, placeText, playAndRank, scoreOf, rowOf, signed, stageRules, type MatchView, type Meeting } from "./tie-break-play";
 import type { BlogExample, Claim, ExampleResult } from "./types";
@@ -143,6 +144,10 @@ function build(): ExampleResult {
     facts[`${module.key}ThreeWay`] = threeWayWords(order, module.key);
   });
   facts.sportCount = visited;
+  const partial = partialScheduleFacts();
+  facts.partialScheduleSports = partial.sports;
+  facts.partialScheduleOrder = partial.order;
+  facts.partialScheduleCount = partial.count;
 
   const result: ExampleResult = {
     facts,
@@ -482,6 +487,7 @@ const tableClaims: Claim[] = [
 const claims: Claim[] = [
   ...caseClaims(),
   ...tableClaims,
+  partialScheduleClaim,
   {
     says: "the caption is the one said from the table's own cells and the facts",
     source: "the table's cells and the example's facts (nothing in it is typed)",
