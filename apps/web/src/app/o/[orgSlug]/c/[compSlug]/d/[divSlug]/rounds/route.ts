@@ -22,6 +22,11 @@ export async function GET(req: Request) {
     const auth = await requireResourceAuth(req, "division", divisionId, "read");
     const rows = (await listDivisionFixtures(auth, divisionId)).filter((f) => f.stage_id === stageId && (all || f.round_no === round));
     if (rows.length === 0) throw new HttpError(404, all ? "stage not found" : "round not found");
-    return reply(200, rows, { "Cache-Control": "private, no-store" });
+    // `round=all` feeds the round planner only, and a stage at the caps holds thousands of lines: just the five fields it reads
+    // (`adhocRowOf`), never the desk's whole row.
+    const body = all
+      ? rows.map((f) => ({ round_no: f.round_no, home_entrant_id: f.home_entrant_id, away_entrant_id: f.away_entrant_id, status: f.status, expunged: f.expunged === true }))
+      : rows;
+    return reply(200, body, { "Cache-Control": "private, no-store" });
   });
 }

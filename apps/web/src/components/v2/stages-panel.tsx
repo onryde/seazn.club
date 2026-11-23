@@ -812,7 +812,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
       .then(async (res) => {
         if (!res.ok) throw new Error(`rounds ${res.status}`);
         // The v1 envelope (`server/api-v1/http.ts`).
-        const rows = ((await res.json()) as { data: FixtureRow[] }).data.map(adhocRowOf);
+        // `round=all` answers only the planner's five fields (`rounds/route.ts`).
+        const rows = ((await res.json()) as { data: Parameters<typeof adhocRowOf>[0][] }).data.map(adhocRowOf);
         setStageLines({ ...read, rows });
       })
       .catch(() => setStageLines({ ...read, failed: true }))
