@@ -50,7 +50,10 @@ import "server-only";
 // judged on its own fields — challenger, Black, clock, unrated, standard,
 // White — inside our create window, which for a challenge is the lookup's
 // own time: one we send leaves the list by +36 s (measured), so a match
-// listed after marker + LICHESS_TIMEOUT_MS + 36 s cannot be our send. Such a
+// listed after marker + LICHESS_TIMEOUT_MS + 36 s cannot be our send. Every
+// instant in these comparisons is the WALL clock (the recovery-clock task):
+// the marker is dated at the send, and Lichess's time is read against the
+// wall, never against a caller's `now` that may be minutes old. Such a
 // match is a STRAY and is cancelled (controller ruling 2026-10-13: cancel a
 // matching stray before re-creating). Exactly one candidate ⇒ adopt (a
 // challenge is accepted with Black's token); none, with every lookup read ⇒
@@ -122,16 +125,16 @@ export type CreateOutcome =
     };
 
 export type CreateGameDeps = {
-  /** The caller's clock: judges the board's window, the dequeue's phase, the row's expiry and the recovery's create window
-   *  (and dates the marker, `create_sent_at`). Never a claim's liveness stamp. KNOWN SKEW: the recovery compares
-   *  `create_sent_at` with ANOTHER request's clock and with Lichess's `createdAt`, so a sender clock more than ~16s old
-   *  can cancel our own challenge as a stray and re-create it (churn, never two games); owed to the recovery-clock task. */
+  /** The caller's clock: judges the board's WINDOW only - the board's phase, the dequeue's phase, the row's expiry and the
+   *  ready row's `updated_at` base. Never a claim's liveness stamp, never the marker, and never compared with Lichess's time. */
   now?: Date;
   publish?: (fixtureId: string) => Promise<void>;
-  /** The WALL clock that stamps the claim, every renewal and the marker write's claim (`mint_claimed_at`), and the takeover
-   *  bound the claim is judged against - read at the moment of each write, never the caller's `now`, which can be minutes old
-   *  by the dequeue (a sweep pass's start, a room request before the queue wait). The sweep's liveness check (pass.ts
-   *  gameMayBeOnFile) reads the same column. Injectable for a test; production passes none. */
+  /** The WALL clock, read at the moment it is needed, never the caller's `now`, which can be minutes old by the dequeue (a sweep
+   *  pass's start, a room request before the queue wait). It stamps the claim, every renewal and the marker write - both its
+   *  claim (`mint_claimed_at`) and the marker itself (`create_sent_at`, the instant the create is sent) - and judges the
+   *  takeover bound. The recovery reads Lichess's own time against it: a listing's instant, a game's createdAt (tolerances:
+   *  LICHESS_TIMEOUT_MS for a listing, SENT_SKEW_MS for lila's clock). The sweep's liveness check (pass.ts gameMayBeOnFile)
+   *  reads the claim column. Injectable for a test; production passes none. */
   clock?: () => Date;
 };
 
@@ -360,15 +363,18 @@ type QueueStep =
 /**
  * The queued job: everything from the claim to the commit. Runs when the
  * create leaves the queue, so every read here is as fresh as the HTTP call
- * that follows it. TWO clocks (fix round 1, I1): `fixedNow` is the CALLER's
- * `now` when it handed one (every production caller does: the room its
- * request's, the sweep its pass start), and it judges windows only - the
- * phase at dequeue, the row's expiry, the recovery's create window.
- * `clock` is the wall clock, read at each write, and stamps every claim
- * (`mint_claimed_at`): the claim, each renewal, the marker write. A claim
- * stamped on the caller's clock would be as old as that clock at birth -
- * stale on arrival after a long queue wait or a slow sweep pass - and its
- * renewals would rewrite the same instant, so no renewal could extend it.
+ * that follows it. TWO clocks (fix round 1, I1; the recovery-clock task):
+ * `fixedNow` is the CALLER's `now` when it handed one (every production
+ * caller does: the room its request's, the sweep its pass start), and it
+ * judges the board's window only - the phase at dequeue, the row's expiry,
+ * the ready row's `updated_at`. `clock` is the wall clock, read at each use:
+ * it stamps every claim (`mint_claimed_at`: the claim, each renewal, the
+ * marker write) and the marker itself (`create_sent_at`), and the recovery
+ * reads Lichess's time against it. A claim stamped on the caller's clock
+ * would be as old as that clock at birth - stale on arrival after a long
+ * queue wait or a slow sweep pass - and its renewals would rewrite the same
+ * instant; a marker dated on it would make our own send look older than it
+ * is to the recovery that compares it with Lichess.
  */
 async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined, clock: () => Date): Promise<QueueStep> {
   const judgedAt = fixedNow ?? new Date();
@@ -469,7 +475,9 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined, c
   let accepted = false;
   let sentHere = false;
   if (claimRow.create_sent_at !== null) {
-    const found = await findSentGame(plan, whiteToken, claimRow.create_sent_at, () => fixedNow ?? new Date(), renewClaim);
+    // The recovery reads Lichess's time (a listing, a game's createdAt) against the WALL clock, as the marker was written on
+    // it - never against `judgedAt`, which is this request's and can be minutes behind the instants it would be compared with.
+    const found = await findSentGame(plan, whiteToken, claimRow.create_sent_at, clock, renewClaim);
     if (found.kind === "lost") return { stage: "lost" };
     if (found.kind === "unknown") {
       const held = await holdForOrganiser(fixtureId, claim, {
@@ -503,15 +511,17 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined, c
 
   if (gameId === null) {
     // The marker, as its own committed write, BEFORE the HTTP call — and the
-    // claim renewed to this instant (the wall clock), so the two calls below
-    // cannot outlive it. The marker's own date stays on the CALLER's clock
-    // for now; the recovery reads it against another request's clock and
-    // Lichess's createdAt, a known skew owed to the recovery-clock task.
-    const sentAt = fixedNow ?? new Date();
+    // claim renewed to this instant, so the two calls below cannot outlive it.
+    // BOTH are the wall clock at this write (the recovery-clock task): the
+    // marker is the instant the create is really sent, which a LATER request's
+    // recovery compares with Lichess's own time (a listing, a game's
+    // createdAt). Dated on the caller's `now` - a sweep pass's start, a room
+    // request read before the queue wait - it was as old as that clock, and
+    // past ~16 s of age our own still-listed challenge read as a stray.
     const markAt = clock();
     const marked = await sql<{ fixture_id: string }[]>`
       update fixture_external_play
-         set create_sent_at = ${sentAt}, mint_claimed_at = ${markAt}, updated_at = now()
+         set create_sent_at = ${markAt}, mint_claimed_at = ${markAt}, updated_at = now()
        where fixture_id = ${fixtureId} and status = 'pending' and challenge_id is null
          and mint_claimed_at = ${claim}
        returning fixture_id`;
@@ -639,10 +649,12 @@ const CLOSED_CHALLENGE = new Set(["canceled", "declined"]);
 
 /** N1 (controller ruling, fix round 2; made symmetric in fix round 3, R2-1):
  *  a candidate counts as ours only if it was created within
- *  [create_sent_at − SENT_SKEW_MS, now + SENT_SKEW_MS]. The marker is written
- *  before the send; the skew allows for lila's clock against ours, in either
- *  direction. A createdAt EARLIER than the window is not ours (excluded); one
- *  LATER than it cannot be judged — a clock that far ahead could be hiding
+ *  [create_sent_at − SENT_SKEW_MS, now + SENT_SKEW_MS]. Both ends are the
+ *  WALL clock (the recovery-clock task): the marker is the wall clock at the
+ *  write just before the send, and `now` the wall clock once the exports are
+ *  read - so the skew is lila's clock against ours, in either direction, and
+ *  nothing else. A createdAt EARLIER than the window is not ours (excluded);
+ *  one LATER than it cannot be judged — a clock that far ahead could be hiding
  *  our own game — so it is unverified and holds, never re-creates. */
 const SENT_SKEW_MS = 60_000;
 
@@ -656,7 +668,9 @@ const CHALLENGE_LISTED_MS = 36_000;
 /** L1 (controller ruling 2026-10-13): the last instant at which a LISTED
  *  challenge can still be our send — it lands at most LICHESS_TIMEOUT_MS after
  *  the marker and stays listed at most CHALLENGE_LISTED_MS. A match listed
- *  later is somebody's challenge kept alive elsewhere, never ours. Inclusive. */
+ *  later is somebody's challenge kept alive elsewhere, never ours. Inclusive.
+ *  Compared with the listing's own instant on the wall clock (findSentGame's
+ *  `listedAt`), as the marker is. */
 const challengeWindowEnd = (sentAt: Date): number => sentAt.getTime() + LICHESS_TIMEOUT_MS + CHALLENGE_LISTED_MS;
 
 type Verdict = "ours" | "not_ours" | "unverified";
@@ -688,7 +702,7 @@ function gameVerdict(m: GameMeta, plan: CreationPlan, sentAt: Date, now: Date): 
 /** A challenge not (yet) a game, judged on its own fields — MEASURED shape
  *  (T17 live probe, 2026-10-13). Our create is White's token challenging
  *  Black with rated=false, variant=standard, color=white and the fixture's
- *  clock. There is no time fact: the window is the caller's (above).
+ *  clock. There is no time fact: the window is the listing's (above).
  *  N3 (T17 re-review): so a challenge a player sent BY HAND with every one of these fields cannot be told from ours —
  *  adopted inside the window when ours never landed, and cancelled with White's token as a stray past it; that
  *  follows from the controller's ruling (L1, 2026-10-13) and is accepted, not an oversight. */
@@ -731,6 +745,11 @@ async function findSentGame(
   clock: () => Date,
   renew: () => Promise<boolean>,
 ): Promise<SentGame> {
+  // The listing's instant, on the WALL clock (`sentAt` is the wall clock at the send): read BEFORE the call, the earliest
+  // instant the list can describe. Lichess answers within LICHESS_TIMEOUT_MS, so the list is of some instant in
+  // [listedAt, listedAt + LICHESS_TIMEOUT_MS]; judged at its start, a listed challenge is a stray only when it could not be
+  // ours at ANY instant the list may describe - the call's own bound is the tolerance, and it errs toward "may be ours".
+  const listedAt = clock();
   // One request at a time (Lichess API tips): the challenges, then the games — both read, whatever the first answers.
   const outgoing = await listOutgoingChallenges(whiteToken);
   const ongoing = await listOngoingGames(whiteToken);
@@ -796,7 +815,7 @@ async function findSentGame(
 
   // L1: a listed challenge is a candidate only while it can still be our
   // send; after that, one that matches ours is a stray.
-  const inWindow = clock().getTime() <= challengeWindowEnd(sentAt);
+  const inWindow = listedAt.getTime() <= challengeWindowEnd(sentAt);
   const open: Array<[string, Verdict]> = [];
   const strays: string[] = [];
   for (const [id, c] of challenges) {
@@ -829,6 +848,8 @@ async function findSentGame(
     if (!(await renew())) return { kind: "lost" };
     await cancelStray(plan.fixtureId, id, whiteToken);
   }
+  // The wall clock after every export was read: a game cannot have been created later than its export answered, so this
+  // bounds createdAt from above (gameVerdict adds SENT_SKEW_MS for lila's clock against ours).
   const now = clock();
   const ours: Array<{ id: string; kind: "game" | "challenge" }> = [];
   const unverified: string[] = [];
