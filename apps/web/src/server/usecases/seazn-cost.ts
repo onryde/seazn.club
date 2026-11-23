@@ -24,10 +24,11 @@ import "server-only";
 //   purgeDeletedOrgReplays(deps, now, scope)
 //       Every replay of an organisation whose `organizations.deleted_at` is more than SEAZN_ORG_DELETED_REPLAY_GRACE_DAYS before
 //       `now`, not yet deleted, is deleted as the organiser's delete does (organiser-replays.ts): one short transaction takes the
-//       row FOR UPDATE and writes `deleted`, reason `org_deleted`, no `deleted_by`, the move's cleanup due one claim lease later
-//       (`cleanupDueAfterDelete`: the cleanup deletes the Cloudflare copy and retries a removal that fails here — never ahead of
-//       the last read). After the commit, the copy's minutes are read one last time (`measureReplayBeforeRemoval`, ruling 2a),
-//       THEN the copy is removed and the row forgets it.
+//       row FOR UPDATE and writes `deleted`, reason `org_deleted`, no `deleted_by`, the move's cleanup due one claim lease after
+//       that commit (`cleanupDueAfterDelete` from the later of `now` and the wall clock — `now` is the sweep's start: the cleanup
+//       deletes the Cloudflare copy and retries a removal that fails here, never ahead of the last read). After the commit, the
+//       copy's minutes are read one last time (`measureReplayBeforeRemoval`, ruling 2a), THEN the copy is removed and the row
+//       forgets it.
 //
 //   measureReplayBeforeRemoval(host, copy, now)
 //       The last read of a copy about to be removed, from the day after the session's `replay_measured_through` up to NOW (today's
@@ -206,10 +207,13 @@ export async function measureSeaznDelivery(deps: SeaznCostDeps, now: Date, scope
       if (w === null) continue;
       let minutes = 0;
       let goneHere = 0;
-      for (const copy of s.copies) {
+      for (const [i, copy] of s.copies.entries()) {
         const m = await deps.replay.watchMinutes(copy, w.from, endOfDay(w.through));
-        if (m === null) goneHere++;   // gone: nothing more can be read of it — never a 0 written over what is stored
-        else minutes += m;
+        if (m !== null) { minutes += m; continue; }
+        // Gone: nothing more can be read of it — never a 0 written over what is stored. Unless its row was DELETED since the
+        // selection (review R2): that delete removed it and took its last read, and the write below is refused for it.
+        const [row] = await sql<{ state: string }[]>`select state from fixture_video_replays where id = ${s.replay_ids[i]!}`;
+        if (row?.state !== "deleted") goneHere++;
       }
       // Review m3: a row NOT deleted whose copy the host no longer holds is a broken public replay, and this pass is the only daily
       // reader that would notice — warned here and named in the pass's one report, every day it stays so.
@@ -301,10 +305,13 @@ export async function purgeDeletedOrgReplays(deps: Pick<SeaznCostDeps, "replay">
         const [cur] = await tx<{ state: string; bunny_video_id: string | null }[]>`
           select state, bunny_video_id from fixture_video_replays where id = ${row.id} for update`;
         if (!cur || cur.state === "deleted") return undefined;   // deleted since the selection (the organiser, a second pass)
+        // The cleanup's lease runs from THIS commit (review R1): `now` is the sweep's start, and the sweep's earlier steps can take
+        // longer than the lease — counted from `now`, the row would be due before its last read.
+        const commitAt = new Date(Math.max(now.getTime(), Date.now()));
         await tx`
           update fixture_video_replays
              set state = 'deleted', state_at = ${now}, deleted_at = coalesce(deleted_at, ${now}), deleted_reason = 'org_deleted',
-                 deleted_by = null, next_attempt_at = ${cleanupDueAfterDelete(now)}, attempts = 0
+                 deleted_by = null, next_attempt_at = ${cleanupDueAfterDelete(commitAt)}, attempts = 0
            where id = ${row.id}`;
         return cur.bunny_video_id;
       })) as string | null | undefined;
