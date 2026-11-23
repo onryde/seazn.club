@@ -215,6 +215,22 @@ describe("Tabs - only the active panel is in the document (B3)", () => {
     expect(sent, "schedule (the bare route) and entrants; never standings, which is here").toEqual(["/live/o/c/d", "/live/o/c/d?tab=entrants"]);
   });
 
+  // 08127b251b: Standings to Entrants is the same route with another param, so React may keep this instance and hand it the
+  // new document as props. Its absent panels differ, and are prefetched in their turn; a re-render of the same document is not.
+  it("a new document handed to a kept instance prefetches ITS absent panels; a re-render of the same one prefetches nothing (I3)", () => {
+    vi.stubGlobal("window", { location: { href: "https://seazn.club/live/o/c/d?tab=standings" }, history: { replaceState: vi.fn() } });
+    const props = { ids: IDS, labels: ES, label: "x", basePath: BASE };
+    const island = renderIsland(Tabs, { ...props, initial: 1, children: standingsOnly() });
+    expect(nav.prefetch.mock.calls.map((c) => c[0] as string).sort()).toEqual(["/live/o/c/d", "/live/o/c/d?tab=entrants"]);
+    nav.prefetch.mockClear();
+    island.rerender({ ...props, initial: 1, children: standingsOnly() });
+    expect(nav.prefetch, "the same document again: nothing new to fetch").not.toHaveBeenCalled();
+    vi.stubGlobal("window", { location: { href: "https://seazn.club/live/o/c/d?tab=entrants" }, history: { replaceState: vi.fn() } });
+    island.rerender({ ...props, initial: 2, children: [null, null, <p key="c">ENTRANTS PANEL</p>] });
+    const sent = nav.prefetch.mock.calls.map((c) => c[0] as string).sort();
+    expect(sent, "schedule and standings; never entrants, which is here").toEqual(["/live/o/c/d", "/live/o/c/d?tab=standings"]);
+  });
+
   it("a tap on an absent panel shows at once: the tapped tab takes the active style and aria-busy while its document loads (I3)", () => {
     vi.stubGlobal("window", { location: { href: "https://seazn.club/live/o/c/d?tab=standings" }, history: { replaceState: vi.fn() } });
     const island = renderIsland(Tabs, { ids: IDS, labels: ES, label: "x", basePath: BASE, initial: 1, children: standingsOnly() }, undefined, {
