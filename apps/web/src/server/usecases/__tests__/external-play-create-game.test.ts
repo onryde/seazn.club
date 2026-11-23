@@ -1293,6 +1293,12 @@ describe.skipIf(!process.env.DATABASE_URL)("I1 — a reschedule never makes a se
 // if created); BOTH lookups succeed and find nothing ⇒ re-create; ANY lookup
 // fails ⇒ needs_organiser / create_outcome_unknown, never a re-create.
 describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reached Lichess is looked up, never re-sent blind", () => {
+  /** A recovery AT NOW: a fresh request whose `now` is the wall clock. Since the recovery-clock task the recovery reads
+   *  Lichess's time (a listing, a game's createdAt) against the WALL clock (`clock`), not the caller's `now`, so a scenario
+   *  timed against NOW - a marker NOW - 31 s, a window edge at marker + 46 s - says the wall is NOW too. Left to the real
+   *  wall clock (weeks after NOW), every listed challenge would read as long past the window, and the boundaries below
+   *  would pass without being reached. The claim/segment tests further down keep the real wall clock on purpose. */
+  const AT_NOW = { now: NOW, clock: () => NOW } as const;
   type MarkerRow = { status: string; challenge_id: string | null; needs_reason: string | null;
     mint_claimed_at: Date | null; create_sent_at: Date | null; last_error: string | null };
   const marker = async (fixtureId: string): Promise<MarkerRow | undefined> =>
@@ -1365,11 +1371,13 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
       return { ok: true, challengeId: GM };
     });
     const startedAt = Date.now();
+    // The caller's `now` (NOW) is weeks behind the wall: the marker must not be dated on it.
     expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: true, gameId: GM });
     expect(seenAtSend?.create_sent_at, "durable before the HTTP call").not.toBeNull();
-    // Two clocks (fix round 1, I1): the marker's date is the CALLER's (the recovery's create window reads it against that
-    // clock); the claim it renews is the wall clock's, taken by THIS call at the write.
-    expect(seenAtSend?.create_sent_at?.getTime(), "the marker dated on the caller's clock").toBe(NOW.getTime());
+    // The recovery-clock task: the marker is the instant of the send on the WALL clock (a later recovery compares it with
+    // Lichess's own time), written in the same statement as the claim it renews, on the same instant.
+    expect(seenAtSend?.create_sent_at?.getTime(), "the marker dated on the wall clock at the write").toBeGreaterThanOrEqual(startedAt);
+    expect(seenAtSend?.create_sent_at?.getTime(), "one instant: the marker and its claim").toBe(seenAtSend?.mint_claimed_at?.getTime());
     expect(seenAtSend?.mint_claimed_at?.getTime(), "written on this call's claim, on the wall clock").toBeGreaterThanOrEqual(startedAt);
     const after = await marker(s.fixtureId);
     expect(after?.create_sent_at, "a recorded game is a known outcome").toBeNull();
@@ -1383,7 +1391,7 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
     board.listOngoingGames.mockResolvedValue({ ok: true, complete: true, games: [playing(theirs, s.away.lichessId)] });
     exportsAnswer({ [theirs]: ourMeta(theirs, sent) });
     const publish = vi.fn(async () => undefined);
-    expect(await createGameIfReady(s.fixtureId, { now: NOW, publish })).toEqual({ created: true, gameId: theirs });
+    expect(await createGameIfReady(s.fixtureId, { ...AT_NOW, publish })).toEqual({ created: true, gameId: theirs });
     expect(board.createChallengeToUser, "never re-sent").not.toHaveBeenCalled();
     expect(board.acceptChallenge, "already accepted at Lichess").not.toHaveBeenCalled();
     const row = await bridge(s.fixtureId);
@@ -1403,7 +1411,7 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
     const theirs = freshGameId();
     board.listOutgoingChallenges.mockResolvedValue({ ok: true, challenges: [ourChallenge(theirs, s)] });
     const publish = vi.fn(async () => undefined);
-    expect(await createGameIfReady(s.fixtureId, { now: NOW, publish })).toEqual({ created: true, gameId: theirs });
+    expect(await createGameIfReady(s.fixtureId, { ...AT_NOW, publish })).toEqual({ created: true, gameId: theirs });
     expect(board.acceptChallenge).toHaveBeenCalledTimes(1);
     expect(board.acceptChallenge).toHaveBeenCalledWith({ blackToken: `lio_seed_${s.away.lichessId}`, challengeId: theirs });
     expect(board.createChallengeToUser, "never re-sent").not.toHaveBeenCalled();
@@ -1419,7 +1427,7 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
     await crashedAfterSend(s);
     const [a, b] = [freshGameId(), freshGameId()];
     board.listOutgoingChallenges.mockResolvedValue({ ok: true, challenges: [ourChallenge(a, s), ourChallenge(b, s)] });
-    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: false, reason: "provider_error" });
+    expect(await createGameIfReady(s.fixtureId, { ...AT_NOW })).toEqual({ created: false, reason: "provider_error" });
     const row = await marker(s.fixtureId);
     expect(row).toMatchObject({ status: "needs_organiser", needs_reason: "create_outcome_unknown", challenge_id: null });
     expect(row?.last_error).toContain("ambiguous");
@@ -1438,7 +1446,7 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
     board.listOngoingGames.mockResolvedValue({ ok: true, complete: true, games: [playing(game, s.away.lichessId)] });
     exportsAnswer({ [game]: ourMeta(game, sent) });
     board.listOutgoingChallenges.mockResolvedValue({ ok: true, challenges: [ourChallenge(chal, s)] });
-    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: false, reason: "provider_error" });
+    expect(await createGameIfReady(s.fixtureId, { ...AT_NOW })).toEqual({ created: false, reason: "provider_error" });
     expect((await marker(s.fixtureId))?.last_error).toContain("ambiguous");
     expect(board.acceptChallenge).not.toHaveBeenCalled();
     expect(board.createChallengeToUser).not.toHaveBeenCalled();
@@ -1470,7 +1478,7 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
     };
     board.listOutgoingChallenges.mockResolvedValue({ ok: true, challenges: noise.challenges });
     board.listOngoingGames.mockResolvedValue({ ok: true, complete: true, games: noise.games });
-    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: true, gameId: GM });
+    expect(await createGameIfReady(s.fixtureId, { ...AT_NOW })).toEqual({ created: true, gameId: GM });
     expect(board.createChallengeToUser).toHaveBeenCalledTimes(1);
     expect(noise.challenges.length + noise.games.length, "anti-vacuity: nine non-matches offered").toBe(9);
     expect(board.exportGameMeta, "no candidate survived to be verified").not.toHaveBeenCalled();
@@ -1484,7 +1492,7 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
     board.listOngoingGames.mockResolvedValue({
       ok: true, complete: true, games: [playing(theirs, s.away.lichessId.toUpperCase())],
     });
-    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: true, gameId: theirs });
+    expect(await createGameIfReady(s.fixtureId, { ...AT_NOW })).toEqual({ created: true, gameId: theirs });
     expect(board.createChallengeToUser).not.toHaveBeenCalled();
   });
 
@@ -1511,14 +1519,14 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
       c.arrange();
       const s = await seed();
       await crashedAfterSend(s);
-      expect(await createGameIfReady(s.fixtureId, { now: NOW }), c.name).toEqual({ created: false, reason: "provider_error" });
+      expect(await createGameIfReady(s.fixtureId, { ...AT_NOW }), c.name).toEqual({ created: false, reason: "provider_error" });
       expect(board.createChallengeToUser, c.name).not.toHaveBeenCalled();
       const row = await marker(s.fixtureId);
       expect(row, c.name).toMatchObject({ status: "needs_organiser", needs_reason: "create_outcome_unknown",
         challenge_id: null, mint_claimed_at: null });
       expect(row?.create_sent_at, `${c.name}: the unknown outcome stays marked`).not.toBeNull();
       // And a retry does not re-create either: the hold is a status.
-      expect(await createGameIfReady(s.fixtureId, { now: NOW }), c.name).toEqual({ created: false, reason: "not_ready" });
+      expect(await createGameIfReady(s.fixtureId, { ...AT_NOW }), c.name).toEqual({ created: false, reason: "not_ready" });
       expect(board.createChallengeToUser, c.name).not.toHaveBeenCalled();
       checked += 1;
     }
@@ -1532,7 +1540,7 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
     exportsAnswer({ [a]: ourMeta(a, sent), [b]: ourMeta(b, sent, { createdAtMs: sent.getTime() + 900 }) });
     board.listOngoingGames.mockResolvedValue({ ok: true, complete: true,
       games: [playing(a, s.away.lichessId), playing(b, s.away.lichessId)] });
-    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: false, reason: "provider_error" });
+    expect(await createGameIfReady(s.fixtureId, { ...AT_NOW })).toEqual({ created: false, reason: "provider_error" });
     expect(await marker(s.fixtureId)).toMatchObject({ status: "needs_organiser", needs_reason: "create_outcome_unknown", challenge_id: null });
     expect((await marker(s.fixtureId))?.last_error).toContain("ambiguous");
     expect(board.createChallengeToUser).not.toHaveBeenCalled();
@@ -1547,7 +1555,7 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
       challenges: [ourChallenge(theirs, s, { status: "accepted" })] });
     board.listOngoingGames.mockResolvedValue({ ok: true, complete: true, games: [playing(theirs, s.away.lichessId)] });
     exportsAnswer({ [theirs]: ourMeta(theirs, sent) });
-    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: true, gameId: theirs });
+    expect(await createGameIfReady(s.fixtureId, { ...AT_NOW })).toEqual({ created: true, gameId: theirs });
     expect(board.acceptChallenge, "a game needs no accept").not.toHaveBeenCalled();
     expect(board.exportGameMeta, "verified once, by its export").toHaveBeenCalledTimes(1);
   });
@@ -1562,7 +1570,7 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
     board.listOutgoingChallenges.mockResolvedValue({ ok: true, challenges: [ourChallenge(theirs, s)] });
     board.listOngoingGames.mockResolvedValue({ ok: true, complete: true, games: [playing(theirs, s.away.lichessId)] });
     exportsAnswer({ [theirs]: ourMeta(theirs, sent) });
-    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: true, gameId: theirs });
+    expect(await createGameIfReady(s.fixtureId, { ...AT_NOW })).toEqual({ created: true, gameId: theirs });
     expect(board.cancelChallenge, "the accepted game was cancelled as a stray").not.toHaveBeenCalled();
     expect(board.createChallengeToUser).not.toHaveBeenCalled();
     expect(board.acceptChallenge, "a game needs no accept").not.toHaveBeenCalled();
@@ -1577,7 +1585,7 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
       insert into fixture_external_play (fixture_id, org_id, scheduled_at_basis, create_sent_at)
       values (${s.fixtureId}, ${s.orgId}, ${T}, ${new Date(NOW.getTime() - 3_600_000)})`;
     board.listOutgoingChallenges.mockResolvedValue({ ok: false, code: "unauthorized", raw: "x" });
-    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: false, reason: "provider_error" });
+    expect(await createGameIfReady(s.fixtureId, { ...AT_NOW })).toEqual({ created: false, reason: "provider_error" });
     expect(board.createChallengeToUser).not.toHaveBeenCalled();
   });
 
@@ -1588,7 +1596,7 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
       await sql`update fixture_external_play set mint_claimed_at = ${new Date(NOW.getTime() + 1_000)} where fixture_id = ${s.fixtureId}`;
       return { ok: true, complete: true, games: [] };
     });
-    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: false, reason: "not_ready" });
+    expect(await createGameIfReady(s.fixtureId, { ...AT_NOW })).toEqual({ created: false, reason: "not_ready" });
     expect(board.createChallengeToUser, "a lost claim never sends").not.toHaveBeenCalled();
   });
 
@@ -1602,7 +1610,7 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
       await sql`update fixture_external_play set mint_claimed_at = ${new Date(NOW.getTime() + 1_000)} where fixture_id = ${s.fixtureId}`;
       return { ok: true, meta: ourMeta(theirs, sent) };
     });
-    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: false, reason: "not_ready" });
+    expect(await createGameIfReady(s.fixtureId, { ...AT_NOW })).toEqual({ created: false, reason: "not_ready" });
     expect(board.exportGameMeta, "premise: verified, so the commit is what lost").toHaveBeenCalledTimes(1);
     expect(board.cancelChallenge, "this call did not make it").not.toHaveBeenCalled();
     expect(board.createChallengeToUser).not.toHaveBeenCalled();
@@ -1616,14 +1624,14 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
     GM = freshGameId();
     board.createChallengeToUser.mockClear();
     board.createChallengeToUser.mockResolvedValue({ ok: true, challengeId: GM });
-    expect(await createGameIfReady(fixtureId, { now: NOW }), label).toEqual({ created: true, gameId: GM });
+    expect(await createGameIfReady(fixtureId, { ...AT_NOW }), label).toEqual({ created: true, gameId: GM });
     expect(board.createChallengeToUser, `${label}: re-created`).toHaveBeenCalledTimes(1);
     expect((await marker(fixtureId))?.challenge_id, `${label}: our new game recorded`).toBe(GM);
   };
   /** One call that must HOLD: create_outcome_unknown, nothing sent, marker kept. */
   const expectHeld = async (fixtureId: string, label: string, why: string) => {
     board.createChallengeToUser.mockClear();
-    expect(await createGameIfReady(fixtureId, { now: NOW }), label).toEqual({ created: false, reason: "provider_error" });
+    expect(await createGameIfReady(fixtureId, { ...AT_NOW }), label).toEqual({ created: false, reason: "provider_error" });
     const row = await marker(fixtureId);
     expect(row, label).toMatchObject({ status: "needs_organiser", needs_reason: "create_outcome_unknown", challenge_id: null });
     expect(row?.last_error, label).toContain(why);
@@ -1684,7 +1692,7 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
       const theirs = freshGameId();
       board.listOngoingGames.mockResolvedValue({ ok: true, complete: true, games: [playing(theirs, s.away.lichessId)] });
       exportsAnswer({ [theirs]: ourMeta(theirs, sent, { createdAtMs: at(sent) }) });
-      expect(await createGameIfReady(s.fixtureId, { now: NOW }), name).toEqual({ created: true, gameId: theirs });
+      expect(await createGameIfReady(s.fixtureId, { ...AT_NOW }), name).toEqual({ created: true, gameId: theirs });
       expect(board.createChallengeToUser, `${name}: never re-sent`).not.toHaveBeenCalled();
       checked += 1;
     }
@@ -1755,7 +1763,7 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
     board.listOngoingGames.mockResolvedValue({ ok: true, complete: true,
       games: [playing(mine, adopted.away.lichessId), playing(rated, adopted.away.lichessId)] });
     exportsAnswer({ [mine]: ourMeta(mine, sentA), [rated]: ourMeta(rated, sentA, { rated: true }) });
-    expect(await createGameIfReady(adopted.fixtureId, { now: NOW })).toEqual({ created: true, gameId: mine });
+    expect(await createGameIfReady(adopted.fixtureId, { ...AT_NOW })).toEqual({ created: true, gameId: mine });
   });
 
   it("an OPEN challenge differing from ours in ONE of its own fields is not ours ⇒ re-created — swept and counted", async () => {
@@ -1819,7 +1827,7 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
     await crashedAfterSend(edge, WINDOW_MS);
     const atEdge = freshGameId();
     board.listOutgoingChallenges.mockResolvedValue({ ok: true, challenges: [ourChallenge(atEdge, edge)] });
-    expect(await createGameIfReady(edge.fixtureId, { now: NOW }), "at the edge").toEqual({ created: true, gameId: atEdge });
+    expect(await createGameIfReady(edge.fixtureId, { ...AT_NOW }), "at the edge").toEqual({ created: true, gameId: atEdge });
     expect(board.cancelChallenge).not.toHaveBeenCalled();
 
     const past = await seed();
@@ -1864,7 +1872,7 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
         arrange(s, sent);
         if (want === "recreated") await expectRecreated(s.fixtureId, name);
         else {
-          const got = await createGameIfReady(s.fixtureId, { now: NOW });
+          const got = await createGameIfReady(s.fixtureId, { ...AT_NOW });
           expect(got.created, name).toBe(want.created);
           if (!want.created) expect(got, name).toEqual(want);
         }
@@ -1924,7 +1932,7 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
       await sql`update fixture_external_play set mint_claimed_at = ${new Date(NOW.getTime() + 1_000)} where fixture_id = ${lost.fixtureId}`;
       return { ok: true, complete: true, games: [] };
     });
-    expect(await createGameIfReady(lost.fixtureId, { now: NOW })).toEqual({ created: false, reason: "not_ready" });
+    expect(await createGameIfReady(lost.fixtureId, { ...AT_NOW })).toEqual({ created: false, reason: "not_ready" });
     expect(board.acceptChallenge, "a lost claim accepts nothing").not.toHaveBeenCalled();
   });
 
@@ -1955,12 +1963,12 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
   it("marker lifecycle: a 429 clears it (lila refused before acting); an outcome_unknown keeps it; a recorded accept failure clears it", async () => {
     const r429 = await seed();
     board.createChallengeToUser.mockResolvedValueOnce({ ok: false, code: "rate_limited", raw: "Too many requests" });
-    await createGameIfReady(r429.fixtureId, { now: NOW });
+    await createGameIfReady(r429.fixtureId, { ...AT_NOW });
     expect(await marker(r429.fixtureId)).toMatchObject({ status: "pending", mint_claimed_at: null, create_sent_at: null });
 
     const unknown = await seed();
     board.createChallengeToUser.mockResolvedValueOnce({ ok: false, code: "outcome_unknown", raw: "" });
-    await createGameIfReady(unknown.fixtureId, { now: NOW });
+    await createGameIfReady(unknown.fixtureId, { ...AT_NOW });
     const u = await marker(unknown.fixtureId);
     expect(u?.status).toBe("needs_organiser");
     expect(u?.create_sent_at, "the outcome is still unknown").not.toBeNull();
@@ -1969,7 +1977,7 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
     GM = freshGameId();
     board.createChallengeToUser.mockResolvedValueOnce({ ok: true, challengeId: GM });
     board.acceptChallenge.mockResolvedValueOnce({ ok: false, code: "unavailable", raw: "x" });
-    await createGameIfReady(acc.fixtureId, { now: NOW });
+    await createGameIfReady(acc.fixtureId, { ...AT_NOW });
     expect(await marker(acc.fixtureId)).toMatchObject({ status: "needs_organiser", challenge_id: GM, create_sent_at: null });
   });
 
@@ -2050,7 +2058,7 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
       await crashedAfterSend(solo);
       const loneMatch = freshGameId();
       board.listOutgoingChallenges.mockResolvedValue({ ok: true, challenges: [ourChallenge(loneMatch, solo)] });
-      expect(await createGameIfReady(solo.fixtureId, { now: NOW }), `same pair, ${label}: adopted`)
+      expect(await createGameIfReady(solo.fixtureId, { ...AT_NOW }), `same pair, ${label}: adopted`)
         .toEqual({ created: true, gameId: loneMatch });
     }
 
@@ -2061,7 +2069,7 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
     await crashedAfterSend(s0);
     const m0 = freshGameId();
     board.listOutgoingChallenges.mockResolvedValue({ ok: true, challenges: [ourChallenge(m0, s0)] });
-    expect(await createGameIfReady(s0.fixtureId, { now: NOW }), "a peer of other players: adopted").toEqual({ created: true, gameId: m0 });
+    expect(await createGameIfReady(s0.fixtureId, { ...AT_NOW }), "a peer of other players: adopted").toEqual({ created: true, gameId: m0 });
 
     // A peer in flight sharing only ONE of the two players is not this pair: adopted. LABELLED SQL: a third fixture's
     // home entrant carries the shared player as a second member (a pairs entry), so its other seat is somebody else.
@@ -2076,7 +2084,7 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
       await crashedAfterSend(s1);
       const m1 = freshGameId();
       board.listOutgoingChallenges.mockResolvedValue({ ok: true, challenges: [ourChallenge(m1, s1)] });
-      expect(await createGameIfReady(s1.fixtureId, { now: NOW }), `a peer sharing only ${shared}: adopted`)
+      expect(await createGameIfReady(s1.fixtureId, { ...AT_NOW }), `a peer sharing only ${shared}: adopted`)
         .toEqual({ created: true, gameId: m1 });
       oneSided += 1;
     }
@@ -2151,7 +2159,7 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
       await crashedAfterSend(s);
       const match = freshGameId();
       board.listOutgoingChallenges.mockResolvedValue({ ok: true, challenges: [ourChallenge(match, s)] });
-      expect(await createGameIfReady(s.fixtureId, { now: NOW }), `${settled}: adopted`).toEqual({ created: true, gameId: match });
+      expect(await createGameIfReady(s.fixtureId, { ...AT_NOW }), `${settled}: adopted`).toEqual({ created: true, gameId: match });
       checked += 1;
     }
     expect(checked, "anti-vacuity: every settled status").toBe(FIXTURE_STATUSES.length - 2);
@@ -2169,7 +2177,7 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
     const game = freshGameId();
     board.listOngoingGames.mockResolvedValue({ ok: true, complete: true, games: [playing(game, g.away.lichessId)] });
     exportsAnswer({ [game]: ourMeta(game, sent) });
-    expect(await createGameIfReady(g.fixtureId, { now: NOW }), "our own game: adopted").toEqual({ created: true, gameId: game });
+    expect(await createGameIfReady(g.fixtureId, { ...AT_NOW }), "our own game: adopted").toEqual({ created: true, gameId: game });
     expect(board.createChallengeToUser, "never re-sent").not.toHaveBeenCalled();
 
     // The pair: the same dead peer, and a live one mid-create (pending, its fixture scheduled) — the live one holds.
@@ -2215,7 +2223,7 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
       await crashedAfterSend(s);
       const match = freshGameId();
       board.listOutgoingChallenges.mockResolvedValue({ ok: true, challenges: [ourChallenge(match, s)] });
-      expect(await createGameIfReady(s.fixtureId, { now: NOW }), `${label}: adopted`).toEqual({ created: true, gameId: match });
+      expect(await createGameIfReady(s.fixtureId, { ...AT_NOW }), `${label}: adopted`).toEqual({ created: true, gameId: match });
       checked += 1;
     }
     expect(checked).toBe(2);
@@ -2238,7 +2246,7 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
         return acceptOk ? { ok: true } : { ok: false, code: "not_found", raw: "accept refused" };
       });
       const label = acceptOk ? "accepted, then the ready commit" : "accept failed, then the hold that records it";
-      expect(await createGameIfReady(s.fixtureId, { now: NOW }), `${label}: refused, not thrown`)
+      expect(await createGameIfReady(s.fixtureId, { ...AT_NOW }), `${label}: refused, not thrown`)
         .toEqual({ created: false, reason: "not_ready" });
       const row = await marker(s.fixtureId);
       // Refused: the claim goes, the marker STAYS (whoever comes next looks again), nothing is recorded here.
@@ -2326,7 +2334,7 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
   });
 
   it("a caller whose `now` is in the PAST (a sweep pass, a room request before the queue wait): its claim is LIVE by the sweep's own check at every Lichess call", async () => {
-    // Every test here passes `now: NOW`, weeks before the wall clock - exactly a caller whose clock was read long before the
+    // This test passes `now: NOW` and NO clock: NOW is weeks before the wall clock - exactly a caller whose clock was read long before the
     // create left the queue. The claim is a liveness stamp, so it is the wall clock's; a sweep pass reading it at the moment
     // of each call must see a create in flight (pass.ts gameMayBeOnFile), or it would treat the board as having no game.
     const premise = gameMayBeOnFile({ now: new Date() } as Pass, { bridgeStatus: "pending", challengeId: null, createSentAt: null, mintClaimedAt: NOW });
@@ -2365,7 +2373,7 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
       if (!offered) vi.stubEnv("ONLINE_CHESS_ALWAYS", undefined);
       forgetOnlineChessFlagCache();
       try {
-        expect(await createGameIfReady(s.fixtureId, { now: NOW }), `offered=${offered}`).toEqual({ created: false, reason: "not_ready" });
+        expect(await createGameIfReady(s.fixtureId, { ...AT_NOW }), `offered=${offered}`).toEqual({ created: false, reason: "not_ready" });
       } finally {
         vi.unstubAllEnvs();
         forgetOnlineChessFlagCache();
@@ -2381,6 +2389,133 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
       checked += 1;
     }
     expect(checked).toBe(2);
+  });
+
+  // ─── The recovery clock (lual review, "older problem" + fix round 1 judgement; owed task 2026-11-23) ───────────────────
+  // A caller's `now` can be minutes old by the time its create leaves the queue: a sweep pass's start, a room request read
+  // before the queue wait. The marker is what a LATER request compares with Lichess's own time (a challenge's listing, a
+  // game's createdAt), so it must be the instant the create was really sent - the wall clock at the marker write - and the
+  // recovery must read Lichess's time against the wall clock too. Every instant below is the SCENARIO's: a sender whose
+  // `now` is 60 s behind the wall, and a recovery at the earliest takeover of its claim.
+  describe("the recovery clock: the marker and Lichess's own time are read on the wall clock", () => {
+    const SENDER_LAG_MS = 60_000;
+    const WALL_SEND = new Date(NOW.getTime() + SENDER_LAG_MS); // the sender's `now` is NOW, 60 s behind the wall
+    const WALL_TAKEOVER = new Date(WALL_SEND.getTime() + MINT_CLAIM_STALE_MS + 1); // the sender's claim is stale from here
+    /** The sender: a sweep-style caller (its `now` 60 s old) whose create reached Lichess, then died before recording it
+     *  (the accept never answers). Driven through the REAL create, so the marker is the one production writes. */
+    const staleSenderDiesAfterSend = async (s: Awaited<ReturnType<typeof seed>>, sentId: string) => {
+      board.createChallengeToUser.mockResolvedValueOnce({ ok: true, challengeId: sentId });
+      board.acceptChallenge.mockRejectedValueOnce(new Error("the process died after the send"));
+      await expect(createGameIfReady(s.fixtureId, { now: NOW, clock: () => WALL_SEND })).rejects.toThrow("the process died");
+      const row = await marker(s.fixtureId);
+      expect(row, "premise: sent, nothing recorded, the sender's claim left behind").toMatchObject({ status: "pending", challenge_id: null });
+      expect(row?.mint_claimed_at?.getTime(), "premise: the claim is the wall clock's").toBe(WALL_SEND.getTime());
+      board.createChallengeToUser.mockClear();
+      board.acceptChallenge.mockClear();
+      board.acceptChallenge.mockResolvedValue({ ok: true });
+      return row!;
+    };
+
+    it("the marker is dated at the SEND on the wall clock, not on the sender's 60 s old `now`", async () => {
+      const s = await seed();
+      const row = await staleSenderDiesAfterSend(s, freshGameId());
+      expect(row.create_sent_at?.getTime(), "the instant the create was really sent").toBe(WALL_SEND.getTime());
+    });
+
+    it("a stale SENDER's own challenge, still listed when the recovery looks, is OURS: adopted, never cancelled as a stray, never re-sent", async () => {
+      // Our challenge reached Lichess at WALL_SEND and stays listed for the measured 36 s (LISTED_MS); the recovery looks
+      // 30 s later, so the challenge it sees can only be ours.
+      expect(WALL_TAKEOVER.getTime() - WALL_SEND.getTime(), "premise: the recovery looks while our send is still listed").toBeLessThan(LISTED_MS);
+      const s = await seed();
+      const ours = freshGameId();
+      await staleSenderDiesAfterSend(s, ours);
+      board.listOutgoingChallenges.mockResolvedValue({ ok: true, challenges: [ourChallenge(ours, s)] });
+      // The recovery is a fresh room request: its `now` is the wall.
+      expect(await createGameIfReady(s.fixtureId, { now: WALL_TAKEOVER, clock: () => WALL_TAKEOVER })).toEqual({ created: true, gameId: ours });
+      expect(board.cancelChallenge, "our own challenge is never cancelled").not.toHaveBeenCalled();
+      expect(board.createChallengeToUser, "never re-sent").not.toHaveBeenCalled();
+      expect(board.acceptChallenge).toHaveBeenCalledWith({ blackToken: `lio_seed_${s.away.lichessId}`, challengeId: ours });
+      expect(await bridge(s.fixtureId)).toMatchObject({ status: "ready", challenge_id: ours });
+    });
+
+    it("a game created more than the 60 s tolerance BEFORE our send is not ours (re-created); one created after it is (adopted)", async () => {
+      let checked = 0;
+      for (const [label, createdAt, adopted] of [
+        ["created 90 s before the send", WALL_SEND.getTime() - 90_000, false],
+        ["created 2 s after the send", WALL_SEND.getTime() + 2_000, true],
+      ] as const) {
+        const s = await seed();
+        await staleSenderDiesAfterSend(s, freshGameId());
+        const g = freshGameId();
+        board.listOngoingGames.mockResolvedValue({ ok: true, complete: true, games: [playing(g, s.away.lichessId)] });
+        exportsAnswer({ [g]: ourMeta(g, WALL_SEND, { createdAtMs: createdAt }) });
+        GM = freshGameId();
+        board.createChallengeToUser.mockResolvedValue({ ok: true, challengeId: GM });
+        const got = await createGameIfReady(s.fixtureId, { now: WALL_TAKEOVER, clock: () => WALL_TAKEOVER });
+        expect(got, label).toEqual({ created: true, gameId: adopted ? g : GM });
+        expect(board.createChallengeToUser, `${label}: re-sent iff not ours`).toHaveBeenCalledTimes(adopted ? 0 : 1);
+        checked += 1;
+      }
+      expect(checked, "anti-vacuity: both sides of the tolerance").toBe(2);
+    });
+
+    it("a recovery whose OWN `now` is stale still adopts our game: its upper bound is the wall clock, not the caller's", async () => {
+      // The recovering request read its clock 90 s before it ran (NOW): our game, made 2 s after the send, is 'later' than
+      // that clock by more than the tolerance - but not later than the wall.
+      const s = await seed();
+      await staleSenderDiesAfterSend(s, freshGameId());
+      const g = freshGameId();
+      board.listOngoingGames.mockResolvedValue({ ok: true, complete: true, games: [playing(g, s.away.lichessId)] });
+      exportsAnswer({ [g]: ourMeta(g, WALL_SEND, { createdAtMs: WALL_SEND.getTime() + 2_000 }) });
+      expect(await createGameIfReady(s.fixtureId, { now: NOW, clock: () => WALL_TAKEOVER })).toEqual({ created: true, gameId: g });
+      expect(board.createChallengeToUser, "never re-sent").not.toHaveBeenCalled();
+    });
+
+    it("a genuine STRAY - a matching challenge still listed after our send could have left the list - is still cancelled, once, with White's token, before the re-create; also by a recovery whose own `now` is stale", async () => {
+      // Listed 1 s after the last instant our send could still be listed (it lands within LICHESS_TIMEOUT_MS of the
+      // marker and leaves the list within the measured LISTED_MS).
+      const lookAt = new Date(WALL_SEND.getTime() + LICHESS_TIMEOUT_MS + LISTED_MS + 1_000);
+      let checked = 0;
+      // A fresh recovering request, and one whose `now` was read 90 s before it ran: on that clock the listing would sit
+      // inside the window, and the stray would be ACCEPTED as ours.
+      for (const [label, recoverNow] of [["fresh", lookAt], ["stale by 90 s", new Date(lookAt.getTime() - 90_000)]] as const) {
+        vi.clearAllMocks();
+        board.listOngoingGames.mockResolvedValue({ ok: true, games: [], complete: true });
+        board.cancelChallenge.mockResolvedValue({ ok: true });
+        preflight.seatPlayer.mockResolvedValue({ seated: true, participant: null });
+        const s = await seed();
+        await staleSenderDiesAfterSend(s, freshGameId());
+        const stray = freshGameId();
+        board.listOutgoingChallenges.mockResolvedValue({ ok: true, challenges: [ourChallenge(stray, s)] });
+        GM = freshGameId();
+        board.createChallengeToUser.mockResolvedValue({ ok: true, challengeId: GM });
+        expect(await createGameIfReady(s.fixtureId, { now: recoverNow, clock: () => lookAt }), label).toEqual({ created: true, gameId: GM });
+        expect(board.cancelChallenge, label).toHaveBeenCalledTimes(1);
+        expect(board.cancelChallenge, label).toHaveBeenCalledWith({ token: `lio_seed_${s.home.lichessId}`, challengeId: stray });
+        expect(board.cancelChallenge.mock.invocationCallOrder[0]!, `${label}: cancelled BEFORE the re-create`)
+          .toBeLessThan(board.createChallengeToUser.mock.invocationCallOrder[0]!);
+        expect(board.acceptChallenge, `${label}: the stray is never accepted`).not.toHaveBeenCalledWith(expect.objectContaining({ challengeId: stray }));
+        checked += 1;
+      }
+      expect(checked, "anti-vacuity: both recovering clocks").toBe(2);
+    });
+
+    it("the window is judged at the listing's START (the documented tolerance): a listing that took 5 s across the window's edge still adopts our challenge", async () => {
+      // Our send is still listed at the window's last instant; the listing call is made then and answers 5 s later.
+      const edge = new Date(WALL_SEND.getTime() + LICHESS_TIMEOUT_MS + LISTED_MS);
+      let wall = edge;
+      const s = await seed();
+      const ours = freshGameId();
+      await staleSenderDiesAfterSend(s, ours);
+      board.listOutgoingChallenges.mockImplementation(async () => {
+        wall = new Date(edge.getTime() + 5_000);
+        return { ok: true, challenges: [ourChallenge(ours, s)] };
+      });
+      expect(await createGameIfReady(s.fixtureId, { now: edge, clock: () => wall })).toEqual({ created: true, gameId: ours });
+      expect(wall.getTime(), "premise: the wall moved past the window's edge during the listing").toBeGreaterThan(edge.getTime());
+      expect(board.cancelChallenge, "our challenge is not a stray").not.toHaveBeenCalled();
+      expect(board.createChallengeToUser).not.toHaveBeenCalled();
+    });
   });
 });
 

@@ -53,8 +53,19 @@ export const SWEEP_JOBS = [
   "reconcile",
   "camera_evidence",
   "arbiter_revoke",
+  "close_strays",
 ] as const;
 export type SweepJob = (typeof SWEEP_JOBS)[number];
+
+/** A Lichess 429 inside a network job's row (rcs fix round 1, m2). Thrown by the job AFTER it has noted its own row; `each`
+ *  then stops the job for this pass and counts the rest `deferred` - never a failure - exactly as a RealtimeKit budget
+ *  refusal does. The next firing reaches them. */
+export class LichessRateLimited extends Error {
+  constructor(why: string) {
+    super(`Lichess answered 429: ${why}`);
+    this.name = "LichessRateLimited";
+  }
+}
 
 /** Final review I-1: written out LITERALLY. The cron Worker reads `data.failed` and `data.skipped` as its failure
  *  counters (R3, apps/cron-worker/src/schedule.ts), and apps/cron-worker/test/drift.test.ts finds each field's numeric
@@ -70,6 +81,9 @@ export type SweepReport = {
    *  fix round 1, I1): held, pending, ready or live rows under a fixture
    *  decided on the pad, settled, withdrawn, voided or cancelled. */
   bridgesClosed: number;
+  /** Challenges cancelled at Lichess this pass because their board closed with a create sent and nothing recorded
+   *  (job 7, `close_strays`): what a withdrawal or a void left open for Black to accept. */
+  straysCancelled: number;
   noShows: number;
   mintRetries: number;
   meetingsEnded: number;
@@ -135,7 +149,8 @@ export type SweepDeps = {
    *  on its own. Production never passes it. */
   serialise?: false;
   /** TEST SEAM — the clock the pass budget (I-1) and reconcile's slice (D20)
-   *  are measured on. Production passes none and reads Date.now. */
+   *  are measured on, and the wall clock job 7 judges a listing's instant on
+   *  (close-strays). Production passes none and reads Date.now. */
   wallClock?: () => number;
   /** TEST SEAM — job 3b's read of the parked rooms (V460). Production reads `video_rooms_to_end`; a test passes a reader that
    *  throws to prove a broken or missing table cannot starve the jobs that run before it. */
@@ -184,6 +199,7 @@ const NETWORK_JOBS: ReadonlySet<SweepJob> = new Set<SweepJob>([
   "teardown",
   "camera_evidence",
   "arbiter_revoke",
+  "close_strays",
 ]);
 
 /** The window a board is playable in, anchored on the BOARD's batch of the round being opened (D12; spec §3.2.1). Every
@@ -274,11 +290,15 @@ export async function each<T extends { fixtureId: string }>(
       // The budget is the account's, not the row's: every later row of this job would be refused for the same reason, and
       // asking costs a database statement each. So the rest is counted deferred with this one and the job stops (the same
       // shape as the pass budget above); the next firing starts from the top.
-      if (err instanceof RealtimeKitDeferred) {
+      // The same shape for a Lichess 429 a job raises as LichessRateLimited (rcs fix round 1, m2): lila asks for a pause, and
+      // the next row would ask it again at once.
+      if (err instanceof RealtimeKitDeferred || err instanceof LichessRateLimited) {
         pass.report.deferred += rows.length - i;
         log.info(
           { job, fixtureId: row.fixtureId, remaining: rows.length - i },
-          "external-play sweep: RealtimeKit call budget spent; the rest of the job keeps its place",
+          err instanceof LichessRateLimited
+            ? "external-play sweep: Lichess answered 429; the rest of the job keeps its place"
+            : "external-play sweep: RealtimeKit call budget spent; the rest of the job keeps its place",
         );
         break;
       }
