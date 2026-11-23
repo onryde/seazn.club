@@ -121,7 +121,17 @@ export type CreateOutcome =
         | GrantRefusal;
     };
 
-export type CreateGameDeps = { now?: Date; publish?: (fixtureId: string) => Promise<void> };
+export type CreateGameDeps = {
+  /** The caller's clock: judges the board's window, the dequeue's phase, the row's expiry and the recovery's create window
+   *  (and dates the marker, `create_sent_at`, which only that window reads). Never a claim's liveness stamp. */
+  now?: Date;
+  publish?: (fixtureId: string) => Promise<void>;
+  /** The WALL clock that stamps the claim, every renewal and the marker write's claim (`mint_claimed_at`), and the takeover
+   *  bound the claim is judged against - read at the moment of each write, never the caller's `now`, which can be minutes old
+   *  by the dequeue (a sweep pass's start, a room request before the queue wait). The sweep's liveness check (pass.ts
+   *  gameMayBeOnFile) reads the same column. Injectable for a test; production passes none. */
+  clock?: () => Date;
+};
 
 /** The guard answers `null` for "not an online fixture" AND for a bye, so a
  *  bye cannot be told apart without this second read (plan premise P-B2-11).
@@ -284,7 +294,7 @@ export async function createGameIfReady(
   try {
     step = await enqueueCreation({ key: fixtureId, challenger: whiteLichess.id }, () => {
       ranHere = true;
-      return createAtDequeue(plan, deps.now);
+      return createAtDequeue(plan, deps.now, deps.clock ?? (() => new Date()));
     });
   } catch (err) {
     if (!(err instanceof CreationRateLimited)) throw err;
@@ -348,11 +358,18 @@ type QueueStep =
 /**
  * The queued job: everything from the claim to the commit. Runs when the
  * create leaves the queue, so every read here is as fresh as the HTTP call
- * that follows it. `fixedNow` is the test clock; production reads the wall
- * clock HERE, at dequeue, not where the call joined the queue.
+ * that follows it. TWO clocks (fix round 1, I1): `fixedNow` is the CALLER's
+ * `now` when it handed one (every production caller does: the room its
+ * request's, the sweep its pass start), and it judges windows only - the
+ * phase at dequeue, the row's expiry, the recovery's create window.
+ * `clock` is the wall clock, read at each write, and stamps every claim
+ * (`mint_claimed_at`): the claim, each renewal, the marker write. A claim
+ * stamped on the caller's clock would be as old as that clock at birth -
+ * stale on arrival after a long queue wait or a slow sweep pass - and its
+ * renewals would rewrite the same instant, so no renewal could extend it.
  */
-async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): Promise<QueueStep> {
-  const claimAt = fixedNow ?? new Date();
+async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined, clock: () => Date): Promise<QueueStep> {
+  const judgedAt = fixedNow ?? new Date();
   const { fixtureId } = plan;
 
   // Re-check: the board this call validated may have changed while it
@@ -378,7 +395,7 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
   const open = await boardOpenFor(sql, fixtureId);
   if (!open) return { stage: "refused" };
   const anchor = open.anchor;
-  const dequeuePhase = await boardPhase(claimAt, { fixtureId, anchor }, {
+  const dequeuePhase = await boardPhase(judgedAt, { fixtureId, anchor }, {
     personId: null,
     bothOnly: true,
     facts: async () => {
@@ -402,6 +419,8 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
   // Claim: conditional on pending, no challenge, and either never claimed or
   // claimed stale — so a crashed minter recovers without a human. RETURNING
   // the marker: a claim on a row that carries it is never sent blind (I2).
+  // Stamped and judged on the WALL clock (`clock`), the one the sweep reads liveness against.
+  const claimAt = clock();
   const claimed = await sql<{ create_sent_at: Date | null }[]>`
     update fixture_external_play set mint_claimed_at = ${claimAt}, updated_at = now()
      where fixture_id = ${fixtureId} and status = 'pending' and challenge_id is null
@@ -413,7 +432,7 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
   // THIS call's claim renewed to now, conditional on still holding it — before any Lichess call that would otherwise make a
   // claim segment longer than two call-times (the header). False: the claim is another claimant's now.
   const renewClaim = async (): Promise<boolean> => {
-    const renewAt = fixedNow ?? new Date();
+    const renewAt = clock();
     const renewed = await sql<{ fixture_id: string }[]>`
       update fixture_external_play set mint_claimed_at = ${renewAt}, updated_at = now()
        where fixture_id = ${fixtureId} and status = 'pending' and challenge_id is null
@@ -482,16 +501,19 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
 
   if (gameId === null) {
     // The marker, as its own committed write, BEFORE the HTTP call — and the
-    // claim renewed to this instant, so the two calls below cannot outlive it.
+    // claim renewed to this instant (the wall clock), so the two calls below
+    // cannot outlive it. The marker's own date stays on the CALLER's clock:
+    // only the recovery's create window reads it, against that same clock.
     const sentAt = fixedNow ?? new Date();
+    const markAt = clock();
     const marked = await sql<{ fixture_id: string }[]>`
       update fixture_external_play
-         set create_sent_at = ${sentAt}, mint_claimed_at = ${sentAt}, updated_at = now()
+         set create_sent_at = ${sentAt}, mint_claimed_at = ${markAt}, updated_at = now()
        where fixture_id = ${fixtureId} and status = 'pending' and challenge_id is null
          and mint_claimed_at = ${claim}
        returning fixture_id`;
     if (marked.length === 0) return { stage: "lost" }; // nothing sent
-    claim = sentAt;
+    claim = markAt;
 
     // HTTP, outside every transaction.
     const made = await createChallengeToUser({
@@ -548,7 +570,7 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
   // Sized from the anchor read at the dequeue, BEFORE the claim above: an extension that landed before that read is in it. One that
   // lands between that read and the claim is not (it is the claim that makes a game on file, `bridgeGameOnFile`, and an extension
   // is refused from then on), so the expiry stays on the deadline the board had a moment earlier - never later than the board's own.
-  const readyExpiresAt = claimAt.getTime() < windowFor(anchor).deadline.getTime() ? windowFor(anchor).deadline : boardCap(anchor);
+  const readyExpiresAt = judgedAt.getTime() < windowFor(anchor).deadline.getTime() ? windowFor(anchor).deadline : boardCap(anchor);
 
   // Ready: create + accept. T10's first accepted move flips it to `live`;
   // nothing here writes 'live'. white_side and BOTH Lichess ids are what T8's
@@ -564,7 +586,7 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
            mint_claimed_at = null, create_sent_at = null, last_error = null,
            -- The game's creation time, on the dequeue's clock: the sweep's expected end for a board that never started takes
            -- its base from it when the game was made past the deadline (spec §5.7.8, m8). A later rewrite of the row only moves that base later.
-           updated_at = ${claimAt}
+           updated_at = ${judgedAt}
      where fixture_id = ${fixtureId} and status = 'pending' and mint_claimed_at = ${claim}
      returning fixture_id`;
   } catch (err) {
@@ -789,6 +811,12 @@ async function findSentGame(
   const gameIds = [...games];
   // One request at a time: each export in the ongoing list's order (`metas[i]` is `gameIds[i]`'s), then each stray cancel —
   // every one on a renewed claim, so the serial calls never stretch a claim segment past two call-times (the header).
+  // A claim lost at a renewal leaves the strays not yet cancelled, ON PURPOSE (review m6): while the row is still `pending`
+  // the claim's new holder runs this same lookup, lists the same strays and cancels them itself — two claimants cancelling
+  // side by side is the overlap this serialisation exists to stop. A row that LEFT `pending` (a withdrawal or a void closed
+  // the bridge mid-recovery) has no next holder, so its strays stay open at Lichess, unrecorded — exactly as they already do
+  // when the withdrawal lands before any recovery runs (a fixture no longer playable is never claimed). Owed to the
+  // bridge close, not to a claim this call no longer holds.
   const metas: Array<Awaited<ReturnType<typeof exportGameMeta>>> = [];
   for (const id of gameIds) {
     if (!(await renew())) return { kind: "lost" };
