@@ -6,11 +6,12 @@
 // The failures come from their REAL producers: hls.js's fatal error through the playback controller (a recording fake of hls.js, as
 // seazn-playback.test.ts drives it, whose error data carries the signed URL and a message quoting it, as hls.js's does), and the
 // route's failures from `api()` (lib/client.ts) and the island's own answer check. The Sentry send is the client's existing path
-// (`Sentry.captureMessage`, as the match room's camera reports through `Sentry.captureException`), here a mock.
+// (`captureMessage` of lib/sentry-browser.ts, the facade every client file reports through, as the match room's camera reports
+// through its `captureException`), here a mock. The facade's own queue-and-load is proven in lib/__tests__/sentry-browser-init.test.ts.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sentry = vi.hoisted(() => ({ messages: [] as { message: string; context: unknown }[] }));
-vi.mock("@sentry/nextjs", () => ({
+vi.mock("@/lib/sentry-browser", () => ({
   captureMessage: (message: string, context: unknown) => void sentry.messages.push({ message, context }),
 }));
 

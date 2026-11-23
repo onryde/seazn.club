@@ -15,7 +15,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplayFrameEvent } from "@sentry/nextjs";
 import {
   REPLAY_BLOCK_SELECTORS,
@@ -27,12 +27,19 @@ import {
 } from "@/lib/replay-guard";
 import { holdsCredential, scrubScoreTokensIntegration, scrubScoreUrl } from "@/lib/scrub-score-url";
 import { ORIGIN, TOKEN, credentialPages, setReplay } from "./_replay-fixtures";
+import { TEST_DSN, stubConsent } from "./_browser-sentry";
+import { loadBrowserSentry } from "@/lib/sentry-browser";
 
 vi.mock("@/lib/db", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/db")>()),
   sql: (await import("./_fake-sql")).fakeSql,
 }));
-vi.mock("@sentry/nextjs", () => ({ getClient: vi.fn(), captureRouterTransitionStart: vi.fn() }));
+vi.mock("@sentry/nextjs", () => ({
+  getClient: vi.fn(),
+  captureRouterTransitionStart: vi.fn(),
+  init: vi.fn(),
+  consoleLoggingIntegration: vi.fn(() => ({ name: "ConsoleLogs" })),
+}));
 
 // ---- the installed SDK, loaded through the packages that depend on it (this also bypasses the mock above) ----
 const fromNextjs = createRequire(createRequire(import.meta.url).resolve("@sentry/nextjs"));
@@ -84,6 +91,15 @@ const historyFrame = (to: string, previous?: string) => span("navigation.push", 
 const navigateFrame = (url: string) => span("navigation.navigate", url, { size: 1, type: "navigate" });
 const navigationCrumb = (from: string, to: string) => crumb("navigation", { data: { from, to } });
 
+// The guard looks the Replay up on the client lib/sentry-browser.ts holds once the SDK has loaded: load it (over the mock above)
+// as a consented page does, so setReplay's stand-in client is the one the guard asks.
+beforeAll(async () => {
+  vi.stubEnv("NEXT_PUBLIC_SENTRY_DSN", TEST_DSN);
+  stubConsent("accepted");
+  expect(await loadBrowserSentry(), "the (mocked) SDK loaded").toBe(true);
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+});
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -149,7 +165,7 @@ describe("premises: where @sentry/replay writes a page URL (pinned to the instal
     expect(REPLAY_SRC).toMatch(/async stop\(\{\s*forceFlush = false,\s*reason\s*\} = \{\}\) \{\s*if \(!this\._isEnabled\) \{\s*return;\s*\}/);
   });
 
-  it("is reachable from @sentry/nextjs's client entry: getClient (the guard) and replayIntegration (a client init, which is not wired today)", () => {
+  it("is reachable from @sentry/nextjs's client entry: getClient (the guard) and replayIntegration (which the browser init does not build: no replay, owner 2026-11-23)", () => {
     expect(typeof nextjsClientEntry.getClient).toBe("function");
     expect(typeof nextjsClientEntry.replayIntegration).toBe("function");
   });
@@ -367,7 +383,7 @@ describe("stopReplayBeforeNavigatingTo (onRouterTransitionStart)", () => {
     expect(stop).toHaveBeenCalledTimes(2);
   });
 
-  it("does nothing, and does not throw, when Sentry has no client (not initialised: today's state) or the client has no Replay", async () => {
+  it("does nothing, and does not throw, when Sentry has no client (no DSN) or the client has no Replay (the browser client's state today)", async () => {
     const { getClient } = await import("@sentry/nextjs");
     const [first] = await credentialPages();
     setReplay(undefined);

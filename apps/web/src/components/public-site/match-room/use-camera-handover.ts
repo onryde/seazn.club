@@ -4,7 +4,7 @@
 // the tile's frame proof calls `onSdkFrame` once the SDK's own video has painted. Lives in the Screen, so the check-in
 // tile and the live room's tile share one cover — a quick check-in can reach the board before the SDK's video does.
 import { useCallback, useEffect, useRef, useState } from "react";
-import * as Sentry from "@sentry/nextjs";
+import * as Sentry from "@/lib/sentry-browser";
 import {
   cameraHandover,
   captureFrame,

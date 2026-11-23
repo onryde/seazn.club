@@ -15,9 +15,10 @@ vi.mock("@/components/i18n/dict-provider", () => ({
   useLocale: () => "en",
 }));
 
-vi.mock("@sentry/nextjs", () => ({ addBreadcrumb: vi.fn(), captureException: vi.fn() }));
+// The client's Sentry path is lib/sentry-browser.ts, the facade every client file reports through.
+vi.mock("@/lib/sentry-browser", () => ({ addBreadcrumb: vi.fn(), captureException: vi.fn() }));
 
-import * as Sentry from "@sentry/nextjs";
+import * as Sentry from "@/lib/sentry-browser";
 import { Screen } from "../room-shell";
 import { Checkin } from "../checkin";
 import { OwnTile } from "../own-tile";
