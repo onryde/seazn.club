@@ -513,6 +513,43 @@ describe.runIf(HAS_DB)("Swiss float history reaches the pairer (engine SwissHist
     expect(named(r, three.history.floats), "P1 floated in round 2 on the adjustment, and P6").toEqual([["P1", 1], ["P6", 1]]);
   }, 180_000);
 
+  it("a round paired twice is cut at its NEWEST pairing row: an adjustment between the two Pairs is in its score", async () => {
+    // single-sport: as above.
+    // Hand derivation: round 1 of the base rig (P1, P2 and P6 win); round 2 is paired (its first row), THEN P1 is adjusted +1,
+    // then round 2 is Unpaired and paired again (its second row). The boards round 2 holds were seated by the second Pair,
+    // with the adjustment already written: P1 (one win and 1) alone floats down to P2, P6 floats down to P4, P3-P5 - the base
+    // round 2, as in the test above. Results: P1 beats P2, P4 beats P6, P3 beats P5. Round 3's history is P1 once (P1-P2 was
+    // unequal on the adjustment) and P6 once.
+    // Cut at round 2's OLDEST row instead, the adjustment comes after it, P1-P2 reads level, and the history is P6 alone.
+    const r = await startedSwiss(sportOf("badminton"), { players: 6, rounds: 3 });
+    await generateStageFixtures(r.auth, r.stageId); // Pair round 1
+    expect((await seatsOf(r, 1)).boards, "premise: round 1 folds the seeds").toEqual(ROUND_ONE);
+    await r.sport.win(r.auth, await boardOf(r, 1, "P1", "P4"), r.id("P1"));
+    await r.sport.win(r.auth, await boardOf(r, 1, "P2", "P5"), r.id("P2"));
+    await r.sport.win(r.auth, await boardOf(r, 1, "P3", "P6"), r.id("P6"));
+    await generateStageFixtures(r.auth, r.stageId); // Pair round 2, the first time
+    expect((await seatsOf(r, 2)).boards, "rig: round 2, first Pair").toEqual(ROUND_TWO);
+    const { adjustment } = await adjustPoints(r.auth, r.stageId, { entrant_id: r.id("P1"), delta: 1, reason: "Fair play" });
+    expect((await unpairSwissRound(r.auth, r.stageId)).round, "rig: Unpair cleared round 2").toBe(2);
+    const two = await pairSpied(r); // Pair round 2, the second time
+    expect((await seatsOf(r, 2)).boards, "round 2 as derived, on the adjustment").toEqual(ROUND_TWO);
+    expect(named(r, two.history.floats), "round 1 stays level: the adjustment came after it was paired").toEqual([]);
+
+    const pairRows = await sql<{ seq: number }[]>`
+      select seq::int as seq from division_events
+       where payload->>'stage_id' = ${r.stageId} and type = 'fixtures_generated' and payload->>'round' = '2' order by seq`;
+    expect(pairRows.length, "premise: round 2 has two pairing rows").toBe(2);
+    expect(pairRows[0]!.seq, "premise: the adjustment came after the first").toBeLessThan(adjustment.seq);
+    expect(pairRows[1]!.seq, "premise: and before the second").toBeGreaterThan(adjustment.seq);
+
+    await r.sport.win(r.auth, await boardOf(r, 2, "P1", "P2"), r.id("P1"));
+    await r.sport.win(r.auth, await boardOf(r, 2, "P4", "P6"), r.id("P4"));
+    await r.sport.win(r.auth, await boardOf(r, 2, "P3", "P5"), r.id("P3"));
+    const three = await pairSpied(r); // Pair round 3
+    expect(named(r, three.history.floats), "cut at the newest Pair: P1 floated on the adjustment, and P6").toEqual([["P1", 1], ["P6", 1]]);
+    expect(named(r, three.history.floats), "differential: not the oldest Pair's cut").not.toEqual([["P6", 1]]);
+  }, 180_000);
+
   it("a round whose pairing row names no round (a stage paired before rows carried one) reads every adjustment in force", async () => {
     // single-sport: as above. The legacy reading is the table as it stands now, the reading before rounds were cut by the ledger.
     // Hand derivation: the first adjustment test's rig, with round 2's pairing row stripped of its `round`. Round 1's row
