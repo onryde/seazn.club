@@ -1,0 +1,226 @@
+{
+  "facts": {
+    "players": 8,
+    "courts": 2,
+    "rounds": 7,
+    "matchesPerRound": 2,
+    "partnerPairs": 21,
+    "allPairs": 28,
+    "neverPartnered": 7,
+    "partneredTwice": 7,
+    "pivot": "Ana",
+    "pivotPartners": 7,
+    "twicePair": "Ben and Cy",
+    "twiceRounds": "1 and 4",
+    "neverPair": "Ben and Dev",
+    "ninthPlayer": "Ivy",
+    "sitOutsPerRound": 1,
+    "sitOutFirstRounds": "Ivy in round 1, Ben in round 2 and Cy in round 3",
+    "offeredSports": "carrom, any other sport, badminton, table tennis and tennis",
+    "offeredCount": 5,
+    "refusedSports": "football, cricket, chess, volleyball, ice hockey and hockey",
+    "refusedCount": 6
+  },
+  "table": {
+    "caption": "8 players on 2 courts over 7 rounds, as Seazn draws them. Each match puts two pairs against each other.",
+    "columns": [
+      "Round",
+      "Court 1",
+      "Court 2"
+    ],
+    "rows": [
+      [
+        "Round 1",
+        "Ana and Dev against Ben and Cy",
+        "Eli and Hal against Fay and Gus"
+      ],
+      [
+        "Round 2",
+        "Ana and Eli against Cy and Dev",
+        "Fay and Ben against Gus and Hal"
+      ],
+      [
+        "Round 3",
+        "Ana and Fay against Dev and Eli",
+        "Gus and Cy against Hal and Ben"
+      ],
+      [
+        "Round 4",
+        "Ana and Gus against Eli and Fay",
+        "Hal and Dev against Ben and Cy"
+      ],
+      [
+        "Round 5",
+        "Ana and Hal against Fay and Gus",
+        "Ben and Eli against Cy and Dev"
+      ],
+      [
+        "Round 6",
+        "Ana and Ben against Gus and Hal",
+        "Cy and Fay against Dev and Eli"
+      ],
+      [
+        "Round 7",
+        "Ana and Cy against Hal and Ben",
+        "Dev and Gus against Eli and Fay"
+      ]
+    ]
+  },
+  "diagram": {
+    "kind": "partnerGrid",
+    "title": "Every pair of the 8 players, and the round they played on the same side. An empty square is a pair that never partnered; two numbers, a pair that partnered twice.",
+    "players": [
+      "Ana",
+      "Ben",
+      "Cy",
+      "Dev",
+      "Eli",
+      "Fay",
+      "Gus",
+      "Hal"
+    ],
+    "rounds": [
+      {
+        "pairs": [
+          [
+            "Ana",
+            "Dev"
+          ],
+          [
+            "Ben",
+            "Cy"
+          ],
+          [
+            "Eli",
+            "Hal"
+          ],
+          [
+            "Fay",
+            "Gus"
+          ]
+        ]
+      },
+      {
+        "pairs": [
+          [
+            "Ana",
+            "Eli"
+          ],
+          [
+            "Cy",
+            "Dev"
+          ],
+          [
+            "Fay",
+            "Ben"
+          ],
+          [
+            "Gus",
+            "Hal"
+          ]
+        ]
+      },
+      {
+        "pairs": [
+          [
+            "Ana",
+            "Fay"
+          ],
+          [
+            "Dev",
+            "Eli"
+          ],
+          [
+            "Gus",
+            "Cy"
+          ],
+          [
+            "Hal",
+            "Ben"
+          ]
+        ]
+      },
+      {
+        "pairs": [
+          [
+            "Ana",
+            "Gus"
+          ],
+          [
+            "Eli",
+            "Fay"
+          ],
+          [
+            "Hal",
+            "Dev"
+          ],
+          [
+            "Ben",
+            "Cy"
+          ]
+        ]
+      },
+      {
+        "pairs": [
+          [
+            "Ana",
+            "Hal"
+          ],
+          [
+            "Fay",
+            "Gus"
+          ],
+          [
+            "Ben",
+            "Eli"
+          ],
+          [
+            "Cy",
+            "Dev"
+          ]
+        ]
+      },
+      {
+        "pairs": [
+          [
+            "Ana",
+            "Ben"
+          ],
+          [
+            "Gus",
+            "Hal"
+          ],
+          [
+            "Cy",
+            "Fay"
+          ],
+          [
+            "Dev",
+            "Eli"
+          ]
+        ]
+      },
+      {
+        "pairs": [
+          [
+            "Ana",
+            "Cy"
+          ],
+          [
+            "Hal",
+            "Ben"
+          ],
+          [
+            "Dev",
+            "Gus"
+          ],
+          [
+            "Eli",
+            "Fay"
+          ]
+        ]
+      }
+    ]
+  },
+  "text": []
+}
