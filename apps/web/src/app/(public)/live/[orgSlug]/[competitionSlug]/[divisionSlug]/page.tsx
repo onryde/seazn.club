@@ -585,6 +585,7 @@ export default async function DivisionHomePage({ params }: Props) {
             over packed as columns (`PackedSchedule`), the same rows. */}
         <Tabs
           initial={DIVISION_TABS.indexOf(tab)}
+          basePath={basePath}
           ids={[...DIVISION_TABS]}
           labels={[
             t(dict, "division.tab.schedule"),
