@@ -1,0 +1,109 @@
+{
+  "facts": {
+    "teams": 5,
+    "signUpOrder": "Hawks, Rockets, Comets, Dynamos and Wolves",
+    "newcomer": "Tigers",
+    "playedRounds": 3,
+    "lastRound": 5,
+    "owed": 5,
+    "restFilled": 2,
+    "restOpponents": "Rockets and Hawks",
+    "restRounds": "4 and 5",
+    "appended": 3,
+    "newRounds": "6, 7 and 8",
+    "lastRoundAfter": 8,
+    "homeGames": 2,
+    "awayGames": 3,
+    "noticeCatchUp": "Tigers has 5 catch-up matches, in rounds 4, 5, 6, 7, and 8.",
+    "noticeUnscheduled": "5 new matches have no time or court yet. Give each one a time and court.",
+    "noticeOpponents": "Their opponents are not notified. Tell them about the new matches.",
+    "rebuildOffered": "No match in this stage has started yet. Rebuild fixtures would draw it again with Tigers in it, instead of the catch-up matches.",
+    "finishedRefusal": "This table has finished. Late players can't join it.",
+    "sportCount": 11
+  },
+  "table": {
+    "caption": "Five teams play one league and three of its five rounds are played. Tigers join, and owe a match against each of them.",
+    "columns": [
+      "Round",
+      "Match",
+      "Where it goes"
+    ],
+    "rows": [
+      [
+        4,
+        "Tigers v Rockets",
+        "In a round Rockets sit out"
+      ],
+      [
+        5,
+        "Hawks v Tigers",
+        "In a round Hawks sit out"
+      ],
+      [
+        6,
+        "Comets v Tigers",
+        "In a new round"
+      ],
+      [
+        7,
+        "Tigers v Dynamos",
+        "In a new round"
+      ],
+      [
+        8,
+        "Wolves v Tigers",
+        "In a new round"
+      ]
+    ]
+  },
+  "diagram": {
+    "kind": "fixtureList",
+    "title": "Tigers join after round 3. A team whose rest round has not been played plays them in it. Every other team gets a new round after the last one.",
+    "scenes": [
+      {
+        "heading": "Tigers join after round 3",
+        "lead": "5 matches owed, one against each team:",
+        "effect": "2 in a rest round, 3 in new rounds",
+        "lines": [
+          {
+            "round": "Round 4",
+            "opponent": "Rockets",
+            "fate": "Rest round",
+            "tone": "keep"
+          },
+          {
+            "round": "Round 5",
+            "opponent": "Hawks",
+            "fate": "Rest round",
+            "tone": "keep"
+          },
+          {
+            "round": "Round 6",
+            "opponent": "Comets",
+            "fate": "New round",
+            "tone": "new"
+          },
+          {
+            "round": "Round 7",
+            "opponent": "Dynamos",
+            "fate": "New round",
+            "tone": "new"
+          },
+          {
+            "round": "Round 8",
+            "opponent": "Wolves",
+            "fate": "New round",
+            "tone": "new"
+          }
+        ]
+      }
+    ]
+  },
+  "text": [
+    "Round 1: Hawks v Dynamos, Rockets v Comets. Wolves rest.",
+    "Round 2: Wolves v Comets, Hawks v Rockets. Dynamos rest.",
+    "Round 3: Dynamos v Rockets, Wolves v Hawks. Comets rest.",
+    "Round 4: Comets v Hawks, Dynamos v Wolves. Rockets rest.",
+    "Round 5: Rockets v Wolves, Comets v Dynamos. Hawks rest."
+  ]
+}

@@ -11,6 +11,8 @@ import { LadderSwap } from "@/components/blog/diagrams/ladder-swap";
 import { ScoreTiles } from "@/components/blog/diagrams/score-tiles";
 import { BestPlaced } from "@/components/blog/diagrams/best-placed";
 import { GroupsToBracket } from "@/components/blog/diagrams/groups-to-bracket";
+import { FixtureList } from "@/components/blog/diagrams/fixture-list";
+import { PointsRanges } from "@/components/blog/diagrams/points-ranges";
 import { RoundRobinWheel } from "@/components/blog/diagrams/round-robin-wheel";
 import { SwissRoundDiagram } from "@/components/blog/swiss-round-diagram";
 import { WalkoverBracket } from "@/components/blog/diagrams/walkover-bracket";
@@ -34,13 +36,17 @@ export function BlogDiagram({ model }: { model: DiagramModel }) {
     case "swissRound":
       return <SwissRoundDiagram model={model} />;
     // ---- end batch 3 ----
-    // ---- batch 6 (Task 12): round-robin-schedule, groups-into-knockout, best-third-placed-teams ----
+    // ---- batch 6 (Task 12): round-robin-schedule, groups-into-knockout, best-third-placed-teams, clinched-or-eliminated ----
     case "roundRobinWheel":
       return <RoundRobinWheel model={model} />;
     case "groupsToBracket":
       return <GroupsToBracket model={model} />;
     case "bestPlaced":
       return <BestPlaced model={model} />;
+    case "pointsRanges":
+      return <PointsRanges model={model} />;
+    case "fixtureList":
+      return <FixtureList model={model} />;
     // ---- end batch 6 ----
     default:
       throw new Error(`blog diagram: there is no drawing for '${(model as { kind: string }).kind}' yet (add it to components/blog/blog-diagram.tsx with the first post that uses it)`);

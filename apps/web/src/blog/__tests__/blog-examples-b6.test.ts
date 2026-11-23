@@ -7,7 +7,7 @@ import { BLOG_EXAMPLES } from "@/blog/examples";
 import { BLOG_GOLDENS } from "@/blog/examples/goldens";
 import type { ExampleResult } from "@/blog/examples/types";
 
-const B6 = ["round-robin-schedule", "groups-into-knockout", "best-third-placed-teams"] as const;
+const B6 = ["round-robin-schedule", "groups-into-knockout", "best-third-placed-teams", "clinched-or-eliminated", "withdrawal-in-a-league", "joining-a-league-late"] as const;
 const EMPTY: ExampleResult = { facts: {}, text: [] };
 const clone = (id: string): ExampleResult => JSON.parse(JSON.stringify(BLOG_GOLDENS[id]!)) as ExampleResult;
 const claimsOf = (id: string) => BLOG_EXAMPLES.find((e) => e.id === id)!.claims;
@@ -94,6 +94,108 @@ describe("batch 6 claims have teeth", () => {
     const same = clone(id);
     same.facts.fullRecordLeader = same.facts.comparedLeader;
     expect(failing(id, same), "the full-record leader is not the compared leader").toContain(says("counting every result would rank a different team first"));
+  });
+
+  it("clinched or eliminated: a level rival ignored (Through), a level most called out, the frozen words reversed and a win that is not enough are all caught", () => {
+    const id = "clinched-or-eliminated";
+    const says = (start: string) => claimsOf(id).find((c) => c.says.startsWith(start))!.says;
+    const g = BLOG_GOLDENS[id]!;
+    const rowOf = (r: ExampleResult, team: unknown) => r.table!.rows.find((row) => row[0] === team)!;
+    const WORDS = 4;
+    const AFTER = 5;
+    // The team held back only by a rival that can draw level is called Through, as a strict test would call it.
+    const through = clone(id);
+    rowOf(through, g.facts.levelTeam)[WORDS] = "Through";
+    expect(failing(id, through), "a level rival ignored").toContain(says("each team's words with one round to play"));
+    // The team whose most is only level with a rival's fewest is called Out, as a non-strict test would call it.
+    const out = clone(id);
+    rowOf(out, String(g.facts.needsHelpTeams).split(" and ")[0])[WORDS] = "Out";
+    expect(failing(id, out), "a level most called out").toContain(says("each team's words with one round to play"));
+    // The right answers differ from the wrong constants: the level team's fewest is exactly the needs-help team's most.
+    expect(g.facts.levelTeamPoints, "the level team's fewest is the needs-help team's most").toBe(g.facts.needsHelpBest);
+    // A team that was Through shown as not qualified, and one that was Out shown as qualified.
+    const frozen = clone(id);
+    const hawks = rowOf(frozen, g.facts.throughTeam);
+    hawks[AFTER] = String(hawks[AFTER]).replace("Qualified", "Out");
+    expect(failing(id, frozen), "a team that was Through goes out").toContain(says("once the last round is played the words freeze"));
+    // One win that is not enough: the rival that can still reach the new total is named, as many as places.
+    const win = clone(id);
+    win.facts.winAndInRivalsAfterWin = `${String(win.facts.winAndInRivalsAfterWin)} and ${String(win.facts.levelRival)}`;
+    expect(failing(id, win), "a win that does not clear the places").toContain(says("every status the post names is in the example"));
+  });
+
+  it("withdrawal in a league: the exact half-way line treated as removed, a team on a different number of matches, and the leaver's early match counted twice are all caught", () => {
+    const id = "withdrawal-in-a-league";
+    const says = (start: string) => claimsOf(id).find((c) => c.says.startsWith(start))!.says;
+    const g = BLOG_GOLDENS[id]!;
+    const rowOf = (r: ExampleResult, team: unknown) => r.table!.rows.find((row) => row[0] === team)!;
+    const PLAYED_LATE = 3;
+    const POINTS_EARLY = 2;
+    // The late case sits exactly on the line (2 of 4 played), and the rule keeps the results there: awarded, not removed.
+    expect(Number(g.facts.latePlayed) * 2, "the late case is exactly half").toBe(Number(g.facts.lateTotal));
+    expect(Number(g.facts.earlyPlayed) * 2, "the early case is under half").toBeLessThan(Number(g.facts.earlyTotal));
+    const half = clone(id);
+    half.facts.lateMode = "voided";
+    expect(failing(id, half), "exactly half treated as removed").toContain(says("the leaver's matches are removed when fewer than half"));
+    const under = clone(id);
+    under.facts.earlyMode = "awarded";
+    expect(failing(id, under), "under half treated as kept").toContain(says("the leaver's matches are removed when fewer than half"));
+    // The leaver's late row shown as if they never entered (the table a removal would give).
+    const gone = clone(id);
+    const leaver = rowOf(gone, g.facts.leaver);
+    leaver[PLAYED_LATE] = 0;
+    leaver[PLAYED_LATE + 1] = "0 points";
+    expect(failing(id, gone), "the late leaver's row voided").toContain(says("each table is what the printed results and the rule give"));
+    // One of the other teams on a different number of matches from the rest, in the one claim about that.
+    const gap = clone(id);
+    const last = gap.table!.rows[gap.table!.rows.length - 1]!;
+    expect(last[0], "the last row is not the leaver").not.toBe(g.facts.leaver);
+    last[1] = Number(last[1]) - 1;
+    expect(failing(id, gap), "a team on fewer matches than the others").toContain(says("every other team is compared on the same number of matches"));
+    // The right answer differs from the wrong constant: counting the leaver's round one match in both cases leaves the first opponent level.
+    const level = clone(id);
+    rowOf(level, g.facts.firstOpponent)[POINTS_EARLY] = rowOf(level, g.facts.firstOpponent)[POINTS_EARLY + 2];
+    level.facts.firstOpponentPointsEarly = level.facts.firstOpponentPointsLate;
+    expect(failing(id, level), "the first opponent on the same points in both cases").toContain(says("the right answer differs from the wrong constant"));
+    expect(g.facts.firstOpponentPointsLate, "the golden's own two answers differ").not.toBe(g.facts.firstOpponentPointsEarly);
+  });
+
+  it("joining a league late: a bye slot of a played round, rounds that do not follow on, a plain one-round answer and an unbalanced home and away are all caught", () => {
+    const id = "joining-a-league-late";
+    const says = (start: string) => claimsOf(id).find((c) => c.says.startsWith(start))!.says;
+    const g = BLOG_GOLDENS[id]!;
+    const placed = says("a team whose rest round has not been played");
+    const ROUND = 0;
+    const WHERE = 2;
+    const rows = (r: ExampleResult) => r.table!.rows;
+    // The golden's own placement is neither of the plain answers: two matches in rest rounds and three in rounds after the last.
+    expect(Number(g.facts.restFilled), "rest rounds used").toBe(2);
+    expect(Number(g.facts.appended), "new rounds").toBe(3);
+    expect(Number(g.facts.lastRoundAfter), "not a single new round").not.toBe(Number(g.facts.lastRound) + 1);
+    // A team whose rest round is already played gets a match in that old round.
+    const old = clone(id);
+    const newRound = rows(old).find((row) => row[WHERE] === "In a new round")!;
+    newRound[ROUND] = Number(g.facts.playedRounds);
+    newRound[WHERE] = `In a round ${String(newRound[1]).split(" v ").find((t) => t !== g.facts.newcomer)} sit out`;
+    expect(failing(id, old), "a match in a round that is already played").toContain(placed);
+    // The new rounds leave a gap.
+    const gap = clone(id);
+    rows(gap)[rows(gap).length - 1]![ROUND] = Number(g.facts.lastRoundAfter) + 1;
+    expect(failing(id, gap), "a gap among the new rounds").toContain(placed);
+    // Everything in one new round (the plain answer).
+    const one = clone(id);
+    for (const row of rows(one)) if (row[WHERE] === "In a new round") row[ROUND] = Number(g.facts.lastRound) + 1;
+    expect(failing(id, one), "all the new matches in one round").toContain(placed);
+    // A rest round that is not yet played is not used: the match goes to a new round instead.
+    const unused = clone(id);
+    const rest = rows(unused).find((row) => String(row[WHERE]).startsWith("In a round"))!;
+    rest[ROUND] = Number(g.facts.lastRoundAfter) + 1;
+    rest[WHERE] = "In a new round";
+    expect(failing(id, unused), "a free rest round left unused").toContain(placed);
+    // The newcomer at home in every match.
+    const home = clone(id);
+    for (const row of rows(home)) row[1] = String(row[1]).split(" v ").sort((a, b) => (a === g.facts.newcomer ? -1 : b === g.facts.newcomer ? 1 : 0)).join(" v ");
+    expect(failing(id, home), "home every time").toContain(says("the newcomer's home and away games differ by at most one"));
   });
 });
 

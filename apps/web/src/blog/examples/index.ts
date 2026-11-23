@@ -32,6 +32,9 @@ import type { BlogExample } from "./types";
 import { roundRobinSchedule } from "./round-robin-schedule";
 import { groupsIntoKnockout } from "./groups-into-knockout";
 import { bestThirdPlacedTeams } from "./best-third-placed-teams";
+import { clinchedOrEliminated } from "./clinched-or-eliminated";
+import { withdrawalInALeague } from "./withdrawal-in-a-league";
+import { joiningALeagueLate } from "./joining-a-league-late";
 // ---- end batch 6 ----
 // --- blog batch 4 (knockouts) ---
 import { thirdPlaceMatch } from "./third-place-match";
@@ -64,6 +67,9 @@ export const BLOG_EXAMPLES: readonly BlogExample[] = [
   roundRobinSchedule,
   groupsIntoKnockout,
   bestThirdPlacedTeams,
+  clinchedOrEliminated,
+  withdrawalInALeague,
+  joiningALeagueLate,
   // ---- end batch 6 ----
 ];
 

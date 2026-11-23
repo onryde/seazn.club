@@ -29,7 +29,7 @@ interface Line {
 }
 
 /** The app's league draw for a field and a number of legs: the lines and who sits out each round. */
-function draw(field: readonly string[], legs: number): { lines: Line[]; rests: Map<number, string> } {
+export function draw(field: readonly string[], legs: number): { lines: Line[]; rests: Map<number, string> } {
   const names = new Map(field.map((n) => [`id-${n}`, n]));
   const entrants = field.map((n, i) => ({ id: `id-${n}`, seed: i + 1, swiss_first_round: null }));
   const plan = roundRobinStagePlan("league", { legs }, entrants, new Map());

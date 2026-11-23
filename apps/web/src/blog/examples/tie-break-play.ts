@@ -49,6 +49,8 @@ export interface Meeting {
   want?: (m: MatchView) => boolean;
   /** The side that did not turn up: the match is a walkover with nothing played (`core.forfeit`, reason walkover). */
   walkoverBy?: string;
+  /** Why the side did not turn up: "walkover" (the default) or "withdrew", the reason the withdrawal cascade records. */
+  walkoverReason?: "walkover" | "withdrew";
   /**
    * Scheduled and not played yet: the stage holds the fixture and nothing is decided, which is what a head-to-head step reads
    * as an incomplete mini-schedule. Such a meeting is not in `played`; it is in `pending`.
@@ -149,7 +151,7 @@ export function playMeeting(module: AnySportModule, cfg: unknown, kind: "league"
     return { outcome, result, played, gamePoints: [pair[0].points, pair[1].points] as const, headline: folded.summary.headline, state: folded.state };
   };
   if (m.walkoverBy !== undefined) {
-    const s = settle([makeEnvelope(1, { type: "core.forfeit", payload: { by: m.walkoverBy, reason: "walkover" } } as never)], `${m.home}-${m.away}-walkover`);
+    const s = settle([makeEnvelope(1, { type: "core.forfeit", payload: { by: m.walkoverBy, reason: m.walkoverReason ?? "walkover" } } as never)], `${m.home}-${m.away}-walkover`);
     if (s === null) throw new Error(`${module.key}: a walkover by ${m.walkoverBy} decided nothing (${m.what})`);
     return { meeting: m, view: view(s.outcome, s.result, m.home, s.headline), result: s.result, played: s.played, gamePoints: s.gamePoints };
   }

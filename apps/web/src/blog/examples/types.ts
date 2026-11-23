@@ -86,6 +86,15 @@ export type DiagramModel =
    *  ("Group C, 4 teams"), `counted` what was counted ("0 points, -4 from 2 matches"), `leftOut` what was not ("Left out: v Eagles (4th)"
    *  or "Nothing left out"). */
   | { kind: "bestPlaced"; title: string; take: number; candidates: { team: string; group: string; counted: string; leftOut: string }[] }
+  // ---- batch 6 (Task 12): clinched-or-eliminated ----
+  /** A league table read with some rounds to play: one bar per team, from the fewest points it can finish on (`worst`) to the most
+   *  (`best`) on a shared 0..`axisMax` axis, with the points it has now and the words the table shows beside its name. */
+  | { kind: "pointsRanges"; title: string; axisMax: number; rows: { team: string; label: string; now: number; worst: number; best: number }[] }
+  // ---- batch 6 (Task 12): withdrawal-in-a-league, joining-a-league-late ----
+  /** One team's matches listed by round in one or more cases: each case has a heading, a verdict in two parts (`lead`, `effect`) and
+   *  one line per match with its round, the opponent and what became of the match (`tone` colours the dot beside it; the words say
+   *  the same). */
+  | { kind: "fixtureList"; title: string; scenes: { heading: string; lead: string; effect: string; lines: { round: string; opponent: string; fate: string; tone: "keep" | "drop" | "award" | "new" }[] }[] }
   | { kind: "ladder"; title: string; rungs: string[]; challenger: string; target: string; swapped: boolean }
   // ---- batch 5, fix round 1 (M9): one picture for each of the walkover posts ----
   /** A walkover in a bracket: rounds left to right, each match with its two sides (a seat not filled reads as the words the
