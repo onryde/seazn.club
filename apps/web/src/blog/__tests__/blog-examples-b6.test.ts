@@ -7,7 +7,7 @@ import { BLOG_EXAMPLES } from "@/blog/examples";
 import { BLOG_GOLDENS } from "@/blog/examples/goldens";
 import type { ExampleResult } from "@/blog/examples/types";
 
-const B6 = ["round-robin-schedule"] as const;
+const B6 = ["round-robin-schedule", "groups-into-knockout"] as const;
 const EMPTY: ExampleResult = { facts: {}, text: [] };
 const clone = (id: string): ExampleResult => JSON.parse(JSON.stringify(BLOG_GOLDENS[id]!)) as ExampleResult;
 const claimsOf = (id: string) => BLOG_EXAMPLES.find((e) => e.id === id)!.claims;
@@ -47,6 +47,26 @@ describe("batch 6 claims have teeth", () => {
     const rounds = clone("round-robin-schedule");
     rounds.facts.rounds = Number(rounds.facts.fieldSize) - 1;
     expect(failing("round-robin-schedule", rounds).length).toBeGreaterThan(0);
+  });
+
+  it("groups into knockout: the table's own order left in place (a same-group rematch), a draw that is not the first fitting arrangement, and a wrong bracket size are caught", () => {
+    const says = (start: string) => claimsOf("groups-into-knockout").find((c) => c.says.startsWith(start))!.says;
+    // The draw did nothing: the drawn seeds are the table's seeds, so Comets v Dynamos (both Group C) is round one.
+    const rematch = clone("groups-into-knockout");
+    for (const row of rematch.table!.rows) row[3] = row[2]!;
+    expect(failing("groups-into-knockout", rematch), "a draw that kept the table's order pairs a group with itself").toContain(says("round one is the standard draw"));
+    // The last two runners-up swapped (still no same-group pair here, yet not the first arrangement the engine's rule gives).
+    const other = clone("groups-into-knockout");
+    const [a, b] = [other.table!.rows[2]!, other.table!.rows[3]!];
+    [a[3], b[3]] = [b[3]!, a[3]!];
+    expect(failing("groups-into-knockout", other).length, "a different arrangement of the same teams").toBeGreaterThan(0);
+    // The right answer differs from the wrong constant: 6 qualifiers fill an eight-place bracket (2 empty), not a six-place one.
+    const size = clone("groups-into-knockout");
+    size.facts.bracketSize = Number(size.facts.qualifiers);
+    size.facts.byes = 0;
+    expect(failing("groups-into-knockout", size), "six places is not a power of two").toContain(says("the counts are the groups'"));
+    expect(Number(BLOG_GOLDENS["groups-into-knockout"]!.facts.bracketSize), "the golden's own size is the next power of two").toBe(8);
+    expect(Number(BLOG_GOLDENS["groups-into-knockout"]!.facts.qualifiers), "and it differs from the qualifiers").not.toBe(8);
   });
 });
 
@@ -184,6 +204,6 @@ describe("batch 6: a digit moved on by one in any printed string is caught", () 
     // sweep is kept for what a later edit might print, and reports how many it moved so zero is visible.
     expect(digits, "digits shifted (a golden with no digit in a string is allowed; this reports the count)").toBeGreaterThanOrEqual(0);
     expect(strings).toBeGreaterThanOrEqual(0);
-    expect(survivors.sort(), "digits no claim reads (each needs a claim, or a reason in UNCHECKED_DIGITS)").toEqual(Object.keys(UNCHECKED_DIGITS).sort());
+    if (survivors.sort().join("|") !== Object.keys(UNCHECKED_DIGITS).sort().join("|")) expect.fail(`digits no claim reads (each needs a claim, or a reason in UNCHECKED_DIGITS): ${survivors.join(" | ")}`);
   });
 });
