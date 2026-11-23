@@ -762,7 +762,10 @@ test.describe("hub live update", () => {
     // the DOM watch's case, covered above).
     let change = false;
     let answered = 0;
-    await page.route("**/api/v1/public/orgs/*/competitions/*/hub", async (route) => {
+    // Matched on the PATHNAME: the page polls `/hub?window=rounds` (W5 follow-ups C), and a glob ending in `/hub` matches only
+    // the bare URL, so it stubbed nothing and the poll went straight to the server.
+    const hubApi = /^\/api\/v1\/public\/orgs\/[^/]+\/competitions\/[^/]+\/hub$/;
+    await page.route((u) => hubApi.test(u.pathname), async (route) => {
       // W5 follow-ups B4: the page sends the ETag it holds and an unchanged document comes back 304, with no body to edit. This
       // stub edits the server's document, so it always asks for the whole of it.
       const headers = { ...route.request().headers() };
