@@ -22,7 +22,7 @@
 //      (video/cf-analytics.ts `liveMinutesViewed`) every 30 s for the full 10 min — stopping early only once BOTH uids show
 //      minutes that held still across two polls (Task 30 review I1: a key whose rows arrive later must not read as absent).
 //      After the cleanup's deletes it reads the same two uids once more (review I2: does a deleted uid still answer? Task 31's
-//      daily read normally comes after the delete). Printed: OBSERVED.liveView (segments, bytes, seconds) and OBSERVED.analytics
+//      daily read normally comes after the delete). Printed: OBSERVED.liveView (segments, bytes, seconds, timedOut) and OBSERVED.analytics
 //      ({inputUid, videoUid, byUid, keyedBy, polls, series, firstNonZeroPoll, stoppedBecause, afterDelete}) — uids and numbers
 //      only. `keyedBy` answers ONE question: is one live view reported under both keys (a double count)? Task 31 queries both
 //      uids whatever it says, because the interim replay plays by video uid (cf-playback.ts); the report's decision table maps
@@ -92,6 +92,9 @@ const FEED_MAX_SECONDS = 300;   // ffmpeg's own cap; the run stops it earlier, a
  *  often it asks. */
 const ANALYTICS_WAIT_MS = 10 * 60_000;
 const ANALYTICS_POLL_MS = 30_000;
+/** Step 5 (review m6): the longest one live-view GET — a playlist or a segment, headers and body — may take. A segment is a few
+ *  seconds of video at the lowest rendition, so 10 s is generous; the GET is also never allowed past the view's end. */
+const LIVE_VIEW_GET_TIMEOUT_MS = 10_000;
 
 /** The test feed, everything but the output. History (2026-11-21, owner runs):
  *  - Runs 1–2 sent `testsrc -tune zerolatency -g 60 -b:v 2500k`: measured locally at ~1.1 Mbps, under Stream Live's
@@ -172,16 +175,41 @@ describe.skipIf(!GATE.enabled)("Cloudflare Stream — signed recording lock, PUT
   /** Step 5's viewer, as Seazn's player views a live match: a fresh token for the INPUT uid (C1), the master playlist, its
    *  lowest-bandwidth rendition, and every segment that rendition lists, each fetched once, until `untilMs`. Only counts are
    *  kept — no URL, no token, no body — and a failure is recorded by the step it hit and the error's NAME, never its text (a
-   *  fetch error can quote the URL, and the URL is the token). It never throws: the expiry probe shares this wait. */
-  async function watchLive(liveHost: string, untilMs: number): Promise<{ segments: number; bytes: number; seconds: number; stoppedAt: string | null }> {
+   *  fetch error can quote the URL, and the URL is the token). It never throws: the expiry probe shares this wait.
+   *  Review m6 (2026-11-23): every playlist and segment GET — headers and body alike — gives up after LIVE_VIEW_GET_TIMEOUT_MS,
+   *  and never past `untilMs` (with a 1 s floor), so one hung GET cannot push the expiry reads that follow past the feed. A GET
+   *  that times out is COUNTED (`timedOut`), not a failure: a playlist is asked again on the next turn, a segment is left. */
+  async function watchLive(liveHost: string, untilMs: number): Promise<{
+    segments: number; bytes: number; seconds: number; stoppedAt: string | null; timedOut: { playlist: number; segment: number };
+  }> {
     const startedAt = Date.now();
     const fetched = new Set<string>();
+    const timedOut = { playlist: 0, segment: 0 };
     let bytes = 0;
     let step = "mint";
+    const TIMED_OUT = Symbol("timed out");
+    /** One bounded GET and its body read: the read's value, or TIMED_OUT when the bound ran out first. Anything else throws. */
+    async function boundedGet<T>(url: string, read: (res: Response) => Promise<T>): Promise<T | typeof TIMED_OUT> {
+      const signal = AbortSignal.timeout(Math.max(1_000, Math.min(LIVE_VIEW_GET_TIMEOUT_MS, untilMs - Date.now())));
+      try {
+        return await read(await fetch(url, { signal }));
+      } catch (e) {
+        if (signal.aborted) return TIMED_OUT;
+        throw e;
+      }
+    }
+    const result = (stoppedAt: string | null) => ({ segments: fetched.size, bytes, seconds: Math.round((Date.now() - startedAt) / 1000), stoppedAt, timedOut });
     try {
       const master = `${liveHost}/${await mint(inputUid!)}/manifest/video.m3u8`;
       step = "master playlist";
-      const lines = (await (await fetch(master)).text()).split("\n").map((l) => l.trim());
+      let masterText: string | null = null;
+      while (masterText === null && Date.now() < untilMs) {
+        const got = await boundedGet(master, (res) => res.text());
+        if (got === TIMED_OUT) timedOut.playlist++;
+        else masterText = got;
+      }
+      if (masterText === null) return result(null);   // the whole window went on timed-out GETs: counted, not a failure
+      const lines = masterText.split("\n").map((l) => l.trim());
       let pick: { bandwidth: number; uri: string } | null = null;
       for (let i = 0; i < lines.length - 1; i++) {
         const m = /^#EXT-X-STREAM-INF:.*\bBANDWIDTH=(\d+)/.exec(lines[i]);
@@ -192,21 +220,28 @@ describe.skipIf(!GATE.enabled)("Cloudflare Stream — signed recording lock, PUT
       const rendition = new URL(pick.uri, master).toString();
       while (Date.now() < untilMs) {
         step = "rendition playlist";
-        const res = await fetch(rendition);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        for (const line of (await res.text()).split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"))) {
-          const segment = new URL(line, rendition).toString();
-          if (fetched.has(segment) || Date.now() >= untilMs) continue;
-          fetched.add(segment);
-          step = "segment";
-          bytes += (await (await fetch(segment)).arrayBuffer()).byteLength;
+        const playlist = await boundedGet(rendition, async (res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.text();
+        });
+        if (playlist === TIMED_OUT) timedOut.playlist++;
+        else {
+          for (const line of playlist.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"))) {
+            const segment = new URL(line, rendition).toString();
+            if (fetched.has(segment) || Date.now() >= untilMs) continue;
+            fetched.add(segment);
+            step = "segment";
+            const got = await boundedGet(segment, async (res) => (await res.arrayBuffer()).byteLength);
+            if (got === TIMED_OUT) timedOut.segment++;
+            else bytes += got;
+          }
         }
         await sleep(Math.min(4_000, Math.max(0, untilMs - Date.now())));
       }
-      return { segments: fetched.size, bytes, seconds: Math.round((Date.now() - startedAt) / 1000), stoppedAt: null };
+      return result(null);
     } catch (e) {
       const why = e instanceof Error && /^(no rendition|HTTP \d+)$/.test(e.message) ? e.message : (e as { name?: string })?.name ?? "error";
-      return { segments: fetched.size, bytes, seconds: Math.round((Date.now() - startedAt) / 1000), stoppedAt: `${step}: ${why}` };
+      return result(`${step}: ${why}`);
     }
   }
 
