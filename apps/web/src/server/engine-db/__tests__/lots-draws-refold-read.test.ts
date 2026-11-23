@@ -19,7 +19,8 @@ import { generateStageFixtures } from "@/server/usecases/stages";
 import { recomputeStandings } from "../competition";
 import { loadStageInputs, toTableStage } from "../competition/stage-inputs";
 import { loadLiveLotsDraws, loadLotsDraws, loadLotsDrawsFor } from "../table-rules";
-import { genericResult, tableScene } from "./helpers/w2d-table-rig";
+import { between, genericResult, tableScene } from "./helpers/w2d-table-rig";
+import { post } from "@/server/usecases/__tests__/_groups-ko-scene";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -94,10 +95,10 @@ async function lotsSets(stageId: string): Promise<number> {
   return completeTableStage(toTableStage(inputs, new Map()), inputs.tableFixtures).newLotsDraws.length;
 }
 
-/** The stage ranked the old way: every stored draw read, newest per key. */
-async function rankedByEveryDraw(stageId: string) {
+/** The stage ranked the old way: every stored draw read, newest per key - or the draws given (read before a write). */
+async function rankedByEveryDraw(stageId: string, draws?: Awaited<ReturnType<typeof loadLotsDraws>>) {
   const inputs = await loadStageInputs(sql as never, stageId);
-  const { tables } = completeTableStage(toTableStage(inputs, await loadLotsDraws(sql, stageId)), inputs.tableFixtures);
+  const { tables } = completeTableStage(toTableStage(inputs, draws ?? (await loadLotsDraws(sql, stageId))), inputs.tableFixtures);
   return tables.pools.flatMap((p) => p.rows);
 }
 
@@ -120,13 +121,17 @@ describe.skipIf(!HAS_DB)("B6 a refold reads the live draws and the tie sets it r
     expect(sets, "premise: lots orders at least one tie set, so the refold ranks by stored draws").toBeGreaterThan(0);
     const live = await liveCount(t.stageId);
     const before = await storedCount(t.stageId);
+    // Review M6: the oracle is ranked BEFORE the refold writes, from every draw stored then - read after, it would agree with
+    // whatever the refold had just stored (a refold re-drawing a known tie set read as correct).
+    const expected = await rankedByEveryDraw(t.stageId);
 
     const rows = await refoldCounted(t.auth.orgId, t.stageId);
     expect(reads.calls, "anti-vacuity: the refold read lots draws through the loaders").toBeGreaterThan(0);
     expect(reads.rows, `read at most ${live} live + 2 x ${sets} asked rows, of ${before} stored`).toBeLessThanOrEqual(live + 2 * sets);
     expect(reads.rows, "never the history").toBeLessThan(planted);
     expect(rows.length, "anti-vacuity: a table came back").toBe(8);
-    expect(rows, "the same table the whole-history read ranks").toEqual(await rankedByEveryDraw(t.stageId));
+    expect(await storedCount(t.stageId), "every tie set it ranks was drawn before: the refold stores no new draw").toBe(before);
+    expect(rows, "the same table the whole-history read ranked before the refold").toEqual(expected);
   }, 240_000);
 
   it("the sequence: a second refold stores nothing new, reads as little, and ranks the same; a further result moves the table and still reads only its tie sets", async () => {
@@ -148,11 +153,44 @@ describe.skipIf(!HAS_DB)("B6 a refold reads the live draws and the tie sets it r
     await genericResult(t.auth, t.stageId, E, F, 1, 0);
     const sets = await lotsSets(t.stageId);
     const live3 = await liveCount(t.stageId);
+    const stored3 = await storedCount(t.stageId);
+    const expected3 = await rankedByEveryDraw(t.stageId); // before the write (review M6)
     reads.rows = 0;
     const third = await refoldCounted(t.auth.orgId, t.stageId);
     expect(reads.rows).toBeLessThanOrEqual(live3 + 2 * sets);
     expect(reads.rows).toBeLessThan(planted);
-    expect(third, "the same table the whole-history read ranks").toEqual(await rankedByEveryDraw(t.stageId));
+    expect(await storedCount(t.stageId), "the results' own refolds drew every set: this one stores nothing").toBe(stored3);
+    expect(third, "the same table the whole-history read ranked before the refold").toEqual(expected3);
+  }, 240_000);
+
+  it("a tie set that comes back after a split is served its own earlier draw, never drawn again (review M6)", async () => {
+    // The branch the live read cannot cover: A-B 0-0 draws {A, B} and {C, D}; B-C 0-0 then ties {A, C}, whose draw supersedes
+    // both (a stored draw that intersects a new one is superseded, `persistLotsDraws`); voiding B-C brings {A, B} and {C, D}
+    // back - the first pass names them, and the refold must serve the draws it made before, never draw them again.
+    const t = await started(4);
+    const [A, B, C, D] = t.entrants as [string, string, string, string];
+    await genericResult(t.auth, t.stageId, A, B, 0, 0);
+    await genericResult(t.auth, t.stageId, B, C, 0, 0);
+    const cdRows = await sql<{ superseded: boolean }[]>`
+      select superseded_at is not null as superseded from stage_lots_draws
+       where stage_id = ${t.stageId} and members_key in (${membersKeyOf([C, D])}, ${membersKeyOf([A, B])})`;
+    const f = await between(t.stageId, B, C);
+    const [result] = await sql<{ id: string }[]>`
+      select id from score_events where fixture_id = ${f.id} and type = 'generic.result' order by seq desc limit 1`;
+    const drawsBefore = await loadLotsDraws(sql, t.stageId); // the oracle's draws, read before any write below
+    const storedBefore = await storedCount(t.stageId);
+    if (cdRows.length === 0) {
+      // Neither set was drawn before the split (nothing to come back): the branch is unreachable in this scene - fail loudly.
+      expect(cdRows.length, "premise: {A, B} and {C, D} were drawn before the split").toBeGreaterThan(0);
+    }
+    expect(cdRows.length, "premise: both sets were drawn").toBe(2);
+    expect(cdRows.every((r) => r.superseded), "premise: {A, C}'s draw superseded both, so the live read cannot cover them").toBe(true);
+
+    await post(t.auth, f.id, "core.void", { event_id: result!.id }); // the tie comes back; this write refolds
+    const rows = await refoldCounted(t.auth.orgId, t.stageId);
+    expect(rows.length, "anti-vacuity: a table came back").toBe(4);
+    expect(await storedCount(t.stageId), "the returning set is served its stored draw: nothing new is stored").toBe(storedBefore);
+    expect(rows, "the table the draws stored BEFORE the void rank").toEqual(await rankedByEveryDraw(t.stageId, drawsBefore));
   }, 240_000);
 
   it("both refold reads find their rows through stage_lots_draws_stage_key (V541), never a scan of every stage's draws", async () => {
