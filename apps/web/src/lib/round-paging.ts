@@ -100,8 +100,9 @@ export function planRounds(rounds: readonly { key: string; buckets: RoundBuckets
     }
   }
   // Review N3: nothing after the frontier is to play, yet a round BEHIND it still holds a match to play (postponed, rearranged). It
-  // is the next thing the season plays - the earliest such round is "next" and opens, before the finished ending is considered.
-  if (next === -1) next = rounds.findIndex((r) => r.buckets.upcoming > 0);
+  // is the next thing the season plays - the earliest such round is "next" and opens, before the finished ending is considered. Only
+  // BEHIND it: the frontier round itself, part-played, is the current round ("inProgress", opened as such), never "next".
+  if (next === -1) next = rounds.findIndex((r, i) => i < frontier && r.buckets.upcoming > 0);
   const stateOf = (r: { buckets: RoundBuckets }, i: number): RoundState => {
     const b = r.buckets;
     if (b.live > 0) return "live";

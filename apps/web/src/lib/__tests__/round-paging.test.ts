@@ -192,6 +192,21 @@ describe("planRounds: a postponed match behind a fully played last round keeps i
     expect(openKeys(planRounds([g("r1", 0, 0, 4), g("r2", 0, 1, 3), g("r3", 0, 0, 4), g("r4", 0, 4, 0)]))).toEqual(["r4"]);
   });
 
+  // The fallback looks BEHIND the frontier only (final review minor): the frontier round itself, part-played with nothing live, is
+  // the current round ("inProgress", the RoundState rule above), never "next" - next is a round still to play after the last round
+  // anything has happened in, or a postponed one behind it.
+  it("the LAST round part-played with nothing live and nothing behind it to play: it is the current round (inProgress), not 'next'", () => {
+    const partPlayed = planRounds([g("r1", 0, 0, 4), g("r2", 0, 0, 4), g("r3", 0, 2, 2)]);
+    expect(states(partPlayed)).toEqual({ r1: "finished", r2: "finished", r3: "inProgress" });
+    expect(openKeys(partPlayed)).toEqual(["r3"]);
+    // ...with a postponed round behind it as well, that round is next and both open.
+    const withPostponed = planRounds([g("r1", 0, 1, 3), g("r2", 0, 0, 4), g("r3", 0, 2, 2)]);
+    expect(states(withPostponed)).toEqual({ r1: "next", r2: "finished", r3: "inProgress" });
+    expect(openKeys(withPostponed)).toEqual(["r1", "r3"]);
+    // ...and once r3's last matches are played, the season's ending opens.
+    expect(openKeys(planRounds([g("r1", 0, 0, 4), g("r2", 0, 0, 4), g("r3", 0, 0, 4)]))).toEqual(["r3"]);
+  });
+
   it("a postponed match behind a live last round: the live round opens and the postponed round is next", () => {
     const plan = planRounds([g("r1", 0, 0, 4), g("r2", 0, 1, 3), g("r3", 1, 0, 3)]);
     expect(openKeys(plan)).toEqual(["r2", "r3"]);
