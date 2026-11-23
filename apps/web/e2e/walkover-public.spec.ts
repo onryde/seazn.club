@@ -1233,12 +1233,17 @@ test.describe("W2b loop H F1 — the run sheet keeps the result's tag whole", ()
         await page.goto(sheets.get(divId)!);
         await dismissCookieBanner(page);
         // Match Day PB1 (owner 2026-11-02): a round whose every match is settled loads folded to its bar, and this rig settles whole
-        // rounds. Once every row under test is on the page (in the DOM, folded or not), open the bars as an organiser would; the
-        // reads below still ask for each row VISIBLE.
+        // rounds. W5 follow-ups B2: a folded round's rows are not in the DOM until its bar is opened. So: wait for the run sheet to
+        // render (a row or a round bar), open the bars as an organiser would, and only then require every row under test; the reads
+        // below still ask for each row VISIBLE.
+        await expect(
+          page.getByTestId("run-sheet").locator('li[data-fixture-no], [data-testid="run-sheet-round-toggle"]').first(),
+          `${width}: the run sheet rendered`,
+        ).toBeAttached({ timeout: STEP_MS });
+        await expandAllFolds(page);
         for (const r of rows.filter((x) => x.div === divId)) {
           await expect(page.getByTestId("run-sheet").locator(`li[data-fixture-no="${r.f.fixture_no}"]`), `${width} ${r.name}: on the page`).toBeAttached({ timeout: STEP_MS });
         }
-        await expandAllFolds(page);
         for (const r of rows.filter((x) => x.div === divId)) {
           const row = page.getByTestId("run-sheet").locator(`li[data-fixture-no="${r.f.fixture_no}"]`);
           await expect(row, `${width} ${r.name}: the run-sheet row`).toBeVisible({ timeout: STEP_MS });

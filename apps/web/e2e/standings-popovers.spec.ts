@@ -763,7 +763,11 @@ test.describe("hub live update", () => {
     let change = false;
     let answered = 0;
     await page.route("**/api/v1/public/orgs/*/competitions/*/hub", async (route) => {
-      const response = await route.fetch();
+      // W5 follow-ups B4: the page sends the ETag it holds and an unchanged document comes back 304, with no body to edit. This
+      // stub edits the server's document, so it always asks for the whole of it.
+      const headers = { ...route.request().headers() };
+      delete headers["if-none-match"];
+      const response = await route.fetch({ headers });
       const body = (await response.json()) as { data: { tables: { rows: { entrantId: string; cells: string[] }[] }[] } };
       if (change) {
         const row = body.data.tables.flatMap((t) => t.rows).find((r) => r.entrantId === seed.ids.a);
