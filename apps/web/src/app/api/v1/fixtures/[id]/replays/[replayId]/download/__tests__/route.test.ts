@@ -302,6 +302,10 @@ describe.skipIf(!HAS_DB)("GET …/fixtures/{id}/replays/{replayId}/download over
   it("a viewer is 403 (an admin is served, the positive pair); another organisation's member, an unknown and a malformed fixture are 404; an API key is 403 at the door; signed out 401 — each `private, no-store`, and the host is never asked for a refusal", async () => {
     const o = await organiser();
     const stranger = await organiser();
+    // `organiser()` installs ITS host as the process's driver, so the stranger's call replaced o's: put o's back. The process has
+    // one replay host, and o's playable copy is on o's (each fake names its own copies since V545's one-row-per-copy index, so the
+    // stranger's host holds no copy of o's: the admin's positive pair below would read 409 replay_not_downloadable).
+    setReplayDriverForTest(o.host);
     await override(o.orgId, "api.access", true);
     await override(o.orgId, "api.write", true);
     const { secret } = await createApiKey({ orgId: o.orgId, via: "session", userId: o.ownerId, role: "owner", keyId: null }, { name: `dl-${randomUUID().slice(0, 6)}`, scopes: ["manage"] });
