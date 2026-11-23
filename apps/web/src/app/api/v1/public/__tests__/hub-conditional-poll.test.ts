@@ -99,6 +99,18 @@ describe("B4 the hub poll costs a document only when the document changed", () =
     expect(sent.slice(1).every((e) => e !== null), "every poll after the first sends its tag").toBe(true);
   });
 
+  it("a card's OWN instant is content, not the build stamp: when only it moves, the tag moves (review M5)", async () => {
+    const first = await GET(new Request("http://x/hub"), ctx);
+    const etag = first.headers.get("ETag");
+    const doc = docAt("2026-11-22T10:00:00.000Z", "1-0") as unknown as { matches: { header: { updatedAt: string } }[] };
+    expect(doc.matches[1]!.header.updatedAt, "the premise: card f2 carries an instant of its own").not.toBe("2026-11-22T10:00:00.000Z");
+    doc.matches[1]!.header.updatedAt = "2026-11-21T09:30:00.000Z";
+    current.doc = doc;
+    const moved = await GET(new Request("http://x/hub", { headers: { "If-None-Match": etag! } }), ctx);
+    expect(moved.status, "a card's own instant moved: the document").toBe(200);
+    expect(moved.headers.get("ETag")).not.toBe(etag);
+  });
+
   it("the empty case: a fetch layer that has never seen this competition sends no ETag, even after another competition's", async () => {
     const sent: (string | null)[] = [];
     vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
