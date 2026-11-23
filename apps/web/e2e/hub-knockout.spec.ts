@@ -1375,8 +1375,9 @@ test.describe("competition hub: Knockout tab", () => {
       expect(lined, "neither a realtime subscription nor a poll tick").not.toBeNull();
 
       // A pre-result copy in THIS browser's HTTP cache, fetched and stored
-      // before the write.
-      const primed = await page.evaluate(async (url) => (await fetch(url, { cache: "reload" })).status, hubApi);
+      // before the write - at the URL the page actually polls (W5 follow-ups C, review I3/N2: the poll asks for the window,
+      // `?window=rounds`; a copy primed at the bare route is one the page never reads, and the guard would test nothing).
+      const primed = await page.evaluate(async (url) => (await fetch(url, { cache: "reload" })).status, `${hubApi}?window=rounds`);
       expect(primed).toBe(200);
 
       await scoreFixture(request, semiA, 2, 1);
