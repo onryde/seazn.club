@@ -131,7 +131,7 @@ describe.skipIf(!HAS_DB)("B7 two interleaved result writes: the stored table nev
     expect(await storedAppearances(s.stageId), `both results are in the stored table (second write ${state})`).toBe(4);
   });
 
-  it("the sequence without a race: a third result after the interleaving is counted too (the guard does not freeze the table)", async () => {
+  it("the sequence without a race: each of three results in turn is counted (the lock does not freeze the table)", async () => {
     const s = await league();
     for (const [i, f] of s.fixtures.slice(0, 3).entries()) {
       await decide(s.auth, f.id);
