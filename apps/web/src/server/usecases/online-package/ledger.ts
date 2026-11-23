@@ -1,8 +1,9 @@
 import "server-only";
 // server/usecases/online-package/ledger.ts — an Online Chess package's rows on the Seazn credits ledger (spec
-// 2026-11-23-online-chess-credits-design.md §7.1, §7.4; P4, P6, P21). The ONE module that writes a package debit or a
-// package return to `org_stream_credits`; the payment, move-down and refund usecases (Tasks 5, 6) call it and own the
-// package row.
+// 2026-11-23-online-chess-credits-design.md §7.1, §7.4, §7.5; P4, P6, P21). The ONE module of the package code that writes
+// `org_stream_credits`: a package debit, a package return, and the settle step's claw-back of a reversed pack
+// (`revokeForReversal`, §7.5). The payment, move-down, refund and settle usecases (Tasks 5, 6) call it and own the package
+// row and the attribution.
 //
 //  * Rows: a debit is a `consume`, a return a `refund`. Each names the package (`online_package_id`) and no stream session,
 //    has no staff author (`created_by` null: how the stream code tells a platform refund from staff) and no key; the ledger's
@@ -199,4 +200,30 @@ export async function refundForPackage(tx: Tx, a: { orgId: string; packageId: st
       insert into org_stream_credits (org_id, delta, reason, bucket, online_package_id, balance_after)
       values (${a.orgId}, ${n}, 'refund', ${bucket}, ${a.packageId}, ${balance})`;
   }
+}
+
+/** The settle step's claw-back (§7.5 item 2): take `credits` bought credits back against the reversed pack `intent`, as ONE
+ *  `revoke` row in the `pack` bucket carrying the intent (so a human walks it back to the Stripe object, and the attribution counts
+ *  it as already revoked) and NO key: settle rows are bounded by the attribution, not by a key (the claw-back's own
+ *  `stream_pack_refund:{intent}` row stays the replay guard). No session, no package, no staff author: the shape of the
+ *  claw-back's own row. Floored on the PACK, as every revoke is (V426): asking for more than the pack holds is a named 500, never
+ *  a write that drives the bucket below zero. Answers the org total after the row. Takes the money lock (re-entrant). */
+export async function revokeForReversal(tx: Tx, a: { orgId: string; intent: string; credits: number }): Promise<number> {
+  assertCount(a.credits, "the credits to take back", 1);
+  await lockOrg(tx, a.orgId);
+  const split = await creditBreakdown(tx, a.orgId);
+  if (a.credits > split.pack) {
+    throw new HttpError(
+      500,
+      `Organisation ${a.orgId} holds ${split.pack} bought credits; refusing to take back ${a.credits} for payment intent ${a.intent}`,
+      "reversal_exceeds_pack",
+    );
+  }
+  debit(split.pack, a.credits); // the floor, in memory, against the pack (the claw-back's own check)
+  const balanceAfter = split.total - a.credits;
+  await tx`
+    insert into org_stream_credits (org_id, delta, reason, bucket, balance_after, note, stripe_payment_intent_id)
+    values (${a.orgId}, ${-a.credits}, 'revoke', 'pack', ${balanceAfter},
+            ${`Stripe claw-back settled after an Online Chess package returned credits — payment intent ${a.intent}`}, ${a.intent})`;
+  return balanceAfter;
 }

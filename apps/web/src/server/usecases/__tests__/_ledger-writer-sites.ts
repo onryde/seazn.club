@@ -61,17 +61,20 @@ export const LEDGER_WRITER_SITES: readonly LedgerWriterSite[] = [
   { key: "event-pass", fn: "grantPassStreamCredits", needle: "'grant', 'pack'", reasons: ["grant"], buckets: ["pack"], byStaff: false, session: "never", key_shape: /^stream-pass:.+$/, kinds: ["passGrant"] },
 ];
 
-/** Online Chess (spec 2026-11-23-online-chess-credits-design.md §7.1): the SECOND file that writes the ledger, an online
- *  division's package debits (`consume`) and returns (`refund`), each naming the package and no session or staff author.
- *  stream-credit-ledger-writers.test.ts (W3) holds its inserts to these two sites (function + needle, the two fields that
+/** Online Chess (spec 2026-11-23-online-chess-credits-design.md §7.1, §7.5): the SECOND file that writes the ledger, an online
+ *  division's package debits (`consume`) and returns (`refund`), each naming the package and no session or staff author, and
+ *  the settle step's claw-back of a reversed pack (`revoke`, pack bucket, the payment intent, no key, no package).
+ *  stream-credit-ledger-writers.test.ts (W3) holds its inserts to these three sites (function + needle, the two fields that
  *  test reads) exactly as it holds stream-credits.ts to the nine. They are NOT in LEDGER_WRITER_SITES yet, because the
- *  organiser's history does not name a package row until Online Chess Task 10: that task owes moving both into
- *  LEDGER_WRITER_SITES with their full shape and history kinds (the nine-count pins become eleven) and driving them in
- *  stream-credit-history.test.ts's matrix. */
+ *  organiser's history does not name a package row until Online Chess Task 10: that task owes moving all three into
+ *  LEDGER_WRITER_SITES with their full shape and history kinds (the nine-count pins become twelve) and driving them in
+ *  stream-credit-history.test.ts's matrix. Until then a settle row (a revoke with no staff author and no
+ *  `stream_pack_refund:` key) reads as `other` in the history. */
 export const PACKAGE_WRITER_FILE = "server/usecases/online-package/ledger.ts";
 export const PACKAGE_LEDGER_WRITER_SITES: readonly Pick<LedgerWriterSite, "fn" | "needle">[] = [
   { fn: "debitForPackage", needle: "'consume'" },
   { fn: "refundForPackage", needle: "'refund'" },
+  { fn: "revokeForReversal", needle: "'revoke'" },
 ];
 
 // ---------------------------------------------------------------------------------------------------------------------

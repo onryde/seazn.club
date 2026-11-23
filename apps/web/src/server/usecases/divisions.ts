@@ -64,6 +64,7 @@ import { normalizeTags } from "./venues";
 import {
   applyOnlinePlayToConfig,
   assertOnlinePlayValue,
+  divisionPlaysOnline,
   readOnlinePlay,
   withoutDivisionMetaKeys,
 } from "@/server/external-play/online-play";
@@ -81,6 +82,17 @@ import { assertTimeControl } from "@/server/external-play/time-controls";
 import type { BoardgameClockInput } from "@/server/external-play/clock";
 import { assertOnlinePlayFits, countOnlineHeld, openOnlineCapGuard, readPlanLimit } from "@/server/external-play/online-entrant-cap";
 import { assertOnlineChessOffered, onlineChessDisabled, onlineChessOffered } from "./external-play/online-chess-flag";
+import {
+  applyOnlineSave,
+  applyPackageDelete,
+  decideOnlineSize,
+  planPackageDelete,
+  prepareOnlineSave,
+  writeOnlineSize,
+  type OnlineSavePrelude,
+  type PackageDeletePlan,
+} from "./online-package";
+import type { OnlineSize } from "@/lib/online-chess-package";
 import { audit } from "./audit";
 
 export interface DivisionRow {
@@ -279,9 +291,16 @@ export async function createDivision(
   // T20: a division created online STARTS online play, so the club must be offered it (the PostHog flag
   // `online-chess`). Asked only when online play is asked for, and out here for the same reason as the reads above:
   // it is a remote call, never made while a tenant transaction holds a pooled connection.
-  if ((input.config as Record<string, unknown> | undefined)?.onlinePlay === "lichess") {
+  const onlineAsked = (input.config as Record<string, unknown> | undefined)?.onlinePlay === "lichess";
+  if (onlineAsked) {
     await assertOnlineChessOffered(auth);
   }
+  // Online Chess (spec 2026-11-23 §7.1, P14, P17): a division created online gets its unpaid package row, at the size the
+  // request names (judged against the plan's per-division cap, read out here for the same pooled-connection reason) or at 16.
+  // The row is sealed, so it is written in the privileged epilogue; the size is judged in the tenant callback.
+  const onlinePlanCap =
+    onlineAsked && input.online_size !== undefined ? await getLimit(auth.orgId, "entrants.per_division.max", competitionId) : null;
+  let onlineSize: OnlineSize | null = null;
 
   const row = await withTenant(auth.orgId, async (tx) => {
     const [comp] = await tx`select 1 from competitions where id = ${competitionId}`;
@@ -410,22 +429,37 @@ export async function createDivision(
       if (dupe) {
         throw new HttpError(409, `slug '${input.slug}' is already in use in this competition`);
       }
-      return insert(input.slug, tx);
     }
-    return withUniqueSlug(
-      tx,
-      {
-        base: slugify(input.name),
-        constraint: SLUG_CONSTRAINT.divisions,
-        taken: async (s) => {
-          const [taken] = await tx`
-            select 1 from divisions where competition_id = ${competitionId} and slug = ${s}`;
-          return !!taken;
-        },
-      },
-      insert,
-    );
-  });
+    const created = input.slug
+      ? await insert(input.slug, tx)
+      : await withUniqueSlug(
+          tx,
+          {
+            base: slugify(input.name),
+            constraint: SLUG_CONSTRAINT.divisions,
+            taken: async (s) => {
+              const [taken] = await tx`
+                select 1 from divisions where competition_id = ${competitionId} and slug = ${s}`;
+              return !!taken;
+            },
+          },
+          insert,
+        );
+    onlineSize = await decideOnlineSize(tx, {
+      divisionId: created.id,
+      onlineBefore: false,
+      onlineAfter: divisionPlaysOnline(created),
+      requested: input.online_size,
+      planCap: onlinePlanCap,
+    });
+    return created;
+  }, onlineAsked || input.online_size !== undefined ? {
+    privilegedEpilogue: async (etx, created) => {
+      if (onlineSize !== null) {
+        await writeOnlineSize(etx, { orgId: auth.orgId, divisionId: created.id, divisionName: created.name, size: onlineSize });
+      }
+    },
+  } : {});
   await expireCompetitionShell(auth.orgId, { competitionId, divisionId: row.id });
   // Activation funnel (feature 1): step after competition_created.
   await fireDivisionCreated(auth, input.sport_key, competitionId);
@@ -500,6 +534,11 @@ async function assertRegistrationClosed(
  * over-quota freeze.
  */
 export async function deleteDivision(auth: AuthCtx, id: string): Promise<void> {
+  // Online Chess (spec 2026-11-23 §7.3): the division's package goes with it — paid and unfrozen is refunded in full, unpaid
+  // is deleted, frozen is left. Planned in the privileged prelude, BEFORE the delete sets its `division_id` to null, under the
+  // `division:` lock and the money lock; applied in the privileged epilogue by the ids read here, so the refund commits or
+  // rolls back with the delete. Never flag-gated.
+  let packages: PackageDeletePlan | null = null;
   const deleted = await withTenant(auth.orgId, async (tx) => {
     const [division] = await tx<DeleteTarget[]>`
       select id, competition_id, name, slug, sport_key, status, archived_at
@@ -591,6 +630,13 @@ export async function deleteDivision(auth: AuthCtx, id: string): Promise<void> {
     );
     await tx`delete from divisions where id = ${id}`;
     return division;
+  }, {
+    privilegedPrelude: async (ptx) => {
+      packages = await planPackageDelete(ptx, { orgId: auth.orgId, divisionIds: [id] });
+    },
+    privilegedEpilogue: async (etx) => {
+      await applyPackageDelete(etx, auth.orgId, packages!);
+    },
   });
   // A purge removes a division the shell stopped listing when it was archived.
   if (deleted.archived_at === null) {
@@ -805,8 +851,21 @@ export async function patchDivision(
       : null;
   // The online switch judges the places held against min(plan cap, 256) (cap-256 review m1): the plan's limit is an entitlement
   // read, asked out here like the flag above and only when the patch names 'lichess'. undefined for a sport that cannot play online.
+  // Online Chess (spec 2026-11-23 §7.1, §7.3): a size the patch names is judged against the same plan limit, read here too.
   const onlineCapGuard =
-    (patch.config as Record<string, unknown> | undefined)?.onlinePlay === "lichess" ? await openOnlineCapGuard(id) : undefined;
+    (patch.config as Record<string, unknown> | undefined)?.onlinePlay === "lichess" || patch.online_size !== undefined
+      ? await openOnlineCapGuard(id)
+      : undefined;
+  // Online Chess (spec 2026-11-23 §7.1, §7.3, §7.4): a save that names online play or a size carries the division's package
+  // with it — turned on, an unpaid row (at the size named, else the smallest that holds the places held); turned off, the row
+  // refunded (paid), deleted (unpaid) or left (frozen); a size named, an unpaid row moved. Read and locked in the privileged
+  // prelude (`division:` lock, then the money lock when there is money to return), judged in the tenant callback, written in
+  // the privileged epilogue: the package table is sealed. A save that names neither touches no package. Never flag-gated.
+  const onlinePatch = patch.config as Record<string, unknown> | undefined;
+  const onlineNamed = (onlinePatch !== undefined && "onlinePlay" in onlinePatch) || patch.online_size !== undefined;
+  const turnsOnlineOff = onlinePatch !== undefined && "onlinePlay" in onlinePatch && onlinePatch.onlinePlay !== "lichess";
+  let onlinePrelude: OnlineSavePrelude | null = null;
+  let onlineSize: OnlineSize | null = null;
   // T6 / D9: the camera requirement. Validated before anything is read. The
   // round-open question is asked INSIDE the write's own transaction (review
   // M9, fix round 1), in withTenant's privileged prelude: stage_round_opens is
@@ -868,6 +927,8 @@ export async function patchDivision(
     // undefined when the save writes no format.
     let rulesBefore: UnfrozenRules | undefined;
     const effective: Record<string, unknown> = { ...patch };
+    // Not a column: the package row's (the epilogue below).
+    delete effective.online_size;
     // Batch 4 re-review N1: ONE lock order everywhere — the division advisory lock FIRST, then any row lock on `divisions`.
     // The stage writers (`insertStageBatch`, which `createStages` and `replaceStages` share) take the advisory lock and
     // only then reopen a completed division (`update divisions`, a row lock); this save used to read the row `for no key
@@ -1453,8 +1514,36 @@ export async function patchDivision(
     // W2c Task 15 fix round 1 (I-1): every unstarted match whose format this save moved gets a new version, so a pad open
     // on it before the save is refused on its first tap (409 FIXTURE_RULES_CHANGED) and reloads the format it will play.
     if (rulesBefore !== undefined) await bumpMovedRules(tx, rulesBefore);
+    if (onlineNamed) {
+      // Judged on the division as written (a refused or re-sent onlinePlay lands as stored), under the prelude's lock.
+      const onlineAfter = divisionPlaysOnline(written);
+      onlineSize = await decideOnlineSize(tx, {
+        divisionId: id,
+        onlineBefore: onlinePrelude!.storedOnline,
+        onlineAfter,
+        requested: patch.online_size,
+        // Fails closed (readPlanLimit): asked only of a size named for a division that plays online, whose guard was read.
+        planCap: patch.online_size !== undefined && onlineAfter ? readPlanLimit(onlineCapGuard) : null,
+      });
+    }
     return written;
-  }, cameraPolicyNamed ? { privilegedPrelude: cameraGate } : {}).catch((err: unknown) => {
+  }, {
+    ...(cameraPolicyNamed || onlineNamed
+      ? {
+          privilegedPrelude: async (ptx: Tx) => {
+            if (cameraPolicyNamed) await cameraGate(ptx);
+            if (onlineNamed) onlinePrelude = await prepareOnlineSave(ptx, { orgId: auth.orgId, divisionId: id, turnsOff: turnsOnlineOff });
+          },
+        }
+      : {}),
+    ...(onlineNamed
+      ? {
+          privilegedEpilogue: async (etx: Tx, written: DivisionRow) => {
+            await applyOnlineSave(etx, { orgId: auth.orgId, division: written, prelude: onlinePrelude!, size: onlineSize });
+          },
+        }
+      : {}),
+  }).catch((err: unknown) => {
     // Race backstop for the AGE BAND — READ COMMITTED means two concurrent
     // PATCHes can each pass the merge-and-validate guard above against a
     // stale read, then both write; whichever commits second still hits

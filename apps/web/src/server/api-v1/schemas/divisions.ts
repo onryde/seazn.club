@@ -15,6 +15,7 @@ import { z } from "zod";
 import { isValidCutoffDay, REASON_MIN, REASON_MAX } from "../../../lib/registration-rules.ts";
 import { CAMERA_POLICIES } from "../../../lib/camera-policy.ts";
 import { Slug, DivisionStatus, RequiredCourtTags, Uuid } from "./common.ts";
+import { OnlineSizeS } from "./online-package.ts";
 
 // ---------------------------------------------------------------------------
 // Divisions
@@ -172,6 +173,11 @@ export const CreateDivision = z
      *  (NOT NULL, default 'off'); a stage may override it. Board games only —
      *  any other sport refuses 'optional'/'required' (422 CAMERA_POLICY_SPORT). */
     camera_policy: CameraPolicyS.nullable().optional(),
+    /** Online Chess (spec 2026-11-23 §7.1): the package size of a division created online (`config.onlinePlay: "lichess"`).
+     *  Absent ⇒ 16. Unpaid until the organiser pays for it; a size below the places held, above the plan, or under the
+     *  Swiss rounds is refused with the package's own codes. Named for a division that does not play online: 422
+     *  ONLINE_FORMAT_NOT_SUPPORTED. */
+    online_size: OnlineSizeS.optional(),
   })
   .superRefine(checkAgeBand)
   .superRefine(checkAgeCutoff);
@@ -247,6 +253,11 @@ export const PatchDivision = z
      *  a `chess.camera_policy_changed` competition_events row. A re-send of
      *  the stored value is a no-op. */
     camera_policy: CameraPolicyS.nullable(),
+    /** Online Chess (spec 2026-11-23 §7.1, §7.4): move the division's UNPAID package to this size (a re-send of the stored size
+     *  is a no-op). A paid size changes only through POST /divisions/{id}/online-package (409 `online_size_paid`); a frozen one
+     *  never (409 `online_size_frozen`). Turning online play on without it opens the package at the smallest size that holds
+     *  the places held; turning online play off refunds a paid package, deletes an unpaid one and leaves a frozen one. */
+    online_size: OnlineSizeS,
   })
   .partial()
   .refine((p) => Object.keys(p).length > 0, "empty patch")

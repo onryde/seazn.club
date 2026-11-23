@@ -41,6 +41,7 @@ import { lockOrg, streamMonthlyRate } from "@/server/usecases/stream-credits";
 import { debitForPackage, refundForPackage } from "./ledger";
 import { quoteLocked, readPackageFacts, type PackageQuote } from "./quote";
 import { livePackage } from "./read";
+import { settleReversals } from "./settle";
 import type { PackageFacts, PackageRow } from "./types";
 
 /** What the organiser confirmed: a size, the total the receipt showed (positive to pay, negative to return), and at most the one
@@ -52,8 +53,8 @@ export type PayInput = { size: OnlineSize; expectedOwed: number; addCameras?: bo
  *  under the locks, before the write). `capacityLoweredTo`: the size, when a stored registration capacity above it was lowered. */
 export type PayResult = { applied: boolean; quote: PackageQuote; package: PackageRow; capacityLoweredTo: number | null };
 
-/** The settle step of §7.5 (Task 6's `settleReversals`): re-runs the netted attribution of the org's reversed packs after a
- *  return, on the caller's transaction and under its money lock. Injected so this task lands before Task 6 builds it. */
+/** The settle step of §7.5: re-runs the netted attribution of the org's reversed packs after a return, on the caller's
+ *  transaction and under its money lock. `settleReversals` unless a test injects another (to watch it run, or make it fail). */
 export type PayDeps = { settle?: (tx: Tx, orgId: string) => Promise<number> };
 
 /** The money facts read BEFORE the transaction (lib/db.ts forbids a pooled read inside one): the org's plan rate
@@ -61,9 +62,6 @@ export type PayDeps = { settle?: (tx: Tx, orgId: string) => Promise<number> };
  *  owes credits. */
 export type PayMoney = { rate: number; beforeCharge?: () => void };
 
-/** Until Task 6 wires `settleReversals` here, a move down settles nothing: no reversal marker is written before Task 6 either
- *  (the claw-back change is Task 6's), so there is nothing to settle. Task 6 replaces this default. */
-const SETTLE_NOTHING_YET: NonNullable<PayDeps["settle"]> = async () => 0;
 
 /** 409 ONLINE_QUOTE_CHANGED with the fresh quote. One code for both ways the confirmed receipt went stale, and a message for
  *  each: the fresh quote REFUSES the size (its total may be unchanged, so "the total changed" would be false), or it no longer
@@ -81,7 +79,7 @@ function quoteChanged(quote: PackageQuote): HttpError {
 
 /** 422 ONLINE_FORMAT_NOT_SUPPORTED (plan Global Constraints, carrying `kind`): the division does not play online at all
  *  (`kind` null), or it holds a stage kind online play does not allow (P16). */
-function formatNotSupported(kind: string | null): HttpError {
+export function formatNotSupported(kind: string | null): HttpError {
   return new HttpError(
     422,
     kind === null ? "This division does not play online" : `Online Chess does not run a ${kind} stage`,
@@ -117,7 +115,7 @@ async function assertBooks(tx: Tx, row: PackageRow): Promise<void> {
 /** A stored registration capacity above the new size is lowered to it (§7.4 item 2, §11): the size is the entrant limit, and a
  *  capacity above it would promise places the division cannot hold. None stored (null) stays none. Answers the size when it
  *  lowered one. */
-async function clampCapacity(tx: Tx, divisionId: string, size: OnlineSize): Promise<number | null> {
+export async function clampCapacity(tx: Tx, divisionId: string, size: OnlineSize): Promise<number | null> {
   const lowered = await tx`
     update registration_settings set capacity = ${size}, updated_at = now()
      where division_id = ${divisionId} and capacity > ${size}
@@ -199,7 +197,8 @@ export async function payOnlinePackageInTx(
   await assertBooks(tx, after);
 
   const capacityLoweredTo = await clampCapacity(tx, a.divisionId, a.size);
-  if (quote.owed < 0) await (deps.settle ?? SETTLE_NOTHING_YET)(tx, a.orgId);
+  // The settle step (§7.5) on EVERY move down, the route's and Task 9's pay-and-open alike: the default is the real one.
+  if (quote.owed < 0) await (deps.settle ?? settleReversals)(tx, a.orgId);
   return { applied: true, quote, package: after, capacityLoweredTo };
 }
 

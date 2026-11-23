@@ -11,6 +11,7 @@ import { captureServer } from "@/lib/posthog-server";
 import { EVENTS, type AnalyticsEvent } from "@/lib/analytics-events";
 import { FIXTURE_DELETED_REASON } from "@/server/email-outbox/cancel";
 import { cancelBoardInvites } from "./external-play/cancel-invites";
+import { applyPackageDelete, planPackageDelete, type PackageDeletePlan } from "./online-package";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { page, type ListQuery, type Page } from "@/server/api-v1/http";
 import { CompetitionStatus, ENDS_BEFORE_STARTS, type CreateCompetition, type PatchCompetition, type PublicQuotaDegraded } from "@/server/api-v1/schemas";
@@ -902,6 +903,11 @@ export async function patchCompetition(
 }
 
 export async function deleteCompetition(auth: AuthCtx, id: string): Promise<void> {
+  // Online Chess (spec 2026-11-23 §7.3): every division's package goes with the competition — paid and unfrozen is refunded in
+  // full, unpaid is deleted, frozen is left. Planned in the privileged prelude BEFORE the cascade sets their `division_id` to
+  // null (the divisions read org-scoped, their `division:` locks in ascending id, then the money lock), applied in the
+  // privileged epilogue by the ids read there, so the refunds commit or roll back with the delete. Never flag-gated.
+  let packages: PackageDeletePlan | null = null;
   const gone = await withTenant(auth.orgId, async (tx) => {
     // Guard: no deleting a competition with recorded play (ledger is precious).
     const [scored] = await tx`
@@ -1001,6 +1007,15 @@ export async function deleteCompetition(auth: AuthCtx, id: string): Promise<void
     // outbox rows first would be the reverse order. Here the delete already holds the bridge rows when the cancel reaches the outbox.
     await cancelBoardInvites(tx, boards.map((b) => b.id), FIXTURE_DELETED_REASON);
     return deleted;
+  }, {
+    privilegedPrelude: async (ptx) => {
+      const divisions = await ptx<{ id: string }[]>`
+        select id from divisions where competition_id = ${id} and org_id = ${auth.orgId}`;
+      packages = await planPackageDelete(ptx, { orgId: auth.orgId, divisionIds: divisions.map((d) => d.id) });
+    },
+    privilegedEpilogue: async (etx) => {
+      await applyPackageDelete(etx, auth.orgId, packages!);
+    },
   });
   // Public hub perf T2: a deleted competition must stop answering the polled
   // public readers' cached slug lookup (`findCompetitionRef`, usecases/public.ts)

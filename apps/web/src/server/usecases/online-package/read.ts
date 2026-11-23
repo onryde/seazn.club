@@ -40,7 +40,26 @@ export async function livePackage(db: Tx | typeof sql, divisionId: string, opts:
       from division_online_packages
      where division_id = ${divisionId} and refunded_at is null
      ${opts.forUpdate ? db`for update` : db``}`;
-  if (!r) return null;
+  return r ? toPackageRow(r) : null;
+}
+
+/** One package row by its OWN id (spec §7.3: a door that takes a division away addresses its package by the id it read before
+ *  the delete, because the delete sets `division_id` to null). Live only (`refunded_at` null) unless `includeRefunded`, so a
+ *  refund can tell "already refunded" from "not there". `forUpdate` is `livePackage`'s third lock, on the privileged pool. */
+export async function livePackageById(
+  db: Tx | typeof sql, id: string, opts: { forUpdate?: boolean; includeRefunded?: boolean } = {},
+): Promise<PackageRow | null> {
+  const [r] = await db<RawPackageRow[]>`
+    select id, org_id, division_id, division_name, size, cameras_paid, credits_paid, credits_refunded, credits_forfeited,
+           paid_at, paid_by, frozen_at, refunded_at, created_at
+      from division_online_packages
+     where id = ${id} ${opts.includeRefunded ? db`` : db`and refunded_at is null`}
+     ${opts.forUpdate ? db`for update` : db``}`;
+  return r ? toPackageRow(r) : null;
+}
+
+/** A raw row as the doors read it, its size ASSERTED on the ladder first. */
+function toPackageRow(r: RawPackageRow): PackageRow {
   if (!isOnlineSize(r.size)) {
     throw new HttpError(500, `Online Chess package ${r.id} holds size ${r.size}, which is not on the ladder; refusing to price it`, "online_package_size_invalid");
   }

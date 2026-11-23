@@ -78,7 +78,7 @@ export function lastDayOfUtcMonth(now: Date): string {
 
 /** The first refusal that holds for `size`, in ONE order: frozen, below_held, plan, rounds_above_max, rounds. A caller that must
  *  judge the places and rounds without the plan passes `planCap: null` (the plan allows every size). */
-function refusalFor(size: OnlineSize, facts: PackageFacts, frozen: boolean): PackageQuote["refusal"] {
+export function refusalFor(size: OnlineSize, facts: PackageFacts, frozen: boolean): PackageQuote["refusal"] {
   if (frozen) return "frozen";
   if (size < facts.held) return "below_held";
   if (!sizeAllowedByPlan(size, facts.planCap)) return "plan";
@@ -107,7 +107,7 @@ async function projectedSplit(tx: Tx, orgId: string, rate: number, now: Date): P
  *  this month, then an earlier month's, which are forfeited. The row's `credits_forfeited` is netted out of the earlier months
  *  first: the ledger keeps the consume rows of credits a previous move down already forfeited, and they are not forfeited twice.
  *  A row that has forfeited more than the ledger shows expired is refused by name (no forfeit can come from this month's credits). */
-async function backFor(tx: Tx, row: PackageRow, credits: number): Promise<ReturnPlan> {
+export async function backFor(tx: Tx, row: PackageRow, credits: number): Promise<ReturnPlan> {
   const can = await returnableFor(tx, { orgId: row.orgId, packageId: row.id });
   if (row.creditsForfeited > can.monthlyExpired) {
     throw new HttpError(

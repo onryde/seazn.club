@@ -32,7 +32,8 @@ export const OnlinePackagePayInput = z
     size: OnlineSizeS,
     expectedOwed: z.number().int().min(-ONLINE_MAX_OWED).max(ONLINE_MAX_OWED).meta({ examples: [2] }),
     addCameras: z.boolean().optional(),
-    expectedForfeited: z.number().int().min(0).optional(),
+    /** A forfeit is included credits a package held, so never more than its price: bounded by the dearest one, as `owed` is. */
+    expectedForfeited: z.number().int().min(0).max(ONLINE_MAX_OWED).optional().meta({ examples: [1] }),
   })
   .strict();
 export type OnlinePackagePayInput = z.infer<typeof OnlinePackagePayInput>;

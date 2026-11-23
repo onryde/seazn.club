@@ -1,10 +1,12 @@
 // withTenant's privilegedEpilogue (lib/db.ts; MD-1 batch 2 fix round 2, N1, the controller's ruling) resets the role to the
-// pool's for the rest of the transaction, so a write it makes bypasses every RLS policy. One caller is allowed: the Match
+// pool's for the rest of the transaction, so a write it makes bypasses every RLS policy. Three callers are allowed: the Match
 // Day code's open, which logs each link it hands out in the sealed `match_day_code_uses` in the link's own transaction
-// (capture S4 design §3). Claims, as enc-boundary.test.ts does for the sealed columns:
-//  1. outside __tests__ and lib/db.ts (which defines it), the open's file is the ONLY file naming `privilegedEpilogue`;
-//  2. and it does (the positive half: an allowed owner that stopped using it leaves this list stale, which an empty
-//     scan cannot see).
+// (capture S4 design §3); and the division and competition doors, which carry a division's sealed Online Chess package with
+// the tenant write (Online Chess spec 2026-11-23 §7.3; plan Task 6). Claims, as enc-boundary.test.ts does for the sealed columns:
+//  1. outside __tests__ and lib/db.ts (which defines it), the allow-listed files are the ONLY files naming `privilegedEpilogue`;
+//  2. and each does (the positive half: an allowed owner that stopped using it leaves this list stale, which an empty
+//     scan cannot see);
+//  3. and the claim refuses an unnamed file (the judge run over a tree with one more caller than the list).
 // A new caller is a security decision: add it here, with its reason, in the same review.
 // Pure (no DB); runs in every CI job. Same glob discipline as enc-boundary.test.ts.
 import { describe, expect, it } from "vitest";
@@ -28,7 +30,17 @@ const DEFINER = "lib/db.ts";
 /** The allow-list: each file allowed to use the epilogue, and why. */
 const ALLOWED: Record<string, string> = {
   "server/usecases/match-day-code-open.ts": "the open's match_day_code_uses row, in the link's own transaction (spec §3)",
+  "server/usecases/divisions.ts":
+    "the Online Chess package a division create, save or delete carries: the unpaid row and its size, the full refund, the unpaid row deleted (spec 2026-11-23 §7.3)",
+  "server/usecases/competitions.ts":
+    "the Online Chess packages a competition delete carries: each paid one refunded, each unpaid one deleted (spec 2026-11-23 §7.3)",
 };
+
+/** The files naming the epilogue outside the definer, given a tree and a reader: the one judgement both the real scan and the
+ *  refusal case below make. */
+function naming(files: string[], read: (f: string) => string): string[] {
+  return files.filter((f) => f !== DEFINER && read(f).includes("privilegedEpilogue")).sort();
+}
 
 describe("privilegedEpilogue is used only by its allow-listed callers", () => {
   const files = walk(SRC)
@@ -41,8 +53,19 @@ describe("privilegedEpilogue is used only by its allow-listed callers", () => {
     expect(readFileSync(join(SRC, DEFINER), "utf8")).toContain("privilegedEpilogue");
   });
 
-  it("no file outside the allow-list names privilegedEpilogue", () => {
-    const naming = files.filter((f) => f !== DEFINER && readFileSync(join(SRC, f), "utf8").includes("privilegedEpilogue"));
-    expect(naming.sort()).toEqual(Object.keys(ALLOWED).sort());
+  it("no file outside the allow-list names privilegedEpilogue, and every allow-listed file does", () => {
+    const named = naming(files, (f) => readFileSync(join(SRC, f), "utf8"));
+    expect(Object.keys(ALLOWED)).toHaveLength(3);
+    expect(named).toEqual(Object.keys(ALLOWED).sort());
+  });
+
+  it("the epilogue allow-list names divisions.ts and competitions.ts and fails for an unnamed file", () => {
+    expect(Object.keys(ALLOWED)).toEqual(expect.arrayContaining(["server/usecases/divisions.ts", "server/usecases/competitions.ts"]));
+    // The real tree, plus one file that names the epilogue and is on no list: the judgement must see it.
+    const intruder = "server/usecases/an-unlisted-door.ts";
+    const read = (f: string) => (f === intruder ? "await withTenant(org, fn, { privilegedEpilogue: write });" : readFileSync(join(SRC, f), "utf8"));
+    const named = naming([...files, intruder], read);
+    expect(named).toContain(intruder);
+    expect(named).not.toEqual(Object.keys(ALLOWED).sort());
   });
 });

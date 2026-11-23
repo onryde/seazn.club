@@ -6,7 +6,7 @@
 //      row by its shape, so a tenth writer (or a renamed one) must fail HERE, by name, before it can ship a row the
 //      classifier labels wrongly. The sites are held to `LEDGER_WRITER_SITES` (_ledger-writer-sites.ts — an oracle typed from
 //      the writers' contract) in both directions, and no other production file may write the table at all — save the Online
-//      Chess package writer (online-package/ledger.ts), whose inserts are held to its own two sites the same way
+//      Chess package writer (online-package/ledger.ts), whose inserts are held to its own three sites the same way
 //      (`PACKAGE_LEDGER_WRITER_SITES`), until Online Chess Task 10 folds them into the registry with their history kinds.
 //   2. WHAT "Refund: camera never connected" MEANS. The label is read off a refund row with no author and a session — a shape
 //      the classifier cannot tell from any other author-less refund. It is honest because exactly ONE thing in production
@@ -188,7 +188,7 @@ describe("the nine ledger writers", () => {
     }
   });
 
-  it("no other production file writes the table — insert, update, delete, truncate, merge or copy (W3); the Online Chess package writer inserts at exactly its two sites (W3b)", () => {
+  it("no other production file writes the table — insert, update, delete, truncate, merge or copy (W3); the Online Chess package writer inserts at exactly its three sites (W3b)", () => {
     const files = productionSourceFiles();
     expect(files.length, "the scan walked the source tree").toBeGreaterThan(200);
     expect(files, "…and it included the writer").toContain(WRITER_FILE);
@@ -209,7 +209,7 @@ describe("the nine ledger writers", () => {
     const site = (s: { fn: string; needle: string }) => `${s.fn}() ${s.needle}`;
     const judged = pkg.map((w) => `${w.verb} = ${PACKAGE_LEDGER_WRITER_SITES.filter((s) => s.fn === w.fn && w.raw.includes(s.needle)).map(site).join(" & ") || `no site (${w.fn}())`}`);
     expect(judged.sort()).toEqual(PACKAGE_LEDGER_WRITER_SITES.map((s) => `insert into = ${site(s)}`).sort());
-    expect(PACKAGE_LEDGER_WRITER_SITES).toHaveLength(2);
+    expect(PACKAGE_LEDGER_WRITER_SITES).toHaveLength(3);
   });
 
   it("every history kind but `other` is some writer's, and every writer's kinds are real — no kind is orphaned, none invented", () => {

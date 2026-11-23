@@ -59,9 +59,11 @@ import {
   streamMonthlyRate,
 } from "@/server/usecases/stream-credits";
 import {
-  debitForPackage, onlinePackageQuote, payOnlinePackage, payOnlinePackageInTx, readPackageFacts, refundForPackage,
+  debitForPackage, onlinePackageQuote, payOnlinePackage, payOnlinePackageInTx, readPackageFacts,
   type PackageQuote, type PayDeps, type PayInput, type PayResult,
 } from "@/server/usecases/online-package";
+import { patchDivision } from "@/server/usecases/divisions";
+import { seedBoardgameSport } from "@/server/usecases/__tests__/_external-play-seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -300,24 +302,25 @@ async function seedStage(r: Rig, kind: string, config: unknown): Promise<string>
   return s!.id;
 }
 
-/** Task 6's full refund, as it will write it (the real return writer, then the row in ONE statement), and the fresh unpaid row
- *  switching online play on again writes: what "pay after a refund" meets. */
+/** Online play switched OFF and back ON through the REAL save door (`patchDivision`, Task 6): the off refunds the paid package in
+ *  full in the save's privileged epilogue, and the on writes a fresh unpaid row at P14's default (the smallest size that holds
+ *  the places held). What "pay after a refund" meets. The raw-seeded division is first given a curated clock and the catalogue's
+ *  boardgame rows, so the save door can parse it (the online switch demands a curated clock). */
 async function fullRefundAndReopen(r: Rig, size: OnlineSize): Promise<string> {
   const before = await packageRow(r.packageId);
-  await inTx(async (tx) => {
-    const [can] = await tx<{ pack: number; monthly: number }[]>`
-      select coalesce(sum(delta) filter (where bucket = 'pack'), 0)::int * -1 as pack,
-             coalesce(sum(delta) filter (where bucket = 'monthly'), 0)::int * -1 as monthly
-        from org_stream_credits where online_package_id = ${r.packageId}`;
-    await refundForPackage(tx, { orgId: r.orgId, packageId: r.packageId, pack: can!.pack, monthly: can!.monthly });
-    await tx`
-      update division_online_packages
-         set refunded_at = now(), credits_refunded = credits_refunded + ${can!.pack + can!.monthly}
-       where id = ${r.packageId}`;
-  });
-  expect((await packageRow(r.packageId)).credits_refunded, "premise: the refund returned what was paid").toBe(before.credits_paid - before.credits_forfeited);
-  const fresh = await seedPackage(r.orgId, { id: r.divisionId, name: r.divisionName }, size);
-  return fresh;
+  await seedBoardgameSport();
+  const clock = { base: 600, increment: 5 };
+  await sql`update divisions set config = ${sql.json({ variant: "classical", onlinePlay: "lichess", clock } as never)} where id = ${r.divisionId}`;
+  await patchDivision(r.auth, r.divisionId, { config: { variant: "classical", onlinePlay: "off", clock } });
+  const refunded = await packageRow(r.packageId);
+  expect(refunded.refunded_at, "premise: switching off refunded the package").not.toBeNull();
+  expect(refunded.credits_refunded + refunded.credits_forfeited, "premise: the refund returned what was paid").toBe(before.credits_paid);
+  await patchDivision(r.auth, r.divisionId, { config: { variant: "classical", onlinePlay: "lichess", clock } });
+  const [fresh] = await sql<{ id: string; size: number }[]>`
+    select id, size from division_online_packages where division_id = ${r.divisionId} and refunded_at is null`;
+  expect(fresh, "premise: switching on again wrote one unpaid row").toBeDefined();
+  expect(fresh!.size, `premise: the default size is the case's ${size}`).toBe(size);
+  return fresh!.id;
 }
 
 // ─── First payment ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -757,7 +760,8 @@ describe.skipIf(!HAS_DB)("payOnlinePackage: upgrade, add cameras, move down", ()
     expect((err.extra as { quote: PackageQuote }).quote.refusal, "20 held, down to 16").toBe("below_held");
     expect(await packageRow(r.packageId)).toMatchObject({ size: 32, credits_refunded: 4 });
     steps += 1;
-    // Task 6's full refund, then online play on again: a new unpaid row, paid at the full price; the refunded row is history.
+    // Online play off (Task 6's full refund, through the real save door), then on again: a new unpaid row at the default for
+    // the 20 places held (32), paid at the full price; the refunded row is history.
     const old = r.packageId;
     const fresh = await fullRefundAndReopen(r, 32);
     const again = await payOnlinePackage(r.auth, r.divisionId, { size: 32, expectedOwed: (await quote(r, 32)).owed });
