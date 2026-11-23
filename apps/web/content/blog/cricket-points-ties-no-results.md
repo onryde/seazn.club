@@ -18,17 +18,17 @@ Each team gets **{{fact:cricket-points.tieEach}}** for a tie and **{{fact:cricke
 
 Each row is one way a match can end, played out as a real match. A **tie** means both sides finished on the same score. A **no result** means the match was abandoned before it could be decided, for example by rain. In both, nobody wins, so both teams are paid the same.
 
-A tie can be turned into a win. When the stage plays a super over on a tie, the winner of the super over wins the match: they get {{fact:cricket-points.superOverWinner}} and the other side gets {{fact:cricket-points.superOverLoser}}, and the table no longer holds a tie at all. The rules editor also lets you choose what happens if the super over is tied as well: another super over, most boundaries wins, or leave it as a tie.
+A tie can be turned into a win. When the stage plays a super over on a tie, the winner of the super over wins the match: they get {{fact:cricket-points.superOverWinner}} and the other side gets {{fact:cricket-points.superOverLoser}}, and that match is booked as a win and a loss, not a tie. With the super over off, the scorer's pad ends a tied match as tied straight away. The rules editor also lets you choose what happens if the super over is tied as well: another super over (the scorer's pad plays one when the setting is left alone), most boundaries wins, or leave it as a tie, which pays each side {{fact:cricket-points.tieEach}}.
 
 ## A washed-out match
 
-Rain does not always make a no result. The rules editor has a setting for the fewest overs the chasing side must face before DLS, the Duckworth-Lewis-Stern method, can decide an abandoned match. In the editor's own words, fewer is a no result. A match that ends as a no result pays each side {{fact:cricket-points.noResultEach}}.
+Rain makes a no result unless DLS can decide the match. DLS, the Duckworth-Lewis-Stern method, revises the target of an interrupted match. It stays off unless the organiser switches it on in the rules editor, so by default an abandoned limited-overs match is a no result. With DLS on, a second setting applies: the fewest overs the chasing side must face before DLS can decide an abandoned match, and in the editor's own words, fewer is a no result. Either way, a match that ends as a no result pays each side {{fact:cricket-points.noResultEach}}.
 
 ## What changes from format to format
 
 - **The limited-overs formats.** {{fact:cricket-points.limitedOversList}} all pay the same: a win {{fact:cricket-points.winWinner}}, a tie {{fact:cricket-points.tieEach}} each, no result {{fact:cricket-points.noResultEach}} each.
 - **Test match.** A win pays {{fact:cricket-points.testWinWinner}} to {{fact:cricket-points.testWinLoser}}. A Test is the one format that can end in a draw, and a draw pays each side {{fact:cricket-points.testDrawEach}}. A tie pays {{fact:cricket-points.testTieEach}} each. A Test that is abandoned is booked as a draw, so it pays {{fact:cricket-points.testAbandonedEach}} each, not as a no result.
-- **Every other sport.** Cricket is the only one of the {{fact:cricket-points.sportCount}} sports whose league rules have a result called a tie or a no result. Football, ice hockey, hockey, chess, carrom, a generic division, volleyball, badminton, table tennis and tennis have neither. Where one of them allows a level match it is booked as a draw, and [how standings points work in each sport](/blog/how-standings-points-work) lists what each pays for it.
+- **Every other sport.** Cricket is the only one of the {{fact:cricket-points.sportCount}} sports whose league rules have a result called a tie or a no result. {{fact:cricket-points.withoutTieOrNoResultList}} have neither. Where one of them allows a level match it is booked as a draw, and [how standings points work in each sport](/blog/how-standings-points-work) lists what each pays for it. (An online chess board in a league that the organiser marks as No result is voided, and no points go to either player.)
 
 ## Where you set it
 

@@ -23,7 +23,7 @@ Neither count is wrong. They answer different questions: the half-point count re
 ## What changes from sport to sport
 
 - **Chess.** A chess league offers {{fact:chess-points.leaguePresets}} presets, the half-point count and the football-style count. A Swiss tournament offers {{fact:chess-points.swissPresets}}, the half-point count.
-- **Every other sport.** Only {{fact:chess-points.halfPointSports}} of the {{fact:chess-points.sportCount}} sports, chess, counts in half points. Football, cricket, ice hockey, hockey, carrom, a generic division, volleyball, badminton, table tennis and tennis all count whole points.
+- **Every other sport.** Only {{fact:chess-points.halfPointSports}} of the {{fact:chess-points.sportCount}} sports, chess, counts in half points. {{fact:chess-points.wholePointSportsList}} count whole points.
 
 ## Where you set it
 

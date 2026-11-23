@@ -1,6 +1,6 @@
 ---
 title: Why does a table tennis loss still earn a point?
-description: A played table tennis match pays the loser something at every score, because the table ranks on match points. A forfeit before play pays less.
+description: A table tennis match played to the end pays the loser something at every score. A forfeit before a point is played pays the loser less.
 date: 2026-11-23
 author: Seazn
 topic: points
@@ -10,7 +10,7 @@ related: how-standings-points-work, why-matches-won-come-first, forfeits-and-wal
 examples: table-tennis-loss
 ---
 
-Because table tennis ranks on match points, and a match that was played pays both players. The winner gets **{{fact:table-tennis-loss.won30Winner}}** and the loser gets **{{fact:table-tennis-loss.won30Loser}}**, at every score. Only a forfeit before a point is played pays the loser less: **{{fact:table-tennis-loss.forfeitLoser}}**.
+Because table tennis ranks its table on match points first, and a match played to the end pays both players. The winner gets **{{fact:table-tennis-loss.won30Winner}}** and the loser gets **{{fact:table-tennis-loss.won30Loser}}**, at every score. A forfeit before a point is played pays the loser less: **{{fact:table-tennis-loss.forfeitLoser}}**.
 
 {{example:table-tennis-loss}}
 
@@ -22,12 +22,12 @@ The last row is a different kind of match. Ben forfeits before a single point is
 
 ## Why a played loss earns something
 
-Table tennis builds its league table on match points first, not on matches won first, which is the difference from volleyball in [why matches won come first](/blog/why-matches-won-come-first). A table built on match points has to say what a loss is worth. In table tennis a loss that was played is worth something, at every score, and a loss that was never played is worth less.
+Seazn's table tennis rules follow the ITTF's tie-break regulation (3.7.5), which starts from match points, not from matches won. That is the difference from volleyball in [why matches won come first](/blog/why-matches-won-come-first). In those rules a loss that was played to the end is worth {{fact:table-tennis-loss.won30Loser}} match point whatever the score, and a loss that was never played, a forfeit before a point, is worth {{fact:table-tennis-loss.forfeitLoser}} points.
 
 ## What changes from sport to sport
 
 - **Table tennis.** The same points apply in all {{fact:table-tennis-loss.variantCount}} formats: {{fact:table-tennis-loss.variantsList}}. The table above is the format a new table tennis division starts on.
-- **Every other sport.** Only {{fact:table-tennis-loss.sportsEveryLossPays}} of the {{fact:table-tennis-loss.sportCount}} sports pays every played loss: {{fact:table-tennis-loss.everyLossPaysList}}. Football, cricket, ice hockey, hockey, chess, carrom, a generic division, volleyball, badminton and tennis each have at least one way of losing that earns nothing. And only {{fact:table-tennis-loss.sportsDecidingUnplayed}} of the {{fact:table-tennis-loss.sportCount}} sports has a separate amount for a loss that was not played, which is table tennis again.
+- **Every other sport.** Only {{fact:table-tennis-loss.sportsEveryLossPays}} of the {{fact:table-tennis-loss.sportCount}} sports pays every played loss: {{fact:table-tennis-loss.everyLossPaysList}}. {{fact:table-tennis-loss.someLossPaysNothingList}} each have at least one way of losing that earns nothing. And only {{fact:table-tennis-loss.sportsDecidingUnplayed}} of the {{fact:table-tennis-loss.sportCount}} sports starts with a separate amount for a loss that was not played, which is table tennis again.
 
 ## Where you set it
 

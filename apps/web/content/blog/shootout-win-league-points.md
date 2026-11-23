@@ -10,9 +10,9 @@ related: how-standings-points-work, cricket-points-ties-no-results, knockout-mat
 examples: shootout-points
 ---
 
-It depends on the sport. When a league match is level and the rules play on, the win can count as a full win, as a smaller win that still pays the loser something, or as a draw with a bonus for the winner. Seazn pays each the way the sport's own rules do.
+It depends on the sport. When a league match is level and the rules play on, the win can count as a full win, as a smaller win that still pays the loser something, or as a draw with a bonus for the winner. The table below shows what a new division of each of those sports pays.
 
-Only {{fact:shootout-points.sportsBeyond}} of the {{fact:shootout-points.sportCount}} sports can settle a league match beyond normal time: {{fact:shootout-points.beyondList}}. The table below was made by playing real matches in each of them.
+Only {{fact:shootout-points.sportsBeyond}} of the {{fact:shootout-points.sportCount}} sports can, with deciders switched on, settle a league match beyond normal time: {{fact:shootout-points.beyondList}}. The table below was made by playing real matches in each of them.
 
 {{example:shootout-points}}
 
@@ -24,7 +24,7 @@ Look at football first. A win in extra time is a win like any other: the winner 
 
 ## The total stays the same
 
-In every row, the two sides together earn what a win in normal time hands out between them: {{fact:shootout-points.footballRegTotal}} in football, {{fact:shootout-points.icehockeyRegTotal}} in IIHF ice hockey, {{fact:shootout-points.icehockeyRecreationalRegTotal}} in recreational ice hockey, {{fact:shootout-points.hockeyRegTotal}} in hockey and {{fact:shootout-points.cricketRegTotal}} in cricket. Playing on never makes a match worth more points than finishing it in normal time. It changes how the same total is split between the two sides, and the last column of the table shows it.
+In every row, the two sides together earn what a win in normal time hands out between them: {{fact:shootout-points.footballRegTotal}} in football, {{fact:shootout-points.icehockeyRegTotal}} in IIHF ice hockey, {{fact:shootout-points.icehockeyRecreationalRegTotal}} in recreational ice hockey, {{fact:shootout-points.hockeyRegTotal}} in hockey and {{fact:shootout-points.cricketRegTotal}} in cricket. Playing on never makes a match worth more points than a win in normal time. It changes how the same total is split between the two sides, and the last column of the table shows it.
 
 ## What changes from sport to sport
 
