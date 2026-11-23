@@ -52,7 +52,7 @@ Enterprise sets no limit on either. An [Event Pass](/help/billing/event-pass) li
 When the competition is full, the builder lets you reach **Review**. A panel there says "Adding another division needs a bigger plan." and **Create division** does not create it. On a competition that is **completed** or **archived**, a division is refused with "This competition is finished, so no new divisions can be added to it." Archiving a division gives its place back only if nothing was scored in it: see [archive and delete](/help/divisions/archive).
 
 > **Example**
-> On Community you add four divisions to **Spring Open**, and each one is created. You build a fifth and press **Create division**. The **Review** step shows "Adding another division needs a bigger plan." and no fifth division appears.
+> On Community you add divisions to **Spring Open**, and each one is created until the competition is full. You build one more and press **Create division**. The **Review** step shows "Adding another division needs a bigger plan." and no further division appears.
 
 ## Change it later
 

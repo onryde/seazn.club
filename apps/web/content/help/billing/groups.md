@@ -9,7 +9,7 @@ A subscription is a **billing group**: one plan, one card and one invoice for ev
 
 The person who pays sees the bill under **Settings → Plan & Billing**, in **Organisations on this bill**. From there you [add an organisation](/help/billing/add-an-organisation), [take one off](/help/billing/remove-an-organisation) or [hand the bill to someone else](/help/billing/hand-over-a-bill).
 
-![The Organisations on this bill panel, with three organisations on a Pro bill](/help/billing/groups-panel.webp "The payer's view of a bill with three organisations on it, each with Remove from this bill")
+![The payer's panel on a bill: each organisation with Remove from this bill, and the hand-over card](/help/billing/groups-panel.webp "The payer's view of a bill, with each organisation on it carrying Remove from this bill")
 
 ## What it costs
 
@@ -27,7 +27,7 @@ An organisation on the bill gets the bill's plan: its limits, features and platf
 | Pro | {{plan:registration.fee_percent:pro}}% |
 | Enterprise | {{plan:registration.fee_percent:enterprise}}% |
 
-The limits are per organisation, not shared. Three organisations on a Pro bill each get Pro's limits. Team members are per organisation too, so someone who helps run two of them is invited to each. See [inviting your team](/help/getting-started/invite-your-team).
+The limits are per organisation, not shared. Every organisation on a Pro bill gets Pro's limits. Team members are per organisation too, so someone who helps run two of them is invited to each. See [inviting your team](/help/getting-started/invite-your-team).
 
 ## The entry-fee rate locks when sales start
 

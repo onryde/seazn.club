@@ -43,7 +43,7 @@ Add someone after you generated, and the stage card tells you, with the control 
 
 **Swiss.** Before round 1 is paired, the card lists every entrant after "Not paired this round:", so a newcomer is one more name in that list and **Pair next round** seats them with everyone else. Once round 1 is paired, a late player waits, and only then does the list name the latecomer alone. The card also says "Swiss pairs one round at a time. Use Pair next round to seat them." **Pair next round** refuses while the current round has undecided matches, so you seat the newcomer once round 1 has its results.
 
-Once a match in the stage has a result, **Rebuild fixtures** refuses and says "Can't rebuild — this stage already has recorded results. Complete it as it stands, or use Generate to add missing entrants instead." On a league that has started, a late player gets catch-up matches, and there is no **Rebuild fixtures** button to press. [A division's life](/help/divisions/lifecycle) shows who can still join each format.
+Once a match in the stage has a result, **Rebuild fixtures** refuses and says "Can't rebuild — this stage already has recorded results. Complete it as it stands, or use Generate to add missing entrants instead." On a league that has started, a player you add gets catch-up matches at once, with no **Rebuild fixtures** button to press. A player who arrives on their own waits on the Fixtures tab, and while no match in the stage has started you can choose **Rebuild fixtures** there instead of catch-up matches. [A division's life](/help/divisions/lifecycle) shows who can still join each format.
 
 ## Times and courts
 

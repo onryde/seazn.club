@@ -2260,6 +2260,11 @@ export function passBoundProseFaults(label: string, passProse: string): string[]
   return faults;
 }
 
+/** "a one-time top-up of AI credits": the grant said without its size (see `passCreditProseFaults`). */
+export const BY_REFERENCE_CREDIT_GRANT = /\bone[-\s]time\s+top[-\s]?up\s+of\s+AI\s+credits\b/i;
+/** The block names the pricing page, where the size is. */
+export const PRICING_PAGE_POINTER = /\bpricing\s+page\b/i;
+
 /**
  * Every AI-credit figure in the pass's own copy, against `PASS_CREDIT_GRANT`.
  *
@@ -2269,8 +2274,10 @@ export function passBoundProseFaults(label: string, passProse: string): string[]
  * of them would leave the comparison table — the first thing a buyer looks at —
  * unchecked.
  *
- * Paired with the positive: EVERY declared grant must actually be stated, and
- * every block that states one must say it is one-time. The recurring vocabulary
+ * Paired with the positive: EVERY declared grant must actually be stated (by figure,
+ * or by reference to the pricing page, which keeps the size out of the help tree
+ * where a repricing would strand it), and every block that states one must say it
+ * is one-time. The recurring vocabulary
  * is the inverse claim, and a block that quotes the right number monthly is
  * worse than one that quotes nothing.
  *
@@ -2285,6 +2292,11 @@ export function passCreditProseFaults(label: string, passProse: string): string[
   const faults: string[] = [];
   const stated = new Set<number>();
   for (const block of claimTexts(passProse)) {
+    // A block may state the grant BY REFERENCE ("a one-time top-up of AI credits ... the amounts are on the pricing
+    // page"): the figure then lives on /pricing, the one place a repricing already moves, so the help copy cannot go
+    // stale. It counts as stating every declared grant, but only with BOTH halves - "one-time" and the pointer - and
+    // a recurring word still faults below. A block that types a figure is read exactly as before.
+    const byReference = BY_REFERENCE_CREDIT_GRANT.test(block) && PRICING_PAGE_POINTER.test(block);
     const figures = [
       ...block.matchAll(/(?:\+\s*)?(\d[\d,]*)\s+AI\s+credits?\b/gi),
       // The number-after form needs a SEPARATOR, not merely proximity: a free
@@ -2303,7 +2315,7 @@ export function passCreditProseFaults(label: string, passProse: string): string[
       // the form above needs a separator in the first place.
       ...(/\bAI\s+credits?\b\s*[:|]/i.test(block) ? block.matchAll(/\|\s*\+(\d[\d,]*)\b/g) : []),
     ].map((m) => Number(m[1]!.replace(/,/g, "")));
-    if (figures.length === 0) continue;
+    if (figures.length === 0 && !byReference) continue;
 
     const snippet = block.slice(0, 48);
     for (const figure of figures) {
@@ -2317,6 +2329,7 @@ export function passCreditProseFaults(label: string, passProse: string): string[
       faults.push(`${label}: "${snippet}…" states the credit grant without saying it is one-time`);
     } else {
       for (const figure of figures) if (DECLARED_GRANTS.includes(figure)) stated.add(figure);
+      if (byReference) for (const grant of DECLARED_GRANTS) stated.add(grant);
     }
     for (const pattern of RECURRING_GRANT_PATTERNS) {
       if (pattern.test(block)) {

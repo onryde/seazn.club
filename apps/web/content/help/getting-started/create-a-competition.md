@@ -46,6 +46,6 @@ At the limit, the form says "Your plan's active-competition limit is reached." a
 A second limit covers **Public** and **Link only** competitions once they are published or live. Community allows {{plan:dashboard.public.max:community}} at once, and a draft does not count. With no slot free, the form says "This one will be created private". Publishing one when no slot is free is refused: **Save changes** shows "Your plan's public dashboards are all in use — archive a finished one, or upgrade." [Who can see what](/help/sharing/visibility) has the detail.
 
 > **Example**
-> On Community you create three competitions, all drafts. A fourth is refused with that message. You set the first to **completed**, and the fourth now goes through. Setting the first back to **live** is then refused, because the limit is full again.
+> On Community you create competitions, all drafts, until the form says "Your plan's active-competition limit is reached." The next one is refused with that message. You set one of them to **completed**, and a new one now goes through. Setting the completed one back to **live** is then refused, because the limit is full again.
 
 An [Event Pass](/help/billing/event-pass) can lift the limits of one competition. The limit on public pages is separate. See [who can see what](/help/sharing/visibility).

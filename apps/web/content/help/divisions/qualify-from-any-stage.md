@@ -35,4 +35,4 @@ The ready-made formats use these `take` rules in the next stage's `progression`:
 - `{ "kind": "rankRange", "from": 1, "to": 2 }` takes a range of the finishing order.
 - `{ "kind": "roundLosers", "round": 1, "count": 4 }` takes the losers of one named round. A bracket's rounds are labelled, not simply counted, so name the round you mean.
 
-A stage that takes losers of a round still waits until the source stage is complete before it offers a seed proposal. The API answers 409 until then.
+A stage that takes losers of a round still waits until the source stage is complete before it offers a seed proposal. A request for one is refused until then.

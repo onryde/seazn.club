@@ -240,7 +240,7 @@ export const APPROVED_EVENT_PASS_INVENTORY: string[] = [
   "7bc08add4baa8871",
   "47575ba7b53d0edb",
   "a43842a611fc3a7a",
-  "356e3e87f193429b",
+  "8d36883ee19be452",
   "b90d6ce033e2aacc",
   "363febc178ed3a6d",
   "013e3950b602f09c",
@@ -300,7 +300,7 @@ export const APPROVED_PLANS_INVENTORY: string[] = [
   "f5efc5625de91596",
   "a07947b88760f99c",
   "517e0c7d69b84931",
-  "c61819aba823adc7",
+  "6588d813e31ecbdf",
   "5763f3e946991ded",
   "631d2073630b49af",
   "5394abf0df6228e4",
@@ -543,7 +543,7 @@ export const APPROVED_GROUPS_INVENTORY: string[] = [
   "82ad58f71300bb0b",
   "79ff0430b6bd8934",
   "b26eebdc70d60598",
-  "5598a40b219f6f07",
+  "8b45f9ef48475913",
   "960ffcbe3004ff7a",
   "64184ba94539f225",
   "e20c1cd957d9d775",
@@ -554,7 +554,7 @@ export const APPROVED_GROUPS_INVENTORY: string[] = [
   "66c3e5bf1cd62bf3",
   "050378df2e0b9f83",
   "fb6784c7c8704d6b",
-  "ad0fc64be53f1daf",
+  "bd07c455c52c10a9",
   "ddc8366bdf93737f",
   "c79b2af04f0b802c",
   "28aee6c7e00e1c33",
@@ -628,7 +628,7 @@ export const APPROVED_CREATE_ORG_INVENTORY: string[] = [
   "f9ceb5454551da29",
   "7ad2690b11e9dbdf",
   "9b651647cd419ff3",
-  "346c3229c8c616fd"
+  "2226ff777ce773b3"
 ];
 
 /** Every user-visible surface of `content/help/billing/buy-an-event-pass.md`,
@@ -830,5 +830,5 @@ export const APPROVED_HANDOVER_INVENTORY: string[] = [
   "4843523b81761d8f",
   "cf54553c624a1b60",
   "8dd73e6da354fae1",
-  "417db1ee024e03d2",
+  "c14a3d8c8ae32ef0",
 ];

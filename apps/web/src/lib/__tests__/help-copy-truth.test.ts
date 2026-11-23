@@ -1159,14 +1159,13 @@ describe.skipIf(!HAS_DB)("billing help articles quote the numbers the matrix enf
         where plan_key = ${key} and feature_key = 'ai.credits.monthly'`;
       expect(row, `${key} must have no monthly credit row`).toBeUndefined();
     }
-    // The ARTICLE, though, quotes the grant of the rung it sells and no other.
-    for (const key of SELLABLE_PASS_KEYS) {
-      expect(plansPassSection!, `${key}'s one-time grant`).toMatch(
-        new RegExp(`\\b${PASS_CREDIT_GRANT[key]} AI credits\\b[^.]*\\bone time\\b`),
-      );
-    }
-    for (const key of HIDDEN_PASS_KEYS) {
-      expect(plans, `${key} is off sale`).not.toMatch(new RegExp(`\\b${PASS_CREDIT_GRANT[key]} AI credits`));
+    // The ARTICLE says the pass adds a one-time top-up of AI credits and sends the reader to the pricing page for the
+    // size (final review m4): a typed figure is a plan figure, and this one has no help token (it is `PASS_CREDIT_GRANT`,
+    // not a matrix row). So it states the grant by reference and types NO rung's figure, sellable or not.
+    expect(plansPassSection!, "the one-time top-up, said without its size").toMatch(/\bone-time top-up of AI credits\b/);
+    expect(plansPassSection!, "the pointer to the size").toMatch(/\bpricing page\b/);
+    for (const key of [...SELLABLE_PASS_KEYS, ...HIDDEN_PASS_KEYS]) {
+      expect(plans, `${key}'s grant is not typed in plans.md`).not.toMatch(new RegExp(`\\b${PASS_CREDIT_GRANT[key]} AI credits`));
     }
     // The declaration keeps them distinct whether or not the copy says so, or
     // the negative above is satisfied by the two grants being one number.
@@ -1526,6 +1525,24 @@ describe("the help-prose guards survive a rewording, not just a revert", () => {
     expect(passCreditProseFaults("x", "- Branded exports and sponsor tiers.")).toEqual(
       grants.map((g) => `x: never states the one-time +${g} AI credit grant`),
     );
+
+    // THE GRANT BY REFERENCE (final review m4): the size is on the pricing page, so the help copy states the grant
+    // without it. It counts as stating every declared grant, and only with BOTH halves.
+    const never = grants.map((g) => `x: never states the one-time +${g} AI credit grant`);
+    const pointer = "- A one-time top-up of AI credits, added to your wallet when you buy. The amounts are on the [pricing page](/pricing).";
+    expect(passCreditProseFaults("x", pointer)).toEqual([]);
+    // One-time without the pointer is the deletion case: a reader cannot find the size.
+    expect(passCreditProseFaults("x", "- A one-time top-up of AI credits, added to your wallet when you buy.")).toEqual(never);
+    // The pointer without "one-time": a reader cannot tell it does not repeat.
+    expect(passCreditProseFaults("x", "- A top-up of AI credits, added when you buy. The amounts are on the pricing page.")).toEqual(never);
+    // A recurring word beside the pointer is still the recurring fault.
+    expect(
+      passCreditProseFaults("x", "- A one-time top-up of AI credits, and a monthly one. The amounts are on the pricing page.").join(" "),
+    ).toContain("sells the one-time grant as recurring");
+    // A figure beside the pointer is still read against the declaration.
+    expect(
+      passCreditProseFaults("x", `- A one-time top-up of AI credits, ${lGrant} AI credits in all. The amounts are on the pricing page.`).join(" "),
+    ).toContain(`quotes ${lGrant} AI credits, but the pass grants ${mGrant}`);
   });
 
   it("catches a fee-ladder row that drifts from the matrix, and one that vanishes", () => {
