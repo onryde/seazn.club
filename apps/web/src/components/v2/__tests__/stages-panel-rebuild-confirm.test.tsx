@@ -13,6 +13,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { StagesPanel } from "@/components/v2/stages-panel";
+import { windowRunSheet } from "@/lib/run-sheet-paging";
 
 const confirmCalls = vi.hoisted(() => [] as { title?: string; body?: string }[]);
 vi.mock("@/components/ui/confirm-provider", () => ({
@@ -86,3 +87,53 @@ describe("Rebuild's confirm says times and courts stay with each match's place",
     expect(checked, "anti-vacuity: five kinds").toBe(5);
   });
 });
+
+// W5 follow-ups C, review I2: a big division's desk holds only the window's rows plus a TALLY of its folded rounds
+// (`lib/run-sheet-paging.ts`), so the confirm's "deletes N fixtures" read the window - "35" over a stage that deletes 4,970. The
+// expected sentence is the whole list's own render (the panel as it was before windowing), never a number typed here.
+describe("review I2: a windowed stage's Rebuild confirm counts EVERY fixture, folded rounds included", () => {
+  /** A 22-player single league (231 lines, over the paging line): rounds 1-5 played, 6-21 to come. */
+  function league() {
+    const NOW = Date.now();
+    const rows = [];
+    let n = 0;
+    for (let round = 1; round <= 21; round++) {
+      for (let seq = 1; seq <= 11; seq++) {
+        n += 1;
+        const done = round <= 5;
+        rows.push({
+          id: `f${n}`, division_id: "d1", stage_id: "s1", pool_id: null, fixture_no: n, round_no: round, seq_in_round: seq,
+          status: done ? "decided" : "scheduled", scheduled_at: new Date(NOW + (round - 6) * 7 * 86_400_000).toISOString(),
+          home_entrant_id: `e${seq}`, away_entrant_id: `e${seq + 11}`, outcome: done ? { kind: "win", winner: `e${seq}` } : null,
+          home_slot_label: null, away_slot_label: null, court_id: null, court_name: null, venue_name: null, officials: [], lane: null,
+          is_final: false, third_place: false, conditional: false, ext_key: null,
+        });
+      }
+    }
+    return { rows, NOW };
+  }
+  async function confirmBody(extra: Record<string, unknown>) {
+    confirmCalls.length = 0;
+    const island = renderIsland(StagesPanel, { ...props("league", { legs: 1 }), ...extra } as never);
+    await flush();
+    const btn = island.tree().filter((el) => propsOf(el)["data-testid"] === "roster-drift-rebuild");
+    expect(btn, "premise: the Rebuild button is rendered").toHaveLength(1);
+    (propsOf(btn[0]!).onClick as () => void)();
+    await flush();
+    expect(confirmCalls).toHaveLength(1);
+    return confirmCalls[0]!.body ?? "";
+  }
+
+  it("the windowed desk's confirm says what the whole list's says", async () => {
+    const { rows, NOW } = league();
+    const w = windowRunSheet(rows, [{ id: "s1", kind: "league" }], { held: new Set(), nowMs: NOW, matchMinutes: 60, tz: "UTC" });
+    expect(w.folded.length, "premise: rounds fold").toBeGreaterThan(10);
+    expect(w.shipped.length, "premise: the window ships a fraction").toBeLessThan(rows.length / 4);
+    const whole = await confirmBody({ fixtures: rows });
+    const windowed = await confirmBody({ fixtures: w.shipped, foldedRounds: w.folded });
+    const shippedOnly = await confirmBody({ fixtures: w.shipped });
+    expect(shippedOnly, "premise: the count differs between the window and the whole list").not.toBe(whole);
+    expect(windowed).toBe(whole);
+  });
+});
+

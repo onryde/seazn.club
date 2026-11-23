@@ -1160,7 +1160,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         // W5 T23 (B2 batch M4): the confirm states the real number of fixtures the Rebuild deletes — this stage's own lines as the
         // desk holds them (a late player's catch-up lines included) — never only the generic sentence. What it draws in their place
         // is the server's to say, after: `rebuiltNotice`.
-        rebuildConfirmCount(fixtures.filter((f) => f.stage_id === stageId).length, msgPlural),
+        // W5 follow-ups C (review I2): a big division's desk holds only the window's rows, so the folded rounds' lines are added.
+        rebuildConfirmCount(fixtures.filter((f) => f.stage_id === stageId).length + foldedTally(foldedRounds, stageId).rows, msgPlural),
         attachmentWarning(rosterDrift[stageId], msg, locale),
       ]
         .filter(Boolean)
