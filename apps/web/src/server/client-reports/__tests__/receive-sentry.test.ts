@@ -226,6 +226,22 @@ describe("a client report's reach into Sentry, events and Logs, read off the rea
     }
   });
 
+  it("Task 25c: two IPv6 addresses in ONE /64 share one Sentry share (and one report bucket); another /64 does not", async () => {
+    probe.budget.max = 10_000; // this test is about the share, not the kind's budget (restored below)
+    try {
+      const share = CLIENT_REPORT_IP_SENTRY_SHARE.max;
+      for (let i = 0; i < share; i++) {
+        // A different address of the same /64 each time: the low 64 bits rotate, as SLAAC privacy addresses do.
+        expect(await receive(report(`v6-${i}`), `2001:db8:aa:1::${(i + 1).toString(16)}`), `first report ${i + 1}`).toBe("sent");
+      }
+      expect(await receive(report("v6-past"), "2001:db8:aa:1:ffff:ffff:ffff:fffe"), "another address, the same /64: past its share").toBe("over-share");
+      expect(await receive(report("v6-other"), "2001:db8:aa:2::1"), "the next /64: its own share").toBe("sent");
+      expect(await reachedSentry()).toEqual({ logs: share + 1, events: share + 1 });
+    } finally {
+      probe.budget.max = 3;
+    }
+  });
+
   it("I2: a first report the IP's SHARE refuses gives back its dedupe slot: another IP's report of that failure is a first, and sent", async () => {
     probe.budget.max = 10_000; // this test is about the share, not the kind's budget (restored below)
     try {

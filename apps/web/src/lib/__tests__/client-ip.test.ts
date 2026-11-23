@@ -37,6 +37,7 @@ import {
   CLOUDFLARE_IPV4_RANGES,
   CLOUDFLARE_IPV6_RANGES,
   isCloudflarePeer,
+  limiterSubject,
 } from "../client-ip";
 import { clientIpOf } from "@/server/api-v1/capture-http";
 import { publicPollRateLimit, publicRateLimit } from "@/server/usecases/public";
@@ -543,5 +544,67 @@ describe("every limiter the batch names keys on it (the real callers)", () => {
   it("straight to the origin, a forged CF-Connecting-IP moves none of them: Fly's peer keys every one", async () => {
     const got = await allOf({ "fly-client-ip": DIRECT, "cf-connecting-ip": VISITOR, "x-forwarded-for": XFF_FIRST });
     expect(got).toEqual({ capture: DIRECT, keys: bucketsOf(DIRECT) });
+  });
+});
+
+// Task 25c: one subscriber is routinely given a whole IPv6 /64 (RFC 6177's end-site assignment; SLAAC and privacy addresses rotate
+// the low 64 bits at will), so a limiter keyed on the raw IPv6 address can be walked past one address at a time. The limiter subject
+// is the /64 prefix; IPv4 is keyed as it is. The expected strings below are written out by hand from RFC 4291 (text forms, `::`
+// compression, the IPv4-mapped form), never read back from the helper.
+describe("limiterSubject — the key a per-IP limiter uses: IPv4 as it is, an IPv6 as its /64", () => {
+  it("EMPTY CASE FIRST: not an address (\"unknown\", blank, junk) is returned unchanged", () => {
+    let checked = 0;
+    for (const v of ["unknown", "", "not-an-ip", "2001:db8::/64"]) {
+      expect(limiterSubject(v), JSON.stringify(v)).toBe(v);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("IPv4 is unchanged", () => {
+    let checked = 0;
+    for (const v of ["203.0.113.7", "198.51.100.42", "10.0.0.1", "0.0.0.0", "255.255.255.255"]) {
+      expect(limiterSubject(v), v).toBe(v);
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
+
+  it("two addresses in ONE /64 are one subject; another /64 is another", () => {
+    expect(limiterSubject("2001:db8:aa:1::1")).toBe("2001:db8:aa:1::/64");
+    expect(limiterSubject("2001:db8:aa:1:dead:beef:cafe:f00d")).toBe("2001:db8:aa:1::/64");
+    expect(limiterSubject("2001:db8:aa:2::1"), "the next /64").toBe("2001:db8:aa:2::/64");
+    expect(limiterSubject("2001:db9:aa:1::1"), "another network").toBe("2001:db9:aa:1::/64");
+  });
+
+  it("every text form of one address maps the same: compressed, expanded, leading zeros, upper case, a zone id", () => {
+    const forms = [
+      "2001:db8::1",
+      "2001:0db8:0000:0000:0000:0000:0000:0001",
+      "2001:db8:0:0:0:0:0:1",
+      "2001:DB8::1",
+      "2001:db8:0::1",
+      "2001:db8::0:1",
+      "fe80::1%eth0".replace("fe80", "2001:db8"),
+    ];
+    let checked = 0;
+    for (const v of forms) {
+      expect([v, limiterSubject(v)]).toEqual([v, "2001:db8:0:0::/64"]);
+      checked++;
+    }
+    expect(checked).toBe(7);
+    expect(limiterSubject("::"), "the unspecified address").toBe("0:0:0:0::/64");
+    expect(limiterSubject("::1"), "loopback").toBe("0:0:0:0::/64");
+    expect(limiterSubject("fe80::1%eth0"), "link-local with a zone id").toBe("fe80:0:0:0::/64");
+  });
+
+  it("an IPv4-mapped IPv6 (::ffff:a.b.c.d, either spelling) is the IPv4, one subject with the IPv4 itself", () => {
+    let checked = 0;
+    for (const v of ["::ffff:203.0.113.7", "::FFFF:203.0.113.7", "0:0:0:0:0:ffff:203.0.113.7", "::ffff:cb00:7107"]) {
+      expect([v, limiterSubject(v)]).toEqual([v, "203.0.113.7"]);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    expect(limiterSubject("64:ff9b::203.0.113.7"), "NAT64's prefix is NOT the mapped form: an IPv6 like any other").toBe("64:ff9b:0:0::/64");
   });
 });

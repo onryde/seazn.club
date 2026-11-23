@@ -140,3 +140,33 @@ export function clientIp(headers: Headers): string {
   }
   return first(headers.get("x-forwarded-for")?.split(",")[0]) ?? first(headers.get("x-real-ip")) ?? "unknown";
 }
+
+/** The 8 groups of an IPv6 address (`isIP` already said 6): `::` expanded, a zone id dropped, a trailing dotted IPv4 as 2 groups. */
+function ipv6Groups(ip: string): number[] {
+  const bare = ip.split("%")[0]!.toLowerCase();
+  const part = (side: string): number[] =>
+    side === ""
+      ? []
+      : side.split(":").flatMap((g) => {
+          if (!g.includes(".")) return [parseInt(g, 16)];
+          const [a, b, c, d] = g.split(".").map(Number) as [number, number, number, number];
+          return [(a << 8) | b, (c << 8) | d];
+        });
+  const [head, tail] = bare.split("::") as [string, string | undefined];
+  if (tail === undefined) return part(head);
+  const left = part(head);
+  const right = part(tail);
+  return [...left, ...Array<number>(8 - left.length - right.length).fill(0), ...right];
+}
+
+/** What a per-IP limiter keys on for a client address (Task 25c). An IPv4 as it is. An IPv6 as its /64 (`2001:db8:0:0::/64`): one
+ *  subscriber is given a whole /64 and its low 64 bits rotate at will (SLAAC privacy addresses), so a raw IPv6 key can be walked
+ *  past one address at a time. An IPv4-mapped IPv6 (`::ffff:a.b.c.d`) as the IPv4 itself. Anything that is not an address
+ *  ("unknown") unchanged. Every text form of one address (compressed or not, any case, a zone id) gives the same key. */
+export function limiterSubject(ip: string): string {
+  if (isIP(ip) !== 6) return ip;
+  const g = ipv6Groups(ip);
+  if (g.length !== 8 || g.some((n) => !Number.isInteger(n) || n < 0 || n > 0xffff)) return ip;
+  if (g.slice(0, 5).every((n) => n === 0) && g[5] === 0xffff) return `${g[6]! >> 8}.${g[6]! & 255}.${g[7]! >> 8}.${g[7]! & 255}`;
+  return `${g.slice(0, 4).map((n) => n.toString(16)).join(":")}::/64`;
+}
