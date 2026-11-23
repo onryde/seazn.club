@@ -8,8 +8,8 @@
 //  * A DELETE answers 200 every time, a second one included (B10). So `remove` decides `absent` from a GET that answers 404,
 //    never from the DELETE's status.
 //  * The embed token is B4's. A file needs B5's CDN token AND an allowed Referer (B3, B9).
-//  * Watch time (Task 30): `GET /statistics?videoGuid=&dateFrom=&dateTo=`, summing `watchTimeChart`, whose UNIT is not yet
-//    measured (WATCH_TIME_CHART_SECONDS_PER_UNIT; the Task 20 probe settles it).
+//  * Watch time (Task 30): `GET /statistics?videoGuid=&dateFrom=&dateTo=`, summing `watchTimeChart`, whose unit is SECONDS
+//    (WATCH_TIME_CHART_SECONDS_PER_UNIT; measured by the Task 20 probe's B11, 2026-11-23).
 // Secrets (the API key, the read-only key, the token key) reach no URL, message, record or log line. A message is built from
 // the operation, the status and our own ids only (never the vendor's text, never a fetch error's text, which can quote the
 // URL), and it passes sanitise.ts's `redact` floor on its way out. A signed URL is never recorded: the CDN call is recorded
@@ -29,12 +29,14 @@ const MAX_HEIGHT = 720;
 /** How long the CDN token for one server-side download is valid. The server makes the request at once, so this only has to
  *  cover the start of one GET. A provider-protocol number, like the base URL above. */
 export const DOWNLOAD_TOKEN_TTL_SECONDS = 300;
-/** How many SECONDS one unit of the statistics answer's `watchTimeChart` is (Task 30). UNMEASURED, and the one line to change
- *  when it is: Bunny's "Get Video Statistics" (read 2026-11-23) types each value as an int64 "total watch time" and names no
- *  unit. Assumed seconds (1): a whole-minute count would drop every view under a minute, and nothing in the schema hints at
- *  milliseconds. The Task 20 probe (bunny.live.test.ts, "watch time") settles it — it reads the chart after watching a video of
- *  known length to its end: 1 if it holds seconds, 60 if minutes, 0.001 if milliseconds. A provider-protocol fact, like the
- *  base URL above. */
+/** How many SECONDS one unit of the statistics answer's `watchTimeChart` is (Task 30). Bunny's "Get Video Statistics" (read
+ *  2026-11-23) types each value as an int64 "total watch time" and names no unit. MEASURED as seconds by the Task 20 probe's B11
+ *  (bunny.live.test.ts, "watch time"; the controller's run, 2026-11-23): 119 units charted for 183.1 s played, an implied
+ *  1.539 s per unit — inside the probe's factor-of-two band around 1, where minutes would chart ~3 and milliseconds ~183 100.
+ *  Kept at exactly 1 (controller ruling): the chart reads about a third under what the probe played, a gap whose cause is
+ *  unmeasured, so a total here is an estimate, not an invoice line. The same run: the unwatched control video answered 0 (its
+ *  chart an object, not null or absent), and a video read after its DELETE still answered minutes. A provider-protocol fact, like
+ *  the base URL above. */
 export const WATCH_TIME_CHART_SECONDS_PER_UNIT = 1;
 
 /** The video API's `status`, number by number (Task 21's table; B2 saw 2 -> 3 -> 4). A number not listed throws: a status

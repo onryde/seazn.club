@@ -165,7 +165,7 @@ describe("BunnyReplayHost: the API calls (AccessKey header, library base URL)", 
 // Task 30: the statistics read. `GET /library/{lib}/statistics?videoGuid=&dateFrom=&dateTo=` (Bunny's "Get Video Statistics", read
 // 2026-11-23: dateFrom/dateTo are UTC date-times, videoGuid filters to one video, and an omitted or INVALID dateFrom answers the
 // last 30 days instead of an error). `watchTimeChart` maps each UTC interval to an int64 "total watch time" whose unit the docs do
-// not state: WATCH_TIME_CHART_SECONDS_PER_UNIT holds the assumption (seconds) until the Task 20 probe measures it.
+// not state: WATCH_TIME_CHART_SECONDS_PER_UNIT holds it, measured as seconds by the Task 20 probe's B11 (2026-11-23).
 describe("BunnyReplayHost: watchMinutes (Task 30)", () => {
   const FROM = new Date("2026-11-01T00:00:00.000Z");
   const TO = new Date("2026-11-22T23:59:59.999Z");
@@ -173,7 +173,7 @@ describe("BunnyReplayHost: watchMinutes (Task 30)", () => {
     viewsChart: { "2026-11-01T00:00:00Z": 2 }, watchTimeChart, countryViewCounts: {}, countryWatchTime: {}, engagementScore: 0,
   });
 
-  it("the unit: one watchTimeChart unit is assumed to be ONE SECOND (Bunny does not document it; the Task 20 probe settles it)", () => {
+  it("the unit: one watchTimeChart unit is ONE SECOND (Bunny does not document it; measured by the Task 20 probe's B11, 2026-11-23: 119 units for 183.1 s played)", () => {
     expect(WATCH_TIME_CHART_SECONDS_PER_UNIT).toBe(1);
   });
 

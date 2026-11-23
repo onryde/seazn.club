@@ -553,6 +553,10 @@ export function cfAnalyticsConfig(env: Record<string, string | undefined> = proc
   }
   return found as CfAnalyticsConfig; // every key was set: `missing` is empty
 }
+/** Task 30 fix round 1 (review m1, 2026-11-23): one live-minutes read gives up after this long (`AbortSignal.timeout`, the request
+ *  and the body read alike; recorded `timeout`). The daily sweep reads each session's uids in turn, and undici's own bound is
+ *  300 s, so with Cloudflare down one hung read held the sweep for five minutes. A day's answer is a few groups. */
+export const SEAZN_LIVE_MINUTES_TIMEOUT_MS = 20_000;
 /** C9: simulcast outputs bill as delivery; Cloudflare caps 5 per input. */
 export const MAX_OUTPUTS_PER_INPUT = 5;
 

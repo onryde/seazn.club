@@ -7,16 +7,21 @@ import "server-only";
 // grouped by `uid`, reading `sum { minutesViewed }`. The answer is summed per uid, and every uid asked for has a number (0 when
 // Cloudflare has no group for it). Cloudflare's own limits: a query spans at most 32 days (768 hours), and its data is kept 92.
 //
-// Which uid a live view lands under is UNMEASURED: the docs key `uid` as "Video ID (for HLS/DASH)", and Seazn's viewers play the
-// programme INPUT's uid (C1). Plan decision: the caller asks for the input uid AND each of its video uids and sums them, so the
-// minutes are counted wherever they land; the Task 7 probe (cf-signed-live.live.test.ts) measures which key carries them.
+// Which uid a LIVE view lands under is unmeasured: the docs key `uid` as "Video ID (for HLS/DASH) or Input ID (for WebRTC/WHEP)",
+// and Seazn's viewers play the programme INPUT's uid (C1). The caller always asks for the input uid AND each of its video uids
+// (Task 30 review I1): the interim replay plays by VIDEO uid (cf-playback.ts `signRecordingPlayback`) from the session's end until
+// the replay host's copy is verified, so a video uid carries real minutes whatever the live answer is. The Task 7 probe
+// (cf-signed-live.live.test.ts, step 8) answers only whether one live view is reported under BOTH keys — a double count the
+// caller must not sum (the report's decision table: then the larger of the input's and its videos' minutes, per input and day).
+//
+// One call gives up after SEAZN_LIVE_MINUTES_TIMEOUT_MS, the request and the body read alike, recorded `timeout` (fix round 1).
 //
 // Safety: the token rides in the Authorization header alone — never the URL, the body, a message or a record. Every thrown message
 // is our own wording, passed through sanitise.ts's `redact` floor; a fetch failure's own text is never quoted (it can carry the
 // request). An answer naming a uid that was not asked for is refused, never summed or dropped: Cloudflare ignores a filter it does
 // not apply (C6), and a number for "some other uid" would mean the query was not the one sent. The data is sampled by Cloudflare,
 // so a total is an estimate, not an invoice line.
-import { cfAnalyticsConfig, type CfAnalyticsConfig } from "@/server/relay/config";
+import { cfAnalyticsConfig, SEAZN_LIVE_MINUTES_TIMEOUT_MS, type CfAnalyticsConfig } from "@/server/relay/config";
 import { NOOP_RECORDER, type ProviderCallRecorder } from "@/server/relay/ports";
 import { redact } from "@/server/relay/sanitise";
 
@@ -84,18 +89,33 @@ export async function liveMinutesViewed(
       }))
       .catch(() => undefined);
 
+  // One deadline for the request and the body read alike: a call that does not finish in it is a failed call, recorded `timeout`.
+  const signal = AbortSignal.timeout(SEAZN_LIVE_MINUTES_TIMEOUT_MS);
+  const failure = (e: unknown) => (signal.aborted || (e as { name?: string })?.name === "TimeoutError" ? "timeout" : "network");
   let res: Response;
   try {
     res = await fetchImpl(CF_GRAPHQL_URL, {
       method: "POST",
       headers: { authorization: `Bearer ${config.token}`, "content-type": "application/json" },
       body: JSON.stringify({ query: QUERY, variables: { accountTag: config.accountId, uids: asked, start, end } }),
+      signal,
     });
-  } catch {
-    record(null, null, "network");
+  } catch (e) {
+    record(null, null, failure(e));
     throw fail("request failed before a response");
   }
-  const json = (await res.json().catch(() => undefined)) as Answer | undefined;
+  let json: Answer | undefined;
+  try {
+    json = (await res.json()) as Answer;
+  } catch (e) {
+    // A body that arrived but is not JSON (an error page) reads as absent. One that never arrived in full — the deadline, or the
+    // connection cut — is a failed call, never its status (the replay host's rule, replay-bunny.ts `api`).
+    if (!(e instanceof SyntaxError)) {
+      record(null, null, failure(e));
+      throw fail("the response did not arrive in full");
+    }
+    json = undefined;
+  }
   const errors = Array.isArray(json?.errors) ? json.errors : [];
   record(res.status, res.headers.get("cf-ray"), errors.length > 0 ? "graphql_error" : null);
   if (errors.length > 0) {

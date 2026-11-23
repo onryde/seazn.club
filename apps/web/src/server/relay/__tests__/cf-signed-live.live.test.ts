@@ -19,9 +19,14 @@
 //      token, C1): its minutes land in Cloudflare's GraphQL Analytics under the input uid, under the live video uid, or both?
 //      During the expiry's wait (item 3) the probe plays the live rendition's playlist and every segment it lists, once each, ~90 s
 //      (counts only are kept); after the PUT it reads the minutes for both uids through the production reader
-//      (video/cf-analytics.ts `liveMinutesViewed`) every 30 s for up to 10 min. Printed: OBSERVED.liveView (segments, bytes,
-//      seconds) and OBSERVED.analytics ({inputUid, videoUid, byUid, keyedBy, polls}) — uids and numbers only. `keyedBy` is the
-//      answer: the key that never carries minutes is the one Task 31 drops (the plan sums both until then).
+//      (video/cf-analytics.ts `liveMinutesViewed`) every 30 s for the full 10 min — stopping early only once BOTH uids show
+//      minutes that held still across two polls (Task 30 review I1: a key whose rows arrive later must not read as absent).
+//      After the cleanup's deletes it reads the same two uids once more (review I2: does a deleted uid still answer? Task 31's
+//      daily read normally comes after the delete). Printed: OBSERVED.liveView (segments, bytes, seconds) and OBSERVED.analytics
+//      ({inputUid, videoUid, byUid, keyedBy, polls, series, firstNonZeroPoll, stoppedBecause, afterDelete}) — uids and numbers
+//      only. `keyedBy` answers ONE question: is one live view reported under both keys (a double count)? Task 31 queries both
+//      uids whatever it says, because the interim replay plays by video uid (cf-playback.ts); the report's decision table maps
+//      the answer to Task 31's rule. `afterDelete` is recorded, never asserted.
 //
 // Gate (the `_live-fly-gate.ts` order): the flag CF_LIVE_PROBE=1 first, and only behind it the account pair
 // CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_STREAM_TOKEN (environment, then apps/web/.env.local). Without the flag nothing
@@ -44,7 +49,8 @@
 //   * Secrets (API token, stream key, playback tokens) are never logged or asserted on; a token is shown, if ever, as
 //     its first 6 characters. The stream key reaches ffmpeg as argv only.
 //   * Step 5 changes nothing on Cloudflare: the viewer GETs this run's own live HLS, and the analytics read is one GraphQL query
-//     (a POST that only reads) for this run's two uids. The token rides in a header only (cf-analytics.ts).
+//     (a POST that only reads) for this run's two uids. The token rides in a header only (cf-analytics.ts). The post-delete
+//     re-read in `afterAll` is the same read-only query for the same two uids, made after the deletes and never before them.
 //
 // Run: cd apps/web && DATABASE_URL= CF_LIVE_PROBE=1 npx vitest run src/server/relay/__tests__/cf-signed-live.live.test.ts
 import { afterAll, describe, expect, it } from "vitest";
@@ -140,6 +146,7 @@ describe.skipIf(!GATE.enabled)("Cloudflare Stream — signed recording lock, PUT
   let videoUid: string | null = null;
   let ffmpeg: ChildProcess | null = null;
   const ledger = { created: [] as string[], deleted: [] as string[], skipped: [] as string[], foreignItemsSkipped: 0 };
+  let runStartedAt: Date | null = null;   // step 5's analytics window opens here; the post-delete re-read (afterAll) reuses it
   const obs: Record<string, unknown> = {};
 
   async function cf<T>(method: string, path: string, body?: unknown): Promise<{ status: number; ok: boolean; result: T | undefined; errors: unknown }> {
@@ -278,13 +285,26 @@ describe.skipIf(!GATE.enabled)("Cloudflare Stream — signed recording lock, PUT
         else ledger.skipped.push(`input ${inputUid} delete answered ${r.status}`);
       }
     }
+    // Review I2: one more read of the step-8 uids, AFTER the deletes above — does Cloudflare still answer a deleted uid's minutes
+    // (it keeps the data 92 days)? Recorded, never asserted: Task 31 reads only after its own deletes, so a 0 here is a finding.
+    // Read-only, this run's two uids, and only when step 8 ran (its byUid is what this is compared with).
+    const analytics = obs.analytics as Record<string, unknown> | undefined;
+    if (analytics && inputUid && videoUid && runStartedAt) {
+      try {
+        const after = await liveMinutesViewed([inputUid, videoUid], runStartedAt, new Date(), { config: { accountId, token } });
+        analytics.afterDelete = { input: after[inputUid] ?? null, video: after[videoUid] ?? null, deleted: [...ledger.deleted] };
+      } catch (e) {
+        analytics.afterDelete = { error: (e as Error).message };
+      }
+    }
     note(`OBSERVED ${JSON.stringify(obs)}`);
     note(`LEDGER ${JSON.stringify(ledger)}`);
     expect(ledger.skipped).toEqual([]);
   }, 8 * 60_000);
 
   it("observes the lock in progress, the expiry, the lock after the end, the PUT, and which uid a live view's minutes land under", async () => {
-    const runStartedAt = new Date();   // step 5's analytics window opens here
+    const windowStart = new Date();
+    runStartedAt = windowStart;
     // 0. Preflight, before anything is created on Cloudflare: can this machine encode the feed in real time?
     const speed = await preflightSpeed();
     obs.preflightSpeed = Math.round(speed * 10) / 10;
@@ -426,32 +446,48 @@ describe.skipIf(!GATE.enabled)("Cloudflare Stream — signed recording lock, PUT
     const reread = await cf<{ recording?: { requireSignedURLs?: boolean }; enabled?: boolean }>("GET", `/live_inputs/${inputUid}`);
     obs.inputAfterPut = { enabled: reread.result?.enabled, requireSignedURLs: reread.result?.recording?.requireSignedURLs };
 
-    // 8. Header item 5 (Task 30): which uid carries the step-5 view's minutes. The production reader, for this run's two uids only,
-    // every ANALYTICS_POLL_MS until either shows minutes or ANALYTICS_WAIT_MS runs out. Its errors are its own redacted wording. The
-    // account and token are the run's own Stream pair (owner ruling 2026-11-23): a token without Analytics read shows in lastError.
+    // 8. Header item 5 (Task 30): is the step-5 view's minutes reported under the input uid, the live video uid, or BOTH? The
+    // production reader, for this run's two uids only, every ANALYTICS_POLL_MS for the whole ANALYTICS_WAIT_MS (review I1): the
+    // first key to show is not the answer, because the other key's rows may land later and a hidden `both` is a double count.
+    // The one early stop: both keys non-zero and unchanged across two consecutive polls. Every poll's pair is kept (`series`),
+    // with the poll each key first showed minutes. Errors are the reader's own redacted wording. The account and token are the
+    // run's own Stream pair (owner ruling 2026-11-23): a token without Analytics read shows in lastError.
     const analytics: Record<string, unknown> = { inputUid, videoUid };
     obs.analytics = analytics;
     {
       const config = { accountId, token };
-      const waitUntil = Date.now() + ANALYTICS_WAIT_MS;
+      const pollStart = Date.now();
+      const waitUntil = pollStart + ANALYTICS_WAIT_MS;
       let byUid: Record<string, number> = {};
       let polls = 0;
+      const series: { poll: number; atSeconds: number; input: number | null; video: number | null }[] = [];
+      const firstNonZeroPoll: { input: number | null; video: number | null } = { input: null, video: null };
+      let stoppedBecause = "window ended";
       for (;;) {
         polls++;
         try {
-          byUid = await liveMinutesViewed([inputUid, videoUid], runStartedAt, new Date(), { config });
+          byUid = await liveMinutesViewed([inputUid, videoUid], windowStart, new Date(), { config });
           analytics.lastError = null;
+          const point = { poll: polls, atSeconds: Math.round((Date.now() - pollStart) / 1000), input: byUid[inputUid] ?? null, video: byUid[videoUid] ?? null };
+          const prev = series.at(-1);
+          series.push(point);
+          if (firstNonZeroPoll.input === null && (point.input ?? 0) > 0) firstNonZeroPoll.input = polls;
+          if (firstNonZeroPoll.video === null && (point.video ?? 0) > 0) firstNonZeroPoll.video = polls;
+          if (prev && (point.input ?? 0) > 0 && (point.video ?? 0) > 0 && prev.input === point.input && prev.video === point.video) {
+            stoppedBecause = "both keys non-zero and stable across two polls";
+            break;
+          }
         } catch (e) {
           analytics.lastError = (e as Error).message;
         }
-        if ((byUid[inputUid] ?? 0) + (byUid[videoUid] ?? 0) > 0 || Date.now() > waitUntil) break;
+        if (Date.now() > waitUntil) break;
         await sleep(ANALYTICS_POLL_MS);
       }
       const onInput = (byUid[inputUid] ?? 0) > 0;
       const onVideo = (byUid[videoUid] ?? 0) > 0;
       Object.assign(analytics, {
-        byUid: { input: byUid[inputUid] ?? null, video: byUid[videoUid] ?? null }, polls,
-        waitedSeconds: Math.round((Date.now() - (waitUntil - ANALYTICS_WAIT_MS)) / 1000),
+        byUid: { input: byUid[inputUid] ?? null, video: byUid[videoUid] ?? null }, polls, series, firstNonZeroPoll, stoppedBecause,
+        waitedSeconds: Math.round((Date.now() - pollStart) / 1000),
         keyedBy: onInput && onVideo ? "both" : onInput ? "input" : onVideo ? "video" : "neither",
       });
     }
@@ -474,7 +510,8 @@ describe.skipIf(!GATE.enabled)("Cloudflare Stream — signed recording lock, PUT
     expect.soft(obs.expiryAtOnce, "short token at once").toBe(200);
     expect.soft([401, 403], "short token at now+90 s").toContain(obs.expiryAtPlus90);
     // Header item 5 (Task 30): the live view's minutes show under the input uid, the live video uid, or both — OBSERVED.analytics.keyedBy
-    // says which. "neither" answers nothing: read OBSERVED.analytics.lastError (a refused query) and OBSERVED.liveView (no view) first.
+    // says which, read after the full window. "neither" answers nothing: read OBSERVED.analytics.lastError (a refused query) and
+    // OBSERVED.liveView (no view) first.
     expect.soft(analytics.keyedBy, "Task 30: a live HLS view's minutes land under the input uid, the live video uid, or both").toMatch(/^(input|video|both)$/);
   }, 32 * 60_000);
 });

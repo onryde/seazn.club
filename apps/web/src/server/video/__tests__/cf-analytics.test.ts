@@ -1,9 +1,9 @@
 // Task 30: the delivered-minutes reader for Seazn live (Cloudflare's GraphQL Analytics, `streamMinutesViewedAdaptiveGroups`)
 // against a mocked fetch. No network. The query's names and limits are Cloudflare's published ones
 // (developers.cloudflare.com/stream/getting-analytics/fetching-bulk-analytics, read 2026-11-23): the endpoint, the dataset, its
-// `sum { minutesViewed }` and `dimensions { uid }`, and its maximum query interval of "32 days (768 hours)". Whether a live view
-// of a programme input lands under the input uid or its live video uid is unmeasured (the plan sums both); the Task 7 probe
-// settles it. Every expected value below is typed from those sources, never read back from the reader.
+// `sum { minutesViewed }` and `dimensions { uid }`, and its maximum query interval of "32 days (768 hours)". The caller always asks
+// for the input uid and its video uids (the interim replay plays by video uid); whether one live view is reported under both is the
+// Task 7 probe's question, not this file's. Every expected value below is typed from those sources, never read back from the reader.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FakeRecorder } from "@/server/relay/fakes";
 import type { CfAnalyticsConfig } from "@/server/relay/config";
@@ -107,23 +107,48 @@ describe("liveMinutesViewed: what it answers", () => {
     expect(message).toMatch(/^cloudflare liveMinutesViewed: .*not asked for/);
   });
 
-  it("an answer whose shape is not the query's is refused, never read as 0", async () => {
-    const shapes: [string, unknown][] = [
-      ["no data", { data: null, errors: null }],
-      ["no account", { data: { viewer: { accounts: [] } }, errors: null }],
-      ["groups not a list", { data: { viewer: { accounts: [{ streamMinutesViewedAdaptiveGroups: null }] } }, errors: null }],
-      ["minutes missing", answer([{ uid: INPUT, minutes: undefined }])],
-      ["minutes not a number", answer([{ uid: INPUT, minutes: "12" }])],
-      ["minutes negative", answer([{ uid: INPUT, minutes: -1 }])],
-      ["uid missing", answer([{ uid: undefined, minutes: 1 }])],
+  it("an answer whose shape is not the query's is refused by its own guard, never read as 0", async () => {
+    // Each row names the fragment of ITS guard's message (fix round 1, review m3): a later guard catching the row instead (the
+    // foreign-uid refusal for a uid-less group, the groups check for an empty account list) is a red, not a pass.
+    const ONE_ACCOUNT = { streamMinutesViewedAdaptiveGroups: [{ sum: { minutesViewed: 4 }, dimensions: { uid: INPUT } }] };
+    const shapes: [string, unknown, RegExp][] = [
+      ["no data", { data: null, errors: null }, /answered no accounts, not the one asked for$/],
+      ["no account", { data: { viewer: { accounts: [] } }, errors: null }, /answered 0 accounts, not the one asked for$/],
+      ["two accounts (the filter on accountTag not applied)", { data: { viewer: { accounts: [ONE_ACCOUNT, ONE_ACCOUNT] } }, errors: null }, /answered 2 accounts, not the one asked for$/],
+      ["groups not a list", { data: { viewer: { accounts: [{ streamMinutesViewedAdaptiveGroups: null }] } }, errors: null }, /answered no minutes-viewed groups$/],
+      ["minutes missing", answer([{ uid: INPUT, minutes: undefined }]), /the group for in-0001 carries no minutes count$/],
+      ["minutes not a number", answer([{ uid: INPUT, minutes: "12" }]), /the group for in-0001 carries no minutes count$/],
+      ["minutes negative", answer([{ uid: INPUT, minutes: -1 }]), /the group for in-0001 carries no minutes count$/],
+      ["uid missing", answer([{ uid: undefined, minutes: 1 }]), /: a group carries no uid$/],
+      ["uid not a string", answer([{ uid: 7, minutes: 1 }]), /: a group carries no uid$/],
     ];
     let checked = 0;
-    for (const [what, body] of shapes) {
+    for (const [what, body, guard] of shapes) {
       const { read } = harness(() => ({ status: 200, body }));
-      expect(await errorOf(read([INPUT])), what).toMatch(/^cloudflare liveMinutesViewed: /);
+      const message = await errorOf(read([INPUT]));
+      expect(message, what).toMatch(/^cloudflare liveMinutesViewed: /);
+      expect(message, what).toMatch(guard);
       checked++;
     }
-    expect(checked, "anti-vacuity: shapes refused").toBe(7);
+    expect(checked, "anti-vacuity: shapes refused").toBe(9);
+  });
+
+  it("a non-2xx answer with no errors[] is refused as its HTTP status alone — a body with the query's shape included — and recorded with that status", async () => {
+    // Fix round 1 (review m2): the errors[] branch answers first, so these rows carry none; each would read differently past it.
+    const rows: [string, number, unknown][] = [
+      ["503, an empty object", 503, {}],
+      ["500, a body with the query's shape", 500, answer([{ uid: INPUT, minutes: 5 }])],
+      ["502, an HTML error page (not JSON: read as absent)", 502, "<html><body>Bad gateway</body></html>"],
+    ];
+    let checked = 0;
+    for (const [what, status, body] of rows) {
+      const { read, recorder } = harness(() => ({ status, body }));
+      expect(await errorOf(read([INPUT])), what).toBe(`cloudflare liveMinutesViewed: HTTP ${status}`);
+      await flush();
+      expect(recorder.calls.map((c) => [c.status, c.errorCode]), what).toEqual([[status, null]]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: non-2xx answers refused").toBe(3);
   });
 });
 
@@ -178,15 +203,19 @@ describe("liveMinutesViewed: refusals, and the token in none of them", () => {
     await flush();
     let checked = 0;
     for (const m of messages) { expect(m, m).not.toContain(CONFIG.token); checked++; }
-    for (const r of recorders) {
+    // Each refusal is recorded as the failure it was (fix round 1, review m4): a refused query by its status and `graphql_error`,
+    // a call that never answered with no status and `network`. Never a clean row.
+    const expected: [number | null, string][] = [[200, "graphql_error"], [403, "graphql_error"], [null, "network"]];
+    for (const [k, r] of recorders.entries()) {
       expect(r.calls).toHaveLength(1);
       expect(JSON.stringify(r.calls[0])).not.toContain(CONFIG.token);
+      expect([r.calls[0].status, r.calls[0].errorCode], `record ${k}`).toEqual(expected[k]);
       checked++;
     }
     expect(checked, "anti-vacuity: three messages and three records read").toBe(6);
   });
 
-  it("the Stream token unset (the reader uses the relay's own pair: owner ruling 2026-11-23): it refuses naming CLOUDFLARE_STREAM_TOKEN, makes no call, and the module imports with nothing set", async () => {
+  it("the Stream token unset (the reader uses the relay's own pair: owner ruling 2026-11-23): it refuses naming CLOUDFLARE_STREAM_TOKEN, makes no call, and importing the module reads no setting", async () => {
     vi.stubEnv("CLOUDFLARE_STREAM_TOKEN", "");
     vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acct-from-env");
     vi.resetModules();
@@ -209,5 +238,93 @@ describe("liveMinutesViewed: one provider-call record per call (ruling 13)", () 
     expect(recorder.calls[0]).toMatchObject({
       provider: "cloudflare", operation: "liveMinutesViewed", method: "POST", url: GRAPHQL, ids: [CONFIG.accountId], status: 200, errorCode: null,
     });
+  });
+});
+
+// Fix round 1 (review m1, 2026-11-23): the daily sweep reads each session's uids in turn, and undici's own bound is 300 s, so one
+// hung call held the sweep for five minutes. One call gives up after 20 s (the controller's figure, typed here) — the request and
+// the body read alike — and is recorded as `timeout`. AbortSignal.timeout runs on a real timer, so the spy hands out a controller
+// per call and the test fires the deadline itself.
+describe("liveMinutesViewed: one call gives up at 20 s (fix round 1, review m1)", () => {
+  const timedOut = () => new DOMException("The operation was aborted due to timeout", "TimeoutError");
+  function deadlineSpy() {
+    const deadlines: AbortController[] = [];
+    const spy = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => { const c = new AbortController(); deadlines.push(c); return c.signal; });
+    return { deadlines, spy };
+  }
+  /** A 200 whose headers arrived and whose body never does — until its signal fires, or `cut` errors it at once. */
+  function stalledBody(signal: AbortSignal | null | undefined, cut?: () => unknown): Response {
+    return new Response(new ReadableStream({
+      start(c) {
+        if (cut) queueMicrotask(() => c.error(cut()));
+        else signal?.addEventListener("abort", () => c.error(signal.reason), { once: true });
+      },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }
+
+  it("a fetch that never answers: the call carries AbortSignal.timeout(20000), is still pending until the deadline fires, then throws our own words, recorded with no status and `timeout`", async () => {
+    const { deadlines, spy } = deadlineSpy();
+    try {
+      const signals: (AbortSignal | null | undefined)[] = [];
+      const fetchImpl = vi.fn((_url: string | URL | Request, init?: RequestInit) => {
+        const signal = init?.signal;
+        signals.push(signal);
+        return new Promise<Response>((_, reject) => signal?.addEventListener("abort", () => reject(signal.reason), { once: true }));
+      }) as unknown as typeof fetch;
+      const recorder = new FakeRecorder();
+      let settled = false;
+      const pending = liveMinutesViewed([INPUT, VIDEO_A], FROM, TO, { config: CONFIG, fetchImpl, recorder })
+        .then(() => null, (e: unknown) => e as Error)
+        .finally(() => { settled = true; });
+      await vi.waitFor(() => expect(signals).toHaveLength(1));
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy).toHaveBeenCalledWith(20_000);
+      expect(signals[0], "the request carries the deadline's signal").toBe(deadlines[0]!.signal);
+      await flush();
+      expect(settled, "nothing answers before the deadline").toBe(false);
+      deadlines[0]!.abort(timedOut());
+      const err = await pending;
+      expect(err?.message).toBe("cloudflare liveMinutesViewed: request failed before a response");
+      expect(err?.message).not.toContain(CONFIG.token);
+      await flush();
+      expect(recorder.calls.map((c) => [c.status, c.errorCode])).toEqual([[null, "timeout"]]);
+      expect(JSON.stringify(recorder.calls)).not.toContain(CONFIG.token);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("a 200 whose body never arrives is a failed call at the deadline (no status, `timeout`), never the 200; a body cut by the connection is the same failure, `network`; a body that arrived but is not JSON is still read as absent", async () => {
+    const { deadlines, spy } = deadlineSpy();
+    try {
+      let answered = 0;
+      const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+        answered++;
+        if (answered === 1) return stalledBody(init?.signal);
+        if (answered === 2) return stalledBody(init?.signal, () => new TypeError("terminated"));
+        return new Response("<html>not JSON</html>", { status: 200, headers: { "content-type": "text/html" } });
+      }) as unknown as typeof fetch;
+      const recorder = new FakeRecorder();
+      const read = () => liveMinutesViewed([INPUT], FROM, TO, { config: CONFIG, fetchImpl, recorder }).then(() => null, (e: unknown) => e as Error);
+      const pending = read();
+      await vi.waitFor(() => expect(answered, "the headers arrived").toBe(1));
+      deadlines[0]!.abort(timedOut());
+      const stalled = await pending;
+      await flush();
+      const cut = await read();
+      await flush();
+      let checked = 0;
+      for (const err of [stalled, cut]) {
+        expect(err?.message).toBe("cloudflare liveMinutesViewed: the response did not arrive in full");
+        checked++;
+      }
+      expect(checked, "anti-vacuity: body failures read").toBe(2);
+      // Not JSON is a body that arrived: read as absent, so the shape guard refuses it and the row keeps its 200.
+      expect((await read())?.message).toBe("cloudflare liveMinutesViewed: HTTP 200 answered no accounts, not the one asked for");
+      await flush();
+      expect(recorder.calls.map((c) => [c.status, c.errorCode]), "a failure, never the 200").toEqual([[null, "timeout"], [null, "network"], [200, null]]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
