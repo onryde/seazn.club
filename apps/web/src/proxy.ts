@@ -242,14 +242,17 @@ const DIVISION_TAB_DOCUMENT = new RegExp(`^${PUBLIC_HUB_ROOT}/([^/]+)/([^/]+)/([
 
 /**
  * W5 follow-ups fix round 1 (review M2): the rewrite's target is a real route, so a request NAMING it - a crawler, a pasted link -
- * was served the same document at a second public address. The proxy runs on the request a browser sends, never again on its
- * own rewrite, so such a request is answered with a permanent redirect to the address the hub links to, `{division}?tab={tab}`
- * (the query kept). Null for anything else: an unknown tab there is the route's own 404.
+ * was served the same document at a second public address. Such a request is answered with a permanent redirect to the
+ * address the hub links to, `{division}?tab={tab}` (the query kept). The built server runs this proxy AGAIN on the URL it
+ * rewrote to, and the rewrite keeps the query, so that URL names the tab twice: it is let through, or every `?tab=` would
+ * redirect to itself. Null for anything else: an unknown tab there is the route's own 404.
  */
 export function divisionTabCanonicalRedirect(request: NextRequest): URL | null {
   const m = DIVISION_TAB_DOCUMENT.exec(request.nextUrl.pathname);
   if (m === null || NOT_A_COMPETITION.has(m[2]!) || NOT_A_DIVISION.has(m[3]!)) return null;
   if (!(ROUTED_DIVISION_TABS as readonly string[]).includes(m[4]!)) return null;
+  // The rewrite's own request (see above): served as it is.
+  if (request.nextUrl.searchParams.get("tab") === m[4]) return null;
   const url = request.nextUrl.clone();
   url.pathname = routes.publicHub(m[1]!, m[2]!, m[3]!);
   url.searchParams.set("tab", m[4]!);

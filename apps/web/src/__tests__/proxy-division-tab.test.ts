@@ -81,9 +81,9 @@ describe("B3 divisionTabRewrite", () => {
 });
 
 // Review M2: the rewrite's target, `{division}/tab/{tab}`, is a real route, and a request for it by that path was served as a
-// second public address of the same document (a crawler could index both). The proxy runs on the request a browser or crawler
-// sends, never again on its own rewrite, so a request that NAMES the internal path is answered with a permanent redirect to the
-// address the hub links to.
+// second public address of the same document (a crawler could index both). A request that NAMES the internal path is answered
+// with a permanent redirect to the address the hub links to - except the rewrite's own request, which the built server sends
+// back through the proxy (the last test).
 describe("M2 divisionTabCanonicalRedirect", () => {
   it("a direct request for a routed tab's internal path goes (308) to the division's ?tab= address, keeping the query", () => {
     let checked = 0;
@@ -122,5 +122,24 @@ describe("M2 divisionTabCanonicalRedirect", () => {
     const viaTab = proxy(req("/live/riverside/autumn-cup/open?tab=entrants"));
     expect(viaTab.status).not.toBe(308);
     expect(viaTab.headers.get("x-middleware-rewrite")).toContain("/live/riverside/autumn-cup/open/tab/entrants");
+  });
+
+  // Found on the built server (fix round 1): Next runs the proxy AGAIN on the URL it rewrote to, so the first version of this
+  // redirect answered every `?tab=standings` with a 308 to itself - a loop. The rewrite keeps the query, so its own URL names
+  // the tab twice; that one is the rewrite's, never redirected.
+  it("the proxy run again on its OWN rewrite (as the server does) serves the document, never redirects: no loop", () => {
+    let checked = 0;
+    for (const tab of ["standings", "entrants"]) {
+      const first = proxy(req(`/live/riverside/autumn-cup/open?tab=${tab}&ref=share`));
+      const rewritten = new URL(first.headers.get("x-middleware-rewrite")!);
+      expect(rewritten.pathname, "premise: the first pass rewrote").toBe(`/live/riverside/autumn-cup/open/tab/${tab}`);
+      const again = proxy(req(rewritten.pathname + rewritten.search));
+      expect(again.status, `${tab}: the second pass on the rewrite`).not.toBe(308);
+      expect(again.headers.get("location"), tab).toBeNull();
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+    // A tab in the path and ANOTHER in the query is not the rewrite's: it goes to the path's tab.
+    expect(divisionTabCanonicalRedirect(req("/live/riverside/autumn-cup/open/tab/standings?tab=entrants"))?.searchParams.get("tab")).toBe("standings");
   });
 });
