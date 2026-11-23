@@ -26,57 +26,57 @@
     ],
     "rows": [
       [
-        "Football (11-a-side)",
+        "Football, 11-a-side",
         "3 — 0",
         "3 goals to 0"
       ],
       [
-        "Cricket (T20)",
+        "Cricket, T20",
         "No score",
         "the side that did not turn up is charged 20 overs at no runs"
       ],
       [
-        "Chess (Blitz)",
+        "Chess, Blitz",
         "1 — 0",
         "a win, with no colour counted"
       ],
       [
-        "Carrom (Club (29 points))",
+        "Carrom, Club, 29 points",
         "2 — 0",
         "2 sets to 0; 58 points to 0"
       ],
       [
-        "Any other game (Score)",
+        "Any other game, Score",
         "W/O — L",
         "a win, with no score"
       ],
       [
-        "Volleyball (Beach)",
+        "Volleyball, Beach",
         "2 — 0",
         "2 sets to 0; 42 points to 0"
       ],
       [
-        "Badminton (BWF 3×15 (15 points))",
+        "Badminton, BWF 3×15, 15 points",
         "2 — 0",
         "2 sets to 0; 30 points to 0"
       ],
       [
-        "Table tennis (Best of 5)",
+        "Table tennis, Best of 5",
         "3 — 0",
         "3 sets to 0; 33 points to 0"
       ],
       [
-        "Tennis (Tour)",
+        "Tennis, Tour",
         "2 — 0",
         "2 sets to 0; no games"
       ],
       [
-        "Ice hockey (IIHF)",
+        "Ice hockey, IIHF",
         "5 — 0",
         "5 goals to 0"
       ],
       [
-        "Hockey (FIH outdoor)",
+        "Hockey, FIH outdoor",
         "5 — 0",
         "5 goals to 0"
       ]
@@ -84,7 +84,7 @@
   },
   "diagram": {
     "kind": "scoreTiles",
-    "title": "The score a walkover shows in each sport. It comes from that sport's own rules, so it is not the same everywhere, and cricket and any other game show no score.",
+    "title": "The score a walkover shows in each sport. It comes from that sport's own rules, so it is not the same everywhere: 9 sports show a score, cricket shows “No score” and any other game shows “W/O — L”.",
     "tiles": [
       {
         "sport": "Football",

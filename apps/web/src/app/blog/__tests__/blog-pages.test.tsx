@@ -476,6 +476,22 @@ describe("pieces that guard themselves", () => {
               ? model!.tiles.flatMap((t) => [t.sport, t.score])
               : [];
       expect(words.length, `${id}: anti-vacuity`).toBeGreaterThan(3);
+      // A seat that holds no player ("nobody", "not known yet") is drawn muted italic, and no name is (cleanup N3).
+      if (model!.kind === "walkoverBracket") {
+        const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        let vacantSeen = 0;
+        let namesSeen = 0;
+        for (const m of model!.rounds.flatMap((r) => r.matches))
+          for (const side of m.sides) {
+            const classes = [...html.matchAll(new RegExp(`<text[^>]*class="([^"]*)"[^>]*>${esc(side)}</text>`, "g"))].map((x) => x[1]!);
+            expect(classes.length, `${id}: ${side} is drawn`).toBeGreaterThan(0);
+            const vacant = (m.vacant ?? []).includes(side);
+            for (const c of classes) expect(/\bitalic\b/.test(c), `${id}: ${side} ${vacant ? "is italic" : "is not italic"}`).toBe(vacant);
+            vacant ? vacantSeen++ : namesSeen++;
+          }
+        expect(vacantSeen, `${id}: a vacant seat is drawn`).toBeGreaterThan(0);
+        expect(namesSeen, `${id}: a player is drawn`).toBeGreaterThan(0);
+      }
       for (const w of words) expect(html, `${id} shows ${w}`).toContain(`>${w.replace(/'/g, "&#x27;")}<`);
       kinds.add(model!.kind);
       drawn++;

@@ -60,6 +60,8 @@ export function bracketAfterRoundOne(): Line[] {
 }
 
 const NOT_KNOWN = "not known yet";
+/** The sides of a match that hold no player yet, so the picture can draw them as a seat and not a name. */
+const vacantOf = (sides: string[]): { vacant?: string[] } => (sides.some((s) => s === NOT_KNOWN) ? { vacant: sides.filter((s) => s === NOT_KNOWN) } : {});
 const vs = (l: { home?: string; away?: string }) => (l.home === undefined && l.away === undefined ? "Not drawn yet" : `${l.home ?? NOT_KNOWN} against ${l.away ?? NOT_KNOWN}`);
 
 function build(): ExampleResult {
@@ -118,6 +120,7 @@ function build(): ExampleResult {
   // the final its winner is now seated in.
   const semis = lines.filter((l) => l.round === 1);
   const final = lines.find((l) => l.round === 2)!;
+  const finalSides = [seatsAfter.get(final.id)!.home ?? NOT_KNOWN, seatsAfter.get(final.id)!.away ?? NOT_KNOWN];
   const waitingFor = semis.find((l) => updates.get(l.id) === undefined && (l.id === final.homeFrom || l.id === final.awayFrom));
   return {
     facts,
@@ -134,8 +137,10 @@ function build(): ExampleResult {
           name: "Semi-finals",
           matches: semis.map((l) => {
             const u = updates.get(l.id);
+            const sides = [l.home ?? NOT_KNOWN, l.away ?? NOT_KNOWN];
             return {
-              sides: [l.home ?? NOT_KNOWN, l.away ?? NOT_KNOWN] as [string, string],
+              sides,
+              ...vacantOf(sides),
               ...(u !== undefined ? { struck: [WITHDRAWN], winner: u.walkoverTo } : {}),
               result: u !== undefined ? "Walkover" : "Not played yet",
             };
@@ -145,7 +150,8 @@ function build(): ExampleResult {
           name: "Final",
           matches: [
             {
-              sides: [seatsAfter.get(final.id)!.home ?? NOT_KNOWN, seatsAfter.get(final.id)!.away ?? NOT_KNOWN] as [string, string],
+              sides: finalSides,
+              ...vacantOf(finalSides),
               result: "Not played yet",
             },
           ],
@@ -257,7 +263,12 @@ const claims: Claim[] = [
       if (d.rounds[0]!.name !== "Semi-finals" || d.rounds[1]!.name !== "Final") return `the picture's rounds are '${d.rounds.map((x) => x.name).join("', '")}'`;
       if (d.rounds[1]!.matches[0]!.result !== "Not played yet") return `the final's result line is '${d.rounds[1]!.matches[0]!.result}'`;
       const seated = seatsOf(String(rows[6]![2]));
-      return (seated !== null && sameSet(d.rounds[1]!.matches[0]!.sides, seated.sides)) || "the final's seats differ from the table";
+      const fin = d.rounds[1]!.matches[0]!;
+      if (seated === null || fin.sides.length !== 2 || !sameSet(fin.sides, seated.sides)) return "the final's seats differ from the table";
+      // A seat that holds no player is drawn as a seat: the picture marks exactly the sides the table reads "not known yet", and no semi-final has one.
+      if (!sameSet(fin.vacant ?? [], seated.sides.filter((x) => x === NOT_KNOWN))) return `the final's vacant seats are '${(fin.vacant ?? []).join("', '")}'`;
+      if ((fin.vacant ?? []).length === 0) return "anti-vacuity: the final has a seat not known yet";
+      return d.rounds[0]!.matches.every((m) => m.vacant === undefined && m.sides.length === 2) || "a semi-final is marked as holding no player";
     },
   },
   {

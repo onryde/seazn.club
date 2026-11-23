@@ -27,9 +27,13 @@ const C = { sport: 0, score: 1, counts: 2 } as const;
 
 type Ledger = Record<string, number>;
 
-/** A row's first cell: the sport as the picker names it, and the variant the table was folded under ("Volleyball (Beach)"). */
+/** A variant's name with its own bracket folded into the list: "Club (29 points)" reads "Club, 29 points". */
+const flatVariant = (label: string): string => label.replace(/\s*\(([^()]*)\)\s*$/, ", $1");
+
+/** A row's first cell: the sport as the picker names it, then the variant the table was folded under, as a plain list with no
+ *  nested brackets ("Carrom, Club, 29 points"; N3). */
 export function rowLabel(module: AnySportModule): string {
-  return `${pickerSportName(module.key)} (${variantLabel(module.key, startingVariantKey(module))})`;
+  return `${pickerSportName(module.key)}, ${flatVariant(variantLabel(module.key, startingVariantKey(module)))}`;
 }
 
 export function startingCfg(module: AnySportModule): unknown {
@@ -104,8 +108,11 @@ function build(): ExampleResult {
   const cricketCfg = startingCfg(cricket) as { ballsPerInnings: number; ballsPerOver: number };
   facts.cricketOvers = cricketCfg.ballsPerInnings / cricketCfg.ballsPerOver;
   // The picture (M9): one tile per sport. The sports whose walkover shows no digit say so in the caption, from the rows.
-  const lower = tileNames.filter((_, i) => !/\d/.test(String(rows[i]![C.score]))).map((n) => n.toLowerCase());
-  const names = lower.length <= 1 ? (lower[0] ?? "no sport") : `${lower.slice(0, -1).join(", ")} and ${lower[lower.length - 1]}`;
+  // N1: the caption is built from what the tiles SHOW. A tile with a digit is a score; each of the others is quoted as it reads
+  // ("No score", "W/O — L"), so the caption never says "no score" about a tile that prints something else.
+  const scored = rows.filter((r) => /\d/.test(String(r[C.score]))).length;
+  const shows = tileNames.flatMap((n, i) => (/\d/.test(String(rows[i]![C.score])) ? [] : [`${n.toLowerCase()} shows \u201c${String(rows[i]![C.score])}\u201d`]));
+  const others = shows.length <= 1 ? (shows[0] ?? "no sport shows anything else") : `${shows.slice(0, -1).join(", ")} and ${shows[shows.length - 1]}`;
   return {
     facts,
     table: {
@@ -115,7 +122,7 @@ function build(): ExampleResult {
     },
     diagram: {
       kind: "scoreTiles",
-      title: `The score a walkover shows in each sport. It comes from that sport's own rules, so it is not the same everywhere, and ${names} ${lower.length === 1 ? "shows" : "show"} no score.`,
+      title: `The score a walkover shows in each sport. It comes from that sport's own rules, so it is not the same everywhere: ${scored} sports show a score, ${others}.`,
       tiles: tileNames.map((sport, i) => ({ sport, score: String(rows[i]![C.score]) })),
     },
     text: [],
@@ -265,6 +272,39 @@ const claims: Claim[] = [
       const visited = forEachSport(({ module }) => labels.push(rowLabel(module)));
       if (r.facts.sportCount !== visited) return `sportCount ${String(r.facts.sportCount)}, registry ${visited}`;
       return JSON.stringify((r.table?.rows ?? []).map((x) => x[C.sport])) === JSON.stringify(labels) || "rows differ from the registry";
+    },
+  },
+  {
+    says: "the picture's caption says what the tiles show: how many sports show a score, and exactly what each of the others shows",
+    source: "a recount of the table's score cells (a digit is a score) against the registry's sport names",
+    check(r) {
+      const d = r.diagram;
+      if (d?.kind !== "scoreTiles") return "no score tiles";
+      const rows = r.table?.rows ?? [];
+      if (rows.length === 0) return "the table has no rows";
+      const names: string[] = [];
+      forEachSport(({ module }) => names.push(pickerSportName(module.key)));
+      if (rows.length !== names.length) return `${rows.length} rows, the registry holds ${names.length} sports`;
+      const scoreOf = (i: number) => String(rows[i]![C.score]);
+      const scored = names.filter((_, i) => /\d/.test(scoreOf(i))).length;
+      const others = names.map((n, i) => ({ n: n.toLowerCase(), score: scoreOf(i), digit: /\d/.test(scoreOf(i)) }));
+      if (scored === 0 || scored === names.length) return "anti-vacuity: some sports show a score and some do not";
+      if (!d.title.includes(`${scored} sports show a score`)) return `the caption does not say that ${scored} sports show a score`;
+      for (const o of others) {
+        const says = d.title.includes(`${o.n} shows \u201c${o.score}\u201d`);
+        if (!o.digit && !says) return `the caption does not quote what ${o.n} shows ('${o.score}')`;
+        if (o.digit && d.title.includes(`${o.n} shows`)) return `the caption quotes ${o.n}, which shows a score`;
+      }
+      return true;
+    },
+  },
+  {
+    says: "no sport cell nests brackets: the variant is a plain list after the sport's name",
+    source: "the table's first column read for brackets",
+    check(r) {
+      const rows = r.table?.rows ?? [];
+      if (rows.length === 0) return "the table has no rows";
+      return rows.every((row) => !/[()]/.test(String(row[C.sport]))) || "a sport cell holds a bracket";
     },
   },
   {

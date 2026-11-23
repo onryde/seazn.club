@@ -1,6 +1,6 @@
 // A walkover in a bracket (posts "withdrawal-in-a-knockout" and "double-walkover"): rounds left to right, each match a box
 // with its two sides and one short result line, the next round's match joined to the two that feed it. A side that left or
-// did not turn up is struck through; the player who goes through is marked and bold. Every word it shows comes from the
+// did not turn up is struck through, a seat that holds no player ("nobody", "not known yet") is muted italic, and the player who goes through is marked and bold. Every word it shows comes from the
 // model (the example's golden); the caption is the model's title, which says what happened in words.
 //
 // Sized by its viewBox and scaled to the column (no horizontal scroll at 320): two columns fit in 316 units.
@@ -78,6 +78,7 @@ export function WalkoverBracket({ model }: { model: BracketModel }) {
                 <rect x={x(r)} y={top} width={BOX_W} height={BOX_H} rx={6} className="fill-white stroke-slate-300" />
                 {m.sides.map((side, s) => {
                   const struck = (m.struck ?? []).includes(side);
+                  const vacant = (m.vacant ?? []).includes(side);
                   const won = m.winner === side;
                   const y = top + s * ROW_H;
                   return (
@@ -86,7 +87,7 @@ export function WalkoverBracket({ model }: { model: BracketModel }) {
                       <text
                         x={x(r) + 10}
                         y={y + ROW_H / 2 + 4}
-                        className={`text-[12px] ${struck ? "fill-slate-400 line-through" : won ? "fill-slate-900 font-bold" : "fill-slate-900 font-semibold"}`}
+                        className={`text-[12px] ${vacant ? "fill-slate-400 italic" : struck ? "fill-slate-400 line-through" : won ? "fill-slate-900 font-bold" : "fill-slate-900 font-semibold"}`}
                       >
                         {side}
                       </text>

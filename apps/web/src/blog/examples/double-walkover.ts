@@ -121,7 +121,7 @@ function build(): ExampleResult {
             { sides: [second.home!, second.away!], struck: [second.home!, second.away!], result: "Neither turned up" },
           ],
         },
-        { name: "Semi-final", matches: [{ sides: [winner, NOBODY], winner, result: "Walkover" }] },
+        { name: "Semi-final", matches: [{ sides: [winner, NOBODY], vacant: [NOBODY], winner, result: "Walkover" }] },
       ],
     },
     text: [],
@@ -250,7 +250,8 @@ const claims: Claim[] = [
       const [s] = sf.matches;
       if (qf.name !== "Quarter-finals" || sf.name !== "Semi-final") return `the picture's rounds are '${qf.name}' and '${sf.name}'`;
       if (a.result !== `${seed(1)} won` || b.result !== "Neither turned up" || s?.result !== "Walkover") return `the result lines are '${a.result}', '${b.result}' and '${String(s?.result)}'`;
-      return (s !== undefined && s.sides[0] === seed(1) && s.sides[1] === NOBODY && s.winner === seed(1) && s.struck === undefined) || "the semi-final is not a walkover for the first quarter-final's winner";
+      if (a.vacant !== undefined || b.vacant !== undefined || s?.vacant?.length !== 1 || s.vacant[0] !== NOBODY) return "only the semi-final's empty seat, 'nobody', is drawn as a seat and not a name";
+      return (s !== undefined && s.sides.length === 2 && s.sides[0] === seed(1) && s.sides[1] === NOBODY && s.winner === seed(1) && s.struck === undefined) || "the semi-final is not a walkover for the first quarter-final's winner";
     },
   },
 ];

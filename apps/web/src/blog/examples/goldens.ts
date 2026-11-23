@@ -14,8 +14,8 @@ export const BLOG_GOLDENS: Record<string, ExampleResult> = {
   "standings-points": standingsPoints as ExampleResult,
   // ---- batch 5 (Task 11) ----
   "ladder-challenge": ladderChallenge as ExampleResult,
-  "knockout-withdrawal": knockoutWithdrawal as unknown as ExampleResult,
+  "knockout-withdrawal": knockoutWithdrawal as ExampleResult,
   "forfeit-scores": forfeitScores as ExampleResult,
-  "double-walkover": doubleWalkover as unknown as ExampleResult,
+  "double-walkover": doubleWalkover as ExampleResult,
   // ---- end batch 5 ----
 };

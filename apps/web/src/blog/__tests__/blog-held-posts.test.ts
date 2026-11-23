@@ -14,8 +14,11 @@
 //       A fix that changes (a) or (b) turns the test red. The expected set is read from the sport registry's own
 //       declarations (`eventSchemas`) and the builder's own offer (`templatesForSport`), never typed here.
 //   D2: mexicano round two. Once round one is scored, the stage's buttons offer only "Complete" (`stageActions`), with no
-//       way to draw the next round. A fix that adds one for this input turns the test red. Weaker than D1: a fix that
-//       adds a NEW input to `stageActions` and leaves today's answer unchanged would not trip it, which the held note says.
+//       way to draw the next round. Two legs: (a) a fix inside `stageActions` that adds a button for this input turns the
+//       test red; (b) a fix on the CALLER side, which asks `stageActions` for "pair next" with `pairNext` computed in
+//       `desk/stage-rail.tsx` for Swiss only, turns it red the day that expression names any stage kind but "swiss".
+//       Still weaker than D1: a fix that adds a NEW input to `stageActions` and leaves today's answer for these inputs
+//       unchanged, or that draws round two from somewhere else entirely, is not seen; the held note says so.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { effectiveEntrantModel } from "@seazn/engine/sport";
@@ -27,6 +30,7 @@ import { BLOG_PLANNED_SLUGS, allBlogPosts } from "@/server/blog-content";
 
 const HELD = ["how-americano-works", "how-mexicano-works"] as const;
 const PANEL = join(__dirname, "..", "..", "components", "v2", "americano-panel.tsx");
+const RAIL = join(__dirname, "..", "..", "components", "v2", "desk", "stage-rail.tsx");
 
 /** The sports the builder offers americano to, by the product's own offer. */
 function offeredAmericano(): string[] {
@@ -56,6 +60,15 @@ describe("held posts #22 and #23: tripwires that go red when the product defect 
     });
     expect(afterRoundOne.primary?.action !== "complete" || afterRoundOne.secondary.length > 0, "W7 fixed mexicano round two: release held post #23").toBe(false);
     expect(afterRoundOne, "anti-vacuity: today's answer is the lone Complete").toEqual({ primary: { action: "complete", enabled: true }, secondary: [] });
+  });
+
+  it("D2, caller side: the stage rail asks stageActions for pair-next on Swiss stages only", () => {
+    // The `pairNext:` argument of the one stageActions call in the rail, read as source. Today it is
+    // `p.stage.kind === "swiss" && p.swissHasUnseated`; the kind tokens it names are the whole list of stages that pair a next round.
+    const lines = readFileSync(RAIL, "utf8").split("\n").filter((l) => /^\s*pairNext:/.test(l));
+    expect(lines.length, "anti-vacuity: the rail passes pairNext to stageActions exactly once").toBe(1);
+    const kinds = [...lines[0]!.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]);
+    expect(kinds, "W7 widened pair-next beyond Swiss in desk/stage-rail.tsx: release held post #23").toEqual(["swiss"]);
   });
 
   it("the two held slugs are planned (so related: links to them resolve) and are not published posts", () => {

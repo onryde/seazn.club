@@ -18,7 +18,7 @@ Sometimes nobody comes. A double walkover is a match that neither side turned up
 
 The match was on the schedule and neither side played it, so the table counts it as played and lost by both. That keeps the played column honest: everyone can see a match was due and was not played. Neither side earns a point, and nothing goes into goals, sets, games or runs, so the match cannot help or hurt anyone's goal difference or ratio.
 
-Because nothing is credited, the lists of results, the brackets and the posters do not print a 0 against a 0 for it. The match reads {{fact:double-walkover.tag}}, with the line "{{fact:double-walkover.sentence}}", in every sport.
+Because nothing is credited, the match page and the stream overlays show no score for it: the match page reads "{{fact:double-walkover.sentence}}", and in a knockout it adds who gets the walkover next. Where a short label fits, such as the printed bracket and the slideshow, the tag {{fact:double-walkover.tag}} stands in for the score.
 
 It is not the same as each side losing a played match. In table tennis a played loss still pays {{fact:double-walkover.tabletennisPlayedLoss}} in the table, but a double walkover pays {{fact:double-walkover.tabletennisPoints}}, the same as any walkover loss ({{fact:double-walkover.tabletennisWalkoverLoss}}). Nobody is rewarded for not turning up.
 

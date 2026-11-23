@@ -13,8 +13,10 @@ const clone = (id: string): ExampleResult => JSON.parse(JSON.stringify(BLOG_GOLD
 const claimsOf = (id: string) => BLOG_EXAMPLES.find((e) => e.id === id)!.claims;
 const failing = (id: string, r: ExampleResult) => claimsOf(id).filter((c) => c.check(r) !== true).map((c) => c.says);
 
+const CLAIM_COUNT = B5.reduce((n, id) => n + claimsOf(id).length, 0);
+
 describe("batch 5 claims have teeth", () => {
-  it("every claim of every batch 5 example passes on its golden and fails on an empty result", () => {
+  it(`every one of the ${CLAIM_COUNT} claims of batch 5 passes on its golden and fails on an empty result`, () => {
     let checked = 0;
     for (const id of B5) {
       expect(claimsOf(id).length, `${id}: claims`).toBeGreaterThan(0);
@@ -24,6 +26,7 @@ describe("batch 5 claims have teeth", () => {
         checked++;
       }
     }
+    expect(checked, "anti-vacuity: batch 5 claims checked").toBe(CLAIM_COUNT);
     expect(checked, "anti-vacuity: batch 5 claims checked").toBeGreaterThanOrEqual(B5.length * 2);
   });
 
@@ -42,6 +45,18 @@ describe("batch 5 claims have teeth", () => {
     row[1] = "5 — 0";
     r.facts.footballScore = "5 — 0";
     expect(failing("forfeit-scores", r).length).toBeGreaterThan(0);
+  });
+
+  it("forfeits: a caption that calls the 'any other game' tile 'no score', and a nested-bracket row label, are caught (cleanup N1, N3)", () => {
+    const caption = clone("forfeit-scores");
+    expect(caption.diagram!.title, "premise: the caption quotes the any-other-game tile").toContain("any other game shows");
+    caption.diagram!.title = caption.diagram!.title.replace(/ and any other game shows .*\.$/, " and cricket and any other game show no score.");
+    expect(failing("forfeit-scores", caption), "the old caption wording").toContain("the picture's caption says what the tiles show: how many sports show a score, and exactly what each of the others shows");
+    const nested = clone("forfeit-scores");
+    const carrom = nested.table!.rows.find((x) => String(x[0]).startsWith("Carrom"))!;
+    expect(carrom[0], "premise: the carrom label is a flat list").toBe("Carrom, Club, 29 points");
+    carrom[0] = "Carrom (Club (29 points))";
+    expect(failing("forfeit-scores", nested)).toContain("no sport cell nests brackets: the variant is a plain list after the sport's name");
   });
 
   it("double walkover: a point paid to either side is caught", () => {
@@ -109,14 +124,19 @@ const UNCHECKED: Readonly<Record<string, readonly { label: string; why: string }
 
 describe("batch 5: the corruption sweep (every cell, fact and diagram value of every example)", () => {
   for (const id of B5) {
-    it(`${id}: every cell, fact and diagram value is held by a claim`, () => {
+    // The title carries the count the sweep will run (read from the golden at collection), so a JSON or CI report shows how many
+    // corrupted results each example was held against, not only that the floor below was cleared.
+    const swept = mutantsOf(BLOG_GOLDENS[id]!).length;
+    it(`${id}: all ${swept} corrupted cells, facts and diagram values are held by a claim`, () => {
       const golden = BLOG_GOLDENS[id]!;
       const mutants = mutantsOf(golden);
+      expect(mutants.length, `${id}: the count in the title is the count swept`).toBe(swept);
       expect(mutants.length, `anti-vacuity: ${id} mutants`).toBeGreaterThan(Object.keys(golden.facts).length);
       const exempt = new Map((UNCHECKED[id] ?? []).map((u) => [u.label, u.why]));
       const survived: string[] = [];
       const threw: string[] = [];
       const staleExemptions: string[] = [];
+      let caughtCount = 0;
       for (const m of mutants) {
         const r = structuredClone(golden);
         m.apply(r);
@@ -132,11 +152,14 @@ describe("batch 5: the corruption sweep (every cell, fact and diagram value of e
         if (exempt.has(m.label)) {
           if (caught) staleExemptions.push(m.label);
         } else if (!caught) survived.push(m.label);
+        else caughtCount++;
       }
       // `expect.fail` with the whole list: vitest elides a long array's (or string's) tail in a diff, and the list is the finding.
       if (threw.length > 0) expect.fail(`a claim must fail a corrupted result, never throw: ${threw.join(" | ")}`);
       if (survived.length > 0) expect.fail(`${id}: ${survived.length} corrupted values no claim notices: ${survived.join(" | ")}`);
       if (staleExemptions.length > 0) expect.fail(`${id}: exemptions that a claim now catches: ${staleExemptions.join(" | ")}`);
+      // Every mutant was either caught by a claim or is a named exemption that a claim must still miss: nothing was skipped.
+      expect(caughtCount + exempt.size, `${id}: ${mutants.length} swept`).toBe(mutants.length);
     });
   }
 });
