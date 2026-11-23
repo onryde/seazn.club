@@ -1,7 +1,7 @@
 import { v1, reply, parseBody } from "@/server/api-v1/http";
 import { requireResourceAuth } from "@/server/api-v1/auth";
 import { DEVICE_LINK_MINT_LIMIT, rateLimit } from "@/lib/rate-limit";
-import { clientIp } from "@/lib/client-ip";
+import { clientIp, limiterSubject } from "@/lib/client-ip";
 import { CreateDeviceLink } from "@/server/api-v1/schemas";
 import { createDeviceLink } from "@/server/usecases/device-links";
 
@@ -12,7 +12,8 @@ type Ctx = { params: Promise<{ id: string }> };
 export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {
     const { id } = await params;
-    const ip = clientIp(req.headers);
+    // Task 25d: the limiter keys the client's SUBJECT (lib/client-ip.ts `limiterSubject`): an IPv6 /64 is one client.
+    const ip = limiterSubject(clientIp(req.headers));
     await rateLimit(`dlmint:${ip}`, DEVICE_LINK_MINT_LIMIT);
     const body = await parseBody(req, CreateDeviceLink);
     const auth = await requireResourceAuth(req, "fixture", id, "write");

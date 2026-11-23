@@ -94,7 +94,7 @@ vi.mock("../kinds", async (orig) => {
 
 import os from "node:os";
 import pino from "pino";
-import { CLIENT_REPORT_IP_LIMIT } from "@/lib/rate-limit";
+import { CLIENT_REPORT_IP_LIMIT, CLIENT_REPORT_LIMIT } from "@/lib/rate-limit";
 import { log } from "@/server/logger";
 import { CLIENT_REPORT_IP_SENTRY_SHARE, CLIENT_REPORT_SENTRY_WINDOW_SECONDS, type ClientReport } from "..";
 
@@ -224,6 +224,24 @@ describe("a client report's reach into Sentry, events and Logs, read off the rea
     } finally {
       probe.budget.max = 3;
     }
+  });
+
+  it("Task 25d (T25c review m1): the per-IP report bucket keys an IPv6 client by its /64: rotating addresses of one /64 share its limit", async () => {
+    // A new subject each time, so only the per-IP bucket (not the per-subject one) can refuse.
+    for (let i = 0; i < CLIENT_REPORT_IP_LIMIT.max; i++) {
+      expect(await receive(report(`ip-${i}`), `2001:db8:bb:1::${(i + 1).toString(16)}`), `report ${i + 1}`).not.toBe("capped");
+    }
+    expect(await receive(report("ip-past"), "2001:db8:bb:1:ffff::1"), "another address of the same /64: past the bucket").toBe("capped");
+    expect(await receive(report("ip-other"), "2001:db8:bb:2::1"), "the next /64: its own bucket").not.toBe("capped");
+  });
+
+  it("Task 25d (T25c review m1): the per-subject bucket keys an IPv6 client by its /64: rotating addresses of one /64 share it", async () => {
+    for (let i = 0; i < CLIENT_REPORT_LIMIT.max; i++) {
+      expect(await receive(report("one-fixture"), `2001:db8:cc:1::${(i + 1).toString(16)}`), `report ${i + 1}`).not.toBe("capped");
+    }
+    expect(await receive(report("one-fixture"), "2001:db8:cc:1:ffff::1"), "another address of the same /64: past the subject's bucket").toBe("capped");
+    expect(await receive(report("one-fixture"), "2001:db8:cc:2::1"), "the next /64: its own").not.toBe("capped");
+    expect(await receive(report("another-fixture"), "2001:db8:cc:1:ffff::2"), "the same /64, another subject: its own").not.toBe("capped");
   });
 
   it("Task 25c: two IPv6 addresses in ONE /64 share one Sentry share (and one report bucket); another /64 does not", async () => {

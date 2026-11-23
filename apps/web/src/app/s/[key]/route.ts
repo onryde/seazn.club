@@ -13,7 +13,7 @@
 import { deferred } from "@/lib/deferred";
 import { HttpError } from "@/lib/errors";
 import { rateLimit, SPONSOR_LINK_MISS_LIMIT } from "@/lib/rate-limit";
-import { clientIp } from "@/lib/client-ip";
+import { clientIp, limiterSubject } from "@/lib/client-ip";
 import { clientIpDigest, countsAsClick, recordClickOnce, resolveSponsorLink } from "@/server/sponsors/clicks";
 
 export const dynamic = "force-dynamic";
@@ -32,7 +32,8 @@ export async function GET(req: Request, { params }: Ctx) {
 /** A 404, spending the IP's miss budget first: past it, a 429 with the window's Retry-After. */
 async function miss(ip: string): Promise<Response> {
   try {
-    await rateLimit(`s404:${clientIpDigest(ip)}`, SPONSOR_LINK_MISS_LIMIT);
+    // Task 25d: the miss budget keys the client's subject (an IPv6 /64 is one client); the click dedupe above keeps the address.
+    await rateLimit(`s404:${clientIpDigest(limiterSubject(ip))}`, SPONSOR_LINK_MISS_LIMIT);
   } catch (err) {
     if (err instanceof HttpError && err.status === 429) {
       return new Response(err.message, { status: 429, headers: err.headers });

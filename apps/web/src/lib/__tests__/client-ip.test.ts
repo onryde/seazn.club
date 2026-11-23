@@ -51,6 +51,11 @@ const CF_EDGE6 = "2606:4700:10::ac43:1";
 /** The visitor, as Cloudflare names them. */
 const VISITOR = "203.0.113.50";
 const VISITOR6 = "2001:db8:1::7";
+/** Task 25d: VISITOR6's /64, written by hand (RFC 4291: the first four groups), and another address in it and another /64. */
+const VISITOR6_64 = "2001:db8:1:0::/64";
+const VISITOR6_SAME64 = "2001:db8:1:0:aaaa:bbbb:cccc:dddd";
+const OTHER_64 = "2001:db8:1:1::7";
+const OTHER_64_SUBJECT = "2001:db8:1:1::/64";
 /** A client reaching the fly.dev origin directly: not Cloudflare. */
 const DIRECT = "198.51.100.60";
 const XFF_FIRST = "192.0.2.7";
@@ -538,7 +543,19 @@ describe("every limiter the batch names keys on it (the real callers)", () => {
     const one = await allOf({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR });
     expect(one).toEqual({ capture: VISITOR, keys: bucketsOf(VISITOR) });
     const two = await allOf({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR6 });
-    expect(two, "a second visitor through the SAME edge is another bucket").toEqual({ capture: VISITOR6, keys: bucketsOf(VISITOR6) });
+    // Task 25d: an IPv6 visitor is keyed by its /64 (limiterSubject), in every one of these limiters.
+    expect(two, "a second visitor through the SAME edge is another bucket").toEqual({ capture: VISITOR6_64, keys: bucketsOf(VISITOR6_64) });
+  });
+
+  it("Task 25d: two IPv6 addresses in ONE /64 are ONE bucket in capture's failed-401 budget (and every clientIpOf limiter: mdfail, dlmint), the public read limiters and the /s/ miss budget; another /64 is another", async () => {
+    const a = await allOf({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR6 });
+    const b = await allOf({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR6_SAME64 });
+    const c = await allOf({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": OTHER_64 });
+    expect(a).toEqual({ capture: VISITOR6_64, keys: bucketsOf(VISITOR6_64) });
+    expect(b, "the same /64: the same buckets").toEqual(a);
+    expect(c, "another /64").toEqual({ capture: OTHER_64_SUBJECT, keys: bucketsOf(OTHER_64_SUBJECT) });
+    // IPv4 is untouched by the grouping.
+    expect(await allOf({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR })).toEqual({ capture: VISITOR, keys: bucketsOf(VISITOR) });
   });
 
   it("straight to the origin, a forged CF-Connecting-IP moves none of them: Fly's peer keys every one", async () => {
@@ -606,5 +623,82 @@ describe("limiterSubject — the key a per-IP limiter uses: IPv4 as it is, an IP
     }
     expect(checked).toBe(4);
     expect(limiterSubject("64:ff9b::203.0.113.7"), "NAT64's prefix is NOT the mapped form: an IPv6 like any other").toBe("64:ff9b:0:0::/64");
+  });
+});
+
+// Task 25d (T25c review m2): limiterSubject checked against an independent /64 oracle, Node's own `net.BlockList` subnet check, over
+// generated addresses in several text forms. For each: the address is INSIDE the subnet its subject names, an address that differs
+// only in its low 64 bits maps to the SAME subject, and one that differs in a bit of the prefix is OUTSIDE that subnet.
+describe("limiterSubject against net.BlockList's /64 check (generated addresses, counted)", () => {
+  // A seeded generator (mulberry32), so a failure reproduces.
+  const rand = (() => {
+    let a = 0x25d0c0de;
+    return () => {
+      a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  })();
+  const group = () => Math.floor(rand() * 0x10000);
+  const hex = (g: number[]) => g.map((n) => n.toString(16)).join(":");
+  /** One address, written one of four ways: expanded with leading zeros, plain, upper case, or with its longest zero run as `::`. */
+  const spell = (g: number[], form: number): string => {
+    if (form === 0) return g.map((n) => n.toString(16).padStart(4, "0")).join(":");
+    if (form === 1) return hex(g);
+    if (form === 2) return hex(g).toUpperCase();
+    let best = [-1, 0];
+    for (let i = 0; i < 8; ) {
+      if (g[i] !== 0) { i++; continue; }
+      let j = i;
+      while (j < 8 && g[j] === 0) j++;
+      if (j - i > best[1]!) best = [i, j - i];
+      i = j;
+    }
+    if (best[1]! < 2) return hex(g);
+    return `${hex(g.slice(0, best[0]))}::${hex(g.slice(best[0]! + best[1]!))}`;
+  };
+
+  it("every generated address is inside the /64 its subject names; its low 64 bits never move the subject; a prefix bit always does", async () => {
+    const { BlockList } = await import("node:net");
+    let checked = 0;
+    for (let i = 0; i < 2000; i++) {
+      const g = Array.from({ length: 8 }, group);
+      if (i % 5 === 0) g[2] = g[3] = 0; // zero runs in the prefix, so `::` lands there too
+      if (i % 7 === 0) g[4] = g[5] = g[6] = 0;
+      if (g.slice(0, 5).every((n) => n === 0) && g[5] === 0xffff) g[0] = 0x2001; // not the IPv4-mapped form (its own test)
+      const text = spell(g, i % 4);
+      const subject = limiterSubject(text);
+      const m = /^(.+)::\/64$/.exec(subject);
+      expect(m, `${text} -> ${subject}: a /64`).not.toBeNull();
+      const net = new BlockList();
+      net.addSubnet(`${m![1]}::`, 64, "ipv6");
+      expect([text, net.check(hex(g), "ipv6")]).toEqual([text, true]);
+      const low = [...g.slice(0, 4), group(), group(), group(), group()];
+      expect([text, limiterSubject(spell(low, (i + 1) % 4))], "the same /64, other low bits").toEqual([text, subject]);
+      const flipped = [...g];
+      const bit = Math.floor(rand() * 64);
+      flipped[Math.floor(bit / 16)] = g[Math.floor(bit / 16)]! ^ (1 << (bit % 16));
+      expect([text, bit, net.check(hex(flipped), "ipv6")], "a prefix bit flipped: outside").toEqual([text, bit, false]);
+      expect([text, limiterSubject(hex(flipped)) === subject], "and another subject").toEqual([text, false]);
+      checked++;
+    }
+    expect(checked).toBe(2000);
+  });
+
+  it("every generated IPv4-mapped address is its IPv4, inside a /32 BlockList of that IPv4", async () => {
+    const { BlockList } = await import("node:net");
+    let checked = 0;
+    for (let i = 0; i < 500; i++) {
+      const v4 = [0, 0, 0, 0].map(() => Math.floor(rand() * 256)).join(".");
+      const [a, b, c, d] = v4.split(".").map(Number) as [number, number, number, number];
+      const text = i % 2 ? `::ffff:${v4}` : `::ffff:${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+      const net = new BlockList();
+      net.addSubnet(v4, 32, "ipv4");
+      expect([text, limiterSubject(text)]).toEqual([text, v4]);
+      expect(net.check(limiterSubject(text), "ipv4")).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(500);
   });
 });

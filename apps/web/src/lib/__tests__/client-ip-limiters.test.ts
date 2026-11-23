@@ -42,12 +42,19 @@ import { POST as register } from "@/app/api/v1/public/orgs/[orgSlug]/competition
 import { POST as checkout } from "@/app/api/v1/public/registrations/[id]/checkout/route";
 import { POST as withdraw } from "@/app/api/v1/public/registrations/by-ref/[ref]/withdraw/route";
 import { POST as resend } from "@/app/api/v1/public/registrations/groups/[id]/resend/route";
+import { POST as quickMatch } from "@/app/api/quick-match/route";
 
 /** A Cloudflare edge (162.158.0.0/15, Cloudflare's published ranges) and one over IPv6 (2606:4700::/32). */
 const CF_EDGE = "162.158.12.34";
 /** Visitors, as Cloudflare names them. */
 const VISITOR = "203.0.113.50";
 const VISITOR6 = "2001:db8:1::7";
+/** Task 25d: an IPv6 visitor's bucket is its /64 (lib/client-ip.ts `limiterSubject`), written by hand (RFC 4291: the first four
+ *  groups); another address of that /64, and an address of the next /64 with its subject. */
+const VISITOR6_64 = "2001:db8:1:0::/64";
+const VISITOR6_SAME64 = "2001:db8:1:0:aaaa:bbbb:cccc:dddd";
+const OTHER_64 = "2001:db8:1:1::7";
+const OTHER_64_SUBJECT = "2001:db8:1:1::/64";
 /** A client reaching the fly.dev origin directly: not Cloudflare. */
 const DIRECT = "198.51.100.60";
 /** What a client writes into X-Forwarded-For / X-Real-IP itself, to pick a fresh bucket per request. */
@@ -116,7 +123,7 @@ const TOPOLOGIES: Array<{ name: string; headers: Record<string, string>; client:
   {
     name: "behind Cloudflare, a second visitor through the SAME edge: another bucket, never the edge's",
     headers: { "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR6, "x-forwarded-for": `${FORGED}, ${VISITOR6}` },
-    client: VISITOR6,
+    client: VISITOR6_64,
   },
   {
     name: "straight to the fly.dev origin: Fly's peer, never a forged CF-Connecting-IP or X-Forwarded-For",
@@ -149,5 +156,32 @@ describe.each(TOPOLOGIES)("$name", ({ headers, client }) => {
     expect(keys.filter((k) => !k.startsWith("pubv1")), "the limiter's own bucket").toEqual([`${namespace}:${client}`]);
     // The public read budget two of these spend first keys on the same client (it already read clientIp).
     for (const k of keys.filter((k) => k.startsWith("pubv1"))) expect(k).toBe(`pubv1:${client}`);
+  });
+});
+
+// Task 25d: one subscriber holds a whole IPv6 /64 and can rotate its low 64 bits at will, so every row above (and the quick-match
+// create, whose limiter sits before its form) keys an IPv6 client by its /64: two addresses of one /64 are ONE bucket, the next /64
+// another. Expected keys are written by hand, never read back from limiterSubject.
+describe("Task 25d: an IPv6 client is its /64 on every limiter", () => {
+  const ROWS: Row[] = [
+    ...LIMITERS,
+    {
+      name: "POST /api/quick-match (the create's own limit, before its form)",
+      namespace: "quick-match-create",
+      call: (h) => quickMatch(post("/api/quick-match", h) as never),
+    },
+  ];
+  it("covers the 17 rows and the quick-match create (anti-vacuity)", () => expect(ROWS).toHaveLength(18));
+
+  it.each(ROWS)("$name: two addresses of one /64 share $namespace's bucket; the next /64 is another", async ({ namespace, call, extra }) => {
+    const ownKeys: string[] = [];
+    for (const visitor of [VISITOR6, VISITOR6_SAME64, OTHER_64]) {
+      vi.mocked(rateLimit).mockClear();
+      const h = new Headers({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": visitor, ...extra });
+      incoming.headers = h;
+      await call(h);
+      ownKeys.push(...vi.mocked(rateLimit).mock.calls.map(([key]) => key).filter((k) => k.startsWith(`${namespace}:`)));
+    }
+    expect(ownKeys).toEqual([`${namespace}:${VISITOR6_64}`, `${namespace}:${VISITOR6_64}`, `${namespace}:${OTHER_64_SUBJECT}`]);
   });
 });

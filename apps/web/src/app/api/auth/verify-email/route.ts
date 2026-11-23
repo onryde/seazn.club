@@ -7,7 +7,7 @@ import { consumeVerificationToken } from "@/lib/verification";
 import { saveQuickMatchesForVerifiedUser } from "@/server/usecases/quick-match-save";
 import { rateLimit, AUTH_LIMIT } from "@/lib/rate-limit";
 import { headers } from "next/headers";
-import { clientIp } from "@/lib/client-ip";
+import { clientIp, limiterSubject } from "@/lib/client-ip";
 
 // `next` is the post-verify redirect the emailed link carries (a signup from
 // the invite, claim, check-in or login page). Without this key `.strict()`
@@ -32,7 +32,8 @@ const schema = z
 /** Verify an email token, mark the account verified, and sign the user in. */
 export async function POST(req: Request) {
   return handler(async () => {
-    const ip = clientIp(await headers());
+    // Task 25d: the limiter keys the client's SUBJECT (lib/client-ip.ts `limiterSubject`): an IPv6 /64 is one client.
+    const ip = limiterSubject(clientIp(await headers()));
     await rateLimit(`verify-email:${ip}`, AUTH_LIMIT);
 
     const { token, next } = schema.parse(await req.json());

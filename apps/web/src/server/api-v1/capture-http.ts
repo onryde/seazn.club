@@ -13,7 +13,7 @@ import { log } from "@/server/logger";
 import { CAPTURE_CODE_LIMIT, CAPTURE_FAIL_LIMIT, CAPTURE_RECORD_LIMIT, CAPTURE_START_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { normaliseCode } from "@/server/relay/domain/stream-code";
 import type { CaptureRecordRefusalCode, CaptureRefusalCode } from "./capture-schemas";
-import { clientIp } from "@/lib/client-ip";
+import { clientIp, limiterSubject } from "@/lib/client-ip";
 
 export class CaptureRefusalError extends Error {
   constructor(
@@ -108,7 +108,8 @@ function credentialKeyOf(req: Request): string {
  * the budget, so it never refuses a valid tok (B6 review I-1).
  */
 export function clientIpOf(req: Request): string {
-  return clientIp(req.headers);
+  // Task 25d: every caller keys a limiter on it (capture-fail, mdfail, dlmint), so it is the client's SUBJECT: an IPv6 /64 is one.
+  return limiterSubject(clientIp(req.headers));
 }
 
 /**

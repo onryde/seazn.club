@@ -4,7 +4,7 @@ import { sql } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { COOKIE_POLICY_VERSION } from "@/lib/consent";
 import { rateLimit, CONSENT_LIMIT } from "@/lib/rate-limit";
-import { clientIp } from "@/lib/client-ip";
+import { clientIp, limiterSubject } from "@/lib/client-ip";
 
 const Body = z.object({
   choice: z.enum(["accepted", "rejected"]),
@@ -27,7 +27,8 @@ function consentIp(req: Request): string | null {
 export async function POST(req: Request) {
   return handler(async () => {
     const ip = consentIp(req);
-    await rateLimit(`consent:${ip ?? "unknown"}`, CONSENT_LIMIT);
+    // Task 25d: the limiter keys the client's subject (an IPv6 /64 is one client); the consent record below keeps the address.
+    await rateLimit(`consent:${ip === null ? "unknown" : limiterSubject(ip)}`, CONSENT_LIMIT);
 
     const { choice, policy_version } = Body.parse(await req.json());
     const user = await getCurrentUser();

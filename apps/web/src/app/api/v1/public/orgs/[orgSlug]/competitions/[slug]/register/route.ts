@@ -1,6 +1,6 @@
 import { v1, parseBody, reply } from "@/server/api-v1/http";
 import { rateLimit } from "@/lib/rate-limit";
-import { clientIp } from "@/lib/client-ip";
+import { clientIp, limiterSubject } from "@/lib/client-ip";
 import { requireTurnstile } from "@/server/turnstile";
 import { HttpError } from "@/lib/errors";
 import { PublicRegisterGroupRequest } from "@/server/api-v1/schemas";
@@ -38,7 +38,8 @@ type Ctx = { params: Promise<{ orgSlug: string; slug: string }> };
 export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {
     const timer = createStageTimer();
-    const ip = clientIp(req.headers);
+    // Task 25d: the limiter keys the client's SUBJECT (lib/client-ip.ts `limiterSubject`): an IPv6 /64 is one client.
+    const ip = limiterSubject(clientIp(req.headers));
     await timer.stage("rate_limit", () => rateLimit(`regsubmit:${ip}`, { max: 10, windowSeconds: 60 }));
     // Bot check (Cloudflare Turnstile): after the general per-IP bucket, before the body, the honeypot and the narrower bucket,
     // so a request that fails it spends one hit and not the competition's whole 5-per-5-minutes. 403 TURNSTILE_FAILED.

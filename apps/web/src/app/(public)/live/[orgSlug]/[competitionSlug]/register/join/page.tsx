@@ -51,7 +51,7 @@ import { headers } from "next/headers";
 import { previewJoinEntry } from "@/server/usecases/registration-submit";
 import { HttpError } from "@/lib/errors";
 import { rateLimit } from "@/lib/rate-limit";
-import { clientIp } from "@/lib/client-ip";
+import { clientIp, limiterSubject } from "@/lib/client-ip";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
 import { DictProvider } from "@/components/i18n/dict-provider";
@@ -67,7 +67,7 @@ import { routes } from "@/lib/routes";
  *  here that renders the page with no join_code at all. */
 async function requestClientIp(): Promise<string> {
   try {
-    return clientIp(await headers());
+    return limiterSubject(clientIp(await headers())); // Task 25d: an IPv6 /64 is one client, as in the sibling route
   } catch {
     return "unknown";
   }

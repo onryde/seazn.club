@@ -24,7 +24,7 @@ import { NEXT_PATH_MAX_LENGTH } from "@/lib/types";
 import { rateLimit, EMAIL_LIMIT } from "@/lib/rate-limit";
 import { requireTurnstile } from "@/server/turnstile";
 import { headers } from "next/headers";
-import { clientIp } from "@/lib/client-ip";
+import { clientIp, limiterSubject } from "@/lib/client-ip";
 
 /** The body of any unexpected failure, exactly as `handler()` words it when the thrown value is not an Error
  *  (lib/http.ts). The route builds the same response itself for the two outbox refusals, whose own messages name an
@@ -55,7 +55,8 @@ const schema = z
  *  response is identical whether or not the account already existed. */
 export async function POST(req: Request) {
   return handler(async () => {
-    const ip = clientIp(await headers());
+    // Task 25d: the limiter keys the client's SUBJECT (lib/client-ip.ts `limiterSubject`): an IPv6 /64 is one client.
+    const ip = limiterSubject(clientIp(await headers()));
     await rateLimit(`magic-link:${ip}`, EMAIL_LIMIT);
     // Bot check (Cloudflare Turnstile): before the body is read or any account is looked at. 403 TURNSTILE_FAILED.
     await requireTurnstile(req, "login");

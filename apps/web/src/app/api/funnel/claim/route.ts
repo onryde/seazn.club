@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { headers } from "next/headers";
-import { clientIp } from "@/lib/client-ip";
+import { clientIp, limiterSubject } from "@/lib/client-ip";
 import { HttpError, PaymentRequiredError, handler } from "@/lib/http";
 import { rateLimit, AUTH_LIMIT } from "@/lib/rate-limit";
 import { sql } from "@/lib/db";
@@ -61,7 +61,8 @@ async function resolveOrCreateVerifiedUser(email: string): Promise<string | null
  *  draft, and return where to land: inside the competition. */
 export async function POST(req: Request) {
   return handler(async () => {
-    const ip = clientIp(await headers());
+    // Task 25d: the limiter keys the client's SUBJECT (lib/client-ip.ts `limiterSubject`): an IPv6 /64 is one client.
+    const ip = limiterSubject(clientIp(await headers()));
     await rateLimit(`funnel-claim:${ip}`, AUTH_LIMIT);
 
     // A token the schema refuses (a truncated link) names no draft either: the same dead-link answer, not "Invalid input".

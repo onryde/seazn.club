@@ -75,7 +75,7 @@ import {
 } from "@/server/public-site/competition-hub-schema";
 import { routes } from "@/lib/routes";
 import { isoDateTime } from "@/lib/public-site";
-import { clientIp } from "@/lib/client-ip";
+import { clientIp, limiterSubject } from "@/lib/client-ip";
 
 // s-maxage=30 at the edge (doc 08 §6); Redis mirrors that window.
 export const PUBLIC_CACHE_CONTROL = "public, s-maxage=30, stale-while-revalidate=300";
@@ -85,7 +85,8 @@ const TTL_SECONDS = 30;
  *  behind Cloudflare each visitor is their own bucket (never the edge's), and neither a client-written X-Forwarded-For hop nor
  *  a `CF-Connecting-IP` forged at the fly.dev origin leads. */
 function publicClientIp(req: Request): string {
-  return clientIp(req.headers);
+  // Task 25d: the client's SUBJECT, so an IPv6 /64 is one bucket (lib/client-ip.ts `limiterSubject`).
+  return limiterSubject(clientIp(req.headers));
 }
 
 /** Per-IP limit for unauthenticated reads (doc 08 §6: 60/min). */
