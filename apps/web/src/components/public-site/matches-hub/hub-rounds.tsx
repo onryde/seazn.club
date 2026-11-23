@@ -25,8 +25,10 @@ export function hubRoundsFor(pages: readonly HubRoundPage[], bucket: Bucket): Hu
   return bucket === "completed" ? holding.reverse() : holding;
 }
 
-export const hubRoundsUrl = (doc: Pick<CompetitionHubDocT, "orgSlug" | "competitionSlug">, divisionSlug: string, key: string) =>
-  `/live/${encodeURIComponent(doc.orgSlug)}/${encodeURIComponent(doc.competitionSlug)}/${encodeURIComponent(divisionSlug)}/hub-rounds?key=${encodeURIComponent(key)}`;
+/** Where a folded round's cards are read. `at` names the document build (`generatedAt`): the answer is edge-cached (30 s, then 300 s
+ *  stale-while-revalidate), so a URL without it could be answered with an older build's cards and marked as this build's read. */
+export const hubRoundsUrl = (doc: Pick<CompetitionHubDocT, "orgSlug" | "competitionSlug" | "generatedAt">, divisionSlug: string, key: string) =>
+  `/live/${encodeURIComponent(doc.orgSlug)}/${encodeURIComponent(doc.competitionSlug)}/${encodeURIComponent(divisionSlug)}/hub-rounds?key=${encodeURIComponent(key)}&at=${encodeURIComponent(doc.generatedAt)}`;
 
 /** What a folded round last read: at which document build, its cards, or that the read failed (the cards before it kept). While a
  *  read for the current build is out there is no entry for that build yet, which is what "loading" is (derived, never stored). */

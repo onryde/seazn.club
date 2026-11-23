@@ -75,7 +75,8 @@ describe("C: a folded hub round loads when opened and keeps up with the poll", (
     (propsOf(toggleOf(island, key9)).onClick as () => void)();
     await settle();
     expect(calls.length).toBe(1);
-    expect(calls[0]).toContain(`/live/${full.orgSlug}/${full.competitionSlug}/premier/hub-rounds?key=${encodeURIComponent(key9)}`);
+    // Review minor: the URL names the document build (`at`), so an edge-cached answer of an older build is never read as this one's.
+    expect(calls[0]).toContain(`/live/${full.orgSlug}/${full.competitionSlug}/premier/hub-rounds?key=${encodeURIComponent(key9)}&at=g1`);
     expect(cardsOf(island).filter((id) => id.startsWith("P9-")).length).toBe(15);
   });
 
@@ -90,6 +91,7 @@ describe("C: a folded hub round loads when opened and keeps up with the poll", (
     island.rerender(props("g2") as never);
     await settle();
     expect(calls.length, "new build: read again").toBe(2);
+    expect(new URL(calls[1]!, "http://x").searchParams.get("at"), "at the new build").toBe("g2");
     expect(cardsOf(island).filter((id) => id.startsWith("P9-")).length, "the cards stay while it reads").toBe(15);
   });
 

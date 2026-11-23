@@ -5,7 +5,7 @@
 // Single-sport: the loader is sport-blind (it reads round keys and fixture rows), the sport sweep is the planner's.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
-import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
+import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import en from "@/dictionaries/en/public.json";
 import type { Dict } from "@/lib/i18n-constants";
 import { packRows } from "@/lib/packed-rows";
@@ -144,3 +144,63 @@ describe("review I1: an open folded round of the paged Schedule is read again un
     expect(courtsIn(island, key9).length).toBe(15);
   });
 });
+
+// Review minor: the team search's answer is checked against the pick it was asked for. A slow answer for an earlier pick, landing after
+// a newer pick's, must never draw the earlier team's rows under "Showing <newer team>"; nor may an answer naming another team.
+describe("the team search draws only the answer for the team on screen", () => {
+  type Answer = { kind: "entrant"; entrantId: string; rounds: { key: string; rows: PublicFixture[] }[]; extras: { slotLabels: object; forfeit: object } };
+  const answerFor = (entrantId: string, key: string): Answer => ({
+    kind: "entrant",
+    entrantId,
+    rounds: [{ key, rows: [F(9, "scheduled", { id: `${entrantId}-row` })] }],
+    extras: { slotLabels: {}, forfeit: {} },
+  });
+  /** Fetch held open per entrant until the test answers it. */
+  function deferredFetch() {
+    const pending = new Map<string, (body: unknown) => void>();
+    vi.stubGlobal("fetch", (url: string) => {
+      calls.push(url);
+      const entrant = new URL(url, "http://x").searchParams.get("entrant")!;
+      return new Promise((resolve) => pending.set(entrant, (body) => resolve(new Response(JSON.stringify({ ok: true, data: body }), { status: 200 }))));
+    });
+    return pending;
+  }
+  const pick = (island: Island, name: string) => {
+    const input = island.tree().find((el) => propsOf(el)["data-testid"] === "paged-team-search")!;
+    (propsOf(input).onChange as (e: { target: { value: string } }) => void)({ target: { value: name.slice(0, 3) } });
+    const button = island.tree().find((el) => el.type === "button" && textOf(el) === name)!;
+    expect(button, `premise: ${name} is suggested`).toBeDefined();
+    (propsOf(button).onClick as () => void)();
+  };
+  const teamRows = (island: Island) =>
+    island.tree().filter((el) => propsOf(el).railMode !== undefined && (propsOf(el).fixture as PublicFixture | undefined)?.id?.endsWith("-row")).map((el) => (propsOf(el).fixture as PublicFixture).id);
+
+  it("Alpha asked, then Bravo; Bravo answers first, Alpha's late answer is dropped: Bravo's rows stay", async () => {
+    const pending = deferredFetch();
+    const data = dataOf(rows());
+    const key9 = data.groups.find((g) => g.roundNo === 9)!.key;
+    const island = renderIsland(PagedSchedule, props(data) as never) as unknown as Island;
+    pick(island, "Alpha");
+    pick(island, "Bravo");
+    expect(calls.length, "premise: two reads out").toBe(2);
+    pending.get("e2")!(answerFor("e2", key9));
+    await settle();
+    expect(teamRows(island)).toEqual(["e2-row"]);
+    pending.get("e1")!(answerFor("e1", key9));
+    await settle();
+    expect(teamRows(island), "Alpha's late answer never replaces Bravo's").toEqual(["e2-row"]);
+  });
+
+  it("an answer naming another team is not drawn: the search says it failed", async () => {
+    const pending = deferredFetch();
+    const data = dataOf(rows());
+    const key9 = data.groups.find((g) => g.roundNo === 9)!.key;
+    const island = renderIsland(PagedSchedule, props(data) as never) as unknown as Island;
+    pick(island, "Bravo");
+    pending.get("e2")!(answerFor("e1", key9));
+    await settle();
+    expect(teamRows(island)).toEqual([]);
+    expect(island.tree().some((el) => propsOf(el).role === "alert"), "the failure is said").toBe(true);
+  });
+});
+

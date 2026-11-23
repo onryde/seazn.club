@@ -281,7 +281,10 @@ interface FixtureRow {
  *  picks from. The real page always sends every field (`listDivisionFixtures`
  *  selects them all); this only normalises the gap for TypeScript and for any
  *  hand-built test fixture that omits one. */
-/** No folded rounds - one array, so the run sheet's "the page sent new rounds" check never fires on a re-render. */
+/** No folded rounds: one shared empty array, so a panel rendered without them hands the run sheet the SAME value every render. The
+ *  sheet keys its folded-round reads on this array's identity (`run-sheet.tsx`), and with no folded rounds there is nothing to read
+ *  either way. A page render WITH folded rounds always sends a new array (the server builds it each time), and the sheet then
+ *  re-reads every folded round it has open (review I1) - which is the point, not a waste. */
 const NO_FOLDED_ROUNDS: readonly FoldedRunSheetRound[] = [];
 
 function toRunSheetFixture(f: FixtureRow): RunSheetFixture {

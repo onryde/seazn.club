@@ -147,19 +147,26 @@ export function PagedSchedule({ data, entrantNames, divisionPath, tz, copy, page
       return next;
     });
 
+  // The team the search is showing: an answer for an earlier pick (a slow read overtaken by a newer one) is dropped.
+  const teamPick = useRef<string | null>(null);
   const chooseTeam = (pick: { id: string; name: string }) => {
+    teamPick.current = pick.id;
     setTeam(pick);
     setQuery(pick.name);
     setTeamLoad({ state: "loading" });
     fetchRounds(roundsUrl(divisionPath, { entrant: pick.id }))
       .then((answer) => {
-        if (answer.kind !== "entrant") throw new Error("rounds: not a team");
+        if (teamPick.current !== pick.id) return;
+        if (answer.kind !== "entrant" || answer.entrantId !== pick.id) throw new Error("rounds: not this team");
         setExtras((prev) => mergeRowExtras(prev, answer.extras));
         setTeamLoad({ state: "ready", rounds: answer.rounds });
       })
-      .catch(() => setTeamLoad({ state: "error" }));
+      .catch(() => {
+        if (teamPick.current === pick.id) setTeamLoad({ state: "error" });
+      });
   };
   const clearTeam = () => {
+    teamPick.current = null;
     setTeam(null);
     setTeamLoad(null);
     setQuery("");
@@ -328,6 +335,7 @@ export function PagedSchedule({ data, entrantNames, divisionPath, tz, copy, page
             onChange={(e) => {
               setQuery(e.target.value);
               if (team !== null) {
+                teamPick.current = null;
                 setTeam(null);
                 setTeamLoad(null);
               }
