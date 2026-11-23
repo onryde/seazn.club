@@ -74,12 +74,18 @@ type Props = {
 };
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  const { orgSlug, competitionSlug, divisionSlug } = await params;
+  const { orgSlug, competitionSlug, divisionSlug, tab } = await params;
   const data = await getPublicDivision(orgSlug, competitionSlug, divisionSlug);
   if (!data) return {};
   // The org's language, like every word on the page (ISR: never the viewer's).
   const dict = await getDictionary(toLocale(data.org.default_locale), "public");
+  // Round 2 (R4): a tab's document is `tab/{tab}`, but its ONE public address is `{division}?tab={tab}` (the hub's link, and where
+  // the proxy redirects the internal path). The rewrite's own request - `tab/{tab}?tab={tab}` - is served as it is, so each
+  // document names that address: it is then no second page. Relative, resolved against the root layout's `metadataBase`.
+  const division = routes.publicHub(orgSlug, competitionSlug, divisionSlug);
+  const routed = divisionTabOf(tab);
   return {
+    alternates: { canonical: routed !== null && routed !== "schedule" ? `${division}?tab=${routed}` : division },
     title: `${data.division.name} — ${data.competition.name}`,
     description: t(dict, "division.metaDescription", {
       division: data.division.name,
