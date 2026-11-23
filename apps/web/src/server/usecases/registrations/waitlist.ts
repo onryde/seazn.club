@@ -87,17 +87,19 @@ export function freesTeamSlot(row: { status: string; free_agent: boolean }): boo
 
 /** The room check an ORGANISER's manual promotion owes (registration defects, item 1), run inside the promoting transaction.
  *  `promoteOldestWaitlisted` trusts its caller that a place is free, which holds for the automatic promotions (a withdrawal,
- *  rejection or expiry just made the place) and not for an organiser pressing Promote on a full division.
+ *  rejection or expiry just made the place) and not for an organiser pressing Promote on a full division. In the order the code
+ *  judges them (the first that is past answers):
  *  - at or past the FORMAT's max entrants (`divisionFormatMaxes`: the largest field the first stage's draw fits): always refused,
  *    422 `FORMAT_TOO_MANY_ENTRANTS`, on any plan and confirmed or not. It answers FIRST, before the online cap (owner "apply rec"
  *    2026-11-22): no plan or cap raises it, so its sentence is the one that says what to change;
+ *  - past the cap of a division that plays ONLINE, min(`planLimit`, 128) (owner ruling 2026-11-21), where the online cap is what
+ *    binds (the plan's limit is absent or no lower): always refused, 422 `ONLINE_DIVISION_FULL` - a capacity limit, with no plan to
+ *    raise. It is judged by the places the division HOLDS (`countOnlineHeld`: live entrants plus sign-ups let in), the count every
+ *    online-cap door shares, not by the plan's count below, and it comes before the plan's refusal (at a plan of exactly 128 no
+ *    upgrade changes anything);
  *  - past the PLAN's per-division limit (`planLimit`, the limit submit honours: `getLimit` with its add-on bonus; null = unlimited):
- *    always refused, 422 `PROMOTE_PLAN_LIMIT`;
- *  - past the cap of a division that plays ONLINE, min(`planLimit`, 128) (owner ruling 2026-11-21): always refused too, but where the
- *    online cap is what binds (the plan's limit is absent or no lower) it is 422 `ONLINE_DIVISION_FULL` - a capacity limit, with no
- *    plan to raise. That one is judged by the places the division HOLDS (`countOnlineHeld`: live entrants plus sign-ups let in), the
- *    count every online-cap door shares, not by the plan's count below; a plan limit LOWER than the cap judges that same count too (re-review
- *    N2) and answers with `PROMOTE_PLAN_LIMIT`;
+ *    always refused, 422 `PROMOTE_PLAN_LIMIT`. In an online division a plan limit LOWER than the cap also judges the online held
+ *    count (re-review N2), with this same refusal;
  *  - at or past the division's OWN capacity: refused 409 `PROMOTE_OVER_CAPACITY` unless `confirmOverCapacity`.
  *  The format's, the plan's and the capacity's count is submit's own (team entries holding a place, a solo sign-up never one), taken under the same
  *  `division:` advisory lock and `registration_settings` row lock submit takes (in that order), so two promotions - or a promotion and
