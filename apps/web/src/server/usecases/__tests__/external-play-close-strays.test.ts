@@ -38,7 +38,7 @@ vi.mock("../external-play/preflight", async (importOriginal) => ({
   seatPlayer: preflight.seatPlayer,
 }));
 
-import { createGameIfReady } from "../external-play/create-game";
+import { createGameIfReady, STRAYS_CLOSED_REASONS } from "../external-play/create-game";
 import { closeBridgeIfUnplayable } from "../external-play/bridge-close";
 import { isPlayableFixtureStatus } from "../external-play/preflight";
 import { mintOrgOwnerAuth } from "../external-play/auth";
@@ -140,13 +140,18 @@ const withdraw = async (s: Seeded) => {
 };
 
 /** One REAL sweep pass, scoped to `orgIds`, at the instant `atMs` - its `now` (the claim fence) and its wall clock (the
- *  listing's instant) are that one instant, as they are in production. Reconcile and the teardown are not this suite's. */
-async function pass(orgIds: string[], atMs: number, { failures = [] as unknown[] } = {}): Promise<SweepReport> {
+ *  listing's instant) are that one instant, as they are in production. Reconcile and the teardown are not this suite's.
+ *  `wallClock` overrides the wall clock alone, for a test whose clock moves while a call is in flight. */
+async function pass(
+  orgIds: string[],
+  atMs: number,
+  { failures = [] as unknown[], wallClock = () => atMs }: { failures?: unknown[]; wallClock?: () => number } = {},
+): Promise<SweepReport> {
   const r = await sweepExternalPlay({
     ...NO_PRUNE,
     ...NO_WINDOW,
     now: new Date(atMs),
-    wallClock: () => atMs,
+    wallClock,
     orgIds,
     serialise: false,
     reconcile: async () => null,
@@ -218,6 +223,41 @@ describe.skipIf(!DB)("close_strays — only what could still be our create is ca
       await pass([s.orgId], sent + ageMs + 60_000);
       expect(board.listOutgoingChallenges, `${label}: never asked again`).not.toHaveBeenCalled();
       expect(notListedWarns(s.fixtureId), `${label}: never warned again`).toHaveLength(0);
+      checked += 1;
+    }
+    expect(checked).toBe(cases.length);
+  });
+
+  it("n1: a listing that ANSWERS past the window is never acted on - asked inside it, answered one ms past its end: nothing cancelled, stamped not_listed, warned with the answer's age. Answered AT the end, the match is cancelled once", async () => {
+    const cases: Array<[string, number, boolean]> = [
+      ["answered one ms past the window's end", WINDOW_MS + 1, false],
+      ["answered at the window's end (inclusive)", WINDOW_MS, true],
+    ];
+    let checked = 0;
+    for (const [label, answeredAgeMs, cancels] of cases) {
+      vi.clearAllMocks();
+      board.cancelChallenge.mockResolvedValue({ ok: true });
+      const s = await seed();
+      const sent = await deadSender(s, freshId());
+      await withdraw(s);
+      const lookalike = freshId();
+      let wall = sent + IN_WINDOW_MS;
+      const askedAt: number[] = [];
+      board.listOutgoingChallenges.mockImplementation(async () => {
+        askedAt.push(wall);
+        wall = sent + answeredAgeMs; // the call takes the clock across (or up to) the window's end
+        return { ok: true, challenges: [ourChallenge(lookalike, s)] };
+      });
+      const r = await pass([s.orgId], sent + IN_WINDOW_MS, { wallClock: () => wall });
+      expect(askedAt, `${label}: asked once, inside the window`).toEqual([sent + IN_WINDOW_MS]);
+      expect(cancelsOf(lookalike), `${label}: cancels`).toHaveLength(cancels ? 1 : 0);
+      expect(board.cancelChallenge, `${label}: no other cancel`).toHaveBeenCalledTimes(cancels ? 1 : 0);
+      expect(r.straysCancelled, label).toBe(cancels ? 1 : 0);
+      expect(await reasonOf(s.fixtureId), label).toBe(cancels ? "cancelled" : "not_listed");
+      expect(
+        notListedWarns(s.fixtureId).map((c) => c[0] as { ageMs: number; called: boolean }),
+        `${label}: warned once with the answer's age, a call made`,
+      ).toEqual(cancels ? [] : [expect.objectContaining({ ageMs: answeredAgeMs, called: true })]);
       checked += 1;
     }
     expect(checked).toBe(cases.length);
@@ -480,5 +520,18 @@ describe.skipIf(!DB)("close_strays — only what could still be our create is ca
       expect(await bridgeRow(ids[i]!), `${label}: nothing stamped`).toMatchObject({ strays_closed_at: null, strays_attempts: 0 });
     }
     expect(ids.length, "anti-vacuity: three boards").toBe(3);
+  });
+});
+
+describe.skipIf(!DB)("strays_closed_reason — the TypeScript vocabulary IS V543's CHECK", () => {
+  it("every reason the CHECK admits is in STRAYS_CLOSED_REASONS and nothing else is (order not compared: it has no meaning)", async () => {
+    // The authority is the database: read the CHECK's literals back (the NEEDS_REASONS pattern, V456 / needs-organiser).
+    const [def] = await sql<{ d: string }[]>`
+      select pg_get_constraintdef(c.oid) as d from pg_constraint c
+       where c.conrelid = 'fixture_external_play'::regclass and c.conname = 'fixture_external_play_strays_closed_reason_check'`;
+    const dbReasons = [...(def?.d ?? "").matchAll(/'([a-z_]+)'::text/g)].map((m) => m[1]!).sort();
+    expect(dbReasons.length, "premise: the CHECK was found and parsed").toBeGreaterThan(0);
+    expect([...STRAYS_CLOSED_REASONS].sort()).toEqual(dbReasons);
+    expect(new Set(STRAYS_CLOSED_REASONS).size, "no reason listed twice").toBe(STRAYS_CLOSED_REASONS.length);
   });
 });

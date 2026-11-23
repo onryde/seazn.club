@@ -902,16 +902,19 @@ async function knownElsewhere(
   };
 }
 
-/** Why the closed-board cleanup stamped a board done (`strays_closed_reason`, V543's CHECK lists exactly these). Done means
- *  "nothing more THIS job can do", never "nothing of ours is open" - see cancelClosedBoardStrays. */
-export type StraysClosedReason = "cancelled" | "not_listed" | "token_refused" | "no_token" | "unidentifiable" | "gave_up";
+/** Why the closed-board cleanup stamped a board done (`strays_closed_reason`). The SAME SET as V543's CHECK:
+ *  external-play-close-strays.test.ts reads the CHECK back from pg_constraint and fails if the two ever differ (the
+ *  NEEDS_REASONS pattern; order is not compared). Done means "nothing more THIS job can do", never "nothing of ours is
+ *  open" - see cancelClosedBoardStrays. */
+export const STRAYS_CLOSED_REASONS = ["cancelled", "not_listed", "token_refused", "no_token", "unidentifiable", "gave_up"] as const;
+export type StraysClosedReason = (typeof STRAYS_CLOSED_REASONS)[number];
 
 /** What the closed-board cleanup did for one board (the sweep's `close_strays`, sweep/close-strays.ts). */
 export type ClosedBoardStrays =
   /** Stamped (`strays_closed_at`, `strays_closed_reason`): nothing more this job can do for the board. `cancelled` - every
-   *  match listed inside the window was cancelled or was already over; `not_listed` - none was listed inside it, or the
-   *  board was reached only after it (no call made); `token_refused` / `no_token` - White's token cannot list or cancel;
-   *  `unidentifiable` - nothing to match ours by. NOT a promise that nothing of ours is open (the header's residual). */
+   *  match listed inside the window was cancelled or was already over; `not_listed` - none was listed inside it, the listing
+   *  answered only after it (nothing cancelled), or the board was reached only after it (no call made); `token_refused` /
+   *  `no_token` - White's token cannot list or cancel; `unidentifiable` - nothing to match ours by. NOT a promise that nothing of ours is open (the header's residual). */
   | { kind: "done"; cancelled: number; reason: StraysClosedReason }
   /** Owed to a later pass, NOT stamped: a 429 (`rateLimited` - the sweep stops the whole job for the pass), an answer that
    *  proves nothing (a 5xx, a 404: lila's 404 cannot be told from a 5xx here, so the next pass's listing decides - a gone
@@ -927,9 +930,9 @@ export type ClosedBoardStrays =
  *
  * ONLY what could still be our create (controller ruling I1, 2026-11-23): a listed challenge is cancelled only while it can
  * still be our send by the recovery's OWN rule - L1's window after the marker (`challengeWindowEnd`: LICHESS_TIMEOUT_MS for
- * the send to land, CHALLENGE_LISTED_MS for it to stay listed), judged on the wall-clock instant of the listing, before the
- * call. A challenge carries no createdAt (measured absent, T17), so the listing's instant is the only clock it has, exactly
- * as in the recovery. A match listed later is somebody's challenge kept alive elsewhere - a player's own, or another
+ * the send to land, CHALLENGE_LISTED_MS for it to stay listed), judged on the wall clock before the listing's call AND again
+ * when it answers (n1: a list answered past the window acts on nothing). A challenge carries no createdAt (measured absent,
+ * T17), so the listing's instants are the only clock it has, exactly as in the recovery. A match listed later is somebody's challenge kept alive elsewhere - a player's own, or another
  * fixture's - and is NEVER cancelled here; a board reached after its window is stamped `not_listed` with no call at all,
  * which also bounds what a first deploy finds (every historical board is past it).
  *
@@ -1011,6 +1014,11 @@ export async function cancelClosedBoardStrays(
     if (listed.code === "unauthorized") return done(0, "token_refused");
     return { kind: "retry", cancelled: 0, why: `challenge_list:${listed.code}`, rateLimited: listed.code === "rate_limited" };
   }
+  // n1 (I1 re-review): the list describes some instant between the call and its answer, and here the tolerance points at
+  // CANCEL - so the answer too must land inside the window. One that answers past it may list a lookalike kept alive
+  // elsewhere: nothing is cancelled. The price, I1's direction: a slow answer can skip our own challenge.
+  const answeredAt = clock();
+  if (answeredAt.getTime() > challengeWindowEnd(row.sentAt)) return notListed(answeredAt, true);
   const plan = { white: { userId: white.userId, lichessId: white.lichess.id }, tc };
   const blackId = black.lichess.id.toLowerCase();
   const matches = listed.challenges
