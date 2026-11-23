@@ -93,10 +93,14 @@ async function sendLikeTheCrashedMinter(s: { whiteToken: string; away: { lichess
   return made.challengeId;
 }
 
-/** The crashed minter's row: claimed, marked sent `ageMs` before NOW, never
- *  committed. The default age is the earliest takeover (just past stale). */
+/** The crashed minter's row: claimed, marked sent `ageMs` before this moment, never
+ *  committed. The default age is the earliest takeover (just past stale).
+ *  On the WALL clock: T9 dates the marker and its claim on the wall clock at the
+ *  write (create-game), and the recovery reads the listing against the wall clock -
+ *  the fixture server's own clock is the wall too. NOW (passed as `now` below)
+ *  judges the board's window only. */
 async function crashedAfterSend(s: Seeded, ageMs = MINT_CLAIM_STALE_MS + 1): Promise<void> {
-  const at = new Date(NOW.getTime() - ageMs);
+  const at = new Date(Date.now() - ageMs);
   await sql`
     insert into fixture_external_play (fixture_id, org_id, scheduled_at_basis, mint_claimed_at, create_sent_at)
     values (${s.fixtureId}, ${s.orgId}, ${T}, ${at}, ${at})`;
