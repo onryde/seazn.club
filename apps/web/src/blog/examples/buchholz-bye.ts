@@ -8,19 +8,23 @@
 // Two players, Cy and Dev, finish on the same points with a bye each. Their byes are worth the same (each is read as a game
 // against an imaginary opponent on the player's own points), so what separates them is who they really played.
 //
+// THE CAP (fix round 2). The third bye is Ana's, and Ana wins her other two games: three points, more than a draw in every
+// round of a three-round event (1½). FIDE C.07 art. 16.4.2 caps the dummy at a draw's points times the number of rounds, so her
+// bye counts 1½ in her Buchholz, not 3. Cy and Dev sit exactly ON the cap (1½), which cannot tell the two readings apart; Ana is
+// past it, so her Buchholz is the capped figure and differs from the uncapped one, and a claim says so.
+//
 // WHAT CHECKS IT. FIDE C.07 article 16 (unplayed rounds), recomputed from the table's own cells: a bye is read as a game
-// against a dummy opponent who finished on the same points as the player (16.4) and as a win (a bye awards a win's points,
-// 16.3.1); a real opponent counts at its final score. The dummy's score is the player's own as long as it is not above a draw in
-// every round (the cap the engine also applies); a guard in the claim refuses an example in which a bye holder is above it, so
-// the claim never rests on a cap it does not model. The places follow chess's DECLARED Swiss order (`defaultOrderOf`).
+// against a dummy opponent who finished on the player's own points (16.4) but never on more than a draw's points times the
+// number of rounds (16.4.2, the cap read from chess's DECLARED draw points) and as a win (a bye awards a win's points, 16.3.1);
+// a real opponent counts at its final score. The places follow chess's DECLARED Swiss order (`defaultOrderOf`).
 import { resultColumnText } from "@seazn/engine/competition";
 import { builtinModules } from "@seazn/engine/sports";
 import { declaredCfgs, defaultOrderOf } from "@seazn/engine/testkit";
 import { standingsLabel } from "@/blog/labels-screens";
 import { derivedText } from "@/server/public-site/standings-view";
-import { C, COLUMNS, halves, separatedByClaim } from "./buchholz-sonneborn-berger";
+import { C, COLUMNS, halves, pointsText, separatedByClaim } from "./buchholz-sonneborn-berger";
 import { startingVariantKey } from "./starting-variant";
-import { factsRepeatTheTable, placeOf, placeText, playAndRank, rowOf, type MatchView, type Meeting } from "./tie-break-play";
+import { factsRepeatTheTable, placeOf, placeText, playAndRank, rowOf, stageRules, type MatchView, type Meeting } from "./tie-break-play";
 import type { BlogExample, Claim, ExampleResult } from "./types";
 
 export const BUCHHOLZ_BYE_ID = "buchholz-bye";
@@ -37,20 +41,33 @@ const nameOf = (id: string) => PLAYERS.find((p) => p.id === id)!.name;
 const homeWins = (v: MatchView) => v.outcome.kind === "win" && v.outcome.winner === v.home.entrantId;
 const drawn = (v: MatchView) => v.outcome.kind === "draw";
 
-/** Each round one of the five sits out: Eve, then Dev, then Cy. Nobody meets anyone twice. */
+/** Each round one of the five sits out: Cy, then Dev, then Ana. Nobody meets anyone twice. */
 const MEETINGS: Meeting[] = [
   { round: 1, home: "ana", away: "ben", what: "round 1: Ana beats Ben", seed: 5, want: homeWins },
-  { round: 1, home: "cy", away: "dev", what: "round 1: Cy draws with Dev", seed: 2, want: drawn },
-  { round: 1, home: "eve", away: "", what: "round 1: Eve has the bye", bye: true },
+  { round: 1, home: "dev", away: "eve", what: "round 1: Dev draws with Eve", seed: 2, want: drawn },
+  { round: 1, home: "cy", away: "", what: "round 1: Cy has the bye", bye: true },
   { round: 2, home: "ana", away: "cy", what: "round 2: Ana beats Cy", seed: 5, want: homeWins },
   { round: 2, home: "ben", away: "eve", what: "round 2: Ben beats Eve", seed: 5, want: homeWins },
   { round: 2, home: "dev", away: "", what: "round 2: Dev has the bye", bye: true },
-  { round: 3, home: "ana", away: "eve", what: "round 3: Ana beats Eve", seed: 5, want: homeWins },
   { round: 3, home: "ben", away: "dev", what: "round 3: Ben beats Dev", seed: 5, want: homeWins },
-  { round: 3, home: "cy", away: "", what: "round 3: Cy has the bye", bye: true },
+  { round: 3, home: "cy", away: "eve", what: "round 3: Cy draws with Eve", seed: 2, want: drawn },
+  { round: 3, home: "ana", away: "", what: "round 3: Ana has the bye", bye: true },
 ];
 
 const chess = () => builtinModules.find((m) => m.key === "boardgame")!;
+
+/**
+ * FIDE C.07 art. 16.4.2: a dummy opponent's score shall not exceed a draw's points times the number of rounds. Read from
+ * chess's DECLARED points rule (a win is one printed point), never typed: three rounds at a draw of half a point are 1½.
+ */
+export function dummyCap(): number {
+  const sport = chess();
+  const points = stageRules(sport, declaredCfgs(sport).find((c) => c.name === startingVariantKey(sport))!.cfg, "swiss").points;
+  const win = points.win.regulation;
+  const draw = points.draw;
+  if (win === undefined || win <= 0 || draw === undefined) throw new Error(`buchholz-bye: chess's Swiss points rule has no win/draw: ${JSON.stringify(points)}`);
+  return (draw * ROUNDS) / win;
+}
 
 function gamesText(id: string, ranked: ReturnType<typeof playAndRank>): string {
   const cards: { round: number; text: string }[] = [];
@@ -94,6 +111,16 @@ function build(): ExampleResult {
   }
   facts.rounds = ROUNDS;
   facts.players = PLAYERS.length;
+  // The capped bye (16.4.2): the bye holder whose own points are above the cap, read from the cells.
+  const cap = dummyCap();
+  const above = rows.filter((x) => String(x[C.games]).includes("had a bye") && halves(x[C.points]) > cap);
+  if (above.length !== 1) throw new Error(`buchholz-bye: ${above.length} bye holders above the cap, the post tells one`);
+  const top = above[0]!;
+  facts.dummyCap = pointsText(cap);
+  facts.cappedPlayer = String(top[C.player]);
+  facts.cappedPoints = String(top[C.points]);
+  facts.cappedBuchholz = String(top[C.buchholz]);
+  facts.uncappedBuchholz = pointsText(halves(top[C.buchholz]) + halves(top[C.points]) - cap);
   const result: ExampleResult = {
     facts,
     table: { caption: "", columns: COLUMNS, rows },
@@ -134,20 +161,21 @@ function cardsOf(x: (string | number)[]): Card[] {
 }
 
 /** The figures under art. 16.3 / 16.4: a bye is a win against a dummy on the player's own points; a real game, the opponent's final score. */
-function figures(r: ExampleResult): Map<string, { points: number; cut1: number; buchholz: number; sb: number; naive: number }> | string {
+function figures(r: ExampleResult): Map<string, { points: number; cut1: number; buchholz: number; sb: number; naive: number; uncapped: number }> | string {
   const rows = r.table?.rows ?? [];
   const points = new Map(rows.map((x) => [String(x[C.player]), halves(x[C.points])]));
-  const out = new Map<string, { points: number; cut1: number; buchholz: number; sb: number; naive: number }>();
+  const out = new Map<string, { points: number; cut1: number; buchholz: number; sb: number; naive: number; uncapped: number }>();
+  const cap = dummyCap();
   for (const x of rows) {
     const own = points.get(String(x[C.player]))!;
     const cards = cardsOf(x);
-    // Assumptions are guards: the dummy is on the player's own points only while that is no more than a draw in every round.
-    if (cards.some((c) => c.opp === null) && own > 0.5 * ROUNDS) return `${String(x[C.player])} has a bye and ${own} points, above a draw a round (${0.5 * ROUNDS}): the capped rule applies and this claim does not model it`;
-    const contributions = cards.map((c) => (c.opp === null ? own : (points.get(c.opp) ?? Number.NaN)));
+    // 16.4: the dummy is on the player's own points, but 16.4.2 never above a draw's points times the rounds.
+    const contributions = cards.map((c) => (c.opp === null ? Math.min(own, cap) : (points.get(c.opp) ?? Number.NaN)));
     const buchholz = contributions.reduce((a, b) => a + b, 0);
     const sb = cards.reduce((a, c, i) => a + (c.result === "won" ? contributions[i]! : c.result === "drew" ? contributions[i]! / 2 : 0), 0);
     const naive = cards.reduce((a, c, i) => a + (c.opp === null ? 0 : contributions[i]!), 0);
-    out.set(String(x[C.player]), { points: own, cut1: buchholz - Math.min(...contributions), buchholz, sb, naive });
+    const uncapped = cards.reduce((a, c, i) => a + (c.opp === null ? own : contributions[i]!), 0);
+    out.set(String(x[C.player]), { points: own, cut1: buchholz - Math.min(...contributions), buchholz, sb, naive, uncapped });
   }
   return out;
 }
@@ -245,8 +273,48 @@ const caseClaims: Claim[] = [
   },
 ];
 
+const capClaim: Claim = {
+  says: "a bye holder with more points than a draw in every round is read at that cap, not at their own points: the dummy counts a draw's points times the rounds, and the Buchholz cell is the capped figure, below the uncapped one",
+  source: "FIDE C.07 art. 16.4.2 (the dummy's score is the player's own but shall not exceed a draw's points times the number of rounds in the tournament), the cap read from chess's declared draw points; the engine applies the same cap (tiebreakers.js `game.cap`)",
+  check(r) {
+    const fide = figures(r);
+    if (typeof fide === "string") return fide;
+    const cap = dummyCap();
+    const rows = r.table?.rows ?? [];
+    const above = rows.filter((x) => cardsOf(x).some((c) => c.opp === null) && halves(x[C.points]) > cap);
+    // Class 19 / assumptions are guards: with nobody past the cap the two readings (capped and not) print the same figure.
+    if (above.length === 0) return `no player with a bye is past the cap (${cap}): the example cannot tell the capped reading from the uncapped one`;
+    if (above.length !== 1) return `${above.length} bye holders past the cap, the post tells one`;
+    const x = above[0]!;
+    const f = fide.get(String(x[C.player]))!;
+    if (f.uncapped === f.buchholz) return `${String(x[C.player])}: the capped and uncapped Buchholz are both ${f.buchholz}`;
+    if (halves(x[C.buchholz]) === f.uncapped) return `${String(x[C.player])}: the Buchholz cell is the UNCAPPED figure ${f.uncapped}`;
+    if (halves(x[C.buchholz]) !== f.buchholz) return `${String(x[C.player])}: Buchholz ${String(x[C.buchholz])}, the capped rule gives ${f.buchholz}`;
+    // The post says leaving the bye out altogether would lower everyone's Buchholz who had one.
+    for (const y of rows) {
+      const g = fide.get(String(y[C.player]))!;
+      if (cardsOf(y).some((c) => c.opp === null) && !(g.naive < g.buchholz)) return `${String(y[C.player])}: leaving the bye out does not lower the Buchholz (${g.naive} against ${g.buchholz})`;
+    }
+    // Every other bye holder is read at their own points (the cap changes nothing for them): the post says the pair sits exactly ON it.
+    const others = rows.filter((y) => y !== x && cardsOf(y).some((c) => c.opp === null));
+    for (const y of others) if (halves(y[C.points]) > cap) return `${String(y[C.player])} is also past the cap`;
+    const onCap = others.filter((y) => halves(y[C.points]) === cap);
+    if (onCap.length !== 2) return `${onCap.length} bye holders sit exactly on the cap, the post tells two`;
+    const want: Record<string, string | number> = {
+      dummyCap: pointsText(cap),
+      cappedPlayer: String(x[C.player]),
+      cappedPoints: String(x[C.points]),
+      cappedBuchholz: String(x[C.buchholz]),
+      uncappedBuchholz: pointsText(f.uncapped),
+    };
+    for (const [k, v] of Object.entries(want)) if (r.facts[k] !== v) return `fact ${k} is '${String(r.facts[k])}', the cells give '${String(v)}'`;
+    return true;
+  },
+};
+
 const claims: Claim[] = [
   ...caseClaims,
+  capClaim,
   separatedByClaim,
   factsRepeatTheTable(PLAYERS, C.player, { Points: C.points, Cut1: C.cut1, Buchholz: C.buchholz, SonnebornBerger: C.sb, Place: C.place, Games: C.games }),
 ];

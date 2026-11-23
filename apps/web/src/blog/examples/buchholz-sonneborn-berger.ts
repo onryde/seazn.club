@@ -57,6 +57,13 @@ const ROUNDS = 3;
 const chess = () => builtinModules.find((m) => m.key === "boardgame")!;
 
 /** "2½" / "½" / "3" as a number. */
+/** A number of whole or half points as the table prints it: 3, 1½, ½. */
+export function pointsText(n: number): string {
+  if (!Number.isInteger(n * 2) || n < 0) throw new Error(`pointsText: ${n} is not a whole or half point`);
+  const whole = Math.floor(n);
+  return n === whole ? String(n) : whole === 0 ? "½" : `${whole}½`;
+}
+
 export function halves(text: unknown): number {
   const s = String(text);
   const half = s.endsWith("½") ? 0.5 : 0;
@@ -106,6 +113,12 @@ function build(): ExampleResult {
   }
   facts.rounds = ROUNDS;
   facts.players = PLAYERS.length;
+  // What Sonneborn-Berger adds for the two players the post compares: the scores of the opponents Ben beat, and half of
+  // Ana's score for Cy's draw with her.
+  const pts = new Map(rows.map((x) => [String(x[C.player]), halves(x[C.points])]));
+  const rowOfName = (n: string) => rows.find((x) => x[C.player] === n)!;
+  facts.benWinsAdd = pointsText(gamesOf(rowOfName("Ben")).filter((g) => g.result === "won").reduce((a, g) => a + pts.get(g.opp)!, 0));
+  facts.cyDrawAnaAdds = pointsText(pts.get("Ana")! / 2);
   const visited = forEachSport(({ module: m }) => {
     const order = stageRules(m, declaredCfgs(m).find((c) => c.name === startingVariantKey(m))!.cfg, "swiss").tiebreakers;
     facts[`${m.key}SwissOrder`] = order.slice(1).map((k) => standingsLabel(k, m.key)).join(", ");
@@ -278,8 +291,29 @@ export const separatedByClaim: Claim = {
   },
 };
 
+const sbAddsClaim: Claim = {
+  says: "Cy's draw with Ana adds half of Ana's score to Sonneborn–Berger, Ben's wins add the scores of the players he beat, and the draw adds more than the wins together",
+  source: "FIDE C.07 Sonneborn–Berger (the score of each opponent beaten plus half the score of each opponent drawn), recomputed over the table's cells",
+  check(r) {
+    const rows = r.table?.rows ?? [];
+    const pts = new Map(rows.map((x) => [String(x[C.player]), halves(x[C.points])]));
+    const cy = rows.find((x) => x[C.player] === "Cy");
+    const ben = rows.find((x) => x[C.player] === "Ben");
+    if (cy === undefined || ben === undefined) return "Cy or Ben is not in the table";
+    if (!gamesOf(cy).some((g) => g.opp === "Ana" && g.result === "drew")) return "Cy did not draw with Ana";
+    const wins = gamesOf(ben).filter((g) => g.result === "won");
+    if (wins.length === 0) return "Ben won no game";
+    const benAdd = wins.reduce((a, g) => a + (pts.get(g.opp) ?? Number.NaN), 0);
+    const cyAdd = (pts.get("Ana") ?? Number.NaN) / 2;
+    if (!(cyAdd > benAdd)) return `the draw adds ${cyAdd}, Ben's wins add ${benAdd}: the post says the draw adds more`;
+    if (r.facts.benWinsAdd !== pointsText(benAdd)) return `benWinsAdd is '${String(r.facts.benWinsAdd)}', the cells give '${pointsText(benAdd)}'`;
+    return r.facts.cyDrawAnaAdds === pointsText(cyAdd) || `cyDrawAnaAdds is '${String(r.facts.cyDrawAnaAdds)}', the cells give '${pointsText(cyAdd)}'`;
+  },
+};
+
 const claims: Claim[] = [
   ...caseClaims,
+  sbAddsClaim,
   factsRepeatTheTable(PLAYERS, C.player, { Points: C.points, Cut1: C.cut1, Buchholz: C.buchholz, SonnebornBerger: C.sb, Place: C.place, Games: C.games }),
   separatedByClaim,
   {

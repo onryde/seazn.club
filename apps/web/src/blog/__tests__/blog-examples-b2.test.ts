@@ -7,6 +7,7 @@ import { builtinModules } from "@seazn/engine/sports";
 import { defaultOrderOf, forEachSport } from "@seazn/engine/testkit";
 import { BLOG_EXAMPLES } from "@/blog/examples";
 import { BLOG_GOLDENS } from "@/blog/examples/goldens";
+import { C as BSB } from "@/blog/examples/buchholz-sonneborn-berger";
 import { C } from "@/blog/examples/set-ratio-or-difference";
 import { threeWayPhrases } from "@/blog/examples/three-way-tie";
 import type { ExampleResult } from "@/blog/examples/types";
@@ -115,6 +116,31 @@ describe("blog batch 2: the guards inside the claims are reached", () => {
     const noEarlyChase = clone(golden);
     noEarlyChase.facts.tigersBeatLions = "114/7 (20) — 113 (12)";
     expect(String(claim.check(noEarlyChase))).toContain("not witnessed");
+  });
+
+  it("buchholz-bye: a bye holder past the cap is read at the cap; an example without one, or a cell at the uncapped figure, fails the cap claim", () => {
+    const golden = BLOG_GOLDENS["buchholz-bye"]!;
+    const claim = BLOG_EXAMPLES.find((e) => e.id === "buchholz-bye")!.claims.find((c) => c.says.startsWith("a bye holder with more points than a draw"))!;
+    expect(claim.check(golden), "the golden passes this claim").toBe(true);
+    // Nobody past the cap: the capped and uncapped readings print the same figures, so the example would prove nothing.
+    const none = clone(golden);
+    none.table!.rows.find((x) => x[BSB.player] === golden.facts.cappedPlayer)![BSB.points] = "1½";
+    expect(String(claim.check(none))).toContain("cannot tell the capped reading from the uncapped one");
+    // The cell shows the figure counted at the player's own points (the reading the cap forbids).
+    const uncapped = clone(golden);
+    uncapped.table!.rows.find((x) => x[BSB.player] === golden.facts.cappedPlayer)![BSB.buchholz] = String(golden.facts.uncappedBuchholz);
+    expect(String(claim.check(uncapped))).toContain("UNCAPPED");
+    expect(golden.facts.uncappedBuchholz, "the two readings differ in the golden").not.toBe(golden.facts.cappedBuchholz);
+  });
+
+  it("buchholz-sonneborn-berger: the claim that Cy's draw adds more than Ben's wins refuses a table in which it does not", () => {
+    const golden = BLOG_GOLDENS["buchholz-sonneborn-berger"]!;
+    const claim = BLOG_EXAMPLES.find((e) => e.id === "buchholz-sonneborn-berger")!.claims.find((c) => c.says.startsWith("Cy's draw with Ana adds half"))!;
+    expect(claim.check(golden), "the golden passes this claim").toBe(true);
+    // A weaker Ana: half her score is no more than what Ben's wins add together, so the sentence in the post would be false.
+    const weak = clone(golden);
+    weak.table!.rows.find((x) => x[BSB.player] === "Ana")![BSB.points] = "1";
+    expect(String(claim.check(weak))).toContain("the post says the draw adds more");
   });
 
   it("set-ratio-or-difference: a table whose place columns list the players alphabetically fails the guard claim", () => {

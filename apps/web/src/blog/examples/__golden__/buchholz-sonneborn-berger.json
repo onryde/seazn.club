@@ -38,6 +38,8 @@
     "fayGames": "drew with Cy, lost to Ben, lost to Dev",
     "rounds": 3,
     "players": 6,
+    "benWinsAdd": "½",
+    "cyDrawAnaAdds": "1",
     "footballSwissOrder": "goal difference, goals scored, wins, Buchholz, opponents' score difference, direct encounter, drawing of lots",
     "cricketSwissOrder": "wins, net run rate, Buchholz Cut-1, Buchholz, direct encounter, drawing of lots",
     "boardgameSwissOrder": "Buchholz Cut-1, Buchholz, Sonneborn–Berger, direct encounter, wins, drawing of lots",
