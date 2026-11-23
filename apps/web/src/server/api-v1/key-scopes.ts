@@ -502,6 +502,10 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   // resend is the same invite to the same people.
   "POST /stages/:id/open-round",
   "POST /fixtures/:id/external-play/resend",
+  // Online Chess credits (Task 5): the package's quote and its payment spend or return the org's Seazn credits, and the
+  // payment names the USER who paid (division_online_packages.paid_by) — money, console-only, a key has no user to name.
+  "GET /divisions/:id/online-package",
+  "POST /divisions/:id/online-package",
   // Destructive + money-adjacent (payments-hardening P0-1): deleting a
   // competition cascades registrations/passes; console has no button —
   // keys must not have one either.
