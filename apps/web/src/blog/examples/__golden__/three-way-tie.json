@@ -1,0 +1,103 @@
+{
+  "facts": {
+    "hawksPlaceOwn": "1st",
+    "hawksPlaceUefa": "2nd",
+    "rocketsPlaceOwn": "2nd",
+    "rocketsPlaceUefa": "1st",
+    "cometsPlaceOwn": "3rd",
+    "cometsPlaceUefa": "3rd",
+    "dynamosPlaceOwn": "4th",
+    "dynamosPlaceUefa": "4th",
+    "levelPoints": 6,
+    "cometsMiniGoals": 1,
+    "hawksMiniGoals": 2,
+    "hawksGoalDifference": "+3",
+    "rocketsGoalDifference": "+1",
+    "rocketsBeatHawks": "2 — 1",
+    "hawksBeatComets": "1 — 0",
+    "cometsBeatRockets": "1 — 0",
+    "uefaSplitBy": "head-to-head",
+    "ownSplitBy": "difference",
+    "footballThreeWay": "one pass of a mini-league of the games among the tied teams, then difference (straight after the first measure)",
+    "cricketThreeWay": "one pass of a mini-league of the games among the tied teams, then seeding (after wins, net run rate)",
+    "boardgameThreeWay": "a mini-league of the games among all the tied players (straight after the first measure)",
+    "carromThreeWay": "one pass of a mini-league of the games among the tied teams, then drawing of lots (after wins, set ratio, board ratio, point ratio)",
+    "genericThreeWay": "one pass of a mini-league of the games among the tied teams, then drawing of lots (after difference, total scored)",
+    "volleyballThreeWay": "one pass of a mini-league of the games among the tied teams, then drawing of lots (after points, set ratio, point ratio)",
+    "badmintonThreeWay": "head-to-head only between two: with three level it is skipped, and it comes back once a later step leaves exactly two (first checked straight after the first measure)",
+    "tabletennisThreeWay": "a mini-league of the games among the tied players, started again among only those still level each time it separates someone (straight after the first measure)",
+    "tennisThreeWay": "head-to-head only between two: with three level it is skipped, and it comes back once a later step leaves exactly two (first checked after matches played)",
+    "icehockeyThreeWay": "a mini-league of the games among the tied teams, re-applied to any smaller group it leaves level (straight after the first measure)",
+    "hockeyThreeWay": "one pass of a mini-league of the games among the tied teams, then field goals (after wins, difference, total scored)",
+    "sportCount": 11
+  },
+  "table": {
+    "caption": "Hawks, Rockets and Comets finish level on points. Football's own order and the UEFA order rank the same results differently.",
+    "columns": [
+      "Team",
+      "Points",
+      "Goal difference",
+      "Points in the games between the three",
+      "Goals in the games between the three",
+      "Place, football's own order",
+      "Place, UEFA order"
+    ],
+    "rows": [
+      [
+        "Hawks",
+        6,
+        "+3",
+        3,
+        2,
+        "1st",
+        "2nd"
+      ],
+      [
+        "Rockets",
+        6,
+        "+1",
+        3,
+        2,
+        "2nd",
+        "1st"
+      ],
+      [
+        "Comets",
+        6,
+        "+1",
+        3,
+        1,
+        "3rd",
+        "3rd"
+      ],
+      [
+        "Dynamos",
+        0,
+        "-5",
+        "Not one of the three",
+        "Not one of the three",
+        "4th",
+        "4th"
+      ]
+    ]
+  },
+  "text": [
+    "Rockets 2 — 1 Hawks.",
+    "Hawks 1 — 0 Comets.",
+    "Comets 1 — 0 Rockets.",
+    "Hawks 3 — 0 Dynamos.",
+    "Rockets 1 — 0 Dynamos.",
+    "Comets 1 — 0 Dynamos.",
+    "Football: one pass of a mini-league of the games among the tied teams, then difference (straight after the first measure).",
+    "Cricket: one pass of a mini-league of the games among the tied teams, then seeding (after wins, net run rate).",
+    "Chess: a mini-league of the games among all the tied players (straight after the first measure).",
+    "Carrom: one pass of a mini-league of the games among the tied teams, then drawing of lots (after wins, set ratio, board ratio, point ratio).",
+    "Generic: one pass of a mini-league of the games among the tied teams, then drawing of lots (after difference, total scored).",
+    "Volleyball: one pass of a mini-league of the games among the tied teams, then drawing of lots (after points, set ratio, point ratio).",
+    "Badminton: head-to-head only between two: with three level it is skipped, and it comes back once a later step leaves exactly two (first checked straight after the first measure).",
+    "Table tennis: a mini-league of the games among the tied players, started again among only those still level each time it separates someone (straight after the first measure).",
+    "Tennis: head-to-head only between two: with three level it is skipped, and it comes back once a later step leaves exactly two (first checked after matches played).",
+    "Ice hockey: a mini-league of the games among the tied teams, re-applied to any smaller group it leaves level (straight after the first measure).",
+    "Hockey: one pass of a mini-league of the games among the tied teams, then field goals (after wins, difference, total scored)."
+  ]
+}

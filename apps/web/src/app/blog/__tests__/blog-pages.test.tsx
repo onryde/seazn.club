@@ -136,12 +136,21 @@ describe("the post page, through the real renderer (the pilot)", () => {
     expect(markup.match(/<th scope="row"/g)!.length).toBe(BLOG_GOLDENS["standings-points"]!.table!.rows.length);
   });
 
-  it("shows only related posts that resolve: the pilot names three that are not written yet", async () => {
-    const markup = await html(PILOT);
-    expect(post.related.length).toBeGreaterThanOrEqual(2);
-    expect(post.related.every((s) => blogPost(s) === null), "premise: none resolves today").toBe(true);
-    for (const slug of post.related) expect(markup, slug).not.toContain(blogUrl(slug));
-    expect(markup).not.toContain('data-testid="blog-related"');
+  it("shows only related posts that resolve: when the related slugs are not posts, no link and no section", async () => {
+    // Blog batch 2: the pilot's own related slugs become posts as the batches land, so "none resolves" is made true here
+    // by naming slugs that are posts nowhere, never read off today's tree.
+    const unwritten = ["a-post-nobody-has-written", "another-post-nobody-has-written"];
+    rel.on = true;
+    rel.related = unwritten;
+    rel.find = () => null;
+    try {
+      const markup = await html(PILOT);
+      expect(unwritten.every((s) => blogPost(s) === null), "premise: these are not posts").toBe(true);
+      for (const slug of unwritten) expect(markup, slug).not.toContain(blogUrl(slug));
+      expect(markup).not.toContain('data-testid="blog-related"');
+    } finally {
+      rel.on = false;
+    }
   });
 
   it("related cards on the real page: resolved slugs are linked in front-matter order, with their titles; an unresolved one is not", async () => {
