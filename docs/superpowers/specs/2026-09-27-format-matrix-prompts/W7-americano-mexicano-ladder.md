@@ -102,6 +102,43 @@ Auto-schedule BUILD + apply, then every played row holds a time AND a court
 When a format is proven, remove its key from the sweep's `EXCLUDED` and lower
 `EXCLUDED_COUNT` in the same commit.
 
+## Carried from blog P2 (2026-11-23)
+
+Owner ruling 2026-11-23: two product defects found while proving the blog's
+americano and mexicano posts are W7's. Both were driven on a local server
+built from main 01cb34db93 (engine 10.0.3). Re-pin both before building on
+them.
+
+- **D1: americano and mexicano score boxes work only in "any other sport".**
+  `components/v2/americano-panel.tsx:163-179` always posts `generic.result`.
+  On a badminton americano the server answers
+  `INVALID_EVENT unknown event type "generic.result"`, and the panel prints
+  that English sentence to the organiser. The rounds are drawn, but no row can
+  be scored, so the points table never moves. This affects every sport whose
+  module does not accept `generic.result`; the blog run saw it on badminton,
+  and table tennis, tennis and carrom are expected to behave the same way.
+  Enumerate every sport the format is offered for, and for each one score a
+  row through the panel, not just the reducer.
+- **D2: a mexicano cannot draw round two from the product.** `americanoGen`
+  draws the next round only when Generate runs
+  (`usecases/stages/generators.ts:136-141`). After Start, `stageActions` offers
+  no Generate (`lib/stage-card/summaries.ts:283-296`), and `pairNext` is
+  Swiss-only (`desk/stage-rail.tsx:238`). Driven: after round 1 was scored, the
+  stage still had round 1's fixtures only, and the page offered just
+  "Complete stage". This is the lazy-press path the W4 carry above already
+  names ("ONE round a press"): the press itself has no door.
+- Minor, same area: the mexicano leaderboard orders level players by name
+  (`usecases/americano.ts:61`), while the draw breaks the same tie by person
+  id (engine `scheduling/americano.js:43-45`), so the table and the court
+  split can disagree for players on equal points. The engine comment at
+  `americano.js:2` ("(i, i+1) vs (i+2, i+3)") is stale: the code plays 1+4
+  against 2+3 (engine repo).
+
+Blog dependency: the americano post (#22) and the mexicano post (#23) live on
+the blog branch. #23 describes rounds after the first, so it is held until D2
+ships. When D1 and D2 land, tell the blog session (`home`) so it can re-run the
+two posts' claims and release #23.
+
 ## Output and handoff
 
 Update the W7 row, decision log and "False premises found" in `_INDEX.md` as
