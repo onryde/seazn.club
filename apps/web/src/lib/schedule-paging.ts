@@ -39,13 +39,15 @@ export function pageSchedule<F extends GroupedFixture>(
   a: PagedScheduleInput,
 ): { groups: PagedScheduleGroup[]; rowsOf: Map<string, F[]> } {
   const rounds = scheduleRoundGroups(fixtures, { ...a, shared: sharedRoundNames(fixtures, a.roundLabels) });
-  const plan = planRounds(rounds.map((r) => ({ key: r.key, buckets: bucketCounts(r.fixtures, (f) => f.status) })));
+  const catchUpOf = (r: (typeof rounds)[number]) => r.fixtures.some((f) => isCatchUpRoundExtKey(f.ext_key));
+  // A late entrant's catch-up round never moves the frontier (review C2, `planRounds`).
+  const plan = planRounds(rounds.map((r) => ({ key: r.key, buckets: bucketCounts(r.fixtures, (f) => f.status), catchUp: catchUpOf(r) })));
   const groups = rounds.map((r, i): PagedScheduleGroup => ({
     ...plan[i]!,
     label: r.label,
     stageId: r.stageId,
     roundNo: r.roundNo,
-    catchUp: r.fixtures.some((f) => isCatchUpRoundExtKey(f.ext_key)),
+    catchUp: catchUpOf(r),
     sitsOut: a.sitsOut?.[`${r.stageId}:${r.roundNo}`] ?? null,
     anchorAt: r.fixtures.find((f) => f.scheduled_at)?.scheduled_at ?? null,
   }));

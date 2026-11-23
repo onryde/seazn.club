@@ -104887,6 +104887,9 @@
                               "expunged": {
                                 "type": "boolean"
                               },
+                              "catchUp": {
+                                "type": "boolean"
+                              },
                               "forfeit": {
                                 "anyOf": [
                                   {

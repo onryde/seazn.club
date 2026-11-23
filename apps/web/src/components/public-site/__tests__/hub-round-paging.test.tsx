@@ -9,6 +9,7 @@ import type { Dict } from "@/lib/i18n-constants";
 import { CompetitionHubDoc, type CompetitionHubDocT, type HubMatchT } from "@/server/public-site/competition-hub-schema";
 import { hubBucketTotals, hubRoundKey, hubRoundMatches, windowHubDoc } from "@/lib/hub-round-paging";
 import { MatchesTab } from "../matches-hub/matches-tab";
+import { landingStatus } from "@/lib/matches-hub";
 import { hubRoundsFor } from "../matches-hub/hub-rounds";
 import { hubDoc, knockoutView, koRound, m } from "./hub-fixtures";
 
@@ -153,6 +154,29 @@ describe("C: the hub serves a big division by round", () => {
     expect(live).not.toContain('data-testid="mh-matches-empty-filter"');
     // Under Results the semi-final is listed beside the league's finished rounds (their headers).
     expect(tab("completed")).toContain("/fixtures/S1\"");
+  });
+
+  it("C2: a late entrant's catch-up rounds never move the hub's frontier: through the sequence rounds 72-73 stay served and the landing never says finished", () => {
+    // Round 72 part played (the current round), then a late entry's five catch-up rounds 143-147, one match each.
+    const step = (played: number) => {
+      const league = bigLeague().map((x) =>
+        x.roundNo === 72 && Number(x.fixtureId.split("-")[1]) <= 10 ? { ...x, bucket: "completed" as const } : x,
+      );
+      const catchUps = [143, 144, 145, 146, 147].map((r, i) =>
+        m(`C${r}`, i < played ? "completed" : "upcoming", new Date(NOW + (i < played ? -1 : 40 + i) * 86_400_000).toISOString(), "premier", { roundNo: r, catchUp: true }),
+      );
+      return windowHubDoc(hubDoc({ matches: [...league, ...catchUps, ...smallCup()] }));
+    };
+    let checked = 0;
+    for (const [name, played] of [["late entry", 0], ["one catch-up result", 1], ["every catch-up played", 5]] as const) {
+      const served = step(played);
+      const rounds = [...new Set(served.matches.filter((x) => x.divisionSlug === "premier").map((x) => x.roundNo))];
+      expect(rounds, name).toEqual([72, 73]);
+      const status = landingStatus({ matches: served.matches, divisions: served.divisions.length, startsOn: null, endsOn: null, now: new Date(NOW) });
+      expect(status.kind, name).not.toBe("finished");
+      checked += 1;
+    }
+    expect(checked).toBe(3);
   });
 
   it("Results lists the finished rounds most recent first", () => {

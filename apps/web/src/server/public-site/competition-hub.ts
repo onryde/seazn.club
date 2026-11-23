@@ -121,6 +121,7 @@ import type {
 } from "./competition-hub-schema";
 import { routes } from "@/lib/routes";
 import { registrationWaitsOnCardPayments } from "@/lib/registration-card-payments";
+import { isCatchUpRoundExtKey } from "@/lib/roundrobin-late-entry";
 
 // ---------------------------------------------------------------- liveness
 
@@ -936,6 +937,8 @@ export async function loadCompetitionHub(
         byeSides: hubByeSides(f),
         // W5 T23 (RB5-W2): a withdrawal's removal, struck on the card as on the public schedule. Absent unless true.
         ...(f.expunged === true ? { expunged: true } : {}),
+        // W5 follow-ups C (review C2): a catch-up round's line, so the hub's round planner never reads it as the season's frontier.
+        ...(isCatchUpRoundExtKey(f.ext_key) ? { catchUp: true } : {}),
         winnerIndex:
           winner === null
             ? null

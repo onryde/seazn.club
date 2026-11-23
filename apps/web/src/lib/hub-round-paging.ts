@@ -65,7 +65,8 @@ export function windowHubDoc<D extends Pick<CompetitionHubDocT, "matches" | "kno
   for (const matches of big) {
     const rounds = roundsOf(matches.filter((m) => !brackets.has(m.fixtureId)));
     if (rounds.length === 0) continue;
-    const plan = planRounds(rounds.map((r) => ({ key: r.key, buckets: hubBuckets(r.rows) })));
+    // A late entrant's catch-up round never moves the frontier (review C2, `planRounds`).
+    const plan = planRounds(rounds.map((r) => ({ key: r.key, buckets: hubBuckets(r.rows), catchUp: r.rows.some((m) => m.catchUp === true) })));
     rounds.forEach((r, i) => {
       const first = r.rows[0]!;
       pages.push({ ...plan[i]!, divisionId: first.divisionId, divisionSlug: first.divisionSlug, stageName: first.stageName, roundNo: first.roundNo, label: first.roundLabel });

@@ -195,6 +195,10 @@ export const HubMatch = z.object({
    *  names struck, no time and no score, "Abandoned" in the status slot — never "Ended". Optional: a document cached before the
    *  field existed reads as not expunged. */
   expunged: z.boolean().optional(),
+  /** W5 follow-ups C (review C2): a line of a late entrant's APPENDED catch-up round (`isCatchUpRoundExtKey`): numbered after the
+   *  draw's last round, played alongside the season, so it never marks how far the season has come (`planRounds`). Absent unless
+   *  true; a document cached before the field existed reads as no catch-up. */
+  catchUp: z.boolean().optional(),
   /** W2b Task 13 (UI-2 option A): a credited result's short tag ("w/o", "ret.", "2× w/o", "Aband. · DLS") and the
    *  full sentence that is its tooltip and accessible name, pre-resolved in the org's locale by `hubForfeit`
    *  (lib/forfeit-tag.ts is the one reader). `kind` is the reader's own (`ForfeitTagKind`). Null for a played result

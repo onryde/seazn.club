@@ -70,18 +70,26 @@ export interface PlannedRound extends RoundBuckets {
  * (the frontier). A part-played round BEHIND the frontier (a postponed match) stays folded: it must never take "next" from the
  * round that really is next. When nothing is left to play, the last round opens, so a finished schedule still shows its ending.
  * The empty schedule plans nothing.
+ *
+ * A CATCH-UP round (`catchUp`: a late entrant's appended round, `isCatchUpRoundExtKey`, numbered after the draw's last round but
+ * played alongside the season) never marks how far the season has come (review C2): the frontier, "next" and the finished
+ * schedule's ending are read off the draw's own rounds. A catch-up round opens only while it is live or part-played, and is
+ * "next" only once its stage's drawn rounds have nothing left to play.
  */
-export function planRounds(rounds: readonly { key: string; buckets: RoundBuckets }[]): PlannedRound[] {
+export function planRounds(rounds: readonly { key: string; buckets: RoundBuckets; catchUp?: boolean }[]): PlannedRound[] {
   if (rounds.length === 0) return [];
   for (const r of rounds) {
     if (r.buckets.live + r.buckets.upcoming + r.buckets.result === 0) throw new Error(`ROUND_PAGING_EMPTY_ROUND: ${r.key}`);
   }
+  const drawn = (i: number) => rounds[i]!.catchUp !== true;
   let frontier = -1;
   rounds.forEach((r, i) => {
-    if (r.buckets.live > 0 || r.buckets.result > 0) frontier = i;
+    if (drawn(i) && (r.buckets.live > 0 || r.buckets.result > 0)) frontier = i;
   });
-  // The next round: the first after the frontier with a match still to play. A live round is never after the frontier (the
-  // frontier is the LAST round with anything played or in play), so nothing after it has a live match.
+  // The next round: the first round after the frontier with a match still to play. A drawn round is never live after the frontier
+  // (the frontier is the LAST drawn round with anything played or in play). Catch-up rounds sit after their stage's drawn rounds, so
+  // one is "next" only once its stage's draw has nothing left to play - and then before a later stage's first round, which cannot
+  // start until they are played.
   let next = -1;
   for (let i = frontier + 1; i < rounds.length; i++) {
     if (rounds[i]!.buckets.upcoming > 0) {
@@ -99,8 +107,8 @@ export function planRounds(rounds: readonly { key: string; buckets: RoundBuckets
   };
   const planned = rounds.map((r, i): PlannedRound => {
     const state = stateOf(r, i);
-    // The current round: the frontier itself, part-played with nothing live.
-    const current = i === frontier && state === "inProgress";
+    // The current round: the frontier itself, part-played with nothing live - or a catch-up round part-played.
+    const current = state === "inProgress" && (i === frontier || !drawn(i));
     return {
       key: r.key,
       state,
@@ -109,6 +117,16 @@ export function planRounds(rounds: readonly { key: string; buckets: RoundBuckets
       ...r.buckets,
     };
   });
-  if (!planned.some((r) => r.open)) planned[planned.length - 1]!.open = true;
+  if (!planned.some((r) => r.open)) {
+    // Nothing left to play: the draw's last round is the schedule's ending (a catch-up only when the draw has none).
+    let last = planned.length - 1;
+    for (let i = planned.length - 1; i >= 0; i--) {
+      if (drawn(i)) {
+        last = i;
+        break;
+      }
+    }
+    planned[last]!.open = true;
+  }
   return planned;
 }

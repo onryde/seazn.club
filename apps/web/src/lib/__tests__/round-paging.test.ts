@@ -115,3 +115,62 @@ describe("pagesByRound (only a BIG schedule pages)", () => {
     expect(pagesByRound(4970)).toBe(true);
   });
 });
+
+// Review C2: a late entrant's catch-up rounds (`rr-cu-`, W5 T23) are numbered AFTER the draw's last round but played alongside the
+// season. Read as ordinary rounds, one catch-up result moved the "frontier" past every real round, folding the current and next
+// rounds, and once every catch-up was played the "everything finished" fallback opened a catch-up. They never mark how far the
+// season has come: open only while live or part-played, and "next" only when the draw's own rounds have nothing left to play.
+describe("planRounds: catch-up rounds never move the frontier", () => {
+  // An 11-round draw: rounds 1-4 played, round 5 part-played (the current round), 6-11 to come. A late entry appends five catch-up
+  // rounds, 12-16, one match each (the engine's catch-up rounds hold one fixture: `lateEntryFixtures`).
+  const draw = () => [
+    ...[1, 2, 3, 4].map((r) => g(`r${r}`, 0, 0, 6)),
+    g("r5", 0, 3, 3),
+    ...[6, 7, 8, 9, 10, 11].map((r) => g(`r${r}`, 0, 6, 0)),
+  ];
+  const cu = (r: number, live: number, upcoming: number, result: number) => ({ ...g(`cu${r}`, live, upcoming, result), catchUp: true });
+
+  it("the sequence: a late entry, one catch-up result, every catch-up played - the current round and the next stay open throughout", () => {
+    const steps: [string, ReturnType<typeof cu>[]][] = [
+      ["late entry, nothing played", [12, 13, 14, 15, 16].map((r) => cu(r, 0, 1, 0))],
+      ["one catch-up result", [cu(12, 0, 0, 1), ...[13, 14, 15, 16].map((r) => cu(r, 0, 1, 0))]],
+      ["every catch-up played", [12, 13, 14, 15, 16].map((r) => cu(r, 0, 0, 1))],
+    ];
+    let checked = 0;
+    for (const [name, catchUps] of steps) {
+      const plan = planRounds([...draw(), ...catchUps]);
+      expect(openKeys(plan), name).toEqual(["r5", "r6"]);
+      expect(states(plan).r6, name).toBe("next");
+      checked += 1;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("a catch-up round opens while it is live, beside the real current and next rounds; a played one folds as finished", () => {
+    const plan = planRounds([...draw(), cu(12, 0, 0, 1), cu(13, 1, 0, 0), cu(14, 0, 1, 0)]);
+    expect(openKeys(plan)).toEqual(["r5", "r6", "cu13"]);
+    expect(states(plan)).toMatchObject({ cu12: "finished", cu13: "live", cu14: "upcoming" });
+    // Part played (a two-line catch-up round: the planner does not assume the engine's one line a round) opens too.
+    expect(openKeys(planRounds([...draw(), cu(12, 0, 1, 1), cu(13, 0, 1, 0)]))).toEqual(["r5", "r6", "cu12"]);
+  });
+
+  it("when the draw's own rounds are all played, the first catch-up still to play is next and opens", () => {
+    const allPlayed = [1, 2, 3, 4, 5].map((r) => g(`r${r}`, 0, 0, 6));
+    const plan = planRounds([...allPlayed, cu(6, 0, 0, 1), cu(7, 0, 1, 0), cu(8, 0, 1, 0)]);
+    expect(openKeys(plan)).toEqual(["cu7"]);
+    expect(states(plan).cu7).toBe("next");
+  });
+
+  it("a league played out with catch-ups still to play, then a knockout stage: the first catch-up is next, not the knockout's first round", () => {
+    const league = [1, 2, 3].map((r) => g(`r${r}`, 0, 0, 6));
+    const plan = planRounds([...league, cu(4, 0, 1, 0), cu(5, 0, 1, 0), g("ko1", 0, 4, 0), g("ko2", 0, 2, 0)]);
+    expect(openKeys(plan)).toEqual(["cu4"]);
+    expect(states(plan)).toMatchObject({ cu4: "next", ko1: "upcoming" });
+  });
+
+  it("everything played, catch-ups included: the draw's LAST round opens (its ending), never a catch-up", () => {
+    const plan = planRounds([...[1, 2, 3].map((r) => g(`r${r}`, 0, 0, 6)), cu(4, 0, 0, 1), cu(5, 0, 0, 1)]);
+    expect(openKeys(plan)).toEqual(["r3"]);
+  });
+});
+

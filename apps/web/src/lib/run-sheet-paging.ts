@@ -117,7 +117,14 @@ export function windowRunSheet<F extends PagedRunSheetRow>(
     for (const f of fixtures) if (f.stage_id === stage.id) byRound.set(f.round_no, [...(byRound.get(f.round_no) ?? []), f]);
     const rounds = [...byRound.entries()].sort(([a], [b]) => a - b);
     if (rounds.length === 0) continue;
-    const plan = planRounds(rounds.map(([round, rows]) => ({ key: String(round), buckets: bucketCounts(rows, (f) => f.status) })));
+    // A late entrant's catch-up round never moves the frontier (review C2, `planRounds`).
+    const plan = planRounds(
+      rounds.map(([round, rows]) => ({
+        key: String(round),
+        buckets: bucketCounts(rows, (f) => f.status),
+        catchUp: rows.some((f) => isCatchUpRoundExtKey(f.ext_key ?? null)),
+      })),
+    );
     rounds.forEach(([round, rows], i) => {
       if (plan[i]!.open || rows.some((f) => wantsAttention(f, ctx, today))) return;
       for (const f of rows) foldedIds.add(f.id);
