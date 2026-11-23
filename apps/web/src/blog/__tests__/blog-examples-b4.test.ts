@@ -116,6 +116,24 @@ describe("what-is-a-plate", () => {
     expect(failing(id, mutate(id, (r) => { rowWhere(r, 0, "Ben")[4] = "Yes"; })).length).toBeGreaterThan(0);
     expect(failing(id, mutate(id, (r) => { r.facts.sportsOffered = 0; }))).toHaveLength(1);
   });
+  it("review I-3: the walkover winner's first match is the NEXT one, and losing it puts them in the plate; the walkover-as-first-match reading is caught", () => {
+    const winner = String(BLOG_GOLDENS[id]!.facts.walkoverWinner);
+    const asWalkoverReading = (r: ExampleResult) => {
+      // The wrong reading: the walkover win counts as the player's first match, so a later loss is no first loss.
+      const row = rowWhere(r, 0, winner);
+      row[1] = "Quarter-finals";
+      row[2] = "Won";
+      row[4] = "No";
+    };
+    const caught = failing(id, mutate(id, asWalkoverReading));
+    expect(caught.length, "the wrong reading is caught").toBeGreaterThan(0);
+    expect(caught.some((c) => c.includes("WON a first-round walkover")), "by the walkover-winner claim itself").toBe(true);
+    // The untouched golden shows the two readings DIFFER: this player is in the plate.
+    expect(rowWhere(BLOG_GOLDENS[id]!, 0, winner)[4]).toBe("Yes");
+    // A plate list that drops the walkover winner, or a left-out name that is not the walkover loser, is caught.
+    expect(failing(id, mutate(id, (r) => { r.facts.plateNames = String(r.facts.plateNames).split(", ").filter((n) => n !== winner).join(", "); })).length).toBeGreaterThan(0);
+    expect(failing(id, mutate(id, (r) => { r.facts.excludedNames = winner; })).length).toBeGreaterThan(0);
+  });
 });
 
 describe("no batch 4 claim is vacuous: an empty result fails every one of them", () => {
