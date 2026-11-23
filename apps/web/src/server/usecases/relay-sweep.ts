@@ -102,6 +102,7 @@ export interface SweepResult {
   framesBucketPublic: boolean | null; // R4 S9 7d: the frames bucket's visibility (null: it could not be read)
   seaznMeasured: number;           // Seazn Task 31 7e: sessions with delivered minutes written this pass (SEAZN_HOSTED_COST)
   seaznMeasureFailed: number;      // Seazn Task 31 7e: sessions whose measurement failed (read again tomorrow), +1 when the pass threw
+  seaznMeasureSkipped: number;     // Seazn Task 31b 7e: sessions whose live half was not asked — Cloudflare failed too often in a row
   seaznReplaysPurged: number;      // Seazn Task 31 7e: replays of orgs deleted past the grace, deleted (`org_deleted`) this pass
   seaznPurgeFailed: number;        // Seazn Task 31 7e: those whose delete or copy removal failed (retried), +1 when the pass threw
   bunnyEventsDeleted: number;      // Seazn Task 31b 7f: Bunny webhook dedupe marks past BUNNY_WEBHOOK_EVENT_RETENTION_DAYS deleted
@@ -294,7 +295,7 @@ export async function sweepStreamSessions(
     seaznHeld: 0, seaznHeldPastPromise: 0,
     headroomMinutes: 0, videosSeen: 0, recordingsFinalised: 0, summariesWritten: 0, samplesDeleted: 0, beatsDeleted: 0, recordsDeleted: 0,
     framesPurged: 0, framePurgesFailed: 0, framesBucketPublic: null,
-    seaznMeasured: 0, seaznMeasureFailed: 0, seaznReplaysPurged: 0, seaznPurgeFailed: 0,
+    seaznMeasured: 0, seaznMeasureFailed: 0, seaznMeasureSkipped: 0, seaznReplaysPurged: 0, seaznPurgeFailed: 0,
     bunnyEventsDeleted: 0, bunnyEventsPurgeFailed: 0,
   };
 
@@ -815,6 +816,7 @@ export async function sweepStreamSessions(
       const m = await measureSeaznDelivery(costDeps, now, scope);
       out.seaznMeasured = m.measured;
       out.seaznMeasureFailed = m.failed;
+      out.seaznMeasureSkipped = m.skipped;
     } catch (err) {
       out.seaznMeasureFailed += 1;
       log.error({ err: String(err) }, "relay sweep: the Seazn delivery measurement failed — nothing was lost; the next pass reads every window again");

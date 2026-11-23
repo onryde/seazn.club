@@ -73,3 +73,43 @@ export function finalWindow(a: { firstAt: Date; measuredThrough: Date | null; no
   if (from.getTime() > utcDay(a.now).getTime()) return null;
   return { from, to: a.now };
 }
+
+/** One live-minutes query: a window and the distinct uids it names, and the items (sessions) whose uids those are. */
+export interface WindowBatch<T> {
+  from: Date;
+  through: Date;
+  uids: string[];
+  items: T[];
+}
+
+/** Task 31b (T31 review m11, the scale guard): the daily live read's QUERIES. Items whose windows are the same (`from` and `through`)
+ *  share a query, so a day of N sessions costs a query per window, not N. One batch per window, in the order the windows first
+ *  appear; items keep their order; a uid two items share is named once. A batch closes before the item that would take it past
+ *  `maxUids` distinct uids; an item that alone has more is a batch of its own — never split across queries (a session's minutes are
+ *  one sum) and never dropped. */
+export function batchByWindow<T>(
+  items: readonly { uids: readonly string[]; window: { from: Date; through: Date }; item: T }[],
+  maxUids: number,
+): WindowBatch<T>[] {
+  if (!Number.isInteger(maxUids) || maxUids < 1) throw new RangeError(`delivery window: maxUids ${maxUids} is not a positive whole number`);
+  const open = new Map<string, WindowBatch<T> & { seen: Set<string> }>();
+  const out: (WindowBatch<T> & { seen: Set<string> })[] = [];
+  for (const it of items) {
+    const key = `${it.window.from.getTime()}/${it.window.through.getTime()}`;
+    let b = open.get(key);
+    const fresh = b ? it.uids.filter((u) => !b!.seen.has(u)) : it.uids;
+    if (b && b.items.length > 0 && b.seen.size + new Set(fresh).size > maxUids) b = undefined;
+    if (!b) {
+      b = { from: it.window.from, through: it.window.through, uids: [], items: [], seen: new Set() };
+      open.set(key, b);
+      out.push(b);
+    }
+    for (const u of it.uids) {
+      if (b.seen.has(u)) continue;
+      b.seen.add(u);
+      b.uids.push(u);
+    }
+    b.items.push(it.item);
+  }
+  return out.map(({ from, through, uids, items: its }) => ({ from, through, uids, items: its }));
+}

@@ -12,7 +12,7 @@
 // No sport: the window reads no sport rule.
 import { describe, expect, it } from "vitest";
 import { CF_ANALYTICS_MAX_WINDOW_DAYS } from "../../cf-analytics";
-import { dailyWindow, dayOf, dayText, endOfDay, finalWindow, utcDay } from "../delivery-window";
+import { batchByWindow, dailyWindow, dayOf, dayText, endOfDay, finalWindow, utcDay } from "../delivery-window";
 
 const d = (iso: string) => new Date(iso);
 const day = (ymd: string) => new Date(`${ymd}T00:00:00.000Z`);
@@ -105,5 +105,46 @@ describe("finalWindow — the last read before a copy is removed, up to now", ()
 
   it("a stored day at or past today has nothing left to read before now", () => {
     expect(finalWindow({ firstAt: d("2026-11-20T21:30:00.000Z"), measuredThrough: day("2026-11-23"), now: NOW })).toBeNull();
+  });
+});
+
+// Task 31b (T31 review m11, the scale guard): sessions whose daily windows are the SAME are read in one Cloudflare query, in queries of
+// at most `maxUids` distinct uids. The rules, typed here: one batch per window, in the order the windows first appear; items keep their
+// order; a batch closes before the item that would take it past `maxUids`; an item with more uids than that is a batch of its own —
+// never split across queries, never dropped; a uid two items share is counted (and asked) once.
+describe("batchByWindow — the live read's queries", () => {
+  const W1 = { from: day("2026-11-21"), through: day("2026-11-22") };
+  const W2 = { from: day("2026-11-22"), through: day("2026-11-22") };
+  const item = (name: string, uids: string[], window = W1) => ({ uids, window, item: name });
+  const shape = (bs: ReturnType<typeof batchByWindow<string>>) =>
+    bs.map((b) => ({ from: dayText(b.from), through: dayText(b.through), uids: b.uids, items: b.items }));
+
+  it("EMPTY CASE FIRST: no items, no batches", () => {
+    expect(batchByWindow<string>([], 4)).toEqual([]);
+  });
+
+  it("items sharing a window are one batch (their uids unioned, a shared uid once); another window is another batch, in first-appearance order", () => {
+    // W3 shares W1's first day but not its last: a window is both ends.
+    const W3 = { from: day("2026-11-21"), through: day("2026-11-21") };
+    const out = batchByWindow([item("a", ["a1", "a2"]), item("b", ["b1"], W2), item("c", ["c1", "a2"]), item("d", ["d1"], W3)], 10);
+    expect(shape(out)).toEqual([
+      { from: "2026-11-21", through: "2026-11-22", uids: ["a1", "a2", "c1"], items: ["a", "c"] },
+      { from: "2026-11-22", through: "2026-11-22", uids: ["b1"], items: ["b"] },
+      { from: "2026-11-21", through: "2026-11-21", uids: ["d1"], items: ["d"] },
+    ]);
+  });
+
+  it("a window's items are chunked at maxUids distinct uids; an item over maxUids is a batch of its own, never split or dropped; every item comes out exactly once", () => {
+    const items = [item("a", ["a1", "a2"]), item("b", ["b1", "b2"]), item("c", ["c1"]), item("big", ["x1", "x2", "x3", "x4", "x5"]), item("d", ["d1"])];
+    const out = batchByWindow(items, 4);
+    expect(shape(out).map((b) => [b.items, b.uids.length])).toEqual([[["a", "b"], 4], [["c"], 1], [["big"], 5], [["d"], 1]]);
+    const seen = out.flatMap((b) => b.items);
+    expect(seen.length, "anti-vacuity: items checked").toBe(items.length);
+    expect([...seen].sort()).toEqual(items.map((i) => i.item).sort());
+    for (const b of out) expect(b.uids.length <= 4 || b.items.length === 1, `${b.items}: over the cap only alone`).toBe(true);
+  });
+
+  it("a cap that is not a positive whole number is refused by name", () => {
+    for (const bad of [0, -1, 1.5, Number.NaN]) expect(() => batchByWindow([item("a", ["a1"])], bad), String(bad)).toThrow(/maxUids/);
   });
 });

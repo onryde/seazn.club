@@ -749,6 +749,10 @@ describe("Seazn cost (Task 31): the measurement window and the deleted-org grace
   it("Task 31b's numbers: Bunny's webhook dedupe marks are kept 30 days", () => {
     expect(config.BUNNY_WEBHOOK_EVENT_RETENTION_DAYS).toBe(30);
   });
+  it("Task 31b's scale guard (T31 review m11): at most 100 uids per live query, and the live pass stops after 3 failed queries in a row", () => {
+    expect(config.SEAZN_LIVE_MEASURE_UIDS_PER_QUERY).toBe(100);
+    expect(config.SEAZN_LIVE_MEASURE_BREAKER_FAILURES).toBe(3);
+  });
   it("a live read never needs more dates than Cloudflare answers in one query: 31 days back, plus the extra date a session's start can cross (it lasts at most MAX_DURATION_MINUTES), fits its 32", () => {
     const startCrosses = Math.ceil(config.MAX_DURATION_MINUTES / (24 * 60));
     expect(startCrosses, "PREMISE: a session lasts less than a day").toBe(1);

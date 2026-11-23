@@ -20,7 +20,9 @@ vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
 
 import { sql } from "@/lib/db";
 import { log } from "@/server/logger";
-import { SEAZN_CLAIM_LEASE_SECONDS, SEAZN_LIVE_MEASURE_DAYS, SEAZN_ORG_DELETED_REPLAY_GRACE_DAYS } from "@/server/relay/config";
+import {
+  SEAZN_CLAIM_LEASE_SECONDS, SEAZN_LIVE_MEASURE_BREAKER_FAILURES, SEAZN_LIVE_MEASURE_DAYS, SEAZN_ORG_DELETED_REPLAY_GRACE_DAYS,
+} from "@/server/relay/config";
 import type { LiveMinutesReader } from "@/server/video/cf-analytics";
 import { FakeReplayHost } from "@/server/video/replay-fake";
 import { movedReplays } from "@/server/video/__tests__/_seazn-replay-rig";
@@ -83,7 +85,7 @@ describe.skipIf(!HAS_DB)("measureSeaznDelivery — live minutes (Cloudflare)", (
     const cf = fakeLive();
     const host = new FakeReplayHost();
     const res = await measureSeaznDelivery({ liveMinutes: cf.read, replay: host }, slot(new Date(), 2), scope(r.auth.orgId));
-    expect(res).toEqual({ measured: 0, failed: 0, gone: 0 });
+    expect(res).toEqual({ measured: 0, failed: 0, gone: 0, skipped: 0 });
     expect(cf.calls).toEqual([]);
     expect(await deliveryOf(yt)).toBeNull();
     expect(await deliveryOf(open)).toBeNull();
@@ -95,21 +97,21 @@ describe.skipIf(!HAS_DB)("measureSeaznDelivery — live minutes (Cloudflare)", (
     const cf = fakeLive({ [w.inputUid]: 12.5, [w.videoUids[0]!]: 3 });
     const deps = { liveMinutes: cf.read, replay: w.host };
     const day1 = slot(w.createdAt, 2);
-    expect(await measureSeaznDelivery(deps, day1, scope(w.auth.orgId))).toEqual({ measured: 1, failed: 0, gone: 0 });
+    expect(await measureSeaznDelivery(deps, day1, scope(w.auth.orgId))).toEqual({ measured: 1, failed: 0, gone: 0, skipped: 0 });
     // One query, for the programme input AND its recording, from the session's first UTC date through yesterday.
     expect(cf.calls).toEqual([{ uids: [w.inputUid, w.videoUids[0]!].sort(), from: ymd(w.createdAt), to: ymd(daysAfter(w.createdAt, 1)) }]);
     const first = await deliveryOf(w.sid);
     expect(first).toMatchObject({ org_id: w.auth.orgId, live_minutes: "15.5", live_through: ymd(daysAfter(w.createdAt, 1)) });
 
     // The same day again (a re-run, a second cron firing): nothing asked, nothing added.
-    expect(await measureSeaznDelivery(deps, new Date(day1.getTime() + 6 * 3_600_000), scope(w.auth.orgId))).toEqual({ measured: 0, failed: 0, gone: 0 });
+    expect(await measureSeaznDelivery(deps, new Date(day1.getTime() + 6 * 3_600_000), scope(w.auth.orgId))).toEqual({ measured: 0, failed: 0, gone: 0, skipped: 0 });
     expect(cf.calls).toHaveLength(1);
     expect((await deliveryOf(w.sid))!.live_minutes, "not doubled").toBe("15.5");
 
     // The next day: exactly the one new day, its minutes ADDED; updated_at moves with the write (T29 carry m2).
     cf.minutes[w.inputUid] = 2;
     cf.minutes[w.videoUids[0]!] = 0;
-    expect(await measureSeaznDelivery(deps, slot(w.createdAt, 3), scope(w.auth.orgId))).toEqual({ measured: 1, failed: 0, gone: 0 });
+    expect(await measureSeaznDelivery(deps, slot(w.createdAt, 3), scope(w.auth.orgId))).toEqual({ measured: 1, failed: 0, gone: 0, skipped: 0 });
     expect(cf.calls[1]).toEqual({ uids: [w.inputUid, w.videoUids[0]!].sort(), from: ymd(daysAfter(w.createdAt, 2)), to: ymd(daysAfter(w.createdAt, 2)) });
     const next = await deliveryOf(w.sid);
     expect(next).toMatchObject({ live_minutes: "17.5", live_through: ymd(daysAfter(w.createdAt, 2)) });
@@ -163,14 +165,20 @@ describe.skipIf(!HAS_DB)("measureSeaznDelivery — live minutes (Cloudflare)", (
       sids.push(sid);
     }
     const [a, b] = sids as [string, string];
+    // Task 31b: both sessions start on one instant, so they share a window — and the batched query.
+    await sql`update fixture_stream_sessions set created_at = (select created_at from fixture_stream_sessions where id = ${a}) where id = ${b}`;
     const [{ uid: aInput }] = await sql<{ uid: string }[]>`select ingest_input_uid as uid from fixture_stream_sessions where id = ${a}`;
+    const [{ uid: bInput }] = await sql<{ uid: string }[]>`select ingest_input_uid as uid from fixture_stream_sessions where id = ${b}`;
     const [{ created_at }] = await sql<{ created_at: Date }[]>`select min(created_at) as created_at from fixture_stream_sessions where id in (${a}, ${b})`;
     const cf = fakeLive();
     cf.failWhen((uids) => uids.includes(aInput));
     sentry.captureError.mockClear();
     const now = slot(new Date(created_at), 2);
     const deps = { liveMinutes: cf.read, replay: new FakeReplayHost() };
-    expect(await measureSeaznDelivery(deps, now, scope(r.auth.orgId))).toEqual({ measured: 1, failed: 1, gone: 0 });
+    expect(await measureSeaznDelivery(deps, now, scope(r.auth.orgId))).toEqual({ measured: 1, failed: 1, gone: 0, skipped: 0 });
+    // Task 31b: the shared query is refused, so each session is asked ALONE — a's refusal holds back only a.
+    expect(cf.calls[0]!.uids, "the batch: both sessions' uids").toEqual([aInput, bInput].sort());
+    expect(cf.calls.slice(1).map((c) => c.uids).sort(), "then each session alone").toEqual([[aInput], [bInput]].sort());
     expect(await deliveryOf(a), "the failed session: no row").toBeNull();
     expect(await deliveryOf(b), "the other session: measured").toMatchObject({ live_minutes: "0.0", live_through: ymd(daysAfter(new Date(created_at), 1)) });
     const reports = sentry.captureError.mock.calls;
@@ -183,6 +191,99 @@ describe.skipIf(!HAS_DB)("measureSeaznDelivery — live minutes (Cloudflare)", (
     const retried = cf.calls.filter((c) => c.uids.includes(aInput));
     expect(retried.at(-1)).toMatchObject({ from: ymd(new Date(created_at)), to: ymd(daysAfter(new Date(created_at), 2)) });
     expect(await deliveryOf(a)).toMatchObject({ live_minutes: "4.0", live_through: ymd(daysAfter(new Date(created_at), 2)) });
+  });
+
+  // ─── Task 31b (T31 review m11): the scale guard ────────────────────────────────────────────────────────────────────────────────
+  /** `n` Seazn sessions of one org, live then ended by the real producers (the rig's two fixtures in turn: a stopped match started
+   *  again is a new session), all started on ONE instant, so their daily windows are the same; their input uids, in session order. */
+  async function endedSessions(n: number) {
+    const r = await seaznRig();
+    const sids: string[] = [];
+    for (let i = 0; i < n; i++) {
+      const f = r.fixtureIds[i % r.fixtureIds.length]!;
+      const sid = await live(r, f, r.seazn);
+      await stopAndSettle(r, f, sid);
+      sids.push(sid);
+    }
+    await sql`update fixture_stream_sessions set created_at = (select min(created_at) from fixture_stream_sessions where id in ${sql(sids)}) where id in ${sql(sids)}`;
+    const rows = await sql<{ id: string; uid: string; created_at: Date }[]>`select id, ingest_input_uid as uid, created_at from fixture_stream_sessions where id in ${sql(sids)}`;
+    const uidOf = new Map(rows.map((x) => [x.id, x.uid]));
+    expect(rows.length, "PREMISE: every session made").toBe(n);
+    expect(new Set(uidOf.values()).size, "PREMISE: each session its own input uid").toBe(n);
+    return { orgId: r.auth.orgId, sids, uids: sids.map((x) => uidOf.get(x)!), createdAt: new Date(rows[0]!.created_at) };
+  }
+
+  it("Task 31b: sessions sharing a window are read in ONE query naming every session's uids, and each stores only its own uids' minutes; a session on another window is its own query", async () => {
+    const t = await endedSessions(2);
+    const [a, b] = t.sids as [string, string];
+    const [aUid, bUid] = t.uids as [string, string];
+    const cf = fakeLive({ [aUid]: 5, [bUid]: 7 });
+    const deps = { liveMinutes: cf.read, replay: new FakeReplayHost() };
+    expect(await measureSeaznDelivery(deps, slot(t.createdAt, 2), scope(t.orgId))).toEqual({ measured: 2, failed: 0, gone: 0, skipped: 0 });
+    expect(cf.calls, "one query for both").toEqual([{ uids: [aUid, bUid].sort(), from: ymd(t.createdAt), to: ymd(daysAfter(t.createdAt, 1)) }]);
+    expect([(await deliveryOf(a))!.live_minutes, (await deliveryOf(b))!.live_minutes], "each its own").toEqual(["5.0", "7.0"]);
+    // b started a day earlier: two windows, two queries.
+    await sql`delete from fixture_video_delivery where session_id in (${a}, ${b})`;
+    await sql`update fixture_stream_sessions set created_at = created_at - interval '1 day' where id = ${b}`;
+    expect(await measureSeaznDelivery(deps, slot(t.createdAt, 2), scope(t.orgId))).toMatchObject({ measured: 2, failed: 0 });
+    expect(cf.calls.slice(1).map((c) => [c.uids, c.from]).sort(), "a query per window").toEqual([
+      [[aUid], ymd(t.createdAt)], [[bUid], ymd(daysAfter(t.createdAt, -1))],
+    ].sort());
+  });
+
+  it("Task 31b: Cloudflare failing every query — the live pass stops after SEAZN_LIVE_MEASURE_BREAKER_FAILURES in a row: the rest are counted skipped, nothing is written, ONE report names the skipped count, and the next day reads them all", async () => {
+    const K = SEAZN_LIVE_MEASURE_BREAKER_FAILURES;
+    const n = K + 2;
+    const t = await endedSessions(n);
+    const cf = fakeLive();
+    cf.failWhen(() => true);
+    sentry.captureError.mockClear();
+    const warn = vi.spyOn(log, "warn");
+    const deps = { liveMinutes: cf.read, replay: new FakeReplayHost() };
+    // The shared query, then each session alone — until K queries in a row have failed.
+    const res = await measureSeaznDelivery(deps, slot(t.createdAt, 2), scope(t.orgId));
+    expect(cf.calls, "exactly K queries").toHaveLength(K);
+    expect(res, "the batch and K - 1 sessions asked; the rest never").toEqual({ measured: 0, failed: K - 1, gone: 0, skipped: n - (K - 1) });
+    for (const sid of t.sids) expect(await deliveryOf(sid), sid).toBeNull();
+    expect(sentry.captureError, "ONE report for the pass").toHaveBeenCalledTimes(1);
+    expect(sentry.captureError.mock.calls[0]![1]).toMatchObject({ route: "relay.sweep.seazn_measure", extra: { failed: K - 1, skipped: n - (K - 1) } });
+    expect(warn.mock.calls.filter(([, m]) => typeof m === "string" && m.includes("in a row")), "the stop warned once").toHaveLength(1);
+    warn.mockRestore();
+    cf.failWhen(null);
+    expect(await measureSeaznDelivery(deps, slot(t.createdAt, 3), scope(t.orgId)), "the next day: all read, in one query").toEqual({ measured: n, failed: 0, gone: 0, skipped: 0 });
+    expect(cf.calls.slice(K), "one query").toHaveLength(1);
+    expect(cf.calls[K]!.from, "from each session's first day").toBe(ymd(t.createdAt));
+  });
+
+  it("Task 31b: a shared answer that names no minutes for one session's uid fails THAT session — never read as 0 with its day stored — while the other session in the query stores its own", async () => {
+    const t = await endedSessions(2);
+    const [a, b] = t.sids as [string, string];
+    const [aUid, bUid] = t.uids as [string, string];
+    const asked: string[][] = [];
+    const read: LiveMinutesReader = async (uids) => {
+      asked.push([...uids]);
+      return { [bUid]: 3 };   // a's uid absent
+    };
+    expect(await measureSeaznDelivery({ liveMinutes: read, replay: new FakeReplayHost() }, slot(t.createdAt, 2), scope(t.orgId)))
+      .toEqual({ measured: 1, failed: 1, gone: 0, skipped: 0 });
+    expect(asked.map((u) => [...u].sort()), "PREMISE: one shared query").toEqual([[aUid, bUid].sort()]);
+    expect(await deliveryOf(a), "a: nothing stored").toBeNull();
+    expect((await deliveryOf(b))!.live_minutes).toBe("3.0");
+  });
+
+  it("Task 31b: a query that ANSWERS between failures resets the count — the pass never stops on failures that are not in a row", async () => {
+    const t = await endedSessions(5);
+    // The pass asks in session order — `created_at`, then id; one instant here, so by id.
+    const second = [...t.sids].sort()[1]!;
+    const okUid = t.uids[t.sids.indexOf(second)]!;
+    const cf = fakeLive({ [okUid]: 2 });
+    // Every query fails except the one asking for the second session alone: F (the batch), F, ok, F, F, F — never K in a row before
+    // the last, so nothing is skipped (without the reset, the third session's failure would be the third in a row).
+    cf.failWhen((uids) => !(uids.length === 1 && uids[0] === okUid));
+    const res = await measureSeaznDelivery({ liveMinutes: cf.read, replay: new FakeReplayHost() }, slot(t.createdAt, 2), scope(t.orgId));
+    expect(cf.calls, "the batch, then all five alone").toHaveLength(6);
+    expect(res).toEqual({ measured: 1, failed: 4, gone: 0, skipped: 0 });
+    expect((await deliveryOf(second))!.live_minutes).toBe("2.0");
   });
 });
 
@@ -215,14 +316,14 @@ describe.skipIf(!HAS_DB)("measureSeaznDelivery — replay minutes (the replay ho
     const deps = { liveMinutes: fakeLive().read, replay: w.host };
     sentry.captureError.mockClear();
     const warn = vi.spyOn(log, "warn");
-    expect(await measureSeaznDelivery(deps, slot(w.createdAt, 2), scope(w.auth.orgId))).toEqual({ measured: 1, failed: 0, gone: 1 });
+    expect(await measureSeaznDelivery(deps, slot(w.createdAt, 2), scope(w.auth.orgId))).toEqual({ measured: 1, failed: 0, gone: 1, skipped: 0 });
     expect(await deliveryOf(w.sid)).toMatchObject({ replay_minutes: "4.0", replay_through: ymd(daysAfter(w.createdAt, 1)) });
     // Review m3: warned, and reported once for the pass — the count and the session, beside the (empty) failures.
     expect(warn.mock.calls.filter(([o]) => (o as { sid?: string }).sid === w.sid && JSON.stringify(o).includes('"gone":1')), "warned").toHaveLength(1);
     expect(sentry.captureError, "ONE report for the pass").toHaveBeenCalledTimes(1);
     expect(sentry.captureError.mock.calls[0]![1]).toMatchObject({ route: "relay.sweep.seazn_measure", extra: { failed: 0, gone: 1, goneSessionIds: [w.sid] } });
     await w.host.remove(w.copies[0]!);
-    expect(await measureSeaznDelivery(deps, slot(w.createdAt, 3), scope(w.auth.orgId))).toEqual({ measured: 1, failed: 0, gone: 2 });
+    expect(await measureSeaznDelivery(deps, slot(w.createdAt, 3), scope(w.auth.orgId))).toEqual({ measured: 1, failed: 0, gone: 2, skipped: 0 });
     expect(await deliveryOf(w.sid), "kept, not zeroed; the day still counts as measured").toMatchObject({ replay_minutes: "4.0", replay_through: ymd(daysAfter(w.createdAt, 2)) });
   });
 

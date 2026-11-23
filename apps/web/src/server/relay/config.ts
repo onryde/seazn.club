@@ -568,6 +568,14 @@ export const SEAZN_ORG_DELETED_REPLAY_GRACE_DAYS = 30;
  *  this many days after it was received. Bunny's redeliveries of one event span minutes to hours, so a mark this old guards
  *  nothing; without it the table grew by every event for ever. */
 export const BUNNY_WEBHOOK_EVENT_RETENTION_DAYS = 30;
+/** Task 31b (T31 review m11, the scale guard): the daily live read asks Cloudflare for the sessions that share a window in ONE query
+ *  (`uid_in`), at most this many uids per query. The dataset groups by uid only, so a query of 100 uids is 100 groups, far inside
+ *  its 10,000-group limit (cf-analytics.ts), and a body of a few KB; a day of 1,000 sessions is about 10 queries, not 1,000. */
+export const SEAZN_LIVE_MEASURE_UIDS_PER_QUERY = 100;
+/** Task 31b (T31 review m11): the live read stops for the pass once this many Cloudflare queries IN A ROW have failed — Cloudflare
+ *  is down, and each further query would wait out SEAZN_LIVE_MINUTES_TIMEOUT_MS. A query that answers resets the count. The
+ *  sessions not asked are counted `skipped` and read whole the next day (nothing is written for them, so nothing is lost). */
+export const SEAZN_LIVE_MEASURE_BREAKER_FAILURES = 3;
 /** C9: simulcast outputs bill as delivery; Cloudflare caps 5 per input. */
 export const MAX_OUTPUTS_PER_INPUT = 5;
 

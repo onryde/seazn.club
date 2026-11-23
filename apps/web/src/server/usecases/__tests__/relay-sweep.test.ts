@@ -89,13 +89,17 @@ vi.mock("@/server/sponsors/airings", async (importOriginal) => {
 
 // Seazn-hosted video Task 31, step 7e: a measure or purge pass that THROWS as a whole (the database refusing it) — the real
 // passes otherwise.
-const costFault = vi.hoisted(() => ({ measure: null as Error | null, purge: null as Error | null }));
+const costFault = vi.hoisted(() => ({
+  measure: null as Error | null, purge: null as Error | null,
+  /** Task 31b: fields laid over the real measure pass's answer (its `skipped`: the breaker, driven by seazn-cost.test.ts). */
+  measureAs: null as Record<string, number> | null,
+}));
 vi.mock("@/server/usecases/seazn-cost", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/usecases/seazn-cost")>();
   return {
     ...actual,
     measureSeaznDelivery: (...a: Parameters<typeof actual.measureSeaznDelivery>) =>
-      costFault.measure ? Promise.reject(costFault.measure) : actual.measureSeaznDelivery(...a),
+      costFault.measure ? Promise.reject(costFault.measure) : actual.measureSeaznDelivery(...a).then((r) => ({ ...r, ...costFault.measureAs })),
     purgeDeletedOrgReplays: (...a: Parameters<typeof actual.purgeDeletedOrgReplays>) =>
       costFault.purge ? Promise.reject(costFault.purge) : actual.purgeDeletedOrgReplays(...a),
   };
@@ -234,6 +238,7 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
       framesPurged: 0, framePurgesFailed: 0,   // R4 S9 7d
       seaznHeld: 0, seaznHeldPastPromise: 0,   // Seazn-hosted video Task 18
       seaznMeasured: 0, seaznMeasureFailed: 0, seaznReplaysPurged: 0, seaznPurgeFailed: 0,   // Seazn-hosted video Task 31 (flag off)
+      seaznMeasureSkipped: 0,   // Seazn-hosted video Task 31b (the live read's breaker)
       bunnyEventsDeleted: 0, bunnyEventsPurgeFailed: 0,   // Seazn-hosted video Task 31b 7f (a scoped run never reaches it)
     });
     expect(listMachines).not.toHaveBeenCalled();   // no composed session in scope ever held a runner
@@ -2049,6 +2054,7 @@ describe.skipIf(!HAS_DB)("Seazn-hosted video Task 31: step 7e measures Seazn del
     vi.unstubAllEnvs();
     costFault.measure = null;
     costFault.purge = null;
+    costFault.measureAs = null;
   });
   const costReports = () => sentry.captureError.mock.calls.filter(([, c]) => /^relay\.sweep\.seazn_(measure|purge)$/.test((c as { route?: string }).route ?? ""));
 
@@ -2161,6 +2167,14 @@ describe.skipIf(!HAS_DB)("Seazn-hosted video Task 31: step 7e measures Seazn del
     expect(outside(res)).toEqual(outside(baseline));
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from stream_storage_snapshots where source = 'sweep' and taken_at = ${w.r.deps.now()}`;
     expect(n, "step 8 ran").toBe(1);
+  });
+
+  it("Task 31b: the measure pass's skipped sessions (Cloudflare's breaker, seazn-cost.test.ts) are the sweep's seaznMeasureSkipped, beside its other counts", async () => {
+    const w = await endedSeazn();
+    vi.stubEnv("SEAZN_HOSTED_COST", "true");
+    costFault.measureAs = { skipped: 4 };
+    const res = await sweepLater(w);
+    expect(res).toMatchObject({ seaznMeasured: 1, seaznMeasureFailed: 0, seaznMeasureSkipped: 4 });
   });
 
   it("a pass that THROWS as a whole is counted (+1), reported once each, and the other pass and step 8 still run", async () => {

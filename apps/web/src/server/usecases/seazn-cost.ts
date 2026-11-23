@@ -20,6 +20,11 @@ import "server-only";
 //       run reads its whole window again: nothing is lost, nothing is counted twice. So does a replay half one of whose parts was
 //       deleted while it was read: that delete's last read took the copy's days (review m1). Every failure is counted and logged; the
 //       pass reports ONCE (route relay.sweep.seazn_measure), never once per session.
+//       The scale guard (Task 31b, T31 review m11): the live half asks Cloudflare once per WINDOW, not once per session — sessions
+//       whose windows are the same share one `uid_in` query of at most SEAZN_LIVE_MEASURE_UIDS_PER_QUERY uids (`batchByWindow`), and
+//       each stores only its own uids' sum. A shared query that fails is asked again per session, so one session's refusal holds back
+//       only that session. After SEAZN_LIVE_MEASURE_BREAKER_FAILURES failed queries IN A ROW the live half stops for the pass: the
+//       sessions not asked are counted `skipped` (warned once, named in the report) and read whole the next day.
 //
 //   purgeDeletedOrgReplays(deps, now, scope)
 //       Every replay of an organisation whose `organizations.deleted_at` is more than SEAZN_ORG_DELETED_REPLAY_GRACE_DAYS before
@@ -52,9 +57,12 @@ import { sql } from "@/lib/db";
 import { scrubScoreUrl } from "@/lib/scrub-score-url";
 import { captureError } from "@/lib/sentry";
 import { log } from "@/server/logger";
-import { SEAZN_CLAIM_LEASE_SECONDS, SEAZN_LIVE_MEASURE_DAYS, SEAZN_ORG_DELETED_REPLAY_GRACE_DAYS, seaznHostedCost } from "@/server/relay/config";
+import {
+  SEAZN_CLAIM_LEASE_SECONDS, SEAZN_LIVE_MEASURE_BREAKER_FAILURES, SEAZN_LIVE_MEASURE_DAYS, SEAZN_LIVE_MEASURE_UIDS_PER_QUERY,
+  SEAZN_ORG_DELETED_REPLAY_GRACE_DAYS, seaznHostedCost,
+} from "@/server/relay/config";
 import { CF_ANALYTICS_MAX_WINDOW_DAYS, type LiveMinutesReader } from "@/server/video/cf-analytics";
-import { dailyWindow, dayOf, dayText, endOfDay, finalWindow, utcDay } from "@/server/video/domain/delivery-window";
+import { batchByWindow, dailyWindow, dayOf, dayText, endOfDay, finalWindow, utcDay } from "@/server/video/domain/delivery-window";
 import type { ReplayHost } from "@/server/video/replay-ports";
 
 const DAY_MS = 86_400_000;
@@ -76,6 +84,9 @@ export interface SeaznMeasureResult {
   failed: number;
   /** Replay copies the host no longer holds (read null: nothing added). */
   gone: number;
+  /** Sessions whose live half was not asked: the pass stopped after SEAZN_LIVE_MEASURE_BREAKER_FAILURES failed queries in a row
+   *  (Task 31b). Nothing written for them; the next run reads their whole window. */
+  skipped: number;
 }
 export interface SeaznPurgeResult {
   /** Replay rows deleted (`org_deleted`) this run. */
@@ -173,18 +184,72 @@ export async function measureSeaznDelivery(deps: SeaznCostDeps, now: Date, scope
        and (d.live_measured_through is null or d.live_measured_through < ${yesterday}::date)
        ${inScope}
      order by s.created_at, s.id`;
+  // Each session's window first (a failure here is that session's), then one query per batch of sessions sharing a window.
+  type LiveRow = (typeof live)[number];
+  const liveFailed = (s: LiveRow, err: unknown) => {
+    failures.push({ sessionId: s.id, half: "live", err });
+    log.error({ sid: s.id, half: "live", errClass: errClass(err), detail: detail(err) }, "seazn cost: a live measurement failed — nothing written; the next pass reads its whole window");
+  };
+  const planned: { uids: string[]; window: { from: Date; through: Date }; item: LiveRow }[] = [];
   for (const s of live) {
     try {
       const w = dailyWindow({ firstAt: new Date(s.created_at), measuredThrough: dayOf(s.through), now, maxDays: CF_ANALYTICS_MAX_WINDOW_DAYS });
       if (w === null) continue;   // the selection admits only a session owed a day; kept for a clock that moved under it
       if (w.clamped) log.warn({ sid: s.id, from: dayText(w.from), through: dayText(w.through) }, "seazn cost: a live window reached past Cloudflare's 32 dates — the earlier days are not read");
-      const byUid = await deps.liveMinutes(s.uids, w.from, w.through);
-      const minutes = Object.values(byUid).reduce((sum, m) => sum + m, 0);
+      planned.push({ uids: s.uids, window: w, item: s });
+    } catch (err) {
+      liveFailed(s, err);
+    }
+  }
+  let failedInARow = 0;
+  let skipped = 0;
+  /** One Cloudflare query, counted toward the breaker: an answer resets the count, a failure adds one. */
+  const ask = async (uids: string[], w: { from: Date; through: Date }): Promise<{ ok: true; byUid: Record<string, number> } | { ok: false; err: unknown }> => {
+    try {
+      const byUid = await deps.liveMinutes(uids, w.from, w.through);
+      failedInARow = 0;
+      return { ok: true, byUid };
+    } catch (err) {
+      failedInARow++;
+      return { ok: false, err };
+    }
+  };
+  const stopped = () => failedInARow >= SEAZN_LIVE_MEASURE_BREAKER_FAILURES;
+  /** Stores one session's live half from an answer that named its uids. */
+  const store = async (s: LiveRow, byUid: Record<string, number>, w: { through: Date }) => {
+    try {
+      let minutes = 0;
+      for (const u of s.uids) {
+        // Cloudflare's reader answers every uid it was asked (0 for none); a missing one would read as 0 and store the day.
+        if (!Object.hasOwn(byUid, u)) throw new Error(`seazn cost: the live answer names no minutes for uid ${u}`);
+        minutes += byUid[u]!;
+      }
       if (await addMinutes("live", { sessionId: s.id, orgId: s.org_id, minutes, readThrough: s.through, through: dayText(w.through) })) written.add(s.id);
       else log.warn({ sid: s.id, half: "live" }, "seazn cost: another pass measured this session first — nothing added");
     } catch (err) {
-      failures.push({ sessionId: s.id, half: "live", err });
-      log.error({ sid: s.id, half: "live", errClass: errClass(err), detail: detail(err) }, "seazn cost: a live measurement failed — nothing written; the next pass reads its whole window");
+      liveFailed(s, err);
+    }
+  };
+  const skippedSessions: string[] = [];
+  const skip = (s: LiveRow) => {
+    if (skipped === 0) log.warn({ failedInARow, limit: SEAZN_LIVE_MEASURE_BREAKER_FAILURES }, "seazn cost: Cloudflare failed the live read too many times in a row — the rest of the live half is skipped this pass; it is read whole next pass");
+    skipped++;
+    skippedSessions.push(s.id);
+  };
+  for (const b of batchByWindow(planned, SEAZN_LIVE_MEASURE_UIDS_PER_QUERY)) {
+    if (stopped()) { b.items.forEach(skip); continue; }
+    const answer = await ask(b.uids, b);
+    if (answer.ok) {
+      for (const s of b.items) await store(s, answer.byUid, b);
+      continue;
+    }
+    if (b.items.length === 1) { liveFailed(b.items[0]!, answer.err); continue; }
+    // A shared query failed: each session alone, so one session's refusal holds back only that session.
+    for (const s of b.items) {
+      if (stopped()) { skip(s); continue; }
+      const own = await ask(s.uids, b);
+      if (own.ok) await store(s, own.byUid, b);
+      else liveFailed(s, own.err);
     }
   }
 
@@ -234,7 +299,7 @@ export async function measureSeaznDelivery(deps: SeaznCostDeps, now: Date, scope
   const failedSessions = new Set(failures.map((f) => f.sessionId));
   // ONE report for the pass: sessions that failed (nothing written; re-read whole next pass) and copies gone from the host while
   // their rows are not deleted (review m3).
-  if (failedSessions.size > 0 || goneSessions.length > 0) {
+  if (failedSessions.size > 0 || goneSessions.length > 0 || skipped > 0) {
     const first = failures[0];
     captureError(new Error("relay sweep: Seazn delivery was not all measured — failed sessions are read again whole next pass; a gone copy's row is not deleted"), {
       route: "relay.sweep.seazn_measure",
@@ -242,10 +307,11 @@ export async function measureSeaznDelivery(deps: SeaznCostDeps, now: Date, scope
         failed: failedSessions.size, sessionIds: [...failedSessions].slice(0, REPORTED_IDS_MAX), firstError: first ? detail(first.err) : null,
         halves: failures.map((f) => f.half).slice(0, REPORTED_IDS_MAX),
         gone, goneSessionIds: goneSessions.slice(0, REPORTED_IDS_MAX),
+        skipped, skippedSessionIds: skippedSessions.slice(0, REPORTED_IDS_MAX),
       },
     });
   }
-  return { measured: written.size, failed: failedSessions.size, gone };
+  return { measured: written.size, failed: failedSessions.size, gone, skipped };
 }
 
 export type FinalMeasure = "off" | "measured" | "nothing_left" | "gone" | "raced" | "failed";
