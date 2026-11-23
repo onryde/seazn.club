@@ -1,12 +1,16 @@
 // Posts #22 (how-americano-works) and #23 (how-mexicano-works) are HELD: written, reviewed and fixed, but not published,
 // because the product cannot yet finish an evening of either format (owner ruling 2026-11-23; findings D1 and D2 in the
-// batch 5 review). Their final text and examples live in
-//   .superpowers/sdd/2026-11-19-blog-p2/held-22-how-americano-works.md and held-23-how-mexicano-works.md
-// beside the SDD ledger, with the commit that holds the files and the steps that put them back.
+// batch 5 review). Their final text and examples are in git history, not in a side folder (the SDD ledger directory is not
+// tracked): commit 6d6a8322b9 is the one that held them, and it deleted them, so its PARENT holds every file. To release a post,
+// restore its files from there, for example
+//   git show 6d6a8322b9^:apps/web/content/blog/how-americano-works.md
+//   git checkout 6d6a8322b9^ -- apps/web/src/blog/examples/americano-rotation.ts apps/web/src/blog/examples/__golden__/americano-rotation.json
+// (`git show --stat 6d6a8322b9` lists all 17 files: the two posts, their two examples and goldens, the americano partner
+// grid component, and the registrations in goldens.ts, index.ts, types.ts and blog-diagram.tsx), then re-register the examples.
 //
 // These are TRIPWIRES. Each one passes while the defect stands and FAILS the day it is fixed, so a fix cannot ship without
 // someone being told that a held post is now ready to release. A tripwire is not a pin on the defect for its own sake: when
-// it goes red, release the posts (see the held notes), then delete this file's matching test.
+// it goes red, release the posts (the commit named above), then delete this file's matching test.
 //
 //   D1: score entry in americano. The division page's score boxes (`americano-panel.tsx` scoreMatch) post the event
 //       `generic.result`; only the catch-all sport declares it, so in every other sport the boxes are refused. It stands
