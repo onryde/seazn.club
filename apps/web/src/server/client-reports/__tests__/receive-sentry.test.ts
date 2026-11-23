@@ -119,7 +119,13 @@ beforeAll(async () => {
 });
 afterAll(() => vi.unstubAllEnvs());
 
+// The logger's level, pinned per test and restored: CI's smoke jobs run with LOG_LEVEL=error (ci.yml), under which pino's warn and
+// the pipeline's server-log-only line are both silent, and these tests are about what a WARN line does. Set BEFORE any spy on `log`
+// (pino's level setter reassigns the level methods, which would replace a spy), restored AFTER the spies are.
+let ambientLevel = "";
 beforeEach(async () => {
+  ambientLevel = log.level;
+  log.level = "info";
   // Drain whatever a previous test left buffered (Sentry Logs are batched), so each test reads only its own envelopes.
   await Sentry.flush(5000);
   clock.now = Date.parse("2026-11-23T12:00:00.000Z");
@@ -139,7 +145,10 @@ beforeEach(async () => {
     return true;
   }) as typeof process.stdout.write);
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  log.level = ambientLevel;
+});
 
 /** What the SDK posted, after a flush: this probe's Sentry Logs (by body) and events (by message). */
 async function reachedSentry(): Promise<{ logs: number; events: number }> {

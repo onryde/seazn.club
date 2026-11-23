@@ -101,7 +101,13 @@ describe.skipIf(!HAS_DB)("receiveClientReport — the video kind, over a real da
   });
 
   let warn: ReturnType<typeof vi.spyOn>;
+  // The logger's level, pinned per test and restored: CI's smoke jobs run with LOG_LEVEL=error (ci.yml), under which pino's warn and
+  // the pipeline's server-log-only line are both silent, and these tests are about what a WARN line does. Set BEFORE any spy on `log`
+  // (pino's level setter reassigns the level methods, which would replace a spy), restored AFTER the spies are.
+  let ambientLevel = "";
   beforeEach(() => {
+    ambientLevel = log.level;
+    log.level = "info";
     clock.now = Date.parse("2026-11-23T12:00:00.000Z");
     counter.off = false;
     counter.windows.clear();
@@ -115,6 +121,7 @@ describe.skipIf(!HAS_DB)("receiveClientReport — the video kind, over a real da
   afterEach(() => {
     __setRateLimitCounterForTests(null);
     vi.restoreAllMocks();
+    log.level = ambientLevel;
   });
 
   it("EMPTY CASE FIRST: a report about an id no fixture has is dropped — nothing logged, nothing sent", async () => {

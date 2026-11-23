@@ -7,12 +7,17 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const counter = vi.hoisted(() => new Map<string, number>());
+// Redis stands in as CONFIGURED and answering, whatever the job's REDIS_URL: the windowed INCR on this map, DEL on the same map.
 vi.mock("@/lib/cache", async (orig) => ({
   ...(await orig<typeof import("@/lib/cache")>()),
+  cacheEnabled: () => true,
   incrWindow: async (key: string) => {
     const next = (counter.get(key) ?? 0) + 1;
     counter.set(key, next);
     return { count: next, ttlMs: 60_000 };
+  },
+  cacheDel: async (...keys: string[]) => {
+    for (const key of keys) counter.delete(key);
   },
 }));
 const sentry = vi.hoisted(() => ({ messages: [] as { message: string; context: unknown }[] }));
@@ -56,7 +61,13 @@ describe.skipIf(!HAS_DB)("a viewer's failure, from the player's own error to the
   const beacons: { url: string; body: string }[] = [];
   /** What the pipeline wrote into the logger's own destination outside pino's serialiser (its server-log-only lines). */
   const serverOnly: string[] = [];
+  // The logger's level, pinned per test and restored: CI's smoke jobs run with LOG_LEVEL=error (ci.yml), under which pino's warn and
+  // the pipeline's server-log-only line are both silent, and these tests are about what a WARN line does. Set BEFORE any spy on `log`
+  // (pino's level setter reassigns the level methods, which would replace a spy), restored AFTER the spies are.
+  let ambientLevel = "";
   beforeEach(() => {
+    ambientLevel = log.level;
+    log.level = "info";
     counter.clear();
     sentry.messages.length = 0;
     beacons.length = 0;
@@ -71,6 +82,7 @@ describe.skipIf(!HAS_DB)("a viewer's failure, from the player's own error to the
     __setRateLimitCounterForTests(null);
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    log.level = ambientLevel;
   });
 
   /** Each recorded beacon, POSTed to the route as the browser sends it: its URL, a text/plain string, the viewer's IP. */
