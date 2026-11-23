@@ -746,6 +746,9 @@ describe("Seazn cost (Task 31): the measurement window and the deleted-org grace
     expect(config.SEAZN_LIVE_MEASURE_DAYS).toBe(31);
     expect(config.SEAZN_ORG_DELETED_REPLAY_GRACE_DAYS).toBe(30);
   });
+  it("Task 31b's numbers: Bunny's webhook dedupe marks are kept 30 days", () => {
+    expect(config.BUNNY_WEBHOOK_EVENT_RETENTION_DAYS).toBe(30);
+  });
   it("a live read never needs more dates than Cloudflare answers in one query: 31 days back, plus the extra date a session's start can cross (it lasts at most MAX_DURATION_MINUTES), fits its 32", () => {
     const startCrosses = Math.ceil(config.MAX_DURATION_MINUTES / (24 * 60));
     expect(startCrosses, "PREMISE: a session lasts less than a day").toBe(1);

@@ -564,6 +564,10 @@ export const SEAZN_LIVE_MEASURE_DAYS = 31;
 /** Task 31 (plan decision; spec §5.5): an organisation's Seazn replays are removed from the replay host this many days after its
  *  `organizations.deleted_at` (V021) — the schema's only "closed or deleted" mark, set by staff until a product path sets it. */
 export const SEAZN_ORG_DELETED_REPLAY_GRACE_DAYS = 30;
+/** Task 31b (the Task 27 follow-up): a Bunny webhook dedupe mark (`bunny_webhook_events`, V542) is deleted by the daily sweep
+ *  this many days after it was received. Bunny's redeliveries of one event span minutes to hours, so a mark this old guards
+ *  nothing; without it the table grew by every event for ever. */
+export const BUNNY_WEBHOOK_EVENT_RETENTION_DAYS = 30;
 /** C9: simulcast outputs bill as delivery; Cloudflare caps 5 per input. */
 export const MAX_OUTPUTS_PER_INPUT = 5;
 

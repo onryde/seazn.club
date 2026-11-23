@@ -20,7 +20,7 @@ import { FAKE_REPLAY_LENGTH_SECONDS, FakeReplayHost } from "@/server/video/repla
 import { deleteSeaznReplay } from "@/server/video/organiser-replays";
 import { discoveredReplays, replayRowsOf } from "@/server/video/__tests__/_seazn-replay-rig";
 import { installSeaznEnv, seaznRig } from "@/server/video/__tests__/_seazn-session-rig";
-import { type BunnyWebhookDeps, applyBunnyEvent } from "../seazn-replay-webhook";
+import { type BunnyWebhookDeps, applyBunnyEvent, purgeBunnyWebhookEvents } from "../seazn-replay-webhook";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 /** A replay fake whose copy ids are this test's own: the webhook looks a copy up by its id across the whole table (Bunny's guids are
@@ -353,5 +353,42 @@ describe.skipIf(!HAS_DB)("applyBunnyEvent — the Bunny Stream webhook (Task 27)
     for (const [name, spy] of cf) expect([name, spy.mock.calls.length]).toEqual([name, 0]);
     expect(cf.length).toBe(6);
     expect(w.ingest.deletedVideos, "no Cloudflare video was deleted").toEqual([]);
+  });
+});
+
+// Task 31b (the T27 follow-up): the dedupe marks are kept 30 days — the brief's number, typed here — then the daily sweep deletes
+// them (relay-sweep.ts 7f). Bunny's redeliveries of one event span far less, so a mark that old guards nothing.
+describe.skipIf(!HAS_DB)("purgeBunnyWebhookEvents — the dedupe marks' retention (Task 31b)", () => {
+  const RETENTION_DAYS = 30;
+  const DAY = 86_400_000;
+  const mark = async (at: Date) => {
+    const id = `evt-t31b-${randomUUID()}`;
+    await sql`insert into bunny_webhook_events (event_id, received_at) values (${id}, ${at})`;
+    return id;
+  };
+
+  it("EMPTY CASE FIRST: no mark in scope older than 30 days — nothing deleted, 0 answered", async () => {
+    const now = new Date();
+    const young = await mark(new Date(now.getTime() - 60_000));
+    expect(await purgeBunnyWebhookEvents(now, { eventIds: [young, `evt-none-${randomUUID()}`] })).toBe(0);
+    expect(await marksOf(young)).toBe(1);
+  });
+
+  it("a mark a minute past 30 days goes, one a minute inside stays; a second run on the same clock deletes nothing; the next day the kept one goes too", async () => {
+    const now = new Date();
+    const edge = now.getTime() - RETENTION_DAYS * DAY;
+    const past = await mark(new Date(edge - MIN));
+    const inside = await mark(new Date(edge + MIN));
+    const scope = { eventIds: [past, inside] };
+    expect(await purgeBunnyWebhookEvents(now, scope)).toBe(1);
+    expect([await marksOf(past), await marksOf(inside)]).toEqual([0, 1]);
+    expect(await purgeBunnyWebhookEvents(now, scope), "a second run, the same clock").toBe(0);
+    expect(await marksOf(inside)).toBe(1);
+    expect(await purgeBunnyWebhookEvents(new Date(now.getTime() + DAY), scope), "a day later").toBe(1);
+    expect(await marksOf(inside)).toBe(0);
+  });
+
+  it("an EMPTY eventIds scope is refused by name — never read as every mark", async () => {
+    await expect(purgeBunnyWebhookEvents(new Date(), { eventIds: [] })).rejects.toThrow(/eventIds is empty/);
   });
 });

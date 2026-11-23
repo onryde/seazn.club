@@ -101,6 +101,17 @@ vi.mock("@/server/usecases/seazn-cost", async (importOriginal) => {
   };
 });
 
+// Seazn-hosted video Task 31b, step 7f: a Bunny webhook mark purge that THROWS (the database refusing it) — the real purge otherwise.
+const bunnyFault = vi.hoisted(() => ({ error: null as Error | null }));
+vi.mock("@/server/usecases/seazn-replay-webhook", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/usecases/seazn-replay-webhook")>();
+  return {
+    ...actual,
+    purgeBunnyWebhookEvents: (...a: Parameters<typeof actual.purgeBunnyWebhookEvents>) =>
+      bunnyFault.error ? Promise.reject(bunnyFault.error) : actual.purgeBunnyWebhookEvents(...a),
+  };
+});
+
 const HAS_DB = !!process.env.DATABASE_URL;
 
 // A KEK of this file's own (secret-columns.test.ts precedent): CI supplies no RELAY_KEK, and every sealed destination
@@ -223,6 +234,7 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
       framesPurged: 0, framePurgesFailed: 0,   // R4 S9 7d
       seaznHeld: 0, seaznHeldPastPromise: 0,   // Seazn-hosted video Task 18
       seaznMeasured: 0, seaznMeasureFailed: 0, seaznReplaysPurged: 0, seaznPurgeFailed: 0,   // Seazn-hosted video Task 31 (flag off)
+      bunnyEventsDeleted: 0, bunnyEventsPurgeFailed: 0,   // Seazn-hosted video Task 31b 7f (a scoped run never reaches it)
     });
     expect(listMachines).not.toHaveBeenCalled();   // no composed session in scope ever held a runner
     expect(listInputVideos, "R2004 1c: no ended composed session, no camera listed").not.toHaveBeenCalled();
@@ -2172,5 +2184,88 @@ describe.skipIf(!HAS_DB)("Seazn-hosted video Task 31: step 7e measures Seazn del
       checked++;
     }
     expect(checked).toBe(2);
+  });
+});
+
+// Seazn-hosted video Task 31b (the Task 27 follow-up): step 7f deletes Bunny's webhook dedupe marks (`bunny_webhook_events`, V542)
+// older than 30 days — the brief's number, typed here. The table has no org, so a SCOPED run (every other test in this file) never
+// reaches it, and these tests drive the UNSCOPED production call the m3 test's way: on a clock 40 years back, where no other file's
+// session, beat, record or mark exists (the premise is counted, not assumed). Step 7d's frame purge is faulted for these runs: it
+// drains sponsor-frame tombstones at ANY clock, which would reach every other file's.
+describe.skipIf(!HAS_DB)("Seazn-hosted video Task 31b: step 7f deletes Bunny's webhook dedupe marks past 30 days", () => {
+  const RETENTION_DAYS = 30;
+  const PREFIX = "evt-t31b-sweep-";
+  afterEach(() => {
+    bunnyFault.error = null;
+    purgeFault.error = null;
+  });
+  const marksOf = async (id: string) => (await sql<{ n: number }[]>`select count(*)::int as n from bunny_webhook_events where event_id = ${id}`)[0]!.n;
+  const mark = async (at: Date) => {
+    const id = `${PREFIX}${randomUUID()}`;
+    await sql`insert into bunny_webhook_events (event_id, received_at) values (${id}, ${at})`;
+    return id;
+  };
+  const bunnyReports = () => sentry.captureError.mock.calls.filter(([, c]) => (c as { route?: string }).route === "relay.sweep.bunny_events");
+
+  /** The unscoped sweep (no options: the cron route's call) on `clock`, with the frame purge faulted (header). */
+  async function ancientSweep(clock: Date) {
+    const ingest = new FakeIngest();
+    ingest.storage = { totalStorageMinutes: 0, totalStorageMinutesLimit: ROOMY_STORAGE_MINUTES, videoCount: 0 };
+    const deps: SessionDeps = { drivers: { ingest, runner: new FakeRunner() }, now: () => clock, appUrl: "http://app.test" };
+    const [{ others }] = await sql<{ others: number }[]>`select count(*)::int as others from fixture_stream_sessions where created_at <= ${clock}`;
+    expect(others, "PREMISE: no session exists at the sweep's clock").toBe(0);
+    purgeFault.error = new Error("frame purge kept off the unscoped run");
+    try {
+      const res = await sweepStreamSessions(deps);   // NO options
+      const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from stream_storage_snapshots where source = 'sweep' and taken_at = ${clock}`;
+      return { res, snapshots: n };
+    } finally {
+      await sql`delete from stream_storage_snapshots where source = 'sweep' and taken_at = ${clock}`;
+    }
+  }
+
+  it("a SCOPED sweep (a test's) never touches a mark, however old: the table has no org to scope it by (mutant: run 7f on a scoped sweep → red)", async () => {
+    const { auth } = await seedOrg();
+    const ancient = await mark(new Date(Date.now() - 40 * 365 * DAY_MS));
+    try {
+      const ingest = new FakeIngest();
+      ingest.storage = { totalStorageMinutes: 0, totalStorageMinutesLimit: ROOMY_STORAGE_MINUTES, videoCount: 0 };
+      const res = await sweepStreamSessions({ drivers: { ingest, runner: new FakeRunner() }, now: () => new Date(), appUrl: "x" }, { orgIds: [auth.orgId] });
+      expect(res).toMatchObject({ bunnyEventsDeleted: 0, bunnyEventsPurgeFailed: 0 });
+      expect(await marksOf(ancient), "the 40-year-old mark is still there").toBe(1);
+    } finally {
+      await sql`delete from bunny_webhook_events where event_id = ${ancient}`;
+    }
+  });
+
+  it("the UNSCOPED sweep deletes a mark a minute past 30 days and keeps one a minute inside; nothing reported", async () => {
+    const clock = new Date(Date.now() - 40 * 365 * DAY_MS);
+    const edge = clock.getTime() - RETENTION_DAYS * DAY_MS;
+    // A killed earlier run's marks sit before this clock's edge too: this test's own debris, cleared first.
+    await sql`delete from bunny_webhook_events where event_id like ${PREFIX + "%"}`;
+    const past = await mark(new Date(edge - 60_000));
+    const inside = await mark(new Date(edge + 60_000));
+    try {
+      const [{ older }] = await sql<{ older: number }[]>`select count(*)::int as older from bunny_webhook_events where received_at < ${new Date(edge)}`;
+      expect(older, "PREMISE: the one mark past the edge is this test's").toBe(1);
+      sentry.captureError.mockClear();
+      const { res } = await ancientSweep(clock);
+      expect(res).toMatchObject({ bunnyEventsDeleted: 1, bunnyEventsPurgeFailed: 0 });
+      expect([await marksOf(past), await marksOf(inside)]).toEqual([0, 1]);
+      expect(bunnyReports()).toEqual([]);
+    } finally {
+      await sql`delete from bunny_webhook_events where event_id in (${past}, ${inside})`;
+    }
+  });
+
+  it("a purge that THROWS is counted (bunnyEventsPurgeFailed 1), reported once, and step 8 still runs", async () => {
+    const clock = new Date(Date.now() - 40 * 365 * DAY_MS);
+    bunnyFault.error = new Error("database refused the mark purge");
+    sentry.captureError.mockClear();
+    const { res, snapshots } = await ancientSweep(clock);
+    expect(res).toMatchObject({ bunnyEventsDeleted: 0, bunnyEventsPurgeFailed: 1 });
+    expect(bunnyReports()).toHaveLength(1);
+    expect((bunnyReports()[0]![0] as Error).message).toBe("database refused the mark purge");
+    expect(snapshots, "step 8 ran after it").toBe(1);
   });
 });

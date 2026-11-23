@@ -21,10 +21,13 @@ import "server-only";
 // own removal failed (Task 26 review m5) — and is removed. A recording still `fetching` is skipped: the move's own answer is about to
 // land (plan decision: remove rather than adopt; the fetch's stale timeout is the one recovery path). Anything else in the library
 // is never touched.
+//
+// RETENTION (Task 31b): `purgeBunnyWebhookEvents` deletes the marks older than BUNNY_WEBHOOK_EVENT_RETENTION_DAYS; the daily sweep
+// runs it on an unscoped pass (relay-sweep.ts 7f).
 import { sql } from "@/lib/db";
 import { scrubScoreUrl } from "@/lib/scrub-score-url";
 import { log } from "@/server/logger";
-import { SEAZN_CF_DELETE_DELAY_MINUTES } from "@/server/relay/config";
+import { BUNNY_WEBHOOK_EVENT_RETENTION_DAYS, SEAZN_CF_DELETE_DELAY_MINUTES } from "@/server/relay/config";
 import { type BunnyEvent, webhookOutcome } from "@/server/video/bunny-webhook";
 import { parseReplayCopyTitle, replayFailure, verifyReplayCopy } from "@/server/video/domain/replay-move";
 import type { ReplayHost } from "@/server/video/replay-ports";
@@ -147,4 +150,19 @@ async function strayCopy(deps: BunnyWebhookDeps, ev: BunnyEvent): Promise<BunnyE
   await deps.replay.remove(guid);
   log.info({ replayId: row.id, guid, state: row.state }, "seazn replay webhook: a stray copy of ours removed");
   return "applied";
+}
+
+/** Task 31b: every dedupe mark received more than BUNNY_WEBHOOK_EVENT_RETENTION_DAYS before `now` is deleted; answers how many.
+ *  `eventIds` is a TEST-ONLY scope (the sweep's `orgIds` rule — the table has no org): omitted, every mark; an empty list is refused,
+ *  never read as "every mark". */
+export async function purgeBunnyWebhookEvents(now: Date, scope: { eventIds?: readonly string[] } = {}): Promise<number> {
+  if (scope.eventIds !== undefined && scope.eventIds.length === 0) {
+    throw new Error("bunny webhook retention: eventIds is empty — omit it for every mark, or name at least one");
+  }
+  const cutoff = new Date(now.getTime() - BUNNY_WEBHOOK_EVENT_RETENTION_DAYS * 86_400_000);
+  const gone = await sql<{ event_id: string }[]>`
+    delete from bunny_webhook_events
+     where received_at < ${cutoff} ${scope.eventIds ? sql`and event_id in ${sql([...scope.eventIds])}` : sql``}
+     returning event_id`;
+  return gone.length;
 }
