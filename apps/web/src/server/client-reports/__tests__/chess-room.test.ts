@@ -245,6 +245,7 @@ describe("the chess-room report through the pipeline (receive.ts)", () => {
     expect(asked, "the subject was looked up once").toHaveLength(1);
     expect(asked[0]!.values).toEqual([FIXTURE]);
     expect(asked[0]!.text).toContain("fixture_video_meetings");
+    expect(asked[0]!.text, "a LIVE room only (the real predicate is run in route-seam-chess-room.test.ts)").toContain("ended_at");
     expect(lines()).toEqual([]);
     expect(serverOnly).toEqual([]);
     expect(sentry.messages).toEqual([]);

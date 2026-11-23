@@ -8,17 +8,25 @@
 // names it, and RealtimeKit's own leave state (lib/chess-room-report-codes.ts). No name, no email, no token, no peer or participant id,
 // no time: a report is "this room dropped, this way", and the server stamps the time itself.
 //
-// A report counts only for a fixture that has a camera room: one with a `fixture_video_meetings` row (V451/V459; any side, ended or not:
-// the row is the board's room, and a late drop at the result is still that board's). Any other id is dropped without a word, so the
-// route's answer never says whether a fixture exists.
+// UNAUTHENTICATED HINTS, NOT EVIDENCE. The route is public and a fixture's id is public, so anyone can send a well-formed report for any
+// live board: nothing in it is signed, and nothing in it proves a player's connection dropped. It is an operator's lead for the server
+// log and Sentry, never a record an organiser or an arbiter may rely on in a dispute. Nothing reads these reports back: the server's own
+// camera flags and guard-fault stamps (`fixture_play_flags`, `fixture_video_guard_faults`) are written by the server, never from here.
+//
+// A report counts only for a board whose camera room is LIVE: a `fixture_video_meetings` row (V451/V459; any side) that has not ended, or
+// ended within the last 15 minutes (a drop at the result, or the room's own teardown racing the client's last event, is still that
+// board's). Any other id is dropped without a word, so the route's answer never says whether a fixture exists, and a board whose room
+// is long over can neither be forged against nor have a dedupe slot taken on it.
 //
 // Limits (the shared pipeline's, receive.ts): per IP, fixture and kind, 30 a minute (a connection that flaps does not become 30 log
 // lines); one Sentry event per window for each of
 //     fixture + surface + side + leave state
 // (a player's drop and the arbiter's of the same board are two events: they are two joins; a socket drop and the SDK giving up are two
 // events, because they say different things; a flapping line repeats the same pair and is one). The kind's Sentry budget is the
-// registry default, 60 first reports an hour: a venue-wide outage reaches Sentry in its first 60 boards and sends the rest to the
-// server log, which is what an incident needs, and a quiet hour spends nothing.
+// registry default, 60 first reports an hour, and it counts DEDUPE KEYS, not boards: a board that drops on both surfaces and in more
+// than one state spends several (about three is usual), so an outage across a whole venue reaches Sentry with its first 60 keys, a
+// score of boards, and the rest are server-log lines. One client IP's Sentry share is 5 an hour across every kind, so a venue behind one
+// NAT is held to 5 events whatever its boards do: the log has the rest. A quiet hour spends nothing.
 import { z } from "zod";
 import { ROOM_DROP_STATES, ROOM_REPORT_SIDES, ROOM_REPORT_SURFACES } from "../../lib/chess-room-report-codes.ts";
 import { defineClientReportKind } from "./define.ts";
@@ -41,7 +49,10 @@ export const chessRoomClientReport = defineClientReportKind(ChessRoomClientRepor
   dedupeSubject: `${r.fixtureId}:${r.surface}:${r.side ?? "-"}:${r.leaveState}`,
   subjectExists: async (db) => {
     const [row] = await db<{ room: boolean }[]>`
-      select exists (select 1 from fixture_video_meetings where fixture_id = ${r.fixtureId}) as room`;
+      select exists (
+        select 1 from fixture_video_meetings
+        where fixture_id = ${r.fixtureId} and (ended_at is null or ended_at > now() - interval '15 minutes')
+      ) as room`;
     return row?.room === true;
   },
   message: "realtimekit: room dropped",

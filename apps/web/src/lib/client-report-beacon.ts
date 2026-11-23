@@ -6,6 +6,7 @@
 // its Content-Type), else a keepalive fetch. Fire and forget: no answer is read, a report that cannot be sent is lost, never retried,
 // and never throws into the page. The caller builds a report that the route's own closed schema takes (server/client-reports/);
 // nothing here looks inside it.
+import type { ClientReport } from "@/server/client-reports/kinds";
 import { CLIENT_REPORTS_PATH } from "./client-reports";
 
 /** Send one serialised report to `url` (the route's path). */
@@ -22,7 +23,8 @@ export function sendClientReport(url: string, body: string): void {
   }
 }
 
-/** Send one report of a registered kind to the route (a body with its `kind`, as JSON). */
-export function beaconClientReport(report: { kind: string }): void {
+/** Send one report of a registered kind to the route (a body with its `kind`, as JSON). Typed by the route's own body union, so a
+ *  report the route's closed schema would refuse does not compile. */
+export function beaconClientReport(report: ClientReport): void {
   sendClientReport(CLIENT_REPORTS_PATH, JSON.stringify(report));
 }

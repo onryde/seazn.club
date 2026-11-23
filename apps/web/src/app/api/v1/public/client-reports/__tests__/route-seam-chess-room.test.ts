@@ -55,22 +55,32 @@ async function settle(): Promise<void> {
 const camera = (m: FakeMeeting, peer: string) => m.produce(peer, { producerId: `${peer}-cam`, kind: "video", screenShare: false });
 
 describe.skipIf(!HAS_DB)("a camera room's drop, from the loader's own roomLeft to the server's log line and Sentry warning", () => {
-  /** A board whose room exists (a meeting row per side), and one that has none. */
-  const board = { withRoom: "", noRoom: "" };
-  beforeAll(async () => {
-    const [a, b] = await Promise.all([1, 2].map(() =>
-      seedOnlineChessFixture({ onlinePlay: "lichess", divisionStarted: true, linked: true, scheduledAt: new Date(Date.now() + 3_600_000) })));
-    board.withRoom = a!.fixtureId;
-    board.noRoom = b!.fixtureId;
-    for (const side of ["home", "away"] as const) {
+  /** A board whose room is live (a meeting row per side, none ended), one that has none, one whose room ended long ago, and one whose
+   *  room ended a few minutes ago. A fixture's id is public, so only a LIVE room counts (chess-room.ts). */
+  const board = { withRoom: "", noRoom: "", endedLongAgo: "", endedJustNow: "" };
+  /** Seeds a board and, for `rooms` (null: none), a meeting row per side, ended `endedAgo` ago (a Postgres interval) or never (null). */
+  async function seedBoard(rooms: { endedAgo: string | null } | null): Promise<string> {
+    const { fixtureId } = await seedOnlineChessFixture({ onlinePlay: "lichess", divisionStarted: true, linked: true, scheduledAt: new Date(Date.now() + 3_600_000) });
+    for (const side of rooms === null ? [] : (["home", "away"] as const)) {
       await sql`
-        insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, home_entrant_id, away_entrant_id)
-        select id, ${side}, org_id, ${`cr-seam-${side}-${board.withRoom}`}, home_entrant_id, away_entrant_id from fixtures where id = ${board.withRoom}`;
+        insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, home_entrant_id, away_entrant_id, ended_at)
+        select id, ${side}, org_id, ${`cr-seam-${side}-${fixtureId}`}, home_entrant_id, away_entrant_id,
+               case when ${rooms?.endedAgo ?? null}::text is null then null else now() - (${rooms?.endedAgo ?? null}::text)::interval end
+        from fixtures where id = ${fixtureId}`;
     }
-    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_video_meetings where fixture_id = ${board.withRoom}`;
-    expect(n, "PREMISE: the board's two meeting rows").toBe(2);
-    const [{ none }] = await sql<{ none: number }[]>`select count(*)::int as none from fixture_video_meetings where fixture_id = ${board.noRoom}`;
-    expect(none, "PREMISE: the other board has no room").toBe(0);
+    return fixtureId;
+  }
+  beforeAll(async () => {
+    board.withRoom = await seedBoard({ endedAgo: null });
+    board.noRoom = await seedBoard(null);
+    board.endedLongAgo = await seedBoard({ endedAgo: "2 hours" });
+    board.endedJustNow = await seedBoard({ endedAgo: "5 minutes" });
+    const count = async (id: string, filter: "all" | "ended") =>
+      (await sql<{ n: number }[]>`select count(*)::int as n from fixture_video_meetings where fixture_id = ${id} and (${filter === "all"} or ended_at is not null)`)[0]!.n;
+    expect([await count(board.withRoom, "all"), await count(board.withRoom, "ended")], "PREMISE: a live room: two rows, none ended").toEqual([2, 0]);
+    expect(await count(board.noRoom, "all"), "PREMISE: the other board has no room").toBe(0);
+    expect([await count(board.endedLongAgo, "all"), await count(board.endedLongAgo, "ended")], "PREMISE: two rows, both ended").toEqual([2, 2]);
+    expect([await count(board.endedJustNow, "all"), await count(board.endedJustNow, "ended")], "PREMISE: two rows, both ended").toEqual([2, 2]);
   });
 
   let warn: ReturnType<typeof vi.spyOn>;
@@ -145,6 +155,29 @@ describe.skipIf(!HAS_DB)("a camera room's drop, from the loader's own roomLeft t
     expect(serverOnly, "no server-log line either").toEqual([]);
     expect(sentry.messages, "no event").toEqual([]);
     expect(browserSentry.captureMessage, "and not through the browser Sentry").not.toHaveBeenCalled();
+  });
+
+  it("a room that ENDED LONG AGO is dropped without a word - a fixture's id is public, so an old board can be neither forged against nor have a dedupe slot taken", async () => {
+    const m = await joinPlayer(board.endedLongAgo);
+    m.dropSocket();
+    expect(beacons, "the drop was beaconed (the client cannot know the room is over)").toHaveLength(1);
+    expect(await deliver()).toEqual([204]);
+    expect(own(), "no line").toEqual([]);
+    expect(serverOnly, "no server-log line either").toEqual([]);
+    expect(sentry.messages, "no event").toEqual([]);
+    expect([...counter.keys()].filter((k) => k.startsWith("client-report-sentry")), "no dedupe slot was taken").toEqual([]);
+    // The pair that makes the above mean something: a drop on a LIVE board, answered by the same pipeline in the same test, is sent.
+    (await joinPlayer(board.withRoom)).dropSocket();
+    expect(await deliver()).toEqual([204]);
+    expect(sentry.messages, "the live board's drop reached Sentry").toHaveLength(1);
+  });
+
+  it("a room that ended only minutes ago still counts: the result's own teardown races the client's last event", async () => {
+    const m = await joinPlayer(board.endedJustNow);
+    m.dropSocket();
+    expect(await deliver()).toEqual([204]);
+    expect(own().map((c: unknown[]) => (c[0] as { fixtureId: string }).fixtureId)).toEqual([board.endedJustNow]);
+    expect(sentry.messages).toHaveLength(1);
   });
 
   it("the player's socket drop on a board WITH a room: one line and one warning, codes only; the flapping line's repeat is a server-log line only", async () => {

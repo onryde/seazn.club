@@ -142,8 +142,8 @@ export function roomDropReport(surface: "player" | "arbiter", where: RoomWhere, 
   return { kind: "chess-room", fixtureId: where.fixtureId, surface, side, leaveState };
 }
 
-/** Connection drops, reported with what we already have (owner 2026-11-22: "we have logger and sentry"; no table, no
- *  endpoint).
+/** Connection drops, reported with what we already have (owner 2026-11-22: "we have logger and sentry"; no table of our
+ *  own: the shared client-reports route, which writes a log line and a windowed Sentry event and nothing else).
  *
  *  A DROP goes to OUR server as a `chess-room` client report (owner 2026-11-23: POST /api/v1/public/client-reports,
  *  server/client-reports/chess-room.ts), NOT to the browser's own Sentry: that runs only for a visitor who accepted analytics,
