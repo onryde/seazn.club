@@ -65,7 +65,17 @@ export type DiagramModel =
       bracket: { name: string; matches: { home: string | null; away: string | null }[] }[];
     }
   | { kind: "ladder"; title: string; rungs: string[]; challenger: string; target: string; swapped: boolean }
-  | { kind: "partnerGrid"; title: string; players: string[]; rounds: { pairs: [string, string][] }[] };
+  // ---- batch 5, fix round 1 (M9): one picture for each of the walkover posts ----
+  /** A walkover in a bracket: rounds left to right, each match with its two sides (a seat not filled reads as the words the
+   *  example gives it), the sides to strike (the ones that left or did not turn up), the sides that are not a player at all ("nobody", "not known yet":
+   *  drawn muted and italic, never as a name), the winner, and one short result line. `sides` is two strings, which the claims check. */
+  | {
+      kind: "walkoverBracket";
+      title: string;
+      rounds: { name: string; matches: { sides: string[]; struck?: string[]; vacant?: string[]; winner?: string; result: string }[] }[];
+    }
+  /** One tile per sport: its name and the score a walkover shows there (the example's own words, never a key). */
+  | { kind: "scoreTiles"; title: string; tiles: { sport: string; score: string }[] };
 
 /** What an example produces, and what the committed golden holds: plain JSON, nothing that needs the engine to read. */
 export interface ExampleResult {
@@ -96,13 +106,30 @@ export interface Claim {
   check(result: ExampleResult): boolean | string;
 }
 
-export interface BlogExample {
+interface BlogExampleBase {
   id: string;
-  /** `engine`: a pure call into the engine. `server`: a rule the app owns, checked by an env-gated DB test. */
-  kind: "engine" | "server";
   /** The sports it sweeps. A single-sport example says why it is one. */
   sports: SportKey[] | "all";
   singleSportReason?: string;
-  build(): ExampleResult;
   claims: Claim[];
 }
+
+/** `engine`: a pure call into the engine (and the app's pure readers); `build()` regenerates the golden in the unit run. */
+export interface EngineExample extends BlogExampleBase {
+  kind: "engine";
+  build(): ExampleResult;
+}
+
+/**
+ * `server` (batch 5, Task 11): a rule the APP owns, run inside a database transaction with no pure function to call (the
+ * ladder's challenge reach and swap). Its golden is regenerated and compared by the env-gated DB test named in `runner`,
+ * which drives the real usecases; the unit harness checks the claims against the committed golden, and that the runner
+ * exists and names this example. There is no `build()`: without a database there is nothing to run.
+ */
+export interface ServerExample extends BlogExampleBase {
+  kind: "server";
+  /** The DB test that runs the example through the real usecases, relative to apps/web. */
+  runner: string;
+}
+
+export type BlogExample = EngineExample | ServerExample;

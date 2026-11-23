@@ -7,6 +7,12 @@ import matchesWonFirst from "./__golden__/matches-won-first.json";
 import shootoutPoints from "./__golden__/shootout-points.json";
 import standingsPoints from "./__golden__/standings-points.json";
 import tableTennisLoss from "./__golden__/table-tennis-loss.json";
+// ---- batch 5 (Task 11) ----
+import ladderChallenge from "./__golden__/ladder-challenge.json";
+import knockoutWithdrawal from "./__golden__/knockout-withdrawal.json";
+import forfeitScores from "./__golden__/forfeit-scores.json";
+import doubleWalkover from "./__golden__/double-walkover.json";
+// ---- end batch 5 ----
 import type { ExampleResult } from "./types";
 // --- blog batch 4 (knockouts) ---
 import thirdPlaceMatch from "./__golden__/third-place-match.json";
@@ -31,4 +37,10 @@ export const BLOG_GOLDENS: Record<string, ExampleResult> = {
   "standings-points": standingsPoints as ExampleResult,
   "table-tennis-loss": tableTennisLoss as ExampleResult,
   ...BATCH_4,
+  // ---- batch 5 (Task 11) ----
+  "ladder-challenge": ladderChallenge as ExampleResult,
+  "knockout-withdrawal": knockoutWithdrawal as ExampleResult,
+  "forfeit-scores": forfeitScores as ExampleResult,
+  "double-walkover": doubleWalkover as ExampleResult,
+  // ---- end batch 5 ----
 };
