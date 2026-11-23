@@ -3,7 +3,7 @@
 // (regenerate, every claim passes, leak scan) is blog-examples.test.ts; this file proves those claims are not decoration.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
 import { forEachSport } from "@seazn/engine/testkit";
 import { blogExample } from "@/blog/examples";
@@ -13,6 +13,19 @@ import { sportLabel } from "@/blog/labels";
 import { FORFEIT_REASONS } from "@seazn/engine/core";
 import { appDraw, betterSeedWins, forfeitOutClaim, playBracket } from "@/blog/examples/bracket-play-b4";
 import { declaredLeagueStages, leagueListsProblem } from "@/blog/examples/knockout-match-ends-level";
+import { tooFewCopyProblem } from "@/blog/examples/third-place-match";
+import { THIRD_PLACE_MIN } from "@/lib/third-place";
+
+// A pass-through of the English copy lookup the third-place example reads (`msg`), with one seam: a test can make the stage's
+// too-few-entrants sentence say something else, the way a dictionary edit that drifted from the declared minimum would.
+const drift = vi.hoisted(() => ({ tooFew: null as string | null }));
+vi.mock("@/lib/messages", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/messages")>();
+  return { ...real, msg: (key: Parameters<typeof real.msg>[0], vars?: Parameters<typeof real.msg>[1]) => (key === "thirdPlace.tooFewCount" && drift.tooFew !== null ? drift.tooFew : real.msg(key, vars)) };
+});
+afterEach(() => {
+  drift.tooFew = null;
+});
 
 const B4 = ["third-place-match", "knockout-match-ends-level", "page-playoff-and-stepladder", "double-elimination-explained", "what-is-a-plate"];
 
@@ -55,6 +68,33 @@ describe("third-place-match", () => {
     expect(failing(id, mutate(id, (r) => { r.facts.smallestPlayoffField = 3; }))).toHaveLength(1);
     expect(failing(id, mutate(id, (r) => { r.facts.matchesPlayoff = Number(r.facts.matchesShared) + 2; }))).toHaveLength(1);
     expect(failing(id, mutate(id, (r) => { r.facts.sportsOffered = builtinModules.length - 1; }))).toHaveLength(1);
+  });
+  it("the too-few-entrants sentence the post quotes: a changed count or a changed minimum is caught, and the copy that is true is not", () => {
+    const said = String(BLOG_GOLDENS[id]!.facts.tooFewMessage);
+    const min = THIRD_PLACE_MIN;
+    expect(tooFewCopyProblem(said, min), "the committed sentence").toBe(true);
+    // The product's own sentence for the declared minimum, then the same sentence with the count and the size each moved on by one.
+    const cases: [string, string][] = [
+      ["the entrants it counts", said.replace(`has ${min - 1} entrants`, `has ${min - 2} entrants`)],
+      ["the size it asks for", said.replace(`at least ${min}`, `at least ${min + 1}`)],
+      ["the size it asks for, spelled as a word", said.replace(`at least ${min}`, "at least four")],
+    ];
+    for (const [what, doctored] of cases) {
+      expect(doctored, `${what}: the doctored sentence differs`).not.toBe(said);
+      expect(tooFewCopyProblem(doctored, min), what).not.toBe(true);
+    }
+    // The wrong declared minimum is caught the other way round: the sentence is right for 4 and the declaration says 5.
+    expect(tooFewCopyProblem(said, min + 1)).not.toBe(true);
+    expect(cases.length, "cases refused").toBe(3);
+    expect(failing(id, mutate(id, (r) => { r.facts.tooFewMessage = said.replace(`has ${min - 1} entrants`, `has ${min} entrants`); })), "a stage that is no short of the minimum").toHaveLength(1);
+  });
+  it("a dictionary that asks for another size than the declared minimum is caught even when the post quotes the dictionary faithfully", () => {
+    // The shipped sentence drifts to 'at least 5' while THIRD_PLACE_MIN stays 4: the fact and the product copy agree with each other, so only the declared minimum can refuse it.
+    const drifted = String(BLOG_GOLDENS[id]!.facts.tooFewMessage).replace(`at least ${THIRD_PLACE_MIN}`, `at least ${THIRD_PLACE_MIN + 1}`);
+    expect(drifted, "the drifted sentence differs").not.toBe(BLOG_GOLDENS[id]!.facts.tooFewMessage);
+    expect(failing(id, mutate(id, () => undefined)), "before the drift").toHaveLength(0);
+    drift.tooFew = drifted;
+    expect(failing(id, mutate(id, (r) => { r.facts.tooFewMessage = drifted; })), "after the drift").toHaveLength(1);
   });
 });
 

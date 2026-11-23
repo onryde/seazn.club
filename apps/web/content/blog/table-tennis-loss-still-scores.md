@@ -16,7 +16,7 @@ Because table tennis ranks its table on match points first, and a match played t
 
 ## Reading the table
 
-Each of the first rows is a real match that Ana won, played to the end, at one of the scores the format can finish on. The loser gets the same whether the match ended 3-0, 3-1 or 3-2: {{fact:table-tennis-loss.won30Loser}} at 3-0, {{fact:table-tennis-loss.won31Loser}} at 3-1 and {{fact:table-tennis-loss.won32Loser}} at 3-2. The winner gets {{fact:table-tennis-loss.won30Winner}}, {{fact:table-tennis-loss.won31Winner}} and {{fact:table-tennis-loss.won32Winner}}.
+Each of the first rows is a real match that Ana won, played to the end, at one of the scores the format can finish on. The loser gets the same whether the match ended {{fact:table-tennis-loss.winScores}}: {{fact:table-tennis-loss.won30Loser}} at {{fact:table-tennis-loss.won30Score}}, {{fact:table-tennis-loss.won31Loser}} at {{fact:table-tennis-loss.won31Score}} and {{fact:table-tennis-loss.won32Loser}} at {{fact:table-tennis-loss.won32Score}}. The winner gets {{fact:table-tennis-loss.won30Winner}}, {{fact:table-tennis-loss.won31Winner}} and {{fact:table-tennis-loss.won32Winner}}.
 
 The last row is a different kind of match. Ben forfeits before a single point is played, so there was no match to play. Ana is paid the win, **{{fact:table-tennis-loss.forfeitWinner}}**, and Ben is paid **{{fact:table-tennis-loss.forfeitLoser}}**.
 

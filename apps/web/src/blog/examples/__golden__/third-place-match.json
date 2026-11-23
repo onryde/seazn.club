@@ -11,6 +11,7 @@
     "matchesShared": 7,
     "matchesPlayoff": 8,
     "smallestPlayoffField": 4,
+    "tooFewMessage": "This stage has 3 entrants, and a third-place match needs at least 4.",
     "players": 8,
     "sportsOffered": 11,
     "sportCount": 11

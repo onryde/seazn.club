@@ -13,7 +13,7 @@ import type { AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { forEachSport } from "@seazn/engine/testkit";
 import { sportLabel, variantLabel } from "@/blog/labels";
-import { NAMES, moduleOf, play, sentenceList, variantsOf, winnerLoserPoints, winnerSetScore, type Cfg, declaredLeaguePoints } from "./kit";
+import { NAMES, joinOr, moduleOf, play, sentenceList, variantsOf, winnerLoserPoints, winnerSetScore, type Cfg, declaredLeaguePoints } from "./kit";
 import { startingVariantKey } from "./starting-variant";
 import type { BlogExample, Claim, ExampleResult } from "./types";
 
@@ -56,10 +56,12 @@ function build(): ExampleResult {
     const p = play(m, cfg, `${variantKey} win ${score}`, ["ana", "ben"], (o, pair) => o.kind === "win" && o.winner === "ana" && winnerSetScore(pair) === score, { variantKey });
     const [w, l] = winnerLoserPoints(p);
     rows.push([howPlayed(score), f(w), f(l)]);
+    facts[`won${score.replace("-", "")}Score`] = score;
     facts[`won${score.replace("-", "")}Winner`] = f(w);
     facts[`won${score.replace("-", "")}Loser`] = f(l);
     text.push(`${howPlayed(score)}: ${NAMES.ana} beat ${NAMES.ben} ${p.headline}.`);
   }
+  facts.winScores = joinOr([...scores]);
   const forfeit = play(
     m,
     cfg,
@@ -124,7 +126,10 @@ function claimsFor(m: AnySportModule): Claim[] {
       const scores = m.reachableSetScores?.(cfg as never) ?? [];
       const want = [...scores.map(howPlayed), FORFEIT_ROW];
       const got = (r.table?.rows ?? []).map((x) => String(x[C.how]));
-      return (scores.length >= 2 && JSON.stringify(got) === JSON.stringify(want)) || `rows are [${got.join("; ")}], expected [${want.join("; ")}]`;
+      if (scores.length < 2 || JSON.stringify(got) !== JSON.stringify(want)) return `rows are [${got.join("; ")}], expected [${want.join("; ")}]`;
+      // The post names the scores the format can end on, by fact: each score, and the list of them.
+      for (const s of scores) if (r.facts[`won${s.replace("-", "")}Score`] !== s) return `the fact for ${s} is '${String(r.facts[`won${s.replace("-", "")}Score`])}'`;
+      return r.facts.winScores === joinOr([...scores]) || `winScores is '${String(r.facts.winScores)}', the format ends on ${joinOr([...scores])}`;
     }),
     mine("a played match pays the winner the win and the loser the declared loss, at every score", DECLARED, (r) => {
       const scores = m.reachableSetScores?.(cfg as never) ?? [];

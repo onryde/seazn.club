@@ -91,6 +91,9 @@ export function buildFrom(draw: typeof drawn): ExampleResult {
       matchesShared: sharedLines.filter((l) => l.row.status === "decided").length,
       matchesPlayoff: playoffLines.filter((l) => l.row.status === "decided").length,
       smallestPlayoffField: Number(smallest),
+      // The sentence the stage prints when it drops below that size (stages-panel.tsx: msg("thirdPlace.tooFewCount", { count })), with the
+      // count of a stage one entrant short of it.
+      tooFewMessage: msg("thirdPlace.tooFewCount", { count: Number(smallest) - 1 }),
       players: PLAYERS.length,
       sportsOffered: offered.offered.length,
       sportCount: offered.visited,
@@ -117,6 +120,13 @@ const finalName = msg("bracket.round.final");
 const thirdName = msg("bracket.round.thirdPlace");
 
 const nameOf = (cell: unknown) => String(cell).replace(/ \(\d+\)$/, "");
+
+/** What the too-small-stage sentence must say, read off the declared minimum: the entrants it counts (one short) and the size it asks for. */
+export function tooFewCopyProblem(said: string, min: number): string | true {
+  // The copy carries the minimum as a literal: it must be the declared one, or the product tells an organiser the wrong size.
+  if (!said.includes(`at least ${min} `) && !said.includes(`at least ${min}.`)) return `the copy does not name the declared minimum ${min}: '${said}'`;
+  return said.includes(`has ${min - 1} entrants`) || `the copy does not name ${min - 1} entrants: '${said}'`;
+}
 
 const claims: Claim[] = [
   forfeitOutClaim(),
@@ -167,6 +177,16 @@ const claims: Claim[] = [
     says: "the smallest field that can have a third-place match is the app's declared minimum: two real semi-finals need four players",
     source: "THIRD_PLACE_MIN (WEB/lib/third-place.ts:8); ENG/scheduling/bracket.js:147-155 (third_place_needs_two_semis)",
     check: (r) => r.facts.smallestPlayoffField === THIRD_PLACE_MIN || `smallest field ${r.facts.smallestPlayoffField}, declared ${THIRD_PLACE_MIN}`,
+  },
+  {
+    says: "the sentence a too-small stage prints says how many entrants it has (one short of the minimum) and names the declared minimum, in the product's own words",
+    source: "THIRD_PLACE_MIN (WEB/lib/third-place.ts:8) against the copy thirdPlace.tooFewCount (dictionaries/en/ui.json), rendered the way stages-panel.tsx renders it",
+    check: (r) => {
+      const said = String(r.facts.tooFewMessage);
+      const want = msg("thirdPlace.tooFewCount", { count: THIRD_PLACE_MIN - 1 });
+      if (said !== want) return `the fact is '${said}', the product's copy gives '${want}'`;
+      return tooFewCopyProblem(said, THIRD_PLACE_MIN);
+    },
   },
   {
     says: "players knocked out in the same earlier round are not placed level: the better seed is placed higher",

@@ -36,6 +36,6 @@ A third-place match is fed by the losers of the two semi-finals. With three play
 
 ## Where to find it in Seazn
 
-A knockout stage has a **Third place** setting, with **Shared** and **Play-off match**. A stage starts on Shared. If players withdraw before the start and the stage drops below the size a third-place match needs, the stage says so ("This stage has 3 entrants, and a third-place match needs at least 4") and shows a **Use Shared** button. Start refuses until you switch, and says why.
+A knockout stage has a **Third place** setting, with **Shared** and **Play-off match**. A stage starts on Shared. If players withdraw before the start and the stage drops below the size a third-place match needs, the stage says so ("{{fact:third-place-match.tooFewMessage}}") and shows a **Use Shared** button. Start refuses until you switch, and says why.
 
 The rule is the same in every sport: the bracket is drawn from the entrants and their seeds alone, and the draw is never told the sport. A knockout is offered in all {{fact:third-place-match.sportCount}} sports.

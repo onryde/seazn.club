@@ -1,11 +1,15 @@
 {
   "facts": {
+    "won30Score": "3-0",
     "won30Winner": "2",
     "won30Loser": "1",
+    "won31Score": "3-1",
     "won31Winner": "2",
     "won31Loser": "1",
+    "won32Score": "3-2",
     "won32Winner": "2",
     "won32Loser": "1",
+    "winScores": "3-0, 3-1 or 3-2",
     "forfeitWinner": "2",
     "forfeitLoser": "0",
     "sportCount": 11,
