@@ -121,6 +121,34 @@ describe.skipIf(!HAS_DB)("I2 Add stage after a finished source refuses a Top N i
     expect(await stagesOf(d.divId)).toEqual([1]);
   });
 
+  // Round 2 (R2): the shortfall's `max` is what the take can still take from the table, not the table's row count. A take that does
+  // not start at rank 1 asks only the ranks it names: ranks 3-8 of four entrants can seat ranks 3 and 4 (2), never "at most 4".
+  // (Ranks 3-6 are no whole finishing band, so the save refuses them first as KO_CUT_NOT_WHOLE_ROUND - the takes below are the
+  // band-aligned ones that reach the shortfall: 3-4 | 5-8 are the knockout's bands.) The expected `max` is the scene's own count - a rank is there iff it is no more than the entrants the knockout finished with.
+  it("a take that does not start at rank 1 says what it CAN take: ranks 3-8, 2-8, 5-8 (and 1-8, which starts there) of a complete four-entrant knockout", async () => {
+    const entrants = 4;
+    const d = await division("knockout", entrants, true);
+    let asked = 0;
+    for (const [from, to] of [
+      [3, 8],
+      [2, 8],
+      [5, 8],
+      [1, 8],
+    ] as const) {
+      const body = {
+        ...addStageBody(to),
+        progression: { sources: [{ stage: "previous", take: [{ kind: "rankRange", from, to }] }], placement: "rank_order", timing: "on_complete" },
+      };
+      const ranks = Array.from({ length: to - from + 1 }, (_, i) => from + i);
+      const err = await refusalOf(createStages(d.auth, d.divId, body as never));
+      expect(err?.code, `ranks ${from}-${to}: refused by name`).toBe("RR_CUT_EXCEEDS_FIELD");
+      expect(err!.extra, `ranks ${from}-${to}`).toMatchObject({ qualified: ranks.length, max: ranks.filter((r) => r <= entrants).length });
+      asked += 1;
+    }
+    expect(asked, "anti-vacuity: four takes asked").toBe(4);
+    expect(await stagesOf(d.divId), "nothing was added").toEqual([1]);
+  });
+
   it("the sequence: a second Add stage after the refusal is refused the same way, and a Top N the table CAN supply then saves", async () => {
     const d = await division("league", 6, true);
     for (let attempt = 1; attempt <= 2; attempt++) {

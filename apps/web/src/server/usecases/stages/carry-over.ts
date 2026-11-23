@@ -9,6 +9,7 @@ import { carryDeltas, placementTable, progressionSize, type BracketFixture, type
 import { parseExtKey, bracketWinnerLoser } from "@/server/engine-db/competition";
 import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "@/server/engine-db/level-seat";
 import { engineFixtureStatus as toBracketFixtureStatus } from "@/lib/fixture-engine-status";
+import { takeCutIssue } from "@/lib/field-cut-gate";
 import { refuseCutBeyondTables } from "./cut-gate";
 import { resolveStoredProgression } from "../stored-progression";
 import { attachFeedRefs, engineRoundOf, laneDepthOf } from "@/server/engine-db/bracket-rounds";
@@ -286,8 +287,13 @@ export async function refuseUnfillableFromFinishedSources(
     // One source: its take is the whole cut, so the numbers read as the cut gate's do. Several: the engine names one table's rows,
     // not the cut's supply, so its own refusal stands.
     if (typeof available === "number" && progression.sources.length === 1) {
-      const qualified = progressionSize(progression.sources[0]!.take);
-      throw roundRobinRefusal("RR_CUT_EXCEEDS_FIELD", { qualified, max: available, reason: "cut_exceeds_field", stageId: resolved[0]!.id });
+      const take = progression.sources[0]!.take;
+      const qualified = progressionSize(take);
+      // `max` is what THIS take can fill from the table's `available` rows - the positions of its own that fall within them
+      // (`takeCutIssue`, the cut gate's count) - not the row count: ranks 3-8 of a four-entrant knockout fill 2 seats, not "at most 4".
+      // A take that gate cannot judge keeps the engine's row count.
+      const max = takeCutIssue(take, [available])?.max ?? available;
+      throw roundRobinRefusal("RR_CUT_EXCEEDS_FIELD", { qualified, max, reason: "cut_exceeds_field", stageId: resolved[0]!.id });
     }
     if (EngineError.is(err)) throw new HttpError(422, err.message, err.code, err.data as never);
     throw err;
