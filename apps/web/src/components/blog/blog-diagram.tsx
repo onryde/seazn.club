@@ -1,10 +1,13 @@
 // A generated diagram (design: "Pictures and diagrams"): drawn from an example's `diagram` model, `role="img"` with a
 // <title>, sized by its viewBox. The six models are declared in blog/examples/types.ts; a model's DRAWING lands with the
-// first post that needs it. Until then no example carries one, and this component refuses any model rather than
-// drawing nothing: a post whose example gains a `diagram` fails the build here, instead of shipping a figure with
-// a caption and no picture.
+// first post that needs it (the Swiss round grid with batch 3). A model with no drawing yet is refused rather than drawn as
+// nothing: a post whose example gains one fails the build here, instead of shipping a figure with a caption and no picture.
 import type { DiagramModel } from "@/blog/examples/types";
+import { SwissRoundDiagram } from "@/components/blog/swiss-round-diagram";
 
-export function BlogDiagram({ model }: { model: DiagramModel }): never {
+export function BlogDiagram({ model }: { model: DiagramModel }) {
+  // ---- batch 3 (Swiss and seeding) ----
+  if (model.kind === "swissRound") return <SwissRoundDiagram model={model} />;
+  // ---- end batch 3 ----
   throw new Error(`blog diagram: there is no drawing for '${model.kind}' yet (add it to components/blog/blog-diagram.tsx with the first post that uses it)`);
 }
