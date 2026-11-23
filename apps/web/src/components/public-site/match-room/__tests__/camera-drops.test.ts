@@ -314,26 +314,30 @@ describe("realtimekit drops: a `chess-room` report per unplanned roomLeft, a bre
     expect(checked).toBe(SURFACES.length * states.length);
   });
 
-  it("a drop with no board named (the caller gave no fixture) has nothing to name it by: no report, and none through the browser Sentry either", async () => {
-    // The guard on the assumption "every caller names a board": the report's builder refuses it, and the loader sends nothing for it.
+  it("a drop with no board or no side named has nothing to find its meeting by (one per player): no report, and none through the browser Sentry either", async () => {
+    // The guard on the assumption "every caller names its board and side": the report's builder refuses it, and the loader sends nothing.
     expect(roomDropReport("player", { fixtureId: null, side: "white" }, "disconnected")).toBeNull();
+    expect(roomDropReport("player", { fixtureId: PLAYER_FIXTURE, side: null }, "disconnected")).toBeNull();
     const rtk = fakeRealtimeKit({ setup: (m) => (m.peerJoins(OPP.peer, OPP.user), camera(m, OPP.peer)) });
-    await makeJoinOwnCamera(rtk.load, () => undefined)(PLAYER_TOKEN);
-    await settle();
-    const m = rtk.meetings[0]!;
-    expect(m.calls, "premise: joined with no `where`").toContain("join");
-    m.dropSocket();
-    expect(beacons, "a drop that cannot be named").toEqual([]);
-    expect(sentDropsToBrowserSentry()).toEqual([]);
-    // The positive pair: the same drop WITH a board is a report (a loader that could not send would pass the above).
+    const nameless = [undefined, { fixtureId: PLAYER_FIXTURE, side: null }, { fixtureId: null, side: "white" }] as const;
+    for (const where of nameless) {
+      clearSent();
+      await makeJoinOwnCamera(rtk.load, () => undefined)(PLAYER_TOKEN, where);
+      await settle();
+      const m = rtk.meetings.at(-1)!;
+      expect(m.calls, "premise: joined").toContain("join");
+      m.dropSocket();
+      expect(beacons, `a drop that cannot be named: ${JSON.stringify(where)}`).toEqual([]);
+      expect(sentDropsToBrowserSentry()).toEqual([]);
+    }
+    expect(rtk.meetings.length, "anti-vacuity: every case joined its own meeting").toBe(nameless.length);
+    // The positive pair: the same drop WITH a board and a side is a report (a loader that could not send would pass the above).
     expect(roomDropReport("player", { fixtureId: PLAYER_FIXTURE, side: "white" }, "disconnected")).not.toBeNull();
   });
 
-  it("a side the route does not list goes as null, never as a string the route would refuse; every named side is kept", () => {
-    expect(roomDropReport("arbiter", { fixtureId: ARBITER_FIXTURE, side: "left-hand" }, "failed")).toEqual({
-      kind: "chess-room", fixtureId: ARBITER_FIXTURE, surface: "arbiter", side: null, leaveState: "failed",
-    });
-    expect(roomDropReport("arbiter", { fixtureId: ARBITER_FIXTURE, side: null }, "failed")?.side).toBeNull();
+  it("a side the route does not list is no report, never a string the route would refuse; every named side is kept", () => {
+    expect(roomDropReport("arbiter", { fixtureId: ARBITER_FIXTURE, side: "left-hand" }, "failed")).toBeNull();
+    expect(roomDropReport("arbiter", { fixtureId: ARBITER_FIXTURE, side: "HOME" }, "failed")).toBeNull();
     let checked = 0;
     for (const side of ["white", "black", "home", "away"]) {
       const report = roomDropReport("player", { fixtureId: PLAYER_FIXTURE, side }, "left");

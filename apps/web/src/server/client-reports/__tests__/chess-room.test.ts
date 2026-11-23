@@ -1,11 +1,10 @@
 // Seazn-hosted Task 25b, chess follow-up (owner 2026-11-23): the `chess-room` client report (chess-room.ts) — a camera room dropped a
 // player's or the arbiter's connection. Three parts:
-//   - the SCHEMA: every combination of the declared surfaces, sides (and none) and drop states is accepted; a planned leave state (read
+//   - the SCHEMA: every combination of the declared surfaces, sides and drop states is accepted, and a report with no side is refused (its meeting cannot be found without one); a planned leave state (read
 //     from the SDK's own `LeaveRoomState`, not typed here), a fixture that is no uuid, an unknown surface or side, a missing field, any
 //     extra key (a name, an email, a token, a participant id) and any string shaped like an address or a credential are refused — by the
 //     kind and by the route's union;
-//   - the FACTS: the Sentry dedupe key is fixture + surface + side + leave state — EACH of the four moves it, a repeat does not, and no
-//     side is its own value; the rate subject is the fixture; the fields and tags are codes and ids only;
+//   - the FACTS: the Sentry dedupe key is fixture + surface + side + leave state — EACH of the four moves it, a repeat does not; the rate subject is the fixture; the fields and tags are codes and ids only;
 //   - the PIPELINE (receive.ts, over an in-memory counter on a test clock and a stub fixture lookup; the SQL itself is
 //     route-seam-chess-room.test.ts, over a real database): a fixture with no camera room is dropped without a word (the EMPTY case,
 //     first); the first report is one log line and one Sentry warning; a repeat is a server-log line only; each component of the key
@@ -61,10 +60,10 @@ type Room = z.input<typeof ChessRoomClientReport>;
 const room = (over: Partial<Room> = {}): Room => ({ kind: "chess-room", fixtureId: FIXTURE, surface: "player", side: "white", leaveState: "disconnected", ...over });
 
 describe("the chess-room report's schema", () => {
-  it("every declared surface, side (and none) and drop state is accepted, as the kind and as the route's union", () => {
+  it("every declared surface, side and drop state is accepted, as the kind and as the route's union", () => {
     let checked = 0;
     for (const surface of ROOM_REPORT_SURFACES) {
-      for (const side of [...ROOM_REPORT_SIDES, null]) {
+      for (const side of ROOM_REPORT_SIDES) {
         for (const leaveState of ROOM_DROP_STATES) {
           const body = room({ surface, side, leaveState });
           expect(ChessRoomClientReport.parse(body), `${surface}/${side}/${leaveState}`).toEqual(body);
@@ -73,7 +72,7 @@ describe("the chess-room report's schema", () => {
         }
       }
     }
-    expect(checked, "anti-vacuity: the whole product was walked").toBe(ROOM_REPORT_SURFACES.length * (ROOM_REPORT_SIDES.length + 1) * ROOM_DROP_STATES.length);
+    expect(checked, "anti-vacuity: the whole product was walked").toBe(ROOM_REPORT_SURFACES.length * ROOM_REPORT_SIDES.length * ROOM_DROP_STATES.length);
     expect(checked).toBeGreaterThan(0);
   });
 
@@ -107,7 +106,8 @@ describe("the chess-room report's schema", () => {
       ["no kind", without("kind")],
       ["no fixtureId", without("fixtureId")],
       ["no surface", without("surface")],
-      ["no side (null is the way to say none)", without("side")],
+      ["no side: a report names its meeting", without("side")],
+      ["side null: nothing to find the meeting by", room({ side: null as never })],
       ["no leaveState", without("leaveState")],
       ["leaveState a number", room({ leaveState: 1 as never })],
       ["an array", [room()]],
@@ -155,11 +155,9 @@ describe("the chess-room report's facts: what the pipeline reads off one", () =>
     expect(f.message).toBe("realtimekit: room dropped");
     expect(f.fields).toEqual({ fixtureId: FIXTURE, surface: "arbiter", side: "home", leaveState: "failed" });
     expect(f.tags).toEqual({ area: "realtimekit", event: "room_dropped", surface: "arbiter", leave_state: "failed", fixture_id: FIXTURE, side: "home" });
-    expect(Object.keys(facts({ side: null }).tags), "no side: no side tag (a tag is a string, never null)").not.toContain("side");
-    expect(facts({ side: null }).fields.side).toBeNull();
   });
 
-  it("the dedupe key moves with EACH of fixture, surface, side (including none) and leave state — and not with a repeat", () => {
+  it("the dedupe key moves with EACH of fixture, surface, side and leave state — and not with a repeat", () => {
     const base = facts().dedupeSubject;
     expect(facts().dedupeSubject, "the same drop again").toBe(base);
     const other = randomUUID();
@@ -167,7 +165,6 @@ describe("the chess-room report's facts: what the pipeline reads off one", () =>
       ["another fixture", { fixtureId: other }],
       ["the other surface", { surface: "arbiter" }],
       ["another side", { side: "black" }],
-      ["no side", { side: null }],
       ["another leave state", { leaveState: "failed" }],
     ];
     const keys = new Set<string>([base]);
@@ -181,7 +178,7 @@ describe("the chess-room report's facts: what the pipeline reads off one", () =>
     const all = new Set<string>();
     let checked = 0;
     for (const surface of ROOM_REPORT_SURFACES) {
-      for (const side of [...ROOM_REPORT_SIDES, null]) {
+      for (const side of ROOM_REPORT_SIDES) {
         for (const leaveState of ROOM_DROP_STATES) {
           all.add(facts({ surface, side, leaveState }).dedupeSubject);
           checked++;
@@ -243,8 +240,9 @@ describe("the chess-room report through the pipeline (receive.ts)", () => {
     const outcome = await send({}, IP, { db: db(new Set()) });
     expect(outcome).toBe("unknown");
     expect(asked, "the subject was looked up once").toHaveLength(1);
-    expect(asked[0]!.values).toEqual([FIXTURE]);
+    expect(asked[0]!.values, "the fixture and the side the report names").toEqual([FIXTURE, "white"]);
     expect(asked[0]!.text).toContain("fixture_video_meetings");
+    expect(asked[0]!.text, "the meeting of the NAMED side (the source guard's rule, §5.6.1)").toContain("m.side =");
     expect(asked[0]!.text, "a LIVE room only (the real predicate is run in route-seam-chess-room.test.ts)").toContain("ended_at");
     expect(lines()).toEqual([]);
     expect(serverOnly).toEqual([]);
@@ -279,7 +277,6 @@ describe("the chess-room report through the pipeline (receive.ts)", () => {
       ["another fixture", { fixtureId: randomUUID() }],
       ["the arbiter's join of the board", { surface: "arbiter" }],
       ["the other side", { side: "black" }],
-      ["no side", { side: null }],
       ["the SDK giving up", { leaveState: "failed" }],
     ];
     for (const [name, over] of variants) expect(await send(over, fresh().ip), name).toBe("sent");

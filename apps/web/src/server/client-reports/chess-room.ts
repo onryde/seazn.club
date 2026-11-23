@@ -13,10 +13,17 @@
 // log and Sentry, never a record an organiser or an arbiter may rely on in a dispute. Nothing reads these reports back: the server's own
 // camera flags and guard-fault stamps (`fixture_play_flags`, `fixture_video_guard_faults`) are written by the server, never from here.
 //
-// A report counts only for a board whose camera room is LIVE: a `fixture_video_meetings` row (V451/V459; any side) that has not ended, or
-// ended within the last 15 minutes (a drop at the result, or the room's own teardown racing the client's last event, is still that
-// board's). Any other id is dropped without a word, so the route's answer never says whether a fixture exists, and a board whose room
-// is long over can neither be forged against nor have a dedupe slot taken on it.
+// A report counts only for the camera room it NAMES, and only while that room is LIVE: the `fixture_video_meetings` row of THAT side
+// (D16, §5.6.1: a board has a meeting per player, so the statement names the side; the source guard in
+// external-play/__tests__/video-per-player-source-guard.test.ts holds every reference to it) that has not ended, or ended within the last 15
+// minutes (a drop at the result, or the room's own teardown racing the client's last event, is still that board's). The side a report
+// names is the arbiter's own meeting side (`home` / `away`), or a player's COLOUR, which is read through the board's bridge (the
+// `white_side` the game fixed: White's meeting is that side's, Black's the other). A colour the bridge has not fixed yet (no game
+// has been made) names no meeting, and that report is dropped like any other that names none. A report that names no side at all is
+// refused by the schema (400): both production callers always send one (the room shell passes `you.colour`, the arbiter its meeting side),
+// and the any-side reading a board-wide statement would need is a listed exemption of the guard, not this report's to take.
+// Any other id is dropped without a word, so the route's answer never says whether a fixture exists, and a board whose room is long over
+// can neither be forged against nor have a dedupe slot taken on it.
 //
 // Limits (the shared pipeline's, receive.ts): per IP, fixture and kind, 30 a minute (a connection that flaps does not become 30 log
 // lines); one Sentry event per window for each of
@@ -37,8 +44,8 @@ export const ChessRoomClientReport = z.strictObject({
   fixtureId: z.uuid(),
   /** The player's own camera, or the arbiter's. */
   surface: z.enum(ROOM_REPORT_SURFACES),
-  /** The meeting's side as the surface names it (a player's colour, an arbiter's home / away); null when the caller did not say. */
-  side: z.enum(ROOM_REPORT_SIDES).nullable(),
+  /** The meeting's side as the surface names it: a player's colour (white / black), an arbiter's meeting side (home / away). */
+  side: z.enum(ROOM_REPORT_SIDES),
   /** RealtimeKit's leave state: a lost connection only (never a planned leave). */
   leaveState: z.enum(ROOM_DROP_STATES),
 });
@@ -46,12 +53,23 @@ export type ChessRoomClientReport = z.infer<typeof ChessRoomClientReport>;
 
 export const chessRoomClientReport = defineClientReportKind(ChessRoomClientReport, (r) => ({
   rateSubject: r.fixtureId,
-  dedupeSubject: `${r.fixtureId}:${r.surface}:${r.side ?? "-"}:${r.leaveState}`,
+  dedupeSubject: `${r.fixtureId}:${r.surface}:${r.side}:${r.leaveState}`,
   subjectExists: async (db) => {
+    // The meeting's side: home / away as named, or a colour through the bridge's `white_side` (null until a game fixes it, so a
+    // colour with no game names no meeting and nothing matches). `m.side` is NAMED in the predicate: the guard reads it there.
     const [row] = await db<{ room: boolean }[]>`
       select exists (
-        select 1 from fixture_video_meetings
-        where fixture_id = ${r.fixtureId} and (ended_at is null or ended_at > now() - interval '15 minutes')
+        select 1
+        from fixture_video_meetings m
+        left join fixture_external_play x on x.fixture_id = m.fixture_id
+        where m.fixture_id = ${r.fixtureId}
+          and m.side = case ${r.side}::text
+            when 'home' then 'home'
+            when 'away' then 'away'
+            when 'white' then x.white_side
+            when 'black' then case x.white_side when 'home' then 'away' when 'away' then 'home' end
+          end
+          and (m.ended_at is null or m.ended_at > now() - interval '15 minutes')
       ) as room`;
     return row?.room === true;
   },
@@ -62,7 +80,7 @@ export const chessRoomClientReport = defineClientReportKind(ChessRoomClientRepor
     surface: r.surface,
     leave_state: r.leaveState,
     fixture_id: r.fixtureId,
-    ...(r.side === null ? {} : { side: r.side }),
+    side: r.side,
   },
   fields: { fixtureId: r.fixtureId, surface: r.surface, side: r.side, leaveState: r.leaveState },
 }));

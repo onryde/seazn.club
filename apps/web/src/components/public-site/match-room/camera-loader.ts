@@ -133,12 +133,12 @@ export type RoomWhere = { fixtureId: string | null; side: string | null };
  *  the SDK stops declaring is a compile error, not a report the route would refuse. */
 const DROP_STATES: ReadonlySet<LeaveRoomState> = new Set<LeaveRoomState>(ROOM_DROP_STATES);
 
-/** The `chess-room` client report of one drop (server/client-reports/chess-room.ts), or null when there is nothing to name it by:
- *  a caller that gave no board, or a state that is no drop. A side outside the route's list goes as null, never as a string the
- *  route would refuse. */
+/** The `chess-room` client report of one drop (server/client-reports/chess-room.ts), or null when there is nothing to name its
+ *  meeting by: a caller that gave no board or no side (or one outside the route's list: never a string the route would refuse),
+ *  or a state that is no drop. The route needs the side to find the meeting (one per player, D16), so a drop without one is not sent. */
 export function roomDropReport(surface: "player" | "arbiter", where: RoomWhere, leaveState: string): ChessRoomClientReport | null {
-  if (where.fixtureId === null || !isRoomDropState(leaveState)) return null;
-  const side = ROOM_REPORT_SIDES.find((s) => s === where.side) ?? null;
+  const side = ROOM_REPORT_SIDES.find((s) => s === where.side);
+  if (where.fixtureId === null || side === undefined || !isRoomDropState(leaveState)) return null;
   return { kind: "chess-room", fixtureId: where.fixtureId, surface, side, leaveState };
 }
 
@@ -157,8 +157,8 @@ export function roomDropReport(surface: "player" | "arbiter", where: RoomWhere, 
  *   - a `roomLeft` that is NOT our own leave and is a DROP - "disconnected" (a socket or media-node drop), "failed" (the
  *     SDK gave up) or "left" (the SDK leaving on its own) - is a `chess-room` report naming the surface, the board, the
  *     side and the SDK's leave state (`{ state: LeaveRoomState }`, the event's only field in 2.0.2), "realtimekit: room
- *     dropped" in the server's log and Sentry. A caller that gave no board (`fixtureId` null) has nothing to name it by: no
- *     report;
+ *     dropped" in the server's log and Sentry. A caller that gave no board or no side (`fixtureId` / `side` null) has nothing
+ *     to name its meeting by (a board has one per player): no report;
  *   - any other leave state - "kicked" and "ended" are OUR server's doing (the arbiter revocation removes a participant;
  *     the teardown and the retire end the meeting, realtimekit.ts), and "rejected", "connected-meeting", "stageLeft" are no
  *     connection loss - is a breadcrumb, "realtimekit: room left", never a report (review m1);

@@ -110330,19 +110330,12 @@
                         ]
                       },
                       "side": {
-                        "anyOf": [
-                          {
-                            "type": "string",
-                            "enum": [
-                              "white",
-                              "black",
-                              "home",
-                              "away"
-                            ]
-                          },
-                          {
-                            "type": "null"
-                          }
+                        "type": "string",
+                        "enum": [
+                          "white",
+                          "black",
+                          "home",
+                          "away"
                         ]
                       },
                       "leaveState": {
@@ -110537,19 +110530,12 @@
                         ]
                       },
                       "side": {
-                        "anyOf": [
-                          {
-                            "type": "string",
-                            "enum": [
-                              "white",
-                              "black",
-                              "home",
-                              "away"
-                            ]
-                          },
-                          {
-                            "type": "null"
-                          }
+                        "type": "string",
+                        "enum": [
+                          "white",
+                          "black",
+                          "home",
+                          "away"
                         ]
                       },
                       "leaveState": {
