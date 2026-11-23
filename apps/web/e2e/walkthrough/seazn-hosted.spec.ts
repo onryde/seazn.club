@@ -524,3 +524,104 @@ test("Task 25: two playable replays read Part 1 and Part 2 in the replay host's 
     await finishSeaznMatch(m);
   }
 });
+
+// ===========================================================================
+// Task 26: the organiser deletes a replay part, and downloads one
+// ===========================================================================
+// The organiser's Stream panel (Phone tab, the ended card) lists the fixture's Seazn replay parts. Each playable part has Download — a
+// link to OUR download route, the ids and nothing else — and every part has Delete, which asks the house confirm (never the
+// browser's) first. "Keep replay" sends nothing; "Delete replay" removes the part for everyone: the panel drops its row at once, the row
+// reads deleted by this organiser, and the public match page no longer offers it. The bytes of a download, the streaming, the headers'
+// hygiene and the org/role refusals are the route's vitest (download/__tests__/route.test.ts, over the replay fake holding the file):
+// this e2e server's replay host holds no copy of the seeded parts, so the route's own answer here is its "host not ready" refusal (409,
+// private) — asserted, so the link reaches the route rather than a 404 or a redirect to the host. Not gated on LIVE (as Task 25's
+// case). At 1280, then 320 for the panel's fit (no sideways scroll, every action a 44 px target).
+test("Task 26: the organiser's panel lists both parts with Download and Delete; Keep sends nothing; Delete removes part 2 for everyone — the panel row, the stored row and the public page", async ({ page }) => {
+  test.setTimeout(REPLAY_SEED_MS + 3 * NAV_MS + 2 * CALL_MS + ONE_RE_READ_MS);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const m = await seedSeaznMatch(page, { name: `Seazn Delete ${Date.now().toString(36)}`, live: true });
+  try {
+    await finishSeaznMatch(m);
+    const bunny = await seedPlayableReplays(m, await lockRecordings(m, 2));
+    expect(bunny, "premise: two playable parts").toHaveLength(2);
+    const ids = (await withDb((sql) => sql<{ id: string }[]>`select id from fixture_video_replays where fixture_id = ${m.fixtureId} order by part_no`)).map((r) => r.id);
+    expect(ids, "premise: one row per part").toHaveLength(2);
+    const deletes: string[] = [];
+    page.on("request", (r) => { if (r.method() === "DELETE") deletes.push(new URL(r.url()).pathname); });
+
+    const body = await openPhoneTab(page, m.fixturePath);
+    const card = body.getByTestId("stream-seazn-replays");
+    await expect(card.getByText(ui("stream.replay.seazn.title"))).toBeVisible({ timeout: CALL_MS });
+    const rows = card.getByTestId("stream-seazn-replay");
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(0)).toContainText(ui("stream.replay.seazn.part").replace("{n}", "1"));
+    await expect(rows.nth(0), "a public competition's part is on the match page").toContainText(ui("stream.replay.seazn.ready"));
+    const downloads = card.getByTestId("stream-seazn-replay-download");
+    await expect(downloads).toHaveCount(2);
+    for (const [i, id] of ids.entries()) {
+      await expect(downloads.nth(i), `part ${i + 1}: the link is our route, the ids and nothing else`).toHaveAttribute("href", `/api/v1/fixtures/${m.fixtureId}/replays/${id}/download`);
+      await expect(downloads.nth(i)).toHaveAttribute("download", "");
+    }
+    const answer = await page.request.get(`/api/v1/fixtures/${m.fixtureId}/replays/${ids[0]}/download`, { maxRedirects: 0 });
+    expect(answer.status(), "the route answers itself (the e2e host holds no copy: not ready), never a redirect to the host").toBe(409);
+    expect(answer.headers()["cache-control"] ?? "").toMatch(/private/);
+    expect(answer.headers()["cache-control"] ?? "").toMatch(/no-store/);
+    expect(answer.headers()["location"], "no redirect").toBeUndefined();
+
+    // Keep: the house confirm (an alertdialog of ours, not the browser's), and nothing sent.
+    let nativeDialog = false;
+    page.on("dialog", (d) => { nativeDialog = true; void d.dismiss(); });
+    const deleteButtons = card.getByTestId("stream-seazn-replay-delete");
+    await expect(deleteButtons).toHaveCount(2);
+    await deleteButtons.nth(1).click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toBeVisible({ timeout: CALL_MS });
+    await expect(dialog).toContainText(ui("stream.replay.deletePartTitle").replace("{n}", "2"));
+    await expect(dialog).toContainText(ui("stream.replay.deleteConfirm"));
+    await dialog.getByRole("button", { name: ui("stream.replay.deleteKeep") }).click();
+    await expect(dialog).toBeHidden();
+    await expect(rows, "Keep: both parts stay").toHaveCount(2);
+    expect(deletes, "Keep sends nothing").toEqual([]);
+
+    // Delete part 2.
+    await deleteButtons.nth(1).click();
+    await expect(dialog).toBeVisible({ timeout: CALL_MS });
+    await dialog.getByRole("button", { name: ui("stream.replay.delete") }).click();
+    await expect(rows, "the deleted part leaves the panel").toHaveCount(1, { timeout: CALL_MS });
+    await expect(rows.first(), "one part left: no part label").not.toContainText(ui("stream.replay.seazn.part").replace("{n}", "1"));
+    expect(deletes, "one DELETE, to part 2's route").toEqual([`/api/v1/fixtures/${m.fixtureId}/replays/${ids[1]}`]);
+    expect(nativeDialog, "never the browser's confirm()").toBe(false);
+    const [stored] = await withDb((sql) => sql<{ state: string; deleted_reason: string | null; deleted_by: string | null; deleted_at: Date | null }[]>`
+      select state, deleted_reason, deleted_by, deleted_at from fixture_video_replays where id = ${ids[1]}`);
+    expect(stored?.state).toBe("deleted");
+    expect(stored?.deleted_reason).toBe("organiser");
+    expect(stored?.deleted_by, "deleted by the signed-in organiser").toBeTruthy();
+    expect(stored?.deleted_at).toBeInstanceOf(Date);
+
+    for (const width of [1280, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      await expectNoHorizontalScroll(page);
+      for (const action of [card.getByTestId("stream-seazn-replay-download"), card.getByTestId("stream-seazn-replay-delete")]) {
+        const box = await action.first().boundingBox();
+        expect(box, `${width}: laid out`).not.toBeNull();
+        expect(box!.height, `${width}: a 44 px target`).toBeGreaterThanOrEqual(44);
+        expect(box!.x + box!.width, `${width}: inside the right edge`).toBeLessThanOrEqual(width);
+      }
+    }
+
+    // The public page no longer offers part 2: the one part left plays in the frame, with no part picker.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await stubFakeEmbedHost(page);
+    await page.goto(m.publicPath);
+    await dismissCookieBanner(page);
+    const region = page.getByTestId("seazn-video");
+    const frame = region.getByTestId("seazn-replay-frame");
+    await expect(frame).toHaveCount(1, { timeout: ONE_RE_READ_MS });
+    const frameHolds = (bunnyId: string) =>
+      frame.evaluate((el, source) => new RegExp(source).test((el as HTMLIFrameElement).src), signedEmbedPattern(bunnyId).source);
+    await expect.poll(() => frameHolds(bunny[0]!), { message: "part 1 still plays" }).toBe(true);
+    await expect(region.getByRole("tab"), "one part: no picker, and no part 2").toHaveCount(0);
+  } finally {
+    await finishSeaznMatch(m);
+  }
+});

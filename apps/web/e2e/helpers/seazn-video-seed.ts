@@ -35,6 +35,8 @@ export interface SeaznMatch extends SeaznSession {
   orgId: string;
   fixtureId: string;
   publicPath: string;
+  /** Task 26: the organiser's fixture page (its Stream panel lists the Seazn replays). */
+  fixturePath: string;
 }
 
 /** The address the fake driver signs for a programme uid: `https://<fake host>/fake.<uid>.<exp seconds>/manifest/video.m3u8`
@@ -69,11 +71,14 @@ export async function seedSeaznMatch(page: Page, o: { name: string; ensurePro?: 
   const fixtureId = fixtureIds[0]!;
 
   const session = await seedSeaznSession(org.id, fixtureId);
+  const [fixture] = await withDb((sql) => sql<{ no: number }[]>`select fixture_no as no from fixtures where id = ${fixtureId}`);
+  expect(typeof fixture?.no, "premise: the fixture has its number").toBe("number");
   const match: SeaznMatch = {
     orgId: org.id,
     fixtureId,
     ...session,
     publicPath: routes.publicFixture(org.slug, comp.data!.slug, div.data!.slug, fixtureId),
+    fixturePath: `/o/${org.slug}/c/${comp.data!.slug}/d/${div.data!.slug}/f/${fixture!.no}`,
   };
   if (o.live) await goLive(match);
   return match;
