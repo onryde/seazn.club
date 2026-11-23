@@ -14,28 +14,20 @@
 // (`tablePointsRule`, `primaryTableKey`, `reachableResultKinds`, `reachableSetScores`, `reachableDecidedIn`) in code
 // that shares no formatter with `build()`, and compare the committed result to it. None reads `build()`.
 import type { MatchOutcome } from "@seazn/engine/core";
-import { decidedInFor, forfeitShaped, payout, pointsText, setsToWinOf, type FixtureResult } from "@seazn/engine/competition";
-import { resolvePositions } from "@seazn/engine/sport";
+import { decidedInFor, pointsText } from "@seazn/engine/competition";
 import type { AnySportModule } from "@seazn/engine/sport";
-import { buildWalk, declaredCfgs, forEachSport, lineupFromCatalog } from "@seazn/engine/testkit";
+import { forEachSport } from "@seazn/engine/testkit";
 import { sportLabel, tiebreakLabel, variantLabel } from "@/blog/labels";
-import { foldFrom } from "@/server/engine-db/fold";
-import { tableRulesOf, type LoadedTableRules } from "@/server/engine-db/table-rules";
+import { NAMES, compact, groupBy, joinOr, leagueRules, play, upperFirst, variantsOf, winnerLoserPoints, winnerSetScore, type Cfg } from "./kit";
 import { startingVariantKey } from "./starting-variant";
 import type { BlogExample, Claim, ExampleResult } from "./types";
 
 export const STANDINGS_POINTS_ID = "standings-points";
 
-const NAMES: Record<string, string> = { ana: "Ana", ben: "Ben", cy: "Cy", dev: "Dev" };
-/** The seeded search's bounds: far past what any sport needs, so a miss is a real fault and not a short budget. */
-const MAX_SEEDS = 20000;
-const MAX_EVENTS = 3000;
-
 const COLUMNS = ["Sport", "Winner gets", "Loser gets", "Each side when nobody wins", "After overtime or a shoot-out", "Table sorted by first"];
 const C = { sport: 0, winner: 1, loser: 2, nobody: 3, beyond: 4, sorted: 5 } as const;
 const NOT_POSSIBLE = "Not possible";
 
-type Cfg = unknown;
 type LevelKind = "draw" | "tie" | "noResult";
 type Beyond = "ot" | "so";
 const LEVEL_KINDS: readonly LevelKind[] = ["draw", "tie", "noResult"];
@@ -57,90 +49,7 @@ export const DECLARED_BUT_UNREACHABLE: Readonly<Record<string, readonly LevelKin
 const levelKindsOf = (module: AnySportModule, variantKey: string, reach: ReadonlySet<string>): LevelKind[] =>
   LEVEL_KINDS.filter((k) => reach.has(k) && !(DECLARED_BUT_UNREACHABLE[`${module.key}/${variantKey}`] ?? []).includes(k));
 
-const upperFirst = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const scoreSuffix = (score: string | null) => (score === null ? "" : score.replace("-", ""));
-const compact = (variantKey: string) => upperFirst(variantKey.replace(/[^a-z0-9]/gi, ""));
-
-/** The variants a module declares by name (declaredCfgs also lists the bare schema default, which is no variant). */
-function variantsOf(module: AnySportModule): { key: string; cfg: Cfg }[] {
-  return declaredCfgs(module)
-    .filter((c) => Object.hasOwn(module.variants, c.name))
-    .map((c) => ({ key: c.name, cfg: c.cfg as Cfg }));
-}
-
-/**
- * The rules a league table pays and ranks by, read where every standings read reads them: the web's one loader
- * (`tableRulesOf`, table-rules-single-resolver.test.ts), over the rows of a new division on this variant whose league
- * stage has not started. So no stage rule, no division order and no pin: the loader's live layers, down to the sport's.
- */
-function leagueRules(module: AnySportModule, cfg: Cfg): LoadedTableRules {
-  return tableRulesOf(
-    {
-      stageId: `blog-example:${module.key}`,
-      kind: "league",
-      status: "pending",
-      stageConfig: null,
-      pin: null,
-      pinnedAt: null,
-      divisionConfig: cfg,
-      divisionTiebreakers: null,
-    },
-    module,
-  );
-}
-
-interface Played {
-  outcome: MatchOutcome;
-  paid: FixtureResult;
-  headline: string;
-}
-
-/**
- * Plays one match to the wanted result: the first seeded walk, in seed order, whose refolded outcome `accept`
- * takes. The refold is the app's own read fold (`foldFrom`, so the outcome and the headline are the kernel's readers,
- * outcomeOf and summaryOf, as every stored fixture's are), and it must leave the state the walk's own last step left.
- */
-function play(module: AnySportModule, cfg: Cfg, what: string, sides: [string, string], accept: (outcome: MatchOutcome, pair: FixtureResult) => boolean): Played {
-  const catalog = resolvePositions(module, cfg);
-  const lineups = { home: lineupFromCatalog(catalog, sides[0]), away: lineupFromCatalog(catalog, sides[1]) };
-  const rules = leagueRules(module, cfg);
-  for (let seed = 1; seed <= MAX_SEEDS; seed++) {
-    const { events, states } = buildWalk(module, cfg, lineups, seed, MAX_EVENTS);
-    const last = states[states.length - 1];
-    // An empty walk is no match (and the read fold refuses an empty ledger).
-    if (last === undefined) continue;
-    const folded = foldFrom(`blog-example:${module.key}:${seed}`, { sportKey: module.key, module, cfg, lineups, envelopes: events, stageKind: "league" });
-    if (JSON.stringify(folded.state) !== JSON.stringify(last)) {
-      throw new Error(`${module.key}: seed ${seed}: the app's fold and the walk disagree on the state`);
-    }
-    const outcome = folded.outcome;
-    // Only a decided, played match can be wanted.
-    if (outcome === null || !["win", "draw", "tie", "no_result"].includes(outcome.kind) || forfeitShaped(outcome)) continue;
-    const delta = module.standingsDelta(outcome, cfg as never, { kind: "league" }, folded.state);
-    const pair: FixtureResult = [delta[0], delta[1]];
-    if (!accept(outcome, pair)) continue;
-    const paid = payout(outcome, decidedInFor(module, outcome), pair, true, rules.points, module.awardScoreKeys, setsToWinOf(module, cfg));
-    return { outcome, paid, headline: folded.summary.headline };
-  }
-  throw new Error(`${module.key}: no seed up to ${MAX_SEEDS} gives the wanted match (${what})`);
-}
-
-function winnerSetScore(pair: FixtureResult): string | null {
-  const w = pair.find((d) => d.won === 1);
-  const won = w?.metrics.sets_won;
-  const lost = w?.metrics.sets_lost;
-  return won === undefined || lost === undefined ? null : `${won}-${lost}`;
-}
-
-/** What the winner and the loser of a decided match were paid, by entrant (a booked shoot-out has no `won` flag). */
-function winnerLoserPoints(p: Played): [number, number] {
-  const o = p.outcome;
-  if (o.kind !== "win") throw new Error("a winner and a loser need a win");
-  const w = p.paid.find((d) => d.entrantId === o.winner);
-  const l = p.paid.find((d) => d.entrantId === o.loser);
-  if (w === undefined || l === undefined) throw new Error("the paid pair does not name the match's winner and loser");
-  return [w.points, l.points];
-}
 
 interface Tagged<T extends string | null> {
   tag: T;
@@ -210,20 +119,6 @@ function runVariant(module: AnySportModule, variantKey: string, cfg: Cfg, rowId:
 }
 
 // ---- how a run prints (build side) ----
-
-function groupBy<T>(items: T[], keyOf: (t: T) => string): T[][] {
-  const groups: T[][] = [];
-  for (const it of items) {
-    const g = groups.find((x) => keyOf(x[0]!) === keyOf(it));
-    if (g) g.push(it);
-    else groups.push([it]);
-  }
-  return groups;
-}
-
-function joinOr(words: string[]): string {
-  return words.length < 2 ? (words[0] ?? "") : `${words.slice(0, -1).join(", ")} or ${words[words.length - 1]}`;
-}
 
 function sideCell(wins: Tagged<string | null>[], side: "winner" | "loser", unit: "whole" | "half"): string {
   const groups = groupBy(wins, (w) => `${w.winner}/${w.loser}`);

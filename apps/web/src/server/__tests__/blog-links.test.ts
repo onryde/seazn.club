@@ -17,7 +17,7 @@ vi.mock("@/server/blog-content", async (importOriginal) => {
 
 import BlogPostPage from "@/app/blog/[slug]/page";
 import { FORMAT_FAMILIES } from "@/config/format-gallery";
-import { allBlogPosts } from "@/server/blog-content";
+import { allBlogPosts, BLOG_PLANNED_SLUGS } from "@/server/blog-content";
 import { allHelpArticles } from "@/server/help-content";
 import { assertBlogLinks, blogBodyLinks, blogLinkProblems, liveLinkResolvers, type LinkResolvers } from "../blog-links";
 
@@ -31,6 +31,33 @@ describe("which links are read", () => {
       "A bare /help/not-a-link in prose is text, not a link.",
     ].join("\n");
     expect(blogBodyLinks(md)).toEqual(["/help/divisions/settings", "/blog/how-standings-points-work#reading", "/help", "/blog/x", "/help/a", "/blog"]);
+  });
+});
+
+describe("a picture is a file, not a link", () => {
+  it("skips a picture's target (with or without a caption) and still reads a link on either side of it", () => {
+    const md = [
+      "See [the help](/help/divisions/settings).",
+      "",
+      '![A stage card](/help/blog/some-post-1.webp "A caption")',
+      "",
+      "![No caption](/help/blog/some-post-2.webp)",
+      "",
+      "And [a post](/blog/how-standings-points-work).",
+    ].join("\n");
+    expect(blogBodyLinks(md)).toEqual(["/help/divisions/settings", "/blog/how-standings-points-work"]);
+    expect(blogLinkProblems(md, stub)).toEqual([]);
+  });
+
+  it("every picture the real posts carry is skipped, and there are some (anti-vacuity)", () => {
+    const posts = allBlogPosts();
+    let pictures = 0;
+    for (const p of posts) {
+      const found = [...p.markdown.matchAll(/!\[[^\]\n]*\]\(([^)\s]+)/g)].map((m) => m[1]!);
+      pictures += found.length;
+      for (const f of found) expect(blogBodyLinks(p.markdown), `${p.slug}: ${f}`).not.toContain(f);
+    }
+    expect(pictures, "pictures in the posts").toBeGreaterThanOrEqual(5);
   });
 });
 
@@ -96,7 +123,8 @@ describe("the real resolvers", () => {
     expect(posts.length).toBeGreaterThan(0);
     for (const p of posts) expect(live.post(p.slug), p.slug).toBe(true);
     // A planned slug (named in `related:` while the programme is written) is NOT a page, so a body link to it is dead.
-    expect(live.post("shootout-win-league-points")).toBe(false);
+    expect(BLOG_PLANNED_SLUGS.size, "anti-vacuity: planned slugs").toBeGreaterThan(0);
+    for (const planned of BLOG_PLANNED_SLUGS) expect(live.post(planned), planned).toBe(false);
   });
 });
 

@@ -136,12 +136,16 @@ describe("the post page, through the real renderer (the pilot)", () => {
     expect(markup.match(/<th scope="row"/g)!.length).toBe(BLOG_GOLDENS["standings-points"]!.table!.rows.length);
   });
 
-  it("shows only related posts that resolve: the pilot names three that are not written yet", async () => {
+  it("shows exactly the related posts that resolve, and none of those still to be written (the pilot names some of each while the programme lands)", async () => {
     const markup = await html(PILOT);
     expect(post.related.length).toBeGreaterThanOrEqual(2);
-    expect(post.related.every((s) => blogPost(s) === null), "premise: none resolves today").toBe(true);
-    for (const slug of post.related) expect(markup, slug).not.toContain(blogUrl(slug));
-    expect(markup).not.toContain('data-testid="blog-related"');
+    const resolved = post.related.filter((s) => blogPost(s) !== null);
+    const unresolved = post.related.filter((s) => blogPost(s) === null);
+    expect(resolved.length + unresolved.length, "every related slug is one or the other").toBe(post.related.length);
+    expect(resolved.length, "anti-vacuity: related posts that resolve").toBeGreaterThan(0);
+    for (const slug of resolved) expect(markup, slug).toContain(blogUrl(slug));
+    for (const slug of unresolved) expect(markup, slug).not.toContain(blogUrl(slug));
+    expect(markup).toContain('data-testid="blog-related"');
   });
 
   it("related cards on the real page: resolved slugs are linked in front-matter order, with their titles; an unresolved one is not", async () => {

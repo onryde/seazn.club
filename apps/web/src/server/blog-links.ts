@@ -17,9 +17,14 @@ import { allBlogPosts, type BlogPost } from "@/server/blog-content";
 // site's /help/... is somebody else's page and is left alone.
 const LINK = /(?:\]\(\s*|href=["']|^[ \t]{0,3}\[[^\]\n]+\]:[ \t]*<?)(?:https?:\/\/(?:www\.)?seazn\.club)?(\/(?:help|blog)(?:[/?#][^)\s"'>]*)?)(?=[)\s"'>]|$)/gm;
 
-/** The `/help` and `/blog` targets a body links to, as written (query and fragment kept). */
+// A picture, `![alt](/help/blog/x.webp "Caption")`. Its target is a FILE under public/, not a page: the help renderer
+// refuses a picture that is missing, not a webp or over budget (help-figures.ts, and every post is rendered in
+// blog-tree.test.ts), so the link check leaves it alone rather than ask the help registry for a page named x.webp.
+const PICTURE = /!\[[^\]\n]*\]\([^)\n]*\)/g;
+
+/** The `/help` and `/blog` targets a body links to, as written (query and fragment kept). A picture's target is not one. */
 export function blogBodyLinks(markdown: string): string[] {
-  return [...markdown.matchAll(LINK)].map((m) => m[1]!);
+  return [...markdown.replace(PICTURE, " ").matchAll(LINK)].map((m) => m[1]!);
 }
 
 export interface LinkResolvers {

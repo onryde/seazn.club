@@ -65,26 +65,36 @@ describe("registry", () => {
 });
 
 describe("regenerate: build() deep-equals the committed golden", () => {
-  it("every registered example", () => {
-    if (UPDATE) {
-      mkdirSync(GOLDEN_DIR, { recursive: true });
-      for (const e of BLOG_EXAMPLES) writeFileSync(goldenPath(e.id), stable(e.build()));
-    }
-    let checked = 0;
-    for (const e of BLOG_EXAMPLES) {
-      const golden = JSON.parse(readFileSync(goldenPath(e.id), "utf8")) as ExampleResult;
-      // JSON round trip: the golden is plain data, so compare what a page would read.
-      expect(JSON.parse(JSON.stringify(e.build())), `${e.id} no longer matches its golden (UPDATE_BLOG_EXAMPLES=1 moves it)`).toEqual(golden);
-      expect(readFileSync(goldenPath(e.id), "utf8"), `${e.id}: golden is written in the canonical form`).toBe(stable(golden));
-      checked++;
-    }
-    expect(checked, "examples regenerated").toBe(BLOG_EXAMPLES.length);
-    expect(checked).toBeGreaterThan(0);
+  // One test per example, not one loop over all of them: a seeded-walk example costs seconds of CPU (the shoot-out and cricket
+  // ones about five each), and a single test that built every example twice outran the suite's 30 s budget on a loaded runner.
+  // Each example has its own budget this way, and the repo's rule of never pinning a timeout inline stays true.
+  it("there are examples to regenerate, and each has a golden file (anti-vacuity)", () => {
+    expect(BLOG_EXAMPLES.length).toBeGreaterThan(0);
+    if (!UPDATE) for (const e of BLOG_EXAMPLES) expect(existsSync(goldenPath(e.id)), `${e.id}: golden file`).toBe(true);
   });
 
-  it("build() is deterministic: two runs of every example are equal", () => {
-    for (const e of BLOG_EXAMPLES) expect(e.build(), e.id).toEqual(e.build());
-  });
+  // The first build of each example, kept by the golden test so the determinism test below costs ONE more build, not two
+  // (run alone with -t, the cache is empty and it builds twice: slower, never wrong).
+  const firstBuild = new Map<string, ExampleResult>();
+
+  for (const e of BLOG_EXAMPLES) {
+    it(`${e.id}: build() equals its golden, which is written in the canonical form`, () => {
+      const built = e.build();
+      firstBuild.set(e.id, built);
+      if (UPDATE) {
+        mkdirSync(GOLDEN_DIR, { recursive: true });
+        writeFileSync(goldenPath(e.id), stable(built));
+      }
+      const golden = JSON.parse(readFileSync(goldenPath(e.id), "utf8")) as ExampleResult;
+      // JSON round trip: the golden is plain data, so compare what a page would read.
+      expect(JSON.parse(JSON.stringify(built)), `${e.id} no longer matches its golden (UPDATE_BLOG_EXAMPLES=1 moves it)`).toEqual(golden);
+      expect(readFileSync(goldenPath(e.id), "utf8"), `${e.id}: golden is written in the canonical form`).toBe(stable(golden));
+    });
+
+    it(`${e.id}: build() is deterministic (two runs are equal)`, () => {
+      expect(e.build(), e.id).toEqual(firstBuild.get(e.id) ?? e.build());
+    });
+  }
 });
 
 describe("claims: each one checks the result against a declaration, never against the result itself", () => {
@@ -414,7 +424,8 @@ describe("the registry is server-only: nothing a page loads imports the engine's
   const spec = String.raw`(?:from\s+|import\s*\(?\s*)["']`;
   const FORBIDDEN = [
     new RegExp(spec + String.raw`@/blog/examples["']`),
-    new RegExp(spec + String.raw`@/blog/examples/(?:index|standings-points|starting-variant)["']`),
+    // Every example module and the shared kit pull in the engine: only the goldens and the types are client-safe.
+    new RegExp(spec + String.raw`@/blog/examples/(?!goldens["']|types["'])[a-z-]+["']`),
     new RegExp(spec + String.raw`@seazn/engine/testkit["']`),
     new RegExp(spec + String.raw`@/blog/labels["']`),
   ];
@@ -431,9 +442,10 @@ describe("the registry is server-only: nothing a page loads imports the engine's
     expect(hits).toEqual([]);
   });
   it("the scan itself sees each forbidden import form", () => {
-    const forms = ['import "@/blog/labels";', 'const m = await import("@/blog/labels");', 'import { x } from "@/blog/examples";', "import x from '@/blog/examples/standings-points';", 'import { y } from "@seazn/engine/testkit";', 'import { t } from "@/blog/labels";'];
+    const forms = ['import "@/blog/labels";', 'const m = await import("@/blog/labels");', 'import { x } from "@/blog/examples";', "import x from '@/blog/examples/standings-points';", 'import { y } from "@seazn/engine/testkit";', 'import { t } from "@/blog/labels";', 'import { p } from "@/blog/examples/kit";', "import { c } from '@/blog/examples/cricket-points';", 'import { m } from "@/blog/examples/matches-won-first";'];
     for (const f of forms) expect(FORBIDDEN.some((re) => re.test(f)), f).toBe(true);
     expect(FORBIDDEN.some((re) => re.test('import { g } from "@/blog/examples/goldens";'))).toBe(false);
+    expect(FORBIDDEN.some((re) => re.test('import type { ExampleResult } from "@/blog/examples/types";'))).toBe(false);
   });
 });
 
