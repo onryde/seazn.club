@@ -10,7 +10,8 @@
 import { describe, expect, it } from "vitest";
 import type { Event } from "@sentry/nextjs";
 import type { CaptureResult, CapturedNetworkRequest } from "posthog-js";
-import { BUNNY_EMBED_HOST, BunnyReplayHost } from "@/server/video/replay-bunny";
+import { BUNNY_EMBED_HOST } from "@/server/relay/config";
+import { BunnyReplayHost } from "@/server/video/replay-bunny";
 import { holdsCredential, maskCapturedNetworkRequest, posthogBeforeSend, scrubScoreUrl, scrubSentryEvent } from "../scrub-score-url";
 
 const GUID = "3f1c2a9e-0b7d-4c55-9a61-2d8e4f7b1c03";

@@ -21,7 +21,8 @@ import { expect, type Page } from "@playwright/test";
 import { randomBytes } from "node:crypto";
 import { activeOrg, addEntrantsViaApi, apiJson, createStageAndGenerate, setOrgPlanBySql, withDb } from "../helpers";
 import { routes } from "../../src/lib/routes";
-import { FAKE_REPLAY_EMBED_HOST, FAKE_REPLAY_LENGTH_SECONDS, FAKE_REPLAY_LIBRARY_ID } from "../../src/server/video/replay-fake";
+import { FAKE_REPLAY_EMBED_HOST } from "../../src/server/relay/config";
+import { FAKE_REPLAY_LENGTH_SECONDS, FAKE_REPLAY_LIBRARY_ID } from "../../src/server/video/replay-fake";
 
 /** A Seazn session row and the uid its programme input will carry once live (`goLive`). */
 export interface SeaznSession {

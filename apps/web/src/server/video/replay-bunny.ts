@@ -13,13 +13,12 @@
 // URL), and it passes sanitise.ts's `redact` floor on its way out. A signed URL is never recorded: the CDN call is recorded
 // with its token replaced by `[signed]`, and the fetch's source URL (a signed Cloudflare download) goes only to Bunny.
 import { createHash } from "node:crypto";
-import { SEAZN_REPLAY_CALL_TIMEOUT_MS, seaznVideoOrigins, type BunnyConfig } from "@/server/relay/config";
+import { BUNNY_EMBED_HOST, SEAZN_REPLAY_CALL_TIMEOUT_MS, seaznVideoOrigins, type BunnyConfig } from "@/server/relay/config";
 import { NOOP_RECORDER, type ProviderCallRecorder } from "@/server/relay/ports";
 import { redact } from "@/server/relay/sanitise";
 import type { ReplayDownload, ReplayHost, ReplayState, ReplayVideo } from "./replay-ports";
 
 export const BUNNY_API_BASE = "https://video.bunnycdn.com/library";
-export const BUNNY_EMBED_HOST = "iframe.mediadelivery.net";
 /** The tallest rendition a replay is served at: the port promises nothing above it. */
 const MAX_HEIGHT = 720;
 /** How long the CDN token for one server-side download is valid. The server makes the request at once, so this only has to

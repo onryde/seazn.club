@@ -7,9 +7,7 @@ import { isPublicHubPath } from "@/lib/routes";
 import { isStagingOrigin } from "@/lib/robots-policy";
 import { siteOrigin } from "@/lib/site-origin";
 import { revshareEnabled } from "@/lib/revshare-shared";
-import { replayDriverMode, streamPlaybackHost } from "@/server/relay/config";
-import { BUNNY_EMBED_HOST } from "@/server/video/replay-bunny";
-import { FAKE_REPLAY_EMBED_HOST } from "@/server/video/replay-fake";
+import { BUNNY_EMBED_HOST, FAKE_REPLAY_EMBED_HOST, replayDriverIsFake, streamPlaybackHost } from "@/server/relay/config";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
@@ -82,16 +80,11 @@ function playbackOrigin(): string {
 }
 
 /** The replay host's embed origin(s) for frame-src (Task 25), as ` https://<host>` suffixes: the real host's always (a fixed origin,
- *  not a setting), and the fake's only under the fake replay driver. A driver setting that throws adds no fake origin and never
- *  takes the page down (the driver itself refuses it by name where it is used). */
+ *  not a setting), and the fake's only under the fake replay driver. Read through config.ts alone (review m1: no adapter in the
+ *  proxy), and with no error built per request: a driver setting the driver refuses adds no fake origin and never takes the page
+ *  down (the driver refuses it by name where it is used). */
 function replayEmbedOrigins(): string {
-  let fake = false;
-  try {
-    fake = replayDriverMode() === "fake";
-  } catch {
-    fake = false;
-  }
-  return ` https://${BUNNY_EMBED_HOST}${fake ? ` https://${FAKE_REPLAY_EMBED_HOST}` : ""}`;
+  return ` https://${BUNNY_EMBED_HOST}${replayDriverIsFake() ? ` https://${FAKE_REPLAY_EMBED_HOST}` : ""}`;
 }
 
 /** The PostHog first-party proxy origin (prod), as a ` <origin>` connect-src suffix; "" when events ride the same-origin /ingest rewrite. */

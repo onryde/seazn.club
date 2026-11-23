@@ -466,6 +466,33 @@ export function replayDriverMode(env: Record<string, string | undefined> = proce
   throw new Error(`REPLAY_DRIVER must be "fake" or "bunny", got ${JSON.stringify(v)}`);
 }
 
+/** The replay hosts' embed origins (Task 25): the page a replay plays in. Bunny Stream's player page is a fixed origin, not a
+ *  setting; the fake's (`.invalid` never resolves) exists only under the fake driver. Held HERE, not in the adapters, because the
+ *  proxy's frame-src reads them on every request, and this file is import-free (review m1: the proxy imports no adapter). */
+export const BUNNY_EMBED_HOST = "iframe.mediadelivery.net";
+export const FAKE_REPLAY_EMBED_HOST = "embed.fake.invalid";
+
+/** `replayDriverMode(env) === "fake"`, answered WITHOUT building an error (review m1): the proxy asks it on every request, and a
+ *  deployment with REPLAY_DRIVER unset under a live relay (prod today) would otherwise build and throw a long Error per request. A
+ *  setting `replayDriverMode` refuses reads false here (no fake origin): the driver refuses it by name where it is used. The two
+ *  are held equal by a sweep (config.test.ts). */
+export function replayDriverIsFake(env: Record<string, string | undefined> = process.env): boolean {
+  const v = env.REPLAY_DRIVER?.trim();
+  if (v === "fake") return fakeHonoured(env);
+  if (v === undefined || v === "") {
+    const relay = env.RELAY_DRIVERS;
+    if (relay === undefined || relay === "") return env.NODE_ENV !== "production";
+    return relay === "fake" && fakeHonoured(env);
+  }
+  return false;
+}
+/** An explicit fake is honoured with ENV_NAME `local` or `ci`, or with none outside production (R5, m2): the rule both drivers
+ *  refuse by, without the refusal. */
+function fakeHonoured(env: Record<string, string | undefined>): boolean {
+  const name = envNameOf(env);
+  return name === null ? env.NODE_ENV !== "production" : FAKE_DRIVER_ENV_NAMES.includes(name);
+}
+
 /** The five Bunny settings, each an env variable held on the server only (never `NEXT_PUBLIC_`, never a database column).
  *  The two keys and the token key are secrets; the library id and the CDN host are config, held the same way. */
 const BUNNY_ENV = {

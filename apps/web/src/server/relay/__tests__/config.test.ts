@@ -597,6 +597,34 @@ describe("replayDriverMode — REPLAY_DRIVER, which replay host this process tal
   });
 });
 
+// Task 25 review m1: the proxy asks `replayDriverIsFake` on every request instead of catching `replayDriverMode`'s refusal, so the
+// two must answer alike on every setting — the mode's own answer is the expected value (fake, or a refusal, which reads false).
+describe("replayDriverIsFake — replayDriverMode's fake, answered without a throw (review m1)", () => {
+  it("SWEEP every REPLAY_DRIVER x RELAY_DRIVERS x ENV_NAME x NODE_ENV: equal to `replayDriverMode(env) === \"fake\"`, a refusal reading false, and never throws", () => {
+    const counts = { fake: 0, notFake: 0, refused: 0 };
+    for (const REPLAY_DRIVER of [undefined, "", " ", "fake", " fake ", "bunny", "Fake", "nonsense"]) {
+      for (const RELAY_DRIVERS of [undefined, "", "fake", "live", "bogus"]) {
+        for (const ENV_NAME of [undefined, "", "local", " ci ", "stg", "prod"]) {
+          for (const NODE_ENV of [undefined, "production", "development", "test"]) {
+            const env = { REPLAY_DRIVER, RELAY_DRIVERS, ENV_NAME, NODE_ENV };
+            let want: boolean;
+            try {
+              want = config.replayDriverMode(env) === "fake";
+              if (want) counts.fake++; else counts.notFake++;
+            } catch {
+              want = false;
+              counts.refused++;
+            }
+            expect(config.replayDriverIsFake(env), JSON.stringify(env)).toBe(want);
+          }
+        }
+      }
+    }
+    expect(counts.fake + counts.notFake + counts.refused, "anti-vacuity: 8 x 5 x 6 x 4 settings").toBe(960);
+    for (const [k, n] of Object.entries(counts)) expect(n, `the sweep reaches ${k}`).toBeGreaterThan(0);
+  });
+});
+
 describe("bunnyConfig — the Bunny settings, from env only (Task 21)", () => {
   const SECRETS = {
     BUNNY_STREAM_API_KEY: "ZZ-fake-api-key-5c1e",

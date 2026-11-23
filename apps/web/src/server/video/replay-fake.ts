@@ -8,11 +8,12 @@
 //   * `remove` reads the fake's own state, never a status: after it the video reads `absent`, and a second remove says so.
 //   * Ids are a counter (`fake-video-1`, …), so a run is the same every time.
 import { createHash } from "node:crypto";
+import { FAKE_REPLAY_EMBED_HOST } from "@/server/relay/config";
 import type { ReplayDownload, ReplayHost, ReplayVideo } from "./replay-ports";
 
-/** The host the fake's embed URLs sit on (`.invalid` never resolves, so no fake URL can be followed by accident). Task 25's CSP
- *  adds exactly this to `frame-src` under the fake driver. */
-export const FAKE_REPLAY_EMBED_HOST = "embed.fake.invalid";
+/** The host the fake's embed URLs sit on (`.invalid` never resolves, so no fake URL can be followed by accident): config.ts's
+ *  FAKE_REPLAY_EMBED_HOST, which Task 25's CSP adds to `frame-src` under the fake driver. Re-exported for the fake's callers. */
+export { FAKE_REPLAY_EMBED_HOST };
 /** The library segment of an embed URL: digits, as the real one is. */
 export const FAKE_REPLAY_LIBRARY_ID = "1";
 export const FAKE_REPLAY_LENGTH_SECONDS = 120;

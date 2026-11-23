@@ -6,6 +6,8 @@
 // The ONE value read from the code is the origin of a REAL signed address from each adapter (BunnyReplayHost / FakeReplayHost
 // `signedEmbed`), to prove the policy allows what the frame will actually load.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { NextRequest } from "next/server";
 import { cspHeader, proxy } from "../proxy";
 import { BunnyReplayHost } from "@/server/video/replay-bunny";
@@ -74,6 +76,13 @@ describe("CSP for the Seazn replay frame (Task 25)", () => {
       expect(values.filter((v) => v.includes("mediadelivery") || v.includes("embed.fake")), name).toEqual([]);
     }
     expect(checked, "anti-vacuity: every directive was inspected").toBeGreaterThanOrEqual(10);
+  });
+
+  it("review m1: the proxy imports no replay adapter — the hosts come from config.ts (import-free), never from server/video", () => {
+    const source = readFileSync(join(__dirname, "..", "proxy.ts"), "utf8");
+    const imports = [...source.matchAll(/^import[^;]*?from\s+"([^"]+)";/gms)].map((m) => m[1]!);
+    expect(imports, "PREMISE: the proxy's imports were read").toContain("@/server/relay/config");
+    expect(imports.filter((i) => i.includes("server/video")), "no adapter in the proxy").toEqual([]);
   });
 
   it("the real response carries it: the public match page through proxy() (report-only)", () => {
