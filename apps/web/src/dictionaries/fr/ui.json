@@ -3142,6 +3142,8 @@
   "stage.addMatch.round.clashAlone": "Tour {n} · {name} joue déjà",
   "stage.addMatch.round.clashRange": "Tours {from} à {to} · une équipe joue déjà",
   "stage.addMatch.round.pickSides": "Choisissez d'abord les deux côtés",
+  "stage.addMatch.round.loading": "Lecture des tours de la phase…",
+  "stage.addMatch.round.loadFailed": "Les tours de la phase n’ont pas pu être chargés : aucun tour ne peut être proposé. Fermez le formulaire et rouvrez-le.",
   "stage.addMatch.hint": "Un match ajouté est un vrai résultat — il compte au classement.",
   "slot.winner_group": "Vainqueur du Groupe {g}",
   "slot.runner_up_group": "Deuxième du Groupe {g}",

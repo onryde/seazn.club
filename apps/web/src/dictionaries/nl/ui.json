@@ -3142,6 +3142,8 @@
   "stage.addMatch.round.clashAlone": "Ronde {n} · {name} speelt al",
   "stage.addMatch.round.clashRange": "Rondes {from} tot {to} · een van beide speelt al",
   "stage.addMatch.round.pickSides": "Kies eerst beide kanten",
+  "stage.addMatch.round.loading": "De rondes van de fase lezen…",
+  "stage.addMatch.round.loadFailed": "De rondes van de fase konden niet laden, dus er kan geen ronde worden aangeboden. Sluit het formulier en open het opnieuw.",
   "stage.addMatch.hint": "Een toegevoegde wedstrijd is een echt resultaat — hij telt mee in de stand.",
   "slot.winner_group": "Winnaar van Groep {g}",
   "slot.runner_up_group": "Nummer twee van Groep {g}",

@@ -782,6 +782,49 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   const [undoable, setUndoable] = useState(false);
   // PROMPT-66: stage id whose inline "Add match" form is open.
   const [addingTo, setAddingTo] = useState<string | null>(null);
+  // W5 follow-ups C (review I2 sweep): the Add match form's Round select plans over EVERY line of its stage (`adhocRoundPlan`), and
+  // the server writes the round it sends. A windowed stage's desk holds only the window's rows, so over one with folded rounds the
+  // form reads the stage's every line (`rounds?round=all`) and offers no round until they are here - for which render of the page
+  // (`from`: a refresh reads them again), the lines, or that the read failed.
+  const [stageLines, setStageLines] = useState<{
+    stageId: string;
+    from: readonly FoldedRunSheetRound[];
+    rows?: AdhocRoundRow[];
+    failed?: true;
+  } | null>(null);
+  const linesWanted =
+    addingTo !== null &&
+    foldedTally(foldedRounds, addingTo).rows > 0 &&
+    !(stageLines?.stageId === addingTo && stageLines.from === foldedRounds)
+      ? addingTo
+      : null;
+  const linesRead = useRef<{ stageId: string; from: readonly FoldedRunSheetRound[] } | null>(null);
+  useEffect(() => {
+    if (linesWanted === null) return;
+    const read = { stageId: linesWanted, from: foldedRounds };
+    if (linesRead.current?.stageId === read.stageId && linesRead.current.from === read.from) return;
+    linesRead.current = read;
+    const q = new URLSearchParams({ division: divisionId, stage: read.stageId, round: "all" });
+    fetch(`${routes.division(orgSlug, compSlug, divSlug)}/rounds?${q}`, { headers: { accept: "application/json" } })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`rounds ${res.status}`);
+        // The v1 envelope (`server/api-v1/http.ts`).
+        const rows = ((await res.json()) as { data: FixtureRow[] }).data.map(adhocRowOf);
+        setStageLines({ ...read, rows });
+      })
+      .catch(() => setStageLines({ ...read, failed: true }))
+      .finally(() => {
+        if (linesRead.current === read) linesRead.current = null;
+      });
+  }, [linesWanted, foldedRounds, divisionId, orgSlug, compSlug, divSlug]);
+  /** The lines the Add match form plans over for `stageId`: the desk's own rows, or - over a stage with folded rounds - the stage's
+   *  every line once read (null while they are not here). */
+  const adhocRowsFor = (stageId: string, stageFixtures: readonly FixtureRow[]): AdhocRoundRow[] | null => {
+    if (foldedTally(foldedRounds, stageId).rows === 0) return stageFixtures.map(adhocRowOf);
+    return stageLines?.stageId === stageId && stageLines.rows !== undefined ? stageLines.rows : null;
+  };
+  const adhocRowsFailed = (stageId: string) =>
+    stageLines?.stageId === stageId && stageLines.from === foldedRounds && stageLines.failed === true;
   // Task 10 — stage id whose phone "Stage tools" bottom sheet is open.
   // Owned here, not as a local `useState` inside `<StageRail>` (stage-
   // rail.tsx's own header explains why: `expandWithHooks`, the test harness
@@ -2276,14 +2319,10 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     msg={msg}
                     stageId={stage.id}
                     entrantNames={entrantNames}
-                    // W5 T3 (X-BD-6): the stage's lines as the round planner reads them. A line seats its sides unless it was voided
-                    // ("Not played", `cancelled`) or a withdrawal expunged it - the server's own `seats` rule (`addFixture`).
-                    roundRows={stageFixtures.map((f) => ({
-                      round_no: f.round_no,
-                      home: f.home_entrant_id,
-                      away: f.away_entrant_id,
-                      seats: f.status !== "cancelled" && f.expunged !== true,
-                    }))}
+                    // W5 T3 (X-BD-6): the stage's lines as the round planner reads them (`adhocRowOf`); over a windowed stage, every
+                    // line read for the form (W5 follow-ups C, review I2 sweep).
+                    roundRows={adhocRowsFor(stage.id, stageFixtures)}
+                    roundRowsFailed={adhocRowsFailed(stage.id)}
                     boardSlotOptions={boardSlotOptions}
                     onDone={() => {
                       setAddingTo(null);
@@ -3196,6 +3235,12 @@ export type StageNameLookup = (stageId: string) => string | undefined;
 
 /** Fixture id → who plays it ("Ana – Ben"), or undefined when the board does not hold that match (or its seats are
  *  not both filled). Names a held match in the Complete-stage refusal. */
+/** A line as the Add match form's round planner reads it: it seats its sides unless it was voided ("Not played", `cancelled`) or a
+ *  withdrawal expunged it - the server's own `seats` rule (`addFixture`). */
+function adhocRowOf(f: Pick<FixtureRow, "round_no" | "home_entrant_id" | "away_entrant_id" | "status" | "expunged">): AdhocRoundRow {
+  return { round_no: f.round_no, home: f.home_entrant_id, away: f.away_entrant_id, seats: f.status !== "cancelled" && f.expunged !== true };
+}
+
 export type MatchNameLookup = (fixtureId: string) => string | undefined;
 
 /** The board's lookup for a held match: "Ana – Ben" from the fixture's two seats (an entrant it cannot name reads "?"),
@@ -3389,6 +3434,7 @@ function AddMatchForm({
   stageId,
   entrantNames,
   roundRows,
+  roundRowsFailed = false,
   boardSlotOptions,
   onDone,
   onCancel,
@@ -3396,8 +3442,11 @@ function AddMatchForm({
   msg: Msg;
   stageId: string;
   entrantNames: Record<string, string>;
-  /** W5 T3 (X-BD-6): the stage's lines, for the Round select. */
-  roundRows: AdhocRoundRow[];
+  /** W5 T3 (X-BD-6): the stage's lines, for the Round select. Null while a windowed stage's lines are being read (W5 follow-ups C):
+   *  no round is offered and nothing can be added until they are here. */
+  roundRows: AdhocRoundRow[] | null;
+  /** The windowed stage's lines did not load: said, and still nothing can be added. */
+  roundRowsFailed?: boolean;
   /** Board slots for the "When" field — see `boardSlotOptionsFor` above.
    *  `undefined` lets `DateTimeField` fall back to quarter hours. */
   boardSlotOptions?: string[];
@@ -3418,6 +3467,7 @@ function AddMatchForm({
     try {
       // The round on screen is the round sent (W5 T3, X-BD-6): the server defaults the same way when none is named, but a form that
       // shows "Round 3" must write round 3, not whatever a second planner says later.
+      if (roundRows === null) return;
       const round = chosenAdhocRound(adhocRoundPlan(roundRows, home, away), roundPick);
       await apiV1(`/api/v1/stages/${stageId}/fixtures`, {
         method: "POST",
@@ -3461,15 +3511,25 @@ function AddMatchForm({
             ))}
           </select>
         </label>
-        <AddMatchRoundSelect
-          msg={msg}
-          rows={roundRows}
-          home={home}
-          away={away}
-          entrantNames={entrantNames}
-          pick={roundPick}
-          onPick={setRoundPick}
-        />
+        {roundRows !== null ? (
+          <AddMatchRoundSelect
+            msg={msg}
+            rows={roundRows}
+            home={home}
+            away={away}
+            entrantNames={entrantNames}
+            pick={roundPick}
+            onPick={setRoundPick}
+          />
+        ) : roundRowsFailed ? (
+          <p role="alert" data-testid="add-match-rounds-failed" className="text-xs text-red-600">
+            {msg("stage.addMatch.round.loadFailed")}
+          </p>
+        ) : (
+          <p role="status" data-testid="add-match-rounds-loading" className="text-xs text-slate-500">
+            {msg("stage.addMatch.round.loading")}
+          </p>
+        )}
         <DateTimeField
           kind="datetime-local"
           label={msg("stage.addMatch.when")}
@@ -3480,7 +3540,7 @@ function AddMatchForm({
         <button
           type="button"
           className="btn btn-primary px-3 py-1.5 text-xs"
-          disabled={saving || home === "" || away === "" || home === away}
+          disabled={saving || roundRows === null || home === "" || away === "" || home === away}
           onClick={() => void submit()}
         >
           {saving ? msg("schedule.working") : msg("stage.addMatch.button")}

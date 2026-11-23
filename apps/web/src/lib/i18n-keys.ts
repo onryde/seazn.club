@@ -10396,6 +10396,8 @@ export type DictionaryKey =
   | "stage.addMatch.round.clashRange"
   | "stage.addMatch.round.free"
   | "stage.addMatch.round.freeSuggested"
+  | "stage.addMatch.round.loadFailed"
+  | "stage.addMatch.round.loading"
   | "stage.addMatch.round.new"
   | "stage.addMatch.round.newSuggested"
   | "stage.addMatch.round.pickSides"

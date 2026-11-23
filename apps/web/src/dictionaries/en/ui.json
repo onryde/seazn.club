@@ -3142,6 +3142,8 @@
   "stage.addMatch.round.clashAlone": "Round {n} · {name} already plays",
   "stage.addMatch.round.clashRange": "Rounds {from} to {to} · a side already plays",
   "stage.addMatch.round.pickSides": "Pick both sides first",
+  "stage.addMatch.round.loading": "Reading the stage's rounds…",
+  "stage.addMatch.round.loadFailed": "The stage's rounds didn't load, so no round can be offered. Close the form and open it again.",
   "stage.addMatch.hint": "An added match is a real result — it counts in the table.",
   "slot.winner_group": "Winner of Group {g}",
   "slot.runner_up_group": "Runner-up of Group {g}",

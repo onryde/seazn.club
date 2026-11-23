@@ -3142,6 +3142,8 @@
   "stage.addMatch.round.clashAlone": "Ronda {n} · {name} ya juega",
   "stage.addMatch.round.clashRange": "Rondas {from} a {to} · un equipo ya juega",
   "stage.addMatch.round.pickSides": "Elige primero los dos lados",
+  "stage.addMatch.round.loading": "Leyendo las rondas de la fase…",
+  "stage.addMatch.round.loadFailed": "No se pudieron cargar las rondas de la fase, así que no se puede ofrecer ninguna ronda. Cierra el formulario y vuelve a abrirlo.",
   "stage.addMatch.hint": "Un partido añadido es un resultado real: cuenta en la clasificación.",
   "slot.winner_group": "Ganador del Grupo {g}",
   "slot.runner_up_group": "Subcampeón del Grupo {g}",
