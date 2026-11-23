@@ -22,7 +22,7 @@
     "matchList": "Blues beat Reds 3-2, Reds beat Greens 3-0, Golds beat Reds 3-2, Greens beat Blues 3-0, Blues beat Golds 3-2, Greens beat Golds 3-0",
     "sportCount": 11,
     "sportsNotWinsFirst": 8,
-    "notWinsFirstList": "Football, cricket, chess, carrom, generic, table tennis, ice hockey and hockey",
+    "notWinsFirstList": "Football, cricket, chess, carrom, a generic division, table tennis, ice hockey and hockey",
     "sportsWinsFirst": 3,
     "winsFirstList": "Volleyball, Badminton and Tennis",
     "sportsWhereOrdersCanDiffer": 1,

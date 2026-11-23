@@ -22,7 +22,7 @@ The last row is a different kind of match. Ben forfeits before a single point is
 
 ## Why a played loss earns something
 
-Seazn's table tennis rules follow the ITTF's tie-break regulation (3.7.5), which starts from match points, not from matches won. That is the difference from volleyball in [why matches won come first](/blog/why-matches-won-come-first). In those rules a loss that was played to the end is worth {{fact:table-tennis-loss.won30Loser}} match point whatever the score, and a loss that was never played, a forfeit before a point, is worth {{fact:table-tennis-loss.forfeitLoser}} points.
+Seazn's table tennis rules follow the ITTF's tie-break regulation, which starts from match points, not from matches won. That is the difference from volleyball in [why matches won come first](/blog/why-matches-won-come-first). In those rules a loss that was played to the end is worth {{fact:table-tennis-loss.won30Loser}} match point whatever the score, and a loss that was never played, a forfeit before a point, is worth {{fact:table-tennis-loss.forfeitLoser}} points.
 
 ## What changes from sport to sport
 

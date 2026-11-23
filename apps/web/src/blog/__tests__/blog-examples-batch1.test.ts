@@ -18,7 +18,7 @@ const MIN_CLAIMS: Record<(typeof BATCH1)[number], number> = {
   "shootout-points": 1 + 11 * 4, // one registry-wide claim, four per sport
   "cricket-points": 5,
   "chess-points": 5,
-  "matches-won-first": 6,
+  "matches-won-first": 8,
   "table-tennis-loss": 5,
 };
 
@@ -162,5 +162,21 @@ describe("batch 1 examples: each one separates the right answer from the wrong c
     expect(Number(f.forfeitLoser)).toBeLessThan(Number(f.won30Loser));
     expect(f.won30Loser, "a played loss pays the same at every score").toBe(f.won32Loser);
     expect(f.won30Loser).toBe(f.won31Loser);
+  });
+});
+
+describe("batch 1 examples: the sport lists a post prints", () => {
+  // The generic sport is "a generic division" in prose and in every list; a bare "generic" among sport names reads as a typo.
+  // Read from the goldens a post renders from, so it is what a reader gets, not what the formatter was meant to do.
+  const BARE_GENERIC = /(^|, | and )generic(,| and |$)/i;
+  const lists: [string, string, string][] = [];
+  for (const id of BATCH1) for (const [key, v] of Object.entries(BLOG_GOLDENS[id]!.facts)) if (key.endsWith("List") && typeof v === "string") lists.push([id, key, v]);
+
+  it("no list names the generic sport bare, and the lists that hold it say 'a generic division'", () => {
+    expect(lists.length, "anti-vacuity: sport and format lists checked").toBeGreaterThan(0);
+    for (const [id, key, v] of lists) expect(BARE_GENERIC.test(v), `${id}.${key}: '${v}'`).toBe(false);
+    const holders = lists.filter(([, , v]) => /a generic division/i.test(v));
+    // The four posts' other-sports lists (cricket, chess, table tennis, volleyball) are the ones that hold every sport but a few.
+    expect(holders.length, "anti-vacuity: lists that hold the generic sport").toBeGreaterThanOrEqual(4);
   });
 });

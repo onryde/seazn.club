@@ -149,7 +149,14 @@ describe("the post page, through the real renderer (the pilot)", () => {
     const planned = post.related.filter((s) => BLOG_PLANNED_SLUGS.has(s));
     expect(unresolved, "every related slug that does not resolve is one still to be written").toEqual(planned);
     for (const slug of resolved) expect(markup, slug).toContain(blogUrl(slug));
-    for (const slug of unresolved) expect(markup, slug).not.toContain(blogUrl(slug));
+    let absent = 0;
+    for (const slug of unresolved) {
+      expect(markup, slug).not.toContain(blogUrl(slug));
+      absent++;
+    }
+    // While the pilot still names a planned slug, the arm must have checked at least one (the loop above cannot run empty).
+    if (planned.length > 0) expect(absent, "anti-vacuity: unresolved related slugs checked absent from the page").toBeGreaterThan(0);
+    expect(absent).toBe(planned.length);
     expect(markup).toContain('data-testid="blog-related"');
   });
 

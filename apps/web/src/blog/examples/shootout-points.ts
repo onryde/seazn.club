@@ -16,7 +16,7 @@ import { stageDefaultsFor } from "@seazn/engine/sport";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { forEachSport } from "@seazn/engine/testkit";
 import { sportLabel, variantLabel } from "@/blog/labels";
-import { NAMES, compact, leagueCfg, play, upperFirst, variantsOf, winnerLoserPoints, type Cfg, type StageRules, declaredLeaguePoints } from "./kit";
+import { NAMES, compact, leagueCfg, play, sentenceList, upperFirst, variantsOf, winnerLoserPoints, type Cfg, type StageRules, declaredLeaguePoints } from "./kit";
 import { startingVariantKey } from "./starting-variant";
 import type { BlogExample, Claim, ExampleResult } from "./types";
 
@@ -133,7 +133,7 @@ function build(): ExampleResult {
   facts.sportCount = visited;
   facts.sportsBeyond = beyondSports.length;
   facts.sportsRegulationOnly = regulationOnly.length;
-  facts.regulationOnlyList = joinAnd(regulationOnly);
+  facts.regulationOnlyList = sentenceList(regulationOnly);
   facts.beyondList = joinAnd(beyondSports);
   return {
     facts,
@@ -275,7 +275,7 @@ function acrossSports(): Claim[] {
         if (f.sportsRegulationOnly !== never.length) return `sportsRegulationOnly is ${String(f.sportsRegulationOnly)}, the declarations give ${never.length}`;
         if (beyond.length + never.length !== visited) return "the two groups do not add up to the registry";
         if (f.beyondList !== joinAnd(beyond)) return `beyondList is '${String(f.beyondList)}', the declarations give '${joinAnd(beyond)}'`;
-        return f.regulationOnlyList === joinAnd(never) || `regulationOnlyList is '${String(f.regulationOnlyList)}', the declarations give '${joinAnd(never)}'`;
+        return f.regulationOnlyList === sentenceList(never) || `regulationOnlyList is '${String(f.regulationOnlyList)}', the declarations give '${sentenceList(never)}'`;
       },
     },
   ];

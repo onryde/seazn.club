@@ -10,7 +10,7 @@ related: how-standings-points-work, set-ratio-or-set-difference, level-on-points
 examples: matches-won-first
 ---
 
-Because the match is the result that counts in these sports. Points can be paid by the score of the match, so a team can collect more points from narrow results than another team collects from wins. Ranking on matches won first means a team that wins more matches always sits above one that wins fewer, whatever the points say. Seazn puts matches won first in all three sports, and its rules for each cite the sport's governing body: the FIVB for volleyball, the BWF for badminton and the ATP for tennis.
+Because the match is the result that counts in these sports. Points can be paid by the score of the match, so a team can collect more points from narrow results than another team collects from wins. Ranking on matches won first means a team that wins more matches always sits above one that wins fewer, whatever the points say. Seazn puts matches won first in all three sports, and its rules for each follow a published rulebook: the FIVB's for volleyball, the BWF's for badminton and the ATP's for tennis.
 
 {{example:matches-won-first}}
 

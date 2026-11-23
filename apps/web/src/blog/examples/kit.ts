@@ -13,6 +13,7 @@ import { resolvePositions } from "@seazn/engine/sport";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { buildWalk, declaredCfgs, lineupFromCatalog } from "@seazn/engine/testkit";
+import { sportLabel } from "@/blog/labels";
 import { postedStageCfg } from "@/lib/stage-decider-off";
 import { foldFrom } from "@/server/engine-db/fold";
 import { tableRulesOf, type LoadedTableRules } from "@/server/engine-db/table-rules";
@@ -59,11 +60,15 @@ export function joinOr(words: string[]): string {
 
 /**
  * A list of sport labels as a sentence's subject or object: the first word keeps its capital, the rest go lower case
- * ("Football, ice hockey and tennis"), joined with commas and a last "and". An empty list prints nothing, so every claim
+ * ("Football, ice hockey and tennis"; the generic sport is "a generic division"), joined with commas and a last "and". An empty list prints nothing, so every claim
  * that reads one fails an empty list itself (anti-vacuity: zero sports listed is a failure there).
  */
 export function sentenceList(labels: readonly string[]): string {
-  const words = labels.map((l, i) => (i === 0 ? l : l.charAt(0).toLowerCase() + l.slice(1)));
+  // The generic sport's label reads as a bare "Generic" in a list, so a list names it as the prose always did.
+  const words = labels.map((l, i) => {
+    const w = l === sportLabel("generic") ? "a generic division" : l;
+    return i === 0 ? w.charAt(0).toUpperCase() + w.slice(1) : w.charAt(0).toLowerCase() + w.slice(1);
+  });
   return words.length < 2 ? (words[0] ?? "") : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
 }
 

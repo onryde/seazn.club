@@ -32,7 +32,7 @@
     "sportCount": 11,
     "sportsBeyond": 4,
     "sportsRegulationOnly": 7,
-    "regulationOnlyList": "Chess, Carrom, Generic, Volleyball, Badminton, Table tennis and Tennis",
+    "regulationOnlyList": "Chess, carrom, a generic division, volleyball, badminton, table tennis and tennis",
     "beyondList": "Football, Cricket, Ice hockey and Hockey"
   },
   "table": {

@@ -28,7 +28,7 @@ Rain makes a no result unless DLS can decide the match. DLS, the Duckworth-Lewis
 
 - **The limited-overs formats.** {{fact:cricket-points.limitedOversList}} all pay the same: a win {{fact:cricket-points.winWinner}}, a tie {{fact:cricket-points.tieEach}} each, no result {{fact:cricket-points.noResultEach}} each.
 - **Test match.** A win pays {{fact:cricket-points.testWinWinner}} to {{fact:cricket-points.testWinLoser}}. A Test is the one format that can end in a draw, and a draw pays each side {{fact:cricket-points.testDrawEach}}. A tie pays {{fact:cricket-points.testTieEach}} each. A Test that is abandoned is booked as a draw, so it pays {{fact:cricket-points.testAbandonedEach}} each, not as a no result.
-- **Every other sport.** Cricket is the only one of the {{fact:cricket-points.sportCount}} sports whose league rules have a result called a tie or a no result. {{fact:cricket-points.withoutTieOrNoResultList}} have neither. Where one of them allows a level match it is booked as a draw, and [how standings points work in each sport](/blog/how-standings-points-work) lists what each pays for it. (An online chess board in a league that the organiser marks as No result is voided, and no points go to either player.)
+- **Every other sport.** Cricket is the only one of the {{fact:cricket-points.sportCount}} sports whose league rules have a result called a tie or a no result. {{fact:cricket-points.withoutTieOrNoResultList}} have neither. Where one of them allows a level match it is booked as a draw, and [how standings points work in each sport](/blog/how-standings-points-work) lists what each pays for it. (An online chess board in a league that the organiser marks as No result earns neither player any points.)
 
 ## Where you set it
 
