@@ -1,0 +1,88 @@
+{
+  "facts": {
+    "winWinner": "2",
+    "winLoser": "0",
+    "tieEach": "1",
+    "superOverWinner": "2",
+    "superOverLoser": "0",
+    "noResultEach": "1",
+    "testWinWinner": "2",
+    "testWinLoser": "0",
+    "testDrawEach": "1",
+    "testTieEach": "1",
+    "testAbandonedEach": "1",
+    "sportCount": 11,
+    "sportsWithTieOrNoResult": 1,
+    "limitedOversList": "T20, One-day (50 overs) and The Hundred"
+  },
+  "table": {
+    "caption": "What each side gets for each way a cricket match can end, by format.",
+    "columns": [
+      "How the match ended",
+      "Format",
+      "One side gets",
+      "The other side gets"
+    ],
+    "rows": [
+      [
+        "A win",
+        "T20",
+        "2",
+        "0"
+      ],
+      [
+        "A tie",
+        "T20",
+        "1",
+        "1"
+      ],
+      [
+        "A tie, settled by a super over",
+        "T20, super over on",
+        "2",
+        "0"
+      ],
+      [
+        "Abandoned, with no result",
+        "T20",
+        "1",
+        "1"
+      ],
+      [
+        "A win",
+        "Test match",
+        "2",
+        "0"
+      ],
+      [
+        "A draw",
+        "Test match",
+        "1",
+        "1"
+      ],
+      [
+        "A tie",
+        "Test match",
+        "1",
+        "1"
+      ],
+      [
+        "Abandoned",
+        "Test match",
+        "1",
+        "1"
+      ]
+    ]
+  },
+  "text": [
+    "Each row is a real cricket match played to that ending: Ana beats Ben, and Cy and Dev finish level, are rained off or are abandoned.",
+    "A win, T20: Ana beat Ben 61/9 (20) — 35 (5).",
+    "A tie, T20: Cy and Dev tied 113/9 (20) — 113/7 (20).",
+    "A tie, settled by a super over, T20, super over on: Ana beat Ben in a super over 113/9 (20) — 113/7 (20) · SO 10–8.",
+    "Abandoned, with no result, T20: Cy and Dev abandoned, no result, 151/5 (19.1) — 70/3 (6.5).",
+    "A win, Test match: Ana beat Ben 158/0 & 4/7 — 3/7 & 17/9.",
+    "A draw, Test match: Cy and Dev drew 42 & 105/6d — 61/2.",
+    "A tie, Test match: Cy and Dev tied 42 & 33/4 — 20/7 & 55/4.",
+    "Abandoned, Test match: Cy and Dev abandoned, booked as a draw, 134/9 & 179/1d — 73/8d & 151/8."
+  ]
+}
