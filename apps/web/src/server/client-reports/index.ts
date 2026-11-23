@@ -2,6 +2,7 @@
 //   define.ts   what a kind is (its closed schema and the facts the pipeline reads), and `ReportCode`. Pure.
 //   kinds.ts    the registry of kinds and the route's body (`ClientReport`, a union on `kind`). Pure: OpenAPI loads it.
 //   video.ts    the `video` kind: the match page's player gave up, or its read of the video route failed. Pure.
+//   chess-room.ts  the `chess-room` kind: an online chess board's camera room dropped a player's or the arbiter's connection. Pure.
 //   receive.ts  the pipeline: the capped read, the per-IP and per-subject limits, the subject check, then (first report of its key
 //               only) the IP's Sentry share, the kind's Sentry budget, the log line and the Sentry event. server-only.
 export { readClientReport, receiveClientReport, CLIENT_REPORT_IP_SENTRY_SHARE, CLIENT_REPORT_MAX_BYTES, CLIENT_REPORT_SENTRY_WINDOW_SECONDS, type ClientReportOutcome } from "./receive";

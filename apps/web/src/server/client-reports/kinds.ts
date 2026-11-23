@@ -1,12 +1,13 @@
 // server/client-reports/kinds.ts — the registry of client report kinds (Task 25b), and the route's body: a union on `kind` built from
 // it, so the schema the route parses with and the one OpenAPI publishes are the same object. Pure zod: the bare OpenAPI generator loads
-// this file (openapi.ts). A new kind is its own file beside video.ts and ONE entry in CLIENT_REPORT_KINDS; nothing else names a kind.
+// this file (openapi.ts). A new kind is its own file beside video.ts and chess-room.ts and ONE entry in CLIENT_REPORT_KINDS; nothing else names a kind.
 import { z } from "zod";
 import type { ClientReportKind } from "./define.ts";
+import { chessRoomClientReport } from "./chess-room.ts";
 import { videoClientReport } from "./video.ts";
 
 /** Every kind, in the order OpenAPI lists them. */
-export const CLIENT_REPORT_KINDS = [videoClientReport] as const;
+export const CLIENT_REPORT_KINDS = [videoClientReport, chessRoomClientReport] as const;
 
 type KindSchemaOf = (typeof CLIENT_REPORT_KINDS)[number]["schema"];
 

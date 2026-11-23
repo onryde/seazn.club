@@ -110164,7 +110164,7 @@
     },
     "/api/v1/public/client-reports": {
       "post": {
-        "summary": "A browser's report of a failure it saw (Task 25b; the match page's video player and its read of the video route, kind `video`), sent by `navigator.sendBeacon` (text/plain) or a keepalive fetch, for the server's log and its Sentry. The body is exactly one registered kind, closed and made of codes: a string shaped like an address, a query or a credential's name is a 400. At most 2 KiB (413). Every accepted body answers 204 with nothing said of what became of it: a report past its per-IP limits (one per IP, one per IP and fixture), or about a fixture with no Seazn stream, is dropped, and one past its kind's Sentry budget is logged to the server only",
+        "summary": "A browser's report of a failure it saw (Task 25b; kind `video`: the match page's video player and its read of the video route; kind `chess-room`: an online chess board's camera room dropping a player's or the arbiter's connection), sent by `navigator.sendBeacon` (text/plain) or a keepalive fetch, for the server's log and its Sentry. The body is exactly one registered kind, closed and made of codes: a string shaped like an address, a query or a credential's name is a 400. At most 2 KiB (413). Every accepted body answers 204 with nothing said of what became of it: a report past its per-IP limits (one per IP, one per IP and fixture), or about a fixture the kind does not apply to (no Seazn stream for `video`, no camera room for `chess-room`), is dropped, and one past its kind's Sentry budget is logged to the server only",
         "tags": [
           "public"
         ],
@@ -110307,6 +110307,59 @@
                       "hlsDetails",
                       "httpStatus",
                       "mediaCode"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "chess-room"
+                      },
+                      "fixtureId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "surface": {
+                        "type": "string",
+                        "enum": [
+                          "player",
+                          "arbiter"
+                        ]
+                      },
+                      "side": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "white",
+                              "black",
+                              "home",
+                              "away"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "leaveState": {
+                        "type": "string",
+                        "enum": [
+                          "disconnected",
+                          "failed",
+                          "left"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "fixtureId",
+                      "surface",
+                      "side",
+                      "leaveState"
                     ],
                     "additionalProperties": false
                   }
@@ -110461,6 +110514,59 @@
                       "hlsDetails",
                       "httpStatus",
                       "mediaCode"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "chess-room"
+                      },
+                      "fixtureId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      "surface": {
+                        "type": "string",
+                        "enum": [
+                          "player",
+                          "arbiter"
+                        ]
+                      },
+                      "side": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "white",
+                              "black",
+                              "home",
+                              "away"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "leaveState": {
+                        "type": "string",
+                        "enum": [
+                          "disconnected",
+                          "failed",
+                          "left"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "fixtureId",
+                      "surface",
+                      "side",
+                      "leaveState"
                     ],
                     "additionalProperties": false
                   }
