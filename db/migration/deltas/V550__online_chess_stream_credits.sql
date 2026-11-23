@@ -15,7 +15,12 @@ alter table org_stream_credits
   add column online_package_id uuid null references division_online_packages(id),
   -- A row moves credits for a stream session OR for a package, never both.
   add constraint org_stream_credits_one_subject
-    check (session_id is null or online_package_id is null);
+    check (session_id is null or online_package_id is null),
+  -- A package row is a debit (`consume`) or a return (`refund`), and the platform writes it: a null created_by on a refund
+  -- is how the stream code tells a platform refund from staff (stream-credits.ts). Every existing row passes: the column is
+  -- added by this same statement, so it is null on all of them.
+  add constraint org_stream_credits_package_row_check
+    check (online_package_id is null or (reason in ('consume', 'refund') and created_by is null));
 -- Partial, V425's shape for session_id: only package rows are ever looked up by package (the package's own ledger read,
 -- and the foreign key's check when an unpaid row is deleted).
 create index org_stream_credits_online_package_id

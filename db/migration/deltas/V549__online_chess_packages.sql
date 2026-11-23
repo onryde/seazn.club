@@ -43,7 +43,18 @@ create table division_online_packages (
   -- Nothing returns or is forfeited beyond what was debited.
   constraint division_online_packages_returned_check check (credits_refunded + credits_forfeited <= credits_paid),
   -- Only a paid row can be refunded.
-  constraint division_online_packages_refunded_paid_check check (refunded_at is null or paid_at is not null)
+  constraint division_online_packages_refunded_paid_check check (refunded_at is null or paid_at is not null),
+  -- A payment names its payer, and only a payment does.
+  constraint division_online_packages_paid_by_check check ((paid_at is null) = (paid_by is null)),
+  -- refunded_at is the FULL refund (a move down leaves it null): everything debited came back or was forfeited.
+  constraint division_online_packages_refunded_in_full_check
+    check (refunded_at is null or credits_refunded + credits_forfeited = credits_paid),
+  -- A frozen row is never refunded (P7: refundable only while no round has opened).
+  constraint division_online_packages_frozen_refunded_check check (frozen_at is null or refunded_at is null),
+  -- Frozen and unpaid is the grandfathered row of the backfill below, and only that: the backfill writes frozen_at = now()
+  -- and created_at defaults to now(), the same instant in one transaction. Any later freeze needs a payment.
+  constraint division_online_packages_frozen_unpaid_check
+    check (paid_at is not null or frozen_at is null or frozen_at = created_at)
 );
 -- At most ONE live package per division. A refunded one stays as history.
 create unique index division_online_packages_live

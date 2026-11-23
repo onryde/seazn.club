@@ -96,16 +96,23 @@ type Pkg = {
   paidBy?: string | null;
   frozenAt?: Date | null;
   refundedAt?: Date | null;
+  /** Omitted: the column default, now(). */
+  createdAt?: Date;
 };
 
-/** A package row as the privileged writers will write it. The default is a fresh UNPAID row at 16. */
+/** The organiser on a paid row whose case does not name one (paid_by has no foreign key: spec §7.1). */
+const PAYER = "00000000-0000-4000-8000-00000000c0de";
+
+/** A package row as the privileged writers will write it. The default is a fresh UNPAID row at 16. A paid row (paidAt set)
+ *  names PAYER unless the case says otherwise; an explicit `paidBy: null` is a payment with no payer. */
 const insertPackage = (db: typeof sql, orgId: string, p: Pkg = {}) => db<{ id: string }[]>`
   insert into division_online_packages
     (org_id, division_id, division_name, size, cameras_paid, credits_paid, credits_refunded, credits_forfeited,
-     paid_at, paid_by, frozen_at, refunded_at)
+     paid_at, paid_by, frozen_at, refunded_at, created_at)
   values (${orgId}, ${p.divisionId ?? null}, ${p.divisionName ?? "Open"}, ${p.size === undefined ? 16 : p.size},
           ${p.camerasPaid ?? null}, ${p.creditsPaid ?? 0}, ${p.creditsRefunded ?? 0}, ${p.creditsForfeited ?? 0},
-          ${p.paidAt ?? null}, ${p.paidBy ?? null}, ${p.frozenAt ?? null}, ${p.refundedAt ?? null})
+          ${p.paidAt ?? null}, ${p.paidBy !== undefined ? p.paidBy : p.paidAt ? PAYER : null}, ${p.frozenAt ?? null},
+          ${p.refundedAt ?? null}, coalesce(${p.createdAt ?? null}::timestamptz, now()))
   returning id`;
 
 /** A PAID row at 32 without cameras: price(32, false) = 2 credits (Global Constraints). */
@@ -225,6 +232,7 @@ describe.skipIf(!HAS_DB)("V549 + V550 online chess packages: schema", () => {
     it("refuses paid_at without credits, cameras_paid without paid_at, refunded+forfeited > paid, refunded_at on an unpaid row", async () => {
       const org = await seedOrg();
       const paidAt = new Date("2026-11-20T10:00:00Z");
+      const WRITTEN = new Date("2026-11-23T08:00:00Z");
       // Each case breaks exactly ONE rule (the others hold), so it names the constraint that answers it.
       const cases: Array<[string, Pkg, string]> = [
         ["paid_at set, nothing debited", { paidAt, camerasPaid: false, creditsPaid: 0 }, "division_online_packages_paid_credits_check"],
@@ -246,7 +254,7 @@ describe.skipIf(!HAS_DB)("V549 + V550 online chess packages: schema", () => {
         ["unpaid", {}],
         ["paid", PAID_32],
         ["paid with cameras", { size: 32, camerasPaid: true, creditsPaid: 4, paidAt }],
-        ["frozen, grandfathered (unpaid at 256)", { size: 256, frozenAt: new Date() }],
+        ["frozen, grandfathered (unpaid at 256, frozen as it was written)", { size: 256, frozenAt: WRITTEN, createdAt: WRITTEN }],
         ["refunded in full, part forfeited (returned == paid)", { ...PAID_32, creditsRefunded: 1, creditsForfeited: 1, refundedAt: new Date() }],
         ["moved down: part returned, still live", { size: 16, camerasPaid: false, creditsPaid: 2, creditsRefunded: 1, paidAt }],
       ];
@@ -254,6 +262,41 @@ describe.skipIf(!HAS_DB)("V549 + V550 online chess packages: schema", () => {
         expect(await rolledBack((tx) => insertPackage(tx, org, p)), name).toEqual({ accepted: true });
       }
       expect(accepted.length).toBe(6);
+    });
+
+    it("refuses a payment with no payer (or a payer with no payment), a refund stamp on a partial return, a refunded frozen row, and an unpaid row frozen after it was written", async () => {
+      const org = await seedOrg();
+      const written = new Date("2026-11-22T08:00:00Z");
+      const later = new Date("2026-11-22T09:00:00Z");
+      // Each case breaks exactly ONE rule (the others hold), so it names the constraint that answers it.
+      const cases: Array<[string, Pkg, string]> = [
+        ["paid, no payer", { ...PAID_32, paidBy: null }, "division_online_packages_paid_by_check"],
+        ["a payer, never paid", { paidBy: PAYER }, "division_online_packages_paid_by_check"],
+        ["refunded_at on a partial return (a move down is not a refund)", { ...PAID_32, creditsRefunded: 1, refundedAt: later },
+          "division_online_packages_refunded_in_full_check"],
+        ["refunded after a round opened", { ...PAID_32, creditsRefunded: 2, refundedAt: later, frozenAt: written },
+          "division_online_packages_frozen_refunded_check"],
+        ["unpaid, frozen after it was written", { size: 256, createdAt: written, frozenAt: later },
+          "division_online_packages_frozen_unpaid_check"],
+      ];
+      let checked = 0;
+      for (const [name, p, constraint] of cases) {
+        expect(await rolledBack((tx) => insertPackage(tx, org, p)), name).toEqual({ accepted: false, code: CHECK_VIOLATION, constraint });
+        checked += 1;
+      }
+      expect(checked, "anti-vacuity: payer both ways, full refund, frozen refund, late unpaid freeze").toBe(5);
+
+      // The accepted twins, one per rule.
+      const accepted: Array<[string, Pkg]> = [
+        ["paid, with its payer", { ...PAID_32, paidBy: PAYER }],
+        ["refunded in full (everything back)", { ...PAID_32, creditsRefunded: 2, refundedAt: later }],
+        ["paid, then frozen later (not refunded)", { ...PAID_32, createdAt: written, frozenAt: later }],
+        ["unpaid, frozen as it was written (the grandfathered row)", { size: 256, createdAt: written, frozenAt: written }],
+      ];
+      for (const [name, p] of accepted) {
+        expect(await rolledBack((tx) => insertPackage(tx, org, p)), name).toEqual({ accepted: true });
+      }
+      expect(accepted.length).toBe(4);
     });
 
     it("a size off the ladder is refused (a stored 0 or 48 is impossible), and each ladder size is accepted", async () => {
@@ -310,7 +353,7 @@ describe.skipIf(!HAS_DB)("V549 + V550 online chess packages: schema", () => {
     expect(await attempt(insertPackage(sql, org, { divisionId: other.id })), "another division is not blocked").toEqual({ accepted: true });
 
     // Pay, then refund in full: the row becomes history, and the division may hold a new live row.
-    await sql`update division_online_packages set paid_at = now(), credits_paid = 2, cameras_paid = false where id = ${first!.id}`;
+    await sql`update division_online_packages set paid_at = now(), paid_by = ${PAYER}, credits_paid = 2, cameras_paid = false where id = ${first!.id}`;
     expect(await attempt(insertPackage(sql, org, { divisionId: div.id })), "paid is still live").toEqual(LIVE_INDEX);
     await sql`update division_online_packages set refunded_at = now(), credits_refunded = 2 where id = ${first!.id}`;
     const [second] = await insertPackage(sql, org, { divisionId: div.id });
@@ -318,7 +361,9 @@ describe.skipIf(!HAS_DB)("V549 + V550 online chess packages: schema", () => {
 
     // The sequence: the new live row blocks a third, frozen or not.
     expect(await attempt(insertPackage(sql, org, { divisionId: div.id })), "a third, beside the new live row").toEqual(LIVE_INDEX);
-    await sql`update division_online_packages set size = 256, frozen_at = now() where id = ${second!.id}`;
+    // A row is frozen by the first open, and only a paid row can be (the grandfathered backfill row aside): pay, then freeze.
+    await sql`update division_online_packages set size = 256, paid_at = now(), paid_by = ${PAYER}, credits_paid = 16, cameras_paid = false where id = ${second!.id}`;
+    await sql`update division_online_packages set frozen_at = now() where id = ${second!.id}`;
     expect(await attempt(insertPackage(sql, org, { divisionId: div.id })), "a frozen row is live").toEqual(LIVE_INDEX);
 
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from division_online_packages where division_id = ${div.id}`;
@@ -345,9 +390,10 @@ describe.skipIf(!HAS_DB)("V549 + V550 online chess packages: schema", () => {
         returning id`;
       return { org, div, pkgId: pkg!.id, sessionId: session!.id };
     }
-    const ledgerRow = (tx: typeof sql, org: string, o: { session?: string | null; pkg?: string | null; reason?: string; delta?: number }) => tx`
-      insert into org_stream_credits (org_id, delta, reason, balance_after, bucket, session_id, online_package_id)
-      values (${org}, ${o.delta ?? -1}, ${o.reason ?? "consume"}, 0, 'pack', ${o.session ?? null}, ${o.pkg ?? null})`;
+    type LedgerRow = { session?: string | null; pkg?: string | null; reason?: string; delta?: number; createdBy?: string | null };
+    const ledgerRow = (tx: typeof sql, org: string, o: LedgerRow) => tx`
+      insert into org_stream_credits (org_id, delta, reason, balance_after, bucket, session_id, online_package_id, created_by)
+      values (${org}, ${o.delta ?? -1}, ${o.reason ?? "consume"}, 0, 'pack', ${o.session ?? null}, ${o.pkg ?? null}, ${o.createdBy ?? null})`;
 
     it("refuses a ledger row naming both a session and a package", async () => {
       const r = await ledgerRig();
@@ -355,7 +401,7 @@ describe.skipIf(!HAS_DB)("V549 + V550 online chess packages: schema", () => {
         accepted: false, code: CHECK_VIOLATION, constraint: "org_stream_credits_one_subject",
       });
       // The accepted twins: each subject alone, and neither (a purchase or a grant names no subject).
-      const twins: Array<[string, { session?: string | null; pkg?: string | null; reason?: string; delta?: number }]> = [
+      const twins: Array<[string, LedgerRow]> = [
         ["a package consume", { pkg: r.pkgId }],
         ["a package refund", { pkg: r.pkgId, reason: "refund", delta: 1 }],
         ["a stream consume", { session: r.sessionId }],
@@ -365,6 +411,31 @@ describe.skipIf(!HAS_DB)("V549 + V550 online chess packages: schema", () => {
         expect(await rolledBack((tx) => ledgerRow(tx, r.org, o)), name).toEqual({ accepted: true });
       }
       expect(twins.length).toBe(4);
+    });
+
+    it("a package row is a platform consume or refund, nothing else (spec §7.1: created_by stays null on these rows)", async () => {
+      const r = await ledgerRig();
+      const PACKAGE_ROW = { accepted: false, code: CHECK_VIOLATION, constraint: "org_stream_credits_package_row_check" };
+      // The ledger's other reasons, typed from V410's reason CHECK (purchase, consume, refund, grant, revoke, expire) minus the
+      // two the spec gives a package row.
+      const OTHER_REASONS: Array<[string, number]> = [["purchase", 5], ["grant", 5], ["revoke", -1], ["expire", -1]];
+      let checked = 0;
+      for (const [reason, delta] of OTHER_REASONS) {
+        expect(await rolledBack((tx) => ledgerRow(tx, r.org, { pkg: r.pkgId, reason, delta })), reason).toEqual(PACKAGE_ROW);
+        checked += 1;
+      }
+      for (const [reason, delta] of [["consume", -1], ["refund", 1]] as const) {
+        expect(await rolledBack((tx) => ledgerRow(tx, r.org, { pkg: r.pkgId, reason, delta, createdBy: randomUUID() })),
+          `a staff-authored package ${reason}`).toEqual(PACKAGE_ROW);
+        checked += 1;
+      }
+      expect(checked, "anti-vacuity: 4 other reasons + 2 staff-authored rows").toBe(6);
+      // The accepted twins: the platform's own package rows, and a staff row that names no package (the rule is scoped).
+      expect(await rolledBack((tx) => ledgerRow(tx, r.org, { pkg: r.pkgId })), "a platform package consume").toEqual({ accepted: true });
+      expect(await rolledBack((tx) => ledgerRow(tx, r.org, { pkg: r.pkgId, reason: "refund", delta: 1 })), "a platform package refund")
+        .toEqual({ accepted: true });
+      expect(await rolledBack((tx) => ledgerRow(tx, r.org, { reason: "grant", delta: 5, createdBy: randomUUID() })), "a staff grant")
+        .toEqual({ accepted: true });
     });
 
     it("a ledger row cannot name a package that does not exist, and a package the ledger names cannot be deleted", async () => {
@@ -416,7 +487,8 @@ describe.skipIf(!HAS_DB)("V549 + V550 online chess packages: schema", () => {
     it("a competition delete (which cascades its divisions) keeps the row the same way", async () => {
       const org = await seedOrg();
       const div = await seedDivision(org, { name: "Blitz Open" });
-      const [pkg] = await insertPackage(sql, org, { size: 256, frozenAt: new Date("2026-11-21T09:00:00Z"), divisionId: div.id, divisionName: div.name });
+      const stamp = new Date("2026-11-21T09:00:00Z");
+      const [pkg] = await insertPackage(sql, org, { size: 256, createdAt: stamp, frozenAt: stamp, divisionId: div.id, divisionName: div.name });
       const before = await snapshot(pkg!.id);
       await sql`delete from competitions where id = ${div.competitionId}`;
       expect(await snapshot(pkg!.id)).toEqual({ ...before, division_id: null });
@@ -483,7 +555,7 @@ describe.skipIf(!HAS_DB)("V549 + V550 online chess packages: schema", () => {
     async function runBackfill(statement: string, divisionIds: string[]) {
       let out: { rows: Array<{ division_id: string; org_id: string; division_name: string; size: number; frozen_at: Date | null;
         paid_at: Date | null; cameras_paid: boolean | null; credits_paid: number; credits_refunded: number; credits_forfeited: number;
-        refunded_at: Date | null; paid_by: string | null }>; now: Date } | null = null;
+        refunded_at: Date | null; paid_by: string | null; created_at: Date }>; now: Date; checks: { temp: string[]; real: string[] } } | null = null;
       await sql
         .begin(async (tx) => {
           const [{ schema }] = await tx<{ schema: string }[]>`select current_schema() as schema`;
@@ -491,10 +563,14 @@ describe.skipIf(!HAS_DB)("V549 + V550 online chess packages: schema", () => {
           await tx.unsafe(statement);
           const rows = await tx<NonNullable<typeof out>["rows"]>`
             select division_id, org_id, division_name, size, frozen_at, paid_at, cameras_paid, credits_paid, credits_refunded,
-                   credits_forfeited, refunded_at, paid_by
+                   credits_forfeited, refunded_at, paid_by, created_at
               from pg_temp.division_online_packages where division_id in ${tx(divisionIds)}`;
           const [{ now }] = await tx<{ now: Date }[]>`select now() as now`;
-          out = { rows, now };
+          // The copy carries every CHECK of the real table, so the backfill's rows were held to all of them.
+          const checksOf = async (rel: string) => (await tx<{ def: string }[]>`
+            select pg_get_constraintdef(oid) as def from pg_constraint where conrelid = ${rel}::regclass and contype = 'c'
+             order by 1`).map((c) => c.def);
+          out = { rows, now, checks: { temp: await checksOf("pg_temp.division_online_packages"), real: await checksOf(`"${schema}".division_online_packages`) } };
           throw ROLLBACK;
         })
         .catch((e) => {
@@ -587,7 +663,12 @@ describe.skipIf(!HAS_DB)("V549 + V550 online chess packages: schema", () => {
       for (const sport of otherSports) notOnline.push(await seedDivision(org, { sport, config: { onlinePlay: "lichess" } }));
 
       const statement = backfillStatement();
-      const { rows, now } = await runBackfill(statement, [...seeded.map((s) => s.d.id), ...notOnline.map((d) => d.id)]);
+      const { rows, now, checks } = await runBackfill(statement, [...seeded.map((s) => s.d.id), ...notOnline.map((d) => d.id)]);
+
+      // 12 named CHECKs in V549 (size, 3 counters, paid/credits, paid/cameras, returned, refunded/paid, payer, refund in full,
+      // frozen/refunded, frozen/unpaid): the copy holds every one, so each backfill row passed all of them.
+      expect(checks.real.length, "the real table's CHECKs").toBe(12);
+      expect(checks.temp, "the temp copy holds the same CHECKs").toEqual(checks.real);
 
       let checked = 0;
       for (const { d, c } of seeded) {
@@ -600,6 +681,7 @@ describe.skipIf(!HAS_DB)("V549 + V550 online chess packages: schema", () => {
         expect(row[0], c.name).toEqual({
           division_id: d.id, org_id: org, division_name: d.name, size: c.size, frozen_at: c.frozen ? now : null,
           paid_at: null, cameras_paid: null, credits_paid: 0, credits_refunded: 0, credits_forfeited: 0, refunded_at: null, paid_by: null,
+          created_at: now,
         });
         checked += 1;
       }
