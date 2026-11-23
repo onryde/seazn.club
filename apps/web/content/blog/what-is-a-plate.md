@@ -22,16 +22,18 @@ So the plate counts matches, not rounds. In the example the top seed, {{fact:wha
 
 ## Why a walkover does not count
 
-A walkover is a match nobody played. A player who did not turn up for round one is usually not there for a plate either, and drawing them in would hand a plate opponent another walkover. So a first match lost by walkover, by withdrawal or by retirement is left out. In the example, {{fact:what-is-a-plate.excludedNames}} does not turn up and is left out. The opponent who goes through on that walkover has not played yet either, so their first match is their next one.
+A walkover is a match nobody played, and a player who withdraws, retires or is disqualified is leaving the event. Drawing any of them into the plate would hand a plate opponent a walkover, or a match that was never finished. So a first match lost by walkover, withdrawal, retirement or disqualification is left out. In the example, {{fact:what-is-a-plate.excludedNames}} does not turn up and is left out.
+
+The opponent who goes through on that walkover has not played yet either, so their first match is their next one. In the example, {{fact:what-is-a-plate.walkoverWinner}} goes through on the walkover, plays a first match in the {{fact:what-is-a-plate.walkoverWinnerRound}}, loses it, and joins the plate. A plate that counted the walkover as a first match would leave {{fact:what-is-a-plate.walkoverWinner}} out, because {{fact:what-is-a-plate.walkoverWinner}} won it.
 
 The plate in the example holds {{fact:what-is-a-plate.plateSize}} players: {{fact:what-is-a-plate.plateNames}}.
 
 ## Why the plate waits for the first matches
 
-Who is in the plate is only known once every player has played their first match. Most play it in round one, but a player with a bye, or one who went through on a walkover, plays it in round two. So the plate's draw waits for those matches, and never for the main draw's final. Its size is whatever the field turns out to be.
+Who is in the plate is only known once every player has played their first match. Most play it in round one, but a player with a bye, or one who went through on a walkover, plays it in round two. So the plate's draw waits for those matches, and never for the main draw's final. Its size is whatever the field turns out to be. If fewer than two players lost their first match there is nobody to play a plate: the plate stage completes with no draw, and its card says "Not enough first-match losers for a plate".
 
 ## Where to find it in Seazn
 
 Pick **Knockout + Plate** as the division's format. The main draw is set up as usual. The plate's stage waits and shows how many of the first matches are decided so far. Its draw is proposed as soon as the last one is.
 
-The plate does not depend on the sport, and it is offered in all {{fact:what-is-a-plate.sportCount}} sports.
+The plate's field is read from the main draw's results alone and is never told the sport, and the plate is offered in all {{fact:what-is-a-plate.sportCount}} sports.

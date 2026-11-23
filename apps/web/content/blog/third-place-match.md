@@ -6,7 +6,7 @@ author: Seazn
 topic: knockout
 sports: all
 help: formats/knockout
-related: knockout-seeds-and-byes, what-is-a-plate, page-playoff-and-stepladder
+related: knockout-seeds-and-byes, what-is-a-plate, page-playoff-and-stepladder, withdrawal-in-a-knockout
 examples: third-place-match
 ---
 
@@ -20,7 +20,7 @@ Each beaten semi-finalist lost once, to a different finalist, in the same round.
 
 A shared place still uses up the place below it. Two players are third, so nobody is fourth, and the next player is placed {{fact:third-place-match.nextPlaceAfterShared}}. That is the same rule a results table uses when two runners cross the line together.
 
-Third is the only place a knockout shares like this. The players beaten in the quarter-finals also lost once in the same round, but they are placed one after another by seed. They are further from a medal, and a list of places with four players level on fifth is no use to anyone.
+When every match is played, third is the only place a knockout shares like this. The players beaten in the quarter-finals also lost once in the same round, but they are placed one after another by seed. They are further from a medal, and a list of places with four players level on fifth is no use to anyone.
 
 ## What the third-place match changes
 
@@ -28,12 +28,14 @@ The third-place match turns the shared place into a result. The two beaten semi-
 
 It is worth the extra match when third place means something: a medal, a prize, or a place in a later event. When it does not, sharing saves a match at the end of a long day.
 
+Only a semi-final lost by playing sends a player to the third-place match. A player who loses a semi-final by forfeit, withdrawal or retirement is out of the tournament at once, so they are not sent on to it.
+
 ## Why a small bracket cannot have one
 
 A third-place match is fed by the losers of the two semi-finals. With three players, one of them has a bye into the final, and the other semi-final is the only real match. There is only one beaten semi-finalist, so there is nobody for them to play. Below {{fact:third-place-match.smallestPlayoffField}} players, Seazn shows the third-place match option but does not let you pick it.
 
 ## Where to find it in Seazn
 
-A knockout stage has a **Third place** setting, with **Shared** and **Play-off match**. A stage starts on Shared. If players withdraw before the start and the stage drops below the size a third-place match needs, Start tells you, and offers to switch the stage to Shared.
+A knockout stage has a **Third place** setting, with **Shared** and **Play-off match**. A stage starts on Shared. If players withdraw before the start and the stage drops below the size a third-place match needs, the stage says so ("This stage has 3 entrants, and a third-place match needs at least 4") and shows a **Use Shared** button. Start refuses until you switch, and says why.
 
-The rule is the same in every sport, because the draw does not depend on the sport. A knockout is offered in all {{fact:third-place-match.sportCount}} sports.
+The rule is the same in every sport: the bracket is drawn from the entrants and their seeds alone, and the draw is never told the sport. A knockout is offered in all {{fact:third-place-match.sportCount}} sports.

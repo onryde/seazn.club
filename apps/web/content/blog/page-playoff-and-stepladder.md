@@ -6,7 +6,7 @@ author: Seazn
 topic: knockout
 sports: all
 help: formats/page_playoff
-related: third-place-match, double-elimination-explained, groups-into-knockout
+related: third-place-match, double-elimination-explained, groups-into-knockout, withdrawal-in-a-knockout
 examples: page-playoff-and-stepladder
 ---
 
@@ -18,7 +18,7 @@ A plain knockout after a league throws away most of what the league proved: the 
 
 A Page playoff takes the top {{fact:page-playoff-and-stepladder.pageField}} and plays {{fact:page-playoff-and-stepladder.pageMatches}} matches. First and second meet in Qualifier 1, and the winner goes straight to the final. Third and fourth meet in the Eliminator, and the loser is out.
 
-The loser of Qualifier 1 is not out. They get a second chance in Qualifier 2, against the winner of the Eliminator, for the other place in the final. So the top two can each lose once and still win the title, and third and fourth cannot. In the example, {{fact:page-playoff-and-stepladder.pageQ1Loser}} loses Qualifier 1 and still finishes as champion: {{fact:page-playoff-and-stepladder.pageChampion}}.
+The loser of Qualifier 1 is not out. They get a second chance in Qualifier 2, against the winner of the Eliminator, for the other place in the final. So the top two can each lose once and still win the title, and third and fourth cannot. The second chance is for a loss that was played: a player who loses Qualifier 1 by forfeit, withdrawal or retirement is out at once, and does not go on to Qualifier 2. In the example, {{fact:page-playoff-and-stepladder.pageQ1Loser}} loses Qualifier 1 and still finishes as champion: {{fact:page-playoff-and-stepladder.pageChampion}}.
 
 That is the point of the format. Finishing in the top two is worth a safety net, and finishing third or fourth still keeps you in the hunt.
 
@@ -30,10 +30,12 @@ Every place is worth something. The top seed, {{fact:page-playoff-and-stepladder
 
 ## Which one to pick
 
-Pick a Page playoff when the top two should be safe from one bad game, as in many cricket leagues. Pick a stepladder when each extra place in the table should count, as in bowling finals, and when you want a final that a lower seed can reach only by beating everyone above them.
+Pick a Page playoff when the top two should be safe from one bad game, as in many cricket leagues. Pick a stepladder when each extra place in the table should count, as in bowling finals, and when you want a lower seed to earn the final by winning every match on the way up.
 
 ## Where to find it in Seazn
 
-Both are finals stages that follow a round robin. Pick **Group + Playoffs (IPL style)** for a Page playoff of the top four, or **Group + Stepladder** for a stepladder of the top places you choose. **Swiss Playoff** ends a Swiss with the same Page playoff. The bracket names the matches Qualifier 1, Eliminator, Qualifier 2 and Final for a Page playoff, and numbers the rungs of a stepladder.
+Both are finals stages. Pick **Group + Playoffs (IPL style)** for a Page playoff of the top four, or **Group + Stepladder** for a stepladder of the top places you choose; each follows a group stage. **Swiss Playoff** ends a Swiss with the same Page playoff instead.
 
-The draw does not depend on the sport, and both are offered in all {{fact:page-playoff-and-stepladder.sportCount}} sports.
+The public division page names the matches Qualifier 1, Eliminator, Qualifier 2 and Final for a Page playoff, and numbers the rungs of a stepladder. The organiser's run sheet is terser: it groups the first round as "Qualifiers" and names a seat that is waiting on a match "Loser of R1·1".
+
+The draw is made from the standings alone and is never told the sport, and both are offered in all {{fact:page-playoff-and-stepladder.sportCount}} sports.
