@@ -3,8 +3,8 @@
 // vitest stubs `server-only` (vitest.config.ts), so an import added to a leaf stays green in every unit test and kills that runner at
 // start - on a manual load dispatch, or the smoke job, long after the merge. This scan is the guard: each leaf imports NOTHING, and each
 // runner still imports the leaf (not the module behind it, which is the import the leaf exists to avoid).
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const WEB = join(import.meta.dirname, "..", "..", "..", "..");
@@ -34,6 +34,18 @@ function moduleDependencies(source: string): string[] {
     for (const m of code.matchAll(re)) found.push(m[1]!);
   }
   return found;
+}
+
+const SMOKE_SUITES = join(REPO, "scripts", "smoke", "suites");
+
+/** Whether a smoke suite (a file at `suiteFile`, reading `source`) imports the leaf at `leafAbs` (an absolute path): a relative specifier
+ *  that resolves to it (with or without the `.ts`), or an aliased one (`@/lib/...`) that ends in the leaf's own path under src/. */
+function suiteImportsLeaf(suiteFile: string, source: string, leafAbs: string, leaf: string): boolean {
+  const bare = (p: string) => p.replace(/\.tsx?$/, "");
+  return moduleDependencies(source).some((spec) => {
+    if (spec.startsWith(".")) return bare(resolve(dirname(suiteFile), spec)) === bare(leafAbs);
+    return bare(spec).endsWith(bare(leaf));
+  });
 }
 
 describe("the import-free leaves import nothing (cap-256 review m2)", () => {
@@ -74,5 +86,44 @@ describe("the import-free leaves import nothing (cap-256 review m2)", () => {
     }
     expect(checked, "leaves scanned").toBe(4);
     expect(withRunner, "leaves whose runner was checked").toBe(3);
+  });
+
+  it("the tripwire's own detector: it fires on a relative import, with or without .ts, and on an aliased one; it is silent otherwise", () => {
+    const suite = join(SMOKE_SUITES, "x.ts");
+    const leafAbs = join(WEB, "src", "lib", "online-chess-package.ts");
+    const leaf = "lib/online-chess-package.ts";
+    const cases: [string, boolean][] = [
+      [`import { a } from "../../../apps/web/src/lib/online-chess-package.ts";`, true],
+      [`import { a } from "../../../apps/web/src/lib/online-chess-package";`, true],
+      [`import { a } from "@/lib/online-chess-package";`, true],
+      [`import { a } from "../../../apps/web/src/lib/online-chess-cap.ts";`, false], // a sibling leaf is not this leaf
+      [`// import { a } from "../../../apps/web/src/lib/online-chess-package.ts";\nexport const A = 1;`, false], // a comment is not an import
+      [``, false],
+    ];
+    let checked = 0;
+    for (const [source, want] of cases) {
+      expect(suiteImportsLeaf(suite, source, leafAbs, leaf), JSON.stringify(source)).toBe(want);
+      checked += 1;
+    }
+    expect(checked, "detector cases checked").toBe(cases.length);
+    // and against a REAL runner: onlineChessDesk.ts does import the cap leaf (the positive control for the sweep below)
+    const desk = join(SMOKE_SUITES, "onlineChessDesk.ts");
+    expect(suiteImportsLeaf(desk, readFileSync(desk, "utf8"), join(WEB, "src", "lib", "online-chess-cap.ts"), "lib/online-chess-cap.ts")).toBe(true);
+  });
+
+  it("a leaf with a null runner is imported by NO smoke suite: null means 'no runner imports it yet', so the first import forces the tuple to be filled in", () => {
+    const suites = readdirSync(SMOKE_SUITES).filter((f) => f.endsWith(".ts"));
+    expect(suites.length, "smoke suite files scanned (zero is a failure)").toBeGreaterThan(0);
+    const sources = suites.map((f) => [join(SMOKE_SUITES, f), readFileSync(join(SMOKE_SUITES, f), "utf8")] as const);
+    let nullLeaves = 0;
+    for (const [leaf, runner] of LEAVES) {
+      if (runner !== null) continue;
+      nullLeaves += 1;
+      const importers = sources
+        .filter(([file, source]) => suiteImportsLeaf(file, source, join(WEB, "src", leaf), leaf))
+        .map(([file]) => file.slice(SMOKE_SUITES.length + 1));
+      expect(importers, `${leaf} has a null runner but ${importers.join(", ")} imports it: put that suite's path and specifier in LEAVES`).toEqual([]);
+    }
+    expect(nullLeaves, "leaves with a null runner (the tripwire's subjects)").toBe(1);
   });
 });

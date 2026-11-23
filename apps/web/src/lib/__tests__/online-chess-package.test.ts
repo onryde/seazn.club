@@ -19,6 +19,7 @@ import {
   sizeForRounds,
   type OnlineSize,
 } from "../online-chess-package";
+import { ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION } from "../online-chess-cap";
 
 const REPO = join(import.meta.dirname, "..", "..", "..", "..", "..");
 
@@ -43,6 +44,13 @@ const ROUNDS_TABLE: [OnlineSize, number][] = [
 describe("the sizes", () => {
   it("are 16, 32, 64, 128 and 256, in that order (decision 2)", () => {
     expect([...ONLINE_SIZES]).toEqual([16, 32, 64, 128, 256]);
+  });
+
+  it("the largest size IS the online entrant cap: two leaves, one 256, tied here (the leaf itself stays import-free)", () => {
+    // If the cap is lowered, a size above it must leave the ladder in the same change; otherwise a size nobody can fill stays on sale.
+    expect(ONLINE_SIZES[ONLINE_SIZES.length - 1]).toBe(ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION);
+    // the ladder is never longer than the cap allows either
+    expect(ONLINE_SIZES.filter((s) => s > ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION)).toEqual([]);
   });
 
   it("nextSize walks the ladder one step and is null at 256 (every step checked, the top included)", () => {
