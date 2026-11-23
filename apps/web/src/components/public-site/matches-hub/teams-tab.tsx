@@ -278,7 +278,8 @@ export function TeamsTab({ doc, dict, locale, initialDivision }: TeamsTabProps) 
                 // the href renders a corner tab on a division nobody has
                 // given a time to yet. Nothing takes its place when it is
                 // withheld — no empty corner, no placeholder.
-                const calendarIcon = tm.calendarHref && scheduledEntrants.has(tm.entrantId) ? (
+                // W5 follow-ups C (review I4): or a dated match the window folded away (`datedElsewhere`, `windowHubDoc`).
+                const calendarIcon = tm.calendarHref && (scheduledEntrants.has(tm.entrantId) || tm.datedElsewhere === true) ? (
                   <Link
                     data-testid={calendarId}
                     href={tm.calendarHref}

@@ -461,6 +461,11 @@ export const TeamCard = z.object({
    *  `?entrant=` filter, which also carries every still-unresolved fixture in
    *  the division (the route's own owner ruling, 2026-08-24). */
   calendarHref: z.string().optional(),
+  /** W5 follow-ups C (review I4): this entrant has a DATED match the served `matches` do not hold - a big division's folded round
+   *  (`windowHubDoc`). An odd-sized league or pool sits a team out every round, so a window serving one round can hold none of its
+   *  matches. The Teams tab offers the calendar when this is true OR a served match dates the entrant. Set only on a windowed
+   *  document; absent: the served matches say it all. */
+  datedElsewhere: z.boolean().optional(),
 });
 
 export const HubInfo = z.object({

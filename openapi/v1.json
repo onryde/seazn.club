@@ -105908,6 +105908,9 @@
                               },
                               "calendarHref": {
                                 "type": "string"
+                              },
+                              "datedElsewhere": {
+                                "type": "boolean"
                               }
                             },
                             "required": [

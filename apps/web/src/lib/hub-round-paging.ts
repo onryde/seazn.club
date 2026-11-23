@@ -57,7 +57,9 @@ export const HUB_WINDOW_ROUNDS = "rounds";
 
 /** The document as served: a big division's folded rounds leave `matches` for `roundPages`. A document with no big division is
  *  returned as it is (the same object). */
-export function windowHubDoc<D extends Pick<CompetitionHubDocT, "matches" | "knockouts">>(doc: D): D & { roundPages?: HubRoundPage[] } {
+export function windowHubDoc<D extends Pick<CompetitionHubDocT, "matches" | "knockouts"> & { teams?: CompetitionHubDocT["teams"] }>(
+  doc: D,
+): D & { roundPages?: HubRoundPage[] } {
   const byDivision = new Map<string, HubMatchT[]>();
   for (const m of doc.matches) byDivision.set(m.divisionId, [...(byDivision.get(m.divisionId) ?? []), m]);
   const big = [...byDivision.values()].filter((matches) => pagesByRound(matches.length));
@@ -78,7 +80,17 @@ export function windowHubDoc<D extends Pick<CompetitionHubDocT, "matches" | "kno
     });
   }
   if (pages.length === 0) return doc;
-  return { ...doc, matches: doc.matches.filter((m) => !folded.has(m.fixtureId)), roundPages: pages };
+  const matches = doc.matches.filter((m) => !folded.has(m.fixtureId));
+  // Review I4: a team whose every dated match is folded (an odd league's sit-out, when one round is served) keeps its calendar.
+  const datedServed = new Set<string>();
+  for (const m of matches) if (m.scheduledAt !== null) for (const s of m.header.sides) datedServed.add(s.entrantId);
+  const datedFolded = new Set<string>();
+  for (const m of doc.matches) {
+    if (!folded.has(m.fixtureId) || m.scheduledAt === null) continue;
+    for (const s of m.header.sides) if (!datedServed.has(s.entrantId)) datedFolded.add(s.entrantId);
+  }
+  const teams = doc.teams?.map((t) => (datedFolded.has(t.entrantId) ? { ...t, datedElsewhere: true } : t));
+  return { ...doc, matches, roundPages: pages, ...(teams !== undefined ? { teams } : {}) };
 }
 
 /** One folded round's cards out of the WHOLE (cached) document; null for a key the document has no round-stage match under. */

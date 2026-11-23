@@ -11,7 +11,8 @@ import { hubBucketTotals, hubRoundKey, hubRoundMatches, windowHubDoc } from "@/l
 import { MatchesTab } from "../matches-hub/matches-tab";
 import { landingStatus } from "@/lib/matches-hub";
 import { hubRoundsFor } from "../matches-hub/hub-rounds";
-import { hubDoc, knockoutView, koRound, m } from "./hub-fixtures";
+import { hubDoc, knockoutView, koRound, m, team } from "./hub-fixtures";
+import { TeamsTab } from "../matches-hub/teams-tab";
 
 vi.mock("@/server/usecases/public", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/usecases/public")>()),
@@ -205,3 +206,84 @@ describe("C: the page's hub poll is served windowed, as the page is; the v1 read
     expect(data.roundPages).toBeUndefined();
   });
 });
+
+// Review I4: batch C's report assumed "every entrant plays the open round", so the Teams tab's calendar link (shown when the team has a
+// DATED match among the document's matches) would survive the window. False for an odd-sized league or pool: one team sits out every
+// round. When the window serves one round, that team's every dated match is in a folded round and its calendar link vanished. The
+// expected set is the whole document's own render (the tab before windowing), never a list typed here.
+describe("I4: an odd league's sit-out team keeps its Teams calendar link through the window", () => {
+  /** A 21-team single league (circle method: 21 rounds of 10, one team sitting out each, 210 matches, over the paging line): rounds
+   *  1-20 played, round 21 to play - so the window serves round 21 alone. */
+  function oddLeague() {
+    const ids = Array.from({ length: 21 }, (_, i) => `t${i + 1}`);
+    const ring: (string | null)[] = [...ids, null];
+    const matches: HubMatchT[] = [];
+    const sitsOut: string[] = [];
+    for (let r = 1; r <= 21; r++) {
+      for (let k = 0; k < 11; k++) {
+        const a = ring[k]!;
+        const b = ring[21 - k]!;
+        if (a === null || b === null) {
+          sitsOut.push((a ?? b)!);
+          continue;
+        }
+        const done = r <= 20;
+        matches.push(
+          m(`O${r}-${k}`, done ? "completed" : "upcoming", new Date(NOW + (r - 21) * DAY).toISOString(), "odd", {
+            roundNo: r,
+            header: { sides: [
+              { entrantId: a, name: a, short: a, colour: null, badgeUrl: null },
+              { entrantId: b, name: b, short: b, colour: null, badgeUrl: null },
+            ] } as never,
+          }),
+        );
+      }
+      ring.splice(1, 0, ring.pop()!);
+    }
+    const teams = ids.map((id) => team(id, id, null, null, { divisionSlug: "odd" }));
+    return { doc: hubDoc({ matches, teams }), sitsOut };
+  }
+  const calendarLinks = (doc: CompetitionHubDocT) =>
+    [...renderToStaticMarkup(<TeamsTab doc={doc} dict={en as Dict} locale="en" />).matchAll(/data-testid="mh-team-(t\d+)-calendar"/g)].map((x) => x[1]).sort();
+
+  it("premise: 210 matches over the paging line, the window serves round 21 alone, and its sit-out team is in none of it", () => {
+    const { doc, sitsOut } = oddLeague();
+    expect(doc.matches.length).toBe(210);
+    const served = windowHubDoc(doc);
+    expect([...new Set(served.matches.map((x) => x.roundNo))]).toEqual([21]);
+    const out = sitsOut[20]!;
+    expect(served.matches.some((x) => x.header.sides.some((sd) => sd.entrantId === out)), "the sit-out plays none of round 21").toBe(false);
+  });
+
+  it("the windowed document's Teams tab offers the same calendar links as the whole document's: every team, the sit-out included", () => {
+    const { doc, sitsOut } = oddLeague();
+    const whole = calendarLinks(doc);
+    expect(whole.length, "anti-vacuity: the whole document offers every team its calendar").toBe(21);
+    expect(whole).toContain(sitsOut[20]!);
+    expect(calendarLinks(windowHubDoc(doc) as CompetitionHubDocT)).toEqual(whole);
+  });
+
+  it("a team with no dated match anywhere - none at all, or only undated ones in a folded round - gets no calendar link, windowed or not", () => {
+    const { doc } = oddLeague();
+    // t98 v t99 in folded round 3, never given a time.
+    const tbd = m("TBD-1", "upcoming", null, "odd", {
+      roundNo: 3,
+      header: { sides: [
+        { entrantId: "t98", name: "t98", short: "t98", colour: null, badgeUrl: null },
+        { entrantId: "t99", name: "t99", short: "t99", colour: null, badgeUrl: null },
+      ] } as never,
+    });
+    const undated = {
+      ...doc,
+      matches: [...doc.matches, tbd],
+      teams: [...doc.teams, team("t98", "t98", null, null, { divisionSlug: "odd" }), team("t99", "t99", null, null, { divisionSlug: "odd" }), team("t97", "t97", null, null, { divisionSlug: "odd" })],
+    };
+    expect(windowHubDoc(undated).matches.some((x) => x.fixtureId === "TBD-1"), "premise: the undated match is folded").toBe(false);
+    expect(calendarLinks(undated)).not.toContain("t99");
+    for (const links of [calendarLinks(undated), calendarLinks(windowHubDoc(undated) as CompetitionHubDocT)]) {
+      expect(links.filter((x) => ["t97", "t98", "t99"].includes(x))).toEqual([]);
+      expect(links.length, "anti-vacuity: the league's own 21 keep theirs").toBe(21);
+    }
+  });
+});
+
