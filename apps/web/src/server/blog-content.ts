@@ -101,7 +101,7 @@ export interface BlogParseOptions {
 // sweep test (lib/__tests__/help-no-typed-plan-figures.test.ts). blog-content.test.ts reads that file and fails
 // if either literal drifts, so the two copies cannot disagree unnoticed.
 export const TYPED_FIGURE = /\d+(?:\.\d+)?\s?%|[$£€]\s?\d/;
-export const PLAN_WORD = /\b(?:Community|Event Pass|Pro)\b|platform fee/i;
+export const PLAN_WORD = /\b(?:Community|Event Pass|Pro|Enterprise)\b|platform fee/i;
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const EXAMPLE_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
