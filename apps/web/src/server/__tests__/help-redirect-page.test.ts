@@ -44,7 +44,7 @@ import { allHelpArticles, staticHelpSlugs } from "@/server/help-content";
 const HelpArticlePage = page.default;
 const call = (slug: string[]) => HelpArticlePage({ params: Promise.resolve({ slug }) });
 /** A token-free article, so the page renders without a plan table. */
-const PLAIN = "getting-started/create-a-competition";
+const PLAIN = "getting-started/start-scoring";
 
 beforeEach(() => {
   nav.notFound.mockClear();

@@ -641,6 +641,9 @@ const KNOWN_POSITIVES: string[] = [
   "totdat de competitie bezig is",
   "tot de competitie draait",
   "zolang de competitie duurt",
+  // ── The pass's credit grant stated by reference (final review m4) ──
+  "a one-time top-up of AI credits",
+  "the amounts are on the pricing page",
   // ── Retired AI-run cap (task 1/3) ──
   "10 AI schedule runs per division",
   "three runs a division",

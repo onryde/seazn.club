@@ -1,6 +1,6 @@
 ---
 title: The match audit trail
-description: Every match keeps a tamper-evident ledger. On Pro or an Event Pass you can download it, signed.
+description: Every match keeps a tamper-evident ledger. With a paid plan or an Event Pass you can download it, signed.
 order: 9
 related: scoring/corrections, scoring/batch-import, api/keys
 ---
@@ -11,7 +11,7 @@ Every entry is an event in the match's ledger. Corrections are new events, never
 
 **Download audit** on the fixture console gives you the full trail. The same file is available from the API as `GET /api/v1/fixtures/{id}/audit`, as JSON, or as a readable PDF with `?format=pdf`. A key with the read scope can fetch it.
 
-The download needs a plan that includes it, or an **Event Pass** for that competition. Without either, the console shows **Signed audit — Pro** where the button would be, and its hover hint reads "The signed match audit trail download is a Pro feature." That hint does not mention the Event Pass, which unlocks the download too. See [plans](/help/billing/plans).
+The download needs a plan that includes it, or an **Event Pass** for that competition. Without either, the console shows **Signed audit — paid plan** where the button would be, with a line beneath it that reads "The signed match audit trail download needs a paid plan or an Event Pass for this competition." See [plans](/help/billing/plans).
 
 The file holds:
 

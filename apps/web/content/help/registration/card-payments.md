@@ -1,15 +1,17 @@
 ---
 title: How card entry fees flow
-description: From connecting Stripe to money in your bank, with holds, reminders, refunds and disputes.
+description: From connecting Stripe to money in your bank, with the hold on an unpaid entry, the platform fee and payout alerts.
 order: 3
-related: registration/open-registration, registration/registrants, registration/waitlist
+related: registration/refunds-and-disputes, registration/open-registration, registration/registrants, registration/waitlist
 ---
 
-With card payments, players pay their entry fee by card when they register. The money goes to your own Stripe account. This page follows one payment from connecting Stripe to the money reaching your bank. To take cash or bank transfers instead, choose **Pay the organiser** in [open registration](/help/registration/open-registration).
+With card payments, players pay their entry fee by card when they register. The money goes to your own Stripe account. This page follows one payment from connecting Stripe to the money reaching your bank. To take cash or bank transfers instead, choose **Pay the organiser** in [open registration](/help/registration/open-registration). For refunds and disputes, see [refunds and disputes](/help/registration/refunds-and-disputes).
 
 ## Connect your Stripe account
 
 You do this once, and only an organisation owner can. Choose **Settings**, then **Connect**. Under **Card payments (Stripe)**, tick the agreement to the Terms of Service, then press **Connect Stripe**. The agreement says your organisation bears the cost of chargebacks on its entry fees. Lost disputes are recovered from your Stripe balance.
+
+An admin who opens **Connect** sees the cash and bank transfer instructions, but not the **Card payments (Stripe)** section.
 
 Stripe takes over from there. The page shows three steps, and says this about each:
 
@@ -44,41 +46,27 @@ Taking card payments needs no upgrade. Every plan can do it, Community included.
 | Pro | {{plan:registration.fee_percent:pro}}% |
 | Enterprise | {{plan:registration.fee_percent:enterprise}}% |
 
-The **Connect** page says payouts land in your bank on Stripe's schedule, minus Stripe's processing fee and the platform fee for your plan.
-
 The rate for a competition is the better of what your plan and an [Event Pass](/help/billing/event-pass) give it. It is fixed when the competition takes its first paid entry, and later entries pay that same rate even if your plan changes.
 
 > **Example**
 > A Community organisation puts its annual open on an Event Pass. Until the first paid entry arrives, the open can still change rate. Once the first player pays, the open keeps the Event Pass rate for every later entry, while the organisation's other competitions stay at the Community rate.
 
-## Refunds
+## Payouts
 
-When a player withdraws a paid card entry before the **Refund lock** date, the refund is automatic and in full. The money goes back to their card, the platform fee is returned with it, and they receive a receipt email. The player withdraws with **Cancel this entry** on their registration page.
+The **Connect** page says payouts land in your bank on Stripe's schedule, minus Stripe's processing fee and the platform fee for your plan. To see your payouts or change your bank account, use **Open Stripe dashboard** on the **Connect** page.
 
-Set the **Refund lock** in the division's settings, under **Money**. It appears when the division charges by card. After that moment a withdrawal keeps the fee, and refunds become your call.
+When a payout needs you, the **Connect** page shows **Your payouts need attention** with one of these lines:
 
-With no **Refund lock** set, withdrawals refund in full until the competition's start date. If the competition has no start date either, nothing refunds by itself.
+- "Stripe could not pay out to your bank account. Check your bank details in Stripe — the next payout retries once they are right."
+- "The bank account Stripe pays out to was removed. Add a new one in Stripe, or your entry fees stay on your Stripe balance."
+- "Your payout bank details changed. If that was not you, check them in Stripe before the next payout."
 
-After the lock, open the entry on the **Registrants** tab and press **Refund**. The entry keeps its place. **Withdraw** frees the place and applies the same lock rule.
-
-A solo sign-up with no team by its **Place-by date** is also withdrawn and refunded. See [allow solo sign-ups](/help/registration/open-registration#allow-solo-sign-ups).
-
-> **Example**
-> A division charges a card fee and its **Refund lock** is 1 June. A player withdraws on 28 May and is refunded in full to their card. Another withdraws on 3 June. Their fee is kept. You decide to refund them anyway, so you open their entry and press **Refund**.
-
-## Disputes
-
-A cardholder can dispute a payment with their bank. When Stripe tells Seazn Club, the entry's payment shows **Disputed**, and an alert email goes to your organisation's owner. The email asks you to check the entry and gather anything that shows the registration was genuine, such as the confirmation email or check-in records. Nothing happens to the entrant automatically. Whether they stay in the competition is your call.
-
-The **Registrants** tab has no place to upload evidence or reply to a dispute, and the alert email does not say who replies to Stripe.
-
-- **You win the dispute.** The flag clears and the money stays with you.
-- **You lose the dispute.** Stripe repays the cardholder, and the entry records the amount as refunded. The net amount you received for that payment is taken back from your Stripe balance. If your balance cannot cover it, the email says Stripe takes it from your upcoming payouts. Seazn Club covers Stripe's dispute fee. You get an email that says what moved. If the amount could not be taken back automatically, the email says the Seazn Club team will follow up.
+The notice is on the **Connect** page only, where the owner sees it. It goes away once a payout made after it reaches your bank.
 
 ## Common questions
-
-**Where do I change my bank account or see payouts?** Use **Open Stripe dashboard** on the **Connect** page. The **Verify (KYC)** step on that page lists a bank account among what Stripe asks for.
 
 **Why can I not choose Card payment at sign-up?** Your Stripe account is not live yet. See the first section of this page.
 
 **Does a waitlisted player pay?** No. A fee is only taken once a place is theirs. See [the waitlist](/help/registration/waitlist).
+
+**Does a shared bill change where entry fees go?** No. Each organisation keeps its own Stripe account and payouts, even when someone else pays for its plan. See [one bill for several organisations](/help/billing/groups).

@@ -16,10 +16,14 @@ export async function disputeSurfacesSuite() {
       terms.body.includes("Entry-fee chargebacks") &&
       terms.body.includes("recovered from your connected Stripe balance"),
   );
-  const helpCards = await html(newSession(), "/help/registration/card-payments");
+  // Task 14b moved disputes out of card-payments into their own help page.
+  const helpCards = await html(newSession(), "/help/registration/refunds-and-disputes");
   check(
-    "p55: card-payments help states the lost-dispute outcome",
-    helpCards.status === 200 && helpCards.body.includes("recovered from your Stripe balance"),
+    "p55: refunds-and-disputes help states the lost-dispute outcome",
+    // Both: the lost-dispute bullet itself, and the Connect agreement's restatement of it.
+    helpCards.status === 200 &&
+      helpCards.body.includes("taken back from your Stripe balance") &&
+      helpCards.body.includes("recovered from your Stripe balance"),
   );
   // First connect without accepting the terms is refused before any Stripe
   // call — asserts the server-side gate, not just the disabled checkbox

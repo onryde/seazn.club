@@ -1821,78 +1821,171 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
   // matrix, and against the shape of the defect (a ceiling attributed to "a
   // pass" with no rung beside it).
   it("the add-a-division article gives the rung on sale, at its live caps", async () => {
-    const md = readFileSync("content/help/getting-started/add-a-division.md", "utf8");
-    /** One `**Question?**` line — the answers are scoped so a figure that
-     *  belongs to the divisions answer cannot satisfy the entrants one. */
-    const answer = (question: string) =>
-      md.split("\n").find((l) => l.startsWith(`**${question}`)) ?? "";
+    // Task 15 (help rewrite) replaced the two answer lines with a limits table whose cells are plan tokens, so the
+    // figures are the matrix's by construction (resolvedHelp throws on a token with no integer cell). What this pins
+    // is what a token cannot: WHICH plan's cell each column names, that every rung on sale has a column, that the
+    // rung left off sale is not named, and that the pass figures are attributed to the pass article.
+    const md = await resolvedHelp("content/help/getting-started/add-a-division.md");
+    const rowCells = (label: string): string[] => {
+      const line = md.split("\n").find((l) => l.startsWith(`| ${label}`));
+      expect(line, `no "${label}" row in the limits table`).toBeTruthy();
+      return line!.split("|").slice(2, -1).map((c) => c.trim());
+    };
+    const header = md.split("\n").find((l) => l.startsWith("| What |"));
+    expect(header, "no limits table header").toBeTruthy();
+    const columns = header!.split("|").slice(2, -1).map((c) => c.trim());
+    // One column per plan that has a cap to show: Community, every rung on sale, Pro.
+    expect(columns, "a column for each rung on sale").toHaveLength(2 + SELLABLE_PASS_KEYS.length);
+    expect(columns[0]).toBe("Community");
+    expect(columns[columns.length - 1]).toBe("Pro");
 
-    const entrants = answer("How many entrants");
-    expect(entrants, "no entrants answer").toBeTruthy();
-    expect(entrants).toContain(`**${await capFor("entrants.per_division.max", "community")}**`);
-    expect(entrants).toContain(`**${await capFor("entrants.per_division.max", "pro")}**`);
-
-    const divisions = answer("How many divisions");
-    expect(divisions, "no divisions answer").toBeTruthy();
-    expect(divisions).toContain(`**${await capFor("divisions.per_competition.max", "community")}**`);
-    // Pro's own division cap, and it is not decoration: this answer said "as
-    // many as you like on Pro" until 2026-09-05, which V393 had made false when
-    // it capped Pro at 20 — a pre-existing overclaim, found while sweeping the
-    // L rung out of this line and fixed in the same edit.
-    expect(divisions).toContain(`**${await capFor("divisions.per_competition.max", "pro")}**`);
-
-    for (const rung of SELLABLE_PASS_KEYS) {
-      expect(entrants).toContain(`**${await capFor("entrants.per_division.max", rung)}**`);
-      expect(divisions).toContain(`**${await capFor("divisions.per_competition.max", rung)}**`);
+    const entrants = rowCells("Entrants in one division");
+    const divisions = rowCells("Divisions in one competition");
+    for (const [feature, cells] of [
+      ["entrants.per_division.max", entrants],
+      ["divisions.per_competition.max", divisions],
+    ] as const) {
+      const expected = [
+        await capFor(feature, "community"),
+        ...(await Promise.all(SELLABLE_PASS_KEYS.map((r) => capFor(feature, r)))),
+        await capFor(feature, "pro"),
+      ];
+      expect(cells.map(Number), `${feature}: each column carries its own plan's cap`).toEqual(expected);
+      // "Enterprise sets no limit on either" — the page's words, against the row.
+      expect(await capFor(feature, "enterprise"), `${feature}: enterprise is uncapped`).toBeNull();
     }
-    // The withdrawn rung's ceilings are what a reader would come here to find,
-    // so they are exactly what must be gone (owner decision 2026-09-05). L's
-    // entrant cap was NULL and this answer said so in words ("no limit at
-    // all"); V393 made it 512, and the words stayed wrong for a wave — so the
-    // uncapped phrasing is still banned as well as the number.
-    //
-    // The NUMBER can only be asserted absent where it belongs to the hidden
-    // rung ALONE. L's division cap is 20 and so is Pro's, which this answer
-    // legitimately quotes — a bare `not.toMatch(20)` would fail on the correct
-    // text and the obvious repair would be to delete the check. So the figure
-    // is skipped where it collides, and the rung's own NAME carries the
-    // assertion instead: naming a size is how this answer attributed a ceiling
-    // to a rung in the first place.
+    expect(md).toContain("Enterprise sets no limit on either");
+
+    // The withdrawn rung's ceilings are what a reader would come here to find, so they are exactly what must be
+    // gone (owner decision 2026-09-05). L's entrant cap was NULL and the old answer said so in words ("no limit at
+    // all"); V393 made it 512, and the words stayed wrong for a wave — so the uncapped phrasing is banned as well
+    // as the number. The NUMBER can only be asserted absent where it belongs to the hidden rung ALONE: L's
+    // division cap is 20 and so is Pro's, which the table legitimately quotes, so a shared figure is skipped and
+    // the rung's own NAME carries the assertion instead.
     for (const rung of HIDDEN_PASS_KEYS) {
-      for (const [feature, line, what] of [
+      for (const [feature, cells, what] of [
         ["entrants.per_division.max", entrants, "entrant"],
         ["divisions.per_competition.max", divisions, "division"],
       ] as const) {
         const cap = await capFor(feature, rung);
         const shared = (
-          await Promise.all(
-            ["community", "pro", ...SELLABLE_PASS_KEYS].map((p) => capFor(feature, p)),
-          )
+          await Promise.all(["community", "pro", ...SELLABLE_PASS_KEYS].map((p) => capFor(feature, p)))
         ).includes(cap);
-        if (!shared) expect(line, `${rung}'s ${what} cap`).not.toMatch(wholeNumber(cap!));
+        if (!shared) expect(cells.join(" "), `${rung}'s ${what} cap`).not.toMatch(wholeNumber(cap!));
       }
       // Unconditional, and it is what makes the skip above safe.
-      expect(divisions, `${rung} must not be named`).not.toMatch(/\*\*L\*\*/);
-      expect(entrants, `${rung} must not be named`).not.toMatch(/\*\*L\*\*/);
+      expect(md, `${rung} must not be named`).not.toMatch(/\*\*L\*\*/);
     }
-    // Anti-vacuity: at least one hidden cap really was unique, so the loop
-    // above is not skipping every case it has.
+    // Anti-vacuity: at least one hidden cap really was unique, so the loop above is not skipping every case.
     expect(await capFor("entrants.per_division.max", "event_pass_l")).not.toBe(
       await capFor("entrants.per_division.max", "pro"),
     );
-    expect(entrants.toLowerCase(), "no rung is uncapped").not.toContain("no limit at all");
+    expect(md.toLowerCase(), "no rung is uncapped").not.toContain("no limit at all");
 
-    // THE defect this pair was written for: a ceiling handed to "an Event
-    // Pass" / "a pass" with no plan beside it states one offer's limit as the
-    // product's. Each answer must therefore attribute its pass figure — it is
-    // the link to the pass article that carries that here, since there is one
-    // size to name.
-    for (const [name, line] of [
-      ["entrants", entrants],
-      ["divisions", divisions],
-    ] as const) {
-      expect(line, `${name}: attributes its pass figure`).toContain("/help/billing/event-pass");
+    // THE defect this was written for: a ceiling handed to "an Event Pass" with no plan beside it states one
+    // offer's limit as the product's. The table's own column says Event Pass, and the sentence under it links to
+    // the pass article.
+    expect(columns.slice(1, -1), "the pass column is named").toEqual(["Event Pass"]);
+    expect(md, "attributes its pass figure").toContain("/help/billing/event-pass");
+  });
+
+  // Task 15 (help rewrite). `create-a-competition.md` told Community "10 active competitions" while the matrix said 3,
+  // and no test read the article, so the figure stood. The cap is a token now, so the number cannot drift; what a token
+  // cannot pin is that the sentence names the right plan's cell and that the unlimited words match null rows.
+  it("the create-a-competition article states Community's active-competition cap, and that Pro and Enterprise have none", async () => {
+    const md = await resolvedHelp("content/help/getting-started/create-a-competition.md");
+    const community = await capFor("competitions.max_active", "community");
+    expect(community, "Community is capped").not.toBeNull();
+    // The old, false figure. If the matrix ever made it true this guard would have nothing to tell apart.
+    expect(community, "the withdrawn figure differs from the matrix").not.toBe(10);
+    expect(md).toContain(`Community allows ${community}.`);
+    expect(md, "the withdrawn figure").not.toMatch(/\b10 active competitions\b/);
+    expect(await capFor("competitions.max_active", "pro"), "Pro is unlimited (null row)").toBeNull();
+    expect(await capFor("competitions.max_active", "enterprise"), "Enterprise is unlimited (null row)").toBeNull();
+    expect(md).toContain("Pro and Enterprise set no limit.");
+
+    // Fix round 1 (review m2): the second limit, on PUBLISHED public and link-only competitions. Same figure on both pages
+    // that state it; a draft is not counted (the meter's status set is published and live, `PUBLIC_DASHBOARD_STATUSES`).
+    const publicCap = await capFor("dashboard.public.max", "community");
+    expect(publicCap, "Community has a public cap").not.toBeNull();
+    expect(md).toContain(`Community allows ${publicCap} at once, and a draft does not count.`);
+    const share = await resolvedHelp("content/help/getting-started/share-your-dashboard.md");
+    expect(share).toContain(`Community allows ${publicCap}, and a draft does not count.`);
+
+    // Review N5(a): the RESOLVED figure alone cannot tell two cells apart when they are equal (a token swapped to
+    // `competitions.max_active` resolves to the same number on a matrix where both caps match), so the raw token's
+    // KEY text is asserted on both pages as well.
+    for (const page of ["create-a-competition", "share-your-dashboard"]) {
+      const raw = readFileSync(`content/help/getting-started/${page}.md`, "utf8");
+      expect(raw, `${page} cites the public-dashboard cap's own key`).toContain("{{plan:dashboard.public.max:community}}");
+      expect(raw, `${page} states the public cap with the public cap's token, not the active-competition one`).not.toMatch(
+        /Community allows \{\{plan:competitions\.max_active:community\}\}, and a draft/,
+      );
     }
+
+    // Review N5(b)/N6: "a draft does not count" and "published or live" are read from the meter's own declaration, not
+    // typed here. A status added to or dropped from the set moves this test.
+    const freeze = readFileSync("src/server/usecases/entitlement-freeze.ts", "utf8");
+    const decl = freeze.match(/PUBLIC_DASHBOARD_STATUSES\s*=\s*\[([^\]]*)\]\s*as const/);
+    expect(decl, "PUBLIC_DASHBOARD_STATUSES declaration found").not.toBeNull();
+    const statuses = [...decl![1]!.matchAll(/"([^"]+)"/g)].map((m) => m[1]!);
+    expect(statuses.length, "the status set is not empty (an empty set would pass every negative below)").toBeGreaterThan(0);
+    expect(statuses, "a draft holds no public slot").not.toContain("draft");
+    const named = statuses.join(" or ");
+    expect(md).toContain(`once they are ${named}.`);
+    expect(share).toContain(`once they are ${named}.`);
+
+    // Review N6: publishing into a full cap is refused, and the page quotes the sentence the Settings gate renders. The
+    // string is the product's own (`featureReason`), the guard is the one `patchCompetition` runs on a publish, and the
+    // two display hops are source-pinned because apps/web vitest has no DOM to render the gate in.
+    const { featureReason } = await import("@/lib/feature-copy");
+    const reason = featureReason("dashboard.public.max");
+    expect(reason, "the key has its own sentence, not the generic fallback").not.toBe("This feature needs a plan upgrade.");
+    expect(md).toContain(`"${reason}"`);
+    expect(share).toContain(`"${reason}"`);
+    expect(freeze).toContain("export function countsTowardPublicQuota");
+    expect(readFileSync("src/server/usecases/competitions.ts", "utf8")).toContain(
+      "if (goingPublic && !alreadyMetered) await assertPublicQuota(auth, id);",
+    );
+    expect(readFileSync("src/components/upgrade-gate.tsx", "utf8")).toContain(
+      "const reason = reasonOverride ?? featureReason(feature);",
+    );
+    expect(readFileSync("src/components/v2/competition-settings.tsx", "utf8")).toContain(
+      "<UpgradeGate feature={paywallFeature} viewerPlan={viewerPlan} />",
+    );
+  });
+
+  // Task 15 (help rewrite). `api/keys.md` splits by plan: a key needs Pro, and a key that writes needs Enterprise. The
+  // words are pinned to the two flags the key routes read (`api.access`, `api.write`), so a flag moving breaks the page.
+  it("the api/keys article's plan split matches api.access and api.write", async () => {
+    const md = readFileSync("content/help/api/keys.md", "utf8");
+    const flag = async (feature: string, plan: string): Promise<boolean | null> => {
+      const [row] = await sql<{ bool_value: boolean | null }[]>`
+        select bool_value from plan_entitlements where plan_key = ${plan} and feature_key = ${feature}`;
+      expect(row, `plan_entitlements has no ${plan}/${feature} row`).toBeDefined();
+      return row!.bool_value;
+    };
+    expect(await flag("api.access", "community"), "Community has no keys").toBe(false);
+    expect(await flag("api.access", "pro"), "Pro has keys").toBe(true);
+    expect(await flag("api.access", "enterprise"), "Enterprise has keys").toBe(true);
+    expect(md).toContain("Keys are a Pro feature.");
+    expect(await flag("api.write", "pro"), "Pro cannot write").toBe(false);
+    expect(await flag("api.write", "enterprise"), "Enterprise can write").toBe(true);
+    expect(md).toContain("On Pro, **Read** is the choice you can use.");
+    expect(md).toContain("On Enterprise, all three are open to you.");
+
+    // Fix round 1 (review m6): the per-key rate limit, read from the constant the route enforces. Every plan but Pro gets
+    // the baseline, so Enterprise's figure is the baseline's. Source declarations, not a figure typed here.
+    const auth = readFileSync("src/server/api-v1/auth.ts", "utf8");
+    const rate = auth.match(/KEY_RATE\s*=\s*\{\s*free:\s*(\d+),\s*pro:\s*(\d+)/);
+    expect(rate, "KEY_RATE declaration found in auth.ts").not.toBeNull();
+    const [, free, pro] = rate!;
+    expect(md).toContain(`${pro} calls on Pro and ${free} on Enterprise`);
+    expect(Number(pro), "Pro's limit differs from the baseline, so the sentence can tell them apart").not.toBe(Number(free));
+    // Review N2: the page says Enterprise gets the BASELINE. That is a claim about the plan mapping, which the two constants
+    // above do not carry: only the ternary decides who gets which. Pinned as text so a change that hands Enterprise (or any
+    // other plan) the Pro figure reds this test instead of leaving the page wrong.
+    expect(auth, "only Pro gets the higher per-key limit").toContain('sub?.plan_key === "pro" ? KEY_RATE.pro : KEY_RATE.free');
   });
 
   // `content/help/billing/plans.md` was the ONE help article with no test

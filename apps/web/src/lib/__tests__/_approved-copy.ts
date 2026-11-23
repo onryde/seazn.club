@@ -240,7 +240,7 @@ export const APPROVED_EVENT_PASS_INVENTORY: string[] = [
   "7bc08add4baa8871",
   "47575ba7b53d0edb",
   "a43842a611fc3a7a",
-  "356e3e87f193429b",
+  "8d36883ee19be452",
   "b90d6ce033e2aacc",
   "363febc178ed3a6d",
   "013e3950b602f09c",
@@ -300,7 +300,7 @@ export const APPROVED_PLANS_INVENTORY: string[] = [
   "f5efc5625de91596",
   "a07947b88760f99c",
   "517e0c7d69b84931",
-  "c61819aba823adc7",
+  "6588d813e31ecbdf",
   "5763f3e946991ded",
   "631d2073630b49af",
   "5394abf0df6228e4",
@@ -499,124 +499,79 @@ export const APPROVED_ADD_ONS_INVENTORY: string[] = [
  * membership was being decided by a regex that catches almost nothing. Gating
  * the two articles on the axis is what makes the axis mean something.
  *
- * WHAT THIS ARTICLE ASSERTS, AND WHAT DECIDES IT:
- *  - the extra-organisation rate, five times — `stripe-plans.json`'s graduated
- *    tiers via `riderClaimShape`; only "no more than half" is true in all
- *    twenty plan x interval x currency combinations.
- *  - WHEN THE ATTACH CHARGE LANDS. `attachOrgToGroup` bills entirely through
- *    `syncGroupQuantity`, whose only Stripe mutation is
- *    `subscriptions.update` with `create_prorations`
- *    (`billing-groups.ts:327-330`) — the NEXT invoice, not the card, and the
- *    same behaviour the add-on paths have. Round 2 said "charged now" on six
- *    surfaces here on the strength of a stale comment.
- *  - the dunning window — real, but it is the next INVOICE that can fail;
- *    nothing is attempted against the card at attach.
- *  - "Removing never refunds, and adding never takes money from your card there
- *    and then" (`## No refunds, and the freed slot`). ROUND 5: this said
- *    "adding ALWAYS CHARGES IMMEDIATELY", false three ways — prorations book to
- *    the next invoice (`billing-groups.ts:327-330`), a freed-slot attach raises
- *    no proration at all (`previewAttachCharge:122`, `raising` requires
- *    `active > quantity_paid`), and a trial attach charges nothing (`:123`,
- *    `:320`). It also contradicted line 41 of this same article, which round 3
- *    had corrected.
+ * WHAT THIS ARTICLE ASSERTS, AND WHAT DECIDES IT (re-approved in Task 14b,
+ * when the 3,300-word page was split by job; adding, removing and handing over
+ * now live in add-an-organisation.md, remove-an-organisation.md and
+ * hand-over-a-bill.md, which make NO half-rate claim and so are off the axis;
+ * each has its own inventory further down):
+ *  - the extra-organisation rate, once ("What it costs"), BOUNDED BY THE PLAN'S
+ *    LIMIT — `stripe-plans.json`'s graduated tiers via `riderClaimShape`; only
+ *    "no more than half" is true in all twenty plan x interval x currency
+ *    combinations. Past the limit an organisation on a bought extra place is
+ *    charged twice: a seat (every organisation is counted,
+ *    `billing-groups.ts:281-284`) plus the `org_addons` add-on. The first
+ *    re-approval in Task 14b froze the unbounded sentence; fix round 1 bounded
+ *    it. No price is typed: the page links /pricing and says the attach dialog
+ *    shows the amount (`previewAttachCharge`, `billing-groups.ts:129`).
+ *  - the organisation caps and the fee ladder — `{{plan:…}}` tokens, read from
+ *    plan_entitlements at render.
+ *  - the fee lock — first-wins stamp in
+ *    `registrations/checkout-completion.ts:465`.
+ *  - who pays and what the payer can open — `page-auth.ts:199-245`
+ *    (`requireBillingPage`), the guest owner's `billing.billedBy.named`
+ *    (`o/[orgSlug]/settings/billing/page.tsx:403-410`).
+ *  - the every-organisation-suspended answer — `groupOrgLimit`
+ *    (`lib/billing-group.ts:183-221`); its two claims are also pinned by
+ *    `server/__tests__/help-groups-suspension.test.ts`.
+ *  - the payer deleting their account — `app/api/users/me/route.ts:104-121`
+ *    moves `owner_user_id` only, so the departing payer's card stays on the
+ *    Stripe customer and keeps paying (contrast `finishHandover`,
+ *    `billing-groups.ts:1955-1970`).
+ *  - the Event Pass credit — `pass-credit.ts:297-330` (most recent pass of the
+ *    buying org, 30 days, PAID — no staff grant — and in the bill's currency,
+ *    once per group).
  *
- *    THE GATE FROZE IT FAITHFULLY FOR TWO ROUNDS. That is not a failure of the
- *    gate; it is the gate's contract, and this wave's thesis in one line: an
- *    inventory proves a wording was DELIBERATE, never that it was TRUE. Only
- *    reading the sentence against `billing-groups.ts` found it, which is the
- *    step the fixture exists to force and which nobody had performed on this
- *    paragraph.
- *  - the freed slot, the fee lock, payouts, the detach modes — see the
- *    per-section notes in `server/usecases/billing-groups.ts`.
+ *    THE GATE PROVES DELIBERATE, NEVER TRUE. The first Task 14b re-approval
+ *    claimed every surface had been re-read and still froze an unbounded rate
+ *    claim (review 14b-1, I1). Fix round 1 re-read each surface against the
+ *    file named beside it, the rate sentence against the seat count AND the
+ *    add-on, before these digests were taken.
  */
 export const APPROVED_GROUPS_INVENTORY: string[] = [
-  "6dfdc975fd75c021",
-  "56e3282cee657350",
-  "889eb9bb8adb1b8f",
-  "0b3f064c075f4830",
-  "2c08e52c75400e40",
-  "d9d2fda79e6acad3",
-  "650ab572d939bca6",
+  "70406cfe0fe3385a",
+  "9b34a88bcf6b26d7",
+  "82ad58f71300bb0b",
+  "79ff0430b6bd8934",
+  "b26eebdc70d60598",
+  "8b45f9ef48475913",
+  "960ffcbe3004ff7a",
+  "64184ba94539f225",
+  "e20c1cd957d9d775",
+  "32ab7fcccdf14c08",
+  "9e428b3ee9865afa",
   "f78e9f343b9dc2e8",
   "d2190ce79f9684a3",
-  "0feb98b86f880f7c",
-  "beaab221487f9585",
-  "5be7274033911d5c",
-  "a1d537317da5529d",
-  "d5ddc1b7a27ed12b",
-  "e12f4df63f6cc9ea",
-  "03db06a1af2d3405",
-  "8cca87480a6deb54",
-  "696c2fcc2ecfec40",
-  "a052c3f07ce2508c",
-  "0efcbcbfd21cd2d3",
-  "f3e48e76dfb4c932",
-  "71f2718498988d98",
-  "19f8dbd797ab2df3",
-  "86457c10b518c75c",
-  "670d6537399af0cb",
-  "44b8772e6777bd12",
-  "8d62189b191b015f",
-  "bb6e0a58fdb569a4",
-  "93cbb9e0a733ea84",
-  "a082daadd09b8b31",
-  "76f844d7c521260b",
-  "99dafbaddeddd281",
-  "ce62fde77df9f3cb",
-  "af77535948d286c5",
-  "791c29feee358ae2",
-  "3b9f1b1cb23117b0",
-  "afe3dfcd35264bc9",
-  "45ac520e121a63aa",
-  "845db4ff8eae0223",
-  "3812af4fc53ba873",
-  "7e50122fa44a6f4b",
-  "f1eec393ae73101f",
-  "e20498cfa56931d3",
-  "858c8b7b0159c14f",
-  "af0c83ae6240326a",
-  "eb9b66040aaa25d8",
-  "5b365c93cb4a5637",
-  "7104f26a03ffde1e",
-  "537d992c53d3e378",
-  "cc5546e9475093dd",
-  "68ae3680386824c4",
-  "1687f37c2560ab80",
-  "2a82d5d161253e15",
-  "79756849efc57255",
-  "25eb5c468a8a54a2",
-  "9eb0591ae278ad76",
-  "37e0ccd2e5e57b16",
-  "80a8c63adbf7acf6",
-  "aa38f07aed66bd26",
-  "3b68d1b4c3fc4888",
-  "cbfceb3121b039d5",
-  "14babe148d741a28",
-  "c1952e825277a576",
-  "5a31bc0dd92a9d01",
-  "529f239aa64eaa4e",
-  "ef90d0b1078b0b3d",
-  "7a89a4a943513245",
-  "19438b187f04e834",
-  "84701e090fcbf515",
+  "66c3e5bf1cd62bf3",
+  "050378df2e0b9f83",
+  "fb6784c7c8704d6b",
+  "bd07c455c52c10a9",
   "ddc8366bdf93737f",
-  "44a3cac6b1327242",
-  "29c9a5af721c8abb",
-  "a04e4219f607e695",
+  "c79b2af04f0b802c",
+  "28aee6c7e00e1c33",
+  "15317f9c60cde9f8",
+  "f5599c0a037f5c56",
+  "63a4368110cb3fad",
+  "6870f62c36ba5d08",
+  "4b35ab3a3bb36666",
+  "5443214e8391453a",
   "2b57b36732a3e9fb",
-  "16727d4791a0a08b",
-  "c5c32d350da1d6b1",
+  "8ed00131d3fa9ba5",
   "09c784bdca897d29",
-  "3d324adb3ee0b927",
-  "636714ad25e8f991",
-  "1415f62ed176347a",
-  "a83851ffc59ddfeb",
-  "290e525981e1463d",
-  "364b1c1d4b1409c9",
-  "8d2ecf6ae325690e",
-  "7dde35de16939fb2",
-  "2f102e765460c832",
-  "3b281af0174847e4"
+  "b58acc6ca8ca98b8",
+  "12ebb72943dc687d",
+  "b7650ee1d51c3add",
+  "408f592f5e3fed13",
+  "cf9d1c2ac0db4086",
 ];
 
 /**
@@ -629,36 +584,51 @@ export const APPROVED_GROUPS_INVENTORY: string[] = [
  * plan org caps, and the vocabulary that was supposedly defending it scored
  * 0/24.
  *
- * WHAT IT ASSERTS: the fee ladder (8/5/2/1, `plan_entitlements`
- * `registration.fee_percent`), the plan org caps (5 / 10, `orgs.max_owned`,
- * V314), the extra-organisation rate (`riderClaimShape`), and that Community
- * can already take card entry fees.
- *
- * Surface 11 ("Who can see my organisation?") re-approved 2026-09-27 for the
- * owner decision that a DRAFT competition is unlisted until published: the
- * org page lists Public competitions past draft — published, live, completed
- * or archived (`listOrgHomeCompetitions`: `status <> 'draft'`) — and a new
- * competition is a public draft reachable by link and open to register.
- * Re-approved again the same day (review item 8): "Public and published" read
- * as if a live or finished competition dropped off the page, which it does not.
- * Re-approved 2026-11-04 (LIVE1): the public page moved from `/shared/your-org`
- * to `/live/your-org` (`routes.publicHub(org)`; the org home under the
- * moved `(public)/live` tree still lists through `listOrgHomeCompetitions`
- * in `server/public-site/data.ts`); only the path changed, the claim did not.
+ * WHAT IT ASSERTS (as of Task 15, 2026-11-22): the org caps (`orgs.max_owned`,
+ * as tokens) and the extra-organisation rate (`riderClaimShape`). Until then it
+ * also carried the fee ladder, the "Who can see my organisation?" surface
+ * (re-approved 2026-09-27 and 2026-11-04 for the draft-is-unlisted ruling and
+ * the `/shared` to `/live` move) and the Community card-fee line; those claims
+ * now live in sharing/visibility, billing/plans and registration/card-payments.
+ * Re-approved 2026-11-22 (help rewrite, Task 15): the page was rewritten as a
+ * first-run walkthrough, every sentence driven on a fresh Community
+ * organisation (the Task 15 claim sheet). It still states the half-rate
+ * claim (`More than one organisation`, via `riderClaimShape`), so it stays on
+ * the axis; the fee ladder and the "Community can take card entry fees" lines
+ * are gone from it (they live in billing/plans and registration/card-payments),
+ * and the org caps are `{{plan:orgs.max_owned:<plan>}}` tokens now.
  */
 export const APPROVED_CREATE_ORG_INVENTORY: string[] = [
   "5a9aee8c75f74828",
-  "c7abb53b293957ff",
-  "7780e9adec7a42e1",
-  "97afdcb5cc7373e9",
-  "332fd65e1bd72032",
-  "b29441d979e91695",
-  "b389c86ad2de4a26",
-  "75ff1142c46e7346",
-  "09c784bdca897d29",
-  "98cabe982ddf445c",
-  "3b7f53eba6ec307f",
-  "ec33da78b550dcac"
+  "d3dcc5ae5e5144b2",
+  "01c8b9f70653ba9b",
+  "47edae8c3a0940d8",
+  "bf7f406496864320",
+  "107160c4b80476b0",
+  "e45d3bb712ecbeab",
+  "17f097713e42ad85",
+  "4453b9202a720e5c",
+  "12f83290bbb28b7c",
+  "994bc682c79954a6",
+  "37024e593784619d",
+  "8aba1d2e765244ba",
+  "2674f36a611bc43e",
+  "d898de463fbff782",
+  "52cbbb4e48a82d5a",
+  "4a2babaa72369f2e",
+  "57618eb0b22ecf4c",
+  "4ebd7de2485ce0ae",
+  "03954b968d97d2e2",
+  "02a009f67c401f8a",
+  "3790279f7d19b1d3",
+  "4ed06dd3e7784c0f",
+  "f553103e10e1938a",
+  "c330f603bc8296d7",
+  "6426f03ec202aa42",
+  "f9ceb5454551da29",
+  "7ad2690b11e9dbdf",
+  "9b651647cd419ff3",
+  "2226ff777ce773b3"
 ];
 
 /** Every user-visible surface of `content/help/billing/buy-an-event-pass.md`,
@@ -730,4 +700,135 @@ export const APPROVED_PASS_ENDS_INVENTORY: string[] = [
   "bf350a0418ba9078",
   "7f889bb823d1e024",
   "72950fee3ebe84f2",
+];
+
+/** Every user-visible surface of `content/help/billing/add-an-organisation.md`,
+ *  split out of groups.md in Task 14b (2026-11-22) and gated in its fix round 1:
+ *  the attach-cost copy is where review round 5 once found "adding ALWAYS
+ *  CHARGES IMMEDIATELY". Each claim, and the code that decides it:
+ *  - payer AND owner, an admin cannot move it — `billing-groups.ts:908-920`.
+ *  - the create-org picker, its reasons and Buy another slot —
+ *    `components/create-org-form.tsx:37-57`, `:236-254`; the button's amount
+ *    and "now" — `create-org-form.tsx:98-115`, `:533-545`.
+ *  - nothing charged to the card, prorated onto the next invoice —
+ *    `create_prorations` at `billing-groups.ts:336-339`.
+ *  - a freed seat is free until renewal; no freed seat mid-trial —
+ *    `billing-groups.ts:355-374` (`quantity_paid` frozen while trialing).
+ *  - a failed invoice moves every organisation to Community after 14 days —
+ *    `lib/entitlements.ts:268-272`, `billing-events/invoices.ts:34-36`.
+ *  - the refusals — `billing-groups.ts:929`, `:934`, `:956`.
+ *  - an extra-place organisation charged twice — the seat count at
+ *    `billing-groups.ts:281-284` plus `config/stripe-plans.json` org_addons.
+ *  - credits merge only from a bill it had to itself — `billing-groups.ts:1001-1017`.
+ *  - the last organisation off ends the subscription — `billing-groups.ts:1351-1363`. */
+export const APPROVED_ADD_ORG_INVENTORY: string[] = [
+  "cb8ef08a4b41fd66",
+  "7686eb11001f7a8d",
+  "c0b1fe41ed3c50ad",
+  "38509a4d316a3901",
+  "713512e1ea76588d",
+  "688b02d0858ad57c",
+  "3d2b52bce25f7488",
+  "6d69b6c87832da24",
+  "6243e07be75433df",
+  "796d223bd4ee0917",
+  "8adca19202f689f6",
+  "c9c7788d5540fd61",
+  "960ffcbe3004ff7a",
+  "59157b7d594f3619",
+  "9551555abfe89fce",
+  "c2e9150017c5e014",
+  "a626b583c4b6451f",
+  "0fcb433221cee9a6",
+  "47a5285d7ace2641",
+  "ef5d5525587d3c99",
+  "fd44da19dd768735",
+  "acc9fdd555c812b9",
+  "00999a97621990f3",
+  "c4dee8005d8b8a5c",
+  "1a23aefaccc463ae",
+  "8e1d5830baa12adc",
+  "830498f5a1804791",
+];
+
+/** Every user-visible surface of `content/help/billing/remove-an-organisation.md`,
+ *  split out of groups.md in Task 14b and gated in its fix round 1. Each claim,
+ *  and the code that decides it:
+ *  - only the payer has a control — the panel mounts behind `isPayer`
+ *    (`o/[orgSlug]/settings/billing/page.tsx:371`).
+ *  - the two modes, and the past-due exception — `billing-groups.ts:1236-1262`.
+ *  - the last organisation off ends the subscription at once, refused if the
+ *    payer owns it — `billing-groups.ts:1351-1363`, `:774`, `:1224-1225`.
+ *  - no way back for someone else's organisation — `billing-groups.ts:908-920`.
+ *  - the trial record carries over — `billing-groups.ts:1259`, `lib/billing.ts:223-235`.
+ *  - credits stay with the bill — `billing-groups.ts:1312-1319`.
+ *  - who is emailed — `billing-groups.ts:2049-2082`. */
+export const APPROVED_REMOVE_ORG_INVENTORY: string[] = [
+  "c9c761eadb4f29fe",
+  "8a4962e1233e38e5",
+  "76513e733834f4df",
+  "447dafaa0242ddc6",
+  "6c5778377cf1304b",
+  "6595b2984fcdc8b4",
+  "751ccd110f7a2f95",
+  "dd1916b92b00b115",
+  "d58610ce9f1d3542",
+  "e0e759d1e6793cb5",
+  "51e88cc89c9554ac",
+  "9881f94b00e1cfd7",
+  "eaac665ba083385f",
+  "a2d81e97e856fd4b",
+  "adbba485715c4619",
+  "d4ff6e86d4ccfea2",
+  "0a84530b58beb457",
+  "9d680af0ccffd7cc",
+  "a657b2e0fa2a6bc4",
+  "fa89b35a411e0bce",
+  "88ffa5a89e539bc4",
+  "becaf1af0a9a149b",
+  "adf648474c4e80f3",
+  "8185c0f21fd26a46",
+  "963a54ec2c19cfd0",
+  "b981434fba36477b",
+  "8de45fd6f1123c92",
+];
+
+/** Every user-visible surface of `content/help/billing/hand-over-a-bill.md`,
+ *  split out of groups.md in Task 14b and gated in its fix round 1. Each claim,
+ *  and the code that decides it:
+ *  - who can receive it — `lib/billing-group-view.ts:162-175`; the
+ *    nobody-eligible line — `components/billing-group-panel.tsx:518-519`.
+ *  - the offer email, 7 days, one at a time, withdraw —
+ *    `billing-groups.ts:1536`, `:1396`, `:1467-1491`, `:1652`.
+ *  - the card swap — `billing-groups.ts:1955-1970`; only name and email move to
+ *    the new payer (`:1959-1962`), so the billing address and VAT number stay
+ *    and are shown to them (`o/[orgSlug]/settings/billing/page.tsx:501-505`;
+ *    taxed via `lib/billing.ts:217-218`).
+ *  - invoices by tenure — `usecases/billing-manage.ts:87-105`, `:299-303`, `:333-339`. */
+export const APPROVED_HANDOVER_INVENTORY: string[] = [
+  "5d7678031aedc5ff",
+  "e9958d0199ba281d",
+  "1536e2332bdde647",
+  "c1120b5d7bab5db1",
+  "db96ebe57a9a6821",
+  "49b0d36583d79741",
+  "db32c00dc0971cc9",
+  "8497be6ae06f83ce",
+  "b12df74b5302f19f",
+  "0ca33696e3a1c53a",
+  "e73b618d45a18711",
+  "bc292ccfa768fc8b",
+  "4113703f47f708d3",
+  "f9b0bbfe71ddcdea",
+  "f6e144366d2b4912",
+  "955920602ef9c34c",
+  "5a31bc0dd92a9d01",
+  "36068ba39750a7ff",
+  "bcb6bad591d05b21",
+  "5e64e15ec9d531ca",
+  "9ebad4974d73fb13",
+  "4843523b81761d8f",
+  "cf54553c624a1b60",
+  "8dd73e6da354fae1",
+  "c14a3d8c8ae32ef0",
 ];

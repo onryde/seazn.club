@@ -33,11 +33,11 @@ You can go public later, and back. Switch a competition to **Private** and its p
 
 ## Plan limit on public competitions
 
-A plan limits how many competitions can be **Public** or **Link only** at once. On Community the limit is {{plan:dashboard.public.max:community}}. On Pro it is {{plan:dashboard.public.max:pro}}. Only live competitions that do not have an Event Pass count. When your plan has no slot free, a new competition is made **Private**. Switching an existing competition to **Public** or **Link only** is refused instead, with a line ending **archive a finished one, or upgrade.** For a new one the form reads **This one will be created private** and **Created as private for now: your plan has no public or link-only slot free.** Make room by switching another one to **Private**.
+A plan limits how many competitions can be **Public** or **Link only** at once. On Community the limit is {{plan:dashboard.public.max:community}}. On Pro it is {{plan:dashboard.public.max:pro}}. Only published or live competitions that do not have an Event Pass count. When your plan has no slot free, a new competition is made **Private**. Switching an existing competition to **Public** or **Link only** is refused instead, with a line ending **archive a finished one, or upgrade.** For a new one the form reads **This one will be created private** and **Created as private for now: your plan has no public or link-only slot free.** Make room by switching another one to **Private**.
 
 ## Youth divisions
 
 Youth divisions show shortened player names on public pages. See [youth privacy](/help/registration/youth).
 
 > **Example**
-> You run **Spring Open** as **Public** and have **Autumn Cup** on **Link only**, which is the whole allowance on a Community plan. You start a third competition. The form says **This one will be created private**. The third competition opens only for your members. You switch **Autumn Cup** to **Private**. Its address now shows a not-found page to everyone, and your members open it from the console.
+> You run **Spring Open** as **Public** and have **Autumn Cup** on **Link only**, which uses up your plan's allowance. You start a new competition. The form says **This one will be created private**. The new competition opens only for your members. You switch **Autumn Cup** to **Private**. Its address now shows a not-found page to everyone, and your members open it from the console.

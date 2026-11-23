@@ -103,6 +103,9 @@ import {
   APPROVED_PLANS_INVENTORY,
   APPROVED_ADD_ONS_INVENTORY,
   APPROVED_GROUPS_INVENTORY,
+  APPROVED_ADD_ORG_INVENTORY,
+  APPROVED_REMOVE_ORG_INVENTORY,
+  APPROVED_HANDOVER_INVENTORY,
   APPROVED_CREATE_ORG_INVENTORY,
 } from "./_approved-copy";
 
@@ -216,6 +219,23 @@ describe("billing help articles say what the resolver enforces", () => {
     ).toEqual([]);
   });
 
+  // Task 14b fix round 1: the three pages split out of groups.md carry its
+  // attach, detach and handover money copy, so each is pinned word for word
+  // like the pass split above. NOT in GATED_ARTICLES: that set is the half-rate
+  // axis, and none of these pages makes the half-rate claim.
+  it("the bill pages split out of groups.md are the copy that was approved", () => {
+    const pages = [
+      ["add-an-organisation.md", helpArticle("add-an-organisation"), APPROVED_ADD_ORG_INVENTORY],
+      ["remove-an-organisation.md", helpArticle("remove-an-organisation"), APPROVED_REMOVE_ORG_INVENTORY],
+      ["hand-over-a-bill.md", helpArticle("hand-over-a-bill"), APPROVED_HANDOVER_INVENTORY],
+    ] as const;
+    for (const [label, text, approved] of pages) {
+      expect(approved.length, `${label}: an inventory this short gates nothing`).toBeGreaterThan(8);
+      expect(inventoryFaults(label, text, [...approved])).toEqual([]);
+    }
+    expect(pages.length).toBe(3);
+  });
+
   it("the approved paragraphs still say exactly what was approved", () => {
     expect(goldenParagraphFaults("event-pass.md", eventPass, APPROVED_EVENT_PASS)).toEqual([]);
     expect(goldenParagraphFaults("event-pass-ends.md", passEnds, APPROVED_PASS_ENDS)).toEqual([]);
@@ -317,15 +337,18 @@ describe("billing help articles say what the resolver enforces", () => {
     }));
     expect(riderRateFaults(claimed)).toEqual([]);
 
-    // …and the two figures the sentence spells out are the seed's own usd
-    // riders, so a price move cannot leave a stale dollar amount on the page.
+    // Task 14b: groups.md used to spell out the usd riders ("$6.99/month"),
+    // pinned here to the seed. Typed plan figures are banned in help now and a
+    // price cannot be a token, so the page states the rate's SHAPE (judged
+    // above against every tier) and sends the reader to the live prices. What
+    // this pins instead: no typed amount in any currency comes back, the link
+    // is there, and every plan still has the rider tier the shape is judged on.
     for (const plan of stripePlans.plans) {
       const rider = plan.prices.monthly.tiers.find((t) => t.up_to === "inf");
       expect(rider, `${plan.key} has no monthly rider tier`).toBeDefined();
-      expect(plainProse(groupsPage), `${plan.key}'s usd rider`).toContain(
-        `$${rider!.unit_amount / 100}/month`,
-      );
     }
+    expect(plainProse(groupsPage), "groups.md types a price again").not.toMatch(/[$€£₹]\s?\d/);
+    expect(groupsPage, "groups.md must send the reader to the live prices").toContain("(/pricing)");
   });
 
   // Fix round 1, critical 2: round 1 shipped "a late entrant pays the same 5%
@@ -1136,14 +1159,13 @@ describe.skipIf(!HAS_DB)("billing help articles quote the numbers the matrix enf
         where plan_key = ${key} and feature_key = 'ai.credits.monthly'`;
       expect(row, `${key} must have no monthly credit row`).toBeUndefined();
     }
-    // The ARTICLE, though, quotes the grant of the rung it sells and no other.
-    for (const key of SELLABLE_PASS_KEYS) {
-      expect(plansPassSection!, `${key}'s one-time grant`).toMatch(
-        new RegExp(`\\b${PASS_CREDIT_GRANT[key]} AI credits\\b[^.]*\\bone time\\b`),
-      );
-    }
-    for (const key of HIDDEN_PASS_KEYS) {
-      expect(plans, `${key} is off sale`).not.toMatch(new RegExp(`\\b${PASS_CREDIT_GRANT[key]} AI credits`));
+    // The ARTICLE says the pass adds a one-time top-up of AI credits and sends the reader to the pricing page for the
+    // size (final review m4): a typed figure is a plan figure, and this one has no help token (it is `PASS_CREDIT_GRANT`,
+    // not a matrix row). So it states the grant by reference and types NO rung's figure, sellable or not.
+    expect(plansPassSection!, "the one-time top-up, said without its size").toMatch(/\bone-time top-up of AI credits\b/);
+    expect(plansPassSection!, "the pointer to the size").toMatch(/\bpricing page\b/);
+    for (const key of [...SELLABLE_PASS_KEYS, ...HIDDEN_PASS_KEYS]) {
+      expect(plans, `${key}'s grant is not typed in plans.md`).not.toMatch(new RegExp(`\\b${PASS_CREDIT_GRANT[key]} AI credits`));
     }
     // The declaration keeps them distinct whether or not the copy says so, or
     // the negative above is satisfied by the two grants being one number.
@@ -1503,6 +1525,24 @@ describe("the help-prose guards survive a rewording, not just a revert", () => {
     expect(passCreditProseFaults("x", "- Branded exports and sponsor tiers.")).toEqual(
       grants.map((g) => `x: never states the one-time +${g} AI credit grant`),
     );
+
+    // THE GRANT BY REFERENCE (final review m4): the size is on the pricing page, so the help copy states the grant
+    // without it. It counts as stating every declared grant, and only with BOTH halves.
+    const never = grants.map((g) => `x: never states the one-time +${g} AI credit grant`);
+    const pointer = "- A one-time top-up of AI credits, added to your wallet when you buy. The amounts are on the [pricing page](/pricing).";
+    expect(passCreditProseFaults("x", pointer)).toEqual([]);
+    // One-time without the pointer is the deletion case: a reader cannot find the size.
+    expect(passCreditProseFaults("x", "- A one-time top-up of AI credits, added to your wallet when you buy.")).toEqual(never);
+    // The pointer without "one-time": a reader cannot tell it does not repeat.
+    expect(passCreditProseFaults("x", "- A top-up of AI credits, added when you buy. The amounts are on the pricing page.")).toEqual(never);
+    // A recurring word beside the pointer is still the recurring fault.
+    expect(
+      passCreditProseFaults("x", "- A one-time top-up of AI credits, and a monthly one. The amounts are on the pricing page.").join(" "),
+    ).toContain("sells the one-time grant as recurring");
+    // A figure beside the pointer is still read against the declaration.
+    expect(
+      passCreditProseFaults("x", `- A one-time top-up of AI credits, ${lGrant} AI credits in all. The amounts are on the pricing page.`).join(" "),
+    ).toContain(`quotes ${lGrant} AI credits, but the pass grants ${mGrant}`);
   });
 
   it("catches a fee-ladder row that drifts from the matrix, and one that vanishes", () => {
@@ -2061,6 +2101,8 @@ describe("every surface a reader sees is covered, not just the paragraphs", () =
 // ─────────────────────────────────────────────────────────────────────────────
 const addOns = helpArticle("add-ons");
 const groups = helpArticle("groups");
+/** Task 14b split groups.md by job: what joining costs now lives here. */
+const addOrg = helpArticle("add-an-organisation");
 
 /** Every inventory-gated help article, by slug. Shared by the axis describe and
  *  the rate measurements below so the two cannot disagree about what is gated. */
@@ -2924,8 +2966,12 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
     );
 
     // …and the copy says the true thing, in both the article and the dialog.
-    expect(groups).toMatch(/added to your next invoice, not charged to your card there and then/i);
-    expect(groups).not.toMatch(/and charged now/i);
+    // Task 14b: the attach-cost copy moved from groups.md to add-an-organisation.md.
+    expect(addOrg).toMatch(/Nothing is charged to your card when an organisation joins\./);
+    expect(addOrg).toMatch(/prorated to the rest of the current period and added to your next invoice/i);
+    for (const page of [groups, addOrg]) {
+      expect(page).not.toMatch(/charged now|charged to your card (straight away|at once|immediately)/i);
+    }
     const ui = JSON.parse(readFileSync("src/dictionaries/en/ui.json", "utf8")) as Record<string, string>;
     for (const key of ["billing.group.attach.confirmCharge", "billing.group.attach.confirmChargeAmount"]) {
       expect(ui[key], key).toMatch(/added to your next invoice/);
@@ -2969,8 +3015,9 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
     // …and the FREE body carries the renewal bound it was missing (N3): the
     // item quantity still rises, so the renewal invoice bills the seat.
     expect(ui["billing.group.attach.confirmFree"]).toMatch(/from your next renewal onwards/i);
-    // groups.md already said the trial thing; the two must agree.
-    expect(groups).toMatch(/rides the same trial to the same end date and costs nothing now/i);
+    // groups.md already said the trial thing; the two must agree. Task 14b: the
+    // sentence moved with the attach copy to add-an-organisation.md.
+    expect(addOrg).toMatch(/rides your trial to the same end date\. Nothing is charged/i);
 
     // THE THREE BODIES MUST STAY DISCRIMINABLE, and the e2e negatives assert
     // that by string. This is where those strings are kept honest.

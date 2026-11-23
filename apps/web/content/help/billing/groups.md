@@ -1,157 +1,65 @@
 ---
-title: One subscription, several organisations
-description: A billing group pays for more than one organisation on a single card and a single invoice — extra organisations cost no more than half the base rate, and every one of them runs on the group's plan.
+title: One bill for several organisations
+description: A billing group is one plan, one card and one invoice for several organisations. What each extra organisation costs, who pays, and what every organisation keeps for itself.
 order: 4
+related: billing/add-an-organisation, billing/remove-an-organisation, billing/hand-over-a-bill, billing/operator
 ---
 
-A subscription isn't tied to one organisation. It's a **billing group**: one plan, one card, one invoice, covering as many organisations as the plan allows. A county association can fund eight clubs; a management company can fund the events it runs for other people. Nobody has to be a member of the organisations they pay for.
+A subscription is a **billing group**: one plan, one card and one invoice for every organisation on it. A county association, for example, can pay for its member clubs. The person who pays does not have to be a member of the organisations they pay for.
 
-## What the group buys
+The person who pays sees the bill under **Settings → Plan & Billing**, in **Organisations on this bill**. From there you [add an organisation](/help/billing/add-an-organisation), [take one off](/help/billing/remove-an-organisation) or [hand the bill to someone else](/help/billing/hand-over-a-bill).
 
-Two things, and the second is usually the bigger one.
+![The payer's panel on a bill: each organisation with Remove from this bill, and the hand-over card](/help/billing/groups-panel.webp "The payer's view of a bill, with each organisation on it carrying Remove from this bill")
 
-**A cheaper bill.** The first organisation pays the plan's normal rate. Every organisation after that costs **no more than half the base rate** — Pro is $14.99/month plus $6.99/month each, or $128.99/year plus $63.99/year each. Five clubs on Pro annually come to **$384.95** for the group, against five separate Pro subscriptions at $644.95 — $260 a year saved, on one card and one invoice.
+## What it costs
 
-**A cheaper entry-fee rate.** Every organisation in the group runs on the *group's* plan, so the platform fee on entry fees follows it:
+The first organisation pays the plan's normal rate. Each organisation after it, up to the plan's limit, costs no more than half the base rate. The plan prices in your currency are on the [pricing page](/pricing), and when you add an organisation to a paid bill, the dialog says what your bill goes up by before you confirm.
+
+Pro has room for {{plan:orgs.max_owned:pro}} organisations on one bill, and Enterprise has no limit. Community covers {{plan:orgs.max_owned:community}}. Past the limit, a Pro bill can take more through an extra organisation under **Settings → Add-ons**. Each one then costs a seat on the bill as well as the extra place, so it is charged twice. See [add an organisation](/help/billing/add-an-organisation#when-a-bill-cannot-take-one).
+
+## Every organisation runs on the bill's plan
+
+An organisation on the bill gets the bill's plan: its limits, features and platform fee on card entry fees.
 
 | The group's plan | Platform fee on entries |
 | --- | --- |
-| Community | 5% |
-| Pro | 2% |
-| Enterprise | 1% |
+| Community | {{plan:registration.fee_percent:community}}% |
+| Pro | {{plan:registration.fee_percent:pro}}% |
+| Enterprise | {{plan:registration.fee_percent:enterprise}}% |
 
-So adding a free club to a Pro group takes that club from 5% to 2% the moment it joins. For those five clubs, the three points saved cover the $384.95 subscription at about **$12,800 of entries across the group** — roughly $2,600 per club per year. Above that, grouping wins; below it, staying free and paying 5% is genuinely cheaper. It's worth doing the arithmetic for your own volume rather than assuming either way.
-
-**How many organisations fit:** Community holds 1 and Pro holds 5. Beyond five, [talk to us](mailto:hello@seazn.club) — Enterprise is unlimited.
-
-## Who pays, and who can't
-
-A group has exactly **one payer** — one card, one invoice, one billing address, one VAT number. The payer manages the plan, the card and cancellation for the whole group.
-
-**The payer can open that bill from any organisation on it**, whether or not they are a member of one — **Settings → Billing**, **Credits** and **Add-ons** are theirs on every organisation the group funds. What they reach there is the bill and nothing else: no competitions, no members, nothing about the club itself to change.
-
-An organisation inside a group **cannot pay for itself, or pay a share.** There is no way to split a single invoice between several people; that's a payments product, not a setting. An organisation that wants its own bill has to leave the group first — see below. That's also the answer for two clubs that are two separate registered charities: two legal entities need two VAT numbers and two invoices, so they need two groups.
-
-Ownership of an organisation and payment for it are separate things. If an organisation changes owner, its billing stays with the group; the new owner sees who is paying for them, and can leave.
-
-## Adding an organisation
-
-A new organisation starts on its **own** bill — its own plan and invoice. You choose to share a bill deliberately, never automatically: either when you create the organisation (pick "Add to an existing bill") or later from **Settings → Billing → Billing group**. You can also **leave** a bill later and go back to your own — see [Leaving a group](#leaving-a-group).
-
-Adding is done by someone who owns **both** the organisation being added and the group it's joining — admins run the competition, not the money.
-
-- The bill goes up by no more than half the base rate, prorated to the rest of the period — added to your next invoice, not charged to your card there and then.
-- The organisation is on the group's plan **immediately** — limits, features and the entry-fee rate all change the same second. The lower rate applies to competitions that haven't taken a payment yet; one that already has an entrant paid keeps the rate it locked (see [below](#the-entry-fee-rate-locks-when-sales-start)).
-- Added during the group's free trial, it rides the same trial to the same end date and costs nothing now.
-- An organisation that already has its own live subscription can't be added yet. Cancel it, or wait for it to lapse.
-- A group can't take on a new organisation while its own payment is overdue or while it's set to cancel at the end of the period. Settle the invoice, or resume the subscription, and then add.
-
-If that invoice later fails, the organisation stays in the group — it doesn't get thrown back out. The group enters the normal 14-day [dunning](/help/billing/downgrade) window instead, and if it runs out, every organisation in the group drops to Community limits together. Nothing is attempted against your card at the moment you add, so adding an organisation cannot itself fail a payment.
-
-### What an added organisation costs
-
-The added organisation becomes an extra **seat on the bill you already have** — never a new, separate subscription. So it inherits your bill's shape:
-
-- **On a monthly bill** it's no more than half the base rate per month (Pro **+$6.99/mo**), prorated for the rest of the current month and added to your next invoice.
-- **On an annual bill** it's no more than half the base rate per **year** (Pro **+$63.99/yr**), prorated for the rest of the current year and added to your next invoice — it renews on your existing annual date, not a new one. Mid-year, the proration covers only the slice of the year that's left; the full amount lands at your next renewal.
-
-You never guess the figure: the "Add to an existing bill" step shows the **exact amount that will be added to your bill**, taken live from Stripe, before you confirm.
-
-**With a discount on the bill**, what the added organisation gets depends on the coupon's *type*:
-
-- A **percentage** discount that's still running (a *forever* code, or a *repeating* one inside its window) comes off the added organisation too — both the prorated amount and its share of every future renewal. A 60%-off Pro bill adds an extra org at 60% off.
-- A **one-time** code (applies *once*, already spent on your first invoice) does **not** discount a mid-cycle add — that proration is separate from the invoice the code was used on.
-- A **fixed-amount** code (e.g. £20 off) comes off the *invoice total*, not each seat, so on a mid-cycle add it may cover little or none of the extra. Percentage, longer-duration codes are the ones that follow the whole group — which is why they're usually the right choice for a group that will grow.
-
-Whatever the code, the amount shown before you confirm is the real, post-discount figure.
-
-## Leaving a group
-
-Either side can end it. The payer can push an organisation out; the organisation's owner can pull it out. Nobody needs the payer's permission to leave, and no payer is stuck funding an organisation that won't cooperate.
-
-**Leaving costs nothing** — no payment, no card, no settling up. What you decide is what happens to the seat the group already paid for, because that seat can go one of two ways and never both:
-
-- **Keep its plan until the period ends.** The organisation keeps the plan it had — and the entry-fee rate that came with it — until the end of the period the group already paid for, then falls back to Community. The seat **goes with it**: the group's next invoice is one seat smaller, and adding a replacement organisation now costs a new seat.
-- **Free up the seat now.** The organisation drops to Community straight away and loses the plan immediately. The seat stays with the payer as a **freed slot**, which another organisation can fill at no extra charge until the period renews — on an annual plan that can be worth eleven months.
-
-You can't have both from one seat — keep the plan on the way out *and* reuse the slot for free — because that would be two organisations entitled by a single paid seat. So the only question is which of the two is worth more to you. An organisation leaving a group that isn't currently billing (Community, or a cancelled subscription) has no period to ride out, so it simply moves to its own Community plan. Nothing is deleted either way, exactly as in a [downgrade](/help/billing/downgrade).
-
-Competitions that have **already taken a payment keep their locked entry-fee rate** whatever happens to the plan — leaving a group never raises the fee on a competition whose entrants have started paying. Only competitions that haven't sold a place yet move to the new rate.
-
-Two details worth knowing:
-
-- The organisation's owner becomes the owner of its new, standalone billing — there's no role to grant.
-- A free trial doesn't reset on the way out. If the group has used its trial, the departing organisation has used it too.
-
-Whoever didn't do it gets an email. If the payer removes an organisation, that organisation's owner is told what happened to the plan — whether it rides out the period or drops to Community now — and that its billing is now theirs. If an owner takes their own organisation out, the payer is told their next bill has changed. Nobody acts on someone else's bill without the other side hearing about it.
-
-## No refunds, and the freed slot
-
-Removing never refunds, and adding never takes money from your card there and then — nothing moves mid-period in either direction. Adding is prorated onto your next invoice, and not even that if you are filling a slot you have already paid for or you are still on your free trial. The two removal choices differ only in **who keeps the value of the seat you already paid for**: the departing organisation, which rides out the period on its plan, or you, as a freed slot to reuse.
-
-If you chose **Free up the seat now**, that slot can be filled by another organisation **at no extra charge** until renewal, and nothing changes at all if you add an organisation back into it. If you chose **Keep its plan until the period ends**, the seat left with the organisation, so the next organisation you add is a fresh seat and is charged as one. Either way the count is trued up at renewal.
-
-## Handing the group to a new payer
-
-Treasurers change. When they do, the group itself can change hands — you don't have to pull eight clubs out and re-group them, which would lose the group and charge full rate for each one again.
-
-**The card doesn't travel with the group.** Someone who has stopped running a federation should stop funding it, so the incoming payer supplies their own card. That's why a group with a live subscription hands over in two steps rather than one:
-
-1. The current payer offers the group to a named person.
-2. That person adds a card, and only then does the group change hands.
-
-Between those two steps nothing has moved: the group still belongs to the current payer, still bills their card, and the offer can be withdrawn at any point. The old card is removed last of all, after the new one is attached, so the subscription is never left without a way to pay — the failure this two-step exists to prevent is a September handover on an annual plan silently failing its renewal in March and dunning every club in the group down to Community.
-
-Details worth knowing:
-
-- **An offer is for one named person and can only be used once.** It lapses on its own after seven days.
-- **The payer can withdraw an offer** at any time before it's accepted.
-- **Send them the link.** There's no inbox for pending offers yet, so the offer has to reach the recipient the way you'd send anything else. If they lose it, withdraw it and make a new one.
-- **A group with nothing to bill** — Community, or a subscription that has already been cancelled — moves in a single step, because there's no invoice to fail. It can only be handed to someone who already owns an organisation in the group, since there's no acceptance step to serve as their consent.
-- **Nothing about the organisations changes.** Same plan, same limits, same entry-fee rate, same Stripe Connect accounts, same payouts. The only things that move are who is billed, and who sees which invoices — see [what happens to your invoices](#what-happens-to-your-invoices-when-the-bill-changes-hands) just below.
-
-### What happens to your invoices when the bill changes hands
-
-A billing group is **one account** at our payment processor, so every invoice the group has ever been sent lives in one place. But each invoice carries the **name and billing address of whoever was paying when it went out** — printed on the PDF. So when the bill changes hands, we split the history by *who paid*, never showing one payer another's details:
-
-- **The new payer sees only their own invoices** — the ones sent from the handover onward. They never see yours, and never see your name or address on an older receipt.
-- **You keep yours.** Your invoices from when *you* paid stay visible to you, read-only, under **Settings → Billing → Your past invoices** on any organisation still in the group — even though you've stopped paying for it. Nothing to download in a rush before you hand over.
-- **If the bill ever comes back to you** later, you see both your earlier stretch and your new one — and still none of the invoices from whoever paid in between.
-
-This is only about who can *see* an invoice. It moves no money and changes no plan.
+The limits are per organisation, not shared. Every organisation on a Pro bill gets Pro's limits. Team members are per organisation too, so someone who helps run two of them is invited to each. See [inviting your team](/help/getting-started/invite-your-team).
 
 ## The entry-fee rate locks when sales start
 
-Because a group's plan can be changed by the payer — who might not be the person running a competition — the platform fee on entries is **fixed the moment a competition takes its first paid entry**. From then on every entrant in that competition is charged the same rate, whatever happens to the plan afterwards: a group detach, a downgrade, or any other plan change — none of it re-rates a competition whose entrants have already started paying.
+A competition's platform fee is fixed when it takes its first paid card entry. Moving onto a bill, coming off one, or a change of plan never re-rates a competition whose entrants have started paying.
 
-Before the first paid entry the rate is still live, so if you set a competition up on the wrong plan you can fix the plan and see the new rate apply — right up until someone pays. Free and offline entries don't lock anything; the rate is set by the first entry that actually pays through the platform.
+Until the first card payment, the rate follows the plan. Free entries and entries paid to the organiser do not lock anything.
 
-This protects the organiser, not the platform: it means the fee you were quoted when your first entrant paid is the fee you keep for the whole competition.
+> **Example**
+> Harbour County Association pays for a Pro bill and moves Westbrook Badminton onto it. Westbrook's spring open took its first card payment while Westbrook was on Community, so the open keeps the Community rate. Westbrook's summer league has not taken a payment yet, so it moves to the Pro rate.
+
+## Who pays
+
+A bill has one payer, with one card and one invoice. The payer manages the plan, the card and cancellation for every organisation on it.
+
+The payer can open **Plan & Billing**, **Credits** and **Add-ons** on every organisation on the bill, even one they are not a member of. The rest of that organisation stays closed to them.
+
+The owner of an organisation on someone else's bill sees who pays on its **Plan & Billing** page, for example "This organisation is covered by Alex Morgan's subscription — they pay for it, and the plan above applies here in full." The page has no card or plan controls for them.
+
+An organisation on a bill cannot pay for itself or pay a share. For a bill of its own, it has to come off this one first.
 
 ## Payouts never move
 
-This is the part people worry about, so plainly: **Stripe Connect is per organisation and grouping never touches it.**
-
-Each organisation keeps its own Stripe account, its own verification, its own bank details and its own payouts. Entry fees still settle into that club's account, not the payer's. Regrouping who pays for the software moves no money into or out of anybody's bank account — the only thing that changes is the percentage we take, and it changes in the club's favour. See [how card entry fees flow](/help/registration/card-payments).
+A bill never touches card entry fees. Each organisation keeps its own Stripe account, bank details and payouts, and its entry fees go to its own account, not the payer's. See [how card entry fees flow](/help/registration/card-payments).
 
 ## Common questions
 
-**Do the group's organisations share limits?** No. Quotas — team members, clubs, active competitions, public dashboards — are per organisation. Three organisations on Pro get three organisations' worth of everything, and that headroom is what the extra organisation's rate buys.
+**Do the organisations share AI credits?** Yes, one AI wallet for the whole bill, and the payer can cap each organisation in the [operator console](/help/billing/operator). See [AI credits](/help/billing/credits).
 
-**The bill says it's full — do we have to upgrade?** Only on Community, which covers one organisation and sells nothing to raise that. On **Pro**, a full bill is a purchase rather than a plan change: buy an extra organisation under **Settings → Add-ons** and the limit goes up by one for the whole group. It's a recurring add-on billed every month on top of your current bill, on its own cadence — so an annual group pays for it monthly, and the Add-ons tab shows the exact amount in your currency before you confirm.
+**What currency is the bill in?** One currency, set at the bill's first checkout. Organisations added later are billed in it.
 
-**Are team members shared?** No. Membership is per organisation; someone who works on two of them is invited to both. Paying for an organisation doesn't put you inside it, and being inside it doesn't let you see the group's card or invoices. See [inviting your team](/help/getting-started/invite-your-team).
+**Does an Event Pass count toward the subscription?** Once per billing group, ever. It counts when the organisation that starts the Pro checkout paid for its most recent pass in the 30 days before, in the bill's currency. A pass our team granted earns nothing, and so does a pass another organisation on the bill holds. See [start, switch or cancel Pro](/help/billing/change-plan).
 
-**Can staff comp a single organisation?** Yes — a comp or a raised limit can be applied to one organisation without touching the group's plan or its bill.
+**Every organisation on our bill is suspended by your team. What happens?** Suspension is a moderation step, not a billing one, and you keep paying for the bill. While every organisation on the bill is suspended, the number of organisations the bill can hold falls to what its plan covers plus the extra organisations you have bought, which still count. A limit our team raised for one organisation does not apply until that organisation is back. If the bill is already at that limit, it cannot take another organisation until one is back.
 
-**Does a promo code apply to organisations added later?** Yes. A discount applies to the whole group, including organisations that join afterwards, so duration-limited codes are usually the right choice.
-
-**What currency does the group bill in?** One, fixed at the group's first checkout — organisations that join later are billed in it too, whatever their own entry fees are charged in.
-
-**One organisation was suspended by our team. Do we stop paying for it?** No. Suspension is a moderation action, not a billing one — the slot stays yours and the other organisations in the group are unaffected. One exception, and only while *every* organisation in the group is suspended at once: a limit our team raised by hand for a single organisation stops applying until that same organisation is back — a different one returning first restores nothing, because the raised limit belongs to the organisation it was granted to — so the group falls to what its plan and its add-ons cover, and the extra organisations you've bought still count, exactly as they always do. If the group is already at that limit, it can't add another until that organisation is back. **Settings → Add-ons** says so while that's true, and nothing is charged differently.
-
-**We bought an Event Pass for one of our organisations — does it credit the group?** Only if that same organisation is the one whose checkout starts the group's subscription, and only **once, ever** — a billing group earns this credit a single time in its lifetime, however many organisations it holds and however many passes they buy afterwards. The credit checks that one organisation's own pass, not a shared pool across the group — a pass held by a different organisation, even one that joined the group earlier, earns nothing. If you want the pass to count, buy it for the organisation that will actually run the upgrade, before the group's one credit is spent. See [Event Pass](/help/billing/event-pass).
-
-**I handed the group over — where did my old invoices go?** Nowhere. They stay with you: your invoices from when you were the payer remain visible, read-only, under **Settings → Billing** on any organisation still in the group. The new payer can't see them — an invoice carries the billing name and address of whoever paid it, so we only ever show each person their own. See [what happens to your invoices](#what-happens-to-your-invoices-when-the-bill-changes-hands).
-
-**What if the payer deletes their account?** The group passes to the longest-standing owner of an organisation inside it, so nobody is left paying for organisations they can no longer manage — and nobody loses their plan because someone else closed an account. If there's nobody left who could ever manage it, the subscription is cancelled rather than orphaned. If you're deliberately handing over, do it properly with an offer first: that way the incoming payer's own card is on file before you go.
+**What if the payer deletes their account?** The bill passes to the longest-standing owner of an organisation on it. The departing payer's card stays on the bill and keeps paying until the new payer changes it. If nobody can take it over, the subscription is cancelled. Leaving on purpose? [Hand the bill over](/help/billing/hand-over-a-bill) first, so the new payer's card is on file before you go.

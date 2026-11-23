@@ -13,7 +13,7 @@ test.use({ storageState: { cookies: [], origins: [] } });
 
 /** A long article with six level-2 headings (content/help/registration/card-payments.md). */
 const LONG = "/help/registration/card-payments";
-/** An h3 of content/help/billing/groups.md: in the search index, never on the help home's own page. */
+/** A heading of content/help/billing/hand-over-a-bill.md: in the search index, never on the help home's own page. */
 const INDEX_ONLY = "What happens to your invoices when the bill changes hands";
 /** A page a blog post names in its `help:` key, so it carries the "Read how it works" list (blog P2 Task 6); read from the posts. */
 const WITH_POSTS = helpPageWithPosts();
@@ -132,8 +132,8 @@ test("search loads its index only when asked, offers the matching page with the 
     if (new URL(r.url()).pathname === "/api/help-index") indexRequests.push(r.url());
   });
   await visit(page, "/help");
-  // The index is not in the page: no request yet, and the HTML does not carry a string only an index row has (an h3
-  // of the billing groups page, which /help never shows). The positive pair is below: the index response carries it.
+  // The index is not in the page: no request yet, and the HTML does not carry a string only an index row has (a
+  // heading of the hand-over-a-bill page, which /help never shows). The positive pair is below: the index response carries it.
   expect(indexRequests, "no index request before the box is used").toEqual([]);
   expect(await page.content()).not.toContain(INDEX_ONLY);
 

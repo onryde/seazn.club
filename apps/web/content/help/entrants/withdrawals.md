@@ -9,7 +9,7 @@ When someone drops out, **Withdraw** removes them without breaking the draw. Wha
 
 ![The Entrants tab after the tournament started, with one team withdrawn and a Reinstate button on its row](/help/entrants/withdraw-and-reinstate.webp "After the tournament starts, every active row has Withdraw and Disqualify. A withdrawn row has Reinstate")
 
-On the **Entrants** tab, each active row has **Withdraw** and **Disqualify**. Before the division starts, rows have **Withdraw** and **Delete** instead. A started division shows a banner saying the entrant list is locked and that withdrawals still work.
+On the **Entrants** tab, each active row has **Withdraw** and **Disqualify**. Before the division starts, rows have **Withdraw** and **Delete** instead. A started division whose format closes the list shows a banner saying the entrant list is locked and that withdrawals still work. A format that keeps taking late players shows no such banner. [A division's life](/help/divisions/lifecycle) lists who can still join each format.
 
 ## What happens to their fixtures
 
@@ -40,4 +40,4 @@ A withdrawal is not final. Choose **Reinstate** on the withdrawn row and the ent
 
 ## Entry fees
 
-Entry fees and refunds belong to registration. See [card entry fees](/help/registration/card-payments).
+Entry fees and refunds belong to registration. See [refunds and disputes](/help/registration/refunds-and-disputes).

@@ -15,7 +15,7 @@ import { dismissCookieBanner } from "./scorepad-a11y-kit";
 // Run against a production build (CI's e2e serves the standalone server.js); `next dev` renders everything dynamically.
 // Desktop only: this is response headers and hydration, not layout.
 
-const ARTICLE = "/help/getting-started/create-your-organisation"; // a plain article, in the plan-reading route
+const ARTICLE = "/help/getting-started/start-scoring"; // a plain article (no plan token: prerendered), in the plan-reading route
 const TOKEN_ARTICLE = "/help/registration/card-payments"; // carries a plan token: not prerendered, rendered on first request
 const POST = "/blog/how-standings-points-work";
 const EDGE: [path: string, sMaxage: number][] = [

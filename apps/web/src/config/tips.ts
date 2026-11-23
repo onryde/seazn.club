@@ -69,8 +69,8 @@ export const TIPS = {
   },
   // A DIFFERENT article from the one above, deliberately: this tip is the
   // GRADUATED TIER a group pays for organisations inside its plan's limit, and
-  // `billing/groups` is where "What an added organisation costs" lives. The
-  // rider that RAISES the limit is the add-ons article.
+  // `billing/groups` is where that rate lives ("What it costs"). The rider that
+  // RAISES the limit is the add-ons article.
   "billing.extra-org": {
     title: "What another organisation costs",
     // "half your plan's rate" until v17 gap W7 (#299): the seed derives the
@@ -93,7 +93,9 @@ export const TIPS = {
   "billing.freed-slot": {
     title: "You have a slot you have already paid for",
     body: "When an organisation leaves, we do not lower the bill mid-period — the slot stays yours until the subscription renews. Adding another organisation into it costs nothing until then.",
-    helpSlug: "billing/groups",
+    // Task 14b split billing/groups by job; the freed slot is explained where
+    // it is made, on the page about taking an organisation off a bill.
+    helpSlug: "billing/remove-an-organisation",
   },
   "billing.billed-by": {
     title: "Why the plan is managed elsewhere",

@@ -1,54 +1,51 @@
 ---
 title: Clubs & Teams
-description: Your org-wide register of clubs and persistent teams — the ladder from a one-off entrant to a standalone team to a full club, the club hub, squad quick-add, and the per-plan limits.
+description: Keep your clubs, teams and squads in one place, and enrol a team into a division without typing its players again.
 order: 1
+related: getting-started/add-entrants, entrants/kinds, entrants/team-badges-and-bulk-enrolment, billing/plans
 ---
 
-The Directory's **Clubs & Teams** tab is your organisation-wide register of clubs and persistent teams. It sits next to People and Officials under **Directory**, and everything here is shared across every competition and division you run — so a squad you build once can be re-entered season after season.
+**Directory** holds four tabs: **Players**, **Clubs & Teams**, **Officials** and **Venues**. The **Clubs & Teams** tab is your register of clubs and teams. Everything in it belongs to your organisation, so a squad you build once is there for your later competitions too.
 
-## The ladder
+A new organisation shows "No clubs or teams yet — create your first club to group teams across divisions, or add a standalone team." The tab has a search box, **New club**, **New team** and a **Bulk import participants** link. The list has the columns **Club**, **Teams** and **Contact**.
 
-You don't have to model everything as a club. Pick the lightest step that fits:
+## Pick the lightest step
 
-- **Entrant only** — add an entrant straight into a division. Nothing persists between seasons; it's the fastest way to run a one-off event.
-- **Standalone team** — a named, persistent squad you can re-enrol each season. It keeps its own roster, badge and short name without belonging to a club.
-- **Club** — group several teams under one badge, kit colours and contacts (for example a club that fields a first XI, a reserves side and a youth team).
+- **Entrant only.** Add an entrant straight into a division and keep nothing in the directory. See [add entrants](/help/getting-started/add-entrants).
+- **A standalone team.** Press **New team**, type a **Team name** and press **Create**. It appears in the list marked **standalone**, with an **Add to club…** choice if you want to place it in a club later.
+- **A club.** Press **New club**, type a **Club name** and press **Create**. A club groups teams under one crest, kit colours and contacts. Grouping teams under a club needs no paid plan.
 
-You can run a team standalone — it sits in the directory right alongside your clubs — or detach a team from a club without losing its squad. The ladder is a convenience, not a lock-in.
+## The club page
 
-## The directory list
+Creating a club opens its page, with a **Back to directory** link and three tabs.
 
-The tab shows every club and standalone team with its crest, short name, team count and primary contact. Search filters by name as you type. Editors get **New club** and **New team** buttons, plus an **Import** link to bring clubs and teams in from a spreadsheet. Opening a club takes you to its hub.
+**Overview** holds the club's **Club name**, **Short name**, **URL slug**, **Home ground**, **Website** and **Notes**. Under **Kit colours**, **Home** and **Away** each have a **Primary** and a **Secondary** colour. Press **Save changes** to keep them. **Upload crest** adds the club crest. Every team without its own badge wears it. **Contacts** takes a **Role** (**Secretary**, **Chair**, **Treasurer**, **Welfare officer**, **Manager** or **Other**), a **Full name**, an **Email** and a **Phone**. The first contact you add is marked **Primary**. **Make primary** beside another contact moves the **Primary** badge to it. The **Danger zone** deletes the club and keeps its teams. Their badges fall back to no club badge.
 
-## The club hub
+![The Teams tab of a club: the Team name and Short boxes with Add team, and the team Lakeside First Four opened to show its squad, with Priya Nair ticked as captain, Tom Reyes, a Find player box and Save squad.](/help/directory/club-teams-tab.webp "A club's Teams tab with one squad open")
 
-Each club has its own page with three tabs:
+**Teams** has a **Team name** and a **Short** name with **Add team**. A new team shows as a row. Press its name to open the squad: **Find player…** searches your players, and a name that is not there offers **+ Add 'Priya Nair' as a new player** without leaving the page. Each player has a **No.** box for the squad number, a **captain** tick box and **remove**. **Save squad** keeps the list. **Override club crest** gives the team its own badge. **Detach** asks you to confirm, and says the team keeps its players and just leaves the club.
 
-- **Overview** — edit the profile (name, short name, public slug, home ground, website, notes), set kit colours and upload the club crest — every team without its own badge wears it — and manage contacts (secretary, chairman, treasurer, welfare officer, manager). One contact can be marked primary. The danger zone deletes the club.
-- **Teams** — the club's teams, with add-a-team, a per-team badge that overrides the club crest (**Use club crest** puts a team back on it), and the squad editor. Type a player's name and, if they aren't in your People directory yet, **add them as a brand-new player without leaving the page** — no need to switch to People first. You can also detach a team from the club here.
-- **Entries** — a read-only grid showing where every team is entered, so you can see at a glance which divisions a club is competing in.
+**Entries** lists each team of the club with the divisions it is entered in.
 
 ## Squads and entry rosters
 
-A team's **squad** lives in the directory; each competition entry keeps its own **roster**. When you enrol a team into a division, the entry roster is copied from the squad **once, at that moment** — the enroll form tells you how many players will be copied, and warns you when the squad is still empty. After that the two are independent on purpose: suspensions, lineups and team sheets hang off the entry roster, so editing the squad mid-season never silently rewrites a competition entry.
+A team's **squad** lives in the directory. Each competition entry keeps its own roster. When you enrol a team into a division, the entry gets a copy of the squad at that moment. In the **Entrants** tab of a team division, choose **Existing team**, pick the team and read the note: "Team squad: 2 players will be copied to this entry." Then press **Enroll team**.
 
-If the squad has changed since you enrolled — late signings, departures — open the entrant row and use **Sync from team squad**. It replaces the whole entry roster with the team's current squad (position or role settings the division's sport doesn't define are dropped, and roster edits made only on that entry are lost — the confirmation spells this out). The badge is different: crests resolve live (entry badge, then team badge, then club crest), so a crest change shows up everywhere immediately without any sync.
+After that the two are separate. A player you add to the squad later is not on the entry. In the entrant's row, **Sync from team squad** asks "This replaces the whole entry roster with the team's current squad. Position or role settings the sport doesn't define are dropped; roster edits made only on this entry are lost." and **Sync roster** goes ahead.
 
-## Limits per plan
+> **Example**
+> The squad of Riverside First XI holds Priya Nair and Tom Reyes, and you enrol the team. You then add Lena Fox to the squad. The entry still lists two players, with a **+ Lena Fox** suggestion. You press **Sync from team squad**, then **Sync roster**, and the entry now lists Lena Fox, Priya Nair and Tom Reyes.
 
-Your plan sets how many clubs and teams you can create, and how large a single squad can be:
+## Limits
+
+Your plan sets how many clubs and teams you can have and how large a squad can be:
 
 | Plan | Clubs | Teams | Squad size |
-| --- | --- | --- | --- |
-| Community | 5 | 8 | 23 |
-| Event Pass | No change | No change | No change |
-| Pro | 25 | 100 | 40 |
+|---|---|---|---|
+| Community | {{plan:clubs.max:community}} | {{plan:teams.max:community}} | {{plan:teams.squad_max:community}} |
+| Pro | {{plan:clubs.max:pro}} | {{plan:teams.max:pro}} | {{plan:teams.squad_max:pro}} |
 | Enterprise | Unlimited | Unlimited | Unlimited |
 
-An Event Pass lifts one **competition** — its entrants, its divisions and the platform fee it charges. Clubs, teams and squads are organisation-wide, so a pass leaves all three exactly where your own plan sets them.
+Clubs, teams and squads belong to the organisation, not to one competition, so an [Event Pass](/help/billing/event-pass) does not change them.
 
-Grouping teams under a club (the club hierarchy) works on every plan — the caps above are what a bigger plan lifts. When you hit a limit, the page tells you which one and links to upgrade. Upgrade any time to raise the ceilings.
-
-## Need a one-off exception?
-
-Limits are tuned per organisation, so a specific cap can be raised for your org without changing your plan. If you're close to a limit for a genuine reason, contact support and an administrator can adjust it for you.
+At a limit the page says "You've reached your plan's club limit." or "You've reached your plan's team limit." with a link to plans. A squad over its size is refused with "This squad has reached your plan's size limit." See [plans at a glance](/help/billing/plans).

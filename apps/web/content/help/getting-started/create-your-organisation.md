@@ -1,29 +1,58 @@
 ---
 title: Create your organisation
-description: Your organisation is home base — competitions, teammates and billing all live under it.
+description: Your organisation is made for you when you first sign in. Rename it, set its defaults and see where the welcome tour takes you.
 order: 1
+related: getting-started/create-a-competition, getting-started/invite-your-team, scheduling/timezones, billing/groups, sharing/dashboard
 ---
 
-Everything you run on seazn.club lives inside an **organisation** — your club, league or school. You get one automatically when you sign up, and you can rename it whenever you like. The free Community plan covers **one** organisation; running more than one means a paid plan, where a single subscription can cover several — see [one subscription, several organisations](/help/billing/groups).
+Everything you run lives inside an **organisation**: your club, league or school. You do not create the first one. When you sign in for the first time, Seazn Club makes one called **My organization** and makes you its **Owner**. This page shows you what to set up before your first competition.
 
-## Set it up
+## Your first screen
 
-1. Sign in and open **Settings → Organisation**.
-2. **Rename** it to what players will recognise — the name appears on every public page.
-3. Add a **logo** — free on every plan — so dashboards and share images carry your identity. A **brand colour** on top of it is a Pro feature.
-4. Invite teammates under **Settings → Team** — owners and admins can edit everything, scorers only score their assigned matches, viewers can look but not touch. Invites never change an existing member's role: a viewer who accepts an umpire invite keeps viewer access and just gains those matches to score ([how scorer invites work](/help/scoring/scorer-role)).
+After you sign in, **Welcome to Seazn Club** lists the sports that are built in. The tiles are only a list. Nothing on them is clickable.
 
-## Get set up to get paid
+- Press **Create my first competition →** to go straight to [creating a competition](/help/getting-started/create-a-competition).
+- Press **Skip for now** to open your organisation's home page. It says **No competitions yet** and offers **Create your first competition**.
 
-The welcome tour walks you through this next, right after naming your organisation:
+## Rename it
 
-1. **Connect Stripe** under **Settings → Connect** so you can take **card entry fees** — registrants pay at sign-up and the money settles straight into your own Stripe account. It's a one-time, secure onboarding; [here's the whole money journey](/help/registration/card-payments).
-2. Check **Settings → Plan & Billing** — you start on the free **Community** plan, and it can already take card entry fees. Upgrading doesn't switch payments on; it lowers the **platform fee** (5% on Community, 3% with an Event Pass, 2% on Pro, 1% on Enterprise) and raises your limits. [Compare plans](/help/billing/plans) whenever you're ready. Running a free event? Community is plenty.
+1. Open **Settings**, then **Organisation**.
+2. Change **Organization name**.
+3. Press **Save changes**.
 
-## Common questions
+The name appears on your public pages. It also sets your public address, so renaming moves your pages to a new address. Links you shared earlier still work: they are sent on to the new address. If another organisation already has the name you chose, Seazn Club adds a number to your address.
 
-**Can I run more than one organisation?** On a paid plan, yes — switch between them from the organisation menu. Each keeps its own competitions, team and Stripe payouts, but they don't need separate subscriptions: one plan covers up to 5 organisations on Pro, with each one after the first at no more than half the base rate. Community covers one organisation, and Enterprise is unlimited. See [one subscription, several organisations](/help/billing/groups).
+> **Example**
+> You rename **My organization** to **Riverside Badminton Club**. The page you were on moves from `/o/my-organization-…` to `/o/riverside-badminton-club`, and the **Public page** row shows the new `/live/…` address. A link to **Spring Open** at the old address opens the same competition at the new one.
 
-**Who can see my organisation?** Your public page at `/live/your-org` lists your **Public** competitions once they are no longer drafts — published, live or finished. A new competition starts as a draft with Public visibility: anyone you give its link to can open it and register, but it is not listed on your page or in search until you publish it. See [Create a competition](/help/getting-started/create-a-competition#visibility).
+## Add a logo
 
-Next: [Create a competition](/help/getting-started/create-a-competition).
+Click the logo square and choose a PNG, JPG or WebP file of up to 2 MB. A logo is free on every plan. **Brand color** is a Pro feature: on Community the field reads **Brand color requires an upgrade**. See [the public dashboard](/help/sharing/dashboard) for where they show.
+
+## Set the defaults
+
+Under **Organisation defaults**, three settings save one at a time, each with its own **Save** button.
+
+| Setting | What it does | Starts as |
+|---|---|---|
+| **Scheduling timezone** | The venue zone every schedule is shown in | **Not set — schedules use UTC** |
+| **Public language** | The language of your public pages, entrant emails, exports and embeds. You can choose English, Français, Español or Nederlands | English |
+| **Entry fee currency** | The currency entrants are quoted and charged. You can choose USD, EUR, GBP or INR | GBP |
+
+![The Organisation defaults card on a phone-width screen: the scheduling timezone reading Not set, the public language English and the entry fee currency GBP, each with its own Save button.](/help/getting-started/organisation-defaults.webp "Organisation defaults on a new organisation, before anything is changed")
+
+Set the timezone to where you play before you build a schedule. See [timezones](/help/scheduling/timezones).
+
+## Bring your team in
+
+Owners and admins can invite people from **Settings**, then **Team**. See [invite your team](/help/getting-started/invite-your-team).
+
+## The welcome tour
+
+Once your organisation has a competition, its home page opens a seven-step tour: **Welcome to Seazn Club**, **Your organisation**, **Rename your organisation**, **Get paid**, **Your plan & billing**, **Create a competition** and **Your first competition**. A brand-new organisation with no competition does not open it. Press **Skip tour** to close it. To see it again, open **Settings**, then **Organisation**, and press **Replay tour**.
+
+**Get paid** points you to **Settings**, then **Connect**, where you link your Stripe account to take card entry fees. [Card payments](/help/registration/card-payments) follows the whole journey. Your organisation starts on the free **Community** plan. [Plans at a glance](/help/billing/plans) lists what each plan changes.
+
+## More than one organisation
+
+Community covers {{plan:orgs.max_owned:community}} organisation. Pro covers {{plan:orgs.max_owned:pro}}, and Enterprise has no limit on organisations. One subscription pays for all of them: the first costs the plan's normal rate, and each one after it, up to the plan's limit, costs no more than half the base rate. Past the limit, see [add-ons](/help/billing/add-ons). Once you own as many organisations as your plan covers, the **Create an organization** page refuses another and says your plan covers the most organisations it allows. See [one subscription, several organisations](/help/billing/groups).

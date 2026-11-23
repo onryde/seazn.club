@@ -1,33 +1,56 @@
 ---
 title: Invite your team
-description: Two ways to bring people in — email someone a personal invite, or share a link with the whole group.
+description: Bring committee members and helpers into your organisation by email or by a link, and choose what they can do.
 order: 8
+related: scoring/scorer-role, scoring/device-links, billing/groups, getting-started/create-your-organisation
 ---
 
-Bring committee members, scorers and spectators into your organisation from **Settings → Team**. There are two ways to invite, and both let you pick the role people arrive with.
+People you invite join your organisation and can work on its competitions. Open **Settings**, then **Team**. The page lists your **Members**, and below them two ways to invite.
+
+![The invite panels on the Team page: Invite by email with a role choice and Send invite, and Invite by link with an Admin link created, its expiry time and Revoke.](/help/getting-started/team-invites.webp "Settings, then Team, after creating an Admin link")
+
+## Choose a role
+
+Both ways ask for a role: **Viewer (read-only)** or **Admin (can manage)**.
+
+- **Admin** can add and change competitions, divisions, entrants and results.
+- **Viewer** is read-only. The invite page says "Viewers get read-only access to the board." On a match page a viewer sees the match and its history, with no scoring controls.
+
+The **Owner** role is the top one, and an organisation can have more than one owner. Only an owner changes roles, and an owner sees the role choice (**Owner**, **Admin** or **Viewer**) on every row except their own. An organisation must keep at least one owner. A person who only needs to score one match does not need an account: hand them a [device link](/help/scoring/device-links). Officials who score are set up under [officials](/help/scoring/scorer-role).
 
 ## Invite by email
 
-Type an address, pick a role and press **Send invite**. The person gets an email with a personal join link that's valid for **7 days**, works exactly once, and **only for the address it was sent to** — another account opening it is turned away. Pending email invites stay listed in the Team panel until they're accepted, expire or you revoke them. The personal link itself is only ever in that email: because it signs a new invitee straight in, nobody else, you included, can see or copy it.
+Type an email address under **Invite by email**, choose a role and press **Send invite**. The invite is listed with the role, the address and "expires" with a date. It lasts 7 days and is for one person: the email carries a personal link that works once. Press **Revoke** to cancel it.
 
-Someone new to Seazn Club doesn't need to set anything up first: opening the link and pressing **Accept** creates their account, signs them in and joins them in one step — the email itself is the proof of identity, so there's no password and no second sign-in email. Anyone who **already** has a Seazn Club account signs in as usual before accepting, so a forwarded link can never get into an existing account.
+If the email could not be sent at once, the page says "The email didn't go out straight away. It may arrive late, or not at all — if they don't receive it, revoke this invite and share an invite link instead."
 
 ## Invite by link
 
-Create a shareable link and drop it in the group chat. Anyone who opens it joins as the role you picked. Links last **24 hours**, work for any number of people, and stay listed in the Team panel until they expire or you revoke them — closing the tab doesn't lose the link.
+Choose a role under **Invite by link** and press **+ Create link**. The link is listed as `/join/…` with its role, its expiry time and **Revoke**. The row's button is labelled **copy link**. Send the link in your group chat. Anyone who opens it joins with that role. A link lasts 24 hours, and it stays listed until it expires or you press **Revoke**. Closing the tab does not lose it.
 
-## Roles
+## Who can do what here
 
-- **Admin** — can manage competitions, entrants and settings.
-- **Viewer** — read-only access to the console.
-- **Scorer** — only scores the matches they're assigned ([how scorer invites work](/help/scoring/scorer-role)).
+| | Owner | Admin | Viewer |
+|---|---|---|---|
+| See the Members list | Yes | Yes | Yes |
+| Send invites and create links | Yes | Yes | No |
+| Change someone's role, or **Remove** them | Yes | No | No |
 
-Invites never change an existing member's role — accepting a second invite adds capabilities at most, it can't demote or promote anyone.
+An owner changes another member's role with the choice beside their name, or presses **Remove**. An admin sees no role choices and no **Remove** buttons. The page gives you no control on your own row, and the server refuses to demote or remove the last owner: "An organization must keep at least one owner".
 
-## Common questions
+> **Example**
+> You email an invite to a Viewer and create a link for Admin. The Team page lists the Viewer invite as expiring in seven days and the Admin link as expiring tomorrow. A person joins through the link and appears under **Members**. As the owner, you now see a role choice and **Remove** beside their name. They, as an Admin, see the invite panels but no role choice.
 
-**Someone's invite email didn't arrive?** An invite email that didn't go out straight away may arrive late, or not at all. Ask them to check spam; if it still hasn't come, revoke the pending invite and either send a new one or create an invite link and share that with them directly.
+## Seats
 
-**Can I cut off a link I shared too widely?** Yes — press **Revoke** next to it. Everyone who already joined stays; nobody new can use it.
+Your plan counts the members of an organisation, and the owner takes a seat.
 
-**Do members carry across organisations?** No. Membership is always per organisation, so someone who helps with two of them needs an invite to each — even when both organisations are paid for by the same [billing group](/help/billing/groups). Joining an organisation and paying for one are separate things: a member never sees the group's card or invoices, and whoever pays doesn't become a member of anything.
+| Plan | Seats |
+|---|---|
+| Community | {{plan:members.max:community}} |
+| Pro | {{plan:members.max:pro}} |
+| Enterprise | Unlimited |
+
+When the seats are full you can still create invites. The person who opens one and presses **Join organization** is refused with "You've reached your plan's team-member seats." Free a seat first, or see [plans at a glance](/help/billing/plans).
+
+Membership is per organisation. Someone who helps with two organisations needs an invite to each, even when one [billing group](/help/billing/groups) pays for both.
