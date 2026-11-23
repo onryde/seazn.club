@@ -34,6 +34,11 @@ vi.mock("@/lib/cache", async (orig) => {
       counter.windows.set(key, live);
       return { count: live.count, ttlMs: live.until - clock.now };
     },
+    // Redis DEL on the same keyspace (receive.ts gives a refused first report's dedupe slot back).
+    cacheDel: async (...keys: string[]) => {
+      if (counter.off) return;
+      for (const key of keys) counter.windows.delete(key);
+    },
   };
 });
 const sentry = vi.hoisted(() => ({ messages: [] as { message: string; context: unknown }[] }));

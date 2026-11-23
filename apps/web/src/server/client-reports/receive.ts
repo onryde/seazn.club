@@ -11,6 +11,8 @@ import "server-only";
 //      cannot spend the kinds' budgets;
 //   5. the kind's Sentry budget across every client (its `sentryBudget`, CLIENT_REPORT_SENTRY_BUDGET by default): past it, a
 //      server-log line only;
+//   A first report the share or the budget refuses GIVES BACK its dedupe slot (review I2): otherwise every other client's report of
+//   that failure would be a repeat for the window, and one IP over its share could silence a failure for everyone;
 //   6. then, and only then, ONE `log.warn` (pino: stdout, and Sentry Logs through Sentry.pinoIntegration) and ONE Sentry event (level
 //      warning). So the budget and the share bound Sentry's events AND its Logs exactly.
 // Every counter lives in Redis, shared by every machine. With NO Redis configured (a dev box, e2e) none of them runs, and every
@@ -22,7 +24,7 @@ import "server-only";
 // `text/plain`. Nothing read here is logged except the kind's own fields, which are codes.
 import * as Sentry from "@sentry/nextjs";
 import pino from "pino";
-import { cacheEnabled, incrWindow } from "@/lib/cache";
+import { cacheDel, cacheEnabled, incrWindow } from "@/lib/cache";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { CLIENT_REPORT_IP_LIMIT, CLIENT_REPORT_LIMIT, rateLimit, type RateLimitConfig } from "@/lib/rate-limit";
@@ -88,8 +90,10 @@ type PinoInternals = Record<symbol, unknown>;
  *  the request context), written into the logger's OWN destination stream: one writer on fd 1, one buffer, one order (review N2).
  *  Not through pino's serialiser: Sentry.pinoIntegration() listens on that serialiser's tracing channel (`pino_asJson`) and forwards
  *  every pino line at every level to Sentry Logs (sentry.server.config.ts); its per-logger opt-out keys on a module-private symbol.
- *  The fields are the kind's codes, the only thing a report's line ever holds, so pino's redaction has nothing to act on. */
+ *  The fields are the kind's codes, the only thing a report's line ever holds, so pino's redaction has nothing to act on. Written only
+ *  at a level the logger writes (LOG_LEVEL), as pino's own warn would be (review m-r2b). */
 function unforwardedLine(fields: Record<string, unknown>, message: string): void {
+  if (!log.isLevelEnabled("warn")) return;
   const internals = log as unknown as PinoInternals;
   const destination = internals[pino.symbols.streamSym] as { write: (chunk: string) => unknown };
   const bindings = (internals[pino.symbols.chindingsSym] as string | undefined) ?? "";
@@ -109,15 +113,21 @@ export async function receiveClientReport(report: ClientReport, ip: string, deps
     unforwardedLine({ ...line, clientReportSentry: why }, facts.message);
     return outcome;
   };
-  const seen = await incrWindow(`client-report-sentry:${report.kind}:${facts.dedupeSubject}`, CLIENT_REPORT_SENTRY_WINDOW_SECONDS);
+  const dedupeKey = `client-report-sentry:${report.kind}:${facts.dedupeSubject}`;
+  const seen = await incrWindow(dedupeKey, CLIENT_REPORT_SENTRY_WINDOW_SECONDS);
   if (counted && seen === null) return serverLogOnly("uncounted", "uncounted");
   if (seen !== null && seen.count > 1) return serverLogOnly("logged", "repeat");
+  /** A first report refused below gives its dedupe slot back (review I2), so the next report of this failure, from anyone, is first. */
+  const refused = async <O extends ClientReportOutcome>(outcome: O): Promise<O> => {
+    if (seen !== null && seen.count === 1) await cacheDel(dedupeKey);
+    return serverLogOnly(outcome, outcome);
+  };
   const share = await incrWindow(`client-report-sentry-ip:${ip}`, CLIENT_REPORT_IP_SENTRY_SHARE.windowSeconds);
   if (counted && share === null) return serverLogOnly("uncounted", "uncounted");
-  if (share !== null && share.count > CLIENT_REPORT_IP_SENTRY_SHARE.max) return serverLogOnly("over-share", "over-share");
+  if (share !== null && share.count > CLIENT_REPORT_IP_SENTRY_SHARE.max) return refused("over-share");
   const spent = await incrWindow(`client-report-sentry-budget:${report.kind}`, kind.sentryBudget.windowSeconds);
   if (counted && spent === null) return serverLogOnly("uncounted", "uncounted");
-  if (spent !== null && spent.count > kind.sentryBudget.max) return serverLogOnly("over-budget", "over-budget");
+  if (spent !== null && spent.count > kind.sentryBudget.max) return refused("over-budget");
   log.warn(line, facts.message);
   Sentry.captureMessage(facts.message, { level: "warning", tags: { client_report: report.kind, ...facts.tags }, extra: { ...facts.fields } });
   return "sent";

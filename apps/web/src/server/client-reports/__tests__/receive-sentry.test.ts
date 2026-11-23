@@ -1,4 +1,4 @@
-// Seazn-hosted Task 25b, fix rounds 1-2 (review I1, m1, N1, N2): what of a client report reaches SENTRY — its events AND its Logs — read off the
+// Seazn-hosted Task 25b, fix rounds 1-3 (review I1, m1, N1, N2, I2, m-r2b): what of a client report reaches SENTRY — its events AND its Logs — read off the
 // envelopes the REAL SDK would post. The SDK is initialised by the REAL sentry.server.config.ts (its enableLogs, beforeSendLog and
 // pinoIntegration, which forwards every pino line to Sentry Logs), with only the transport swapped so the envelopes can be read (the
 // db-error-redaction.test.ts rig). The pipeline is the REAL receive.ts with the real `log`, the real limiter and the real
@@ -12,11 +12,14 @@
 //   - within the kind's budget each first report reaches Sentry; past it, neither; the budget's window over, Sentry again. The
 //     POSITIVE control is the same rig: the in-budget lines ARE seen as Sentry Logs, so a missing one is not a harness that cannot see;
 //   - one client IP reaches Sentry at most CLIENT_REPORT_IP_SENTRY_SHARE times a window, across every kind; another IP is not held;
+//   - a first report the share OR the budget refuses gives its dedupe slot back (I2): the next report of that failure, from another
+//     IP, is a FIRST and reaches Sentry, so one IP over its share cannot silence a failure for everyone;
 //   - Redis configured but giving no count (an outage), on any of the three counters: server log only (review m1);
 //   - no Redis configured (a dev box): every report a Log and an event, as before (the house fallback, unchanged);
 //   - the client IP's bucket across every subject is spent before the subject is looked up;
 //   - a line kept out of Sentry is written into PINO'S OWN destination (N2: one writer, one order, pino's base fields), never beside
-//     it on process.stdout, and never through pino's serialiser (which is what Sentry listens to).
+//     it on process.stdout, and never through pino's serialiser (which is what Sentry listens to); and only at a level the logger
+//     writes (m-r2b: LOG_LEVEL=error silences it, as it silences pino's own warn).
 // Expected numbers come from the declarations (the probe's budget, CLIENT_REPORT_IP_LIMIT), never from the pipeline.
 // Sport: not applicable. A client's failure report is sport-agnostic.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -56,6 +59,11 @@ vi.mock("@/lib/cache", async (orig) => ({
     redis.windows.set(key, live);
     return { count: live.count, ttlMs: live.until - clock.now };
   },
+  // Redis DEL on the same keyspace: the key is gone, so its next INCR starts a new window at 1.
+  cacheDel: async (...keys: string[]) => {
+    if (!redis.configured) return;
+    for (const key of keys) if (!redis.down(key)) redis.windows.delete(key);
+  },
 }));
 
 const probe = vi.hoisted(() => ({ asked: 0, budget: { max: 3, windowSeconds: 60 } }));
@@ -88,7 +96,7 @@ import os from "node:os";
 import pino from "pino";
 import { CLIENT_REPORT_IP_LIMIT } from "@/lib/rate-limit";
 import { log } from "@/server/logger";
-import { CLIENT_REPORT_IP_SENTRY_SHARE, type ClientReport } from "..";
+import { CLIENT_REPORT_IP_SENTRY_SHARE, CLIENT_REPORT_SENTRY_WINDOW_SECONDS, type ClientReport } from "..";
 
 const MESSAGE = "probe: a client report";
 const IP = "203.0.113.41";
@@ -206,6 +214,49 @@ describe("a client report's reach into Sentry, events and Logs, read off the rea
       expect(await reachedSentry()).toEqual({ logs: 2, events: 2 });
     } finally {
       probe.budget.max = 3;
+    }
+  });
+
+  it("I2: a first report the IP's SHARE refuses gives back its dedupe slot: another IP's report of that failure is a first, and sent", async () => {
+    probe.budget.max = 10_000; // this test is about the share, not the kind's budget (restored below)
+    try {
+      const share = CLIENT_REPORT_IP_SENTRY_SHARE.max;
+      for (let i = 0; i < share; i++) expect(await receive(report(`venue-${i}`), IP), `the venue IP's first report ${i + 1}`).toBe("sent");
+      expect(await receive(report("court-x"), IP), "the venue IP, over its share, reports court X first").toBe("over-share");
+      expect(await receive(report("court-x"), IP), "and again: still a first (the slot was given back), still refused").toBe("over-share");
+      expect(await receive(report("court-x"), OTHER_IP), "a viewer elsewhere: court X's FIRST report, sent").toBe("sent");
+      expect(await receive(report("court-x"), THIRD_IP), "after it, court X is a repeat again").toBe("logged");
+      expect(await reachedSentry()).toEqual({ logs: share + 1, events: share + 1 });
+    } finally {
+      probe.budget.max = 3;
+    }
+  });
+
+  it("I2: a first report the kind's BUDGET refuses gives back its dedupe slot: once the budget's window turns, another IP's is sent", async () => {
+    for (let i = 1; i <= probe.budget.max; i++) expect(await receive(report(`s${i}`), OTHER_IP), `first report ${i}`).toBe("sent");
+    expect(await receive(report("court-x"), IP), "court X's first report, past the budget").toBe("over-budget");
+    // The budget's window (60 s) turns well inside the dedupe window (CLIENT_REPORT_SENTRY_WINDOW_SECONDS): a slot still held would
+    // make the next report a repeat.
+    expect(probe.budget.windowSeconds, "PREMISE: the budget turns inside the dedupe window").toBeLessThan(CLIENT_REPORT_SENTRY_WINDOW_SECONDS);
+    clock.now += probe.budget.windowSeconds * 1000;
+    expect(await receive(report("court-x"), THIRD_IP), "court X from another IP, the budget's window turned: a first, sent").toBe("sent");
+    expect(await receive(report("court-x"), IP), "then a repeat").toBe("logged");
+    expect(await reachedSentry()).toEqual({ logs: probe.budget.max + 1, events: probe.budget.max + 1 });
+  });
+
+  it("m-r2b: a line kept out of Sentry is written only at a level the logger writes (LOG_LEVEL=error: not, like pino's own warn)", async () => {
+    const level = log.level;
+    try {
+      log.level = "error";
+      expect(await receive(report("s1"), IP)).toBe("sent");
+      expect(await receive(report("s1"), IP)).toBe("logged");
+      expect(unforwarded("repeat"), "the repeat's warn line: not written").toBe(0);
+      expect(written.filter((l) => l.includes(`"msg":"${MESSAGE}"`)), "nor pino's own warn for the first").toEqual([]);
+      log.level = "warn";
+      expect(await receive(report("s1"), IP)).toBe("logged");
+      expect(unforwarded("repeat"), "POSITIVE pair: at warn, written").toBe(1);
+    } finally {
+      log.level = level;
     }
   });
 
