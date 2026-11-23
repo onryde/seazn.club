@@ -405,6 +405,59 @@ describe.skipIf(!HAS_DB)("deleteSeaznReplay — the organiser deletes a part (Ta
     expect((await colsOf(row.id)).state).toBe("playable");
     expect(await deleteSeaznReplay({ ...w.auth, role: "admin" }, w.f, row.id, { replay: w.host }), "the positive pair: an admin").toEqual({ deleted: true });
   });
+
+  // Task 31 (controller ruling 2b, 2026-11-23): the host forgets a removed copy's watch time with it, so with SEAZN_HOSTED_COST on the
+  // delete reads the copy's minutes one last time BEFORE it removes it — from the session's first day (nothing measured yet) up to the
+  // delete — and ADDS them to the session's replay minutes without moving `replay_measured_through`. Best-effort: a read that fails
+  // never holds the delete back, and with the flag off nothing is read at all.
+  const deliveryOf = async (sid: string) => (await sql<{ replay_minutes: string; replay_through: string | null }[]>`
+    select replay_minutes::text, replay_measured_through::text as replay_through from fixture_video_delivery where session_id = ${sid}`)[0] ?? null;
+
+  it("SEAZN_HOSTED_COST on: the copy's minutes are read up to the delete, BEFORE the removal, and added to the session's replay minutes", async () => {
+    vi.stubEnv("SEAZN_HOSTED_COST", "true");
+    const w = await world();
+    const row = w.rows[0]!;
+    const guid = row.bunny_video_id!;
+    const at = new Date(w.t0 + 16 * MIN);
+    w.host.setWatchMinutes(guid, 7.5);
+    const order: string[] = [];
+    const read = vi.spyOn(w.host, "watchMinutes");
+    read.mockImplementation(async (id, from, to) => { order.push("read"); return FakeReplayHost.prototype.watchMinutes.call(w.host, id, from, to); });
+    const remove = vi.spyOn(w.host, "remove");
+    remove.mockImplementation(async (id) => { order.push("remove"); return FakeReplayHost.prototype.remove.call(w.host, id); });
+
+    expect(await deleteSeaznReplay(w.auth, w.f, row.id, { now: at, replay: w.host })).toEqual({ deleted: true });
+    expect(order, "read first: a removed copy answers nothing").toEqual(["read", "remove"]);
+    const [{ created_at }] = await sql<{ created_at: Date }[]>`select created_at from fixture_stream_sessions where id = ${w.sid}`;
+    const firstDay = new Date(`${new Date(created_at).toISOString().slice(0, 10)}T00:00:00.000Z`);
+    expect(w.host.watchWindows(guid), "from the session's first UTC day up to the delete").toEqual([{ from: firstDay, to: at }]);
+    expect(await deliveryOf(w.sid), "added; the daily pass's day not moved").toEqual({ replay_minutes: "7.5", replay_through: null });
+    expect((await colsOf(row.id)).bunny_video_id, "the copy still removed and forgotten").toBeNull();
+  });
+
+  it("SEAZN_HOSTED_COST off — or malformed — reads nothing; a read that THROWS still deletes and removes the copy", async () => {
+    let checked = 0;
+    for (const flag of ["", "false", "yes"]) {
+      vi.stubEnv("SEAZN_HOSTED_COST", flag);
+      const w = await world();
+      const read = vi.spyOn(w.host, "watchMinutes");
+      expect(await deleteSeaznReplay(w.auth, w.f, w.rows[0]!.id, { replay: w.host })).toEqual({ deleted: true });
+      expect(read, `SEAZN_HOSTED_COST=${JSON.stringify(flag)}`).not.toHaveBeenCalled();
+      expect(await deliveryOf(w.sid)).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(3);
+
+    vi.stubEnv("SEAZN_HOSTED_COST", "true");
+    const w = await world();
+    const row = w.rows[0]!;
+    vi.spyOn(w.host, "watchMinutes").mockRejectedValueOnce(new Error("bunny watchMinutes: request failed before a response"));
+    const remove = vi.spyOn(w.host, "remove");
+    expect(await deleteSeaznReplay(w.auth, w.f, row.id, { replay: w.host })).toEqual({ deleted: true });
+    expect(remove.mock.calls).toEqual([[row.bunny_video_id]]);
+    expect(await colsOf(row.id)).toMatchObject({ state: "deleted", bunny_video_id: null });
+    expect(await deliveryOf(w.sid), "nothing written").toBeNull();
+  });
 });
 
 // ─── Task 26: the organiser downloads a part ──────────────────────────────────────────────────────────────────────────────

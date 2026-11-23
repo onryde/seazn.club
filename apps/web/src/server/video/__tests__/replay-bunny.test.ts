@@ -224,13 +224,13 @@ describe("BunnyReplayHost: watchMinutes (Task 30)", () => {
     expect(await host.watchMinutes(GUID, FROM, FROM), "a zero-length window is a window").toBe((60 * WATCH_TIME_CHART_SECONDS_PER_UNIT) / 60);
   });
 
-  it("refusals map by status, as every other API call's do: 401/403 refuse our API key, 429/5xx are the host not answering, a 404 is neither", async () => {
+  it("refusals map by status, as every other API call's do: 401/403 refuse our API key, 429/5xx are the host not answering, any other non-2xx is neither", async () => {
     const rows: [number, (e: unknown) => boolean][] = [
       [401, (e) => e instanceof ReplayHostRefused && e.credential === "api_key"],
       [403, (e) => e instanceof ReplayHostRefused && e.credential === "api_key"],
       [429, (e) => e instanceof ReplayHostUnavailable],
       [503, (e) => e instanceof ReplayHostUnavailable],
-      [404, (e) => !(e instanceof ReplayHostRefused) && !(e instanceof ReplayHostUnavailable) && /HTTP 404/.test((e as Error).message)],
+      [400, (e) => !(e instanceof ReplayHostRefused) && !(e instanceof ReplayHostUnavailable) && /HTTP 400/.test((e as Error).message)],
     ];
     let checked = 0;
     for (const [status, is] of rows) {
@@ -241,6 +241,23 @@ describe("BunnyReplayHost: watchMinutes (Task 30)", () => {
       checked++;
     }
     expect(checked).toBe(5);
+  });
+
+  // Task 31 (controller ruling 2, 2026-11-23): the controller's read-only check — a deleted video's statistics answer 404 with no
+  // watchTimeChart, and so does a guid the library never held (not the library's whole total). So a 404 is "the host holds no such
+  // video: nothing more can be read", answered as null — never 0, which a caller would add as a measurement, and never an error,
+  // which would hold the session's other copies back. Both bodies the host may send with it read the same.
+  it("a 404 (the host holds no such video: never stored, or removed) answers null — not 0, not an error — whatever its body; it is recorded as the 404 it was", async () => {
+    let checked = 0;
+    for (const body of [{ message: "Not Found" }, { viewsChart: {}, engagementScore: 0 }, undefined]) {
+      const { host, recorder } = harness(() => ({ status: 404, body }));
+      expect(await host.watchMinutes(GUID, FROM, TO), JSON.stringify(body)).toBeNull();
+      await new Promise((r) => setTimeout(r, 0)); // the record is fire-and-forget
+      expect(recorder.calls).toHaveLength(1);
+      expect(recorder.calls[0]).toMatchObject({ operation: "watchMinutes", status: 404, errorCode: null });
+      checked++;
+    }
+    expect(checked, "anti-vacuity: 404 bodies").toBe(3);
   });
 
   it("each read is one provider-call record about the video, its library id templated and no key in it", async () => {
@@ -498,7 +515,7 @@ describe("BunnyReplayHost: no secret and no signed token in a message, a record 
     await host.fetchFromUrl({ collectionId: "c1", title: "t", url: SOURCE });
     await host.video(GUID);
     await host.remove(GUID);
-    await errorOf(host.watchMinutes(GUID, NOW, NOW)); // 404 here: the URL is what is read
+    expect(await host.watchMinutes(GUID, NOW, NOW)).toBeNull(); // 404 here (Task 31: no such video reads null): the URL is what is read
     expect(calls).toHaveLength(5);
     for (const c of calls) {
       for (const s of SECRETS) expect(c.url, c.url).not.toContain(s);

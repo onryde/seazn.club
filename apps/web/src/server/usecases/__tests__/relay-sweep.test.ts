@@ -46,6 +46,8 @@ import { saveStreamSettings } from "../stream-codes";
 import { createStreamTarget } from "../stream-targets";
 import { type SessionDeps, createSession, currentSession, heartbeat, stopSession, storageReservations } from "../stream-sessions";
 import { type BackstopBucket, SweepScopeEmpty, backstopOutcome, isOrphan, sweepSessionLockKey, sweepStreamSessions } from "../relay-sweep";
+import type { LiveMinutesReader } from "@/server/video/cf-analytics";
+import { FakeReplayHost } from "@/server/video/replay-fake";
 import { SPONSOR_FRAMES_BUCKET } from "@/lib/supabase-storage";
 import { ORPHAN_FRAME_GRACE_MS } from "@/server/sponsors/airings";
 
@@ -82,6 +84,20 @@ vi.mock("@/server/sponsors/airings", async (importOriginal) => {
     ...actual,
     purgeOrphanFrames: (...a: Parameters<typeof actual.purgeOrphanFrames>) =>
       purgeFault.error ? Promise.reject(purgeFault.error) : actual.purgeOrphanFrames(...a),
+  };
+});
+
+// Seazn-hosted video Task 31, step 7e: a measure or purge pass that THROWS as a whole (the database refusing it) — the real
+// passes otherwise.
+const costFault = vi.hoisted(() => ({ measure: null as Error | null, purge: null as Error | null }));
+vi.mock("@/server/usecases/seazn-cost", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/usecases/seazn-cost")>();
+  return {
+    ...actual,
+    measureSeaznDelivery: (...a: Parameters<typeof actual.measureSeaznDelivery>) =>
+      costFault.measure ? Promise.reject(costFault.measure) : actual.measureSeaznDelivery(...a),
+    purgeDeletedOrgReplays: (...a: Parameters<typeof actual.purgeDeletedOrgReplays>) =>
+      costFault.purge ? Promise.reject(costFault.purge) : actual.purgeDeletedOrgReplays(...a),
   };
 });
 
@@ -206,6 +222,7 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
       cameraInputsCleared: 0, cameraRecordingsDeleted: 0, cameraRecordingsDeferred: 0, cameraRecordingsRefused: 0, cameraListingsTruncated: 0,   // R2004 1c
       framesPurged: 0, framePurgesFailed: 0,   // R4 S9 7d
       seaznHeld: 0, seaznHeldPastPromise: 0,   // Seazn-hosted video Task 18
+      seaznMeasured: 0, seaznMeasureFailed: 0, seaznReplaysPurged: 0, seaznPurgeFailed: 0,   // Seazn-hosted video Task 31 (flag off)
     });
     expect(listMachines).not.toHaveBeenCalled();   // no composed session in scope ever held a runner
     expect(listInputVideos, "R2004 1c: no ended composed session, no camera listed").not.toHaveBeenCalled();
@@ -1288,6 +1305,8 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
     // A run killed before its `finally` leaves its rows decades back, where they would sit under the next run's clock. No
     // other code writes a session that old, so a row there is this test's debris: its org is deleted first (taking the
     // decades-old events with it), not swept.
+    // Task 31 (ruling 4): a delivery row (V546) holds its session ON DELETE RESTRICT, so it goes first, or the org delete is 23503.
+    await sql`delete from fixture_video_delivery where session_id in (select id from fixture_stream_sessions where created_at < now() - interval '20 years')`;
     await sql`delete from organizations where id in (select org_id from fixture_stream_sessions where created_at < now() - interval '20 years')`;
     await shift("-");
     let clock: Date | null = null;
@@ -1336,6 +1355,7 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
     } finally {
       // The rows cannot all be shifted home (the events refuse), so the two rigs' orgs go, and the cascade takes their
       // sessions, the events the sweep dated decades back, samples and credits with them.
+      await sql`delete from fixture_video_delivery where org_id in (${a.orgId}, ${b.orgId})`;   // Task 31 (ruling 4): RESTRICT on the session
       await sql`delete from organizations where id in (${a.orgId}, ${b.orgId})`;
       if (clock) await sql`delete from stream_storage_snapshots where source = 'sweep' and taken_at = ${clock}`;
     }
@@ -2001,5 +2021,143 @@ describe.skipIf(!HAS_DB)("Seazn-hosted video Task 18: the sweep holds Seazn prog
     } finally {
       sentry.captureError.mockImplementation(() => undefined);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// Seazn-hosted video Task 31 (Phase 3): step 7e, behind SEAZN_HOSTED_COST. With the flag on, the sweep measures every Seazn
+// session's delivered minutes (usecases/seazn-cost.ts, whose own file proves the rules) and removes a deleted org's replays after
+// the grace; with it off — or malformed, read as off with a warning — it asks no provider anything. A failure inside either pass,
+// or of the pass as a whole, is counted, reported ONCE, and never stops the sweep: every other counter and step 8's snapshot stand.
+// Sessions end through the REAL path (Go live → stop → completed) on the fake ports; Cloudflare's reader and the replay host are
+// fakes handed in through SessionDeps. The sweep runs two days after the match, so a whole UTC day lies between them.
+// ---------------------------------------------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("Seazn-hosted video Task 31: step 7e measures Seazn delivery and purges a deleted org's replays", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    costFault.measure = null;
+    costFault.purge = null;
+  });
+  const costReports = () => sentry.captureError.mock.calls.filter(([, c]) => /^relay\.sweep\.seazn_(measure|purge)$/.test((c as { route?: string }).route ?? ""));
+
+  /** A composed Seazn session, live and ended; its programme input uid; a playable replay row on a copy the host holds. */
+  async function endedSeazn() {
+    vi.stubEnv("SEAZN_HOSTED_LIVE", "true");
+    vi.stubEnv("SEAZN_VIDEO_ORIGINS", "seazn.club");
+    const r = await rig("composed", { seazn: true });
+    await goLive(r);
+    await stopSession(r.auth, r.fixtureId, r.sessionId, r.deps);
+    await currentSession(r.auth, r.fixtureId, r.deps);
+    expect((await r.state()).state, "PREMISE: the session ended").toBe("completed");
+    vi.unstubAllEnvs();
+    const [{ uid }] = await sql<{ uid: string }[]>`select ingest_input_uid as uid from fixture_stream_sessions where id = ${r.sessionId}`;
+    const host = new FakeReplayHost();
+    const copy = await host.fetchFromUrl({ collectionId: "c", title: "part 1", url: "https://cf.example.invalid/x/downloads/default.mp4" });
+    const [{ id: replayId }] = await sql<{ id: string }[]>`
+      insert into fixture_video_replays (org_id, session_id, fixture_id, cf_video_id, recorded_at, part_no, state, bunny_video_id, verified_at)
+      values (${r.orgId}, ${r.sessionId}, ${r.fixtureId}, ${`v-${randomUUID()}`}, now(), 1, 'playable', ${copy}, now()) returning id`;
+    const calls: string[][] = [];
+    const live: LiveMinutesReader = async (uids) => { calls.push([...uids]); return Object.fromEntries(uids.map((u) => [u, u === uid ? 12.5 : 3])); };
+    return { r, uid, host, copy, replayId, calls, live };
+  }
+  type World = Awaited<ReturnType<typeof endedSeazn>>;
+  /** The sweep two days after the match (a whole UTC day between), with the cost fakes in its deps, scoped to the rig's org. */
+  const sweepLater = (w: World, o: { live?: LiveMinutesReader } = {}) => {
+    w.r.tick(2 * DAY_MS);
+    return sweepStreamSessions({ ...w.r.deps, liveMinutes: o.live ?? w.live, replay: w.host }, { orgIds: [w.r.orgId] });
+  };
+  const deliveryOf = async (sid: string) => (await sql<{ live_minutes: string; replay_minutes: string }[]>`
+    select live_minutes::text, replay_minutes::text from fixture_video_delivery where session_id = ${sid}`)[0] ?? null;
+
+  it("SEAZN_HOSTED_COST off, or malformed (read as off, with a warning): ZERO analytics calls, no replay read, nothing removed — the sweep otherwise unchanged", async () => {
+    let checked = 0;
+    for (const flag of [undefined, "false", "yes"]) {
+      const w = await endedSeazn();
+      await sql`update organizations set deleted_at = now() - interval '31 days' where id = ${w.r.orgId}`;
+      if (flag !== undefined) vi.stubEnv("SEAZN_HOSTED_COST", flag);
+      const warn = vi.spyOn(log, "warn");
+      const reads = vi.spyOn(w.host, "watchMinutes");
+      const removes = vi.spyOn(w.host, "remove");
+      const res = await sweepLater(w);
+      expect(w.calls, `SEAZN_HOSTED_COST=${String(flag)}: no Cloudflare call`).toEqual([]);
+      expect(reads).not.toHaveBeenCalled();
+      expect(removes).not.toHaveBeenCalled();
+      expect(res).toMatchObject({ seaznMeasured: 0, seaznMeasureFailed: 0, seaznReplaysPurged: 0, seaznPurgeFailed: 0 });
+      expect(await deliveryOf(w.r.sessionId)).toBeNull();
+      expect((await sql<{ state: string }[]>`select state from fixture_video_replays where id = ${w.replayId}`)[0]!.state).toBe("playable");
+      const flagWarnings = warn.mock.calls.filter(([, m]) => typeof m === "string" && m.includes("SEAZN_HOSTED_COST is not true/false"));
+      expect(flagWarnings, String(flag)).toHaveLength(flag === "yes" ? 1 : 0);
+      warn.mockRestore();
+      vi.unstubAllEnvs();
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("SEAZN_HOSTED_COST on: the session's live minutes are the input's plus its recordings' (12.5 + 3), its copy is measured, and the deleted org's replay is purged — its copy read first, then removed", async () => {
+    const w = await endedSeazn();
+    await sql`update organizations set deleted_at = now() - interval '31 days' where id = ${w.r.orgId}`;
+    w.host.setWatchMinutes(w.copy, 2);
+    vi.stubEnv("SEAZN_HOSTED_COST", "true");
+    // One video uid for the session, as step 5 stamps it: the sum is the input's AND the recording's.
+    const video = `v-${randomUUID()}`;
+    await sql`update fixture_stream_sessions set video_uids = array[${video}]::text[] where id = ${w.r.sessionId}`;
+    sentry.captureError.mockClear();
+    const res = await sweepLater(w);
+    expect(res).toMatchObject({ seaznMeasured: 1, seaznMeasureFailed: 0, seaznReplaysPurged: 1, seaznPurgeFailed: 0 });
+    expect(w.calls).toHaveLength(1);
+    expect([...w.calls[0]!].sort()).toEqual(expect.arrayContaining([w.uid, video]));
+    // Measured through yesterday (2), then the purge's last read up to the sweep (2 again: the fake answers per read).
+    expect(await deliveryOf(w.r.sessionId)).toEqual({ live_minutes: String(12.5 + 3 * (w.calls[0]!.length - 1)), replay_minutes: "4.0" });
+    expect(w.host.videoIds()).not.toContain(w.copy);
+    expect((await sql<{ state: string; deleted_reason: string }[]>`select state, deleted_reason from fixture_video_replays where id = ${w.replayId}`)[0])
+      .toEqual({ state: "deleted", deleted_reason: "org_deleted" });
+    expect(costReports()).toEqual([]);
+  });
+
+  it("Cloudflare THROWING: counted (seaznMeasureFailed 1), reported ONCE, nothing written — and every other counter, the purge and step 8's snapshot still run", async () => {
+    // The baseline: the same world, swept at the same distance from its match, with Cloudflare answering.
+    const twin = await endedSeazn();
+    vi.stubEnv("SEAZN_HOSTED_COST", "true");
+    const baseline = await sweepLater(twin);
+    expect(baseline, "PREMISE: the twin measured").toMatchObject({ seaznMeasured: 1, seaznMeasureFailed: 0 });
+    vi.unstubAllEnvs();
+    const w = await endedSeazn();
+    vi.stubEnv("SEAZN_HOSTED_COST", "true");
+    sentry.captureError.mockClear();
+    const res = await sweepLater(w, { live: async () => { throw new Error("cloudflare liveMinutesViewed: HTTP 503"); } });
+    expect(res).toMatchObject({ seaznMeasured: 1, seaznMeasureFailed: 1, seaznReplaysPurged: 0, seaznPurgeFailed: 0 });
+    expect(sentry.captureError, "ONE report for the whole sweep").toHaveBeenCalledTimes(1);
+    expect(sentry.captureError.mock.calls[0]![1]).toMatchObject({ route: "relay.sweep.seazn_measure", extra: { failed: 1, sessionIds: [w.r.sessionId] } });
+    expect(await deliveryOf(w.r.sessionId), "the replay half was written; the live half was not").toEqual({ live_minutes: "0.0", replay_minutes: "0.0" });
+    // The rest of the sweep: the same outcome as a sweep whose Cloudflare answered — the counters outside 7e untouched.
+    const outside = (x: typeof res) => Object.fromEntries(Object.entries(x).filter(([k]) => !k.startsWith("seazn") && k !== "headroomMinutes"));
+    expect(Object.keys(outside(res)).length, "anti-vacuity: counters compared").toBeGreaterThan(20);
+    expect(outside(res)).toEqual(outside(baseline));
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from stream_storage_snapshots where source = 'sweep' and taken_at = ${w.r.deps.now()}`;
+    expect(n, "step 8 ran").toBe(1);
+  });
+
+  it("a pass that THROWS as a whole is counted (+1), reported once each, and the other pass and step 8 still run", async () => {
+    let checked = 0;
+    for (const which of ["measure", "purge"] as const) {
+      const w = await endedSeazn();
+      await sql`update organizations set deleted_at = now() - interval '31 days' where id = ${w.r.orgId}`;
+      vi.stubEnv("SEAZN_HOSTED_COST", "true");
+      costFault[which] = new Error(`database refused the ${which} pass`);
+      sentry.captureError.mockClear();
+      const res = await sweepLater(w);
+      expect(res, which).toMatchObject(which === "measure"
+        ? { seaznMeasured: 0, seaznMeasureFailed: 1, seaznReplaysPurged: 1, seaznPurgeFailed: 0 }
+        : { seaznMeasured: 1, seaznMeasureFailed: 0, seaznReplaysPurged: 0, seaznPurgeFailed: 1 });
+      expect(costReports().map(([, c]) => (c as { route: string }).route), which).toEqual([`relay.sweep.seazn_${which}`]);
+      expect((costReports()[0]![0] as Error).message).toBe(`database refused the ${which} pass`);
+      const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from stream_storage_snapshots where source = 'sweep' and taken_at = ${w.r.deps.now()}`;
+      expect(n, `${which}: step 8 ran`).toBe(1);
+      costFault[which] = null;
+      vi.unstubAllEnvs();
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 });

@@ -71,8 +71,9 @@ export interface ReplayHost {
    *  before the file starts or while it streams, the host stops sending (Task 26 review m1). */
   openDownload(videoId: string, signal?: AbortSignal): Promise<ReplayDownload>;
   /** Minutes of the video watched between `from` and `to` (Phase 3). A window `assertWatchWindow` refuses is refused before any
-   *  call, by every host. */
-  watchMinutes(videoId: string, from: Date, to: Date): Promise<number>;
+   *  call, by every host. Null: the host holds no such video — never stored, or removed — so nothing about it can be read any more
+   *  (Task 31: the host forgets a removed video's watch time with it). Never 0 in its place: a caller adds a number as minutes. */
+  watchMinutes(videoId: string, from: Date, to: Date): Promise<number | null>;
 }
 
 /** The window a `watchMinutes` read may ask about: two real instants, `from` no later than `to` (Task 30). Every host checks it

@@ -57,6 +57,9 @@ export interface LiveMinutesOptions {
   recorder?: ProviderCallRecorder;
 }
 
+/** `liveMinutesViewed` as a caller holds it (Task 31: the daily measurement takes it as a dependency, so a test hands it a fake). */
+export type LiveMinutesReader = (uids: readonly string[], from: Date, to: Date) => Promise<Record<string, number>>;
+
 /** The UTC date of an instant, as Cloudflare's `Date` filter takes it (`YYYY-MM-DD`). */
 const utcDate = (d: Date): string => d.toISOString().slice(0, 10);
 

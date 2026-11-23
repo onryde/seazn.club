@@ -557,6 +557,13 @@ export function cfAnalyticsConfig(env: Record<string, string | undefined> = proc
  *  and the body read alike; recorded `timeout`). The daily sweep reads each session's uids in turn, and undici's own bound is
  *  300 s, so with Cloudflare down one hung read held the sweep for five minutes. A day's answer is a few groups. */
 export const SEAZN_LIVE_MINUTES_TIMEOUT_MS = 20_000;
+/** Task 31 (the plan's brief): the daily pass reads a Seazn session's LIVE minutes while it ended within this many days. Live
+ *  viewing ends with the session, and the interim replay (by video uid) ends once the replay host's copy is verified, within hours;
+ *  31 days back plus the one extra date a session's start can cross stays inside Cloudflare's 32-date query (config.test.ts). */
+export const SEAZN_LIVE_MEASURE_DAYS = 31;
+/** Task 31 (plan decision; spec §5.5): an organisation's Seazn replays are removed from the replay host this many days after its
+ *  `organizations.deleted_at` (V021) — the schema's only "closed or deleted" mark, set by staff until a product path sets it. */
+export const SEAZN_ORG_DELETED_REPLAY_GRACE_DAYS = 30;
 /** C9: simulcast outputs bill as delivery; Cloudflare caps 5 per input. */
 export const MAX_OUTPUTS_PER_INPUT = 5;
 

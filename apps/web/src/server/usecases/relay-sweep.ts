@@ -29,6 +29,8 @@ import "server-only";
 //      Task 18), whatever the flags, and one past the promise is alerted once, ever.
 //   5. VIDEO FACTS (ruling 13 item 5, Dd), 6. SUMMARIES, 7. SAMPLE RETENTION, 7b. PHONE-BEAT RETENTION (W10, 24 h),
 //   7c. CAPTURE-RECORD RETENTION (spec 2026-10-12 §9, 30 days), 7d. ORPHAN SPONSOR FRAMES (R4 S9, session end + 24 h),
+//   7e. SEAZN COST (Seazn-hosted video Task 31, SEAZN_HOSTED_COST only): every Seazn session's delivered minutes measured, then a
+//       deleted org's replays removed past the grace (usecases/seazn-cost.ts); each pass counted and reported, never fatal,
 //   8. ONE storage snapshot.
 import { sql, type Tx } from "@/lib/db";
 import { captureError } from "@/lib/sentry";
@@ -42,6 +44,10 @@ import type { IngestVideo, RunnerListing } from "@/server/relay/ports";
 import { recordEvent, recordStorageSnapshot } from "@/server/relay/telemetry";
 import { framesBucketIsPublic } from "@/lib/supabase-storage";
 import { purgeOrphanFrames } from "@/server/sponsors/airings";
+import { dbRecorder } from "@/server/relay/drivers";
+import { liveMinutesViewed } from "@/server/video/cf-analytics";
+import { replayDriver } from "@/server/video/replay-driver";
+import { type SeaznCostDeps, measureSeaznDelivery, purgeDeletedOrgReplays, seaznCostArmed } from "./seazn-cost";
 import {
   ACTIVE_STATES, TERMINAL_STATES, type SessionDeps,
   apply, destroyListedMachine, estimateCostMinor, reconcileSession, releaseOutput, storageHeadroomMinutes, storageUsageForColumns, tickSession,
@@ -93,6 +99,10 @@ export interface SweepResult {
   framePurgesFailed: number;       // R4 S9 7d: objects whose storage remove failed (tombstones kept, retried tomorrow),
                                    //   +1 when the purge itself threw
   framesBucketPublic: boolean | null; // R4 S9 7d: the frames bucket's visibility (null: it could not be read)
+  seaznMeasured: number;           // Seazn Task 31 7e: sessions with delivered minutes written this pass (SEAZN_HOSTED_COST)
+  seaznMeasureFailed: number;      // Seazn Task 31 7e: sessions whose measurement failed (read again tomorrow), +1 when the pass threw
+  seaznReplaysPurged: number;      // Seazn Task 31 7e: replays of orgs deleted past the grace, deleted (`org_deleted`) this pass
+  seaznPurgeFailed: number;        // Seazn Task 31 7e: those whose delete or copy removal failed (retried), +1 when the pass threw
 }
 
 export type BackstopBucket = Exclude<keyof SweepResult["backstop"], "candidates" | "visited" | "skippedLocked" | "errored">;
@@ -281,6 +291,7 @@ export async function sweepStreamSessions(
     seaznHeld: 0, seaznHeldPastPromise: 0,
     headroomMinutes: 0, videosSeen: 0, recordingsFinalised: 0, summariesWritten: 0, samplesDeleted: 0, beatsDeleted: 0, recordsDeleted: 0,
     framesPurged: 0, framePurgesFailed: 0, framesBucketPublic: null,
+    seaznMeasured: 0, seaznMeasureFailed: 0, seaznReplaysPurged: 0, seaznPurgeFailed: 0,
   };
 
   // 1. BACKSTOP — every non-terminal session, PLUS (C27) every session whose runner has not finished dying: `reconcileSession`
@@ -782,6 +793,38 @@ export async function sweepStreamSessions(
     }
   } catch (err) {
     log.warn({ err: String(err) }, "relay sweep: the sponsor-frames bucket could not be read — its privacy was not checked");
+  }
+
+  // 7e. SEAZN COST (Seazn-hosted video Task 31), only with SEAZN_HOSTED_COST on (a malformed value reads as off, warned:
+  //     `seaznCostArmed`). The delivered minutes first, then the deleted orgs' replays — so a copy about to be removed is
+  //     measured through yesterday here, and its last partial day by the purge's own read just before its removal. Each pass
+  //     counts and reports its own failures ONCE; a pass that throws as a whole is counted (+1) and reported here, and the
+  //     other pass and step 8 still run. The minutes are never worth the sweep.
+  if (seaznCostArmed()) {
+    const costDeps: SeaznCostDeps = {
+      liveMinutes: deps.liveMinutes ?? ((uids, from, to) => liveMinutesViewed(uids, from, to, { recorder: dbRecorder })),
+      // Resolved when read: `replayDriver()` throws on an unset REPLAY_DRIVER under a live relay (stream-sessions/deps.ts).
+      get replay() { return deps.replay ?? replayDriver(); },
+    };
+    const scope = orgIds ? { orgIds } : {};
+    try {
+      const m = await measureSeaznDelivery(costDeps, now, scope);
+      out.seaznMeasured = m.measured;
+      out.seaznMeasureFailed = m.failed;
+    } catch (err) {
+      out.seaznMeasureFailed += 1;
+      log.error({ err: String(err) }, "relay sweep: the Seazn delivery measurement failed — nothing was lost; the next pass reads every window again");
+      captureError(err, { route: "relay.sweep.seazn_measure" });
+    }
+    try {
+      const p = await purgeDeletedOrgReplays(costDeps, now, scope);
+      out.seaznReplaysPurged = p.purged;
+      out.seaznPurgeFailed = p.failed;
+    } catch (err) {
+      out.seaznPurgeFailed += 1;
+      log.error({ err: String(err) }, "relay sweep: the deleted orgs' Seazn replay purge failed — the next pass retries it");
+      captureError(err, { route: "relay.sweep.seazn_purge" });
+    }
   }
 
   // 8. ONE storage snapshot per run, on the fitted reading (its CHECK: headroom = limit − used − reserved, in integers).

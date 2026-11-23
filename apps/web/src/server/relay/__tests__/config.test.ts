@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import * as config from "../config";
+import { CF_ANALYTICS_MAX_WINDOW_DAYS } from "../../video/cf-analytics";
 import {
   AUTO_START_RETRY_SECONDS, AUTO_STOP_AFTER_RESULT_SECONDS, COURT_AUTO_STOP_AFTER_RESULT_SECONDS, CODE_GRACE_AFTER_FINISH_MINUTES, DEAD_PHONE_TAKEOVER_SECONDS,
   FLY_RELAY_APP_RETIRED_DEFAULT, LOCAL_ENV_NAME, PHONE_LOST_LIVE_MINUTES, PHONE_NOT_READY_SHOW_AFTER_SECONDS,
@@ -737,6 +738,18 @@ describe("the replay move's numbers (Task 24): each is the ruling's or the recom
     // The retry window is the Cloudflare copy's own life: past it there is nothing left to fetch.
     expect(config.SEAZN_REPLAY_RETRY_DAYS).toBe(30);
     expect(config.SEAZN_REPLAY_RETRY_DAYS).toBe(config.DELETE_RECORDING_AFTER_DAYS);
+  });
+});
+
+describe("Seazn cost (Task 31): the measurement window and the deleted-org grace", () => {
+  it("the brief's numbers: live minutes are read while a session ended within 31 days; a deleted org's replays go 30 days after deleted_at", () => {
+    expect(config.SEAZN_LIVE_MEASURE_DAYS).toBe(31);
+    expect(config.SEAZN_ORG_DELETED_REPLAY_GRACE_DAYS).toBe(30);
+  });
+  it("a live read never needs more dates than Cloudflare answers in one query: 31 days back, plus the extra date a session's start can cross (it lasts at most MAX_DURATION_MINUTES), fits its 32", () => {
+    const startCrosses = Math.ceil(config.MAX_DURATION_MINUTES / (24 * 60));
+    expect(startCrosses, "PREMISE: a session lasts less than a day").toBe(1);
+    expect(config.SEAZN_LIVE_MEASURE_DAYS + startCrosses).toBeLessThanOrEqual(CF_ANALYTICS_MAX_WINDOW_DAYS);
   });
 });
 

@@ -94,12 +94,14 @@ export class FakeReplayHost implements ReplayHost {
     };
   }
 
-  // The number a test sets is the answer for any window and any video, removed or not, and every read is logged (`watchWindows`).
-  // A window the port refuses (backwards, or not a date) is refused here as the real adapter refuses it (Task 30), and is not
-  // logged: no read was made. What the real host answers for a DELETED video is still unmeasured, so the fake does not model it.
-  async watchMinutes(videoId: string, from: Date, to: Date): Promise<number> {
+  // The number a test sets is the answer for any window, for a video the fake holds, and every read is logged (`watchWindows`). A
+  // video it does not hold — removed, or never fetched — answers null, as the real host's 404 does (Task 31: the controller's read,
+  // 2026-11-23, saw a deleted video's statistics answer 404), whatever a test set. A window the port refuses (backwards, or not a
+  // date) is refused here as the real adapter refuses it (Task 30), and is not logged: no read was made.
+  async watchMinutes(videoId: string, from: Date, to: Date): Promise<number | null> {
     assertWatchWindow(from, to);
     this.watchReads.push({ videoId, from, to });
+    if (!this.videos.has(videoId)) return null;
     return this.watched.get(videoId) ?? 0;
   }
 

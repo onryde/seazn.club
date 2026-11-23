@@ -9,7 +9,8 @@
 //    never from the DELETE's status.
 //  * The embed token is B4's. A file needs B5's CDN token AND an allowed Referer (B3, B9).
 //  * Watch time (Task 30): `GET /statistics?videoGuid=&dateFrom=&dateTo=`, summing `watchTimeChart`, whose unit is SECONDS
-//    (WATCH_TIME_CHART_SECONDS_PER_UNIT; measured by the Task 20 probe's B11, 2026-11-23).
+//    (WATCH_TIME_CHART_SECONDS_PER_UNIT; measured by the Task 20 probe's B11, 2026-11-23). A 404 is a video the library does not
+//    hold, deleted or never there (the controller's read-only check, 2026-11-23: no chart, and not the library's total): null.
 // Secrets (the API key, the read-only key, the token key) reach no URL, message, record or log line. A message is built from
 // the operation, the status and our own ids only (never the vendor's text, never a fetch error's text, which can quote the
 // URL), and it passes sanitise.ts's `redact` floor on its way out. A signed URL is never recorded: the CDN call is recorded
@@ -35,8 +36,9 @@ export const DOWNLOAD_TOKEN_TTL_SECONDS = 300;
  *  1.539 s per unit — inside the probe's factor-of-two band around 1, where minutes would chart ~3 and milliseconds ~183 100.
  *  Kept at exactly 1 (controller ruling): the chart reads about a third under what the probe played, a gap whose cause is
  *  unmeasured, so a total here is an estimate, not an invoice line. The same run: the unwatched control video answered 0 (its
- *  chart an object, not null or absent), and a video read after its DELETE still answered minutes. A provider-protocol fact, like
- *  the base URL above. */
+ *  chart an object, not null or absent), and a video read seconds after its DELETE still answered minutes — but re-read an hour
+ *  later it answered 404 with no chart (the controller's check, 2026-11-23), so that read was lag: a deleted video's watch time is
+ *  gone with it (Task 31 reads it before every removal). A provider-protocol fact, like the base URL above. */
 export const WATCH_TIME_CHART_SECONDS_PER_UNIT = 1;
 
 /** The video API's `status`, number by number (Task 21's table; B2 saw 2 -> 3 -> 4). A number not listed throws: a status
@@ -210,11 +212,13 @@ export class BunnyReplayHost implements ReplayHost {
    *  after the port's own check (`assertWatchWindow`: Bunny answers an unreadable date with the last 30 days, never an error).
    *  `watchTimeChart` maps each UTC interval to a watch-time count; their sum is converted through
    *  WATCH_TIME_CHART_SECONDS_PER_UNIT. A null chart is the schema's "no data" and reads 0. An answer with no chart at all, or a
-   *  value that is not a count, throws: a shape we did not expect is reported, never read as nobody watching. */
-  async watchMinutes(videoId: string, from: Date, to: Date): Promise<number> {
+   *  value that is not a count, throws: a shape we did not expect is reported, never read as nobody watching. A 404 is null (Task 31):
+   *  the library holds no such video — Bunny forgets a deleted video's statistics with it — so there is nothing left to read. */
+  async watchMinutes(videoId: string, from: Date, to: Date): Promise<number | null> {
     assertWatchWindow(from, to);
     const query = `videoGuid=${encodeURIComponent(videoId)}&dateFrom=${encodeURIComponent(from.toISOString())}&dateTo=${encodeURIComponent(to.toISOString())}`;
     const r = await this.api<{ watchTimeChart?: unknown }>("GET", `/statistics?${query}`, undefined, { operation: "watchMinutes", ids: [videoId], subjectId: videoId });
+    if (r.status === 404) return null;
     if (!r.ok) throw this.httpError(r.status, `watchMinutes: HTTP ${r.status} (video ${videoId})`, "api_key");
     const chart = r.json?.watchTimeChart;
     if (chart === null) return 0;

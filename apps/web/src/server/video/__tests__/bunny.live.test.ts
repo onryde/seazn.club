@@ -496,7 +496,7 @@ describe.skipIf(!GATE.enabled)("Bunny Stream — collections, embed past expiry,
     for (;;) {
       polls++;
       try {
-        minutes = await stats.watchMinutes(videoIds.long!, statsFrom, new Date());
+        minutes = (await stats.watchMinutes(videoIds.long!, statsFrom, new Date())) ?? 0;   // null: the host holds no such video (Task 31)
         lastError = null;
       } catch (e) {
         lastError = redact((e as Error).message);

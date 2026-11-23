@@ -234,7 +234,24 @@ describe("FakeReplayHost: openDownload", () => {
   });
 });
 
-describe("FakeReplayHost: watchMinutes (Phase 3, unmeasured against the real host)", () => {
+describe("FakeReplayHost: watchMinutes (Phase 3)", () => {
+  // Task 31 (controller ruling 2, 2026-11-23): the real host answers 404 for a video it no longer holds (deleted) or never held, and
+  // its adapter reads that as null. The fake models it from its own state: a removed or unknown id reads null whatever a test set,
+  // and the read is still logged (a read was made).
+  it("a video the fake does not hold — removed, or never fetched — answers null (the real host's 404), never the minutes a test set, and the read is logged", async () => {
+    const fake = new FakeReplayHost();
+    const id = await fetchOne(fake);
+    const from = new Date("2026-11-01T00:00:00.000Z");
+    const to = new Date("2026-11-21T00:00:00.000Z");
+    fake.setWatchMinutes(id, 9);
+    expect(await fake.watchMinutes(id, from, to), "PREMISE: held, it answers what was set").toBe(9);
+    expect(await fake.remove(id)).toBe("deleted");
+    expect(await fake.watchMinutes(id, from, to), "removed").toBeNull();
+    expect(await fake.watchMinutes("never-fetched", from, to), "never held").toBeNull();
+    expect(fake.watchWindows(id)).toEqual([{ from, to }, { from, to }]);
+    expect(fake.watchWindows("never-fetched")).toEqual([{ from, to }]);
+  });
+
   it("reads 0 until a test sets it, then the number it was given, and logs each window it was asked", async () => {
     const fake = new FakeReplayHost();
     const id = await fetchOne(fake);
