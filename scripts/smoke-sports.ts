@@ -166,6 +166,26 @@ async function cleanup(): Promise<void> {
       delete from sponsor_orders
       where org_id in (select id from organizations
                        where created_by in (select id from users where email = any(${emails})))`;
+    // seazn_held_alerts.session_id is RESTRICT (V541): a held-recording alert would block the sessions cascade.
+    await sql`
+      delete from seazn_held_alerts
+      where session_id in (select s.id from fixture_stream_sessions s join organizations o on o.id = s.org_id
+                           where o.created_by in (select id from users where email = any(${emails})))`;
+    // seazn_locked_videos.input_row_id is RESTRICT too (V541): a recording the stream tick locked would block the inputs cascade.
+    await sql`
+      delete from seazn_locked_videos
+      where input_row_id in (select i.id from fixture_stream_inputs i
+                               join fixture_stream_sessions s on s.id = i.session_id
+                               join organizations o on o.id = s.org_id
+                              where o.created_by in (select id from users where email = any(${emails})))`;
+    // fixture_video_replays (org_id and session_id) and org_video_collections (org_id) are RESTRICT (V542): a replay the mover
+    // recorded, or the org's replay collection, would block the org delete.
+    await sql`
+      delete from fixture_video_replays
+      where org_id in (select id from organizations where created_by in (select id from users where email = any(${emails})))`;
+    await sql`
+      delete from org_video_collections
+      where org_id in (select id from organizations where created_by in (select id from users where email = any(${emails})))`;
     const orgs = await sql`
       delete from organizations
       where created_by in (select id from users where email = any(${emails}))`;

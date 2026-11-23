@@ -7,6 +7,7 @@ import { isPublicHubPath } from "@/lib/routes";
 import { isStagingOrigin } from "@/lib/robots-policy";
 import { siteOrigin } from "@/lib/site-origin";
 import { revshareEnabled } from "@/lib/revshare-shared";
+import { BUNNY_EMBED_HOST, FAKE_REPLAY_EMBED_HOST, replayDriverIsFake, streamPlaybackHost } from "@/server/relay/config";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
@@ -65,6 +66,27 @@ function overlayLoopbackOrigin(pathname: string): string {
   return OVERLAY_TREE.test(pathname) ? ` http://127.0.0.1:${RELAY_PHASE_PORT}` : "";
 }
 
+/** Seazn-hosted video (Task 15): the Stream customer host the signed playback addresses are built on (`https://<host>/<token>/manifest/
+ *  video.m3u8`, server/video/cf-playback.ts reads the SAME `streamPlaybackHost()`), as a ` https://<host>` suffix for the two
+ *  directives the player's requests fall under; "" where there is none to name (a live deployment with no host signs nothing) or the
+ *  setting is malformed (the signer refuses it by name; the policy must never be what takes every page down). */
+function playbackOrigin(): string {
+  try {
+    const host = streamPlaybackHost();
+    return host ? ` https://${host}` : "";
+  } catch {
+    return "";
+  }
+}
+
+/** The replay host's embed origin(s) for frame-src (Task 25), as ` https://<host>` suffixes: the real host's always (a fixed origin,
+ *  not a setting), and the fake's only under the fake replay driver. Read through config.ts alone (review m1: no adapter in the
+ *  proxy), and with no error built per request: a driver setting the driver refuses adds no fake origin and never takes the page
+ *  down (the driver refuses it by name where it is used). */
+function replayEmbedOrigins(): string {
+  return ` https://${BUNNY_EMBED_HOST}${replayDriverIsFake() ? ` https://${FAKE_REPLAY_EMBED_HOST}` : ""}`;
+}
+
 /** The PostHog first-party proxy origin (prod), as a ` <origin>` connect-src suffix; "" when events ride the same-origin /ingest rewrite. */
 function posthogApiOrigin(): string {
   const host = process.env.NEXT_PUBLIC_POSTHOG_API_HOST;
@@ -121,11 +143,17 @@ export function cspHeader(
     // (Cloudflare's RealtimeKit network allowlist; proxy-csp-realtimekit.test.ts).
     // R2005: the compositor's loopback phase channel, on `/overlay` only (overlayLoopbackOrigin).
     // The fixed policy (nonce null) also lets revshare's tracking.js reach its API when revshare is on.
-    `connect-src 'self' https://api.stripe.com https://*.supabase.co wss://*.supabase.co https://*.realtime.cloudflare.com wss://*.realtime.cloudflare.com https://*.ingest.sentry.io https://*.sentry.io${posthogApiOrigin()}${overlayLoopbackOrigin(opts.pathname ?? "")}${nonce === null && revshareEnabled() ? ` ${REVSHARE_ORIGIN}` : ""}`,
+    // Seazn-hosted video (Task 15): the match page's player fetches the signed HLS manifest and its segments from the Stream customer
+    // host (hls.js: XHR/fetch, here), so it is named in connect-src and, below, in media-src (proxy-csp-seazn-video.test.ts).
+    `connect-src 'self' https://api.stripe.com https://*.supabase.co wss://*.supabase.co https://*.realtime.cloudflare.com wss://*.realtime.cloudflare.com${playbackOrigin()} https://*.ingest.sentry.io https://*.sentry.io${posthogApiOrigin()}${overlayLoopbackOrigin(opts.pathname ?? "")}${nonce === null && revshareEnabled() ? ` ${REVSHARE_ORIGIN}` : ""}`,
     // Embedded Checkout renders inside a Stripe-hosted iframe; the Turnstile widget (components/turnstile-widget.tsx) is a challenges.cloudflare.com
     // iframe. The public match page's replay player (YouTube Connect T16) is YouTube's
     // privacy-enhanced embed, loaded only after a tap: `youtube-nocookie.com` and its www host, and no `youtube.com` origin.
-    `frame-src 'self' https://js.stripe.com https://*.stripe.com https://hooks.stripe.com https://www.youtube-nocookie.com https://youtube-nocookie.com https://challenges.cloudflare.com`,
+    // Seazn-hosted video (Task 15): the <video> plays a MediaSource through a `blob:` URL (hls.js), or the signed manifest itself
+    // (Safari's native HLS) from the Stream customer host. A directive of its own, so it restates 'self' (default-src covered media).
+    `media-src 'self' blob:${playbackOrigin()}`,
+    // Seazn-hosted video (Task 25): a replay host's copy plays in the host's own embed page (`replayEmbedOrigins`; proxy-csp-seazn-replay.test.ts).
+    `frame-src 'self' https://js.stripe.com https://*.stripe.com https://hooks.stripe.com https://www.youtube-nocookie.com https://youtube-nocookie.com https://challenges.cloudflare.com${replayEmbedOrigins()}`,
     `object-src 'none'`,
     `base-uri 'self'`,
     `form-action 'self'`,

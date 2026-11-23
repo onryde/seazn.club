@@ -36,6 +36,7 @@
     "chessground": "9.2.1",
     "exceljs": "^4.4.0",
     "flexsearch": "^0.8.212",
+    "hls.js": "1.7.4",
     "ioredis": "^5.11.1",
     "jose": "^6.2.3",
     "lucide-react": "^1.22.0",

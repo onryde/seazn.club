@@ -347,8 +347,10 @@ or `fixture-console.tsx` at a phone width. Not derivable from the code:
   a feature branch gets zero automatic e2e signal, ever, until it merges (the
   exact opposite of smoke, which is PR-only — see the next bullet; the two
   trigger on disjoint events and neither substitutes for the other).
-  Three jobs — `e2e-parallel` (sharded), `e2e-serial`, `e2e-mobile`
-  (matrixed) — and **all seven width projects are covered** between them.
+  Four jobs — `e2e-parallel` (sharded), `e2e-serial`, `e2e-mobile`
+  (matrixed), and `e2e-seazn` (the one job with SEAZN_HOSTED_LIVE on: two
+  walkthrough files) — and **all seven width projects are covered** between
+  the first three.
   Do NOT trust a job/leg count written here: this paragraph claimed "five
   legs" and was right for about four hours until #597 split the floor jobs
   (2026-08-17), then claimed "runs on PRs" until the trigger changed under it.

@@ -12,6 +12,9 @@
 //   - GET /public/orgs/{org}/competitions/{slug}/players/{id}/matches   use-live-player-matches.ts
 //   - GET /public/orgs/{org}/live               org-live-chips.tsx
 //   - GET /public/fixtures/{id}/board           watch-panel.tsx (T16, an online chess board's view-only state)
+//   - GET /public/fixtures/{id}/video           seazn-video-island.tsx (Seazn-hosted video, Task 15: a read at once, then
+//                                               before each signed address's token lapses, never slower than every 30 s
+//                                               while there is a live or recording to refresh, and a retry per failure)
 // Not polled: /public/fixtures/{id}/realtime-token is fetched once per
 // subscription (use-live-fixture.ts, use-fixture-stream.ts), never on a timer,
 // so it stays on the 60 bucket.
@@ -59,6 +62,7 @@ const usecase = vi.hoisted(() => ({
   fixtureRealtimeEligible: vi.fn(async () => true),
   publicFixtureBoard: vi.fn(async () => ({ roundOpened: false, externalPlay: null })),
   mintPublicFixtureToken: vi.fn(async () => "token"),
+  seaznFixtureVideo: vi.fn(async () => ({ live: null, replay: [] })),
 }));
 vi.mock("@/server/usecases/public", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/usecases/public")>()),
@@ -95,6 +99,7 @@ vi.mock("@/server/public-site/data", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/public-site/data")>()),
   fixtureRealtimeEligible: usecase.fixtureRealtimeEligible,
 }));
+vi.mock("@/server/video/seazn-video", () => ({ seaznFixtureVideo: usecase.seaznFixtureVideo }));
 vi.mock("@/lib/realtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/realtime")>()),
   mintPublicFixtureToken: usecase.mintPublicFixtureToken,
@@ -111,6 +116,7 @@ import { GET as standings } from "../orgs/[orgSlug]/competitions/[slug]/division
 import { GET as competition } from "../orgs/[orgSlug]/competitions/[slug]/route";
 import { GET as discovery } from "../discovery/route";
 import { GET as realtimeToken } from "../fixtures/[id]/realtime-token/route";
+import { GET as video } from "../fixtures/[id]/video/route";
 import { GET as entrants } from "../orgs/[orgSlug]/competitions/[slug]/divisions/[divisionSlug]/entrants/route";
 import { GET as schedule } from "../orgs/[orgSlug]/competitions/[slug]/divisions/[divisionSlug]/schedule/route";
 import { GET as stats } from "../orgs/[orgSlug]/competitions/[slug]/divisions/[divisionSlug]/stats/route";
@@ -146,6 +152,7 @@ const POLLED: Array<[string, Call]> = [
   ],
   ["orgs/{org}/live", (ip) => orgLive(from(ip), params({ orgSlug: "o" }))],
   ["fixtures/{id}/board", (ip) => board(from(ip), params({ id: "f1" }))],
+  ["fixtures/{id}/video", (ip) => video(from(ip), params({ id: "f1" }))],
 ];
 // A third element names the route's OWN tighter per-IP bucket, spent on top of
 // the 60 (bot hardening 2026-09-25); registrations/__tests__/route-rate-limits
@@ -185,10 +192,20 @@ describe("the polled public endpoints: their own per-IP bucket, 300 a minute", (
     expect(statuses[300], "the 301st").toBe(429);
   });
 
-  it("all six share ONE poll bucket per IP (one page polling two of them is one budget)", async () => {
+  it("all seven share ONE poll bucket per IP (one page polling two of them is one budget)", async () => {
     const ip = "203.0.113.8";
-    expect(POLLED, "premise: 300 splits evenly across the polled routes").toHaveLength(6);
-    for (const [, call] of POLLED) expect(await send(call, ip, 300 / POLLED.length)).not.toContain(429);
+    expect(POLLED, "premise: the polled routes are the seven named above").toHaveLength(7);
+    // 300 does not split evenly across seven, so the requests go round-robin; every route is hit, and the 300 are one budget.
+    const hits = new Map<string, number>();
+    const statuses: number[] = [];
+    for (let i = 0; i < 300; i++) {
+      const [route, call] = POLLED[i % POLLED.length]!;
+      hits.set(route, (hits.get(route) ?? 0) + 1);
+      statuses.push((await call(ip)).status);
+    }
+    expect(statuses, "the first 300, across routes").not.toContain(429);
+    expect([...hits.keys()].sort(), "anti-vacuity: every polled route took part").toEqual(POLLED.map(([route]) => route).sort());
+    expect(Math.min(...hits.values()), "and none was a bystander").toBeGreaterThan(0);
     expect(counters.get(`rl:pubv1poll:${ip}`)).toBe(300);
     expect((await POLLED[0]![1](ip)).status, "the 301st, across routes").toBe(429);
   });

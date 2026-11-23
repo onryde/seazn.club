@@ -95,10 +95,27 @@ vi.mock("../entitlement-freeze", async (importOriginal) => {
     },
   };
 });
+// Task 17: the Seazn live read is decorative on a polled read too (the same M5 rule), so a throw from it must not take the board down.
+const seaznFault = vi.hoisted(() => ({ fail: false, hits: 0 }));
+vi.mock("@/server/video/seazn-live", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/server/video/seazn-live")>();
+  return {
+    ...real,
+    liveSeaznFixtureIds: async (...args: Parameters<typeof real.liveSeaznFixtureIds>) => {
+      if (seaznFault.fail) {
+        seaznFault.hits++;
+        throw new Error("seazn live fault (test)");
+      }
+      return real.liveSeaznFixtureIds(...args);
+    },
+  };
+});
 import { log } from "@/server/logger";
 import type { MatchDayCandidate, MatchDayCourt, MatchDayFixture, MatchDayView } from "@/lib/match-day/types";
 import { MatchDayView as MatchDayViewSchema } from "@/server/api-v1/schemas";
-import { apiSessionOnTarget, rigApiTarget, rigTarget, sessionOnTarget } from "@/server/relay/__tests__/_session-rig";
+import { apiSessionOnTarget, rigApiTarget, rigTarget, rigUser, sessionOnTarget } from "@/server/relay/__tests__/_session-rig";
+import { installSeaznEnvForDescribe, live as seaznLive, goLive as seaznGoLive, seaznRigFor, stopAndSettle as seaznStop } from "@/server/video/__tests__/_seazn-session-rig";
+import { stopSession } from "../stream-sessions";
 import { youtubeWatchUrl } from "@/lib/youtube";
 import { appendEvent } from "@/server/engine-db/append-event";
 import { createCompetition } from "../competitions";
@@ -618,6 +635,7 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
       // ledger, so no scorer attention.
       scorer_attention: null,
       live_video: null,
+      live_seazn: false,
       format_line: block.effectiveLine,
       // Court stream §5.5: no switch row and no code of its own, on a court with no link.
       court_stream: false,
@@ -905,6 +923,117 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
       checked++;
     }
     expect(checked).toBe(5);
+  });
+
+  describe("live_seazn (Seazn-hosted video, Task 17)", () => {
+    installSeaznEnvForDescribe("match-day-seazn-test");
+
+    it("Task 17 — a playing match ON AIR to Seazn carries live_seazn and NO video address (live_video stays the YouTube shape); a warming Seazn session, a stopped one, a YouTube live, a pasted key and a queued match do not", async () => {
+      const day = await seedDay();
+      const c4 = await addCourt(day, "hallA", "Court 4", 3);
+      const c5 = await addCourt(day, "hallA", "Court 5", 4);
+      const { p1, p2, p3, p4 } = pairs(day);
+      const f12 = between(day.comp, p1, p2);
+      const f34 = between(day.comp, p3, p4);
+      const f13 = between(day.comp, p1, p3);
+      const f24 = between(day.comp, p2, p4);
+      const f14 = between(day.comp, p1, p4);
+      const f23 = between(day.comp, p2, p3);
+      for (const [f, c] of [[f12, day.courts.c1], [f34, day.courts.c2], [f13, day.courts.c3], [f24, c4], [f14, c5]] as const) {
+        await place(day, f.id, -10, c);
+        await start(day, f.id, -10);
+      }
+      // f23 is queued behind f12 on Court 1: not started, with a LIVE Seazn session of its own (a match of the day, early).
+      await place(day, f23.id, 30, day.courts.c1);
+      const r = await seaznRigFor({ ...day.auth, userId: await rigUser() }, [f12.id, f34.id, f14.id, f23.id, f24.id]);
+      const onAir = await seaznLive(r, f12.id, r.seazn);
+      await seaznGoLive(r, f34.id, r.seazn);
+      const stopped = await seaznLive(r, f14.id, r.seazn);
+      await seaznStop(r, f14.id, stopped);
+      await seaznLive(r, f23.id, r.seazn);
+      await seaznLive(r, f24.id, r.pasted);
+      const yt = await onYouTube(day, f13.id, "live", false);
+      expect(onAir, "PREMISE: a live Seazn session").toBeTruthy();
+
+      const view = await getMatchDay(day.auth, day.comp.id, at(0));
+      const expected: [string, string, boolean, MatchDayFixture["live_video"], string | null][] = [
+        // court, match, live_seazn, live_video, stream
+        [day.courts.c1, f12.id, true, null, "live"],
+        [day.courts.c2, f34.id, false, null, "waiting"],
+        [day.courts.c3, f13.id, false, { url: youtubeWatchUrl(yt), made_for_kids: false }, "live"],
+        [c4, f24.id, false, null, "live"],
+        [c5, f14.id, false, null, null],
+      ];
+      let checked = 0;
+      for (const [court, id, seazn, video, stream] of expected) {
+        const current = courtOf(view, court).current!;
+        expect(current.id).toBe(id);
+        expect(current.live_seazn, `${court} live_seazn`).toBe(seazn);
+        expect(current.live_video, `${court} live_video`).toEqual(video);
+        expect(current.stream, `${court} stream`).toBe(stream);
+        checked++;
+      }
+      expect(checked).toBe(5);
+      // Queued behind f12 with a live session of its own: a queue row carries no extras, so no live_seazn.
+      expect(courtOf(view, day.courts.c1).queue.map((q) => [q.id, q.live_seazn])).toEqual([[f23.id, false]]);
+      // The polled board carries no playback address and no token: a boolean is all it is given.
+      expect(JSON.stringify(view)).not.toContain("playback.fake.invalid");
+      expect(JSON.stringify(view)).not.toMatch(/\/manifest\//);
+      // And the answer still parses through the route's own schema, `live_seazn` included.
+      expect(MatchDayViewSchema.parse(JSON.parse(JSON.stringify(view))).courts.find((c) => c.court_id === day.courts.c1)!.current!.live_seazn).toBe(true);
+    });
+
+    it("Task 17 guard (M5) — a Seazn live read that throws leaves the board answering: every match as before but live_seazn false, and the fault logged", async () => {
+      const day = await seedDay();
+      const { p1, p2 } = pairs(day);
+      const f12 = between(day.comp, p1, p2);
+      await place(day, f12.id, -10, day.courts.c1);
+      await start(day, f12.id, -10);
+      const r = await seaznRigFor({ ...day.auth, userId: await rigUser() }, [f12.id]);
+      await seaznLive(r, f12.id, r.seazn);
+      const before = await getMatchDay(day.auth, day.comp.id, at(0));
+      expect(courtOf(before, day.courts.c1).current!.live_seazn, "PREMISE: on air before the fault").toBe(true);
+
+      const warn = vi.spyOn(log, "warn");
+      seaznFault.fail = true;
+      seaznFault.hits = 0;
+      try {
+        const view = await getMatchDay(day.auth, day.comp.id, at(0));
+        expect(seaznFault.hits, "the faulty reader was asked").toBe(1);
+        const now = courtOf(view, day.courts.c1).current!;
+        expect(now.live_seazn).toBe(false);
+        // Nothing else moved: the board is the one read before the fault, with the decorative flag left false.
+        const off = (v: MatchDayView): MatchDayView => ({ ...v, courts: v.courts.map((c) => (c.current === null ? c : { ...c, current: { ...c.current, live_seazn: false } })) });
+        expect(off(view)).toEqual(off(before));
+        expect(warn).toHaveBeenCalledWith(expect.objectContaining({ err: expect.any(Error), fixtureIds: [f12.id] }), expect.stringContaining("Seazn live read failed"));
+      } finally {
+        seaznFault.fail = false;
+        warn.mockRestore();
+      }
+    });
+
+    it("Task 17 — a match playing on NO court is on air too; `ending` (the Stop was tapped, the Machine still draining) is not, and the next read after it settled has no stream at all", async () => {
+      const day = await seedDay();
+      const { p1, p2 } = pairs(day);
+      const f12 = between(day.comp, p1, p2);
+      await place(day, f12.id, null, null);
+      await start(day, f12.id, -10);
+      const r = await seaznRigFor({ ...day.auth, userId: await rigUser() }, [f12.id]);
+      const sid = await seaznLive(r, f12.id, r.seazn);
+      const playing = async () => (await getMatchDay(day.auth, day.comp.id, at(0))).playing_no_court;
+
+      const [onAir] = await playing();
+      expect(onAir!.id).toBe(f12.id);
+      expect([onAir!.stream, onAir!.live_seazn, onAir!.live_video]).toEqual(["live", true, null]);
+
+      await stopSession(r.auth, f12.id, sid, r.deps);
+      const [draining] = await playing();
+      expect([draining!.stream, draining!.live_seazn], "ending reads as live, but the programme feed is going: no preview").toEqual(["live", false]);
+
+      await seaznStop(r, f12.id, sid);
+      const [ended] = await playing();
+      expect([ended!.stream, ended!.live_seazn]).toEqual([null, false]);
+    });
   });
 
   it("what holds a court ends no earlier than now: an overrunning match holds it until now; a called match for a match length from now", async () => {

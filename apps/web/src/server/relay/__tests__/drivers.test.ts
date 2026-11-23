@@ -11,6 +11,7 @@ import { FlyClient } from "../fly-client";
 import { FlyRunner } from "../runner-fly";
 import { FLY_RELAY_APP_RETIRED_DEFAULT, relayDriverMode, relayOutputProfile } from "../config";
 import { RelayDriversDisabled, composedUnavailable, disabledRelayDrivers, relayDrivers, relayUnavailable, setRelayDriversForTest } from "../drivers";
+import { log } from "@/server/logger";
 
 // m-2: the live pair's report reaches Sentry (last describe); the provider-call recorder's DB write is stubbed out.
 const sentry = vi.hoisted(() => ({ captureError: vi.fn<(err: unknown, ctx?: { route?: string; extra?: Record<string, unknown> }) => void>() }));
@@ -39,7 +40,8 @@ describe("R5: relayDrivers() in disabled mode", () => {
     const ingest = methodsOf(d.ingest);
     const runner = methodsOf(d.runner);
     // Completeness is tsc's: the disabled pair is typed as the two ports, so a method missing from it does not compile.
-    // What runs here is that every method it HAS refuses — the floors below are today's port sizes (11 and 5).
+    // What runs here is that every method it HAS refuses — the floors below are today's port sizes (14 and 5; Seazn Task 13 added
+    // playbackToken and requireSignedVideo to the ingest port, Task 24 createDownload).
     let refused = 0;
     for (const [port, names] of [[d.ingest, ingest], [d.runner, runner]] as const) {
       for (const name of names) {
@@ -49,7 +51,8 @@ describe("R5: relayDrivers() in disabled mode", () => {
       }
     }
     expect(refused, "no port method was exercised").toBeGreaterThanOrEqual(ingest.length + runner.length);
-    expect(ingest.length, "the ingest port's methods").toBeGreaterThanOrEqual(11);
+    expect(ingest.length, "the ingest port's methods").toBeGreaterThanOrEqual(14);
+    expect(ingest, "Seazn Task 13's two and Task 24's one refuse with the rest").toEqual(expect.arrayContaining(["playbackToken", "requireSignedVideo", "createDownload"]));
     expect(runner.length, "the runner port's methods").toBeGreaterThanOrEqual(5);
     // The two data members refuse too: a capability or a settle window read off a disabled provider is a fake number.
     expect(() => d.ingest.capabilities).toThrow(RelayDriversDisabled);
@@ -170,6 +173,33 @@ describe("m-2: the live drivers wire the Cloudflare adapter's unseen-word report
       expect(reports).toHaveLength(1);
       expect(reports[0]![1]).toMatchObject({ extra: { sessionId: "sess-wire", inputUid: "in_wire", words: ["reconnected"] } });
     } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+// Phase 1 review I3: the lock's echo with no scheduled deletion is warned through an INJECTED `warn` (the adapter imports no app
+// module, as with m-2 above). The live pair must hand it the app's logger, or the warning is an inert seam.
+describe("review I3: the live drivers wire the Cloudflare adapter's lost-deletion warning to the logger", () => {
+  it("live mode: an edit whose echo carries no scheduled deletion still locks, and is logged as a warning by video id alone", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("RELAY_DRIVERS", "live");
+    vi.stubEnv("ENV_NAME", "prod");
+    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acct");
+    vi.stubEnv("CLOUDFLARE_STREAM_TOKEN", "tok");
+    const cf = vi.fn(async () => new Response(JSON.stringify({ success: true, result: { uid: "v_wire", requireSignedURLs: true, scheduledDeletion: null } }), { status: 200 }));
+    vi.stubGlobal("fetch", cf);
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    try {
+      setRelayDriversForTest(null);
+      const { ingest } = relayDrivers();
+      expect(await ingest.requireSignedVideo("v_wire", { deleteAt: new Date("2026-12-22T15:30:00.000Z") })).toBe("set");
+      expect(cf, "PREMISE: the live adapter really asked (the stubbed) Cloudflare").toHaveBeenCalledTimes(1);
+      const lines = warn.mock.calls.filter(([fields]) => (fields as { videoId?: string }).videoId === "v_wire");
+      expect(lines, "one warning, for this video").toHaveLength(1);
+      expect(lines[0]![0]).toEqual({ videoId: "v_wire" });
+    } finally {
+      warn.mockRestore();
       vi.unstubAllGlobals();
     }
   });

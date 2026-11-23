@@ -140,7 +140,7 @@ export const routes = {
   slideshowCompetition: (competitionId: string) => `/slideshow/competitions/${competitionId}`,
   slideshowDivision: (divisionId: string) => `/slideshow/divisions/${divisionId}`,
   // ── The public spectator tree (LIVE1, 2026-11-03: `/shared/…` → `/live/…`). Every spectator URL in the app is
-  // built HERE, over PUBLIC_HUB_ROOT — never by hand (lib/__tests__/public-hub-links.test.ts reds on one). The old
+  // built HERE, over PUBLIC_HUB_ROOT — never by hand. The old
   // root answers a permanent 308 to the new one (next.config.js), so a printed QR code still lands; a link we
   // produce never goes through it. A bare `/live` is the marketing wall, not this tree (option A).
   /** The public hub: the org home, a competition, or a division. Slug-based, marker-less scheme. */

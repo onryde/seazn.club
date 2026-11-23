@@ -15,6 +15,7 @@
         "away_slot": null,
         "status": "upcoming",
         "scheduled_at": "2026-11-07T11:30:00.000Z",
+        "live_seazn": null,
         "summary": null
       },
       "source": "this_court",
@@ -39,6 +40,7 @@
         "away_slot": null,
         "status": "upcoming",
         "scheduled_at": null,
+        "live_seazn": null,
         "summary": null
       },
       "source": "no_court",
@@ -63,6 +65,7 @@
         "away_slot": null,
         "status": "upcoming",
         "scheduled_at": "2026-11-07T11:00:00.000Z",
+        "live_seazn": null,
         "summary": null
       },
       "source": "other_court",

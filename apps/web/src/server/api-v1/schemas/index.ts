@@ -28,7 +28,7 @@
 //   ai-planning.ts           scheduling constraints v2 and AI: ScheduleShift, plan/repair, officials plan, joint multi-division (#350), parse preview (W5), OverrideStandings
 //   seeding-discipline.ts    seed proposals (D4a), ladder challenge, discipline and suspensions, official marks, match reports
 //   org-admin.ts             org news posts, duplicate review and merge (#404), venues and courts (D5)
-//   public.ts                public fixture summary (GET /public/fixtures/{id}) and PublicOrgLive
+//   public.ts                public fixture summary (GET /public/fixtures/{id}), PublicOrgLive, and a fixture's Seazn video (PublicFixtureVideo)
 //   quick-match.ts           quick match: the guest's one create (CreateQuickMatch)
 //
 // Dependency order is strictly downward (a module imports only from the ones listed above it;
@@ -36,13 +36,14 @@
 // needs are `export`ed from their module but are NOT re-exported here.
 
 // Capture QR v2 (PR-1 T1) — the phone↔web contract's zod twins (docs/contracts/capture-*.json), re-exported, never
-// re-typed. Relative + explicit `.ts`, same reason as above; capture-schemas.ts imports zod and nothing else.
+// re-typed. Relative + explicit `.ts`, same reason as above; capture-schemas.ts imports zod and lib/public-hub-root.mjs
+// (plain ESM that imports nothing) and nothing else.
 export {
   CAPTURE_CODE_RE, CaptureEndReason, CaptureStartedBy, CaptureCause, CapturePhoneState, CaptureNotReady,
   CaptureStartFailed, CaptureWaiting, CaptureCred, CaptureSession, CaptureDescriptor, CaptureBeat, CaptureBeatAnswer,
   CaptureStartBody, CaptureStartOk, CaptureRefusalCode, CaptureRefusal,
   // W27 / W28 (2026-10-06).
-  CAPTURE_POOL_RE, CaptureStageRole, CaptureStage, CAPTURE_STAGE_LABEL_MAX, CAPTURE_COURT_NAME_MAX, CaptureCourt, CaptureNext, CAPTURE_AUTO_REFUSALS, CaptureAutoRefusal, CAPTURE_SCORING_LINK_URL_RE, CaptureScoringLinkOk,
+  CAPTURE_POOL_RE, CaptureStageRole, CaptureStage, CAPTURE_STAGE_LABEL_MAX, CAPTURE_COURT_NAME_MAX, CaptureCourt, CaptureNext, CAPTURE_AUTO_REFUSALS, CaptureAutoRefusal, CAPTURE_SCORING_LINK_URL_RE, CAPTURE_MATCHDAY_WATCH_URL_RE, CaptureScoringLinkOk,
   // capture-record.v1 (spec 2026-10-12, approved).
   CAPTURE_RECORD_MAX_LINES, CAPTURE_RECORD_MAX_BYTES, CAPTURE_RECORD_REF_RE, CaptureRecordLine, CaptureRecordOk,
   CaptureRecordRefusalCode, CaptureRecordRefusal, CaptureRecordSecretS2, CaptureRecordSecretS3, CaptureRecordSecretS4,
@@ -123,7 +124,7 @@ export {
   StreamTargetSaveOutcome, StreamTargetSaved, PatchStreamTarget, StreamTargetRemoved, PickYoutubeChannel,
   YoutubeConnectionSaved, YoutubePendingChannels, YoutubeConnectionSettings, YOUTUBE_REVOKE_OUTCOMES,
   YoutubeDisconnected, YoutubeChannelSafety, RelayAiring, RelayHeartbeat, RelayHeartbeatReply, RelayPhaseReply, RelayPhaseEndpoint,
-  RelayJobInput, RelayJobOutput, RelayJobSession,
+  RelayJobInput, RelayJobOutput, RelayJobSession, SeaznReplayDeleted,
 } from "./streaming.ts";
 export {
   SlotLabelRef, Fixture, DeskInPlayFixture, DeskNextFixture, CompetitionDesk, LineupSlotInput, PutLineup,
@@ -194,7 +195,7 @@ export {
   CreateCourt, PatchCourt, PutCourtCalendar, CourtCalendar,
 } from "./org-admin.ts";
 export {
-  PublicFixtureOutcome, PublicFixtureSummarySchema, PublicFixtureSummary, PublicOrgLive,
+  PublicFixtureOutcome, PublicFixtureSummarySchema, PublicFixtureSummary, PublicOrgLive, PublicFixtureVideo,
 } from "./public.ts";
 export type {
   PublicOrgLiveT,

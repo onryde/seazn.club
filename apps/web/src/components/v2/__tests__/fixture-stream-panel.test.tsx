@@ -72,6 +72,7 @@ import { platformName } from "@/components/v2/stream-platform-mark";
 import { YoutubeIcon } from "@/components/v2/youtube-icon";
 import { FixtureDestinationPicker, type FixtureDestinationPickerProps } from "@/components/v2/fixture-destination-picker";
 import { ReplayCopyButton } from "@/components/v2/stream-replay-copy";
+import { SeaznReplaysCard } from "@/components/v2/seazn-replays-card";
 import { YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, YOUTUBE_REFUSAL_CODES, isYoutubeUrl } from "@/lib/youtube";
 import { REFUSAL_FOCUS_RING, focusRefusalBlock } from "@/components/v2/refusal-focus";
 import { D3Warning, PhoneStripView, SignalChain } from "@/components/v2/stream-signal-chain";
@@ -673,7 +674,7 @@ const LEGACY = readModel({ legacy: true, phone: null, code: null });
 const session = (over: Partial<StreamSessionView> = {}): StreamSessionView => ({
   id: "s1", fixtureId: "f-1", mode: "passthrough", overlay: null, state: "warming", desiredState: "live",
   failReason: null, health: null, ingest: { state: "disconnected", protocol: null }, output: null,
-  balance: 2, startedAt: null, endedAt: null, replayUrl: null, replayParts: [], youtubeVideoUrl: null, youtubeStatus: null, youtubeLiveForMs: null,
+  balance: 2, startedAt: null, endedAt: null, replayUrl: null, replayParts: [], seaznReplays: [], youtubeVideoUrl: null, youtubeStatus: null, youtubeLiveForMs: null,
   target: { id: "t1", kind: "youtube", label: "Club" }, fixtureDecided: false, fixtureHeld: false, endReason: null, creditUsed: false,
   startCause: "organiser", restart: null, countdown: null,
   ...over,
@@ -1040,6 +1041,7 @@ const BODY: PhoneTabBodyProps = {
   onSelectTarget: () => {}, onPickAnother: () => {}, pickerOpenSignal: 0, onRetryTargets: () => {}, onGoLive: () => {}, safetyNotice: false, onDismissSafety: () => {}, onStop: () => {}, onCancel: () => {},
   onBuy: () => {}, onAgain: () => {}, onCopy: () => {}, onToggleCode: () => {}, onReissue: () => {}, onRetryCode: () => {},
   onShowBuy: () => {}, onTileIntent: () => {}, score: SCORE_OFF,
+  replayActions: { deleting: null, failed: null, gone: new Set(), onDelete: () => {} },
 };
 /** A loaded list — what most states render with. */
 const ok = (list: StreamTarget[]): TargetsState => ({ status: "ok", list });
@@ -2764,6 +2766,44 @@ describe("PhoneTabBody — PR-2: the switch, the phone's line, the refusal, the 
     expect(line(60)).toBe(liveLine(1));
     expect(line(null), "none served: the page's minutes (3)").toBe(liveLine(3));
     expect(line(undefined)).toBe(liveLine(3));
+  });
+
+  // Seazn-hosted video Task 24 (recommendation 2026-11-21, G-E): a Seazn session's own stop (`stopRule: "seazn"`) applies in every
+  // mode — the switch off, an operator phone — so "Automatic: …" would be false. It names the stop in its own words: the server's
+  // 900 s as 15 minutes, never seconds. The English is typed here from the ruling; every locale carries both plural forms.
+  it("Task 24 (G-E): a Seazn session's own stop reads the Seazn line — with the switch off and an operator phone — and §7.3's own still reads `Automatic`", () => {
+    const seaznLine = (n: number) => `Stops about ${n} ${n === 1 ? "minute" : "minutes"} after the result, so the replay can be saved`;
+    const seazn = (over: Partial<Auto>, mode: "automatic" | "operator") =>
+      readModel({ auto: auto({ stopApplies: true, stopRule: "seazn", ...over }), phone: facts({ mode, state: "publishing" }) });
+    let checked = 0;
+    for (const [name, phone] of [
+      ["the switch off, an operator phone", seazn({ enabled: false, stopAfterSeconds: 900 }, "operator")],
+      ["the switch off, an automatic phone", seazn({ enabled: false, stopAfterSeconds: 900 }, "automatic")],
+      ["the switch on, an operator phone", seazn({ stopAfterSeconds: 900 }, "operator")],
+    ] as const) {
+      expect(textAt(body({ view: LIVE, balance: 1, phone, autoStopMinutes: 3 }), "stream-auto-live"), name).toBe(seaznLine(15));
+      checked++;
+    }
+    expect(checked).toBe(3);
+    // §7.3's own rule (and an older server that serves no rule) keeps the existing line.
+    const result = readModel({ auto: auto({ stopApplies: true, stopRule: "result", stopAfterSeconds: 180 }), phone: facts({ mode: "automatic", state: "publishing" }) });
+    expect(textAt(body({ view: LIVE, balance: 1, phone: result, autoStopMinutes: 3 }), "stream-auto-live")).toBe(liveLine(3));
+    const older = readModel({ auto: auto({ stopApplies: true, stopAfterSeconds: 180 }), phone: facts({ mode: "automatic", state: "publishing" }) });
+    expect(textAt(body({ view: LIVE, balance: 1, phone: older, autoStopMinutes: 3 }), "stream-auto-live")).toBe(liveLine(3));
+    // A Seazn stop under a minute (none is made: the delay is 15 min) still reads minutes, never "Automatic: … seconds".
+    expect(textAt(body({ view: LIVE, balance: 1, phone: seazn({ stopAfterSeconds: 30 }, "operator"), autoStopMinutes: 3 }), "stream-auto-live")).toBe(seaznLine(1));
+    let locales = 0;
+    for (const locale of ["en", "es", "fr", "nl"]) {
+      const d = uiDict(locale);
+      for (const form of ["one", "other"]) {
+        const text = d[`stream.auto.seaznLine.${form}`];
+        expect(text, `${locale} ${form}`).toBeTypeOf("string");
+        expect(text!.split("{count}").length - 1, `${locale} ${form}: one {count}`).toBe(1);
+        expect(text, `${locale} ${form}: not the automatic wording`).not.toBe(d[`stream.auto.liveLine.${form}`]);
+      }
+      locales++;
+    }
+    expect(locales).toBe(4);
   });
 
   it("T11: live, the strip is the phone-health line (Option A state 4) — the read model's readings, wired as the builder answers", () => {
@@ -6400,6 +6440,44 @@ describe("T12: after a match — the replay row, and the destination's name read
     expect(html.split(es["streaming.youtube.disconnectedLabel"]!).length - 1, "the label is drawn by the ending line AND the chain").toBeGreaterThanOrEqual(2);
     // The positive pair: the customer's own label passes through untouched.
     expect(textAt(body({ view: session({ state: "ending", target: { id: "t1", kind: "youtube", label: "Club TV" } }), balance: 1 }), "stream-ending")).toBe(m("stream.phone.ending", { destination: "Club TV" }));
+  });
+});
+
+// ─── Seazn-hosted video Task 25: the ended card lists the fixture's Seazn replays ───────────────────────────────────────────
+// The session view's `seaznReplays` (server/video/organiser-replays.ts) reach the ended card's list (seazn-replays-card.tsx, whose own
+// test pins the words). Only the ended card: a live or failed session's card never carries it.
+describe("Task 25: the ended card's Seazn replays", () => {
+  const ENDED = { state: "completed" as const, startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z", endReason: "stopped" as const };
+  const R = [
+    { id: "00000000-0000-4000-8000-000000000001", partNo: 1, state: "playable" as const, lengthSeconds: 120, onMatchPage: true },
+    { id: "00000000-0000-4000-8000-000000000002", partNo: 2, state: "processing" as const, lengthSeconds: null, onMatchPage: true },
+  ];
+  const cards = (tree: ReactElement[]) => tree.filter((el) => el.type === SeaznReplaysCard);
+
+  it("EMPTY CASE FIRST: an ended session with none hands the card an empty list (it draws nothing)", () => {
+    const tree = body({ view: session({ ...ENDED, seaznReplays: [] }), balance: 1 });
+    expect(byTestId(tree, "stream-ended"), "PREMISE: the ended card").toBeDefined();
+    expect(cards(tree).map((el) => propsOf(el).replays)).toEqual([[]]);
+  });
+
+  it("an ended session hands the card the view's list, inside the ended card — with the body's own fixture id and Delete state (Task 26)", () => {
+    const actions = { ...BODY.replayActions, deleting: R[1]!.id, gone: new Set([R[0]!.id]) };
+    const tree = body({ fixtureId: "f-7", view: session({ ...ENDED, seaznReplays: R }), balance: 1, replayActions: actions });
+    expect(cards(tree).map((el) => propsOf(el).replays)).toEqual([R]);
+    expect(cards(tree).map((el) => propsOf(el).fixtureId), "the body's fixture, not a constant").toEqual(["f-7"]);
+    expect(cards(tree).map((el) => propsOf(el).actions), "the body's Delete state, as given").toEqual([actions]);
+    expect(propsOf(cards(tree)[0]!).actions).toBe(actions);
+    const ended = walk([byTestId(tree, "stream-ended")!]);
+    expect(ended.filter((el) => el.type === SeaznReplaysCard), "inside the ended card").toHaveLength(1);
+  });
+
+  it("a live or a failed session's card never carries it", () => {
+    let checked = 0;
+    for (const view of [session({ state: "live", seaznReplays: R }), session({ ...ENDED, state: "failed", failReason: "machine_crash", seaznReplays: R })]) {
+      expect(cards(body({ view, balance: 1 })), view.state).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 });
 

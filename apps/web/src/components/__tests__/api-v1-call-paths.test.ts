@@ -113,6 +113,9 @@ const HAND_CHECKED_DYNAMIC: Record<string, number> = {
   // extend-checkin, src/app/api/v1/stages/[id]/extend-checkin, src/app/api/v1/stages/[id]/generate). The open's and the resend's POSTs are
   // `useOpenRoundWith`'s, counted under desk/use-open-round.ts above.
   "src/components/v2/match-day/round-focus.tsx": 1,
+  // Seazn replays card (Task 26): `del(url)` → apiV1(url, DELETE), url built in deleteSeaznReplayFlow as
+  // `/api/v1/fixtures/${fixtureId}/replays/${replayId}` — a DELETE route that exists (src/app/api/v1/fixtures/[id]/replays/[replayId]).
+  "src/components/v2/seazn-replays-card.tsx": 1,
   // Match Day's board panel (Task 8, traced 2026-11-20): ONE module-level `post = (path, body) => apiV1(path, …)` handed to
   // `decisionRunner` (arbiter-decision.ts), the same runner the held queue uses (the Arbiter panel that shared it is deleted): every path it builds is
   // `/api/v1/fixtures/${id}/external-play/${tail}`, tail ∈ resync | video-override | flags/close | resolve, and the board's "+5 min" posts

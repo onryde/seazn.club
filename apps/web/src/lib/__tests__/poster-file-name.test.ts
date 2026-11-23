@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { posterFileName } from "@/lib/poster-file-name";
+import { posterFileName, replayFileName } from "@/lib/poster-file-name";
 
 describe("posterFileName — a saved poster has to be a file something will open", () => {
   it("always ends in .png, whatever the names are", () => {
@@ -34,5 +34,30 @@ describe("posterFileName — a saved poster has to be a file something will open
     // Capped, and never left ending on the separator the cap cut through.
     expect(name).not.toMatch(/-v-/.source + ".*-v-");
     expect(name.split("-v-")[0]).not.toMatch(/-$/);
+  });
+});
+
+describe("replayFileName (Seazn-hosted video, Task 26)", () => {
+  it("is the poster's stem for the same two sides, then the part: `<stem>-part-<n>.mp4`", () => {
+    const pairs: [string, string][] = [["Northfield CC", "Riverside FC"], ["", ""], ["Ünïcode Club", "Riverside FC"], ["A".repeat(90), "B"]];
+    let checked = 0;
+    for (const [home, away] of pairs) {
+      for (const n of [1, 2, 12]) {
+        expect(replayFileName(home, away, n), `${home} / ${away} / ${n}`).toBe(posterFileName(home, away).replace(/\.png$/, `-part-${n}.mp4`));
+        checked++;
+      }
+    }
+    expect(checked).toBe(12);
+    expect(replayFileName("Northfield CC", "Riverside FC", 2)).toBe("seazn-northfield-cc-v-riverside-fc-part-2.mp4");
+    expect(replayFileName("", "", 1), "no usable names").toBe("seazn-match-part-1.mp4");
+  });
+
+  it("a number that names no part (0, negative, fractional, NaN) is refused, never a file name", () => {
+    let checked = 0;
+    for (const n of [0, -1, 1.5, Number.NaN]) {
+      expect(() => replayFileName("A", "B", n), String(n)).toThrow(RangeError);
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 });

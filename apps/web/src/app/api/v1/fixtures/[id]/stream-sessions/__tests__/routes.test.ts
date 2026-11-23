@@ -684,6 +684,32 @@ describe.skipIf(!HAS_DB)("POST/GET …/stream-sessions over HTTP", () => {
     expect(thawed.status, JSON.stringify(thawed.body.error)).toBe(201);
   });
 
+  it("Seazn-hosted video (Task 11, Task 10 review m3): with SEAZN_HOSTED_LIVE off, a body naming the org's Seazn row is 422 seazn_unavailable on the wire — documented on the route's 422 codes, with seazn_video_unconfigured on its 503 — and writes nothing; the pasted target beside it is 201", async () => {
+    const o = await organiser();
+    const [seazn] = await sql<{ id: string }[]>`select id from org_stream_targets where org_id = ${o.auth.orgId} and kind = 'seazn'`;
+    vi.stubEnv("SEAZN_HOSTED_LIVE", "false");
+    try {
+      const createInput = vi.spyOn(o.ingest, "createLiveInput");
+      for (const mode of ["passthrough", "composed"] as const) {
+        const r = await create(o.fixtureId, { mode, targetId: seazn!.id });
+        expect(r.status, mode).toBe(422);
+        expect(r.body.error, mode).toMatchObject({ code: "seazn_unavailable" });
+      }
+      expect(await sessionsOn(o.fixtureId)).toBe(0);
+      expect(await sql`select 1 from fixture_stream_settings where fixture_id = ${o.fixtureId}`).toHaveLength(0);
+      expect(createInput, "no Cloudflare input").toHaveBeenCalledTimes(0);
+      type Op = { summary?: string; responses: Record<string, { content: { "application/json": { schema: { properties: { error: { properties: { code: { description?: string } } } } } } } }> };
+      const op = (buildOpenApiDocument() as { paths: Record<string, { post?: Op }> }).paths["/api/v1/fixtures/{id}/stream-sessions"]!.post!;
+      expect(op.responses["422"]!.content["application/json"].schema.properties.error.properties.code.description).toContain("seazn_unavailable");
+      expect(op.summary).toContain("422 seazn_unavailable");
+      expect(op.summary).toContain("503 seazn_video_unconfigured");
+      // The positive pair: the flag refuses the Seazn row only.
+      expect((await create(o.fixtureId, { mode: "passthrough", targetId: o.target.id })).status).toBe(201);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("W5 over HTTP: a Go live with no phone paired is 409 phone_not_paired on the wire, documented on the route, and writes nothing", async () => {
     const o = await organiser({ phone: false });
     const r = await create(o.fixtureId, { mode: "passthrough", targetId: o.target.id });

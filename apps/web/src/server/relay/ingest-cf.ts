@@ -10,7 +10,8 @@
 //  * NO update that changes `recording` on a live input, ever: flipping mode off
 //    took a live input off air in seconds while it stayed `connected` (F1).
 //    The ONE update this adapter sends is `setInputEnabled`, and it re-asserts the
-//    create's own recording settings (LIVE_INPUT_RECORDING) with the flag — the
+//    create's own recording settings (liveInputRecording over LIVE_INPUT_RECORDING,
+//    with the signing the input was created with — Task 12) with the flag — the
 //    docs' page sends the flag alone, but nothing there says a partial body leaves
 //    `recording` as it was, and an input reset to mode off is the F1 outage.
 //  * deleteInput leaks the recording; deleteVideo answers 409 code 10046 while
@@ -28,7 +29,7 @@
 //    "not known yet" — `measured()` maps those to null on the VALUE, never on
 //    the state, because a video that ERRORED is no longer `live-inprogress`
 //    and a state-keyed rule would pass its -1 into recording_bytes.
-import { DELETE_RECORDING_AFTER_DAYS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS, OUTPUT_READ_FAILURES_BEFORE_REPORT } from "./config";
+import { DELETE_RECORDING_AFTER_DAYS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS, OUTPUT_READ_FAILURES_BEFORE_REPORT, SEAZN_TOKEN_MINT_TIMEOUT_MS } from "./config";
 // The token is ACCOUNT-owned: /user/tokens/verify says "Invalid API Token"
 // while every Stream endpoint answers 200 (C12) — nothing here calls it.
 // Ruling 13: one stream_provider_calls row per call, through the injected
@@ -41,7 +42,7 @@ import { NOOP_RECORDER } from "./ports";
 // second copy, and not an import of the sibling DRIVER (two adapters must stay independent of each other).
 import { redact } from "./sanitise";
 import type {
-  DeleteVideoResult, IngestCapabilities, IngestCreateSpec, IngestCredentials, IngestProvider,
+  CallTimeout, DeleteVideoResult, IngestCapabilities, IngestCreateSpec, IngestCredentials, IngestProvider,
   IngestState, IngestStatus, IngestTarget, IngestVideo, InputSwitchMeta, OutputState, ProviderCallMeta, ProviderCallRecorder, StorageUsage,
 } from "./ports";
 
@@ -66,6 +67,30 @@ export const LIST_VIDEOS_PAGE_LIMIT = 1000;
  *  two cannot drift: the mode is `automatic`, always (C4 — a live input whose recording goes off is off air), and the
  *  timeout is config's. `deleteRecordingAfterDays` is NOT a member: it is a top-level sibling (U1-S1). */
 const LIVE_INPUT_RECORDING = { mode: "automatic", timeoutSeconds: INGEST_TIMEOUT_SECONDS } as const;
+
+/** Seazn-hosted video (Task 12, G5): the `recording` an input is created with, and the one `setInputEnabled` re-sends — ONE
+ *  builder over the ONE constant, so signing only ever ADDS `requireSignedURLs` and `allowedOrigins` (C1) to the camera's own
+ *  settings and the create and the update cannot drift. No access: exactly the unsigned settings, as before. C8 (MEASURED
+ *  2026-11-21): a PUT that re-sent this signed body kept `requireSignedURLs: true`. */
+export function liveInputRecording(access?: IngestCreateSpec["access"]): typeof LIVE_INPUT_RECORDING & { requireSignedURLs?: true; allowedOrigins?: string[] } {
+  if (!access) return { ...LIVE_INPUT_RECORDING };
+  return { ...LIVE_INPUT_RECORDING, requireSignedURLs: true, allowedOrigins: [...access.allowedOrigins] };
+}
+
+/** Task 12 (U1: every setting sent is read back): what an echo says of the input's signing, against what was sent. Signed
+ *  sent ⇒ `requireSignedURLs` must echo `true` and the origins must be the same hosts (order is not compared). Unsigned sent ⇒
+ *  the echo must not say signed: the camera's playback is read by the phone. An empty list is "applied". */
+function accessNotApplied(sent: IngestCreateSpec["access"], echo: { requireSignedURLs?: boolean | null; allowedOrigins?: string[] | null } | null | undefined): string[] {
+  const out: string[] = [];
+  const echoedSigned = echo?.requireSignedURLs === true;
+  if (echoedSigned !== (sent !== undefined)) out.push(`requireSignedURLs sent ${sent ? "true" : "nothing"}, echoed ${String(echo?.requireSignedURLs)}`);
+  if (sent) {
+    const echoed = echo?.allowedOrigins ?? null;
+    const same = echoed !== null && [...echoed].sort().join(",") === [...sent.allowedOrigins].sort().join(",");
+    if (!same) out.push(`allowedOrigins sent ${JSON.stringify(sent.allowedOrigins)}, echoed ${JSON.stringify(echoed)}`);
+  }
+  return out;
+}
 
 /** The dashboard name a live input is created with: session, role (a programme input says so) and slot. ONE builder, so the
  *  create and the update (`setInputEnabled`) cannot name the same input two ways. */
@@ -114,17 +139,22 @@ const INPUT_STATES: ReadonlyMap<string, IngestState | null> = new Map<string, In
 
 /** m-2: `captureError`'s shape (lib/sentry.ts), so the live pair passes it as is. */
 export type ErrorReporter = (err: unknown, context?: { route?: string; extra?: Record<string, unknown> }) => void;
+/** Phase 1 review I3: where a soft finding is logged (the live pair passes the app logger's `warn`, drivers.ts). Fields hold ids
+ *  only, never a token or a body. */
+export type Warn = (fields: Record<string, unknown>, message: string) => void;
 
 /** Dd: -1 (duration, size) and 0 (width, height) are Cloudflare's "not known
  *  yet". Tested on the VALUE, so an errored video's -1 is dropped too; a real
  *  recording is never negative and never 0 px, so nothing true is lost. */
 const measured = (n: number | null | undefined): number | null => (typeof n === "number" && n > 0 ? n : null);
 
-/** A Stream video object, as both listings return it (the fields this adapter reads). */
+/** A Stream video object, as both listings return it (the fields this adapter reads). `requireSignedURLs` (Seazn Task 13) is
+ *  in the list item schema (boolean, default false); the schema requires nothing, so it may be absent. */
 type CfVideo = {
   uid: string; created: string; liveInput?: string | null;
   status?: { state?: string; errorReasonCode?: string | null };
   duration?: number; size?: number; input?: { width?: number; height?: number } | null;
+  requireSignedURLs?: boolean | null;
 };
 /** One mapping for both listings, so the per-input listing cannot drift from the account one (Dd). */
 function videoOf(v: CfVideo): IngestVideo {
@@ -140,6 +170,8 @@ function videoOf(v: CfVideo): IngestVideo {
     height: measured(v.input?.height),
     state: v.status?.state ?? "unknown",
     errorReasonCode: v.status?.errorReasonCode ?? null,
+    // Seazn Task 13 (C3, C7): the video's own flag, read as given; an item that does not say is null, never a guess.
+    signed: typeof v.requireSignedURLs === "boolean" ? v.requireSignedURLs : null,
   };
 }
 
@@ -160,6 +192,8 @@ export class CloudflareIngest implements IngestProvider {
    *  app module (fakes.ts imports it, and e2e specs import fakes.ts outside Next), so the live pair passes
    *  `captureError` (drivers.ts). Default: nothing. */
   private readonly reportError: ErrorReporter;
+  /** Phase 1 review I3: the lock's echo with no scheduled deletion. INJECTED like `reportError`. Default: nothing. */
+  private readonly warn: Warn;
   /** m-2 / G-1 / m-c: what has already been reported, `<what>:<session, or input:<uid> with no session>` — each kind of
    *  report goes out once per session (per process: the live pair is a process singleton, drivers.ts). */
   private readonly reported = new Set<string>();
@@ -178,7 +212,7 @@ export class CloudflareIngest implements IngestProvider {
     return Boolean(env.CLOUDFLARE_ACCOUNT_ID) && Boolean(env.CLOUDFLARE_STREAM_TOKEN);
   }
 
-  constructor(opts: { fetchImpl?: typeof fetch; accountId?: string; token?: string; recorder?: ProviderCallRecorder; reportError?: ErrorReporter } = {}) {
+  constructor(opts: { fetchImpl?: typeof fetch; accountId?: string; token?: string; recorder?: ProviderCallRecorder; reportError?: ErrorReporter; warn?: Warn } = {}) {
     const accountId = opts.accountId ?? process.env.CLOUDFLARE_ACCOUNT_ID;
     const token = opts.token ?? process.env.CLOUDFLARE_STREAM_TOKEN;
     if (!accountId) throw new Error("CLOUDFLARE_ACCOUNT_ID is not set (RELAY_DRIVERS=live needs it)");
@@ -189,6 +223,7 @@ export class CloudflareIngest implements IngestProvider {
     this.accountId = accountId;
     this.rec = opts.recorder ?? NOOP_RECORDER;
     this.reportError = opts.reportError ?? (() => undefined);
+    this.warn = opts.warn ?? (() => undefined);
   }
 
   /** One request, one record (ruling 13). `meta.ids` are the ids the caller
@@ -208,7 +243,7 @@ export class CloudflareIngest implements IngestProvider {
     // LIVE_INPUT_RECORDING, never a mode of its own. The scan stays, because a raw
     // `fetch` beside this helper would dodge the type.
     method: "GET" | "POST" | "PUT" | "DELETE", path: string, body: unknown,
-    meta: { operation: string; ids: string[]; subjectId?: string | null; subjectOf?: (result: T | undefined) => string | null; sessionId?: string | null },
+    meta: { operation: string; ids: string[]; subjectId?: string | null; subjectOf?: (result: T | undefined) => string | null; sessionId?: string | null; timeoutMs?: number },
   ): Promise<{ status: number; json: CfEnvelope<T> }> {
     const url = `${this.base}${path}`;
     const started = Date.now();
@@ -217,15 +252,20 @@ export class CloudflareIngest implements IngestProvider {
         .then(() => this.rec.record({ provider: "cloudflare", operation: meta.operation, subjectId, sessionId: meta.sessionId ?? null,
           method, url, ids: [this.accountId, ...meta.ids], status, latencyMs: Date.now() - started, attempt: 1, requestId, errorCode }))
         .catch(() => undefined);
+    // Phase 1 review I1: a call that names a timeout gives up after it — the request and the body read alike (one signal for both).
+    // The viewer-driven playback token names one, and so does every call the replay move makes (Task 24 review I3, `CallTimeout`);
+    // every other call keeps the platform's own behaviour.
+    const signal = meta.timeoutMs === undefined ? undefined : AbortSignal.timeout(meta.timeoutMs);
     let res: Response;
     try {
       res = await this.fetchImpl(url, {
         method,
         headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
         body: body === undefined ? undefined : JSON.stringify(body),
+        ...(signal ? { signal } : {}),
       });
     } catch (e) {
-      record(null, null, "network", meta.subjectId ?? null);
+      record(null, null, (e as { name?: string })?.name === "TimeoutError" ? "timeout" : "network", meta.subjectId ?? null);
       // Re-review N2. The ONE throw in this adapter that bypassed the floor below — and the one whose message we did
       // not write: undici rejects with `TypeError: fetch failed`, and a url-shaped failure quotes the url back. The
       // sibling driver's twin (`fly-client.ts`'s `transportFailure`) does not rethrow either; it builds its own
@@ -278,11 +318,12 @@ export class CloudflareIngest implements IngestProvider {
        *  { allowedOrigins, hideLiveViewerCount, mode, requireSignedURLs,
        *  timeoutSeconds } — the retention key is NOT in it (U1-S1), and a
        *  `timeoutSeconds` Cloudflare declined comes back null (U1-S8). */
-      recording?: { timeoutSeconds?: number | null } | null;
+      recording?: { timeoutSeconds?: number | null; requireSignedURLs?: boolean | null; allowedOrigins?: string[] | null } | null;
       deleteRecordingAfterDays?: number | null;
     }>("POST", "/live_inputs", {
       // R2004: a programme input (the composed session's Input B) says so in its name; the camera's name is unchanged.
-      // Both record (owner ruling 2026-10-18, option (a)), so the settings below are the same for both roles.
+      // Both record (owner ruling 2026-10-18, option (a)), so the settings below are the same for both roles — Task 12: plus the
+      // signing a Seazn session's programme input is created with, in the create body and never by a later update (F1/C4).
       meta: { name: inputName(spec) },
       // U1-S1, MEASURED 2026-09-10: `deleteRecordingAfterDays` is a TOP-LEVEL
       // SIBLING of `recording`, never a member of it. Nested, Cloudflare answers
@@ -291,7 +332,7 @@ export class CloudflareIngest implements IngestProvider {
       // retention is then never configured, the prepaid storage block never
       // recycles, and §6.5's 503 storage_exhausted starts refusing every
       // session, with a green create call at every step.
-      recording: LIVE_INPUT_RECORDING,
+      recording: liveInputRecording(spec.access),
       deleteRecordingAfterDays: DELETE_RECORDING_AFTER_DAYS,
     }, { operation: "createLiveInput", ids: [], sessionId: spec.sessionId, subjectOf: (result) => result?.uid ?? null });
     if (!r.json.success || !r.json.result) this.fail("create live input", r);
@@ -306,6 +347,9 @@ export class CloudflareIngest implements IngestProvider {
     const notApplied: string[] = [];
     if (echoedTimeout !== INGEST_TIMEOUT_SECONDS) notApplied.push(`timeoutSeconds sent ${INGEST_TIMEOUT_SECONDS}, echoed ${String(echoedTimeout)}`);
     if (echoedRetention !== DELETE_RECORDING_AFTER_DAYS) notApplied.push(`deleteRecordingAfterDays sent ${DELETE_RECORDING_AFTER_DAYS}, echoed ${String(echoedRetention)}`);
+    // Task 12 (G5): a signed input that came back unsigned is publicly playable (C3 saw exactly that of a recording), so it is
+    // refused and deleted like every other setting that did not apply.
+    notApplied.push(...accessNotApplied(spec.access, r.json.result.recording));
     if (notApplied.length > 0) {
       // The input exists and is misconfigured. Nothing has connected yet, so it
       // holds no recording for `deleteInput` to leak (C2) — dropping it here is
@@ -495,13 +539,23 @@ export class CloudflareIngest implements IngestProvider {
    *  Read back, like every setting the create sends (U1): a 200 whose echoed `enabled` is not the flag, or whose echoed
    *  `recording.mode` is anything but `automatic`, is an ERROR — a disable that did not take leaves a phone connected, and
    *  a flipped mode is C4. A 404 is an input already gone: success to a DISABLE (idempotent — the daily retention sweep and
-   *  the create's cleanup delete inputs, and a second stop must not fail), a refusal to an ENABLE. */
+   *  the create's cleanup delete inputs, and a second stop must not fail), a refusal to an ENABLE.
+   *
+   *  Task 12 (G5, C8): the re-sent recording carries the signing the input was CREATED with — `meta.access`, read from its
+   *  row, never from env — and the echo is read back for it like the mode. */
   async setInputEnabled(inputId: string, enabled: boolean, meta: InputSwitchMeta = {}): Promise<void> {
+    // Only a programme input can be signed, and only its row knows. A switch that does not say — no `access`, or `access:
+    // undefined` (a select that omitted the column; the type allows it) — would re-send the unsigned body over a signed input,
+    // so it is refused before anything is sent; `access: null` is the row's explicit unsigned answer. The camera is never
+    // signed (the phone plays it), so its switch needs none.
+    if (meta.role === "programme" && meta.access === undefined) {
+      throw new Error(this.red(`cloudflare set input enabled: refused a programme input ${inputId} switch without its access (read it from the input's row) — nothing was sent`));
+    }
     // The name is the create's, rebuilt from the same three facts; a caller with no session or slot cannot name the input, and
     // then the body carries none (the usecase always passes them).
     const named = meta.sessionId && meta.slot !== undefined ? { meta: { name: inputName({ sessionId: meta.sessionId, slot: meta.slot, ...(meta.role ? { role: meta.role } : {}) }) } } : {};
-    const r = await this.call<{ enabled?: boolean; recording?: { mode?: string } | null }>("PUT", `/live_inputs/${encodeURIComponent(inputId)}`, {
-      ...named, enabled, recording: LIVE_INPUT_RECORDING, deleteRecordingAfterDays: DELETE_RECORDING_AFTER_DAYS,
+    const r = await this.call<{ enabled?: boolean; recording?: { mode?: string; requireSignedURLs?: boolean | null; allowedOrigins?: string[] | null } | null }>("PUT", `/live_inputs/${encodeURIComponent(inputId)}`, {
+      ...named, enabled, recording: liveInputRecording(meta.access ?? undefined), deleteRecordingAfterDays: DELETE_RECORDING_AFTER_DAYS,
     }, { operation: "setInputEnabled", ids: [inputId], subjectId: inputId, sessionId: meta.sessionId ?? null });
     if (r.status === 404 && !enabled) return;
     if (!r.json.success || !r.json.result) this.fail("set input enabled", r);
@@ -509,6 +563,7 @@ export class CloudflareIngest implements IngestProvider {
     if (r.json.result.enabled !== enabled) notApplied.push(`enabled sent ${String(enabled)}, echoed ${String(r.json.result.enabled)}`);
     const echoedMode = r.json.result.recording?.mode;
     if (echoedMode !== undefined && echoedMode !== LIVE_INPUT_RECORDING.mode) notApplied.push(`recording.mode sent ${LIVE_INPUT_RECORDING.mode}, echoed ${String(echoedMode)}`);
+    notApplied.push(...accessNotApplied(meta.access ?? undefined, r.json.result.recording));
     if (notApplied.length > 0) throw new Error(this.red(`cloudflare set input enabled: settings were not applied — ${notApplied.join("; ")}`));
   }
 
@@ -571,19 +626,82 @@ export class CloudflareIngest implements IngestProvider {
    *  means "there may be more" to the sweep that reads it. Mapped exactly as `listVideos` maps, `inputId` included: it is
    *  the video's own `liveInput` — optional in the schema, so null when absent — never the id this call asked about,
    *  so the sweep's guard on it is a check and not an echo. */
-  async listInputVideos(inputId: string, meta: ProviderCallMeta = {}): Promise<IngestVideo[]> {
+  async listInputVideos(inputId: string, meta: ProviderCallMeta & CallTimeout = {}): Promise<IngestVideo[]> {
     const r = await this.call<CfVideo[]>("GET", `?live_input_id=${encodeURIComponent(inputId)}&limit=${LIST_VIDEOS_PAGE_LIMIT}`, undefined,
-      { operation: "listInputVideos", ids: [inputId], subjectId: inputId, sessionId: meta.sessionId ?? null });
+      { operation: "listInputVideos", ids: [inputId], subjectId: inputId, sessionId: meta.sessionId ?? null, timeoutMs: meta.timeoutMs });
     if (!r.json.success || !r.json.result) this.fail("list input videos", r);
     return r.json.result.map(videoOf);
   }
 
-  async deleteVideo(videoId: string): Promise<DeleteVideoResult> {
+  async deleteVideo(videoId: string, o: CallTimeout = {}): Promise<DeleteVideoResult> {
     const r = await this.call("DELETE", `/${encodeURIComponent(videoId)}`, undefined,
-      { operation: "deleteVideo", ids: [videoId], subjectId: videoId });
+      { operation: "deleteVideo", ids: [videoId], subjectId: videoId, timeoutMs: o.timeoutMs });
     if (r.status === 404) return "absent";
     if (r.status === 409 && r.json.errors?.some((e) => e.code === 10046)) return "in_progress";
     if (r.json.success || (r.status >= 200 && r.status < 300)) return "deleted";
     this.fail("delete video", r);
+  }
+
+  /** Seazn Task 13 (C1, C5): "Create signed URL tokens for videos" — `POST /accounts/{account_id}/stream/{identifier}/token`
+   *  (OpenAPI, read 2026-11-21: body `exp` "unix epoch timestamp … maximum … 24 hours from issuing time", `downloadable`
+   *  "enables using signed tokens to access MP4 download links"; result `{ token }`). The identifier may be a live input's uid
+   *  (C1 measured live HLS 401 without, 200 with) or a video's. No signing key of ours (C1: `id`/`pem` are never sent).
+   *  `downloadable` is sent only when asked, so a viewer's token never opens the MP4.
+   *
+   *  The answer is a SECRET: the provider-call record carries no body (ports.ts ProviderCallRecord), and every message this
+   *  throws is redacted against whatever token the answer held, as well as the account token.
+   *
+   *  Phase 1 review I1: a viewer's request waits on this call, so it gives up after SEAZN_TOKEN_MINT_TIMEOUT_MS (recorded as
+   *  `timeout`); the caller's token cache then counts it as a failed mint. */
+  async playbackToken(uid: string, o: { expiresAt: Date; downloadable?: boolean } & CallTimeout): Promise<string> {
+    const exp = Math.floor(o.expiresAt.getTime() / 1000);
+    const r = await this.call<{ token?: string }>("POST", `/${encodeURIComponent(uid)}/token`, o.downloadable ? { exp, downloadable: true } : { exp },
+      { operation: "playbackToken", ids: [uid], subjectId: uid, timeoutMs: o.timeoutMs ?? SEAZN_TOKEN_MINT_TIMEOUT_MS });
+    const token = r.json.result?.token;
+    const minted = typeof token === "string" ? [token] : [];
+    if (!r.json.success) this.fail("playback token", r, minted);
+    if (typeof token !== "string" || token.length === 0) throw new Error(this.red(`cloudflare playback token: the 200 carried no token (HTTP ${r.status})`));
+    return token;
+  }
+
+  /** Seazn Task 13 (C3): "Edit video details" — `POST /accounts/{account_id}/stream/{identifier}` with `{ requireSignedURLs: true,
+   *  scheduledDeletion }` and nothing else. C3 measured a signed input's FINISHED recording reading unsigned; C7 measured this call
+   *  answering 200 and echoing `true` on an in-progress one, after which the unsigned manifest answered 401. Read back like every
+   *  setting this adapter sends (U1): a 200 whose echo is not `true` did not lock anything, and is an error. A 404 is a video
+   *  Cloudflare does not hold — `absent`. Never a DELETE, never a listing: the uid is the caller's, checked against its own input
+   *  (C6).
+   *
+   *  Phase 1 review I3: `scheduledDeletion` (Cloudflare: "at least 30 days from upload time"; omitted means no change) rides in the
+   *  same edit, because nobody has measured whether this POST keeps the deletion the input's `deleteRecordingAfterDays` stamped,
+   *  and the sweep holds every Seazn programme recording for Phase 2. An echo with no deletion is WARNED by video id, never
+   *  refused: the lock (the token rule) held, and a refusal would leave the recording unsigned and retried forever. */
+  async requireSignedVideo(videoId: string, o: { deleteAt: Date } & CallTimeout): Promise<"set" | "absent"> {
+    const r = await this.call<{ requireSignedURLs?: boolean | null; scheduledDeletion?: string | null }>("POST", `/${encodeURIComponent(videoId)}`,
+      { requireSignedURLs: true, scheduledDeletion: o.deleteAt.toISOString() },
+      { operation: "requireSignedVideo", ids: [videoId], subjectId: videoId, timeoutMs: o.timeoutMs });
+    if (r.status === 404) return "absent";
+    if (!r.json.success || !r.json.result) this.fail("require signed video", r);
+    const echoed = r.json.result.requireSignedURLs;
+    if (echoed !== true) throw new Error(this.red(`cloudflare require signed video: not applied — requireSignedURLs sent true, echoed ${String(echoed)}`));
+    const deletion = r.json.result.scheduledDeletion;
+    if (typeof deletion !== "string" || Number.isNaN(Date.parse(deletion))) {
+      this.warn({ videoId }, "cloudflare require signed video: the echo carries no scheduled deletion — Cloudflare may never delete this recording");
+    }
+    return "set";
+  }
+
+  /** Seazn Task 24 (C4): "Create downloads" — `POST /accounts/{account_id}/stream/{identifier}/downloads`, no body (OpenAPI, read
+   *  2026-11-22: "Creates a download for a video when a video is ready to view"; result `{ default: { status, url, percentComplete
+   *  } }`, status `ready` | `inprogress` | `error`). Asking again for a download that exists answers its current status, so the
+   *  mover calls this until `ready`. The answer's `url` is unsigned and never read: the mover signs its own. An `error` status, a
+   *  200 with no `default`, and any refusal (a 404 included: a video Cloudflare no longer holds) throw. */
+  async createDownload(videoId: string, o: CallTimeout = {}): Promise<"ready" | "inprogress"> {
+    const r = await this.call<{ default?: { status?: string } }>("POST", `/${encodeURIComponent(videoId)}/downloads`, undefined,
+      { operation: "createDownload", ids: [videoId], subjectId: videoId, timeoutMs: o.timeoutMs });
+    if (!r.json.success) this.fail("create download", r);
+    const status = r.json.result?.default?.status;
+    if (status === "ready" || status === "inprogress") return status;
+    if (status === undefined) throw new Error(this.red(`cloudflare create download: the 200 carried no default download (HTTP ${r.status})`));
+    throw new Error(this.red(`cloudflare create download: the download failed (status ${String(status).slice(0, 20)})`));
   }
 }

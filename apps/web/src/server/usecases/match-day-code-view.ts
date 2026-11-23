@@ -22,6 +22,8 @@ import { levelWords, type LevelWords } from "@/lib/score/levels";
 import { resolveSeedingSourceStage, seedingSourceReady } from "@/lib/seeding-source-ready";
 import { isSwissBoardSeated, nextUnseatedSwissRound } from "@/lib/swiss-shell";
 import type { Dict } from "@/lib/i18n-constants";
+import { log } from "@/server/logger";
+import { seaznWatchUrls } from "@/server/video/seazn-live";
 import { readBoard, type Board, type FixtureRow } from "./match-day";
 import { IN_PLAY, liveCallSql } from "./match-day-call";
 import { readMatchDayNames } from "./match-day-names";
@@ -55,6 +57,10 @@ export type MatchDayCodeRowView = {
    *  Never the engine's full headline, which carries every set's score and pushes the names off a 320 dp phone row (the
    *  controller's ruling, MD-1 follow-up). Null before the engine has published a summary. */
   summary: string | null;
+  /** Seazn-hosted video (Task 17, owner ruling option A): while the match is playing, on air to Seazn and its public page is readable,
+   *  that page's address for the phone's "Watch live" (`seaznWatchUrls`); else null. Never a playback address or a token, and never a
+   *  query: the page signs its own short-lived address for whoever opens it. */
+  live_seazn: { watch_url: string } | null;
 };
 
 /** `round`: a Swiss approval's round awaiting pairing (the phone's "Round 4 pairings are ready"); null for a draw. */
@@ -335,13 +341,19 @@ async function scopeLabel(tx: Tx, code: MatchDayCodeRow, compName: string, court
   return ranked.map((id) => courtNames.get(id) ?? "").filter((n) => n !== "").join(", ");
 }
 
+/** No match on air: every row's `live_seazn` null. The candidates' rows (match-day-code-call.ts) read no video, so they are given this. */
+const NO_WATCH: ReadonlyMap<string, string> = new Map();
+
 /** The phone's row for each of `rows` (the day read's, and the code's candidates', match-day-code-call.ts): the board's round
- *  codes and the desk's tags and seat labels, read once for all of them. */
+ *  codes and the desk's tags and seat labels, read once for all of them. `watch` maps a match on air to Seazn to its public page's
+ *  address; it is read LAZILY, when a row is built, so the day read can fill it after its tenant transaction (the video tables are
+ *  privileged-only reads and cannot run inside one). */
 export async function codeRowViews(
   tx: Tx,
   rows: readonly FixtureRow[],
   dict: Dict,
   words: LevelWords,
+  watch: ReadonlyMap<string, string> = NO_WATCH,
 ): Promise<(r: FixtureRow) => MatchDayCodeRowView> {
   const rounds = await readRounds(tx, rows, dict);
   const names = await readMatchDayNames(tx, rows, dict);
@@ -358,8 +370,11 @@ export async function codeRowViews(
     status: statusOf(r.status),
     scheduled_at: isoOrNull(r.scheduled_at),
     summary: shortScore(r, words),
+    live_seazn: watchLink(watch.get(r.id)),
   });
 }
+
+const watchLink = (url: string | undefined): MatchDayCodeRowView["live_seazn"] => (url === undefined ? null : { watch_url: url });
 
 /**
  * The day read (§9.3) for a code `resolveMatchDayCode` has accepted at `now`. Reads under the code's org (its issuer
@@ -370,7 +385,10 @@ export async function getMatchDayForCode(code: MatchDayCodeRow, now: Date): Prom
   const dict = await getDictionary(DEFAULT_LOCALE, "ui");
   // The live level's marks (TB, MTB, Ad) in English, as the round codes are: the desk reads them from the public dictionary.
   const words = levelWords(await getDictionary(DEFAULT_LOCALE, "public"));
-  return withTenant(code.orgId, async (tx) => {
+  // Seazn-hosted video (Task 17): filled AFTER the tenant transaction (the video tables are read by the privileged client only, and a
+  // second pool connection inside a transaction is the nesting the pool cannot afford), read lazily by every row built from it.
+  const watch = new Map<string, string>();
+  const { playing, build } = await withTenant(code.orgId, async (tx) => {
     const board = await readBoard(tx, code.competitionId, now, { noCourt: code.scope.kind === "competition", finished: true });
     // Owner O3 (2026-11-17): online divisions stay OUT of this read. An online board is the web Match Day's to list (`online_rounds`), and
     // the phone's code never lists one - on a court, off one, or in play. The division's sport and config are read here (a tenant table),
@@ -390,10 +408,10 @@ export async function getMatchDayForCode(code: MatchDayCodeRow, now: Date): Prom
       }));
     const noCourt = scope.kind === "competition" ? [...board.playingNoCourt, ...board.noCourt].filter(covers) : [];
     const shown = [...courts.flatMap((x) => [...(x.now ? [x.now] : []), ...x.next, ...x.finished]), ...noCourt];
-    const rowView = await codeRowViews(tx, shown, dict, words);
+    const rowView = await codeRowViews(tx, shown, dict, words, watch);
     const label = await scopeLabel(tx, code, board.comp.name, board.courtNames, board.courts.map((c) => c.court_id));
     const approvals = await readApprovals(tx, code);
-    return {
+    const build = (): MatchDayCodeView => ({
       competition: { id: board.comp.id, name: board.comp.name },
       scope: { kind: scope.kind, label },
       day: code.day,
@@ -416,6 +434,15 @@ export async function getMatchDayForCode(code: MatchDayCodeRow, now: Date): Prom
       // alone, and `covers` above drops an online division's boards from the lists. So `online` stays [].
       online: [],
       approvals,
-    };
+    });
+    // Only the matches PLAYING now can be on air: a queued or a finished match's row never carries a link.
+    return { playing: shown.filter((r) => r.status === IN_PLAY).map((r) => r.id), build };
   });
+  // Decorative on a polled read (the board's M5 rule): a link that cannot be read is logged and left out, never a 500 for the phone's list.
+  try {
+    for (const [id, url] of await seaznWatchUrls(code.orgId, playing)) watch.set(id, url);
+  } catch (err) {
+    log.warn({ err, competitionId: code.competitionId, fixtureIds: playing }, "match-day code: Seazn watch link read failed; links left out");
+  }
+  return build();
 }

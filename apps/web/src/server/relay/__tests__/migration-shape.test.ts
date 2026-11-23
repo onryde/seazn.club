@@ -51,7 +51,7 @@ async function insertSession(r: Awaited<ReturnType<typeof rig>>, state: string) 
 }
 
 describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", () => {
-  it("RLS is enabled AND forced on all NINETEEN tables (V410's eight, V430's four, V437's two, V479's four, V525's one), with zero policies", async () => {
+  it("RLS is enabled AND forced on all TWENTY-FOUR tables (V410's eight, V430's four, V437's two, V479's four, V525's one, V541's two, V542's three), with zero policies", async () => {
     // The list is read from the migration files themselves (`create table (\w+)` over the
     // stream fold), so a table added later is guarded the day it lands, not the day someone
     // remembers this test. STREAM_TABLES comes from _stream-migration.ts, which
@@ -63,7 +63,7 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
       where n.nspname = current_schema()
         and c.relname = any(${STREAM_TABLES})
       order by c.relname`;
-    expect(STREAM_TABLES.length).toBe(8 + 4 + 2 + 4 + 1);
+    expect(STREAM_TABLES.length).toBe(8 + 4 + 2 + 4 + 1 + 2 + 3);
     expect(rows.map((r) => r.relname)).toEqual([...STREAM_TABLES].sort());
     for (const r of rows) {
       expect(r.rls, r.relname).toBe(true);
@@ -580,7 +580,8 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
       refused++;
     }
     expect(refused).toBe(4);
-    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_targets where org_id = ${a.orgId}`;
+    // External destinations only: since V541 every org also holds its one `seazn` row, which this count is not about.
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_targets where org_id = ${a.orgId} and kind <> 'seazn'`;
     expect(n).toBe(3);   // rig's null, the second null, the fingerprinted row
     // The PREDICATE keeps legacy nulls outside the index WITHOUT leaning on NULLS DISTINCT (a later "tidy" to NULLS NOT
     // DISTINCT would otherwise make two legacy rows collide), and it is what insertStreamTarget's

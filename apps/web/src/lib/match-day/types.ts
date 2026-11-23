@@ -87,6 +87,11 @@ export interface MatchDayFixture {
    *  broadcast's own made-for-kids stamp — the Match Day preview's source (spec §6.2). Null for any match whose stream is not live,
    *  and for a live stream that names no YouTube video (a pasted key). Set on a playing court's match only. */
   live_video: { url: string; made_for_kids: boolean } | null;
+  /** While the match's latest session is a Seazn-hosted one on air (Seazn-hosted video, Task 17): the preview plays its live from the
+   *  organiser's own video route (`GET /fixtures/{id}/video`). A boolean only: the polled board never carries a playback address or a
+   *  token, and `live_video` keeps its YouTube shape. False for every match not playing, and for a Seazn session still warming or
+   *  already ending. Set on a playing court's match only, like `live_video`. */
+  live_seazn: boolean;
   /** Match Day C2: the format this match plays, in the public line's words (`fixtureFormatLines`, the fixture page's own
    *  `effectiveLine`) — the court's read-only Match format. Set on a playing match only; null for any other, and for a format
    *  the line has no words for. */

@@ -16,6 +16,11 @@ import { setRateLimitInfo } from "./context";
 
 export type Scope = "read" | "write";
 
+/** What `requireOrgAuth` throws (an `AuthError`, so a 401) for a signed-in user who is not a member of the org. A route whose
+ *  answer must not tell a stranger that the id exists (the organiser's Seazn video) turns exactly this one into a 404; the
+ *  signed-out "Unauthorized" stays a 401. */
+export const NOT_A_MEMBER = "You are not a member of this organization";
+
 export interface AuthCtx {
   orgId: string;
   /** `match_day_code`: a Match Day code's actor (`matchDayActor`, match-day-codes.ts), built by the md_ routes, which
@@ -234,7 +239,7 @@ export async function requireOrgAuth(req: Request, orgId: string, scope: Scope):
   if (token) return apiKeyAuth(req, token, orgId);
   const user = await requireUser();
   const role = await getOrgRole(orgId, user.id);
-  if (!role) throw new AuthError("You are not a member of this organization");
+  if (!role) throw new AuthError(NOT_A_MEMBER);
   const roles: readonly OrgRole[] = scope === "write" ? EDITOR_ROLES : READ_ROLES;
   if (!roles.includes(role)) throw new HttpError(403, "Insufficient permissions");
   // Downgrade freeze (doc 10 §2.4): an over-quota admin seat is read-only

@@ -45,7 +45,9 @@ const key = (id: string, label: string, kind: StreamTarget["kind"] = "youtube"):
 describe("destinationRow: what one destination reads as", () => {
   it("a pasted key: the platform's own key line, for EVERY stored kind — and never a health badge (nothing is known about a key's health)", () => {
     let checked = 0;
-    for (const kind of StreamTargetKind.options) {
+    // "seazn" is the org's own row (V541), not a pasted key: its reading has its own describe below (Task 16).
+    const pasted = StreamTargetKind.options.filter((k) => k !== "seazn");
+    for (const kind of pasted) {
       const row = destinationRow(msg, key("k", `Dest ${kind}`, kind));
       const expected =
         kind === "custom_rtmp" ? "Custom stream key"
@@ -58,7 +60,7 @@ describe("destinationRow: what one destination reads as", () => {
       expect(row.health, `${kind}: a key has no health to claim`).toBeNull();
       checked++;
     }
-    expect(checked, "every stored kind").toBe(StreamTargetKind.options.length);
+    expect(checked, "every pasted kind").toBe(pasted.length);
     expect(checked).toBeGreaterThan(4);
   });
 
@@ -627,5 +629,85 @@ describe("the picker, driven", () => {
     for (const n of names) expect(attr(n, "title"), "a clipped name stays readable").toBe(textOf(n));
     expect(attr(name, "title")).toBe(long);
     expect(names.length, "anti-vacuity: the trigger and all six rows").toBe(7);
+  });
+});
+
+// ─── Task 16: the Seazn destination ──────────────────────────────────────────────────────────────────────────────────────────
+const NL = JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "dictionaries", "nl", "ui.json"), "utf8")) as Record<string, string>;
+const msgNl = (k: MessageKey, vars: Record<string, string | number> = {}): string =>
+  Object.entries(vars).reduce((s, [n, v]) => s.replaceAll(`{${n}}`, String(v)), NL[k] ?? `MISSING:${k}`);
+const seazn = (): StreamTarget => ({
+  id: "t-seazn", kind: "seazn", label: "Seazn", watchUrl: null, createdAt: "2026-11-01T10:00:00.000Z", keyHint: null, inUse: null, youtube: null,
+});
+
+describe("the Seazn destination (Task 16)", () => {
+  // The open list registers a document listener, which a node environment lacks (same stand-in as "the picker, driven").
+  beforeEach(() => {
+    vi.stubGlobal("document", { addEventListener: () => {}, removeEventListener: () => {} });
+    vi.stubGlobal("Node", class {});
+  });
+  afterEach(() => vi.unstubAllGlobals());
+  it("reads as 'Seazn' / \"Plays on this match's page\" — never as a pasted key — and in Dutch as the Dutch strings", () => {
+    const en = destinationRow(msg, seazn());
+    expect(en.name).toBe("Seazn");
+    expect(en.kind).toBe("Plays on this match's page");
+    expect(en.kind).not.toMatch(/stream key/i);
+    expect(en.health).toBeNull();
+    const nl = destinationRow(msgNl, seazn());
+    expect(nl.name).toBe("Seazn");
+    expect(nl.kind).toBe("Wordt afgespeeld op de pagina van deze wedstrijd");
+  });
+
+  it("the stored label never shows: a localised name is the dictionary's", () => {
+    expect(destinationRow(msg, { ...seazn(), label: "stored-label" }).name).toBe("Seazn");
+  });
+
+  it("listed first and checked for a fixture with no pick of its own: the server's answer is the Seazn id, so exactly the first option is selected", () => {
+    const p = mount({ targets: [seazn(), ...TARGETS], selectedId: "t-seazn" });
+    expect(attr(p.trigger(), "data-value")).toBe("t-seazn");
+    expect(textOf(byTestId(p.island.tree(), "stream-target-kind")!)).toBe("Plays on this match's page");
+    (attr(p.trigger(), "onClick") as () => void)();
+    const opts = p.options();
+    expect(opts.length, "anti-vacuity").toBe(TARGETS.length + 1);
+    expect(opts.map((o) => attr(o, "data-target-id"))[0]).toBe("t-seazn");
+    expect(opts.filter((o) => attr(o, "aria-selected") === true).map((o) => attr(o, "data-target-id"))).toEqual(["t-seazn"]);
+    const mark = deep(opts[0]!).find((el) => attr(el, "data-platform-mark") !== undefined && attr(el, "data-platform-mark") !== null);
+    expect(attr(mark!, "data-platform-mark")).toBe("seazn");
+  });
+
+  // Phase 1 visual D2: at 320 the Seazn helper ("Se reproduce en la página d…") was cut in es/fr/nl, on the trigger and in the list,
+  // and the cut part is the part that says what it does. It wraps instead: no `truncate`, no line clamp; its column keeps `min-w-0`.
+  // Every other row's kind line keeps its one-line truncation (the trigger and the rows read the same, so the change is Seazn's alone).
+  it("review D2: the Seazn helper wraps on the closed trigger and in the open list — no truncate, no line clamp, inside a min-w-0 column; a pasted key's still truncates", () => {
+    const classes = (el: ReactElement) => String(attr(el, "className") ?? "").split(/\s+/);
+    const p = mount({ targets: [seazn(), ...TARGETS], selectedId: "t-seazn" });
+    const onTrigger = byTestId(deep(p.trigger()), "stream-target-kind")!;
+    (attr(p.trigger(), "onClick") as () => void)();
+    const optionKinds = p.options().map((o) => byTestId(deep(o), "stream-target-kind")!);
+    expect(optionKinds.length, "anti-vacuity: every row has a kind line").toBe(TARGETS.length + 1);
+    const seaznKinds = [onTrigger, optionKinds[0]!];
+    let checked = 0;
+    for (const kind of seaznKinds) {
+      expect(textOf(kind), "PREMISE: the Seazn helper").toBe("Plays on this match's page");
+      expect(classes(kind)).not.toContain("truncate");
+      expect(classes(kind).some((c) => c.startsWith("line-clamp")), "no line clamp").toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // The column it sits in: min-w-0, so the wrap is inside the row, never past it.
+    const holdsKind = (el: ReactElement) =>
+      ([] as ReactNode[]).concat((el.props as { children?: ReactNode }).children).some((c) => isValidElement(c) && attr(c, "data-testid") === "stream-target-kind");
+    const column = deep(p.trigger()).find(holdsKind);
+    expect(column, "PREMISE: the helper's own column").toBeDefined();
+    expect(classes(column!), "the column keeps min-w-0").toContain("min-w-0");
+    // The control: the pasted key on the same list keeps its one-line truncation.
+    const keyRow = p.options().find((o) => attr(o, "data-target-id") === "t-key")!;
+    expect(classes(byTestId(deep(keyRow), "stream-target-kind")!)).toContain("truncate");
+  });
+
+  it("a pasted key picked on the same list stays picked: the picker shows the pick it is given, not Seazn (the reload answer is the server's)", () => {
+    const p = mount({ targets: [seazn(), ...TARGETS], selectedId: "t-key" });
+    expect(attr(p.trigger(), "data-value")).toBe("t-key");
+    expect(textOf(byTestId(p.island.tree(), "stream-target-kind")!)).toBe("YouTube stream key");
   });
 });

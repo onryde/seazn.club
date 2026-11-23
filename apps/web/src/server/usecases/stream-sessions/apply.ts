@@ -116,7 +116,9 @@ export async function apply(
       if (!monthly) {
         throw new HttpError(500, `Session ${sessionId} went live (${peek.state} at the rate read, ${before.state} under the lock) with no monthly credit rate resolved; refusing to consume without the monthly rollover`, "monthly_rate_unresolved");
       }
-      if (before.mode === "composed" && before.outputUid === null) {
+      // Seazn-hosted video (Task 11, spec §7.3 "billing is unchanged"): a Seazn session has no destination output BY DESIGN —
+      // viewers play its programme input — so it is charged like any composed match; the guard below is for an EXTERNAL one.
+      if (before.mode === "composed" && before.outputUid === null && before.destination !== "seazn") {
         // R2004, PR #981 review I3 — "cannot happen" as a guard: a composed session going live with NO destination output
         // (the add failed and the fail-closed path did not land, or a row seeded without one). The broadcast reaches
         // nobody, so it is never charged: refused by name, logged and reported, and the decision goes on unconsumed.

@@ -3496,6 +3496,9 @@
                                           }
                                         ]
                                       },
+                                      "live_seazn": {
+                                        "type": "boolean"
+                                      },
                                       "format_line": {
                                         "anyOf": [
                                           {
@@ -3534,6 +3537,7 @@
                                       "stream",
                                       "scorer_attention",
                                       "live_video",
+                                      "live_seazn",
                                       "format_line",
                                       "court_stream",
                                       "own_stream_code"
@@ -3800,6 +3804,9 @@
                                         }
                                       ]
                                     },
+                                    "live_seazn": {
+                                      "type": "boolean"
+                                    },
                                     "format_line": {
                                       "anyOf": [
                                         {
@@ -3848,6 +3855,7 @@
                                     "stream",
                                     "scorer_attention",
                                     "live_video",
+                                    "live_seazn",
                                     "format_line",
                                     "court_stream",
                                     "own_stream_code",
@@ -4243,6 +4251,9 @@
                                   }
                                 ]
                               },
+                              "live_seazn": {
+                                "type": "boolean"
+                              },
                               "format_line": {
                                 "anyOf": [
                                   {
@@ -4281,6 +4292,7 @@
                               "stream",
                               "scorer_attention",
                               "live_video",
+                              "live_seazn",
                               "format_line",
                               "court_stream",
                               "own_stream_code"
@@ -4614,6 +4626,7 @@
                             "url": null,
                             "made_for_kids": null
                           },
+                          "live_seazn": true,
                           "format_line": "example",
                           "court_stream": true,
                           "own_stream_code": true
@@ -4653,6 +4666,7 @@
                               "url": null,
                               "made_for_kids": null
                             },
+                            "live_seazn": true,
                             "format_line": "example",
                             "court_stream": true,
                             "own_stream_code": true,
@@ -4712,6 +4726,7 @@
                           "url": "example",
                           "made_for_kids": true
                         },
+                        "live_seazn": true,
                         "format_line": "example",
                         "court_stream": true,
                         "own_stream_code": true
@@ -6369,6 +6384,9 @@
                                   }
                                 ]
                               },
+                              "live_seazn": {
+                                "type": "boolean"
+                              },
                               "format_line": {
                                 "anyOf": [
                                   {
@@ -6407,6 +6425,7 @@
                               "stream",
                               "scorer_attention",
                               "live_video",
+                              "live_seazn",
                               "format_line",
                               "court_stream",
                               "own_stream_code"
@@ -6552,6 +6571,7 @@
                           "url": "example",
                           "made_for_kids": true
                         },
+                        "live_seazn": true,
                         "format_line": "example",
                         "court_stream": true,
                         "own_stream_code": true
@@ -53915,6 +53935,26 @@
                                             "type": "null"
                                           }
                                         ]
+                                      },
+                                      "live_seazn": {
+                                        "anyOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "watch_url": {
+                                                "type": "string",
+                                                "pattern": "^https:\\/\\/[a-z0-9.-]+(?::\\d+)?\\/live\\/[^/?#]+\\/[^/?#]+\\/[^/?#]+\\/fixtures\\/[0-9a-fA-F-]{36}$"
+                                              }
+                                            },
+                                            "required": [
+                                              "watch_url"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
                                       }
                                     },
                                     "required": [
@@ -53929,7 +53969,8 @@
                                       "away_slot",
                                       "status",
                                       "scheduled_at",
-                                      "summary"
+                                      "summary",
+                                      "live_seazn"
                                     ],
                                     "additionalProperties": false
                                   },
@@ -54046,6 +54087,26 @@
                                           "type": "null"
                                         }
                                       ]
+                                    },
+                                    "live_seazn": {
+                                      "anyOf": [
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "watch_url": {
+                                              "type": "string",
+                                              "pattern": "^https:\\/\\/[a-z0-9.-]+(?::\\d+)?\\/live\\/[^/?#]+\\/[^/?#]+\\/[^/?#]+\\/fixtures\\/[0-9a-fA-F-]{36}$"
+                                            }
+                                          },
+                                          "required": [
+                                            "watch_url"
+                                          ],
+                                          "additionalProperties": false
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
                                     }
                                   },
                                   "required": [
@@ -54060,7 +54121,8 @@
                                     "away_slot",
                                     "status",
                                     "scheduled_at",
-                                    "summary"
+                                    "summary",
+                                    "live_seazn"
                                   ],
                                   "additionalProperties": false
                                 }
@@ -54173,6 +54235,26 @@
                                           "type": "null"
                                         }
                                       ]
+                                    },
+                                    "live_seazn": {
+                                      "anyOf": [
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "watch_url": {
+                                              "type": "string",
+                                              "pattern": "^https:\\/\\/[a-z0-9.-]+(?::\\d+)?\\/live\\/[^/?#]+\\/[^/?#]+\\/[^/?#]+\\/fixtures\\/[0-9a-fA-F-]{36}$"
+                                            }
+                                          },
+                                          "required": [
+                                            "watch_url"
+                                          ],
+                                          "additionalProperties": false
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
                                     }
                                   },
                                   "required": [
@@ -54187,7 +54269,8 @@
                                     "away_slot",
                                     "status",
                                     "scheduled_at",
-                                    "summary"
+                                    "summary",
+                                    "live_seazn"
                                   ],
                                   "additionalProperties": false
                                 }
@@ -54313,6 +54396,26 @@
                                     "type": "null"
                                   }
                                 ]
+                              },
+                              "live_seazn": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "watch_url": {
+                                        "type": "string",
+                                        "pattern": "^https:\\/\\/[a-z0-9.-]+(?::\\d+)?\\/live\\/[^/?#]+\\/[^/?#]+\\/[^/?#]+\\/fixtures\\/[0-9a-fA-F-]{36}$"
+                                      }
+                                    },
+                                    "required": [
+                                      "watch_url"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -54327,7 +54430,8 @@
                               "away_slot",
                               "status",
                               "scheduled_at",
-                              "summary"
+                              "summary",
+                              "live_seazn"
                             ],
                             "additionalProperties": false
                           }
@@ -54440,6 +54544,26 @@
                                     "type": "null"
                                   }
                                 ]
+                              },
+                              "live_seazn": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "watch_url": {
+                                        "type": "string",
+                                        "pattern": "^https:\\/\\/[a-z0-9.-]+(?::\\d+)?\\/live\\/[^/?#]+\\/[^/?#]+\\/[^/?#]+\\/fixtures\\/[0-9a-fA-F-]{36}$"
+                                      }
+                                    },
+                                    "required": [
+                                      "watch_url"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -54454,7 +54578,8 @@
                               "away_slot",
                               "status",
                               "scheduled_at",
-                              "summary"
+                              "summary",
+                              "live_seazn"
                             ],
                             "additionalProperties": false
                           }
@@ -54577,7 +54702,10 @@
                           "away_slot": "example",
                           "status": "upcoming",
                           "scheduled_at": "2026-08-01T09:00:00Z",
-                          "summary": "example"
+                          "summary": "example",
+                          "live_seazn": {
+                            "watch_url": null
+                          }
                         },
                         "next": [
                           {
@@ -54592,7 +54720,10 @@
                             "away_slot": "example",
                             "status": "upcoming",
                             "scheduled_at": "2026-08-01T09:00:00Z",
-                            "summary": "example"
+                            "summary": "example",
+                            "live_seazn": {
+                              "watch_url": null
+                            }
                           }
                         ],
                         "finished": [
@@ -54608,7 +54739,10 @@
                             "away_slot": "example",
                             "status": "upcoming",
                             "scheduled_at": "2026-08-01T09:00:00Z",
-                            "summary": "example"
+                            "summary": "example",
+                            "live_seazn": {
+                              "watch_url": null
+                            }
                           }
                         ]
                       }
@@ -54626,7 +54760,10 @@
                         "away_slot": "example",
                         "status": "upcoming",
                         "scheduled_at": "2026-08-01T09:00:00Z",
-                        "summary": "example"
+                        "summary": "example",
+                        "live_seazn": {
+                          "watch_url": "example"
+                        }
                       }
                     ],
                     "online": [
@@ -54642,7 +54779,10 @@
                         "away_slot": "example",
                         "status": "upcoming",
                         "scheduled_at": "2026-08-01T09:00:00Z",
-                        "summary": "example"
+                        "summary": "example",
+                        "live_seazn": {
+                          "watch_url": "example"
+                        }
                       }
                     ],
                     "approvals": [
@@ -56444,6 +56584,26 @@
                                         "type": "null"
                                       }
                                     ]
+                                  },
+                                  "live_seazn": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "watch_url": {
+                                            "type": "string",
+                                            "pattern": "^https:\\/\\/[a-z0-9.-]+(?::\\d+)?\\/live\\/[^/?#]+\\/[^/?#]+\\/[^/?#]+\\/fixtures\\/[0-9a-fA-F-]{36}$"
+                                          }
+                                        },
+                                        "required": [
+                                          "watch_url"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
                                   }
                                 },
                                 "required": [
@@ -56458,7 +56618,8 @@
                                   "away_slot",
                                   "status",
                                   "scheduled_at",
-                                  "summary"
+                                  "summary",
+                                  "live_seazn"
                                 ],
                                 "additionalProperties": false
                               },
@@ -56591,7 +56752,10 @@
                           "away_slot": "example",
                           "status": "upcoming",
                           "scheduled_at": "2026-08-01T09:00:00Z",
-                          "summary": "example"
+                          "summary": "example",
+                          "live_seazn": {
+                            "watch_url": "example"
+                          }
                         },
                         "source": "this_court",
                         "from_court_name": "example",
@@ -57983,7 +58147,7 @@
     },
     "/api/v1/fixtures/{id}/stream-sessions": {
       "post": {
-        "summary": "Start a phone-relay session for the fixture (one match credit is consumed when it goes live). 409 active_session when one is already running (its id is returned as `sessionId`), 409 overlay_required, 409 phone_not_paired (no phone is paired on the fixture's stream code — scan it first; asked after active_session and before credits, so no row is written and no credit spent), 409 phone_not_responding (a phone IS paired but has sent no beat within its liveness window — wake it, no rescan needed; asked at the same point, same guarantees), 409 target_in_use (the destination is live or waiting on another match, named in `holder`), 402 PAYMENT_REQUIRED competitions.max_active (the fixture's competition is billing-frozen: its organisation is over its active-competition limit; asked before every other refusal, so nothing is written or spent; reading and stopping a running session stay open), 402 no_credits, 422 DESTINATION_NOT_ALLOWED (the saved destination is no longer on the allowlist), 422 TARGET_UNREADABLE (the saved stream key can no longer be read: replace the key, or for a legacy destination remove it, since only YouTube and Twitch can be added; refused before any provider call, no row is written, no credit spent), 503 composed_unavailable (mode composed where the compositor cannot run: the relay is unavailable, no compositor image is configured, or, on a live deployment, FLY_API_TOKEN or ENV_NAME is unset or FLY_RELAY_APP is unset or still the retired shared default; asked before every admission refusal, after the deployment's ingest_unavailable, so no session row, input, credit or runner is created — start passthrough instead), 503 storage_exhausted (no row is written). A destination that is a connected YouTube channel is refused with a YouTube code and `connectionId` in the error extras (nothing is written or spent, and a broadcast made at YouTube is deleted again) — after every admission refusal above except 503 storage_exhausted, which is weighed after the YouTube step, so a channel that cannot go live answers its YouTube code even when storage is exhausted, and a channel that can answers storage_exhausted: 409 youtube_reconnect_needed (the channel's grant is dead: reconnect it), 409 youtube_live_not_enabled (live streaming is not enabled on the channel), 409 youtube_live_blocked (YouTube has blocked the channel from streaming), 409 youtube_channel_busy (the channel already has its ten live streams in use), 429 youtube_limit_reached (YouTube's quota is used up; try again later), 503 youtube_unavailable (YouTube did not answer, or the channel's stream key could not be read)",
+        "summary": "Start a phone-relay session for the fixture (one match credit is consumed when it goes live). 409 active_session when one is already running (its id is returned as `sessionId`), 409 overlay_required, 409 phone_not_paired (no phone is paired on the fixture's stream code — scan it first; asked after active_session and before credits, so no row is written and no credit spent), 409 phone_not_responding (a phone IS paired but has sent no beat within its liveness window — wake it, no rescan needed; asked at the same point, same guarantees), 409 target_in_use (the destination is live or waiting on another match, named in `holder`), 402 PAYMENT_REQUIRED competitions.max_active (the fixture's competition is billing-frozen: its organisation is over its active-competition limit; asked before every other refusal, so nothing is written or spent; reading and stopping a running session stay open), 402 no_credits, 422 DESTINATION_NOT_ALLOWED (the saved destination is no longer on the allowlist), 422 TARGET_UNREADABLE (the saved stream key can no longer be read: replace the key, or for a legacy destination remove it, since only YouTube and Twitch can be added; refused before any provider call, no row is written, no credit spent), 422 seazn_unavailable (the destination is Seazn hosted video, which is not available to this deployment yet; refused before any provider call, nothing is written or spent), 503 composed_unavailable (mode composed where the compositor cannot run: the relay is unavailable, no compositor image is configured, or, on a live deployment, FLY_API_TOKEN or ENV_NAME is unset or FLY_RELAY_APP is unset or still the retired shared default; asked before every admission refusal, after the deployment's ingest_unavailable, so no session row, input, credit or runner is created — start passthrough instead; a start on the Seazn destination always runs composed, whatever mode it names), 503 seazn_video_unconfigured (the destination is Seazn hosted video and this deployment has no SEAZN_VIDEO_ORIGINS to sign its playback with; refused after composed_unavailable and before any provider call, nothing is written or spent), 503 storage_exhausted (no row is written). A destination that is a connected YouTube channel is refused with a YouTube code and `connectionId` in the error extras (nothing is written or spent, and a broadcast made at YouTube is deleted again) — after every admission refusal above except 503 storage_exhausted, which is weighed after the YouTube step, so a channel that cannot go live answers its YouTube code even when storage is exhausted, and a channel that can answers storage_exhausted: 409 youtube_reconnect_needed (the channel's grant is dead: reconnect it), 409 youtube_live_not_enabled (live streaming is not enabled on the channel), 409 youtube_live_blocked (YouTube has blocked the channel from streaming), 409 youtube_channel_busy (the channel already has its ten live streams in use), 429 youtube_limit_reached (YouTube's quota is used up; try again later), 503 youtube_unavailable (YouTube did not answer, or the channel's stream key could not be read)",
         "tags": [
           "fixtures"
         ],
@@ -58464,7 +58628,7 @@
                       "properties": {
                         "code": {
                           "type": "string",
-                          "description": "This route's 422 codes — DESTINATION_NOT_ALLOWED: the destination is not on the allowlist (see `rule`); TARGET_UNREADABLE: the saved stream key can no longer be read (replace the key; a legacy destination: remove it, since only YouTube and Twitch can be added)"
+                          "description": "This route's 422 codes — DESTINATION_NOT_ALLOWED: the destination is not on the allowlist (see `rule`); TARGET_UNREADABLE: the saved stream key can no longer be read (replace the key; a legacy destination: remove it, since only YouTube and Twitch can be added); seazn_unavailable: the destination is Seazn hosted video, which is not available to this deployment yet"
                         },
                         "message": {
                           "type": "string"
@@ -58911,6 +59075,55 @@
                                 "additionalProperties": false
                               }
                             },
+                            "seaznReplays": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  },
+                                  "partNo": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "state": {
+                                    "type": "string",
+                                    "enum": [
+                                      "processing",
+                                      "playable",
+                                      "failed"
+                                    ]
+                                  },
+                                  "lengthSeconds": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "onMatchPage": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "partNo",
+                                  "state",
+                                  "lengthSeconds",
+                                  "onMatchPage"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "youtubeVideoUrl": {
                               "anyOf": [
                                 {
@@ -58962,7 +59175,8 @@
                                     "facebook",
                                     "twitch",
                                     "kick",
-                                    "custom_rtmp"
+                                    "custom_rtmp",
+                                    "seazn"
                                   ]
                                 },
                                 "label": {
@@ -59141,6 +59355,7 @@
                             "endedAt",
                             "replayUrl",
                             "replayParts",
+                            "seaznReplays",
                             "youtubeVideoUrl",
                             "youtubeStatus",
                             "youtubeLiveForMs",
@@ -59202,6 +59417,15 @@
                         "partNo": 1,
                         "url": "example",
                         "private": true
+                      }
+                    ],
+                    "seaznReplays": [
+                      {
+                        "id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                        "partNo": 1,
+                        "state": "processing",
+                        "lengthSeconds": 0,
+                        "onMatchPage": true
                       }
                     ],
                     "youtubeVideoUrl": "example",
@@ -59740,6 +59964,55 @@
                             "additionalProperties": false
                           }
                         },
+                        "seaznReplays": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "partNo": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991
+                              },
+                              "state": {
+                                "type": "string",
+                                "enum": [
+                                  "processing",
+                                  "playable",
+                                  "failed"
+                                ]
+                              },
+                              "lengthSeconds": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "onMatchPage": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "partNo",
+                              "state",
+                              "lengthSeconds",
+                              "onMatchPage"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
                         "youtubeVideoUrl": {
                           "anyOf": [
                             {
@@ -59791,7 +60064,8 @@
                                 "facebook",
                                 "twitch",
                                 "kick",
-                                "custom_rtmp"
+                                "custom_rtmp",
+                                "seazn"
                               ]
                             },
                             "label": {
@@ -59970,6 +60244,7 @@
                         "endedAt",
                         "replayUrl",
                         "replayParts",
+                        "seaznReplays",
                         "youtubeVideoUrl",
                         "youtubeStatus",
                         "youtubeLiveForMs",
@@ -60026,6 +60301,15 @@
                         "partNo": 1,
                         "url": "example",
                         "private": true
+                      }
+                    ],
+                    "seaznReplays": [
+                      {
+                        "id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                        "partNo": 1,
+                        "state": "processing",
+                        "lengthSeconds": 0,
+                        "onMatchPage": true
                       }
                     ],
                     "youtubeVideoUrl": "example",
@@ -69061,6 +69345,20 @@
                                       "type": "null"
                                     }
                                   ]
+                                },
+                                "stopRule": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "result",
+                                        "seazn"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
                                 }
                               },
                               "required": [
@@ -69397,9 +69695,1009 @@
         ]
       }
     },
+    "/api/v1/fixtures/{id}/video": {
+      "get": {
+        "summary": "The organiser's Seazn-hosted video of a fixture (the signed-in member's session only; Match Day's stream preview): the same body as the public route — `live`, while the fixture's latest stream session is on air to Seazn, and `replay`, its finished recordings in recording order — each a signed playback URL (the token is a path segment) with the time its token expires, read for this organisation's own fixture whatever its competition's visibility. Any member of the fixture's organisation reads it, a viewer included. Never key-reachable: a signed address is a bearer credential. A signed-in user who is not a member of the fixture's organisation, an unknown id and a malformed one all answer the same 404. Served `Cache-Control: private, no-store`, varying on Cookie and Authorization. A fixture with no Seazn video answers `{ live: null, replay: [] }`",
+        "tags": [
+          "fixtures"
+        ],
+        "x-required-scope": "none",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "live": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "src": {
+                                  "type": "string",
+                                  "format": "uri"
+                                },
+                                "expiresAt": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                                }
+                              },
+                              "required": [
+                                "src",
+                                "expiresAt"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "replay": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "src": {
+                                "type": "string",
+                                "format": "uri"
+                              },
+                              "expiresAt": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                              },
+                              "partNo": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991
+                              },
+                              "player": {
+                                "type": "string",
+                                "enum": [
+                                  "hls",
+                                  "embed"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "src",
+                              "expiresAt",
+                              "partNo",
+                              "player"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "live",
+                        "replay"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "live": {
+                      "src": "https://example.com/example",
+                      "expiresAt": "2026-08-01T09:00:00Z"
+                    },
+                    "replay": [
+                      {
+                        "src": "https://example.com/example",
+                        "expiresAt": "2026-08-01T09:00:00Z",
+                        "partNo": 1,
+                        "player": "hls"
+                      }
+                    ]
+                  },
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      }
+    },
+    "/api/v1/fixtures/{id}/replays/{replayId}": {
+      "delete": {
+        "summary": "Delete one part of the fixture's Seazn replay, for everyone (an editor's session only): the part leaves the public match page and the organiser's list at once, and its stored copy is removed — now, or by the replay move's cleanup when the video host refuses (the answer is the same either way). Answers `{ deleted: true }`, the same for a part already deleted. A viewer is 403, and so is an API key (never key-reachable); an admin whose seat is over the plan's member quota is read-only, 402. A signed-in user who is not a member of the fixture's organisation, an unknown or malformed fixture id answer 404 fixture not found; a part that is not this fixture's, unknown or malformed, 404 replay not found. Served `Cache-Control: private, no-store`",
+        "tags": [
+          "fixtures"
+        ],
+        "x-required-scope": "none",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "replayId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "deleted": {
+                          "type": "boolean",
+                          "const": true
+                        }
+                      },
+                      "required": [
+                        "deleted"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "deleted": true
+                  },
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Plan upgrade required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      }
+    },
+    "/api/v1/fixtures/{id}/replays/{replayId}/download": {
+      "get": {
+        "summary": "Download one PLAYABLE part of the fixture's Seazn replay (an editor's session only) as a `video/mp4` attachment named for the match and the part (`seazn-<home>-v-<away>-part-<n>.mp4`), with its size when the host gives it. The file streams through this route: never a redirect, and no host address or token in any header. 409 replay_not_downloadable for a part that is processing, failed or deleted, or that the video host is not ready to hand over yet (try again later). A viewer is 403, and so is an API key (never key-reachable); an over-quota admin seat 402 and 404 as the delete. 503 replay_host_unavailable when the video host does not start the file (no response within its 4 s, or a network fault): try again. Served `Cache-Control: private, no-store`; refusals are the usual JSON envelope",
+        "tags": [
+          "fixtures"
+        ],
+        "x-required-scope": "none",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "replayId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {},
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {},
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Plan upgrade required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      }
+    },
     "/api/v1/fixtures/{id}/stream-settings": {
       "put": {
-        "summary": "The fixture's stream settings: the destination pre-pick the phone's start uses (`targetId`, null clears it), the automatic-streaming switch (`autoStream`), and the stream's score preferences — `streamMode` (`passthrough` streams the camera only; null or `composed` streams the score whenever the deployment can run it, and every start reads it), `overlayTemplate` (null is the sport's default; an id the fixture's sport is not offered is a 400 and writes nothing) and `overlayDelayMs` (0–30000 whole ms; null is the server's default, 0 a real override). Send any of them; a field left out is left as it is. The answer's `targetId` is the saved choice, and its `revision` orders it against any other answer or read of these settings (higher is newer). 404 when the target is not this org's, is archived, or does not exist",
+        "summary": "The fixture's stream settings: the destination pre-pick the phone's start uses (`targetId`, null clears it), the automatic-streaming switch (`autoStream`), and the stream's score preferences — `streamMode` (`passthrough` streams the camera only; null or `composed` streams the score whenever the deployment can run it, and every start reads it), `overlayTemplate` (null is the sport's default; an id the fixture's sport is not offered is a 400 and writes nothing) and `overlayDelayMs` (0–30000 whole ms; null is the server's default, 0 a real override). Send any of them; a field left out is left as it is. The answer's `targetId` is the saved choice, and its `revision` orders it against any other answer or read of these settings (higher is newer). 404 when the target is not this org's, is archived, or does not exist; 422 seazn_unavailable when it is the Seazn destination and Seazn hosted video is not available yet",
         "tags": [
           "fixtures"
         ],
@@ -69757,6 +71055,51 @@
                       "properties": {
                         "code": {
                           "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Rejected by the engine",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "description": "This route's 422 codes — seazn_unavailable: the destination is Seazn hosted video, which is not available to this deployment yet"
                         },
                         "message": {
                           "type": "string"
@@ -98663,7 +100006,8 @@
                               "facebook",
                               "twitch",
                               "kick",
-                              "custom_rtmp"
+                              "custom_rtmp",
+                              "seazn"
                             ]
                           },
                           "label": {
@@ -99128,7 +100472,8 @@
                             "facebook",
                             "twitch",
                             "kick",
-                            "custom_rtmp"
+                            "custom_rtmp",
+                            "seazn"
                           ]
                         },
                         "label": {
@@ -99731,7 +101076,8 @@
                             "facebook",
                             "twitch",
                             "kick",
-                            "custom_rtmp"
+                            "custom_rtmp",
+                            "seazn"
                           ]
                         },
                         "label": {
@@ -100225,7 +101571,7 @@
                       "properties": {
                         "code": {
                           "type": "string",
-                          "description": "This route's 422 codes — DESTINATION_NOT_ALLOWED: the destination is not on the allowlist (see `rule`); STREAM_KEY_EMPTY: the stream key is blank once trimmed; DESTINATION_LABEL_EMPTY: the destination name is blank once trimmed; TARGET_UNREADABLE: the saved stream key can no longer be read (replace the key; a legacy destination: remove it, since only YouTube and Twitch can be added); YOUTUBE_USE_DISCONNECT: the destination is a connected YouTube channel, which has no key or name of its own (disconnect the channel instead)"
+                          "description": "This route's 422 codes — DESTINATION_NOT_ALLOWED: the destination is not on the allowlist (see `rule`); STREAM_KEY_EMPTY: the stream key is blank once trimmed; DESTINATION_LABEL_EMPTY: the destination name is blank once trimmed; TARGET_UNREADABLE: the saved stream key can no longer be read (replace the key; a legacy destination: remove it, since only YouTube and Twitch can be added); YOUTUBE_USE_DISCONNECT: the destination is a connected YouTube channel, which has no key or name of its own (disconnect the channel instead); seazn_destination_fixed: the destination is the organisation's Seazn destination, which has no key or name of its own and is never removed"
                         },
                         "message": {
                           "type": "string"
@@ -100269,7 +101615,7 @@
         ]
       },
       "delete": {
-        "summary": "Remove a streaming destination — an archive: hidden from every list, history keeps its name, and adding the same key again restores it. 409 TARGET_IN_USE while a match is live or waiting on it; 404 once removed; 422 YOUTUBE_USE_DISCONNECT for a destination that is a connected YouTube channel (disconnect the channel instead)",
+        "summary": "Remove a streaming destination (never the Seazn destination: 422 seazn_destination_fixed) — an archive: hidden from every list, history keeps its name, and adding the same key again restores it. 409 TARGET_IN_USE while a match is live or waiting on it; 404 once removed; 422 YOUTUBE_USE_DISCONNECT for a destination that is a connected YouTube channel (disconnect the channel instead)",
         "tags": [
           "fixtures"
         ],
@@ -100593,7 +101939,7 @@
                       "properties": {
                         "code": {
                           "type": "string",
-                          "description": "This route's 422 codes — YOUTUBE_USE_DISCONNECT: the destination is a connected YouTube channel, which has no key or name of its own (disconnect the channel instead)"
+                          "description": "This route's 422 codes — YOUTUBE_USE_DISCONNECT: the destination is a connected YouTube channel, which has no key or name of its own (disconnect the channel instead); seazn_destination_fixed: the destination is the organisation's Seazn destination, which has no key or name of its own and is never removed"
                         },
                         "message": {
                           "type": "string"
@@ -108406,6 +109752,230 @@
                     "channel": "example",
                     "url": "example",
                     "apikey": "example"
+                  },
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/v1/public/fixtures/{id}/video": {
+      "get": {
+        "summary": "A fixture's Seazn-hosted video for the match page's player: `live`, while the fixture's latest stream session is on air to Seazn, and `replay`, its finished recordings in recording order, each numbered by its place among them all (one past the recording host's own delete, or one that cannot be signed right now, is left out and leaves a gap); each a signed playback URL (the token is a path segment) with the time its token expires. Answered `Cache-Control: private, no-store`. A fixture with no Seazn video, or one the public cannot see, answers `{ live: null, replay: [] }`",
+        "tags": [
+          "public"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "live": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "src": {
+                                  "type": "string",
+                                  "format": "uri"
+                                },
+                                "expiresAt": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                                }
+                              },
+                              "required": [
+                                "src",
+                                "expiresAt"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "replay": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "src": {
+                                "type": "string",
+                                "format": "uri"
+                              },
+                              "expiresAt": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                              },
+                              "partNo": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991
+                              },
+                              "player": {
+                                "type": "string",
+                                "enum": [
+                                  "hls",
+                                  "embed"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "src",
+                              "expiresAt",
+                              "partNo",
+                              "player"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "live",
+                        "replay"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "live": {
+                      "src": "https://example.com/example",
+                      "expiresAt": "2026-08-01T09:00:00Z"
+                    },
+                    "replay": [
+                      {
+                        "src": "https://example.com/example",
+                        "expiresAt": "2026-08-01T09:00:00Z",
+                        "partNo": 1,
+                        "player": "hls"
+                      }
+                    ]
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }

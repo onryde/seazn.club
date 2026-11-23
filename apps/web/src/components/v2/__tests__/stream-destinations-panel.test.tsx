@@ -20,6 +20,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
 import { ZodError } from "zod";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { ApiV1Error } from "@/lib/client-v1";
@@ -27,7 +29,7 @@ import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
 import { messages, type MessageKey } from "@/lib/messages";
 import type { Dict } from "@/lib/i18n-constants";
 import {
-  ADDABLE_STREAM_PLATFORMS, DESTINATION_LABEL_EMPTY, STREAM_KEY_EMPTY, STREAM_PLATFORMS, isStreamPlatform,
+  ADDABLE_STREAM_PLATFORMS, DESTINATION_LABEL_EMPTY, SEAZN_TARGET_FIXED, STREAM_KEY_EMPTY, STREAM_PLATFORMS, isStreamPlatform,
   type StreamPlatform,
 } from "@/lib/stream-destinations";
 import { v1, parseBody } from "@/server/api-v1/http";
@@ -172,7 +174,8 @@ async function schemaRefusal(body: unknown): Promise<unknown> {
   throw new Error("the schema accepted the body");
 }
 
-const LEGACY_KINDS = StreamTargetKind.options.filter((k) => !isStreamPlatform(k));
+// "seazn" is the org's own row (V541), not a stored legacy kind; its fixed row has its own describe below (Task 16).
+const LEGACY_KINDS = StreamTargetKind.options.filter((k) => k !== "seazn" && !isStreamPlatform(k));
 
 // ─── the whole panel as markup ────────────────────────────────────────────────────────────────────────────────────────
 describe("the Streaming page (spec §4)", () => {
@@ -545,7 +548,8 @@ describe("DestinationRow — driven", () => {
 
   it("the Remove dialog's body: a platform row says re-adding the key restores it (D2); a LEGACY row never says 'again' — it cannot be added (D6)", async () => {
     let checked = 0;
-    for (const kind of StreamTargetKind.options) {
+    // The Seazn row mounts no editable row at all (Task 16, its own describe below): no Remove to drive.
+    for (const kind of StreamTargetKind.options.filter((k) => k !== "seazn")) {
       confirmMock.mockClear();
       const { row } = panelWith(target({ kind }));
       await click(byTestId(row.tree(), "stream-dest-remove"));
@@ -557,7 +561,7 @@ describe("DestinationRow — driven", () => {
       }
       checked++;
     }
-    expect(checked).toBe(StreamTargetKind.options.length);
+    expect(checked).toBe(StreamTargetKind.options.filter((k) => k !== "seazn").length);
   });
 
   it("Remove answered 'cancel' in the dialog sends nothing", async () => {
@@ -688,7 +692,7 @@ describe("DestinationRow — driven", () => {
 
   it("Replace key: a password field with Show and the ROW's platform shape warning (never blocking), PATCH {streamKey}; a legacy kind warns nothing", async () => {
     let checked = 0;
-    for (const kind of StreamTargetKind.options) {
+    for (const kind of StreamTargetKind.options.filter((k) => k !== "seazn")) {
       apiCalls.length = 0;
       refresh.mockClear();
       const { row } = panelWith(target({ kind }));
@@ -709,7 +713,7 @@ describe("DestinationRow — driven", () => {
       expect(apiCalls, kind).toEqual([{ url: "/api/v1/orgs/o/stream-targets/t1", method: "PATCH", json: { streamKey: "TestKeyName" } }]);
       checked++;
     }
-    expect(checked).toBe(StreamTargetKind.options.length);
+    expect(checked).toBe(StreamTargetKind.options.filter((k) => k !== "seazn").length);
   });
 
   it("the phone ⋯ menu opens the same three actions as 44px menu items; a held row's locked items say 'Stop Match {n} first' inside the menu", async () => {
@@ -901,5 +905,87 @@ describe("StreamDestinationsPanel — the add path, driven", () => {
     await settle();
     expect(textAt(panel.tree(), "stream-dest-error")).toBe(m("streamDest.error.generic"));
     expect(refresh).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Task 16: the fixed Seazn row ────────────────────────────────────────────────────────────────────────────────────────────
+describe("the Seazn row is fixed (Task 16)", () => {
+  const seazn = (): StreamTarget => target({ id: "t-seazn", kind: "seazn", label: "Seazn", keyHint: null });
+  const rowOf = (html: string, id: string): string => {
+    const found = new RegExp(`<li data-testid="stream-dest-row" data-target-id="${id}"[\\s\\S]*?</li>`).exec(html);
+    if (!found) throw new Error(`no row ${id} in the markup — every probe on it would pass vacuously`);
+    return found[0];
+  };
+  const ACTION_IDS = ["stream-dest-rename", "stream-dest-replace", "stream-dest-remove", "stream-dest-menu", "stream-dest-menu-rename", "stream-dest-menu-replace", "stream-dest-menu-remove"];
+
+  it("an organiser sees the Seazn row with its mark, name and sub — and none of Rename, Replace key, Remove or the phone menu; the pasted key beside it keeps all of them", () => {
+    const html = panelHtml({ canEdit: true, targets: [seazn(), target()] });
+    const row = rowOf(html, "t-seazn");
+    expect(row).toMatch(/data-platform-mark="seazn"/);
+    expect(row).toContain(">Seazn<");
+    expect(row).toMatch(/data-testid="stream-dest-subline"[^>]*>Plays on this match&#x27;s page</);
+    // Phase 1 visual D2: the helper wraps at 320 in es/nl instead of being cut — no truncate, no line clamp, in a min-w-0 column.
+    const sub = /<div class="([^"]*)"><p[^>]*>Seazn<\/p><p data-testid="stream-dest-subline" class="([^"]*)"/.exec(row);
+    expect(sub, "the Seazn row's name and helper, in their column").not.toBeNull();
+    expect(sub![2]!.split(" ")).not.toContain("truncate");
+    expect(sub![2]!.split(" ").some((c) => c.startsWith("line-clamp")), "no line clamp").toBe(false);
+    expect(sub![1]!.split(" "), "the column keeps min-w-0").toContain("min-w-0");
+    // The control: a pasted key's subline on the same page keeps its one-line truncation.
+    expect(/data-target-id="t1"[\s\S]*?data-testid="stream-dest-subline" class="([^"]*)"/.exec(html)![1]!.split(" ")).toContain("truncate");
+    expect(row).not.toMatch(/stream key|key ends/i);
+    let checked = 0;
+    for (const id of ACTION_IDS) {
+      expect(row, id).not.toContain(`data-testid="${id}"`);
+      checked++;
+    }
+    expect(row).not.toMatch(/<button/);
+    expect(checked).toBe(ACTION_IDS.length);
+    // The control: the same page's pasted-key row does carry them (the absence above is the Seazn row's, not the page's).
+    const keyRow = rowOf(html, "t1");
+    for (const id of ["stream-dest-rename", "stream-dest-replace", "stream-dest-remove", "stream-dest-menu"]) expect(keyRow, id).toContain(`data-testid="${id}"`);
+    // It sits first in the list the server gave (Seazn first), and the page does not reorder it.
+    expect(html.indexOf('data-target-id="t-seazn"')).toBeLessThan(html.indexOf('data-target-id="t1"'));
+  });
+
+  it("with a connected channel, Seazn and a pasted key: Seazn sits first, in its own list, and is not under the 'Stream keys' heading (I1)", () => {
+    const channel = target({
+      id: "t-ch", label: "Club channel", keyHint: null,
+      youtube: { connectionId: "c-1", channelId: "UC1", channelTitle: "Club channel", privacy: "unlisted", madeForKids: false, status: "connected", liveState: "enabled", termsOutdated: false, openBroadcasts: 0 } as StreamTarget["youtube"],
+    });
+    const html = panelHtml({ canEdit: true, targets: [seazn(), channel, target()] });
+    const heading = html.indexOf(`>${m("streaming.keys.heading")}<`);
+    expect(heading, "premise: the keys heading is on the page (a channel and a key are listed)").toBeGreaterThan(-1);
+    const sz = html.indexOf('data-target-id="t-seazn"');
+    expect(sz, "premise: the Seazn row is on the page").toBeGreaterThan(-1);
+    expect(sz, "Seazn is above the keys heading").toBeLessThan(heading);
+    expect(html.indexOf('data-testid="youtube-channel-list"'), "and above the channels").toBeGreaterThan(sz);
+    expect(html.indexOf('data-target-id="t1"'), "the pasted key is below the heading").toBeGreaterThan(heading);
+  });
+
+  it("an org with only the Seazn row lists it (the empty card does not claim 'No destinations yet')", () => {
+    const html = panelHtml({ canEdit: true, targets: [seazn()] });
+    expect(rowOf(html, "t-seazn")).toContain("Seazn");
+    expect(html).not.toContain('data-testid="stream-dest-empty"');
+  });
+
+  it("the nl render shows the Dutch strings", () => {
+    const nl = JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "dictionaries", "nl", "ui.json"), "utf8")) as Dict;
+    const html = renderToStaticMarkup(
+      <DictProvider dict={nl} locale="nl">
+        <StreamDestinationsPanel orgId="o" canEdit targets={[seazn()]} locale="nl" initialAddOpen={false} />
+      </DictProvider>,
+    );
+    expect(rowOf(html, "t-seazn")).toContain("Wordt afgespeeld op de pagina van deze wedstrijd");
+  });
+
+  it("the server's refusal of a change to the row reads as the dictionary's sentence, for every op; the client's literal is the server's", async () => {
+    expect(SEAZN_TARGET_FIXED).toBe("seazn_destination_fixed");
+    let checked = 0;
+    for (const op of ["rename", "replace", "remove"] as const) {
+      const err = await wire(new HttpError(422, "The Seazn destination cannot be renamed, re-keyed or removed", SEAZN_TARGET_FIXED));
+      expect(destinationErrorText(m as never, err, "seazn", op), op).toBe("Seazn is always available and can't be changed");
+      checked++;
+    }
+    expect(checked).toBe(3);
   });
 });

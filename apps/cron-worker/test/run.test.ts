@@ -21,7 +21,8 @@ const FIVE_MINUTE_ROWS = JOBS.filter((j) => j.id === "external-play");
 const UNKNOWN = "*/7 * * * *";
 // A healthy body for every route: the R3 counters read 0, the others ignore it. `youtube.failed` is stream-tick's second counter
 // (T15): a body without it reads "unreadable", i.e. degraded, exactly as the real route's body would if it dropped the field.
-const HEALTHY = JSON.stringify({ ok: true, data: { failed: 0, alerted: 0, orphanGroups: { failed: 0 }, addonPrices: { mismatched: 0 }, youtube: { failed: 0 } } });
+// `seazn.failed` is its third (Seazn-hosted T13), on the same rule.
+const HEALTHY = JSON.stringify({ ok: true, data: { failed: 0, alerted: 0, orphanGroups: { failed: 0 }, addonPrices: { mismatched: 0 }, youtube: { failed: 0 }, seazn: { failed: 0 } } });
 const env = (over: Partial<Env> = {}): Env => ({
   ENV_NAME: "prod",
   BASE_URL: "https://seazn.club",
@@ -519,7 +520,7 @@ describe("R2 (option S): a fast job's failures reach Sentry at most once per UTC
 
   // T15: the degraded path through the Worker's own reader — the YouTube counter alone raises the event, tagged `counts`.
   it("a 200 whose YouTube counter reads > 0 is degraded on that counter alone: one event, the session counter 0 (the route's new data.youtube.failed, read by the Worker's own reader)", async () => {
-    const body = JSON.stringify({ ok: true, data: { ticked: 0, ended: 0, failed: 0, deferred: 0, youtube: { ended: 0, neverLive: 0, orphans: 0, failed: 2, deferred: 0 } } });
+    const body = JSON.stringify({ ok: true, data: { ticked: 0, ended: 0, failed: 0, deferred: 0, youtube: { ended: 0, neverLive: 0, orphans: 0, failed: 2, deferred: 0 }, seazn: { locked: 0, relocked: 0, refused: 0, failed: 0, deferred: 0 } } });
     const h = harness(() => new Response(body));
     const [r] = await runDue(minuteSlot(0), FAST_PROD, env(), h.deps, TICK_ONLY);
     expect(r).toMatchObject({ job: "stream-tick", status: "degraded", httpStatus: 200, degraded: { "data.youtube.failed": 2 } });
@@ -529,6 +530,23 @@ describe("R2 (option S): a fast job's failures reach Sentry at most once per UTC
     const [healthy] = await runDue(minuteSlot(0), FAST_PROD, env(), ok.deps, TICK_ONLY);
     expect(healthy).toMatchObject({ job: "stream-tick", status: "ok" });
     expect(ok.events()).toEqual([]);
+  });
+
+  // Seazn-hosted T13: the third counter through the same reader. A busy pass (locked, refused, deferred) is healthy; only `failed` degrades.
+  it("a 200 whose Seazn counter reads > 0 is degraded on that counter alone; a busy Seazn pass with failed 0 is ok; a body WITHOUT the seazn block is degraded as unreadable", async () => {
+    const tick = (seazn: object | undefined) =>
+      JSON.stringify({ ok: true, data: { ticked: 0, ended: 0, failed: 0, deferred: 0, youtube: { ended: 0, neverLive: 0, orphans: 0, failed: 0, deferred: 0 }, ...(seazn ? { seazn } : {}) } });
+    const bad = harness(() => new Response(tick({ locked: 1, relocked: 0, refused: 0, failed: 3, deferred: 0 })));
+    const [r] = await runDue(minuteSlot(0), FAST_PROD, env(), bad.deps, TICK_ONLY);
+    expect(r).toMatchObject({ job: "stream-tick", status: "degraded", httpStatus: 200, degraded: { "data.seazn.failed": 3 } });
+    expect(bad.events()).toEqual([expect.objectContaining({ tags: expect.objectContaining({ job: "stream-tick", reason: "counts" }) })]);
+    const busy = harness(() => new Response(tick({ locked: 4, relocked: 1, refused: 2, failed: 0, deferred: 5 })));
+    const [ok] = await runDue(minuteSlot(0), FAST_PROD, env(), busy.deps, TICK_ONLY);
+    expect(ok).toMatchObject({ job: "stream-tick", status: "ok" });
+    expect(busy.events()).toEqual([]);
+    const missing = harness(() => new Response(tick(undefined)));
+    const [m] = await runDue(minuteSlot(0), FAST_PROD, env(), missing.deps, TICK_ONLY);
+    expect(m).toMatchObject({ job: "stream-tick", status: "degraded", degraded: { "data.seazn.failed": "unreadable" } });
   });
 });
 

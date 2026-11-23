@@ -21,6 +21,8 @@ import { sportsEventJsonLd } from "@/lib/public-site";
 import { publicThemeStyle } from "@/lib/public-theme";
 import { MatchCentreWithTabParam } from "@/components/public-site/match-centre/match-centre-with-tab-param";
 import { ReplayEmbed } from "@/components/public-site/match-centre/replay-embed";
+import { SeaznVideoIsland } from "@/components/public-site/match-centre/seazn-video-island";
+import { seaznVideoLabels } from "@/components/public-site/match-centre/seazn-video-labels";
 import type { LiveFixtureData } from "@/components/public-site/live-score-data";
 import { ShareButton } from "@/components/share-button";
 import { PosterButton } from "@/components/public-site/poster-button";
@@ -51,6 +53,8 @@ import { routes } from "@/lib/routes";
 import { hasFeature } from "@/lib/entitlements";
 import { resolveSponsors } from "@/server/usecases/sponsors";
 import { SponsorsBoard } from "@/components/public-site/sponsors-board";
+import { log } from "@/server/logger";
+import { seaznVideoPlan } from "@/server/video/seazn-video-plan";
 // P6 fix round 1, finding #2 (CRITICAL) — org.default_locale, same pattern
 // as data.ts:502-503 and every other public surface this fix round wires.
 // This IS a server component and getPublicFixture already carries `org`, so
@@ -263,6 +267,13 @@ export default async function FixturePage({ params }: Props) {
   const decidedLine = decidedLineFor(fixture, entrantNames, msgFn, division.sport_key, data.matchCentre, dict);
   // T16 — the replay parts the player lists, and whether the club's own link still shows beside it (replay-plan.ts).
   const plan = replayPlan({ status: fixture.status, streamUrl: fixture.stream_url ?? null, parts: data.parts });
+  // Seazn-hosted video (Task 15, spec §5.1) - which player fills the replay slot: the Seazn island for a fixture that streams (or is about
+  // to stream) to Seazn, today's YouTube replay for every other (`seaznVideoPlan`, decided from the fixture's own sessions). The plan is an
+  // enhancement's decision, so a failure to read it must not take down a page that rendered without it: the page is what it was.
+  const seaznPlan = await seaznVideoPlan(fixture.id).catch((err: unknown) => {
+    log.warn({ fixtureId: fixture.id, err: err instanceof Error ? err.name : typeof err }, "match page: the Seazn video plan could not be read; the page renders as it did before Seazn video");
+    return { player: "external" } as const;
+  });
   // R4 S10 (owner rulings D15 + R8) — the competition's sponsors, read exactly as the competition page reads them
   // (its own two calls), so both pages show one board: tier grouping only with Pro `sponsors.tiers`.
   const tiered = await hasFeature(org.id, "sponsors.tiers", competition.id);
@@ -469,7 +480,29 @@ export default async function FixturePage({ params }: Props) {
           initial={initial}
           realtime={realtime}
           dict={dict}
-          replay={plan.parts.length > 0 ? <ReplayEmbed parts={plan.parts} /> : undefined}
+          replay={
+            seaznPlan.player === "seazn" ? (
+              // The island asks the video route itself after hydration: this page is ISR (revalidate = 30), and a signed address minted
+              // in its server render would be served past its token's life. Its strings are the few it needs, not the whole dictionary.
+              // `settledAt` (review I2): once the fixture is settled, an empty answer stops the island's reads. `reserve` (visual D1): the
+              // player's box is held from this render where a player is expected, so its arrival moves nothing. `kickoffAt` and
+              // `activeUntil` (review N1): near kick-off, or while the match was active at this render, the island keeps its 30 s floor.
+              // `holdUntil` (re-capture R2): a session warming or just stopped keeps the box, with its line, through empty answers until
+              // then. `replayParts` (re-capture R1): two or more recordings keep the picker's row from this render, so no tab row arrives late.
+              <SeaznVideoIsland
+                fixtureId={fixture.id}
+                labels={seaznVideoLabels(dict)}
+                settledAt={seaznPlan.settledAt?.toISOString() ?? null}
+                kickoffAt={seaznPlan.kickoffAt?.toISOString() ?? null}
+                activeUntil={seaznPlan.activeUntil?.toISOString() ?? null}
+                reserve={seaznPlan.reserve}
+                holdUntil={seaznPlan.holdUntil?.toISOString() ?? null}
+                replayParts={seaznPlan.replayParts}
+              />
+            ) : plan.parts.length > 0 ? (
+              <ReplayEmbed parts={plan.parts} />
+            ) : undefined
+          }
         />
 
         {/* R4 S10 (owner rulings D15 + R8) — the sponsor board, below the match centre: the perimeter of the ground,

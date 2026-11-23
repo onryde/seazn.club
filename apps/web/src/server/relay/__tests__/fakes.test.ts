@@ -70,6 +70,82 @@ describe("FakeIngest", () => {
     expect(await fake.listInputVideos(camera.inputId), "the fake's own page holds all three").toHaveLength(3);
   });
 
+  // Seazn Task 13: the fake's token, its per-video lock, and the seeded listing that stands in for C6 (a listing that answers
+  // another input's recording). Each control is read back here so the usecase tests can trust it.
+  it("Seazn Task 13: a token reads fake.<uid>.<exp seconds>[.dl]; requireSignedVideo signs a video it holds and answers absent for one it does not; a seeded listing answers another input's video under ITS OWN inputId", async () => {
+    const fake = new FakeIngest();
+    const exp = new Date("2026-11-21T11:00:00.900Z");
+    const expS = Math.floor(Date.parse("2026-11-21T11:00:00Z") / 1000);
+    expect(await fake.playbackToken("in-1", { expiresAt: exp })).toBe(`fake.in-1.${expS}`);
+    expect(await fake.playbackToken("v-1", { expiresAt: exp, downloadable: true })).toBe(`fake.v-1.${expS}.dl`);
+    const at = "2026-09-01T00:00:00Z";
+    fake.addVideo({ videoId: "v-mine", inputId: "in-1", createdAt: at, inProgress: true });
+    fake.addVideo({ videoId: "v-theirs", inputId: "in-2", createdAt: at, inProgress: false });
+    expect([fake.videoAccess("v-mine"), fake.videoAccess("v-theirs")]).toEqual([false, false]);
+    const deleteAt = new Date("2026-12-22T15:30:00.000Z");
+    expect(await fake.requireSignedVideo("v-mine", { deleteAt })).toBe("set");
+    expect([fake.videoAccess("v-mine"), fake.videoAccess("v-theirs")], "only the named video").toEqual([true, false]);
+    expect(await fake.requireSignedVideo("v-never", { deleteAt: new Date(deleteAt.getTime() + 1_000) })).toBe("absent");
+    expect(fake.signedVideoCalls).toEqual(["v-mine", "v-never"]);
+    // Phase 1 review I3: the deletion each edit sent, in step with the calls.
+    expect(fake.signedVideoDeleteAts.map((d) => d.toISOString())).toEqual(["2026-12-22T15:30:00.000Z", "2026-12-22T15:30:01.000Z"]);
+    expect(() => fake.videoAccess("v-never"), "an unknown video is the test's mistake").toThrow(/unknown video/);
+    // The listing reads the video's own flag, and a recording that finishes can read unsigned again (C3 at ready).
+    expect((await fake.listInputVideos("in-1")).map((v) => [v.videoId, v.signed])).toEqual([["v-mine", true]]);
+    fake.updateVideo("v-mine", { inProgress: false, state: "ready", signed: false });
+    expect((await fake.listInputVideos("in-1")).map((v) => [v.videoId, v.state, v.signed])).toEqual([["v-mine", "ready", false]]);
+    // C6: seeded, in-1's listing also answers in-2's video, which still names in-2.
+    fake.seedInputListing("in-1", ["v-theirs", "v-mine"]);   // naming the input's own recording in the seed does not list it twice
+    expect((await fake.listInputVideos("in-1")).map((v) => [v.videoId, v.inputId])).toEqual([["v-mine", "in-1"], ["v-theirs", "in-2"]]);
+    expect((await fake.listInputVideos("in-2")).map((v) => v.videoId), "the seed changes only the input it names").toEqual(["v-theirs"]);
+  });
+
+  // Seazn Task 24: the fake's `createDownload` — ready by default for a video it holds, a scripted sequence when a test needs the
+  // download to take a while, and Cloudflare's 404 (a throw) for a video it does not hold. Every call is kept, in order.
+  it("Seazn Task 24: createDownload answers ready for a held video, follows a script (inprogress then ready), throws for an unknown one, and keeps every call", async () => {
+    const fake = new FakeIngest();
+    fake.addVideo({ videoId: "v-a", inputId: "in-1", createdAt: "2026-09-01T00:00:00Z", inProgress: false });
+    fake.addVideo({ videoId: "v-b", inputId: "in-1", createdAt: "2026-09-01T00:00:00Z", inProgress: false });
+    expect(await fake.createDownload("v-a")).toBe("ready");
+    fake.scriptDownload("v-b", ["inprogress", "inprogress"]);
+    expect([await fake.createDownload("v-b"), await fake.createDownload("v-b"), await fake.createDownload("v-b")], "the script, then ready").toEqual(["inprogress", "inprogress", "ready"]);
+    await expect(fake.createDownload("v-never")).rejects.toThrow(/v-never/);
+    expect(fake.downloadCalls).toEqual(["v-a", "v-b", "v-b", "v-b", "v-never"]);
+    // The download goes with the video: a deleted video has none to make.
+    await fake.deleteVideo("v-a");
+    await expect(fake.createDownload("v-a")).rejects.toThrow(/v-a/);
+  });
+
+  // Seazn Task 19: the walkthrough's stand-in for Cloudflare finishing a recording of an input. A test control like addVideo:
+  // it adds a FINISHED, UNSIGNED recording (C3's measured default) of the named input and records no provider call.
+  it("Seazn Task 19: addRecording adds a finished, unsigned recording of a known input, each with its own id, and refuses an unknown input", async () => {
+    const rec = new FakeRecorder();
+    const fake = new FakeIngest({ clock: () => Date.parse("2026-11-21T12:00:00Z"), recorder: rec });
+    const { inputId } = await fake.createLiveInput({ sessionId: "s1", slot: 0, role: "programme" });
+    const other = (await fake.createLiveInput({ sessionId: "s2", slot: 0 })).inputId;
+    await new Promise((r) => setImmediate(r));
+    const before = rec.calls.length;
+    expect(await fake.listInputVideos(inputId), "EMPTY CASE FIRST: a new input holds no recording").toEqual([]);
+    const first = fake.addRecording(inputId);
+    const second = fake.addRecording(inputId);
+    expect(second, "two recordings of one input are two videos").not.toBe(first);
+    const listed = await fake.listInputVideos(inputId);
+    expect(listed.map((v) => [v.videoId, v.inputId, v.inProgress, v.state, v.signed])).toEqual([
+      [first, inputId, false, "ready", false],
+      [second, inputId, false, "ready", false],
+    ]);
+    expect(listed[0]!.createdAt, "made on the fake's own clock").toBe("2026-11-21T12:00:00.000Z");
+    expect(await fake.listInputVideos(other), "only the named input's listing").toEqual([]);
+    expect(() => fake.addRecording("fake-in-0-nope"), "an unknown input is the caller's mistake").toThrow(/unknown input/);
+    // A recording outlives its input (C2): a deleted input still gets one, as Cloudflare finishes it after the input goes.
+    await fake.deleteInput(other);
+    expect(fake.videoAccess(fake.addRecording(other))).toBe(false);
+    await new Promise((r) => setImmediate(r));
+    expect(rec.calls.slice(before).map((c) => c.operation), "a control, not a provider call: only the listings and the delete").toEqual([
+      "listInputVideos", "listInputVideos", "listInputVideos", "deleteInput",
+    ]);
+  });
+
   it("inputStatus has the per-input GET's shape and flips at connectAfterMs exactly", async () => {
     let now = 1_000_000;
     const fake = new FakeIngest({ clock: () => now, connectAfterMs: 3000 });
@@ -251,6 +327,41 @@ describe("FakeIngest", () => {
     ]);
   });
 
+  // Seazn-hosted video (Task 12, G5): the fake keeps each input's signing as the adapter sends it — so a usecase test can read
+  // what the programme input was CREATED with — and refuses what the adapter refuses: a programme switch that does not name its
+  // access. A fake laxer than the adapter would let a DB test pass what production throws.
+  it("Task 12: the fake keeps each input's access (the Seazn programme's signed settings; null for the camera and an external programme) and refuses a programme switch with no `access` key before recording anything; a switch re-sends the access it names", async () => {
+    const port = new FakeRecorder();
+    const fake = new FakeIngest({ recorder: port });
+    const signed: { signed: true; allowedOrigins: string[] } = { signed: true, allowedOrigins: ["seazn.club"] };
+    const cam = await fake.createLiveInput({ sessionId: "s1", slot: 0 });
+    const prog = await fake.createLiveInput({ sessionId: "s1", slot: 0, role: "programme", access: signed });
+    const ext = await fake.createLiveInput({ sessionId: "s2", slot: 0, role: "programme" });
+    expect(fake.inputAccess(prog.inputId)).toEqual({ signed: true, allowedOrigins: ["seazn.club"] });
+    expect(fake.inputAccess(cam.inputId), "the camera stays unsigned").toBeNull();
+    expect(fake.inputAccess(ext.inputId), "an external destination's programme input is unsigned").toBeNull();
+    expect(() => fake.inputAccess("fake-in-unknown"), "an input the fake never made is a test bug, never a quiet null").toThrow(/unknown/);
+
+    await new Promise((r) => setImmediate(r));
+    const recorded = port.calls.length;
+    await expect(fake.setInputEnabled(prog.inputId, false, { sessionId: "s1", slot: 0, role: "programme" })).rejects.toThrow(/without its access/);
+    // review m1: `access: undefined` (a select that omitted the column) is refused the same way.
+    await expect(fake.setInputEnabled(prog.inputId, false, { sessionId: "s1", slot: 0, role: "programme", access: undefined })).rejects.toThrow(/without its access/);
+    await new Promise((r) => setImmediate(r));
+    expect(port.calls.length, "refused before any call is recorded").toBe(recorded);
+    expect(fake.enabledCalls, "…or counted").toEqual([]);
+    expect(fake.isEnabled(prog.inputId), "…or applied").toBe(true);
+
+    await fake.setInputEnabled(prog.inputId, false, { sessionId: "s1", slot: 0, role: "programme", access: signed });
+    expect([fake.isEnabled(prog.inputId), fake.inputAccess(prog.inputId)], "C8: re-sending the signing keeps it").toEqual([false, signed]);
+    // The update re-sends the WHOLE recording (ingest-cf.ts), so what it names is what the input then holds. A re-send without the
+    // signing is not measured; the fake takes the pessimistic reading, so a test that downgrades an input sees it.
+    await fake.setInputEnabled(prog.inputId, true, { sessionId: "s1", slot: 0, role: "programme", access: null });
+    expect(fake.inputAccess(prog.inputId)).toBeNull();
+    await fake.setInputEnabled(cam.inputId, false, { sessionId: "s1", slot: 0, role: "camera" });   // port-effects.ts's own call
+    expect([fake.isEnabled(cam.inputId), fake.inputAccess(cam.inputId)]).toEqual([false, null]);
+  });
+
   it("listVideos carries Cloudflare's recording facts, and a LIVE recording reads unknown — never a finalised-looking zero (Dd)", async () => {
     const fake = new FakeIngest();
     // The live row deliberately PASSES numbers: the fake must drop them. A fake
@@ -262,6 +373,7 @@ describe("FakeIngest", () => {
     expect(live).toEqual({
       videoId: "v-live", inputId: "in-1", createdAt: new Date(0).toISOString(), inProgress: true,
       durationSeconds: null, sizeBytes: null, width: null, height: null, state: "live-inprogress", errorReasonCode: null,
+      signed: false,   // Seazn Task 13: unless a test says otherwise, a recording reads unsigned (C3's measured default)
     });
     expect(done).toMatchObject({ durationSeconds: 61, sizeBytes: 734_003_200, width: 1280, height: 720, state: "ready", errorReasonCode: null });
     // `createdBefore` is STRICT (`<`, not `<=`) — a FAKE CONVENTION, pinned so both

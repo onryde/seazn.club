@@ -119,8 +119,7 @@ const nextConfig = {
   // through to the destination). Kept FOREVER: paper does not expire. Redirects
   // run before proxy.ts and before the filesystem, so the old root never
   // reaches the app; nothing we render links to it (routes.* builds every
-  // spectator URL, and lib/__tests__/public-hub-links.test.ts reds on a
-  // hand-written one), so the app's own client-side `?_rsc` navigation never
+  // spectator URL), so the app's own client-side `?_rsc` navigation never
   // goes through it either. A bare /shared lands on /live, the marketing wall.
   // Pinned by lib/__tests__/public-hub-redirect.test.ts (Next's own matcher)
   // and e2e/walkthrough/live-public-path.spec.ts (a prod server).

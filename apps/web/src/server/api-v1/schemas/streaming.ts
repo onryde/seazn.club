@@ -67,7 +67,7 @@ export const StreamFailReason = z.enum([
 export const StreamEndReason = z.enum(["stopped", "operator_stopped", "auto_stopped", "phone_lost", "max_duration", "relay_ended"]);
 export type StreamEndReason = z.infer<typeof StreamEndReason>;
 export type StreamFailReason = z.infer<typeof StreamFailReason>;
-export const StreamTargetKind = z.enum(["youtube", "facebook", "twitch", "kick", "custom_rtmp"]);
+export const StreamTargetKind = z.enum(["youtube", "facebook", "twitch", "kick", "custom_rtmp", "seazn"]);
 export type StreamTargetKind = z.infer<typeof StreamTargetKind>;
 
 /** A fixture's score timing override, whole ms 0–30000 (V462's `overlay_delay_ms` check; lib/stream-settings.ts
@@ -122,6 +122,9 @@ export const StreamRestartAllowance = z
 
 /** W24 (§6.12): `lostCountdown`'s answer — both durations on the server's clock, never below 0. */
 const countdownClock = { elapsedMs: z.number().int().nonnegative(), remainingMs: z.number().int().nonnegative() };
+/** Seazn-hosted video Task 26: the answer to `DELETE /fixtures/{id}/replays/{replayId}` — the same for a part already deleted. */
+export const SeaznReplayDeleted = z.object({ deleted: z.literal(true) }).strict();
+
 /** W24 (controller ruling 2026-10-04): the countdown names the end it counts to — `live` only W19's `phone_lost`;
  *  `warming` the warming timeout (`no_inbound_timeout`) or ask 10's `phone_lost`, whichever lands first. */
 export const StreamLostCountdown = z.discriminatedUnion("kind", [
@@ -162,6 +165,22 @@ export const StreamSessionCurrent = z
      *  own). `private` is true for a broadcast that is PRIVATE on YouTube: the organiser keeps it here and the panel says so, the public
      *  match page never shows it (and its number counts every complete broadcast, so it can differ from the public page's). */
     replayParts: z.array(z.object({ partNo: z.number().int().min(1), url: z.string(), private: z.boolean() }).strict()),
+    /** Seazn-hosted video Task 25: the fixture's Seazn replays as the organiser reads them (server/video/organiser-replays.ts): each
+     *  part the replay move made, by its stored number, `processing` while the copy is on its way, `playable` once verified,
+     *  `failed` when it failed its check; a removed part is not listed. Read for THIS organisation, whatever the competition's
+     *  visibility. `[]` when there is none (every non-Seazn session). Task 25 review m3: `onMatchPage` is whether the PUBLIC match
+     *  page shows the part (a playable copy, or a failed copy's interim recording) — false for a private competition, or a division
+     *  still in setup. Task 26: the organiser deletes a part (`DELETE …/replays/{replayId}`) and downloads a playable one
+     *  (`GET …/replays/{replayId}/download`) by its `id`. */
+    seaznReplays: z.array(
+      z.object({
+        id: z.uuid(),
+        partNo: z.number().int().min(1),
+        state: z.enum(["processing", "playable", "failed"]),
+        lengthSeconds: z.number().int().min(0).nullable(),
+        onMatchPage: z.boolean(),
+      }).strict(),
+    ),
     /** Owner 2026-10-30: the watch URL of the video on YouTube THIS session streams into (server/youtube/parts.ts `sessionVideoUrl`) -
      *  its YouTube Connect broadcast once YouTube gave it its id, in any state but `failed`. Null for a pasted key, before the id is
      *  known, and once the channel is disconnected (the broadcast rows are purged). The panel's "On YouTube" card links it. */
@@ -377,6 +396,11 @@ export const StreamPhone = z
          *  local/ci). The live line names it, so it never promises a delay the tick does not use. Null with no open session; the
          *  server always serves it, so a reader that finds it absent falls back to the page's per-code minutes. */
         stopAfterSeconds: z.number().int().positive().nullable().optional(),
+        /** Seazn-hosted video Task 24 (recommendation 2026-11-21, G-E): WHICH stop `stopApplies` and `stopAfterSeconds` describe —
+         *  `result`, §7.3's own (the switch on, the session's phone automatic); `seazn`, a Seazn session's own stop 15 min after the
+         *  result in every mode, so its replay is moved. The live line names the Seazn one in its own words, because the phone may
+         *  not be automatic. Null when neither applies, or with no open session; a reader that finds it absent reads `result`. */
+        stopRule: z.enum(["result", "seazn"]).nullable().optional(),
       })
       .strict()
       .nullable(),

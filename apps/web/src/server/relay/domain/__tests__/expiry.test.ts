@@ -20,7 +20,7 @@ const S = (over: Partial<Session> = {}): Session => ({
   id: "s1", fixtureId: "f1", orgId: "o1", mode: "passthrough", state: "warming", desiredState: "live",
   failReason: null, endReason: null, runner: RUNNER_NONE, runnerRetries: 0, createdAt: T0, startedAt: null, endedAt: null,
   heartbeatAt: null, beatWindowAt: null, endingAt: null, maxDurationMinutes: MAX_DURATION_MINUTES, outputUid: null,
-  startCause: "organiser", warmingAt: null, ...over,
+  startCause: "organiser", warmingAt: null, destination: "external", ...over,
 });
 
 describe("evaluate", () => {

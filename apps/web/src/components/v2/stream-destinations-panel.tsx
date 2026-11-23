@@ -19,7 +19,7 @@ import { UTC, fmtPublicDate } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
 import {
   ADDABLE_STREAM_PLATFORMS, DESTINATION_LABEL_EMPTY, DESTINATION_NOT_ALLOWED, STREAM_KEY_EMPTY, TARGET_UNREADABLE, isStreamPlatform,
-  type StreamPlatform,
+  type StreamPlatform, SEAZN_TARGET_FIXED,
 } from "@/lib/stream-destinations";
 import { keyShapeWarning } from "@/lib/stream-key-shape";
 import type { StreamTarget, StreamTargetKind, StreamTargetSaved } from "@/server/api-v1/schemas";
@@ -92,6 +92,8 @@ export function destinationErrorText(msg: Msg, err: unknown, kind: StreamTargetK
       const watch = Array.isArray(issues) && issues.some((i) => Array.isArray((i as { path?: unknown })?.path) && (i as { path: unknown[] }).path[0] === "watchUrl");
       return watch ? msg("streamDest.error.watch") : retry;
     }
+    case SEAZN_TARGET_FIXED:
+      return msg("streamDest.error.seaznFixed");
     case "FORBIDDEN":
       return msg("streamDest.error.forbidden");
     case "UNAUTHENTICATED":
@@ -178,8 +180,12 @@ export function StreamDestinationsPanel({
   // The connected channels and the pasted-key destinations are told apart by what the row CARRIES, not by its kind.
   // The channel picker is the way in while it is open (`?youtube=pick`): the empty card's Connect YouTube would be a second one.
   const pickPending = canEdit && landing?.code === "pick" ? landing.pendingId : null;
-  const channels = targets.filter((t) => t.youtube !== null);
-  const keys = targets.filter((t) => t.youtube === null);
+  // The Seazn row is neither a channel nor a pasted key (Task 16 review I1): it is drawn first, under no heading, so it never reads as a key.
+  // It is the one row told apart by its KIND, and it is left out of BOTH other lists, so one target is always one row (the database
+  // refuses a seazn row that names a connection, V541 org_stream_targets_one_source; the panel does not lean on that).
+  const seaznRows = targets.filter((t) => t.kind === "seazn");
+  const channels = targets.filter((t) => t.youtube !== null && t.kind !== "seazn");
+  const keys = targets.filter((t) => t.youtube === null && t.kind !== "seazn");
   // Connect YouTube is the primary way in and comes first; Add streaming key (a pasted key) is the secondary one (owner 2026-10-30).
   const connectButton = (testid: string) => (
     <button type="button" data-testid={testid} aria-expanded={connectOpen} onClick={() => (connectOpen ? setConnectOpen(false) : openConnect())} className="btn btn-primary min-h-11">
@@ -256,6 +262,15 @@ export function StreamDestinationsPanel({
         </div>
       ) : (
         <div className="space-y-4">
+          {seaznRows.length > 0 && (
+            <section>
+              <div className="card overflow-visible">
+                <ul data-testid="seazn-destination-list" className="divide-y divide-slate-100" aria-label={msg("stream.dest.kind.seazn")}>
+                  {seaznRows.map((t) => <SeaznRow key={t.id} t={t} />)}
+                </ul>
+              </div>
+            </section>
+          )}
           {channels.length > 0 && (
             <section>
               {keys.length > 0 && <h2 className="mb-2 text-sm font-semibold text-slate-700">{msg("streaming.youtube.channels")}</h2>}
@@ -273,9 +288,7 @@ export function StreamDestinationsPanel({
               {channels.length > 0 && <h2 className="mb-2 text-sm font-semibold text-slate-700">{msg("streaming.keys.heading")}</h2>}
               <div className="card overflow-visible">
                 <ul className="divide-y divide-slate-100" aria-label={msg("streamDest.listLabel")}>
-                  {keys.map((t) => (
-                    <DestinationRow key={t.id} t={t} canEdit={canEdit} locale={locale} orgId={orgId} run={run} />
-                  ))}
+                  {keys.map((t) => <DestinationRow key={t.id} t={t} canEdit={canEdit} locale={locale} orgId={orgId} run={run} />)}
                 </ul>
               </div>
             </section>
@@ -486,6 +499,24 @@ function badgeOf(t: StreamTarget, msg: Msg): ReactNode {
 }
 
 const ACTION = "btn min-h-11 px-2.5";
+
+/** Task 16: the Seazn row is fixed — always available, nothing to rename, re-key or remove (the server refuses all three, `seazn_destination_fixed`),
+ *  so the list draws it with this and never mounts the editable row. */
+export function SeaznRow({ t }: { t: StreamTarget }) {
+  const msg = useMsg();
+  return (
+    <li data-testid="stream-dest-row" data-target-id={t.id} data-fixed="seazn" className="px-4 py-3">
+      <div className="flex items-start gap-3 md:items-center">
+        <PlatformMark kind="seazn" size="md" />
+        <div className="min-w-0 flex-1">
+          <p className="truncate font-semibold text-slate-900">{msg("stream.dest.kind.seazn")}</p>
+          {/* Phase 1 visual D2: wraps (es/fr/nl are cut at 320, and the cut part is what it does) — no truncate, no clamp. */}
+          <p data-testid="stream-dest-subline" className="text-xs text-slate-500">{msg("stream.dest.seazn.sub")}</p>
+        </div>
+      </div>
+    </li>
+  );
+}
 
 export function DestinationRow({
   t, canEdit, locale, orgId, run,

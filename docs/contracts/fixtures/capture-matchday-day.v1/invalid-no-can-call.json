@@ -32,6 +32,7 @@
           "away_slot": "Runner-up of Group B",
           "status": "upcoming",
           "scheduled_at": "2026-11-07T09:20:00.000Z",
+          "live_seazn": null,
           "summary": null
         }
       ],

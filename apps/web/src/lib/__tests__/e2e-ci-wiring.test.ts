@@ -373,6 +373,12 @@ const WALKTHROUGH_SPECS: string[] = [
   "directory-venues-courts.spec.ts",
   // The Streaming page (2026-09-30 as a Directory tab; its own top-nav page since 2026-10-27): destinations' add, shape warning, rename, replace key, remove=archive, the in-use lock (waiting and live), re-add restores, the empty state, the phone ⋯ menu, and (T8) the fixture picker's Manage destinations link.
   "streaming-destinations.spec.ts",
+  // Seazn-hosted video (Task 19): Seazn pre-selected, a spectator on the page before kick-off, a real Go live reaching it, Stop leaving
+  // the open page within one read, the stream tick's locked recording as the interim replay, a second Go live reaching the same page
+  // within one read, and no YouTube broadcast or addOutput call. Runs (and is not skipped: the job's must-have-RUN step, pinned in the
+  // e2e-seazn describe below) only in e2e.yml's e2e-seazn job, the one with SEAZN_HOSTED_LIVE=true; holds the whole stream-slot pool
+  // twice (its own PoolHolder).
+  "seazn-hosted.spec.ts",
 
   // Spectator surface W1 (Task 15) — the anonymous match centre. Split
   // across two files so each stays under budget: cricket matches A (tapped
@@ -1183,12 +1189,13 @@ describe("e2e CI wiring", () => {
     const passthroughs = signing.filter((v) =>
       v.includes("env.SUPABASE_JWT_SIGNING_KEY_B64"),
     );
-    expect(literals.length, "one dummy JWK per e2e job").toBe(3);
+    // Four jobs since Seazn-hosted video Task 19 added e2e-seazn (the LIVE-on job).
+    expect(literals.length, "one dummy JWK per e2e job").toBe(4);
     expect(
       passthroughs.length,
-      "Start server + Playwright, three jobs — the processes that mint / drive mint",
-    ).toBe(6);
-    expect(new Set(literals).size, "all three jobs must share the same dummy").toBe(1);
+      "Start server + Playwright, four jobs — the processes that mint / drive mint",
+    ).toBe(8);
+    expect(new Set(literals).size, "all four jobs must share the same dummy").toBe(1);
 
     const jwk = JSON.parse(Buffer.from(literals[0]!, "base64").toString("utf8")) as {
       kty?: string;
@@ -1213,7 +1220,7 @@ describe("e2e CI wiring", () => {
     );
 
     const startServers = [...yml.matchAll(/- name: Start server\n([\s\S]*?)(?=\n      - name: )/g)];
-    expect(startServers.length, "three e2e jobs each start a server").toBe(3);
+    expect(startServers.length, "four e2e jobs each start a server").toBe(4);
     for (const [, body] of startServers) {
       expect(body).toContain("SUPABASE_JWT_SIGNING_KEY_B64:");
     }
@@ -1221,7 +1228,7 @@ describe("e2e CI wiring", () => {
     const playwrightSteps = [
       ...yml.matchAll(/- name: Run Playwright e2e[^\n]*\n([\s\S]*?)(?=\n      - name: )/g),
     ];
-    expect(playwrightSteps.length, "three Playwright run steps").toBe(3);
+    expect(playwrightSteps.length, "four Playwright run steps").toBe(4);
     for (const [, body] of playwrightSteps) {
       expect(body).toContain("SUPABASE_JWT_SIGNING_KEY_B64:");
     }
@@ -1234,7 +1241,7 @@ describe("e2e CI wiring", () => {
     const yml = readFileSync(join(REPO_ROOT, ".github/workflows/e2e.yml"), "utf8");
 
     const startServers = [...yml.matchAll(/- name: Start server\n([\s\S]*?)(?=\n      - name: )/g)];
-    expect(startServers.length, "three e2e jobs each start a server").toBe(3);
+    expect(startServers.length, "four e2e jobs each start a server").toBe(4);
     for (const [, body] of startServers) {
       expect(body, "LOG_LEVEL must be on the server process, not Playwright").toMatch(
         /^\s+LOG_LEVEL:\s*warn\s*$/m,
@@ -1244,7 +1251,7 @@ describe("e2e CI wiring", () => {
     const placementStarts = [
       ...yml.matchAll(/- name: Start the placement service\n([\s\S]*?)(?=\n      - name: )/g),
     ];
-    expect(placementStarts.length, "three e2e jobs each start placement").toBe(3);
+    expect(placementStarts.length, "four e2e jobs each start placement").toBe(4);
     for (const [, body] of placementStarts) {
       expect(body).toContain("-e PLACEMENT_LOG_LEVEL=WARNING");
     }
@@ -1271,7 +1278,7 @@ describe("e2e CI wiring", () => {
   it("pins every checkout to an immutable SHA, never a branch name", () => {
     const yml = readFileSync(join(REPO_ROOT, ".github/workflows/e2e.yml"), "utf8");
     const refs = yml.match(/^\s*ref: \$\{\{.*$/gm) ?? [];
-    expect(refs.length, "no `ref:` on any checkout — has the workflow changed shape?").toBe(3);
+    expect(refs.length, "no `ref:` on any checkout — has the workflow changed shape? (four jobs since Task 19's e2e-seazn)").toBe(4);
     for (const ref of refs) {
       expect(
         ref,
@@ -1575,8 +1582,9 @@ describe("RELAY_KEK reaches every fake-relay server, generated per run", () => {
         checked++;
       }
     }
-    // Anti-vacuity: the fake-relay servers are e2e.yml's three jobs and ci.yml's smoke build — none found is a failure.
-    expect(checked, "fake-relay Start server steps found").toBeGreaterThanOrEqual(4);
+    // Anti-vacuity: the fake-relay servers are e2e.yml's four jobs (e2e-seazn since Task 19) and ci.yml's smoke build — a
+    // floor, so losing any of the five reds here rather than going unswept.
+    expect(checked, "fake-relay Start server steps found").toBeGreaterThanOrEqual(5);
     expect(missing, "jobs whose fake-relay server starts with no generated RELAY_KEK").toEqual([]);
   });
 
@@ -1627,8 +1635,8 @@ describe("the fake YouTube reaches every fake-relay server, its key generated pe
 
   it("every fake-relay server also runs YOUTUBE_DRIVER=fake under ENV_NAME=ci, with the redirect URI pinned to http://localhost:3000", () => {
     const servers = fakeRelayServers();
-    // Anti-vacuity: e2e.yml's three jobs and ci.yml's three smoke servers.
-    expect(servers.length, "fake-relay Start server envs found").toBeGreaterThanOrEqual(6);
+    // Anti-vacuity: e2e.yml's four jobs (e2e-seazn since Task 19) and ci.yml's three smoke servers.
+    expect(servers.length, "fake-relay Start server envs found").toBeGreaterThanOrEqual(7);
     let checked = 0;
     for (const s of servers) {
       expect(s.env, `${s.where}: YOUTUBE_DRIVER`).toMatch(/^\s+YOUTUBE_DRIVER:\s*fake\s*$/m);
@@ -2285,5 +2293,136 @@ describe("e2e: a helper does not call itself as a bare statement of its own body
     visit(sf);
     expect(gotos, "page.goto appears once in the file, inside the `open` helper").toEqual(["open"]);
     expect(opens, "anti-vacuity: the spec navigates through the helper").toBeGreaterThanOrEqual(6);
+  });
+});
+
+// Seazn-hosted video Task 19 review m4: seazn-hosted.spec.ts and streaming-destinations' case 11 SKIP by name unless the runner
+// sees SEAZN_HOSTED_LIVE=true, and a skip is green. e2e-seazn is the one job they run in, so this pins what makes them run there:
+// LIVE on the server AND the runner, the origins and the fake compositor image the walk needs, the two files, a step after the
+// run that reds on a skipped or missing case (the runtime proof), and no other job anywhere turning LIVE on.
+describe("e2e-seazn: the one LIVE-on job runs its two files, and proves they RAN", () => {
+  const WORKFLOWS = join(REPO_ROOT, ".github/workflows");
+  const stripComments = (text: string) =>
+    text
+      .split("\n")
+      .map((line) => line.replace(/(^|\s)#.*$/, ""))
+      .join("\n");
+  /** The jobs of a workflow: each `  name:` key under `jobs:`, with its text up to the next one. */
+  const jobsOf = (yml: string): { name: string; body: string }[] => {
+    const at = yml.search(/^jobs:\s*$/m);
+    if (at < 0) return [];
+    const rest = yml.slice(at);
+    const starts = [...rest.matchAll(/^ {2}([A-Za-z0-9_-]+):\s*$/gm)];
+    return starts.map((m, i) => ({ name: m[1]!, body: rest.slice(m.index!, starts[i + 1]?.index ?? rest.length) }));
+  };
+  /** A job's steps, in order: each `      - ` item, its text up to the next. */
+  const stepsOf = (job: string): string[] => {
+    const starts = [...job.matchAll(/^ {6}- /gm)];
+    return starts.map((m, i) => job.slice(m.index!, starts[i + 1]?.index ?? job.length));
+  };
+  const nameOf = (step: string) => /^ {6}- name: (.+)$/m.exec(step)?.[1]?.trim() ?? "";
+  const valueOf = (step: string, key: string) => new RegExp(`^\\s+${key}: *"?([^"\\n]*?)"?\\s*$`, "m").exec(step)?.[1];
+  const seazn = () => {
+    const job = jobsOf(stripComments(readFileSync(join(WORKFLOWS, "e2e.yml"), "utf8"))).find((j) => j.name === "e2e-seazn");
+    expect(job, "e2e.yml has its e2e-seazn job").toBeDefined();
+    return stepsOf(job!.body);
+  };
+
+  it("the server and the runner both run LIVE on, the server with the origins and the compositor image, the runner over the two files", () => {
+    const steps = seazn();
+    const servers = steps.filter((s) => nameOf(s) === "Start server");
+    const runs = steps.filter((s) => nameOf(s).startsWith("Run Playwright e2e"));
+    expect(servers.length, "one Start server step").toBe(1);
+    expect(runs.length, "one Playwright run step").toBe(1);
+    const [server] = servers;
+    const [run] = runs;
+    expect(valueOf(server!, "SEAZN_HOSTED_LIVE"), "the server runs LIVE on").toBe("true");
+    expect(valueOf(server!, "SEAZN_VIDEO_ORIGINS") ?? "", "the server names the host it serves (seazn_video_unconfigured otherwise)").not.toBe("");
+    expect(valueOf(server!, "RELAY_IMAGE") ?? "", "a composed Go live needs the compositor image named").not.toBe("");
+    expect(valueOf(run!, "SEAZN_HOSTED_LIVE"), "the runner is told LIVE is on (both files skip by name otherwise)").toBe("true");
+    const command = /^\s+run: (.+)$/m.exec(run!)?.[1] ?? "";
+    expect(command, "the walkthrough project").toContain("--project=walkthrough");
+    expect(command, "the Seazn walk").toContain("e2e/walkthrough/seazn-hosted.spec.ts");
+    expect(command, "the Streaming page's walkthrough (case 11)").toContain("e2e/walkthrough/streaming-destinations.spec.ts");
+    expect(command, "a file filter, never -g (AGENTS.md #21)").not.toMatch(/\s(-g|--grep)\b/);
+  });
+
+  it("a step after the run reds when the Seazn walk or case 11 is skipped or missing from the report", () => {
+    const steps = seazn();
+    const runAt = steps.findIndex((s) => nameOf(s).startsWith("Run Playwright e2e"));
+    const proofAt = steps.findIndex((s) => /must have RUN/.test(nameOf(s)));
+    expect(runAt, "the Playwright run step").toBeGreaterThanOrEqual(0);
+    expect(proofAt, "the must-have-RUN step comes after the run").toBeGreaterThan(runAt);
+    const proof = steps[proofAt]!;
+    expect(proof, "it runs whenever the run passed (no `if:` that could skip it)").not.toMatch(/^ {8}if:/m);
+    expect(proof, "nor is its red forgiven").not.toMatch(/continue-on-error/);
+    expect(valueOf(proof, "REPORT"), "it reads the run's own JSON report").toBe("apps/web/playwright-report/results.json");
+    expect(proof, "it keys on the Seazn walk's file").toContain('endsWith("seazn-hosted.spec.ts")');
+    expect(proof, "and on case 11's titles").toContain('startsWith("11 @")');
+    expect(proof, "a skip is a failure").toContain('status === "skipped"');
+    expect(proof, "an absent case is a failure").toContain("ts.length === 0");
+    expect(proof, "and either fails the step").toContain("process.exit(1)");
+  });
+
+  it("no other job, in any workflow, turns SEAZN_HOSTED_LIVE on", () => {
+    const files = readdirSync(WORKFLOWS).filter((f) => /\.ya?ml$/.test(f));
+    const elsewhere: string[] = [];
+    let inSeazn = 0;
+    for (const f of files) {
+      for (const job of jobsOf(stripComments(readFileSync(join(WORKFLOWS, f), "utf8")))) {
+        const sets = [...job.body.matchAll(/^\s+SEAZN_HOSTED_LIVE:/gm)].length;
+        if (f === "e2e.yml" && job.name === "e2e-seazn") inSeazn += sets;
+        else if (sets > 0) elsewhere.push(`${f}:${job.name}`);
+      }
+    }
+    expect(files.length, "anti-vacuity: the workflows were read").toBeGreaterThan(1);
+    // Anti-vacuity: the sweep saw the flag where it belongs — the server's env and the runner's.
+    expect(inSeazn, "e2e-seazn sets the flag on its server and its runner").toBe(2);
+    expect(elsewhere, "jobs other than e2e-seazn that set SEAZN_HOSTED_LIVE").toEqual([]);
+  });
+
+  it("the proof step wants case 11 at EVERY width the spec declares: CASE_11_WIDTHS is the length of the spec's own list", () => {
+    const proof = seazn().find((s) => /must have RUN/.test(nameOf(s)));
+    expect(proof, "the must-have-RUN step").toBeDefined();
+    const spec = readFileSync(join(E2E_DIR, "walkthrough/streaming-destinations.spec.ts"), "utf8");
+    const loop = /for \(const width of \[([^\]]*)\] as const\) \{\s*\n\s*test\(`11 @\$\{width\}/.exec(spec);
+    expect(loop, "premise: case 11 is one test per width of a literal list").not.toBeNull();
+    const widths = loop![1]!.split(",").map((w) => w.trim()).filter(Boolean);
+    expect(widths.length, "anti-vacuity: case 11 declares widths").toBeGreaterThan(0);
+    expect(Number(valueOf(proof!, "CASE_11_WIDTHS")), `the step wants ${widths.join(", ")}`).toBe(widths.length);
+    expect(proof, "and refuses any other count").toContain("ts.length !== want");
+  });
+
+  it("the job's timeout covers the walk's worst case on every attempt CI makes, plus the setup — derived, not picked (n2)", async () => {
+    const yml = stripComments(readFileSync(join(WORKFLOWS, "e2e.yml"), "utf8"));
+    const job = jobsOf(yml).find((j) => j.name === "e2e-seazn");
+    expect(job, "e2e.yml has its e2e-seazn job").toBeDefined();
+    // The job's own timeout: the one `timeout-minutes` at the job's indent (a step's would sit deeper).
+    const timeouts = [...job!.body.matchAll(/^ {4}timeout-minutes: *(\d+)\s*$/gm)].map((m) => Number(m[1]));
+    expect(timeouts, "e2e-seazn states ONE job timeout").toHaveLength(1);
+    // The connect delay the walk's runner sees (its clocks are derived from it), from the Playwright step itself.
+    const run = stepsOf(job!.body).find((s) => nameOf(s).startsWith("Run Playwright e2e"));
+    const connect = Number(valueOf(run ?? "", "FAKE_INGEST_CONNECT_AFTER_MS"));
+    expect(connect, "premise: the runner is told the server's connect delay").toBeGreaterThan(0);
+    // The retries CI runs: the config read as CI evaluates it (`retries: process.env.CI ? 1 : 0`).
+    vi.stubEnv("CI", "true");
+    let retries: number | undefined;
+    try {
+      retries = ((await configFor(undefined)) as unknown as { retries?: number }).retries;
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(retries, "premise: CI retries a failed test").toBeGreaterThan(0);
+    const { seaznWalkClock } = await import("../../../e2e/helpers/seazn-hosted-clock");
+    const { WALK_MS } = seaznWalkClock(connect);
+    expect(WALK_MS, "premise: the walk's own timeout is more than the old 30-minute job's half").toBeGreaterThan(15 * 60_000);
+    // The setup before the first test: ~106 s measured for the migrate, sport sync, build, placement image and server start
+    // (e2e.yml's e2e-parallel leg note), allowed six minutes.
+    const SETUP_ALLOWANCE_MS = 6 * 60_000;
+    const needMs = (retries! + 1) * WALK_MS + SETUP_ALLOWANCE_MS;
+    expect(
+      timeouts[0]! * 60_000,
+      `${retries! + 1} attempts × ${WALK_MS} ms + ${SETUP_ALLOWANCE_MS} ms setup = ${needMs} ms must fit the ${timeouts[0]}-minute job, or it cancels the retry and loses its trace`,
+    ).toBeGreaterThanOrEqual(needMs);
   });
 });

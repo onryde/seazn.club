@@ -569,7 +569,7 @@ for (const width of WIDTHS) {
     if (width === 320) expect(await expectTapTargets(form), "destination form controls hit-tested").toBeGreaterThan(3);
     await form.getByTestId("stream-dest-save").click();
     await expect(form, "a saved destination closes the form").toHaveCount(0, { timeout: POLL_WAIT_MS });
-    const saved = await withDb((sql) => sql<{ label: string }[]>`select label from org_stream_targets where org_id = ${rig.orgId}`);
+    const saved = await withDb((sql) => sql<{ label: string }[]>`select label from org_stream_targets where org_id = ${rig.orgId} and kind <> 'seazn'`);   // external only: V541's seazn row is every org's
     expect(saved.map((t) => t.label), "the destination row is the one the form saved").toEqual([label]);
     // …and back on the match, the picker offers it, selected.
     await openPhoneTab(page, rig, f);

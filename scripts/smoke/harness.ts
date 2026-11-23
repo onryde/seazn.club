@@ -1685,6 +1685,18 @@ export async function cleanup(tag: string): Promise<void> {
     await sql`delete from court_hours where org_id in (${doomedOrgs})`;
     await sql`delete from courts where org_id in (${doomedOrgs})`;
     await sql`delete from venues where org_id in (${doomedOrgs})`;
+    // seazn_held_alerts.session_id is ON DELETE RESTRICT (V541): a held-recording alert would block the sessions cascade.
+    await sql`delete from seazn_held_alerts
+              where session_id in (select id from fixture_stream_sessions where org_id in (${doomedOrgs}))`;
+    // seazn_locked_videos.input_row_id is ON DELETE RESTRICT too (V541): a recording the stream tick locked (Task 13) would
+    // block the inputs cascade, so its row goes first.
+    await sql`delete from seazn_locked_videos
+              where input_row_id in (select i.id from fixture_stream_inputs i join fixture_stream_sessions s on s.id = i.session_id
+                                      where s.org_id in (${doomedOrgs}))`;
+    // fixture_video_replays (org_id and session_id) and org_video_collections (org_id) are ON DELETE RESTRICT (V542): a replay
+    // the mover recorded, or the org's replay collection, would block the org delete.
+    await sql`delete from fixture_video_replays where org_id in (${doomedOrgs})`;
+    await sql`delete from org_video_collections where org_id in (${doomedOrgs})`;
     const orgs = await sql`
       delete from organizations
       where created_by in (select id from users where email = any(${emails}))`;

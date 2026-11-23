@@ -31,7 +31,7 @@ import {
 } from "@/server/api-v1/schemas";
 import { DestinationNotAllowedError, TargetUnreadableError } from "@/server/usecases/stream-targets";
 import {
-  BEAT_STALE_SECONDS, COUNTDOWN_KEYS, CREATE_ERROR_CODES, OUTPUT_WARNING_AFTER_MS, CREATE_ERROR_KEYS, END_REASON_KEYS, FAIL_REASON_KEYS,
+  BEAT_STALE_SECONDS, COUNTDOWN_KEYS, CREATE_ERROR_CODES, seaznRefinedCode, OUTPUT_WARNING_AFTER_MS, CREATE_ERROR_KEYS, END_REASON_KEYS, FAIL_REASON_KEYS,
   INGEST_STATE_KEYS, READY_STATES, RECONNECT_REASON_KEYS, STATE_PILL_KEYS, STREAM_POLL_MS, type CreateErrorCode, type PhoneTabState,
   type ReadyState, type StreamSessionView,
   TARGET_REMOVED, canGoLive, countdownKey, createErrorCode, createErrorHolder, createErrorIsNotFound, createErrorText, d3Warning,
@@ -76,7 +76,7 @@ const NOW = new Date("2026-09-14T12:10:00Z");
 const view = (over: Partial<StreamSessionView> = {}): StreamSessionView => ({
   id: "s", fixtureId: "f", mode: "passthrough", overlay: null, state: "live", desiredState: "live", failReason: null,
   health: null, ingest: { state: "connected", protocol: "srt" }, output: null, balance: 2,
-  startedAt: "2026-09-14T12:00:00Z", endedAt: null, replayUrl: null, replayParts: [], youtubeVideoUrl: null, youtubeStatus: null, youtubeLiveForMs: null,
+  startedAt: "2026-09-14T12:00:00Z", endedAt: null, replayUrl: null, replayParts: [], seaznReplays: [], youtubeVideoUrl: null, youtubeStatus: null, youtubeLiveForMs: null,
   target: { id: "t", kind: "youtube", label: "Club" }, fixtureDecided: false, fixtureHeld: false, endReason: null, creditUsed: true, startCause: "organiser", restart: null, countdown: null, ...over,
 });
 
@@ -210,6 +210,9 @@ describe("stream-session-view — create refusals off the real wire (D1)", () =>
     ["ingest_unavailable 503", new HttpError(503, "the ingest service is unavailable", "ingest_unavailable"), "ingest_unavailable"],
     // R2001: composed asked for on a deployment with no compositor image — its own sentence, never "try again in a minute".
     ["composed_unavailable 503", new HttpError(503, "composed streaming is not available on this deployment", "composed_unavailable"), "composed_unavailable"],
+    // Seazn-hosted video (Tasks 11, 16): the two refusals of its own, as the route documents them (422 / 503).
+    ["seazn_unavailable 422", new HttpError(422, "Seazn video is not available", "seazn_unavailable"), "seazn_unavailable"],
+    ["seazn_video_unconfigured 503", new HttpError(503, "Seazn video is not configured", "seazn_video_unconfigured"), "seazn_video_unconfigured"],
     ["target_in_use 409, a holder with a court", new HttpError(409, "in use", "target_in_use", { holder: { fixtureId: "f-2", courtName: "Court 3", label: "Club channel" } }), "target_in_use"],
     ["target_in_use 409, the index race (holder null)", new HttpError(409, "in use", "target_in_use", { holder: null }), "target_in_use"],
     // m4 (Task 13 review): the server's OWN refusal class (stream-targets.ts), not an HttpError shaped like it.
@@ -250,6 +253,8 @@ describe("stream-session-view — create refusals off the real wire (D1)", () =>
       checked++;
     }
     expect(checked).toBe(ROWS.length);
+    // The one code that is never on the wire: the panel's own refinement of composed_unavailable for a Seazn destination (Task 16).
+    produced.add(seaznRefinedCode("composed_unavailable", "seazn"));
     expect([...produced].sort()).toEqual([...CREATE_ERROR_CODES].sort());
   });
 
@@ -1977,5 +1982,28 @@ describe("youtubeStatusLineOf: the live YouTube status line", () => {
       }
       expect(checked).toBe(7);
     });
+  });
+});
+
+describe("seaznRefinedCode (Task 16)", () => {
+  it("composed_unavailable on a Seazn destination is its own code; on every other kind, and every other code, nothing changes", () => {
+    expect(seaznRefinedCode("composed_unavailable", "seazn")).toBe("seazn_composed_unavailable");
+    let checked = 0;
+    for (const kind of ["youtube", "twitch", "facebook", "kick", "custom_rtmp", undefined]) {
+      expect(seaznRefinedCode("composed_unavailable", kind), String(kind)).toBe("composed_unavailable");
+      checked++;
+    }
+    for (const code of CREATE_ERROR_CODES.filter((c) => c !== "composed_unavailable")) {
+      expect(seaznRefinedCode(code, "seazn"), code).toBe(code);
+      checked++;
+    }
+    expect(checked).toBe(6 + CREATE_ERROR_CODES.length - 1);
+  });
+
+  it("the Seazn sentence does not tell the organiser to go live with the camera only (the plain one does: the control)", () => {
+    const en = dict("en");
+    expect(en[CREATE_ERROR_KEYS.composed_unavailable]).toMatch(/camera only/);
+    expect(en[CREATE_ERROR_KEYS.seazn_composed_unavailable]).not.toMatch(/camera/i);
+    expect(inEveryLocale([CREATE_ERROR_KEYS.seazn_composed_unavailable])).toBe(LOCALES.length);
   });
 });

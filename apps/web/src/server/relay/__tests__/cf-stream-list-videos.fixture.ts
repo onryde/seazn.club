@@ -11,7 +11,8 @@
 //     uid (string, maxLength 32), created (date-time string), liveInput (string, maxLength 32, "The live input ID used to
 //     upload a video with Stream Live."), status { state (enum incl. "live-inprogress", "ready", "error"),
 //     errorReasonCode (string) }, duration (number, -1 = unknown), size (number), input { width, height } (integer,
-//     -1 = unknown).
+//     -1 = unknown), requireSignedURLs (boolean, default false: "When set to `true`, a signed token must be generated … to
+//     view the video" — Seazn Task 13, re-read 2026-11-21 from the same document's list item schema).
 // Not from the document: the uids and values below are made up; only their NAMES and TYPES are the document's.
 
 /** The two query parameters, as the OpenAPI document names them. */
@@ -20,14 +21,16 @@ export const LIST_VIDEOS_QUERY = { liveInputId: "live_input_id", limit: "limit" 
 export const LIST_VIDEOS_LIMIT_MAX = 1000;
 
 /** A 200 for `?live_input_id=in_abc`: a live recording (the -1/0 placeholders), a finished one, and one whose
- *  `liveInput` is ABSENT — legal under the schema, and the case the sweep's guard must refuse. */
+ *  `liveInput` is ABSENT — legal under the schema, and the case the sweep's guard must refuse. Task 13: the live one reads
+ *  `requireSignedURLs: true` (C7 measured that of an in-progress recording), the finished one `false` (C3), and the third omits
+ *  the key (the schema requires nothing). */
 export const LIST_VIDEOS_BY_INPUT_200 = {
   success: true,
   errors: [],
   messages: [],
   result: [
-    { uid: "v_cam_live", created: "2026-09-01T00:00:00Z", status: { state: "live-inprogress" }, liveInput: "in_abc", duration: -1, size: -1, input: { width: 0, height: 0 } },
-    { uid: "v_cam_done", created: "2026-09-01T01:00:00Z", status: { state: "ready" }, liveInput: "in_abc", duration: 30, size: 1000, input: { width: 1280, height: 720 } },
+    { uid: "v_cam_live", created: "2026-09-01T00:00:00Z", status: { state: "live-inprogress" }, liveInput: "in_abc", requireSignedURLs: true, duration: -1, size: -1, input: { width: 0, height: 0 } },
+    { uid: "v_cam_done", created: "2026-09-01T01:00:00Z", status: { state: "ready" }, liveInput: "in_abc", requireSignedURLs: false, duration: 30, size: 1000, input: { width: 1280, height: 720 } },
     { uid: "v_cam_unnamed", created: "2026-09-01T02:00:00Z", status: { state: "ready" }, duration: 12, size: 500, input: { width: 1280, height: 720 } },
   ],
 } as const;

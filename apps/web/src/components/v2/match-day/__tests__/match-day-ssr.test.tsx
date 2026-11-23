@@ -63,6 +63,10 @@ import { NO_FROZEN_NAMES, type FrozenNames } from "@/lib/match-day/frozen-names"
 import { DotLine, MatchDayShell } from "@/components/v2/match-day/match-day-shell";
 import { DeviceLinkPanel } from "@/components/v2/device-link-panel";
 import { propsOf, renderIsland, walk } from "@/components/__tests__/_hook-harness";
+import { CourtStreamPreview } from "@/components/v2/match-day/court-stream-preview";
+import { SeaznVideoIsland } from "@/components/public-site/match-centre/seazn-video-island";
+import { seaznVideoLabels } from "@/components/public-site/match-centre/seazn-video-labels";
+import { MATCH_DAY_SCORE_DICT_PREFIXES, matchDayScoreDict } from "@/lib/match-day/score-dict";
 import { NeedsYou, needsYouItems, type NeedsYouItem } from "@/components/v2/desk/needs-you";
 import { ATTENTION_SEVERITY, type Attention } from "@/lib/division-phase";
 import type { CompetitionDesk } from "@/server/usecases/competition-desk";
@@ -145,6 +149,7 @@ const fx = (o: Partial<MatchDayFixture> = {}): MatchDayFixture => ({
   stream: null,
   scorer_attention: null,
   live_video: null,
+  live_seazn: false,
   format_line: null,
   court_stream: false,
   own_stream_code: false,
@@ -1649,19 +1654,161 @@ describe("A4 — a playing court with a live stream shows its preview; any other
     expect(checked).toBe(cases.length);
   });
 
-  it("streamPreviewOf: the part only for a live stream on an embeddable YouTube video", () => {
+  it("streamPreviewOf: the part only for a live stream on an embeddable YouTube video — YouTube's answer is unchanged, wrapped as its own kind", () => {
     expect(youtubeVideoId(youtubeWatchUrl(VIDEO))).toBe(VIDEO);
-    expect(streamPreviewOf({ stream: "live", live_video: { url: youtubeWatchUrl(VIDEO), made_for_kids: false } })).toEqual({
-      partNo: 1,
-      url: youtubeWatchUrl(VIDEO),
-      madeForKids: false,
+    expect(streamPreviewOf({ stream: "live", live_video: { url: youtubeWatchUrl(VIDEO), made_for_kids: false }, live_seazn: false })).toEqual({
+      kind: "youtube",
+      part: { partNo: 1, url: youtubeWatchUrl(VIDEO), madeForKids: false },
     });
-    expect(streamPreviewOf({ stream: "live", live_video: null })).toBeNull();
-    expect(streamPreviewOf({ stream: "live", live_video: { url: youtubeWatchUrl(VIDEO), made_for_kids: true } })).toBeNull();
-    expect(streamPreviewOf({ stream: "waiting", live_video: { url: youtubeWatchUrl(VIDEO), made_for_kids: false } })).toBeNull();
-    expect(streamPreviewOf({ stream: null, live_video: { url: youtubeWatchUrl(VIDEO), made_for_kids: false } })).toBeNull();
+    expect(streamPreviewOf({ stream: "live", live_video: null, live_seazn: false })).toBeNull();
+    expect(streamPreviewOf({ stream: "live", live_video: { url: youtubeWatchUrl(VIDEO), made_for_kids: true }, live_seazn: false })).toBeNull();
+    expect(streamPreviewOf({ stream: "waiting", live_video: { url: youtubeWatchUrl(VIDEO), made_for_kids: false }, live_seazn: false })).toBeNull();
+    expect(streamPreviewOf({ stream: null, live_video: { url: youtubeWatchUrl(VIDEO), made_for_kids: false }, live_seazn: false })).toBeNull();
+  });
+
+  it("streamPreviewOf (Task 17): a Seazn live is its own kind — only while the stream reads live; waiting, none and an ended stream keep the scoreboard; Seazn wins over a YouTube video both set", () => {
+    const yt = { url: youtubeWatchUrl(VIDEO), made_for_kids: false };
+    expect(streamPreviewOf({ stream: "live", live_video: null, live_seazn: true })).toEqual({ kind: "seazn" });
+    expect(streamPreviewOf({ stream: "live", live_video: yt, live_seazn: true }), "both set").toEqual({ kind: "seazn" });
+    // A Seazn live whose video is made-for-kids-flagged YouTube is no concern: the kids rule is YouTube's.
+    expect(streamPreviewOf({ stream: "live", live_video: { ...yt, made_for_kids: true }, live_seazn: true })).toEqual({ kind: "seazn" });
+    for (const stream of ["waiting", null] as const) {
+      expect(streamPreviewOf({ stream, live_video: null, live_seazn: true }), String(stream)).toBeNull();
+    }
+    expect(streamPreviewOf({ stream: "live", live_video: null, live_seazn: false })).toBeNull();
   });
 });
+
+describe("Task 17 — a playing court on air to Seazn plays it in the preview (the organiser's own video route), with the score under it", () => {
+  const seazn = (o: Partial<MatchDayFixture> = {}) =>
+    goldenCourt("badminton", BADMINTON!, { stream: "live", serving: "away", live_video: null, live_seazn: true, ...o });
+  const islandsOf = (node: ReactNode) => walk(node).filter((el) => el.type === SeaznVideoIsland);
+  const previewTree = (f: MatchDayFixture, scoreDict: Dict = publicEn as Dict, readOnly = false) =>
+    CourtStreamPreview({
+      fixture: f,
+      preview: { kind: "seazn" },
+      label: "Live stream on Court 3",
+      streamHref: "/x?stream=open",
+      dict,
+      scoreDict,
+      readOnly,
+    });
+
+  it("the focused court: 'Live on Seazn' (the badge), the score under the picture, the stream panel one tap away — and no scoreboard, no YouTube facade, no iframe", () => {
+    expect(BADMINTON).not.toBeNull();
+    const html = focus(seazn());
+    expect(html).toContain('data-testid="md-stream-preview"');
+    expect(html).not.toContain('data-testid="md-scoreboard"');
+    const preview = html.slice(html.indexOf('data-testid="md-stream-preview"'));
+    expect(preview).toContain(`>${esc(t(dict, "matchDay.preview.liveSeazn"))}<`);
+    expect(preview).not.toContain(t(dict, "stream.youtube.link.live"));
+    expect(preview).not.toMatch(/<iframe|data-testid="replay-facade"|data-testid="replay-box"/);
+    expect(preview).toContain(`aria-label="${esc(t(dict, "matchDay.preview.label", { court: "Court 3" }))}"`);
+    const score = preview.slice(preview.indexOf('data-testid="md-preview-score"'));
+    expect(score).toContain(`>${gamesWon(BADMINTON!)}<`);
+    expect(score).toContain(`>${liveOf(BADMINTON!)}<`);
+    expect(score).toContain(`${esc(AWAY.name)} `);
+    expect(preview).toContain(`href="${routes.fixture("acme", "safe-badminton", "girls-u14", 7)}?stream=open"`);
+    // No address or token is painted by the server: the island asks the route after it hydrates.
+    expect(html).not.toMatch(/playback|manifest|data-src=/);
+  });
+
+  it("the island is mounted for THIS match on the ORGANISER's route, with the page's own labels: fixture id, endpoint 'org', and a key per match so the next match gets a fresh player", () => {
+    const f = seazn().current!;
+    const islands = islandsOf(previewTree(f));
+    expect(islands, "anti-vacuity: one island").toHaveLength(1);
+    const props = propsOf(islands[0]!);
+    expect(props.fixtureId).toBe(f.id);
+    expect(props.endpoint).toBe("org");
+    expect(props.initial, "no server-side answer: the island reads the route itself").toBeUndefined();
+    // Phase 1 visual D1: the court is on air to Seazn, so the player's box is held until the first read (no shift when it arrives).
+    expect(props.reserve, "the box is reserved").toBe(true);
+    expect(props.labels).toEqual(seaznVideoLabels(publicEn as Dict));
+    expect(islands[0]!.key, "keyed by the match").toBe(f.id);
+    const other = islandsOf(previewTree({ ...f, id: "f-2" }))[0]!;
+    expect(other.key).toBe("f-2");
+    expect(propsOf(other).fixtureId).toBe("f-2");
+  });
+
+  it("a view-only reader gets the same video (the organiser's route answers any member) but no 'Stream settings' door", () => {
+    const html = focus(seazn());
+    expect(html).toContain(`>${t(dict, "matchDay.stream.settings")}<`);
+    const readOnly = renderToStaticMarkup(
+      <CourtFocus ctx={{ ...ctx, readOnly: true }} court={seazn()} backLabel="All courts" onBack={() => {}} onChanged={() => {}} onRefused={() => {}} refreshKey="k" divisions={null} />,
+    );
+    expect(readOnly).toContain('data-testid="md-stream-preview"');
+    expect(readOnly).not.toContain(`>${t(dict, "matchDay.stream.settings")}<`);
+    expect(islandsOf(previewTree(seazn().current!, publicEn as Dict, true))).toHaveLength(1);
+  });
+
+  it("a match on NO court gets the same preview, named for the match", () => {
+    const f = seazn().current!;
+    const html = noCourtFocus(f);
+    expect(html).toContain('data-testid="md-stream-preview"');
+    expect(html).not.toContain('data-testid="md-scoreboard"');
+    expect(html).toContain(`>${esc(t(dict, "matchDay.preview.liveSeazn"))}<`);
+  });
+
+  it("every case that is not a live Seazn stream keeps the scoreboard: not live_seazn, a waiting or absent stream (count reported)", () => {
+    const cases: [string, MatchDayCourt][] = [
+      ["on air flag off", seazn({ live_seazn: false })],
+      ["Seazn flag on but the stream is waiting", seazn({ stream: "waiting" })],
+      ["Seazn flag on but no stream", seazn({ stream: null })],
+    ];
+    let checked = 0;
+    for (const [name, c] of cases) {
+      const html = focus(c);
+      expect(html, name).not.toContain('data-testid="md-stream-preview"');
+      expect(html, name).toContain('data-testid="md-scoreboard"');
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("every locale: the island's labels and the badge are that locale's words — never a key name, and for es/fr never the English; read through the page's own dictionary slice", () => {
+    const locales = { en: [en, publicEn], es: [es, publicEs], fr: [fr, publicFr], nl: [nl, publicNl] } as unknown as Record<string, [Dict, Dict]>;
+    const f = seazn().current!;
+    let checked = 0;
+    for (const [locale, [ui, pubFull]] of Object.entries(locales)) {
+      const slice = matchDayScoreDict(pubFull);
+      const labels = propsOf(islandsOf(previewTree(f, slice))[0]!).labels as ReturnType<typeof seaznVideoLabels>;
+      // Expected: the locale's own dictionary file, read by the key the island is documented to use — never the labels' own output.
+      expect(labels, locale).toEqual({
+        live: pubFull["seaznVideo.live"],
+        unavailable: pubFull["seaznVideo.unavailable"],
+        part: pubFull["seaznVideo.part"],
+        replay: pubFull["overlay.replay"],
+        starting: pubFull["seaznVideo.starting"],
+      });
+      for (const [field, value] of Object.entries(labels)) {
+        expect(value, `${locale} ${field}`).not.toMatch(/^(seaznVideo|overlay)\./);
+        expect(value.trim(), `${locale} ${field}`).not.toBe("");
+        if (locale === "es" || locale === "fr") expect(value, `${locale} ${field} is not the English`).not.toBe((publicEn as Dict)[`${field === "replay" ? "overlay" : "seaznVideo"}.${field}`]);
+      }
+      const badge = t(ui, "matchDay.preview.liveSeazn");
+      expect(badge, locale).not.toBe("matchDay.preview.liveSeazn");
+      expect(badge, locale).toContain("Seazn");
+      if (locale !== "en") expect(badge, `${locale} badge is translated`).not.toBe(t(en as Dict, "matchDay.preview.liveSeazn"));
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("the page's dictionary slice carries every key the island reads (the m6 gap: matchCentre. + forfeit. alone left them to print as key names)", () => {
+    const wanted = ["seaznVideo.live", "seaznVideo.unavailable", "seaznVideo.part", "seaznVideo.starting", "overlay.replay"];
+    const old = pickLegacySlice(publicEn as Dict);
+    for (const key of wanted) expect(old[key], `PREMISE: the old slice lacks ${key}`).toBeUndefined();
+    const slice = matchDayScoreDict(publicEn as Dict);
+    for (const key of wanted) expect(slice[key], key).toBe((publicEn as Dict)[key]);
+    // The scoreboard's own keys are still there, and nothing from outside the four prefixes came along.
+    expect(Object.keys(slice).filter((k) => k.startsWith("matchCentre.")).length, "matchCentre.* kept").toBeGreaterThan(10);
+    expect(Object.keys(slice).filter((k) => !MATCH_DAY_SCORE_DICT_PREFIXES.some((p) => k.startsWith(p))), "nothing else").toEqual([]);
+    expect(Object.keys(slice).filter((k) => k.startsWith("overlay.")), "overlay.replay only").toEqual(["overlay.replay"]);
+  });
+});
+
+/** The slice the page passed BEFORE this task: the premise the gap test starts from. */
+const pickLegacySlice = (d: Dict): Dict => Object.fromEntries(Object.entries(d).filter(([k]) => k.startsWith("matchCentre.") || k.startsWith("forfeit.")));
 
 describe("A3 carry-in — a middle-dot line never leaves a dot dangling", () => {
   it("the header: the competition on its own line, the counts as dot-led parts in a box that clips the dot of a part starting a line", () => {

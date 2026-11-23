@@ -20,8 +20,13 @@ export interface IngestTarget { url: string; streamKey: string }
  *  A composed session has two: the `camera` (Input A; the compositor reads it over SRT playback) and the `programme`
  *  (Input B; the compositor publishes to it, and the destination output attaches to it). */
 export type InputRole = "camera" | "programme";
-/** `role` absent is the camera, so the passthrough create is the call it always was. */
-export interface IngestCreateSpec { sessionId: string; slot: number; role?: InputRole }
+/** Seazn-hosted video (Task 12, G5): how an input's playback is protected — signed, for these hosts. Only a Seazn session's
+ *  programme input carries it; absent is an unsigned input (the camera, whose playback the phone reads, and every external
+ *  destination's programme input). */
+export interface InputAccess { signed: true; allowedOrigins: string[] }
+/** `role` absent is the camera, so the passthrough create is the call it always was. `access` is sent IN the create (an update
+ *  never changes a live input's recording settings: ingest-cf.ts). */
+export interface IngestCreateSpec { sessionId: string; slot: number; role?: InputRole; access?: InputAccess }
 export interface IngestCredentials {
   inputId: string;
   srt: { url: string; streamId: string; passphrase: string };
@@ -50,9 +55,19 @@ export type OutputState = "ok" | "connecting" | "rejected" | "unknown";
 /** Spec §5.7 — what a per-session provider call is FOR, so its stream_provider_calls row carries the session (staging
  *  2026-09-30 found removeOutput rows with a NULL session_id). Optional: a caller with no session passes nothing. */
 export interface ProviderCallMeta { sessionId?: string | null }
+/** Task 24 review I3 (2026-11-22): how long ONE call may take before the adapter gives up on it (`AbortSignal.timeout`; a thrown
+ *  failure recorded as `timeout`). Taken only by the calls made inside the tick's Seazn slice — the replay move's listInputVideos,
+ *  deleteVideo, createDownload and playbackToken, and the lock pass's listInputVideos and requireSignedVideo (re-review N3); absent,
+ *  a call keeps the platform's own bound (and a token its 10 s). */
+export interface CallTimeout { timeoutMs?: number }
 /** What `setInputEnabled` is told about the input beside the session: its slot and role, so an adapter that updates the input
- *  with the CREATE's own body can re-send the name the create gave it (`meta.name` is built from session, role and slot). */
-export interface InputSwitchMeta extends ProviderCallMeta { slot?: number; role?: InputRole }
+ *  with the CREATE's own body can re-send the name the create gave it (`meta.name` is built from session, role and slot).
+ *  `access` (Task 12) is the signing the input was CREATED with, READ from its row (`fixture_stream_inputs.access`), never from
+ *  env — so a change to SEAZN_VIDEO_ORIGINS can never alter an existing input's recording. `null` is the row's explicit
+ *  unsigned answer. A PROGRAMME input's switch must carry it (null or a value): the adapter refuses one whose `access` is absent
+ *  OR `undefined`, so a caller cannot send an unsigned body to a signed input by forgetting the field. The camera's switch needs
+ *  none (it is unsigned). */
+export interface InputSwitchMeta extends ProviderCallMeta { slot?: number; role?: InputRole; access?: InputAccess | null }
 export interface StorageUsage { totalStorageMinutes: number; totalStorageMinutesLimit: number; videoCount: number }
 /** Dd — a recording, with every fact Cloudflare's video object carries.
  *  While `state` is "live-inprogress" the probe (2026-09-14) reads `duration`
@@ -71,6 +86,10 @@ export interface IngestVideo {
   height: number | null;            // `input.height`
   state: string;                    // `status.state`, verbatim ("live-inprogress" | "ready" | "error" | …)
   errorReasonCode: string | null;   // `status.errorReasonCode`
+  /** Seazn Task 13 (C3, C7): whether the video itself needs a signed token to play (`requireSignedURLs`). Null when the listing
+   *  did not say. C3 measured a FINISHED recording of a signed input reading false (publicly playable), so the lock pass
+   *  re-reads this on every recording it has already locked and locks it again unless it reads true. */
+  signed: boolean | null;
 }
 export type DeleteVideoResult = "deleted" | "in_progress" | "absent";
 export interface IngestCapabilities {
@@ -109,8 +128,24 @@ export interface IngestProvider {
   listVideos(opts: { createdBefore: Date }): Promise<IngestVideo[]>;
   /** R2004 (owner ruling 2026-10-18, option (a)): the recordings ONE input made. The daily sweep deletes a composed
    *  session's camera recordings with it once the session has ended — never the programme's. */
-  listInputVideos(inputId: string, meta?: ProviderCallMeta): Promise<IngestVideo[]>;
-  deleteVideo(videoId: string): Promise<DeleteVideoResult>;       // 409/10046 → "in_progress"
+  listInputVideos(inputId: string, meta?: ProviderCallMeta & CallTimeout): Promise<IngestVideo[]>;
+  deleteVideo(videoId: string, o?: CallTimeout): Promise<DeleteVideoResult>;       // 409/10046 → "in_progress"
+  /** Seazn Task 13 (C1, C5): a playback token for one input or video, minted by the provider (no signing key of ours), valid
+   *  until `expiresAt` (whole seconds). `downloadable` asks for one that also opens the MP4 download (Phase 2's mover). The
+   *  token is a SECRET until it is handed to a viewer inside a playback URL: it never reaches a record, a log or an error. */
+  playbackToken(uid: string, o: { expiresAt: Date; downloadable?: boolean } & CallTimeout): Promise<string>;
+  /** Seazn Task 13 (C3): make ONE video need a signed token to play, read back from the provider's echo — `set` only when the
+   *  echo says so (a 200 that does not is an error). `absent` is a video the provider does not hold (gone between the listing
+   *  and this call). The uid comes from a listing item checked against its own input (C6), never from a filtered listing alone.
+   *  Phase 1 review I3: the same edit sets the video's own deletion to `deleteAt`, so a held recording is still deleted by the
+   *  provider whatever the edit does to the deletion its input stamped (never measured); an echo without it is warned, not
+   *  refused (the token rule held). */
+  requireSignedVideo(videoId: string, o: { deleteAt: Date } & CallTimeout): Promise<"set" | "absent">;
+  /** Seazn Task 24 (C4): make ONE video's MP4 download, or ask after it — `ready` once it can be fetched, `inprogress` while the
+   *  provider is still making it (ask again later). A download that failed, a video the provider does not hold, and a fault all
+   *  throw. The download goes with the video when the video is deleted. The uid is a replay row's own `cf_video_id` (C6), and the
+   *  download URL the provider answers is never handed back: the mover signs its own (cf-playback.ts `signDownload`). */
+  createDownload(videoId: string, o?: CallTimeout): Promise<"ready" | "inprogress">;
 }
 export type RunnerSpec = {
   sessionId: string; attempt: number; jobToken: string; appUrl: string;   // attempt → the Machine NAME (domain/runner.ts machineNameFor)
@@ -232,7 +267,9 @@ export interface RunnerProvider {
  *  adapter that logged here would log once per CALL. `url` is the URL as called; the recorder templates
  *  it (sanitise.ts pathTemplate) — the adapter passes the ids it interpolated. */
 export interface ProviderCallRecord {
-  provider: "cloudflare" | "fly" | "stripe"; operation: string; subjectId?: string | null; sessionId?: string | null;
+  /** `bunny` (Task 22): the replay host's adapter records here too; V542 admits it in the table's provider CHECK, and
+   *  replay-driver.ts binds the database recorder to the adapter it builds. */
+  provider: "cloudflare" | "fly" | "stripe" | "bunny"; operation: string; subjectId?: string | null; sessionId?: string | null;
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"; url: string; ids: readonly string[];
   status: number | null; latencyMs: number; attempt: number;
   retryReason?: string | null; retryAfterSeconds?: number | null; requestId?: string | null; errorCode?: string | null;

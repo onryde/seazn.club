@@ -40,6 +40,7 @@ const KNOWN = [
   "funnel",
   "marketing",
   "revshareSale",
+  "seaznHosted",
 ] as const;
 
 describe("SMOKE_ONLY — selectSmokeSuites (review R1)", () => {
@@ -109,7 +110,8 @@ describe("SMOKE_ONLY — selectSmokeSuites (review R1)", () => {
     // (player payment page Task 4: its own org and sign-in, nothing from SubsetCtx); quickMatch last (quick match plan 2 T11 +
     // plan 3 T7: the system org's guest matches and its own saver's sign-in, nothing from SubsetCtx); funnel and marketing after it
     // (start wizard plan T7: anonymous visitors and a fetch of public pages, nothing from SubsetCtx); revshareSale last
-    // (Revshare affiliate tracking: its own org, a stamped group and a stubbed fetch, nothing from SubsetCtx).
+    // (Revshare affiliate tracking: its own org, a stamped group and a stubbed fetch, nothing from SubsetCtx); seaznHosted after it
+    // (Seazn-hosted video Task 19: its own org and sign-in, nothing from SubsetCtx).
     const block = /const SELECTABLE_SUITES\b[\s\S]*?=\s*\{([\s\S]*?)\n\};/.exec(src)?.[1] ?? "";
     const names = [...block.matchAll(/^\s*(\w+):/gm)].map((m) => m[1]);
     expect(names.length, "the registry block was found and read").toBeGreaterThan(0);

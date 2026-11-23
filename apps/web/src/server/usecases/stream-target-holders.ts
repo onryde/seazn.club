@@ -60,6 +60,9 @@ export async function holderRows(
        -- several matches at once, so no session on an API-backed target (a connection, not a key) holds it; exclusivity for
        -- those moves to the pooled key (§5.4). Decided by the TARGET's source, not by anything the session carries.
        and t.youtube_connection_id is null
+       -- Seazn-hosted video (V541): the Seazn destination is the org's own, not a key a second match could collide on, so a
+       -- session on it holds nothing (the one_active_target index carves the same case out).
+       and t.kind <> 'seazn'
        and s.state in ${exec([...ACTIVE_STATES])}
        and (${targetId}::uuid is null or s.target_id = ${targetId}::uuid)
        and (${notFixtureId}::uuid is null or s.fixture_id is distinct from ${notFixtureId}::uuid)

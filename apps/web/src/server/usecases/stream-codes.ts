@@ -9,14 +9,14 @@ import { createHash, randomBytes, randomInt, timingSafeEqual } from "node:crypto
 import { sql, type Tx } from "@/lib/db";
 import { requireFeature } from "@/lib/entitlements";
 import { HttpError } from "@/lib/errors";
-import { resolveStreamTarget, type SavedStreamTarget, type StreamTargetSource } from "@/lib/stream-destinations";
+import { SEAZN_UNAVAILABLE, resolveStreamTarget, type SavedStreamTarget, type StreamTargetSource } from "@/lib/stream-destinations";
 import { effectiveStreamMode, isPickableTemplate, type StreamPrefsRead } from "@/lib/stream-settings";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { CaptureRefusalError, codeEnded } from "@/server/api-v1/capture-http";
 import type { PutStreamSettings, StreamCodeShown, StreamMode, StreamSettings } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
-import { CODE_GRACE_AFTER_FINISH_MINUTES, PHONE_SILENT_FLOOR_SECONDS, PHONE_SILENT_SLACK_SECONDS, tunable } from "@/server/relay/config";
+import { CODE_GRACE_AFTER_FINISH_MINUTES, PHONE_SILENT_FLOOR_SECONDS, PHONE_SILENT_SLACK_SECONDS, seaznHostedLive, tunable } from "@/server/relay/config";
 import { composedUnavailable } from "@/server/relay/drivers";
 import { hasValidKek, sealWith } from "@/server/relay/crypto";
 import { ACTIVE_STATES, type SessionState } from "@/server/relay/domain/session";
@@ -24,6 +24,7 @@ import { courtCodeView } from "@/server/relay/domain/court-stream";
 import { type CodeCall, codeServes, codeStatus, type CodeView, normaliseCode, type RecordTail, recordTailAnchor } from "@/server/relay/domain/stream-code";
 import type { CourtLinkRef, ResolvedCourtCode } from "./court-stream-codes";
 import { liveCourtLinkFor } from "./court-streams";
+import { seaznOrder, seaznWhere } from "./stream-targets";
 import { insertStreamCode, openStreamCodeTok, wipeStreamCodeTok } from "@/server/relay/secret-columns";
 
 /** §6.1: 12 characters of lowercase Crockford base32 (60 bits). V430's `code` check admits exactly this alphabet. */
@@ -496,11 +497,12 @@ export async function saveStreamSettings(auth: AuthCtx, fixtureId: string, body:
 export async function fixtureStreamTarget(
   exec: Tx | typeof sql, a: { orgId: string; fixtureId: string },
 ): Promise<{ id: string; label: string; source: StreamTargetSource } | null> {
+  const seazn = seaznHostedLive();
   const [r] = await exec<{ has_row: boolean; saved_id: string | null; live: { id: string; label: string }[] }[]>`
     select coalesce(st.target_chosen, false) as has_row, st.target_id as saved_id,
-           coalesce((select json_agg(json_build_object('id', o.id, 'label', o.label) order by o.created_at, o.id)
+           coalesce((select json_agg(json_build_object('id', o.id, 'label', o.label) ${seaznOrder(seazn)})
                        from org_stream_targets o
-                      where o.org_id = ${a.orgId} and o.archived_at is null), '[]'::json) as live
+                      where o.org_id = ${a.orgId} and o.archived_at is null ${seaznWhere(seazn)}), '[]'::json) as live
       from (select 1) as one
       left join fixture_stream_settings st on st.fixture_id = ${a.fixtureId}`;
   const saved: SavedStreamTarget = r!.has_row ? { row: true, targetId: r!.saved_id } : { row: false };
@@ -516,9 +518,11 @@ export async function writeStreamSettings(
   tx: Tx, a: { orgId: string; fixtureId: string; targetId: string | null; updatedBy: string | null },
 ): Promise<{ targetId: string | null }> {
   if (a.targetId !== null) {
-    const live = await tx`
-      select 1 from org_stream_targets where id = ${a.targetId} and org_id = ${a.orgId} and archived_at is null`;
+    const live = await tx<{ seazn: boolean }[]>`
+      select kind = 'seazn' as seazn from org_stream_targets where id = ${a.targetId} and org_id = ${a.orgId} and archived_at is null`;
     if (live.length === 0) throw new HttpError(404, "stream target not found");
+    // Seazn-hosted video: with LIVE off the row is hidden from every list, so naming it is refused rather than stored.
+    if (live[0]!.seazn && !seaznHostedLive()) throw new HttpError(422, "Seazn hosted video is not available", SEAZN_UNAVAILABLE);
   }
   await tx`
     insert into fixture_stream_settings (fixture_id, org_id, target_id, target_chosen, updated_by, updated_at, revision)

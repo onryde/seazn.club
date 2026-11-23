@@ -214,8 +214,9 @@ describe("the player payment page's token is scrubbed from every URL shape (coun
 /** Every `/<path>/${<expression naming a token, secret or code>}` template in the app (routes.ts included), by its path, with each
  *  interpolated segment (`${orgId}`) as `[id]`: the invite revoke call is `/api/orgs/[id]/invites/<token>/revoke`, and the path rules are
  *  anchored at the route root, so the tail `/invites` alone is no longer one. */
-function pathBuilders(): Map<string, string> {
+function scanBuilders(): { paths: Map<string, string>; hosted: { file: string; rest: string }[] } {
   const found = new Map<string, string>();
+  const hosted: { file: string; rest: string }[] = [];
   const segment = "(?:[a-z][a-z0-9-]*|\\$\\{[^}]*\\})";
   const builder = new RegExp(`(\\/${segment}(?:\\/${segment})*)\\/\\$\\{([^}]*)\\}`, "g");
   const walk = (dir: string) => {
@@ -228,17 +229,30 @@ function pathBuilders(): Map<string, string> {
         for (const m of text.matchAll(builder)) {
           // The expression NAMES a secret (`.token`, `invite.token`, `got.secret`, `c.code`, `refCode`), not merely contains the
           // letters (`encodeURIComponent`).
-          const key = m[1]!.replace(/\$\{[^}]*\}/g, "[id]");
-          if (/(?:^|[.(!\s])(?:token|secret|code|ref_code|refCode|referralCode)\b/.test(m[2]!) && !found.has(key)) {
-            found.set(key, path.relative(SRC_DIR, full));
+          if (!/(?:^|[.(!\s])(?:token|secret|code|ref_code|refCode|referralCode)\b/.test(m[2]!)) continue;
+          // `https://${host}/${token}`: a first segment right after `//` is ANOTHER origin, not a path under ours (Seazn-hosted
+          // video, Task 14: the signed Cloudflare playback URL). Its rest of path, as `[id]`s, is checked on that host below.
+          if (m.index > 0 && text[m.index - 1] === "/") {
+            hosted.push({ file: path.relative(SRC_DIR, full), rest: m[1]!.replace(/^\/\$\{[^}]*\}/, "").replace(/\$\{[^}]*\}/g, "[id]") });
+            continue;
           }
+          const key = m[1]!.replace(/\$\{[^}]*\}/g, "[id]");
+          if (!found.has(key)) found.set(key, path.relative(SRC_DIR, full));
         }
       }
     }
   };
   walk(SRC_DIR);
-  return found;
+  return { paths: found, hosted };
 }
+const pathBuilders = (): Map<string, string> => scanBuilders().paths;
+
+/** The files that build a token URL on ANOTHER host (`https://${host}/${token}`), each with the host it builds on, taken from the
+ *  setting it reads. A new one must be named here, or the sweep below fails: its URL is checked on that host, never on ours. */
+const HOSTED_BUILDERS: Record<string, string> = {
+  // STREAM_PLAYBACK_HOST, the Cloudflare Stream customer host (relay/config.ts): the signed playback and download URLs (Task 13).
+  "server/video/cf-playback.ts": "customer-k7q2m9.cloudflarestream.com",
+};
 
 /** The builder paths that are knowingly public, each with the reason (the file-system verdicts above, seen from the template). */
 const PUBLIC_BUILDERS: Record<string, string> = {
@@ -282,6 +296,26 @@ describe("every /<path>/${token} template is scrubbed, or is knowingly public", 
     // plan 2 Task 5 added the home token as a kind, and 32 at 4, before the rebase onto main brought the player pay page token.
     expect(scrubbed).toBeGreaterThanOrEqual(40);
     expect(kept).toBe(Object.keys(PUBLIC_BUILDERS).length * KINDS.length);
+  });
+
+  it("each builder on ANOTHER host loses its token there; every such file names its host, and no named file is stale", () => {
+    const { hosted } = scanBuilders();
+    // Anti-vacuity: cf-playback.ts builds two (the manifest and the download).
+    expect(hosted.filter((h) => h.file === "server/video/cf-playback.ts")).toHaveLength(2);
+    let checked = 0;
+    for (const { file, rest } of hosted) {
+      const host = HOSTED_BUILDERS[file];
+      expect(host, `${file} builds a token URL on a host of its own: name that host in HOSTED_BUILDERS`).toBeDefined();
+      for (const [kind, tokens] of KINDS) {
+        const url = `https://${host}${rest.replace(/\[id\]/g, "00000000-0000-4000-8000-000000000002")}/${tokens[0]!}`;
+        expect(scrubScoreUrl(url), `${file} / ${kind} on ${host}`).toBe(without(url, tokens[0]!));
+        checked++;
+      }
+    }
+    expect(checked).toBe(hosted.length * KINDS.length);
+    for (const file of Object.keys(HOSTED_BUILDERS)) {
+      expect(hosted.some((h) => h.file === file), `${file} no longer builds a hosted token URL: delete it`).toBe(true);
+    }
   });
 });
 

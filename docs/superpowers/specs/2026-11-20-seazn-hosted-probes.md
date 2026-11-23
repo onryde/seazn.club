@@ -1,0 +1,234 @@
+# Seazn-hosted video: Cloudflare and Bunny probes
+
+Plan: `docs/superpowers/plans/2026-11-20-seazn-hosted-video.md`. Spec: `docs/superpowers/specs/2026-11-20-seazn-hosted-video-design.md`.
+Cite results by ID: C1–C6 and B1–B6 from the POC, C7–C9 for Task 7, B7–B10 for Task 20.
+
+## POC results (2026-11-20), copied from the plan
+
+Measured by hand on the staging accounts. They replace what Tasks 7 and 20 set out to probe; those tasks now record these results and probe only what is still open. Cite them by ID.
+
+Cloudflare:
+
+- **C1. Tokens.** A live input created with `recording.requireSignedURLs: true` and `allowedOrigins`: live HLS by uid answers 401; with a token from `POST /stream/{input_uid}/token` it answers 200. Cloudflare's token endpoint is enough. Plan decision: **no signing key of our own and no `jose` minting.** Nothing else in the plan needs a key (downloads use the same endpoint with `downloadable: true`, C5), and a key would add a secret, its rotation and a JWT path to test. The cost of the endpoint (one API call per mint) is bounded by caching one token per uid on the server (Task 13), so calls scale with live inputs, not viewers.
+- **C2. `allowedOrigins` is not access control.** A raw HLS request with another `Origin`/`Referer` answered 200. The only protection of live playback is the token's short life (1 h, Task 8). The spec's G5 is softened to match.
+- **C3. The recording of a signed input is NOT signed.** The video Cloudflare recorded from the signed input read `requireSignedURLs: false`, publicly playable. Every Seazn recording is set `requireSignedURLs: true` (`POST /stream/{video_uid}`) as soon as it appears (Task 13), and tested. Until the next tick it is open (at most about a minute).
+- **C4. Sizes.** The live ladder from a 720p input was 720/480/360/240. Cloudflare's MP4 download of the recording was 1080p (1920×1080).
+- **C5. Download for Bunny.** `POST /stream/{uid}/downloads`, then a token minted with `downloadable: true`, gives `https://{cf-customer-host}/{token}/downloads/default.mp4`, which Bunny fetched.
+- **C6. The list filter is a footgun.** `GET /stream?live_input_id=` filters; an unknown query parameter is silently ignored and the call answers every video on the account. During the POC a misspelt filter deleted 25 recordings. See the Global Constraint below.
+
+Bunny:
+
+- **B1. Fetch answers the id.** `POST /library/{id}/videos/fetch` with the C5 URL works and its body carries the new video's `id`. Plan decision: **no title search** anywhere (the old `findByTitle` is gone).
+- **B2. Encoding.** 200 s of video encoded in about 2.5 min; video statuses seen 2 → 3 → 4. The library's resolutions are capped at **720p** (owner setting): nothing may assume a 1080p replay. (B9, 2026-11-21: at first not so on the Bunny POC library, where a 1080p source encoded to 1080p. The owner capped the library that day, and run 3 measured nothing above 720p.)
+- **B3. Security (owner turned on):** Block direct url file access (referrer allow-list), Embed view token authentication, CDN token authentication. One library token key signs both tokens.
+- **B4. Embed.** With no or a bad token the embed shows an error page. With `token = hex(sha256(tokenKey + videoGuid + expires))` at `https://iframe.mediadelivery.net/embed/{libraryId}/{guid}?token=…&expires=…` it plays. Plan decision: **replays play in Bunny's embed player (iframe) with this token; live stays hls.js on Cloudflare.** The spec preferred one player for both, but direct Bunny HLS needs an allowed `Referer` and a per-path CDN token on every request, which the embed carries for us.
+- **B5. Direct files** need BOTH an allowed `Referer` AND a CDN token: `https://{cdn}/bcdn_token={t}&expires={e}&token_path=%2F{guid}%2F/{guid}/playlist.m3u8`, `t = base64url-no-pad(sha256(tokenKey + "/{guid}/" + expires + "token_path=/{guid}/"))` (a plain sha256, not an HMAC). So an organiser's download goes through our server (Task 26).
+- **B6. Webhook.** Per library. Body `VideoLibraryId`, `VideoGuid`, `Status`, `EventId` (dedupe on it), `Timestamp`. Webhook statuses: 3 Finished, 4 Resolution finished (playable), 5 Failed. These are NOT the video API's statuses (B2, Task 21), where 3 is transcoding. Header `X-BunnyStream-Signature` = lowercase hex HMAC-SHA256 of the raw body keyed with the library's Read-Only API key; `X-BunnyStream-Signature-Version: v1`; `X-BunnyStream-Signature-Algorithm: hmac-sha256`. Retries at 30 s, 2 m, 10 m, 30 m, 1 h, 2 h, then dropped. Plan: a webhook route (Task 27) is the primary signal; the tick's poll every 15 min is the backstop.
+
+Still open, and probed in Tasks 7 and 20: whether a lock set on an in-progress recording survives its end and leaves the live HLS playing; whether a `PUT` of `recording` keeps `requireSignedURLs`; whether the token's `exp` is honoured; collection create and fetch into a collection; whether an embed keeps playing past its token's `expires`; the MP4 fallback's file name at the 720p cap; and the analytics keys (Task 30).
+
+## Task 7: Cloudflare, what remained open
+
+Probe: `apps/web/src/server/relay/__tests__/cf-signed-live.live.test.ts`, gated on `CF_LIVE_PROBE=1` plus
+`CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_STREAM_TOKEN`. Run:
+`cd apps/web && DATABASE_URL= CF_LIVE_PROBE=1 npx vitest run src/server/relay/__tests__/cf-signed-live.live.test.ts`
+(the empty `DATABASE_URL` is needed locally: `vitest.config.ts` refuses a dev-database URL from `.env.local`, and the probe uses no database).
+It creates one input with `recording: { mode: "automatic", requireSignedURLs: true, allowedOrigins: ["seazn.club"], timeoutSeconds: 180 }`,
+publishes an ffmpeg test feed (lavfi testsrc + sine, at most 300 s) to its RTMPS URL, and deletes only the input and the
+one recording it created, each by the uid it captured (C6). It prints an `OBSERVED` line with every value below and a
+`LEDGER` line with the uids created and deleted.
+The stream key is passed to ffmpeg as argv, so it is visible to local `ps` on the machine running the probe for the
+feed's duration (it never reaches a log, the report or a commit).
+
+**Run 1 (2026-11-21, owner-approved on the account staging and production share; run by the owner).** EXIT=1 after
+224 s. One input (`6d49e895…`) and its one recording (`52d5189c…`) were created, and both were deleted by uid (200 each).
+No foreign items were seen and nothing was skipped. Raw values are from the probe's `OBSERVED` line. Tokens were never
+logged.
+
+**The live side never played.** Every live-HLS read through an input-uid token answered **204** (no content), never 200.
+That includes the baseline before the lock, which the probe re-polled for 90 s, the read after the lock, and a fresh-token
+control 90 s later. The 204 is not an auth refusal. At the same URL form and the same moment, an expired token answered
+401 while a fresh one answered 204, so host, path and token were all accepted and there was nothing to serve. The rest of
+the run fits that reading:
+- ffmpeg had already exited before the +90 s mark, although its own cap was 300 s.
+- The recording's final state was `error`, not `ready`.
+
+The test feed broke, and Cloudflare had no playable live rendition. The probe did not capture the cause: ffmpeg's stderr
+and the video's error reason were not recorded in run 1. A wrong URL form is ruled out by the 401/204 differential.
+
+- **C7. Lock on an in-progress recording.** PARTLY MEASURED.
+  - *Measured:*
+    - Before any lock, the in-progress recording already read `requireSignedURLs: true` (state `live-inprogress`).
+    - `POST /stream/{video_uid} {requireSignedURLs:true}` answered 200 and echoed `true` while the recording was
+      `live-inprogress`.
+    - After the lock, the unsigned `/{video_uid}/manifest/video.m3u8` answered **401**.
+    - After the feed stopped, the video read `requireSignedURLs: true`. Its end state was `error`, though, not `ready`.
+  - *Not measured:* whether live HLS keeps answering 200 after the lock (there was no 200 baseline), and whether the flag
+    survives a recording that ends `ready`.
+  - *Against C3:* C3 saw a FINISHED recording of a signed input read `false`. Here the in-progress recording read `true`
+    before anything set it. Whether Cloudflare flips it to `false` when the recording finishes is still open. That is the
+    case Task 13 must cover, and it should keep signing on appearance AND re-check after `ready`.
+  - *Create echo (run 1's `OBSERVED.createEcho`; Task 12 review m6).* MEASURED. The `POST /live_inputs` that created the
+    signed input echoed `recording` as `{"mode":"automatic","timeoutSeconds":180,"requireSignedURLs":true,
+    "allowedOrigins":["seazn.club"],"hideLiveViewerCount":false}`: the origins came back as sent (same host, not
+    normalised, no scheme). `createLiveInput`'s read-back (`ingest-cf.ts` `accessNotApplied`) relies on exactly this. One
+    host only, so whether a multi-host list keeps its order is unmeasured; the read-back compares order-insensitively.
+- **C8. PUT keeps `requireSignedURLs`.** MEASURED.
+  - A `PUT /live_inputs/{uid}` that re-sent the create's `recording` with `enabled: false` answered 200 and echoed
+    `recording.requireSignedURLs: true`, `allowedOrigins: ["seazn.club"]`, `mode: automatic`, `timeoutSeconds: 180` and
+    `enabled: false`.
+  - A fresh GET read `enabled: false`, `requireSignedURLs: true`.
+  - The input was off air at the time, as `ingest-cf.ts:10-15` requires.
+- **C9. Token `exp` honoured.** MEASURED, using the 401/204 differential.
+  - A token minted with `exp` = now + 60 s was accepted at once (204, the same answer as every valid token in this run).
+  - At now + 90 s that token answered **401**, while a freshly minted token at the same moment answered 204.
+  - The 200-at-once half could not be shown, for the 204 reason above.
+
+**Re-run owed for:** live HLS still playing after an in-progress lock, and the lock surviving a `ready` end. The probe
+now waits up to 180 s for a 200 baseline. If none comes, it stops before the lock and records `baselineDiagnostics`:
+- the video's state and error reason
+- the input's state and reason
+- ffmpeg's exit code and stderr tail, with the key redacted
+
+The feed now sends stereo 48 kHz AAC with a capped bitrate. Re-run with
+`cd apps/web && DATABASE_URL= CF_LIVE_PROBE=1 npx vitest run src/server/relay/__tests__/cf-signed-live.live.test.ts`
+and paste the `OBSERVED` and `LEDGER` lines.
+
+**C7 attempt 2 (2026-11-21, run by the owner).** EXIT=1. The probe stopped before the lock, as designed. Cleanup:
+input `dfb215db…` and video `dae51934…` were created, and both were deleted by uid (200 each). No foreign items were
+seen.
+- Live HLS answered 204 for the whole 180 s baseline.
+- `baselineDiagnostics`:
+  - The video was `live-inprogress` with no error reason.
+  - The input was `disconnected`, reason `client_disconnect`.
+  - ffmpeg had exited with code 187: "Error submitting a packet to the muxer: End of file … Error writing trailer". That
+    is Cloudflare closing the RTMPS connection.
+
+**Likely cause (medium confidence): the test feed was below Stream Live's input requirements, not a signing effect.**
+- Cloudflare requires a combined input bitrate of **2–14 Mbps** and a steady **2–10 s** keyframe interval
+  ([requirements](https://developers.cloudflare.com/stream/stream-live/start-stream-live/#requirements)).
+- The probe's feed was `testsrc` with `-tune zerolatency -g 60 -b:v 2500k`.
+- A local 12 s encode of exactly that feed, without the network, averaged **1,097 kbps** including audio. `-b:v` is an
+  average target, and x264 undershoots it badly on a near-static test pattern. The keyframes landed on the 2 s floor.
+- The same symptom showed in both runs: connected, a recording created, only 204, then a server-side close. That fits an
+  input Cloudflare accepts but cannot package.
+
+Ruled out or unlikely:
+- **URL and protocol.** RTMPS URL + key from the create answer, the form `ingest-cf.ts` uses. The connection was
+  accepted and made a recording.
+- **Codec.** H.264 + AAC-LC, both supported.
+- **`requireSignedURLs` / `allowedOrigins`.** These are playback-side. C1's input carried both and streamed.
+- **An account limit.** Ingest connected.
+- **A re-PUT before the push.** The probe's only PUT comes last, after the feed stops.
+
+The 2026-11-20 POC's own feed is not recorded anywhere in the repo, so it could not be diffed directly.
+
+**Fix:** the feed now matches the shape the R1 plan and the capture-QR PR streamed to Cloudflare successfully:
+`testsrc2` + sine, libx264 veryfast, and no `-tune zerolatency`. It also adds:
+- true CBR at 3 Mbps (`minrate = maxrate`, `nal-hrd=cbr`); the local encode measured **3,183 kbps**;
+- a fixed closed 4 s GOP (`-g 120 -keyint_min 120 -sc_threshold 0`), keyframes at 0/4/8 s;
+- ffmpeg at `-loglevel warning`, its exit time, and the input's state at each baseline poll, all in `baselineDiagnostics`.
+
+Stderr is redacted over the whole text before it is sliced.
+
+## Task 20: Bunny, what remained open
+
+Probe: `apps/web/src/server/video/__tests__/bunny.live.test.ts`. It is gated on `BUNNY_LIVE_PROBE=1` plus the four
+`BUNNY_*` values, read from the environment only (the POC credentials file, never `.env.local`). Run:
+`cd apps/web && set -a; . ~/.config/seazn/bunny-poc.env; set +a; DATABASE_URL= BUNNY_LIVE_PROBE=1 npx vitest run src/server/video/__tests__/bunny.live.test.ts`
+
+What it does:
+
+- Creates one collection and fetches two public samples into it: `long` (1280×720, 183 s) and `hd` (1920×1080, 28 s,
+  which tests the cap).
+- Deletes only those three items, each by the id its own answer carried, after re-reading it by id.
+- Never calls a list endpoint.
+- Prints an `OBSERVED` line and a `LEDGER` line.
+- Drives the embed in headless Google Chrome 157.
+
+In this section `{lib}`, `{cdn}` and `{guid}` stand for real values, and `<token>` for a token that was never written down.
+
+**Status (2026-11-21): RUN three times, on the owner's Bunny POC library. Run 3 is green, 2 of 2.**
+
+- The POC library is the one whose credentials are in `~/.config/seazn/bunny-poc.env`. It is not confirmed to be the
+  staging library that Operator setup Phase 2 configures, so the B3 and B9 results transfer to that library only if
+  the two are the same.
+- Each run created 3 items and deleted 3 (two videos, then the collection, each answering 200). Nothing was skipped.
+- Run 2 was the live run. It went red on exactly one assertion: the B9 cap. The probe now checks the cap in its own
+  test, titled as an owner library setting rather than code, so that a red there is never read as a vendor fact that
+  moved.
+- Run 3 came after the owner unticked 1080p in the library's resolutions, leaving 240/360/480/720 with H.264. Both
+  tests passed: the cap test (B9) and every other check. B7, B8 and B10 read the same as in run 2.
+
+- **B7. Collections work.**
+  - `POST /library/{lib}/collections {name}` answers 200, with a `guid` and the name echoed back.
+  - `POST /videos/fetch?collectionId={guid}` with body `{url, title}` answers 200. Its body keys are `id`, `message`,
+    `statusCode` and `success` (as in B1).
+  - `GET /videos/{id}` names the collection in `collectionId` and echoes the title that was sent, so Task 27's `title`
+    read works.
+  - `GET /collections/{guid}` reads `videoCount: 2`. `DELETE /collections/{guid}` answers 200.
+  - Encoding was quicker than in B2: 51 s for the 183 s video and 31 s for the 28 s one, timed from the fetch to
+    status 4. Polled every 10 s, the statuses ran 0 → 3 → 4 in run 1 and 0 → 2 → 3 → 4 in run 2. In run 3 the 28 s
+    video took 337 s to reach status 4 (statuses 0 → 3 → 4). The cause was not measured, so encoding time is not a
+    fixed number.
+- **B8. An embed keeps playing past its `expires`.**
+  - Setup: the embed was loaded with `expires` = now + 60 s. The page was served as `https://stg.seazn.club/` by
+    request interception, so no request reached seazn.club.
+  - Result: in both runs it autoplayed and played the 183 s video to its end (`ended: true`), with about 129 s of
+    playback after the expiry and no media error.
+  - Control: the same embed with `expires` 120 s in the past shows Bunny's "403" page and no video. So the embed
+    token is checked when the page loads.
+  - A caveat on that result: the player buffers far ahead (136 s at 16 s, and the whole 183 s by about 75 s). Only one
+    segment was fetched after the expiry (it answered 200).
+  - What settles it is the CDN token the embed hands its own player:
+    - It is the path form, `bcdn_token=<token>&expires=…&token_path=…`.
+    - Its `expires` is the embed's `expires` + 35 941 s (run 2) and + 35 940 s (run 3). Either way that is 10 h
+      (36 000 s) after the embed page rendered. Both runs used the same embed `expires`, now + 60 s; run 1 did not
+      read the token.
+      *Inferred, not measured:* whether Bunny anchors that time to the page render or to the embed's `expires`. One
+      sample fits both rules, and under either one the token lasts at least 10 h after render.
+    - At expiry + 127 s, the embed's playlist and last segment URLs still answer 200 with the iframe's `Referer`
+      (`https://iframe.mediadelivery.net/`), and 403 with no `Referer`.
+  - **So the embed token gates only the page load. Once a replay has loaded, it can keep playing for about 10 h.**
+    Task 25 needs no `src` swap, and `REPLAY_EMBED_TOKEN_TTL_SECONDS = 3600` stands. A viewer who reloads after the
+    expiry needs a fresh embed URL from the route, as the control shows.
+  - The embed also calls Bunny's own hosts: `fonts.bunny.net`, the `edgezone-*.bunnyinfra.net` edge probes,
+    `metrics-bunny.net`, `rum-metrics.bunny.net` and `bunnycdn-video-assets.b-cdn.net` (measured).
+    *Inferred, not measured:* these are the iframe's own requests, governed by the iframe's CSP, so our page should
+    need only `frame-src https://iframe.mediadelivery.net`. That conclusion is reasoned from how a cross-origin
+    iframe's CSP works: the probe page had no CSP, and the embed was never driven under `proxy.ts`'s CSP. Task 25 is
+    to confirm it on stg.
+- **B9. The MP4 file name is as planned. Since the owner's fix, the library is capped at 720p (run 3).**
+  - Every video read `hasMP4Fallback: true`.
+  - `https://{cdn}/bcdn_token=<token>&expires=…&token_path=%2F{guid}%2F/{guid}/play_{h}p.mp4`, with the B5 token,
+    answers:
+    - 200 `video/mp4` with `Referer: https://stg.seazn.club/`;
+    - 403 with no `Referer`;
+    - 403 with `Referer: https://example.com/`.
+  - That holds for the highest `h` listed, and every listed height answers 200 with the allowed `Referer`.
+    `stg.seazn.club` was the first referrer tried and it was accepted, so `seazn.club` and `www.seazn.club` were not
+    tried.
+  - The name is `play_{h}p.mp4`, so Task 22's `openDownload` keeps it.
+  - **The cap, before and after the owner's fix:**
+    - Runs 1 and 2: the 1080p source encoded to `availableResolutions` = `360p,480p,720p,240p,1080p`, and
+      `play_1080p.mp4` answered 200. The library was not capped, which contradicted B2 and the operator setup.
+    - The owner then unticked 1080p, leaving 240/360/480/720 with H.264.
+    - Run 3: the same 1080p source encoded to `480p,720p,240p,360p`, with nothing above 720p. The highest file is now
+      `play_720p.mp4`: 200 `video/mp4` with the allowed `Referer`, and 403 with none or with a foreign one. Every
+      listed height answered 200.
+    - The 720p source listed `240p` to `720p` in every run.
+  - The list comes back unordered in every run, so it must be parsed and the maximum taken, not the last item.
+  - The probe's library-setting test can fail only on the 1080p `hd` source. It was red in runs 1 and 2 and passed in
+    run 3.
+  - The cap applies to videos encoded after the owner's change; the 1080p videos of runs 1 and 2 were deleted. Whether
+    the stg and prod libraries carry the same setting is not measured here (see the library note above).
+  - File sizes:
+    - 183 s at 720p was 66.7 to 69.0 MB in all three runs, about 3 Mbit/s. A 3 h match is then about 4 GB, more than
+      the 2–3 GB Task 26 assumes.
+    - The 28 s 1080p source, capped, gave 14.3 MB at 720p, about 4.1 Mbit/s. A 3 h match is then about 5.5 GB.
+    - Before the cap, the same source gave 25.7 MB at 1080p, about 7.3 Mbit/s, or about 10 GB for 3 h.
+- **B10. A delete answers 200 every time.**
+  - `DELETE /videos/{id}` answers 200, and `GET /videos/{id}` reads 404 immediately afterwards.
+  - A second `DELETE` also answers **200, not 404** (both videos, both runs). Bunny's delete is idempotent.
+  - So `remove()` (Tasks 21 and 22) cannot tell `absent` from a DELETE's status. It must either read with `GET` first
+    (404 → `absent`) or report a 200 as `deleted` in both cases.

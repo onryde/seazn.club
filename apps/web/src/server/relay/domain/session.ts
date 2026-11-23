@@ -73,6 +73,11 @@ export interface Session {
    *  spent provisioning no longer eats the phone's pre-flight window. Null for a session not yet warming — and for every
    *  session opened before V430, which is why expiry.ts falls back to createdAt. Only the usecase writes it. */
   warmingAt: Date | null;
+  /** Seazn-hosted video (plan Task 12; the branch below was pulled forward by Task 11, which cannot admit a Seazn session to
+   *  `live` without it): where the session's broadcast goes — an external destination (an output on its input), or Seazn
+   *  (`destination_kind = 'seazn'`: no output; the programme input IS what viewers play). Required, so no Session can be built
+   *  without saying which (session-row.ts `toSession` maps the row). Set at creation, never changed. */
+  destination: "external" | "seazn";
 }
 
 /** §5.3: the three ways a broadcast starts (V430's start_cause check). */
@@ -399,7 +404,9 @@ function decideCell(s: Session, c: Command, now: Date): Decision {
       return {
         next: { ...s, state: "warming" },
         events: [{ type: "SessionWarming" }],
-        effects: [{ type: "add_output" }],   // C9: exactly one output — passthrough's on its camera input, composed's on its programme input (R2004)
+        // C9: exactly one output — passthrough's on its camera input, composed's on its programme input (R2004). Seazn (Task 12,
+        // G1): none — the session has no external destination to add one for. Killer: session.test.ts "Task 12: provisioning → warming".
+        effects: s.destination === "seazn" ? [] : [{ type: "add_output" }],
       };
     case "ingest_connected":
       if (s.state !== "warming" || s.mode !== "passthrough") throw illegal();

@@ -50,6 +50,37 @@ const stripComments = (src: string): string => src.replace(/\/\*[\s\S]*?\*\//g, 
 /** Does `src`'s CODE declare `leaf` as a number? The one judgement both the scan and its self-test use. */
 const declaresNumber = (src: string, leaf: string): boolean => new RegExp(`\\b${leaf}\\s*:\\s*number\\b`).test(stripComments(src));
 
+/** The body of a named object type in `src`'s code — `interface T {…}` or `type T = {…}` — or null when it has none. */
+const bodyOf = (src: string, typeName: string): string | null => {
+  const code = stripComments(src);
+  const head = new RegExp(`\\b(?:interface|type)\\s+${typeName}\\b[^{=;]*(?:=\\s*)?\\{`).exec(code);
+  if (!head) return null;
+  let depth = 1;
+  let i = head.index + head[0].length;
+  const start = i;
+  for (; i < code.length && depth > 0; i++) {
+    if (code[i] === "{") depth++;
+    else if (code[i] === "}") depth--;
+  }
+  return depth === 0 ? code.slice(start, i - 1) : null;
+};
+/** Seazn T13 review m6: a NESTED counter, `data.<parent>.<leaf>`, judged by its FULL path. The ROUTE (it owns its answer's shape)
+ *  types `<parent>` as a named type, and that type's own body — in the route or a module it imports — declares `<leaf>: number`.
+ *  The leaf-only scan cannot see a nested counter go missing while another type still declares the same leaf (`failed: number` is
+ *  in nearly every result type). Answers null when the route does not type `<parent>` by name (an inferred shape, as relay-sweep's
+ *  and billing-quantity's answers are: the full path cannot be read from the text there). */
+const declaresPath = (route: string, src: string, path: string): boolean | null => {
+  const segs = path.split(".");
+  if (segs.length !== 3 || segs[0] !== "data") return null;
+  const [, parent, leaf] = segs as [string, string, string];
+  const named = [...stripComments(route).matchAll(new RegExp(`\\b${parent}\\??\\s*:\\s*([A-Z]\\w*)\\b`, "g"))].map((m) => m[1]!);
+  if (named.length === 0) return null;
+  return named.some((t) => {
+    const body = bodyOf(src, t);
+    return body !== null && declaresNumber(body, leaf);
+  });
+};
+
 describe("R3 failure counters ↔ the usecases' return types", () => {
   const WEB_SRC = join(REPO, "apps/web/src");
   /** The source text of every module a route imports through the `@/` alias. */
@@ -77,7 +108,40 @@ describe("R3 failure counters ↔ the usecases' return types", () => {
         checked++;
       }
     }
-    expect(checked, "counters checked").toBe(16);   // sponsor deals T9: + sponsor-deals' data.failed; T17: + relay-sweep's data.youtube.failed; T7b: + stream-tick's data.failed; I-1: + external-play's two; outbox: + data.failed; T15: + stream-tick's data.youtube.failed; quick match plan 3 T3: + quick-match-expiry's data.failed; check-in capacity plan 2 T5: + external-play-premint's two
+    expect(checked, "counters checked").toBe(17);   // sponsor deals T9: + sponsor-deals' data.failed; T17: + relay-sweep's data.youtube.failed; T7b: + stream-tick's data.failed; I-1: + external-play's two; outbox: + data.failed; T15: + stream-tick's data.youtube.failed; quick match plan 3 T3: + quick-match-expiry's data.failed; check-in capacity plan 2 T5: + external-play-premint's two; Seazn-hosted T13: + stream-tick's data.seazn.failed
+  });
+
+  it("m6: a nested counter whose parent the ROUTE types by name resolves by its FULL path — stream-tick's data.seazn.failed and data.youtube.failed", () => {
+    const resolved: string[] = [];
+    for (const j of JOBS) {
+      const route = readFileSync(join(WEB_API, j.path.replace(/^\/api\//, ""), "route.ts"), "utf8");
+      const src = `${route}\n${importedSource(j.path)}`;
+      for (const path of j.failureCounts ?? []) {
+        const full = declaresPath(route, src, path);
+        if (full === null) continue;   // a flat counter, or a parent whose shape is inferred: the leaf scan above is all there is
+        expect(full, `${j.id}: ${path} → its parent's own type declares the leaf as a number`).toBe(true);
+        resolved.push(`${j.id} ${path}`);
+      }
+    }
+    // Anti-vacuity, and the counter this exists for: if the route stopped typing `seazn` by name, this list would shrink. Today
+    // relay-sweep's data.youtube.failed and billing-quantity's two nested counters are inferred shapes (the leaf scan only).
+    expect(resolved.sort(), "nested counters resolved by full path").toEqual(["stream-tick data.seazn.failed", "stream-tick data.youtube.failed"]);
+  });
+
+  it("m6: the full-path judgement reads the PARENT's type — a leaf declared on another type does not count; prose does not count", () => {
+    const cases: [string, boolean | null][] = [
+      ["type R = { failed: number; seazn: P }; interface P { locked: number }", false],
+      ["type R = { failed: number; seazn: P }; interface P { locked: number; failed: number }", true],
+      ["type R = { seazn?: P }; type P = { locked: number; failed: number };", true],
+      ["// seazn: P\ninterface P { failed: number }", null],
+      ["type R = { seazn: P }; interface P { /* failed: number */ locked: number }", false],
+    ];
+    for (const [src, want] of cases) expect(declaresPath(src, src, "data.seazn.failed"), JSON.stringify(src)).toBe(want);
+    expect(declaresPath("type R = { failed: number }", "type R = { failed: number }", "data.failed"), "a flat path is the leaf scan's").toBeNull();
+    // The parent is read off the ROUTE only; its type's body may live in an imported module.
+    expect(declaresPath("type A = { seazn: P };", "type A = { seazn: P }; interface P { failed: number }", "data.seazn.failed")).toBe(true);
+    expect(declaresPath("const x = { seazn };", "interface Deps { seazn: P } interface P { failed: number }", "data.seazn.failed"), "a parent typed only elsewhere is not the route's").toBeNull();
+    expect(cases.length, "cases checked").toBe(5);
   });
 
   it("the scan reads CODE, not prose: a field named only in a block or line comment is not declared; the same field in a type is", () => {

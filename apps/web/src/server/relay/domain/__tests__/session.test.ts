@@ -25,7 +25,7 @@ const S = (over: Partial<Session> = {}): Session => ({
   id: "s1", fixtureId: "f1", orgId: "o1", mode: "passthrough", state: "requested", desiredState: "live",
   failReason: null, endReason: null, runner: RUNNER_NONE, runnerRetries: 0, createdAt: T0, startedAt: null, endedAt: null,
   heartbeatAt: null, beatWindowAt: null, endingAt: null, maxDurationMinutes: MAX_DURATION_MINUTES, outputUid: null,
-  startCause: "organiser", warmingAt: null, ...over,
+  startCause: "organiser", warmingAt: null, destination: "external", ...over,
 });
 const OK = { overlay: true, relay: true, balance: 1, targetBelongsToOrg: true, headroomMinutes: MAX_DURATION_MINUTES, maxDurationMinutes: MAX_DURATION_MINUTES, activeSessionId: null, restartWithinReuseWindow: false, phone: "present" as PhoneStanding, mode: "passthrough" as Mode, composedUnavailable: false };
 
@@ -266,6 +266,24 @@ describe("decide — legal edges", () => {
     expect(c.next.state).toBe("warming");
     expect(c.effects).toEqual([{ type: "add_output" }]);
     expect(c.events).toEqual([{ type: "SessionWarming" }]);
+  });
+  // Seazn-hosted video (Task 12, global constraint G1): a Seazn session has no external destination, so `provisioned` adds no
+  // output; the programme input is what viewers play. An external one adds exactly one, as above. The expected effects come
+  // from G1 and C9, never from the code. Every mode × every destination, though admission only ever makes a Seazn session
+  // composed: the domain decides on `destination` alone.
+  it("Task 12: provisioning → warming adds NO output for a Seazn session and exactly ONE for an external one — both modes × both destinations", () => {
+    let checked = 0;
+    for (const mode of ["passthrough", "composed"] as const) {
+      for (const destination of ["external", "seazn"] as const) {
+        const d = decide(S({ state: "provisioning", mode, destination }), { type: "provisioned" }, T0);
+        expect(d.next.state, `${mode} × ${destination}`).toBe("warming");
+        expect(d.events, `${mode} × ${destination}`).toEqual([{ type: "SessionWarming" }]);
+        expect(d.effects, `${mode} × ${destination}`).toEqual(destination === "seazn" ? [] : [{ type: "add_output" }]);
+        expect(d.next.destination, "set at creation, never changed by decide").toBe(destination);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: 2 modes × 2 destinations").toBe(4);
   });
   it("warming → live on ingest_connected (passthrough) with the consume effect (m1's domain twin); composed goes live only through the runner's callback (Task 2C)", () => {
     const p = decide(S({ state: "warming" }), { type: "ingest_connected" }, T0);

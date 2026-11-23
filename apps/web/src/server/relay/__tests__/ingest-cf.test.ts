@@ -19,6 +19,8 @@ import type { IngestState, OutputState, ProviderCallRecord } from "../ports";
 import {
   CLOUDFLARE_RETENTION_RANGE, DELETE_RECORDING_AFTER_DAYS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS, OUTPUT_READ_FAILURES_BEFORE_REPORT,
 } from "../config";
+/** Phase 1 review I3: a recording's deletion instant, as the lock pass computes it (seazn-recordings.ts). */
+const DELETE_AT = new Date("2026-12-22T15:30:00.000Z");
 
 type Call = { url: string; init: RequestInit };
 type Reply = { status: number; body: unknown; headers?: Record<string, string> };
@@ -71,17 +73,34 @@ const CREATE_RESULT_TIMEOUT_NULL = {
 /** N-4: a bad echo whose input then REFUSES to be deleted — the one path that
  *  leaves a live input nothing will ever reclaim. */
 const CREATE_RESULT_ORPHAN = { ...CREATE_RESULT_DROPPED, uid: "in_undeletable" };
+/** Seazn-hosted video (Task 12, G5): the signed settings a Seazn session's programme input is created with — the plan's own
+ *  value, typed here, never read off the adapter. */
+const SIGNED: { signed: true; allowedOrigins: string[] } = { signed: true, allowedOrigins: ["seazn.club"] };
+/** Seazn Task 13: the playback token the fixture's Cloudflare mints — a secret until it is inside a viewer's URL. */
+const MINTED = "eyJhbGciOiJSUzI1NiJ9.minted-playback-secret.c2lnbmF0dXJl";
 
 function cfReply(c: Call): Reply {
   if (c.init.method === "POST" && c.url.endsWith("/live_inputs")) {
     // Keyed on the session id the adapter puts in `meta.name`, so one fixture
     // can answer three different creates.
-    const name = String((JSON.parse(String(c.init.body)) as { meta?: { name?: string } }).meta?.name ?? "");
+    const sent = JSON.parse(String(c.init.body)) as { meta?: { name?: string }; recording?: Record<string, unknown> };
+    const name = String(sent.meta?.name ?? "");
     if (name.includes("s_orphan")) return { status: 200, body: { success: true, result: CREATE_RESULT_ORPHAN } };
     if (name.includes("s_dropped")) return { status: 200, body: { success: true, result: CREATE_RESULT_DROPPED } };
     if (name.includes("s_notimeout")) return { status: 200, body: { success: true, result: CREATE_RESULT_TIMEOUT_NULL } };
     if (name.includes("s_noplay")) return { status: 200, body: { success: true, result: { ...CREATE_RESULT, srtPlayback: undefined } } };
-    return { status: 200, body: { success: true, result: CREATE_RESULT } };
+    // Task 12 (G5): the silent-acceptance shapes of the signing — a 200 whose echo has NO `requireSignedURLs` key at all, one
+    // that kept the flag but dropped the origins, and an unsigned create that came back signed.
+    if (name.includes("s_unsigned_echo")) {
+      const unsigned: Record<string, unknown> = { ...CREATE_RESULT.recording, ...sent.recording };
+      delete unsigned.requireSignedURLs;
+      return { status: 200, body: { success: true, result: { ...CREATE_RESULT, recording: unsigned } } };
+    }
+    if (name.includes("s_no_origins_echo")) return { status: 200, body: { success: true, result: { ...CREATE_RESULT, recording: { ...CREATE_RESULT.recording, ...sent.recording, allowedOrigins: null } } } };
+    if (name.includes("s_signed_camera")) return { status: 200, body: { success: true, result: { ...CREATE_RESULT, recording: { ...CREATE_RESULT.recording, requireSignedURLs: true } } } };
+    // A healthy Cloudflare applies the body and echoes it (C8 measured the signed keys echoed back): what was SENT, over the
+    // measured shape. For an unsigned create that is CREATE_RESULT's own echo exactly.
+    return { status: 200, body: { success: true, result: { ...CREATE_RESULT, recording: { ...CREATE_RESULT.recording, ...sent.recording } } } };
   }
   if (c.init.method === "GET" && /\/live_inputs\/in_abc$/.test(c.url))
     return { status: 200, body: { success: true, result: { uid: "in_abc", status: { current: { ingestProtocol: "srt", state: "connected", reason: "connected_to_live_input", statusEnteredAt: "2026-09-13T10:00:00Z", statusLastSeen: "2026-09-13T10:00:05Z" }, history: [] } } } };
@@ -107,6 +126,39 @@ function cfReply(c: Call): Reply {
   if (c.init.method === "GET" && /\/live_inputs\/in_gone$/.test(c.url))
     return { status: 404, body: { success: false, errors: [{ code: 10003, message: "not found" }] } };
   if (c.init.method === "POST" && /\/outputs$/.test(c.url)) return { status: 200, body: { success: true, result: { uid: "out_1" } } };
+  // Seazn Task 13 (C1, C5): "Create signed URL tokens for videos" — `POST /stream/{uid}/token`, result `{ token }` (OpenAPI,
+  // read 2026-11-21). `in_leaky` is a refusal that QUOTES a token back in its error and its result — the redaction floor's
+  // case; `in_notoken` a 200 whose result has no token.
+  if (c.init.method === "POST" && /\/stream\/in_leaky\/token$/.test(c.url))
+    return { status: 500, body: { success: false, errors: [{ code: 10000, message: `could not mint, last was ${MINTED}` }], result: { token: MINTED } } };
+  if (c.init.method === "POST" && /\/stream\/in_notoken\/token$/.test(c.url)) return { status: 200, body: { success: true, result: {} } };
+  if (c.init.method === "POST" && /\/stream\/[^/]+\/token$/.test(c.url)) return { status: 200, body: { success: true, result: { token: MINTED } } };
+  // Seazn Task 24 (C4): "Create downloads" — `POST /stream/{uid}/downloads`, result `{ default: { status, url, percentComplete } }`
+  // (OpenAPI, read 2026-11-22: status "ready" | "inprogress" | "error"). `v_dl_busy` is still being made, `v_dl_error` failed,
+  // `v_dl_empty` a 200 with no `default`, `v_gone` a video Cloudflare does not hold, `v_boom` a provider fault; any other is ready.
+  if (c.init.method === "POST" && /\/stream\/v_dl_busy\/downloads$/.test(c.url))
+    return { status: 200, body: { success: true, result: { default: { status: "inprogress", percentComplete: 40, url: "https://customer-x.cloudflarestream.com/v_dl_busy/downloads/default.mp4" } } } };
+  if (c.init.method === "POST" && /\/stream\/v_dl_error\/downloads$/.test(c.url))
+    return { status: 200, body: { success: true, result: { default: { status: "error", percentComplete: 0 } } } };
+  if (c.init.method === "POST" && /\/stream\/v_dl_empty\/downloads$/.test(c.url)) return { status: 200, body: { success: true, result: {} } };
+  if (c.init.method === "POST" && /\/stream\/v_gone\/downloads$/.test(c.url)) return { status: 404, body: { success: false, errors: [{ code: 10003, message: "video not found" }] } };
+  if (c.init.method === "POST" && /\/stream\/v_boom\/downloads$/.test(c.url)) return { status: 500, body: { success: false, errors: [{ code: 10000, message: "internal error for tok" }] } };
+  if (c.init.method === "POST" && /\/stream\/[^/]+\/downloads$/.test(c.url))
+    return { status: 200, body: { success: true, result: { default: { status: "ready", percentComplete: 100, url: `https://customer-x.cloudflarestream.com/${c.url.split("/").at(-2)}/downloads/default.mp4` } } } };
+  // Seazn Task 13 (C3): "Edit video details" — `POST /stream/{uid}`, echoing the video it now holds. A healthy Cloudflare echoes
+  // what was sent (C7 measured `requireSignedURLs: true` echoed on an in-progress recording). `v_unsigned_echo` is the silent
+  // acceptance (a 200 that did not apply it), `v_gone` a video Cloudflare does not hold, `v_boom` a provider fault.
+  if (c.init.method === "POST" && /\/stream\/v_unsigned_echo$/.test(c.url))
+    return { status: 200, body: { success: true, result: { uid: "v_unsigned_echo", requireSignedURLs: false } } };
+  // Phase 1 review I3: `v_no_deletion_echo` applies the lock but echoes no scheduled deletion (what the review fears the edit does).
+  if (c.init.method === "POST" && /\/stream\/v_no_deletion_echo$/.test(c.url))
+    return { status: 200, body: { success: true, result: { uid: "v_no_deletion_echo", requireSignedURLs: true, scheduledDeletion: null } } };
+  if (c.init.method === "POST" && /\/stream\/v_gone$/.test(c.url)) return { status: 404, body: { success: false, errors: [{ code: 10003, message: "video not found" }] } };
+  if (c.init.method === "POST" && /\/stream\/v_boom$/.test(c.url)) return { status: 500, body: { success: false, errors: [{ code: 10000, message: "internal error" }] } };
+  if (c.init.method === "POST" && /\/stream\/[^/?]+$/.test(c.url)) {
+    const sent = JSON.parse(String(c.init.body)) as { requireSignedURLs?: boolean; scheduledDeletion?: string };
+    return { status: 200, body: { success: true, result: { uid: c.url.split("/").pop(), status: { state: "ready" }, requireSignedURLs: sent.requireSignedURLs ?? false, scheduledDeletion: sent.scheduledDeletion ?? null } } };
+  }
   // C1: "Delete an output" answers HTTP 200 with the body `{}` (Cloudflare API docs, fetched 2026-09-29) — no `success`
   // envelope. `out_gone` is an output already removed (Cloudflare's 404), `out_boom` a provider fault.
   if (c.init.method === "DELETE" && /\/outputs\/out_gone$/.test(c.url))
@@ -158,6 +210,10 @@ function cfReply(c: Call): Reply {
     return { status: 200, body: { success: true, result: { uid: "in_mode_off", enabled: false, recording: { mode: "off", timeoutSeconds: 0 }, deleteRecordingAfterDays: null } } };
   if (c.init.method === "PUT" && /\/live_inputs\/in_noecho$/.test(c.url))   // 200 and nothing to read back
     return { status: 200, body: { success: true, result: { uid: "in_noecho" } } };
+  if (c.init.method === "PUT" && /\/live_inputs\/in_unsigned_echo$/.test(c.url)) {   // Task 12: 200, the flag applied, the signing it re-sent dropped
+    const sent = JSON.parse(String(c.init.body)) as { enabled: boolean };
+    return { status: 200, body: { success: true, result: { uid: "in_unsigned_echo", enabled: sent.enabled, recording: { mode: "automatic", timeoutSeconds: INGEST_TIMEOUT_SECONDS }, deleteRecordingAfterDays: DELETE_RECORDING_AFTER_DAYS } } };
+  }
   if (c.init.method === "PUT" && /\/live_inputs\/[^/]+$/.test(c.url)) {
     const sent = JSON.parse(String(c.init.body)) as { enabled: boolean; recording: Record<string, unknown>; deleteRecordingAfterDays: number };
     return { status: 200, body: { success: true, result: {
@@ -257,6 +313,36 @@ describe("CloudflareIngest", () => {
     expect(settings(bodies[2]!), "the programme input records as the camera does").toEqual(settings(bodies[0]!));
   });
 
+  // Seazn-hosted video (Task 12, G5): a Seazn session's PROGRAMME input is created signed — `requireSignedURLs` and the Seazn
+  // hosts as `allowedOrigins` (C1; C2: the origins block nothing, the token's short life is the protection), in the create body,
+  // never by a later update (ingest-cf.ts header, F1/C4). The camera stays unsigned: the phone's own playback reads it.
+  it("Task 12 (G5): a Seazn programme create sends recording.requireSignedURLs true and allowedOrigins [\"seazn.club\"] on top of the camera's own recording settings; the camera create sends neither", async () => {
+    await ingest.createLiveInput({ sessionId: "s1", slot: 0, role: "programme", access: SIGNED });
+    await ingest.createLiveInput({ sessionId: "s1", slot: 0 });
+    const [prog, cam] = rec.calls.filter((c) => c.init.method === "POST").map((c) => JSON.parse(String(c.init.body)) as { recording: Record<string, unknown> });
+    expect(prog!.recording.requireSignedURLs).toBe(true);
+    expect(prog!.recording.allowedOrigins).toEqual(["seazn.club"]);
+    // Signing ADDS the two keys and changes nothing else the create sends (C4: the mode stays automatic, config's timeout).
+    expect({ ...prog!.recording, requireSignedURLs: undefined, allowedOrigins: undefined }).toEqual(cam!.recording);
+    expect(cam!.recording, "the camera: exactly the unsigned settings").toEqual({ mode: "automatic", timeoutSeconds: INGEST_TIMEOUT_SECONDS });
+    expect(["requireSignedURLs", "allowedOrigins"].filter((k) => k in cam!.recording), "the camera carries neither key").toEqual([]);
+  });
+
+  it("Task 12 (U1, G5): the signing is READ BACK — a signed create whose echo has no requireSignedURLs, or whose origins are not the ones sent, is refused and its input deleted; an unsigned create echoed signed is refused too; the honest echoes pass", async () => {
+    await expect(ingest.createLiveInput({ sessionId: "s_unsigned_echo", slot: 0, role: "programme", access: SIGNED })).rejects.toThrow(/settings were not applied — requireSignedURLs/);
+    // A signed input that came back unsigned is publicly playable (C3's lesson): it is dropped, never handed on.
+    expect(rec.calls.map((x) => `${String(x.init.method)} ${x.url}`)).toEqual([
+      `POST ${CLOUDFLARE_STREAM_BASE}/acct/stream/live_inputs`,
+      `DELETE ${CLOUDFLARE_STREAM_BASE}/acct/stream/live_inputs/in_abc`,
+    ]);
+    await expect(ingest.createLiveInput({ sessionId: "s_no_origins_echo", slot: 0, role: "programme", access: SIGNED })).rejects.toThrow(/settings were not applied — allowedOrigins/);
+    // The camera must stay unsigned for the phone's playback, so a signed echo for it is the same error.
+    await expect(ingest.createLiveInput({ sessionId: "s_signed_camera", slot: 0 })).rejects.toThrow(/settings were not applied — requireSignedURLs/);
+    // Positive twins: the echo a healthy Cloudflare sends (C8 measured both signed keys echoed) passes, signed and unsigned.
+    await expect(ingest.createLiveInput({ sessionId: "s1", slot: 0, role: "programme", access: SIGNED })).resolves.toMatchObject({ inputId: "in_abc" });
+    await expect(ingest.createLiveInput({ sessionId: "s1", slot: 0 })).resolves.toMatchObject({ inputId: "in_abc" });
+  });
+
   it("R2004 (review I2): listInputVideos GETs the DOCUMENTED filtered listing — /stream?live_input_id=<uid>&limit=<the document's max> — maps the recording facts exactly as listVideos does (an ABSENT liveInput reads null, never the id asked about), and records the call under the input and session; a failed envelope throws with the token redacted", async () => {
     const vids = await ingest.listInputVideos("in_abc", { sessionId: "s1" });
     const url = new URL(rec.calls[0]!.url);
@@ -267,9 +353,9 @@ describe("CloudflareIngest", () => {
     expect(Number(url.searchParams.get(LIST_VIDEOS_QUERY.limit))).toBe(LIST_VIDEOS_LIMIT_MAX);
     expect(rec.calls[0]!.init.method).toBe("GET");
     expect(vids).toEqual([
-      { videoId: "v_cam_live", inputId: "in_abc", createdAt: "2026-09-01T00:00:00Z", inProgress: true, durationSeconds: null, sizeBytes: null, width: null, height: null, state: "live-inprogress", errorReasonCode: null },
-      { videoId: "v_cam_done", inputId: "in_abc", createdAt: "2026-09-01T01:00:00Z", inProgress: false, durationSeconds: 30, sizeBytes: 1000, width: 1280, height: 720, state: "ready", errorReasonCode: null },
-      { videoId: "v_cam_unnamed", inputId: null, createdAt: "2026-09-01T02:00:00Z", inProgress: false, durationSeconds: 12, sizeBytes: 500, width: 1280, height: 720, state: "ready", errorReasonCode: null },
+      { videoId: "v_cam_live", inputId: "in_abc", createdAt: "2026-09-01T00:00:00Z", inProgress: true, durationSeconds: null, sizeBytes: null, width: null, height: null, state: "live-inprogress", errorReasonCode: null, signed: true },
+      { videoId: "v_cam_done", inputId: "in_abc", createdAt: "2026-09-01T01:00:00Z", inProgress: false, durationSeconds: 30, sizeBytes: 1000, width: 1280, height: 720, state: "ready", errorReasonCode: null, signed: false },
+      { videoId: "v_cam_unnamed", inputId: null, createdAt: "2026-09-01T02:00:00Z", inProgress: false, durationSeconds: 12, sizeBytes: 500, width: 1280, height: 720, state: "ready", errorReasonCode: null, signed: null },
     ]);
     expect(vids, "anti-vacuity: every fixture item mapped").toHaveLength(LIST_VIDEOS_BY_INPUT_200.result.length);
     const err = await ingest.listInputVideos("in_failed_list").catch((e: unknown) => e);
@@ -346,23 +432,30 @@ describe("CloudflareIngest", () => {
   // off was off air. So this adapter never sends the flag alone: it re-asserts the recording settings the create sent.
   it("setInputEnabled PUTs live_inputs/{input} ONCE per call, in both directions, with the CREATE's own body plus the flag — the same name, recording settings and retention, never the flag alone, and nothing else (no preferLowLatency)", async () => {
     let checked = 0;
-    // Every role the create names differently: the camera (the default) and a programme input.
-    for (const role of [undefined, "camera", "programme"] as const) {
-      const spec = { sessionId: "s_1", slot: 0, ...(role ? { role } : {}) };
+    // Every role the create names differently: the camera (the default) and a programme input — Task 12: unsigned (an external
+    // destination's, whose row reads `access` null) and signed (a Seazn session's). The switch is told the access its row holds.
+    const cases = [
+      { role: undefined, access: undefined }, { role: "camera", access: undefined },
+      { role: "programme", access: null }, { role: "programme", access: SIGNED },
+    ] as const;
+    for (const { role, access } of cases) {
+      const spec = { sessionId: "s_1", slot: 0, ...(role ? { role } : {}), ...(access ? { access } : {}) };
+      const meta = { sessionId: "s_1", slot: 0, ...(role ? { role } : {}), ...(access !== undefined ? { access } : {}) };
+      const label = `${role ?? "default"}${access ? " signed" : ""}`;
       rec.calls.length = 0;
       await ingest.createLiveInput(spec);
       const created = JSON.parse(String(rec.calls[0]!.init.body)) as { meta: { name: string }; recording: { mode: string; timeoutSeconds: number }; deleteRecordingAfterDays: number };
       for (const enabled of [false, true]) {
         rec.calls.length = 0;
-        await expect(ingest.setInputEnabled("in_abc", enabled, spec)).resolves.toBeUndefined();
-        expect(rec.calls, `${role ?? "default"} enabled ${enabled}: one call`).toHaveLength(1);
+        await expect(ingest.setInputEnabled("in_abc", enabled, meta)).resolves.toBeUndefined();
+        expect(rec.calls, `${label} enabled ${enabled}: one call`).toHaveLength(1);
         const call = rec.calls[0]!;
         expect(call.init.method).toBe("PUT");
         expect(call.url).toBe(`${CLOUDFLARE_STREAM_BASE}/acct/stream/live_inputs/in_abc`);
         expect((call.init.headers as Record<string, string>).authorization).toBe("Bearer tok");
         const body = JSON.parse(String(call.init.body)) as { enabled: boolean; meta: { name: string }; recording: { mode: string; timeoutSeconds: number }; deleteRecordingAfterDays: number };
         // ONE authority for the settings: what the create sent is what the update re-asserts, so neither can drift from the other.
-        expect(body, `${role ?? "default"} enabled ${enabled}: the create's body plus the flag`).toEqual({ ...created, enabled });
+        expect(body, `${label} enabled ${enabled}: the create's body plus the flag`).toEqual({ ...created, enabled });
         expect(body.enabled, "the flag is the boolean asked for").toBe(enabled);
         // …and each is the rulebook's value, read off config and C4, not off the adapter: mode is the literal "automatic".
         expect(body.recording.mode).toBe("automatic");
@@ -372,13 +465,46 @@ describe("CloudflareIngest", () => {
         checked++;
       }
     }
-    expect(checked, "three roles x both directions were sent").toBe(6);
+    expect(checked, "four role/access cases x both directions were sent").toBe(8);
     // The names differ by role, so the loop above is not three copies of one case.
     rec.calls.length = 0;
-    await ingest.setInputEnabled("in_abc", false, { sessionId: "s_1", slot: 0, role: "programme" });
+    await ingest.setInputEnabled("in_abc", false, { sessionId: "s_1", slot: 0, role: "programme", access: null });
     await ingest.setInputEnabled("in_abc", false, { sessionId: "s_1", slot: 0, role: "camera" });
     const names = rec.calls.map((c) => (JSON.parse(String(c.init.body)) as { meta: { name: string } }).meta.name);
     expect(new Set(names).size, "a programme input and a camera input are not named alike").toBe(2);
+  });
+
+  // Task 12 (C8, MEASURED 2026-11-21: a PUT that re-sent the create's signed `recording` with `enabled: false` echoed
+  // requireSignedURLs true and the origins). The switch re-sends the signing its row holds and reads it back.
+  it("Task 12 (C8): setInputEnabled on a signed programme input re-sends requireSignedURLs and allowedOrigins with the create's settings and reads them back — an echo that dropped the signing is an error; `access: null` (the row's explicit unsigned answer) sends the unsigned body", async () => {
+    const meta = { sessionId: "s_1", slot: 0, role: "programme" as const, access: SIGNED };
+    await ingest.setInputEnabled("in_abc", false, meta);
+    const signed = JSON.parse(String(rec.calls.at(-1)!.init.body)) as { recording: Record<string, unknown> };
+    expect(signed.recording).toEqual({ mode: "automatic", timeoutSeconds: INGEST_TIMEOUT_SECONDS, requireSignedURLs: true, allowedOrigins: ["seazn.club"] });
+    const dropped = await ingest.setInputEnabled("in_unsigned_echo", false, meta).then(() => null, (e: Error) => e);
+    expect(dropped?.message, "a 200 whose echo lost the signing is not a switch that worked").toMatch(/^cloudflare set input enabled: settings were not applied — requireSignedURLs/);
+    await ingest.setInputEnabled("in_abc", false, { ...meta, access: null });
+    const unsigned = JSON.parse(String(rec.calls.at(-1)!.init.body)) as { recording: Record<string, unknown> };
+    expect(unsigned.recording).toEqual({ mode: "automatic", timeoutSeconds: INGEST_TIMEOUT_SECONDS });
+  });
+
+  it("Task 12: a PROGRAMME switch whose meta has no `access` — the key absent, or `access: undefined` (review m1: a select that omitted the column) — is refused before any call; the camera's switch (port-effects.ts) needs none", async () => {
+    const port = new FakeRecorder();
+    const cf = new CloudflareIngest({ fetchImpl: rec.fetchImpl, accountId: "acct", token: "tok", recorder: port });
+    const metas = [{ sessionId: "s_1", slot: 0, role: "programme" as const }, { sessionId: "s_1", slot: 0, role: "programme" as const, access: undefined }];
+    let checked = 0;
+    for (const m of metas) {
+      const err = await cf.setInputEnabled("in_abc", false, m).then(() => null, (e: Error) => e);
+      expect(err?.message, JSON.stringify(Object.keys(m))).toMatch(/programme input .* without its access/);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(rec.calls, "no request was sent").toHaveLength(0);
+    await new Promise((r) => setImmediate(r));
+    expect(port.calls, "and none was recorded").toHaveLength(0);
+    // The positive pair: the camera's switch, exactly as port-effects.ts sends it, goes out.
+    await expect(cf.setInputEnabled("in_abc", false, { sessionId: "s_1", slot: 0, role: "camera" })).resolves.toBeUndefined();
+    expect(rec.calls).toHaveLength(1);
   });
 
   it("setInputEnabled with no session or slot to name the input sends no meta at all (never a made-up name) — the recording settings and retention still ride", async () => {
@@ -422,12 +548,12 @@ describe("CloudflareIngest", () => {
     expect(rec.calls[0]!.url).toBe(`${CLOUDFLARE_STREAM_BASE}/acct/stream?end=2026-09-10T00%3A00%3A00.000Z&limit=1000`);
     expect(LIST_VIDEOS_PAGE_LIMIT).toBe(1000);
     expect(vids).toEqual([
-      { videoId: "v_live", inputId: "in_abc", createdAt: "2026-09-01T00:00:00Z", inProgress: true, durationSeconds: null, sizeBytes: null, width: null, height: null, state: "live-inprogress", errorReasonCode: null },
-      { videoId: "v_done", inputId: null, createdAt: "2026-09-01T00:00:00Z", inProgress: false, durationSeconds: 61.5, sizeBytes: 734003200, width: 1280, height: 720, state: "ready", errorReasonCode: null },
+      { videoId: "v_live", inputId: "in_abc", createdAt: "2026-09-01T00:00:00Z", inProgress: true, durationSeconds: null, sizeBytes: null, width: null, height: null, state: "live-inprogress", errorReasonCode: null, signed: null },
+      { videoId: "v_done", inputId: null, createdAt: "2026-09-01T00:00:00Z", inProgress: false, durationSeconds: 61.5, sizeBytes: 734003200, width: 1280, height: 720, state: "ready", errorReasonCode: null, signed: null },
       // The differential the "map on the value" rule exists for: this one is
       // NOT live-inprogress, so a state-keyed mapping would pass its -1 straight
       // into recording_bytes.
-      { videoId: "v_err", inputId: null, createdAt: "2026-09-01T00:00:00Z", inProgress: false, durationSeconds: null, sizeBytes: null, width: null, height: null, state: "error", errorReasonCode: "ERR_NON_VIDEO" },
+      { videoId: "v_err", inputId: null, createdAt: "2026-09-01T00:00:00Z", inProgress: false, durationSeconds: null, sizeBytes: null, width: null, height: null, state: "error", errorReasonCode: "ERR_NON_VIDEO", signed: null },
     ]);
     expect(await ingest.deleteVideo("v_live")).toBe("in_progress");
     expect(await ingest.deleteVideo("v_done")).toBe("deleted");
@@ -1066,6 +1192,9 @@ describe("fake/real provider-call parity (Task 3 review G1, m4)", () => {
     await real.listInputVideos(realCreds.inputId);
     await real.deleteVideo("v_done");
     await real.deleteInput(realCreds.inputId);
+    await real.playbackToken(realCreds.inputId, { expiresAt: BEFORE });   // Seazn Task 13: appended, so the indexes above hold
+    await real.requireSignedVideo("v_done", { deleteAt: DELETE_AT });
+    await real.createDownload("v_done");   // Seazn Task 24: appended, so the indexes above hold
 
     const fakePort = new FakeRecorder();
     const fake = new FakeIngest({ recorder: fakePort });
@@ -1081,14 +1210,19 @@ describe("fake/real provider-call parity (Task 3 review G1, m4)", () => {
     await fake.listInputVideos(fakeCreds.inputId);
     await fake.deleteVideo("v_done");
     await fake.deleteInput(fakeCreds.inputId);
+    await fake.playbackToken(fakeCreds.inputId, { expiresAt: BEFORE });
+    await fake.requireSignedVideo("v_done", { deleteAt: DELETE_AT });
+    fake.addVideo({ videoId: "v_done", inputId: null, createdAt: "2026-09-01T00:00:00Z", inProgress: false });   // deleted above; a control, no call
+    await fake.createDownload("v_done");
 
     await new Promise((r) => setImmediate(r));
     const realShapes = shapes(realPort.calls, { input: realCreds.inputId, video: "v_done", output: realOut });
     const fakeShapes = shapes(fakePort.calls, { input: fakeCreds.inputId, video: "v_done", output: fakeOut });
-    // Present twin for the comparison's own vacuity: eleven operations, in order,
+    // Present twin for the comparison's own vacuity: thirteen operations, in order,
     // and the templates really are Cloudflare's account-scoped Stream paths.
     expect(realShapes.map((s) => s.operation)).toEqual([
       "createLiveInput", "inputStatus", "addOutput", "outputState", "removeOutput", "setInputEnabled", "storageUsage", "listVideos", "listInputVideos", "deleteVideo", "deleteInput",
+      "playbackToken", "requireSignedVideo", "createDownload",
     ]);
     expect(realShapes[1]!.template).toBe("/client/v4/accounts/{id}/stream/live_inputs/{id}");
     expect(realShapes[4]!.template).toBe("/client/v4/accounts/{id}/stream/live_inputs/{id}/outputs/{id}");   // C1: the output, never the input
@@ -1097,9 +1231,15 @@ describe("fake/real provider-call parity (Task 3 review G1, m4)", () => {
     expect(realShapes[7]!.template).toBe("/client/v4/accounts/{id}/stream");
     expect(realShapes[8]!.template).toBe("/client/v4/accounts/{id}/stream");   // R2004 review I2: the filtered account listing
     expect(realShapes[9]!.template).toBe("/client/v4/accounts/{id}/stream/{id}");
+    // Seazn Task 13: the token is minted on the uid's own `/token` path (C1); the lock is a POST to the video itself (C3).
+    expect([realShapes[11]!.method, realShapes[11]!.template]).toEqual(["POST", "/client/v4/accounts/{id}/stream/{id}/token"]);
+    expect([realShapes[12]!.method, realShapes[12]!.template]).toEqual(["POST", "/client/v4/accounts/{id}/stream/{id}"]);
     // m4: the subject id per operation. The adapter is the authority — the
-    // object the call is ABOUT — and the fake agrees on all eleven (C1: the removal is about the OUTPUT; the switch, the INPUT).
-    expect(realShapes.map((s) => s.subject)).toEqual(["input", "input", "input", "input", "output", "input", "none", "none", "input", "video", "input"]);
+    // object the call is ABOUT — and the fake agrees on all thirteen (C1: the removal is about the OUTPUT; the switch, the INPUT;
+    // Task 13: the token, the uid it signs; the lock, the VIDEO).
+    // Seazn Task 24: the download is made on the video's own `/downloads` path, about the VIDEO.
+    expect([realShapes[13]!.method, realShapes[13]!.template]).toEqual(["POST", "/client/v4/accounts/{id}/stream/{id}/downloads"]);
+    expect(realShapes.map((s) => s.subject)).toEqual(["input", "input", "input", "input", "output", "input", "none", "none", "input", "video", "input", "input", "video", "video"]);
     expect(fakeShapes).toEqual(realShapes);
   });
 });
@@ -1141,11 +1281,17 @@ describe("server/relay/** static claims (C4, C8, C11, C12, C13)", () => {
     expect(puts, "the one PUT — the enable/disable call — and no other").toHaveLength(1);
     const body = cf.slice(puts[0]!.index, cf.indexOf("operation:", puts[0]!.index));   // the helper's own request body: everything before its call meta
     expect(body.length, "the slice found the request body, not nothing").toBeGreaterThan(40);
-    expect(body, "the PUT's recording is the create's constant, not a literal").toMatch(/recording:\s*LIVE_INPUT_RECORDING/);
+    expect(body, "the PUT's recording is the create's own builder, not a literal").toMatch(/recording:\s*liveInputRecording\(/);
     expect(body).toMatch(/deleteRecordingAfterDays:\s*DELETE_RECORDING_AFTER_DAYS/);
     expect(body, "never a recording literal of its own").not.toMatch(/mode:/);
-    // The create sends that same constant — so the two cannot drift — and nothing in the adapter spells a mode but `automatic`.
-    expect([...cf.matchAll(/recording:\s*LIVE_INPUT_RECORDING/g)], "create and enable/disable both send it").toHaveLength(2);
+    // Task 12: the create sends that same builder — so the two cannot drift — and the builder spreads the ONE constant, so
+    // signing only ever ADDS to the create's settings. Nothing in the adapter spells a mode but `automatic`.
+    expect([...cf.matchAll(/recording:\s*liveInputRecording\(/g)], "create and enable/disable both send it").toHaveLength(2);
+    const builderAt = cf.indexOf("function liveInputRecording(");
+    expect(builderAt, "the builder exists").toBeGreaterThanOrEqual(0);
+    const builder = cf.slice(builderAt, cf.indexOf("\n}", builderAt));
+    expect(builder.length, "the slice found the builder's body, not nothing").toBeGreaterThan(40);
+    expect(builder, "the builder spreads the create's constant").toMatch(/\.\.\.LIVE_INPUT_RECORDING\b/);
     expect(cf).not.toMatch(/mode:\s*"off"/);
     expect([...cf.matchAll(/mode:\s*"/g)], "one mode literal in the whole adapter").toHaveLength(1);
   });
@@ -1159,5 +1305,205 @@ describe("server/relay/** static claims (C4, C8, C11, C12, C13)", () => {
     }
     // Present twin for the grep's own vacuity: the adapter DOES name its base.
     expect(cf).toContain("client/v4/accounts");
+  });
+});
+
+// Seazn-hosted video, Task 13 (C1, C3, C5): Cloudflare's own token endpoint (no signing key of ours) and the per-video lock.
+// The account token here is NOT "tok": `redact` is a substring replace, and the word "token" would lose its "tok" in every
+// message this block reads.
+describe("Seazn Task 13: playback tokens and the recording lock", () => {
+  const API = "cf-api-secret-t13";
+  const build = () => {
+    const rec = recorder(cfReply);
+    const port = new FakeRecorder();
+    return { rec, port, cf: new CloudflareIngest({ fetchImpl: rec.fetchImpl, accountId: "acct", token: API, recorder: port }) };
+  };
+  /** The expiry's whole seconds, from the literal instant — never from the adapter. */
+  const AT = new Date("2026-11-21T10:00:00.750Z");
+  const AT_S = Math.floor(Date.parse("2026-11-21T10:00:00Z") / 1000);
+  const settle = () => new Promise((r) => setImmediate(r));
+
+  it("playbackToken POSTs /stream/{uid}/token with `exp` in whole seconds, and `downloadable: true` ONLY when asked (C1, C5); it answers the minted token", async () => {
+    const { rec, cf } = build();
+    expect(await cf.playbackToken("in_abc", { expiresAt: AT })).toBe(MINTED);
+    expect(await cf.playbackToken("v_rec", { expiresAt: AT, downloadable: true })).toBe(MINTED);
+    expect(await cf.playbackToken("v_rec", { expiresAt: AT, downloadable: false })).toBe(MINTED);
+    expect(rec.calls.map((c) => [c.init.method, c.url])).toEqual([
+      ["POST", `${CLOUDFLARE_STREAM_BASE}/acct/stream/in_abc/token`],
+      ["POST", `${CLOUDFLARE_STREAM_BASE}/acct/stream/v_rec/token`],
+      ["POST", `${CLOUDFLARE_STREAM_BASE}/acct/stream/v_rec/token`],
+    ]);
+    // The bodies EXACTLY: no `downloadable` key at all unless it was asked for, so a viewer's token can never open the MP4.
+    expect(rec.calls.map((c) => JSON.parse(String(c.init.body)))).toEqual([{ exp: AT_S }, { exp: AT_S, downloadable: true }, { exp: AT_S }]);
+  });
+
+  it("no minted token reaches a provider-call record or a thrown message: a success, a refusal that quotes it back, a 200 without one, a transport failure", async () => {
+    const { cf, port } = build();
+    await cf.playbackToken("in_abc", { expiresAt: AT });
+    const messages: string[] = [];
+    for (const uid of ["in_leaky", "in_notoken"]) {
+      const err = await cf.playbackToken(uid, { expiresAt: AT }).then(() => null, (e: unknown) => e);
+      expect(err, uid).toBeInstanceOf(Error);
+      messages.push((err as Error).message);
+    }
+    const offline = new CloudflareIngest({ accountId: "acct", token: API, fetchImpl: (async () => { throw new Error("socket hang up"); }) as unknown as typeof fetch });
+    messages.push(String(await offline.playbackToken("in_abc", { expiresAt: AT }).catch((e: unknown) => (e as Error).message)));
+    expect(messages, "three failures read").toHaveLength(3);
+    expect(messages[0]).toMatch(/^cloudflare playback token: HTTP 500/);
+    expect(messages[1]).toMatch(/^cloudflare playback token: the 200 carried no token/);
+    for (const m of messages) {
+      expect(m).not.toContain(MINTED);
+      expect(m).not.toContain(API);
+    }
+    await settle();
+    const records = port.calls.filter((c) => c.operation === "playbackToken");
+    expect(records, "the success and the two refusals are recorded").toHaveLength(3);
+    expect(JSON.stringify(port.calls)).not.toContain(MINTED);
+    expect(records.map((c) => [c.method, c.subjectId, c.status])).toEqual([["POST", "in_abc", 200], ["POST", "in_leaky", 500], ["POST", "in_notoken", 200]]);
+  });
+
+  it("review I1: playbackToken gives up at its 10 s timeout — the request carries the timeout's signal, the abort is a thrown failure recorded as `timeout`; a call that is not a playback token carries no signal", async () => {
+    const deadline = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => deadline.signal);
+    const port = new FakeRecorder();
+    const inits: RequestInit[] = [];
+    const fetchImpl = vi.fn((url: string | URL | Request, init?: RequestInit) => {
+      inits.push(init ?? {});
+      if (!String(url).endsWith("/token")) return Promise.resolve(new Response(JSON.stringify(cfReply({ url: String(url), init: init ?? {} }).body), { status: 200 }));
+      return new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true }));
+    }) as unknown as typeof fetch;
+    try {
+      const cf = new CloudflareIngest({ fetchImpl, accountId: "acct", token: API, recorder: port });
+      const pending = cf.playbackToken("in_abc", { expiresAt: AT }).then(() => null, (e: unknown) => e as Error);
+      await vi.waitFor(() => expect(inits).toHaveLength(1));
+      expect(timeout).toHaveBeenCalledWith(10_000);
+      expect(inits[0]!.signal, "the token request carries the timeout's signal").toBe(deadline.signal);
+      deadline.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+      const err = await pending;
+      expect(err?.message).toMatch(/^cloudflare playbackToken: request failed before a response/);
+      expect(err?.message).not.toContain(API);
+      await settle();
+      expect(port.calls.map((c) => [c.operation, c.status, c.errorCode])).toEqual([["playbackToken", null, "timeout"]]);
+      await cf.requireSignedVideo("v_cam_done", { deleteAt: DELETE_AT });
+      expect(inits[1]!.signal, "the lock names no timeout").toBeUndefined();
+      expect(timeout, "only the token asked for one").toHaveBeenCalledTimes(1);
+    } finally {
+      timeout.mockRestore();
+    }
+  });
+
+  it("requireSignedVideo POSTs exactly { requireSignedURLs: true, scheduledDeletion } to /stream/{videoId} and answers `set` only on an echo of true; a 200 echoing false is an error (C3); a 404 is `absent`; a 500 throws, redacted", async () => {
+    const { rec, cf, port } = build();
+    expect(await cf.requireSignedVideo("v_cam_done", { deleteAt: DELETE_AT })).toBe("set");
+    expect([rec.calls[0]!.init.method, rec.calls[0]!.url]).toEqual(["POST", `${CLOUDFLARE_STREAM_BASE}/acct/stream/v_cam_done`]);
+    expect(JSON.parse(String(rec.calls[0]!.init.body)), "review I3: the deletion rides in the same edit").toEqual({ requireSignedURLs: true, scheduledDeletion: DELETE_AT.toISOString() });
+    await expect(cf.requireSignedVideo("v_unsigned_echo", { deleteAt: DELETE_AT })).rejects.toThrow(/^cloudflare require signed video: not applied — requireSignedURLs sent true, echoed false/);
+    expect(await cf.requireSignedVideo("v_gone", { deleteAt: DELETE_AT })).toBe("absent");
+    const boom = await cf.requireSignedVideo("v_boom", { deleteAt: DELETE_AT }).then(() => null, (e: unknown) => e as Error);
+    expect(boom?.message).toMatch(/^cloudflare require signed video: HTTP 500 code 10000/);
+    expect(boom?.message).not.toContain(API);
+    await settle();
+    expect(port.calls.map((c) => [c.operation, c.subjectId])).toEqual([
+      ["requireSignedVideo", "v_cam_done"], ["requireSignedVideo", "v_unsigned_echo"], ["requireSignedVideo", "v_gone"], ["requireSignedVideo", "v_boom"],
+    ]);
+  });
+
+  it("Task 24: createDownload POSTs /stream/{videoId}/downloads with no body and answers `default.status` — ready or inprogress; an `error` status, a 200 with no `default`, a 404 and a 500 each throw, the account token redacted; the download URL in the answer is never handed back", async () => {
+    const { rec, cf, port } = build();
+    expect(await cf.createDownload("v_done")).toBe("ready");
+    expect([rec.calls[0]!.init.method, rec.calls[0]!.url, rec.calls[0]!.init.body]).toEqual(["POST", `${CLOUDFLARE_STREAM_BASE}/acct/stream/v_done/downloads`, undefined]);
+    expect(await cf.createDownload("v_dl_busy")).toBe("inprogress");
+    const errs: string[] = [];
+    for (const uid of ["v_dl_error", "v_dl_empty", "v_gone", "v_boom"]) {
+      const e = await cf.createDownload(uid).then(() => null, (x: unknown) => x as Error);
+      expect(e, uid).toBeInstanceOf(Error);
+      errs.push(e!.message);
+    }
+    expect(errs[0]).toMatch(/^cloudflare create download: the download failed \(status error\)/);
+    expect(errs[1]).toMatch(/^cloudflare create download: the 200 carried no default download \(HTTP 200\)/);
+    expect(errs[2]).toMatch(/^cloudflare create download: HTTP 404 code 10003/);
+    expect(errs[3]).toMatch(/^cloudflare create download: HTTP 500 code 10000/);
+    for (const m of errs) {
+      expect(m).not.toContain(API);
+      expect(m, "no download URL in a message").not.toMatch(/cloudflarestream\.com|default\.mp4/);
+    }
+    await settle();
+    expect(port.calls.map((c) => [c.operation, c.subjectId])).toEqual([
+      ["createDownload", "v_done"], ["createDownload", "v_dl_busy"], ["createDownload", "v_dl_error"], ["createDownload", "v_dl_empty"],
+      ["createDownload", "v_gone"], ["createDownload", "v_boom"],
+    ]);
+  });
+
+  // Task 24 review I3 (2026-11-22): the replay move runs inside the tick's 8 s Seazn slice, so each Cloudflare call it makes names
+  // a timeout (`timeoutMs`), exactly as the viewer's token mint names its own 10 s. The ms here is the test's own, not the move's.
+  it("Task 24 review I3 (+ re-review N3): createDownload, deleteVideo, listInputVideos, a download token and the lock (requireSignedVideo) each give up at the timeout they are given — the request carries AbortSignal.timeout(ms), the abort is a thrown failure recorded `timeout`; asked without one, none of the first three carries a signal", async () => {
+    const deadlines: AbortController[] = [];
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => { const c = new AbortController(); deadlines.push(c); return c.signal; });
+    const port = new FakeRecorder();
+    const plain = recorder(cfReply);
+    const inits: RequestInit[] = [];
+    const fetchImpl = vi.fn((url: string | URL | Request, init?: RequestInit) => {
+      inits.push(init ?? {});
+      const signal = init?.signal;
+      if (!signal) return plain.fetchImpl(url, init);
+      return new Promise<Response>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    }) as unknown as typeof fetch;
+    try {
+      const cf = new CloudflareIngest({ fetchImpl, accountId: "acct", token: API, recorder: port });
+      const MS = 1234;
+      const timed: [string, () => Promise<unknown>][] = [
+        ["createDownload", () => cf.createDownload("v_done", { timeoutMs: MS })],
+        ["deleteVideo", () => cf.deleteVideo("v_done", { timeoutMs: MS })],
+        ["listInputVideos", () => cf.listInputVideos("in_abc", { sessionId: "s_1", timeoutMs: MS })],
+        ["playbackToken", () => cf.playbackToken("v_done", { expiresAt: AT, downloadable: true, timeoutMs: MS })],
+        // Re-review N3: the lock pass's lock, which shares the slice.
+        ["requireSignedVideo", () => cf.requireSignedVideo("v_done", { deleteAt: AT, timeoutMs: MS })],
+      ];
+      let checked = 0;
+      for (const [k, [operation, call]] of timed.entries()) {
+        const pending = call().then(() => null, (e: unknown) => e as Error);
+        await vi.waitFor(() => expect(inits).toHaveLength(k + 1));
+        expect(timeout, operation).toHaveBeenLastCalledWith(MS);
+        expect(inits[k]!.signal, `${operation}: the request carries the timeout's signal`).toBe(deadlines[k]!.signal);
+        deadlines[k]!.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+        const err = await pending;
+        expect(err?.message, operation).toMatch(new RegExp(`^cloudflare ${operation}: request failed before a response`));
+        expect(err?.message).not.toContain(API);
+        checked++;
+      }
+      expect(checked, "timed calls").toBe(5);
+      await settle();
+      expect(port.calls.map((c) => [c.operation, c.status, c.errorCode])).toEqual(timed.map(([operation]) => [operation, null, "timeout"]));
+      // Untimed (the retention sweep's own calls): no signal, and an answer as before.
+      expect(await cf.createDownload("v_done")).toBe("ready");
+      expect(await cf.deleteVideo("v_done")).toBe("deleted");
+      expect((await cf.listInputVideos("in_abc", { sessionId: "s_1" })).length).toBeGreaterThan(0);
+      expect(inits.slice(5).map((i) => i.signal), "no signal when no timeout is asked").toEqual([undefined, undefined, undefined]);
+      expect(timeout, "only the five timed calls asked for one").toHaveBeenCalledTimes(5);
+    } finally {
+      timeout.mockRestore();
+    }
+  });
+
+  it("review I3: an echo with no scheduled deletion still locks (`set`: the token rule held) but is WARNED, by video id alone; an echo that keeps it warns nothing", async () => {
+    const warn = vi.fn();
+    const rec = recorder(cfReply);
+    const cf = new CloudflareIngest({ fetchImpl: rec.fetchImpl, accountId: "acct", token: API, warn });
+    expect(await cf.requireSignedVideo("v_cam_done", { deleteAt: DELETE_AT }), "the healthy echo").toBe("set");
+    expect(warn, "a kept deletion warns nothing").not.toHaveBeenCalled();
+    expect(await cf.requireSignedVideo("v_no_deletion_echo", { deleteAt: DELETE_AT }), "the lock itself held").toBe("set");
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [fields, message] = warn.mock.calls[0]! as [Record<string, unknown>, string];
+    expect(fields, "the video id and nothing else").toEqual({ videoId: "v_no_deletion_echo" });
+    expect(message).toMatch(/scheduled deletion/);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(API);
+  });
+
+  it("both listings carry the video's own `requireSignedURLs` as `signed` — true, false, and null when the item does not say (C3, C7)", async () => {
+    const { cf } = build();
+    const byInput = await cf.listInputVideos("in_abc");
+    expect(byInput.map((v) => [v.videoId, v.signed])).toEqual([["v_cam_live", true], ["v_cam_done", false], ["v_cam_unnamed", null]]);
+    // The pair: the fixture really holds the two values and the absence, so the mapping is not answering a constant.
+    expect(LIST_VIDEOS_BY_INPUT_200.result.map((v) => ("requireSignedURLs" in v ? v.requireSignedURLs : "absent"))).toEqual([true, false, "absent"]);
   });
 });

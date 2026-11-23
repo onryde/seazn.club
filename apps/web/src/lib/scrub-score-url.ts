@@ -85,6 +85,24 @@
 // claim, the funnel start's resend, a registrant's withdraw / checkout / resend, and a team's join POST) and every route with a secret in its path (`SECRET_PATH_ROUTES`: the invite and claim
 // accepts, check-in, revoke). Only a Sentry event has a body to drop.
 //
+// The replay host's CDN token rides a URL PATH (Seazn-hosted video, Task 22 review I2): an organiser's download is fetched by the
+// server from `https://{cdn}/bcdn_token=<token>&expires=…&token_path=…/{video}/play_{h}p.mp4` (probe B5), and the server SDK's
+// fetch instrumentation drops only a URL's query, so the path reaches the outgoing request's breadcrumb and span. Every
+// `bcdn_token=` value becomes `[token]`; `expires`, `token_path` and the file name stay (none of them signs anything).
+//
+// A Seazn-hosted video's signed Cloudflare playback URL rides its PATH too (Task 14; probes C1, C5): the match page's player
+// fetches `https://<customer host>/<token>/manifest/video.m3u8` and every playlist and segment under it from the viewer's browser,
+// and the replay mover's download is `…/<token>/downloads/default.mp4`. Whoever holds the URL plays the video until the token
+// expires (C2: the token is the only protection). The path segment right after a Cloudflare Stream customer host
+// (`*.cloudflarestream.com/`, plain or URL-encoded) becomes `[token]`, whatever its shape: on an unsigned input it is the uid,
+// which plays as well as a token does. The host and the rest of the path stay.
+//
+// The replay host's PLAYER URL rides its QUERY (Seazn-hosted video, Task 25; plan B4): the match page's frame loads
+// `https://iframe.mediadelivery.net/embed/<library>/<video>?token=<sha256 hex>&expires=<epoch s>`, which plays the video until it
+// expires, and a session replay's network recording holds the frame's document request. On the host's `/embed/` path, the `token`
+// AND `expires` values become `[token]` / `[expires]`, plain or URL-encoded at any depth; the host, library, video and every other
+// parameter stay. A `token=` on another host is not this rule's.
+//
 // A sampled TRANSACTION carries the request's query string a second time, in its span data, WITH its `?` and beside a URL
 // that has none: `http.query` in `contexts.trace.data` and an outgoing request's breadcrumb (@sentry/opentelemetry
 // `getRequestSpanData`), `url.query` in a span's data (@sentry/core `getHttpSpanDetailsFromUrlObject`). Where the event, or
@@ -92,7 +110,7 @@
 // loses its `token=` like `request.query_string` does; where it names a body-credential route, the serialised body in
 // `http.request.body.data` goes with the request body (`scrubSpanData`).
 import type * as Sentry from "@sentry/nextjs";
-import type { CaptureResult } from "posthog-js";
+import type { CaptureResult, CapturedNetworkRequest } from "posthog-js";
 import { LOCALES } from "./i18n-constants";
 import { OVERLAY_KEY_PARAM } from "./realtime-purpose";
 
@@ -151,6 +169,22 @@ const JOIN_CODE_NAMES = JOIN_CODE_PARAMS.join("|");
 const JOIN_CODE_QUERY = new RegExp(`((?:^|[?&])(?:${JOIN_CODE_NAMES})=)[^&#\\s"'<>]+`, "g");
 /** The same parameter URL-ENCODED inside another URL: `%3Fjoin_code%3D` / `%26join%3D`, at any encoding depth, either hex case. */
 const ENCODED_JOIN_CODE = new RegExp(`(%(?:25)*(?:3[Ff]|26)(?:${JOIN_CODE_NAMES})%(?:25)*3[Dd])[^%&#\\s"'<>]+`, "g");
+/** The replay host's CDN token (probe B5), a path segment `bcdn_token=<token>&expires=…`: the value up to the next `&`, `/`,
+ *  `?`, `#`, quote, angle bracket or space. Any value, not only the token's own 43 characters. */
+const BUNNY_CDN_TOKEN = /(bcdn_token=)[^&/?#\s"'<>]+/g;
+/** The replay host's embed path (Task 25; B4) and its query: the host must end there (an optional port), the path is `/embed/…`, and the
+ *  query runs to a `#`, quote, angle bracket or space. Its `token` and `expires` values are scrubbed (`EMBED_QUERY_PARAM`). */
+const BUNNY_EMBED_QUERY = /(iframe\.mediadelivery\.net(?::\d+)?\/embed\/[^?#\s"'<>]*\?)([^#\s"'<>]*)/g;
+const EMBED_QUERY_PARAM = /(^|&)(token|expires)=[^&]*/g;
+/** The same URL-ENCODED inside another URL, at any depth, either hex case: the encoded query runs to the outer URL's next raw `&`. */
+const ENCODED_BUNNY_EMBED_QUERY = /(iframe\.mediadelivery\.net(?:%(?:25)*3[Aa]\d+)?%(?:25)*2[Ff]embed%(?:25)*2[Ff][^?&#\s"'<>]*?%(?:25)*3[Ff])([^&#\s"'<>]*)/g;
+const ENCODED_EMBED_QUERY_PARAM = /((?:^|%(?:25)*26)(token|expires)%(?:25)*3[Dd])[^%]*/g;
+/** A Cloudflare Stream customer host (`customer-<code>.cloudflarestream.com`, an optional port) and the first segment of its
+ *  path: the playback token (C1), or an unsigned input's uid. The segment runs to the next `/`, `?`, `#`, quote, angle bracket
+ *  or space; a JWT's dots are inside it. The host must end there (`….cloudflarestream.com.other.example/` is not it). */
+const STREAM_PLAYBACK_PATH = /(\.cloudflarestream\.com(?::\d+)?\/)[^/?#\s"'<>]+/g;
+/** The same URL-ENCODED inside another URL (a `next=`, a referrer carried as a parameter), at any depth, either hex case. */
+const ENCODED_STREAM_PLAYBACK_PATH = /(\.cloudflarestream\.com(?:%(?:25)*3[Aa]\d+)?%(?:25)*2[Ff])[^%&/?#\s"'<>]+/g;
 /** A capture code in a phone route's path: everything up to the next `/`, `?`, `#`, quote, angle bracket or space. */
 const CAPTURE_PATH = /(\/capture\/codes\/)[^/?#\s"'<>]+/g;
 /** The same path URL-ENCODED inside another URL, at any encoding depth, either hex case. */
@@ -275,6 +309,9 @@ const MAYBE_TOKEN = new RegExp(
     `${RELAY_PAGE_TOKEN_PARAM}%`,
     "\\/capture\\/codes\\/",
     "capture%(?:25)*2[Ff]codes%",
+    "bcdn_token=",
+    "iframe\\.mediadelivery\\.net",
+    "\\.cloudflarestream\\.com",
     `(?:${JOIN_CODE_NAMES})=`,
     `(?:${JOIN_CODE_NAMES})%`,
     "(?:^|[?&])t=",
@@ -297,11 +334,21 @@ export function scrubTokenQuery(query: string): string {
  *  match-room token in a `t=` query value (plain or encoded) becomes `[token]`, a team's join code in a
  *  `join_code=` / `join=` query value (plain or encoded) becomes `[code]`, the secret after a
  *  `SECRET_PATH_ROUTES` route root (`/claim/`, `/join/`, `/checkin/`, …; plain or encoded) becomes `[token]`, and a
- *  one-time sign-in token in the `token=` query value of a one-time route (plain or encoded) becomes `[token]`, and a bare
- *  quick match home token `qm_…` left anywhere else becomes `qm_[token]`. */
+ *  one-time sign-in token in the `token=` query value of a one-time route (plain or encoded) becomes `[token]`, a replay CDN
+ *  token after `bcdn_token=` becomes `[token]`, the replay host's embed `token` / `expires` values become `[token]` / `[expires]`
+ *  (plain or encoded), the playback token after a Cloudflare Stream customer host (plain or encoded)
+ *  becomes `[token]`, and a bare quick match home token `qm_…` left anywhere else becomes `qm_[token]`. */
 export function scrubScoreUrl(value: string): string {
   if (!MAYBE_TOKEN.test(value)) return value;
   return value
+    // First, for the same reason as the room JWT below: a CDN token is random base64url too, and a `dl_` run inside it would be half-eaten.
+    .replace(BUNNY_CDN_TOKEN, "$1[token]")
+    // Early too: the embed token is hex and must not be touched by a later rule before its own.
+    .replace(BUNNY_EMBED_QUERY, (_m, head: string, query: string) => head + query.replace(EMBED_QUERY_PARAM, "$1$2=[$2]"))
+    .replace(ENCODED_BUNNY_EMBED_QUERY, (_m, head: string, query: string) => head + query.replace(ENCODED_EMBED_QUERY_PARAM, "$1[$2]"))
+    // Early, for the same reason: a Cloudflare playback token is a JWT, and a `dl_` run inside it would be half-eaten.
+    .replace(STREAM_PLAYBACK_PATH, "$1[token]")
+    .replace(ENCODED_STREAM_PLAYBACK_PATH, "$1[token]")
     // First: a room JWT is random base64url and can contain a `dl_` run, which BARE_TOKEN would half-eat and so break the JWT shape (C43).
     .replace(ROOM_TOKEN_QUERY, "$1[token]")
     .replace(ENCODED_ROOM_TOKEN, "$1[token]")
@@ -387,6 +434,18 @@ export function posthogBeforeSend(event: CaptureResult | null): CaptureResult | 
   const pathname: unknown = event.properties?.$pathname;
   if (typeof pathname === "string" && isAdminPath(pathname)) return null;
   return scrubScoreTokens(event);
+}
+
+/**
+ * PostHog `session_recording.maskCapturedNetworkRequestFn` (the current name; `maskNetworkRequestFn` is its deprecated twin). When the
+ * project's network recording is on, a replay stores every request the page made: its URL (`name`), headers and bodies. `before_send`
+ * does not see them (it runs on events, and a replay's network entries ride `$snapshot` frames inside the recorder), so a signed
+ * Cloudflare playback URL, whose token is a PATH segment, would reach PostHog in hls.js's manifest, playlist and segment requests,
+ * and a scoring token in a request's URL or Bearer header with it. The request goes through the same scrubber as every other string
+ * and is returned (never dropped: a replay keeps its timing). A request with nothing to scrub keeps its reference.
+ */
+export function maskCapturedNetworkRequest(request: CapturedNetworkRequest): CapturedNetworkRequest {
+  return scrubScoreTokens(request);
 }
 
 /** A phone route's event (capture QR v2 §6.3): its request URL or its transaction names `/api/v1/capture/`. */

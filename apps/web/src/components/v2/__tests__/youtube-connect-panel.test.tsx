@@ -1947,18 +1947,39 @@ describe("the panel with YouTube Connect", () => {
     }
   });
 
-  it("a row is a channel row or a pasted row by what it CARRIES (`youtube`), never by its kind — swept over every stored kind", () => {
-    let checked = 0;
+  it("a row is a channel row or a pasted row by what it CARRIES (`youtube`), never by its kind — swept over every stored kind but the one fixed kind, seazn, which is the Seazn row whatever it carries", () => {
+    // Task 16 review I1: the Seazn destination is neither a channel nor a pasted key, so the panel draws it by its KIND, in its own
+    // list. The database refuses a seazn row that names a connection (V541 org_stream_targets_one_source), but the panel does not lean
+    // on that: one target is one row, so a seazn row is drawn ONCE, as the Seazn row, whatever it carries — never a channel row too.
+    const SEAZN_ROW = 'data-fixed="seazn"';
+    const count = (html: string, needle: string) => html.split(needle).length - 1;
+    const rows = (html: string) => count(html, 'data-testid="stream-dest-row"') + count(html, 'data-testid="youtube-channel-row"');
+    let carried = 0;
+    let fixed = 0;
     for (const kind of StreamTargetKind.options) {
       const asKey = panelHtml({ targets: [pasted({ kind })] });
-      expect(asKey, `${kind} without a connection`).toContain('data-testid="stream-dest-row"');
-      expect(asKey, `${kind} without a connection`).not.toContain('data-testid="youtube-channel-row"');
       const asChannel = panelHtml({ targets: [channel({}, { kind })] });
+      for (const [html, what] of [[asKey, "without"], [asChannel, "with"]] as const) {
+        expect(rows(html), `${kind} ${what} a connection: one target, one row`).toBe(1);
+      }
+      if (kind === "seazn") {
+        for (const [html, what] of [[asKey, "without"], [asChannel, "with"]] as const) {
+          expect(html, `seazn ${what} a connection`).toContain('data-testid="seazn-destination-list"');
+          expect(html, `seazn ${what} a connection`).toContain(SEAZN_ROW);
+          expect(html, `seazn ${what} a connection`).not.toContain('data-testid="youtube-channel-row"');
+        }
+        fixed++;
+        continue;
+      }
+      expect(asKey, `${kind} without a connection`).toContain('data-testid="stream-dest-row"');
+      expect(asKey, `${kind} without a connection: a pasted row, not the Seazn row`).not.toContain(SEAZN_ROW);
+      expect(asKey, `${kind} without a connection`).not.toContain('data-testid="youtube-channel-row"');
       expect(asChannel, `${kind} with a connection`).toContain('data-testid="youtube-channel-row"');
       expect(asChannel, `${kind} with a connection`).not.toContain('data-testid="stream-dest-row"');
-      checked++;
+      carried++;
     }
-    expect(checked).toBe(StreamTargetKind.options.length);
+    expect(fixed, "the one fixed kind, seazn, was swept").toBe(1);
+    expect(carried + fixed, "every stored kind swept").toBe(StreamTargetKind.options.length);
   });
 
   it("Add streaming key and Connect YouTube are one form at a time: opening either closes the other (driven)", async () => {

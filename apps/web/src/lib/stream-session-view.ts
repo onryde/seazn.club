@@ -209,6 +209,7 @@ export const END_REASON_KEYS: Record<StreamEndReason, MessageKey> = {
 export const CREATE_ERROR_CODES = [
   "no_credits", "overlay_required", "active_session", "phone_not_paired", "phone_not_responding", "storage_exhausted", "ingest_unavailable",
   "composed_unavailable", "target_in_use", "destination_not_allowed", "target_unreadable", "plan_lacks_relay", "competition_frozen",
+  "seazn_unavailable", "seazn_video_unconfigured", "seazn_composed_unavailable",
   ...YOUTUBE_REFUSAL_CODES, "unknown",
 ] as const;
 export type CreateErrorCode = (typeof CREATE_ERROR_CODES)[number];
@@ -232,6 +233,12 @@ export const CREATE_ERROR_KEYS: Record<CreateErrorCode, MessageKey> = {
   plan_lacks_relay: "stream.error.plan_lacks_relay",
   // Match Day PB2 fix round 1 (m5): a stale tab's Go live after the competition froze — the freeze's own 402 says why.
   competition_frozen: "stream.error.competition_frozen",
+  // Seazn-hosted video (Tasks 11, 16): LIVE off for the deployment (422), no signing hosts configured (503), and — client-side only, never
+  // on the wire — `composed_unavailable` when the destination was Seazn, whose "go live with the camera only" advice cannot be followed
+  // (a Seazn start is always composed).
+  seazn_unavailable: "stream.error.seazn_unavailable",
+  seazn_video_unconfigured: "stream.error.seazn_video_unconfigured",
+  seazn_composed_unavailable: "stream.error.seazn_composed_unavailable",
   // YouTube Connect T12 (spec §6.2): one sentence per refusal, the reason only — "nothing was started or charged" is the panel's own
   // line under it (`stream.youtube.refused.nothing`), said once for all six.
   youtube_reconnect_needed: "stream.error.youtube_reconnect_needed",
@@ -270,7 +277,7 @@ const TARGET_IN_USE_ELSEWHERE_KEY: MessageKey = "stream.error.target_in_use.unkn
 /** The lower-case domain codes createSession puts on the wire VERBATIM (usecases/stream-sessions/ `refuse`, `targetInUse`). */
 const VERBATIM_CODES: readonly CreateErrorCode[] = [
   "no_credits", "overlay_required", "active_session", "phone_not_paired", "phone_not_responding", "storage_exhausted", "ingest_unavailable",
-  "composed_unavailable", "target_in_use",
+  "composed_unavailable", "target_in_use", "seazn_unavailable", "seazn_video_unconfigured",
 ];
 
 /** The plan gates createSession refuses with `PaymentRequiredError(featureKey)` — read from the ONE authority the
@@ -287,6 +294,12 @@ function wireError(err: unknown): { code: string; extra: Record<string, unknown>
   const { code, extra } = err as { code?: unknown; extra?: unknown };
   if (typeof code !== "string") return null;
   return { code, extra: typeof extra === "object" && extra !== null ? (extra as Record<string, unknown>) : {} };
+}
+
+/** Task 16: a Seazn start is always composed (usecases/stream-sessions/start.ts), so `composed_unavailable` for a Seazn destination cannot be
+ *  answered by "go live with the camera only" — it reads as its own sentence. Every other (code, destination) pair is unchanged. */
+export function seaznRefinedCode(code: CreateErrorCode, destinationKind: string | undefined): CreateErrorCode {
+  return code === "composed_unavailable" && destinationKind === "seazn" ? "seazn_composed_unavailable" : code;
 }
 
 export function createErrorCode(err: unknown): CreateErrorCode {
@@ -733,9 +746,17 @@ export function takeoverLineKey(act: TakeoverAct, withModel: boolean): MessageKe
 
 /** §7.1: Live's read-only "Automatic: stops about N minutes after the result" — only while live, and only when the SERVER
  *  says §7.3 will stop this session (`auto.stopApplies`, B7 review M-3: the switch on, the session's phone automatic — A4
- *  — and the session created before any result, A15). The tick's own facts and predicate, never re-derived here. */
+ *  — and the session created before any result, A15; or, Seazn Task 24, a Seazn session's own stop in every mode). The tick's
+ *  own facts and predicate, never re-derived here. */
 export function autoStopLine(phone: StreamPhone | null, state: PhoneTabState): boolean {
   return state === "live" && phone?.auto?.stopApplies === true;
+}
+
+/** Seazn-hosted video Task 24 (recommendation 2026-11-21, G-E): the stop Live's line names is a Seazn session's own
+ *  (`auto.stopRule === "seazn"`) — it applies in every mode, the switch off and an operator phone included, so the line names it
+ *  in its own words ("so the replay can be saved") rather than "Automatic: …". Absent or `result`: §7.3's own, as before. */
+export function autoStopIsSeazn(phone: StreamPhone | null): boolean {
+  return phone?.auto?.stopRule === "seazn";
 }
 
 /** The delay Live's line names: the OPEN session's own, as the server serves it (`auto.stopAfterSeconds` — the tick's choice, a
@@ -744,7 +765,8 @@ export function autoStopLine(phone: StreamPhone | null, state: PhoneTabState): b
 export function autoStopWait(phone: StreamPhone | null, fallbackMinutes: number): { unit: "seconds" | "minutes"; count: number } {
   const seconds = phone?.auto?.stopAfterSeconds ?? null;
   if (seconds === null) return { unit: "minutes", count: fallbackMinutes };
-  if (seconds < 60) return { unit: "seconds", count: seconds };
+  // The Seazn line has minutes only (its delay is 15 min): a shorter one reads as 1 minute, never in the "Automatic" seconds line.
+  if (seconds < 60 && !autoStopIsSeazn(phone)) return { unit: "seconds", count: seconds };
   return { unit: "minutes", count: Math.max(1, Math.round(seconds / 60)) };
 }
 

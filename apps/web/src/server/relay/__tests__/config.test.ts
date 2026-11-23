@@ -485,3 +485,270 @@ describe("courtMinAppVersion — the oldest app build a court code serves (court
     }
   });
 });
+
+describe("Seazn-hosted flags and settings (Task 8)", () => {
+  const live = (v?: string) => config.seaznHostedLive(v === undefined ? {} : { SEAZN_HOSTED_LIVE: v });
+  it("LIVE: unset and blank are false, true/false are case-insensitive", () => {
+    expect(config.seaznHostedLive({})).toBe(false);
+    expect(live("")).toBe(false);
+    expect(live("TRUE")).toBe(true);
+    expect(live(" true ")).toBe(true);
+    expect(live("False")).toBe(false);
+  });
+  it("every flag throws naming its variable on a value that is not true/false", () => {
+    expect(() => live("yes")).toThrow(/SEAZN_HOSTED_LIVE/);
+    expect(() => config.seaznHostedReplay({ SEAZN_HOSTED_REPLAY: "1", SEAZN_HOSTED_LIVE: "true" })).toThrow(/SEAZN_HOSTED_REPLAY/);
+    expect(() => config.seaznHostedCost({ SEAZN_HOSTED_COST: "on" })).toThrow(/SEAZN_HOSTED_COST/);
+  });
+  it("COST is independent of LIVE", () => {
+    expect(config.seaznHostedCost({})).toBe(false);
+    expect(config.seaznHostedCost({ SEAZN_HOSTED_COST: "True" })).toBe(true);
+  });
+  it("REPLAY is true only when LIVE is true too", () => {
+    expect(config.seaznHostedReplay({ SEAZN_HOSTED_REPLAY: "true" })).toBe(false);
+    expect(config.seaznHostedReplay({ SEAZN_HOSTED_REPLAY: "true", SEAZN_HOSTED_LIVE: "false" })).toBe(false);
+    expect(config.seaznHostedReplay({ SEAZN_HOSTED_REPLAY: "true", SEAZN_HOSTED_LIVE: "true" })).toBe(true);
+    expect(config.seaznHostedReplay({ SEAZN_HOSTED_REPLAY: "false", SEAZN_HOSTED_LIVE: "true" })).toBe(false);
+  });
+  // Task 24 review m9 refused REPLAY on a named deployment until Task 25 shipped the match page's swap to the replay host (the move
+  // deletes the Cloudflare copy 60 min after its Bunny copy is verified, and the page used to play only Cloudflare). Task 25 is that
+  // swap, so the refusal is lifted and this case pins the ALLOWANCE: REPLAY on is honoured wherever it is set, named deployments
+  // included, and still needs LIVE. The owner's rule stands as a deploy rule, not a code one: prod only after every phase is on stg.
+  it("Task 25 lifts the m9 refusal: SEAZN_HOSTED_REPLAY=true is honoured on stg, prod and an unnamed production server as on local and ci — true with LIVE on, false with LIVE off; off is false everywhere", () => {
+    const on = { SEAZN_HOSTED_REPLAY: "true", SEAZN_HOSTED_LIVE: "true" };
+    let checked = 0;
+    for (const env of [{ ...on, ENV_NAME: "stg" }, { ...on, ENV_NAME: "prod" }, { ...on, ENV_NAME: " Stg " }, { ...on, NODE_ENV: "production" }, { ...on, ENV_NAME: "local" }, { ...on, ENV_NAME: "ci" }, { ...on, NODE_ENV: "test" }, { ...on }]) {
+      expect(config.seaznHostedReplay(env), JSON.stringify(env)).toBe(true);
+      checked++;
+    }
+    for (const env of [{ SEAZN_HOSTED_REPLAY: "true", ENV_NAME: "prod" }, { SEAZN_HOSTED_REPLAY: "true", SEAZN_HOSTED_LIVE: "false", NODE_ENV: "production" }, { SEAZN_HOSTED_REPLAY: "false", SEAZN_HOSTED_LIVE: "true", ENV_NAME: "prod" }, { SEAZN_HOSTED_LIVE: "true", ENV_NAME: "stg", NODE_ENV: "production" }]) {
+      expect(config.seaznHostedReplay(env), JSON.stringify(env)).toBe(false);
+      checked++;
+    }
+    expect(checked, "environments read").toBe(12);
+  });
+  it("Task 24 review I3: the move's provider-call timeout is the ruling's 4 s — under the tick's 8 s Seazn slice", () => {
+    expect(config.SEAZN_REPLAY_CALL_TIMEOUT_MS).toBe(4_000);
+    expect(config.SEAZN_REPLAY_CALL_TIMEOUT_MS, "a hung call ends inside one slice").toBeLessThan(8_000);
+  });
+  it("seaznVideoOrigins: null when unset, trimmed and de-duplicated, bare hostnames only", () => {
+    expect(config.seaznVideoOrigins({})).toBeNull();
+    expect(config.seaznVideoOrigins({ SEAZN_VIDEO_ORIGINS: " seazn.club,www.seazn.club,seazn.club" })).toEqual(["seazn.club", "www.seazn.club"]);
+    for (const bad of ["https://seazn.club", "seazn.club/path", "seazn.club,http://x.test"]) {
+      expect(() => config.seaznVideoOrigins({ SEAZN_VIDEO_ORIGINS: bad })).toThrow(/SEAZN_VIDEO_ORIGINS/);
+    }
+  });
+  it("token constants are pinned", () => {
+    expect(config.SEAZN_LIVE_TOKEN_TTL_SECONDS).toBe(3600);
+    expect(config.SEAZN_TOKEN_REFRESH_BEFORE_SECONDS).toBe(300);
+  });
+});
+
+describe("replayDriverMode — REPLAY_DRIVER, which replay host this process talks to (Task 21)", () => {
+  it("fake and bunny are taken as set, trimmed, whatever the relay driver is", () => {
+    const rows: [Record<string, string>, "fake" | "bunny"][] = [
+      [{ REPLAY_DRIVER: "fake" }, "fake"],
+      [{ REPLAY_DRIVER: " bunny " }, "bunny"],
+      [{ REPLAY_DRIVER: "bunny", RELAY_DRIVERS: "fake", ENV_NAME: "local" }, "bunny"],
+      [{ REPLAY_DRIVER: "bunny", RELAY_DRIVERS: "live", ENV_NAME: "stg" }, "bunny"],
+    ];
+    expect(rows.length).toBeGreaterThan(0);
+    for (const [env, want] of rows) expect(config.replayDriverMode(env), JSON.stringify(env)).toBe(want);
+  });
+
+  it("unset or blank is fake exactly when the relay driver is fake (outside production a process not told otherwise fakes)", () => {
+    const fakeRelay: Record<string, string>[] = [{}, { REPLAY_DRIVER: "" }, { REPLAY_DRIVER: "  " }, { RELAY_DRIVERS: "fake", ENV_NAME: "ci" }, { NODE_ENV: "test" }];
+    for (const env of fakeRelay) expect(config.replayDriverMode(env), JSON.stringify(env)).toBe("fake");
+    expect(fakeRelay).toHaveLength(5);
+  });
+
+  it("unset under a live or disabled relay driver throws naming REPLAY_DRIVER, so a deployment cannot serve fake replays by omission", () => {
+    const rows: Record<string, string>[] = [
+      { RELAY_DRIVERS: "live", ENV_NAME: "stg" },
+      { RELAY_DRIVERS: "live", ENV_NAME: "prod", REPLAY_DRIVER: "" },
+      { NODE_ENV: "production" }, // no RELAY_DRIVERS under production = disabled
+    ];
+    for (const env of rows) expect(() => config.replayDriverMode(env), JSON.stringify(env)).toThrow(/REPLAY_DRIVER/);
+    expect(rows).toHaveLength(3);
+  });
+
+  it("an explicit fake is honoured only where the relay's own fake is: ENV_NAME local or ci, or unset outside production", () => {
+    expect(config.FAKE_DRIVER_ENV_NAMES.length).toBeGreaterThan(0);
+    for (const name of config.FAKE_DRIVER_ENV_NAMES) {
+      expect(config.replayDriverMode({ REPLAY_DRIVER: "fake", ENV_NAME: name }), name).toBe("fake");
+      expect(config.replayDriverMode({ REPLAY_DRIVER: "fake", ENV_NAME: ` ${name} `, NODE_ENV: "production" }), `${name} in production`).toBe("fake");
+    }
+    expect(config.replayDriverMode({ REPLAY_DRIVER: "fake", NODE_ENV: "development" })).toBe("fake");
+    const refused: Record<string, string>[] = [
+      { REPLAY_DRIVER: "fake", ENV_NAME: "stg" },
+      { REPLAY_DRIVER: "fake", ENV_NAME: "prod", NODE_ENV: "production" },
+      { REPLAY_DRIVER: "fake", ENV_NAME: "staging" },
+      { REPLAY_DRIVER: "fake", NODE_ENV: "production" }, // an unnamed production server: what a missing ENV_NAME looks like
+      { REPLAY_DRIVER: "fake", ENV_NAME: "  ", NODE_ENV: "production" },
+    ];
+    for (const env of refused) expect(() => config.replayDriverMode(env), JSON.stringify(env)).toThrow(/REPLAY_DRIVER=fake/);
+    expect(refused).toHaveLength(5);
+  });
+
+  it("anything else throws naming the variable and the values it takes", () => {
+    for (const bad of ["live", "Bunny", "FAKE", "1", "cloudflare"]) {
+      expect(() => config.replayDriverMode({ REPLAY_DRIVER: bad }), bad).toThrow(/REPLAY_DRIVER must be "fake" or "bunny"/);
+    }
+  });
+});
+
+// Task 25 review m1: the proxy asks `replayDriverIsFake` on every request instead of catching `replayDriverMode`'s refusal, so the
+// two must answer alike on every setting — the mode's own answer is the expected value (fake, or a refusal, which reads false).
+describe("replayDriverIsFake — replayDriverMode's fake, answered without a throw (review m1)", () => {
+  it("SWEEP every REPLAY_DRIVER x RELAY_DRIVERS x ENV_NAME x NODE_ENV: equal to `replayDriverMode(env) === \"fake\"`, a refusal reading false, and never throws", () => {
+    const counts = { fake: 0, notFake: 0, refused: 0 };
+    for (const REPLAY_DRIVER of [undefined, "", " ", "fake", " fake ", "bunny", "Fake", "nonsense"]) {
+      for (const RELAY_DRIVERS of [undefined, "", "fake", "live", "bogus"]) {
+        for (const ENV_NAME of [undefined, "", "local", " ci ", "stg", "prod"]) {
+          for (const NODE_ENV of [undefined, "production", "development", "test"]) {
+            const env = { REPLAY_DRIVER, RELAY_DRIVERS, ENV_NAME, NODE_ENV };
+            let want: boolean;
+            try {
+              want = config.replayDriverMode(env) === "fake";
+              if (want) counts.fake++; else counts.notFake++;
+            } catch {
+              want = false;
+              counts.refused++;
+            }
+            expect(config.replayDriverIsFake(env), JSON.stringify(env)).toBe(want);
+          }
+        }
+      }
+    }
+    expect(counts.fake + counts.notFake + counts.refused, "anti-vacuity: 8 x 5 x 6 x 4 settings").toBe(960);
+    for (const [k, n] of Object.entries(counts)) expect(n, `the sweep reaches ${k}`).toBeGreaterThan(0);
+  });
+});
+
+describe("bunnyConfig — the Bunny settings, from env only (Task 21)", () => {
+  const SECRETS = {
+    BUNNY_STREAM_API_KEY: "ZZ-fake-api-key-5c1e",
+    BUNNY_STREAM_READONLY_KEY: "ZZ-fake-readonly-key-77d0",
+    BUNNY_TOKEN_KEY: "ZZ-fake-token-key-a93b",
+  };
+  const FULL = { BUNNY_STREAM_LIBRARY_ID: "424242", BUNNY_STREAM_CDN_HOST: "vz-fake000.b-cdn.net", ...SECRETS };
+  const NAMES = Object.keys(FULL);
+
+  it("reads the five settings, trimmed", () => {
+    const padded = Object.fromEntries(Object.entries(FULL).map(([k, v]) => [k, ` ${v} `]));
+    expect(config.bunnyConfig(padded)).toEqual({
+      libraryId: "424242",
+      apiKey: SECRETS.BUNNY_STREAM_API_KEY,
+      readOnlyKey: SECRETS.BUNNY_STREAM_READONLY_KEY,
+      cdnHost: "vz-fake000.b-cdn.net",
+      tokenKey: SECRETS.BUNNY_TOKEN_KEY,
+    });
+  });
+
+  it("with nothing set it throws naming every variable", () => {
+    expect(() => config.bunnyConfig({})).toThrow(/BUNNY_STREAM_API_KEY/);
+    const message = (() => { try { config.bunnyConfig({}); return ""; } catch (e) { return (e as Error).message; } })();
+    for (const name of NAMES) expect(message, name).toContain(name);
+    expect(NAMES).toHaveLength(5);
+  });
+
+  it("names only the variable that is missing, and a blank one counts as missing", () => {
+    for (const missing of NAMES) {
+      const env: Record<string, string> = { ...FULL };
+      delete env[missing];
+      const fn = () => config.bunnyConfig(env);
+      expect(fn, missing).toThrow(new RegExp(`\\b${missing}\\b`));
+      for (const other of NAMES.filter((n) => n !== missing)) expect(fn, `${missing} missing, ${other} named`).not.toThrow(new RegExp(`\\b${other}\\b`));
+      expect(() => config.bunnyConfig({ ...FULL, [missing]: "   " }), `${missing} blank`).toThrow(new RegExp(`\\b${missing}\\b`));
+    }
+  });
+
+  it("never puts a value in its message: a set secret, a set id and host, and a malformed host all stay out", () => {
+    const messageOf = (env: Record<string, string>) => { try { config.bunnyConfig(env); return null; } catch (e) { return (e as Error).message; } };
+    const withoutTokenKey: Record<string, string> = { ...FULL };
+    delete withoutTokenKey.BUNNY_TOKEN_KEY;
+    const missing = messageOf(withoutTokenKey);
+    expect(missing).toMatch(/BUNNY_TOKEN_KEY/);
+    const badHost = messageOf({ ...FULL, BUNNY_STREAM_CDN_HOST: "https://secret-host.example/path" });
+    expect(badHost).toMatch(/BUNNY_STREAM_CDN_HOST/);
+    const values = [...Object.values(FULL), "https://secret-host.example/path", "secret-host.example"];
+    let checked = 0;
+    for (const message of [missing, badHost]) {
+      for (const value of values) {
+        expect(message, `a value leaked: ${value.slice(0, 6)}…`).not.toContain(value);
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(2 * values.length);
+  });
+
+  it("the CDN host must be a bare hostname: a scheme, port or path throws", () => {
+    for (const bad of ["https://vz-fake000.b-cdn.net", "vz-fake000.b-cdn.net:443", "vz-fake000.b-cdn.net/x", "vz fake"]) {
+      expect(() => config.bunnyConfig({ ...FULL, BUNNY_STREAM_CDN_HOST: bad }), bad).toThrow(/BUNNY_STREAM_CDN_HOST/);
+    }
+  });
+});
+
+describe("the replay move's numbers (Task 24): each is the ruling's or the recommendation's own figure, typed here", () => {
+  it("owner ruling 2026-11-21 (G-A, G-E): 15 min after the result; recommendations 2026-11-21: the Cloudflare delete 60 min after the check, the undecided fallback 6 h", () => {
+    expect(config.SEAZN_REPLAY_DELAY_MINUTES).toBe(15);
+    expect(config.SEAZN_CF_DELETE_DELAY_MINUTES).toBe(60);
+    expect(config.SEAZN_REPLAY_UNDECIDED_FALLBACK_HOURS).toBe(6);
+  });
+  it("the plan's mover decisions: stale fetch 30 min, poll backstop 15 min, claim lease 120 s, batch 10, fetch URL 6 h, backoff cap 60 min, retry window 30 days", () => {
+    expect(config.SEAZN_FETCH_STALE_MINUTES).toBe(30);
+    expect(config.SEAZN_POLL_BACKSTOP_MINUTES).toBe(15);
+    expect(config.SEAZN_CLAIM_LEASE_SECONDS).toBe(120);
+    expect(config.SEAZN_REPLAY_CLAIM_BATCH).toBe(10);
+    expect(config.SEAZN_FETCH_URL_TTL_SECONDS).toBe(6 * 3600);
+    expect(config.SEAZN_REPLAY_BACKOFF_MAX_MINUTES).toBe(60);
+    // The retry window is the Cloudflare copy's own life: past it there is nothing left to fetch.
+    expect(config.SEAZN_REPLAY_RETRY_DAYS).toBe(30);
+    expect(config.SEAZN_REPLAY_RETRY_DAYS).toBe(config.DELETE_RECORDING_AFTER_DAYS);
+  });
+});
+
+describe("REPLAY_EMBED_TOKEN_TTL_SECONDS (Task 21)", () => {
+  it("is pinned at one hour (probe B8 left the number standing)", () => {
+    expect(config.REPLAY_EMBED_TOKEN_TTL_SECONDS).toBe(3600);
+  });
+});
+
+// Phase 1 visual re-capture R2, review I1: the match page waits for a stopped session's recording as long as the REAL path takes, and
+// the slowest link on it is the stream tick's own period (the tick's Seazn pass locks the recording). The period is read back off the
+// Worker's deployed triggers, never typed here: a change to prod's or stg's cron moves this pin.
+describe("STREAM_TICK_PERIOD_SECONDS and SEAZN_RECORDING_LOCK_BY_SECONDS (review I1)", () => {
+  type Wrangler = { env: Record<string, { triggers: { crons: string[] } }> };
+  const wrangler = JSON.parse(readFileSync(resolve(import.meta.dirname, "../../../../../cron-worker/wrangler.json"), "utf8")) as Wrangler;
+  // The period of a cron that fires every minute or every n minutes (`*` or `*` + `/n` in the minute field, every other field `*`); null for
+  // any other (the hourly trigger, which fires on one fixed minute).
+  const periodSeconds = (cron: string): number | null => {
+    const [minute, ...rest] = cron.trim().split(/\s+/);
+    if (rest.length !== 4 || rest.some((f) => f !== "*")) return null;
+    if (minute === "*") return 60;
+    const every = /^\*\/(\d+)$/.exec(minute!);
+    return every === null ? null : Number(every[1]) * 60;
+  };
+
+  it("the cron reader itself: every minute, every n minutes, and the ones that are not a period", () => {
+    const cases: [string, number | null][] = [["* * * * *", 60], ["*/5 * * * *", 300], ["*/10 * * * *", 600], ["17 * * * *", null], ["0 */2 * * *", null], ["*/5 * * *", null]];
+    for (const [cron, want] of cases) expect(periodSeconds(cron), cron).toBe(want);
+    expect(cases.length, "cases checked").toBe(6);
+  });
+
+  it("is the SLOWEST of the periods the Worker is deployed with: each env has exactly one fast trigger, and the constant is the larger", () => {
+    const periods = Object.entries(wrangler.env).map(([env, e]) => {
+      const fast = e.triggers.crons.map(periodSeconds).filter((p): p is number => p !== null);
+      expect(fast, `${env}: exactly one fast trigger`).toHaveLength(1);
+      return fast[0]!;
+    });
+    expect(periods.length, "anti-vacuity: both deployments were read").toBe(2);
+    expect(config.STREAM_TICK_PERIOD_SECONDS).toBe(Math.max(...periods));
+    for (const p of periods) expect(config.STREAM_TICK_PERIOD_SECONDS, "no deployment ticks slower than the constant").toBeGreaterThanOrEqual(p);
+  });
+
+  it("the lock lands within the finalisation grace plus one whole tick period of the end: Cloudflare's own hold and a tick period both fit inside it", () => {
+    expect(config.SEAZN_RECORDING_LOCK_BY_SECONDS).toBeGreaterThanOrEqual(config.INGEST_TIMEOUT_SECONDS + config.HOLD_SLACK_SECONDS + config.STREAM_TICK_PERIOD_SECONDS);
+    expect(config.SEAZN_RECORDING_LOCK_BY_SECONDS, "a whole period beyond the grace the recording is finished by").toBeGreaterThanOrEqual(config.FINALISATION_GRACE_SECONDS + config.STREAM_TICK_PERIOD_SECONDS);
+  });
+});

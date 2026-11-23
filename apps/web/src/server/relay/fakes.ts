@@ -1,5 +1,5 @@
 // server/relay/fakes.ts — FakeIngest / FakeRunner. Two modes in one class:
-//  * SCRIPTED (unit tests): `setState`, `addVideo`, `scriptDeleteVideo`.
+//  * SCRIPTED (unit tests): `setState`, `addVideo`, `addRecording`, `scriptDeleteVideo`.
 //  * CLOCK-DERIVED (a server started with RELAY_DRIVERS=fake): an input is
 //    "connected" once `connectAfterMs` has passed since its creation, and the
 //    creation time is ENCODED IN THE INPUT ID (`fake-in-<ms>-<rand>`), so the
@@ -27,7 +27,7 @@ import { runnerCreateErrorFrom } from "./runner-fly";  // …mapped onto the por
 import { NOOP_RECORDER } from "./ports";
 import type {
   DeleteVideoResult, IngestCapabilities, IngestCreateSpec, IngestCredentials, IngestProvider,
-  IngestState, IngestStatus, IngestTarget, IngestVideo, OutputState, ProviderCallMeta, ProviderCallRecord,
+  IngestState, IngestStatus, IngestTarget, IngestVideo, InputAccess, InputSwitchMeta, OutputState, ProviderCallMeta, ProviderCallRecord,
   ProviderCallRecorder, RunnerHandle, RunnerListing,
   RunnerObservation, RunnerProvider, RunnerSpec, StorageUsage,
 } from "./ports";
@@ -77,7 +77,8 @@ export function connectAfterMsFromEnv(): number {
 /** Dd: a test names the fields it cares about; the fake supplies the rest. */
 export type FakeVideoInput = Pick<IngestVideo, "videoId" | "inputId" | "createdAt" | "inProgress"> & Partial<IngestVideo>;
 
-interface FakeInput { createdAt: number; scripted: IngestState | null; outputs: IngestTarget[]; deleted: boolean; outputUids: string[]; enabled: boolean }
+/** `access` (Task 12): the signing the input holds — what its create sent, then what each switch re-sent; null is unsigned. */
+interface FakeInput { createdAt: number; scripted: IngestState | null; outputs: IngestTarget[]; deleted: boolean; outputUids: string[]; enabled: boolean; access: InputAccess | null }
 
 export class FakeIngest implements IngestProvider {
   readonly capabilities: IngestCapabilities = {
@@ -93,6 +94,8 @@ export class FakeIngest implements IngestProvider {
   private readonly inputs = new Map<string, FakeInput>();
   private videos: IngestVideo[] = [];
   private readonly deleteScripts = new Map<string, DeleteVideoResult[]>();
+  /** Seazn Task 13 (C6 stand-in): input → recordings of OTHER inputs its listing also answers (`seedInputListing`). */
+  private readonly listingSeeds = new Map<string, string[]>();
   private readonly clock: () => number;
   private readonly connectAfterMs: number;
 
@@ -117,7 +120,8 @@ export class FakeIngest implements IngestProvider {
     const createdAt = this.clock();
     const inputId = `fake-in-${createdAt}-${randomBytes(4).toString("hex")}`;
     this.record("createLiveInput", "POST", "/live_inputs", [], inputId, spec.sessionId);
-    this.inputs.set(inputId, { createdAt, scripted: null, outputs: [], deleted: false, outputUids: [], enabled: true });   // Cloudflare's default: enabled
+    this.inputs.set(inputId, { createdAt, scripted: null, outputs: [], deleted: false, outputUids: [], enabled: true,   // Cloudflare's default: enabled
+      access: spec.access ? { signed: true, allowedOrigins: [...spec.access.allowedOrigins] } : null });
     // R2004: a composed session's programme input shares the camera's session and slot, so its stream id names the role.
     // The camera's is the id it always was (`role` absent is the camera).
     const streamId = spec.role === "programme" ? `${spec.sessionId}-programme-${spec.slot}` : `${spec.sessionId}-${spec.slot}`;
@@ -241,9 +245,23 @@ export class FakeIngest implements IngestProvider {
     return !!row && !row.deleted && row.enabled;
   }
 
+  /** Task 12 (G5): the signing an input holds — the signed settings of a Seazn session's programme input, null for an unsigned
+   *  one. An input this fake never made is a test's mistake, so it throws rather than answer a quiet null. */
+  inputAccess(inputId: string): InputAccess | null {
+    const row = this.inputs.get(inputId);
+    if (!row) throw new Error(`FakeIngest.inputAccess: unknown input ${inputId}`);
+    return row.access ? { signed: true, allowedOrigins: [...row.access.allowedOrigins] } : null;
+  }
+
   /** The port's switch (ingest-cf.ts: `PUT /live_inputs/{uid}`). An input that is GONE — deleted, or never made by this
-   *  fake — is Cloudflare's 404: success to a disable, a refusal to an enable. */
-  async setInputEnabled(inputId: string, enabled: boolean, meta: ProviderCallMeta = {}): Promise<void> {
+   *  fake — is Cloudflare's 404: success to a disable, a refusal to an enable. Task 12: it refuses what the adapter refuses — a
+   *  programme switch with no `access` (absent or `undefined`), before any call — and, as the adapter re-sends the whole recording, the input then
+   *  holds the access the switch named (C8 measured a signed re-send keeping the signing; an unsigned re-send is unmeasured, and
+   *  the fake reads it pessimistically, as a downgrade). */
+  async setInputEnabled(inputId: string, enabled: boolean, meta: InputSwitchMeta = {}): Promise<void> {
+    if (meta.role === "programme" && meta.access === undefined) {
+      throw new Error(`FakeIngest.setInputEnabled: refused a programme input ${inputId} switch without its access — nothing was sent`);
+    }
     this.record("setInputEnabled", "PUT", `/live_inputs/${inputId}`, [inputId], inputId, meta.sessionId ?? null);
     this.enabledCalls.push({ inputId, enabled });
     const row = this.inputs.get(inputId);
@@ -252,6 +270,7 @@ export class FakeIngest implements IngestProvider {
       return;
     }
     row.enabled = enabled;
+    row.access = meta.access ? { signed: true, allowedOrigins: [...meta.access.allowedOrigins] } : null;
   }
 
   async deleteInput(inputId: string): Promise<void> {
@@ -271,16 +290,65 @@ export class FakeIngest implements IngestProvider {
    *  measurable — Cloudflare reads -1/-1/0/0 there, and the adapter maps those
    *  to null, so the fake must too, whatever the caller passed. */
   addVideo(v: FakeVideoInput): void {
+    // Seazn Task 13: `signed` defaults to false — C3 measured a FINISHED recording of a signed input reading unsigned, so a
+    // recording is publicly playable until something locks it; a test that means otherwise says so.
+    const signed = v.signed ?? false;
     this.videos.push(
       v.inProgress
-        ? { ...v, durationSeconds: null, sizeBytes: null, width: null, height: null, state: "live-inprogress", errorReasonCode: v.errorReasonCode ?? null }
+        ? { ...v, durationSeconds: null, sizeBytes: null, width: null, height: null, state: "live-inprogress", errorReasonCode: v.errorReasonCode ?? null, signed }
         : {
             ...v,
             durationSeconds: v.durationSeconds ?? null, sizeBytes: v.sizeBytes ?? null,
             width: v.width ?? null, height: v.height ?? null,
-            state: v.state ?? "ready", errorReasonCode: v.errorReasonCode ?? null,
+            state: v.state ?? "ready", errorReasonCode: v.errorReasonCode ?? null, signed,
           },
     );
+  }
+
+  /** Seazn Task 19: Cloudflare finishing a recording of `inputId` — a FINISHED recording (`ready`), unsigned as C3 measured a
+   *  signed input's recording to read, made on this fake's clock. The walkthrough's stand-in for the recording a real input
+   *  leaves behind (nothing in a server process adds videos otherwise), driven through the fake-ingest control route. A test
+   *  control like `addVideo`: no provider call is recorded. An input this instance never made throws (a deleted one does not:
+   *  a recording outlives its input, C2). Answers the new video's id. */
+  addRecording(inputId: string): string {
+    if (!this.inputs.has(inputId)) throw new Error(`FakeIngest.addRecording: unknown input ${inputId}`);
+    const videoId = `fake-vid-${this.clock()}-${randomBytes(4).toString("hex")}`;
+    this.addVideo({ videoId, inputId, createdAt: new Date(this.clock()).toISOString(), inProgress: false, state: "ready", durationSeconds: 60 });
+    return videoId;
+  }
+
+  /** Seazn Task 13: move a recording on — finish it (`inProgress: false, state: "ready"`), or read it unsigned again (C3 at
+   *  ready, the half of C7 nothing has measured). An unknown video is the test's mistake. */
+  updateVideo(videoId: string, patch: Partial<Omit<IngestVideo, "videoId">>): void {
+    const v = this.videos.find((x) => x.videoId === videoId);
+    if (!v) throw new Error(`FakeIngest.updateVideo: unknown video ${videoId}`);
+    Object.assign(v, patch);
+  }
+
+  /** Seazn Task 13: whether a recording needs a signed token to play — what `requireSignedVideo` set, or what the test seeded. */
+  videoAccess(videoId: string): boolean {
+    const v = this.videos.find((x) => x.videoId === videoId);
+    if (!v) throw new Error(`FakeIngest.videoAccess: unknown video ${videoId}`);
+    return v.signed === true;
+  }
+
+  /** Seazn Task 13, standing in for C6: `listInputVideos(inputId)` ALSO answers these recordings — each still naming its own
+   *  input, as Cloudflare's items do when a filter is ignored. Replaces any earlier seed for the input. */
+  seedInputListing(inputId: string, videoIds: readonly string[]): void {
+    this.listingSeeds.set(inputId, [...videoIds]);
+  }
+
+  /** Seazn Task 13: every requireSignedVideo call's video id, in order — a repeat and an unknown id included. */
+  readonly signedVideoCalls: string[] = [];
+  /** Phase 1 review I3: the deletion each requireSignedVideo call sent, in step with `signedVideoCalls`. */
+  readonly signedVideoDeleteAts: Date[] = [];
+
+  /** Seazn Task 24: every createDownload call's video id, in order — a repeat and an unknown id included. */
+  readonly downloadCalls: string[] = [];
+  private readonly downloadScripts = new Map<string, ("ready" | "inprogress")[]>();
+  /** Seazn Task 24: the next createDownload answers for a video, in order; once spent, a held video answers `ready`. */
+  scriptDownload(videoId: string, results: ("ready" | "inprogress")[]): void {
+    this.downloadScripts.set(videoId, [...results]);
   }
 
   scriptDeleteVideo(videoId: string, results: DeleteVideoResult[]): void {
@@ -298,7 +366,10 @@ export class FakeIngest implements IngestProvider {
    *  declares a small page sees the full-page case. */
   async listInputVideos(inputId: string, meta: ProviderCallMeta = {}): Promise<IngestVideo[]> {
     this.record("listInputVideos", "GET", `?live_input_id=${inputId}`, [inputId], inputId, meta.sessionId ?? null);
-    return this.videos.filter((v) => v.inputId === inputId).slice(0, this.capabilities.listVideosPageLimit).map((v) => ({ ...v }));
+    const seeded = this.listingSeeds.get(inputId) ?? [];
+    const own = this.videos.filter((v) => v.inputId === inputId);
+    const foreign = seeded.map((id) => this.videos.find((v) => v.videoId === id)).filter((v): v is IngestVideo => v !== undefined && v.inputId !== inputId);
+    return [...own, ...foreign].slice(0, this.capabilities.listVideosPageLimit).map((v) => ({ ...v }));
   }
 
   async deleteVideo(videoId: string): Promise<DeleteVideoResult> {
@@ -311,6 +382,34 @@ export class FakeIngest implements IngestProvider {
     this.videos.splice(i, 1);
     this.deletedVideos.push(videoId);
     return "deleted";
+  }
+
+  /** Seazn Task 13 (C1, C5): Cloudflare's `POST /stream/{uid}/token`. The fake's token says what it was minted for —
+   *  `fake.<uid>.<exp seconds>[.dl]` — so a test can read the uid, the expiry and the download right back out of a URL. */
+  async playbackToken(uid: string, o: { expiresAt: Date; downloadable?: boolean }): Promise<string> {
+    this.record("playbackToken", "POST", `/${uid}/token`, [uid], uid);
+    return `fake.${uid}.${Math.floor(o.expiresAt.getTime() / 1000)}${o.downloadable ? ".dl" : ""}`;
+  }
+
+  /** Seazn Task 13 (C3): Cloudflare's `POST /stream/{uid}` with `requireSignedURLs: true` and (review I3) `scheduledDeletion`. A
+   *  video the fake does not hold is the 404: `absent`. */
+  async requireSignedVideo(videoId: string, o: { deleteAt: Date }): Promise<"set" | "absent"> {
+    this.record("requireSignedVideo", "POST", `/${videoId}`, [videoId], videoId);
+    this.signedVideoCalls.push(videoId);
+    this.signedVideoDeleteAts.push(new Date(o.deleteAt));
+    const v = this.videos.find((x) => x.videoId === videoId);
+    if (!v) return "absent";
+    v.signed = true;
+    return "set";
+  }
+
+  /** Seazn Task 24 (C4): Cloudflare's `POST /stream/{uid}/downloads`. A video the fake does not hold (never added, or deleted) is
+   *  Cloudflare's 404 — a throw naming the id; a held one follows its script, then answers `ready`. */
+  async createDownload(videoId: string): Promise<"ready" | "inprogress"> {
+    this.record("createDownload", "POST", `/${videoId}/downloads`, [videoId], videoId);
+    this.downloadCalls.push(videoId);
+    if (!this.videos.some((v) => v.videoId === videoId)) throw new Error(`fake ingest: create download: no video ${videoId}`);
+    return this.downloadScripts.get(videoId)?.shift() ?? "ready";
   }
 }
 

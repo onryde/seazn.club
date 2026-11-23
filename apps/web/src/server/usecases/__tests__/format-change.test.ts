@@ -774,6 +774,8 @@ describe.skipIf(!HAS_DB)("FMT5 — every table that points at a fixture, a stage
     "fixture_seat_line(fixture_id)->fixtures": { action: "c", handling: "cascade" },
     "fixture_stream_codes(fixture_id)->fixtures": { action: "c", handling: "cascade" },
     "fixture_stream_sessions(fixture_id)->fixtures": { action: "n", handling: "refused while active (FORMAT_STREAM_LIVE), else set null" },
+    // Seazn replays (V542). Gap G1, routed to Task 31: nothing reads or cleans a fixtureless replay yet.
+    "fixture_video_replays(fixture_id)->fixtures": { action: "n", handling: "set null: the replay leaves the public view (it inner-joins fixtures), and its Bunny copy stays stored and billed with no reader until Task 31 cleans fixtureless rows" },
     "fixture_stream_settings(fixture_id)->fixtures": { action: "c", handling: "cascade" },
     "fixture_video_meetings(fixture_id)->fixtures": { action: "c", handling: "cascade (its trigger parks the room for ending)" },
     "fixtures(loser_to_fixture)->fixtures": { action: "n", handling: "set null (every fixture goes)" },

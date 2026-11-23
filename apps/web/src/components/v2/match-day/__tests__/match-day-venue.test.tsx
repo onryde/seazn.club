@@ -92,6 +92,7 @@ const fixture = (id: string, division: string): MatchDayFixture => ({
   stream: null,
   scorer_attention: null,
   live_video: null,
+  live_seazn: false,
   format_line: null,
   court_stream: false,
   own_stream_code: false,

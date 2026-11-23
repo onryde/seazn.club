@@ -20,7 +20,7 @@
 // database's now() is judged on the rig's clock, which by then lags the database by however long the rig took to build,
 // so `sweep()` first moves a lagging rig clock forward to the real now (never backward — the retention test runs days
 // ahead on purpose). Second-scale thresholds carry a 60 s margin for the same reason.
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomBytes, randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
@@ -34,7 +34,7 @@ import {
   AUTO_STOP_AFTER_RESULT_SECONDS, CLOUDFLARE_STORED_MICROS_PER_MINUTE, ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, FINALISATION_GRACE_SECONDS, MAX_DURATION_MINUTES, PHONE_BEAT_RETENTION_HOURS, PHONE_LOST_LIVE_MINUTES,
   PROVISION_TIMEOUT_SECONDS, RECORDING_RETENTION_DAYS,
   REQUESTED_TIMEOUT_SECONDS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, SAMPLE_RETENTION_DAYS, STALE_HEARTBEAT_SECONDS, WARMING_TIMEOUT_MINUTES,
-  relayEnvironment,
+  relayEnvironment, seaznHostedReplay,
 } from "@/server/relay/config";
 import { RECORDINGS_PER_SESSION } from "@/server/relay/domain/credits";
 import { machineNameFor } from "@/server/relay/domain/runner";
@@ -119,7 +119,7 @@ const OWN = relayEnvironment();
 /** Another deployment's identity: provably not this one's, whatever this one is called. */
 const FOREIGN = `${OWN}-elsewhere`;
 
-async function rig(mode: "passthrough" | "composed" = "passthrough") {
+async function rig(mode: "passthrough" | "composed" = "passthrough", opts: { seazn?: boolean } = {}) {
   const seeded = await seedOrg();
   // A8: seedOrg's auth.userId is null and createSession refuses a start nobody made (403) — a REAL users row starts it.
   const auth = { ...seeded.auth, userId: await rigUser() };
@@ -139,7 +139,12 @@ async function rig(mode: "passthrough" | "composed" = "passthrough") {
   const runner = new FakeRunner();
   const deps: SessionDeps = { drivers: { ingest, runner }, now: () => new Date(now), appUrl: "http://app.test" };
   await pairPresentPhone(fixtureId, { at: deps.now() });   // A7 (capture QR v2 T6): W5 refuses a Go live with no present phone
-  const { sessionId } = await createSession(auth, fixtureId, { mode, targetId: target.id }, deps);
+  // Seazn-hosted video Task 18: the org's own Seazn row (V541's trigger made it; read, never inserted). The caller holds
+  // SEAZN_HOSTED_LIVE on for the start — admission refuses a Seazn start with it off.
+  const targetId = opts.seazn
+    ? (await sql<{ id: string }[]>`select id from org_stream_targets where org_id = ${auth.orgId} and kind = 'seazn'`)[0]!.id
+    : target.id;
+  const { sessionId } = await createSession(auth, fixtureId, { mode, targetId }, deps);
   const state = async (sid = sessionId) => (await sql<{
     state: string; fail_reason: string | null; machine_id: string | null; runner_retries: number; runner_state: string; runner_gone_confirmed_at: Date | null;
   }[]>`
@@ -200,6 +205,7 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
       videosSeen: 0, recordingsFinalised: 0, summariesWritten: 0, samplesDeleted: 0,
       cameraInputsCleared: 0, cameraRecordingsDeleted: 0, cameraRecordingsDeferred: 0, cameraRecordingsRefused: 0, cameraListingsTruncated: 0,   // R2004 1c
       framesPurged: 0, framePurgesFailed: 0,   // R4 S9 7d
+      seaznHeld: 0, seaznHeldPastPromise: 0,   // Seazn-hosted video Task 18
     });
     expect(listMachines).not.toHaveBeenCalled();   // no composed session in scope ever held a runner
     expect(listInputVideos, "R2004 1c: no ended composed session, no camera listed").not.toHaveBeenCalled();
@@ -1694,5 +1700,306 @@ describe.skipIf(!HAS_DB)("R2004: an ended composed session's CAMERA recordings (
     expect(remove.mock.calls.map(([input, uid]) => [input, uid]), "B's output, removed from B").toEqual([[programme.ingest_input_id, out], [programme.ingest_input_id, out]]);
     expect(await sweep(r)).toMatchObject({ outputsReleased: 0, outputReleasesFailed: 0 });
     expect(remove).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// Seazn-hosted video, Phase 1 Task 18 (controller ruling 2026-11-20): every `destination_kind = 'seazn'` programme recording
+// is HELD past RECORDING_RETENTION_DAYS whatever SEAZN_HOSTED_LIVE and SEAZN_HOSTED_REPLAY say, so Phase 1 never deletes a
+// replay Phase 2 will move; Cloudflare's own 30-day deleteRecordingAfterDays is the backstop. A held recording past the
+// promise is alerted ONCE, ever (the seazn_held_alerts mark, V541). The hold only REMOVES from the delete set: the camera
+// step (1c) and every other destination are unchanged, and the ownership filter (I1(c), C6) still skips foreign videos.
+// Every session ends through the REAL path (Go live → stop → completed), on the fake ports.
+// ---------------------------------------------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("Seazn-hosted video Task 18: the sweep holds Seazn programme recordings past 3 days", () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+  const HELD_MESSAGE = "relay sweep: a Seazn recording past 3 days has not reached Bunny";
+  const heldReports = () => sentry.captureError.mock.calls.filter(([, c]) => (c as { route?: string }).route === "relay.sweep.seazn_held");
+  /** Older than the 3-day promise by a day: past retention for a video AND for an ended session's inputs. */
+  const pastPromise = () => new Date(Date.now() - (RECORDING_RETENTION_DAYS + 1) * DAY_MS);
+  const alertRows = (videoId: string) => sql<{ session_id: string }[]>`select session_id from seazn_held_alerts where cf_video_id = ${videoId}`;
+
+  /** A composed session to `seazn` (or the pasted YouTube key), live, its recordings made, ended, and its end dated past the
+   *  promise so retention would take its inputs too. Video ids are unique per run: the alert mark is keyed by them. */
+  async function endedComposed(o: { seazn: boolean; programmeAge: "old" | "fresh"; camera?: number }) {
+    vi.stubEnv("SEAZN_HOSTED_LIVE", "true");
+    vi.stubEnv("SEAZN_VIDEO_ORIGINS", "seazn.club");
+    const r = await rig("composed", { seazn: o.seazn });
+    const [{ kind }] = await sql<{ kind: string | null }[]>`select destination_kind as kind from fixture_stream_sessions where id = ${r.sessionId}`;
+    expect(kind, "PREMISE: admission copied the destination's kind").toBe(o.seazn ? "seazn" : "youtube");
+    await goLive(r);
+    const rows = await sql<{ role: string; ingest_input_id: string }[]>`
+      select role, ingest_input_id from fixture_stream_inputs where session_id = ${r.sessionId} order by role`;
+    expect(rows.map((x) => x.role), "PREMISE: a composed session holds a camera and a programme input").toEqual(["camera", "programme"]);
+    const [camera, programme] = [rows[0]!.ingest_input_id, rows[1]!.ingest_input_id];
+    const tag = randomUUID().slice(0, 8);
+    const cameraVideos = Array.from({ length: o.camera ?? 0 }, (_, k) => `vc${k}-${tag}`);
+    for (const v of cameraVideos) r.ingest.addVideo({ videoId: v, inputId: camera, createdAt: justBefore(), inProgress: false });
+    const programmeVideo = `vp-${tag}`;
+    r.ingest.addVideo({ videoId: programmeVideo, inputId: programme, createdAt: o.programmeAge === "old" ? pastPromise().toISOString() : justBefore(), inProgress: false });
+    await stopSession(r.auth, r.fixtureId, r.sessionId, r.deps);
+    await currentSession(r.auth, r.fixtureId, r.deps);
+    expect((await r.state()).state, "PREMISE: the session ended").toBe("completed");
+    await sql`update fixture_stream_sessions set ended_at = ${pastPromise()} where id = ${r.sessionId}`;
+    vi.unstubAllEnvs();
+    return { r, camera, programme, cameraVideos, programmeVideo };
+  }
+  const listedIds = async (r: Rig) => (await r.ingest.listVideos({ createdBefore: new Date(Date.now() + DAY_MS) })).map((v) => v.videoId);
+  /** Phase 2's flags on: the day-3 alert is armed (review I3), so a case that asserts NO alert witnesses its own rule, not the gate. */
+  const replayOn = () => {
+    vi.stubEnv("SEAZN_HOSTED_LIVE", "true");
+    vi.stubEnv("SEAZN_HOSTED_REPLAY", "true");
+  };
+
+  // Phase 1 review I3: with no replay table yet (Task 23), every held recording would alert at day 3 — Sentry noise from the day
+  // stg turns LIVE on. The alert is armed only with SEAZN_HOSTED_REPLAY on (which needs LIVE: `seaznHostedReplay`); the HOLD
+  // reads no flag at all.
+  it.each([
+    { live: "true", replay: "false", alerts: false },   // Phase 1 shipped, Phase 2 not yet (the ruling's case): held, silent
+    { live: "true", replay: "true", alerts: true },     // Phase 2 on, but this recording has no replay row: held, alerted once
+    { live: "false", replay: "false", alerts: false },  // LIVE turned off after the match streamed: the hold reads no flag
+    { live: "false", replay: "true", alerts: false },   // REPLAY alone is not on (Phase 2 needs Phase 1): held, silent
+  ])("LIVE $live, REPLAY $replay: a 4-day-old Seazn programme recording is held — not deleted, its input deferred — and alerted ONCE only with Phase 2 on ($alerts); a second pass alerts nothing", async ({ live, replay, alerts }) => {
+    const { r, camera, programme, programmeVideo } = await endedComposed({ seazn: true, programmeAge: "old" });
+    vi.stubEnv("SEAZN_HOSTED_LIVE", live);
+    vi.stubEnv("SEAZN_HOSTED_REPLAY", replay);
+    sentry.captureError.mockClear();
+    const first = await sweep(r);
+    expect(first).toMatchObject({ seaznHeld: 1, seaznHeldPastPromise: 1, videosDeleted: 0, foreignVideosSkipped: 0, retentionFailed: 0 });
+    expect(r.ingest.deletedVideos, "the held recording is never deleted").toEqual([]);
+    expect(await listedIds(r)).toContain(programmeVideo);
+    expect(r.ingest.deletedInputs, "the camera input (no recordings) goes; the programme input still names a held video").toEqual([camera]);
+    expect(first).toMatchObject({ inputsDeleted: 1, inputsDeferred: 1 });
+    const [prow] = await sql<{ ingest_input_id: string | null }[]>`select ingest_input_id from fixture_stream_inputs where session_id = ${r.sessionId} and role = 'programme'`;
+    expect(prow!.ingest_input_id, "the programme row keeps its provider id").toBe(programme);
+    if (alerts) {
+      expect(heldReports(), "one alert for the recording").toHaveLength(1);
+      expect((heldReports()[0]![0] as Error).message).toBe(HELD_MESSAGE);
+      expect(heldReports()[0]![1]).toEqual({ route: "relay.sweep.seazn_held", extra: { sessionId: r.sessionId, cfVideoId: programmeVideo } });
+      expect(await alertRows(programmeVideo), "the mark remembers it").toEqual([{ session_id: r.sessionId }]);
+    } else {
+      expect(heldReports(), "Phase 2 off: no alert").toEqual([]);
+      expect(await alertRows(programmeVideo), "and no mark, so Phase 2 turned on later still alerts it").toEqual([]);
+    }
+    // The next day: still held, still deferred — and silent.
+    r.tick(DAY_MS);
+    const second = await sweep(r);
+    expect(second).toMatchObject({ seaznHeld: 1, seaznHeldPastPromise: 1, videosDeleted: 0, inputsDeleted: 0, inputsDeferred: 1 });
+    expect(r.ingest.deletedVideos).toEqual([]);
+    expect(heldReports(), "no second alert for the same recording").toHaveLength(alerts ? 1 : 0);
+    expect(await alertRows(programmeVideo)).toHaveLength(alerts ? 1 : 0);
+  });
+
+  // Phase 1 re-review N3: `seaznHostedReplay` throws on a value other than true/false (config.ts), and the sweep read it bare, so one
+  // typo in the env aborted the whole pass after its deletes — no video facts, no summaries, no purges. The sweep now reads it as
+  // off, with one warning per pass; the HOLD never read it, so nothing is deleted either way.
+  const flagWarnings = (warn: { mock: { calls: unknown[][] } }) =>
+    warn.mock.calls.filter(([, msg]) => typeof msg === "string" && /held-recording alert is off this pass/.test(msg));
+  it.each([
+    { live: "true", replay: "yes" },   // the typo on REPLAY itself
+    { live: "on", replay: "true" },    // REPLAY needs LIVE, so a typo there is read too
+  ])("review N3: LIVE $live, REPLAY $replay — a malformed flag with a recording past the promise: the pass completes (video facts written), nothing alerted or marked, ONE warning", async ({ live, replay }) => {
+    const { r, programmeVideo } = await endedComposed({ seazn: true, programmeAge: "old" });
+    vi.stubEnv("SEAZN_HOSTED_LIVE", live);
+    vi.stubEnv("SEAZN_HOSTED_REPLAY", replay);
+    expect(() => seaznHostedReplay(), "PREMISE: the flag reader throws on this value").toThrow();
+    sentry.captureError.mockClear();
+    const warn = vi.spyOn(log, "warn");
+    try {
+      const res = await sweep(r);
+      expect(res).toMatchObject({ seaznHeld: 1, seaznHeldPastPromise: 1, videosDeleted: 0 });
+      const facts = await sql<{ uid: string }[]>`
+        select payload->>'videoUid' as uid from fixture_stream_events where session_id = ${r.sessionId} and type = 'recording_finalised'`;
+      expect(facts.map((x) => x.uid), "step 5 ran after the alert step: the held recording's video fact is written").toEqual([programmeVideo]);
+      expect(heldReports(), "read as off: no alert").toEqual([]);
+      expect(await alertRows(programmeVideo), "and no mark").toEqual([]);
+      expect(flagWarnings(warn), "one warning for the pass").toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("review N3: EMPTY CASE — a malformed flag with nothing past the promise is never read: no warning", async () => {
+    const { r } = await endedComposed({ seazn: true, programmeAge: "fresh" });
+    vi.stubEnv("SEAZN_HOSTED_LIVE", "true");
+    vi.stubEnv("SEAZN_HOSTED_REPLAY", "yes");
+    const warn = vi.spyOn(log, "warn");
+    try {
+      const res = await sweep(r);
+      expect(res).toMatchObject({ seaznHeld: 1, seaznHeldPastPromise: 0 });
+      expect(flagWarnings(warn)).toHaveLength(0);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("review I3: a recording held silently while Phase 2 was off IS alerted, once, on the first pass after Phase 2 turns on", async () => {
+    const { r, programmeVideo } = await endedComposed({ seazn: true, programmeAge: "old" });
+    vi.stubEnv("SEAZN_HOSTED_LIVE", "true");
+    vi.stubEnv("SEAZN_HOSTED_REPLAY", "false");
+    sentry.captureError.mockClear();
+    await sweep(r);
+    expect(heldReports(), "PREMISE: silent with Phase 2 off").toEqual([]);
+    replayOn();
+    r.tick(DAY_MS);
+    await sweep(r);
+    expect(heldReports().map(([, c]) => (c as { extra: { cfVideoId: string } }).extra.cfVideoId)).toEqual([programmeVideo]);
+    expect(await alertRows(programmeVideo)).toEqual([{ session_id: r.sessionId }]);
+  });
+
+  it("the regression: a 4-day-old YouTube programme recording is still deleted, then its input — nothing held, nothing alerted (mutant: drop the destination predicate → red)", async () => {
+    const { r, camera, programme, programmeVideo } = await endedComposed({ seazn: false, programmeAge: "old" });
+    replayOn();
+    sentry.captureError.mockClear();
+    const res = await sweep(r);
+    expect(res).toMatchObject({ seaznHeld: 0, seaznHeldPastPromise: 0, videosDeleted: 1, inputsDeleted: 2, inputsDeferred: 0, retentionFailed: 0 });
+    expect(r.ingest.deletedVideos).toEqual([programmeVideo]);
+    expect([...r.ingest.deletedInputs].sort()).toEqual([camera, programme].sort());
+    expect(heldReports()).toEqual([]);
+    expect(await alertRows(programmeVideo)).toEqual([]);
+  });
+
+  it("a Seazn session's CAMERA recordings still go at the first pass after its end (step 1c, unchanged); a fresh programme recording is held but not yet alerted", async () => {
+    const { r, cameraVideos, programmeVideo } = await endedComposed({ seazn: true, programmeAge: "fresh", camera: 2 });
+    replayOn();
+    sentry.captureError.mockClear();
+    const res = await sweep(r);
+    expect(res).toMatchObject({ cameraRecordingsDeleted: 2, cameraRecordingsRefused: 0, cameraInputsCleared: 1, seaznHeld: 1, seaznHeldPastPromise: 0, videosDeleted: 0 });
+    expect([...r.ingest.deletedVideos].sort(), "the camera's two, never the programme's").toEqual([...cameraVideos].sort());
+    expect(await listedIds(r)).toContain(programmeVideo);
+    expect(heldReports(), "inside the promise: no alert").toEqual([]);
+    expect(await alertRows(programmeVideo)).toEqual([]);
+  });
+
+  it("C6: beside the held Seazn video, 4-day-old recordings of inputs this database does not own and one with NO input are never deleted — counted as foreign — and the held one is still held", async () => {
+    const { r, programmeVideo } = await endedComposed({ seazn: true, programmeAge: "old" });
+    const foreign = [
+      { videoId: `vf1-${randomUUID().slice(0, 8)}`, inputId: `foreign-${randomUUID()}` },
+      { videoId: `vf2-${randomUUID().slice(0, 8)}`, inputId: `foreign-${randomUUID()}` },
+      { videoId: `vf3-${randomUUID().slice(0, 8)}`, inputId: null },
+    ];
+    for (const f of foreign) r.ingest.addVideo({ ...f, createdAt: pastPromise().toISOString(), inProgress: false });
+    vi.stubEnv("SEAZN_HOSTED_LIVE", "true");
+    const res = await sweep(r);
+    expect(res.foreignVideosSkipped, "anti-vacuity: every foreign and input-less recording was seen and skipped").toBe(foreign.length);
+    expect(res).toMatchObject({ seaznHeld: 1, seaznHeldPastPromise: 1, videosDeleted: 0 });
+    expect(r.ingest.deletedVideos, "nothing deleted: not the held one, not a foreign one").toEqual([]);
+    const left = await listedIds(r);
+    for (const v of [programmeVideo, ...foreign.map((f) => f.videoId)]) expect(left).toContain(v);
+    for (const f of foreign) if (f.inputId) expect(r.ingest.deletedInputs).not.toContain(f.inputId);
+  });
+
+  it("review m3: a 4-day-old Seazn CAMERA recording that reaches retention (step 1c already marked its row) IS deleted — only the programme is held (mutant: drop the `role = 'programme'` predicate → red)", async () => {
+    const { r, camera, programmeVideo } = await endedComposed({ seazn: true, programmeAge: "old" });
+    const cameraVideo = `vc-old-${randomUUID().slice(0, 8)}`;
+    r.ingest.addVideo({ videoId: cameraVideo, inputId: camera, createdAt: pastPromise().toISOString(), inProgress: false });
+    // 1c skips a marked camera row, so the recording meets step 4 (a 1c listing that failed earlier leaves the same shape).
+    await sql`update fixture_stream_inputs set recordings_deleted_at = now() where session_id = ${r.sessionId} and role = 'camera'`;
+    const res = await sweep(r);
+    expect(res).toMatchObject({ cameraRecordingsDeleted: 0, videosDeleted: 1, seaznHeld: 1, seaznHeldPastPromise: 1, inputsDeleted: 1, inputsDeferred: 1 });
+    expect(r.ingest.deletedVideos, "the camera's recording goes; the programme's is held").toEqual([cameraVideo]);
+    expect(r.ingest.deletedInputs).toEqual([camera]);
+    expect(await listedIds(r)).toContain(programmeVideo);
+  });
+
+  // Seazn-hosted video Task 24 (carries from Task 23 and Phase 1 re-review N5). The day-3 alert means "this recording has not
+  // reached the replay host": a recording whose replay row is `playable` (moved and checked; its Cloudflare copy goes 60 min
+  // later) or `deleted` (the organiser removed the replay) is handled, and never alerts. Every other row state, and no row, still
+  // alerts. The rows are written by SQL: the mover's own path is seazn-replays.test.ts's; this is the sweep's read of them.
+  const replayRow = (r: Rig, videoId: string, part: number, state: string) => sql`
+    insert into fixture_video_replays (org_id, session_id, fixture_id, cf_video_id, recorded_at, part_no, state, bunny_video_id, verified_at)
+    values (${r.orgId}, ${r.sessionId}, ${r.fixtureId}, ${videoId}, now(), ${part}, ${state},
+            ${state === "playable" || state === "encoding" ? `g-${videoId}` : null}, ${state === "playable" ? new Date() : null})`;
+  it("Task 24 carry: a recording whose replay is playable or organiser-deleted is handled — not alerted, not marked; one whose replay is encoding, failed or absent still alerts", async () => {
+    const { r, programme, programmeVideo } = await endedComposed({ seazn: true, programmeAge: "old" });
+    const tag = randomUUID().slice(0, 8);
+    const rows = [
+      { videoId: programmeVideo, state: "playable", alerts: false },
+      { videoId: `vpd-${tag}`, state: "deleted", alerts: false },
+      { videoId: `vpe-${tag}`, state: "encoding", alerts: true },
+      { videoId: `vpf-${tag}`, state: "failed", alerts: true },
+      { videoId: `vpn-${tag}`, state: null, alerts: true },
+    ];
+    for (const [i, x] of rows.entries()) {
+      if (x.videoId !== programmeVideo) r.ingest.addVideo({ videoId: x.videoId, inputId: programme, createdAt: pastPromise().toISOString(), inProgress: false });
+      if (x.state !== null) await replayRow(r, x.videoId, i + 1, x.state);
+    }
+    replayOn();
+    sentry.captureError.mockClear();
+    const res = await sweep(r);
+    expect(res, "every one is still held, and past the promise").toMatchObject({ seaznHeld: rows.length, seaznHeldPastPromise: rows.length, videosDeleted: 0 });
+    const alerted = heldReports().map(([, c]) => (c as { extra: { cfVideoId: string } }).extra.cfVideoId).sort();
+    expect(alerted).toEqual(rows.filter((x) => x.alerts).map((x) => x.videoId).sort());
+    let checked = 0;
+    for (const x of rows) {
+      expect(await alertRows(x.videoId), `${x.state}: marked iff alerted`).toHaveLength(x.alerts ? 1 : 0);
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
+
+  // Phase 1 re-review N5: the day Phase 2 turns on, every recording already past the promise is alerted at once — one Sentry
+  // event per recording would be a flood. Up to HELD_ALERT_EACH_MAX (5, typed here) unmarked recordings alert one by one, as
+  // before; past that the pass sends ONE summary naming the count and the first 10 ids, and marks every one of them.
+  it.each([
+    { n: 5, events: 5 },
+    { n: 6, events: 1 },
+    { n: 12, events: 1 },
+  ])("review N5: $n unmarked recordings past the promise send $events alert event(s); every one is marked, and a second pass sends nothing", async ({ n, events }) => {
+    const { r, programme, programmeVideo } = await endedComposed({ seazn: true, programmeAge: "old" });
+    const tag = randomUUID().slice(0, 8);
+    const ids = [programmeVideo, ...Array.from({ length: n - 1 }, (_, k) => `vpx${k}-${tag}`)];
+    for (const v of ids.slice(1)) r.ingest.addVideo({ videoId: v, inputId: programme, createdAt: pastPromise().toISOString(), inProgress: false });
+    replayOn();
+    sentry.captureError.mockClear();
+    const res = await sweep(r);
+    expect(res).toMatchObject({ seaznHeld: n, seaznHeldPastPromise: n, videosDeleted: 0 });
+    expect(heldReports(), "the alert events").toHaveLength(events);
+    if (events === 1) {
+      const [err, ctx] = heldReports()[0]!;
+      expect((err as Error).message).toBe(`relay sweep: ${n} Seazn recordings past 3 days have not reached Bunny`);
+      const extra = (ctx as { extra: { count: number; cfVideoIds: string[] } }).extra;
+      expect(extra.count).toBe(n);
+      expect(extra.cfVideoIds, "the first 10 ids, at most").toHaveLength(Math.min(n, 10));
+      for (const v of extra.cfVideoIds) expect(ids).toContain(v);
+    }
+    let marked = 0;
+    for (const v of ids) marked += (await alertRows(v)).length;
+    expect(marked, "every recording is marked").toBe(n);
+    sentry.captureError.mockClear();
+    r.tick(DAY_MS);
+    await sweep(r);
+    expect(heldReports(), "a second pass: nothing").toEqual([]);
+  });
+
+  it("review m2: an alert that FAILS does not stop the pass's other alerts — the failure is reported, the other recording is alerted and marked, and the next pass alerts only the unmarked one", async () => {
+    const { r, programme, programmeVideo } = await endedComposed({ seazn: true, programmeAge: "old" });
+    const second = `vp2-${randomUUID().slice(0, 8)}`;
+    r.ingest.addVideo({ videoId: second, inputId: programme, createdAt: pastPromise().toISOString(), inProgress: false });
+    const both = [programmeVideo, second];
+    replayOn();
+    const isHeldAlert = (e: unknown) => e instanceof Error && e.message === HELD_MESSAGE;
+    const alertedIds = () => heldReports().filter(([e]) => isHeldAlert(e)).map(([, c]) => (c as { extra: { cfVideoId: string } }).extra.cfVideoId);
+    let thrown = 0;
+    sentry.captureError.mockClear();
+    sentry.captureError.mockImplementation((e: unknown) => { if (isHeldAlert(e) && thrown === 0) { thrown++; throw new Error("sentry transport down"); } });
+    try {
+      const res = await sweep(r);
+      expect(thrown, "anti-vacuity: the first alert DID fail").toBe(1);
+      expect(res).toMatchObject({ seaznHeld: 2, seaznHeldPastPromise: 2, videosDeleted: 0 });
+      expect([...alertedIds()].sort(), "both recordings were alerted — the failure did not end the loop").toEqual([...both].sort());
+      const failed = alertedIds()[0]!;
+      const ok = both.find((v) => v !== failed)!;
+      expect(heldReports().filter(([e]) => (e as Error).message === "sentry transport down"), "the failure is reported").toHaveLength(1);
+      expect(await alertRows(failed), "the failed alert left no mark").toEqual([]);
+      expect(await alertRows(ok), "the other one is marked").toEqual([{ session_id: r.sessionId }]);
+      sentry.captureError.mockClear();
+      r.tick(DAY_MS);
+      await sweep(r);
+      expect(alertedIds(), "the next pass alerts the unmarked one only").toEqual([failed]);
+      expect(await alertRows(failed)).toHaveLength(1);
+    } finally {
+      sentry.captureError.mockImplementation(() => undefined);
+    }
   });
 });

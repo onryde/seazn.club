@@ -23,11 +23,15 @@ const SQL_ONLY = stripSqlComments(STREAM_DELTAS);
 const V430_TABLES = ["fixture_stream_codes", "fixture_stream_settings", "fixture_stream_pairings", "fixture_stream_phone_beats"];
 /** V525's court table (court stream), by name — the fold must find it, enabled AND forced. */
 const V525_TABLES = ["court_stream_links"];
+/** V541's two Seazn mark tables (Seazn-hosted video, Task 9), by name — the V430 pattern. */
+const V541_TABLES = ["seazn_held_alerts", "seazn_locked_videos"];
+/** V542's three replay tables (Seazn-hosted video, Task 23), by name — the V430 pattern. */
+const V542_TABLES = ["org_video_collections", "fixture_video_replays", "bunny_webhook_events"];
 
 describe("the stream deltas — RLS is static text, not a runtime hope", () => {
   it("every created table has `enable row level security` AND `force row level security`", () => {
-    // V410's eight, plus V430's four (R1), plus V525's court table.
-    expect(STREAM_TABLES.length).toBeGreaterThanOrEqual(8 + V430_TABLES.length + V525_TABLES.length);
+    // V410's eight, plus V430's four (R1), plus V525's court table, plus V541's two Seazn marks, plus V542's three replay tables.
+    expect(STREAM_TABLES.length).toBeGreaterThanOrEqual(8 + V430_TABLES.length + V525_TABLES.length + V541_TABLES.length + V542_TABLES.length);
     let checked = 0;
     for (const t of STREAM_TABLES) {
       expect(SQL_ONLY, t).toMatch(new RegExp(`alter table ${t}\\s+enable\\s+row level security;`));
@@ -59,6 +63,34 @@ describe("the stream deltas — RLS is static text, not a runtime hope", () => {
       checked++;
     }
     expect(checked).toBe(1);
+  });
+
+  it("V541's two Seazn mark tables are in the fold, enabled AND forced, and org_stream_targets stays enabled AND forced", () => {
+    expect(STREAM_DELTA_FILES, "the fold reads V541").toContain("V541__seazn_destination.sql");
+    let checked = 0;
+    for (const t of V541_TABLES) {
+      expect(STREAM_TABLES, t).toContain(t);
+      expect(SQL_ONLY, t).toMatch(new RegExp(`alter table ${t}\\s+enable\\s+row level security;`));
+      expect(SQL_ONLY, t).toMatch(new RegExp(`alter table ${t}\\s+force\\s+row level security;`));
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // V541 adds a row to org_stream_targets and changes none of its RLS: no disable, no `no force` anywhere in the fold.
+    expect(SQL_ONLY).not.toMatch(/alter table org_stream_targets\s+(disable|no force)\s+row level security/);
+  });
+
+  it("V542's three replay tables are in the fold, enabled AND forced, and its view is not granted", () => {
+    expect(STREAM_DELTA_FILES, "the fold reads V542").toContain("V542__seazn_replays.sql");
+    let checked = 0;
+    for (const t of V542_TABLES) {
+      expect(STREAM_TABLES, t).toContain(t);
+      expect(SQL_ONLY, t).toMatch(new RegExp(`alter table ${t}\\s+enable\\s+row level security;`));
+      expect(SQL_ONLY, t).toMatch(new RegExp(`alter table ${t}\\s+force\\s+row level security;`));
+      checked++;
+    }
+    expect(checked).toBe(3);
+    expect(SQL_ONLY).toMatch(/create view public_fixture_seazn_replays_v\b/);
+    expect(SQL_ONLY).not.toMatch(/grant [^;]*public_fixture_seazn_replays_v/i);
   });
 
   // m-2 (B3 review): the fold selects deltas by FILENAME (/stream|capture/), so a later `V4xx__relay_*.sql` that alters

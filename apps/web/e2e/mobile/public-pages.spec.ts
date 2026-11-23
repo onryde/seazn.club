@@ -21,6 +21,9 @@ import {
 } from "../../src/games/2048/state";
 import { posterSvg, routePosterArt, storagePublicUrl } from "../helpers/poster-art";
 import { projectViewport, projectTag } from "./_shared";
+import publicEn from "../../src/dictionaries/en/public.json" with { type: "json" };
+import { SEAZN_VIDEO_POLL_FLOOR_MS } from "../../src/components/public-site/match-centre/seazn-video-schedule";
+import { finishSeaznMatch, playsHlsNatively, seedSeaznMatch, signedAddressPattern, stubFakePlaybackHost } from "../helpers/seazn-video-seed";
 
 // Not serial: no test here reads state another test writes (no module-level `let` is shared), so one red does not skip the rest (AGENTS.md class 21).
 
@@ -534,4 +537,54 @@ test("RB5-W2 an expunged leaver's hub Matches cards read Abandoned, struck, no h
   expect(checked, "anti-vacuity: her three lines").toBe(3);
   await expect(card(k.played)).not.toHaveAttribute("data-expunged", "true");
   await expectNoHorizontalScroll(page);
+});
+
+// Seazn-hosted video, Phase 1 Task 15 (spec §5.1): the match page's live player at every width project. The stage is 16:9 with a 200px floor
+// inside the court card, so on a 320px phone it is the floor that sets its height; the live chip sits over the picture and the page must
+// not scroll sideways. What a node test cannot see (classes 2 and 23): the box inside the viewport, nothing clipped in the player's
+// region (the picker is the one place the region may scroll, and a live source has none), and the real element holding the real
+// (fake-driver) signed address. The org is the test's OWN: a fresh user per project, so seven width projects never share a session.
+// The session behind the page is a seeded row (helpers/seazn-video-seed.ts: why, and what the producer's proof is). Not serial.
+test("Seazn live player on the match page: inside the viewport at its 16:9 stage, nothing clipped, no horizontal scroll", async ({ page }) => {
+  const vp = projectViewport();
+  expect(vp, "this project declares a viewport").not.toBeNull();
+  const LOGIN_MS = 30_000;
+  const SEED_MS = 60_000;
+  const FIRST_READ_MS = SEAZN_VIDEO_POLL_FLOOR_MS;
+  test.setTimeout(Math.max(FLOOR_MS, LOGIN_MS + SEED_MS + FIRST_READ_MS + 6 * ROUTE_CHECK_MS));
+
+  await loginUi(page, `delivered+seazn-player-${TAG}-${projectTag()}@resend.dev`);
+  const m = await seedSeaznMatch(page, { name: `Seazn Player ${TAG} ${projectTag()}`, ensurePro: true, live: true });
+  try {
+    const stub = await stubFakePlaybackHost(page);
+    await page.goto(m.publicPath, { waitUntil: "load" });
+    await dismissCookieBanner(page);
+    const player = page.getByTestId("seazn-player");
+    const video = page.locator('[data-testid="seazn-player"] video');
+    await expect(video, "the island read the route: the live player is on the page").toBeVisible({ timeout: FIRST_READ_MS });
+    const address = await video.getAttribute("data-src");
+    expect(address, "the server's own signed address, on the fake host").toMatch(signedAddressPattern(m.programmeUid));
+    if (await playsHlsNatively(page)) await expect(video).toHaveAttribute("src", address!);
+    else await expect.poll(() => stub.requests, { message: "hls.js asked the signed address for its manifest" }).toContain(address!);
+
+    await player.scrollIntoViewIfNeeded();
+    const box = await player.boundingBox();
+    expect(box, "the player has a box").not.toBeNull();
+    expect(box!.x, "inside the left edge").toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width, `inside the right edge at ${vp!.width}px`).toBeLessThanOrEqual(vp!.width + 0.5);
+    expect(box!.height, "the stage keeps its 200px floor").toBeGreaterThanOrEqual(200);
+    expect(box!.width / box!.height, "and is never narrower than 16:9 allows (the floor only makes it taller on a phone)").toBeLessThanOrEqual(16 / 9 + 0.01);
+    // The live chip is over the picture, inside the stage.
+    const chip = player.getByText(publicEn["seaznVideo.live"], { exact: true });
+    await expect(chip).toBeVisible();
+    const chipBox = await chip.boundingBox();
+    expect(chipBox!.x + chipBox!.width, "the chip is inside the stage").toBeLessThanOrEqual(box!.x + box!.width + 0.5);
+
+    const { clipped } = await overflowingIn(page, '[data-testid="seazn-video"]', "div,span,p,button,video", "the Seazn region was not in the DOM");
+    expect(clipped, "nothing in the player's region is silently clipped").toEqual([]);
+    await expectNoHorizontalScroll(page);
+    await expect(page.getByTestId("seazn-player-unavailable")).toHaveCount(0);
+  } finally {
+    await finishSeaznMatch(m);
+  }
 });

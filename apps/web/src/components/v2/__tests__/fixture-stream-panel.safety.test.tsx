@@ -9,7 +9,7 @@ import { renderIsland, propsOf, walk, expandWithHooks, textOf } from "@/componen
 import { defaultTemplateFor } from "@/components/overlay/template-registry";
 import { messages, type MessageKey } from "@/lib/messages";
 import type { StreamPhone, StreamTarget } from "@/server/api-v1/schemas";
-import type { StreamSessionView } from "@/lib/stream-session-view";
+import { createErrorText, type StreamSessionView } from "@/lib/stream-session-view";
 import { LOCALES } from "@/lib/i18n-constants";
 import { YOUTUBE_SAFETY_CLIENT_TIMEOUT_MS } from "@/lib/youtube";
 import { readFileSync } from "node:fs";
@@ -69,7 +69,7 @@ const target = (id: string, youtube: StreamTarget["youtube"]): StreamTarget => (
   id, kind: youtube ? "youtube" : "twitch", label: id, watchUrl: null, createdAt: "2026-09-01T10:00:00.000Z", keyHint: youtube ? null : "abc", inUse: null, youtube,
 });
 
-type Server = { targets: StreamTarget[]; safety?: () => unknown; court?: StreamPhone["court"] };
+type Server = { targets: StreamTarget[]; safety?: () => unknown; court?: StreamPhone["court"]; create?: () => unknown };
 function serve(s: Server) {
   apiV1.mockImplementation(async (url, options) => {
     await new Promise((resolve) => setTimeout(resolve, 1));
@@ -79,7 +79,7 @@ function serve(s: Server) {
     if (key === TARGETS_URL) return structuredClone(s.targets);
     if (key === SAFETY) return s.safety!();
     if (key === "PUT /api/v1/fixtures/f-1/stream-settings") return { targetId: null };
-    if (key === CREATE) return { sessionId: "s1" };
+    if (key === CREATE) return s.create ? s.create() : { sessionId: "s1" };
     throw new Error(`unrouted ${key}`);
   });
 }
@@ -107,6 +107,9 @@ async function mount(s: Server) {
 }
 /** The organiser's pick of `t1` (the fake serves no saved destination, so nothing is selected until one is made). */
 const pick = (island: { tree: () => ReactElement[] }, id = "t1") => bodyOf(island).onSelectTarget(id);
+const seaznTarget = (id: string): StreamTarget => ({
+  id, kind: "seazn", label: "Seazn", watchUrl: null, createdAt: "2026-09-01T10:00:00.000Z", keyHint: null, inUse: null, youtube: null,
+});
 const warnNo = () => ({ warn: false, young: false, shortRecent: 0 });
 const warnYes = () => ({ warn: true, young: true, shortRecent: 0 });
 
@@ -119,6 +122,67 @@ describe("needsChannelCheck: the predicate Task 16's Seazn option is excluded by
     expect(needsChannelCheck(target("b", null))).toBe(false);
     expect(needsChannelCheck(undefined)).toBe(false);
     expect(needsChannelCheck(null)).toBe(false);
+  });
+
+  it("is false for the Seazn destination (kind seazn, youtube null) — Task 16", () => {
+    expect(needsChannelCheck(seaznTarget("s"))).toBe(false);
+    expect(needsChannelCheck(target("c", YT)), "the control: a connection still asks").toBe(true);
+  });
+});
+
+describe("Task 16: the Phase 0 warning stays YouTube-only", () => {
+  it("Seazn picked on an org whose YouTube connection WOULD warn: zero safety requests, no notice, and the first tap POSTs the Seazn targetId", async () => {
+    const island = await mount({ targets: [seaznTarget("sz"), target("yt", YT)], safety: warnYes });
+    pick(island, "sz");
+    bodyOf(island).onGoLive();
+    await settle();
+    expect(calls().filter((c) => c.includes("/safety")), "no safety fetch").toEqual([]);
+    expect(noticeOf(island), "no channel-safety notice").toBeUndefined();
+    expect(count(CREATE)).toBe(1);
+    const post = apiV1.mock.calls.find(([url, o]) => o?.method === "POST" && url === "/api/v1/fixtures/f-1/stream-sessions");
+    expect((post![1]!.json as { targetId: string }).targetId).toBe("sz");
+  });
+
+  it("the control: the same panel with the YouTube connection picked asks once and shows the notice", async () => {
+    const island = await mount({ targets: [seaznTarget("sz"), target("yt", YT)], safety: warnYes });
+    pick(island, "yt");
+    bodyOf(island).onGoLive();
+    await settle();
+    expect(count(SAFETY)).toBe(1);
+    expect(noticeOf(island)).toBeDefined();
+    expect(count(CREATE)).toBe(0);
+  });
+
+  it("composed_unavailable on a Seazn start reads as the Seazn sentence (never 'camera only'); on a pasted key it stays the plain one", async () => {
+    const refuse = () => { throw Object.assign(new Error("composed"), { code: "composed_unavailable" }); };
+    const seazn = await mount({ targets: [seaznTarget("sz")], create: refuse });
+    pick(seazn, "sz");
+    bodyOf(seazn).onGoLive();
+    await settle();
+    expect(bodyOf(seazn).createError?.code).toBe("seazn_composed_unavailable");
+    expect(createErrorText(bodyOf(seazn).createError!, (k) => m(k))).toBe(m("stream.error.seazn_composed_unavailable"));
+    const plain = await mount({ targets: [target("t1", null)], create: refuse });
+    pick(plain);
+    bodyOf(plain).onGoLive();
+    await settle();
+    expect(bodyOf(plain).createError?.code).toBe("composed_unavailable");
+  });
+
+  it("the Seazn refusals render their own copy, never 'unknown'", async () => {
+    const out: string[] = [];
+    for (const code of ["seazn_unavailable", "seazn_video_unconfigured"] as const) {
+      const island = await mount({ targets: [seaznTarget("sz")], create: () => { throw Object.assign(new Error(code), { code }); } });
+      pick(island, "sz");
+      bodyOf(island).onGoLive();
+      await settle();
+      expect(bodyOf(island).createError?.code).toBe(code);
+      // The rendered sentence, from the dictionary the panel reads — never the unknown line.
+      const shown = createErrorText(bodyOf(island).createError!, (k) => m(k));
+      expect(shown).toBe(m(`stream.error.${code}` as MessageKey));
+      expect(shown).not.toBe(m("stream.error.unknown"));
+      out.push(code);
+    }
+    expect(out).toHaveLength(2);
   });
 });
 

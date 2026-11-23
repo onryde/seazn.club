@@ -43,7 +43,7 @@ describe("relay wire enums equal their declarations", () => {
     ["StreamEndReason ↔ fixture_stream_sessions.end_reason (folded)", S.StreamEndReason.options, lastCheckList("fixture_stream_sessions", "end_reason")],
     ["StreamSessionCurrent.startCause ↔ fixture_stream_sessions.start_cause (V430)", S.StreamSessionCurrent.shape.startCause.options, lastCheckList("fixture_stream_sessions", "start_cause")],
     ["StreamIngest.protocol ↔ fixture_stream_sessions.ingest_protocol", S.StreamIngest.shape.protocol.unwrap().options, checkList("fixture_stream_sessions", "ingest_protocol")],
-    ["StreamTargetKind ↔ org_stream_targets.kind", S.StreamTargetKind.options, checkList("org_stream_targets", "kind")],
+    ["StreamTargetKind ↔ org_stream_targets.kind (folded; V541 added seazn)", S.StreamTargetKind.options, lastCheckList("org_stream_targets", "kind")],
     // YouTube live status (V522, owner direction 2026-11-14): the stored words. The wire enum is these PLUS `pasted_key`, which is never stored.
     ["YOUTUBE_LIVE_WORDS ↔ fixture_stream_sessions.youtube_status (V522, folded)", YOUTUBE_LIVE_WORDS, lastCheckList("fixture_stream_sessions", "youtube_status")],
   ];
@@ -108,7 +108,7 @@ describe("relay wire enums equal their declarations", () => {
   it("W4 + A9: StreamSessionCurrent's exact key set — no `qr`, `restart` the one restart field — and no QR schema re-exported", () => {
     expect(Object.keys(S.StreamSessionCurrent.shape).sort()).toEqual([
       "balance", "countdown", "creditUsed", "desiredState", "endReason", "endedAt", "failReason", "fixtureDecided", "fixtureHeld", "fixtureId",
-      "health", "id", "ingest", "mode", "output", "overlay", "replayParts", "replayUrl", "restart", "startCause", "startedAt", "state", "target",
+      "health", "id", "ingest", "mode", "output", "overlay", "replayParts", "replayUrl", "restart", "seaznReplays", "startCause", "startedAt", "state", "target",
       "youtubeLiveForMs", "youtubeStatus", "youtubeVideoUrl",
     ]);
     expect(Object.keys(S).filter((k) => /^CaptureQr/.test(k))).toEqual([]);
@@ -286,7 +286,7 @@ describe("relay request schemas refuse what they must", () => {
   it("StreamSessionCurrent is strict — a v1 `qr` riding along is refused", () => {
     const current = {
       id: "s", fixtureId: "f", mode: "passthrough", overlay: null, state: "warming", desiredState: "live", failReason: null,
-      health: null, ingest: null, output: null, balance: 3, startedAt: null, endedAt: null, replayUrl: null, replayParts: [], youtubeVideoUrl: null, youtubeStatus: null, youtubeLiveForMs: null,
+      health: null, ingest: null, output: null, balance: 3, startedAt: null, endedAt: null, replayUrl: null, replayParts: [], seaznReplays: [], youtubeVideoUrl: null, youtubeStatus: null, youtubeLiveForMs: null,
       target: { id: "t", kind: "youtube", label: "Club" }, fixtureDecided: false, fixtureHeld: false, endReason: null, creditUsed: false,
       startCause: "organiser", restart: null, countdown: null,
     };

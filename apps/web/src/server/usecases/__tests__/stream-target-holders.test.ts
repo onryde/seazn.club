@@ -107,4 +107,18 @@ describe.skipIf(!HAS_DB)("holderRows — who holds a destination, named for a pe
       court_name: null, label: "L", org_slug: null, comp_slug: null, div_slug: null,
     })).toThrow(/terminal/);
   });
+
+  // Seazn-hosted video (V541, task 10): the org's Seazn destination is never exclusive, so a session on it holds nothing.
+  it("a live session on the Seazn destination holds nothing; the same session on a pasted row holds (positive pair)", async () => {
+    const r = await holdRig();
+    const [seazn] = await sql<{ id: string }[]>`select id from org_stream_targets where org_id = ${r.auth.orgId} and kind = 'seazn'`;
+    expect(seazn, "the org has its Seazn row").toBeDefined();
+    await sessionOnTarget(r.auth.orgId, r.fixtureId, seazn!.id, "live");
+    expect(await holderRows(sql, { orgId: r.auth.orgId })).toEqual([]);
+    expect(await holderRows(sql, { orgId: r.auth.orgId, targetId: seazn!.id })).toEqual([]);
+    // One active session per fixture (V410), so the pasted twin sits on a second fixture.
+    const { fixtureIds: [second] } = await startedDivisionWithFixture(r.auth);
+    await sessionOnTarget(r.auth.orgId, second!, r.targetId, "live");
+    expect((await holderRows(sql, { orgId: r.auth.orgId })).map((h) => h.targetId)).toEqual([r.targetId]);
+  });
 });

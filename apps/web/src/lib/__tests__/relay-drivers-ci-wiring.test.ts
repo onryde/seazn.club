@@ -62,8 +62,8 @@ describe("R5: every production server a streaming suite boots runs the fake rela
     expect(swept).toBe(files.length);
     expect(Object.keys(EXEMPT).every((f) => files.includes(f)), "an exemption names a workflow that no longer exists").toBe(true);
     expect(exempted, "bench.yml's boot was seen and excused").toBeGreaterThan(0);
-    // 3 e2e jobs (parallel, serial, mobile) + ci's smoke server, today; a floor, so a NEW boot is swept, not excused.
-    expect(checked).toBeGreaterThanOrEqual(4);
+    // 4 e2e jobs (parallel, serial, mobile, seazn) + ci's smoke server, today; a floor, so a NEW boot is swept, not excused.
+    expect(checked).toBeGreaterThanOrEqual(5);
   });
 
   it("the detector is live: a step without the lines is caught, and each boot is judged by its OWN step's env", () => {

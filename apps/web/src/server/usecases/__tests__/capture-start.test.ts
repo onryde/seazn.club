@@ -13,6 +13,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { randomBytes, randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
+import { SEAZN_UNAVAILABLE, SEAZN_VIDEO_UNCONFIGURED } from "@/lib/stream-destinations";
 import { YOUTUBE_REFUSAL_CODES, type YoutubeRefusalCode } from "@/lib/youtube";
 import { CaptureRefusalError, captureRefusal } from "@/server/api-v1/capture-http";
 import { CaptureBeat, CaptureRefusal, CaptureStartOk } from "@/server/api-v1/capture-schemas";
@@ -129,11 +130,18 @@ describe("phoneStartRefusal — §6.7.2's table, every internal refusal (pure)",
     expect(checked).toBe(2);
   });
 
-  it("R2001, an assumption made a guard: composed_unavailable cannot reach a phone start (R2006: its mode is resolved against the same composedUnavailable()) — refused by name, never mapped to an answer the phone would act on", () => {
-    const err = new HttpError(503, "composed streaming is not available on this deployment", "composed_unavailable");
-    expect(() => phoneStartRefusal(err)).toThrow(/answered composed_unavailable to a phone start/);
-    // The positive pair: the ingest's own 503 on the same status IS mapped — the guard is on the code, not the status.
-    expect(phoneStartRefusal(new HttpError(503, "x", "ingest_unavailable"))).toMatchObject({ status: 503, code: "unavailable" });
+  // Seazn-hosted video (Task 11): a Seazn pre-pick makes a phone start composed whatever `startModeFor` resolved, so the
+  // composed gate CAN answer it now (R2001's old guard is gone); it and the Seazn destination's two refusals are each mapped,
+  // one per code. Expected words from the plan: the deployment's faults → 503 unavailable (the phone tries again), Seazn off →
+  // 409 no_destination (the organiser picks another destination).
+  it.each([
+    ["composed_unavailable (a Seazn pre-pick on a deployment with no compositor)", new HttpError(503, "composed streaming is not available on this deployment", "composed_unavailable"), { status: 503, code: "unavailable" }],
+    ["seazn_video_unconfigured", new HttpError(503, "x", SEAZN_VIDEO_UNCONFIGURED), { status: 503, code: "unavailable" }],
+    ["seazn_unavailable", new HttpError(422, "x", SEAZN_UNAVAILABLE), { status: 409, code: "no_destination" }],
+  ] as const)("Task 11: %s → its phone answer, never a thrown caller bug", (_name, err, want) => {
+    const got = phoneStartRefusal(err);
+    expect(got).toBeInstanceOf(CaptureRefusalError);
+    expect({ status: (got as CaptureRefusalError).status, code: (got as CaptureRefusalError).code }).toEqual(want);
   });
 
   it("YouTube Connect T11 fix round 1 (I-2): EVERY refusal an API-backed Go live can meet (YOUTUBE_REFUSAL_CODES) is a mapped phone answer — the organiser fixes the destination (409 no_destination) or the phone tries again (503 unavailable); never null (an unmapped 503 logged to Sentry), never Seazn's own 429 rate_limited; checked === the declaration's length", () => {

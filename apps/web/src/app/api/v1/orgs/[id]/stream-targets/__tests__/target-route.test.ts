@@ -247,7 +247,7 @@ describe.skipIf(!HAS_DB)("/api/v1/orgs/{id}/stream-targets/{targetId} — the ro
       platforms++;
     }
     expect(platforms).toBe(STREAM_PLATFORMS.length);
-    const legacy = StreamTargetKind.options.filter((k) => !(STREAM_PLATFORMS as readonly string[]).includes(k));
+    const legacy = StreamTargetKind.options.filter((k) => k !== "seazn" && !(STREAM_PLATFORMS as readonly string[]).includes(k));   // seazn is the org's own row (V541), not a stored legacy kind
     expect(legacy.length).toBeGreaterThan(0);
     let legacies = 0;
     for (const kind of legacy) {

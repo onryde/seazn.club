@@ -24,7 +24,7 @@ import { AUTO_STOP_CONJUNCTS } from "@/server/relay/domain/auto-stream";
 import { postBeat } from "../capture-phone";
 import { sweepStreamSessions } from "../relay-sweep";
 import { saveStreamSettings } from "../stream-codes";
-import { createSession, currentSession, heartbeat, stopSession, tickOpenSessions, tickSession } from "../stream-sessions";
+import { autoStopOf, createSession, currentSession, heartbeat, stopSession, tickOpenSessions, tickSession } from "../stream-sessions";
 import { captureRig, phoneId, type CaptureRig } from "./_capture-rig";
 import { streamSessionsSource } from "./_stream-sessions-source";
 
@@ -790,5 +790,96 @@ describe.skipIf(!HAS_DB)("automatic stop — a per-fixture code is unchanged by 
     await saveStreamSettings(r.auth, r.fixtureId, { autoStream: true });
     await sweepTick(r, sid);
     expect(await sessionOf(sid)).toMatchObject({ end_reason: "auto_stopped" });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Seazn-hosted video Task 24 (recommendation 2026-11-21, G-E): a Seazn session still live 15 min after the result is stopped
+// `auto_stopped` in EVERY mode — the Stream switch off, an operator phone, an automatic phone — so the move of its recordings to
+// the replay host always starts. An arm BESIDE §7.3 (domain `seaznStopVerdict`), never a change to it: a session to any other
+// destination is judged as before (G1). The 15 min is the ruling's, typed here. Each session is a REAL composed Go live on the
+// org's Seazn row, the Machine's playing beat, and the phone's beat in the case's mode; the ticks are the daily sweep's backstop.
+describe.skipIf(!HAS_DB)("G-E: a Seazn session still live 15 min after the result is stopped in every mode (Task 24)", () => {
+  const SEAZN_DELAY_MS = 15 * 60 * SEC;
+  beforeEach(() => {
+    vi.stubEnv("SEAZN_HOSTED_LIVE", "true");
+    vi.stubEnv("SEAZN_VIDEO_ORIGINS", "seazn.club");
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  /** A composed session on `target` (the org's Seazn row unless named), live, its phone beating in `mode`; the switch as asked. */
+  async function composedLive(o: { autoStream: boolean; mode: "automatic" | "operator"; target?: "seazn" | "pasted" }) {
+    const r = await captureRig({ credits: 3, connectAfterMs: CONNECT_MS });
+    const phone = phoneId("a");
+    await setStatus(r.fixtureId, "in_play");
+    if (o.autoStream) await saveStreamSettings(r.auth, r.fixtureId, { autoStream: true });
+    const [seazn] = await sql<{ id: string }[]>`select id from org_stream_targets where org_id = ${r.auth.orgId} and kind = 'seazn'`;
+    const targetId = (o.target ?? "seazn") === "seazn" ? seazn!.id : r.target.id;
+    await pairPresentPhone(r.fixtureId, { phone, at: r.now() });
+    const { sessionId: sid } = await createSession(r.auth, r.fixtureId, { mode: "composed", targetId }, r.deps);
+    const jobToken = r.runner.created.find((c) => c.sessionId === sid)!.jobToken;
+    await heartbeat(sid, jobToken, { state: "playing" }, r.deps);
+    await beat(r, phone, { mode: o.mode });
+    const [{ kind }] = await sql<{ kind: string | null }[]>`select destination_kind as kind from fixture_stream_sessions where id = ${sid}`;
+    expect([(await sessionOf(sid)).state, kind], "PREMISE: live, to the asked destination").toEqual(["live", (o.target ?? "seazn") === "seazn" ? "seazn" : "youtube"]);
+    /** The clock to `at`, the Machine and the phone beating there (neither silence is what ends it), then the sweep's tick. */
+    const tickAt = async (at: number) => {
+      clockTo(r, new Date(at));
+      await heartbeat(sid, jobToken, { state: "playing" }, r.deps);
+      await beat(r, phone, { mode: o.mode });
+      await sweepTick(r, sid);
+    };
+    return { r, sid, tickAt };
+  }
+
+  it.each([
+    { name: "the Stream switch off, an automatic phone", autoStream: false, mode: "automatic" as const },
+    { name: "the Stream switch on, an operator phone", autoStream: true, mode: "operator" as const },
+    { name: "the Stream switch off, an operator phone", autoStream: false, mode: "operator" as const },
+  ])("$name: open 1 ms short of 15 min after the result, auto_stopped at 15 min", async ({ autoStream, mode }) => {
+    const { r, sid, tickAt } = await composedLive({ autoStream, mode });
+    const finished = await finishAt(r, sid, SEC);
+    await tickAt(finished.getTime() + SEAZN_DELAY_MS - 1);
+    expect(isOpen(await sessionOf(sid)), "14:59.999").toBe(true);
+    await tickAt(finished.getTime() + SEAZN_DELAY_MS);
+    const s = await sessionOf(sid);
+    expect(["ending", "completed"], s.state).toContain(s.state);
+    expect(s.end_reason).toBe("auto_stopped");
+  });
+
+  it("§7.3 still comes first where it applies: the switch on and an automatic phone stop a Seazn session at the existing 180 s", async () => {
+    const { r, sid, tickAt } = await composedLive({ autoStream: true, mode: "automatic" });
+    const finished = await finishAt(r, sid, SEC);
+    await tickAt(finished.getTime() + DELAY_MS);
+    expect(await sessionOf(sid)).toMatchObject({ end_reason: "auto_stopped" });
+  });
+
+  it("A15 holds on the arm: a Seazn session started AFTER the result is never stopped by it", async () => {
+    const { r, sid, tickAt } = await composedLive({ autoStream: false, mode: "operator" });
+    const finished = await finishAt(r, sid, -SEC);
+    await tickAt(finished.getTime() + 2 * SEAZN_DELAY_MS);
+    expect(isOpen(await sessionOf(sid)), "the organiser's post-match broadcast").toBe(true);
+  });
+
+  it("G1: a pasted-key composed session and a pasted-key phone session, decided long ago with the switch off, are not touched by the arm", async () => {
+    const composed = await composedLive({ autoStream: false, mode: "operator", target: "pasted" });
+    const f1 = await finishAt(composed.r, composed.sid, SEC);
+    await composed.tickAt(f1.getTime() + 2 * SEAZN_DELAY_MS);
+    expect(isOpen(await sessionOf(composed.sid)), "composed, pasted key").toBe(true);
+    const { r, phone, sid } = await liveRig({}, { autoStream: false });
+    const f2 = await finishAt(r, sid, SEC);
+    clockTo(r, new Date(f2.getTime() + 2 * SEAZN_DELAY_MS));
+    await sidBeat(r, phone, sid);
+    await sweepTick(r, sid);
+    expect(isOpen(await sessionOf(sid)), "passthrough, pasted key").toBe(true);
+  });
+
+  it("autoStopOf (the panel's read model): a Seazn session with the switch off applies with the 15 min delay and the `seazn` rule; with the switch on and an automatic phone, §7.3's own 180 s; a pasted-key session with the switch off does not apply", async () => {
+    const off = await composedLive({ autoStream: false, mode: "operator" });
+    expect(await autoStopOf(off.sid)).toEqual({ applies: true, delaySeconds: 15 * 60, rule: "seazn" });
+    const on = await composedLive({ autoStream: true, mode: "automatic" });
+    expect(await autoStopOf(on.sid)).toEqual({ applies: true, delaySeconds: AUTO_STOP_AFTER_RESULT_SECONDS, rule: "result" });
+    const pasted = await composedLive({ autoStream: false, mode: "operator", target: "pasted" });
+    expect(await autoStopOf(pasted.sid)).toEqual({ applies: false, delaySeconds: AUTO_STOP_AFTER_RESULT_SECONDS, rule: null });
   });
 });
