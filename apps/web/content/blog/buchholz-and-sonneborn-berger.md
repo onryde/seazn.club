@@ -28,7 +28,7 @@ Cy and Ben are level on both Buchholz figures, {{fact:buchholz-sonneborn-berger.
 
 ## A round with no game
 
-Nobody has to be paired against anyone in every round: with an odd number of players somebody sits out and is given a bye. A bye has no opponent whose score could be added up, so the tie-break reads it as a game against an imaginary opponent who finishes on the player's own points, but never on more than a draw is worth in every round: with {{fact:buchholz-bye.rounds}} rounds that is at most {{fact:buchholz-bye.dummyCap}} points (FIDE C.07, article 16.4). The bye itself counts as a win (article 16.3.1). The second table is {{fact:buchholz-bye.players}} players over {{fact:buchholz-bye.rounds}} rounds, with a bye for one of them in each round.
+Nobody has to be paired against anyone in every round: with an odd number of players somebody sits out and is given a bye. A bye has no opponent whose score could be added up, so the tie-break reads it as a game against an imaginary opponent who finishes on the player's own points, but never on more than a draw is worth in every round: with {{fact:buchholz-bye.rounds}} rounds that is at most {{fact:buchholz-bye.dummyCap}} points (FIDE C.07, article 16.4). The bye itself counts as a win, the result its points match (also article 16.4). The second table is {{fact:buchholz-bye.players}} players over {{fact:buchholz-bye.rounds}} rounds, with a bye for one of them in each round.
 
 {{example:buchholz-bye}}
 

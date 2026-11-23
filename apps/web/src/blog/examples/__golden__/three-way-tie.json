@@ -42,7 +42,7 @@
     "icehockeyThreeWay": "a mini-league of the games among the tied teams, re-applied to any smaller group it leaves level (straight after the first measure)",
     "hockeyThreeWay": "one pass of a mini-league of the games among the tied teams, then field goals (after wins, goal difference, goals scored)",
     "sportCount": 11,
-    "partialScheduleSports": "Ice hockey",
+    "partialScheduleSports": "ice hockey",
     "partialScheduleOrder": "fewest games played, goal difference, goals scored, seeding",
     "partialScheduleCount": 1
   },

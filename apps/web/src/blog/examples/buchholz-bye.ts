@@ -15,7 +15,7 @@
 //
 // WHAT CHECKS IT. FIDE C.07 article 16 (unplayed rounds), recomputed from the table's own cells: a bye is read as a game
 // against a dummy opponent who finished on the player's own points (16.4) but never on more than a draw's points times the
-// number of rounds (16.4.2, the cap read from chess's DECLARED draw points) and as a win (a bye awards a win's points, 16.3.1);
+// number of rounds (16.4.2, the cap read from chess's DECLARED draw points) and as a win (the result its awarded points match, 16.4);
 // a real opponent counts at its final score. The places follow chess's DECLARED Swiss order (`defaultOrderOf`).
 import { resultColumnText } from "@seazn/engine/competition";
 import { builtinModules } from "@seazn/engine/sports";
@@ -183,7 +183,7 @@ function figures(r: ExampleResult): Map<string, { points: number; cut1: number; 
 const caseClaims: Claim[] = [
   {
     says: "each player's points are their games, a bye counting as a win: a win 1, a draw ½, a loss 0",
-    source: "FIDE Laws of Chess (the game score), FIDE C.07 art. 16.3.1 (a bye is evaluated as the points it was awarded) and chess's declared half-point table",
+    source: "FIDE Laws of Chess (the game score), FIDE C.07 art. 16.4 (an unplayed round is valued with the result matching the points awarded) and chess's declared half-point table",
     check(r) {
       for (const x of r.table?.rows ?? []) {
         const want = cardsOf(x).reduce((a, c) => a + (c.result === "won" ? 1 : c.result === "drew" ? 0.5 : 0), 0);

@@ -12,7 +12,7 @@ import type { Claim } from "./types";
 
 const listOf = (items: readonly string[]) => (items.length < 2 ? (items[0] ?? "none") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`);
 
-/** The sports that declare a partial-schedule order, and the steps it runs (lots is the stage's last step, not one of them), in the Standings tab's words. */
+/** The sports that declare a partial-schedule order (lower case, for mid-sentence use), and the steps it runs (lots is the stage's last step, not one of them), in the Standings tab's words. */
 export function partialScheduleFacts(): { sports: string; order: string; count: number } {
   const declaring = builtinModules.filter((m) => m.partialScheduleOrder !== undefined);
   if (declaring.length === 0) throw new Error("partial-schedule: no sport declares a partial-schedule order");
@@ -20,7 +20,7 @@ export function partialScheduleFacts(): { sports: string; order: string; count: 
   if (orders.size !== 1) throw new Error(`partial-schedule: ${declaring.length} sports declare ${orders.size} different orders; the post tells one`);
   const first = declaring[0]!;
   return {
-    sports: listOf(declaring.map((m) => sportLabel(m.key))),
+    sports: listOf(declaring.map((m) => sportLabel(m.key).toLowerCase())),
     order: (first.partialScheduleOrder ?? []).filter((k) => k !== "lots").map((k) => standingsLabel(k, first.key)).join(", "),
     count: declaring.length,
   };
@@ -36,7 +36,8 @@ export const partialScheduleClaim: Claim = {
     // Anti-vacuity: the claim is about the ones that declare one AND the ones that do not.
     if (declaring.length === 0) return "no sport declares a partial-schedule order";
     if (declaring.length === modules.length) return "every sport declares one: the post's 'every other sport skips the step' would be false";
-    const want = listOf(declaring.map((m) => sportLabel(m.key)));
+    // Lower case: both posts use it in the middle of a sentence.
+    const want = listOf(declaring.map((m) => sportLabel(m.key).toLowerCase()));
     if (r.facts.partialScheduleSports !== want) return `partialScheduleSports is '${String(r.facts.partialScheduleSports)}', the declarations give '${want}'`;
     if (r.facts.partialScheduleCount !== declaring.length) return `partialScheduleCount is ${String(r.facts.partialScheduleCount)}, the declarations give ${declaring.length}`;
     const first = declaring[0]!;
