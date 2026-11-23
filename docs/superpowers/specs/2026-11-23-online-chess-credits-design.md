@@ -1,6 +1,6 @@
 # Online Chess: paid by size, with Seazn credits
 
-**Status:** Draft for owner approval, revised after an independent review (2026-11-23; `.superpowers/sdd/2026-11-17-chess-external-play/online-chess-credits-design-review.md`, with a response table at its end). Every owner decision of 2026-11-23 is recorded in §3, including the UI flow. No owner question is open; the two the review raised are closed by decisions 15 and 16. §4 holds the controller's remaining calls, which the builder may plan on. No code, price or limit has changed.
+**Status:** APPROVED by the owner 2026-11-23, revised after an independent review (2026-11-23; `.superpowers/sdd/2026-11-17-chess-external-play/online-chess-credits-design-review.md`, with a response table at its end). Every owner decision of 2026-11-23 is recorded in §3, including the UI flow. No owner question is open; the two the review raised are closed by decisions 15 and 16. §4 holds the controller's remaining calls, which the builder may plan on. No code, price or limit has changed.
 
 **Mockups (layout only):** `~/seazn-artifacts/2026-11-23_online-chess-cost-layout-v2_oc23a002/index.html`. Where a mock and this document differ, this document wins. Three known differences: the mocks show a "Create · spend" button on Review, but Review is price-only and spends nothing (decision 12); the round-1 receipt preselects the size the organiser chose, not the smallest that fits (decision 15); and the paid chip's link is "Change size", which goes down as well as up (decision 16).
 
