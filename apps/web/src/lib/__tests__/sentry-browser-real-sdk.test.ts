@@ -161,6 +161,19 @@ describe("the browser client on the REAL @sentry/nextjs 10.62 client", () => {
     expect(event!.body).not.toContain("/api/fetched-while-withdrawn");
   });
 
+  it("a warning logged while consent is withdrawn is dropped at capture, so a re-accept inside the log buffer's 5 s sends nothing of it", async () => {
+    calls.length = 0;
+    console.warn("probe: a warning while accepted");
+    store.set(CONSENT_KEY, "rejected");
+    console.warn("probe: a warning while withdrawn");
+    store.set(CONSENT_KEY, "accepted");
+    await client.flush(2000);
+    const bodies = envelopes().map((c) => c.body).join("\n");
+    expect(sentTypes(), "the witness: a log envelope is sent").toContain("log");
+    expect(bodies, "the warning logged under consent is sent (the positive pair)").toContain("probe: a warning while accepted");
+    expect(bodies, "the warning logged while withdrawn is not").not.toContain("probe: a warning while withdrawn");
+  });
+
   // LAST: it adds a tracing integration to the shared client.
   it("the header probe can see a trace header: tracePropagationTargets [] blocks it even with a tracing integration, and a target lets it through", async () => {
     client.addIntegration(browser.browserTracingIntegration({ instrumentPageLoad: false, instrumentNavigation: false }));

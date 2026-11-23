@@ -99,6 +99,9 @@ export function browserSentryOptions(dsn: string): BrowserOptions {
     beforeBreadcrumb: (breadcrumb) => (analyticsConsented() ? scrubScoreTokens(breadcrumb) : null),
 
     beforeSendLog(log) {
+      // Runs at capture, before the SDK buffers the log for up to 5 s: a warning logged while consent is withdrawn must not
+      // be sent by a re-accept inside that window (review m7).
+      if (!analyticsConsented()) return null;
       // Debug/trace are dev-only noise; keep prod log volume down
       if (process.env.NODE_ENV === "production" && (log.level === "debug" || log.level === "trace")) return null;
       return scrubScoreTokens(log);

@@ -32,7 +32,8 @@ function forward(call: (s: Sdk) => void): void {
     }
     return;
   }
-  if (state === "pending" && queue.length < SENTRY_QUEUE_CAP) queue.push(call);
+  // Queued only under consent: a report made after a Reject, before the SDK loads, must not be flushed by a later Accept.
+  if (state === "pending" && queue.length < SENTRY_QUEUE_CAP && analyticsConsented()) queue.push(call);
 }
 
 export function captureException(...args: Parameters<Sdk["captureException"]>): void {
@@ -53,9 +54,11 @@ export function captureRouterTransitionStart(...args: Parameters<Sdk["captureRou
   if (sdk) forward((s) => s.captureRouterTransitionStart(...args));
 }
 
-/** Forget the breadcrumbs the loaded client holds (the banner's Reject: components/cookie-consent.tsx). Nothing to forget
- *  before the load: a breadcrumb made while the load is pending sits in the queue, which a withdrawal drops. */
+/** The banner's Reject (components/cookie-consent.tsx): forget what was collected under the consent just withdrawn. Once the
+ *  SDK has loaded, that is the breadcrumbs the client holds; before, it is the queue, whose reports and breadcrumbs a later
+ *  Accept would otherwise flush (review m8). */
 export function clearBreadcrumbs(): void {
+  if (!sdk) queue.length = 0;
   if (sdk) forward((s) => s.clearBreadcrumbs());
 }
 

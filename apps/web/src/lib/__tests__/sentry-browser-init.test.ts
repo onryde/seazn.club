@@ -280,6 +280,28 @@ describe("the facade (lib/sentry-browser.ts): a call before, during and after th
     expect(await facade.loadBrowserSentry()).toBe(true);
     expect(vi.mocked(Sentry.captureException)).not.toHaveBeenCalled();
   });
+
+  it("a Reject then an Accept before the SDK loads: nothing queued before the Reject or made while rejected is sent; what follows the Accept is", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SENTRY_DSN", TEST_DSN);
+    stubConsent("accepted");
+    const idle = captureIdle();
+    const facade = await import("@/lib/sentry-browser");
+    const { recordConsentChoice } = await import("@/components/cookie-consent");
+    const Sentry = await import("@sentry/nextjs");
+    facade.scheduleBrowserSentry();
+    facade.captureException(new Error("queued before the Reject"));
+    facade.addBreadcrumb({ message: "crumb queued before the Reject" });
+    recordConsentChoice("rejected");
+    facade.captureException(new Error("made while rejected"));
+    facade.addBreadcrumb({ message: "crumb made while rejected" });
+    recordConsentChoice("accepted");
+    expect(idle, "the load was already pending: the Accept schedules nothing new").toHaveLength(1);
+    facade.captureException(new Error("made after the re-accept"));
+    idle[0]!();
+    expect(await facade.loadBrowserSentry()).toBe(true);
+    expect(vi.mocked(Sentry.captureException).mock.calls.map((c) => (c[0] as Error).message), "only what follows the Accept").toEqual(["made after the re-accept"]);
+    expect(vi.mocked(Sentry.addBreadcrumb), "no breadcrumb from before the Accept").not.toHaveBeenCalled();
+  });
 });
 
 describe("the consent gate at send: once loaded, nothing leaves without consent against the CURRENT policy version", () => {
