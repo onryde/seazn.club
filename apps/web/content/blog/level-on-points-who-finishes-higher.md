@@ -16,7 +16,7 @@ Two teams finish on the same points, and the table still has to put one of them 
 
 ## Reading the table
 
-Each row is one sport. The first column after the name is what the table is sorted by first, and the last column is the list of checks for teams that are level on it. Points come first in most sports. Volleyball, badminton and tennis sort by matches won instead, so for them "level" means level on wins, not on points.
+Each row is one sport. The first column after the name is what the table is sorted by first, and the last column is the list of checks for teams that are level on it. Points come first in most sports. {{fact:level-on-points.winsFirstSports}} sort by matches won instead, so for them "level" means level on wins, not on points.
 
 Read a row from left to right and stop at the first check where the two teams are different. Whatever sits to the right of it is never looked at for those two teams. That is why the order is the real decision: two lists with the same checks in a different order can put different teams on top.
 
@@ -30,7 +30,7 @@ Neither table is wrong. Head-to-head asks who was better on the day the two actu
 
 ## What each sport checks
 
-- **Football.** The first check is {{fact:level-on-points.footballFirstTieBreak}}. In full: {{fact:level-on-points.footballOrder}}. This is the head-to-head-first order that FIFA uses from 2026; the classic order, the one the World Cup used before that, checks goal difference first.
+- **Football.** The first check is {{fact:level-on-points.footballFirstTieBreak}}. In full: {{fact:level-on-points.footballOrder}}. Football's own order checks head-to-head before goal difference; the classic order, which football also offers, checks goal difference first.
 - **Cricket.** The first check is {{fact:level-on-points.cricketFirstTieBreak}}. In full: {{fact:level-on-points.cricketOrder}}.
 - **Chess.** The first check is {{fact:level-on-points.boardgameFirstTieBreak}}. In full: {{fact:level-on-points.boardgameOrder}}.
 - **Carrom.** The first check is {{fact:level-on-points.carromFirstTieBreak}}. In full: {{fact:level-on-points.carromOrder}}.
@@ -44,6 +44,10 @@ Neither table is wrong. Head-to-head asks who was better on the day the two actu
 
 Drawing of lots is the last step on every list, so two teams that no check can tell apart are still placed.
 
+## When the matches are not all played
+
+A head-to-head check only runs once every match among the level teams has been played, because a head-to-head count with a match missing would compare teams on different games. Until then the table skips it and goes on to the next check. Part way through the season, Hawks and Rockets are both on {{fact:level-on-points.midHawksPoints}} points and have not met yet, so the table uses goal difference: Rockets are {{fact:level-on-points.midRocketsPlace}} on {{fact:level-on-points.midRocketsGoalDifference}} and Hawks are {{fact:level-on-points.midHawksPlace}} on {{fact:level-on-points.midHawksGoalDifference}}, split on {{fact:level-on-points.midSplitBy}}. The public table adds a note beside them: "{{fact:level-on-points.midNote}}" When the match between them is played, head-to-head runs and, as in the football example above, the places turn round.
+
 ## Which list a table uses
 
 A table can use three lists, and it takes the first one that has been set: the stage's own list, then the list set for the whole division, then the sport's.
@@ -55,3 +59,5 @@ The list is fixed when a stage starts. A change made to the division afterwards 
 Open the division's **Fixtures** tab. The **Division rules** card has a **Tie-breaks** button for the division's list, and every stage card has its own **Tie-breaks** button for that stage alone. In a league the sport's first measure is marked **always first** and drawing of lots is marked **always last**; the steps between them can be moved, removed or added, and a **Reset to** menu offers the football presets. A new stage uses the division's list if one is set, and the sport's list otherwise. Once a stage has started its card reads "Locked: the stage has started" and its rules cannot be changed.
 
 On the public table, a team that was split from another carries the line "Tied with", the names of the other teams, and "split on" followed by the check that separated them.
+
+![The Tie-breaks editor on a football stage: points always first, drawing of lots always last, and the steps between them listed with Add step and Reset to menus](/help/blog/level-on-points-who-finishes-higher-1.webp "A football stage's Tie-breaks editor lists the order step by step, with points always first and drawing of lots always last.")

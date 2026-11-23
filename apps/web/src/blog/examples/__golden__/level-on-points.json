@@ -1,7 +1,7 @@
 {
   "facts": {
     "footballFirstTieBreak": "head-to-head",
-    "footballOrder": "head-to-head, head-to-head difference, head-to-head scoring, difference, total scored, fair play, drawing of lots",
+    "footballOrder": "head-to-head, head-to-head difference, head-to-head scoring, goal difference, goals scored, fair play, drawing of lots",
     "cricketFirstTieBreak": "wins",
     "cricketOrder": "wins, net run rate, head-to-head, seeding, drawing of lots",
     "boardgameFirstTieBreak": "direct encounter",
@@ -19,10 +19,11 @@
     "tennisFirstTieBreak": "matches played",
     "tennisOrder": "matches played, head-to-head between the two, set ratio, head-to-head between the two, game ratio, head-to-head between the two, seeding, drawing of lots",
     "icehockeyFirstTieBreak": "head-to-head",
-    "icehockeyOrder": "head-to-head, head-to-head difference, head-to-head scoring, head-to-head re-applied, difference, total scored, seeding, drawing of lots",
+    "icehockeyOrder": "head-to-head, head-to-head difference, head-to-head scoring, head-to-head re-applied, goal difference, goals scored, seeding, drawing of lots",
     "hockeyFirstTieBreak": "wins",
-    "hockeyOrder": "wins, difference, total scored, head-to-head, head-to-head wins, head-to-head difference, head-to-head scoring, field goals, drawing of lots",
+    "hockeyOrder": "wins, goal difference, goals scored, head-to-head, head-to-head wins, head-to-head difference, head-to-head scoring, field goals, drawing of lots",
     "sportCount": 11,
+    "winsFirstSports": "Volleyball, badminton and tennis",
     "hawksPoints": 6,
     "rocketsPoints": 6,
     "hawksGoalDifference": "+1",
@@ -33,10 +34,17 @@
     "hawksPlaceClassic": "2nd",
     "rocketsPlaceClassic": "1st",
     "ownOrderSplitBy": "head-to-head",
-    "classicSplitBy": "difference"
+    "classicSplitBy": "goal difference",
+    "midHawksPoints": 3,
+    "midHawksGoalDifference": "+1",
+    "midRocketsGoalDifference": "+3",
+    "midHawksPlace": "2nd",
+    "midRocketsPlace": "1st",
+    "midSplitBy": "goal difference",
+    "midNote": "Head-to-head not complete: they have not all played each other yet."
   },
   "table": {
-    "caption": "What each sport's league table checks, in order, when teams are level on its first measure.",
+    "caption": "What the league table of each of the 11 sports checks, in order, when teams are level on its first measure.",
     "columns": [
       "Sport",
       "Ranked first by",
@@ -46,7 +54,7 @@
       [
         "Football",
         "Points",
-        "head-to-head, head-to-head difference, head-to-head scoring, difference, total scored, fair play, drawing of lots"
+        "head-to-head, head-to-head difference, head-to-head scoring, goal difference, goals scored, fair play, drawing of lots"
       ],
       [
         "Cricket",
@@ -91,12 +99,12 @@
       [
         "Ice hockey",
         "Points",
-        "head-to-head, head-to-head difference, head-to-head scoring, head-to-head re-applied, difference, total scored, seeding, drawing of lots"
+        "head-to-head, head-to-head difference, head-to-head scoring, head-to-head re-applied, goal difference, goals scored, seeding, drawing of lots"
       ],
       [
         "Hockey",
         "Points",
-        "wins, difference, total scored, head-to-head, head-to-head wins, head-to-head difference, head-to-head scoring, field goals, drawing of lots"
+        "wins, goal difference, goals scored, head-to-head, head-to-head wins, head-to-head difference, head-to-head scoring, field goals, drawing of lots"
       ]
     ]
   },
@@ -107,6 +115,8 @@
     "Comets 1 — 0 Hawks.",
     "Rockets 3 — 0 Comets.",
     "Rockets 2 — 0 Dynamos.",
-    "Comets 0 — 0 Dynamos."
+    "Comets 0 — 0 Dynamos.",
+    "Part way through: Hawks 1 — 0 Dynamos.",
+    "Part way through: Rockets 3 — 0 Comets."
   ]
 }

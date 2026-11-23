@@ -1,17 +1,20 @@
 // Post #9, "What is net run rate, and what happens to it after a forfeit?". Cricket only: net run rate exists in cricket
 // alone (a claim below sweeps the registry and proves no other sport's order holds it).
 //
-// THE TABLE: three T20 sides (the variant a new cricket division starts on). Lions beat Tigers and Tigers beat Bears in
-// real matches (seeded walks, refolded by the app's read fold); Bears then do not turn up against Lions, a walkover with
-// nothing played. Each result is paid by the stage's rule (`tableRulesOf`) and ranked through the app's ranking path,
-// and the net run rate cell is the public table's own text for it (`derivedText`, the standings view's one formatter).
+// THE TABLE: three T20 sides (the variant a new cricket division starts on). Tigers beat Lions in real match one, chasing a
+// total that Lions were bowled out for well inside their overs (so one innings is all out and early, and one is a winning
+// chase that ends early without being bowled out: the two cases the rule treats differently); Bears beat Tigers in real
+// match two (seeded walks, refolded by the app's read fold); Bears then do not turn up against Lions, a walkover with
+// nothing played. Every side ends on one win and the same points, so net run rate alone puts them in order. Each result is
+// paid by the stage's rule (`tableRulesOf`) and ranked through the app's ranking path, and the net run rate cell is the
+// public table's own text for it (`derivedText`, the standings view's one formatter).
 //
 // WHAT CHECKS IT. The ICC playing conditions (net run rate = runs per over scored minus runs per over conceded, 16.10.7),
 // recomputed from the table's own cells; and the forfeit rule against the variant's DECLARED innings length: the side that
 // did not turn up is charged its full overs at no runs, and the side that was given the match gains nothing in its rate.
 import { builtinModules } from "@seazn/engine/sports";
 import { declaredCfgs, defaultOrderOf, forEachSport } from "@seazn/engine/testkit";
-import { tiebreakLabel } from "@/blog/labels";
+import { standingsLabel } from "@/blog/labels-screens";
 import { derivedText } from "@/server/public-site/standings-view";
 import { startingVariantKey } from "./starting-variant";
 import { factsRepeatTheTable, placeOf, placeText, playAndRank, rowOf, type MatchView, type Meeting } from "./tie-break-play";
@@ -33,12 +36,24 @@ const nameOf = (id: string) => TEAMS.find((t) => t.id === id)!.name;
 const homeWin = (v: MatchView) =>
   v.outcome.kind === "win" && v.outcome.winner === v.home.entrantId && (v.home.metrics.balls_faced_eff ?? 0) > 0 && (v.away.metrics.balls_faced_eff ?? 0) > 0;
 
-/** Tigers win by batting first and posting a bigger total than Lions did, so the two played matches read differently. */
-const bigHomeWin = (v: MatchView) => homeWin(v) && (v.home.metrics.runs_for ?? 0) >= 100;
+/**
+ * The home side wins a chase with overs and wickets to spare, against an innings that was bowled out well inside its
+ * overs. The headline writes an all-out innings without wickets ("60 (17.4)") and a chase with them ("61/3 (14.2)").
+ */
+const chaseWin = (v: MatchView) => {
+  const m = /^(\d+)\/(\d+) \(([\d.]+)\) — (\d+) \(([\d.]+)\)$/.exec(v.headline);
+  const quota = startCfg().ballsPerInnings;
+  if (m === null || quota === null) return false;
+  const bpo = startCfg().ballsPerOver ?? 6;
+  // A chase that stops at the target (at most a six past it), against a total worth chasing.
+  const target = Number(m[4]!);
+  const reached = Number(m[1]!);
+  return v.outcome.kind === "win" && v.outcome.winner === v.home.entrantId && ballsOf(m[3]!, bpo) < quota && ballsOf(m[5]!, bpo) < quota && target >= 90 && reached > target && reached - target <= 6;
+};
 
 const MEETINGS: Meeting[] = [
-  { home: "lions", away: "tigers", what: "Lions beat Tigers", seed: 1, want: homeWin },
-  { home: "tigers", away: "bears", what: "Tigers beat Bears with 100 or more", seed: 3, want: bigHomeWin },
+  { home: "tigers", away: "lions", what: "Tigers chase down Lions' all-out total with overs to spare", want: chaseWin },
+  { home: "bears", away: "tigers", what: "Bears beat Tigers", want: homeWin },
   { home: "lions", away: "bears", what: "Bears do not turn up against Lions", walkoverBy: "bears" },
 ];
 
@@ -79,16 +94,21 @@ function build(): ExampleResult {
     ]);
   const facts: ExampleResult["facts"] = {};
   const played = (home: string, away: string) => ranked.played.find((p) => p.meeting.home === home && p.meeting.away === away)!;
-  const lt = played("lions", "tigers");
-  const tb = played("tigers", "bears");
+  const tl = played("tigers", "lions");
+  const bt = played("bears", "tigers");
   const wo = played("lions", "bears");
-  facts.lionsBeatTigers = lt.view.headline;
-  facts.tigersBeatBears = tb.view.headline;
-  // What the played matches alone put on each side's ledger.
-  facts.lionsOversInTheirMatch = oversText(lt.view.home.metrics.balls_faced_eff ?? 0, bpo);
-  facts.lionsRunsInTheirMatch = lt.view.home.metrics.runs_for ?? 0;
-  facts.bearsOversInTheirMatch = oversText(tb.view.away.metrics.balls_faced_eff ?? 0, bpo);
-  facts.bearsRunsInTheirMatch = tb.view.away.metrics.runs_for ?? 0;
+  facts.tigersBeatLions = tl.view.headline;
+  facts.bearsBeatTigers = bt.view.headline;
+  // What the played matches alone put on each side's ledger (the credited balls: a side bowled out counts its full quota).
+  facts.lionsOversInTheirMatch = oversText(tl.view.away.metrics.balls_faced_eff ?? 0, bpo);
+  facts.lionsRunsInTheirMatch = tl.view.away.metrics.runs_for ?? 0;
+  facts.bearsOversInTheirMatch = oversText(bt.view.home.metrics.balls_faced_eff ?? 0, bpo);
+  facts.bearsRunsInTheirMatch = bt.view.home.metrics.runs_for ?? 0;
+  // The overs each innings of match one really lasted, as the scorecard (the headline) writes them: Lions bowled out, Tigers chasing.
+  const innings = /^\d+\/\d+ \(([\d.]+)\) — \d+ \(([\d.]+)\)$/.exec(tl.view.headline);
+  if (innings === null) throw new Error(`net-run-rate: match one reads '${tl.view.headline}', not a chase against an all-out innings`);
+  facts.tigersChaseOvers = innings[1]!;
+  facts.lionsOversLasted = innings[2]!;
   // What the walkover put there.
   facts.walkoverOversCharged = oversText(wo.view.away.metrics.balls_faced_eff ?? 0, bpo);
   facts.walkoverRunsCharged = wo.view.away.metrics.runs_for ?? 0;
@@ -100,19 +120,30 @@ function build(): ExampleResult {
     facts[`${t.id}Points`] = r.points;
     facts[`${t.id}Place`] = placeText(r.rank!);
   }
-  facts.lionsWins = rowOf(ranked.rows, "lions").won;
+  facts.levelWins = rowOf(ranked.rows, "lions").won;
+  facts.levelPoints = rowOf(ranked.rows, "lions").points;
   facts.inningsOvers = cfg.ballsPerInnings === null ? "none" : oversText(cfg.ballsPerInnings, bpo);
-  facts.cricketOrder = ranked.rules.tiebreakers.slice(1).map(tiebreakLabel).join(", ");
+  facts.cricketOrder = ranked.rules.tiebreakers.slice(1).map((k) => standingsLabel(k, "cricket")).join(", ");
   facts.netRunRateStep = ranked.rules.tiebreakers.indexOf("nrr") + 1;
-  return {
+  const result: ExampleResult = {
     facts,
-    table: { caption: "Three T20 sides after Bears fail to turn up against Lions: Bears are charged a full innings at no runs, and Lions' rate is untouched.", columns: COLUMNS, rows },
+    table: { caption: "", columns: COLUMNS, rows },
     text: [
-      `Lions ${lt.view.headline} Tigers.`,
-      `Tigers ${tb.view.headline} Bears.`,
+      `Tigers ${tl.view.headline} Lions.`,
+      `Bears ${bt.view.headline} Tigers.`,
       "Lions against Bears: Bears did not turn up, a walkover to Lions.",
     ],
   };
+  result.table!.caption = captionOf(result);
+  return result;
+}
+
+/** The table's caption, said from its own cells and the example's facts: nothing the cells can say is typed. */
+export function captionOf(r: Pick<ExampleResult, "facts" | "table">): string {
+  const rows = r.table?.rows ?? [];
+  const at = (place: number) => rows.find((x) => placeOf(x[C.place]) === place)?.[C.team];
+  const walkedOver = nameOf(MEETINGS.find((m) => m.walkoverBy !== undefined)?.walkoverBy ?? "");
+  return `${rows.length} T20 sides, each on ${r.facts.levelWins} win and ${r.facts.levelPoints} points: net run rate puts ${String(at(1))} first and ${String(at(rows.length))} last, and ${walkedOver} are charged a full innings for not turning up.`;
 }
 
 // ---- claims ----
@@ -137,20 +168,38 @@ function inningsOf(text: unknown): [number, number] | null {
 /** The ICC's points for a T20 league match (ICC Men's T20 World Cup Playing Conditions, points table: a win earns 2). */
 const ICC_WIN_POINTS = 2;
 
+/** One side's innings as the scorecard writes it: an innings written without "/wickets" is a side bowled out. */
+interface Innings {
+  runs: number;
+  allOut: boolean;
+  balls: number;
+}
+function inningsPair(text: unknown): [Innings, Innings] | null {
+  const bpo = BPO();
+  const m = /^(\d+)(\/\d+)? \(([\d.]+)\) — (\d+)(\/\d+)? \(([\d.]+)\)$/.exec(String(text));
+  return m === null
+    ? null
+    : [
+        { runs: Number(m[1]), allOut: m[2] === undefined, balls: ballsOf(m[3]!, bpo) },
+        { runs: Number(m[4]), allOut: m[5] === undefined, balls: ballsOf(m[6]!, bpo) },
+      ];
+}
+
 const tableClaims: Claim[] = [
   factsRepeatTheTable(TEAMS, C.team, { NetRunRate: C.nrr, OversFaced: C.oversFaced, Points: C.points, Place: C.place }),
   {
     says: "each side's played, won, runs scored and runs conceded are its matches': the two played results and the walkover to Lions",
     source: "the fixture (three matches, one a walkover) and the two played headlines, home side first",
     check(r) {
-      const lt = inningsOf(r.facts.lionsBeatTigers);
-      const tb = inningsOf(r.facts.tigersBeatBears);
-      if (lt === null || tb === null) return `a headline reads '${String(r.facts.lionsBeatTigers)}' / '${String(r.facts.tigersBeatBears)}'`;
-      if (!(lt[0] > lt[1]) || !(tb[0] > tb[1])) return "a played match was not won by the home side";
+      const tl = inningsOf(r.facts.tigersBeatLions);
+      const bt = inningsOf(r.facts.bearsBeatTigers);
+      if (tl === null || bt === null) return `a headline reads '${String(r.facts.tigersBeatLions)}' / '${String(r.facts.bearsBeatTigers)}'`;
+      if (!(tl[0] > tl[1]) || !(bt[0] > bt[1])) return "a played match was not won by the home side";
+      // [played, won, runs scored, runs conceded]: Tigers (home) beat Lions, Bears (home) beat Tigers, Lions are given the walkover.
       const want: Record<string, [number, number, number, number]> = {
-        Lions: [2, 2, lt[0], lt[1]],
-        Tigers: [2, 1, lt[1] + tb[0], lt[0] + tb[1]],
-        Bears: [2, 0, tb[1], tb[0]],
+        Lions: [2, 1, tl[1], tl[0]],
+        Tigers: [2, 1, tl[0] + bt[1], tl[1] + bt[0]],
+        Bears: [2, 1, bt[0], bt[1]],
       };
       for (const [name, [played, won, scored, conceded]] of Object.entries(want)) {
         const x = rowNamed(r, name);
@@ -158,17 +207,20 @@ const tableClaims: Claim[] = [
         if (x[C.played] !== played || x[C.won] !== won) return `${name}: played ${String(x[C.played])}, won ${String(x[C.won])}`;
         if (x[C.runsFor] !== scored || x[C.runsAgainst] !== conceded) return `${name}: runs ${String(x[C.runsFor])} for, ${String(x[C.runsAgainst])} against`;
       }
-      return r.facts.lionsWins === rowNamed(r, "Lions")?.[C.won] || `lionsWins is ${String(r.facts.lionsWins)}`;
+      return true;
     },
   },
   {
-    says: "points are two a win, and the places follow cricket's order: points, then wins, then net run rate",
+    says: "points are two a win, the three sides are level on points and wins, so net run rate alone puts them in order (points, then wins, then net run rate)",
     source: "ICC Men's T20 World Cup Playing Conditions (points table) and defaultOrderOf(cricket, \"league\")",
     check(r) {
       const declared = defaultOrderOf(cricket(), "league");
       if (declared.slice(0, 3).join() !== "points,wins,nrr") return `cricket's order is [${declared.join(", ")}]`;
       const rows = r.table?.rows ?? [];
       for (const x of rows) if (x[C.points] !== Number(x[C.won]) * ICC_WIN_POINTS) return `${String(x[C.team])}: ${String(x[C.points])} points for ${String(x[C.won])} wins`;
+      if (new Set(rows.map((x) => x[C.points])).size !== 1 || new Set(rows.map((x) => x[C.won])).size !== 1) return "the sides are not level on points and wins: net run rate would not be what orders them";
+      if (new Set(rows.map((x) => nrrFromCells(x).toFixed(3))).size !== rows.length) return "two sides share a net run rate";
+      if (r.facts.levelWins !== rows[0]?.[C.won] || r.facts.levelPoints !== rows[0]?.[C.points]) return `levelWins ${String(r.facts.levelWins)}, levelPoints ${String(r.facts.levelPoints)}`;
       const sorted = [...rows].sort((a, b) => Number(b[C.points]) - Number(a[C.points]) || Number(b[C.won]) - Number(a[C.won]) || nrrFromCells(b) - nrrFromCells(a));
       for (const [i, x] of sorted.entries()) if (placeOf(x[C.place]) !== i + 1) return `${String(x[C.team])}: ${String(x[C.place])}, the order gives ${i + 1}`;
       return true;
@@ -178,6 +230,14 @@ const tableClaims: Claim[] = [
 
 const claims: Claim[] = [
   ...tableClaims,
+  {
+    says: "the caption is the one said from the table's own cells and the facts",
+    source: "the table's cells and the example's facts (nothing in it is typed)",
+    check(r) {
+      const want = captionOf(r);
+      return r.table?.caption === want || `caption is '${String(r.table?.caption)}', the cells give '${want}'`;
+    },
+  },
   {
     says: "net run rate is in cricket's declared order and in no other sport's",
     source: "defaultOrderOf(module, \"league\") over the registry (the single-sport reason)",
@@ -205,8 +265,8 @@ const claims: Claim[] = [
     },
   },
   {
-    says: "the side that did not turn up is charged the variant's full innings at no runs, on top of its played match",
-    source: "the T20 variant's declared ballsPerInnings × inningsPerSide (ICC 16.10.7: a forfeit's overs; CK-WO-1)",
+    says: "the side that did not turn up is charged the variant's full innings at no runs, on top of its played match, and only on the batting side of its ledger",
+    source: "the T20 variant's declared ballsPerInnings × inningsPerSide (ICC 16.10.7: a forfeit's overs; CK-WO-1: the defaulter charged its full quota at 0 runs, nothing on its runs conceded or overs bowled)",
     check(r) {
       const cfg = startCfg();
       if (cfg.ballsPerInnings === null) return "the starting variant has no innings length";
@@ -220,41 +280,48 @@ const claims: Claim[] = [
       const faced = ballsOf(String(bears[C.oversFaced]), bpo);
       const played = ballsOf(String(r.facts.bearsOversInTheirMatch), bpo);
       if (faced !== played + quota) return `Bears faced ${faced} balls, the played match ${played} plus the innings ${quota}`;
+      // Only the batting side: Bears' overs bowled and runs conceded are what their one played match put there (the Tigers' innings).
+      const bt = inningsPair(r.facts.bearsBeatTigers);
+      if (bt === null) return "the Bears-Tigers headline does not parse";
+      const bowledByBears = bt[1].allOut ? quota : bt[1].balls;
+      if (ballsOf(String(bears[C.oversBowled]), bpo) !== bowledByBears) return `Bears bowled ${String(bears[C.oversBowled])} overs: the walkover moved the bowling side (the played match gives ${oversText(bowledByBears, bpo)})`;
+      if (bears[C.runsAgainst] !== bt[1].runs) return `Bears conceded ${String(bears[C.runsAgainst])}: the walkover moved the runs conceded (the played match gives ${bt[1].runs})`;
       return Number(bears[C.runsFor]) === Number(r.facts.bearsRunsInTheirMatch) || "Bears' runs moved with the walkover";
     },
   },
   {
-    says: "a side bowled out counts as having faced its full innings, not the overs it lasted: every overs cell is the sum of full innings",
-    source: "ICC Men's T20 World Cup 2026 Playing Conditions 16.10.7, as the cricket module's nrrCredits declares it (an all-out innings counts its full allocated quota); the quota is the variant's declared ballsPerInnings",
+    says: "a side bowled out counts as having faced its full innings, a chase won inside its overs counts the overs used: every overs cell is the sum of those innings",
+    source: "ICC Men's T20 World Cup 2026 Playing Conditions 16.10.7, as the cricket module's nrrCredits declares it (an all-out innings counts its full allocated quota; any other innings the balls it faced); the quota is the variant's declared ballsPerInnings",
     check(r) {
       const cfg = startCfg();
       if (cfg.ballsPerInnings === null) return "the starting variant has no innings length";
       const bpo = BPO();
       const quota = cfg.ballsPerInnings;
-      // A headline "105 (15.2) — 42 (11.1)" or "61/9 (20) — 35 (5)": an innings written without "/wickets" is a side bowled out.
-      const parts = (text: unknown): { allOut: boolean; balls: number }[] | null => {
-        const m = /^(\d+)(\/\d+)? \(([\d.]+)\) — (\d+)(\/\d+)? \(([\d.]+)\)$/.exec(String(text));
-        return m === null ? null : [{ allOut: m[2] === undefined, balls: ballsOf(m[3]!, bpo) }, { allOut: m[5] === undefined, balls: ballsOf(m[6]!, bpo) }];
-      };
-      const lt = parts(r.facts.lionsBeatTigers);
-      const tb = parts(r.facts.tigersBeatBears);
-      if (lt === null || tb === null) return "a headline does not parse";
-      const counted = (i: { allOut: boolean; balls: number }) => (i.allOut ? quota : i.balls);
-      // Home bats first in these two matches (the walk's own toss), so index 0 is the home side's innings.
+      const tl = inningsPair(r.facts.tigersBeatLions);
+      const bt = inningsPair(r.facts.bearsBeatTigers);
+      if (tl === null || bt === null) return "a headline does not parse";
+      const counted = (i: Innings) => (i.allOut ? quota : i.balls);
+      // Home first in each headline: match one is Tigers (home, chasing) against Lions; match two is Bears (home) against Tigers.
       const faced: Record<string, number> = {
-        Lions: counted(lt[0]!),
-        Tigers: counted(lt[1]!) + counted(tb[0]!),
-        Bears: counted(tb[1]!) + cfg.ballsPerInnings * cfg.inningsPerSide,
+        Lions: counted(tl[1]),
+        Tigers: counted(tl[0]) + counted(bt[1]),
+        Bears: counted(bt[0]) + cfg.ballsPerInnings * cfg.inningsPerSide,
       };
-      const bowled: Record<string, number> = { Lions: counted(lt[1]!), Tigers: counted(lt[0]!) + counted(tb[1]!), Bears: counted(tb[0]!) };
-      // Class 19: the played innings that ended early must differ from the overs they lasted, or the claim cannot see the rule.
-      const early = [...lt, ...tb].filter((i) => i.allOut && i.balls < quota).length;
-      if (early === 0) return "no innings in the example ended early, so the all-out rule is not witnessed";
+      const bowled: Record<string, number> = { Lions: counted(tl[0]), Tigers: counted(tl[1]) + counted(bt[0]), Bears: counted(bt[1]) };
+      // Class 19: an innings bowled out early (counted as the full quota, not as the overs it lasted) AND an innings that ended
+      // early without being bowled out (counted as the overs used), or the claim cannot tell either rule from "every innings counts full".
+      const all = [...tl, ...bt];
+      if (all.filter((i) => i.allOut && i.balls < quota).length === 0) return "no innings in the example was bowled out early, so the all-out rule is not witnessed";
+      if (all.filter((i) => !i.allOut && i.balls < quota).length === 0) return "no innings in the example ended early without being bowled out, so the rule that a chase counts its overs used is not witnessed";
       for (const x of r.table?.rows ?? []) {
         const name = String(x[C.team]);
         if (ballsOf(String(x[C.oversFaced]), bpo) !== faced[name]) return `${name}: overs faced ${String(x[C.oversFaced])}, the innings give ${oversText(faced[name] ?? 0, bpo)}`;
         if (ballsOf(String(x[C.oversBowled]), bpo) !== bowled[name]) return `${name}: overs bowled ${String(x[C.oversBowled])}, the innings give ${oversText(bowled[name] ?? 0, bpo)}`;
       }
+      // The two overs the post quotes for match one are the headline's own: Lions' innings (bowled out) and Tigers' chase.
+      if (!tl[1].allOut || tl[0].allOut) return "match one is not a chase against an all-out innings";
+      if (ballsOf(String(r.facts.lionsOversLasted), bpo) !== tl[1].balls) return `lionsOversLasted is ${String(r.facts.lionsOversLasted)}, the headline gives ${oversText(tl[1].balls, bpo)}`;
+      if (ballsOf(String(r.facts.tigersChaseOvers), bpo) !== tl[0].balls) return `tigersChaseOvers is ${String(r.facts.tigersChaseOvers)}, the headline gives ${oversText(tl[0].balls, bpo)}`;
       return (r.table?.rows.length ?? 0) === TEAMS.length || "rows missing";
     },
   },
@@ -287,7 +354,7 @@ const claims: Claim[] = [
     source: "defaultOrderOf(cricket, \"league\")",
     check(r) {
       const declared = defaultOrderOf(cricket(), "league");
-      const want = declared.slice(1).map(tiebreakLabel).join(", ");
+      const want = declared.slice(1).map((k) => standingsLabel(k, "cricket")).join(", ");
       if (r.facts.cricketOrder !== want) return `order fact '${String(r.facts.cricketOrder)}', declared '${want}'`;
       return r.facts.netRunRateStep === declared.indexOf("nrr") + 1 || `step ${String(r.facts.netRunRateStep)}`;
     },
@@ -302,4 +369,3 @@ export const netRunRate: BlogExample = {
   build,
   claims,
 };
-
