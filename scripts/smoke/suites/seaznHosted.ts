@@ -2,10 +2,10 @@ import { randomBytes, randomUUID } from "node:crypto";
 // The fake hosts' own names and the embed token's life, from the server's declarations (config.ts is import-free, so it loads
 // under `--experimental-strip-types`, as captureV2 reads it).
 import {
-  FAKE_PLAYBACK_HOST, FAKE_REPLAY_EMBED_HOST, REPLAY_EMBED_TOKEN_TTL_SECONDS, SEAZN_CF_DELETE_DELAY_MINUTES,
+  FAKE_PLAYBACK_HOST, FAKE_REPLAY_EMBED_HOST, REPLAY_EMBED_TOKEN_TTL_SECONDS, SEAZN_CF_DELETE_DELAY_MINUTES, seaznHostedCost,
 } from "../../../apps/web/src/server/relay/config.ts";
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP/DB helpers, tag): see the header of that file.
-import { BASE, newSession, check, signIn, smokeDb, tag, timedFixture, v1, v1data, setPlan } from "../harness.ts";
+import { BASE, type Session, cookieHeader, newSession, check, signIn, smokeDb, tag, timedFixture, v1, v1data, setPlan, setStaff } from "../harness.ts";
 
 /**
  * Seazn-hosted video, Phases 1 and 2 (plan Tasks 19 and 28), over real HTTP on the fake relay drivers and the fake replay host:
@@ -31,6 +31,17 @@ import { BASE, newSession, check, signIn, smokeDb, tag, timedFixture, v1, v1data
  * 7. DELETE — the organiser's DELETE (Task 26) answers `{ deleted: true }`: the row is `deleted` by the organiser and has
  *    forgotten its copy (the server's host was asked to remove it). The route then lists NO part, the interim included,
  *    though the recording is still locked on Cloudflare. A second DELETE answers the same and changes nothing.
+ *
+ * Phase 3 (Task 32): what Seazn video costs, over the same HTTP:
+ * 8. STAFF TABLE — /admin/orgs/[id] as staff ships the "Seazn video" table (Task 31): EMPTY for the new org before any Seazn
+ *    session (read right after step 1), and at the end exactly ONE row, this match's session, naming its part deleted by the
+ *    organiser (step 7). The owner is made staff only for each read (`setStaff`), and never left so.
+ * 9. THE SWEEP — the daily relay sweep (POST /api/cron/relay-sweep, the server's and the smoke's one CRON_SECRET) answers 200 with
+ *    every Seazn counter of its step 7e a number — `seaznMeasured` first. Told COST is off (the runner's SEAZN_HOSTED_COST, read as
+ *    the server reads it: every smoke job leaves it unset), every one of them is 0, because 7e did not run. Told it is on, each is a
+ *    whole number: this match's session ended today, so it owes no day yet, and what other sessions owe is not this suite's to say.
+ *    The sweep is server-wide, as the YouTube suite's later one is; its passes act only on what is past a retention, a grace or an
+ *    expiry, and the earlier suites retire what they start (sponsors.ts's note).
  * HOW THE ROW GETS THERE, AND WHY NOT BY THE MOVE. The session, its programme input, the locked recording and the replay row are
  * written by SQL, in the shape the stream tick's passes leave them (the e2e seed's shape, e2e/helpers/seazn-video-seed.ts), and
  * `encoding → playable` is the conditional update the move's poll and the Bunny webhook write. The move cannot run here: it is
@@ -44,22 +55,53 @@ import { BASE, newSession, check, signIn, smokeDb, tag, timedFixture, v1, v1data
  * One sport (hockey, as captureV2): the Seazn destination, the video route and the replay rows read no sport.
  * SMOKE_ONLY=seaznHosted runs it alone (SELECTABLE_SUITES).
  */
+/** The sweep's Seazn counters (relay-sweep.ts `SweepResult`, step 7e and the Task 31b passes), `seaznMeasured` first. */
+const SEAZN_SWEEP_COUNTERS = [
+  "seaznMeasured", "seaznMeasureFailed", "seaznMeasureSkipped", "seaznReplaysPurged", "seaznPurgeFailed", "seaznFixturelessPurged",
+  "seaznFixturelessFailed",
+] as const;
+/** The staff table's markers (components/admin-seazn-video-panel.tsx), anchored on `="` so a bare attribute name cannot pass. */
+const PANEL = 'data-testid="seazn-video-panel"';
+const EMPTY = 'data-testid="seazn-video-empty"';
+const ROW = 'data-testid="seazn-video-row"';
+
+/** /admin/orgs/[id] as staff: the owner made superadmin for this one read only, and never left so. */
+async function staffOrgPage(s: Session, email: string, orgId: string): Promise<{ status: number; has: (m: string) => boolean; count: (m: string) => number }> {
+  await setStaff(email, "superadmin");
+  try {
+    const res = await fetch(`${BASE}/admin/orgs/${orgId}`, { headers: { cookie: cookieHeader(s) } });
+    const html = await res.text();
+    return { status: res.status, has: (m) => html.includes(m), count: (m) => html.split(m).length - 1 };
+  } finally {
+    await setStaff(email, null);
+  }
+}
+
 export async function seaznHostedSuite(): Promise<void> {
   if (!process.env.DATABASE_URL) {
     console.log("SKIP  seazn-hosted suite (DATABASE_URL not set — the Seazn row is read in SQL)");
     return;
   }
   const live = process.env.SEAZN_HOSTED_LIVE === "true";
+  // Phase 3: COST as the sweep reads it (usecases/seazn-cost.ts `seaznCostArmed`: a malformed value is off).
+  const cost = (() => {
+    try {
+      return seaznHostedCost();
+    } catch {
+      return false;
+    }
+  })();
   // LIVE on drops the two refusal steps (3) — the refusal exists only while LIVE is off. Phase 2 (5–7) adds five in both modes:
-  // the read path reads no flag.
-  const EXPECTED_STEPS = (live ? 6 : 8) + 5;
+  // the read path reads no flag. Phase 3 (8–9) adds four in every mode: the two staff-table reads, the sweep's answer and its
+  // counters by COST's mode.
+  const EXPECTED_STEPS = (live ? 6 : 8) + 5 + 4;
   let steps = 0;
   const step = (label: string, cond: boolean) => {
     check(`seazn-hosted smoke: ${label}`, cond);
     steps++;
   };
   const done = () => {
-    console.log(`seazn-hosted smoke: ${steps} steps (LIVE ${live ? "on" : "off"})`);
+    console.log(`seazn-hosted smoke: ${steps} steps (LIVE ${live ? "on" : "off"}, COST ${cost ? "on" : "off"})`);
     check(`seazn-hosted smoke: all ${EXPECTED_STEPS} steps ran (ran ${steps})`, steps === EXPECTED_STEPS);
   };
 
@@ -83,6 +125,13 @@ export async function seaznHostedSuite(): Promise<void> {
     );
     const seaznId = seaznRows[0]?.id;
     if (!seaznId) return done();
+
+    // 8a. STAFF TABLE, EMPTY: the new org has no Seazn session yet, so the table says so and lists no row.
+    const emptyTable = await staffOrgPage(owner, ownerEmail, orgId);
+    step(
+      `STAFF TABLE: before any Seazn session, /admin/orgs/[id] ships the Seazn video table, EMPTY (got ${emptyTable.status}, panel ${emptyTable.has(PANEL)}, empty ${emptyTable.has(EMPTY)}, ${emptyTable.count(ROW)} rows)`,
+      emptyTable.status === 200 && emptyTable.has(PANEL) && emptyTable.has(EMPTY) && emptyTable.count(ROW) === 0,
+    );
 
     const ALNUM = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     const streamKey = "live_1_" + Array.from(randomBytes(24), (b) => ALNUM[b % ALNUM.length]).join("");
@@ -272,6 +321,40 @@ export async function seaznHostedSuite(): Promise<void> {
       again.status === 200 && v1data<{ deleted?: unknown } | undefined>(again)?.deleted === true && afterAgain?.state === "deleted" &&
         afterDel?.deleted_at != null && afterAgain.deleted_at?.getTime() === afterDel.deleted_at.getTime() &&
         afterAgain.state_at.getTime() === afterDel.state_at.getTime(),
+    );
+
+    // ── Phase 3 (Task 32): the daily sweep's Seazn counters, and the staff table (see the header). ──
+    // 9. THE SWEEP. The secret is the one the server was started with (CI's smoke job sets it at job level); without it nothing here
+    //    can be read, which is a red, never a skip.
+    const secret = process.env.CRON_SECRET ?? "";
+    const swept = secret === ""
+      ? { status: 0, body: null }
+      : await fetch(`${BASE}/api/cron/relay-sweep`, { method: "POST", headers: { "x-cron-secret": secret } })
+          .then(async (r) => ({ status: r.status, body: (await r.json().catch(() => null)) as { ok?: boolean; data?: Record<string, unknown> } | null }));
+    const counters = SEAZN_SWEEP_COUNTERS.map((k) => [k, swept.body?.data?.[k]] as const);
+    const shown = counters.map(([k, v]) => `${k} ${String(v)}`).join(", ");
+    step(
+      secret === ""
+        ? "THE SWEEP: CRON_SECRET is not in the smoke env, so the sweep cannot be asked (the server and the smoke must share it)"
+        : `THE SWEEP: POST /api/cron/relay-sweep → 200, and its answer carries every Seazn counter as a number, seaznMeasured first (got ${swept.status}${swept.body?.data?.disabled === true ? ", a relay-DISABLED answer" : ""}; ${shown})`,
+      swept.status === 200 && swept.body?.ok === true && counters.every(([, v]) => typeof v === "number"),
+    );
+    step(
+      cost
+        ? `THE SWEEP, COST on: every Seazn counter is a whole number (${shown})`
+        : `THE SWEEP, COST off: step 7e did not run — every Seazn counter is 0 (${shown})`,
+      counters.every(([, v]) => typeof v === "number" && Number.isInteger(v) && v >= 0 && (cost || v === 0)),
+    );
+
+    // 8b. STAFF TABLE, THE ROW: exactly this match's session, its one part deleted by the organiser (step 7).
+    const table = await staffOrgPage(owner, ownerEmail, orgId);
+    const sessionRow = `data-session-id="${session.id}"`;
+    const deletedPart = "Part 1: deleted (by organiser)";
+    const fixtureLabel = `Seazn Home ${tag} v Seazn Away ${tag}`;
+    step(
+      `STAFF TABLE: /admin/orgs/[id] lists exactly ONE Seazn session, this match's, named by its entrants, its part deleted by the organiser (got ${table.status}, panel ${table.has(PANEL)}, empty ${table.has(EMPTY)}, ${table.count(ROW)} rows, this session ${table.has(sessionRow)}, named ${table.has(fixtureLabel)}, "${deletedPart}" ${table.has(deletedPart)})`,
+      table.status === 200 && table.has(PANEL) && !table.has(EMPTY) && table.count(ROW) === 1 && table.has(sessionRow) &&
+        table.has(fixtureLabel) && table.has(deletedPart),
     );
     done();
   } finally {
