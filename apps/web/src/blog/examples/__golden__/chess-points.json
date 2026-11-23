@@ -15,7 +15,9 @@
     "leaguePresets": 2,
     "swissPresets": 1,
     "sportCount": 11,
-    "halfPointSports": 1
+    "halfPointSports": 1,
+    "wholePointSports": 10,
+    "wholePointSportsList": "Football, cricket, carrom, generic, volleyball, badminton, table tennis, tennis, ice hockey and hockey"
   },
   "table": {
     "caption": "The same seven games each, counted two ways: one player with three wins and four losses, one with seven draws.",

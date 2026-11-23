@@ -57,6 +57,16 @@ export function joinOr(words: string[]): string {
   return words.length < 2 ? (words[0] ?? "") : `${words.slice(0, -1).join(", ")} or ${words[words.length - 1]}`;
 }
 
+/**
+ * A list of sport labels as a sentence's subject or object: the first word keeps its capital, the rest go lower case
+ * ("Football, ice hockey and tennis"), joined with commas and a last "and". An empty list prints nothing, so every claim
+ * that reads one fails an empty list itself (anti-vacuity: zero sports listed is a failure there).
+ */
+export function sentenceList(labels: readonly string[]): string {
+  const words = labels.map((l, i) => (i === 0 ? l : l.charAt(0).toLowerCase() + l.slice(1)));
+  return words.length < 2 ? (words[0] ?? "") : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
+}
+
 /** The variants a module declares by name (declaredCfgs also lists the bare schema default, which is no variant). */
 export function variantsOf(module: AnySportModule): { key: string; cfg: Cfg }[] {
   return declaredCfgs(module)

@@ -14,9 +14,10 @@
 import { pointsText } from "@seazn/engine/competition";
 import { stageDefaultsFor } from "@seazn/engine/sport";
 import type { AnySportModule } from "@seazn/engine/sport";
+import { builtinModules } from "@seazn/engine/sports";
 import { declaredCfgs, forEachSport } from "@seazn/engine/testkit";
 import { sportLabel, variantLabel } from "@/blog/labels";
-import { NAMES, moduleOf, play, variantsOf, winnerLoserPoints, type Cfg, type Played, type StageRules, declaredLeaguePoints } from "./kit";
+import { NAMES, moduleOf, play, sentenceList, variantsOf, winnerLoserPoints, type Cfg, type Played, type StageRules, declaredLeaguePoints } from "./kit";
 import type { BlogExample, Claim, ExampleResult } from "./types";
 
 export const CRICKET_POINTS_ID = "cricket-points";
@@ -176,6 +177,7 @@ function build(): ExampleResult {
   }
   const visited = forEachSport(() => undefined);
   const withLevel: string[] = [];
+  const withoutLevel: string[] = [];
   forEachSport(({ module }) => {
     for (const { cfg } of declaredCfgs(module)) {
       const kinds = module.reachableResultKinds(cfg, "league");
@@ -184,9 +186,12 @@ function build(): ExampleResult {
         return;
       }
     }
+    withoutLevel.push(sportLabel(module.key));
   });
   facts.sportCount = visited;
   facts.sportsWithTieOrNoResult = withLevel.length;
+  facts.sportsWithoutTieOrNoResult = withoutLevel.length;
+  facts.withoutTieOrNoResultList = sentenceList(withoutLevel);
   facts.limitedOversList = joinAnd(limitedVariants(m).map((v) => variantLabel("cricket", v.key)));
   return {
     facts,
@@ -309,6 +314,12 @@ function acrossSports(): Claim[] {
         });
         if (result.facts.sportCount !== visited) return `sportCount is ${String(result.facts.sportCount)}, the registry has ${visited}`;
         if (JSON.stringify(have) !== JSON.stringify(["cricket"])) return `sports that can tie or have no result: [${have.join(", ")}]`;
+        // The post names the OTHER sports from this sweep too: every registry sport but the ones that can, in registry order.
+        const others = builtinModules.filter((m) => !have.includes(m.key)).map((m) => sportLabel(m.key));
+        if (others.length === 0) return "no sport was left that has neither a tie nor a no result";
+        if (result.facts.sportsWithoutTieOrNoResult !== others.length || result.facts.withoutTieOrNoResultList !== sentenceList(others)) {
+          return `withoutTieOrNoResultList is '${String(result.facts.withoutTieOrNoResultList)}' (${String(result.facts.sportsWithoutTieOrNoResult)}), the registry leaves ${others.length}: '${sentenceList(others)}'`;
+        }
         return result.facts.sportsWithTieOrNoResult === have.length || `sportsWithTieOrNoResult is ${String(result.facts.sportsWithTieOrNoResult)}, expected ${have.length}`;
       },
     },

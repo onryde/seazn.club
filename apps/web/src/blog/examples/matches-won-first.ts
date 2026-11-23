@@ -12,9 +12,10 @@
 import { completeTableStage, pointsText, type FixtureResult } from "@seazn/engine/competition";
 import type { TiebreakerKey } from "@seazn/engine/sport";
 import type { AnySportModule } from "@seazn/engine/sport";
+import { builtinModules } from "@seazn/engine/sports";
 import { declaredCfgs, forEachSport } from "@seazn/engine/testkit";
 import { sportLabel, tiebreakLabel, variantLabel } from "@/blog/labels";
-import { leagueRules, moduleOf, play, variantsOf, winnerSetScore, type Cfg, declaredLeaguePoints } from "./kit";
+import { leagueRules, moduleOf, play, sentenceList, variantsOf, winnerSetScore, type Cfg, declaredLeaguePoints } from "./kit";
 import type { BlogExample, Claim, ExampleResult } from "./types";
 
 export const MATCHES_WON_FIRST_ID = "matches-won-first";
@@ -107,23 +108,35 @@ function build(): ExampleResult {
   }
   // The registry sweep: which sports put matches won first, and in which of them points could ever disagree.
   const winsFirst: string[] = [];
+  const notWinsFirst: string[] = [];
   const canDiffer: string[] = [];
   const alwaysAgree: string[] = [];
   const visited = forEachSport(({ module }) => {
     if (module.primaryTableKey === "wins") winsFirst.push(sportLabel(module.key));
+    else notWinsFirst.push(sportLabel(module.key));
     const differing = variantsOf(module).filter((v) => payPairsOf(module, v.cfg).size > 1);
     if (module.primaryTableKey === "wins" && differing.length > 0) canDiffer.push(...differing.map((v) => `${variantLabel(module.key, v.key).toLowerCase()} ${sportLabel(module.key).toLowerCase()}`));
     if (module.primaryTableKey === "wins" && differing.length === 0) alwaysAgree.push(sportLabel(module.key));
   });
   facts.matchList = matchList();
   facts.sportCount = visited;
+  facts.sportsNotWinsFirst = notWinsFirst.length;
+  facts.notWinsFirstList = sentenceList(notWinsFirst);
   facts.sportsWinsFirst = winsFirst.length;
   facts.winsFirstList = joinAnd(winsFirst);
   facts.sportsWhereOrdersCanDiffer = canDiffer.length;
   facts.whereOrdersCanDiffer = joinAnd(canDiffer);
   facts.sportsAlwaysAgree = alwaysAgree.length;
   facts.alwaysAgreeList = joinAnd(alwaysAgree);
-  facts.indoorWinThree = pointsText(declaredLeaguePoints(m, cfg).bySetScore?.["3-0"]?.[0] ?? -1, "whole");
+  const indoorPays = declaredLeaguePoints(m, cfg).bySetScore;
+  facts.indoorWinThree = pointsText(indoorPays?.["3-0"]?.[0] ?? -1, "whole");
+  facts.winnerAt31 = pointsText(indoorPays?.["3-1"]?.[0] ?? -1, "whole");
+  facts.winnerAt32 = pointsText(indoorPays?.["3-2"]?.[0] ?? -1, "whole");
+  facts.loserAt32 = pointsText(indoorPays?.["3-2"]?.[1] ?? -1, "whole");
+  // The shape of the six results, read off them: how many teams and matches, and Reds' narrow defeats.
+  facts.teamCount = TEAMS.length;
+  facts.matchCount = MATCHES.length;
+  facts.redsNarrowLosses = MATCHES.filter((x) => x.loser === "reds" && x.score === "3-2").length;
   return {
     facts,
     table: { caption: "Four volleyball teams, six matches, the same results ranked twice: matches won first, then points first.", columns: COLUMNS, rows },
@@ -206,6 +219,27 @@ function claimsFor(m: AnySportModule): Claim[] {
       if (sweep === undefined) return "the indoor rule declares no 3-0 pair";
       return r.facts.indoorWinThree === pointsText(sweep, "whole") || `indoorWinThree is ${String(r.facts.indoorWinThree)}, the declaration gives ${pointsText(sweep, "whole")}`;
     }),
+    mine("a win in four sets pays the winner what straight sets pays, and only a five-set win pays less (the winner's and the loser's amount)", "the indoor volleyball points rule by set score (bySetScore)", (r) => {
+      const pays = declaredLeaguePoints(m, indoorCfg(m)).bySetScore;
+      const at = (score: string): readonly [number, number] | undefined => pays?.[score] ?? pays?.["*"];
+      const [w30, w31, w32] = [at("3-0"), at("3-1"), at("3-2")];
+      if (w30 === undefined || w31 === undefined || w32 === undefined) return "the indoor rule declares no pair for one of 3-0, 3-1 or 3-2";
+      if (w31[0] !== w30[0]) return `a four-set win pays ${w31[0]}, a straight-sets win ${w30[0]}`;
+      if (!(w32[0] < w30[0])) return `a five-set win pays ${w32[0]}, not less than the ${w30[0]} of straight sets`;
+      const f = r.facts;
+      if (f.winnerAt31 !== pointsText(w31[0], "whole") || f.winnerAt32 !== pointsText(w32[0], "whole") || f.loserAt32 !== pointsText(w32[1], "whole")) return `winnerAt31 ${String(f.winnerAt31)}, winnerAt32 ${String(f.winnerAt32)}, loserAt32 ${String(f.loserAt32)} disagree with ${w31[0]}, ${w32[0]}, ${w32[1]}`;
+      return true;
+    }),
+    mine("the narrative shape of the six results: Blues' every win went to five sets, Reds' every win was straight sets, and the facts count the teams, the matches and Reds' narrow defeats", "the six matches (the example's scenario) against the per-team record", (r) => {
+      const wins = (id: string) => MATCHES.filter((x) => x.winner === id);
+      if (wins("blues").length === 0 || !wins("blues").every((x) => x.score === "3-2")) return "not every Blues win went to five sets";
+      if (wins("reds").length === 0 || !wins("reds").every((x) => x.score === "3-0")) return "not every Reds win was in straight sets";
+      const narrow = MATCHES.filter((x) => x.loser === "reds" && x.score === "3-2").length;
+      const n = (r.table?.rows ?? []).length;
+      if (r.facts.teamCount !== n || r.facts.matchCount !== (n * (n - 1)) / 2) return `teamCount ${String(r.facts.teamCount)} and matchCount ${String(r.facts.matchCount)}, the table has ${n} teams (${(n * (n - 1)) / 2} matches in a round robin)`;
+      if (r.facts.redsNarrowLosses !== narrow || narrow === 0) return `redsNarrowLosses is ${String(r.facts.redsNarrowLosses)}, the results give ${narrow}`;
+      return r.facts.redsWon === wins("reds").length && r.facts.bluesWon === wins("blues").length || "the won facts disagree with the six results";
+    }),
     mine("the table's two place columns are the two orders by the declared keys, and the two orders DIFFER", `${DECLARED}; primaryTableKey`, (r) => {
       if (m.primaryTableKey !== "wins") return "volleyball no longer ranks on matches won first";
       if (JSON.stringify(winsFirst) === JSON.stringify(pointsFirst)) return "the example's results no longer separate the two orders";
@@ -255,6 +289,9 @@ function acrossSports(): Claim[] {
         });
         const f = result.facts;
         if (f.sportCount !== visited) return `sportCount is ${String(f.sportCount)}, the registry has ${visited}`;
+        const rest = builtinModules.filter((b) => b.primaryTableKey !== "wins").map((b) => sportLabel(b.key));
+        if (rest.length === 0) return "no sport was left that ranks on something other than matches won";
+        if (f.sportsNotWinsFirst !== rest.length || f.notWinsFirstList !== sentenceList(rest)) return `notWinsFirstList is '${String(f.notWinsFirstList)}' (${String(f.sportsNotWinsFirst)}), the registry leaves ${rest.length}: '${sentenceList(rest)}'`;
         if (f.sportsWinsFirst !== winsFirst.length || f.winsFirstList !== joinAnd(winsFirst)) return `winsFirst: ${String(f.sportsWinsFirst)} '${String(f.winsFirstList)}', the declarations give ${winsFirst.length} '${joinAnd(winsFirst)}'`;
         if (f.sportsWhereOrdersCanDiffer !== differ.length || f.whereOrdersCanDiffer !== joinAnd(differ)) return `canDiffer: ${String(f.sportsWhereOrdersCanDiffer)} '${String(f.whereOrdersCanDiffer)}', the declarations give ${differ.length} '${joinAnd(differ)}'`;
         if (winsFirst.length < 2) return `only ${winsFirst.length} sports rank on matches won`;

@@ -20,7 +20,7 @@ import { BLOG_AUTHOR, BLOG_TOPICS, blogPostShowsFor, blogUrl, formatBlogDate } f
 import { blogIndexLd, blogOgTitleSize, blogPostBreadcrumbLd, blogPostMetadata, blogPostingLd } from "@/lib/blog-seo";
 import { helpUrl } from "@/lib/help";
 import { LOCALES } from "@/lib/i18n-constants";
-import { allBlogPosts, blogPost, type BlogPost } from "@/server/blog-content";
+import { allBlogPosts, blogPost, BLOG_PLANNED_SLUGS, type BlogPost } from "@/server/blog-content";
 import { blogIndexModel, resolveBlogRelated } from "@/server/blog-index";
 import { blogRssXml, rssDate } from "@/server/blog-rss";
 import { BLOG_GOLDENS } from "@/blog/examples/goldens";
@@ -143,6 +143,11 @@ describe("the post page, through the real renderer (the pilot)", () => {
     const unresolved = post.related.filter((s) => blogPost(s) === null);
     expect(resolved.length + unresolved.length, "every related slug is one or the other").toBe(post.related.length);
     expect(resolved.length, "anti-vacuity: related posts that resolve").toBeGreaterThan(0);
+    // Anti-vacuity for the unresolved arm: the slugs that do not resolve are EXACTLY the pilot's related slugs the programme
+    // still has planned, read from the planned set, so a slug that vanished (neither a post nor planned) is a failure and not
+    // an empty loop. When the last one lands the arm is empty by design, and the fixture test below keeps it exercised.
+    const planned = post.related.filter((s) => BLOG_PLANNED_SLUGS.has(s));
+    expect(unresolved, "every related slug that does not resolve is one still to be written").toEqual(planned);
     for (const slug of resolved) expect(markup, slug).toContain(blogUrl(slug));
     for (const slug of unresolved) expect(markup, slug).not.toContain(blogUrl(slug));
     expect(markup).toContain('data-testid="blog-related"');

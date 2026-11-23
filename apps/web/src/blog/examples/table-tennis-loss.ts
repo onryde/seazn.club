@@ -10,9 +10,10 @@
 // win, the loss, the loss with nothing played) in code that shares no formatter with `build()`.
 import { forfeitShaped, pointsText } from "@seazn/engine/competition";
 import type { AnySportModule } from "@seazn/engine/sport";
+import { builtinModules } from "@seazn/engine/sports";
 import { forEachSport } from "@seazn/engine/testkit";
 import { sportLabel, variantLabel } from "@/blog/labels";
-import { NAMES, moduleOf, play, variantsOf, winnerLoserPoints, winnerSetScore, type Cfg, declaredLeaguePoints } from "./kit";
+import { NAMES, moduleOf, play, sentenceList, variantsOf, winnerLoserPoints, winnerSetScore, type Cfg, declaredLeaguePoints } from "./kit";
 import { startingVariantKey } from "./starting-variant";
 import type { BlogExample, Claim, ExampleResult } from "./types";
 
@@ -74,6 +75,7 @@ function build(): ExampleResult {
   text.push(`${FORFEIT_ROW}: ${NAMES.ben} forfeited, ${forfeit.headline}.`);
 
   const everyLoss: string[] = [];
+  const someLossPaysNothing: string[] = [];
   const declaresUnplayed: string[] = [];
   const visited = forEachSport(({ module }) => {
     let every = true;
@@ -88,11 +90,14 @@ function build(): ExampleResult {
       if (rule.loss.unplayed !== undefined) unplayed = true;
     }
     if (every) everyLoss.push(sportLabel(module.key));
+    else someLossPaysNothing.push(sportLabel(module.key));
     if (unplayed) declaresUnplayed.push(sportLabel(module.key));
   });
   facts.sportCount = visited;
   facts.sportsEveryLossPays = everyLoss.length;
   facts.everyLossPaysList = joinAnd(everyLoss);
+  facts.sportsSomeLossPaysNothing = someLossPaysNothing.length;
+  facts.someLossPaysNothingList = sentenceList(someLossPaysNothing);
   facts.sportsDecidingUnplayed = declaresUnplayed.length;
   facts.variantCount = variantsOf(m).length;
   facts.variantsList = joinAnd(variantsOf(m).map((v) => variantLabel(m.key, v.key)));
@@ -180,6 +185,9 @@ function acrossSports(): Claim[] {
         if (scoresChecked < visited) return `only ${scoresChecked} scores were checked over ${visited} sports`;
         if (f.sportCount !== visited) return `sportCount is ${String(f.sportCount)}, the registry has ${visited}`;
         if (f.sportsEveryLossPays !== every.length || f.everyLossPaysList !== joinAnd(every)) return `everyLossPays: ${String(f.sportsEveryLossPays)} '${String(f.everyLossPaysList)}', the declarations give ${every.length} '${joinAnd(every)}'`;
+        const others = builtinModules.filter((x) => !every.includes(sportLabel(x.key))).map((x) => sportLabel(x.key));
+        if (others.length === 0) return "no sport was left with a loss that earns nothing";
+        if (f.sportsSomeLossPaysNothing !== others.length || f.someLossPaysNothingList !== sentenceList(others)) return `someLossPaysNothingList is '${String(f.someLossPaysNothingList)}' (${String(f.sportsSomeLossPaysNothing)}), the declarations leave ${others.length}: '${sentenceList(others)}'`;
         if (f.sportsDecidingUnplayed !== unplayed.length) return `sportsDecidingUnplayed is ${String(f.sportsDecidingUnplayed)}, the declarations give ${unplayed.length}`;
         if (JSON.stringify(every) !== JSON.stringify([sportLabel("tabletennis")])) return `sports where every played loss pays: [${every.join(", ")}]`;
         return JSON.stringify(unplayed) === JSON.stringify([sportLabel("tabletennis")]) || `sports that pay a lesser loss for nothing played: [${unplayed.join(", ")}]`;

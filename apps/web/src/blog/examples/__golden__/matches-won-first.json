@@ -21,13 +21,21 @@
     "goldsPlacePoints": 4,
     "matchList": "Blues beat Reds 3-2, Reds beat Greens 3-0, Golds beat Reds 3-2, Greens beat Blues 3-0, Blues beat Golds 3-2, Greens beat Golds 3-0",
     "sportCount": 11,
+    "sportsNotWinsFirst": 8,
+    "notWinsFirstList": "Football, cricket, chess, carrom, generic, table tennis, ice hockey and hockey",
     "sportsWinsFirst": 3,
     "winsFirstList": "Volleyball, Badminton and Tennis",
     "sportsWhereOrdersCanDiffer": 1,
     "whereOrdersCanDiffer": "indoor volleyball",
     "sportsAlwaysAgree": 2,
     "alwaysAgreeList": "Badminton and Tennis",
-    "indoorWinThree": "3"
+    "indoorWinThree": "3",
+    "winnerAt31": "3",
+    "winnerAt32": "2",
+    "loserAt32": "1",
+    "teamCount": 4,
+    "matchCount": 6,
+    "redsNarrowLosses": 2
   },
   "table": {
     "caption": "Four volleyball teams, six matches, the same results ranked twice: matches won first, then points first.",

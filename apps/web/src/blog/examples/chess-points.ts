@@ -11,9 +11,10 @@
 // league and the Swiss stage, and the points each preset declares), in code that shares no formatter with `build()`.
 import { pointsText } from "@seazn/engine/competition";
 import type { AnySportModule } from "@seazn/engine/sport";
+import { builtinModules } from "@seazn/engine/sports";
 import { declaredCfgs, forEachSport } from "@seazn/engine/testkit";
 import { sportLabel } from "@/blog/labels";
-import { NAMES, moduleOf, play, type Cfg, type Played, declaredLeaguePoints } from "./kit";
+import { NAMES, moduleOf, play, sentenceList, type Cfg, type Played, declaredLeaguePoints } from "./kit";
 import { startingVariantKey } from "./starting-variant";
 import type { BlogExample, Claim, ExampleResult } from "./types";
 
@@ -88,8 +89,10 @@ function build(): ExampleResult {
     [PLAYERS[1]!.name, PLAYERS[1]!.games, f(benHalf, half.unit), f(benThree, three.unit)],
   ];
   const halfUnit: string[] = [];
+  const wholeUnit: string[] = [];
   const visited = forEachSport(({ module }) => {
     if (declaredCfgs(module).some((c) => declaredLeaguePoints(module, c.cfg).unit === "half")) halfUnit.push(sportLabel(module.key));
+    else wholeUnit.push(sportLabel(module.key));
   });
   const facts: ExampleResult["facts"] = {
     halfWin: f(half.win, half.unit),
@@ -108,6 +111,8 @@ function build(): ExampleResult {
     swissPresets: m.tablePresets?.("swiss").points.length ?? 0,
     sportCount: visited,
     halfPointSports: halfUnit.length,
+    wholePointSports: wholeUnit.length,
+    wholePointSportsList: sentenceList(wholeUnit),
   };
   return {
     facts,
@@ -200,6 +205,12 @@ function acrossSports(): Claim[] {
         });
         if (result.facts.sportCount !== visited) return `sportCount is ${String(result.facts.sportCount)}, the registry has ${visited}`;
         if (JSON.stringify(have) !== JSON.stringify(["boardgame"])) return `sports that count in half points: [${have.join(", ")}]`;
+        // The post names the OTHER sports from this sweep too: every registry sport that does not count in half points.
+        const others = builtinModules.filter((m) => !have.includes(m.key)).map((m) => sportLabel(m.key));
+        if (others.length === 0) return "no sport was left that counts whole points";
+        if (result.facts.wholePointSports !== others.length || result.facts.wholePointSportsList !== sentenceList(others)) {
+          return `wholePointSportsList is '${String(result.facts.wholePointSportsList)}' (${String(result.facts.wholePointSports)}), the registry leaves ${others.length}: '${sentenceList(others)}'`;
+        }
         return result.facts.halfPointSports === have.length || `halfPointSports is ${String(result.facts.halfPointSports)}, expected ${have.length}`;
       },
     },
