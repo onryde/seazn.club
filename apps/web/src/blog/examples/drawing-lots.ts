@@ -22,12 +22,12 @@ import { shuffle } from "@seazn/engine/core";
 import { FOR_KEYS, lotSeed, membersKeyOf, metricOf, type MembersKey, type StoredLotsDraw } from "@seazn/engine/competition";
 import { builtinModules } from "@seazn/engine/sports";
 import type { AnySportModule, TiebreakerKey } from "@seazn/engine/sport";
-import { declaredCfgs, defaultOrderOf, forEachSport } from "@seazn/engine/testkit";
+import { defaultOrderOf, forEachSport } from "@seazn/engine/testkit";
 import { sportLabel } from "@/blog/labels";
 import { standingsLabel } from "@/blog/labels-screens";
-import { startingVariantKey } from "./starting-variant";
 import { placeOf, placeText, playAndRank, scoreOf, rowOf, signed, stageRules, type MatchView, type Meeting } from "./tie-break-play";
 import type { BlogExample, Claim, ExampleResult } from "./types";
+import { startingCfg } from "./kit";
 
 export const DRAWING_LOTS_ID = "drawing-lots";
 
@@ -82,7 +82,7 @@ export function seedingWords(order: readonly TiebreakerKey[]): string {
 
 function build(): ExampleResult {
   const sport = generic();
-  const cfg = declaredCfgs(sport).find((c) => c.name === startingVariantKey(sport))!.cfg;
+  const cfg = startingCfg(sport);
   const first = playAndRank({ module: sport, cfg, kind: "league", entrants: TEAMS, meetings: MEETINGS, rngSeed: RNG_SEED });
   if (first.newLotsDraws.length !== 1) throw new Error(`drawing-lots: ${first.newLotsDraws.length} draws, one expected`);
   const drawn = first.newLotsDraws[0]!;
@@ -133,7 +133,7 @@ function build(): ExampleResult {
   facts.genericOrder = first.rules.tiebreakers.slice(1).map((k) => standingsLabel(k, "generic")).join(", ");
   const seedSports: string[] = [];
   const visited = forEachSport(({ module: m }) => {
-    const order = stageRules(m, declaredCfgs(m).find((c) => c.name === startingVariantKey(m))!.cfg, "league").tiebreakers;
+    const order = stageRules(m, startingCfg(m), "league").tiebreakers;
     facts[`${m.key}LastSteps`] = seedingWords(order);
     if (seedingWords(order) === "seeding first, then lots") seedSports.push(sportLabel(m.key));
   });
@@ -279,7 +279,7 @@ const reachClaims: Claim[] = [
     says: "Wrens lose both matches 0-2, so they are paid nothing, finish behind the level pair under every ordering, and are in no draw",
     source: "the result lines (Larks 2-0 Wrens, Owls 2-0 Wrens) and the generic points rule's declared win, draw and loss points, recomputed here",
     check(r) {
-      const cfg = declaredCfgs(generic()).find((c) => c.name === startingVariantKey(generic()))!.cfg;
+      const cfg = startingCfg(generic());
       const points = stageRules(generic(), cfg, "league").points;
       const win = points.win.regulation;
       const loss = points.loss.regulation;

@@ -17,14 +17,14 @@
 // order (`defaultOrderOf`), never the loader `build()` reads.
 import { builtinModules } from "@seazn/engine/sports";
 import type { AnySportModule, TiebreakerKey } from "@seazn/engine/sport";
-import { declaredCfgs, defaultOrderOf, forEachSport } from "@seazn/engine/testkit";
+import { defaultOrderOf, forEachSport } from "@seazn/engine/testkit";
 import { sportLabel } from "@/blog/labels";
 import ui from "@/dictionaries/en/ui.json";
 import { editorLabel, standingsLabel } from "@/blog/labels-screens";
 import { derivedText } from "@/server/public-site/standings-view";
-import { startingVariantKey } from "./starting-variant";
 import { factsRepeatTheTable, placeOf, placeText, playAndRank, scoreOf, rowOf, stageRules, type MatchView, type Meeting } from "./tie-break-play";
 import type { BlogExample, Claim, ExampleResult } from "./types";
+import { startingCfg } from "./kit";
 
 export const SET_RATIO_OR_DIFFERENCE_ID = "set-ratio-or-difference";
 
@@ -87,7 +87,7 @@ const badminton = () => builtinModules.find((m) => m.key === "badminton")!;
 
 function build(): ExampleResult {
   const sport = badminton();
-  const cfg = declaredCfgs(sport).find((c) => c.name === startingVariantKey(sport))!.cfg;
+  const cfg = startingCfg(sport);
   const own = playAndRank({ module: sport, cfg, kind: "league", entrants: PLAYERS, meetings: MEETINGS });
   const swapped = ratioOrder(own.rules.tiebreakers);
   const ratio = playAndRank({ module: sport, cfg, kind: "league", entrants: PLAYERS, meetings: MEETINGS, stageOrder: swapped });
@@ -122,7 +122,7 @@ function build(): ExampleResult {
   const gameSports: string[] = [];
   const setSports: string[] = [];
   const visited = forEachSport(({ module: m }) => {
-    const order = stageRules(m, declaredCfgs(m).find((c) => c.name === startingVariantKey(m))!.cfg, "league").tiebreakers;
+    const order = stageRules(m, startingCfg(m), "league").tiebreakers;
     facts[`${m.key}Measures`] = measureWords(order, m.key);
     if (m.metrics.some((x) => x.key === "sets_won")) (countsGames(m) ? gameSports : setSports).push(sportLabel(m.key).toLowerCase());
   });

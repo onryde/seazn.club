@@ -17,6 +17,7 @@ import { sportLabel } from "@/blog/labels";
 import { postedStageCfg } from "@/lib/stage-decider-off";
 import { foldFrom } from "@/server/engine-db/fold";
 import { tableRulesOf, type LoadedTableRules } from "@/server/engine-db/table-rules";
+import { startingVariantKey } from "./starting-variant";
 
 export const NAMES: Record<string, string> = { ana: "Ana", ben: "Ben", cy: "Cy", dev: "Dev" };
 /** The seeded search's bounds: far past what any sport needs, so a miss is a real fault and not a short budget. */
@@ -41,6 +42,18 @@ export function declaredLeaguePoints(module: AnySportModule, cfg: Cfg): ReturnTy
   return module.tablePointsRule(cfg as never, "league");
 }
 
+/**
+ * The config a NEW division of this sport starts on: the declared config of the variant the builder opens on
+ * (`startingVariantKey`, starting-variant.ts). A sport with no declared config for that variant is a fault, never a
+ * silent `undefined` handed to a rule reader.
+ */
+export function startingCfg(module: AnySportModule): Cfg {
+  const key = startingVariantKey(module);
+  const hit = declaredCfgs(module).find((c) => c.name === key);
+  if (hit === undefined) throw new Error(`blog example: ${module.key}: no declared config for the starting variant '${key}'`);
+  return hit.cfg;
+}
+
 export const upperFirst = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
 export const compact = (variantKey: string): string => upperFirst(variantKey.replace(/[^a-z0-9]/gi, ""));
 
@@ -52,6 +65,16 @@ export function groupBy<T>(items: T[], keyOf: (t: T) => string): T[][] {
     else groups.push([it]);
   }
   return groups;
+}
+
+/** "a, b and c": the words joined with commas and a last "and", nothing else changed (`sentenceList` also sets the case). */
+export function joinAnd(words: string[]): string {
+  return words.length < 2 ? (words[0] ?? "") : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
+}
+
+/** "1 point" / "3 points": a whole number of points as a sentence prints it. */
+export function pointsPhrase(n: number): string {
+  return `${n} ${n === 1 ? "point" : "points"}`;
 }
 
 export function joinOr(words: string[]): string {
@@ -69,7 +92,7 @@ export function sentenceList(labels: readonly string[]): string {
     const w = l === sportLabel("generic") ? "a generic division" : l;
     return i === 0 ? w.charAt(0).toUpperCase() + w.slice(1) : w.charAt(0).toLowerCase() + w.slice(1);
   });
-  return words.length < 2 ? (words[0] ?? "") : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
+  return joinAnd(words);
 }
 
 /** The variants a module declares by name (declaredCfgs also lists the bare schema default, which is no variant). */

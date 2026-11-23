@@ -17,7 +17,7 @@ import type { AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { declaredCfgs, forEachSport } from "@seazn/engine/testkit";
 import { sportLabel, variantLabel } from "@/blog/labels";
-import { NAMES, moduleOf, play, sentenceList, variantsOf, winnerLoserPoints, type Cfg, type Played, type StageRules, declaredLeaguePoints } from "./kit";
+import { NAMES, moduleOf, play, sentenceList, variantsOf, winnerLoserPoints, type Cfg, type Played, type StageRules, declaredLeaguePoints, joinAnd } from "./kit";
 import type { BlogExample, Claim, ExampleResult } from "./types";
 
 export const CRICKET_POINTS_ID = "cricket-points";
@@ -198,10 +198,6 @@ function build(): ExampleResult {
     table: { caption: "What each side gets for each way a cricket match can end, by format.", columns: COLUMNS, rows },
     text,
   };
-}
-
-function joinAnd(words: string[]): string {
-  return words.length < 2 ? (words[0] ?? "") : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
 }
 
 // ---- claims: every expected value below is recomputed from the sport module's own declarations ----

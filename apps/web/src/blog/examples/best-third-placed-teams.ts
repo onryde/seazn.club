@@ -11,7 +11,7 @@
 // order of those records (football's declared cross-group keys, head-to-head steps removed). A second claim holds the contrast the post
 // is about: with every result counted a different team leads.
 import { builtinModules } from "@seazn/engine/sports";
-import { declaredCfgs, defaultOrderOf, forEachSport } from "@seazn/engine/testkit";
+import { defaultOrderOf, forEachSport } from "@seazn/engine/testkit";
 import { isHeadToHeadKey, type ProgressionSpec, type SourceShape } from "@seazn/engine/competition";
 import { buildTemplateStages } from "@/lib/format-templates";
 import { bestNthBasisNote } from "@/lib/bestnth-basis-note";
@@ -19,8 +19,7 @@ import { resolveStoredProgression } from "@/server/usecases/stored-progression";
 import { seededSnake } from "@/server/usecases/stages/generators";
 import publicDict from "@/dictionaries/en/public.json";
 import { playGroups } from "./group-play";
-import { declaredLeaguePoints } from "./kit";
-import { startingVariantKey } from "./starting-variant";
+import { declaredLeaguePoints, pointsPhrase, startingCfg } from "./kit";
 import { placeText, type Meeting, type MatchView } from "./tie-break-play";
 import { capitalised, col, guarded, numberWord, offeredInEverySportClaim } from "./swiss-claims";
 import type { BlogExample, Claim, ExampleResult } from "./types";
@@ -39,7 +38,6 @@ const nameOfId = (id: string) => TEAMS.find((t) => idOf(t) === id) ?? id;
 const goals = (h: number, a: number) => (v: MatchView) => v.home.metrics.gf === h && v.away.metrics.gf === a;
 const poolName = (key: string) => `Group ${key}`;
 const signed = (n: number) => (n > 0 ? `+${n}` : String(n));
-const pointsText = (n: number) => `${n} ${n === 1 ? "point" : "points"}`;
 const POOL_KEYS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 /** The group matches, home side first. Group A: Hawks, Tigers, Lions. Group B: Rockets, Wolves, Bears. Group C (four teams): Comets,
@@ -80,9 +78,7 @@ interface Candidate {
 
 function build(): ExampleResult {
   const sport = football();
-  const variant = startingVariantKey(sport);
-  const cfg = declaredCfgs(sport).find((c) => c.name === variant)?.cfg;
-  if (cfg === undefined) throw new Error(`best-third-placed-teams: football has no declared variant '${variant}'`);
+  const cfg = startingCfg(sport);
   const entrants = TEAMS.map((name, i) => ({ id: idOf(name), name, seed: i + 1 }));
   const dealt = seededSnake(entrants.map((e) => ({ ...e, swiss_first_round: null })), GROUPS);
   const pools = new Map(dealt.map((members, i) => [POOL_KEYS[i]!, members.map((m) => m.id)] as const));
@@ -146,7 +142,7 @@ function build(): ExampleResult {
   const note = bestNthBasisNote(basis, poolsForNote, names, new Set(), t, "en");
   if (note === null) throw new Error("best-third-placed-teams: the app wrote no footnote for a comparison that left a result out");
   const sizes = [...pools.values()].map((m) => m.length);
-  const recordText = (r: { points: number; diff: number; played: number }) => `${pointsText(r.points)}, ${signed(r.diff)} from ${r.played} matches`;
+  const recordText = (r: { points: number; diff: number; played: number }) => `${pointsPhrase(r.points)}, ${signed(r.diff)} from ${r.played} matches`;
   const leftOutText = (c: Candidate) => (c.leftOut.length === 0 ? "nothing" : c.leftOut.map((l) => `v ${nameOfId(l.id)} (${placeText(l.place)})`).join(", "));
   const thirdsThrough = candidates.slice(0, BEST_COUNT).map((c) => nameOfId(c.id));
   const outThirds = candidates.slice(BEST_COUNT).map((c) => nameOfId(c.id));
@@ -230,8 +226,7 @@ interface Standing {
  *  so a bottom team's can be left out. */
 function groupsFromResults(r: ExampleResult): { tables: Standing[][]; results: { home: string; away: string; h: number; a: number }[] } {
   const sport = football();
-  const variant = startingVariantKey(sport);
-  const cfg = declaredCfgs(sport).find((c) => c.name === variant)?.cfg;
+  const cfg = startingCfg(sport);
   const rule = declaredLeaguePoints(sport, cfg);
   if (rule.draw === undefined) throw new Error("football declares no draw points");
   const results = r.text.map((line) => {
@@ -318,8 +313,7 @@ function derive(r: ExampleResult): Derived[] {
 
 function declaredLeaguePointsOf(): { win: number; draw: number; loss: number } {
   const sport = football();
-  const variant = startingVariantKey(sport);
-  const cfg = declaredCfgs(sport).find((c) => c.name === variant)?.cfg;
+  const cfg = startingCfg(sport);
   const rule = declaredLeaguePoints(sport, cfg);
   return { win: rule.win.regulation, draw: rule.draw ?? Number.NaN, loss: rule.loss.regulation };
 }

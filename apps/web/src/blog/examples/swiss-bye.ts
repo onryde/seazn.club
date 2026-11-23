@@ -12,7 +12,7 @@
 // sweep above covers every sport.
 import { buchholz, buildSwissLedger, pointsText, setsToWinOf, swissDrawFactsOf, swissDrawPoints, type SwissLedgerFixture } from "@seazn/engine/competition";
 import type { AnySportModule } from "@seazn/engine/sport";
-import { declaredCfgs, forEachSport } from "@seazn/engine/testkit";
+import { forEachSport } from "@seazn/engine/testkit";
 import { sportLabel, variantLabel } from "@/blog/labels";
 import { liveCfg } from "@/server/engine-db/fixture-cfg";
 import { maxRoundPoints } from "@/server/engine-db/swiss-max-round-points";
@@ -20,18 +20,12 @@ import { capitalised, captionClaim, col, floatRuleProblem, guarded, numberWord, 
 import { byeDelta, roundDiagram, runSwiss, swissRules } from "./swiss-run";
 import { startingVariantKey } from "./starting-variant";
 import type { BlogExample, Claim, ExampleResult } from "./types";
+import { variantsOf } from "./kit";
 
 export const SWISS_BYE_ID = "swiss-bye";
 export const SWISS_BYE_ROUNDS_ID = "swiss-bye-rounds";
 
 const BYE_COLUMNS = ["Sport", "A bye earns", "The most one played win earns"];
-
-/** The variants a module declares by name (declaredCfgs also lists the bare schema default, which is no variant). */
-function variantsOf(module: AnySportModule): { key: string; cfg: unknown }[] {
-  return declaredCfgs(module)
-    .filter((c) => Object.hasOwn(module.variants, c.name))
-    .map((c) => ({ key: c.name, cfg: c.cfg }));
-}
 
 function byeCells(module: AnySportModule, cfg: unknown): string[] {
   const stageId = `blog-example:swiss-bye:${module.key}`;

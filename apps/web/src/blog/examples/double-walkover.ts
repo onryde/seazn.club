@@ -24,11 +24,11 @@ import { forfeitBaseState, forfeitDialogModel } from "@/components/v2/forfeit-di
 import { doubleWalkoverRefused } from "@/lib/double-walkover-next-match";
 import { finalTitleTag } from "@/lib/final-title-tag";
 import { creditsNobody, forfeitTag, forfeitWords, FORFEIT_SENTENCE_KEY, FORFEIT_TAG_KEY, NO_LEDGER } from "@/lib/forfeit-tag";
-import { tableRulesOf } from "@/server/engine-db/table-rules";
 import { bracketAfterRoundOne, KNOCKOUT_PLAYERS } from "./knockout-withdrawal";
-import { forfeitFold, lineupsFor, scoreShown, startingCfg } from "./forfeit-scores";
+import { forfeitFold, lineupsFor, scoreShown } from "./forfeit-scores";
 import { pickerSportName } from "./sport-name";
 import type { Claim, EngineExample, ExampleResult } from "./types";
+import { leagueRules, startingCfg } from "./kit";
 
 export const DOUBLE_WALKOVER_ID = "double-walkover";
 
@@ -43,13 +43,6 @@ function dictWord(key: string): string {
   const w = DICT[key];
   if (typeof w !== "string" || w.length === 0) throw new Error(`double-walkover: the English dictionary has no '${key}'`);
   return w;
-}
-
-function leagueRules(module: AnySportModule, cfg: unknown) {
-  return tableRulesOf(
-    { stageId: `blog-example:${module.key}`, kind: "league", status: "pending", stageConfig: null, pin: null, pinnedAt: null, divisionConfig: cfg, divisionTiebreakers: null },
-    module,
-  );
 }
 
 function paid(module: AnySportModule, by: string) {

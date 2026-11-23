@@ -13,16 +13,15 @@
 // they check that every other team is compared on the same number of matches in each case; and they sweep the registry for
 // the walkover being a win for the opponent in every sport.
 import { withdrawTableEntrant } from "@seazn/engine/competition";
-import { declaredCfgs, forEachSport } from "@seazn/engine/testkit";
+import { forEachSport } from "@seazn/engine/testkit";
 import { tableWithdrawalInputs, type WithdrawalFixtureRow } from "@/lib/table-withdrawal";
 import { withdrawalNoteText } from "@/lib/table-withdrawal-note";
 import publicDict from "@/dictionaries/en/public.json";
 import { t, type TKey } from "@/lib/i18n-runtime";
 import { builtinModules } from "@seazn/engine/sports";
 import { forfeitFold } from "./forfeit-scores";
-import { declaredLeaguePoints } from "./kit";
+import { declaredLeaguePoints, pointsPhrase, startingCfg } from "./kit";
 import { draw } from "./round-robin-schedule";
-import { startingVariantKey } from "./starting-variant";
 import { playAndRank, type Meeting, type RankedStage } from "./tie-break-play";
 import { capitalised, col, guarded, numberWord } from "./swiss-claims";
 import type { BlogExample, Claim, ExampleResult } from "./types";
@@ -37,7 +36,6 @@ const EARLY = 1;
 const LATE = 3;
 const idOf = (name: string) => name.toLowerCase();
 const pairKey = (a: string, b: string) => [a, b].sort().join("|");
-const pointsText = (n: number) => `${n} ${n === 1 ? "point" : "points"}`;
 
 /** The goals each side scores in the match between a pair, by team: the example's own input. A pair the leaver is in has a score only
  *  where it is played before they leave (the first and the third round); the other two never are. */
@@ -131,9 +129,7 @@ function scene(sport: ReturnType<typeof football>, cfg: unknown, schedule: Line[
 
 function build(): ExampleResult {
   const sport = football();
-  const variant = startingVariantKey(sport);
-  const cfg = declaredCfgs(sport).find((c) => c.name === variant)?.cfg;
-  if (cfg === undefined) throw new Error(`withdrawal-in-a-league: football has no declared variant '${variant}'`);
+  const cfg = startingCfg(sport);
   const drawn = draw(TEAMS, 1);
   const schedule: Line[] = drawn.lines.map((l, i) => ({ id: `blog-line-${i + 1}`, round: l.round, home: l.home, away: l.away }));
   const early = scene(sport, cfg, schedule, EARLY);
@@ -182,7 +178,7 @@ function build(): ExampleResult {
   const rows = TEAMS.map((name) => {
     const a = rowOf(early, name);
     const b = rowOf(late, name);
-    return [name, a.played, pointsText(a.points), b.played, pointsText(b.points)];
+    return [name, a.played, pointsPhrase(a.points), b.played, pointsPhrase(b.points)];
   });
   const fateText = (s: Scene, l: Line): string => {
     const f = s.fates.get(l.id)!;
@@ -247,8 +243,7 @@ const modeOfRule = (played: number, total: number): "voided" | "awarded" => (pla
 
 function pointsPerResult(): { win: number; draw: number; loss: number } {
   const sport = football();
-  const variant = startingVariantKey(sport);
-  const cfg = declaredCfgs(sport).find((c) => c.name === variant)?.cfg;
+  const cfg = startingCfg(sport);
   const rule = declaredLeaguePoints(sport, cfg);
   return { win: rule.win.regulation, draw: rule.draw ?? Number.NaN, loss: rule.loss.regulation };
 }

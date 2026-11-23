@@ -19,13 +19,13 @@
 // a real opponent counts at its final score. The places follow chess's DECLARED Swiss order (`defaultOrderOf`).
 import { resultColumnText } from "@seazn/engine/competition";
 import { builtinModules } from "@seazn/engine/sports";
-import { declaredCfgs, defaultOrderOf } from "@seazn/engine/testkit";
+import { defaultOrderOf } from "@seazn/engine/testkit";
 import { standingsLabel } from "@/blog/labels-screens";
 import { derivedText } from "@/server/public-site/standings-view";
 import { C, COLUMNS, halves, pointsText, separatedByClaim } from "./buchholz-sonneborn-berger";
-import { startingVariantKey } from "./starting-variant";
 import { factsRepeatTheTable, placeOf, placeText, playAndRank, rowOf, stageRules, type MatchView, type Meeting } from "./tie-break-play";
 import type { BlogExample, Claim, ExampleResult } from "./types";
+import { startingCfg } from "./kit";
 
 export const BUCHHOLZ_BYE_ID = "buchholz-bye";
 
@@ -62,7 +62,7 @@ const chess = () => builtinModules.find((m) => m.key === "boardgame")!;
  */
 export function dummyCap(): number {
   const sport = chess();
-  const points = stageRules(sport, declaredCfgs(sport).find((c) => c.name === startingVariantKey(sport))!.cfg, "swiss").points;
+  const points = stageRules(sport, startingCfg(sport), "swiss").points;
   const win = points.win.regulation;
   const draw = points.draw;
   if (win === undefined || win <= 0 || draw === undefined) throw new Error(`buchholz-bye: chess's Swiss points rule has no win/draw: ${JSON.stringify(points)}`);
@@ -83,7 +83,7 @@ function gamesText(id: string, ranked: ReturnType<typeof playAndRank>): string {
 
 function build(): ExampleResult {
   const sport = chess();
-  const cfg = declaredCfgs(sport).find((c) => c.name === startingVariantKey(sport))!.cfg;
+  const cfg = startingCfg(sport);
   const ranked = playAndRank({ module: sport, cfg, kind: "swiss", entrants: PLAYERS, meetings: MEETINGS, rounds: ROUNDS });
   if (ranked.byes.length !== ROUNDS || ranked.played.length !== 6) throw new Error("buchholz-bye: the fixture has the wrong rounds");
   const L = ranked.layout;

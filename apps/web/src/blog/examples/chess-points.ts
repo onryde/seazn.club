@@ -14,7 +14,7 @@ import type { AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { declaredCfgs, forEachSport } from "@seazn/engine/testkit";
 import { sportLabel } from "@/blog/labels";
-import { NAMES, moduleOf, play, sentenceList, type Cfg, type Played, declaredLeaguePoints } from "./kit";
+import { NAMES, moduleOf, play, sentenceList, type Cfg, type Played, declaredLeaguePoints, startingCfg } from "./kit";
 import { startingVariantKey } from "./starting-variant";
 import type { BlogExample, Claim, ExampleResult } from "./types";
 
@@ -76,7 +76,7 @@ const leader = (ana: number, ben: number): string => (ana === ben ? "Level" : an
 function build(): ExampleResult {
   const m = chess();
   const variantKey = startingVariantKey(m);
-  const cfg = declaredCfgs(m).find((c) => c.name === variantKey)?.cfg as Cfg;
+  const cfg = startingCfg(m) as Cfg;
   const half = paidUnder(m, cfg, variantKey, presetRule(m, "league", HALF_ID));
   const three = paidUnder(m, cfg, variantKey, presetRule(m, "league", THREE_ID));
   const anaHalf = total(half, ANA);

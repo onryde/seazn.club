@@ -15,7 +15,7 @@ import type { AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { declaredCfgs, forEachSport } from "@seazn/engine/testkit";
 import { sportLabel, tiebreakLabel, variantLabel } from "@/blog/labels";
-import { leagueRules, moduleOf, play, sentenceList, variantsOf, winnerSetScore, type Cfg, declaredLeaguePoints } from "./kit";
+import { leagueRules, moduleOf, play, sentenceList, variantsOf, winnerSetScore, type Cfg, declaredLeaguePoints, joinAnd } from "./kit";
 import type { BlogExample, Claim, ExampleResult } from "./types";
 
 export const MATCHES_WON_FIRST_ID = "matches-won-first";
@@ -81,7 +81,6 @@ function rankedBy(m: AnySportModule, cfg: Cfg, order: readonly TiebreakerKey[], 
   return pool.rows.map((r) => ({ id: r.entrantId, won: r.won, points: r.points }));
 }
 
-const joinAnd = (words: string[]): string => (words.length < 2 ? (words[0] ?? "") : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`);
 
 function build(): ExampleResult {
   const m = volleyball();

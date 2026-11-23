@@ -13,12 +13,12 @@
 // recomputed from the table's own cells; and the forfeit rule against the variant's DECLARED innings length: the side that
 // did not turn up is charged its full overs at no runs, and the side that was given the match gains nothing in its rate.
 import { builtinModules } from "@seazn/engine/sports";
-import { declaredCfgs, defaultOrderOf, forEachSport } from "@seazn/engine/testkit";
+import { defaultOrderOf, forEachSport } from "@seazn/engine/testkit";
 import { standingsLabel } from "@/blog/labels-screens";
 import { derivedText } from "@/server/public-site/standings-view";
-import { startingVariantKey } from "./starting-variant";
 import { factsRepeatTheTable, placeOf, placeText, playAndRank, rowOf, type MatchView, type Meeting } from "./tie-break-play";
 import type { BlogExample, Claim, ExampleResult } from "./types";
+import { startingCfg } from "./kit";
 
 export const NET_RUN_RATE_ID = "net-run-rate";
 
@@ -58,7 +58,7 @@ const MEETINGS: Meeting[] = [
 ];
 
 const cricket = () => builtinModules.find((m) => m.key === "cricket")!;
-const startCfg = () => declaredCfgs(cricket()).find((c) => c.name === startingVariantKey(cricket()))!.cfg as { ballsPerInnings: number | null; inningsPerSide: number; ballsPerOver?: number };
+const startCfg = () => startingCfg(cricket()) as { ballsPerInnings: number | null; inningsPerSide: number; ballsPerOver?: number };
 
 /** Balls as a scorecard writes overs: 20, or 15.2 for fifteen overs and two balls. */
 export function oversText(balls: number, ballsPerOver: number): string {

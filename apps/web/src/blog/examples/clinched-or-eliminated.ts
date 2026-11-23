@@ -16,7 +16,7 @@ import { declaredCfgs, defaultOrderOf, forEachSport } from "@seazn/engine/testki
 import { boundsInForce, buildQualificationView, stageQualMeta, type QualFixture, type QualificationViewInput, type StageQualMeta } from "@/server/public-site/qualification-view";
 import publicDict from "@/dictionaries/en/public.json";
 import { plural, t, type TKey } from "@/lib/i18n-runtime";
-import { declaredLeaguePoints } from "./kit";
+import { declaredLeaguePoints, pointsPhrase, startingCfg } from "./kit";
 import { TIE_BREAK_MSG_KEYS } from "@/server/public-site/standings-view";
 import { startingVariantKey } from "./starting-variant";
 import { playAndRank, type Meeting, type MatchView, type RankedStage } from "./tie-break-play";
@@ -34,7 +34,6 @@ const ALL_ROUNDS = 5;
 const idOf = (name: string) => name.toLowerCase();
 const nameOfId = (id: string) => TEAMS.find((x) => idOf(x) === id) ?? id;
 const goals = (h: number, a: number) => (v: MatchView) => v.home.metrics.gf === h && v.away.metrics.gf === a;
-const pointsText = (n: number) => `${n} ${n === 1 ? "point" : "points"}`;
 const DICT = publicDict as Record<string, string>;
 
 /** The fifteen matches in the order of their rounds, home side first. Rounds one to four are played when the table is read with one round
@@ -138,9 +137,7 @@ function rank(sport: ReturnType<typeof football>, cfg: unknown, playedRounds: nu
 
 function build(): ExampleResult {
   const sport = football();
-  const variant = startingVariantKey(sport);
-  const cfg = declaredCfgs(sport).find((c) => c.name === variant)?.cfg;
-  if (cfg === undefined) throw new Error(`clinched-or-eliminated: football has no declared variant '${variant}'`);
+  const cfg = startingCfg(sport);
   const names = Object.fromEntries(TEAMS.map((n) => [idOf(n), n]));
   const before = rank(sport, cfg, PLAYED_ROUNDS);
   const after = rank(sport, cfg, ALL_ROUNDS);
@@ -182,7 +179,7 @@ function build(): ExampleResult {
   // In the finished table's order, which is the order the post names them in.
   const qualified = after.rows.filter((x) => afterWords.get(x.entrantId)!.status === "qualified").map((x) => ({ name: nameOfId(x.entrantId) }));
   const list = (xs: string[]) => (xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
-  const tableRows = rows.map((x) => [x.name, x.points, x.left, `${x.worst} to ${x.best}`, x.words.label, `${pointsText(x.final.points)}, ${x.finalWords.label}`]);
+  const tableRows = rows.map((x) => [x.name, x.points, x.left, `${x.worst} to ${x.best}`, x.words.label, `${pointsPhrase(x.final.points)}, ${x.finalWords.label}`]);
   return {
     facts: {
       teams: TEAMS.length,
@@ -279,8 +276,7 @@ function resultsOf(r: ExampleResult): Results[] {
 /** football's declared points a match pays: win, draw, loss, and the per-match fewest and most. */
 function pointsPerMatch(): { win: number; draw: number; loss: number; min: number; max: number } {
   const sport = football();
-  const variant = startingVariantKey(sport);
-  const cfg = declaredCfgs(sport).find((c) => c.name === variant)?.cfg;
+  const cfg = startingCfg(sport);
   const rule = declaredLeaguePoints(sport, cfg);
   const win = rule.win.regulation;
   const loss = rule.loss.regulation;

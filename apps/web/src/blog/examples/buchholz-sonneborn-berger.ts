@@ -12,16 +12,16 @@
 // WHAT CHECKS IT. FIDE C.07 (2026) recomputed from the table's own cells: Buchholz is the sum of the opponents' scores;
 // Cut-1 drops the lowest of them; Sonneborn-Berger adds the scores of the opponents beaten and half the scores of those
 // drawn with. The places follow chess's DECLARED Swiss order (`defaultOrderOf`), and so do the per-sport facts.
-import { resultColumnText } from "@seazn/engine/competition";
+import { pointsText as enginePointsText, resultColumnText } from "@seazn/engine/competition";
 import { builtinModules } from "@seazn/engine/sports";
 import type { AnySportModule } from "@seazn/engine/sport";
-import { declaredCfgs, defaultOrderOf, forEachSport } from "@seazn/engine/testkit";
+import { defaultOrderOf, forEachSport } from "@seazn/engine/testkit";
 import { sportLabel } from "@/blog/labels";
 import { standingsLabel } from "@/blog/labels-screens";
 import { derivedText } from "@/server/public-site/standings-view";
-import { startingVariantKey } from "./starting-variant";
 import { factsRepeatTheTable, placeOf, placeText, playAndRank, rowOf, stageRules, type MatchView, type Meeting } from "./tie-break-play";
 import type { BlogExample, Claim, ExampleResult } from "./types";
+import { startingCfg } from "./kit";
 
 export const BUCHHOLZ_SONNEBORN_BERGER_ID = "buchholz-sonneborn-berger";
 
@@ -56,12 +56,11 @@ const ROUNDS = 3;
 
 const chess = () => builtinModules.find((m) => m.key === "boardgame")!;
 
-/** "2½" / "½" / "3" as a number. */
-/** A number of whole or half points as the table prints it: 3, 1½, ½. */
+/** A number of whole or half points as the table prints it: 3, 1½, ½. The text is the engine's own (`pointsText` in half-points
+ *  mode, which takes the stored count of halves); this only refuses anything that is not a whole or half point. */
 export function pointsText(n: number): string {
   if (!Number.isInteger(n * 2) || n < 0) throw new Error(`pointsText: ${n} is not a whole or half point`);
-  const whole = Math.floor(n);
-  return n === whole ? String(n) : whole === 0 ? "½" : `${whole}½`;
+  return enginePointsText(n * 2, "half");
 }
 
 export function halves(text: unknown): number {
@@ -86,7 +85,7 @@ function gamesText(id: string, played: ReturnType<typeof playAndRank>["played"])
 
 function build(): ExampleResult {
   const sport = chess();
-  const cfg = declaredCfgs(sport).find((c) => c.name === startingVariantKey(sport))!.cfg;
+  const cfg = startingCfg(sport);
   const ranked = playAndRank({ module: sport, cfg, kind: "swiss", entrants: PLAYERS, meetings: MEETINGS, rounds: ROUNDS });
   const L = ranked.layout;
   const rows = [...ranked.rows]
@@ -120,7 +119,7 @@ function build(): ExampleResult {
   facts.benWinsAdd = pointsText(gamesOf(rowOfName("Ben")).filter((g) => g.result === "won").reduce((a, g) => a + pts.get(g.opp)!, 0));
   facts.cyDrawAnaAdds = pointsText(pts.get("Ana")! / 2);
   const visited = forEachSport(({ module: m }) => {
-    const order = stageRules(m, declaredCfgs(m).find((c) => c.name === startingVariantKey(m))!.cfg, "swiss").tiebreakers;
+    const order = stageRules(m, startingCfg(m), "swiss").tiebreakers;
     facts[`${m.key}SwissOrder`] = order.slice(1).map((k) => standingsLabel(k, m.key)).join(", ");
   });
   facts.sportCount = visited;

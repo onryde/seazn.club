@@ -12,7 +12,7 @@
 // place; the later tier is tried in seat order and the first arrangement with no pool meeting itself is taken). A second field, four
 // groups of two qualifiers, is reported as facts.
 import { builtinModules } from "@seazn/engine/sports";
-import { declaredCfgs, defaultOrderOf, forEachSport } from "@seazn/engine/testkit";
+import { defaultOrderOf, forEachSport } from "@seazn/engine/testkit";
 import { expandSources, isHeadToHeadKey, placeDescriptors, type ProgressionSpec, type SourceShape, type SourceTables } from "@seazn/engine/competition";
 import { crossPoolDraw, nextPowerOfTwo, seedPositions } from "@seazn/engine/scheduling";
 import { buildTemplateStages } from "@/lib/format-templates";
@@ -21,8 +21,7 @@ import { resolveStoredProgression } from "@/server/usecases/stored-progression";
 import { seededSnake } from "@/server/usecases/stages/generators";
 import uiDict from "@/dictionaries/en/ui.json";
 import { playGroups } from "./group-play";
-import { declaredLeaguePoints } from "./kit";
-import { startingVariantKey } from "./starting-variant";
+import { declaredLeaguePoints, startingCfg } from "./kit";
 import { placeText, type Meeting, type MatchView } from "./tie-break-play";
 import { capitalised, col, guarded, numberWord, offeredInEverySportClaim } from "./swiss-claims";
 import type { BlogExample, Claim, ExampleResult } from "./types";
@@ -68,9 +67,7 @@ function roundOne(n: number): [number, number][] {
 
 function build(): ExampleResult {
   const sport = football();
-  const variant = startingVariantKey(sport);
-  const cfg = declaredCfgs(sport).find((c) => c.name === variant)?.cfg;
-  if (cfg === undefined) throw new Error(`groups-into-knockout: football has no declared variant '${variant}'`);
+  const cfg = startingCfg(sport);
   const entrants = TEAMS.map((name, i) => ({ id: idOf(name), name, seed: i + 1 }));
   const dealt = seededSnake(entrants.map((e) => ({ ...e, swiss_first_round: null })), GROUPS);
   const pools = new Map(dealt.map((members, i) => ["ABCDEFGHIJKLMNOPQRSTUVWXYZ"[i]!, members.map((m) => m.id)] as const));
@@ -464,8 +461,7 @@ const claims: Claim[] = [
     source: "the played results the example lists, paid by football's declared league points (3 for a win, 1 for a draw) and ranked by points then goal difference",
     check: guarded((r) => {
       const sport = football();
-      const variant = startingVariantKey(sport);
-      const cfg = declaredCfgs(sport).find((c) => c.name === variant)?.cfg;
+      const cfg = startingCfg(sport);
       const rule = declaredLeaguePoints(sport, cfg);
       const d = r.diagram;
       if (d?.kind !== "groupsToBracket") return "no groups diagram";

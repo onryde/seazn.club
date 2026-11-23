@@ -13,7 +13,7 @@ import type { AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { forEachSport } from "@seazn/engine/testkit";
 import { sportLabel, variantLabel } from "@/blog/labels";
-import { NAMES, joinOr, moduleOf, play, sentenceList, variantsOf, winnerLoserPoints, winnerSetScore, type Cfg, declaredLeaguePoints } from "./kit";
+import { NAMES, joinOr, moduleOf, play, sentenceList, variantsOf, winnerLoserPoints, winnerSetScore, type Cfg, declaredLeaguePoints, joinAnd } from "./kit";
 import { startingVariantKey } from "./starting-variant";
 import type { BlogExample, Claim, ExampleResult } from "./types";
 
@@ -24,7 +24,6 @@ const C = { how: 0, winner: 1, loser: 2 } as const;
 const FORFEIT_ROW = "A forfeit before a point is played";
 
 const tableTennis = (): AnySportModule => moduleOf("tabletennis");
-const joinAnd = (words: string[]): string => (words.length < 2 ? (words[0] ?? "") : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`);
 const howPlayed = (score: string): string => `Played, won ${score}`;
 
 /** What the loser of a played match, and of a forfeit with nothing played, are paid under a rule: the declared numbers. */

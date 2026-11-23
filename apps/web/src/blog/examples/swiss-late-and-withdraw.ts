@@ -12,8 +12,9 @@
 import { forEachSport } from "@seazn/engine/testkit";
 import { BYE_CELL, captionClaim, col, floatRuleProblem, guarded, offeredInEverySportClaim, parseSeededLabel, scoreOf, seededLabel, seedReader, type PairedRound, type Seeded } from "./swiss-claims";
 import { declaredBestWin } from "./swiss-bye";
-import { moduleOf, roundDiagram, runSwiss, startingCfg, swissRules, walkover, type BoardResult } from "./swiss-run";
+import { roundDiagram, runSwiss, swissRules, walkover, type BoardResult } from "./swiss-run";
 import type { BlogExample, Claim, ExampleResult } from "./types";
+import { moduleOf, startingCfg } from "./kit";
 
 export const SWISS_LATE_AND_WITHDRAW_ID = "swiss-late-and-withdraw";
 

@@ -12,7 +12,7 @@ import { forbidsLevelResult, type StageKind } from "@seazn/engine/core";
 import { bracketMayEndLevel, deciderKeysFor, stageDefaultsFor, type AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { effectiveRungs, type TiebreakRung } from "@seazn/engine/sports/boardgame";
-import { declaredCfgs, forEachSport } from "@seazn/engine/testkit";
+import { forEachSport } from "@seazn/engine/testkit";
 import publicDict from "@/dictionaries/en/public.json";
 import { sportLabel, variantLabel } from "@/blog/labels";
 import { rulesLineText } from "@/lib/rules-line";
@@ -20,7 +20,7 @@ import { postedStageCfg } from "@/lib/stage-decider-off";
 import { quickMatchKnockoutCfg } from "@/server/usecases/quick-match-sports";
 import { describeDeciders } from "@/server/public-site/describe-rules";
 import { withStageDefaults } from "@/server/usecases/stage-defaults";
-import { sentenceList } from "./kit";
+import { sentenceList, variantsOf } from "./kit";
 import { startingVariantKey } from "./starting-variant";
 import type { BlogExample, Claim, ExampleResult } from "./types";
 
@@ -36,12 +36,6 @@ export const STILL_YES = "Yes: the organiser decides who goes through";
 export const STILL_NO = "No";
 
 type Cfg = Record<string, unknown>;
-
-function variantsOf(module: AnySportModule): { key: string; cfg: Cfg }[] {
-  return declaredCfgs(module)
-    .filter((c) => Object.hasOwn(module.variants, c.name))
-    .map((c) => ({ key: c.name, cfg: c.cfg as Cfg }));
-}
 
 /** A match's rules in a NEW knockout stage of this variant, as the app resolves them: `quickMatchKnockoutCfg` is the app's
  *  one reading of a plain Knockout's match cfg before a fixture exists (the stage as `createStages` stores it, through
@@ -110,13 +104,13 @@ function build(): ExampleResult {
     const start = startingVariantKey(sport);
     const variants = variantsOf(sport);
     const first = variants.find((v) => v.key === start)!;
-    const [d0, s0] = cells(sport, first.key, first.cfg);
+    const [d0, s0] = cells(sport, first.key, first.cfg as Cfg);
     rows.push([sportLabel(key), d0, s0]);
     facts[`${key}Decider`] = d0;
     facts[`${key}StillLevel`] = s0;
     for (const v of variants) {
       if (v.key === start) continue;
-      const [d, s] = cells(sport, v.key, v.cfg);
+      const [d, s] = cells(sport, v.key, v.cfg as Cfg);
       if (d === d0 && s === s0) continue;
       rows.push([`${sportLabel(key)} (${variantLabel(key, v.key)})`, d, s]);
       const tag = `${key}${v.key.replace(/[^a-z0-9]/gi, "").replace(/^./, (c) => c.toUpperCase())}`;
@@ -127,7 +121,7 @@ function build(): ExampleResult {
   facts.sportCount = visited;
   // The numbers football's knockout plays, read off a match's resolved rules (the table's cells say the same).
   const footballModule = builtinModules.find((m) => m.key === "football")!;
-  const fcfg = (variant: string) => knockoutMatchCfg(footballModule, variant, variantsOf(footballModule).find((v) => v.key === variant)!.cfg);
+  const fcfg = (variant: string) => knockoutMatchCfg(footballModule, variant, variantsOf(footballModule).find((v) => v.key === variant)!.cfg as Cfg);
   const adult = fcfg(startingVariantKey(footballModule));
   facts.footballExtraTimeHalf = Number((adult.extraTime as Cfg).halfMinutes);
   facts.footballKicks = Number(adult.shootoutAttempts);
@@ -208,8 +202,8 @@ function sportClaims(module: AnySportModule): Claim[] {
   const start = startingVariantKey(module);
   for (const v of variantsOf(module)) {
     const label = v.key === start ? sportLabel(module.key) : `${sportLabel(module.key)} (${variantLabel(module.key, v.key)})`;
-    const on = declaredOn(module, v.key, v.cfg);
-    const level = canBeLevel(module, v.cfg);
+    const on = declaredOn(module, v.key, v.cfg as Cfg);
+    const level = canBeLevel(module, v.cfg as Cfg);
     const declaredKeys = deciderKeysFor(module, null, null);
     // The variant's own row, or the sport's starting row when the variant shares its answer.
     const find = (r: ExampleResult) => rowFor(r, label) ?? rowFor(r, sportLabel(module.key));
@@ -245,7 +239,7 @@ function sportClaims(module: AnySportModule): Claim[] {
       check: (r) => {
         const row = find(r);
         if (row === undefined) return `no row for ${label}`;
-        const cfg = { ...v.cfg, ...stageDefaultsFor(module, "knockout" as StageKind, v.key), ...(module.bracketDeciders(v.cfg as never) as Cfg) };
+        const cfg = { ...(v.cfg as Cfg), ...stageDefaultsFor(module, "knockout" as StageKind, v.key), ...(module.bracketDeciders(v.cfg as never) as Cfg) };
         // A sport that declares no decider says nothing of its own (`canEndLevel` absent): a knockout refuses a level
         // result outright (`forbidsLevelResult`), so the organiser enters the winner and the match is never left level.
         const declaredLevel = typeof module.canEndLevel === "function" ? module.canEndLevel(cfg as never) : !forbidsLevelResult("knockout");

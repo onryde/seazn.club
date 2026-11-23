@@ -24,16 +24,16 @@
 import { foldResults, resultsAmong } from "@seazn/engine/competition";
 import { builtinModules } from "@seazn/engine/sports";
 import type { AnySportModule, TiebreakerKey } from "@seazn/engine/sport";
-import { declaredCfgs, defaultOrderOf, forEachSport } from "@seazn/engine/testkit";
+import { defaultOrderOf, forEachSport } from "@seazn/engine/testkit";
 import { sportLabel } from "@/blog/labels";
 import publicDict from "@/dictionaries/en/public.json";
 import ui from "@/dictionaries/en/ui.json";
 import { standingsLabel } from "@/blog/labels-screens";
 import { TIE_NOTE_KEYS } from "@/server/public-site/standings-view";
 import { partialScheduleClaim, partialScheduleFacts } from "./partial-schedule";
-import { startingVariantKey } from "./starting-variant";
 import { factsRepeatTheTable, placeOf, placeText, playAndRank, scoreOf, rowOf, signed, stageRules, type MatchView, type Meeting } from "./tie-break-play";
 import type { BlogExample, Claim, ExampleResult } from "./types";
+import { startingCfg } from "./kit";
 
 export const THREE_WAY_TIE_ID = "three-way-tie";
 
@@ -95,7 +95,7 @@ export function threeWayWords(order: readonly TiebreakerKey[], sportKey: string)
 
 function build(): ExampleResult {
   const football = builtinModules.find((m) => m.key === "football")!;
-  const cfg = declaredCfgs(football).find((c) => c.name === startingVariantKey(football))!.cfg;
+  const cfg = startingCfg(football);
   const own = playAndRank({ module: football, cfg, kind: "league", entrants: TEAMS, meetings: MEETINGS });
   const uefa = playAndRank({ module: football, cfg, kind: "league", entrants: TEAMS, meetings: MEETINGS, stageOrder: footballPreset("uefa") });
   const lines = (r: typeof own) => r.played.map((p) => `${nameOf(p.meeting.home)} ${p.view.headline} ${nameOf(p.meeting.away)}`);
@@ -140,7 +140,7 @@ function build(): ExampleResult {
   partWay(football, cfg, facts, text);
 
   const visited = forEachSport(({ module }) => {
-    const order = stageRules(module, declaredCfgs(module).find((c) => c.name === startingVariantKey(module))!.cfg, "league").tiebreakers;
+    const order = stageRules(module, startingCfg(module), "league").tiebreakers;
     facts[`${module.key}ThreeWay`] = threeWayWords(order, module.key);
   });
   facts.sportCount = visited;

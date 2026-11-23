@@ -21,8 +21,7 @@ import type { MatchOutcome } from "@seazn/engine/core";
 import { decidedInFor, forfeitShaped, payout, setsToWinOf, pointsText, withdrawTableEntrant, type FixtureResult, type TableFixture } from "@seazn/engine/competition";
 import { pairRound, type SwissStanding } from "@seazn/engine/scheduling";
 import { resolvePositions, type AnySportModule } from "@seazn/engine/sport";
-import { builtinModules } from "@seazn/engine/sports";
-import { buildWalk, declaredCfgs, lineupFromCatalog } from "@seazn/engine/testkit";
+import { buildWalk, lineupFromCatalog } from "@seazn/engine/testkit";
 import { applyRoundOneColourLot, swissColourLot, swissDrawSeed } from "@/lib/swiss-draw";
 import { isChessSport } from "@/lib/chess-individual-only-rule";
 import { swissRoundsGuidance } from "@/lib/swiss-rounds";
@@ -34,8 +33,8 @@ import { maxRoundPoints } from "@/server/engine-db/swiss-max-round-points";
 import { awardByeDelta } from "@/server/engine-db/competition";
 import { buildSwissHistory, swissFieldForRound, swissFloatHistory } from "@/server/usecases/stages/swiss-gen";
 import type { ActiveEntrant, SwissExistingFixture } from "@/server/usecases/stages/types";
-import { startingVariantKey } from "./starting-variant";
 import type { DiagramModel } from "./types";
+import { moduleOf, startingCfg } from "./kit";
 
 const MAX_SEEDS = 20000;
 const MAX_EVENTS = 3000;
@@ -101,20 +100,6 @@ export interface SwissRun {
   withdrawal: { mode: string; played: number; scheduled: number; walkovers: number } | null;
   name(id: string): string;
   points(n: number): string;
-}
-
-export function moduleOf(sportKey: string): AnySportModule {
-  const m = builtinModules.find((x) => x.key === sportKey);
-  if (m === undefined) throw new Error(`swiss-run: no sport '${sportKey}'`);
-  return m;
-}
-
-/** The cfg a new division of this sport starts on (the builder's own pick, starting-variant.ts). */
-export function startingCfg(module: AnySportModule): unknown {
-  const key = startingVariantKey(module);
-  const hit = declaredCfgs(module).find((c) => c.name === key);
-  if (hit === undefined) throw new Error(`swiss-run: ${module.key}: no declared cfg for '${key}'`);
-  return hit.cfg;
 }
 
 /** A Swiss stage's table rules, read by the web's one loader over a new stage on this division cfg. */

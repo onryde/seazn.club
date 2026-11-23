@@ -18,6 +18,7 @@ import { pickerSportName } from "./sport-name";
 import { foldFrom } from "@/server/engine-db/fold";
 import { startingVariantKey } from "./starting-variant";
 import type { Claim, EngineExample, ExampleResult } from "./types";
+import { startingCfg } from "./kit";
 
 export const FORFEIT_SCORES_ID = "forfeit-scores";
 
@@ -34,11 +35,6 @@ const flatVariant = (label: string): string => label.replace(/\s*\(([^()]*)\)\s*
  *  nested brackets ("Carrom, Club, 29 points"; N3). */
 export function rowLabel(module: AnySportModule): string {
   return `${pickerSportName(module.key)}, ${flatVariant(variantLabel(module.key, startingVariantKey(module)))}`;
-}
-
-export function startingCfg(module: AnySportModule): unknown {
-  const key = startingVariantKey(module);
-  return declaredCfgs(module).find((c) => c.name === key)!.cfg;
 }
 
 export function lineupsFor(module: AnySportModule, cfg: unknown) {

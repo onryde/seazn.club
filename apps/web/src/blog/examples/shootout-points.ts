@@ -16,7 +16,7 @@ import { stageDefaultsFor } from "@seazn/engine/sport";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { forEachSport } from "@seazn/engine/testkit";
 import { sportLabel, variantLabel } from "@/blog/labels";
-import { NAMES, compact, leagueCfg, play, sentenceList, upperFirst, variantsOf, winnerLoserPoints, type Cfg, type StageRules, declaredLeaguePoints } from "./kit";
+import { NAMES, compact, leagueCfg, play, sentenceList, upperFirst, variantsOf, winnerLoserPoints, type Cfg, type StageRules, declaredLeaguePoints, joinAnd } from "./kit";
 import { startingVariantKey } from "./starting-variant";
 import { declaredLeagueStages, leagueStages, lowerFirst } from "./knockout-match-ends-level";
 import type { BlogExample, Claim, ExampleResult } from "./types";
@@ -148,10 +148,6 @@ function build(): ExampleResult {
     table: { caption: "What a win settled beyond regulation earns each side in a league, by sport and by way of settling it.", columns: COLUMNS, rows },
     text,
   };
-}
-
-function joinAnd(words: string[]): string {
-  return words.length < 2 ? (words[0] ?? "") : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
 }
 
 // ---- claims: every expected value below is recomputed from the sport module's own declarations ----
