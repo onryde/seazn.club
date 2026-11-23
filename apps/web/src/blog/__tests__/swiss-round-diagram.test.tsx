@@ -15,6 +15,12 @@ const modelOf = (id: string): SwissRound => {
   return d;
 };
 const count = (html: string, needle: string) => html.split(needle).length - 1;
+/** The blog column at a 320px screen: the layout's 16px gutters (`app/blog/layout.tsx`, `px-4`) either side. */
+const PHONE_COLUMN = 320 - 2 * 16;
+/** The house small-text size: Tailwind `text-xs`, 12px (the blog's table headers and hints use it). */
+const SMALLEST_TEXT_PX = 12;
+/** The texts of a markup fragment, in order, as React printed them: `<text ...>content</text>`. */
+const textsOf = (fragment: string) => [...fragment.matchAll(/<text\b[^>]*>(.*?)<\/text>/gs)].map((m) => m[1]!);
 /** The text inside a tag, markup-escaped as React prints it. */
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#x27;");
 
@@ -30,15 +36,20 @@ describe("the Swiss round diagram draws every part of the example's own model", 
       expect(html).toContain(`<title id="swiss-round-${model.round}-title">${esc(model.title)}</title>`);
       expect(html).toContain(`<figcaption`);
       expect(html).toContain(`${esc(model.title)}</figcaption>`);
-      expect(html, "the drawing is sized by its viewBox").toMatch(/viewBox="0 0 360 \d+"/);
+      expect(html, "the drawing is sized by its viewBox").toMatch(/viewBox="0 0 300 \d+"/);
       expect(html, "no fixed pixel width that would scroll a phone").not.toMatch(/<svg[^>]* width="/);
       // One group per board, numbered as the model numbers them.
       expect(count(html, "data-board=\""), "board groups").toBe(model.pairings.length);
-      for (const p of model.pairings) {
-        expect(html, `board ${p.board}`).toContain(`data-board="${p.board}"`);
-        expect(html).toContain(esc(p.first));
-        if (p.second !== null) expect(html).toContain(esc(p.second));
-        if (p.result !== undefined) expect(html).toContain(esc(p.result));
+      // Each card says, in order and scoped to ITS OWN group: board number, the float tag when it is one, the first player and the
+      // points going in, the second player and theirs, then the result. A score drawn on the wrong card, or not at all, fails here.
+      const segments = html.split('data-board="').slice(1);
+      expect(segments, "a segment per board").toHaveLength(model.pairings.length);
+      for (const [i, p] of model.pairings.entries()) {
+        const want = [String(p.board), ...(p.float ? ["float"] : []), esc(p.first), esc(p.firstScore ?? ""), esc(p.second ?? "No opponent"), esc(p.secondScore ?? ""), ...(p.result !== undefined ? [esc(p.result)] : [])];
+        const got = textsOf(segments[i]!);
+        expect(got.slice(0, want.length), `board ${p.board}: the texts on its card`).toEqual(want);
+        if (i < segments.length - 1) expect(got, `board ${p.board}: nothing else on its card`).toEqual(want);
+        if (p.float !== true) expect(got.includes("float"), `board ${p.board} is not a float`).toBe(false);
       }
       // The float tag is text, once per float board: never by colour alone.
       const floats = model.pairings.filter((p) => p.float === true).length;
@@ -47,12 +58,16 @@ describe("the Swiss round diagram draws every part of the example's own model", 
       expect(count(html, 'data-strip="bye"'), "bye strips").toBe(model.byes.length);
       expect(count(html, 'data-strip="out"'), "left-out strips").toBe((model.notSeated ?? []).length);
       for (const b of model.byes) expect(html).toContain(`Bye: ${esc(b)}`);
-      for (const n of model.notSeated ?? []) expect(html).toContain(`${esc(n.name)}: ${esc(n.why)}`);
+      const stripTexts = textsOf(html.slice(html.indexOf('data-strip="')));
+      for (const n of model.notSeated ?? []) {
+        const at = stripTexts.indexOf(esc(n.name));
+        expect(at, `the strip for ${n.name}`).toBeGreaterThanOrEqual(0);
+        expect(stripTexts[at + 1], `${n.name}'s strip says why, on its own line`).toBe(esc(n.why));
+      }
       // Chess colours: two chips a board, drawn from the model's `firstWhite`.
       const chips = count(html, 'strokeWidth="1.2"') + count(html, 'stroke-width="1.2"');
       expect(chips, "colour chips").toBe(model.pairings.filter((p) => p.firstWhite !== undefined).length * 2);
       // Which side is White: the first chip is the first player's, the second is the opposite colour, board by board.
-      const segments = html.split('data-board="').slice(1);
       for (const [i, p] of model.pairings.entries()) {
         if (p.firstWhite === undefined) continue;
         const colours = [...segments[i]!.matchAll(/class="(fill-white stroke-slate-500|fill-slate-800 stroke-slate-800)"/g)].map((m) => m[1] === "fill-white stroke-slate-500");
@@ -65,6 +80,34 @@ describe("the Swiss round diagram draws every part of the example's own model", 
       totals.chips += chips;
     });
   }
+
+  it("every text of the drawing is the house small-text size or more at a 320px screen, and the float tag is one of them", () => {
+    let measured = 0;
+    let floatTags = 0;
+    let smallest = Infinity;
+    for (const id of SWISS_IDS) {
+      const html = renderToStaticMarkup(<BlogDiagram model={modelOf(id)} />);
+      const box = /viewBox="0 0 (\d+) \d+"/.exec(html);
+      expect(box, `${id}: a viewBox`).not.toBeNull();
+      const pxPerUnit = PHONE_COLUMN / Number(box![1]);
+      // A font size is set on a <text> or on the <g> that holds it (the column headers); a text with neither would inherit
+      // the page's size, which this test cannot see, so it is refused.
+      for (const tag of html.matchAll(/<text\b([^>]*)>(.*?)<\/text>/gs)) {
+        const own = /font-size="([\d.]+)"/.exec(tag[1]!);
+        const groupSize = /<g[^>]*font-size="([\d.]+)"[^>]*>(?:(?!<\/g>).)*?<text\b[^>]*>\s*(?:<!-- -->)?/s.exec(html.slice(0, tag.index! + tag[0].length));
+        const units = own !== null ? Number(own[1]) : groupSize !== null ? Number(groupSize[1]) : NaN;
+        expect(Number.isNaN(units), `${id}: a text with no font size ('${tag[2]}')`).toBe(false);
+        const px = units * pxPerUnit;
+        expect(px, `${id}: '${tag[2]}' is ${px.toFixed(1)}px at 320`).toBeGreaterThanOrEqual(SMALLEST_TEXT_PX);
+        smallest = Math.min(smallest, px);
+        measured++;
+        if (tag[2] === "float") floatTags++;
+      }
+    }
+    expect(measured, "texts measured (zero would prove nothing)").toBeGreaterThan(40);
+    expect(floatTags, "float tags measured").toBeGreaterThan(0);
+    expect(smallest, "the smallest text on the phone").toBeGreaterThanOrEqual(SMALLEST_TEXT_PX);
+  });
 
   it("the three examples between them drew boards, a float, a bye, a left-out player and colours (zero would prove nothing)", () => {
     expect(totals.boards, "boards").toBeGreaterThan(0);
