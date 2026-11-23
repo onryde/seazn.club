@@ -285,6 +285,51 @@ describe.skipIf(!HAS_DB)("measureSeaznDelivery — live minutes (Cloudflare)", (
     expect(res).toEqual({ measured: 1, failed: 4, gone: 0, skipped: 0 });
     expect((await deliveryOf(second))!.live_minutes).toBe("2.0");
   });
+
+  // T31b review m2: every breaker test above keeps its sessions in ONE window, so two branches only a SECOND window reaches were never
+  // witnessed: the stop before a later window's query (that window is never asked once the breaker tripped), and the short-circuit of
+  // a window of one session (its failed query IS that session's failure — never asked again alone, so counted once toward K).
+  /** Moves `sids` a day earlier: an earlier window, and first in the pass's order (`created_at`, then id). */
+  const dayEarlier = (sids: string[]) => sql`update fixture_stream_sessions set created_at = created_at - interval '1 day' where id in ${sql(sids)}`;
+
+  it("T31b m2: the breaker trips inside the FIRST window, and the second window is never asked — its sessions are skipped, K queries in all", async () => {
+    const K = SEAZN_LIVE_MEASURE_BREAKER_FAILURES;
+    // The first window's shared query, then each of its K - 1 sessions alone: K failures in a row exactly at its last session.
+    const first = K - 1;
+    expect(first, "PREMISE: the first window holds more than one session, so its query is a shared one").toBeGreaterThan(1);
+    const t = await endedSessions(first + 2);
+    const early = t.sids.slice(0, first);
+    const late = t.sids.slice(first);
+    const lateUids = late.map((s) => t.uids[t.sids.indexOf(s)]!);
+    await dayEarlier(early);
+    const cf = fakeLive();
+    cf.failWhen(() => true);
+    sentry.captureError.mockClear();
+    const res = await measureSeaznDelivery({ liveMinutes: cf.read, replay: new FakeReplayHost() }, slot(t.createdAt, 2), scope(t.orgId));
+    expect(cf.calls, "exactly K queries").toHaveLength(K);
+    expect(cf.calls.map((c) => c.from), "every one of them the FIRST window's").toEqual(Array(K).fill(ymd(daysAfter(t.createdAt, -1))));
+    expect(cf.calls.flatMap((c) => c.uids).filter((u) => lateUids.includes(u)), "the second window's uids: never asked").toEqual([]);
+    expect(res, "the first window's sessions failed, the second's skipped").toEqual({ measured: 0, failed: first, gone: 0, skipped: late.length });
+    for (const sid of t.sids) expect(await deliveryOf(sid), sid).toBeNull();
+    expect(sentry.captureError, "ONE report for the pass").toHaveBeenCalledTimes(1);
+    expect(sentry.captureError.mock.calls[0]![1]).toMatchObject({ route: "relay.sweep.seazn_measure", extra: { failed: first, skipped: late.length } });
+  });
+
+  it("T31b m2: a window of ONE session whose query fails is that session's failure — asked once, never again alone — and the next window is still asked and stored", async () => {
+    const t = await endedSessions(2);
+    const [a, b] = t.sids as [string, string];
+    const [aUid, bUid] = t.uids as [string, string];
+    await dayEarlier([a]);
+    const cf = fakeLive({ [bUid]: 6 });
+    cf.failWhen((uids) => uids.includes(aUid));
+    const res = await measureSeaznDelivery({ liveMinutes: cf.read, replay: new FakeReplayHost() }, slot(t.createdAt, 2), scope(t.orgId));
+    expect(cf.calls.map((c) => [c.uids, c.from]), "one query per window; a's asked ONCE").toEqual([
+      [[aUid], ymd(daysAfter(t.createdAt, -1))], [[bUid], ymd(t.createdAt)],
+    ]);
+    expect(res).toEqual({ measured: 1, failed: 1, gone: 0, skipped: 0 });
+    expect(await deliveryOf(a), "a: nothing stored").toBeNull();
+    expect((await deliveryOf(b))!.live_minutes).toBe("6.0");
+  });
 });
 
 describe.skipIf(!HAS_DB)("measureSeaznDelivery — replay minutes (the replay host)", () => {
