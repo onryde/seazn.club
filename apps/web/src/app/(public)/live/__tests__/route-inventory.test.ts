@@ -56,12 +56,23 @@ const PAGES_BEFORE_K1 = [
  *  group (a full-screen room with its own header, like the boards). */
 const PAGES_ADDED = ["/live/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/play"];
 
+/** Pages added AFTER the move UNDER the org chrome layout, typed out: W5 follow-ups B3's per-tab ISR documents of the division
+ *  page (the proxy rewrites `?tab=standings|entrants` there; the page itself is the division page, chrome and all). */
+const CHROME_PAGES_ADDED = ["/live/[orgSlug]/[competitionSlug]/[divisionSlug]/tab/[tab]"];
+
 const ROUTES_BEFORE_K1 = [
   "/live/[orgSlug]/news/[postSlug]/story.png",
   "/live/[orgSlug]/[competitionSlug]/poster.pdf",
   "/live/[orgSlug]/[competitionSlug]/[divisionSlug]/calendar.ics",
   "/live/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/poster.png",
 ].sort();
+
+/** Route handlers added AFTER the move, typed out: W5 follow-ups C's round loaders - a big division Schedule's folded round
+ *  (`rounds`) and the hub Matches tab's (`hub-rounds`). */
+const ROUTES_ADDED = [
+  "/live/[orgSlug]/[competitionSlug]/[divisionSlug]/rounds",
+  "/live/[orgSlug]/[competitionSlug]/[divisionSlug]/hub-rounds",
+];
 
 const PRESENT = ["/live/[orgSlug]/[competitionSlug]/present", "/live/[orgSlug]/[competitionSlug]/[divisionSlug]/present"];
 /** Every page that lives outside the org chrome layout. */
@@ -70,12 +81,12 @@ const KIOSK = [...PRESENT, ...PAGES_ADDED];
 describe("/live route inventory across the K-1 kiosk move", () => {
   it("serves exactly the page URLs it served before the move, plus the ones added since", () => {
     const pages = entries().filter((e) => e.kind === "page").map((e) => e.url).sort();
-    expect(pages).toEqual([...PAGES_BEFORE_K1, ...PAGES_ADDED].sort());
+    expect(pages).toEqual([...PAGES_BEFORE_K1, ...PAGES_ADDED, ...CHROME_PAGES_ADDED].sort());
   });
 
-  it("serves exactly the route-handler URLs it served before the move", () => {
+  it("serves exactly the route-handler URLs it served before the move, plus the ones added since", () => {
     const routes = entries().filter((e) => e.kind === "route").map((e) => e.url).sort();
-    expect(routes).toEqual(ROUTES_BEFORE_K1);
+    expect(routes).toEqual([...ROUTES_BEFORE_K1, ...ROUTES_ADDED].sort());
   });
 
   it("no URL is claimed by two files of the same kind (two groups resolving to one path is a Next build error)", () => {
@@ -100,7 +111,7 @@ describe("/live route inventory across the K-1 kiosk move", () => {
 
   it("every other page stays under the org chrome layout", () => {
     const rest = entries().filter((e) => e.kind === "page" && !KIOSK.includes(e.url));
-    expect(rest.length).toBe(PAGES_BEFORE_K1.length - PRESENT.length);
+    expect(rest.length).toBe(PAGES_BEFORE_K1.length - PRESENT.length + CHROME_PAGES_ADDED.length);
     for (const e of rest) expect(e.file, e.url).toMatch(/^live\/\[orgSlug\]\//);
   });
 
