@@ -155,6 +155,22 @@ export const FUNNEL_RECIPIENT_LIMIT: RateLimitConfig = { max: 5, windowSeconds: 
 export const CONSENT_LIMIT: RateLimitConfig = { max: 20, windowSeconds: 60 };
 
 /**
+ * A browser's failure report (POST /api/v1/public/client-reports, server/client-reports/), per kind, subject and client IP: for a video
+ * report, per fixture and IP. A viewer's page reports a player once per address and a read once per kind of failure, so a household or
+ * a venue behind one NAT on one match stays well under thirty a minute. Past it a report is DROPPED, never answered 429: the beacon
+ * reads no answer, and the reports past the cap say nothing the first thirty did not. Fail-open, like the public reads.
+ */
+export const CLIENT_REPORT_LIMIT: RateLimitConfig = { max: 30, windowSeconds: 60 };
+
+/**
+ * The same route's per-IP bucket across EVERY kind and subject (review I1), spent FIRST, before the subject's bucket and before the
+ * subject is looked up in the database: the house order of the public routes (`pubv1:<ip>` before a route's own work, the register
+ * POST's `regsubmit:<ip>` before its per-competition bucket), and their number (doc 08 §6: 60 a minute per IP). Without it one IP's
+ * reports, log lines and lookups grow with the fixture ids it names. Dropped past the cap, never answered 429, like the subject's.
+ */
+export const CLIENT_REPORT_IP_LIMIT: RateLimitConfig = { max: 60, windowSeconds: 60 };
+
+/**
  * Public registration checkout (re)open, per IP. Every call mints a Stripe
  * Checkout Session, so it gets a tighter bucket than the 60/min public read
  * budget. Fail-open — a Redis blip must not stop a registrant paying.

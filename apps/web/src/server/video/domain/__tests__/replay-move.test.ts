@@ -7,8 +7,8 @@
 // backoff, a 30-day retry window, ±2 s, the 240/360/480/720 rungs. No DB and no network: this file needs neither.
 import { describe, expect, it } from "vitest";
 import {
-  REPLAY_PARKED_AT, REPLAY_ROW_STATES, type ReplayRow, type ReplayStep, cfDeleteGate, nextReplayStep, pollOutcome, replayFailure,
-  replayFailureOutcome, requiredRung, verifyReplayCopy,
+  REPLAY_PARKED_AT, REPLAY_ROW_STATES, type ReplayRow, type ReplayStep, cfDeleteGate, nextReplayStep, parseReplayCopyTitle, pollOutcome,
+  replayCopyTitle, replayFailure, replayFailureOutcome, requiredRung, verifyReplayCopy,
 } from "../replay-move";
 
 const MIN = 60_000;
@@ -187,5 +187,26 @@ describe("pollOutcome — what one poll of an encoding copy means", () => {
     expect(pollOutcome(r, { state: "playable", lengthSeconds: 120, heights: [360] }, NOW)).toEqual({ kind: "failed", reason: "rendition" });
     expect(pollOutcome(r, { state: "failed", lengthSeconds: null, heights: [] }, NOW)).toEqual({ kind: "failed", reason: "host_failed" });
     expect(pollOutcome(r, { state: "absent", lengthSeconds: null, heights: [] }, NOW)).toEqual({ kind: "lost" });
+  });
+});
+
+describe("replayCopyTitle / parseReplayCopyTitle — the copy's title, the plan's form `seazn:{sessionId}:{cfVideoId}` (Task 27 reads it back)", () => {
+  const SID = "3b2f6c1e-8a4d-4e6b-9c2a-1f0e5d7c9b8a";
+  it("EMPTY CASE FIRST: no title, an empty one, and every title not of the form name nothing", () => {
+    const others: (string | null)[] = [
+      null, "", "Club promo reel", "seazn:", `seazn:${SID}`, `seazn:${SID}:`, `seazn:not-a-uuid:v-1`, `xseazn:${SID}:v-1`,
+      `seazn:${SID}:v-1:extra`, `seazn:${SID}:v 1`, ` seazn:${SID}:v-1`, `seazn:${SID}:v-1\n`, `SEAZN-${SID}-v-1`,
+    ];
+    let checked = 0;
+    for (const t of others) {
+      expect(parseReplayCopyTitle(t), JSON.stringify(t)).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(13);
+  });
+  it("the producer writes the plan's literal form, and the reader names that session and recording back", () => {
+    expect(replayCopyTitle(SID, "cf-0a1b2c")).toBe(`seazn:${SID}:cf-0a1b2c`);
+    expect(parseReplayCopyTitle(`seazn:${SID}:cf-0a1b2c`)).toEqual({ sessionId: SID, cfVideoId: "cf-0a1b2c" });
+    expect(parseReplayCopyTitle(replayCopyTitle(SID, "v-3-x"))).toEqual({ sessionId: SID, cfVideoId: "v-3-x" });
   });
 });

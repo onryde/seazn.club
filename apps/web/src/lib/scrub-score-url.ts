@@ -636,34 +636,63 @@ const STAMP_REDACTED = "[redacted]";
 /** A key as the prefix check reads it: lower-cased, `_` as `-` (so `x_seazn_origin_secret` is the same header). */
 const stampKey = (k: string): string => k.toLowerCase().replace(/_/g, "-");
 
-/** `record` with every key that starts (any case, `_` or `-`) with `prefix` redacted - a copy - or `undefined` when none. */
-function redactPrefixed<T extends Record<string, unknown>>(record: T, prefix: string): T | undefined {
-  const want = stampKey(prefix);
+/**
+ * The webhook signature headers the routes verify: a vendor's MAC over the request body (Stripe's, Resend's Svix, RealtimeKit's,
+ * Bunny Stream's). Not usable without the body, which Sentry does not hold, but the rule is "no signature in a record" (Task 27
+ * review m1), and "signature" is not in the SDK's own deny list, so each signed delivery sent its signature to Sentry in clear.
+ * Task 27b adds Cloudflare Notifications' `cf-webhook-auth`, which is no MAC: it is the destination's SECRET, verbatim, so a
+ * copy of it is the credential itself. The SDK's span-attribute filter happens to catch it ("auth" is on its deny list); the
+ * request headers it does not, and the rule is ours to keep either way.
+ * scrub-sentry-signatures.test.ts holds this list equal to the `*-signature` and `*-auth` headers the route files read.
+ */
+export const SIGNATURE_HEADERS = ["stripe-signature", "svix-signature", "rtk-signature", "x-bunnystream-signature", "cf-webhook-auth"] as const;
+const SIGNATURE_ATTRIBUTES = SIGNATURE_HEADERS.map((h) => stampKey(`http.request.header.${h}`));
+
+/** A request header that never reaches Sentry in clear: the origin stamp (any name starting with its prefix) or a signature. */
+const isSecretHeader = (k: string): boolean => {
+  const key = stampKey(k);
+  return key.startsWith(stampKey(ORIGIN_STAMP_PREFIX)) || (SIGNATURE_HEADERS as readonly string[]).includes(key);
+};
+/** The same header as the SDK writes it into span (and breadcrumb) data: `http.request.header.<name, - → _>`. */
+const isSecretHeaderAttribute = (k: string): boolean => {
+  const key = stampKey(k);
+  return key.startsWith(stampKey(ORIGIN_STAMP_ATTRIBUTE_PREFIX)) || SIGNATURE_ATTRIBUTES.includes(key);
+};
+
+/** `record` with every key `secret` names redacted - a copy - or `undefined` when none. */
+function redactKeys<T extends Record<string, unknown>>(record: T, secret: (k: string) => boolean): T | undefined {
   let copy: T | undefined;
   for (const k of Object.keys(record)) {
-    if (stampKey(k).startsWith(want)) (copy ??= { ...record })[k as keyof T] = STAMP_REDACTED as T[keyof T];
+    if (secret(k)) (copy ??= { ...record })[k as keyof T] = STAMP_REDACTED as T[keyof T];
   }
   return copy;
 }
 
 /**
- * Any event loses the origin stamp's VALUE wherever the SDK puts it: `request.headers`, and its `http.request.header.*`
- * attribute in the trace context's data and in every span's data (the SDK's deny list masks the right name; this does not
- * depend on it). The key stays, as "[redacted]". A copy: the input is never mutated.
+ * Any event loses the origin stamp's and every webhook signature's VALUE wherever the SDK puts it: `request.headers`, and its
+ * `http.request.header.*` attribute in the trace context's data, in every span's data and in every breadcrumb's data (the SDK's
+ * deny list masks the stamp's right name and no signature; this does not depend on it). The key stays, as "[redacted]". A copy:
+ * the input is never mutated.
  */
-function dropOriginStamp<E extends Event>(event: E): E {
+function dropSecretHeaders<E extends Event>(event: E): E {
   let next: E = event;
-  const headers = event.request?.headers ? redactPrefixed(event.request.headers, ORIGIN_STAMP_PREFIX) : undefined;
+  const headers = event.request?.headers ? redactKeys(event.request.headers, isSecretHeader) : undefined;
   if (headers) next = { ...next, request: { ...next.request, headers } };
   const trace = next.contexts?.trace;
-  const traceData = trace && isData(trace.data) ? redactPrefixed(trace.data, ORIGIN_STAMP_ATTRIBUTE_PREFIX) : undefined;
+  const traceData = trace && isData(trace.data) ? redactKeys(trace.data, isSecretHeaderAttribute) : undefined;
   if (trace && traceData) next = { ...next, contexts: { ...next.contexts, trace: { ...trace, data: traceData } } };
-  let spans: typeof event.spans;
-  next.spans?.forEach((span, i) => {
-    const data = isData(span.data) ? redactPrefixed(span.data, ORIGIN_STAMP_ATTRIBUTE_PREFIX) : undefined;
-    if (data) (spans ??= next.spans!.slice())[i] = { ...span, data };
-  });
+  const mapData = <T extends { data?: unknown }>(items: T[] | undefined): T[] | undefined => {
+    let copy: T[] | undefined;
+    items?.forEach((item, i) => {
+      const data = isData(item.data) ? redactKeys(item.data, isSecretHeaderAttribute) : undefined;
+      if (data) (copy ??= items.slice())[i] = { ...item, data };
+    });
+    return copy;
+  };
+  const spans = mapData(next.spans);
   if (spans) next = { ...next, spans };
+  const breadcrumbs = mapData(next.breadcrumbs);
+  if (breadcrumbs) next = { ...next, breadcrumbs };
   return next;
 }
 
@@ -674,7 +703,7 @@ function dropOriginStamp<E extends Event>(event: E): E {
  * request body (A18); a one-time-token route's event also loses the token in
  * its bare `request.query_string`; the event of a route that takes a credential
  * in its body (`BODY_CREDENTIAL_ROUTES`: a token or a join code) or in its path
- * loses `request.data`. Every event loses the origin stamp's value.
+ * loses `request.data`. Every event loses the origin stamp's value and every webhook signature's.
  */
 export function scrubSentryEvent<E extends Event>(event: E): E {
   const oneTime = isOneTimeTokenEvent(event);
@@ -683,7 +712,7 @@ export function scrubSentryEvent<E extends Event>(event: E): E {
   const safe = isCaptureEvent(event) ? dropCaptureSecrets(scrubbed) : scrubbed;
   const queryScrubbed = oneTime ? dropOneTimeToken(safe) : safe;
   const withSpans = scrubSpans(scrubJoinCodeKeys(queryScrubbed), oneTime, body);
-  return dropOriginStamp(body ? dropRequestBody(withSpans) : withSpans);
+  return dropSecretHeaders(body ? dropRequestBody(withSpans) : withSpans);
 }
 
 /**

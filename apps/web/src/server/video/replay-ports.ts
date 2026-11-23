@@ -36,6 +36,25 @@ export class ReplayNotDownloadable extends Error {
   }
 }
 
+/** The host did not answer: no response in time, a network fault, a body cut off, or a 429 / 5xx. Retryable: the same call may
+ *  work in a moment (Task 27, carrying T26 re-review m1 a). The message is the adapter's own, already redacted. */
+export class ReplayHostUnavailable extends Error {
+  override readonly name = "ReplayHostUnavailable";
+}
+
+/** The host refused OUR credentials (401 / 403): a wrong key or token key, or an address the library does not allow us to fetch
+ *  from (its allowed referrers). A configuration fault on our side, not the host's mood: retrying changes nothing, so it is never
+ *  answered as "try again" (Task 27, carrying T26 re-review m1 a). */
+export class ReplayHostRefused extends Error {
+  override readonly name = "ReplayHostRefused";
+  /** `credential`: which of ours was refused — the host's API key, or the token (and address) its file delivery checks — so the
+   *  line can name the one setting to fix (Task 27 review m3). */
+  constructor(readonly status: number, readonly credential: ReplayCredential, message: string) {
+    super(message);
+  }
+}
+export type ReplayCredential = "api_key" | "delivery_token";
+
 export interface ReplayHost {
   /** Make a collection named `org:<orgId>` and answer its id. A second call makes a second collection: the caller stores the
    *  id it was given, and nothing looks a collection up by name. */

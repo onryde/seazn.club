@@ -8,7 +8,7 @@ import type { BunnyConfig } from "@/server/relay/config";
 import { FakeRecorder } from "@/server/relay/fakes";
 import { pathTemplate } from "@/server/relay/sanitise";
 import { BunnyReplayHost } from "../replay-bunny";
-import { type ReplayHost, ReplayNotDownloadable } from "../replay-ports";
+import { type ReplayHost, ReplayHostRefused, ReplayHostUnavailable, ReplayNotDownloadable } from "../replay-ports";
 
 const CONFIG: BunnyConfig = {
   libraryId: "424242",
@@ -599,5 +599,74 @@ describe("BunnyReplayHost: openDownload times out on the headers only, and follo
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("BunnyReplayHost: a failure says what kind it is (Task 27, carrying T26 re-review m1 a) — the download answers each its own way", () => {
+  const kindOf = (e: unknown) =>
+    e instanceof ReplayHostRefused ? `refused ${e.status} ${e.credential}` : e instanceof ReplayHostUnavailable ? "unavailable" : e instanceof ReplayNotDownloadable ? "not-downloadable" : e instanceof Error ? "other" : "none";
+  const thrown = async (p: Promise<unknown>) => p.then(() => null, (e: unknown) => e);
+
+  it("EMPTY CASE FIRST: a 200 and a 404 throw nothing; the API's 401 and 403 are a refusal of OUR credentials (with the status), 429 and every 5xx the host not answering, any other status neither", async () => {
+    expect(kindOf(await thrown(harness(() => ({ status: 200, body: videoBody({ status: 4, resolutions: "720p" }) })).host.video(GUID)))).toBe("none");
+    expect(kindOf(await thrown(harness(() => ({ status: 404 })).host.video(GUID))), "404 is absent, not a failure").toBe("none");
+    // The API's refusal is of the API key (AccessKey): Task 27 review m3.
+    const table: [number, string][] = [[401, "refused 401 api_key"], [403, "refused 403 api_key"], [429, "unavailable"], [500, "unavailable"], [502, "unavailable"], [503, "unavailable"], [504, "unavailable"], [400, "other"], [409, "other"]];
+    let checked = 0;
+    for (const [status, kind] of table) {
+      const h = harness(() => ({ status, body: { Message: `AccessKey ${CONFIG.apiKey} rejected` } }));
+      const e = await thrown(h.host.video(GUID));
+      expect([status, kindOf(e)]).toEqual([status, kind]);
+      for (const secret of SECRETS) expect((e as Error).message).not.toContain(secret);
+      checked++;
+    }
+    expect(checked).toBe(9);
+  });
+
+  it("an API call that never answers (a network fault) is the host not answering, and so is a body cut off before it arrived", async () => {
+    const net = harness(() => { throw new TypeError(`fetch failed ${CONFIG.apiKey}`); });
+    expect(kindOf(await thrown(net.host.video(GUID)))).toBe("unavailable");
+    const cut = harness(() => ({ ok: true, status: 200, headers: new Headers(), json: async () => { throw new TypeError("terminated"); } }) as unknown as Response);
+    expect(kindOf(await thrown(cut.host.video(GUID)))).toBe("unavailable");
+  });
+
+  it("openDownload: the CDN's 401 and 403 are a refusal (the token key, or a Referer the library does not allow), its 5xx the host not answering, its 404 neither; a missing SEAZN_VIDEO_ORIGINS neither", async () => {
+    const cdn = (status: number) => harness((c) => (c.url.startsWith(API) ? { status: 200, body: videoBody({ status: 4, resolutions: "720p" }) } : new Response(status < 300 ? "x" : null, { status })));
+    // The CDN's refusal is of the delivery token (the token key) or the Referer: Task 27 review m3.
+    const table: [number, string][] = [[401, "refused 401 delivery_token"], [403, "refused 403 delivery_token"], [500, "unavailable"], [503, "unavailable"], [429, "unavailable"], [404, "other"]];
+    let checked = 0;
+    for (const [status, kind] of table) {
+      expect([status, kindOf(await thrown(cdn(status).host.openDownload(GUID)))]).toEqual([status, kind]);
+      checked++;
+    }
+    expect(checked).toBe(6);
+    const noOrigin = harness(() => ({ status: 200, body: videoBody({ status: 4, resolutions: "720p" }) }), null);
+    expect(kindOf(await thrown(noOrigin.host.openDownload(GUID))), "a configuration fault of ours is not the host's").toBe("other");
+  });
+
+  it("openDownload: no headers in the 4 s, or a network fault, is the host not answering; the caller's own cancel is neither (the download answers it before reading the kind)", async () => {
+    // A CDN whose headers never come: only an abort (the adapter's deadline, or the caller's cancel) ends its request.
+    const hangingCdn = () => {
+      const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) =>
+        String(url).startsWith(API)
+          ? new Response(JSON.stringify(videoBody({ status: 4, resolutions: "720p" })), { status: 200, headers: { "content-type": "application/json" } })
+          : new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true }))) as typeof fetch;
+      return new BunnyReplayHost(CONFIG, { fetchImpl, recorder: new FakeRecorder(), now: () => NOW, videoOrigins: () => ["stg.seazn.club"] });
+    };
+    vi.useFakeTimers();
+    try {
+      const timedOut = thrown(hangingCdn().openDownload(GUID));
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(kindOf(await timedOut), "no headers in 4 s").toBe("unavailable");
+      const viewer = new AbortController();
+      const cancelled = thrown(hangingCdn().openDownload(GUID, viewer.signal));
+      await vi.advanceTimersByTimeAsync(10);
+      viewer.abort(new Error("the viewer left"));
+      expect(kindOf(await cancelled), "the caller's cancel").toBe("other");
+    } finally {
+      vi.useRealTimers();
+    }
+    const net = harness((c) => (c.url.startsWith(API) ? { status: 200, body: videoBody({ status: 4, resolutions: "720p" }) } : Promise.reject(new TypeError("fetch failed"))));
+    expect(kindOf(await thrown(net.host.openDownload(GUID))), "a network fault").toBe("unavailable");
   });
 });

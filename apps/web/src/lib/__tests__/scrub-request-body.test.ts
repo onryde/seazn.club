@@ -14,8 +14,10 @@
 // The route lists are not typed here. They come from the app's own directories:
 //  - the body credentials: every `app/api/**/route.ts` that names a `token` or a `*_code` (`join_code`, `ref_code`, …) AND
 //    reads a request body is found by a scan, and must carry a verdict in BODY_VERDICTS (a credential, or why its body is not
-//    one). A new route that takes a token in
-//    its body fails the first test until it takes a side; a verdict whose route is gone fails too;
+//    one). A route reads a body by `req.json()`-style calls or `parseBody(`, by `readCapped(req.body` itself, or by calling a
+//    helper that does (`bodyHelpers()`: every exported function in src that reads `readCapped(req.body`, and every one that calls
+//    such a function, to a fixed point; Task 25b closed this blind spot, which hid every capped reader). A new route that takes
+//    a token in its body fails the first test until it takes a side; a verdict whose route is gone fails too;
 //  - the passwords: every body-reading route whose schema has a password field (inline, or an exported schema found by
 //    scanning src, aliases followed) is derived the same way. The expected answer is NONE: a re-added log-in, sign-up,
 //    change-password or set-password route fails the "no route takes a password" test, and the table-equality test too
@@ -90,13 +92,54 @@ describe("premise: the tokens are real and varied", () => {
 
 // ---- which routes read a credential from their body: the app's own route files -----------------------------------------
 
-/** A route file reads a request body: `req.json()`, `request.text()`, `req.formData()` or the API's `parseBody(`. */
-const READS_BODY = /\b(?:req|request)\.(?:json|text|formData)\(\)|\bparseBody\(/;
+/** A route file reads a request body: `req.json()`, `request.text()`, `req.formData()`, `req.arrayBuffer()`, `req.blob()` (a signed
+ *  webhook reads its raw bytes; review m5) or the API's `parseBody(`. */
+const READS_BODY = /\b(?:req|request)\.(?:json|text|formData|arrayBuffer|blob)\(\)|\bparseBody\(/;
 /** A route names a credential: a `token`, or any `*_code` (`join_code`, `ref_code`, `reason_code`, `postal_code`): a code is either a capability or a plain field, and each route says which. */
 const NAMES_CREDENTIAL = /\btoken\b|\b[a-z]+_code\b/;
 
-/** Every `app/api/**\/route.ts` that names a `token` or a `*_code` AND reads a request body, by its directory under app/. */
-function bodyReaders(): { key: string; file: string }[] {
+/** The raw read under a cap (server/relay/record-body.ts `readCapped`), handed the request's own body stream. */
+const READS_CAPPED_BODY = /\breadCapped\(\s*(?:req|request)\.body\b/;
+
+/**
+ * The exported functions in src (tests aside) that read a request's body: those whose own text reads `readCapped(req.body`, and
+ * every one that calls one of those, to a fixed point (`postCaptureRecord` reads it through `readRecordBody`). A function is the
+ * text from its `export … function NAME`, or its `export const NAME = (async) (` arrow (review m5), to the next top-level `export`,
+ * as passwordSchemaNames splits a module. Takes the
+ * sources so a synthetic tree can prove it. Route files are not helpers (their handlers are the readers being found, and every
+ * route exports a `POST`, so a handler named as a helper would make every `POST(` call a body read).
+ */
+function bodyHelpers(
+  sources: string[] = sourceFiles(SRC_DIR).filter((f) => path.basename(f) !== "route.ts").map((f) => fs.readFileSync(f, "utf8")),
+): string[] {
+  const fns: { name: string; text: string }[] = [];
+  for (const source of sources) {
+    for (const part of source.split(/\n(?=export )/)) {
+      const m = /^export\s+(?:async\s+)?function\s+(\w+)|^export\s+const\s+(\w+)\s*=\s*(?:async\s*)?\(/.exec(part);
+      if (m) fns.push({ name: (m[1] ?? m[2])!, text: part });
+    }
+  }
+  const helpers = new Set(fns.filter((f) => READS_CAPPED_BODY.test(f.text)).map((f) => f.name));
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const f of fns) {
+      if (!helpers.has(f.name) && [...helpers].some((h) => new RegExp(`\\b${h}\\(`).test(f.text))) {
+        helpers.add(f.name);
+        grew = true;
+      }
+    }
+  }
+  return [...helpers].sort();
+}
+
+/** A route file reads its request's body: by a direct read, by `readCapped(req.body`, or by calling a body helper. */
+function readsBody(text: string, helpers: readonly string[]): boolean {
+  return READS_BODY.test(text) || READS_CAPPED_BODY.test(text) || helpers.some((h) => new RegExp(`\\b${h}\\(`).test(text));
+}
+
+/** Every `app/api/**\/route.ts` that reads a request body, and the ones of them that name a `token` or a `*_code`, by directory. */
+function bodyRoutes(helpers: readonly string[] = bodyHelpers()): { all: string[]; readers: { key: string; file: string }[] } {
+  const all: string[] = [];
   const found: { key: string; file: string }[] = [];
   const walk = (dir: string) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -104,12 +147,14 @@ function bodyReaders(): { key: string; file: string }[] {
       if (entry.isDirectory()) walk(full);
       else if (entry.name === "route.ts") {
         const text = fs.readFileSync(full, "utf8");
-        if (READS_BODY.test(text) && NAMES_CREDENTIAL.test(text)) found.push({ key: path.relative(APP_DIR, dir), file: path.relative(APP_DIR, full) });
+        if (!readsBody(text, helpers)) continue;
+        all.push(path.relative(APP_DIR, dir));
+        if (NAMES_CREDENTIAL.test(text)) found.push({ key: path.relative(APP_DIR, dir), file: path.relative(APP_DIR, full) });
       }
     }
   };
   walk(path.join(APP_DIR, "api"));
-  return found.sort((a, b) => a.key.localeCompare(b.key));
+  return { all: all.sort((a, b) => a.localeCompare(b)), readers: found.sort((a, b) => a.key.localeCompare(b.key)) };
 }
 
 /** The verdict on each body reader: `true` = the body carries a credential and is dropped; a string = why it is not one. */
@@ -136,12 +181,16 @@ const BODY_VERDICTS: Record<string, true | string> = {
   "api/v1/orgs/[id]/sponsors/[sponsorId]/report-links": "the body is the report link's competition and dates; its token is minted and returned once (R4 S13), never received",
   "api/users/me": "the body is a profile patch or the delete confirmation; `token` is a comment about a sealed Lichess token held server-side",
   "api/internal/relay/sessions/[sid]/heartbeat": "the relay token is the Bearer header; the body is heartbeat metrics",
+  "api/internal/relay/sessions/[sid]/airings/[momentId]/frame": "the relay job token is the Bearer header; the body is the airing's JPEG frame, read capped",
+  "api/v1/public/client-reports": "a browser's failure report (Task 25b): a closed schema of codes that refuses any URL-, token- or expires-shaped string; `token` is prose in the route's doc",
   "api/v1/competitions/[id]/schedule/apply": "`token` is the plan's sequence token (a concurrency check); the body is the plan",
   "api/v1/divisions/[id]/stages": "`?clear=` carries a format-change preview's token, a digest of the board it named (a staleness check, like schedule/apply's), in the query; the body is the stage list",
   "api/v1/fixtures/[id]/external-play/arbiter": "the body names the entrant side; the arbiter's token is minted and returned, never received",
   "api/v1/fixtures/[id]/external-play/arbiter/[participantId]": "the DELETE's body is the fixed word { intent: \"revoke\" }; the participant id is a path segment and no token is received",
   "api/v1/fixtures/[id]/external-play/room/act": "the body is the move; the player's token stays server-side",
   "api/v1/fixtures/[id]/external-play/room": "the body is the held participant's id; `token` is a comment about the seat's token",
+  "api/webhooks/realtimekit": "the body is Cloudflare RealtimeKit's webhook event, read as raw bytes (`arrayBuffer`) for its signature; `token` is prose (\"no CSRF token\"): the credential is the `rtk-signature` HEADER, which the Sentry scrub redacts (SIGNATURE_HEADERS)",
+  "api/webhooks/bunny-stream": "the body is Bunny Stream's video status event (library, video id, status, event id, time); `token` is a comment (no CSRF token): the credential is the signature HEADER, which the Sentry scrub redacts (SIGNATURE_HEADERS)",
   "api/internal/youtube/fake": "control ops for the FAKE YouTube: handles, stream and video ids, OAuth states. The one op that takes a token, `seedGrant`, takes a `1//` refresh token the calling test minted itself for the fake and never echoes it; the route is 404 unless YOUTUBE_DRIVER=fake and ENV_NAME is local or ci, where no real credential exists",
 };
 
@@ -224,7 +273,8 @@ function passwordRoutes(appDir: string = APP_DIR, srcDir: string = SRC_DIR): { f
   return { found: found.sort((a, b) => a.key.localeCompare(b.key)), routeFiles };
 }
 
-const readers = bodyReaders();
+const helpers = bodyHelpers();
+const { all: bodyRouteKeys, readers } = bodyRoutes(helpers);
 const { found: passwordBodies, routeFiles: routeFilesRead } = passwordRoutes();
 const passwordKeys = new Set(passwordBodies.map((r) => r.key));
 const credentialReaders = readers.filter((r) => BODY_VERDICTS[r.key] === true);
@@ -244,6 +294,37 @@ describe("which routes take a credential in their body: found from the route fil
       readers.map((r) => r.key),
       "a route that names a token and reads a body needs a verdict in BODY_VERDICTS",
     ).toEqual(Object.keys(BODY_VERDICTS).sort((a, b) => a.localeCompare(b)));
+  });
+
+  it("a route that reads its body through a capped helper is a body reader too (anti-vacuity: the helpers and the routes are found)", () => {
+    expect(helpers, "the capped body helpers, found to a fixed point").toEqual(expect.arrayContaining(["postCaptureRecord", "readClientReport", "readRecordBody"]));
+    expect(helpers.filter((h) => /^(?:GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)$/.test(h)), "no route handler is a helper").toEqual([]);
+    expect(bodyRouteKeys, "routes that read their body capped, directly or through a helper").toEqual(expect.arrayContaining([
+      "api/internal/relay/sessions/[sid]/airings/[momentId]/frame", "api/v1/capture/codes/[code]/records", "api/v1/public/client-reports",
+    ]));
+    expect(readers.map((r) => r.key), "the capped readers that name a token take a side in BODY_VERDICTS").toEqual(expect.arrayContaining([
+      "api/internal/relay/sessions/[sid]/airings/[momentId]/frame", "api/v1/public/client-reports",
+    ]));
+  });
+
+  it("the helper scan, on synthetic sources: a direct capped read, one through a helper, two hops; not a private function, not another stream", () => {
+    // Callers before callees, so one pass cannot find the two-hop caller: only the fixed point does.
+    const found = bodyHelpers([
+      "export async function useUseIt(r: Request) {\n  return useIt(r);\n}\n",
+      "export async function useIt(req: Request) {\n  return readIt(req);\n}\n",
+      "export async function readIt(req: Request) {\n  return readCapped(req.body, 10);\n}\nexport function other() {}\n",
+      "async function privateRead(req: Request) {\n  return readCapped(req.body, 1);\n}\nexport async function poster(res: Response) {\n  return readCapped(res.body, 1);\n}\n",
+      // Arrow helpers (review m5): a direct capped read, and one that calls a function helper.
+      "export const readArrow = async (req: Request) => readCapped(req.body, 10);\nexport const plainArrow = (n: number) => n + 1;\n",
+      "export const useArrow = (req: Request) => readIt(req);\n",
+    ]);
+    expect(found).toEqual(["readArrow", "readIt", "useArrow", "useIt", "useUseIt"]);
+    expect(readsBody("export async function POST(req: Request) {\n  return useUseIt(req);\n}\n", found)).toBe(true);
+    expect(readsBody("export async function POST(req: Request) {\n  return other();\n}\n", found)).toBe(false);
+    // The raw-byte reads a signed webhook makes (review m5), and their positive pair, a read of something else's bytes.
+    expect(readsBody("export async function POST(req: Request) {\n  const raw = await req.arrayBuffer();\n}\n", [])).toBe(true);
+    expect(readsBody("export async function POST(request: Request) {\n  const raw = await request.blob();\n}\n", [])).toBe(true);
+    expect(readsBody("export async function POST(req: Request) {\n  const raw = await res.arrayBuffer();\n}\n", [])).toBe(false);
   });
 
   it("no route takes a password in its body (password sign-in was removed 2026-10-19), and the scan read the whole route tree to say so", () => {

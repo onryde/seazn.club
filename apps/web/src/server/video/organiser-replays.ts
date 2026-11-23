@@ -23,7 +23,9 @@ import "server-only";
 //                                          a playable part's file, as the host's own stream (never buffered, never a URL), named
 //                                          for the match and the part (`replayFileName`). Anything but a playable part is 409; so is
 //                                          the host's own "not ready" (ReplayNotDownloadable), which a row can read past (Task 22
-//                                          review m6).
+//                                          review m6). The host not answering is 503 (try again); the host refusing OUR
+//                                          credentials or address is 500 replay_host_refused (a configuration fault, reported),
+//                                          anything else 500; a viewer who left first is 499, never an error (T26 re-review m1).
 //
 // The delete and the download are an editor's, with a session: never an API key, a device link or a Match Day code (the routes are
 // NEVER_KEY_ROUTES too), and another org's part, or another fixture's, is 404.
@@ -39,7 +41,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
 import type { ReplayRowState } from "./domain/replay-move";
 import { replayDriver } from "./replay-driver";
-import { type ReplayHost, ReplayNotDownloadable } from "./replay-ports";
+import { type ReplayCredential, type ReplayHost, ReplayHostRefused, ReplayHostUnavailable, ReplayNotDownloadable } from "./replay-ports";
 
 export type OrganiserReplayState = "processing" | "playable" | "failed";
 export interface OrganiserReplay {
@@ -113,6 +115,17 @@ export const REPLAY_NOT_DOWNLOADABLE = "This replay is not ready to download";
 /** The answer when the video host fails to start the file (no headers in its 4 s, a network fault; review m1): retryable, and
  *  never the host's own words, which name its video. */
 export const REPLAY_HOST_UNAVAILABLE = "The video host did not answer. Try the download again in a moment";
+/** The answer when the download fails for a reason on OUR side — the host refused our credentials or address (a configuration
+ *  fault: T26 re-review m1 a), or anything else unexpected: never "try again", which would not help. Both are reported. */
+export const REPLAY_DOWNLOAD_FAULT = "The download could not start because of a fault on our side. It has been reported";
+/** The refusal's log line names the one setting to fix: the credential the host refused (Task 27 review m3). */
+const REFUSED_LINE: Record<ReplayCredential, string> = {
+  api_key: "seazn replay: the host refused our API key — a configuration fault: check BUNNY_STREAM_API_KEY",
+  delivery_token:
+    "seazn replay: the host's file delivery refused our token or address — a configuration fault: check BUNNY_TOKEN_KEY and the library's allowed referrers (SEAZN_VIDEO_ORIGINS)",
+};
+/** A download the viewer left before the host answered (T26 re-review m1 b): nobody reads this answer, and it is not an error. */
+const REPLAY_DOWNLOAD_CANCELLED = "The download was cancelled";
 
 /** An editor (owner or admin) signed in with a session; anything else — an API key, a device link, a Match Day code, a viewer — is
  *  403. The routes' door already asks for an editor; this is the use case's own guard, so a second caller cannot skip it. */
@@ -192,9 +205,24 @@ export async function seaznReplayDownload(auth: AuthCtx, fixtureId: string, repl
     file = await (deps.replay ?? replayDriver()).openDownload(row.bunny_video_id, deps.signal);
   } catch (err) {
     if (err instanceof ReplayNotDownloadable) throw new HttpError(409, REPLAY_NOT_DOWNLOADABLE, "replay_not_downloadable");
-    // The host's own message is redacted by its adapter (no key, no signed URL) and goes to the log; the caller gets a clean 503.
-    log.warn({ replayId, guid: row.bunny_video_id, errClass: err instanceof Error ? err.name : typeof err, detail: err instanceof Error ? err.message : null }, "seazn replay: the host did not start the download");
-    throw new HttpError(503, REPLAY_HOST_UNAVAILABLE, "replay_host_unavailable");
+    // The host's own words (redacted by its adapter: no key, no signed URL) go to the log through the file's scrubber, never to the
+    // caller. Each kind of failure has its own answer and its own level (T26 re-review m1 a, b, d).
+    const fields = { replayId, guid: row.bunny_video_id, errClass: errClass(err), detail: detail(err) };
+    if (deps.signal?.aborted) {
+      // The viewer left first: whatever the host then threw is the cancel's echo. Below 500, so v1() never reports it to Sentry.
+      log.info(fields, "seazn replay: the download was cancelled before the host answered — the viewer left");
+      throw new HttpError(499, REPLAY_DOWNLOAD_CANCELLED, "download_cancelled");
+    }
+    if (err instanceof ReplayHostUnavailable) {
+      log.warn(fields, "seazn replay: the host did not start the download — retryable");
+      throw new HttpError(503, REPLAY_HOST_UNAVAILABLE, "replay_host_unavailable");
+    }
+    if (err instanceof ReplayHostRefused) {
+      log.error({ ...fields, status: err.status, credential: err.credential }, REFUSED_LINE[err.credential]);
+      throw new HttpError(500, REPLAY_DOWNLOAD_FAULT, "replay_host_refused");
+    }
+    log.error(fields, "seazn replay: the download failed to start");
+    throw new HttpError(500, REPLAY_DOWNLOAD_FAULT, "replay_download_failed");
   }
   return { body: file.body, bytes: file.bytes, fileName: replayFileName(row.home ?? "", row.away ?? "", row.part_no) };
 }

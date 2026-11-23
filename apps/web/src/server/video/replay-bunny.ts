@@ -16,7 +16,10 @@ import { createHash } from "node:crypto";
 import { BUNNY_EMBED_HOST, SEAZN_REPLAY_CALL_TIMEOUT_MS, seaznVideoOrigins, type BunnyConfig } from "@/server/relay/config";
 import { NOOP_RECORDER, type ProviderCallRecorder } from "@/server/relay/ports";
 import { redact } from "@/server/relay/sanitise";
-import { type ReplayDownload, type ReplayHost, ReplayNotDownloadable, type ReplayState, type ReplayVideo } from "./replay-ports";
+import {
+  type ReplayCredential, type ReplayDownload, type ReplayHost, ReplayHostRefused, ReplayHostUnavailable, ReplayNotDownloadable, type ReplayState,
+  type ReplayVideo,
+} from "./replay-ports";
 
 export const BUNNY_API_BASE = "https://video.bunnycdn.com/library";
 /** The tallest rendition a replay is served at: the port promises nothing above it. */
@@ -172,12 +175,12 @@ export class BunnyReplayHost implements ReplayHost {
       cancel?.removeEventListener("abort", onCancel);
       // The fetch error's own text is dropped, not quoted: a network failure can quote the URL, and the URL is the token.
       this.record("openDownload", "GET", recorded, [videoId], null, videoId, started, why ?? "network");
-      throw this.error(
+      // The caller's own cancel is not the host's failure: a plain error, which the download answers before reading any kind.
+      if (why === "cancelled") throw this.error(`openDownload: cancelled before a response (video ${videoId})`);
+      throw this.unavailable(
         why === "timeout"
           ? `openDownload: no response within ${SEAZN_REPLAY_CALL_TIMEOUT_MS} ms (video ${videoId})`
-          : why === "cancelled"
-            ? `openDownload: cancelled before a response (video ${videoId})`
-            : `openDownload: request failed before a response (video ${videoId})`,
+          : `openDownload: request failed before a response (video ${videoId})`,
       );
     }
     // The headers are in: the deadline was for them alone. The body streams for as long as the caller reads it.
@@ -186,7 +189,7 @@ export class BunnyReplayHost implements ReplayHost {
     if (!res.ok || !res.body) {
       cancel?.removeEventListener("abort", onCancel);
       await res.body?.cancel().catch(() => undefined);
-      throw this.error(`openDownload: HTTP ${res.status} (video ${videoId})`);
+      throw this.httpError(res.status, `openDownload: HTTP ${res.status} (video ${videoId})`, "delivery_token");
     }
     const size = Number(res.headers.get("content-length"));
     return { body: res.body, bytes: Number.isFinite(size) && size > 0 ? size : null, fileName: `${videoId}-${height}p.mp4` };
@@ -203,7 +206,8 @@ export class BunnyReplayHost implements ReplayHost {
   private async read(videoId: string, operation: string): Promise<BunnyVideoBody | null> {
     const r = await this.api<BunnyVideoBody>("GET", `/videos/${encodeURIComponent(videoId)}`, undefined, { operation, ids: [videoId], subjectId: videoId });
     if (r.status === 404) return null;
-    if (!r.ok || r.json === undefined || r.json === null) throw this.error(`${operation}: HTTP ${r.status} (video ${videoId})`);
+    if (!r.ok) throw this.httpError(r.status, `${operation}: HTTP ${r.status} (video ${videoId})`, "api_key");
+    if (r.json === undefined || r.json === null) throw this.error(`${operation}: HTTP ${r.status} (video ${videoId})`);
     return r.json;
   }
 
@@ -238,7 +242,7 @@ export class BunnyReplayHost implements ReplayHost {
       });
     } catch (e) {
       this.record(meta.operation, method, url, meta.ids, null, meta.subjectId ?? null, started, (e as { name?: string })?.name === "TimeoutError" ? "timeout" : "network");
-      throw this.error(`${meta.operation}: request failed before a response${meta.subjectId ? ` (video ${meta.subjectId})` : ""}`);
+      throw this.unavailable(`${meta.operation}: request failed before a response${meta.subjectId ? ` (video ${meta.subjectId})` : ""}`);
     }
     let json: T | undefined;
     try {
@@ -248,7 +252,7 @@ export class BunnyReplayHost implements ReplayHost {
       // full — the call's own timeout, or the connection cut — is a failed call (re-review N6): recorded as one, never as its status.
       if (!(e instanceof SyntaxError)) {
         this.record(meta.operation, method, url, meta.ids, null, meta.subjectId ?? null, started, signal.aborted || (e as { name?: string })?.name === "TimeoutError" ? "timeout" : "network");
-        throw this.error(`${meta.operation}: the response did not arrive in full${meta.subjectId ? ` (video ${meta.subjectId})` : ""}`);
+        throw this.unavailable(`${meta.operation}: the response did not arrive in full${meta.subjectId ? ` (video ${meta.subjectId})` : ""}`);
       }
       json = undefined;
     }
@@ -269,5 +273,19 @@ export class BunnyReplayHost implements ReplayHost {
 
   private error(text: string): Error {
     return new Error(redact(`bunny ${text}`, this.secrets));
+  }
+
+  /** The host did not answer (Task 27, carrying T26 re-review m1 a): retryable. */
+  private unavailable(text: string): ReplayHostUnavailable {
+    return new ReplayHostUnavailable(redact(`bunny ${text}`, this.secrets));
+  }
+
+  /** A refusal, by its status: 401 / 403 refuse OUR `credential` (the API's AccessKey, or the CDN's token and Referer: a
+   *  configuration fault), 429 and every 5xx are the host not answering, anything else is neither. */
+  private httpError(status: number, text: string, credential: ReplayCredential): Error {
+    const message = redact(`bunny ${text}`, this.secrets);
+    if (status === 401 || status === 403) return new ReplayHostRefused(status, credential, message);
+    if (status === 429 || status >= 500) return new ReplayHostUnavailable(message);
+    return new Error(message);
   }
 }

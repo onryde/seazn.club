@@ -1,19 +1,14 @@
 // Seazn-hosted video Task 25 (coordinator's addition, owner: viewer-side failures visible through Sentry, NOT PostHog): when the match
-// page's player gives up on an address, and when the island's read of the video route fails, ONE report goes to Sentry — once per
-// address for a player, once per kind of failure for the route — with the fixture, the part, the player's kind, live or replay, and
-// the failure's CODES (hls.js's type/details, the HTTP status). Never the address, its token, its `expires`, or any query.
+// page's player gives up on an address, and when the island's read of the video route fails, ONE report is sent — once per address for a
+// player, once per kind of failure for the route — with the fixture, the part, the player's kind, live or replay, and the failure's
+// CODES (hls.js's type/details, the HTTP status). Never the address, its token, its `expires`, or any query.
 //
 // The failures come from their REAL producers: hls.js's fatal error through the playback controller (a recording fake of hls.js, as
 // seazn-playback.test.ts drives it, whose error data carries the signed URL and a message quoting it, as hls.js's does), and the
-// route's failures from `api()` (lib/client.ts) and the island's own answer check. The Sentry send is the client's existing path
-// (`captureMessage` of lib/sentry-browser.ts, the facade every client file reports through, as the match room's camera reports
-// through its `captureException`), here a mock. The facade's own queue-and-load is proven in lib/__tests__/sentry-browser-init.test.ts.
+// route's failures from `api()` (lib/client.ts) and the island's own answer check. The send (Task 25b) is a beacon to OUR server's
+// client-report route, here a recording `navigator.sendBeacon` (and a recording `fetch` for the fallback), and every body sent is parsed
+// with the route's REAL schema (server/client-reports/kinds.ts `ClientReport`), so the client cannot send a body the route refuses.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-const sentry = vi.hoisted(() => ({ messages: [] as { message: string; context: unknown }[] }));
-vi.mock("@/lib/sentry-browser", () => ({
-  captureMessage: (message: string, context: unknown) => void sentry.messages.push({ message, context }),
-}));
 
 type Handler = (event: string, data: unknown) => void;
 const hls = vi.hoisted(() => ({ instances: [] as { handlers: Map<string, Handler> }[] }));
@@ -41,9 +36,11 @@ vi.mock("hls.js", () => {
 });
 
 import { ApiError } from "@/lib/client";
+import { CLIENT_REPORTS_PATH } from "@/lib/client-reports";
+import { ClientReport } from "@/server/client-reports/kinds";
 import { createPlayback, hlsFailureOf, type PlaybackFailure } from "../seazn-playback";
 import { asPublicFixtureVideo } from "../seazn-video-island";
-import { createVideoReporter, routeFailureOf, sentryVideoReport, type VideoFailureReport } from "../seazn-video-report";
+import { beaconVideoReport, createVideoReporter, routeFailureOf, videoReportRequest, type VideoFailureReport } from "../seazn-video-report";
 
 const FIXTURE = "8c4f7a52-1f3e-4b9a-9d2c-3e5f6a7b8c9d";
 const TOKEN_A = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ2aWQtYSJ9.c2lnbmF0dXJlLWE";
@@ -88,10 +85,12 @@ async function hlsFatal(src: string): Promise<PlaybackFailure> {
 }
 
 beforeEach(() => {
-  sentry.messages.length = 0;
   hls.instances.length = 0;
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe("the controller's failure: codes only, from hls.js's own error data", () => {
   it("a fatal hls.js error yields its type, details and HTTP status, and no part of the URL or the message that quotes it", async () => {
@@ -108,6 +107,10 @@ describe("hlsFailureOf — a code is a bare word and a status is an HTTP status,
     expect(hlsFailureOf({ type: "mediaError", details: "bufferStalledError", response: { code: 0 } }))
       .toEqual({ reason: "hls", hlsType: "mediaError", hlsDetails: "bufferStalledError", httpStatus: null, mediaCode: null });
     expect(hlsFailureOf(undefined)).toEqual({ reason: "hls", hlsType: null, hlsDetails: null, httpStatus: null, mediaCode: null });
+  });
+  it("a bare word that names a credential (the beacon route refuses one, lib/client-reports.ts) reads as null too, in either case", () => {
+    expect(hlsFailureOf({ type: "accessToken", details: "linkEXPIRES" }))
+      .toEqual({ reason: "hls", hlsType: null, hlsDetails: null, httpStatus: null, mediaCode: null });
   });
 });
 
@@ -175,27 +178,81 @@ describe("createVideoReporter — once per address, never the address", () => {
   });
 });
 
-describe("sentryVideoReport — the client's Sentry path", () => {
-  it("one warning message per report, its codes in the tags and extras, no URL anywhere in what is sent", async () => {
+describe("beaconVideoReport — the send is a beacon to our server's client-report route", () => {
+  type Sent = { url: string; body: string };
+  const beacons = (answer: boolean | "throw" = true) => {
+    const sent: Sent[] = [];
+    vi.stubGlobal("navigator", {
+      sendBeacon: (url: string, body: string) => {
+        if (answer === "throw") throw new TypeError("Illegal invocation");
+        sent.push({ url, body });
+        return answer;
+      },
+    });
+    return sent;
+  };
+  const fetches = () => {
+    const sent: (Sent & { init: RequestInit })[] = [];
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      sent.push({ url, body: String(init.body), init });
+      return new Response(null, { status: 204 });
+    });
+    return sent;
+  };
+  /** Two reports through the REAL reporter, as the island makes them: a fatal hls.js error (twice, one address) and a failed read. */
+  const twoReports = async (send: (r: VideoFailureReport) => void): Promise<VideoFailureReport[]> => {
     const reports: VideoFailureReport[] = [];
     const r = createVideoReporter((x) => {
       reports.push(x);
-      sentryVideoReport(x);
+      send(x);
     });
     r.player(FIXTURE, { address: addr(TOKEN_A), source: "replay", partNo: 1, player: "hls", failure: await hlsFatal(addr(TOKEN_A)) });
     r.player(FIXTURE, { address: addr(TOKEN_A), source: "replay", partNo: 1, player: "hls", failure: await hlsFatal(addr(TOKEN_A)) });
     r.route(FIXTURE, new ApiError("Request failed (503)", 503));
-    expect(sentry.messages, "one per report").toHaveLength(2);
-    expect(sentry.messages[0]).toEqual({
-      message: "seazn video: the player gave up",
-      context: {
-        level: "warning",
-        tags: { area: "seazn-video", event: "player_fatal", reason: "hls", fixture_id: FIXTURE },
-        extra: reports[0],
-      },
+    return reports;
+  };
+
+  it("one beacon per report, to the route's path, its body the report with kind `video` — which the route's own schema takes as it is", async () => {
+    const sent = beacons();
+    const f = fetches();
+    const reports = await twoReports(beaconVideoReport);
+    expect(sent, "one per report").toHaveLength(2);
+    expect(f, "the beacon was taken: no fetch").toEqual([]);
+    let checked = 0;
+    for (const [i, { url, body }] of sent.entries()) {
+      expect(url).toBe(CLIENT_REPORTS_PATH);
+      expect(ClientReport.parse(JSON.parse(body)), "the route's schema takes the body unchanged").toEqual({ kind: "video", ...reports[i]! });
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(expectNoUrl(sent.map((s) => s.body))).toBe(FORBIDDEN.length);
+  });
+
+  it("a beacon the browser will not queue (false), one that throws, and no beacon at all: the same body by a keepalive fetch", async () => {
+    let checked = 0;
+    for (const setup of [() => beacons(false), () => beacons("throw"), () => vi.stubGlobal("navigator", {})] as const) {
+      setup();
+      const f = fetches();
+      const reports = await twoReports(beaconVideoReport);
+      expect(f).toHaveLength(2);
+      for (const [i, { url, body, init }] of f.entries()) {
+        expect([url, init.method, init.keepalive]).toEqual([CLIENT_REPORTS_PATH, "POST", true]);
+        expect(body).toBe(videoReportRequest(reports[i]!).body);
+        checked++;
+      }
+      vi.unstubAllGlobals();
+    }
+    expect(checked).toBe(6);
+  });
+
+  it("a send that fails never throws into the page: a rejected fetch, and no fetch at all", async () => {
+    beacons(false);
+    vi.stubGlobal("fetch", async () => {
+      throw new TypeError("Failed to fetch");
     });
-    expect((sentry.messages[1]!.context as { tags: { event: string } }).tags.event).toBe("route_read_failed");
-    expect(sentry.messages[1]!.message).toBe("seazn video: the video route could not be read");
-    expect(expectNoUrl(sentry.messages)).toBe(FORBIDDEN.length);
+    expect(() => beaconVideoReport({ stage: "route", fixtureId: FIXTURE, source: null, partNo: null, player: null, reason: "network", hlsType: null, hlsDetails: null, httpStatus: null, mediaCode: null })).not.toThrow();
+    await new Promise((r) => setTimeout(r, 0));
+    vi.stubGlobal("fetch", undefined);
+    expect(() => beaconVideoReport({ stage: "route", fixtureId: FIXTURE, source: null, partNo: null, player: null, reason: "network", hlsType: null, hlsDetails: null, httpStatus: null, mediaCode: null })).not.toThrow();
   });
 });

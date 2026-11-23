@@ -6,8 +6,11 @@
 //     the real host makes; any other move throws, so a test cannot drive the fake somewhere the host never goes.
 //   * `heights` never exceed 720 and are NOT in order, as the real list is not: the best rendition is the maximum.
 //   * `remove` reads the fake's own state, never a status: after it the video reads `absent`, and a second remove says so.
-//   * Ids are a counter (`fake-video-1`, …), so a run is the same every time.
-import { createHash } from "node:crypto";
+//   * Ids are a counter under a prefix of the fake's own (`fake-video-<8 hex>-1`, …). The prefix is per INSTANCE because a copy's id
+//     is unique across the whole replay table (V545's unique index, Task 27b), as Bunny's guids are across the library: every test
+//     in a shared database, and a `next dev` restarted against one, makes its own fake, and a bare counter would name the same
+//     copy twice. A test that wants a readable id names its own prefix (`{ idPrefix }`).
+import { createHash, randomUUID } from "node:crypto";
 import { FAKE_REPLAY_EMBED_HOST } from "@/server/relay/config";
 import { type ReplayDownload, type ReplayHost, ReplayNotDownloadable, type ReplayVideo } from "./replay-ports";
 
@@ -32,6 +35,11 @@ const MOVES: Record<"advance" | "fail", Partial<Record<Held, Held>>> = {
 
 export class FakeReplayHost implements ReplayHost {
   private nextId = 1;
+  /** `fake-video-<8 hex>` (this instance's own) unless a test names its own (`{ idPrefix }`): the ids are `<prefix>-1`, `<prefix>-2`, … */
+  private readonly idPrefix: string;
+  constructor(o: { idPrefix?: string } = {}) {
+    this.idPrefix = o.idPrefix ?? `fake-video-${randomUUID().slice(0, 8)}`;
+  }
   private readonly collections = new Map<string, string>(); // id -> name
   private readonly videos = new Map<string, Stored>();
   private readonly watched = new Map<string, number>();
@@ -44,7 +52,7 @@ export class FakeReplayHost implements ReplayHost {
   }
 
   async fetchFromUrl(a: { collectionId: string; title: string; url: string }): Promise<string> {
-    const id = `fake-video-${this.nextId++}`;
+    const id = `${this.idPrefix}-${this.nextId++}`;
     this.videos.set(id, { collectionId: a.collectionId, title: a.title, url: a.url, state: "processing" });
     return id;
   }

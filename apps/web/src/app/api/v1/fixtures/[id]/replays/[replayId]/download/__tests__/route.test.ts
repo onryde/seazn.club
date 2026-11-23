@@ -28,6 +28,12 @@ vi.mock("next/headers", () => ({
   headers: async () => new Headers(),
 }));
 vi.mock("@/lib/sentry", () => ({ captureError: vi.fn() }));
+// What reaches Sentry: v1() reports every answer of 500 and above, and nothing below (T26 re-review m1 b: a viewer who left is not an error).
+const sentry = vi.hoisted(() => ({ captured: [] as unknown[] }));
+vi.mock("@sentry/nextjs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@sentry/nextjs")>()),
+  captureException: (e: unknown) => { sentry.captured.push(e); return "test-event-id"; },
+}));
 
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
@@ -40,6 +46,7 @@ import { makeUser, seedOrg } from "@/server/usecases/__tests__/_seed";
 import { frozenMemberIds } from "@/server/usecases/entitlement-freeze";
 import { setReplayDriverForTest } from "@/server/video/replay-driver";
 import { FAKE_REPLAY_FILE, FakeReplayHost } from "@/server/video/replay-fake";
+import { ReplayHostRefused } from "@/server/video/replay-ports";
 import { BunnyReplayHost } from "@/server/video/replay-bunny";
 import { FakeRecorder } from "@/server/relay/fakes";
 import { SEAZN_REPLAY_CALL_TIMEOUT_MS, type BunnyConfig } from "@/server/relay/config";
@@ -114,23 +121,38 @@ const privateNoStore = (r: Response, label: string) => {
 };
 
 describe.skipIf(!HAS_DB)("GET …/fixtures/{id}/replays/{replayId}/download over HTTP", () => {
-  it("review m1: the video host's CDN never sends its headers — the REAL Bunny adapter gives up at its 4 s and the route answers a clean 503 replay_host_unavailable, private, with no token, address, key or host video id; the failure is recorded `timeout`", async () => {
+  it("review m1: the video host's CDN never sends its headers — the REAL Bunny adapter gives up at its 4 s and the route answers a clean 503 replay_host_unavailable, private, with no token, address, key or host video id; the failure is recorded `timeout` (on the fake clock: T26 re-review m1 c)", async () => {
     const o = await organiser();
-    const cdn: { signal: AbortSignal | null } = { signal: null };
+    const cdn: { signal: AbortSignal | null; asked: () => void } = { signal: null, asked: () => {} };
+    const asked = new Promise<void>((resolve) => { cdn.asked = resolve; });
     const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
       if (String(url).startsWith("https://video.bunnycdn.com/")) {
+        // The route's database work is done by now: the clock goes fake here, before the adapter sets its deadline for the CDN's
+        // headers, so the 4 s are counted on it and the test waits for none of them.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
         return new Response(JSON.stringify({ guid: "g", status: 4, length: 60, availableResolutions: "720p" }), { status: 200, headers: { "content-type": "application/json" } });
       }
       cdn.signal = init?.signal ?? null;
+      cdn.asked();
       return new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true }));
     }) as typeof fetch;
     const recorder = new FakeRecorder();
     const bunny = new BunnyReplayHost(BUNNY, { fetchImpl, recorder, videoOrigins: () => ["stg.seazn.club"] });
     setReplayDriverForTest(bunny);
-    const started = Date.now();
-    const res = await get(o.fixtures[0], o.playable.id);
-    const waited = Date.now() - started;
-    expect(waited, "the adapter's own deadline, not sooner").toBeGreaterThanOrEqual(SEAZN_REPLAY_CALL_TIMEOUT_MS - 50);
+    let res: Response;
+    try {
+      const pending = get(o.fixtures[0], o.playable.id);
+      const answered = { done: false };
+      void pending.then(() => { answered.done = true; }, () => { answered.done = true; });
+      await asked;
+      await vi.advanceTimersByTimeAsync(SEAZN_REPLAY_CALL_TIMEOUT_MS - 1);
+      expect(answered.done, "a ms short of the adapter's deadline: still waiting").toBe(false);
+      expect(cdn.signal?.aborted, "PREMISE: the CDN was asked, with a signal").toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      res = await pending;
+    } finally {
+      vi.useRealTimers();
+    }
     expect(res.status).toBe(503);
     const raw = await res.text();
     expect((JSON.parse(raw) as Envelope).error?.code).toBe("replay_host_unavailable");
@@ -140,6 +162,35 @@ describe.skipIf(!HAS_DB)("GET …/fixtures/{id}/replays/{replayId}/download over
     expect(cdn.signal?.aborted, "the CDN request was aborted, not left open").toBe(true);
     await new Promise((r) => setTimeout(r, 0));
     expect(recorder.calls.filter((c) => c.operation === "openDownload").map((c) => [c.status, c.errorCode])).toEqual([[null, "timeout"]]);
+  });
+
+  it("T26 re-review m1 (a, b): the viewer leaving before the host answers is 499 and never reaches Sentry; the host refusing our token or Referer is 500 replay_host_refused (documented), reported to Sentry, and never says try again", async () => {
+    const o = await organiser();
+    // EMPTY CASE FIRST: a download that starts reports nothing.
+    sentry.captured.length = 0;
+    const ok = await get(o.fixtures[0], o.playable.id);
+    expect(ok.status).toBe(200);
+    await ok.body?.cancel().catch(() => undefined);
+    expect(sentry.captured).toEqual([]);
+
+    const viewer = new AbortController();
+    vi.spyOn(o.host, "openDownload").mockImplementationOnce(async () => {
+      viewer.abort(new Error("the viewer left"));
+      throw new Error("bunny openDownload: cancelled before a response (video x)");
+    });
+    const left = await GET(new Request(`${BASE}/fixtures/${o.fixtures[0]}/replays/${o.playable.id}/download`, { method: "GET", signal: viewer.signal }), { params: Promise.resolve({ id: o.fixtures[0], replayId: o.playable.id }) });
+    expect([left.status, ((await left.json()) as Envelope).error?.code]).toEqual([499, "download_cancelled"]);
+    privateNoStore(left, "499");
+    expect(sentry.captured, "a viewer who left is not an error").toEqual([]);
+
+    vi.spyOn(o.host, "openDownload").mockRejectedValueOnce(new ReplayHostRefused(403, "delivery_token", "bunny openDownload: HTTP 403 (video x)"));
+    const refused = await get(o.fixtures[0], o.playable.id);
+    const body = (await refused.json()) as Envelope;
+    expect([refused.status, body.error?.code]).toEqual([500, "replay_host_refused"]);
+    expect(body.error?.message).not.toMatch(/try|again|moment|403|bunny/i);
+    privateNoStore(refused, "500");
+    expect(sentry.captured, "a configuration fault is reported").toHaveLength(1);
+    expect(documented()).toContain("500");
   });
 
   it("review m1: the viewer's cancel reaches the host — the route hands the host its request's signal, and aborting the request aborts it", async () => {
@@ -251,6 +302,10 @@ describe.skipIf(!HAS_DB)("GET …/fixtures/{id}/replays/{replayId}/download over
   it("a viewer is 403 (an admin is served, the positive pair); another organisation's member, an unknown and a malformed fixture are 404; an API key is 403 at the door; signed out 401 — each `private, no-store`, and the host is never asked for a refusal", async () => {
     const o = await organiser();
     const stranger = await organiser();
+    // `organiser()` installs ITS host as the process's driver, so the stranger's call replaced o's: put o's back. The process has
+    // one replay host, and o's playable copy is on o's (each fake names its own copies since V545's one-row-per-copy index, so the
+    // stranger's host holds no copy of o's: the admin's positive pair below would read 409 replay_not_downloadable).
+    setReplayDriverForTest(o.host);
     await override(o.orgId, "api.access", true);
     await override(o.orgId, "api.write", true);
     const { secret } = await createApiKey({ orgId: o.orgId, via: "session", userId: o.ownerId, role: "owner", keyId: null }, { name: `dl-${randomUUID().slice(0, 6)}`, scopes: ["manage"] });

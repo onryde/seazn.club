@@ -17,13 +17,13 @@
 // The shape of the answer comes from the route's own schema (`PublicFixtureVideo`), never typed twice.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-// Task 25 (coordinator's addition): the island's failure reports go to the client's Sentry path (lib/sentry-browser.ts, the
-// facade every client file reports through); recorded here, the rest of the facade real.
-const sentry = vi.hoisted(() => ({ messages: [] as { message: string; context: unknown }[] }));
-vi.mock("@/lib/sentry-browser", async (orig) => ({
-  ...(await orig<typeof import("@/lib/sentry-browser")>()),
-  captureMessage: (message: string, context: unknown) => void sentry.messages.push({ message, context }),
-}));
+// Task 25 (coordinator's addition), sent as a beacon since Task 25b: the island's failure reports go to our server's client-report route
+// through `navigator.sendBeacon`, recorded here (`beaconsSent`) for the tests that mount an island.
+const beacons = vi.hoisted(() => ({ sent: [] as { url: string; body: unknown }[] }));
+const beaconsSent = () => {
+  beacons.sent.length = 0;
+  vi.stubGlobal("navigator", { sendBeacon: (url: string, body: string) => (beacons.sent.push({ url, body: JSON.parse(body) }), true) });
+};
 import { renderToStaticMarkup } from "react-dom/server";
 import publicEn from "@/dictionaries/en/public.json";
 import publicEs from "@/dictionaries/es/public.json";
@@ -39,6 +39,7 @@ import { FINALISATION_GRACE_SECONDS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS,
 import { SEAZN_VIDEO_POLL_FLOOR_MS } from "../seazn-video-schedule";
 import { renderIsland, type walk } from "@/components/__tests__/_hook-harness";
 import type { PlayerFatal } from "../seazn-video-report";
+import { CLIENT_REPORTS_PATH } from "@/lib/client-reports";
 
 const NOW = Date.parse("2026-11-21T12:00:00.000Z");
 const labels = seaznVideoLabels(publicEn);
@@ -430,21 +431,22 @@ describe("Task 25: the frame's ask reaches the loop as a read, not a rebuild", (
       expect(fetchMock, "the frame's ask: one fresh read").toHaveBeenCalledTimes(2);
       expect(stage().props.epoch, "a read, not a rebuild: the frame keeps its element").toBe(0);
       await vi.advanceTimersByTimeAsync(4 * MIN);   // under the m4 bound (SEAZN_VIDEO_FINAL_READ_MS): no read of its own
-      sentry.messages.length = 0;
+      beaconsSent();
       stage().props.onFatal(fatalOn(embeds.replay[1]!.src));
       await vi.advanceTimersByTimeAsync(0);
       expect(fetchMock).toHaveBeenCalledTimes(3);
       expect(stage().props.epoch, "the contrast: a player that gave up is rebuilt").toBe(1);
       // ...and reported, once for its address, with the island's fixture and no part of the address.
-      expect(sentry.messages.map((m) => (m.context as { extra: unknown }).extra)).toEqual([
-        { stage: "player", fixtureId: "f1", source: "replay", partNo: 2, player: "hls", reason: "hls", hlsType: "networkError", hlsDetails: "manifestLoadError", httpStatus: 403, mediaCode: null },
-      ]);
+      expect(beacons.sent).toEqual([{
+        url: CLIENT_REPORTS_PATH,
+        body: { kind: "video", stage: "player", fixtureId: "f1", source: "replay", partNo: 2, player: "hls", reason: "hls", hlsType: "networkError", hlsDetails: "manifestLoadError", httpStatus: 403, mediaCode: null },
+      }]);
       await vi.advanceTimersByTimeAsync(4 * MIN);   // under the m4 bound (SEAZN_VIDEO_FINAL_READ_MS): no read of its own
       stage().props.onFatal(fatalOn(embeds.replay[1]!.src));
       await vi.advanceTimersByTimeAsync(0);
       expect(stage().props.epoch, "rebuilt again").toBe(2);
-      expect(sentry.messages, "the same address: no second report").toHaveLength(1);
-      expect(JSON.stringify(sentry.messages)).not.toMatch(/tok-|fake\.invalid|manifest\/|m3u8|expires|\?/);
+      expect(beacons.sent, "the same address: no second report").toHaveLength(1);
+      expect(JSON.stringify(beacons.sent)).not.toMatch(/tok-|fake\.invalid|manifest\/|m3u8|expires|\?/);
       island.unmount();
     } finally {
       vi.useRealTimers();
@@ -493,16 +495,17 @@ describe("Task 25: the frame's ask reaches the loop as a read, not a rebuild", (
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
     try {
-      sentry.messages.length = 0;
+      beaconsSent();
       const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: false, error: "unavailable" }), { status: 503, headers: { "content-type": "application/json" } }));
       vi.stubGlobal("fetch", fetchMock);
       const island = renderIsland(SeaznVideoIsland, { fixtureId: "f1", labels });
       await vi.advanceTimersByTimeAsync(5 * MIN);
       expect(fetchMock.mock.calls.length, "premise: the loop retried").toBeGreaterThanOrEqual(3);
-      expect(sentry.messages.map((m) => [m.message, (m.context as { extra: { reason: string; httpStatus: number | null; fixtureId: string } }).extra])).toEqual([
-        ["seazn video: the video route could not be read", { stage: "route", fixtureId: "f1", source: null, partNo: null, player: null, reason: "http", hlsType: null, hlsDetails: null, httpStatus: 503, mediaCode: null }],
+      expect(beacons.sent.map((b) => b.body), "one beacon, none for the retries").toEqual([
+        { kind: "video", stage: "route", fixtureId: "f1", source: null, partNo: null, player: null, reason: "http", hlsType: null, hlsDetails: null, httpStatus: 503, mediaCode: null },
       ]);
-      expect(JSON.stringify(sentry.messages)).not.toMatch(/\/api\/|video\?|unavailable/);
+      expect(fetchMock.mock.calls.every((c) => !String((c as unknown[])[0]).includes("client-reports")), "the report went by beacon, not by the route's fetch").toBe(true);
+      expect(JSON.stringify(beacons.sent.map((b) => b.body))).not.toMatch(/\/api\/|video\?|unavailable/);
       island.unmount();
     } finally {
       vi.useRealTimers();

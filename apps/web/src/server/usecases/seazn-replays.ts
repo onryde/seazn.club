@@ -39,7 +39,7 @@ import { TERMINAL_STATES } from "@/server/relay/domain/session";
 import type { IngestProvider, IngestVideo } from "@/server/relay/ports";
 import { type PlaybackTokenCache, signDownload } from "@/server/video/cf-playback";
 import {
-  REPLAY_PARKED_AT, type ReplayRow, type ReplayRowState, type ReplayStep, nextReplayStep, pollOutcome, replayFailure,
+  REPLAY_PARKED_AT, type ReplayRow, type ReplayRowState, type ReplayStep, nextReplayStep, pollOutcome, replayCopyTitle, replayFailure,
   replayFailureOutcome,
 } from "@/server/video/domain/replay-move";
 import { partNumbers } from "@/server/video/domain/replay-parts";
@@ -368,7 +368,7 @@ async function fetchCopy(run: Run, row: Claimed): Promise<Outcome> {
   moved(run, row, { state: "fetching" });
   let guid: string;
   try {
-    guid = await run.deps.replay.fetchFromUrl({ collectionId, title: `seazn:${row.sessionId}:${row.cfVideoId}`, url });
+    guid = await run.deps.replay.fetchFromUrl({ collectionId, title: replayCopyTitle(row.sessionId, row.cfVideoId), url });
   } catch (err) {
     return failure(run, row, "fetch", err);
   }
