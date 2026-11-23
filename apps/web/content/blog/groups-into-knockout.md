@@ -1,6 +1,6 @@
 ---
 title: How do teams go from the groups into the knockout?
-description: The top teams of each group go through and are seeded by how they finished, so group winners meet runners-up. Seazn keeps one group's teams apart in round one.
+description: The top teams of each group go through and are seeded by how they finished, so group winners meet runners-up. Seazn keeps a group apart in round one.
 date: 2026-11-23
 author: Seazn
 topic: groups
