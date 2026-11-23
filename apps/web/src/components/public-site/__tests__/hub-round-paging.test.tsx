@@ -287,3 +287,29 @@ describe("I4: an odd league's sit-out team keeps its Teams calendar link through
   });
 });
 
+// Review N3: a postponed match behind a fully played last round. Through the hub's window: the match is served, Overview's next up
+// (landingStatus "next") names its time, and the landing never reads "finished" while it is still to play.
+describe("N3: a postponed match behind a fully played last round stays on the hub", () => {
+  /** 15 rounds of 15 (225 cards): every round played except one match of round 5, postponed to two days ahead. */
+  function seasonWithPostponed(played: boolean) {
+    const at = new Date(NOW + 2 * DAY).toISOString();
+    return hubDoc({
+      matches: Array.from({ length: 225 }, (_, i) => {
+        const round = Math.floor(i / 15) + 1;
+        const postponed = round === 5 && i % 15 === 0 && !played;
+        return m(`S${round}-${i % 15}`, postponed ? "upcoming" : "completed", postponed ? at : new Date(NOW - (16 - round) * DAY).toISOString(), "premier", { roundNo: round });
+      }),
+    });
+  }
+
+  it("postponed: served, next up names its time, the landing is not finished; once played: finished", () => {
+    const served = windowHubDoc(seasonWithPostponed(false));
+    expect(served.matches.map((x) => x.fixtureId), "the postponed match is served").toContain("S5-0");
+    const status = landingStatus({ matches: served.matches, divisions: served.divisions.length, startsOn: null, endsOn: null, now: new Date(NOW) });
+    expect(status).toEqual({ kind: "next", at: new Date(NOW + 2 * DAY).toISOString(), tz: expect.any(String) });
+    const after = windowHubDoc(seasonWithPostponed(true));
+    const end = landingStatus({ matches: after.matches, divisions: after.divisions.length, startsOn: null, endsOn: null, now: new Date(NOW) });
+    expect(end.kind, "premise: the same season played out reads finished").toBe("finished");
+  });
+});
+

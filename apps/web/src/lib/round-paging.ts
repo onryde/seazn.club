@@ -67,8 +67,10 @@ export interface PlannedRound extends RoundBuckets {
 /**
  * Plan a schedule's rounds, given IN PLAY ORDER. Open: every live round, the current round when it is part-played with nothing
  * live, and the next round - the first round still to play after the last round anything has been played or is being played in
- * (the frontier). A part-played round BEHIND the frontier (a postponed match) stays folded: it must never take "next" from the
- * round that really is next. When nothing is left to play, the last round opens, so a finished schedule still shows its ending.
+ * (the frontier). A part-played round BEHIND the frontier (a postponed match) stays folded while a round after the frontier is still
+ * to play: it must never take "next" from the round that really is next. When nothing after the frontier is to play, the earliest
+ * round still holding a match to play is next (review N3: a postponed match behind a fully played last round). When nothing is
+ * left to play at all, the last round opens, so a finished schedule still shows its ending.
  * The empty schedule plans nothing.
  *
  * A CATCH-UP round (`catchUp`: a late entrant's appended round, `isCatchUpRoundExtKey`, numbered after the draw's last round but
@@ -97,6 +99,9 @@ export function planRounds(rounds: readonly { key: string; buckets: RoundBuckets
       break;
     }
   }
+  // Review N3: nothing after the frontier is to play, yet a round BEHIND it still holds a match to play (postponed, rearranged). It
+  // is the next thing the season plays - the earliest such round is "next" and opens, before the finished ending is considered.
+  if (next === -1) next = rounds.findIndex((r) => r.buckets.upcoming > 0);
   const stateOf = (r: { buckets: RoundBuckets }, i: number): RoundState => {
     const b = r.buckets;
     if (b.live > 0) return "live";

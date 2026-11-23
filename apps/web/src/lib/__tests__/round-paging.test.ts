@@ -174,3 +174,28 @@ describe("planRounds: catch-up rounds never move the frontier", () => {
   });
 });
 
+// Review N3: a match postponed (or rearranged) in a round BEHIND a fully played later round. The frontier is the last round with a
+// result, nothing after it is to play, and the old fallback opened the finished last round - the postponed match folded away, the
+// hub's "next up" lost it and its landing read "finished" with a match still to play. When nothing after the frontier is to play, the
+// earliest round still holding a match to play opens (as "next") before the last round is considered.
+describe("planRounds: a postponed match behind a fully played last round keeps its round open", () => {
+  it("the sequence: r2's match postponed (r2 opens, next); the match played (the last round opens, the schedule's ending)", () => {
+    const postponed = planRounds([g("r1", 0, 0, 4), g("r2", 0, 1, 3), g("r3", 0, 0, 4)]);
+    expect(openKeys(postponed)).toEqual(["r2"]);
+    expect(states(postponed)).toEqual({ r1: "finished", r2: "next", r3: "finished" });
+    const played = planRounds([g("r1", 0, 0, 4), g("r2", 0, 0, 4), g("r3", 0, 0, 4)]);
+    expect(openKeys(played)).toEqual(["r3"]);
+  });
+
+  it("two postponed rounds: the EARLIEST opens; a round after the frontier still to play keeps 'next' (the postponed one folds)", () => {
+    expect(openKeys(planRounds([g("r1", 0, 1, 3), g("r2", 0, 1, 3), g("r3", 0, 0, 4)]))).toEqual(["r1"]);
+    expect(openKeys(planRounds([g("r1", 0, 0, 4), g("r2", 0, 1, 3), g("r3", 0, 0, 4), g("r4", 0, 4, 0)]))).toEqual(["r4"]);
+  });
+
+  it("a postponed match behind a live last round: the live round opens and the postponed round is next", () => {
+    const plan = planRounds([g("r1", 0, 0, 4), g("r2", 0, 1, 3), g("r3", 1, 0, 3)]);
+    expect(openKeys(plan)).toEqual(["r2", "r3"]);
+    expect(states(plan)).toMatchObject({ r2: "next", r3: "live" });
+  });
+});
+
