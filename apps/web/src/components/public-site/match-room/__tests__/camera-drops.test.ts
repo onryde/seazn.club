@@ -8,16 +8,17 @@
 // `roomJoined` carries `{ reconnected }` (index.d.ts l.2358-2363), a socket drop emits roomLeft "disconnected"
 // (index.es.js l.24413-24423) and the client's own leave() emits roomLeft "left" (l.24497-24500).
 //
-// What these tests prove is what the code HANDS to Sentry. The browser client that sends it is initialised in
-// src/instrumentation-client.ts (owner 2026-11-23; review I2) and sends only with the visitor's analytics consent: that
-// init and its consent gate are proven in lib/__tests__/sentry-browser-init.test.ts.
+// What these tests prove is what the code HANDS to Sentry: lib/sentry-browser.ts, the facade every client file reports
+// through. The facade loads the SDK lazily, only with a DSN and the visitor's analytics consent (owner 2026-11-23; review I2),
+// queues a call while it loads and drops it otherwise: that load, the queue and the consent gate are proven in
+// lib/__tests__/sentry-browser-init.test.ts.
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sentry = vi.hoisted(() => ({ captureMessage: vi.fn(), addBreadcrumb: vi.fn(), captureException: vi.fn() }));
-vi.mock("@sentry/nextjs", () => sentry);
+vi.mock("@/lib/sentry-browser", () => sentry);
 
 import { makeJoinOwnCamera } from "../camera-loader";
 import { makeJoinArbiter } from "@/components/v2/match-day/online/arbiter-camera";

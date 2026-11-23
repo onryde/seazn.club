@@ -17,12 +17,12 @@
 // `datetime-split-field.test.tsx` documents, with e2e as the backstop.
 //
 // Rendered through react-dom/server. `useEffect` is a no-op under SSR, so the
-// Sentry module is mocked only to keep the import graph out of the real SDK.
+// Sentry facade (lib/sentry-browser.ts) is mocked only to keep the report out.
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import en from "@/dictionaries/en/ui.json";
 
-vi.mock("@sentry/nextjs", () => ({ captureException: () => {} }));
+vi.mock("@/lib/sentry-browser", () => ({ captureException: () => {} }));
 
 const { default: CompetitionError } = await import("../error");
 

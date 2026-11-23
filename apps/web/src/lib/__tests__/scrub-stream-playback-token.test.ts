@@ -25,6 +25,7 @@ vi.mock("@sentry/nextjs", () => ({
 
 import { createPlaybackTokenCache, signDownload, signLivePlayback, signRecordingPlayback } from "@/server/video/cf-playback";
 import { holdsCredential, posthogBeforeSend, scrubScoreUrl } from "../scrub-score-url";
+import { bootBrowserSentry } from "./_browser-sentry";
 
 const HOST = "customer-k7q2m9.cloudflarestream.com";
 const b64 = (v: unknown) => Buffer.from(JSON.stringify(v)).toString("base64url");
@@ -66,11 +67,9 @@ async function sentryInitOptions(configPath: string): Promise<Options> {
   expect(calls, `${configPath} calls Sentry.init once`).toHaveLength(1);
   return calls[0]![0] as Options;
 }
-/** The browser client's options: src/instrumentation-client.ts imported for real, with a DSN (none means no init). */
-async function clientInitOptions(): Promise<Options> {
-  vi.stubEnv("NEXT_PUBLIC_SENTRY_DSN", "https://0123456789abcdef0123456789abcdef@o0.ingest.sentry.io/0");
-  return sentryInitOptions("../../instrumentation-client");
-}
+/** The browser client's options: src/instrumentation-client.ts imported for real with a DSN and the visitor's consent, and the
+ *  lazy SDK load it schedules (lib/sentry-browser.ts) awaited. No DSN or no consent means no load and no init. */
+const clientInitOptions = (): Promise<Options> => bootBrowserSentry();
 /** No token of `tokens` survives, and the host is still there, followed by the placeholder. */
 function expectClean(value: unknown, tokens: string[], placeholders: number): void {
   const text = JSON.stringify(value);

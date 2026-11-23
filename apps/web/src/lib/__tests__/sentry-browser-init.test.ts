@@ -1,21 +1,25 @@
-// The BROWSER Sentry client (owner 2026-11-23: switch it on, errors and warnings only, no session replay). Under Turbopack the
-// one client init path Next 16 and @sentry/nextjs 10.62 support is src/instrumentation-client.ts (Next's
-// file-conventions/instrumentation-client.md; @sentry/nextjs config/webpack.js: "When using Turbopack
-// `sentry.client.config.ts` will no longer work"). Before this change no client file called `Sentry.init`, so every browser
-// capture (the camera drop warnings, the D7 and arbiter guards' reports, the router hook) went to no client at all.
+// The BROWSER Sentry client (owner 2026-11-23: switch it on, errors and warnings only, no session replay; coordinator ruling the
+// same day: the SDK must not be in the first-load JS). Under Turbopack the client init path Next 16 and @sentry/nextjs 10.62
+// support is src/instrumentation-client.ts (Next's file-conventions/instrumentation-client.md; @sentry/nextjs config/webpack.js:
+// "When using Turbopack `sentry.client.config.ts` will no longer work"). It boots lib/sentry-browser.ts, a facade with no
+// runtime SDK import, which fetches the SDK with a dynamic import() on idle, and only with a DSN and the visitor's analytics
+// consent (the privacy policy names no lawful basis for Sentry, so it is gated as PostHog is). Every client file reports
+// through the facade, which queues calls while the load is pending and drops them otherwise.
 //
-// This file imports the REAL instrumentation-client with the SDK mocked and proves: it calls `Sentry.init` once, with replay
-// and tracing off and the privacy hooks attached; no DSN means no init and no throw; and nothing is SENT without the
-// visitor's analytics consent (the privacy policy names no lawful basis for Sentry, so it is gated as PostHog is:
-// lib/sentry-browser.ts). The scrub hooks themselves are proven in scrub-score-url-wiring.test.ts, through this same init.
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+// The SDK is mocked; instrumentation-client, the facade, the options module, lib/consent and the banner's
+// recordConsentChoice run for real. The scrub hooks themselves are proven in scrub-score-url-wiring.test.ts through the same
+// boot.
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION } from "@/lib/consent";
+import { CONSENT_KEY, COOKIE_POLICY_VERSION } from "@/lib/consent";
+import { TEST_DSN, bootBrowserSentry, stubConsent } from "./_browser-sentry";
 
 const fakeTransport = vi.hoisted(() => ({ send: vi.fn(async () => ({ statusCode: 200 })), flush: vi.fn(async () => true) }));
-vi.mock("posthog-js", () => ({ default: { init: vi.fn(), opt_in_capturing: vi.fn() } }));
+vi.mock("posthog-js", () => ({
+  default: { init: vi.fn(), opt_in_capturing: vi.fn(), opt_out_capturing: vi.fn(), capture: vi.fn(), __loaded: false },
+}));
 vi.mock("@sentry/nextjs", () => ({
   init: vi.fn(),
   replayIntegration: vi.fn(() => ({ name: "Replay" })),
@@ -23,41 +27,55 @@ vi.mock("@sentry/nextjs", () => ({
   captureRouterTransitionStart: vi.fn(),
   getClient: vi.fn(),
   makeFetchTransport: vi.fn(() => fakeTransport),
+  captureException: vi.fn(),
+  captureMessage: vi.fn(),
+  addBreadcrumb: vi.fn(),
 }));
 
-const DSN = "https://0123456789abcdef0123456789abcdef@o0.ingest.sentry.io/0";
 type Options = Record<string, unknown>;
+const settle = (ms = 20) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function clientInit(): Promise<{ options: Options; Sentry: typeof import("@sentry/nextjs") }> {
-  vi.stubEnv("NEXT_PUBLIC_SENTRY_DSN", DSN);
-  await import("../../instrumentation-client");
-  const Sentry = await import("@sentry/nextjs");
-  const calls = vi.mocked(Sentry.init).mock.calls;
-  expect(calls, "instrumentation-client calls Sentry.init once").toHaveLength(1);
-  return { options: calls[0]![0] as Options, Sentry };
+/** requestIdleCallback, captured: the scheduled callbacks run only when the test says the browser is idle. */
+function captureIdle(): (() => void)[] {
+  const pending: (() => void)[] = [];
+  vi.stubGlobal("requestIdleCallback", vi.fn((cb: () => void) => (pending.push(cb), pending.length)));
+  return pending;
 }
 
 beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 204 })));
 });
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
 
-describe("the browser Sentry client (src/instrumentation-client.ts)", () => {
-  it("with a DSN, inits once: replay off, tracing off, warn/error console logs, and the scrub hooks and processor attached", async () => {
-    const { options, Sentry } = await clientInit();
-    expect(options.dsn).toBe(DSN);
+describe("loading the SDK (src/instrumentation-client.ts -> lib/sentry-browser.ts)", () => {
+  it("consented at boot: nothing is fetched while the page loads; the load waits for idle, then inits once with replay off, tracing 0 and the scrub hooks", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SENTRY_DSN", TEST_DSN);
+    stubConsent("accepted");
+    const idle = captureIdle();
+    await import("../../instrumentation-client");
+    const Sentry = await import("@sentry/nextjs");
+    await settle();
+    expect(vi.mocked(Sentry.init), "nothing loads before the browser is idle").not.toHaveBeenCalled();
+    expect(idle, "the load is scheduled on requestIdleCallback").toHaveLength(1);
+    idle[0]!();
+    const facade = await import("@/lib/sentry-browser");
+    expect(await facade.loadBrowserSentry()).toBe(true);
+    expect(vi.mocked(Sentry.init)).toHaveBeenCalledTimes(1);
+
+    const options = vi.mocked(Sentry.init).mock.calls[0]![0] as Options;
+    expect(options.dsn).toBe(TEST_DSN);
     expect(options.tracesSampleRate, "no performance tracing (a 0 rate keeps the router hook's span unsampled)").toBe(0);
     expect(options.replaysSessionSampleRate, "no session replay").toBe(0);
     expect(options.replaysOnErrorSampleRate, "no replay on error either").toBe(0);
     expect(vi.mocked(Sentry.replayIntegration), "no Replay integration is built").not.toHaveBeenCalled();
-    const integrations = options.integrations as { name: string }[];
-    expect(integrations.map((i) => i.name), "the exact set: a new integration is a decision").toEqual(["ConsoleLogs", "ScrubScoreTokens"]);
+    expect((options.integrations as { name: string }[]).map((i) => i.name), "the exact set: a new integration is a decision").toEqual(["ConsoleLogs", "ScrubScoreTokens"]);
     expect(vi.mocked(Sentry.consoleLoggingIntegration)).toHaveBeenCalledWith({ levels: ["warn", "error"] });
-    // The same module instance the init loaded (resetModules gives every test a fresh one).
+    // The same module instance the load used (resetModules gives every test a fresh one).
     const { scrubScoreTokens, scrubSentryEvent } = await import("@/lib/scrub-score-url");
     expect(options.beforeSend).toBe(scrubSentryEvent);
     expect(options.beforeSendTransaction).toBe(scrubSentryEvent);
@@ -78,71 +96,185 @@ describe("the browser Sentry client (src/instrumentation-client.ts)", () => {
       "tracesSampleRate",
       "transport",
     ]);
+    // A second schedule or load is the same load.
+    facade.scheduleBrowserSentry();
+    expect(await facade.loadBrowserSentry()).toBe(true);
+    expect(vi.mocked(Sentry.init), "one init per page load").toHaveBeenCalledTimes(1);
   });
 
-  it("a second load of the page inits again (one init per page load, never zero), and the router hook is still exported", async () => {
-    const first = await clientInit();
-    vi.resetModules();
-    vi.clearAllMocks();
-    const second = await clientInit();
-    expect(second.options.dsn).toBe(first.options.dsn);
-    const mod = await import("../../instrumentation-client");
-    expect(typeof mod.onRouterTransitionStart).toBe("function");
+  it("without requestIdleCallback (Safari) the load falls back to a timeout and still inits once", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SENTRY_DSN", TEST_DSN);
+    stubConsent("accepted");
+    vi.stubGlobal("requestIdleCallback", undefined);
+    await import("../../instrumentation-client");
+    const Sentry = await import("@sentry/nextjs");
+    await vi.waitFor(() => expect(vi.mocked(Sentry.init)).toHaveBeenCalledTimes(1));
   });
 
-  it("without a DSN (unset, or blank as the CI builds bake it) the client is never initialised, nothing throws, and the router hook still runs", async () => {
+  it("no consent at boot (the empty case), a rejection or an OLD policy version: never fetched; the banner's Accept loads it then, once", async () => {
+    let checked = 0;
+    for (const [name, choice, version] of [
+      ["no choice yet", null, COOKIE_POLICY_VERSION],
+      ["rejected", "rejected", COOKIE_POLICY_VERSION],
+      ["accepted an old policy version", "accepted", "2000-01-01"],
+    ] as const) {
+      vi.resetModules();
+      vi.clearAllMocks();
+      vi.stubEnv("NEXT_PUBLIC_SENTRY_DSN", TEST_DSN);
+      stubConsent(choice, version);
+      const idle = captureIdle();
+      await import("../../instrumentation-client");
+      const Sentry = await import("@sentry/nextjs");
+      await settle();
+      expect(idle, `${name}: nothing scheduled`).toHaveLength(0);
+      expect(vi.mocked(Sentry.init), `${name}: never fetched`).not.toHaveBeenCalled();
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every no-consent state checked").toBe(3);
+
+    // The visitor now accepts in the banner: its real handler (components/cookie-consent.tsx) loads the client.
+    const idle = captureIdle();
+    const { recordConsentChoice } = await import("@/components/cookie-consent");
+    recordConsentChoice("accepted");
+    expect(idle, "the Accept schedules the load on idle").toHaveLength(1);
+    idle[0]!();
+    const Sentry = await import("@sentry/nextjs");
+    await vi.waitFor(() => expect(vi.mocked(Sentry.init)).toHaveBeenCalledTimes(1));
+    recordConsentChoice("accepted");
+    recordConsentChoice("rejected");
+    await settle();
+    expect(idle, "a second Accept schedules nothing new").toHaveLength(1);
+    expect(vi.mocked(Sentry.init), "one init").toHaveBeenCalledTimes(1);
+  });
+
+  it("no DSN (unset, or blank as the CI builds bake it), even with consent: never fetched; the router hook is a no-op that does not throw", async () => {
     let checked = 0;
     for (const dsn of [undefined, ""]) {
       vi.resetModules();
       vi.clearAllMocks();
       vi.stubEnv("NEXT_PUBLIC_SENTRY_DSN", dsn);
+      stubConsent("accepted");
+      const idle = captureIdle();
       const mod = await import("../../instrumentation-client");
+      const facade = await import("@/lib/sentry-browser");
       const Sentry = await import("@sentry/nextjs");
-      expect(vi.mocked(Sentry.init), `DSN ${JSON.stringify(dsn)}: no init`).not.toHaveBeenCalled();
+      expect(idle, `DSN ${JSON.stringify(dsn)}: nothing scheduled`).toHaveLength(0);
+      expect(await facade.loadBrowserSentry(), `DSN ${JSON.stringify(dsn)}: may not load`).toBe(false);
       expect(() => mod.onRouterTransitionStart("/dashboard", "push")).not.toThrow();
+      expect(vi.mocked(Sentry.init)).not.toHaveBeenCalled();
+      expect(vi.mocked(Sentry.captureRouterTransitionStart)).not.toHaveBeenCalled();
       checked++;
     }
     expect(checked, "anti-vacuity: both no-DSN shapes checked").toBe(2);
   });
 
-  it("an init that throws never breaks the page: the module still loads and exports the router hook", async () => {
-    vi.stubEnv("NEXT_PUBLIC_SENTRY_DSN", DSN);
+  it("a load that fails (init throws) never breaks the page: queued and later calls are dropped, and it is not retried", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SENTRY_DSN", TEST_DSN);
+    stubConsent("accepted");
+    const idle = captureIdle();
     const Sentry = await import("@sentry/nextjs");
     vi.mocked(Sentry.init).mockImplementationOnce(() => {
       throw new Error("sdk boom");
     });
     const mod = await import("../../instrumentation-client");
+    const facade = await import("@/lib/sentry-browser");
+    facade.captureException(new Error("queued before the failed load"));
+    idle[0]!();
+    expect(await facade.loadBrowserSentry()).toBe(false);
+    facade.captureException(new Error("after the failed load"));
+    expect(() => mod.onRouterTransitionStart("/dashboard", "push")).not.toThrow();
+    facade.scheduleBrowserSentry();
+    expect(await facade.loadBrowserSentry(), "no retry").toBe(false);
     expect(vi.mocked(Sentry.init)).toHaveBeenCalledTimes(1);
-    expect(typeof mod.onRouterTransitionStart).toBe("function");
+    expect(vi.mocked(Sentry.captureException)).not.toHaveBeenCalled();
   });
 });
 
-describe("the consent gate: nothing leaves the browser without analytics consent against the CURRENT policy version", () => {
-  function stubStorage(): Map<string, string> {
-    const store = new Map<string, string>();
-    vi.stubGlobal("localStorage", {
-      getItem: (k: string) => store.get(k) ?? null,
-      setItem: (k: string, v: string) => void store.set(k, v),
-      removeItem: (k: string) => void store.delete(k),
-    });
-    return store;
-  }
+describe("the facade (lib/sentry-browser.ts): a call before, during and after the load", () => {
+  it("while the load is pending, calls queue and flush IN ORDER on load; past 20 they are dropped; after the load they go straight through", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SENTRY_DSN", TEST_DSN);
+    stubConsent("accepted");
+    const idle = captureIdle();
+    const facade = await import("@/lib/sentry-browser");
+    const Sentry = await import("@sentry/nextjs");
+    expect(facade.SENTRY_QUEUE_CAP, "the ruled cap (coordinator 2026-11-23: a bounded queue, 20)").toBe(20);
+    facade.scheduleBrowserSentry();
+    const errors = Array.from({ length: 25 }, (_, i) => new Error(`e${i}`));
+    for (const e of errors) facade.captureException(e, { level: "warning" });
+    facade.captureRouterTransitionStart("/dashboard", "push");
+    expect(vi.mocked(Sentry.captureException), "nothing forwarded before the load").not.toHaveBeenCalled();
+    idle[0]!();
+    expect(await facade.loadBrowserSentry()).toBe(true);
+    const sent = vi.mocked(Sentry.captureException).mock.calls;
+    expect(sent.map((c) => (c[0] as Error).message), "the first 20, in order").toEqual(errors.slice(0, 20).map((e) => e.message));
+    expect(sent.every((c) => (c[1] as { level: string }).level === "warning"), "each call's own arguments").toBe(true);
+    expect(vi.mocked(Sentry.captureRouterTransitionStart), "a navigation before the load is not replayed").not.toHaveBeenCalled();
+    facade.captureMessage("realtimekit: room dropped", { level: "warning" });
+    facade.addBreadcrumb({ category: "realtimekit", message: "realtimekit: room left" });
+    facade.captureRouterTransitionStart("/dashboard", "replace");
+    expect(vi.mocked(Sentry.captureMessage)).toHaveBeenCalledWith("realtimekit: room dropped", { level: "warning" });
+    expect(vi.mocked(Sentry.addBreadcrumb)).toHaveBeenCalledWith({ category: "realtimekit", message: "realtimekit: room left" });
+    expect(vi.mocked(Sentry.captureRouterTransitionStart)).toHaveBeenCalledWith("/dashboard", "replace");
+  });
 
-  it("reads consent at every send, so Accept and withdraw act at once and a policy bump revokes; the empty case sends nothing", async () => {
-    const { options, Sentry } = await clientInit();
-    const store = stubStorage();
+  it("with no consent every call is a no-op: nothing is queued, so nothing is sent even once consent arrives", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SENTRY_DSN", TEST_DSN);
+    const store = stubConsent(null);
+    const idle = captureIdle();
+    const facade = await import("@/lib/sentry-browser");
+    const Sentry = await import("@sentry/nextjs");
+    facade.scheduleBrowserSentry();
+    facade.captureException(new Error("before consent"));
+    facade.captureMessage("before consent");
+    facade.addBreadcrumb({ message: "before consent" });
+    expect(idle, "no consent: no load scheduled").toHaveLength(0);
+    store.set(CONSENT_KEY, "accepted");
+    store.set("seazn_cookie_consent_version", COOKIE_POLICY_VERSION);
+    facade.scheduleBrowserSentry();
+    idle[0]!();
+    expect(await facade.loadBrowserSentry()).toBe(true);
+    expect(vi.mocked(Sentry.captureException)).not.toHaveBeenCalled();
+    expect(vi.mocked(Sentry.captureMessage)).not.toHaveBeenCalled();
+    expect(vi.mocked(Sentry.addBreadcrumb)).not.toHaveBeenCalled();
+  });
+
+  it("consent withdrawn between the schedule and the idle callback: nothing loads, and what was queued is dropped", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SENTRY_DSN", TEST_DSN);
+    const store = stubConsent("accepted");
+    const idle = captureIdle();
+    const facade = await import("@/lib/sentry-browser");
+    const Sentry = await import("@sentry/nextjs");
+    facade.scheduleBrowserSentry();
+    facade.captureException(new Error("queued"));
+    store.set(CONSENT_KEY, "rejected");
+    idle[0]!();
+    expect(await facade.loadBrowserSentry()).toBe(false);
+    expect(vi.mocked(Sentry.init)).not.toHaveBeenCalled();
+    // Accepted again: the load happens, and the call queued under the withdrawn consent is not sent.
+    store.set(CONSENT_KEY, "accepted");
+    facade.scheduleBrowserSentry();
+    idle[1]!();
+    expect(await facade.loadBrowserSentry()).toBe(true);
+    expect(vi.mocked(Sentry.captureException)).not.toHaveBeenCalled();
+  });
+});
+
+describe("the consent gate at send: once loaded, nothing leaves without consent against the CURRENT policy version", () => {
+  it("reads consent at every send, so a withdrawal acts at once and a policy bump revokes; the empty case sends nothing", async () => {
+    const options = await bootBrowserSentry();
+    const Sentry = await import("@sentry/nextjs");
+    const store = stubConsent(null);
     const transport = (options.transport as (o: unknown) => { send(e: unknown): PromiseLike<unknown>; flush(t?: number): PromiseLike<boolean> })({
       url: "https://o0.ingest.sentry.io/api/0/envelope/",
       recordDroppedEvent: () => undefined,
     });
     expect(vi.mocked(Sentry.makeFetchTransport), "the SDK's own fetch transport does the sending").toHaveBeenCalledTimes(1);
     const envelope = [{ event_id: "e1" }, [[{ type: "event" }, { message: "boom" }]]];
-    // Each step: what the banner leaves in localStorage (lib/consent's own keys), and whether it may send.
     const steps: [string, () => void, boolean][] = [
-      ["no choice yet (the empty case)", () => store.clear(), false],
-      ["rejected", () => (store.set(CONSENT_KEY, "rejected"), store.set(CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION)), false],
-      ["accepted an OLD policy version", () => (store.set(CONSENT_KEY, "accepted"), store.set(CONSENT_VERSION_KEY, "2000-01-01")), false],
-      ["accepted the current version", () => (store.set(CONSENT_KEY, "accepted"), store.set(CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION)), true],
+      ["no choice (the empty case)", () => store.clear(), false],
+      ["rejected", () => (store.set(CONSENT_KEY, "rejected"), store.set("seazn_cookie_consent_version", COOKIE_POLICY_VERSION)), false],
+      ["accepted an OLD policy version", () => (store.set(CONSENT_KEY, "accepted"), store.set("seazn_cookie_consent_version", "2000-01-01")), false],
+      ["accepted the current version", () => store.set("seazn_cookie_consent_version", COOKIE_POLICY_VERSION), true],
       ["a second send while accepted", () => undefined, true],
       ["withdrawn mid-session", () => store.set(CONSENT_KEY, "rejected"), false],
       ["accepted again", () => store.set(CONSENT_KEY, "accepted"), true],
@@ -158,16 +290,17 @@ describe("the consent gate: nothing leaves the browser without analytics consent
       checked++;
     }
     expect(checked, "anti-vacuity: every consent state checked").toBe(steps.length);
-    expect(expectedSends, "anti-vacuity: the gate opened at least once").toBe(3);
+    expect(expectedSends, "anti-vacuity: the gate opened").toBe(3);
     await expect(transport.flush(5)).resolves.toBe(true);
     expect(fakeTransport.flush).toHaveBeenCalledWith(5);
   });
 });
 
-// Two inits on the client would double every event (and @sentry/nextjs warns). The webpack-only sentry.client.config.ts is gone,
-// and no other file calls `Sentry.init` except the server and edge configs (run by instrumentation.ts on the server).
-describe("Sentry.init is called in exactly one client file", () => {
+// The first-load JS must not carry the SDK (coordinator 2026-11-23). A file reached from a client root by imports is bundled
+// for the browser; one runtime import of @sentry/* in any of them puts SDK code in a client chunk.
+describe("source scans", () => {
   const WEB = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+  const SRC = path.join(WEB, "src");
   const SKIP_DIRS = new Set(["node_modules", ".next", "__tests__", "e2e", "test-results", "playwright-report", "coverage", "public"]);
   function sources(dir: string, out: string[] = []): string[] {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -179,39 +312,91 @@ describe("Sentry.init is called in exactly one client file", () => {
     }
     return out;
   }
-  const INIT_CALL = /\bSentry\.init\s*\(/g;
-  const NAMED_INIT_IMPORT = /import\s*\{[^}]*\binit\b[^}]*\}\s*from\s*["']@sentry\//;
-  /** Code only: comment lines (`//`, `/*`, ` *`) out, so a comment naming `Sentry.init(` is not a call. Line-based on purpose:
-   *  a regex that strips block comments also eats code between a `/*` and a `*\/` inside two strings (a glob), hiding a call. */
+  /** Code only: comment lines (`//`, `/*`, ` *`) out. Line-based on purpose: a regex that strips block comments also eats code
+   *  between a `/*` and a `*\/` inside two strings (a glob), hiding what it should find. */
   const code = (file: string) =>
     readFileSync(file, "utf8")
       .split("\n")
       .filter((line) => !/^\s*(\/\/|\/\*|\*)/.test(line))
       .join("\n");
+  const hasDirective = (src: string, d: string) => new RegExp(`^(\\s*(//[^\\n]*|/\\*[\\s\\S]*?\\*/))*\\s*["']${d}["']`).test(src);
 
-  it("is in src/instrumentation-client.ts once; the server and edge configs are the only others; sentry.client.config is gone", () => {
+  type Dep = { spec: string; dynamic: boolean };
+  /** Runtime imports: `import … from`, `export … from`, a bare `import "x"`, and `import("x")`. `import type` / `export type`
+   *  and an all-`type` specifier list are erased by the compiler, so they are not. */
+  function runtimeDeps(src: string): Dep[] {
+    const out: Dep[] = [];
+    const fromRe = /(?:^|\n)\s*(?:import|export)\s+(type\s+)?([^;]*?)\s*from\s*["']([^"']+)["']/g;
+    for (let m = fromRe.exec(src); m; m = fromRe.exec(src)) {
+      if (m[1]) continue;
+      const braces = m[2]!.match(/^\{([\s\S]*)\}$/);
+      if (braces && braces[1]!.split(",").map((s) => s.trim()).filter(Boolean).every((s) => s.startsWith("type "))) continue;
+      out.push({ spec: m[3]!, dynamic: false });
+    }
+    const bare = /(?:^|\n)\s*import\s+["']([^"']+)["']/g;
+    for (let m = bare.exec(src); m; m = bare.exec(src)) out.push({ spec: m[1]!, dynamic: false });
+    const dyn = /\bimport\(\s*["']([^"']+)["']\s*\)/g;
+    for (let m = dyn.exec(src); m; m = dyn.exec(src)) out.push({ spec: m[1]!, dynamic: true });
+    return out;
+  }
+  const EXTS = ["", ".ts", ".tsx", ".js", ".jsx", "/index.ts", "/index.tsx", "/index.js"];
+  function resolveLocal(from: string, spec: string): string | null {
+    const base = spec.startsWith("@/") ? path.join(SRC, spec.slice(2)) : spec.startsWith(".") ? path.resolve(path.dirname(from), spec) : null;
+    if (!base) return null;
+    for (const ext of EXTS) if (existsSync(base + ext) && statSync(base + ext).isFile()) return base + ext;
+    return null;
+  }
+
+  it("no client-reachable file imports @sentry/* at runtime; the one dynamic import(\"@sentry/nextjs\") is the facade's", () => {
+    const roots = sources(SRC).filter((f) => hasDirective(readFileSync(f, "utf8"), "use client"));
+    roots.push(path.join(SRC, "instrumentation-client.ts"));
+    const reached = new Set<string>();
+    const stack = [...roots];
+    const sdkImports: string[] = [];
+    while (stack.length) {
+      const file = stack.pop()!;
+      if (reached.has(file)) continue;
+      reached.add(file);
+      const src = code(file);
+      if (hasDirective(readFileSync(file, "utf8"), "use server")) continue; // a server action is a reference on the client
+      for (const dep of runtimeDeps(src)) {
+        if (dep.spec.startsWith("@sentry/")) sdkImports.push(`${path.relative(WEB, file)} ${dep.dynamic ? "import()" : "static"} ${dep.spec}`);
+        const next = resolveLocal(file, dep.spec);
+        if (next) stack.push(next);
+      }
+    }
+    expect(roots.length, "anti-vacuity: client roots").toBeGreaterThan(100);
+    expect(reached.size, "anti-vacuity: client-reachable files").toBeGreaterThan(500);
+    for (const via of ["src/lib/sentry-browser.ts", "src/lib/sentry-browser-options.ts", "src/lib/replay-guard.ts", "src/components/public-site/match-room/camera-loader.ts"]) {
+      expect(reached.has(path.join(WEB, via)), `the walk reaches ${via}`).toBe(true);
+    }
+    expect(sdkImports).toEqual(["src/lib/sentry-browser.ts import() @sentry/nextjs"]);
+    // The matcher's positive pair: the server config's runtime import IS seen.
+    expect(runtimeDeps(code(path.join(WEB, "sentry.server.config.ts"))).map((d) => d.spec)).toContain("@sentry/nextjs");
+  });
+
+  it("init: the server and edge configs call Sentry.init; the browser's one init is the facade's; sentry.client.config is gone", () => {
     const files = sources(WEB);
     expect(files.length, "anti-vacuity: the app's source files were scanned").toBeGreaterThan(1000);
-    const callers: Record<string, number> = {};
+    const sentryInit: Record<string, number> = {};
+    const browserInit: Record<string, number> = {};
     for (const file of files) {
       const src = code(file);
-      const calls = (src.match(INIT_CALL) ?? []).length + (NAMED_INIT_IMPORT.test(src) ? 1 : 0);
-      if (calls > 0) callers[path.relative(WEB, file)] = calls;
+      const a = (src.match(/\bSentry\.init\s*\(/g) ?? []).length + (/import\s*\{[^}]*\binit\b[^}]*\}\s*from\s*["']@sentry\//.test(src) ? 1 : 0);
+      const b = (src.match(/\.init\(\s*browserSentryOptions\(/g) ?? []).length;
+      if (a) sentryInit[path.relative(WEB, file)] = a;
+      if (b) browserInit[path.relative(WEB, file)] = b;
     }
-    expect(callers).toEqual({
-      "sentry.edge.config.ts": 1,
-      "sentry.server.config.ts": 1,
-      "src/instrumentation-client.ts": 1,
-    });
+    expect(sentryInit).toEqual({ "sentry.edge.config.ts": 1, "sentry.server.config.ts": 1 });
+    expect(browserInit).toEqual({ "src/lib/sentry-browser.ts": 1 });
     for (const dead of ["sentry.client.config.ts", "sentry.client.config.js"]) {
       expect(existsSync(path.join(WEB, dead)), `${dead}: webpack-only, and a second client init if a webpack build ever ran`).toBe(false);
     }
   });
 
-  it("no client code builds a Replay integration (owner 2026-11-23: no session replay)", () => {
+  it("no source builds a Replay integration (owner 2026-11-23: no session replay)", () => {
     const files = sources(WEB);
     expect(files.length, "anti-vacuity: the app's source files were scanned").toBeGreaterThan(1000);
-    const builders = files.filter((f) => /\breplay(Canvas)?Integration\s*\(/.test(code(f))).map((f) => path.relative(WEB, f));
-    expect(builders).toEqual([]);
+    expect(files.filter((f) => /\breplay(Canvas)?Integration\s*\(/.test(code(f))).map((f) => path.relative(WEB, f))).toEqual([]);
   });
 });

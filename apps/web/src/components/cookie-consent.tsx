@@ -16,6 +16,7 @@ import { readActiveLocale, clientCommon } from "@/lib/client-dict";
 import { DEFAULT_LOCALE } from "@/lib/i18n-constants";
 import { subscribeToStorage } from "@/lib/use-client-snapshot";
 import { isPublicHubPath } from "@/lib/routes";
+import { scheduleBrowserSentry } from "@/lib/sentry-browser";
 
 /** The one route prefix that renders no chrome at all. Named rather than
  *  inlined so a future overlay route cannot forget it. */
@@ -61,6 +62,40 @@ const localeNeverNotifies = () => () => {};
 const defaultLocaleOnServer = () => DEFAULT_LOCALE;
 
 /**
+ * What a choice in the banner does, outside React: stores it against the current policy version, opts PostHog in or out,
+ * loads the browser Sentry client on an Accept (lib/sentry-browser.ts: the SDK is fetched only once the visitor has
+ * consented; a withdrawal is enforced at every send), and records the proof of consent on the server.
+ */
+export function recordConsentChoice(choice: ConsentChoice): void {
+  localStorage.setItem(CONSENT_KEY, choice);
+  // Stamp the version this choice covers, so a later policy bump re-prompts.
+  localStorage.setItem(CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION);
+  try {
+    if (posthog.__loaded) {
+      if (choice === "accepted") {
+        posthog.opt_in_capturing();
+        posthog.capture("$pageview"); // count the current page now that we may
+      } else {
+        posthog.opt_out_capturing();
+      }
+    }
+  } catch {
+    // Never let an analytics hiccup block dismissing the banner.
+  }
+  try {
+    if (choice === "accepted") scheduleBrowserSentry();
+  } catch {
+    // Error reporting must never block dismissing the banner either.
+  }
+  // Server-side proof-of-consent (GDPR). Best-effort — never blocks the UI.
+  void fetch("/api/consent", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ choice, policy_version: COOKIE_POLICY_VERSION }),
+  }).catch(() => {});
+}
+
+/**
  * Consent banner. Essential cookies (login) always run; analytics (PostHog) is
  * opt-in per GDPR. "Accept" opts PostHog into capturing; "Reject" keeps it
  * opted out. The choice is remembered so the banner shows once, and can be
@@ -102,27 +137,7 @@ export function CookieConsent() {
   }, []);
 
   function decide(choice: ConsentChoice) {
-    localStorage.setItem(CONSENT_KEY, choice);
-    // Stamp the version this choice covers, so a later policy bump re-prompts.
-    localStorage.setItem(CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION);
-    try {
-      if (posthog.__loaded) {
-        if (choice === "accepted") {
-          posthog.opt_in_capturing();
-          posthog.capture("$pageview"); // count the current page now that we may
-        } else {
-          posthog.opt_out_capturing();
-        }
-      }
-    } catch {
-      // Never let an analytics hiccup block dismissing the banner.
-    }
-    // Server-side proof-of-consent (GDPR). Best-effort — never blocks the UI.
-    void fetch("/api/consent", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ choice, policy_version: COOKIE_POLICY_VERSION }),
-    }).catch(() => {});
+    recordConsentChoice(choice);
     setOverride(false);
   }
 

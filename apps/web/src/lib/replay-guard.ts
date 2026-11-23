@@ -1,7 +1,7 @@
 // Sentry Replay and the credentials in a page's URL.
 //
 // NO REPLAY RUNS TODAY: the browser client is initialised without a Replay integration (owner 2026-11-23: errors and warnings
-// only; src/instrumentation-client.ts, lib/sentry-browser.ts). The router hook still calls `stopReplayBeforeNavigatingTo`, which
+// only; lib/sentry-browser.ts and lib/sentry-browser-options.ts). The router hook still calls `stopReplayBeforeNavigatingTo`, which
 // finds no Replay and does nothing. `replayMayRunAt`, `REPLAY_BLOCK_SELECTORS` and `recordingEventHook` have no production
 // caller: they are what a replay must be wired with if one is ever turned on (the deleted sentry.client.config.ts did it:
 // `replayIntegration({ maskAllText, blockAllMedia, block: REPLAY_BLOCK_SELECTORS, beforeAddRecordingEvent: recordingEventHook })`,
@@ -22,8 +22,9 @@
 //    navigates to one (`onRouterTransitionStart`), and it is stopped when the replay's own navigation frame names one (a
 //    redirect the router did not announce).
 // Once stopped it stays stopped for that page load; the next load samples afresh.
-import { getClient, type ReplayFrameEvent } from "@sentry/nextjs";
+import type { ReplayFrameEvent } from "@sentry/nextjs";
 import { holdsCredential, scrubRecordingEvent } from "@/lib/scrub-score-url";
+import { sentryClient } from "@/lib/sentry-browser";
 
 /** The elements the replay blocks: the class PostHog replay already blocks (components/v2/seazn-qr-image.tsx, the painters scan). */
 export const REPLAY_BLOCK_SELECTORS = [".ph-no-capture"];
@@ -34,18 +35,18 @@ export interface StoppableReplay {
 }
 
 // @sentry/nextjs re-exports `Integration` from neither its client nor its server entry; the client's own lookup type is the way in.
-type ClientIntegration = NonNullable<ReturnType<NonNullable<ReturnType<typeof getClient>>["getIntegrationByName"]>>;
+type ClientIntegration = NonNullable<ReturnType<NonNullable<ReturnType<typeof sentryClient>>["getIntegrationByName"]>>;
 
 /** The name the Replay integration registers under (`replayIntegration()` returns `name: "Replay"`; pinned in sentry-replay-guard.test). */
 export const REPLAY_INTEGRATION_NAME = "Replay";
 
 /**
- * The Replay integration of the initialised client, or undefined when Sentry is not initialised (no DSN) or, as today, the
- * client has no Replay (see instrumentation-client.ts). This is `getReplay()`'s own body, spelled out on purpose: importing `getReplay` references
- * @sentry/replay and rrweb (~23 KB gzipped), and this module is in the first-load chunk of every page through
- * instrumentation-client.ts. `getClient` and the integration lookup pull none of it.
+ * The Replay integration of the initialised client, or undefined while the SDK is not loaded (no consent, no DSN) or, as
+ * today, the client has no Replay (see instrumentation-client.ts). This is `getReplay()`'s own body, spelled out on purpose:
+ * this module is in the first-load chunk of every page through instrumentation-client.ts, and the SDK is not (the client
+ * comes from lib/sentry-browser.ts, which loads it lazily); importing `getReplay` would also reference @sentry/replay and rrweb.
  */
-const currentReplay = (): StoppableReplay | undefined => getClient()?.getIntegrationByName<ClientIntegration & StoppableReplay>(REPLAY_INTEGRATION_NAME);
+const currentReplay = (): StoppableReplay | undefined => sentryClient()?.getIntegrationByName<ClientIntegration & StoppableReplay>(REPLAY_INTEGRATION_NAME);
 
 /** May the replay run on this page? `undefined` is no page at all (the server), which never records. */
 export function replayMayRunAt(href: string | undefined): boolean {

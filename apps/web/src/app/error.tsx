@@ -7,7 +7,7 @@
 // segment. Copy is hardcoded English on purpose: this must render even when
 // the thing that failed is the i18n/dictionary provider itself.
 import { useEffect } from "react";
-import * as Sentry from "@sentry/nextjs";
+import * as Sentry from "@/lib/sentry-browser";
 
 export default function AppError({
   error,

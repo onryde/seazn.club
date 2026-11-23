@@ -21,6 +21,7 @@ import { generateRefCode } from "@/lib/ref-code";
 import { USER_ID } from "./_fake-sql";
 import { clientSpanDetails, otelTraceData, outgoingBreadcrumb, serverSpanDetails, transaction } from "./_sdk-span-data";
 import { credentialPages, setReplay } from "./_replay-fixtures";
+import { bootBrowserSentry } from "./_browser-sentry";
 
 // Only the Postgres round trip is a stand-in: the real minters (`createLoginLink`, `createVerificationToken`) run on it.
 vi.mock("@/lib/db", async (importOriginal) => ({
@@ -61,11 +62,9 @@ async function sentryInitOptions(configPath: string): Promise<Options> {
   return calls[0]![0] as Options;
 }
 
-/** The browser client's options: src/instrumentation-client.ts imported for real, with a DSN (none means no init). */
-async function clientInitOptions(): Promise<Options> {
-  vi.stubEnv("NEXT_PUBLIC_SENTRY_DSN", "https://0123456789abcdef0123456789abcdef@o0.ingest.sentry.io/0");
-  return sentryInitOptions("../../instrumentation-client");
-}
+/** The browser client's options: src/instrumentation-client.ts imported for real with a DSN and the visitor's consent, and the
+ *  lazy SDK load it schedules (lib/sentry-browser.ts) awaited. No DSN or no consent means no load and no init. */
+const clientInitOptions = (): Promise<Options> => bootBrowserSentry();
 
 const errorEvent = () => ({
   event_id: "e1",
@@ -250,7 +249,9 @@ describe("Sentry client (src/instrumentation-client.ts, options from lib/sentry-
 });
 
 describe("Sentry router hook (src/instrumentation-client.ts, onRouterTransitionStart)", () => {
+  /** The hook of a page whose SDK has loaded: until then it forwards nothing (sentry-browser-init.test.ts). */
   async function routerHook() {
+    await bootBrowserSentry();
     const mod = await import("../../instrumentation-client");
     const Sentry = await import("@sentry/nextjs");
     return { hook: mod.onRouterTransitionStart, Sentry };

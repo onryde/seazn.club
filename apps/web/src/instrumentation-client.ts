@@ -2,35 +2,29 @@
 // loads and before React hydration — the right place to boot analytics so
 // early pageviews are captured. Kept lightweight per the Next docs (<16ms).
 import posthog from "posthog-js";
-import * as Sentry from "@sentry/nextjs";
 import { analyticsConsented } from "@/lib/consent";
 import { stopReplayBeforeNavigatingTo } from "@/lib/replay-guard";
 import { maskCapturedNetworkRequest, posthogBeforeSend } from "@/lib/scrub-score-url";
-import { browserSentryOptions } from "@/lib/sentry-browser";
+import { captureRouterTransitionStart, scheduleBrowserSentry } from "@/lib/sentry-browser";
 
-// The browser Sentry client (owner 2026-11-23): errors and warnings only, no session replay, no tracing; nothing is sent
-// without the visitor's analytics consent. This is its ONE init: under Turbopack, this file is the client init path Next 16 and
-// @sentry/nextjs support (the old webpack-only sentry.client.config.ts is deleted). The options, the privacy hooks and the
-// consent gate are in lib/sentry-browser.ts. No DSN (local, the CI builds that bake it blank) means no client at all: every
-// Sentry call in the browser is then a no-op. The server/edge counterpart is ../instrumentation.ts, which runs
-// sentry.server.config / sentry.edge.config.
-const sentryDsn = process.env.NEXT_PUBLIC_SENTRY_DSN;
-if (sentryDsn) {
-  try {
-    Sentry.init(browserSentryOptions(sentryDsn));
-  } catch {
-    // Error reporting must never break the app either.
-  }
-}
+// The browser Sentry client (owner 2026-11-23): errors and warnings only, no session replay, no tracing, and only with the
+// visitor's analytics consent. The SDK is NOT in the first-load JS: lib/sentry-browser.ts fetches it with a dynamic import()
+// when the browser is idle, and only if NEXT_PUBLIC_SENTRY_DSN is set and the visitor has accepted (a later Accept in the
+// banner loads it then: components/cookie-consent.tsx). Every client file reports through that facade, which queues calls
+// until the SDK is up and drops them if it never comes. Under Turbopack this file is the client init path Next 16 and
+// @sentry/nextjs support (the old webpack-only sentry.client.config.ts is deleted). The server/edge counterpart is
+// ../instrumentation.ts, which runs sentry.server.config / sentry.edge.config.
+scheduleBrowserSentry();
 
-// The hook is exported because without it Sentry logs an ACTION REQUIRED at build; with tracing at 0 its navigation span is
-// unsampled. The client runs with no Replay integration, so the replay guard (lib/replay-guard) finds none to stop and is a
-// no-op; it stays in place for the day a replay is turned on: it stops the replay before the app navigates to a page whose URL
-// holds a credential. Sentry's own hook runs first, so the guard can never cost the navigation span.
-export const onRouterTransitionStart: typeof Sentry.captureRouterTransitionStart = (href, navigationType) => {
-  Sentry.captureRouterTransitionStart(href, navigationType);
+// Exported because without it @sentry/nextjs logs an ACTION REQUIRED at build (withSentryConfig reads this file for the name).
+// It is a no-op until the SDK has loaded; with tracing at 0 its navigation span is unsampled. The client has no Replay
+// integration, so the replay guard (lib/replay-guard) finds none to stop; it stays for the day a replay is turned on: it stops
+// the replay before the app navigates to a page whose URL holds a credential. Sentry's own hook runs first, so the guard can
+// never cost the navigation span.
+export function onRouterTransitionStart(href: string, navigationType: "push" | "replace" | "traverse"): void {
+  captureRouterTransitionStart(href, navigationType);
   stopReplayBeforeNavigatingTo(href);
-};
+}
 
 const key = process.env.NEXT_PUBLIC_POSTHOG_KEY;
 

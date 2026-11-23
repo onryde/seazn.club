@@ -1,69 +1,98 @@
-// The browser Sentry client's options (owner 2026-11-23: errors and warnings only, no session replay). src/instrumentation-client.ts
-// is the ONE place that calls `Sentry.init` with them. Under Turbopack that file is the only client init path Next 16 and
-// @sentry/nextjs support (@sentry/nextjs 10.62 config/webpack.js: "When using Turbopack `sentry.client.config.ts` will no
-// longer work"); the old apps/web/sentry.client.config.ts was webpack-only, never bundled, and is deleted. Its privacy hooks
-// live on here unchanged.
+// The browser's one door to Sentry (owner 2026-11-23: errors and warnings only, no session replay). Every client file reports
+// through THIS module, never through @sentry/nextjs: the SDK is not in the first-load JS. Nothing here imports it at runtime
+// (`import type` only); it is fetched with a dynamic `import()` once the visitor has accepted analytics, when the browser is
+// idle: at boot by instrumentation-client.ts, or on the banner's Accept (components/cookie-consent.tsx). The options, the
+// privacy hooks and the send-time consent gate are in ./sentry-browser-options.ts, fetched with it.
 //
-// - Errors and warnings only: no Replay integration and both replay rates 0; `tracesSampleRate: 0`. The nextjs client adds
-//   its browserTracingIntegration by default, and `captureRouterTransitionStart` (the router hook) drives it, so a 0 rate
-//   keeps that hook working while every span stays unsampled and no transaction is sent. console.warn / console.error go as
-//   structured logs.
-// - Consent: the privacy policy (/legal/privacy) and the sub-processors list name no lawful basis for Sentry, and the policy
-//   lists product analytics as the consent-based processing. So, like PostHog (instrumentation-client.ts), Sentry is booted
-//   but sends NOTHING until the visitor has accepted analytics against the current policy version. The check is made at
-//   every send (`consentGatedTransport`), so the banner's Accept and a withdrawal act at once and a policy bump revokes,
-//   with no re-init. The transport is the one door every envelope goes through (errors, logs, sessions, client reports),
-//   which no `beforeSend` is. Lifting the gate is a policy decision first: name Sentry (error monitoring, legitimate
-//   interests) in the policy and the sub-processors list, then send `transport` back to the SDK default.
-import * as Sentry from "@sentry/nextjs";
+// Until the SDK has loaded, a call is
+//  - QUEUED while a load is pending (consent given, a DSN set), up to SENTRY_QUEUE_CAP, then flushed in order on load;
+//  - DROPPED otherwise: no consent, no DSN, the queue full, or a load that failed (a failed load is not retried).
+// Under Turbopack, instrumentation-client.ts is the client init path Next 16 and @sentry/nextjs support (@sentry/nextjs 10.62
+// config/webpack.js: "When using Turbopack `sentry.client.config.ts` will no longer work"); that file is deleted.
+import type * as SentryNext from "@sentry/nextjs";
 import { analyticsConsented } from "@/lib/consent";
-import { scrubScoreTokens, scrubScoreTokensIntegration, scrubSentryEvent } from "@/lib/scrub-score-url";
 
-type BrowserOptions = Sentry.BrowserOptions;
-type TransportOptions = Parameters<typeof Sentry.makeFetchTransport>[0];
-type Transport = ReturnType<typeof Sentry.makeFetchTransport>;
+type Sdk = typeof SentryNext;
+type State = "off" | "pending" | "ready" | "failed";
 
-/** The SDK's own fetch transport, sending only while `analyticsConsented()` holds at the moment of the send. A held-back
- *  envelope resolves as sent: no retry, no offline queue, nothing kept. */
-export function consentGatedTransport(options: TransportOptions): Transport {
-  const transport = Sentry.makeFetchTransport(options);
-  return {
-    ...transport,
-    send: (envelope) => (analyticsConsented() ? transport.send(envelope) : Promise.resolve({})),
-  };
+/** Calls held while the SDK loads; past this many they are dropped (a page that errors in a loop must not grow it). */
+export const SENTRY_QUEUE_CAP = 20;
+
+let state: State = "off";
+let sdk: Sdk | undefined;
+let loading: Promise<boolean> | undefined;
+const queue: ((s: Sdk) => void)[] = [];
+
+function forward(call: (s: Sdk) => void): void {
+  if (sdk) {
+    try {
+      call(sdk);
+    } catch {
+      // Reporting never breaks the caller.
+    }
+    return;
+  }
+  if (state === "pending" && queue.length < SENTRY_QUEUE_CAP) queue.push(call);
 }
 
-/** The options instrumentation-client.ts hands `Sentry.init` when NEXT_PUBLIC_SENTRY_DSN is set. */
-export function browserSentryOptions(dsn: string): BrowserOptions {
-  return {
-    dsn,
-    environment: process.env.NODE_ENV,
+export function captureException(...args: Parameters<Sdk["captureException"]>): void {
+  forward((s) => void s.captureException(...args));
+}
 
-    tracesSampleRate: 0,
-    replaysSessionSampleRate: 0,
-    replaysOnErrorSampleRate: 0,
+export function captureMessage(...args: Parameters<Sdk["captureMessage"]>): void {
+  forward((s) => void s.captureMessage(...args));
+}
 
-    enableLogs: true,
+export function addBreadcrumb(...args: Parameters<Sdk["addBreadcrumb"]>): void {
+  forward((s) => s.addBreadcrumb(...args));
+}
 
-    integrations: [
-      // Forward console.warn/error as structured Sentry logs
-      Sentry.consoleLoggingIntegration({ levels: ["warn", "error"] }),
-      // A replay_event's URL list (and any event a processor sees) skips beforeSend; only a processor reaches it.
-      scrubScoreTokensIntegration(),
-    ],
+/** The router hook's half (instrumentation-client.ts `onRouterTransitionStart`). Never queued: a navigation span means
+ *  something only when the navigation starts. With tracing at 0 the span is unsampled anyway. */
+export function captureRouterTransitionStart(...args: Parameters<Sdk["captureRouterTransitionStart"]>): void {
+  if (sdk) forward((s) => s.captureRouterTransitionStart(...args));
+}
 
-    transport: consentGatedTransport,
+/** The initialised client once the SDK has loaded, else undefined (lib/replay-guard looks a Replay integration up on it). */
+export function sentryClient(): ReturnType<Sdk["getClient"]> {
+  return sdk?.getClient();
+}
 
-    // A device link's URL (/score/<token>) is a live scoring credential, and lib/scrub-score-url knows every other one: scrub
-    // them from errors, transactions, breadcrumbs and logs before anything is sent.
-    beforeSend: scrubSentryEvent,
-    beforeSendTransaction: scrubSentryEvent,
-    beforeBreadcrumb: scrubScoreTokens,
+/**
+ * Fetch the SDK and init it now, if NEXT_PUBLIC_SENTRY_DSN is set and the visitor has consented. Idempotent: a second call
+ * returns the first one's promise. Resolves true once the client is up, false when it may not load or the load failed.
+ */
+export function loadBrowserSentry(): Promise<boolean> {
+  if (loading) return loading;
+  const dsn = process.env.NEXT_PUBLIC_SENTRY_DSN;
+  if (!dsn || !analyticsConsented()) {
+    // Consent withdrawn (or never there) between the schedule and the idle callback: nothing waits for a load.
+    if (state === "pending") state = "off";
+    queue.length = 0;
+    return Promise.resolve(false);
+  }
+  state = "pending";
+  loading = Promise.all([import("@sentry/nextjs"), import("@/lib/sentry-browser-options")])
+    .then(([mod, { browserSentryOptions }]) => {
+      mod.init(browserSentryOptions(mod, dsn));
+      sdk = mod;
+      state = "ready";
+      for (const call of queue.splice(0)) forward(call);
+      return true;
+    })
+    .catch(() => {
+      state = "failed";
+      queue.length = 0;
+      return false;
+    });
+  return loading;
+}
 
-    beforeSendLog(log) {
-      // Debug/trace are dev-only noise; keep prod log volume down
-      if (process.env.NODE_ENV === "production" && (log.level === "debug" || log.level === "trace")) return null;
-      return scrubScoreTokens(log);
-    },
-  };
+/** Load when the browser is idle (requestIdleCallback, else a timeout), if it may load at all; calls from now on queue. */
+export function scheduleBrowserSentry(): void {
+  if (state !== "off" || !process.env.NEXT_PUBLIC_SENTRY_DSN || !analyticsConsented()) return;
+  state = "pending";
+  const run = () => void loadBrowserSentry();
+  if (typeof requestIdleCallback === "function") requestIdleCallback(run, { timeout: 5_000 });
+  else setTimeout(run, 1);
 }

@@ -25,7 +25,7 @@
 // ARBITER_MAX_ATTEMPTS tries in a row leaves the meeting before the SDK's
 // consumer sync — nothing heard — and tells the panel, which offers a rejoin.
 import type RealtimeKitClient from "@cloudflare/realtimekit";
-import * as Sentry from "@sentry/nextjs";
+import * as Sentry from "@/lib/sentry-browser";
 import { loadRealtimeKitSdk, watchRoomDrops, type RealtimeKitSdk } from "@/components/public-site/match-room/camera-loader";
 
 /** A colour, as the panel labels a pane and its switch. The meeting is the SIDE's; the colour is only its label. */

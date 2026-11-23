@@ -17,10 +17,11 @@
 // The shape of the answer comes from the route's own schema (`PublicFixtureVideo`), never typed twice.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-// Task 25 (coordinator's addition): the island's failure reports go to the client's Sentry path; recorded here, the rest of the SDK real.
+// Task 25 (coordinator's addition): the island's failure reports go to the client's Sentry path (lib/sentry-browser.ts, the
+// facade every client file reports through); recorded here, the rest of the facade real.
 const sentry = vi.hoisted(() => ({ messages: [] as { message: string; context: unknown }[] }));
-vi.mock("@sentry/nextjs", async (orig) => ({
-  ...(await orig<typeof import("@sentry/nextjs")>()),
+vi.mock("@/lib/sentry-browser", async (orig) => ({
+  ...(await orig<typeof import("@/lib/sentry-browser")>()),
   captureMessage: (message: string, context: unknown) => void sentry.messages.push({ message, context }),
 }));
 import { renderToStaticMarkup } from "react-dom/server";
