@@ -199,7 +199,7 @@ describe("stream-session-view — create refusals off the real wire (D1)", () =>
   // `refuse` in refusals.ts, `targetInUse` in holders.ts, the index race, the saved-target re-check, the ingest
   // refusal, the actor/fixture guards), plus the codes D1 names as "anything else".
   const ROWS: [string, Error, CreateErrorCode][] = [
-    ["no_credits 402", new HttpError(402, "This organisation has no match credits", "no_credits", { featureKey: "streaming.relay" }), "no_credits"],
+    ["no_credits 402", new HttpError(402, "This organisation has no Seazn credits", "no_credits", { featureKey: "streaming.relay" }), "no_credits"],
     ["overlay_required 409", new HttpError(409, "phone streaming needs the overlay tier", "overlay_required"), "overlay_required"],
     ["active_session 409", new HttpError(409, "a session is already running for this fixture", "active_session", { sessionId: "s-1" }), "active_session"],
     // Capture QR v2 W5 (carry): no phone paired on the code (no current pairing) — the refusal createSession throws (`refuse`).
@@ -1137,7 +1137,7 @@ describe("PR-2 §7.4 — the automatic start's refusal (served only while it cou
   it("the tables are total over the domain's AUTO_SERVED_REFUSALS (the stored words and the freeze's served one); each reason reads the manual refusal's own sentence; the remedies are Buy credits and Manage destinations", () => {
     expect(Object.keys(AUTO_REFUSAL_KEYS).sort()).toEqual([...AUTO_SERVED_REFUSALS].sort());
     const SPEC: Record<string, [string, "buy" | "manage" | undefined]> = {
-      no_credit: ["You need a match credit to go live.", "buy"],
+      no_credit: ["You need a Seazn credit to go live.", "buy"],
       no_destination: ["This match has no destination to stream to.", "manage"],
       not_entitled: ["Phone streaming is switched off for this organisation.", undefined],
       destination_in_use: ["That destination is already live on another match.", undefined],

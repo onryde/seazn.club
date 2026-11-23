@@ -473,7 +473,7 @@ describe("PhoneStripView — PR-2's line, lead values and remedies (Option A)", 
     const auto = (refusal: "no_credit" | "no_destination" | "unavailable") => ({ enabled: true, refusal, wontStart: null, stopApplies: null });
     const noCredit = phoneStrip(readModel(facts({ state: "paired" }), { auto: auto("no_credit") }), null)!;
     const withBuy = html(noCredit, "en", () => {});
-    expect(text(withBuy)).toBe("Automatic start couldn't begin: You need a match credit to go live. Buy credits");
+    expect(text(withBuy)).toBe("Automatic start couldn't begin: You need a Seazn credit to go live. Buy credits");
     expect(withBuy).toMatch(/<button type="button" data-testid="stream-auto-remedy-buy" class="[^"]*min-h-11[^"]*"/);
     expect(html(noCredit), "no handler, no button").not.toContain("stream-auto-remedy-buy");
     const manage = html(phoneStrip(readModel(facts({ state: "paired" }), { auto: auto("no_destination") }), null)!);
@@ -482,8 +482,8 @@ describe("PhoneStripView — PR-2's line, lead values and remedies (Option A)", 
     const none = html(phoneStrip(readModel(facts({ state: "paired" }), { auto: auto("unavailable") }), null)!, "en", () => {});
     expect(none).not.toMatch(/stream-auto-remedy/);
     // B7 review M-6: the reason follows a colon mid-sentence — lower case in es/fr/nl, and "Automatic start" said naturally.
-    expect(text(html(noCredit, "es", () => {}))).toBe("No se pudo iniciar automáticamente: necesitas un crédito para emitir. Comprar créditos");
-    expect(text(html(noCredit, "fr", () => {}))).toBe("Impossible de démarrer automatiquement : il vous faut un crédit pour passer en direct. Acheter des crédits");
-    expect(text(html(noCredit, "nl", () => {}))).toBe("Automatisch starten lukte niet: je hebt een tegoed nodig om live te gaan. Tegoed kopen");
+    expect(text(html(noCredit, "es", () => {}))).toBe("No se pudo iniciar automáticamente: necesitas un crédito Seazn para emitir. Comprar créditos");
+    expect(text(html(noCredit, "fr", () => {}))).toBe("Impossible de démarrer automatiquement : il vous faut un crédit Seazn pour passer en direct. Acheter des crédits");
+    expect(text(html(noCredit, "nl", () => {}))).toBe("Automatisch starten lukte niet: je hebt een Seazn-credit nodig om live te gaan. Credits kopen");
   });
 });

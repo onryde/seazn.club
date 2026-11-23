@@ -29,7 +29,7 @@ Every match on the court has a **Stream** switch: the one playing and each one u
 
 When the scorer starts a match whose switch is on, the phone starts that match's own video on the channel. About 30 seconds after the result, the video ends, and the court shows **Video ends in** a number of seconds. If the next switched-on match starts first, it takes over. The phone does not pick a match whose switch is off.
 
-Each video needs a match credit, the same as going live from the match's own page. Without one the match shows **You need a match credit to go live.**
+Each video needs a Seazn credit, the same as going live from the match's own page. Without one the match shows **You need a Seazn credit to go live.**
 
 A match that has its own stream code shows **This match has its own stream code**, and its switch stays off until that code is ended.
 

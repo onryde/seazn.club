@@ -37,7 +37,7 @@ The pass's lower platform fee applies to entries paid by card while the pass app
 ## What else you get
 
 - **A free slot.** A competition with a pass does not count against your active-competition limit while the pass applies.
-- **One-time credits.** Buying a pass adds a one-time top-up of AI credits to your organisation, and a one-time batch of match credits. The amounts are on the [pricing page](/pricing).
+- **One-time credits.** Buying a pass adds a one-time top-up of AI credits to your organisation, and a one-time batch of Seazn credits. The amounts are on the [pricing page](/pricing).
 
 ## What it does not include
 
