@@ -354,7 +354,10 @@ describe("toolchain: Turbopack build cache is opt-in and env-gated", () => {
   it("premise: Next emits Turbopack source maps unless told otherwise", async () => {
     const { defaultConfig } = await import("next/dist/server/config-shared");
     // undefined = Next's documented default ("Enable source maps. Defaults to true").
-    expect(defaultConfig.experimental?.turbopackSourceMaps).not.toBe(false);
+    // Next 16.3 types defaultConfig.experimental as the literal default object, which omits keys whose default is
+    // "absent" — turbopackSourceMaps among them — so read it through an index type.
+    const experimental = defaultConfig.experimental as Readonly<Record<string, unknown>> | undefined;
+    expect(experimental?.turbopackSourceMaps).not.toBe(false);
   });
 
   it("next.config.js leaves source maps alone when NEXT_LEAN_BUILD is unset", async () => {
