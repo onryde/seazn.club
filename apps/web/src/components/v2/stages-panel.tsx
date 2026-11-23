@@ -26,6 +26,7 @@ import { SWISS_ABANDONED_BOARDS_REASON, abandonedBoardsOf } from "@/lib/swiss-ab
 import { ABANDONED_MATCHES_REASON, heldMatchesOf } from "@/lib/abandoned-matches-refusal";
 import { rulesWriteErrorText } from "@/lib/config-issue-copy";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
+import { SCHEDULE_LOCKED_CODE } from "@/lib/schedule-lock";
 import { isSwissRefusalCode, swissRefusalKey } from "@/lib/swiss-refusals";
 import { isUndoRefusalCode, undoRefusalText } from "@/lib/undo-refusals";
 import { isRoundRobinRefusalCode } from "@/lib/roundrobin-refusals";
@@ -2659,8 +2660,11 @@ export function AddStageForm({
         // seed + generate it.
         if (addStageWaitsForPrevious(err)) {
           onDone(msg("schedule.notice.stageAddedLater"));
-        } else if (err instanceof ApiV1Error && err.code !== "PAYMENT_REQUIRED") {
+        } else if (err instanceof ApiV1Error && err.code !== "PAYMENT_REQUIRED" && err.code !== SCHEDULE_LOCKED_CODE) {
           // The stage exists and will not fill on its own: say why, and offer to delete it (the board shows it once refreshed).
+          // Not for a freeze (R1): Generate checks SCHEDULE_LOCKED before the previous-stage wait, so a frozen division whose previous
+          // stage still runs says it here too - and the freeze refuses the card's Delete (stage-graph.ts). It takes the frozen-board
+          // line below, as it did before the card.
           const stageName = name.trim() || "Finals";
           setRefused({ id: stage.id, text: msg("schedule.notice.stageAddedRefused", { name: stageName, reason: addStageErrorText(err, msg, locale) }) });
           onRefresh();

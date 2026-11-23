@@ -32,6 +32,7 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
 
 import { AddStageForm } from "@/components/v2/stages-panel";
 import { ApiV1Error } from "@/lib/client-v1";
+import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 const en = (key: string, vars?: Record<string, string | number>) => t(enUi as never, key, vars);
@@ -104,6 +105,19 @@ describe("I2 Add stage: 'later' only for the wait; any other Generate refusal is
     expect(net.calls.filter((c: Call) => c.method === "DELETE"), "Keep deletes nothing").toEqual([]);
     expect(card(b.island.tree())).toBeUndefined();
     expect(button(b.island.tree(), en("schedule.addStage")), "the form is closed: its opener is back").toBeDefined();
+  });
+
+  // Round 2 (R1): SCHEDULE_LOCKED is checked in generate.ts BEFORE the previous-stage wait, so a frozen division whose previous stage
+  // still runs refuses with it - and Delete would be refused too (stage-graph.ts, the same freeze). The frozen-board line is the
+  // answer there, as before the card existed; "can't be made" with a Delete that fails is the defect.
+  it("a frozen division (SCHEDULE_LOCKED): no card, no Delete offered; the lock line goes to the form's red line, as before", async () => {
+    net.generate = () => Promise.reject(new ApiV1Error(SCHEDULE_LOCKED_MESSAGE, 422, SCHEDULE_LOCKED_CODE));
+    const m = mount();
+    await flush();
+    expect(card(m.island.tree()), "no refusal card for a freeze").toBeUndefined();
+    expect(button(m.island.tree(), en("confirm.deleteStage.label")), "no Delete offered").toBeUndefined();
+    expect(m.onDone, "never the 'later' promise").not.toHaveBeenCalled();
+    expect(m.onError.mock.calls.filter((c) => c[0] !== ""), "the lock line, once").toEqual([[SCHEDULE_LOCKED_MESSAGE]]);
   });
 
   it("a filled stage still says how many fixtures it made (the success path is untouched)", async () => {
