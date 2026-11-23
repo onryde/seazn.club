@@ -2,7 +2,7 @@ import { v1, reply } from "@/server/api-v1/http";
 import { publicCompetitionHub, publicPollRateLimit, PUBLIC_CACHE_CONTROL } from "@/server/usecases/public";
 import { hubDocEtag } from "@/server/public-site/hub-doc-etag";
 import { HUB_BUILD_HEADER } from "@/lib/hub-doc-stamp";
-import { windowHubDoc } from "@/lib/hub-round-paging";
+import { HUB_WINDOW_PARAM, HUB_WINDOW_ROUNDS, windowHubDoc } from "@/lib/hub-round-paging";
 
 type Ctx = { params: Promise<{ orgSlug: string; slug: string }> };
 
@@ -16,8 +16,11 @@ export async function GET(req: Request, { params }: Ctx) {
   return v1(async () => {
     await publicPollRateLimit(req);
     const { orgSlug, slug } = await params;
-    // W5 follow-ups C: served windowed, as the page is (`windowHubDoc`): a big division's folded rounds are `roundPages` headers.
-    const doc = windowHubDoc(await publicCompetitionHub(orgSlug, slug));
+    // W5 follow-ups C, review I3 (controller ruling): a public API answers EVERY match, as before the paging. Only the page's own poll
+    // (`fetchCompetitionHub`) asks for the page's window (`?window=rounds`, `windowHubDoc`: a big division's folded rounds as
+    // `roundPages` headers); anything else is the complete document.
+    const full = await publicCompetitionHub(orgSlug, slug);
+    const doc = new URL(req.url).searchParams.get(HUB_WINDOW_PARAM) === HUB_WINDOW_ROUNDS ? windowHubDoc(full) : full;
     const etag = hubDocEtag(doc);
     // The build a 304 confirms: the page re-stamps the document it holds with it (`restampHubDoc`).
     const headers = { "Cache-Control": PUBLIC_CACHE_CONTROL, ETag: etag, [HUB_BUILD_HEADER]: doc.generatedAt };

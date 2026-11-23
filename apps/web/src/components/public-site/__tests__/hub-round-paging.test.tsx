@@ -187,13 +187,21 @@ describe("C: the hub serves a big division by round", () => {
 });
 
 
-describe("C: the hub poll is served windowed, as the page is", () => {
-  it("the hub API answers a big division's open round and its round headers, not its 4,970 cards", async () => {
+describe("C: the page's hub poll is served windowed, as the page is; the v1 reader without the param gets every card (review I3)", () => {
+  const read = async (qs: string) => {
     sceneDoc = scene();
-    const res = await hubGET(new Request("http://x/hub"), { params: Promise.resolve({ orgSlug: "o", slug: "c" }) });
+    const res = await hubGET(new Request(`http://x/hub${qs}`), { params: Promise.resolve({ orgSlug: "o", slug: "c" }) });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { data: CompetitionHubDocT };
-    expect(body.data.matches.filter((x) => x.divisionSlug === "premier").map((x) => x.roundNo)).toEqual(Array(35).fill(72));
-    expect(body.data.roundPages?.length).toBe(142);
+    return ((await res.json()) as { data: CompetitionHubDocT }).data;
+  };
+  it("?window=rounds (the page's poll): a big division's open round and its round headers, not its 4,970 cards", async () => {
+    const data = await read("?window=rounds");
+    expect(data.matches.filter((x) => x.divisionSlug === "premier").map((x) => x.roundNo)).toEqual(Array(35).fill(72));
+    expect(data.roundPages?.length).toBe(142);
+  });
+  it("no param: every one of the 4,970 cards, no round headers", async () => {
+    const data = await read("");
+    expect(data.matches.filter((x) => x.divisionSlug === "premier").length).toBe(4970);
+    expect(data.roundPages).toBeUndefined();
   });
 });

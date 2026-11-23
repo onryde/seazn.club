@@ -104116,7 +104116,7 @@
     },
     "/api/v1/public/orgs/{orgSlug}/competitions/{slug}/hub": {
       "get": {
-        "summary": "Public competition hub: matches, tables, leaders, teams, info — the landing page's live document",
+        "summary": "Public competition hub: matches, tables, leaders, teams, info — the landing page's live document. Every match, unless `window=rounds` asks for the landing page's own window",
         "tags": [
           "public"
         ],
@@ -104136,6 +104136,18 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "window",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "rounds"
+              ]
+            },
+            "description": "`rounds`: the landing page's window - a division of more than 200 matches lists only its live and next rounds, every other round a `roundPages` header (its counts, no matches). Absent: every match."
           }
         ],
         "responses": {

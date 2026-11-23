@@ -18,6 +18,7 @@ vi.mock("@/server/usecases/public", async (importOriginal) => {
 });
 import { GET } from "../route";
 import { HttpError } from "@/lib/errors";
+import { hubDoc, m } from "@/components/public-site/__tests__/hub-fixtures";
 
 const ctx = { params: Promise.resolve({ orgSlug: "riverside", slug: "cup" }) };
 const doc = { competitionId: "c1", tabs: ["overview", "info"], matches: [], tables: [], leaders: [], teams: [] };
@@ -50,3 +51,40 @@ describe("GET /api/v1/public/orgs/{org}/competitions/{slug}/hub", () => {
     expect(limiter.rateLimit).toHaveBeenCalledWith("pubv1poll:unknown", { max: 300, windowSeconds: 60 });
   });
 });
+
+// W5 follow-ups C, review I3 (controller ruling): `/api/v1` is a PUBLIC API - a reader that asks for a competition's hub gets EVERY
+// match, as before the paging. Windowing (a big division's folded rounds as `roundPages` headers) applies only when the page's own
+// poll asks for it with `?window=rounds`.
+describe("I3: the v1 hub answers every match unless the page's own poll asks for the window", () => {
+  /** One division of 225 matches (over the paging line, 15 rounds of 15): rounds 1-7 played, 8-15 to come. */
+  const big = () =>
+    hubDoc({
+      matches: Array.from({ length: 225 }, (_, i) => {
+        const round = Math.floor(i / 15) + 1;
+        return m(`P${round}-${i % 15}`, round <= 7 ? "completed" : "upcoming", new Date(Date.UTC(2026, 8, 5 + round)).toISOString(), "premier", { roundNo: round });
+      }),
+    });
+  const read = async (qs: string) => {
+    hub.publicCompetitionHub.mockResolvedValue(big());
+    const res = await GET(new Request(`http://x/api/v1/public/orgs/riverside/competitions/cup/hub${qs}`), ctx);
+    return ((await res.json()) as { data: { matches: unknown[]; roundPages?: unknown[] } }).data;
+  };
+
+  it("no param: the response is complete - all 225 matches, no roundPages", async () => {
+    const data = await read("");
+    expect(data.matches.length).toBe(big().matches.length);
+    expect(data.matches.length).toBe(225);
+    expect(Object.hasOwn(data, "roundPages")).toBe(false);
+  });
+
+  it("an unknown window value is the complete document too", async () => {
+    expect((await read("?window=all")).matches.length).toBe(225);
+  });
+
+  it("?window=rounds: the page's windowed document - folded rounds as roundPages, fewer matches", async () => {
+    const data = await read("?window=rounds");
+    expect(data.roundPages?.length, "folded rounds are headers").toBeGreaterThan(0);
+    expect(data.matches.length).toBeLessThan(225);
+  });
+});
+

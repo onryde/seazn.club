@@ -26,14 +26,16 @@ function stubFetch(payload: unknown, ok = true, status = 200) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("fetchCompetitionHub", () => {
-  it("GETs the org/competition hub route and returns the document itself, not a wrapper with a .data property", async () => {
+  // W5 follow-ups C, review I3: the page asks for the WINDOWED document (a big division's folded rounds as `roundPages`); the v1
+  // route answers every match to anyone who does not ask.
+  it("GETs the org/competition hub route, asking for the page's window, and returns the document itself, not a wrapper with a .data property", async () => {
     const doc = { competitionId: "c1", name: "Autumn Cup" };
     stubFetch({ ok: true, data: doc });
 
     const res = await fetchCompetitionHub("riverside", "autumn-cup");
 
     expect(fetch).toHaveBeenCalledWith(
-      "/api/v1/public/orgs/riverside/competitions/autumn-cup/hub",
+      "/api/v1/public/orgs/riverside/competitions/autumn-cup/hub?window=rounds",
       expect.anything(),
     );
     expect(res).toEqual(doc);
@@ -58,7 +60,7 @@ describe("fetchCompetitionHub", () => {
     await fetchCompetitionHub("riverside", "autumn-cup");
 
     expect(fetch).toHaveBeenCalledWith(
-      "/api/v1/public/orgs/riverside/competitions/autumn-cup/hub",
+      "/api/v1/public/orgs/riverside/competitions/autumn-cup/hub?window=rounds",
       expect.objectContaining({ cache: "no-store" }),
     );
   });

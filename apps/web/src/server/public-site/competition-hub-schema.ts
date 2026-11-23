@@ -525,7 +525,8 @@ export const CompetitionHubDoc = z.object({
   matches: z.array(HubMatch),
   /** W5 follow-ups C (Option A, "by round"): a BIG division's rounds as the served document heads them (`lib/hub-round-paging.ts`):
    *  an open round's matches are in `matches`, a folded one's are read on a tap. OPTIONAL: the cached document never carries it (the
-   *  window is applied when the document is served), and absent reads as "every match is here". */
+   *  window is applied when the document is served: to the landing page, and to the v1 hub route only on `?window=rounds`, review
+   *  I3), and absent reads as "every match is here". */
   roundPages: z
     .array(
       z.object({

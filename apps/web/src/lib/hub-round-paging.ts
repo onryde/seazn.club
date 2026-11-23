@@ -51,6 +51,10 @@ function roundsOf(matches: readonly HubMatchT[]): { key: string; rows: HubMatchT
     .sort((a, b) => stageRank.get(a.rows[0]!.stageName)! - stageRank.get(b.rows[0]!.stageName)! || a.rows[0]!.roundNo - b.rows[0]!.roundNo);
 }
 
+/** The v1 hub route's query that asks for the page's window (review I3): `?window=rounds`. Without it the route answers every match. */
+export const HUB_WINDOW_PARAM = "window";
+export const HUB_WINDOW_ROUNDS = "rounds";
+
 /** The document as served: a big division's folded rounds leave `matches` for `roundPages`. A document with no big division is
  *  returned as it is (the same object). */
 export function windowHubDoc<D extends Pick<CompetitionHubDocT, "matches" | "knockouts">>(doc: D): D & { roundPages?: HubRoundPage[] } {

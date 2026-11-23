@@ -7,6 +7,7 @@
 // would silently replace the whole document with `undefined` on every poll.
 import { ApiError, api } from "@/lib/client";
 import { HUB_BUILD_HEADER, restampHubDoc } from "@/lib/hub-doc-stamp";
+import { HUB_WINDOW_PARAM, HUB_WINDOW_ROUNDS } from "@/lib/hub-round-paging";
 import type { CompetitionHubDocT } from "@/server/public-site/competition-hub-schema";
 
 /** W5 follow-ups B4: the content tag (ETag) of each competition's document, and that document - the poll sends the tag back
@@ -18,7 +19,9 @@ export async function fetchCompetitionHub(
   orgSlug: string,
   competitionSlug: string,
 ): Promise<CompetitionHubDocT> {
-  const url = `/api/v1/public/orgs/${orgSlug}/competitions/${competitionSlug}/hub`;
+  // W5 follow-ups C, review I3: the page polls the WINDOWED document it was rendered from (`windowHubDoc`); the route answers every
+  // match to a caller that does not ask.
+  const url = `/api/v1/public/orgs/${orgSlug}/competitions/${competitionSlug}/hub?${HUB_WINDOW_PARAM}=${HUB_WINDOW_ROUNDS}`;
   const seen = held.get(url);
   let etag: string | null = null;
   let build: string | null = null;
