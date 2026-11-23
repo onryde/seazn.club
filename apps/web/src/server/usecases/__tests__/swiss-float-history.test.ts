@@ -19,6 +19,10 @@
 // the engine. The history the engine was handed is read through a spy on `pairRound` (precedent: swiss-score-groups.test.ts).
 //
 // Sports: badminton (a set sport, win 2), chess (boardgame: half-points, draws, colours on) and ice hockey (IIHF, win 3).
+//
+// A points adjustment is in a round's score only when it was written before that round was paired: its ledger row's
+// `division_events.seq` below the round's newest pairing row's (both rows of one per-division counter, taken under the division
+// lock). An adjustment written later moved the table AFTER those boards were seated, so it cannot have made them unequal.
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
@@ -31,6 +35,7 @@ import { post } from "@/server/engine-db/__tests__/helpers/w2b-rig";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
+import { adjustPoints } from "../points-adjustments";
 import { startDivision } from "../schedule";
 import { putStageRules } from "../stage-rules";
 import { createStages, generateStageFixtures, swissFloatHistory, swissFloatRounds, unpairSwissRound } from "../stages";
@@ -461,51 +466,122 @@ describe.runIf(HAS_DB)("Swiss float history reaches the pairer (engine SwissHist
     expect((await seatsOf(r, 3)).boards, "round 3 floats P4, not P6").toEqual(ROUND_THREE);
   }, 180_000);
 
-  it("after a withdrawal the departed player's boards still count, and a bye is not a float (chess)", async () => {
-    // single-sport: chess - draws make the odd score groups this sequence needs on six players, and its colours must not
-    // stand in the way (the seats below hold under either round-1 colour lot).
-    // Hand derivation (chess pays 2 / 1 / 0):
-    //   Round 1 P1-P4, P2-P5, P3-P6: P1 wins, the other two are drawn.
-    //   Round 2 (P1 2; P2, P3, P5, P6 1; P4 0): P1 alone floats down to P2; P3-P5; P6, left odd in the 1-point group, floats
-    //            down to P4. Downfloats: P1 and P6. Results: P2 beats P1, P3 beats P5, P6 beats P4.
-    //   P4 withdraws. P6's round-2 float was paired against P4, and P4 leaving does not unpair it.
-    //   Round 3 (P2, P3, P6 3; P1 2; P5 1): five players, so the lowest, P5, takes the bye. {P2, P3, P6} is odd and P6 floated
-    //            down in round 2: C14 floats P3 (the lowest-ranked of the rest) down to P1, and P2-P6. Without the history
-    //            P6 floats again: P1-P6, P2-P3.
-    //   Results: P2 beats P6, P3 beats P1. Before round 4 the history is P1, P6 (round 2) and P3 (round 3: 3 against P1's 2).
-    //   P5's round-3 bye is not a downfloat: the engine never lists a bye in `floated`.
-    const r = await startedSwiss(sportOf("boardgame"), { players: 6, rounds: 4 });
+  it("a points adjustment written after round 2 was paired is in neither earlier round's score", async () => {
+    // single-sport: the cut is by ledger order, sport-blind; badminton's base rig is enough.
+    // Hand derivation: the base rig (above) through round 2, then P3 is adjusted -1 BEFORE round 3 is paired. Rounds 1 and 2
+    // were paired before the adjustment was written, so neither round's boards could have been unequal because of it: round
+    // 1 was all level, and round 2 floated only P6 (on one win against P4's none). The history is P6 once.
+    // Counting the adjustment in every earlier round's score instead puts P3 below 0 going into round 1 (P6 "floats" on
+    // P3-P6) and below P5 going into round 2 (P5 "floats" on P3-P5): P5 once, P6 twice.
+    const r = await startedSwiss(sportOf("badminton"), { players: 6, rounds: 3 });
+    await playBaseRoundsOneAndTwo(r);
+    await adjustPoints(r.auth, r.stageId, { entrant_id: r.id("P3"), delta: -1, reason: "Late to court" });
+
+    const three = await pairSpied(r);
+    const p3 = three.standings.find((s) => s.entrantId === r.id("P3"))?.score;
+    const p3Earned = (await earned(r, 2)).get(r.id("P3")) ?? 0;
+    expect(p3, "positive pair: the adjustment IS on the table round 3 is paired on").toBeLessThan(p3Earned);
+    expect(named(r, three.history.floats), "P6 once: the adjustment came after both earlier rounds were paired").toEqual([["P6", 1]]);
+    expect(named(r, three.history.floats), "differential: not every adjustment in every earlier score").not.toEqual([["P5", 1], ["P6", 2]]);
+  }, 180_000);
+
+  it("a points adjustment written before round 2 was paired is in round 2's score, never round 1's", async () => {
+    // single-sport: as above.
+    // Hand derivation: round 1 of the base rig (P1, P2 and P6 win), then P1 is adjusted +1 BEFORE round 2 is paired.
+    //   Round 2 (P1 one win and 1; P2, P6 one win; P3, P4, P5 none): P1 alone floats down to the top of the group below it
+    //            has not met, P2; {P6} is left odd and floats down to P4 (it has met P3); P3-P5 - the base rig's round 2. Its
+    //            history is empty: the adjustment was written AFTER round 1 was paired, so round 1 stays all level.
+    //   Results: P1 beats P2, P4 beats P6, P3 beats P5. Round 2's boards were paired with the adjustment already written,
+    //            so P1-P2 was unequal (P1 floated down) and P4-P6 was too (P6 floated). The history is P1 once, P6 once.
+    // Counting the adjustment in round 1 too adds a float for P1 on P1-P4 (P1 twice); counting it nowhere loses P1's.
+    const r = await startedSwiss(sportOf("badminton"), { players: 6, rounds: 3 });
     await generateStageFixtures(r.auth, r.stageId); // Pair round 1
     expect((await seatsOf(r, 1)).boards, "premise: round 1 folds the seeds").toEqual(ROUND_ONE);
     await r.sport.win(r.auth, await boardOf(r, 1, "P1", "P4"), r.id("P1"));
-    await drawChess(r.auth, await boardOf(r, 1, "P2", "P5"));
+    await r.sport.win(r.auth, await boardOf(r, 1, "P2", "P5"), r.id("P2"));
+    await r.sport.win(r.auth, await boardOf(r, 1, "P3", "P6"), r.id("P6"));
+    await adjustPoints(r.auth, r.stageId, { entrant_id: r.id("P1"), delta: 1, reason: "Fair play" });
+
+    const two = await pairSpied(r); // Pair round 2
+    expect((await seatsOf(r, 2)).boards, "round 2 as derived").toEqual(ROUND_TWO);
+    expect(named(r, two.history.floats), "round 1 stays level: the adjustment came after it was paired").toEqual([]);
+    await r.sport.win(r.auth, await boardOf(r, 2, "P1", "P2"), r.id("P1"));
+    await r.sport.win(r.auth, await boardOf(r, 2, "P4", "P6"), r.id("P4"));
+    await r.sport.win(r.auth, await boardOf(r, 2, "P3", "P5"), r.id("P3"));
+
+    const three = await pairSpied(r); // Pair round 3
+    expect(named(r, three.history.floats), "P1 floated in round 2 on the adjustment, and P6").toEqual([["P1", 1], ["P6", 1]]);
+  }, 180_000);
+
+  it("a round whose pairing row names no round (a stage paired before rows carried one) reads every adjustment in force", async () => {
+    // single-sport: as above. The legacy reading is the table as it stands now, the reading before rounds were cut by the ledger.
+    // Hand derivation: the first adjustment test's rig, with round 2's pairing row stripped of its `round`. Round 1's row
+    // still bounds round 1 (no adjustment in it, all level); round 2 has no bound, so P3's -1 is in round 2's score and P3-P5
+    // reads P5 floating down; P4-P6 floats P6. The history is P5 once, P6 once.
+    const r = await startedSwiss(sportOf("badminton"), { players: 6, rounds: 3 });
+    await playBaseRoundsOneAndTwo(r);
+    await adjustPoints(r.auth, r.stageId, { entrant_id: r.id("P3"), delta: -1, reason: "Late to court" });
+    const stripped = await sql`
+      update division_events set payload = payload - 'round'
+       where payload->>'stage_id' = ${r.stageId} and type = 'fixtures_generated' and payload->>'round' = '2'
+      returning seq`;
+    expect(stripped.length, "rig: round 2's one pairing row now names no round").toBe(1);
+
+    const three = await pairSpied(r);
+    expect(named(r, three.history.floats), "round 2 reads the adjustment; round 1, still bounded, does not").toEqual([["P5", 1], ["P6", 1]]);
+  }, 180_000);
+
+  it("after a withdrawal the departed player's boards still count on the points he held, and a bye is not a float (chess)", async () => {
+    // single-sport: chess - draws make the odd score groups this sequence needs on six players, and its colours must not
+    // stand in the way (the seats below hold under either round-1 colour lot).
+    // Hand derivation (chess pays 2 / 1 / 0):
+    //   Round 1 P1-P4, P2-P5, P3-P6: P1-P4 drawn, P2 wins, P3-P6 drawn.
+    //   Round 2 (P2 2; P1, P3, P4, P6 1; P5 0): P2 alone floats down to the top of the 1-point group it has not met, P1;
+    //            {P3, P4, P6} is odd and nobody has floated, so its lowest-ranked, P6, floats down to P5; P3-P4. Downfloats:
+    //            P2 and P6. P3-P4 is LEVEL only on the point P4 drew in round 1. Results: P1 beats P2, P3 beats P4, P6 beats P5.
+    //   P4 withdraws, holding that 1 point.
+    //   Round 3 (P1, P3, P6 3; P2 2; P5 0): five players, so the lowest, P5, takes the bye. {P1, P3, P6} is odd and P6
+    //            floated down in round 2: C14 floats the lowest-ranked of the rest, P3, down to P2; P1-P6.
+    //            Without the history P6 floats again: P1-P3, P2-P6. And a table that dropped the departed P4 to 0 would read
+    //            P3-P4 as P3 floating down, so P3 and P6 would both have floated, P1 (who has met P2) could not go, and P6
+    //            would float again - the same P1-P3, P2-P6.
+    //   Results: P1 beats P6, P3 beats P2. Before round 4 the history is P2, P6 (round 2) and P3 (round 3: 3 against P2's 2);
+    //   P1-P6 was level. P5's round-3 bye is not a downfloat: the engine never lists a bye in `floated`.
+    const r = await startedSwiss(sportOf("boardgame"), { players: 6, rounds: 4 });
+    await generateStageFixtures(r.auth, r.stageId); // Pair round 1
+    expect((await seatsOf(r, 1)).boards, "premise: round 1 folds the seeds").toEqual(ROUND_ONE);
+    await drawChess(r.auth, await boardOf(r, 1, "P1", "P4"));
+    await r.sport.win(r.auth, await boardOf(r, 1, "P2", "P5"), r.id("P2"));
     await drawChess(r.auth, await boardOf(r, 1, "P3", "P6"));
 
     const two = await pairSpied(r); // Pair round 2
     expect(named(r, two.history.floats), "round 2: the empty case").toEqual([]);
-    expect((await seatsOf(r, 2)).boards, "round 2 as derived").toEqual(["P1-P2", "P3-P5", "P4-P6"]);
-    await r.sport.win(r.auth, await boardOf(r, 2, "P1", "P2"), r.id("P2"));
-    await r.sport.win(r.auth, await boardOf(r, 2, "P3", "P5"), r.id("P3"));
-    await r.sport.win(r.auth, await boardOf(r, 2, "P4", "P6"), r.id("P6"));
+    expect((await seatsOf(r, 2)).boards, "round 2 as derived").toEqual(["P1-P2", "P3-P4", "P5-P6"]);
+    await r.sport.win(r.auth, await boardOf(r, 2, "P1", "P2"), r.id("P1"));
+    await r.sport.win(r.auth, await boardOf(r, 2, "P3", "P4"), r.id("P3"));
+    await r.sport.win(r.auth, await boardOf(r, 2, "P5", "P6"), r.id("P6"));
 
+    const held = (await earned(r, 1)).get(r.id("P4")) ?? 0;
+    expect(held, "premise: P4 withdraws holding round 1's drawn point, so 'kept on the table' and 'read as 0' differ").toBe(declaredRule(r.sport).draw);
+    expect(held, "and it is more than nothing").toBeGreaterThan(0);
     await withdrawEntrantCascade(r.auth, r.id("P4"));
     const three = await pairSpied(r); // Pair round 3
     expect(three.standings.map((s) => r.nameOf(s.entrantId)), "premise: P4 is out of round 3's field").not.toContain("P4");
     const oracle3 = await oracleFloats(r, 3);
     expect(oracle3.boards, "anti-vacuity: six boards read, two of them P4's").toBe(6);
-    expect(named(r, oracle3.floats), "premise: P1 and P6 floated down in round 2").toEqual([["P1", 1], ["P6", 1]]);
-    expect(named(r, three.history.floats), "the departed P4's round-2 board still gives P6 its float").toEqual(named(r, oracle3.floats));
+    expect(named(r, oracle3.floats), "premise: P2 and P6 floated down in round 2, P3-P4 was level").toEqual([["P2", 1], ["P6", 1]]);
+    expect(named(r, three.history.floats), "the departed P4 keeps his point in round 2's cut: P3-P4 floats nobody").toEqual(named(r, oracle3.floats));
     const seats3 = await seatsOf(r, 3);
     expect(seats3.bye, "premise: P5, the lowest, sits out").toBe("P5");
-    expect(seats3.boards, "round 3 floats P3, not P6 a second round running").toEqual(["P1-P3", "P2-P6"]);
-    expect(seats3.boards, "differential: without the history").not.toEqual(["P1-P6", "P2-P3"]);
+    expect(seats3.boards, "round 3 floats P3, not P6 a second round running").toEqual(["P1-P6", "P2-P3"]);
+    expect(seats3.boards, "differential: without the history, or with P4 read as 0").not.toEqual(["P1-P3", "P2-P6"]);
 
-    await r.sport.win(r.auth, await boardOf(r, 3, "P2", "P6"), r.id("P2"));
-    await r.sport.win(r.auth, await boardOf(r, 3, "P1", "P3"), r.id("P3"));
+    await r.sport.win(r.auth, await boardOf(r, 3, "P1", "P6"), r.id("P1"));
+    await r.sport.win(r.auth, await boardOf(r, 3, "P2", "P3"), r.id("P3"));
     const four = await pairSpied(r); // Pair round 4
     const oracle4 = await oracleFloats(r, 4);
     expect(oracle4.boards, "anti-vacuity: eight boards read").toBe(8);
-    expect(named(r, oracle4.floats), "premise: P1, P3 and P6 have floated down once each").toEqual([["P1", 1], ["P3", 1], ["P6", 1]]);
+    expect(named(r, oracle4.floats), "premise: P2, P3 and P6 have floated down once each").toEqual([["P2", 1], ["P3", 1], ["P6", 1]]);
     expect(named(r, four.history.floats), "round 4 is handed the counts, P5's bye not among them").toEqual(named(r, oracle4.floats));
     expect(four.history.byes?.has(r.id("P5")), "positive pair: P5's bye IS in the history, as a bye").toBe(true);
     expect(four.history.floats?.has(r.id("P5")), "and is not a float").toBe(false);
