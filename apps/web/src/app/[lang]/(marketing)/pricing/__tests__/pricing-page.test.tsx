@@ -161,13 +161,13 @@ describe("/pricing's Event Pass ticket sells only the rung that is on sale", () 
     expect(markup, 'the M slot').toContain('data-pass-stub-slot="m"');
     expect(text).toContain(M_PRICE);
     expect(text).toContain("10 divisions × 128 entrants");
-    // The chip names STREAMING credits (owner 2026-11-16), at the pass's own one-off figure from the matrix.
-    expect(text).toContain("+3 streaming credits, one-time");
+    // The chip names the stream credits — Seazn credits (owner 2026-11-16, renamed 2026-11-23), at the pass's own one-off figure from the matrix.
+    expect(text).toContain("+3 Seazn credits, one-time");
     expect(text).not.toMatch(/AI credits, one-time|AI credits \/ month/);
     // Community's single credit takes the singular, Pro's five the plural, both per month.
-    expect(text).toContain("1 streaming credit / month");
-    expect(text).toContain("5 streaming credits / month");
-    expect(text).not.toContain("+5 streaming credits");
+    expect(text).toContain("1 Seazn credit / month");
+    expect(text).toContain("5 Seazn credits / month");
+    expect(text).not.toContain("+5 Seazn credits");
 
     // The negative half, about the CAPS and the PRICE, not just the ladder
     // markup — L's price alone could plausibly appear in unrelated FAQ prose.

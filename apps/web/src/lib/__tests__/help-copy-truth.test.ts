@@ -981,7 +981,7 @@ describe.skipIf(!HAS_DB)("billing help articles quote the numbers the matrix enf
     [/^public dashboards$/i, "dashboard.public.max"],
     [/^organisations on one bill$/i, "orgs.max_owned"],
     [/^ai credits a month$/i, "ai.credits.monthly"],
-    [/^free match credits a month$/i, "streaming.credits.monthly"],
+    [/^free seazn credits a month$/i, "streaming.credits.monthly"],
     [/^platform fee/i, "registration.fee_percent"],
   ];
   const tokenTableCells = async (label: string, markdown: string) => {

@@ -126,7 +126,7 @@ test.describe("settings shell", () => {
     // several.
     const rail = page.getByRole("complementary");
     // Anchored, because the balance is whatever this environment's org has.
-    const balance = rail.getByRole("link", { name: /^Streaming credits: \d+$/ });
+    const balance = rail.getByRole("link", { name: /^Seazn credits: \d+$/ });
     await expect(balance).toBeVisible();
     // The Credits tab's bare URL: its Streaming side.
     await expect(balance).toHaveAttribute("href", /\/o\/[^/]+\/settings\/credits$/);

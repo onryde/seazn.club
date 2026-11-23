@@ -28,7 +28,7 @@ Open **Settings** and choose **Plan & Billing**.
 | Public dashboards | {{plan:dashboard.public.max:community}} | {{plan:dashboard.public.max:pro}} | No limit |
 | Organisations on one bill | {{plan:orgs.max_owned:community}} | {{plan:orgs.max_owned:pro}} | No limit |
 | AI credits a month | {{plan:ai.credits.monthly:community}} | {{plan:ai.credits.monthly:pro}} | {{plan:ai.credits.monthly:enterprise}} |
-| Free match credits a month | {{plan:streaming.credits.monthly:community}} | {{plan:streaming.credits.monthly:pro}} | {{plan:streaming.credits.monthly:enterprise}} |
+| Free Seazn credits a month | {{plan:streaming.credits.monthly:community}} | {{plan:streaming.credits.monthly:pro}} | {{plan:streaming.credits.monthly:enterprise}} |
 
 A competition stops counting as active once you mark it completed or archive it. A competition covered by an [Event Pass](/help/billing/event-pass) does not count either, while the pass applies.
 
@@ -42,7 +42,7 @@ Community is free, with no card. It runs up to {{plan:competitions.max_active:co
 
 An Event Pass is a one-time payment that lifts **one competition** while it runs. It raises that competition to **{{plan:divisions.per_competition.max:event_pass}} divisions** of **{{plan:entrants.per_division.max:event_pass}} entrants** and adds most of Pro's features to it. There is no subscription.
 
-Buying a pass also adds a one-time top-up of AI credits to your organisation, and a one-time batch of match credits. The amounts are on the [pricing page](/pricing). See [the Event Pass](/help/billing/event-pass).
+Buying a pass also adds a one-time top-up of AI credits to your organisation, and a one-time batch of Seazn credits. The amounts are on the [pricing page](/pricing). See [the Event Pass](/help/billing/event-pass).
 
 The pass stops once the competition is completed or archived, or a week after its end date. A new competition needs its own pass. See [when an Event Pass ends](/help/billing/event-pass-ends).
 

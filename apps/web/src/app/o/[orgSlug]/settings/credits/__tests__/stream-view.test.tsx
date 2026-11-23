@@ -150,10 +150,10 @@ describe("BillingStreamCredits — a history row", () => {
 });
 
 describe("BillingStreamCredits — balance and the free meter", () => {
-  it("says the balance in match credits, singular for one", async () => {
-    expect(await markup(view({ total: 7 }))).toContain(">7 match credits<");
-    expect(await markup(view({ total: 1 }))).toContain(">1 match credit<");
-    expect(await markup(view({ total: 0 }))).toContain(">0 match credits<");
+  it("says the balance in Seazn credits, singular for one", async () => {
+    expect(await markup(view({ total: 7 }))).toContain(">7 Seazn credits<");
+    expect(await markup(view({ total: 1 }))).toContain(">1 Seazn credit<");
+    expect(await markup(view({ total: 0 }))).toContain(">0 Seazn credits<");
   });
 
   it("the meter counts the allowance: one segment per free credit, filled as they are used (V4)", async () => {
@@ -218,11 +218,11 @@ describe("BillingStreamCredits — buying", () => {
     expect(checked).toBe(8);
     // …and what the org holds is still on the page
     const held = await markup(view({ offer: "notIncluded", total: 5, pack: 5, monthly: 0, freeAllowance: 0 }));
-    expect(held).toContain(">5 match credits<");
+    expect(held).toContain(">5 Seazn credits<");
   });
 
   it("the return from Stripe is announced, in the words that match whether the credits are in", async () => {
-    expect(await markup(view(), "en", { notice: "paid" })).toContain("Payment received. Your match credits are in your balance.");
+    expect(await markup(view(), "en", { notice: "paid" })).toContain("Payment received. Your Seazn credits are in your balance.");
     const processing = await markup(view(), "en", { notice: "processing" });
     expect(processing).toContain("Your payment is still processing.");
     expect(processing, "a payment that has not cleared is not 'received'").not.toContain("Payment received");
@@ -260,7 +260,7 @@ describe("BillingStreamCredits — empty, export and paging", () => {
   it("an empty ledger says so and offers no export (V6)", async () => {
     const out = await markup(view({ total: 0, history: { rows: [], nextCursor: null } }));
     expect(out).toContain('data-testid="credits-stream-empty"');
-    expect(out).toContain("No match credits yet.");
+    expect(out).toContain("No Seazn credits yet.");
     expect(out).not.toContain('role="table"');
     expect(out).not.toContain('data-testid="credits-stream-export"');
     expect(out).not.toContain('data-testid="credits-stream-pager"');

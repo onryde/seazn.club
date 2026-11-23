@@ -54,7 +54,7 @@ const driftRow = (priceId: string, day: string) => ({
   dedupe_key: `${priceId}:${PACK.lookupKey}:${day}`,
   status: "queued",
   recipient: staff,
-  subject: `Match-credit pack price differs from the table: ${PACK.lookupKey}`,
+  subject: `Seazn credit pack price differs from the table: ${PACK.lookupKey}`,
 });
 /** A live price for the pack whose EUR option charges 1 minor unit instead of the table's amount: drift. A run-unique id. */
 function driftedPrice(tag: string) {

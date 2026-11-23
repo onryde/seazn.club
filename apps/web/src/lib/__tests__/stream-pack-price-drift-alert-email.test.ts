@@ -20,7 +20,7 @@ describe("match-credit pack price drift alert", () => {
   it("names the pack, the price and the difference, says checkouts are refused, and says what fixes it", () => {
     const mail = streamPackPriceDriftAlertEmail(base);
     const body = `${mail.subject}\n${mail.html}\n${mail.text}`;
-    expect(mail.subject).toBe(`Match-credit pack price differs from the table: ${base.lookupKey}`);
+    expect(mail.subject).toBe(`Seazn credit pack price differs from the table: ${base.lookupKey}`);
     expect(body).toContain(base.lookupKey);
     expect(body).toContain(base.priceId);
     expect(body).toContain(base.drift);

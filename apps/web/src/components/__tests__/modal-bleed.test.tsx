@@ -11,7 +11,7 @@ const classesOf = (el: ReactElement | undefined): string[] =>
   String((el?.props as { className?: string } | undefined)?.className ?? "").split(/\s+/).filter(Boolean);
 
 function parts(bleed: boolean | undefined) {
-  const island = renderIsland(Modal, { title: "Buy match credits", onClose: () => {}, size: "lg" as const, bleed, children: "x" });
+  const island = renderIsland(Modal, { title: "Buy Seazn credits", onClose: () => {}, size: "lg" as const, bleed, children: "x" });
   const tree = island.tree();
   const dialog = tree.find((el) => (el.props as { role?: string }).role === "dialog");
   const close = tree.find((el) => (el.props as { "aria-label"?: string })["aria-label"] === "Close");

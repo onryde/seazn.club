@@ -198,7 +198,7 @@ export function cursorFromQuery(raw: string | string[] | undefined): string | un
 export function assertCanReadStreamHistory(auth: AuthCtx, orgId: string): void {
   if (orgId.toLowerCase() !== auth.orgId.toLowerCase()) throw new HttpError(404, "organisation not found");
   if (auth.via !== "session") {
-    throw new HttpError(403, "Only a signed-in person can read the match-credit history", "history_session_only");
+    throw new HttpError(403, "Only a signed-in person can read the Seazn credit history", "history_session_only");
   }
 }
 

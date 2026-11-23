@@ -1,6 +1,6 @@
 ---
 title: Add-ons
-description: Add extra organisations to a Pro bill without changing plan, and where to buy AI and match credit packs.
+description: Add extra organisations to a Pro bill without changing plan, and where to buy AI and Seazn credit packs.
 order: 7
 related: billing/groups, billing/plans, billing/credits, billing/match-credits
 ---
@@ -46,7 +46,7 @@ Removing an extra organisation does not freeze anything. Organisations already o
 ## Credit packs
 
 - **AI credit packs** are on **Settings → Credits → AI**, under **Buy credits**. See [AI credits](/help/billing/credits).
-- **Match credit packs** for streaming are on **Settings → Credits**, under **Buy match credits**. See [match credits](/help/billing/match-credits).
+- **Seazn credit packs** for streaming are on **Settings → Credits**, under **Buy Seazn credits**. See [Seazn credits](/help/billing/match-credits).
 
 Packs are one-time purchases and never expire.
 

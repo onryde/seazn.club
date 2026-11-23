@@ -899,7 +899,7 @@ describe("email builders compose from the html templates", () => {
   // downgrade nor a pass revoke, and the pass sentence ("the competition
   // returns to the plan allowance") is false in both halves for it — no
   // competition is involved, and the claw-back is capped at the balance.
-  it("staff dispute alert names match credits and describes the CAPPED claw-back", () => {
+  it("staff dispute alert names Seazn credits and describes the CAPPED claw-back", () => {
     const alert = (kind: "subscription" | "stream_credits" | "event_pass", status: string) =>
       staffDisputeAlertTemplate(
         {
@@ -917,7 +917,7 @@ describe("email builders compose from the html templates", () => {
     // A label of its own, distinct from the other two products' — the whole
     // reason `kind` is a union and not a boolean.
     const lost = alert("stream_credits", "lost");
-    expect(lost.subject).toMatch(/match credits/i);
+    expect(lost.subject).toMatch(/Seazn credits/i);
     expect(new Set([lost.subject, alert("subscription", "lost").subject, alert("event_pass", "lost").subject]).size).toBe(3);
 
     // The outcome line is the sentence a staffer acts on.
