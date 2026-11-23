@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SEAZN_TOKEN_REFRESH_BEFORE_SECONDS } from "@/server/relay/config";
 import type { PublicFixtureVideo } from "@/server/api-v1/schemas";
 import { type PageVisibility, SEAZN_VIDEO_FETCH_TIMEOUT_MS, startVideoPoll } from "../seazn-video-poll";
-import { SEAZN_VIDEO_POLL_FLOOR_MS, nextVideoFetchMs } from "../seazn-video-schedule";
+import { SEAZN_VIDEO_POLL_CEILING_MS, SEAZN_VIDEO_POLL_FLOOR_MS, nextVideoFetchMs } from "../seazn-video-schedule";
 
 const T0 = new Date("2026-11-21T12:00:00.000Z");
 const MIN = 60_000;
@@ -147,11 +147,11 @@ describe("startVideoPoll: the schedule", () => {
     poll.stop();
   });
 
-  it("carry 4: embeds alone on a fixture NOT settled are re-read at the floor, so a new Go live is seen within one read; the live answer then stays on the floor (a Stop is seen within one read)", async () => {
+  it("carry 4: embeds alone on a HOT fixture NOT settled are re-read at the floor, so a new Go live is seen within one read; the live answer then stays on the floor (a Stop is seen within one read)", async () => {
     const live = liveFor(60 * MIN);
     const r = route(embedOnly, embedOnly, live, live);
     const seen: PublicFixtureVideo[] = [];
-    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: (v) => seen.push(v) });
+    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: (v) => seen.push(v), activeUntilMs: T0.getTime() + 10 * MIN });
     await flush();
     await vi.advanceTimersByTimeAsync(SEAZN_VIDEO_POLL_FLOOR_MS - 1);
     expect(r.calls, "not before the floor").toHaveLength(1);
@@ -161,6 +161,24 @@ describe("startVideoPoll: the schedule", () => {
     expect(seen.at(-1)?.live, "the Go live, one floor later").not.toBeNull();
     await vi.advanceTimersByTimeAsync(SEAZN_VIDEO_POLL_FLOOR_MS);
     expect(r.calls).toHaveLength(4);
+    poll.stop();
+  });
+
+  it("review m5: embeds alone on a COLD fixture never settled (undecided) are re-read at the 60 s ceiling, not the floor — a new Go live is still seen within one read, and its live answer goes back to the floor", async () => {
+    const live = liveFor(60 * MIN);
+    const r = route(embedOnly, embedOnly, live, live);
+    const seen: PublicFixtureVideo[] = [];
+    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: (v) => seen.push(v) });
+    await flush();
+    await vi.advanceTimersByTimeAsync(SEAZN_VIDEO_POLL_CEILING_MS - 1);
+    expect(r.calls, "not before the ceiling").toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(r.calls).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(SEAZN_VIDEO_POLL_CEILING_MS);
+    expect(r.calls).toHaveLength(3);
+    expect(seen.at(-1)?.live, "the Go live, one ceiling later").not.toBeNull();
+    await vi.advanceTimersByTimeAsync(SEAZN_VIDEO_POLL_FLOOR_MS);
+    expect(r.calls, "live: the floor again").toHaveLength(4);
     poll.stop();
   });
 

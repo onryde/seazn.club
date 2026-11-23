@@ -26,6 +26,8 @@
 //     by the viewer's clock, so a page opened early turns hot by itself), or while it was in play or a Seazn session of it was
 //     warming or live when the page was drawn, up to the plan's bound (`activeUntil`, seazn-video-plan.ts). A hot page holds the
 //     floor: Go live, a Stop's recording and a second Go live each reach a viewer who is watching within one read.
+//   - A replay of the host's `embed` parts alone on a cold page that is not settled (an undecided fixture never settles) reads at the
+//     ceiling, 60 s (review m5); the frame never needs a re-read for its own sake.
 //   - A SETTLED fixture (decided, and past the stream code's grace after it finished, so no new Go live can start: the page's
 //     `settledAt`, seazn-video-plan.ts) has nothing more coming: an empty answer stops the loop, and an `hls` replay is re-read only at
 //     its token's refresh point (it must be: a player whose token lapses mid-watch fails, and a rebuilt one starts again from 0).
@@ -82,11 +84,13 @@ export const isEmptyVideo = (video: PublicFixtureVideo): boolean => video.live =
  *   - replay with an `hls` part (the interim Cloudflare recording): the floor, so a second Go live reaches an open page within one
  *     poll; once settled, the earliest `hls` token's refresh point instead (never sooner than the floor; an expiry that is not a date
  *     is the floor);
- *   - replay of `embed` parts alone (the replay host's own frame, Task 25, carry 4): the floor until the replay is FINAL, as an `hls`
- *     replay is, so a second Go live (or its Stop) reaches an open page within one read; the frame loaded its address once and ignores
- *     a later answer's (seazn-replay-frame.tsx), so the reads never restart it. FINAL: the fixture settled (no Go live can start) and
- *     nothing hot (no session was active as the page was drawn, kick-off not within the hour): no timer. A frame holding an address
- *     whose token has passed asks for its own read (seazn-video-poll.ts `readSoon`). */
+ *   - replay of `embed` parts alone (the replay host's own frame, Task 25, carry 4): the floor while the match is hot, so a second
+ *     Go live (or its Stop) reaches an open page within one read; the frame loaded its address once and ignores a later answer's
+ *     (seazn-replay-frame.tsx), so the reads never restart it. FINAL: the fixture settled (no Go live can start) and nothing hot (no
+ *     session was active as the page was drawn, kick-off not within the hour): no timer. Cold and not final — an UNDECIDED fixture
+ *     never settles (review m5) — the ceiling (60 s): a later Go live still reaches an open page within one read, and a forgotten
+ *     tab costs one read a minute. A frame holding an address whose token has passed asks for its own read (seazn-video-poll.ts
+ *     `readSoon`). */
 export function nextVideoFetchMs(video: PublicFixtureVideo | null, at: VideoReadContext): number | null {
   if (video === null) return SEAZN_VIDEO_POLL_FLOOR_MS;
   if (video.live !== null) return SEAZN_VIDEO_POLL_FLOOR_MS;
@@ -97,7 +101,10 @@ export function nextVideoFetchMs(video: PublicFixtureVideo | null, at: VideoRead
     return backoffMs(at.emptyStreak);
   }
   const hls = video.replay.filter((p) => p.player === "hls");
-  if (hls.length === 0) return settled && !isHotRead(at) ? null : SEAZN_VIDEO_POLL_FLOOR_MS;   // carry 4: final, or the floor
+  if (hls.length === 0) {
+    if (isHotRead(at)) return SEAZN_VIDEO_POLL_FLOOR_MS;          // carry 4: hot outranks settled
+    return settled ? null : SEAZN_VIDEO_POLL_CEILING_MS;           // final; or cold, not settled (review m5)
+  }
   if (!settled) return SEAZN_VIDEO_POLL_FLOOR_MS;
   const refreshAt = Math.min(...hls.map((p) => Date.parse(p.expiresAt))) - SEAZN_TOKEN_REFRESH_BEFORE_SECONDS * 1000;
   const wait = refreshAt - at.nowMs;

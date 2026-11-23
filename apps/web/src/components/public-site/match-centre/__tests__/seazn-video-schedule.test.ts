@@ -4,9 +4,10 @@
 //   - live: at the 30 s floor, whatever the token's life (Task 19, the Task 15 review's r3: a Stop must reach a page that is open,
 //     within one poll, not ~55 minutes later at the token's refresh point; a re-read at 30 s also always lands inside the token's
 //     refresh window, so it carries the refresh too);
-//   - replay only, and every part is the replay host's embed (Task 25, carry 4): the 30 s floor until the replay is FINAL — the
-//     fixture settled and nothing hot — then no timer (the frame checked its token when it loaded, and a later answer never
-//     touches it, so the reads cost the frame nothing: they are how a second Go live and a Stop still reach an open page);
+//   - replay only, and every part is the replay host's embed (Task 25, carry 4): the 30 s floor while hot, the 60 s ceiling when
+//     cold and not yet final (review m5: an undecided fixture never settles), and no timer once FINAL — the fixture settled and
+//     nothing hot (the frame checked its token when it loaded, and a later answer never touches it, so the reads cost the frame
+//     nothing: they are how a second Go live and a Stop still reach an open page);
 //   - replay only with an `hls` part (the interim Cloudflare recording): the 30 s floor too, whatever the parts' tokens (Task 19 fix
 //     round 1, I1: an organiser's second Go live after the first half's interim replay must reach a page that is open, within one
 //     poll, not ~55 minutes later at the recording token's refresh point).
@@ -73,8 +74,27 @@ describe("nextVideoFetchMs: live", () => {
 });
 
 describe("nextVideoFetchMs: replay only", () => {
-  it("carry 4: every part is the replay host's embed, and the fixture is not settled: the 30 s floor (a second Go live reaches an open page within one read)", () => {
-    expect(nextVideoFetchMs({ live: null, replay: [part(1, 60 * MIN, "embed"), part(2, 60 * MIN, "embed")] })).toBe(SEAZN_VIDEO_POLL_FLOOR_MS);
+  it("carry 4 + review m5: every part is the replay host's embed on a fixture not settled — the 30 s floor while HOT (a second Go live reaches an open page within one read), the 60 s ceiling when cold (it never settles if never decided)", () => {
+    const embeds: PublicFixtureVideo = { live: null, replay: [part(1, 60 * MIN, "embed"), part(2, 60 * MIN, "embed")] };
+    expect(nextVideoFetchMs(embeds), "cold: no kick-off, nothing active").toBe(SEAZN_VIDEO_POLL_CEILING_MS);
+    expect(nextVideoFetchAt(embeds, { ...OPEN, activeUntilMs: NOW.getTime() + 1 }), "a session active as the page was drawn").toBe(SEAZN_VIDEO_POLL_FLOOR_MS);
+    expect(nextVideoFetchAt(embeds, { ...OPEN, activeUntilMs: NOW.getTime() }), "active until now: cold").toBe(SEAZN_VIDEO_POLL_CEILING_MS);
+    expect(nextVideoFetchAt(embeds, { ...OPEN, kickoffAtMs: NOW.getTime() + SEAZN_VIDEO_KICKOFF_WINDOW_MS }), "kick-off within the hour").toBe(SEAZN_VIDEO_POLL_FLOOR_MS);
+  });
+
+  it("review m5: an UNDECIDED fixture's embed-only replay on a cold page reads at the 60 s ceiling on every read — never the floor, never more — so a forgotten open tab costs one read a minute, and a later Go live still reaches it within one", () => {
+    const embeds: PublicFixtureVideo = { live: null, replay: [part(1, 60 * MIN, "embed")] };
+    let checked = 0;
+    for (const hoursLater of [0, 1, 6, 24, 24 * 7]) {
+      for (const emptyStreak of [0, 1, 5]) {
+        const ctx: VideoReadContext = { nowMs: NOW.getTime() + hoursLater * 60 * MIN, settledAtMs: null, emptyStreak, kickoffAtMs: NOW.getTime() - 2 * 60 * MIN, activeUntilMs: NOW.getTime() - MIN };
+        expect(nextVideoFetchAt(embeds, ctx), `${hoursLater} h later, streak ${emptyStreak}`).toBe(60_000);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity").toBe(15);
+    // An hls part beside it still holds the floor (the interim's own rule): the ceiling is for embeds alone.
+    expect(nextVideoFetchAt({ live: null, replay: [part(1, 60 * MIN, "embed"), part(2, 60 * MIN)] }, OPEN)).toBe(SEAZN_VIDEO_POLL_FLOOR_MS);
   });
 
   // I1 (Task 19 review): a page showing the interim replay must learn of a second Go live within one poll. The expiries below are
@@ -205,7 +225,7 @@ describe("review I2: a SETTLED fixture (decided, past the window a new Go live c
     const embeds: PublicFixtureVideo = { live: null, replay: [part(1, 60 * MIN, "embed"), part(2, 60 * MIN, "embed")] };
     expect(nextVideoFetchAt(embeds, settled(-1)), "settled a ms ago").toBeNull();
     expect(nextVideoFetchAt(embeds, settled(0)), "settled at this very read").toBeNull();
-    expect(nextVideoFetchAt(embeds, settled(1)), "settled a ms from now: not yet").toBe(SEAZN_VIDEO_POLL_FLOOR_MS);
+    expect(nextVideoFetchAt(embeds, settled(1)), "settled a ms from now: not yet final, cold: the ceiling (review m5)").toBe(SEAZN_VIDEO_POLL_CEILING_MS);
   });
 
   it("carry 4: hot outranks settled for embeds alone, as it does for an empty answer — a session active as the page was drawn, or kick-off within the hour, holds the floor", () => {
