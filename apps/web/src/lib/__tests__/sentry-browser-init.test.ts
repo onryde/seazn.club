@@ -2,11 +2,12 @@
 // same day: the SDK must not be in the first-load JS). Under Turbopack the client init path Next 16 and @sentry/nextjs 10.62
 // support is src/instrumentation-client.ts (Next's file-conventions/instrumentation-client.md; @sentry/nextjs config/webpack.js:
 // "When using Turbopack `sentry.client.config.ts` will no longer work"). It boots lib/sentry-browser.ts, a facade with no
-// runtime SDK import, which fetches the SDK with a dynamic import() on idle, and only with a DSN and the visitor's analytics
-// consent (the privacy policy names no lawful basis for Sentry, so it is gated as PostHog is). Every client file reports
-// through the facade, which queues calls while the load is pending and drops them otherwise.
+// runtime SDK import, which fetches lib/sentry-browser-sdk.ts (the one module that imports the SDK, by name) with a dynamic
+// import() on idle, and only with a DSN and the visitor's analytics consent (the privacy policy names no lawful basis for
+// Sentry, so it is gated as PostHog is). Every client file reports through the facade, which queues calls while the load is
+// pending and drops them otherwise.
 //
-// The SDK is mocked; instrumentation-client, the facade, the options module, lib/consent and the banner's
+// The SDK is mocked; instrumentation-client, the facade, the lazy SDK module, lib/consent and the banner's
 // recordConsentChoice run for real. The scrub hooks themselves are proven in scrub-score-url-wiring.test.ts through the same
 // boot.
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
@@ -347,35 +348,58 @@ describe("source scans", () => {
     return null;
   }
 
-  it("no client-reachable file imports @sentry/* at runtime; the one dynamic import(\"@sentry/nextjs\") is the facade's", () => {
+  const LAZY = "src/lib/sentry-browser-sdk.ts";
+  const FACADE = "src/lib/sentry-browser.ts";
+  /** Walk the import graph from every client root ("use client" files and instrumentation-client.ts). `followDynamic` false is
+   *  the FIRST-LOAD graph: only static imports put code in a page's first-load chunks; an import() is its own chunk. */
+  function clientWalk(followDynamic: boolean) {
     const roots = sources(SRC).filter((f) => hasDirective(readFileSync(f, "utf8"), "use client"));
     roots.push(path.join(SRC, "instrumentation-client.ts"));
     const reached = new Set<string>();
     const stack = [...roots];
     const sdkImports: string[] = [];
+    const dynamicEdges: string[] = [];
     while (stack.length) {
       const file = stack.pop()!;
       if (reached.has(file)) continue;
       reached.add(file);
-      const src = code(file);
       if (hasDirective(readFileSync(file, "utf8"), "use server")) continue; // a server action is a reference on the client
-      for (const dep of runtimeDeps(src)) {
+      for (const dep of runtimeDeps(code(file))) {
         if (dep.spec.startsWith("@sentry/")) sdkImports.push(`${path.relative(WEB, file)} ${dep.dynamic ? "import()" : "static"} ${dep.spec}`);
         const next = resolveLocal(file, dep.spec);
-        if (next) stack.push(next);
+        if (next && dep.dynamic) dynamicEdges.push(`${path.relative(WEB, file)} -> ${path.relative(WEB, next)}`);
+        if (next && (followDynamic || !dep.dynamic)) stack.push(next);
       }
     }
+    return { roots, reached, sdkImports, dynamicEdges };
+  }
+  const rel = (files: Set<string>) => new Set([...files].map((f) => path.relative(WEB, f)));
+
+  it("the first-load graph: no client-reachable file imports @sentry/* at runtime, and the lazy SDK module is not in it", () => {
+    const { roots, reached, sdkImports } = clientWalk(false);
     expect(roots.length, "anti-vacuity: client roots").toBeGreaterThan(100);
-    expect(reached.size, "anti-vacuity: client-reachable files").toBeGreaterThan(500);
-    for (const via of ["src/lib/sentry-browser.ts", "src/lib/sentry-browser-options.ts", "src/lib/replay-guard.ts", "src/components/public-site/match-room/camera-loader.ts"]) {
-      expect(reached.has(path.join(WEB, via)), `the walk reaches ${via}`).toBe(true);
+    expect(reached.size, "anti-vacuity: files statically reachable from a client root").toBeGreaterThan(500);
+    const reachedRel = rel(reached);
+    for (const via of [FACADE, "src/lib/replay-guard.ts", "src/components/cookie-consent.tsx", "src/app/global-error.tsx", "src/components/public-site/match-room/camera-loader.ts", "src/components/v2/match-day/online/arbiter-camera.ts"]) {
+      expect(reachedRel.has(via), `the walk reaches ${via}`).toBe(true);
     }
-    expect(sdkImports).toEqual(["src/lib/sentry-browser.ts import() @sentry/nextjs"]);
+    expect(sdkImports, "no runtime @sentry/* import anywhere in the first-load graph").toEqual([]);
+    expect(reachedRel.has(LAZY), `${LAZY} is reached only through an import()`).toBe(false);
     // The matcher's positive pair: the server config's runtime import IS seen.
     expect(runtimeDeps(code(path.join(WEB, "sentry.server.config.ts"))).map((d) => d.spec)).toContain("@sentry/nextjs");
   });
 
-  it("init: the server and edge configs call Sentry.init; the browser's one init is the facade's; sentry.client.config is gone", () => {
+  it("with the import() edges followed: the only client module that imports @sentry/* is the lazy SDK module, and only the facade loads it", () => {
+    const { reached, sdkImports, dynamicEdges } = clientWalk(true);
+    expect(rel(reached).has(LAZY), "anti-vacuity: the full walk reaches the lazy module").toBe(true);
+    expect(sdkImports).toEqual([`${LAZY} static @sentry/nextjs`]);
+    expect(dynamicEdges.filter((e) => e.endsWith(`-> ${LAZY}`))).toEqual([`${FACADE} -> ${LAZY}`]);
+    // Named imports only: an import of the whole namespace (or an import() of the package) cannot be tree-shaken, and that chunk
+    // carried Replay and rrweb (measured 2026-11-23).
+    expect(code(path.join(WEB, LAZY))).not.toMatch(/import\s*\*\s*as\s+\w+\s+from\s*["']@sentry\/|import\(\s*["']@sentry\//);
+  });
+
+  it("init: the server and edge configs call Sentry.init; the browser's one init is the lazy SDK module's; sentry.client.config is gone", () => {
     const files = sources(WEB);
     expect(files.length, "anti-vacuity: the app's source files were scanned").toBeGreaterThan(1000);
     const sentryInit: Record<string, number> = {};
@@ -383,12 +407,12 @@ describe("source scans", () => {
     for (const file of files) {
       const src = code(file);
       const a = (src.match(/\bSentry\.init\s*\(/g) ?? []).length + (/import\s*\{[^}]*\binit\b[^}]*\}\s*from\s*["']@sentry\//.test(src) ? 1 : 0);
-      const b = (src.match(/\.init\(\s*browserSentryOptions\(/g) ?? []).length;
+      const b = (src.match(/\binit\(\s*browserSentryOptions\(/g) ?? []).length;
       if (a) sentryInit[path.relative(WEB, file)] = a;
       if (b) browserInit[path.relative(WEB, file)] = b;
     }
-    expect(sentryInit).toEqual({ "sentry.edge.config.ts": 1, "sentry.server.config.ts": 1 });
-    expect(browserInit).toEqual({ "src/lib/sentry-browser.ts": 1 });
+    expect(sentryInit).toEqual({ "sentry.edge.config.ts": 1, "sentry.server.config.ts": 1, [LAZY]: 1 });
+    expect(browserInit).toEqual({ [LAZY]: 1 });
     for (const dead of ["sentry.client.config.ts", "sentry.client.config.js"]) {
       expect(existsSync(path.join(WEB, dead)), `${dead}: webpack-only, and a second client init if a webpack build ever ran`).toBe(false);
     }

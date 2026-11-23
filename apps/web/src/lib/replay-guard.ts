@@ -1,7 +1,7 @@
 // Sentry Replay and the credentials in a page's URL.
 //
 // NO REPLAY RUNS TODAY: the browser client is initialised without a Replay integration (owner 2026-11-23: errors and warnings
-// only; lib/sentry-browser.ts and lib/sentry-browser-options.ts). The router hook still calls `stopReplayBeforeNavigatingTo`, which
+// only; lib/sentry-browser.ts and lib/sentry-browser-sdk.ts). The router hook still calls `stopReplayBeforeNavigatingTo`, which
 // finds no Replay and does nothing. `replayMayRunAt`, `REPLAY_BLOCK_SELECTORS` and `recordingEventHook` have no production
 // caller: they are what a replay must be wired with if one is ever turned on (the deleted sentry.client.config.ts did it:
 // `replayIntegration({ maskAllText, blockAllMedia, block: REPLAY_BLOCK_SELECTORS, beforeAddRecordingEvent: recordingEventHook })`,

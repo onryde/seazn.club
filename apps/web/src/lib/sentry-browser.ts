@@ -1,18 +1,18 @@
 // The browser's one door to Sentry (owner 2026-11-23: errors and warnings only, no session replay). Every client file reports
 // through THIS module, never through @sentry/nextjs: the SDK is not in the first-load JS. Nothing here imports it at runtime
-// (`import type` only); it is fetched with a dynamic `import()` once the visitor has accepted analytics, when the browser is
-// idle: at boot by instrumentation-client.ts, or on the banner's Accept (components/cookie-consent.tsx). The options, the
-// privacy hooks and the send-time consent gate are in ./sentry-browser-options.ts, fetched with it.
+// (`import type` only). ./sentry-browser-sdk.ts, the one module that does, is fetched with a dynamic `import()` once the
+// visitor has accepted analytics, when the browser is idle: at boot by instrumentation-client.ts, or on the banner's Accept
+// (components/cookie-consent.tsx). The options, the privacy hooks and the send-time consent gate are there.
 //
 // Until the SDK has loaded, a call is
 //  - QUEUED while a load is pending (consent given, a DSN set), up to SENTRY_QUEUE_CAP, then flushed in order on load;
 //  - DROPPED otherwise: no consent, no DSN, the queue full, or a load that failed (a failed load is not retried).
 // Under Turbopack, instrumentation-client.ts is the client init path Next 16 and @sentry/nextjs support (@sentry/nextjs 10.62
 // config/webpack.js: "When using Turbopack `sentry.client.config.ts` will no longer work"); that file is deleted.
-import type * as SentryNext from "@sentry/nextjs";
+import type * as LazySdk from "@/lib/sentry-browser-sdk";
 import { analyticsConsented } from "@/lib/consent";
 
-type Sdk = typeof SentryNext;
+type Sdk = typeof LazySdk;
 type State = "off" | "pending" | "ready" | "failed";
 
 /** Calls held while the SDK loads; past this many they are dropped (a page that errors in a loop must not grow it). */
@@ -72,9 +72,9 @@ export function loadBrowserSentry(): Promise<boolean> {
     return Promise.resolve(false);
   }
   state = "pending";
-  loading = Promise.all([import("@sentry/nextjs"), import("@/lib/sentry-browser-options")])
-    .then(([mod, { browserSentryOptions }]) => {
-      mod.init(browserSentryOptions(mod, dsn));
+  loading = import("@/lib/sentry-browser-sdk")
+    .then((mod) => {
+      mod.startBrowserSentry(dsn);
       sdk = mod;
       state = "ready";
       for (const call of queue.splice(0)) forward(call);
