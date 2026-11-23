@@ -10,7 +10,7 @@
 //     callback, the token revoke and the token test) over a stubbed fetch and read the header off the request.
 // The expected header is the exported constant; the constant itself is held to the rule's own words (a URL or the
 // application's name; no personal email), never to its own spelling.
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -40,8 +40,9 @@ import { GET as CALLBACK } from "@/app/api/auth/lichess/callback/route";
 const HAS_DB = !!process.env.DATABASE_URL;
 const WEB = join(__dirname, "../../../..");
 
-/** Every file that sends a request to Lichess, and how many `fetch(` call sites it holds today. A new site moves its
- *  count here AND owes a driven case below. */
+/** Every file that sends a request to Lichess, and how many `fetch(` call sites it holds today. The FILE list is not
+ *  trusted (review m3): the scan below derives it from src/ and must equal these keys, so a new module that calls Lichess
+ *  reds until it is listed here with its count AND owes a driven case below. */
 const SITES: Record<string, number> = {
   "src/server/external-play/lichess/board-api.ts": 2, // the shared `call` helper; readGameStream's first-line read
   "src/server/usecases/external-accounts.ts": 2, // revokeAtLichess (DELETE /api/token); testAtLichess (POST /api/token/test)
@@ -88,7 +89,35 @@ describe("LICHESS_USER_AGENT — the rule's own words", () => {
   });
 });
 
+/** Every non-test source file under src/ whose CODE (comment lines dropped) names a Lichess URL - lichess.org itself or
+ *  any LICHESS_*_URL constant (lib/oauth.ts) - and calls fetch. */
+function lichessFetchingFiles(): { files: string[]; scanned: number } {
+  const all: string[] = [];
+  const walk = (dir: string): void => {
+    for (const name of readdirSync(dir)) {
+      const p = join(dir, name);
+      if (statSync(p).isDirectory()) {
+        if (name !== "__tests__" && name !== "node_modules") walk(p);
+      } else if (/\.tsx?$/.test(name) && !/\.(test|spec|load)\.tsx?$/.test(name)) all.push(p);
+    }
+  };
+  walk(join(WEB, "src"));
+  const files = all
+    .filter((p) => {
+      const code = readFileSync(p, "utf8").split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+      return /LICHESS_[A-Z_]*URL\b|lichess\.org/.test(code) && fetchCalls(code).length > 0;
+    })
+    .map((p) => p.slice(WEB.length + 1));
+  return { files: files.sort(), scanned: all.length };
+}
+
 describe("every fetch( that reaches Lichess passes LICHESS_USER_AGENT (source scan)", () => {
+  it("the files that call Lichess are DERIVED from src/, and are exactly the pinned ones", () => {
+    const { files, scanned } = lichessFetchingFiles();
+    expect(scanned, "anti-vacuity: src/ was walked").toBeGreaterThan(1_000);
+    expect(files, "a file that names a Lichess URL and calls fetch, missing from SITES (or listed and gone)").toEqual(Object.keys(SITES).sort());
+  });
+
   it("each call site's own arguments name the constant, and the site count per file is the pinned one", () => {
     let checked = 0;
     for (const [rel, expected] of Object.entries(SITES)) {
