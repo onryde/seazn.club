@@ -2,6 +2,16 @@
   "facts": {
     "lotsFirst": "Larks",
     "lotsSecond": "Owls",
+    "lastPlace": "Wrens",
+    "lastPlaceNumber": "3rd",
+    "onlyOwlsSeededFirst": "Owls",
+    "onlyOwlsSeededSplitBy": "seeding",
+    "noSeedsFirst": "Larks",
+    "noSeedsSplitBy": "drawing of lots",
+    "threeWayDrawsMade": 1,
+    "threeWayGroupSize": 3,
+    "threeWayFirst": "Wrens",
+    "threeWayLast": "Owls",
     "seedingFirst": "Owls",
     "storedFirst": "Larks",
     "storedDrawsMade": 0,
@@ -26,7 +36,7 @@
     "seedSportCount": 3
   },
   "table": {
-    "caption": "Larks and Owls are level on everything a generic table checks, so a drawing of lots decides. With a seeding step first, the better seed goes higher instead.",
+    "caption": "Larks and Owls are level on points, difference and total scored, so a drawing of lots puts Larks first. With a seeding step before the lots, the seeding puts Owls first instead.",
     "columns": [
       "Team",
       "Seed",
@@ -73,6 +83,9 @@
   "text": [
     "Larks 1 — 1 Owls.",
     "Larks 2 — 0 Wrens.",
-    "Owls 2 — 0 Wrens."
+    "Owls 2 — 0 Wrens.",
+    "Second table: Larks 1 — 1 Owls.",
+    "Second table: Larks 1 — 1 Wrens.",
+    "Second table: Owls 1 — 1 Wrens."
   ]
 }

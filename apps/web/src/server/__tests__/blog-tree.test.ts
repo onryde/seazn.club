@@ -130,6 +130,29 @@ describe("the tree", () => {
     expect(withExample, "posts with a generated example").toBeGreaterThan(0);
   });
 
+  // Blog batch 2: a generated table is not a picture. The review found six posts passing the test above on their table alone,
+  // so each batch 2 post owes a product picture too, which the table does not stand in for.
+  it("blog batch 2: every tie-break post carries a picture as well as its generated table", () => {
+    const BATCH_2_SLUGS = [
+      "level-on-points-who-finishes-higher",
+      "three-way-tie-head-to-head",
+      "net-run-rate-explained",
+      "set-ratio-or-set-difference",
+      "buchholz-and-sonneborn-berger",
+      "when-lots-decide-a-tie",
+    ];
+    let checked = 0;
+    for (const slug of BATCH_2_SLUGS) {
+      const p = posts.find((x) => x.slug === slug);
+      expect(p, `${slug}: the post exists`).toBeDefined();
+      const pictures = p!.markdown.match(/!\[[^\]]*\]\(\/help\/blog\/[^)]+\)/g) ?? [];
+      expect(pictures.length, `${slug}: a picture besides the table`).toBeGreaterThanOrEqual(1);
+      expect(p!.examples.some((id) => BLOG_GOLDENS[id]?.table !== undefined), `${slug}: still has its generated table`).toBe(true);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: batch 2 posts checked").toBe(BATCH_2_SLUGS.length);
+  });
+
   it("every post renders end to end: fact tokens resolved, one example part per listed example, no brace left in the HTML", async () => {
     let parts = 0;
     for (const p of posts) {

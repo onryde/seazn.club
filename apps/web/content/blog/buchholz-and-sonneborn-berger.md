@@ -7,12 +7,12 @@ topic: tie-breaks
 sports: all
 help: sports/chess
 related: level-on-points-who-finishes-higher, how-swiss-pairing-works, when-lots-decide-a-tie
-examples: buchholz-sonneborn-berger
+examples: buchholz-sonneborn-berger, buchholz-bye
 ---
 
 In a Swiss, nobody plays everybody, so two players who finish on the same points may have met completely different opposition, and quite often they never met each other. Head-to-head, the usual way to separate two players, has nothing to look at. What the table can look at is how strong the people they did play turned out to be. That is what Buchholz and Sonneborn-Berger measure, and they are why a Swiss table can put one of two level players above the other without a rematch.
 
-The table below is a chess Swiss: {{fact:buchholz-sonneborn-berger.players}} players, {{fact:buchholz-sonneborn-berger.rounds}} rounds.
+The table below is a chess Swiss: {{fact:buchholz-sonneborn-berger.players}} players, {{fact:buchholz-sonneborn-berger.rounds}} rounds. The pairings were fixed by hand to make the case, and every game in it was scored as a real match; in a real Swiss the system pairs each round itself.
 
 {{example:buchholz-sonneborn-berger}}
 
@@ -24,13 +24,19 @@ The table below is a chess Swiss: {{fact:buchholz-sonneborn-berger.players}} pla
 
 Dev finishes on {{fact:buchholz-sonneborn-berger.devPoints}} points, ahead of everyone, so no tie-break is needed. Ana, Cy and Ben all finish on {{fact:buchholz-sonneborn-berger.anaPoints}}, and the list starts with Buchholz Cut-1. Ana's is {{fact:buchholz-sonneborn-berger.anaCut1}}, against {{fact:buchholz-sonneborn-berger.cyCut1}} for Cy and {{fact:buchholz-sonneborn-berger.benCut1}} for Ben, because Ana met the strongest field of the three. Ana finishes {{fact:buchholz-sonneborn-berger.anaPlace}}.
 
-Cy and Ben are level on both Buchholz figures, {{fact:buchholz-sonneborn-berger.cyCut1}} and {{fact:buchholz-sonneborn-berger.cyBuchholz}} for one and {{fact:buchholz-sonneborn-berger.benCut1}} and {{fact:buchholz-sonneborn-berger.benBuchholz}} for the other, so the next figure decides. Sonneborn-Berger gives Cy {{fact:buchholz-sonneborn-berger.cySonnebornBerger}} and Ben {{fact:buchholz-sonneborn-berger.benSonnebornBerger}}. Ben's wins were against Eve and Fay, who finish {{fact:buchholz-sonneborn-berger.evePlace}} and {{fact:buchholz-sonneborn-berger.fayPlace}}, and he lost to Ana, so those wins add little. Cy drew with Ana, the strongest of the three, and that draw counts for more than Ben's two wins. Cy finishes {{fact:buchholz-sonneborn-berger.cyPlace}} and Ben {{fact:buchholz-sonneborn-berger.benPlace}}.
+Cy and Ben are level on both Buchholz figures, {{fact:buchholz-sonneborn-berger.cyCut1}} and {{fact:buchholz-sonneborn-berger.cyBuchholz}} for one and {{fact:buchholz-sonneborn-berger.benCut1}} and {{fact:buchholz-sonneborn-berger.benBuchholz}} for the other, so the next figure decides. Sonneborn-Berger gives Cy {{fact:buchholz-sonneborn-berger.cySonnebornBerger}} and Ben {{fact:buchholz-sonneborn-berger.benSonnebornBerger}}. Ben's games read: {{fact:buchholz-sonneborn-berger.benGames}}. Eve and Fay, whom he beat, finish {{fact:buchholz-sonneborn-berger.evePlace}} and {{fact:buchholz-sonneborn-berger.fayPlace}}, so those wins add little, and he earns nothing from the loss to Ana. Cy's games read: {{fact:buchholz-sonneborn-berger.cyGames}}. The draw with Ana counts for half of Ana's score, which is more than Ben's two wins add together. Cy finishes {{fact:buchholz-sonneborn-berger.cyPlace}} and Ben {{fact:buchholz-sonneborn-berger.benPlace}}.
+
+## A round with no game
+
+Nobody has to be paired against anyone in every round: with an odd number of players somebody sits out and is given a bye. A bye has no opponent whose score could be added up, so the tie-break reads it as a game against an imaginary opponent who finishes on the same points as the player, and the bye itself counts as a win (FIDE C.07, article 16.4). The second table is {{fact:buchholz-bye.players}} players over {{fact:buchholz-bye.rounds}} rounds, with a bye for one of them in each round.
+
+{{example:buchholz-bye}}
+
+Cy and Dev both had a bye and both finish on {{fact:buchholz-bye.cyPoints}} points. The bye is worth the same to each of them, their own points, so the real games decide. Cy's games read: {{fact:buchholz-bye.cyGames}}. Dev's read: {{fact:buchholz-bye.devGames}}. Cy's Buchholz Cut-1 is {{fact:buchholz-bye.cyCut1}} against {{fact:buchholz-bye.devCut1}} for Dev, so Cy finishes {{fact:buchholz-bye.cyPlace}} and Dev {{fact:buchholz-bye.devPlace}}. Leave the bye out of the sum and the Buchholz drops by the player's own points, which is why the table does not do it.
 
 ## Why chess asks for them first
 
-Chess puts the three in this order: Buchholz Cut-1, then Buchholz, then Sonneborn-Berger. Cut-1 comes first because it is the figure FIDE recommends. After them come the direct encounter, if the two players did meet, then the number of wins, then a drawing of lots.
-
-A chess game has no score beyond a win, a draw or a loss, so there is no margin to count. The quality of the opposition is the first fair evidence there is, and so chess asks for it before anything else.
+After points, chess runs down this list: {{fact:buchholz-sonneborn-berger.boardgameSwissOrder}}. A chess game has no score beyond a win, a draw or a loss, so there is no margin to count, and the quality of the opposition is the first evidence the table has.
 
 ## What each sport's Swiss stage checks
 
@@ -50,4 +56,6 @@ After points, each sport's Swiss stage runs down its own list.
 
 ## Where you set it
 
-The division's **Standings** tab prints the order under the table as "Tie-break cascade", and a chess Swiss reads points, Buchholz Cut-1, Buchholz, Sonneborn-Berger, direct encounter, wins and drawing of lots. The Swiss table has a column for each figure, and beside two players who were separated it says "Tied with" and the other player, and "split on" followed by the figure: for example "split on Buchholz Cut-1". The stage's **Tie-breaks** button on the **Fixtures** tab edits the list until the stage starts.
+The division's **Standings** tab prints the order under the table as "Tie-break cascade", and a chess Swiss reads points, then {{fact:buchholz-sonneborn-berger.boardgameSwissOrder}}. The Swiss table has a column for each figure, and beside two players who were separated it says "Tied with" and the other player, and "split on" followed by the figure: for example "split on Buchholz Cut-1". The stage's **Tie-breaks** button on the **Fixtures** tab edits the list until the stage starts.
+
+![The Tie-breaks list of a started chess Swiss stage: points, Buchholz Cut-1, Buchholz, Sonneborn-Berger, direct encounter, wins and drawing of lots](/help/blog/buchholz-and-sonneborn-berger-1.webp "A chess Swiss stage lists Buchholz Cut-1, Buchholz and Sonneborn-Berger straight after points.")

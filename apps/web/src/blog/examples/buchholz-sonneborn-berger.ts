@@ -16,7 +16,8 @@ import { resultColumnText } from "@seazn/engine/competition";
 import { builtinModules } from "@seazn/engine/sports";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { declaredCfgs, defaultOrderOf, forEachSport } from "@seazn/engine/testkit";
-import { sportLabel, tiebreakLabel } from "@/blog/labels";
+import { sportLabel } from "@/blog/labels";
+import { standingsLabel } from "@/blog/labels-screens";
 import { derivedText } from "@/server/public-site/standings-view";
 import { startingVariantKey } from "./starting-variant";
 import { factsRepeatTheTable, placeOf, placeText, playAndRank, rowOf, stageRules, type MatchView, type Meeting } from "./tie-break-play";
@@ -91,7 +92,7 @@ function build(): ExampleResult {
       derivedText(r, "buchholz", L),
       derivedText(r, "sberger", L),
       placeText(r.rank!),
-      r.tieBreak === undefined ? "Points" : tiebreakLabel(r.tieBreak.key),
+      r.tieBreak === undefined ? "Points" : standingsLabel(r.tieBreak.key, "boardgame"),
     ]);
   const facts: ExampleResult["facts"] = {};
   for (const p of PLAYERS) {
@@ -101,21 +102,18 @@ function build(): ExampleResult {
     facts[`${p.id}Buchholz`] = derivedText(r, "buchholz", L);
     facts[`${p.id}SonnebornBerger`] = derivedText(r, "sberger", L);
     facts[`${p.id}Place`] = placeText(r.rank!);
+    facts[`${p.id}Games`] = gamesText(p.id, ranked.played);
   }
   facts.rounds = ROUNDS;
   facts.players = PLAYERS.length;
   const visited = forEachSport(({ module: m }) => {
     const order = stageRules(m, declaredCfgs(m).find((c) => c.name === startingVariantKey(m))!.cfg, "swiss").tiebreakers;
-    facts[`${m.key}SwissOrder`] = order.slice(1).map(tiebreakLabel).join(", ");
+    facts[`${m.key}SwissOrder`] = order.slice(1).map((k) => standingsLabel(k, m.key)).join(", ");
   });
   facts.sportCount = visited;
-  return {
+  const result: ExampleResult = {
     facts,
-    table: {
-      caption: "Six players after three Swiss rounds. Ana, Cy and Ben share the same points: Buchholz Cut-1 puts Ana first of them, and Sonneborn–Berger separates Cy from Ben.",
-      columns: COLUMNS,
-      rows,
-    },
+    table: { caption: "", columns: COLUMNS, rows },
     text: [
       ...ranked.played.map((p) => `Round ${p.meeting.round}: ${nameOf(p.meeting.home)} ${p.view.headline} ${nameOf(p.meeting.away)}.`),
       ...(() => {
@@ -125,6 +123,19 @@ function build(): ExampleResult {
       })(),
     ],
   };
+  result.table!.caption = captionOf(result);
+  return result;
+}
+
+/** The caption, said from the table's own cells: the group on the same points and the steps that split it. */
+export function captionOf(r: Pick<ExampleResult, "facts" | "table">): string {
+  const rows = [...(r.table?.rows ?? [])].sort((a, b) => placeOf(a[C.place]) - placeOf(b[C.place]));
+  const byPoints = new Map<number, (string | number)[][]>();
+  for (const x of rows) byPoints.set(halves(x[C.points]), [...(byPoints.get(halves(x[C.points])) ?? []), x]);
+  const group = [...byPoints.values()].sort((a, b) => b.length - a.length)[0] ?? [];
+  const names = group.map((x) => String(x[C.player]));
+  const steps = [...new Set(group.map((x) => String(x[C.by])).filter((b) => b !== "Points"))];
+  return `${String(r.facts.players)} players after ${String(r.facts.rounds)} Swiss rounds. ${names.slice(0, -1).join(", ")} and ${names[names.length - 1]} finish level on ${String(group[0]?.[C.points])} points, and ${steps.join(" and ")} put them in that order.`;
 }
 
 // ---- claims: FIDE C.07 (2026), from the table's own cells ----
@@ -231,7 +242,7 @@ function sportClaim(module: AnySportModule): Claim {
     source: "defaultOrderOf(module, \"swiss\")",
     sport: module.key,
     check(r) {
-      const want = defaultOrderOf(module, "swiss").slice(1).map(tiebreakLabel).join(", ");
+      const want = defaultOrderOf(module, "swiss").slice(1).map((k) => standingsLabel(k, module.key)).join(", ");
       return r.facts[`${module.key}SwissOrder`] === want || `fact '${String(r.facts[`${module.key}SwissOrder`])}', declared '${want}'`;
     },
   };
@@ -240,32 +251,43 @@ function sportClaim(module: AnySportModule): Claim {
 /** The first of chess's Swiss steps after points on which two rows differ, as the table labels it. */
 function firstDifference(a: (string | number)[], b: (string | number)[]): string | null {
   const sb = (x: (string | number)[]) => (String(x[C.sb]).includes(".") ? Number(x[C.sb]) : halves(x[C.sb]));
-  if (halves(a[C.cut1]) !== halves(b[C.cut1])) return tiebreakLabel("buchholz_cut1");
-  if (halves(a[C.buchholz]) !== halves(b[C.buchholz])) return tiebreakLabel("buchholz");
-  if (sb(a) !== sb(b)) return tiebreakLabel("sberger");
+  if (halves(a[C.cut1]) !== halves(b[C.cut1])) return standingsLabel("buchholz_cut1", "boardgame");
+  if (halves(a[C.buchholz]) !== halves(b[C.buchholz])) return standingsLabel("buchholz", "boardgame");
+  if (sb(a) !== sb(b)) return standingsLabel("sberger", "boardgame");
   return null;
 }
 
+/** The separated-by column, from the cells: shared with the bye example, whose table has the same columns. */
+export const separatedByClaim: Claim = {
+  says: "the separated-by column names the first step, after points, on which a player differs from the level player below them (the last of a group: above)",
+  source: "defaultOrderOf(boardgame, \"swiss\") over the table's cells (a player alone on their points is separated by points)",
+  check(r) {
+    const rows = [...(r.table?.rows ?? [])].sort((a, b) => placeOf(a[C.place]) - placeOf(b[C.place]));
+    for (const [i, x] of rows.entries()) {
+      const level = rows.filter((y) => y !== x && halves(y[C.points]) === halves(x[C.points]));
+      if (level.length === 0) {
+        if (x[C.by] !== "Points") return `${String(x[C.player])}: separated by ${String(x[C.by])}, alone on their points`;
+        continue;
+      }
+      // Against the level player just below (or, for the last of the group, just above).
+      const next = rows[i + 1] !== undefined && level.includes(rows[i + 1]!) ? rows[i + 1]! : rows[i - 1]!;
+      const want = firstDifference(x, next);
+      if (x[C.by] !== want) return `${String(x[C.player])}: separated by ${String(x[C.by])}, the cells give ${String(want)}`;
+    }
+    return rows.length > 0 || "no rows";
+  },
+};
+
 const claims: Claim[] = [
   ...caseClaims,
-  factsRepeatTheTable(PLAYERS, C.player, { Points: C.points, Cut1: C.cut1, Buchholz: C.buchholz, SonnebornBerger: C.sb, Place: C.place }),
+  factsRepeatTheTable(PLAYERS, C.player, { Points: C.points, Cut1: C.cut1, Buchholz: C.buchholz, SonnebornBerger: C.sb, Place: C.place, Games: C.games }),
+  separatedByClaim,
   {
-    says: "the separated-by column names the first step, after points, on which a player differs from the level player below them (the last of a group: above)",
-    source: "defaultOrderOf(boardgame, \"swiss\") over the table's cells (a player alone on their points is separated by points)",
+    says: "the caption is the one said from the table's own cells and the facts",
+    source: "the table's cells and the example's facts (nothing in it is typed)",
     check(r) {
-      const rows = [...(r.table?.rows ?? [])].sort((a, b) => placeOf(a[C.place]) - placeOf(b[C.place]));
-      for (const [i, x] of rows.entries()) {
-        const level = rows.filter((y) => y !== x && halves(y[C.points]) === halves(x[C.points]));
-        if (level.length === 0) {
-          if (x[C.by] !== "Points") return `${String(x[C.player])}: separated by ${String(x[C.by])}, alone on their points`;
-          continue;
-        }
-        // Against the level player just below (or, for the last of the group, just above).
-        const next = rows[i + 1] !== undefined && level.includes(rows[i + 1]!) ? rows[i + 1]! : rows[i - 1]!;
-        const want = firstDifference(x, next);
-        if (x[C.by] !== want) return `${String(x[C.player])}: separated by ${String(x[C.by])}, the cells give ${String(want)}`;
-      }
-      return rows.length > 0 || "no rows";
+      const want = captionOf(r);
+      return r.table?.caption === want || `caption is '${String(r.table?.caption)}', the cells give '${want}'`;
     },
   },
   {
