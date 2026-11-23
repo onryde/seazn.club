@@ -33,7 +33,7 @@ import { SeaznReplayFrame } from "./seazn-replay-frame";
 import { holdAfterAnswer, holdWait, parseHold, showsPlayer } from "./seazn-video-hold";
 import type { SeaznVideoLabels } from "./seazn-video-labels";
 import { startVideoPoll, type VideoPoll } from "./seazn-video-poll";
-import { BadVideoAnswer, createVideoReporter, sentryVideoReport, type PlayerFatal } from "./seazn-video-report";
+import { BadVideoAnswer, beaconVideoReport, createVideoReporter, type PlayerFatal } from "./seazn-video-report";
 
 export type SeaznVideoEndpoint = "public" | "org";
 
@@ -265,8 +265,9 @@ export function SeaznVideoIsland({
   const [holdUntil, setHoldUntil] = useState<number | null>(() => parseHold(holdFromPlan));
   const [epoch, setEpoch] = useState(0);
   const pollRef = useRef<VideoPoll | null>(null);
-  // One reporter per page view (Task 25): a player's failure once per address, a failed read once per kind (seazn-video-report.ts).
-  const [reporter] = useState(() => createVideoReporter(sentryVideoReport));
+  // One reporter per page view (Task 25): a player's failure once per address, a failed read once per kind, each sent to our server as a
+  // beacon (Task 25b, seazn-video-report.ts).
+  const [reporter] = useState(() => createVideoReporter(beaconVideoReport));
   // Not a date: never settled (a NaN settle time compares false, so the loop only backs off).
   const settledAtMs = settledAt === null ? null : Date.parse(settledAt);
   // Not a date: no window (the schedule reads a NaN hint as cold).

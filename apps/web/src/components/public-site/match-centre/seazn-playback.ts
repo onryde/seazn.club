@@ -24,6 +24,8 @@
 //     because the island reports it (seazn-video-report.ts). Never an address, a token, a URL or an error's text: hls.js's error data
 //     carries the request's URL (the token is a path segment) and its `error.message` can quote it.
 import type Hls from "hls.js";
+import { isClientReportCode } from "@/lib/client-reports";
+import type { PlayerFailureReason } from "@/lib/seazn-video-report-codes";
 import { parseSignedAddress, withToken, type SignedAddress } from "./seazn-signed-address";
 
 export const HLS_MIME = "application/vnd.apple.mpegurl";
@@ -32,7 +34,7 @@ export const HLS_MIME = "application/vnd.apple.mpegurl";
 export interface PlaybackFailure {
   /** `hls`: a fatal hls.js error; `unsupported`: a browser hls.js cannot run in; `bundle`: hls.js would not load; `element`: the
    *  element's own error (native HLS); `unsigned`: an address with no token to read (the signer changed shape). */
-  reason: "hls" | "unsupported" | "bundle" | "element" | "unsigned";
+  reason: PlayerFailureReason;
   /** hls.js's error type and details (`networkError`, `manifestLoadError`), for an hls.js error; else null. */
   hlsType: string | null;
   hlsDetails: string | null;
@@ -41,8 +43,9 @@ export interface PlaybackFailure {
   /** The element's MediaError code (1-4), for an element error; else null. */
   mediaCode: number | null;
 }
-/** A code is a bare word (hls.js's enums are); anything else, a URL included, is dropped. */
-const codeOf = (v: unknown): string | null => (typeof v === "string" && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(v) ? v : null);
+/** A code is a bare word (hls.js's enums are) that names no credential (lib/client-reports.ts, the beacon route's own rule); anything
+ *  else, a URL included, is dropped, so a report never carries a code the route would refuse. */
+const codeOf = (v: unknown): string | null => (isClientReportCode(v) ? v : null);
 const statusOf = (v: unknown): number | null => (typeof v === "number" && Number.isInteger(v) && v >= 100 && v <= 599 ? v : null);
 /** The element's MediaError code: 1-4. */
 const mediaCodeOf = (v: unknown): number | null => (typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 4 ? v : null);

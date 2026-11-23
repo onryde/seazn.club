@@ -9,12 +9,18 @@
 // A report holds the fixture, the part (null for the live), the player's kind, live or replay, and the failure's CODES (hls.js's type
 // and details, the HTTP status, the element's MediaError code). NEVER the address, its token, its `expires`, a query, or an error's
 // text (hls.js quotes the URL in its message): the address is a key in this module's memory and goes nowhere else, and every field is
-// a code, a number or the fixture's id. The send is the client's existing Sentry path (`Sentry.capture*` with area/event tags, as the
-// match room's camera reports), under the browser client's `beforeSend` scrubber (lib/scrub-score-url.ts). The path is
-// lib/sentry-browser.ts, which loads the SDK lazily and only with the viewer's analytics consent, queues a report while it loads
-// and drops it otherwise.
-import * as Sentry from "@/lib/sentry-browser";
+// a code, a number or the fixture's id.
+//
+// The send (Task 25b, owner 2026-11-23): the browser has no Sentry of its own (its init is not wired: instrumentation-client.ts), so a
+// report goes to OUR server as a `video` client report (POST /api/v1/public/client-reports, server/client-reports/video.ts), which logs
+// it and sends the server's Sentry one warning per fixture and reason per window. A beacon first (it outlives the page's unload and
+// waits for nothing), else a keepalive fetch; a report that cannot be sent is lost, never retried, and never throws into the page. The
+// body is the report itself with its `kind`: the same field names the route's closed schema takes, so a code the route would refuse is
+// never sent (seazn-playback.ts drops it to null first).
 import { ApiError } from "@/lib/client";
+import { CLIENT_REPORTS_PATH } from "@/lib/client-reports";
+import type { RouteFailureReason } from "@/lib/seazn-video-report-codes";
+import type { VideoClientReport } from "@/server/client-reports/video";
 import type { PlaybackFailure } from "./seazn-playback";
 
 /** The island refused the route's answer (its shape is not the contract). Named so the route report can tell it from a network one. */
@@ -32,19 +38,8 @@ export interface PlayerFatal {
   failure: PlaybackFailure;
 }
 
-export type RouteFailureReason = "http" | "network" | "timeout" | "answer";
-export interface VideoFailureReport {
-  stage: "player" | "route";
-  fixtureId: string;
-  source: "live" | "replay" | null;
-  partNo: number | null;
-  player: "hls" | "embed" | null;
-  reason: PlaybackFailure["reason"] | RouteFailureReason;
-  hlsType: string | null;
-  hlsDetails: string | null;
-  httpStatus: number | null;
-  mediaCode: number | null;
-}
+/** One report: the `video` client report's body without its `kind` (the route's own schema is the authority for every field). */
+export type VideoFailureReport = Omit<VideoClientReport, "kind">;
 
 /** A failed read's kind and status: an `ApiError`'s status, an abort (the loop's give-up timer), the island's own refusal, or a
  *  network failure. Nothing of a message. */
@@ -82,12 +77,24 @@ export function createVideoReporter(send: (report: VideoFailureReport) => void):
   };
 }
 
-/** The client's Sentry path: one warning message, the codes as tags and extras. */
-export function sentryVideoReport(report: VideoFailureReport): void {
-  const player = report.stage === "player";
-  Sentry.captureMessage(player ? "seazn video: the player gave up" : "seazn video: the video route could not be read", {
-    level: "warning",
-    tags: { area: "seazn-video", event: player ? "player_fatal" : "route_read_failed", reason: report.reason, fixture_id: report.fixtureId },
-    extra: { ...report },
-  });
+/** The request a report is sent as: the beacon route, and the report with its `kind`, as JSON. */
+export function videoReportRequest(report: VideoFailureReport): { url: string; body: string } {
+  const body: VideoClientReport = { kind: "video", ...report };
+  return { url: CLIENT_REPORTS_PATH, body: JSON.stringify(body) };
+}
+
+/** The send: `navigator.sendBeacon` (a string goes as text/plain, which the route reads), else a keepalive `fetch`. Fire and forget: no
+ *  answer is read, a failure is swallowed, nothing is retried. */
+export function beaconVideoReport(report: VideoFailureReport): void {
+  const { url, body } = videoReportRequest(report);
+  try {
+    if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function" && navigator.sendBeacon(url, body)) return;
+  } catch {
+    // A beacon the browser refused outright: the fetch below.
+  }
+  try {
+    void fetch(url, { method: "POST", body, keepalive: true, headers: { "content-type": "application/json" } }).catch(() => undefined);
+  } catch {
+    // No fetch at all: the report is lost, the page is not.
+  }
 }
