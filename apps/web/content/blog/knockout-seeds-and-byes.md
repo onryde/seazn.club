@@ -6,7 +6,7 @@ author: Seazn
 topic: seeding
 sports: all
 help: divisions/bracket-view
-related: how-swiss-pairing-works, swiss-chess-bye, joining-or-leaving-a-swiss
+related: third-place-match, what-is-a-plate, double-elimination-explained
 examples: knockout-seeds
 ---
 
