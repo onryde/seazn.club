@@ -48,7 +48,9 @@ This test is stricter than the one for going through. A team is out only when it
 
 ## When the round is played
 
-Once the last match is decided, the words stop being a forecast. The first {{fact:clinched-or-eliminated.cut}} places read Qualified and the rest read Out: {{fact:clinched-or-eliminated.qualifiedTeams}} went through. A team that was through stays through, and a team that was out stays out, so a word never reverses. {{fact:clinched-or-eliminated.needsHelpTeams}} needed help, and did not get it. Tapping a team that is out says: "{{fact:clinched-or-eliminated.finalOutHeadline}}"
+Once the last match is decided, the words stop being a forecast. The first {{fact:clinched-or-eliminated.cut}} places read Qualified and the rest read Out: {{fact:clinched-or-eliminated.qualifiedTeams}} went through. In this example no team that was through went out, and none that was out came back in. {{fact:clinched-or-eliminated.needsHelpTeams}} needed help, and did not get it. Tapping a team that is out says: "{{fact:clinched-or-eliminated.finalOutHeadline}}"
+
+The marks are worked out from the table as it stands, so they move when the table does. A league whose last match has just been scored is not complete until the organiser completes it, and a team added in that time owes matches against everyone, so the table goes back to forecasting: [Can a team join a league after it has started?](/blog/joining-a-league-late) covers where those matches go. A team that withdraws with fewer than half of its matches played has its results removed, and the points of the teams that played it go with them, which can change who is through or out: [What happens to a team's results when it withdraws from a league?](/blog/withdrawal-in-a-league) has the rule.
 
 Before the first match is played there is nothing to read, so the table shows no qualification mark at all: every team is level, with no results yet.
 

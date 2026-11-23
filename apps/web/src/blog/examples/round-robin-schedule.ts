@@ -74,6 +74,7 @@ function build(): ExampleResult {
       evenRounds: new Set(six.lines.map((l) => l.round)).size,
       evenMatches: six.lines.length,
       evenMatchesPerRound: six.lines.filter((l) => l.round === first).length,
+      evenOpponentsEach: new Set(six.lines.filter((l) => l.home === SIX[0] || l.away === SIX[0]).flatMap((l) => [l.home, l.away]).filter((t) => t !== SIX[0])).size,
       evenHomeFewest: Math.min(...sixHomes),
       evenHomeMost: Math.max(...sixHomes),
       sportCount: forEachSport(() => undefined),
@@ -202,6 +203,7 @@ const claims: Claim[] = [
       if (!(n >= 4) || n % 2 !== 0) return `evenFieldSize ${String(f.evenFieldSize)} is not an even field`;
       if (Number(f.evenRounds) !== n - 1) return `evenRounds is ${String(f.evenRounds)}, an even field of ${n} plays ${n - 1}`;
       if (Number(f.evenMatchesPerRound) !== n / 2) return `evenMatchesPerRound is ${String(f.evenMatchesPerRound)}, n/2 is ${n / 2}`;
+      if (Number(f.evenOpponentsEach) !== n - 1) return `evenOpponentsEach is ${String(f.evenOpponentsEach)}, each team of an even field of ${n} meets ${n - 1}`;
       if (Number(f.evenMatches) !== (n * (n - 1)) / 2) return `evenMatches is ${String(f.evenMatches)}, n(n-1)/2 is ${(n * (n - 1)) / 2}`;
       if (Number(f.evenHomeFewest) !== Math.floor((n - 1) / 2) || Number(f.evenHomeMost) !== Math.ceil((n - 1) / 2)) return `home games run ${String(f.evenHomeFewest)} to ${String(f.evenHomeMost)}, expected ${Math.floor((n - 1) / 2)} to ${Math.ceil((n - 1) / 2)}`;
       // The post's point: the field of six is the odd field's plus one team, and has the same number of rounds.

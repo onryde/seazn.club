@@ -417,6 +417,9 @@ const claims: Claim[] = [
       if (r.facts.largerThirdFullRecord !== record(larger.full)) return `largerThirdFullRecord is '${String(r.facts.largerThirdFullRecord)}'`;
       if (r.facts.largerThirdComparedRecord !== record(larger.compared)) return `largerThirdComparedRecord is '${String(r.facts.largerThirdComparedRecord)}'`;
       if (r.facts.leftOutTeam !== larger.leftOut[0]!.team || r.facts.leftOutPlace !== placeText(larger.leftOut[0]!.place)) return "the team left out is not the facts'";
+      // The post says the win over the last-placed team gave all of the larger third's points: one win's worth, and none are left without it.
+      const win = declaredLeaguePointsOf().win;
+      if (larger.full.points !== win || larger.compared.points !== 0) return `the larger group's third has ${larger.full.points} points, and ${larger.compared.points} without the result left out; one win pays ${win}, the post says that win gave all of them and none are left`;
       return want.indexOf(larger) === want.length - 1 || `${larger.team} is not last once the result is left out`;
     }),
   },

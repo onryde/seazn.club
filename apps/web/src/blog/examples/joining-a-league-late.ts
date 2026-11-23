@@ -6,7 +6,7 @@
 //
 // WHAT CHECKS IT. The claims restate the rule in plain arithmetic over the printed schedule and never call the decision: a newcomer
 // owes one match against every team in the league; a team whose rest round has not started plays the newcomer in that round, and every
-// other team gets a new round after the last one, one match to a round; no round already played is touched; and the newcomer's home
+// other team gets a new round after the last one, one match to a round; no round that has started is touched; and the newcomer's home
 // and away games differ by at most one. The sentences are rebuilt from the dictionary's own templates.
 import { forEachSport } from "@seazn/engine/testkit";
 import { decideRoundRobinLateEntry, type ByeSlot, type ExistingLine } from "@/lib/roundrobin-late-entry";
@@ -115,7 +115,7 @@ function build(): ExampleResult {
     },
     diagram: {
       kind: "fixtureList",
-      title: `${NEWCOMER} join after round ${PLAYED_ROUNDS}. A team whose rest round has not been played plays them in it. Every other team gets a new round after the last one.`,
+      title: `${NEWCOMER} join after round ${PLAYED_ROUNDS}. A team whose rest round has not started plays them in it. Every other team gets a new round after the last one.`,
       scenes: [scene],
     },
     text: scheduleLines,
@@ -175,7 +175,7 @@ const claims: Claim[] = [
     }),
   },
   {
-    says: "a team whose rest round has not been played meets the newcomer in that round; every other team gets a new round after the last, one match to a round, and no round already played is touched",
+    says: "a team whose rest round has not started meets the newcomer in that round; every other team gets a new round after the last, one match to a round, and no round that has started is touched",
     source: "the printed schedule: each team's rest round, and which rounds are played; the rule that a rest round nobody has started is used first and the rest are appended, one match a round",
     check: guarded((r) => {
       const { rounds, rest } = scheduleOf(r);
@@ -265,7 +265,7 @@ const claims: Claim[] = [
       if (r.table?.caption !== cap) return `the caption is '${r.table?.caption ?? ""}', expected '${cap}'`;
       const d = r.diagram;
       if (d?.kind !== "fixtureList") return "no fixture-list diagram";
-      const title = `${String(f.newcomer)} join after round ${String(f.playedRounds)}. A team whose rest round has not been played plays them in it. Every other team gets a new round after the last one.`;
+      const title = `${String(f.newcomer)} join after round ${String(f.playedRounds)}. A team whose rest round has not started plays them in it. Every other team gets a new round after the last one.`;
       if (d.title !== title) return `the picture's caption is '${d.title}', expected '${title}'`;
       const scene = d.scenes[0];
       if (d.scenes.length !== 1 || scene === undefined) return `${d.scenes.length} scenes`;

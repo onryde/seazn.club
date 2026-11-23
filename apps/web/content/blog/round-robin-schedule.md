@@ -1,6 +1,6 @@
 ---
 title: How is a round-robin schedule made, and what happens with an odd number of teams?
-description: Every team meets every other once, round by round. With an odd number of teams one team rests each round, so five teams play five rounds, not four.
+description: Every team meets every other once. With an odd number of teams one team rests each round, so the league needs one more round than each team has opponents.
 date: 2026-11-23
 author: Seazn
 topic: round-robin
@@ -24,15 +24,15 @@ The teams are placed in the order of their seeds, so the seeds decide which roun
 
 The loop only works with an even number of places, so an odd field gets one more place: an empty seat. The empty seat is the one that stays where it is, and whoever sits opposite it in a round has no opponent and rests. In the first round the matches are {{fact:round-robin-schedule.firstLegRoundOne}}, and the team left over rests. Over the {{fact:round-robin-schedule.rounds}} rounds the empty seat is opposite every team once, which is why each of them rests exactly once.
 
-Add a sixth team and the empty seat goes. A field of {{fact:round-robin-schedule.evenFieldSize}} still plays {{fact:round-robin-schedule.evenRounds}} rounds, with {{fact:round-robin-schedule.evenMatchesPerRound}} matches in every round and nobody resting. The sixth team adds a match to each round and no round to the season.
+Add a team to make the field even and the empty seat goes. A field of {{fact:round-robin-schedule.evenFieldSize}} still plays {{fact:round-robin-schedule.evenRounds}} rounds, with {{fact:round-robin-schedule.evenMatchesPerRound}} matches in every round and nobody resting. The extra team adds a match to each round and no round to the season.
 
 ## How many matches
 
-Each of the {{fact:round-robin-schedule.fieldSize}} teams plays {{fact:round-robin-schedule.opponentsEach}} others, and every match has two teams in it, so the matches are counted twice if you add up what the teams play. Halve it and the {{fact:round-robin-schedule.fieldSize}} teams play {{fact:round-robin-schedule.matches}} matches, {{fact:round-robin-schedule.matchesPerRound}} a round. Six teams play {{fact:round-robin-schedule.evenMatches}}. The count grows faster than the field does.
+Each of the {{fact:round-robin-schedule.fieldSize}} teams plays {{fact:round-robin-schedule.opponentsEach}} others, and every match has two teams in it, so the matches are counted twice if you add up what the teams play. Halve it and the {{fact:round-robin-schedule.fieldSize}} teams play {{fact:round-robin-schedule.matches}} matches, {{fact:round-robin-schedule.matchesPerRound}} a round. {{fact:round-robin-schedule.evenFieldSize}} teams play {{fact:round-robin-schedule.evenMatches}}. The count grows faster than the field does.
 
 ## Home and away
 
-A team that hosts more often than it travels has an edge, so the schedule keeps the two counts close. In the {{fact:round-robin-schedule.fieldSize}}-team league every team plays {{fact:round-robin-schedule.homeEach}} at home and {{fact:round-robin-schedule.awayEach}} away. With six teams each plays five matches, so an even split is impossible: every team has {{fact:round-robin-schedule.evenHomeFewest}} or {{fact:round-robin-schedule.evenHomeMost}} of them at home and the rest away.
+A team that hosts more often than it travels has an edge, so the schedule keeps the two counts close. In the {{fact:round-robin-schedule.fieldSize}}-team league every team plays {{fact:round-robin-schedule.homeEach}} at home and {{fact:round-robin-schedule.awayEach}} away. With {{fact:round-robin-schedule.evenFieldSize}} teams each plays {{fact:round-robin-schedule.evenOpponentsEach}} matches, so an even split is impossible: every team has {{fact:round-robin-schedule.evenHomeFewest}} or {{fact:round-robin-schedule.evenHomeMost}} of them at home and the rest away.
 
 ## A second leg
 

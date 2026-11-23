@@ -472,7 +472,7 @@ const claims: Claim[] = [
     }),
   },
   {
-    says: "once the last round is played the words freeze: the first places read Qualified and the rest Out, and no team that was Through went out nor one that was Out went through",
+    says: "once the last round is played the words stop being a forecast: the first places read Qualified and the rest Out, and in this example no team that was Through went out nor one that was Out went through",
     source: "the table finished by the printed results, ranked by points (no tie at the line), and the English dictionary's table.qual.status.qualified / headline strings",
     check: guarded((r) => {
       const per = pointsPerMatch();

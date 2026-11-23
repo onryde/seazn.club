@@ -55,6 +55,48 @@ describe("batch 6 claims have teeth", () => {
     const rematch = clone("groups-into-knockout");
     for (const row of rematch.table!.rows) row[3] = row[2]!;
     expect(failing("groups-into-knockout", rematch), "a draw that kept the table's order pairs a group with itself").toContain(says("round one is the standard draw"));
+    // Seats by record instead of by group: the best winner (Group C's) takes seat 1. The golden's own two orders must differ, in both places,
+    // or this case could pass by luck.
+    const g = BLOG_GOLDENS["groups-into-knockout"]!.facts;
+    expect(g.winnersByRecord, "the winners' record order differs from the group order").not.toBe(g.winnersByGroup);
+    expect(g.runnersByRecord, "the runners-up's record order differs from the group order").not.toBe(g.runnersByGroup);
+    const byRecord = clone("groups-into-knockout");
+    const winners = byRecord.table!.rows.filter((row) => String(row[1]).startsWith("1st"));
+    const seatOf = (name: string) => byRecord.table!.rows.find((row) => row[0] === name)!;
+    expect(winners.length, "anti-vacuity: winners in the table").toBe(3);
+    [seatOf(String(g.bestWinner))[2], seatOf("Hawks")[2]] = [seatOf("Hawks")[2]!, seatOf(String(g.bestWinner))[2]!];
+    expect(failing("groups-into-knockout", byRecord), "seats by record, not by group").toContain(says("the seats before the draw follow the groups"));
+    // Wave order broken: a runner-up seated ahead of a winner (the engine seats every winner first), places still in group order within themselves.
+    const waves = clone("groups-into-knockout");
+    const wave = (c: ExampleResult, name: string) => c.table!.rows.find((row) => row[0] === name)!;
+    [wave(waves, "Rockets")[2], wave(waves, "Tigers")[2]] = [wave(waves, "Tigers")[2]!, wave(waves, "Rockets")[2]!];
+    expect(failing("groups-into-knockout", waves), "a runner-up seated before a winner").toContain(says("the seats before the draw follow the groups"));
+    // Two winners swapped inside their wave (Group B ahead of Group A): the best winner's seat is untouched, so only the group order can notice.
+    const letters = clone("groups-into-knockout");
+    [wave(letters, "Hawks")[2], wave(letters, "Rockets")[2]] = [wave(letters, "Rockets")[2]!, wave(letters, "Hawks")[2]!];
+    expect(failing("groups-into-knockout", letters), "Group B seated ahead of Group A").toContain(says("the seats before the draw follow the groups"));
+    // A seat given twice (and one left empty).
+    const twice = clone("groups-into-knockout");
+    wave(twice, "Tigers")[2] = wave(twice, "Comets")[2]!;
+    expect(failing("groups-into-knockout", twice), "two teams on one seat").toContain(says("the seats before the draw follow the groups"));
+    // Records that agree with the group order in one place (the facts made to agree too): the example must differ from it in EVERY place.
+    const agree = clone("groups-into-knockout");
+    wave(agree, "Tigers")[1] = String(wave(agree, "Tigers")[1]).replace(", +1", ", +5");
+    wave(agree, "Wolves")[1] = String(wave(agree, "Wolves")[1]).replace(", -1", ", +2");
+    agree.facts.runnersByRecord = agree.facts.runnersByGroup;
+    expect(failing("groups-into-knockout", agree), "the runners-up's records follow the group order").toContain(says("the seats before the draw follow the groups"));
+    // The best winner is seated first (Group A's, by its record), so the example would not show the seats ignoring the records.
+    const first = clone("groups-into-knockout");
+    wave(first, "Hawks")[1] = String(wave(first, "Hawks")[1]).replace(", +2", ", +9");
+    first.facts.winnersByRecord = "Hawks, Comets and Rockets";
+    first.facts.bestWinner = "Hawks";
+    first.facts.bestWinnerSeat = 1;
+    expect(failing("groups-into-knockout", first), "the best winner is seated first").toContain(says("the seats before the draw follow the groups"));
+    // No match of two runners-up (the post says 'mostly' and quotes one): Hawks and Tigers trade their drawn seats, the facts follow.
+    const none = clone("groups-into-knockout");
+    [wave(none, "Hawks")[3], wave(none, "Tigers")[3]] = [wave(none, "Tigers")[3]!, wave(none, "Hawks")[3]!];
+    Object.assign(none.facts, { drawnMatches: "Hawks v Dynamos, Comets v Wolves", movedUp: "Tigers, Dynamos", movedDown: "Hawks, Wolves", winnerMatch: "Hawks v Dynamos, Comets v Wolves", runnerMatch: "" });
+    expect(failing("groups-into-knockout", none), "no two runners-up meet").toContain(says("the facts about the clash and the draw"));
     // The last two runners-up swapped (still no same-group pair here, yet not the first arrangement the engine's rule gives).
     const other = clone("groups-into-knockout");
     const [a, b] = [other.table!.rows[2]!, other.table!.rows[3]!];
@@ -94,6 +136,13 @@ describe("batch 6 claims have teeth", () => {
     const same = clone(id);
     same.facts.fullRecordLeader = same.facts.comparedLeader;
     expect(failing(id, same), "the full-record leader is not the compared leader").toContain(says("counting every result would rank a different team first"));
+    // The post says the win over the last-placed team gave ALL of the larger third's points: without it the record has none. A compared record that
+    // kept the win's points (the golden's own full points, 3) differs from the right answer (0) and must be caught by that claim.
+    const kept3 = clone(id);
+    kept3.facts.largerThirdComparedRecord = String(kept3.facts.largerThirdFullRecord);
+    expect(failing(id, kept3), "a compared record that still holds the win's points").toContain(says("counting every result would rank a different team first"));
+    expect(String(BLOG_GOLDENS[id]!.facts.largerThirdComparedRecord), "the golden's compared record has no points").toMatch(/^0 points,/);
+    expect(Number(BLOG_GOLDENS[id]!.facts.largerThirdFullPoints), "and the full record has some, so the two differ").toBeGreaterThan(0);
   });
 
   it("clinched or eliminated: a level rival ignored (Through), a level most called out, the frozen words reversed and a win that is not enough are all caught", () => {
@@ -117,7 +166,7 @@ describe("batch 6 claims have teeth", () => {
     const frozen = clone(id);
     const hawks = rowOf(frozen, g.facts.throughTeam);
     hawks[AFTER] = String(hawks[AFTER]).replace("Qualified", "Out");
-    expect(failing(id, frozen), "a team that was Through goes out").toContain(says("once the last round is played the words freeze"));
+    expect(failing(id, frozen), "a team that was Through goes out").toContain(says("once the last round is played the words stop being a forecast"));
     // One win that is not enough: the rival that can still reach the new total is named, as many as places.
     const win = clone(id);
     win.facts.winAndInRivalsAfterWin = `${String(win.facts.winAndInRivalsAfterWin)} and ${String(win.facts.levelRival)}`;
@@ -164,7 +213,7 @@ describe("batch 6 claims have teeth", () => {
     const id = "joining-a-league-late";
     const says = (start: string) => claimsOf(id).find((c) => c.says.startsWith(start))!.says;
     const g = BLOG_GOLDENS[id]!;
-    const placed = says("a team whose rest round has not been played");
+    const placed = says("a team whose rest round has not started");
     const ROUND = 0;
     const WHERE = 2;
     const rows = (r: ExampleResult) => r.table!.rows;

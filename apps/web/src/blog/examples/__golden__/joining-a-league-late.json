@@ -62,7 +62,7 @@
   },
   "diagram": {
     "kind": "fixtureList",
-    "title": "Tigers join after round 3. A team whose rest round has not been played plays them in it. Every other team gets a new round after the last one.",
+    "title": "Tigers join after round 3. A team whose rest round has not started plays them in it. Every other team gets a new round after the last one.",
     "scenes": [
       {
         "heading": "Tigers join after round 3",

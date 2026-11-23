@@ -10,7 +10,7 @@ related: withdrawal-in-a-knockout, joining-a-league-late, clinched-or-eliminated
 examples: withdrawal-in-a-league
 ---
 
-When a team leaves a league, some of its matches are played and some are not. Seazn has to decide what to do with both, and the answer has to be fair to everyone else in the table. It depends on how much of the schedule the team has played. If fewer than half of its matches are played, every result of the team is removed, and the table reads as if it had never entered. If half or more are played, the results stand and each match still to play is a walkover for the other team.
+When a team leaves a league, some of its matches are played and some are not. Seazn has to decide what to do with both, and the answer has to be fair to everyone else in the table. It depends on how much of the schedule the team has played. If fewer than half of its matches are played, every result of the team is removed, and the table reads as if it had never played a match. If half or more are played, the results stand and each match still to play is a walkover for the other team.
 
 ## The example
 
@@ -36,4 +36,4 @@ In the first case the other teams each have {{fact:withdrawal-in-a-league.earlyC
 
 ## In every sport
 
-A withdrawal is a walkover for the opponent in all {{fact:withdrawal-in-a-league.sportCount}} sports. Each sport pays a walkover in its own way, which [forfeits and walkovers by sport](/blog/forfeits-and-walkovers-by-sport) shows. What the sport changes is the score of the walkover, and the half-way line is the same in all of them.
+When a withdrawal is settled by walkovers, the opponent is given the win in all {{fact:withdrawal-in-a-league.sportCount}} sports. Each sport pays a walkover in its own way, which [forfeits and walkovers by sport](/blog/forfeits-and-walkovers-by-sport) shows. What the sport changes is the score of the walkover, and the half-way line is the same in all of them.

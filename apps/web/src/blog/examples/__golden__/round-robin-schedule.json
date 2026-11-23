@@ -15,6 +15,7 @@
     "evenRounds": 5,
     "evenMatches": 15,
     "evenMatchesPerRound": 3,
+    "evenOpponentsEach": 5,
     "evenHomeFewest": 2,
     "evenHomeMost": 3,
     "sportCount": 11

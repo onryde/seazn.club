@@ -22,15 +22,15 @@ Here are {{fact:joining-a-league-late.teams}} football teams, listed best seed f
 
 {{fact:joining-a-league-late.newcomer}} owe one match against each of the {{fact:joining-a-league-late.teams}} teams, and none against themselves. That is what every other team in the league has, one against each of the others, so the table can compare them with the newcomer on the same footing.
 
-## The rest rounds that have not been played
+## The rest rounds that have not started
 
-A team that rests in a round has nothing to play in it, so a round it rests in has room for one more match. Where that round has not been played yet, {{fact:joining-a-league-late.newcomer}} plays that team in it. Here that is {{fact:joining-a-league-late.restOpponents}}, in rounds {{fact:joining-a-league-late.restRounds}}. Nobody plays twice in a round, and no round gets longer for the teams already in the league.
+A team that rests in a round has nothing to play in it, so a round it rests in has room for one more match. A round counts as started as soon as one of its matches has. Where that round has not started yet, {{fact:joining-a-league-late.newcomer}} plays that team in it. Here that is {{fact:joining-a-league-late.restOpponents}}, in rounds {{fact:joining-a-league-late.restRounds}}. Nobody plays twice in a round, and no round gets longer for the teams already in the league.
 
 ## New rounds after the last
 
-The other teams rested in rounds that are already played, so there is no room left for them. Their matches go in new rounds after round {{fact:joining-a-league-late.lastRound}}: rounds {{fact:joining-a-league-late.newRounds}}, with one match in each. The league now runs to round {{fact:joining-a-league-late.lastRoundAfter}}. A plain "one more round" would not be enough: {{fact:joining-a-league-late.appended}} of the {{fact:joining-a-league-late.owed}} matches could not fit in a rest round.
+The other teams rested in rounds that have already started, so there is no room left for them. Their matches go in new rounds after round {{fact:joining-a-league-late.lastRound}}: rounds {{fact:joining-a-league-late.newRounds}}, with one match in each. The league now runs to round {{fact:joining-a-league-late.lastRoundAfter}}. A plain "one more round" would not be enough: {{fact:joining-a-league-late.appended}} of the {{fact:joining-a-league-late.owed}} matches could not fit in a rest round.
 
-No round that is already played is touched, and no result changes. The newcomer has {{fact:joining-a-league-late.homeGames}} home games and {{fact:joining-a-league-late.awayGames}} away.
+No round that has started is touched, and no result changes. The newcomer has {{fact:joining-a-league-late.homeGames}} home games and {{fact:joining-a-league-late.awayGames}} away.
 
 ## What the organiser is told
 

@@ -14,6 +14,14 @@
     "drawnMatches": "Tigers v Dynamos, Comets v Wolves",
     "movedUp": "Dynamos",
     "movedDown": "Wolves",
+    "winnersByGroup": "Hawks, Rockets and Comets",
+    "winnersByRecord": "Comets, Rockets and Hawks",
+    "runnersByGroup": "Tigers, Wolves and Dynamos",
+    "runnersByRecord": "Tigers, Dynamos and Wolves",
+    "bestWinner": "Comets",
+    "bestWinnerSeat": 3,
+    "winnerMatch": "Comets v Wolves",
+    "runnerMatch": "Tigers v Dynamos",
     "fourGroupsQualified": 8,
     "fourGroupsRoundOne": "A1 v D2, D1 v A2, C1 v B2, B1 v C2",
     "fourGroupsSamePool": 0,
@@ -25,39 +33,39 @@
     "sportCount": 11
   },
   "table": {
-    "caption": "Three groups of three, two from each go through. The table's own order would have put Comets against Dynamos in round one, two teams from Group C, so the draw moves the runners-up.",
+    "caption": "Three groups of three, two from each go through. In group order round one would have put Comets against Dynamos, two teams from Group C, so the draw moves the runners-up.",
     "columns": [
       "Team",
       "Finished",
-      "Seed by the table",
-      "Seed after the draw",
+      "Seat by group order",
+      "Seat after the draw",
       "Round one"
     ],
     "rows": [
       [
         "Hawks",
-        "1st in Group A: 6 points, +4",
+        "1st in Group A: 6 points, +2",
         1,
         1,
         "Straight through"
       ],
       [
         "Rockets",
-        "1st in Group B: 6 points, +3",
+        "1st in Group B: 6 points, +4",
         2,
         2,
         "Straight through"
       ],
       [
         "Comets",
-        "1st in Group C: 6 points, +2",
+        "1st in Group C: 6 points, +6",
         3,
         3,
         "v Wolves"
       ],
       [
         "Tigers",
-        "2nd in Group A: 3 points, +2",
+        "2nd in Group A: 3 points, +1",
         4,
         4,
         "v Dynamos"
@@ -71,7 +79,7 @@
       ],
       [
         "Wolves",
-        "2nd in Group B: 3 points, +1",
+        "2nd in Group B: 3 points, -1",
         5,
         6,
         "v Comets"
@@ -136,13 +144,13 @@
   },
   "text": [
     "Hawks 1 — 0 Tigers.",
-    "Hawks 3 — 0 Lions.",
-    "Tigers 3 — 0 Lions.",
-    "Rockets 1 — 0 Wolves.",
+    "Hawks 1 — 0 Lions.",
+    "Tigers 2 — 0 Lions.",
+    "Rockets 2 — 0 Wolves.",
     "Rockets 2 — 0 Bears.",
-    "Wolves 2 — 0 Bears.",
-    "Comets 1 — 0 Dynamos.",
-    "Comets 1 — 0 Foxes.",
-    "Dynamos 1 — 0 Foxes."
+    "Wolves 1 — 0 Bears.",
+    "Comets 3 — 0 Dynamos.",
+    "Comets 3 — 0 Foxes.",
+    "Dynamos 3 — 0 Foxes."
   ]
 }

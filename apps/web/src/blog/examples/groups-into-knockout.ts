@@ -6,10 +6,11 @@
 // bracket's first round is then read off the engine's own seed positions (`seedPositions`, the geometry the draw's TBD lines hold).
 //
 // WHAT CHECKS IT. The claims hold the printed table to the rules, never to the code that built it: the snake deal (seeds 1..N
-// along the groups, then N..1), the order of the seats (every group's winner, then every runner-up; within a rank, by points and
-// then goal difference, football's declared first two keys), standard knockout seeding (1 v 8, 4 v 5, 3 v 6, 2 v 7), and the
-// engine's declared draw rule (tier one keeps its place; the later tier is tried in table order and the first arrangement with no
-// pool meeting itself is taken). A second field, four groups of two qualifiers, is reported as facts.
+// along the groups, then N..1), the order of the seats (the engine's declared expansion of the take: every group's winner, then every
+// runner-up, each wave in GROUP order and NOT by record; the example's records rank both places in another order, so the claim cannot
+// pass by luck), standard knockout seeding (1 v 8, 4 v 5, 3 v 6, 2 v 7), and the engine's declared draw rule (tier one keeps its
+// place; the later tier is tried in seat order and the first arrangement with no pool meeting itself is taken). A second field, four
+// groups of two qualifiers, is reported as facts.
 import { builtinModules } from "@seazn/engine/sports";
 import { declaredCfgs, defaultOrderOf, forEachSport } from "@seazn/engine/testkit";
 import { expandSources, isHeadToHeadKey, placeDescriptors, type ProgressionSpec, type SourceShape, type SourceTables } from "@seazn/engine/competition";
@@ -38,18 +39,19 @@ const nameOfId = (id: string) => TEAMS.find((t) => idOf(t) === id) ?? id;
 const goals = (h: number, a: number) => (v: MatchView) => v.home.metrics.gf === h && v.away.metrics.gf === a;
 const poolName = (key: string) => `Group ${key}`;
 
-/** The group matches, home side first. Each group's winner beats both; the runner-up beats the third team. The margins are chosen so the
- *  three winners finish A, B, C on goal difference and so do the three runners-up: Group C is the weakest of its rank, twice. */
+/** The group matches, home side first. Each group's winner beats both; the runner-up beats the third team. The margins make the records
+ *  rank AGAINST the group order, in both places: the winners rank Comets, Rockets, Hawks (Group C best) and the runners-up rank Tigers,
+ *  Dynamos, Wolves, while the seats go Group A, B, C. A seed hint is kept only for a result that is unchanged. */
 const SCORES: { home: string; away: string; h: number; a: number; seed: number }[] = [
   { home: "hawks", away: "tigers", h: 1, a: 0, seed: 5 },
-  { home: "hawks", away: "lions", h: 3, a: 0, seed: 202 },
-  { home: "tigers", away: "lions", h: 3, a: 0, seed: 202 },
-  { home: "rockets", away: "wolves", h: 1, a: 0, seed: 5 },
+  { home: "hawks", away: "lions", h: 1, a: 0, seed: 0 },
+  { home: "tigers", away: "lions", h: 2, a: 0, seed: 0 },
+  { home: "rockets", away: "wolves", h: 2, a: 0, seed: 0 },
   { home: "rockets", away: "bears", h: 2, a: 0, seed: 95 },
-  { home: "wolves", away: "bears", h: 2, a: 0, seed: 95 },
-  { home: "comets", away: "dynamos", h: 1, a: 0, seed: 5 },
-  { home: "comets", away: "foxes", h: 1, a: 0, seed: 5 },
-  { home: "dynamos", away: "foxes", h: 1, a: 0, seed: 5 },
+  { home: "wolves", away: "bears", h: 1, a: 0, seed: 0 },
+  { home: "comets", away: "dynamos", h: 3, a: 0, seed: 0 },
+  { home: "comets", away: "foxes", h: 3, a: 0, seed: 0 },
+  { home: "dynamos", away: "foxes", h: 3, a: 0, seed: 0 },
 ];
 
 const football = () => builtinModules.find((m) => m.key === "football")!;
@@ -96,14 +98,21 @@ function build(): ExampleResult {
   };
   const rows = qualifiers.map((q) => [nameOfId(q.id), `${placeText(q.rank)} in ${poolName(q.pool)}: ${q.points} points, ${signed(q.diff)}`, q.tableSeed, q.seed, opponentOf(q.seed)]);
 
-  // The pairing the table's own order gave, and what it would have paired within one group.
+  // The pairing the group order gave, and what it would have paired within one group.
   const tableMatches = roundOne(n).filter(([a, b]) => a <= n && b <= n).map(([a, b]) => [byTable.find((q) => q.tableSeed === a)!, byTable.find((q) => q.tableSeed === b)!] as const);
   const clash = tableMatches.find(([a, b]) => a.pool === b.pool);
-  if (clash === undefined) throw new Error("groups-into-knockout: the example's table order does not clash, so it shows nothing");
+  if (clash === undefined) throw new Error("groups-into-knockout: the example's group order does not clash, so it shows nothing");
   const drawnMatches = roundOne(n).filter(([a, b]) => a <= n && b <= n).map(([a, b]) => `${nameOfId(bySeed.get(a)!.id)} v ${nameOfId(bySeed.get(b)!.id)}`);
   const sortedByTable = [...byTable].sort((a, b) => a.tableSeed - b.tableSeed);
   const straight = qualifiers.filter((q) => roundOne(n).some(([a, b]) => (a === q.seed && b > n) || (b === q.seed && a > n))).map((q) => nameOfId(q.id));
   const four = fourGroups();
+  const listOf = (xs: string[]) => (xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
+  const placeOf = (rank: number) => qualifiers.filter((q) => q.rank === rank);
+  const byGroup = (rank: number) => listOf(placeOf(rank).sort((a, b) => a.pool.localeCompare(b.pool)).map((q) => nameOfId(q.id)));
+  const byRecord = (rank: number) => listOf(placeOf(rank).sort((a, b) => b.points - a.points || b.diff - a.diff).map((q) => nameOfId(q.id)));
+  const bestWinner = placeOf(1).sort((a, b) => b.points - a.points || b.diff - a.diff)[0]!;
+  const realMatches = roundOne(n).filter(([a, b]) => a <= n && b <= n).map(([a, b]) => [bySeed.get(a)!, bySeed.get(b)!] as const);
+  const matchText = (m: readonly [(typeof qualifiers)[number], (typeof qualifiers)[number]]) => `${nameOfId(m[0].id)} v ${nameOfId(m[1].id)}`;
   const groupsDiagram = [...pools.keys()].map((key) => ({
     name: poolName(key),
     entrants: played.rows.get(key)!.map((r) => nameOfId(r.entrantId)),
@@ -125,6 +134,14 @@ function build(): ExampleResult {
       drawnMatches: drawnMatches.join(", "),
       movedUp: sortedByTable.filter((q) => drawnSeed.get(q.id)! < q.tableSeed).map((q) => nameOfId(q.id)).join(", "),
       movedDown: sortedByTable.filter((q) => drawnSeed.get(q.id)! > q.tableSeed).map((q) => nameOfId(q.id)).join(", "),
+      winnersByGroup: byGroup(1),
+      winnersByRecord: byRecord(1),
+      runnersByGroup: byGroup(2),
+      runnersByRecord: byRecord(2),
+      bestWinner: nameOfId(bestWinner.id),
+      bestWinnerSeat: bestWinner.tableSeed,
+      winnerMatch: realMatches.filter((m) => m[0].rank !== m[1].rank).map(matchText).join(", "),
+      runnerMatch: realMatches.filter((m) => m[0].rank === 2 && m[1].rank === 2).map(matchText).join(", "),
       fourGroupsQualified: four.qualified,
       fourGroupsRoundOne: four.pairs.join(", "),
       fourGroupsSamePool: four.samePool,
@@ -136,8 +153,8 @@ function build(): ExampleResult {
       sportCount: forEachSport(() => undefined),
     },
     table: {
-      caption: `${capitalised(numberWord(GROUPS))} groups of ${numberWord(TEAMS.length / GROUPS)}, ${numberWord(ADVANCE)} from each go through. The table's own order would have put ${nameOfId(clash[0].id)} against ${nameOfId(clash[1].id)} in round one, two teams from ${poolName(clash[0].pool)}, so the draw moves the runners-up.`,
-      columns: ["Team", "Finished", "Seed by the table", "Seed after the draw", "Round one"],
+      caption: `${capitalised(numberWord(GROUPS))} groups of ${numberWord(TEAMS.length / GROUPS)}, ${numberWord(ADVANCE)} from each go through. In group order round one would have put ${nameOfId(clash[0].id)} against ${nameOfId(clash[1].id)}, two teams from ${poolName(clash[0].pool)}, so the draw moves the runners-up.`,
+      columns: ["Team", "Finished", "Seat by group order", "Seat after the draw", "Round one"],
       rows,
     },
     diagram: {
@@ -167,7 +184,7 @@ function drawAcross(qualifiers: readonly { entrantId: string; seed: number; sour
 }
 const DRAW_SEED = 7;
 
-/** Four groups, the top two of each: the table's own order never pairs a group with itself, so the draw changes nothing. */
+/** Four groups, the top two of each: the group order never pairs a group with itself, so the draw changes nothing. */
 function fourGroups(): { qualified: number; pairs: string[]; samePool: number } {
   const keys = ["A", "B", "C", "D"];
   const stages = buildTemplateStages("groups_ko", { qualified: 8, swissRounds: 5, poolCount: 4, legs: 1 });
@@ -193,7 +210,7 @@ interface Qualifier {
 
 /** The printed table, read back strictly (a cell that is not what the example prints is a thrown message, which a claim reports as its failure). */
 function qualifiersOf(r: ExampleResult): Qualifier[] {
-  const c = { team: col(r, "Team"), finished: col(r, "Finished"), table: col(r, "Seed by the table"), drawn: col(r, "Seed after the draw"), round: col(r, "Round one") };
+  const c = { team: col(r, "Team"), finished: col(r, "Finished"), table: col(r, "Seat by group order"), drawn: col(r, "Seat after the draw"), round: col(r, "Round one") };
   return (r.table?.rows ?? []).map((row) => {
     const m = /^(\d+)(st|nd|rd|th) in Group ([A-Z]): (\d+) points, ([+-]?\d+)$/.exec(String(row[c.finished]));
     if (m === null) throw new Error(`'${String(row[c.finished])}' is not 'Nth in Group X: P points, +D'`);
@@ -273,27 +290,47 @@ const claims: Claim[] = [
     }),
   },
   {
-    says: "the seats by the table are every group's winner, then every runner-up; within a place the best record comes first, by points and then goal difference (football's declared first two keys, with no head-to-head between groups)",
-    source: "rank_order over the take (topNPerGroup: wave by wave) and football's declared table order, without its head-to-head steps (entrants of different groups never met)",
+    says: "the seats before the draw follow the groups, not the records: every group's winner in group order, then every runner-up in group order, and the example's records rank both places in another order, so the claim cannot pass by luck",
+    source: "the engine's declared expansion of topNPerGroup (expandSources and placeDescriptors: wave by wave, every pool's winner then every pool's runner-up, each wave in pool order) against football's declared table order (points, then goal difference) for the records",
     check: guarded((r) => {
       const declared = defaultOrderOf(football()).filter((k) => !isHeadToHeadKey(k));
       if (declared[0] !== "points" || declared[1] !== "diff") return `football's declared order is ${declared.join(", ")}`;
       const rows = [...qualifiersOf(r)].sort((a, b) => a.tableSeed - b.tableSeed);
-      if (rows.some((x, i) => x.tableSeed !== i + 1)) return "the seeds by the table are not 1..n once each";
-      for (const [i, x] of rows.entries()) {
-        const prev = rows[i - 1];
-        if (prev === undefined) continue;
-        if (x.place < prev.place) return `${x.team} (place ${x.place}) is seated after ${prev.team} (place ${prev.place})`;
-        if (x.place === prev.place) {
-          if (x.points > prev.points || (x.points === prev.points && x.diff > prev.diff)) return `${x.team} has the better record but is seated after ${prev.team}`;
-          if (x.points === prev.points && x.diff === prev.diff) return `${x.team} and ${prev.team} are level, the example is meant to have no tie`;
+      if (rows.length === 0 || rows.some((x, i) => x.tableSeed !== i + 1)) return "the seats before the draw are not 1..n once each";
+      const g = Number(r.facts.groupCount);
+      const advance = Number(r.facts.advance);
+      const keys = Array.from({ length: g }, (_, i) => "ABCDEFGHIJKLMNOPQRSTUVWXYZ"[i]!);
+      const placed = placeDescriptors(expandSources([{ stage: "previous", take: [{ kind: "topNPerGroup", n: advance }] }] as never, () => ({ poolKeys: keys })), "rank_order");
+      const want = placed.map((s) => (s.descriptor.kind === "group_rank" ? `${s.descriptor.pool}${s.descriptor.rank}` : "?"));
+      const got = rows.map((x) => `${x.pool}${x.place}`);
+      if (got.join() !== want.join()) return `the seats run ${got.join(", ")}, the engine's declared order is ${want.join(", ")}`;
+      // The records must rank each place against the group order, or the example proves nothing about which one decides.
+      let differing = 0;
+      const sentence = (xs: Qualifier[]) => (xs.length <= 1 ? xs.map((x) => x.team).join("") : `${xs.slice(0, -1).map((x) => x.team).join(", ")} and ${xs[xs.length - 1]!.team}`);
+      const named: Record<string, string> = {};
+      for (let place = 1; place <= advance; place++) {
+        const ofPlace = rows.filter((x) => x.place === place);
+        const byGroup = ofPlace; // seat order is group order: the engine's expansion was matched above, seat for seat
+        const byRecord = [...ofPlace].sort((a, b) => b.points - a.points || b.diff - a.diff);
+        for (const [i, x] of byRecord.entries()) {
+          const prev = byRecord[i - 1];
+          if (prev !== undefined && prev.points === x.points && prev.diff === x.diff) return `${prev.team} and ${x.team} are level, the example is meant to have no tie`;
         }
+        if (byRecord.map((x) => x.team).join() !== byGroup.map((x) => x.team).join()) differing++;
+        named[`${place}g`] = sentence(byGroup);
+        named[`${place}r`] = sentence(byRecord);
       }
-      return true;
+      if (differing !== advance) return `the records rank ${differing} of ${advance} places differently from the groups, the example must differ in every place`;
+      const best = rows.filter((x) => x.place === 1).sort((a, b) => b.points - a.points || b.diff - a.diff)[0]!;
+      if (best.tableSeed === 1) return `${best.team} has the best record of the winners and is seated first, so the example does not show the seats ignoring records`;
+      const f = r.facts;
+      if (f.winnersByGroup !== named["1g"] || f.winnersByRecord !== named["1r"]) return `winnersByGroup is '${String(f.winnersByGroup)}' and winnersByRecord '${String(f.winnersByRecord)}', the table gives '${String(named["1g"])}' and '${String(named["1r"])}'`;
+      if (f.runnersByGroup !== named["2g"] || f.runnersByRecord !== named["2r"]) return `runnersByGroup is '${String(f.runnersByGroup)}' and runnersByRecord '${String(f.runnersByRecord)}', the table gives '${String(named["2g"])}' and '${String(named["2r"])}'`;
+      return (f.bestWinner === best.team && Number(f.bestWinnerSeat) === best.tableSeed) || `bestWinner is '${String(f.bestWinner)}' at seat ${String(f.bestWinnerSeat)}, the table gives '${best.team}' at seat ${best.tableSeed}`;
     }),
   },
   {
-    says: "round one is the standard draw, seed 1 against the last line and so on; the table's order paired two teams of one group, and the drawn order pairs nobody with their own group",
+    says: "round one is the standard draw, seed 1 against the last line and so on; the group order paired two teams of one group, and the drawn order pairs nobody with their own group",
     source: "standard single-elimination seeding (seed i meets seed N+1-i; the lines run 1, 4, 3, 2 in an eight-line draw) and the engine's declared cross-pool rule: entrants from one pool never meet in round one",
     check: guarded((r) => {
       const rows = qualifiersOf(r);
@@ -311,11 +348,11 @@ const claims: Claim[] = [
         if (key === "tableSeed") clashes = same;
         else if (same !== 0) return `after the draw ${same} first-round matches still pair a group with itself`;
       }
-      return clashes > 0 || "the table's order has no same-group pairing, so the draw shows nothing";
+      return clashes > 0 || "the group order has no same-group pairing, so the draw shows nothing";
     }),
   },
   {
-    says: "the draw keeps every group winner's seat and takes the first arrangement of the runners-up, in table order, that pairs no group with itself",
+    says: "the draw keeps every group winner's seat and takes the first arrangement of the runners-up, in seat order, that pairs no group with itself",
     source: "crossPoolDraw's declared rule (RB5-D10): tier 1 keeps its positions; each later tier is permuted within itself, depth-first in lexicographic order of its table positions, and the first ordering with no same-pool real-versus-real first-round pair wins",
     check: guarded((r) => {
       const rows = qualifiersOf(r);
@@ -355,8 +392,8 @@ const claims: Claim[] = [
     }),
   },
   {
-    says: "the facts about the clash and the draw are the table's: the pairing the table's order gave, its group, the matches the draw made and who moved up and down",
-    source: "the table's own seed columns read back through the standard draw",
+    says: "the facts about the clash and the draw are the table's: the pairing the group order gave, its group, the matches the draw made, who moved up and down, and which matches are a winner against a runner-up and which two runners-up",
+    source: "the table's own seat columns read back through the standard draw",
     check: guarded((r) => {
       const rows = qualifiersOf(r);
       const n = rows.length;
@@ -373,12 +410,19 @@ const claims: Claim[] = [
       const up = byTable.filter((x) => x.drawnSeed < x.tableSeed).map((x) => x.team).join(", ");
       const down = byTable.filter((x) => x.drawnSeed > x.tableSeed).map((x) => x.team).join(", ");
       if (r.facts.movedUp !== up) return `movedUp is '${String(r.facts.movedUp)}', the table gives '${up}'`;
-      return r.facts.movedDown === down || `movedDown is '${String(r.facts.movedDown)}', the table gives '${down}'`;
+      if (r.facts.movedDown !== down) return `movedDown is '${String(r.facts.movedDown)}', the table gives '${down}'`;
+      // Which first-round matches are a winner against a runner-up and which are two runners-up (the post says "mostly", with byes).
+      const text = (a: Qualifier, b: Qualifier) => `${a.team} v ${b.team}`;
+      const mixed = real.map(([a, b]) => [d(a), d(b)] as const).filter(([a, b]) => a.place !== b.place).map(([a, b]) => text(a, b)).join(", ");
+      const runners = real.map(([a, b]) => [d(a), d(b)] as const).filter(([a, b]) => a.place === 2 && b.place === 2).map(([a, b]) => text(a, b)).join(", ");
+      if (r.facts.winnerMatch !== mixed) return `winnerMatch is '${String(r.facts.winnerMatch)}', the table gives '${mixed}'`;
+      if (mixed === "" || runners === "") return "the example has no winner-against-runner-up match, or no match of two runners-up, so 'mostly' is not shown";
+      return r.facts.runnerMatch === runners || `runnerMatch is '${String(r.facts.runnerMatch)}', the table gives '${runners}'`;
     }),
   },
   {
-    says: "four groups with two through each fill an eight-line draw winners first, and the table's order alone never pairs a group with itself",
-    source: "rank_order over every winner then every runner-up (A1, B1, C1, D1, A2, B2, C2, D2) and standard single-elimination seeding (the lines run 1, 4, 3, 2)",
+    says: "four groups with two through each fill an eight-line draw in group order, every winner first, and that order alone never pairs a group with itself",
+    source: "the engine's declared expansion of topNPerGroup, wave by wave in pool order (A1, B1, C1, D1, A2, B2, C2, D2), and standard single-elimination seeding (the lines run 1, 4, 3, 2)",
     check: guarded((r) => {
       const seats = ["A1", "B1", "C1", "D1", "A2", "B2", "C2", "D2"];
       const pairs = STANDARD_EIGHT.map(([a, b]) => `${seats[a - 1]} v ${seats[b - 1]}`);
@@ -394,7 +438,7 @@ const claims: Claim[] = [
     check: guarded((r) => {
       const f = r.facts;
       const [a, b] = String(f.tableOrderMatch).split(" v ");
-      const cap = `${capitalised(numberWord(Number(f.groupCount)))} groups of ${numberWord(Number(f.groupSize))}, ${numberWord(Number(f.advance))} from each go through. The table's own order would have put ${a} against ${b} in round one, two teams from ${String(f.tableOrderClashGroup)}, so the draw moves the runners-up.`;
+      const cap = `${capitalised(numberWord(Number(f.groupCount)))} groups of ${numberWord(Number(f.groupSize))}, ${numberWord(Number(f.advance))} from each go through. In group order round one would have put ${a} against ${b}, two teams from ${String(f.tableOrderClashGroup)}, so the draw moves the runners-up.`;
       if (r.table?.caption !== cap) return `the caption is '${r.table?.caption ?? ""}', expected '${cap}'`;
       const title = `${capitalised(numberWord(Number(f.groupCount)))} groups of ${numberWord(Number(f.groupSize))}, the top ${numberWord(Number(f.advance))} of each go through. The best ${numberWord(Number(f.byes))} group winners are straight through to the next round, and nobody meets a team from their own group in round one.`;
       return r.diagram?.title === title || `the picture's caption is '${r.diagram?.title ?? ""}', expected '${title}'`;
