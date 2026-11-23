@@ -14,6 +14,18 @@ name: Load
 # this baseline job is NOT number-for-number that document's B; it is the webhooks-on flags-off control.
 # Fixture values only (the same CI-only dummies e2e.yml uses); no repository secret is needed.
 # The `summary` job tabulates both reports into the run summary.
+#
+# `lichess: lila` (default `fixture`, today's run unchanged): each job also boots a REAL lila (lila-docker's prebuilt mono
+# image: lila + MongoDB + Redis in one container, on this runner's localhost - never lichess.org) with PRODUCTION rate
+# limits ON (`net.ratelimit = true`), mints LOAD_BOARDS x 2 accounts holding exactly the play grant
+# (apps/web/e2e/load/lila-up.sh), and the harness puts a recording proxy at :4321 in front of it, so LICHESS_BASE_URL stays
+# put and every game is played on lila. A 429 is recorded in the report (lichess.status429 / first429 / statusByPath), not
+# a failure by itself. The minted tokens are masked and live under RUNNER_TEMP, never in the uploaded load-out/.
+# The image is pinned by digest (lila-up.sh LILA_IMAGE_PINNED), and `up` proves lila's limiter live before any player plays:
+# a spare account's sixth create to a non-follower must be a 429, or the job stops there. The summary prints both legs'
+# digests and canaries.
+#
+# Free-text inputs reach a shell only through `env:`, and the first step of each job validates them before anything else.
 
 on:
   workflow_dispatch:
@@ -34,6 +46,12 @@ on:
         required: false
         type: string
         default: ""
+      lichess:
+        description: "Lichess backend: fixture (the hand-written stand-in) or lila (a REAL lila on the runner, production rate limits ON)"
+        required: false
+        type: choice
+        options: [fixture, lila]
+        default: fixture
 
 # Own group: never cancels, and is never cancelled by, e2e.yml (group e2e-*).
 concurrency:
@@ -80,6 +98,23 @@ jobs:
       STRIPE_WEBHOOK_SECRET: whsec_e2e_payments
       LOAD_OUT: ${{ github.workspace }}/load-out
     steps:
+      - name: Validate the dispatch inputs
+        # Before any shell uses them: `$((BOARDS * 2))` evaluates an array subscript in BOARDS as a command, so a free-text
+        # input is checked as data first. Never echoed back.
+        env:
+          BOARDS: ${{ inputs.boards }}
+          SCENARIO: ${{ inputs.scenario }}
+          POLICY_MIX: ${{ inputs.policy_mix }}
+          LICHESS: ${{ inputs.lichess }}
+        run: |
+          bad=0
+          if ! [[ "$BOARDS" =~ ^[1-9][0-9]{0,3}$ ]]; then echo "::error::boards must be a whole number from 1 to 9999"; bad=1; fi
+          case "$SCENARIO" in B|B-honest|B-slow-5|B-slow-10) ;; *) echo "::error::scenario must be B, B-honest, B-slow-5 or B-slow-10"; bad=1 ;; esac
+          if ! [[ "$POLICY_MIX" =~ ^((required|optional|off):[1-9][0-9]*(,(required|optional|off):[1-9][0-9]*)*)?$ ]]; then
+            echo "::error::policy_mix must be empty or policy:boards[,policy:boards...] with policy required, optional or off"; bad=1
+          fi
+          case "$LICHESS" in fixture|lila) ;; *) echo "::error::lichess must be fixture or lila"; bad=1 ;; esac
+          exit $bad
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v4
         with:
@@ -109,6 +144,13 @@ jobs:
       - name: Install Playwright Chromium
         run: npx playwright install chromium
         working-directory: apps/web
+      - name: Boot a real lila (production rate limits ON)
+        if: inputs.lichess == 'lila'
+        env:
+          BOARDS: ${{ inputs.boards }}
+          LILA_ACCOUNTS: ${{ runner.temp }}/lila-accounts.json
+          LILA_OUT: ${{ github.workspace }}/load-out/lila
+        run: LILA_ACCOUNT_COUNT=$((BOARDS * 2)) bash apps/web/e2e/load/lila-up.sh up
       - name: Start server
         env:
           SENTRY_DSN: ""
@@ -151,19 +193,24 @@ jobs:
       - name: Run the load harness
         working-directory: apps/web
         env:
+          BOARDS: ${{ inputs.boards }}
+          SCENARIO: ${{ inputs.scenario }}
           POLICY_MIX: ${{ inputs.policy_mix }}
+          LOAD_LICHESS: ${{ inputs.lichess }}
+          LOAD_LILA_URL: http://localhost:8080
+          LOAD_LILA_ACCOUNTS: ${{ runner.temp }}/lila-accounts.json
         run: |
           set +e
-          case "${{ inputs.scenario }}" in
+          case "$SCENARIO" in
             B)         LAG_MIN=0; LAG_MAX=0 ;;
             B-honest)  LAG_MIN=1; LAG_MAX=3 ;;
             B-slow-5)  LAG_MIN=5; LAG_MAX=5 ;;
             B-slow-10) LAG_MIN=10; LAG_MAX=10 ;;
-            *) echo "::error::unknown scenario ${{ inputs.scenario }}"; exit 2 ;;
+            *) echo "::error::unknown scenario"; exit 2 ;;
           esac
           PLAYWRIGHT_BASE=http://localhost:3391 \
           LOAD_SWEEP_EVERY_S=300 LOAD_WEBHOOKS=1 LOAD_PRESENCE_PROOF=0 \
-          LOAD_BOARDS="${{ inputs.boards }}" LOAD_SCENARIO="${{ inputs.scenario }}" LOAD_POLICY_MIX="$POLICY_MIX" \
+          LOAD_BOARDS="$BOARDS" LOAD_SCENARIO="$SCENARIO" LOAD_POLICY_MIX="$POLICY_MIX" \
           LOAD_ARRIVAL_SPREAD_S=60 LOAD_OPENED_AGO_S=250 \
           LOAD_CAMERA_LAG_MIN_S=$LAG_MIN LOAD_CAMERA_LAG_MAX_S=$LAG_MAX \
           LOAD_REPORT="$LOAD_OUT/report.json" LOAD_SERVER_LOG="$LOAD_OUT/server.log" \
@@ -172,6 +219,24 @@ jobs:
           echo "$EXIT" > "$LOAD_OUT/exit.txt"
           echo "EXIT=$EXIT"
           exit $EXIT
+      - name: Collect lila's log and scrub every token from load-out
+        if: always() && inputs.lichess == 'lila'
+        env:
+          LILA_OUT: ${{ github.workspace }}/load-out/lila
+        run: |
+          # The delete and the scrub run whatever `logs` says (it reds on a lila that logged no refusal all run, or on a
+          # docker logs failure): the upload after this step is always(), so it must never find a token. The step still
+          # fails with `logs`'s own exit.
+          rc=0
+          bash apps/web/e2e/load/lila-up.sh logs || rc=$?
+          rm -f "$RUNNER_TEMP/lila-accounts.json"
+          # Belt and braces: no lip_ token leaves the runner in an artifact, whatever wrote it. A scrub that cannot run
+          # drops load-out/ rather than upload it unscrubbed.
+          if [ -d load-out ]; then
+            find load-out -type f -exec sed -i -E 's/lip_[A-Za-z0-9_-]+/lip_***/g' {} + \
+              || { echo "::error::the token scrub failed: load-out/ is dropped, not uploaded"; rm -rf load-out; rc=1; }
+          fi
+          exit $rc
       - name: Upload report and server log
         if: always()
         uses: actions/upload-artifact@v4
@@ -215,6 +280,23 @@ jobs:
       STRIPE_WEBHOOK_SECRET: whsec_e2e_payments
       LOAD_OUT: ${{ github.workspace }}/load-out
     steps:
+      - name: Validate the dispatch inputs
+        # Before any shell uses them: `$((BOARDS * 2))` evaluates an array subscript in BOARDS as a command, so a free-text
+        # input is checked as data first. Never echoed back.
+        env:
+          BOARDS: ${{ inputs.boards }}
+          SCENARIO: ${{ inputs.scenario }}
+          POLICY_MIX: ${{ inputs.policy_mix }}
+          LICHESS: ${{ inputs.lichess }}
+        run: |
+          bad=0
+          if ! [[ "$BOARDS" =~ ^[1-9][0-9]{0,3}$ ]]; then echo "::error::boards must be a whole number from 1 to 9999"; bad=1; fi
+          case "$SCENARIO" in B|B-honest|B-slow-5|B-slow-10) ;; *) echo "::error::scenario must be B, B-honest, B-slow-5 or B-slow-10"; bad=1 ;; esac
+          if ! [[ "$POLICY_MIX" =~ ^((required|optional|off):[1-9][0-9]*(,(required|optional|off):[1-9][0-9]*)*)?$ ]]; then
+            echo "::error::policy_mix must be empty or policy:boards[,policy:boards...] with policy required, optional or off"; bad=1
+          fi
+          case "$LICHESS" in fixture|lila) ;; *) echo "::error::lichess must be fixture or lila"; bad=1 ;; esac
+          exit $bad
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v4
         with:
@@ -244,6 +326,13 @@ jobs:
       - name: Install Playwright Chromium
         run: npx playwright install chromium
         working-directory: apps/web
+      - name: Boot a real lila (production rate limits ON)
+        if: inputs.lichess == 'lila'
+        env:
+          BOARDS: ${{ inputs.boards }}
+          LILA_ACCOUNTS: ${{ runner.temp }}/lila-accounts.json
+          LILA_OUT: ${{ github.workspace }}/load-out/lila
+        run: LILA_ACCOUNT_COUNT=$((BOARDS * 2)) bash apps/web/e2e/load/lila-up.sh up
       - name: Start server
         env:
           SENTRY_DSN: ""
@@ -287,19 +376,24 @@ jobs:
       - name: Run the load harness
         working-directory: apps/web
         env:
+          BOARDS: ${{ inputs.boards }}
+          SCENARIO: ${{ inputs.scenario }}
           POLICY_MIX: ${{ inputs.policy_mix }}
+          LOAD_LICHESS: ${{ inputs.lichess }}
+          LOAD_LILA_URL: http://localhost:8080
+          LOAD_LILA_ACCOUNTS: ${{ runner.temp }}/lila-accounts.json
         run: |
           set +e
-          case "${{ inputs.scenario }}" in
+          case "$SCENARIO" in
             B)         LAG_MIN=0; LAG_MAX=0 ;;
             B-honest)  LAG_MIN=1; LAG_MAX=3 ;;
             B-slow-5)  LAG_MIN=5; LAG_MAX=5 ;;
             B-slow-10) LAG_MIN=10; LAG_MAX=10 ;;
-            *) echo "::error::unknown scenario ${{ inputs.scenario }}"; exit 2 ;;
+            *) echo "::error::unknown scenario"; exit 2 ;;
           esac
           PLAYWRIGHT_BASE=http://localhost:3391 \
           LOAD_SWEEP_EVERY_S=300 LOAD_WEBHOOKS=1 LOAD_PRESENCE_PROOF=1 \
-          LOAD_BOARDS="${{ inputs.boards }}" LOAD_SCENARIO="${{ inputs.scenario }}" LOAD_POLICY_MIX="$POLICY_MIX" \
+          LOAD_BOARDS="$BOARDS" LOAD_SCENARIO="$SCENARIO" LOAD_POLICY_MIX="$POLICY_MIX" \
           LOAD_ARRIVAL_SPREAD_S=60 LOAD_OPENED_AGO_S=250 \
           LOAD_CAMERA_LAG_MIN_S=$LAG_MIN LOAD_CAMERA_LAG_MAX_S=$LAG_MAX \
           LOAD_REPORT="$LOAD_OUT/report.json" LOAD_SERVER_LOG="$LOAD_OUT/server.log" \
@@ -308,6 +402,24 @@ jobs:
           echo "$EXIT" > "$LOAD_OUT/exit.txt"
           echo "EXIT=$EXIT"
           exit $EXIT
+      - name: Collect lila's log and scrub every token from load-out
+        if: always() && inputs.lichess == 'lila'
+        env:
+          LILA_OUT: ${{ github.workspace }}/load-out/lila
+        run: |
+          # The delete and the scrub run whatever `logs` says (it reds on a lila that logged no refusal all run, or on a
+          # docker logs failure): the upload after this step is always(), so it must never find a token. The step still
+          # fails with `logs`'s own exit.
+          rc=0
+          bash apps/web/e2e/load/lila-up.sh logs || rc=$?
+          rm -f "$RUNNER_TEMP/lila-accounts.json"
+          # Belt and braces: no lip_ token leaves the runner in an artifact, whatever wrote it. A scrub that cannot run
+          # drops load-out/ rather than upload it unscrubbed.
+          if [ -d load-out ]; then
+            find load-out -type f -exec sed -i -E 's/lip_[A-Za-z0-9_-]+/lip_***/g' {} + \
+              || { echo "::error::the token scrub failed: load-out/ is dropped, not uploaded"; rm -rf load-out; rc=1; }
+          fi
+          exit $rc
       - name: Upload report and server log
         if: always()
         uses: actions/upload-artifact@v4
@@ -335,7 +447,8 @@ jobs:
             const d = `reports/load-${n}`;
             const rd = (f) => { try { return fs.readFileSync(`${d}/${f}`, "utf8"); } catch { return null; } };
             const rep = rd("report.json");
-            return { report: rep ? JSON.parse(rep) : null, log: rd("server.log") ?? "", exit: (rd("exit.txt") ?? "no exit file").trim() };
+            const js = (f) => { try { return JSON.parse(rd(f) ?? "null"); } catch { return null; } };
+            return { report: rep ? JSON.parse(rep) : null, log: rd("server.log") ?? "", exit: (rd("exit.txt") ?? "no exit file").trim(), boot: js("lila/boot.json"), after: js("lila/after-run.json") };
           };
           const cols = { baseline: read("baseline"), "flags-on": read("flags-on") };
           const get = (o, p) => p.split(".").reduce((a, k) => (a == null ? a : a[k]), o);
@@ -350,6 +463,15 @@ jobs:
             ["presenceFallbackCount (server log lines)", (c) => c.log.split("\n").filter((l) => l.includes("fell back to the vendor's session read")).length],
             ["webhooks emitted / delivered", (c) => `${f(get(c.report, "webhooks.emitted"))} / ${f(get(c.report, "webhooks.delivered"))}`],
             ["shadow closedByEnded", (c) => get(c.report, "webhooks.shadow.closedByEnded")],
+            ["lichess backend", (c) => (c.report ? get(c.report, "lichess.backend") ?? "fixture" : null)],
+            ["games seen (all divisions)", (c) => (Array.isArray(get(c.report, "byDivision")) ? get(c.report, "byDivision").reduce((a, d) => a + d.gamesSeen, 0) : null)],
+            ["lichess calls total / creates (lila accepted)", (c) => `${f(get(c.report, "lichess.total"))} / ${f(get(c.report, "lichess.creates"))} (${f(get(c.report, "lichess.createsAccepted"))})`],
+            ["lichess 429s", (c) => get(c.report, "lichess.status429")],
+            ["first 429 (endpoint @ second)", (c) => { const x = get(c.report, "lichess.first429"); return x ? `${x.endpoint} @ ${x.atSecond}s` : null; }],
+            ["lila games by status", (c) => { const x = get(c.report, "lichess.games.byStatus"); return x ? JSON.stringify(x) : null; }],
+            ["lila image digest (pinned?)", (c) => (c.boot ? `${String(c.boot.digest).replace(/^.*@/, "")} (${c.boot.pinned ? "pinned" : "NOT the pin"})` : null)],
+            ["lila limiter canary (6 creates)", (c) => (get(c.boot, "canary.statuses") ? `${c.boot.canary.statuses.join(" ")}${c.boot.canary.limiterLive ? " - limiter live" : ""}` : null)],
+            ["lila ratelimit log lines (run)", (c) => get(c.after, "ratelimitLines")],
             ["run seconds", (c) => get(c.report, "runSeconds")],
             ["job exit (playwright)", (c) => c.exit],
           ];
@@ -369,6 +491,10 @@ jobs:
             if (!Array.isArray(divs) || divs.length === 0) { console.log("byDivision: n/a"); continue; }
             console.log("| division | policy | boards | players | games seen | boards without game | seat p50 ms | seat p95 ms |\n| --- | --- | --- | --- | --- | --- | --- | --- |");
             for (const d of divs) console.log(`| ${f(d.division)} | ${f(d.policy)} | ${f(d.boards)} | ${f(d.players)} | ${f(d.gamesSeen)} | ${f(d.boardsWithoutGame)} | ${f(get(d, "arrivalToSeatedMs.p50"))} | ${f(get(d, "arrivalToSeatedMs.p95"))} |`);
+          }
+          for (const [n, c] of Object.entries(cols)) {
+            const s = get(c.report, "lichess.statusByPath");
+            if (s) console.log(`\n**${n}: lila's answers by endpoint (status: count)**\n\n` + Object.entries(s).map(([k, v]) => `- ${k}: ${JSON.stringify(v)}`).join("\n"));
           }
           JS
         env:

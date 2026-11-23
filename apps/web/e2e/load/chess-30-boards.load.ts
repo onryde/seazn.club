@@ -42,6 +42,15 @@
  *   AUTH_SECRET=... CRON_SECRET=... LICHESS_TOKEN_KEK=... \
  *   npx playwright test -c playwright.load.config.ts
  *
+ * THE LICHESS BACKEND (LOAD_LICHESS). `fixture` (the default, or unset) is the hand-written e2e/lichess-fixture-server.ts above. `lila`
+ * plays every game on a REAL lila - Lichess's own server code, booted on the CI runner by e2e/load/lila-up.sh (load.yml `lichess: lila`)
+ * with `net.ratelimit = true`, i.e. production rate limits ON - behind e2e/lichess-recording-proxy.ts, which listens where the fixture
+ * did (LICHESS_BASE_URL is unchanged), forwards untouched and records {method, path, status, at}, so every Lichess count below reads
+ * the same. Each player is linked to an account lila-up.sh minted (LOAD_LILA_ACCOUNTS) holding exactly the play grant, with no API-hog
+ * role and no follows, so a challenge costs what production charges (5 credits; 25 a minute, 200 a day, per challenger). A 429 is
+ * RECORDED (`lichess.status429`, `lichess.first429`, `lichess.statusByPath`), never a failure by itself: the per-board and per-player
+ * bars decide green or red, and the games are judged by lila's own export (LOAD_LILA_URL, default http://localhost:8080).
+ *
  * D21-fix-3: LOAD_POLICY_MIX ("required:30" by default; "required:10,optional:10,off:10" seeds one division per mix entry, and a
  * policy named twice - "required:64,required:64" - seeds two) puts the three camera policies in one run; the report's `byPolicy` says per policy what the boards and players saw - games, stranded
  * boards, wrong refusals, and for an OPTIONAL seat the budget left without a token (the seat says so: `cameraRetry`) how long
@@ -127,8 +136,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import postgres from "postgres";
 import { matchRoomPathBySql, resultEventCountSql, forfeitEventCountSql } from "../helpers";
-import { seedOnlineRound, type RoundBoard, type RoundPlayer } from "../match-room-kit";
+import { playScopes, seedOnlineRound, type RoundBoard, type RoundPlayer } from "../match-room-kit";
 import { startLichessFixtureServer, type LichessFixtureServer } from "../lichess-fixture-server";
+import { lilaGameStatuses, parseLilaAccounts, proxyStatusSummary, startLichessRecordingProxy, verifyLilaTokens, type LichessRecordingProxy, type LilaAccount } from "../lichess-recording-proxy";
 import { httpWebhookDeliver, startRealtimeKitFixtureServer, type RealtimeKitFixtureServer } from "../realtimekit-fixture-server";
 import { CLIENT_POLL, CLIENT_SEAT, LOAD_LIMITS, callsPerWindow, cameraRetryWaitMs, groupCalls, normalisePath, percentile, replayBucket, slidingWindowMax } from "./load-stats";
 import { positionRises, completionReorders, type PositionSample } from "./line-checks";
@@ -227,6 +237,15 @@ const REPORTS_FINAL = num("LOAD_REPORTS_FINAL", 1) === 1;
  *  table: a run that measures presence sets it, and a run that set it and delivered zero fails. */
 const WEBHOOKS = parseWebhooksKnob(process.env.LOAD_WEBHOOKS);
 const REPORT = process.env.LOAD_REPORT ?? "test-results/load/chess-30-boards.json";
+/** Which Lichess answers the run (the header's LICHESS BACKEND): "fixture" (default) or "lila". Anything else is refused by name. */
+const LICHESS_BACKEND: "fixture" | "lila" = (() => {
+  const v = process.env.LOAD_LICHESS ?? "";
+  if (v === "" || v === "fixture") return "fixture";
+  if (v === "lila") return "lila";
+  throw new Error(`LOAD_LICHESS=${v}: expected "fixture" or "lila"`);
+})();
+/** The real lila, read straight (never through the proxy) for the token check and the final export. */
+const LILA_URL = process.env.LOAD_LILA_URL || "http://localhost:8080";
 
 /** Move every seeded round's open this many seconds into the PAST (SQL, time only), before any link is minted. Unset: the real open. */
 const OPENED_AGO_S: number | null = process.env.LOAD_OPENED_AGO_S === undefined || process.env.LOAD_OPENED_AGO_S === "" ? null : num("LOAD_OPENED_AGO_S", 0);
@@ -366,7 +385,32 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
   const baseURL = test.info().project.use.baseURL!;
   const random = rng(SEED);
 
-  const lichess: LichessFixtureServer = await startLichessFixtureServer();
+  // The real-lila backend's accounts, checked before anything is seeded: enough of them, each holding exactly the product's play
+  // grant (lib/oauth.ts, via playScopes), and each token answering /api/account as its own account on that lila.
+  let lilaAccounts: LilaAccount[] = [];
+  if (LICHESS_BACKEND === "lila") {
+    const file = process.env.LOAD_LILA_ACCOUNTS;
+    if (!file) throw new Error("LOAD_LICHESS=lila needs LOAD_LILA_ACCOUNTS: the accounts e2e/load/lila-up.sh minted");
+    let raw: unknown;
+    try {
+      raw = JSON.parse(readFileSync(file, "utf8"));
+    } catch {
+      // Never the parser's own message: it quotes the text it choked on, and the text is tokens.
+      throw new Error(`LOAD_LILA_ACCOUNTS: ${file} is not readable JSON`);
+    }
+    lilaAccounts = parseLilaAccounts(raw, BOARDS * 2, playScopes());
+    // parseLilaAccounts compares the accounts file to playScopes(), but that file and lila's token doc are written from one
+    // copy of the grant: only lila's /api/token/test answer says what lila STORED.
+    const verified = await verifyLilaTokens(LILA_URL, lilaAccounts, playScopes());
+    // `bad` first: it names WHY (by index and id, never by token), which a count mismatch alone does not.
+    expect(verified.bad, "every minted lila token is its own account's, granted exactly the play scopes").toEqual([]);
+    expect(verified.checked, "anti-vacuity: every minted lila token was asked for its account").toBe(BOARDS * 2);
+    expect(verified.scopesChecked, "anti-vacuity: lila answered for every minted token's stored grant").toBe(BOARDS * 2);
+  }
+  const fixture: LichessFixtureServer | null = LICHESS_BACKEND === "fixture" ? await startLichessFixtureServer() : null;
+  const proxy: LichessRecordingProxy | null = LICHESS_BACKEND === "lila" ? await startLichessRecordingProxy({ upstream: LILA_URL }) : null;
+  /** Either backend: every call our server sent Lichess, with its time. */
+  const lichess: { calls: readonly { method: string; path: string; at: number }[]; close(): Promise<void> } = fixture ?? proxy!;
   const video: RealtimeKitFixtureServer = await startRealtimeKitFixtureServer(
     undefined,
     WEBHOOKS ? { webhooks: httpWebhookDeliver(`${baseURL}/api/webhooks/realtimekit`) } : undefined,
@@ -429,7 +473,14 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
     const allBoards: LoadBoard[] = [];
     let used = 0;
     for (const mix of POLICY_MIX) {
-      const part = await seedOnlineRound(request, names.slice(used * 2, (used + mix.boards) * 2), { camera: mix.policy, playable: true, stage: "swiss" });
+      // lila: the players of this division take the next minted accounts, in order (one account per player across every division).
+      const accounts = lilaAccounts.slice(used * 2, (used + mix.boards) * 2).map((a) => ({ lichessId: a.id, token: a.token }));
+      const part = await seedOnlineRound(request, names.slice(used * 2, (used + mix.boards) * 2), {
+        camera: mix.policy,
+        playable: true,
+        stage: "swiss",
+        ...(LICHESS_BACKEND === "lila" ? { lichessAccounts: accounts } : {}),
+      });
       expect(part.boards.length, `anti-vacuity: the ${mix.policy} round paired every player`).toBe(mix.boards);
       // The boards come back in the round's own order (seq_in_round), so an index is a rank (round-open.ts boardRankSql).
       part.boards.forEach((b, rank) => allBoards.push({ ...b, policy: mix.policy, rank, stageId: part.stageId, times: null }));
@@ -453,7 +504,15 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
       const st = stamps.find((x) => x.stage_id === b.stageId)!;
       b.times = boardTimes(new Date(st.opened_at).getTime(), b.rank, st.staggered);
     }
-    for (const b of round.boards) for (const p of [b.home, b.away]) lichess.registerToken(p.lichessToken!, p.lichessId);
+    if (fixture) {
+      for (const b of round.boards) for (const p of [b.home, b.away]) fixture.registerToken(p.lichessToken!, p.lichessId);
+    } else {
+      // lila knows its own accounts: what must hold is that every seeded player IS one of them, each a different one.
+      const minted = new Set(lilaAccounts.map((a) => a.id));
+      const linked = round.boards.flatMap((b) => [b.home, b.away]).filter((p) => minted.has(p.lichessId) && p.lichessToken !== null);
+      expect(linked.length, "anti-vacuity: every player is linked to a minted lila account").toBe(BOARDS * 2);
+      expect(new Set(linked.map((p) => p.lichessId)).size, "and no two players share one").toBe(BOARDS * 2);
+    }
 
     const players: Player[] = [];
     for (const board of round.boards) {
@@ -1068,6 +1127,27 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
     const videoWin = slidingWindowMax(videoCalls.map((c) => c.at), LOAD_LIMITS.windowMs);
     const video60 = slidingWindowMax(videoCalls.map((c) => c.at), 60_000);
     const lichess60 = slidingWindowMax(lichessCalls.map((c) => c.at), 60_000);
+    // The real-lila backend's own account of the run: lila's answers per endpoint (the proxy's record), the creates lila ACCEPTED (a 429'd
+    // create is an attempt, not a game), and lila's export of every game the boards' ledger rows name. A read that throws is recorded and
+    // asserted below, never allowed to skip the report.
+    const lilaStatus = proxy ? proxyStatusSummary(proxy.calls, startedAt) : null;
+    const createsAccepted = proxy
+      ? proxy.calls.filter((c) => c.method === "POST" && normalisePath(c.path) === "/api/challenge/:id" && c.status >= 200 && c.status < 300).length
+      : null;
+    let lilaLedger: { fixture_id: string; challenge_id: string | null }[] = [];
+    let lilaGames: { id: string; status: string; winner: string | null }[] | null = null;
+    let lilaReadError: string | null = null;
+    if (proxy) {
+      try {
+        lilaLedger = await monitor<{ fixture_id: string; challenge_id: string | null }[]>`
+          select fixture_id, challenge_id from fixture_external_play where fixture_id = any(${monitor.array(fixtureIds)}::uuid[])`;
+        lilaGames = await lilaGameStatuses(LILA_URL, lilaLedger.flatMap((r) => (r.challenge_id ? [r.challenge_id] : [])));
+      } catch (e) {
+        lilaReadError = (e as Error).message;
+      }
+    }
+    const lilaGamesByStatus: Record<string, number> = {};
+    for (const g of lilaGames ?? []) lilaGamesByStatus[g.status] = (lilaGamesByStatus[g.status] ?? 0) + 1;
     const lat = (label: string) => {
       const xs = samples.filter((s) => s.label === label).map((s) => s.ms);
       return xs.length === 0
@@ -1428,6 +1508,17 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
         busiestMinute: lichess60.max,
         perEndpoint: groupCalls(lichessCalls),
         perFiveMinuteWindow: callsPerWindow(lichessCalls.map((c) => c.at), startedAt, LOAD_LIMITS.windowMs),
+        // Only with the real-lila backend (the fixture's report is unchanged): lila's statuses, a 429 recorded as the measurement it is.
+        ...(lilaStatus
+          ? {
+              backend: "lila",
+              createsAccepted,
+              status429: lilaStatus.status429,
+              first429: lilaStatus.first429,
+              statusByPath: lilaStatus.statusByPath,
+              games: { ledgerGameIds: lilaLedger.filter((r) => r.challenge_id !== null).length, exported: lilaGames?.length ?? null, byStatus: lilaGamesByStatus, readError: lilaReadError },
+            }
+          : {}),
       },
       realtimekit: {
         total: videoCalls.length,
@@ -1532,14 +1623,25 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
     const playedBoards = round.boards.filter((_, i) => boardStates[i]!.gameSeenAt !== null);
     const PLAYED = STRICT ? BOARDS : playedBoards.length;
     expect(PLAYED, "anti-vacuity: some board was played").toBeGreaterThan(0);
-    expect(lichess.games().length, "a Lichess game per played board").toBe(PLAYED);
-    expect(lichess.games().filter((g) => g.status === "resign").length, "every game ended by the resign").toBe(PLAYED);
+    if (fixture) {
+      expect(fixture.games().length, "a Lichess game per played board").toBe(PLAYED);
+      expect(fixture.games().filter((g) => g.status === "resign").length, "every game ended by the resign").toBe(PLAYED);
+    } else {
+      // lila's own account, read from its export of the games the played boards' ledger rows name.
+      expect(lilaReadError, "lila's export of the run's games was read").toBeNull();
+      const playedIds = new Set(lilaLedger.filter((r) => playedBoards.some((b) => b.fixtureId === r.fixture_id) && r.challenge_id !== null).map((r) => r.challenge_id!));
+      expect(playedIds.size, "anti-vacuity: every played board's ledger names its own lila game").toBe(PLAYED);
+      const known = (lilaGames ?? []).filter((g) => playedIds.has(g.id));
+      expect(known.length, "a Lichess game per played board (lila's own export)").toBe(PLAYED);
+      expect(known.filter((g) => g.status === "resign").length, `every game ended by the resign (lila's statuses: ${JSON.stringify(lilaGamesByStatus)})`).toBe(PLAYED);
+    }
     for (const b of playedBoards) {
       expect(await resultEventCountSql(b.fixtureId), `board ${b.fixtureId}: one result written`).toBe(1);
       expect(await forfeitEventCountSql(b.fixtureId), `board ${b.fixtureId}: a resign is never a forfeit`).toBe(0);
     }
     expect(samples.filter((s) => s.status >= 500 || s.status === 0).length, "no 5xx and no dropped request").toBe(0);
-    expect(lichessCreates.length, "one challenge per played board").toBe(PLAYED);
+    // lila: a create lila refused (a 429) is an attempt, not a game - one ACCEPTED create per played board.
+    expect(createsAccepted ?? lichessCreates.length, "one challenge per played board").toBe(PLAYED);
     expect(lichessCreateWin.max, "Lichess creates in any ten minutes, under 500 per IP").toBeLessThan(LOAD_LIMITS.lichessCreatesPer10Min);
     expect(videoWin.windows, "anti-vacuity: RealtimeKit was called").toBeGreaterThan(players.filter((p) => p.policy !== "off").length);
     // Metered, the bucket is what keeps the calls that LEAVE the platform under the ceiling: this is the budget working.
