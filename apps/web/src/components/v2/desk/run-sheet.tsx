@@ -306,13 +306,36 @@ export function RunSheet({
   // Controller ruling 2: that default is decided the FIRST time a round is seen and then held (`latchedOpen`), so a round that finishes
   // during the visit stays open until a reload or a tap. Written during render (React's "adjust state during render"), never in an effect.
   const [roundLatch, setRoundLatch] = useState<ReadonlyMap<number, boolean>>(() => new Map());
-  // W5 follow-ups C: a folded round's rows once its bar is opened, by round number ("loading" / "error" while they are not here).
-  const [loadedRounds, setLoadedRounds] = useState<ReadonlyMap<number, readonly RunSheetFixture[] | "loading" | "error">>(() => new Map());
-  const [foldedSeen, setFoldedSeen] = useState(foldedRounds);
-  if (foldedSeen !== foldedRounds) {
-    setFoldedSeen(foldedRounds);
-    setLoadedRounds(new Map());
-  }
+  // W5 follow-ups C: an opened folded round's last read, by round number - for which render of the page (`from`, the `foldedRounds`
+  // it was read under), its rows, or that it failed (the rows before it kept). Review I1: a new render (`router.refresh()` after any
+  // action) makes every open folded round's read stale, and it is read AGAIN (the effect below), never left on "Loading"; until the
+  // new answer lands the old rows stay drawn. "Loading" is derived (an open folded round with no rows yet), never stored.
+  const [loadedRounds, setLoadedRounds] = useState<
+    ReadonlyMap<number, { from: readonly FoldedRunSheetRound[] | undefined; rows?: readonly RunSheetFixture[]; failed?: true }>
+  >(() => new Map());
+  // Reads already out, by round, with the render they were asked for: an answer for this render still on its way is not asked twice.
+  const roundReads = useRef(new Map<number, readonly FoldedRunSheetRound[] | undefined>());
+  const wantedRounds =
+    stageId === null || loadRound === undefined
+      ? []
+      : (foldedRounds ?? [])
+          .filter((r) => r.stageId === stageId && roundToggled.get(r.round) === true && loadedRounds.get(r.round)?.from !== foldedRounds)
+          .map((r) => r.round);
+  const wantedKey = wantedRounds.join(",");
+  useEffect(() => {
+    if (wantedKey === "" || stageId === null || loadRound === undefined) return;
+    const from = foldedRounds;
+    for (const round of wantedKey.split(",").map(Number)) {
+      if (roundReads.current.get(round) === from) continue;
+      roundReads.current.set(round, from);
+      loadRound(stageId, round)
+        .then((rows) => setLoadedRounds((prev) => new Map(prev).set(round, { from, rows })))
+        .catch(() => setLoadedRounds((prev) => new Map(prev).set(round, { from, rows: prev.get(round)?.rows, failed: true })))
+        .finally(() => {
+          if (roundReads.current.get(round) === from) roundReads.current.delete(round);
+        });
+    }
+  }, [wantedKey, foldedRounds, stageId, loadRound]);
 
   // Empty division (spec, "Error and empty states"): no header, nothing —
   // the stage rail (Task 5) is the whole story until then.
@@ -636,24 +659,24 @@ export function RunSheet({
   const roundsStage = embedded && stageId !== null ? stageById.get(stageId) : undefined;
   const poolOrder = new Map((pools ?? []).map((p, i) => [p.id, i] as const));
   const poolLabelOf = new Map((pools ?? []).map((p) => [p.id, p.label] as const));
-  // W5 follow-ups C: read a folded round's rows (its bar was opened, or Try again).
-  const openFolded = (round: number) => {
-    if (stageId === null || loadRound === undefined) return;
-    setLoadedRounds((prev) => new Map(prev).set(round, "loading"));
-    loadRound(stageId, round)
-      .then((rows) => setLoadedRounds((prev) => new Map(prev).set(round, rows)))
-      .catch(() => setLoadedRounds((prev) => new Map(prev).set(round, "error")));
+  // W5 follow-ups C: Try again - forget the failed read, so the round is wanted again and the effect above reads it.
+  const retryFolded = (round: number) =>
+    setLoadedRounds((prev) => {
+      const next = new Map(prev);
+      next.delete(round);
+      return next;
+    });
+  const foldedFailed = (round: number) => {
+    const got = loadedRounds.get(round);
+    return got?.failed === true && got.from === foldedRounds && got.rows === undefined;
   };
   const renderRounds = (withBars: boolean): React.ReactElement | null => {
     if (stageId === null) return null;
     // W5 follow-ups C: this stage's folded rounds. A loaded one's rows join the blocks (grouped by the same `buildRunSheet`, so they
     // read exactly as shipped rows do); one not loaded yet is a bar carrying its tally, among the sections by kickoff.
     const foldedHere = withBars ? (foldedRounds ?? []).filter((r) => r.stageId === stageId) : [];
-    const loadedRows = foldedHere.flatMap((r) => {
-      const got = loadedRounds.get(r.round);
-      return Array.isArray(got) ? got : [];
-    });
-    const loadedSet = new Set(foldedHere.filter((r) => Array.isArray(loadedRounds.get(r.round))).map((r) => r.round));
+    const loadedRows = foldedHere.flatMap((r) => loadedRounds.get(r.round)?.rows ?? []);
+    const loadedSet = new Set(foldedHere.filter((r) => loadedRounds.get(r.round)?.rows !== undefined).map((r) => r.round));
     // `seq` orders rows ACROSS stages in `buildRunSheet`; these are one stage's, so any constant reads them in round order.
     const sheetBlocks =
       loadedRows.length > 0
@@ -720,7 +743,6 @@ export function RunSheet({
                     controls: listId,
                     onToggle: () => {
                       setRoundToggled((prev) => new Map(prev).set(section.round, !open));
-                      if (section.folded !== null && !open && loadedRounds.get(section.round) !== "loading") openFolded(section.round);
                     },
                   }}
                 >
@@ -757,11 +779,11 @@ export function RunSheet({
                   bar's `aria-controls` still names it. */}
               <ul id={listId} hidden={!open} className="divide-y divide-slate-50">
                 {open && section.folded !== null && (
-                  <li className="px-4 py-3 text-sm text-slate-500" data-run-sheet-round-load={loadedRounds.get(section.round) === "error" ? "error" : "loading"}>
-                    {loadedRounds.get(section.round) === "error" ? (
+                  <li className="px-4 py-3 text-sm text-slate-500" data-run-sheet-round-load={foldedFailed(section.round) ? "error" : "loading"}>
+                    {foldedFailed(section.round) ? (
                       <span role="alert" className="flex flex-wrap items-center gap-3">
                         {msg("runsheet.round.loadFailed")}
-                        <button type="button" onClick={() => openFolded(section.round)} className="min-h-11 font-semibold text-indigo-700 hover:underline">
+                        <button type="button" onClick={() => retryFolded(section.round)} className="min-h-11 font-semibold text-indigo-700 hover:underline">
                           {msg("runsheet.round.retry")}
                         </button>
                       </span>

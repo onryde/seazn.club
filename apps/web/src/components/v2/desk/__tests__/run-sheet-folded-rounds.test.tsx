@@ -138,14 +138,29 @@ describe("C: a folded round of a big run sheet is a shut bar that loads its rows
     expect(rowsDrawn(island).filter((id) => r1.some((f) => f.id === id)).length).toBe(3);
   });
 
-  it("a new render of the page (new folded rounds) drops what was loaded: the bar is a tally again", async () => {
+  it("review I1: a new render of the page (router.refresh, new folded rounds) re-reads every OPEN folded round and draws its new rows - never stuck on Loading", async () => {
     const { r2, r3, folded } = scene();
-    const loadRound = vi.fn(async () => r3);
+    // The second read answers the round as it now stands: its first match has been played.
+    const replayed = [{ ...r3[0]!, status: "decided", outcome: { kind: "win", winner: "e1" } }, r3[1]!];
+    const loadRound = vi.fn().mockResolvedValueOnce(r3).mockResolvedValueOnce(replayed);
     const island = renderIsland(RunSheet, propsFor(r2, folded, { loadRound }) as never) as unknown as Island;
     tap(island, 2);
     await settle();
-    expect(rowsDrawn(island).some((id) => r3[0]!.id === id)).toBe(true);
+    expect(rowsDrawn(island).filter((id) => r3.some((f) => f.id === id)).length, "premise: the round's rows are drawn").toBe(2);
     island.rerender(propsFor(r2, [...folded], { loadRound }) as never);
-    expect(rowsDrawn(island).some((id) => r3.some((f) => f.id === id)), "the old render's rows are gone").toBe(false);
+    await settle();
+    expect(loadRound.mock.calls, "the open round is read again, once").toEqual([["s1", 3], ["s1", 3]]);
+    expect(loadLine(island), "not stuck on Loading").toBeUndefined();
+    const drawn = island.tree().filter((el) => propsOf(el).inRound === true && (propsOf(el).fixture as RunSheetFixture | undefined)?.id === r3[0]!.id);
+    expect(drawn.map((el) => (propsOf(el).fixture as RunSheetFixture).status), "the new answer's row").toEqual(["decided"]);
+  });
+
+  it("a new render reads nothing for a folded round nobody opened", async () => {
+    const { r2, folded } = scene();
+    const loadRound = vi.fn(async () => []);
+    const island = renderIsland(RunSheet, propsFor(r2, folded, { loadRound }) as never) as unknown as Island;
+    island.rerender(propsFor(r2, [...folded], { loadRound }) as never);
+    await settle();
+    expect(loadRound).not.toHaveBeenCalled();
   });
 });

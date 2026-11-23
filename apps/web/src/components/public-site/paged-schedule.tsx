@@ -4,7 +4,7 @@
 // round is a header whose rows load when it is tapped (`rounds/route.ts`, the same grouping and words as the page). A team search
 // returns that team's matches across ALL rounds, and the chips narrow to live, upcoming or finished matches. The rows are the
 // small schedule's own (`ScorebugRow`); the mock is layout only, the house theme paints it.
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CalendarPlus, ChevronRight, Search, X } from "lucide-react";
 import type { PublicFixture } from "@/server/public-site/data";
 import { fmtPublicZoneAbbrev } from "@/lib/format";
@@ -38,7 +38,19 @@ export interface PagedScheduleProps {
   watchCopy?: ScheduleWatchCopy;
 }
 
-type Load = { state: "loading" } | { state: "error" } | { state: "ready"; rows: PublicFixture[] };
+/** A folded round's last read: for which document (`from`), its rows, or that it failed (the rows before it kept). "Loading" is not
+ *  stored: it is an open folded round with no rows yet. */
+type Load = { from: PagedScheduleData; rows?: PublicFixture[]; failed?: true };
+
+/** Row extras read later layered over what is here (a later read's word for a row wins). */
+function mergeRowExtras(prev: ScheduleRowExtras, more: ScheduleRowExtras): ScheduleRowExtras {
+  return {
+    slotLabels: { ...prev.slotLabels, ...more.slotLabels },
+    forfeit: { ...prev.forfeit, ...more.forfeit },
+    ...(prev.watchLinks || more.watchLinks ? { watchLinks: { ...prev.watchLinks, ...more.watchLinks } } : {}),
+    ...(prev.roundOpenedAt || more.roundOpenedAt ? { roundOpenedAt: { ...prev.roundOpenedAt, ...more.roundOpenedAt } } : {}),
+  };
+}
 
 /** Where a folded round's rows, or a team's, are asked for: beside the division page, the same cached document. */
 export function roundsUrl(divisionPath: string, q: { round: string } | { entrant: string }): string {
@@ -95,32 +107,45 @@ export function PagedSchedule({ data, entrantNames, divisionPath, tz, copy, page
   const [query, setQuery] = useState("");
   const [team, setTeam] = useState<{ id: string; name: string } | null>(null);
   const [teamLoad, setTeamLoad] = useState<{ state: "loading" } | { state: "error" } | { state: "ready"; rounds: { key: string; rows: PublicFixture[] }[] } | null>(null);
-  // A new document (the page re-rendered) starts from its own rows: what was loaded belongs to the old one.
+  // A new document (the page re-rendered: a poll, `router.refresh()`) brings its own extras. Review I1: what was read under the old
+  // one is stale, and every OPEN folded round is read again (the effect below) - its old rows stay drawn until the new answer lands,
+  // never a "Loading" line nothing will ever replace.
   const [seen, setSeen] = useState(data);
   if (seen !== data) {
     setSeen(data);
-    setLoads(new Map());
     setExtras(data.extras);
   }
 
-  const mergeExtras = (more: ScheduleRowExtras) =>
-    setExtras((prev) => ({
-      slotLabels: { ...prev.slotLabels, ...more.slotLabels },
-      forfeit: { ...prev.forfeit, ...more.forfeit },
-      ...(prev.watchLinks || more.watchLinks ? { watchLinks: { ...prev.watchLinks, ...more.watchLinks } } : {}),
-      ...(prev.roundOpenedAt || more.roundOpenedAt ? { roundOpenedAt: { ...prev.roundOpenedAt, ...more.roundOpenedAt } } : {}),
-    }));
-
-  const loadRound = (key: string) => {
-    setLoads((prev) => new Map(prev).set(key, { state: "loading" }));
-    fetchRounds(roundsUrl(divisionPath, { round: key }))
-      .then((answer) => {
-        if (answer.kind !== "round") throw new Error("rounds: not a round");
-        mergeExtras(answer.extras);
-        setLoads((prev) => new Map(prev).set(key, { state: "ready", rows: answer.rows }));
-      })
-      .catch(() => setLoads((prev) => new Map(prev).set(key, { state: "error" })));
-  };
+  const isOpen = (g: PagedScheduleGroup) => toggled.get(g.key) ?? g.open;
+  // The folded rounds to read: open, nothing shipped for them, and no read under THIS document yet.
+  const wanted = data.groups.filter((g) => isOpen(g) && !initial.has(g.key) && loads.get(g.key)?.from !== data).map((g) => g.key);
+  const wantedKey = JSON.stringify(wanted);
+  // Reads already out, by round key, with the document they were asked under: one still on its way is not asked twice.
+  const reads = useRef(new Map<string, PagedScheduleData>());
+  useEffect(() => {
+    const from = data;
+    for (const key of JSON.parse(wantedKey) as string[]) {
+      if (reads.current.get(key) === from) continue;
+      reads.current.set(key, from);
+      fetchRounds(roundsUrl(divisionPath, { round: key }))
+        .then((answer) => {
+          if (answer.kind !== "round") throw new Error("rounds: not a round");
+          setExtras((prev) => mergeRowExtras(prev, answer.extras));
+          setLoads((prev) => new Map(prev).set(key, { from, rows: answer.rows }));
+        })
+        .catch(() => setLoads((prev) => new Map(prev).set(key, { from, rows: prev.get(key)?.rows, failed: true })))
+        .finally(() => {
+          if (reads.current.get(key) === from) reads.current.delete(key);
+        });
+    }
+  }, [wantedKey, data, divisionPath]);
+  // Try again: forget the failed read, so the round is wanted again and the effect above reads it.
+  const retryRound = (key: string) =>
+    setLoads((prev) => {
+      const next = new Map(prev);
+      next.delete(key);
+      return next;
+    });
 
   const chooseTeam = (pick: { id: string; name: string }) => {
     setTeam(pick);
@@ -129,7 +154,7 @@ export function PagedSchedule({ data, entrantNames, divisionPath, tz, copy, page
     fetchRounds(roundsUrl(divisionPath, { entrant: pick.id }))
       .then((answer) => {
         if (answer.kind !== "entrant") throw new Error("rounds: not a team");
-        mergeExtras(answer.extras);
+        setExtras((prev) => mergeRowExtras(prev, answer.extras));
         setTeamLoad({ state: "ready", rounds: answer.rounds });
       })
       .catch(() => setTeamLoad({ state: "error" }));
@@ -140,18 +165,12 @@ export function PagedSchedule({ data, entrantNames, divisionPath, tz, copy, page
     setQuery("");
   };
 
-  const rowsOf = (key: string): PublicFixture[] | null => {
-    const shipped = initial.get(key);
-    if (shipped) return shipped;
+  const rowsOf = (key: string): PublicFixture[] | null => initial.get(key) ?? loads.get(key)?.rows ?? null;
+  const failed = (key: string) => {
     const l = loads.get(key);
-    return l?.state === "ready" ? l.rows : null;
+    return l?.failed === true && l.from === data && l.rows === undefined;
   };
-  const isOpen = (g: PagedScheduleGroup) => toggled.get(g.key) ?? g.open;
-  const toggle = (g: PagedScheduleGroup) => {
-    const open = !isOpen(g);
-    setToggled((prev) => new Map(prev).set(g.key, open));
-    if (open && rowsOf(g.key) === null && loads.get(g.key)?.state !== "loading") loadRound(g.key);
-  };
+  const toggle = (g: PagedScheduleGroup) => setToggled((prev) => new Map(prev).set(g.key, !isOpen(g)));
   const keep = (f: PublicFixture) => chip === "all" || fixtureBucket(f.status) === chip;
   const byKey = new Map(data.groups.map((g) => [g.key, g]));
 
@@ -197,7 +216,6 @@ export function PagedSchedule({ data, entrantNames, divisionPath, tz, copy, page
     const open = isOpen(g);
     const listId = `paged-round-${encodeURIComponent(g.key)}`;
     const rows = rowsOf(g.key);
-    const load = loads.get(g.key);
     const shown = rows?.filter(keep) ?? null;
     return (
       <section key={g.key} data-testid="paged-round" data-round-key={g.key} data-state={g.state} data-open={open ? "true" : "false"} className="mb-4">
@@ -232,10 +250,10 @@ export function PagedSchedule({ data, entrantNames, divisionPath, tz, copy, page
             ) : null}
             {shown !== null ? (
               rowList(shown, listId)
-            ) : load?.state === "error" ? (
+            ) : failed(g.key) ? (
               <p id={listId} role="alert" className="flex flex-wrap items-center gap-3 rounded-xl border border-dashed border-zinc-300 bg-surface px-4 py-3 text-sm text-ink-muted">
                 {pagedCopy.loadFailed}
-                <button type="button" onClick={() => loadRound(g.key)} className="min-h-11 font-semibold text-accent-strong underline-offset-2 hover:underline">
+                <button type="button" onClick={() => retryRound(g.key)} className="min-h-11 font-semibold text-accent-strong underline-offset-2 hover:underline">
                   {pagedCopy.retry}
                 </button>
               </p>
