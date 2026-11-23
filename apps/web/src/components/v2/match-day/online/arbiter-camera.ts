@@ -181,6 +181,9 @@ export function makeJoinArbiter(
       changed();
     };
 
+    // Drops are reported (never acted on here); every leave below is ours. Declared before failClosed, which calls it
+    // (review m2): a `const` read before its line is a TDZ ReferenceError, thrown before `meeting.leave()`.
+    const ourLeave = watchRoomDrops(meeting, "arbiter", { fixtureId: fixtureId ?? null, side: side ?? null });
     const faultListeners = new Set<() => void>();
     let leaving: Promise<void> | null = null;
     async function failClosed(err: unknown): Promise<void> {
@@ -209,8 +212,6 @@ export function makeJoinArbiter(
     participants.joined.on("participantLeft", changed);
     meeting.self.on("roomJoined", watch);
     meeting.self.on("roomLeft", changed);
-    // Drops are reported (never acted on here); every leave below is ours.
-    const ourLeave = watchRoomDrops(meeting, "arbiter", { fixtureId: fixtureId ?? null, side: side ?? null });
 
     await meeting.join();
     await enforce();

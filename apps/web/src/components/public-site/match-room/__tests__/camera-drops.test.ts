@@ -7,6 +7,13 @@
 // expected values come from are the 2.0.2 typings and source: `roomLeft` carries `{ state: LeaveRoomState }`,
 // `roomJoined` carries `{ reconnected }` (index.d.ts l.2358-2363), a socket drop emits roomLeft "disconnected"
 // (index.es.js l.24413-24423) and the client's own leave() emits roomLeft "left" (l.24497-24500).
+//
+// What these tests prove is what the code HANDS to Sentry. In production it SENDS NOTHING yet: the browser Sentry client is
+// never initialised (instrumentation-client.ts - sentry.client.config.ts is webpack-only and the app builds with
+// Turbopack), so every capture below is a no-op until the owner has the client init wired (review I2).
+import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sentry = vi.hoisted(() => ({ captureMessage: vi.fn(), addBreadcrumb: vi.fn(), captureException: vi.fn() }));
@@ -94,7 +101,7 @@ const drops = () => sentry.captureMessage.mock.calls.filter((c) => c[0] === "rea
 const crumbs = (message: string) =>
   sentry.addBreadcrumb.mock.calls.map((c) => c[0] as { message: string; data: Record<string, unknown> }).filter((b) => b.message === message);
 
-describe("realtimekit drops: a warning per unplanned roomLeft, a breadcrumb per rejoin (both surfaces)", () => {
+describe("realtimekit drops: a warning per unplanned roomLeft, a breadcrumb per rejoin (both surfaces) - handed to a Sentry client the browser does not initialise yet, so nothing is SENT until it is wired", () => {
   it("the join's own roomJoined is no rejoin: nothing reported (the empty case)", async () => {
     let checked = 0;
     for (const s of SURFACES) {
@@ -226,6 +233,45 @@ describe("realtimekit drops: a warning per unplanned roomLeft, a breadcrumb per 
       checked += 1;
     }
     expect(checked).toBe(SURFACES.length);
+  });
+
+  it("only a lost connection is a drop: kicked/ended (our server's doing) and every other planned leave state is a breadcrumb, never a warning - swept over the SDK's own LeaveRoomState", async () => {
+    // The states, read from the SDK's declaration (realtimekit 2.0.2 index.d.ts), not typed here: a state a later SDK adds
+    // lands in this sweep and is judged by the rule below. The rule (review m1): a socket/media drop ("disconnected"), the SDK
+    // giving up ("failed") and the SDK leaving on its own ("left", unflagged) are drops; "kicked" (the arbiter revocation
+    // removes a participant) and "ended" (the teardown and the retire end the meeting) are OUR server's, and the rest
+    // ("rejected", "connected-meeting", "stageLeft") lose no connection.
+    const dts = readFileSync(join(dirname(createRequire(import.meta.url).resolve("@cloudflare/realtimekit")), "index.d.ts"), "utf8");
+    const union = /type LeaveRoomState = ([^;]+);/.exec(dts)?.[1] ?? "";
+    const states = [...union.matchAll(/'([^']+)'/g)].map((m) => m[1]!);
+    expect(states.length, "anti-vacuity: the SDK's LeaveRoomState was read").toBe(8);
+    const DROPS = new Set(["disconnected", "failed", "left"]);
+    expect(states.filter((x) => DROPS.has(x)).sort(), "premise: every drop state is one the SDK declares").toEqual([...DROPS].sort());
+    let checked = 0;
+    for (const s of SURFACES) {
+      for (const state of states) {
+        sentry.captureMessage.mockClear();
+        sentry.addBreadcrumb.mockClear();
+        const { m } = await s.join();
+        m.self.emit("roomLeft", { state });
+        m.self.emit("roomJoined", { reconnected: true });
+        await settle();
+        const label = `${s.surface} ${state}`;
+        if (DROPS.has(state)) {
+          expect(drops().map((c) => (c[1] as { tags: { leaveState: string } }).tags.leaveState), label).toEqual([state]);
+          expect(crumbs("realtimekit: room left"), label).toEqual([]);
+          expect(crumbs("realtimekit: room rejoined"), `${label}: a drop's rejoin`).toHaveLength(1);
+        } else {
+          expect(drops(), `${label}: never a warning`).toEqual([]);
+          expect(crumbs("realtimekit: room left").map((b) => b.data), label).toEqual([
+            { surface: s.surface, fixtureId: s.fixtureId, side: s.side, leaveState: state },
+          ]);
+          expect(crumbs("realtimekit: room rejoined"), `${label}: no drop, so no rejoin`).toEqual([]);
+        }
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(SURFACES.length * states.length);
   });
 
   it("never a token, a peer's user id or a name in anything sent to Sentry", async () => {

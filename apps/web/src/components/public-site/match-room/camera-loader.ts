@@ -125,11 +125,25 @@ type SdkModule = RealtimeKitSdk;
  *  the caller did not say. */
 export type RoomWhere = { fixtureId: string | null; side: string | null };
 
+/** The leave states that are a lost connection (a warning); every other state is a planned leave (a breadcrumb). */
+const DROP_STATES: ReadonlySet<LeaveRoomState> = new Set<LeaveRoomState>(["disconnected", "failed", "left"]);
+
 /** Connection drops, reported with what we already have (owner 2026-11-22: "we have logger and sentry"; no table, no
- *  endpoint). For one joined meeting, on either surface:
- *   - every `roomLeft` that is NOT our own leave is a Sentry WARNING, "realtimekit: room dropped", tagged with the
- *     surface, the board, the side and the SDK's leave state (`{ state: LeaveRoomState }`, the event's only field in
- *     2.0.2: a socket or media-node drop is "disconnected", a give-up "failed", and the client's own leave "left");
+ *  endpoint).
+ *
+ *  SENDS NOTHING IN PRODUCTION YET (review I2): the browser Sentry client is never initialised -
+ *  `Sentry.init` is not called on the client (instrumentation-client.ts: sentry.client.config.ts is webpack-only and the app
+ *  builds with Turbopack), so every capture and breadcrumb below is a no-op until the owner has the client init wired. The
+ *  D7 guard's own browser reports are in the same state. What follows is what is sent once it is.
+ *
+ *  For one joined meeting, on either surface:
+ *   - a `roomLeft` that is NOT our own leave and is a DROP - "disconnected" (a socket or media-node drop), "failed" (the
+ *     SDK gave up) or "left" (the SDK leaving on its own) - is a Sentry WARNING, "realtimekit: room dropped", tagged with
+ *     the surface, the board, the side and the SDK's leave state (`{ state: LeaveRoomState }`, the event's only field in
+ *     2.0.2);
+ *   - any other leave state - "kicked" and "ended" are OUR server's doing (the arbiter revocation removes a participant;
+ *     the teardown and the retire end the meeting, realtimekit.ts), and "rejected", "connected-meeting", "stageLeft" are no
+ *     connection loss - is a breadcrumb, "realtimekit: room left", never a warning (review m1);
  *   - the next `roomJoined` after a drop is a breadcrumb, "realtimekit: room rejoined", carrying the gap in ms from the
  *     FIRST drop since the last join and the SDK's `reconnected`; the join's own roomJoined is no rejoin;
  *   - the SDK's socket and media connection updates (`meta`'s socketConnectionUpdate / mediaConnectionUpdate) are
@@ -142,6 +156,15 @@ export function watchRoomDrops(meeting: Pick<Meeting, "self" | "meta">, surface:
   let droppedAt: number | null = null;
   meeting.self.on("roomLeft", ({ state }: { state: LeaveRoomState }) => {
     if (ours) return;
+    if (!DROP_STATES.has(state)) {
+      Sentry.addBreadcrumb({
+        category: "realtimekit",
+        level: "info",
+        message: "realtimekit: room left",
+        data: { surface, fixtureId: where.fixtureId, side: where.side, leaveState: state },
+      });
+      return;
+    }
     droppedAt ??= Date.now();
     Sentry.captureMessage("realtimekit: room dropped", {
       level: "warning",
