@@ -12,17 +12,25 @@ import "server-only";
 //  * Two buckets (V426): a debit draws `monthly` (this month's included credits, which expire) first, then `pack` (P4); a
 //    return gives back bought credits first, then included credits debited in the current UTC month, and forfeits included
 //    credits from an earlier month (P6, P21). Each returned credit goes to the bucket it came from.
+//  * ONE CLOCK, the database's. Every ledger row is dated by its transaction's `now()`, so "this month" is that same
+//    `now()`, read inside the transaction — for the rollover a debit runs, and for the split of what a package can give
+//    back. No function here takes a clock from its caller: a caller-supplied month could make last month's included
+//    credits read as this month's and return them.
 //  * The money lock: the caller holds it (lock order §7.3: the `division:` lock, then `lockOrg`, then the package row
-//    `for update`). Both writers take `lockOrg` again before they read: an advisory lock is re-entrant within a
-//    transaction, so that never waits on the caller's own hold, and a caller that forgot it still cannot race another
-//    writer of the org. The reads here (`returnableFor`) are only true under it.
+//    `for update`). Both writers take `lockOrg` themselves too — the debit as its first statement, the return right after
+//    checking its counts: an advisory lock is re-entrant within a transaction, so that never waits on the caller's own
+//    hold, and a caller that forgot it still cannot race another writer of the org. The debit's take is the ONE that
+//    covers its rollover (stream-credits.ts `rollMonthlyUnderLock` takes none). The reads here (`returnableFor`) are only
+//    true under it.
 //  * Exactly once is the CALLER's (by state under the locks, spec §7.4): these writers move what they are told to, after
-//    refusing anything the package's own ledger cannot account for.
+//    refusing anything the package's own ledger or its state cannot account for.
 import type { Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { ONLINE_PACKAGE_CODES } from "@/lib/online-chess-package";
 import { InsufficientCredits, credit, debit } from "@/server/relay/domain/credits";
-import { creditBreakdown, lockOrg, streamMonthlyPeriod, type StreamCreditBreakdown } from "@/server/usecases/stream-credits";
+import {
+  creditBreakdown, lockOrg, rollMonthlyUnderLock, streamMonthlyPeriod, type StreamCreditBreakdown,
+} from "@/server/usecases/stream-credits";
 import type { BucketSplit, ReturnPlan, Returnable } from "./types";
 
 /** 402 `ONLINE_CHESS_NO_CREDITS` (plan Global Constraints): the org's balance cannot cover what the package owes. Carries
@@ -37,6 +45,13 @@ export class OnlineChessNoCreditsError extends HttpError {
 /** A return that is more than the package can give back: one code for the plan and for the writer, both "cannot happen"
  *  (the package's value never exceeds what its own ledger rows hold), so a 500 that names it, never a write. */
 const RETURN_EXCEEDS_DEBIT = "online_package_return_exceeds_debit";
+
+/** The transaction's own clock: `now()` is fixed at the transaction's start, and it is what every row written in it is
+ *  dated by. */
+async function transactionNow(tx: Tx): Promise<Date> {
+  const [r] = await tx<{ now: Date }[]>`select now() as now`;
+  return r!.now;
+}
 
 /** The split of a package debit of `credits` over the org's two buckets: `monthly` first, then `pack` (P4: the included
  *  credits expire at the end of the UTC month, a bought one never does). Throws 402 `OnlineChessNoCreditsError` when the
@@ -60,21 +75,37 @@ export function planDebit(split: StreamCreditBreakdown, credits: number): Bucket
   return { monthly, pack: credits - monthly };
 }
 
-/** "Cannot happen" as a guard: the caller resolved the package from the org's own division. A package of another org (or
- *  none: a stale id) would put one org's credits on another's package — money moved across tenants, which an append-only
- *  ledger can only compensate, never correct. Postgres returns uuids lower-case; a caller's id may not be. */
-async function assertPackageOfOrg(tx: Tx, a: { orgId: string; packageId: string }): Promise<void> {
-  const [p] = await tx<{ org_id: string }[]>`select org_id from division_online_packages where id = ${a.packageId}`;
+/** "Cannot happen" as guards, each a named 500: the caller resolved the package from the org's own division, under the
+ *  package row's lock, and checked its state. A package of another org (or none: a stale id) would put one org's credits
+ *  on another's package — money moved across tenants, which an append-only ledger can only compensate, never correct. A
+ *  REFUNDED package is history (spec §7.1): nothing is debited for it and nothing more comes back from it. A FROZEN one
+ *  has opened a round (P7, P8): its credits are committed, so nothing comes back. Postgres returns uuids lower-case; a
+ *  caller's id may not be. */
+async function assertPackageWritable(tx: Tx, a: { orgId: string; packageId: string }, op: "debit" | "refund"): Promise<void> {
+  const [p] = await tx<{ org_id: string; frozen_at: Date | null; refunded_at: Date | null }[]>`
+    select org_id, frozen_at, refunded_at from division_online_packages where id = ${a.packageId}`;
   if (!p || p.org_id !== a.orgId.toLowerCase()) {
     throw new HttpError(500, `Online Chess package ${a.packageId} does not belong to organisation ${a.orgId}; nothing was written`, "online_package_not_of_org");
   }
+  if (p.refunded_at !== null) {
+    throw new HttpError(500, `Online Chess package ${a.packageId} was refunded; refusing a ${op} on it`, "online_package_refunded");
+  }
+  if (op === "refund" && p.frozen_at !== null) {
+    throw new HttpError(500, `Online Chess package ${a.packageId} is frozen (a round has opened); refusing to return credits from it`, "online_package_frozen");
+  }
 }
 
-/** Debit `credits` for a package: `planDebit`'s split, written as one `consume` row per bucket that moves (monthly, then
- *  pack), each `balance_after` the running org total. Answers the split. 402 when the balance is short, before any row. */
-export async function debitForPackage(tx: Tx, a: { orgId: string; packageId: string; credits: number }): Promise<BucketSplit> {
+/** Debit `credits` for a package: first the org's monthly rollover at the transaction's own `now()` (`rate` is the org's
+ *  resolved plan rate, `streamMonthlyRate`, read before the transaction), so last month's leftover included credits are
+ *  expired and this month's granted before anything is drawn; then `planDebit`'s split, written as one `consume` row per
+ *  bucket that moves (monthly, then pack), each `balance_after` the running org total. Answers the split. 402 when the
+ *  balance is short, before any consume row (the rollover's rows roll back with the caller's transaction). */
+export async function debitForPackage(
+  tx: Tx, a: { orgId: string; packageId: string; credits: number; rate: number },
+): Promise<BucketSplit> {
   await lockOrg(tx, a.orgId);
-  await assertPackageOfOrg(tx, a);
+  await assertPackageWritable(tx, a, "debit");
+  await rollMonthlyUnderLock(tx, a.orgId, a.rate, await transactionNow(tx));
   const split = await creditBreakdown(tx, a.orgId);
   const plan = planDebit(split, a.credits);
   let balance = split.total;
@@ -88,13 +119,8 @@ export async function debitForPackage(tx: Tx, a: { orgId: string; packageId: str
   return plan;
 }
 
-/** What the package can still give back, from its OWN ledger rows (spec §7.4). `monthlyThisMonth` is the included credits
- *  debited in the UTC month of `now` minus those returned in it; `monthlyExpired` is every other included credit still
- *  debited. A monthly return is only ever written in the month of the consume it returns (P6, enforced by
- *  `refundForPackage`), so each month nets on its own. The row's `credits_forfeited` is NOT netted here: the caller
- *  subtracts it from `monthlyExpired`. The month is `streamMonthlyPeriod`'s, compared on the row's UTC date, never
- *  `date_trunc` in the session time zone (#292). Under the caller's money lock. */
-export async function returnableFor(tx: Tx, a: { orgId: string; packageId: string }, now: Date): Promise<Returnable> {
+/** `returnableFor` at a clock the module read itself (never one a caller handed in). */
+async function returnableAt(tx: Tx, a: { orgId: string; packageId: string }, now: Date): Promise<Returnable> {
   const period = streamMonthlyPeriod(now);
   const [r] = await tx<{ pack: number; this_month: number; expired: number }[]>`
     select coalesce(-sum(delta) filter (where bucket = 'pack'), 0)::int as pack,
@@ -105,6 +131,16 @@ export async function returnableFor(tx: Tx, a: { orgId: string; packageId: strin
       from org_stream_credits
      where org_id = ${a.orgId} and online_package_id = ${a.packageId} and reason in ('consume', 'refund')`;
   return { pack: r!.pack, monthlyThisMonth: r!.this_month, monthlyExpired: r!.expired };
+}
+
+/** What the package can still give back, from its OWN ledger rows (spec §7.4), in the UTC month of the transaction's own
+ *  `now()`. `monthlyThisMonth` is the included credits debited in that month minus those returned in it; `monthlyExpired`
+ *  is every other included credit still debited. A monthly return is only ever written in the month of the consume it
+ *  returns (P6, enforced by `refundForPackage`), so each month nets on its own. The row's `credits_forfeited` is NOT
+ *  netted here: the caller subtracts it from `monthlyExpired`. The month is `streamMonthlyPeriod`'s, compared on the
+ *  row's UTC date, never `date_trunc` in the session time zone (#292). Under the caller's money lock. */
+export async function returnableFor(tx: Tx, a: { orgId: string; packageId: string }): Promise<Returnable> {
+  return returnableAt(tx, a, await transactionNow(tx));
 }
 
 function assertCount(n: number, what: string, min: 0 | 1): void {
@@ -131,17 +167,19 @@ export function planReturn(r: Returnable, credits: number): ReturnPlan {
 
 /** Return `pack` bought and `monthly` included credits to the org, each to its own bucket, as one `refund` row per bucket
  *  that moves (pack first, P21), each `balance_after` the running org total. Nothing to return (everything forfeited)
- *  writes nothing. REFUSED, before any row, when either part is more than the package can give back from that bucket:
- *  bought credits net of what returned already, and included credits debited in the UTC month of `now` net of what
- *  returned in it — so an included credit from an earlier month cannot come back through here (P6), whatever the caller
- *  computed. A part that is not a whole non-negative count is refused by the ledger's own check (`credit`). */
-export async function refundForPackage(
-  tx: Tx, a: { orgId: string; packageId: string; pack: number; monthly: number }, now: Date = new Date(),
-): Promise<void> {
+ *  writes nothing. Both parts must be whole non-negative counts, checked before anything is read or written, so a caller
+ *  that catches the refusal inside its transaction never commits half a return. REFUSED, before any row, on a refunded
+ *  or frozen package, and when either part is more than the package can give back from that bucket: bought credits net
+ *  of what returned already, and included credits debited in the UTC month of the transaction's own `now()` net of what
+ *  returned in it — so an included credit from an earlier month cannot come back through here (P6), and no caller can
+ *  move the month. */
+export async function refundForPackage(tx: Tx, a: { orgId: string; packageId: string; pack: number; monthly: number }): Promise<void> {
+  assertCount(a.pack, "the bought credits to return", 0);
+  assertCount(a.monthly, "the included credits to return", 0);
   await lockOrg(tx, a.orgId);
-  await assertPackageOfOrg(tx, a);
+  await assertPackageWritable(tx, a, "refund");
   if (a.pack === 0 && a.monthly === 0) return;
-  const can = await returnableFor(tx, a, now);
+  const can = await returnableAt(tx, a, await transactionNow(tx));
   // Two comparisons, so each bucket's limb can be mutated on its own.
   if (a.pack > can.pack || a.monthly > can.monthlyThisMonth) {
     throw new HttpError(

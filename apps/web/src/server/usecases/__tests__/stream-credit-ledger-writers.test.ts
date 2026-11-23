@@ -206,8 +206,9 @@ describe("the nine ledger writers", () => {
     // site is matched by exactly one write (one line per write, so a second statement for a site shows as a duplicate).
     const pkg = ledgerWrites(parseSource(PACKAGE_WRITER_FILE, readSource(PACKAGE_WRITER_FILE)));
     expect(pkg.length, "anti-vacuity: the package writer's inserts were found").toBeGreaterThan(0);
-    const judged = pkg.map((w) => `${w.verb} in ${w.fn}() = ${PACKAGE_LEDGER_WRITER_SITES.filter((s) => s.fn === w.fn && w.raw.includes(s.needle)).map((s) => s.key).join(" & ") || "no site"}`);
-    expect(judged.sort()).toEqual(PACKAGE_LEDGER_WRITER_SITES.map((s) => `insert into in ${s.fn}() = ${s.key}`).sort());
+    const site = (s: { fn: string; needle: string }) => `${s.fn}() ${s.needle}`;
+    const judged = pkg.map((w) => `${w.verb} = ${PACKAGE_LEDGER_WRITER_SITES.filter((s) => s.fn === w.fn && w.raw.includes(s.needle)).map(site).join(" & ") || `no site (${w.fn}())`}`);
+    expect(judged.sort()).toEqual(PACKAGE_LEDGER_WRITER_SITES.map((s) => `insert into = ${site(s)}`).sort());
     expect(PACKAGE_LEDGER_WRITER_SITES).toHaveLength(2);
   });
 

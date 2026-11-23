@@ -63,14 +63,15 @@ export const LEDGER_WRITER_SITES: readonly LedgerWriterSite[] = [
 
 /** Online Chess (spec 2026-11-23-online-chess-credits-design.md §7.1): the SECOND file that writes the ledger, an online
  *  division's package debits (`consume`) and returns (`refund`), each naming the package and no session or staff author.
- *  stream-credit-ledger-writers.test.ts (W3) holds its inserts to these two sites exactly as it holds stream-credits.ts to
- *  the nine. They are NOT in LEDGER_WRITER_SITES yet, because the organiser's history does not name a package row until
- *  Online Chess Task 10: that task owes moving both into LEDGER_WRITER_SITES with their history kinds (the nine-count pins
- *  become eleven) and driving them in stream-credit-history.test.ts's matrix. */
+ *  stream-credit-ledger-writers.test.ts (W3) holds its inserts to these two sites (function + needle, the two fields that
+ *  test reads) exactly as it holds stream-credits.ts to the nine. They are NOT in LEDGER_WRITER_SITES yet, because the
+ *  organiser's history does not name a package row until Online Chess Task 10: that task owes moving both into
+ *  LEDGER_WRITER_SITES with their full shape and history kinds (the nine-count pins become eleven) and driving them in
+ *  stream-credit-history.test.ts's matrix. */
 export const PACKAGE_WRITER_FILE = "server/usecases/online-package/ledger.ts";
-export const PACKAGE_LEDGER_WRITER_SITES: readonly Omit<LedgerWriterSite, "kinds">[] = [
-  { key: "online-package-debit", fn: "debitForPackage", needle: "'consume'", reasons: ["consume"], buckets: ["monthly", "pack"], byStaff: false, session: "never", key_shape: null },
-  { key: "online-package-refund", fn: "refundForPackage", needle: "'refund'", reasons: ["refund"], buckets: ["monthly", "pack"], byStaff: false, session: "never", key_shape: null },
+export const PACKAGE_LEDGER_WRITER_SITES: readonly Pick<LedgerWriterSite, "fn" | "needle">[] = [
+  { fn: "debitForPackage", needle: "'consume'" },
+  { fn: "refundForPackage", needle: "'refund'" },
 ];
 
 // ---------------------------------------------------------------------------------------------------------------------
