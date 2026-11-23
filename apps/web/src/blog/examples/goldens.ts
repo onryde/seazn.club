@@ -5,6 +5,7 @@ import chessPoints from "./__golden__/chess-points.json";
 import cricketPoints from "./__golden__/cricket-points.json";
 import shootoutPoints from "./__golden__/shootout-points.json";
 import standingsPoints from "./__golden__/standings-points.json";
+import tableTennisLoss from "./__golden__/table-tennis-loss.json";
 import type { ExampleResult } from "./types";
 
 export const BLOG_GOLDENS: Record<string, ExampleResult> = {
@@ -12,4 +13,5 @@ export const BLOG_GOLDENS: Record<string, ExampleResult> = {
   "cricket-points": cricketPoints as ExampleResult,
   "shootout-points": shootoutPoints as ExampleResult,
   "standings-points": standingsPoints as ExampleResult,
+  "table-tennis-loss": tableTennisLoss as ExampleResult,
 };

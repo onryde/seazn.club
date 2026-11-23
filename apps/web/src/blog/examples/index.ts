@@ -4,9 +4,10 @@ import { chessPoints } from "./chess-points";
 import { cricketPoints } from "./cricket-points";
 import { shootoutPoints } from "./shootout-points";
 import { standingsPoints } from "./standings-points";
+import { tableTennisLoss } from "./table-tennis-loss";
 import type { BlogExample } from "./types";
 
-export const BLOG_EXAMPLES: readonly BlogExample[] = [standingsPoints, shootoutPoints, cricketPoints, chessPoints];
+export const BLOG_EXAMPLES: readonly BlogExample[] = [standingsPoints, shootoutPoints, cricketPoints, chessPoints, tableTennisLoss];
 
 export function blogExample(id: string): BlogExample | null {
   return BLOG_EXAMPLES.find((e) => e.id === id) ?? null;

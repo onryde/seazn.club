@@ -34,7 +34,6 @@ export type BlogPost = BlogPostMeta & { markdown: string };
  */
 export const BLOG_PLANNED_SLUGS: ReadonlySet<string> = new Set([
   "why-matches-won-come-first",
-  "table-tennis-loss-still-scores",
   "level-on-points-who-finishes-higher",
   "three-way-tie-head-to-head",
   "net-run-rate-explained",
