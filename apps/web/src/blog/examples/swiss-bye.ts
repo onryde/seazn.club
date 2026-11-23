@@ -10,7 +10,7 @@
 // shows who sits out each round and who plays whom. The fixture lists them in sign-up order with seeds that are neither that
 // order nor the alphabet's (swiss-claims.ts seedsIndistinguishable). Chess only: the post's question is the chess bye; the
 // sweep above covers every sport.
-import { pointsText, setsToWinOf, swissDrawFactsOf, swissDrawPoints } from "@seazn/engine/competition";
+import { buchholz, buildSwissLedger, pointsText, setsToWinOf, swissDrawFactsOf, swissDrawPoints, type SwissLedgerFixture } from "@seazn/engine/competition";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { declaredCfgs, forEachSport } from "@seazn/engine/testkit";
 import { sportLabel, variantLabel } from "@/blog/labels";
@@ -429,8 +429,8 @@ const roundsClaims: Claim[] = [
     }),
   },
   {
-    says: "a bye's stand-in opponent in the Buchholz scores the holder's own final score, but never more than drawing every round would give, and for at least one holder here the cap changes it",
-    source: "FIDE Handbook C.07 (2026) art. 16.4.2 (the dummy opponent has the player's own score, capped at the draw points times the rounds) with a draw worth ½ (FIDE Laws of Chess art. 10.1)",
+    says: "a bye's stand-in opponent in the Buchholz scores the holder's own final score, but never more than drawing every round would give: the engine's own Buchholz of the played example says so, and for at least one holder here the cap changes it",
+    source: "FIDE Handbook C.07 (2026) art. 16.4.2 (the dummy opponent has the player's own score, capped at the draw points times the rounds) with a draw worth ½ (FIDE Laws of Chess art. 10.1); the expected Buchholz is added up from the grid's opponents, the engine's `buildSwissLedger` and `buchholz` are what is checked against it",
     check: guarded((r) => {
       const rows = byeRowsOf(r);
       if (rows.length !== ROUNDS) return `${rows.length} rounds, the fixture plays ${ROUNDS}`;
@@ -441,10 +441,26 @@ const roundsClaims: Claim[] = [
       for (const [p, s] of last.before) final.set(p, s + (p === last.holder || last.boards.some(([w]) => w === p) ? 1 : 0));
       const cap = 0.5 * rows.length;
       if (scoreOf(r.facts.byeBuchholzCap!) !== cap) return `the post says the cap is ${String(r.facts.byeBuchholzCap)}, ${rows.length} rounds of draws give ${cap}`;
-      const standIns = rows.map((x) => ({ holder: x.holder, own: final.get(x.holder)!, stand: Math.min(final.get(x.holder)!, cap) }));
-      if (standIns.some((x) => x.own === undefined || Number.isNaN(x.own))) return "a bye holder has no final score";
-      const bitten = standIns.filter((x) => x.stand !== x.own);
-      return bitten.length > 0 || `no holder's final score exceeds the cap ${cap} (${standIns.map((x) => `${x.holder} ${x.own}`).join(", ")}), so the cap would not change any Buchholz`;
+      // The example as the engine reads it: every board a win for the player named first, every bye a win for its holder.
+      const delta = (entrantId: string, won: 0 | 1) => ({ entrantId, played: 1, won, drawn: 0, lost: 1 - won, points: won, metrics: {} });
+      const fixtures: SwissLedgerFixture[] = rows.flatMap((x) => [...x.boards.map(([w, b]) => ({ round: x.round, result: [delta(w, 1), delta(b, 0)] as const })), { round: x.round, award: delta(x.holder, 1) }]);
+      const table = buildSwissLedger([...final.keys()], fixtures, { rounds: ROUNDS, drawPoints: 0.5 });
+      let bitten = 0;
+      for (const x of rows) {
+        const row = table.find((t) => t.entrant === x.holder);
+        const own = final.get(x.holder);
+        if (row === undefined || own === undefined || Number.isNaN(own)) return `${x.holder} has no row in the engine's ledger or no final score`;
+        if (row.score !== own) return `${x.holder}: the engine's ledger scores ${row.score}, the grid ends on ${own}`;
+        const card = row.games.find((g) => g.unplayed === "bye");
+        if (card === undefined || card.round !== x.round) return `${x.holder}: no bye card in round ${x.round} of the engine's ledger`;
+        // The Buchholz: each real opponent's final score, plus the stand-in at the holder's own score, capped.
+        const opponents = rows.flatMap((y) => y.boards.flatMap(([w, b]) => (w === x.holder ? [b] : b === x.holder ? [w] : [])));
+        const wanted = opponents.reduce((sum, o) => sum + final.get(o)!, 0) + Math.min(own, cap);
+        const got = buchholz(table, x.holder);
+        if (got !== wanted) return `${x.holder}: the engine's Buchholz is ${got}, the opponents' scores plus a stand-in on min(${own}, ${cap}) make ${wanted}`;
+        if (own > cap) bitten++;
+      }
+      return bitten > 0 || `no holder's final score exceeds the cap ${cap}, so the cap would not change any Buchholz`;
     }),
   },
   {
@@ -517,6 +533,7 @@ const roundsClaims: Claim[] = [
         if (p.float !== (row.before.get(w) !== row.before.get(b))) return `board ${i + 1}: float drawn ${String(p.float)}`;
       }
       if (d.byes.join("|") !== label(row.holder)) return `the diagram's bye is '${d.byes.join(", ")}', the table's is '${label(row.holder)}'`;
+      if (!String(d.title).startsWith(`Round ${d.round}: `)) return `the diagram draws round ${d.round}, the caption starts '${String(d.title).slice(0, 12)}'`;
       return (String(d.title).includes(row.holder) && String(d.title).includes(String(r.facts.r3Lowest))) || "the diagram's caption does not name the bye holder and the level players";
     }),
   },

@@ -333,7 +333,18 @@ const claims: Claim[] = [
         if (p.float !== (b.before[0] !== b.before[1])) return `board ${b.board}: float drawn ${String(p.float)}, the points going in are ${b.before.join(" and ")}`;
         if (scoreOf(p.firstScore!) !== b.before[0] || scoreOf(p.secondScore!) !== b.before[1]) return `board ${b.board}: points drawn ${String(p.firstScore)} and ${String(p.secondScore)}, the table has ${b.before.join(" and ")}`;
       }
-      return String(d.title).includes(String(r.facts.r2TopPair)) && String(d.title).includes(String(r.facts.r1DrawPair)) || "the diagram's caption does not name the pairs the post names";
+      // The caption's names and its three numbers (the round drawn, the board the top pair meet on, the round the drawn pair drew in)
+      // are each read from the diagram's boards and the table, never typed beside them.
+      const t = String(d.title);
+      const nameOnly = (label: string | null) => parseSeededLabel(label ?? "").name;
+      const topAt = d.pairings.find((p) => [nameOnly(p.first), nameOnly(p.second)].sort().join(" and ") === String(r.facts.r2TopPair));
+      if (topAt === undefined) return "the diagram does not seat the pair the post names as level at the top";
+      const drewIn = boardsOf(r).find((b) => pairKey(b.white, b.black) === String(r.facts.r1DrawPair).split(" and ").sort().join("|") && fideScore(b.result)?.[0] === 0.5)?.round;
+      if (drewIn === undefined) return `the table has no drawn game between ${String(r.facts.r1DrawPair)}`;
+      const wanted = [`${String(r.facts.r2TopPair)} are level at the top and meet on board ${topAt.board}.`, `${String(r.facts.r1DrawPair)} drew each other in round ${drewIn},`];
+      if (!t.startsWith(`Round ${d.round}: `)) return `the diagram draws round ${d.round}, the caption starts '${t.slice(0, 12)}'`;
+      const missing = wanted.filter((w) => !t.includes(w));
+      return missing.length === 0 || `the diagram's caption does not say '${missing.join("', '")}'`;
     }),
   },
   offeredInEverySportClaim("swiss", "Swiss", "sportCount"),

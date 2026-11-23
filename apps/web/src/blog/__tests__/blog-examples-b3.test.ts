@@ -377,7 +377,6 @@ describe("the float oracle takes the score groups from the top and refuses a rem
 /** Values nothing checks, each with the reason it is copy and not a fact. `<example id> <path>`. */
 const UNCHECKED: Record<string, string> = {
   "swiss-bye table.caption": "one sentence with no number or name in it ('what a Swiss bye is worth in each sport'); every cell under it is claimed",
-  "swiss-late-and-withdraw diagram.notSeated.0.why": "the sentence beside the checked name of the player the round leaves out (the name itself is claimed)",
 };
 
 function corrupt(v: unknown): unknown {
@@ -398,6 +397,16 @@ function setAt(root: unknown, path: string[], value: unknown): void {
   let at = root as Record<string, unknown>;
   for (const k of path.slice(0, -1)) at = at[k] as Record<string, unknown>;
   at[path[path.length - 1]!] = value;
+}
+
+/** Digit occurrences nothing checks, each with the reason. `<example id> <path>#<index of the digit in the string>`. */
+const UNCHECKED_DIGITS: Record<string, string> = {};
+
+/** Every string with ONE digit moved on by one (9 wraps to 0), once for each digit in it: the corruption the reversed-string sweep cannot
+ *  see, because a reversed caption no longer holds any phrase a claim looks for, while a title that says "Round 3" over a round-2 grid
+ *  still does. */
+function digitShifts(v: string): { at: number; value: string }[] {
+  return [...v].flatMap((c, at) => (/[0-9]/.test(c) ? [{ at, value: `${v.slice(0, at)}${(Number(c) + 1) % 10}${v.slice(at + 1)}` }] : []));
 }
 
 describe("a corrupted fact, cell or diagram label is caught by some claim", () => {
@@ -429,6 +438,41 @@ describe("a corrupted fact, cell or diagram label is caught by some claim", () =
     expect(perKind.table, "table cells swept").toBeGreaterThan(150);
     expect(perKind.diagram, "diagram values swept").toBeGreaterThan(30);
     expect(survivors.sort(), "values no claim reads (each needs a claim, or a reason in UNCHECKED)").toEqual(Object.keys(UNCHECKED).sort());
+  });
+
+  it("moves every digit of every printed string on by one, one digit at a time, and a claim notices each", () => {
+    const survivors: string[] = [];
+    const swept = { digits: 0, strings: 0, facts: 0, table: 0, diagram: 0, captionTitles: 0, labels: 0 };
+    for (const id of SWEPT) {
+      const base = golden(id);
+      const parts = { facts: base.facts, table: base.table, diagram: base.diagram };
+      for (const [part, value] of Object.entries(parts)) {
+        for (const [path, v] of leaves(value)) {
+          if (typeof v !== "string") continue;
+          const shifts = digitShifts(v);
+          if (shifts.length === 0) continue;
+          swept.strings++;
+          swept[part as "facts" | "table" | "diagram"]++;
+          if (part === "diagram" && path[0] === "title") swept.captionTitles++;
+          if (part === "diagram" && /^\w[\w ]* \(\d+\)$/.test(v)) swept.labels++;
+          for (const { at, value: shifted } of shifts) {
+            const mutant = golden(id);
+            setAt(mutant as unknown as Record<string, unknown>, [part, ...path], shifted);
+            swept.digits++;
+            if (failing(id, mutant).length === 0) survivors.push(`${id} ${part}.${path.join(".")}#${at}`);
+          }
+        }
+      }
+    }
+    // Anti-vacuity: the sweep reached facts, table cells and diagram strings, the diagram titles ("Round N") and the seeded labels
+    // ("Fay (1)"), which are the two places the first version let a digit through.
+    expect(swept.digits, "digits shifted").toBeGreaterThan(100);
+    expect(swept.facts, "fact strings with a digit").toBeGreaterThan(5);
+    expect(swept.table, "table cells with a digit").toBeGreaterThan(30);
+    expect(swept.diagram, "diagram strings with a digit").toBeGreaterThan(10);
+    expect(swept.captionTitles, "diagram titles with a digit (one per Swiss diagram at least)").toBeGreaterThanOrEqual(3);
+    expect(swept.labels, "seeded labels on a diagram").toBeGreaterThan(5);
+    expect(survivors.sort(), "digits no claim reads (each needs a claim, or a reason in UNCHECKED_DIGITS)").toEqual(Object.keys(UNCHECKED_DIGITS).sort());
   });
 });
 

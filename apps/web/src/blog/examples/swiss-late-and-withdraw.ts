@@ -344,9 +344,16 @@ const claims: Claim[] = [
         if (p.float !== (round.score.get(first) !== round.score.get(second))) return `board ${p.board}: float drawn ${String(p.float)}`;
       }
       const g = gridOf(r);
-      const outNames = (d.notSeated ?? []).map((n) => parseSeededLabel(n.name).name);
       const absent = [...g].filter(([, row]) => row.rounds[d.round - 1] === LEFT || row.rounds[d.round - 1] === NOT_YET).map(([p]) => p);
-      if (outNames.sort().join(",") !== absent.sort().join(",")) return `the diagram leaves out '${outNames.join(", ")}', the grid has '${absent.join(", ")}' not seated in round ${d.round}`;
+      // The strip carries the player's full label (name and the grid's own printed seed) and says why in the leaver's round.
+      const outLabels = (d.notSeated ?? []).map((n) => n.name).sort();
+      const absentLabels = absent.map((p) => label(p)).sort();
+      if (outLabels.join(",") !== absentLabels.join(",")) return `the diagram leaves out '${outLabels.join(", ")}', the grid has '${absentLabels.join(", ")}' not seated in round ${d.round}`;
+      for (const n of d.notSeated ?? []) {
+        const cell = g.get(parseSeededLabel(n.name).name)?.rounds[d.round - 1];
+        if (cell !== LEFT) return `${n.name} is drawn as left out, the grid says '${String(cell)}' in round ${d.round}`;
+        if (n.why !== `left after round ${String(r.facts.leaverRound)} was paired`) return `${n.name}'s strip says '${n.why}', the post's leaver goes after round ${String(r.facts.leaverRound)}`;
+      }
       if (absent.length === 0) return "nobody is left out, so the diagram cannot show a player who left";
       // The caption's names, rounds and count are the facts the post prints, and the boards drawn.
       const others = d.pairings.length * 2 - 1;

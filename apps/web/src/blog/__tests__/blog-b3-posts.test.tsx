@@ -90,3 +90,16 @@ describe("the shared checks that a picture and a diagram meet", () => {
     expect(flat(withoutDiagramKind(copy)), "a title that says it is still copy").toContain("swissRound");
   });
 });
+
+describe("how-swiss-pairing-works: what the pairing counts", () => {
+  // The app hands the pairer who has met, each player's colours and who has had a bye, and no float history (`SwissHistoryState` in
+  // `server/usecases/stages/swiss-gen.ts`), so the pairing cannot prefer a player who has floated less in an earlier round. The post
+  // may say each group floats as few players as it must; it may not say anyone is picked by how often they floated.
+  it("does not say a floater is chosen by how many floats they have had, and does say the group above is settled first", async () => {
+    const out = await render("how-swiss-pairing-works");
+    const text = unescape(htmlOf(out)).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+    expect(text.length, "the post rendered (zero would prove nothing)").toBeGreaterThan(500);
+    expect(text, "a float history the app never sends").not.toMatch(/floated least|least[- ]floated|fewest earlier floats|floated before/i);
+    expect(text, "the top-down rule is still stated").toMatch(/the group above is settled first/);
+  });
+});
