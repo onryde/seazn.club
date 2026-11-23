@@ -9,7 +9,7 @@
 //   * Ids are a counter (`fake-video-1`, …), so a run is the same every time.
 import { createHash } from "node:crypto";
 import { FAKE_REPLAY_EMBED_HOST } from "@/server/relay/config";
-import type { ReplayDownload, ReplayHost, ReplayVideo } from "./replay-ports";
+import { type ReplayDownload, type ReplayHost, ReplayNotDownloadable, type ReplayVideo } from "./replay-ports";
 
 /** The host the fake's embed URLs sit on (`.invalid` never resolves, so no fake URL can be followed by accident): config.ts's
  *  FAKE_REPLAY_EMBED_HOST, which Task 25's CSP adds to `frame-src` under the fake driver. Re-exported for the fake's callers. */
@@ -19,7 +19,8 @@ export const FAKE_REPLAY_LIBRARY_ID = "1";
 export const FAKE_REPLAY_LENGTH_SECONDS = 120;
 /** Unordered on purpose (the real host lists them unordered), and never above the 720 ceiling. */
 export const FAKE_REPLAY_HEIGHTS: readonly number[] = [360, 480, 720, 240];
-const FAKE_REPLAY_FILE = new TextEncoder().encode("fake replay: not a real mp4");
+/** The bytes every playable fake video's file holds (`openDownload`). */
+export const FAKE_REPLAY_FILE = new TextEncoder().encode("fake replay: not a real mp4");
 
 type Held = "processing" | "playable" | "failed";
 interface Stored { collectionId: string; title: string; url: string; state: Held }
@@ -77,7 +78,7 @@ export class FakeReplayHost implements ReplayHost {
 
   async openDownload(videoId: string): Promise<ReplayDownload> {
     const state = this.videos.get(videoId)?.state ?? "absent";
-    if (state !== "playable") throw new Error(`video ${videoId} is not playable (${state})`);
+    if (state !== "playable") throw new ReplayNotDownloadable(videoId, `not playable (${state})`);
     return {
       body: new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(FAKE_REPLAY_FILE.slice()); controller.close(); } }),
       bytes: FAKE_REPLAY_FILE.length,

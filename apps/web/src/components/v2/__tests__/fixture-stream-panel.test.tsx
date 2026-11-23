@@ -6448,8 +6448,8 @@ describe("T12: after a match — the replay row, and the destination's name read
 describe("Task 25: the ended card's Seazn replays", () => {
   const ENDED = { state: "completed" as const, startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z", endReason: "stopped" as const };
   const R = [
-    { id: "00000000-0000-4000-8000-000000000001", partNo: 1, state: "playable" as const, lengthSeconds: 120 },
-    { id: "00000000-0000-4000-8000-000000000002", partNo: 2, state: "processing" as const, lengthSeconds: null },
+    { id: "00000000-0000-4000-8000-000000000001", partNo: 1, state: "playable" as const, lengthSeconds: 120, onMatchPage: true },
+    { id: "00000000-0000-4000-8000-000000000002", partNo: 2, state: "processing" as const, lengthSeconds: null, onMatchPage: true },
   ];
   const cards = (tree: ReactElement[]) => tree.filter((el) => el.type === SeaznReplaysCard);
 

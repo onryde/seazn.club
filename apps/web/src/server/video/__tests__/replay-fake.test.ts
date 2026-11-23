@@ -3,7 +3,7 @@
 // remove, the pure signed embed, and a download that streams.
 import { describe, expect, it } from "vitest";
 import { FakeReplayHost } from "../replay-fake";
-import type { ReplayHost, ReplayState } from "../replay-ports";
+import { type ReplayHost, ReplayNotDownloadable, type ReplayState } from "../replay-ports";
 
 /** The owner's library setting (probe B2, spec): no replay is encoded above this. */
 const CEILING = 720;
@@ -212,7 +212,11 @@ describe("FakeReplayHost: openDownload", () => {
     fake.advance(removed);
     await fake.remove(removed);
     const ids = [processing, failed, removed, "never-stored"];
-    for (const id of ids) await expect(fake.openDownload(id), id).rejects.toThrow(/not playable|absent/);
+    for (const id of ids) {
+      await expect(fake.openDownload(id), id).rejects.toThrow(/not playable|absent/);
+      // Task 26: the port's typed refusal, which the download answers as "not ready" (409).
+      await expect(fake.openDownload(id), id).rejects.toBeInstanceOf(ReplayNotDownloadable);
+    }
     expect(ids).toHaveLength(4);
   });
 });

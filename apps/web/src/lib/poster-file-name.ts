@@ -14,6 +14,24 @@
  * very long club name cannot crowd the other out of the name entirely.
  */
 export function posterFileName(home: string, away: string): string {
+  return `${matchFileStem(home, away)}.png`;
+}
+
+/**
+ * What a downloaded Seazn replay part is called (Seazn-hosted video, Task 26):
+ * the poster's stem for the same two sides, then the part —
+ * `seazn-northfield-cc-v-riverside-fc-part-2.mp4`. The download route's
+ * `Content-Disposition` is the one place that names the file; the panel's
+ * `<a download>` carries no name of its own, so the two cannot disagree.
+ */
+export function replayFileName(home: string, away: string, partNo: number): string {
+  // A part number is V542's `part_no` (CHECK >= 1); anything else names no part, and must not name a file.
+  if (!Number.isInteger(partNo) || partNo < 1) throw new RangeError(`replayFileName: a part number is a whole number from 1, got ${partNo}`);
+  return `${matchFileStem(home, away)}-part-${partNo}.mp4`;
+}
+
+/** `seazn-<home>-v-<away>`, each side slugged and capped before joining; `seazn-match` when neither side has a usable name. */
+function matchFileStem(home: string, away: string): string {
   const slug = (s: string) =>
     s
       .toLowerCase()
@@ -22,5 +40,5 @@ export function posterFileName(home: string, away: string): string {
       .slice(0, 40)
       .replace(/-+$/g, "");
   const pair = [slug(home), slug(away)].filter((part) => part !== "").join("-v-");
-  return `seazn-${pair === "" ? "match" : pair}.png`;
+  return `seazn-${pair === "" ? "match" : pair}`;
 }

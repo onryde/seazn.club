@@ -1,0 +1,233 @@
+// Seazn-hosted video, Task 26: GET /api/v1/fixtures/{id}/replays/{replayId}/download — the organiser downloads one playable part of a
+// fixture's Seazn replay, driven through its REAL handler over a real session (the organiser video route test's door pattern), over
+// replay rows the REAL producers made (_seazn-replay-rig.ts), the replay fake installed as this process's driver. What is the ROUTE's
+// own (the use case is organiser-replays.test.ts's):
+//   - a playable part: 200, the host's own bytes, `video/mp4`, an `attachment` named for the match and the part, its length, and
+//     `private, no-store`; never a redirect, and no header holds a token, a signed address or the host's video id;
+//   - the body is the host's STREAM passed through, never buffered: the route answers while the host is still sending, and a
+//     cancelled download cancels the host's stream;
+//   - a processing part is 409 (the envelope, documented), a viewer 403, another organisation 404, an API key 403, signed out 401 —
+//     each `private, no-store`, and the host is never asked.
+// ONE SPORT, on purpose (TEST-STRATEGY rule 6): the route reads no sport rule; every rig rides `generic`.
+import { randomUUID } from "node:crypto";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const authState = vi.hoisted(() => ({ userId: "" }));
+
+vi.mock("@/lib/auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/auth")>();
+  const { AuthError } = await import("@/lib/errors");
+  const user = async () => {
+    if (authState.userId === "") throw new AuthError("Unauthorized");
+    return { id: authState.userId };
+  };
+  return { ...actual, requireUser: user, getCurrentUser: async () => (authState.userId === "" ? null : { id: authState.userId }), getActiveOrgId: async () => null };
+});
+vi.mock("next/headers", () => ({
+  cookies: async () => ({ get: () => undefined, set: () => {}, delete: () => {} }),
+  headers: async () => new Headers(),
+}));
+vi.mock("@/lib/sentry", () => ({ captureError: vi.fn() }));
+
+import { sql } from "@/lib/db";
+import { invalidateOrgEntitlements } from "@/lib/entitlements";
+import { replayFileName } from "@/lib/poster-file-name";
+import { buildOpenApiDocument } from "@/server/api-v1/openapi";
+import { rigUser } from "@/server/relay/__tests__/_session-rig";
+import { createApiKey } from "@/server/usecases/api-keys";
+import { startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
+import { makeUser, seedOrg } from "@/server/usecases/__tests__/_seed";
+import { frozenMemberIds } from "@/server/usecases/entitlement-freeze";
+import { setReplayDriverForTest } from "@/server/video/replay-driver";
+import { FAKE_REPLAY_FILE, FakeReplayHost } from "@/server/video/replay-fake";
+import { movedReplays } from "@/server/video/__tests__/_seazn-replay-rig";
+import { installSeaznEnv, seaznRigFor } from "@/server/video/__tests__/_seazn-session-rig";
+import { GET } from "../route";
+
+const HAS_DB = !!process.env.DATABASE_URL;
+installSeaznEnv("seazn-replay-download-route-test");
+afterEach(() => setReplayDriverForTest(null));
+
+const BASE = "https://test.local/api/v1";
+interface Envelope {
+  ok: boolean;
+  error?: { code?: string; message: string };
+}
+
+/** A signed-in OWNER of an org whose first fixture has two replay parts made by the real producers — part 1 playable, part 2 still
+ *  processing — with the replay fake installed as the process's driver. */
+async function organiser() {
+  const { auth: owned } = await seedOrg("pro");
+  authState.userId = owned.userId!;
+  const started = await startedDivisionWithFixture(owned, { fixtures: 2 });
+  const fixtures = started.fixtureIds as [string, string];
+  const r = await seaznRigFor({ ...owned, userId: await rigUser() }, fixtures);
+  const host = new FakeReplayHost();
+  const m = await movedReplays(r, fixtures[0], host, { parts: 2, playable: [1] });
+  setReplayDriverForTest(host);
+  const [names] = await sql<{ home: string | null; away: string | null }[]>`
+    select he.display_name as home, ae.display_name as away from fixtures f
+      left join entrants he on he.id = f.home_entrant_id left join entrants ae on ae.id = f.away_entrant_id where f.id = ${fixtures[0]}`;
+  return { host, ownerId: owned.userId!, orgId: owned.orgId, fixtures, playable: m.rows[0]!, processing: m.rows[1]!, names: names! };
+}
+
+const get = (fixtureId: string, replayId: string, headers: Record<string, string> = {}) =>
+  GET(new Request(`${BASE}/fixtures/${fixtureId}/replays/${replayId}/download`, { method: "GET", headers }), { params: Promise.resolve({ id: fixtureId, replayId }) });
+const documented = (): string[] =>
+  Object.keys(
+    (buildOpenApiDocument() as { paths: Record<string, Record<string, { responses: Record<string, unknown> }>> }).paths["/api/v1/fixtures/{id}/replays/{replayId}/download"]!.get!.responses,
+  );
+async function member(orgId: string, role: "admin" | "viewer"): Promise<string> {
+  const u = await makeUser(role);
+  await sql`insert into org_members (org_id, user_id, role) values (${orgId}, ${u.id}, ${role})`;
+  return u.id;
+}
+/** Over-quota seats (doc 10 §2.4): the org's `members.max` overridden to 1, which the owner's own seat fills, so an ADMIN's seat is
+ *  read-only until the owner frees seats. Checked with the engine's own `frozenMemberIds`, so a changed freeze rule fails HERE, loudly,
+ *  instead of leaving a test that freezes nobody. This is what the door's `write` scope adds over the use case's role check (an admin
+ *  is an editor either way). */
+async function frozenAdmin(orgId: string): Promise<string> {
+  await sql`insert into org_entitlement_overrides (org_id, feature_key, int_value, reason) values (${orgId}, 'members.max', 1, 'frozen seat')
+            on conflict (org_id, feature_key) do update set int_value = 1`;
+  await invalidateOrgEntitlements(orgId);
+  const admin = await member(orgId, "admin");
+  expect((await frozenMemberIds(orgId)).has(admin), "PREMISE: the admin's seat is frozen").toBe(true);
+  return admin;
+}
+async function override(orgId: string, key: string, value: boolean) {
+  await sql`insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason) values (${orgId}, ${key}, ${value}, 'replay download route')
+            on conflict (org_id, feature_key) do update set bool_value = ${value}`;
+  await invalidateOrgEntitlements(orgId);
+}
+const privateNoStore = (r: Response, label: string) => {
+  expect(r.headers.get("cache-control"), label).toMatch(/(^|,\s*)no-store(\s*,|$)/);
+  expect(r.headers.get("cache-control"), label).toMatch(/(^|,\s*)private(\s*,|$)/);
+  expect((r.headers.get("vary") ?? "").toLowerCase().split(/\s*,\s*/), label).toEqual(expect.arrayContaining(["cookie", "authorization"]));
+};
+
+describe.skipIf(!HAS_DB)("GET …/fixtures/{id}/replays/{replayId}/download over HTTP", () => {
+  it("a FROZEN admin seat (over quota, doc 10 §2.4) is 402 members.max, private, the host never asked — the door's write scope, which the use case's role check does not see; the owner of the same org downloads", async () => {
+    const o = await organiser();
+    const open = vi.spyOn(o.host, "openDownload");
+    authState.userId = await frozenAdmin(o.orgId);
+    const refused = await get(o.fixtures[0], o.playable.id);
+    expect(refused.status).toBe(402);
+    privateNoStore(refused, "frozen");
+    expect(documented()).toContain("402");
+    expect(open, "nothing opened for a frozen seat").not.toHaveBeenCalled();
+    authState.userId = o.ownerId;
+    const owner = await get(o.fixtures[0], o.playable.id);
+    expect(owner.status).toBe(200);
+    expect(new Uint8Array(await owner.arrayBuffer())).toEqual(FAKE_REPLAY_FILE);
+  });
+
+  it("EMPTY CASE FIRST: a part this fixture does not have is 404 (the envelope, `private, no-store`) and the host is never asked", async () => {
+    const o = await organiser();
+    const open = vi.spyOn(o.host, "openDownload");
+    const res = await get(o.fixtures[0], randomUUID());
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as Envelope).error?.message).toBe("replay not found");
+    privateNoStore(res, "404");
+    expect(open).not.toHaveBeenCalled();
+    expect(documented()).toContain("404");
+  });
+
+  it("a playable part: 200, the host's own bytes as an mp4 attachment named for the match and the part, its length, `private, no-store`; no redirect, and no header carries a token, an address or the host's video id", async () => {
+    const o = await organiser();
+    const res = await get(o.fixtures[0], o.playable.id);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("location")).toBeNull();
+    expect(res.headers.get("content-type")).toBe("video/mp4");
+    expect(res.headers.get("content-disposition")).toBe(`attachment; filename="${replayFileName(o.names.home ?? "", o.names.away ?? "", 1)}"`);
+    expect(res.headers.get("content-disposition"), "the brief's shape: <match>-part-<n>.mp4").toMatch(/^attachment; filename="seazn-[a-z0-9-]+-part-1\.mp4"$/);
+    expect(res.headers.get("content-length")).toBe(String(FAKE_REPLAY_FILE.length));
+    privateNoStore(res, "200");
+    const headers = [...res.headers.entries()];
+    expect(headers.length, "PREMISE: the headers were read").toBeGreaterThan(4);
+    for (const [name, value] of headers) {
+      expect(value, name).not.toMatch(/token|expires=|https?:|\.invalid/i);
+      expect(value, name).not.toContain(o.playable.bunny_video_id!);
+    }
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(FAKE_REPLAY_FILE);
+  });
+
+  it("the host's stream is passed through, never buffered: the route answers while the host is still sending, the bytes follow as the host sends them, and a cancelled download cancels the host's stream", async () => {
+    const o = await organiser();
+    const enc = new TextEncoder();
+    let more!: () => void;
+    const gate = new Promise<void>((res) => (more = res));
+    let cancelled: unknown = "not cancelled";
+    const sent: string[] = [];
+    const host = (first: string) =>
+      new ReadableStream<Uint8Array>({
+        start(c) { c.enqueue(enc.encode(first)); sent.push(first); },
+        async pull(c) { await gate; c.enqueue(enc.encode("-second")); sent.push("-second"); c.close(); },
+        cancel(reason) { cancelled = reason ?? "cancelled"; },
+      });
+    const open = vi.spyOn(o.host, "openDownload");
+    open.mockResolvedValueOnce({ body: host("first"), bytes: null, fileName: "ignored.mp4" });
+    const timeout = <T>(p: Promise<T>) => Promise.race([p, new Promise<"timed out">((res) => setTimeout(() => res("timed out"), 3000))]);
+    const res = await timeout(get(o.fixtures[0], o.playable.id));
+    expect(res, "the route answered before the host finished sending").not.toBe("timed out");
+    const r = res as Response;
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-length"), "no length when the host gives none").toBeNull();
+    const reader = r.body!.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value), "the first bytes, while the host holds the rest").toBe("first");
+    expect(sent).toEqual(["first"]);
+    more();
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe("-second");
+    expect((await reader.read()).done).toBe(true);
+
+    // A viewer who gives up: the cancel reaches the host's stream.
+    open.mockResolvedValueOnce({ body: host("again"), bytes: null, fileName: "ignored.mp4" });
+    const second = await get(o.fixtures[0], o.playable.id);
+    await second.body!.cancel("viewer left");
+    expect(cancelled).toBe("viewer left");
+  });
+
+  it("a part still processing is 409 replay_not_downloadable (the envelope, documented) and the host is never asked", async () => {
+    const o = await organiser();
+    const open = vi.spyOn(o.host, "openDownload");
+    const res = await get(o.fixtures[0], o.processing.id);
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as Envelope).error?.code).toBe("replay_not_downloadable");
+    privateNoStore(res, "409");
+    expect(open).not.toHaveBeenCalled();
+    expect(documented()).toContain("409");
+  });
+
+  it("a viewer is 403 (an admin is served, the positive pair); another organisation's member, an unknown and a malformed fixture are 404; an API key is 403 at the door; signed out 401 — each `private, no-store`, and the host is never asked for a refusal", async () => {
+    const o = await organiser();
+    const stranger = await organiser();
+    await override(o.orgId, "api.access", true);
+    await override(o.orgId, "api.write", true);
+    const { secret } = await createApiKey({ orgId: o.orgId, via: "session", userId: o.ownerId, role: "owner", keyId: null }, { name: `dl-${randomUUID().slice(0, 6)}`, scopes: ["manage"] });
+    const open = vi.spyOn(o.host, "openDownload");
+    const answers: [string, number, Response][] = [];
+    authState.userId = await member(o.orgId, "viewer");
+    answers.push(["viewer", 403, await get(o.fixtures[0], o.playable.id)]);
+    authState.userId = stranger.ownerId;
+    answers.push(["another organisation", 404, await get(o.fixtures[0], o.playable.id)]);
+    answers.push(["an unknown fixture", 404, await get(randomUUID(), o.playable.id)]);
+    answers.push(["a malformed fixture", 404, await get("f1", o.playable.id)]);
+    authState.userId = o.ownerId;
+    answers.push(["an API key", 403, await get(o.fixtures[0], o.playable.id, { authorization: `Bearer ${secret}` })]);
+    authState.userId = "";
+    answers.push(["signed out", 401, await get(o.fixtures[0], o.playable.id)]);
+    let checked = 0;
+    for (const [label, status, res] of answers) {
+      expect(res.status, label).toBe(status);
+      expect(res.headers.get("content-type"), label).toMatch(/json/);
+      privateNoStore(res, label);
+      expect(documented(), label).toContain(String(status));
+      checked++;
+    }
+    expect(checked).toBe(6);
+    expect(open, "nothing was opened for a refusal").not.toHaveBeenCalled();
+    authState.userId = await member(o.orgId, "admin");
+    const admin = await get(o.fixtures[0], o.playable.id);
+    expect(admin.status).toBe(200);
+    expect(new Uint8Array(await admin.arrayBuffer())).toEqual(FAKE_REPLAY_FILE);
+  });
+});

@@ -122,6 +122,9 @@ export const StreamRestartAllowance = z
 
 /** W24 (§6.12): `lostCountdown`'s answer — both durations on the server's clock, never below 0. */
 const countdownClock = { elapsedMs: z.number().int().nonnegative(), remainingMs: z.number().int().nonnegative() };
+/** Seazn-hosted video Task 26: the answer to `DELETE /fixtures/{id}/replays/{replayId}` — the same for a part already deleted. */
+export const SeaznReplayDeleted = z.object({ deleted: z.literal(true) }).strict();
+
 /** W24 (controller ruling 2026-10-04): the countdown names the end it counts to — `live` only W19's `phone_lost`;
  *  `warming` the warming timeout (`no_inbound_timeout`) or ask 10's `phone_lost`, whichever lands first. */
 export const StreamLostCountdown = z.discriminatedUnion("kind", [
@@ -165,13 +168,17 @@ export const StreamSessionCurrent = z
     /** Seazn-hosted video Task 25: the fixture's Seazn replays as the organiser reads them (server/video/organiser-replays.ts): each
      *  part the replay move made, by its stored number, `processing` while the copy is on its way, `playable` once verified,
      *  `failed` when it failed its check; a removed part is not listed. Read for THIS organisation, whatever the competition's
-     *  visibility. `[]` when there is none (every non-Seazn session). */
+     *  visibility. `[]` when there is none (every non-Seazn session). Task 25 review m3: `onMatchPage` is whether the PUBLIC match
+     *  page shows the part (a playable copy, or a failed copy's interim recording) — false for a private competition, or a division
+     *  still in setup. Task 26: the organiser deletes a part (`DELETE …/replays/{replayId}`) and downloads a playable one
+     *  (`GET …/replays/{replayId}/download`) by its `id`. */
     seaznReplays: z.array(
       z.object({
         id: z.uuid(),
         partNo: z.number().int().min(1),
         state: z.enum(["processing", "playable", "failed"]),
         lengthSeconds: z.number().int().min(0).nullable(),
+        onMatchPage: z.boolean(),
       }).strict(),
     ),
     /** Owner 2026-10-30: the watch URL of the video on YouTube THIS session streams into (server/youtube/parts.ts `sessionVideoUrl`) -

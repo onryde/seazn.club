@@ -124,7 +124,7 @@ export {
   StreamTargetSaveOutcome, StreamTargetSaved, PatchStreamTarget, StreamTargetRemoved, PickYoutubeChannel,
   YoutubeConnectionSaved, YoutubePendingChannels, YoutubeConnectionSettings, YOUTUBE_REVOKE_OUTCOMES,
   YoutubeDisconnected, YoutubeChannelSafety, RelayAiring, RelayHeartbeat, RelayHeartbeatReply, RelayPhaseReply, RelayPhaseEndpoint,
-  RelayJobInput, RelayJobOutput, RelayJobSession,
+  RelayJobInput, RelayJobOutput, RelayJobSession, SeaznReplayDeleted,
 } from "./streaming.ts";
 export {
   SlotLabelRef, Fixture, DeskInPlayFixture, DeskNextFixture, CompetitionDesk, LineupSlotInput, PutLineup,

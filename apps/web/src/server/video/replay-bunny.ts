@@ -16,7 +16,7 @@ import { createHash } from "node:crypto";
 import { BUNNY_EMBED_HOST, SEAZN_REPLAY_CALL_TIMEOUT_MS, seaznVideoOrigins, type BunnyConfig } from "@/server/relay/config";
 import { NOOP_RECORDER, type ProviderCallRecorder } from "@/server/relay/ports";
 import { redact } from "@/server/relay/sanitise";
-import type { ReplayDownload, ReplayHost, ReplayState, ReplayVideo } from "./replay-ports";
+import { type ReplayDownload, type ReplayHost, ReplayNotDownloadable, type ReplayState, type ReplayVideo } from "./replay-ports";
 
 export const BUNNY_API_BASE = "https://video.bunnycdn.com/library";
 /** The tallest rendition a replay is served at: the port promises nothing above it. */
@@ -133,8 +133,8 @@ export class BunnyReplayHost implements ReplayHost {
    *  SEAZN_VIDEO_ORIGINS host as Referer. The CDN's body is answered as it streams in, never buffered here. */
   async openDownload(videoId: string): Promise<ReplayDownload> {
     const v = await this.video(videoId);
-    if (v.state !== "playable") throw this.error(`openDownload: video ${videoId} is not playable (${v.state})`);
-    if (v.heights.length === 0) throw this.error(`openDownload: video ${videoId} has no rendition at or under ${MAX_HEIGHT}p`);
+    if (v.state !== "playable") throw new ReplayNotDownloadable(videoId, `not playable (${v.state})`);
+    if (v.heights.length === 0) throw new ReplayNotDownloadable(videoId, `no rendition at or under ${MAX_HEIGHT}p`);
     const origin = this.videoOrigins()?.[0];
     if (!origin) throw this.error(`openDownload: SEAZN_VIDEO_ORIGINS is not set, and the replay host serves a file only to an allowed Referer (video ${videoId})`);
     const height = Math.max(...v.heights);

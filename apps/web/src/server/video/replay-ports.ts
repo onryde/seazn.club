@@ -26,6 +26,16 @@ export interface ReplayDownload {
   fileName: string;
 }
 
+/** The host's refusal to hand a video's file over: the video is not playable there (still processing, failed, absent), or it has no
+ *  rendition to give. A caller that believes the video playable answers "not ready, try again" rather than an error (Task 22 review
+ *  m6: a row can read playable while the host is still finishing). Every other failure — a timeout, a refused request — is NOT this. */
+export class ReplayNotDownloadable extends Error {
+  override readonly name = "ReplayNotDownloadable";
+  constructor(readonly videoId: string, readonly why: string) {
+    super(`video ${videoId} cannot be downloaded: ${why}`);
+  }
+}
+
 export interface ReplayHost {
   /** Make a collection named `org:<orgId>` and answer its id. A second call makes a second collection: the caller stores the
    *  id it was given, and nothing looks a collection up by name. */
@@ -37,7 +47,8 @@ export interface ReplayHost {
   remove(videoId: string): Promise<"deleted" | "absent">;
   /** A short-lived player URL for the video. Pure: it makes no call and does not check that the video exists. */
   signedEmbed(videoId: string, now: Date, ttlSeconds: number): { src: string; expiresAt: string };
-  /** The video's file as a stream, for the server to pass on. Never a URL a browser could keep. */
+  /** The video's file as a stream, for the server to pass on. Never a URL a browser could keep. A video the host will not hand
+   *  over yet throws ReplayNotDownloadable. */
   openDownload(videoId: string): Promise<ReplayDownload>;
   /** Minutes of the video watched between `from` and `to` (Phase 3). */
   watchMinutes(videoId: string, from: Date, to: Date): Promise<number>;

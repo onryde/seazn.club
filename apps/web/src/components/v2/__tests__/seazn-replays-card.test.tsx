@@ -19,7 +19,7 @@ const DICT_DIR = join(__dirname, "../../../dictionaries");
 const uiDict = (locale: string): Record<string, string> => JSON.parse(readFileSync(join(DICT_DIR, locale, "ui.json"), "utf8"));
 const en = uiDict("en");
 const id = (n: number) => `00000000-0000-4000-8000-00000000000${n}`;
-const r = (partNo: number, state: Replay["state"], lengthSeconds: number | null = null): Replay => ({ id: id(partNo), partNo, state, lengthSeconds });
+const r = (partNo: number, state: Replay["state"], lengthSeconds: number | null = null): Replay => ({ id: id(partNo), partNo, state, lengthSeconds, onMatchPage: true });
 const html = (replays: Replay[], locale = "en") =>
   renderToStaticMarkup(
     <DictProvider dict={uiDict(locale)} locale={locale as "en"}>

@@ -413,6 +413,10 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   // Seazn-hosted video (Task 17): the organiser's read of a fixture's video answers SIGNED playback addresses — bearer credentials for the
   // picture, so the signed-in member's own door (Match Day's preview), never a key's: a key that leaked would hand out a viewable stream.
   "GET /fixtures/:id/video",
+  // Seazn-hosted video (Task 26): the organiser deletes a replay part for everyone, and downloads one — the whole match's file. Both are
+  // an editor's session only (the use case refuses anything else too): a leaked key must neither erase a club's video nor carry it off.
+  "DELETE /fixtures/:id/replays/:replayId",
+  "GET /fixtures/:id/replays/:replayId/download",
   // Capture QR v2 (T8a–T8c, §6.3): the phone's routes. Their Bearer is the stream code's tok — no cookie, never a key.
   "GET /capture/codes/:code",
   "POST /capture/codes/:code/beats",

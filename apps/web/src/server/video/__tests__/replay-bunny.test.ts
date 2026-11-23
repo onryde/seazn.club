@@ -8,7 +8,7 @@ import type { BunnyConfig } from "@/server/relay/config";
 import { FakeRecorder } from "@/server/relay/fakes";
 import { pathTemplate } from "@/server/relay/sanitise";
 import { BunnyReplayHost } from "../replay-bunny";
-import type { ReplayHost } from "../replay-ports";
+import { type ReplayHost, ReplayNotDownloadable } from "../replay-ports";
 
 const CONFIG: BunnyConfig = {
   libraryId: "424242",
@@ -356,6 +356,12 @@ describe("BunnyReplayHost: openDownload (B5, B9)", () => {
     const noOrigin = downloadHarness("720p", 200, null);
     expect(await errorOf(noOrigin.host.openDownload(GUID))).toMatch(/SEAZN_VIDEO_ORIGINS/);
     expect(noOrigin.calls).toHaveLength(1);
+    // Task 26 (T22 review m6): "not playable" and "no rendition" are the port's typed refusal — the download answers "not ready,
+    // try again" (409) — and nothing else is: a missing origin is a configuration fault, not a video that is not ready.
+    const thrown = async (p: Promise<unknown>) => p.then(() => null, (e: unknown) => e);
+    expect(await thrown(processing.host.openDownload(GUID))).toBeInstanceOf(ReplayNotDownloadable);
+    expect(await thrown(onlyHd.host.openDownload(GUID))).toBeInstanceOf(ReplayNotDownloadable);
+    expect(await thrown(noOrigin.host.openDownload(GUID))).not.toBeInstanceOf(ReplayNotDownloadable);
   });
 
   it("a CDN refusal throws with the status and the video id", async () => {
