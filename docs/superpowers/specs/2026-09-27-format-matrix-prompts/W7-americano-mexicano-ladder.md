@@ -134,10 +134,14 @@ them.
   `americano.js:2` ("(i, i+1) vs (i+2, i+3)") is stale: the code plays 1+4
   against 2+3 (engine repo).
 
-Blog dependency: the americano post (#22) and the mexicano post (#23) live on
-the blog branch. #23 describes rounds after the first, so it is held until D2
-ships. When D1 and D2 land, tell the blog session (`home`) so it can re-run the
-two posts' claims and release #23.
+Blog dependency (owner ruling 2026-11-23): americano and mexicano are W7's,
+and BOTH blog posts are held until W7 ships: the americano post (#22,
+`how-americano-works`) waits on D1, and the mexicano post (#23,
+`how-mexicano-works`) waits on D2. Their drafts are in the blog ledger
+(`.superpowers/sdd/2026-11-19-blog-p2/held-22-*.md`, `held-23-*.md`, main
+checkout, git-ignored). A blog tripwire test fails when D1 is fixed. When D1
+and D2 land, tell the blog session (`home`) so it can re-prove both posts'
+claims against the new behaviour and release them.
 
 ## Output and handoff
 
