@@ -9,6 +9,7 @@ import type { DiagramModel } from "@/blog/examples/types";
 import { BracketDiagram } from "@/components/blog/diagrams/bracket";
 import { LadderSwap } from "@/components/blog/diagrams/ladder-swap";
 import { ScoreTiles } from "@/components/blog/diagrams/score-tiles";
+import { RoundRobinWheel } from "@/components/blog/diagrams/round-robin-wheel";
 import { SwissRoundDiagram } from "@/components/blog/swiss-round-diagram";
 import { WalkoverBracket } from "@/components/blog/diagrams/walkover-bracket";
 
@@ -31,6 +32,10 @@ export function BlogDiagram({ model }: { model: DiagramModel }) {
     case "swissRound":
       return <SwissRoundDiagram model={model} />;
     // ---- end batch 3 ----
+    // ---- batch 6 (Task 12): round-robin-schedule ----
+    case "roundRobinWheel":
+      return <RoundRobinWheel model={model} />;
+    // ---- end batch 6 ----
     default:
       throw new Error(`blog diagram: there is no drawing for '${model.kind}' yet (add it to components/blog/blog-diagram.tsx with the first post that uses it)`);
   }

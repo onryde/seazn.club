@@ -30,6 +30,9 @@ import swissLateAndWithdraw from "./__golden__/swiss-late-and-withdraw.json";
 import swissPairing from "./__golden__/swiss-pairing.json";
 // ---- end batch 3 ----
 import type { ExampleResult } from "./types";
+// ---- batch 6 (Task 12) ----
+import roundRobinSchedule from "./__golden__/round-robin-schedule.json";
+// ---- end batch 6 ----
 // --- blog batch 4 (knockouts) ---
 import thirdPlaceMatch from "./__golden__/third-place-match.json";
 import knockoutMatchEndsLevel from "./__golden__/knockout-match-ends-level.json";
@@ -75,4 +78,7 @@ export const BLOG_GOLDENS: Record<string, ExampleResult> = {
   "swiss-late-and-withdraw": swissLateAndWithdraw as ExampleResult,
   "knockout-seeds": knockoutSeeds as ExampleResult,
   // ---- end batch 3 ----
+  // ---- batch 6 (Task 12) ----
+  "round-robin-schedule": roundRobinSchedule as ExampleResult,
+  // ---- end batch 6 ----
 };

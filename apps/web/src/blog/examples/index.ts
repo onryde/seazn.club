@@ -28,6 +28,9 @@ import { swissLateAndWithdraw } from "./swiss-late-and-withdraw";
 import { swissPairing } from "./swiss-pairing";
 // ---- end batch 3 ----
 import type { BlogExample } from "./types";
+// ---- batch 6 (Task 12: round robins, groups, qualification, leaving and joining) ----
+import { roundRobinSchedule } from "./round-robin-schedule";
+// ---- end batch 6 ----
 // --- blog batch 4 (knockouts) ---
 import { thirdPlaceMatch } from "./third-place-match";
 import { knockoutMatchEndsLevel } from "./knockout-match-ends-level";
@@ -55,6 +58,9 @@ export const BLOG_EXAMPLES: readonly BlogExample[] = [
   swissLateAndWithdraw,
   knockoutSeeds,
   // ---- end batch 3 ----
+  // ---- batch 6 (Task 12) ----
+  roundRobinSchedule,
+  // ---- end batch 6 ----
 ];
 
 export function blogExample(id: string): BlogExample | null {

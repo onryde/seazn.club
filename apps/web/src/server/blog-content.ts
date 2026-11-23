@@ -39,7 +39,6 @@ export const BLOG_PLANNED_SLUGS: ReadonlySet<string> = new Set([
   // knockout-seeds-and-byes are written (blog-tree.test.ts: posts + planned = 33), so they are no longer planned.
   "how-americano-works",
   "how-mexicano-works",
-  "round-robin-schedule",
   "groups-into-knockout",
   "best-third-placed-teams",
   "clinched-or-eliminated",
