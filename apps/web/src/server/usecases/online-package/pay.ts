@@ -65,10 +65,15 @@ export type PayMoney = { rate: number; beforeCharge?: () => void };
  *  (the claw-back change is Task 6's), so there is nothing to settle. Task 6 replaces this default. */
 const SETTLE_NOTHING_YET: NonNullable<PayDeps["settle"]> = async () => 0;
 
+/** 409 ONLINE_QUOTE_CHANGED with the fresh quote. One code for both ways the confirmed receipt went stale, and a message for
+ *  each: the fresh quote REFUSES the size (its total may be unchanged, so "the total changed" would be false), or it no longer
+ *  owes, or forfeits, what was confirmed. */
 function quoteChanged(quote: PackageQuote): HttpError {
   return new HttpError(
     409,
-    "The Online Chess total changed since it was shown; check the new total and confirm again",
+    quote.refusal !== null
+      ? `Online Chess cannot be bought at size ${quote.size}: ${quote.refusal}`
+      : "The Online Chess total changed since it was shown; check the new total and confirm again",
     ONLINE_PACKAGE_CODES.quoteChanged,
     { quote },
   );
@@ -163,8 +168,8 @@ export async function payOnlinePackageInTx(
     paid = quote.owed;
   } else if (quote.owed < 0) {
     const back = quote.back;
-    // The quote splits every return it does not refuse (owed < 0 is only ever a paid row); `planReturn` already refuses a split
-    // that is not the return. Null here is a bug upstream.
+    // Type narrowing, not a reachable refusal: the quote splits every return it does not refuse (`back` is non-null whenever
+    // owed < 0 and `refusal` is null, both checked above), and `planReturn` already refuses a split that is not the return.
     if (back === null) {
       throw new HttpError(500, `Online Chess package ${row.id}: the quote returns ${-quote.owed} credits without a split`, "online_package_return_unplanned");
     }
@@ -172,8 +177,10 @@ export async function payOnlinePackageInTx(
     returned = back.pack + back.monthly;
   }
   // The row in ONE statement (V549's CHECKs hold per statement). `cameras_paid` is the quote's camera figure, which already
-  // includes a camera price paid before (P19: never lowered). paid_at and paid_by keep the FIRST payment.
-  await tx`
+  // includes a camera price paid before (P19: never lowered). paid_at and paid_by keep the FIRST payment. Written only while
+  // the row is still writable (not frozen, not refunded) and asserted to be exactly that one row: the row is locked and the
+  // quote refused a frozen one, so a miss is a writer that changed it on this transaction — a named 500, never a silent payment.
+  const written = await tx`
     update division_online_packages
        set size = ${a.size},
            cameras_paid = ${quote.cameras},
@@ -182,11 +189,13 @@ export async function payOnlinePackageInTx(
            credits_forfeited = credits_forfeited + ${forfeited},
            paid_at = coalesce(paid_at, now()),
            paid_by = coalesce(paid_by, ${a.userId}::uuid)
-     where id = ${row.id}`;
-  const after = await livePackage(tx, a.divisionId);
-  if (after === null || after.id !== row.id) {
-    throw new HttpError(500, `Online Chess package ${row.id} is no longer the division's live package after its payment`, "online_package_missing");
+     where id = ${row.id} and frozen_at is null and refunded_at is null
+    returning id`;
+  if (written.length !== 1) {
+    throw new HttpError(500, `Online Chess package ${row.id} was frozen or refunded under its payment; nothing was paid`, "online_package_not_writable");
   }
+  // The row is locked, live and was just written: it is still the division's live package.
+  const after = (await livePackage(tx, a.divisionId))!;
   await assertBooks(tx, after);
 
   const capacityLoweredTo = await clampCapacity(tx, a.divisionId, a.size);

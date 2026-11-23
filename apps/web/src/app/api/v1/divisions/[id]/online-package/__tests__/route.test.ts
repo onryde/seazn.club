@@ -29,7 +29,7 @@ vi.mock("@/lib/posthog-server", async (importOriginal) => {
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
-import { OnlinePackagePayResult, OnlinePackageQuote } from "@/server/api-v1/schemas";
+import { ONLINE_MAX_OWED, OnlinePackagePayInput, OnlinePackagePayResult, OnlinePackageQuote } from "@/server/api-v1/schemas";
 import { createApiKey } from "@/server/usecases/api-keys";
 import { forgetOnlineChessFlagCache } from "@/server/usecases/external-play/online-chess-flag";
 import { recordPurchase } from "@/server/usecases/stream-credits";
@@ -115,6 +115,36 @@ async function written(r: Rig) {
   return { ledger: l!.n, row: p! };
 }
 
+/** Global Constraints' price table (without / with cameras), typed here: the bound's oracle. */
+const GC_PRICE: Record<number, readonly [number, number]> = { 16: [1, 2], 32: [2, 4], 64: [4, 8], 128: [8, 16], 256: [16, 32] };
+
+describe("OnlinePackagePayInput: the expectedOwed bound", () => {
+  it("is the dearest package's price, and every total a payment can owe — any first payment, any change between two states — is inside it", () => {
+    expect(ONLINE_MAX_OWED, "256 with cameras, the Global Constraints' dearest cell").toBe(32);
+    const states = Object.entries(GC_PRICE).flatMap(([size, [without, withCams]]) => [
+      { size: Number(size), cameras: false, price: without },
+      { size: Number(size), cameras: true, price: withCams },
+    ]);
+    let checked = 0;
+    for (const to of states) {
+      // A first payment owes the whole price.
+      expect(OnlinePackagePayInput.safeParse({ size: to.size, expectedOwed: to.price }).success, `first payment ${to.size}/${to.cameras}`).toBe(true);
+      checked += 1;
+      // A paid package holds its own price of value (§7.1); a change owes the difference, cameras never lowered (P19).
+      for (const from of states) {
+        const target = GC_PRICE[to.size]![from.cameras || to.cameras ? 1 : 0]!;
+        const owed = target - from.price;
+        expect(OnlinePackagePayInput.safeParse({ size: to.size, expectedOwed: owed }).success, `${from.size}/${from.cameras} → ${to.size}/${to.cameras}: ${owed}`).toBe(true);
+        checked += 1;
+      }
+    }
+    expect(checked, "first payments and changes").toBe(10 + 100);
+    for (const outside of [ONLINE_MAX_OWED + 1, -ONLINE_MAX_OWED - 1]) {
+      expect(OnlinePackagePayInput.safeParse({ size: 256, expectedOwed: outside }).success, `${outside}`).toBe(false);
+    }
+  });
+});
+
 describe.skipIf(!HAS_DB)("GET and POST /divisions/{id}/online-package", () => {
   it("the organiser reads the quote, pays it, and a second press writes nothing: each answer is its contract's shape", async () => {
     const r = await rig();
@@ -167,6 +197,8 @@ describe.skipIf(!HAS_DB)("GET and POST /divisions/{id}/online-package", () => {
       ["a fractional expectedOwed", { size: 32, expectedOwed: 1.5 }],
       ["no expectedOwed", { size: 32 }],
       ["addCameras not a boolean", { size: 32, expectedOwed: PRICE[32], addCameras: "yes" }],
+      ["an expectedOwed above the dearest package", { size: 256, expectedOwed: 33 }],
+      ["an expectedOwed below minus the dearest package", { size: 16, expectedOwed: -33 }],
     ];
     for (const [label, body] of bodies) {
       const res = await read(await post(r.divisionId, body));
@@ -176,7 +208,7 @@ describe.skipIf(!HAS_DB)("GET and POST /divisions/{id}/online-package", () => {
     const queries = ["size=20", "", "size=abc", "size=32&addCameras=yes"];
     for (const q of queries) expect((await get(r.divisionId, q)).status, `?${q}`).toBe(400);
     expect(await written(r)).toMatchObject({ ledger: 1, row: { credits_paid: 0, paid_at: null } });
-    expect(bodies.length + queries.length, "bad requests").toBe(11);
+    expect(bodies.length + queries.length, "bad requests").toBe(13);
     // The positive pair: the same body without `cameras` pays.
     expect((await post(r.divisionId, { size: 32, expectedOwed: PRICE[32] })).status).toBe(200);
   });

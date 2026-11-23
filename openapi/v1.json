@@ -10076,7 +10076,7 @@
     },
     "/api/v1/divisions/{id}/online-package": {
       "get": {
-        "summary": "Online Chess: the receipt's quote for the division's package at `size` (16, 32, 64, 128 or 256 — the entrant limit), with the optional `addCameras` intent (which only raises the price). `price` is the size's price at `cameras`; `owed` is what a payment would charge (> 0), return (< 0) or neither (0) against the package as paid; `take` splits a payable charge (this month's included credits first, then bought ones) and `shortBy` says how many credits a short balance is missing; `back` splits a return (bought credits first, then this month's included credits; an earlier month's included credits are `forfeited`, never returned); `refusal` names why the size cannot be bought (`frozen` once a round has opened, `below_held` under the places held, `plan` above the plan's entrant cap, `rounds` or `rounds_above_max` when the Swiss rounds need a bigger size); `covers` whether the PAID package covers the division as it stands. Writes nothing. Organisers only (owner or admin); never an API-key route",
+        "summary": "Online Chess: the receipt's quote for the division's package at `size` (16, 32, 64, 128 or 256 — the entrant limit), with the optional `addCameras` intent (which only raises the price). `price` is the size's price at `cameras`; `owed` is what a payment would charge (> 0), return (< 0) or neither (0) against the package as paid; `take` splits a payable charge (this month's included credits first, then bought ones) and `shortBy` says how many credits a short balance is missing; `back` splits a return (bought credits first, then this month's included credits; an earlier month's included credits are `forfeited`, never returned); `refusal` names why the size cannot be bought (`frozen` once a round has opened, `below_held` under the places held, `plan` above the plan's entrant cap, `rounds` or `rounds_above_max` when the Swiss rounds need a bigger size); `covers` whether the PAID package covers the division as it stands. Writes nothing. Organisers only (owner or admin; 402 PAYMENT_REQUIRED `members.max` for an admin whose seat is frozen over the plan's member limit); never an API-key route",
         "tags": [
           "divisions"
         ],
@@ -10414,6 +10414,50 @@
               }
             }
           },
+          "402": {
+            "description": "Plan upgrade required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
           "403": {
             "description": "Forbidden",
             "content": {
@@ -10548,8 +10592,11 @@
                   },
                   "expectedOwed": {
                     "type": "integer",
-                    "minimum": -9007199254740991,
-                    "maximum": 9007199254740991
+                    "minimum": -32,
+                    "maximum": 32,
+                    "examples": [
+                      2
+                    ]
                   },
                   "addCameras": {
                     "type": "boolean"
@@ -10568,7 +10615,7 @@
               },
               "example": {
                 "size": 16,
-                "expectedOwed": -9007199254740991,
+                "expectedOwed": 2,
                 "addCameras": true,
                 "expectedForfeited": 0
               }

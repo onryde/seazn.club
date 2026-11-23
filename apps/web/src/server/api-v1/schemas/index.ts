@@ -209,5 +209,5 @@ export type {
 } from "./public.ts";
 export { CreateQuickMatch } from "./quick-match.ts";
 export {
-  OnlineSizeS, OnlinePackageQuoteQuery, OnlinePackagePayInput, OnlinePackageQuote, OnlinePackageRow, OnlinePackagePayResult,
+  ONLINE_MAX_OWED, OnlineSizeS, OnlinePackageQuoteQuery, OnlinePackagePayInput, OnlinePackageQuote, OnlinePackageRow, OnlinePackagePayResult,
 } from "./online-package.ts";

@@ -4,11 +4,16 @@
 // `node --experimental-strip-types`): relative imports carry an explicit `.ts`, types come in through `import type`.
 import { z } from "zod";
 // The size ladder. The leaf is import-free, so the standalone generator loads it like the other modules' lib imports.
-import { ONLINE_SIZES } from "../../../lib/online-chess-package.ts";
+import { ONLINE_SIZES, packagePrice } from "../../../lib/online-chess-package.ts";
 import { Uuid } from "./common.ts";
 
 /** A size on the ladder (16, 32, 64, 128, 256): the entrant limit an Online Chess package buys. Anything else is a 400. */
 export const OnlineSizeS = z.literal(ONLINE_SIZES);
+
+/** The most a payment can charge or return, from the leaf's price table: the dearest package (the largest size, with cameras).
+ *  A charge is at most a whole price, and a return at most the value a package holds, which is always a price (§7.1), so
+ *  |owed| never exceeds it. */
+export const ONLINE_MAX_OWED = Math.max(...ONLINE_SIZES.flatMap((s) => [packagePrice(s, false), packagePrice(s, true)]));
 
 /** GET /divisions/{id}/online-package: the size asked about, and the one intent the client may send (`addCameras`, which only
  *  ever raises the price). Query values are strings: `size` is coerced to the ladder, `addCameras` is `true` or `false`. */
@@ -25,7 +30,7 @@ export type OnlinePackageQuoteQuery = z.infer<typeof OnlinePackageQuoteQuery>;
 export const OnlinePackagePayInput = z
   .object({
     size: OnlineSizeS,
-    expectedOwed: z.number().int(),
+    expectedOwed: z.number().int().min(-ONLINE_MAX_OWED).max(ONLINE_MAX_OWED).meta({ examples: [2] }),
     addCameras: z.boolean().optional(),
     expectedForfeited: z.number().int().min(0).optional(),
   })

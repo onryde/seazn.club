@@ -55,7 +55,8 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { frozenCompetitionIds } from "@/server/usecases/entitlement-freeze";
 import { forgetOnlineChessFlagCache } from "@/server/usecases/external-play/online-chess-flag";
 import {
-  creditBreakdown, grantMonthlyStreamCredits, recordPurchase, streamMonthlyGrantKey, streamMonthlyPeriod, streamMonthlyRate,
+  creditBreakdown, grantMonthlyStreamCredits, recordPurchase, revokeCredits, streamMonthlyGrantKey, streamMonthlyPeriod,
+  streamMonthlyRate,
 } from "@/server/usecases/stream-credits";
 import {
   debitForPackage, onlinePackageQuote, payOnlinePackage, payOnlinePackageInTx, readPackageFacts, refundForPackage,
@@ -67,6 +68,8 @@ const HAS_DB = !!process.env.DATABASE_URL;
 /** Global Constraints: "16→1/2, 32→2/4, 64→4/8, 128→8/16, 256→16/32 credits (without / with cameras)". */
 const GC_PRICE: Record<OnlineSize, readonly [number, number]> = { 16: [1, 2], 32: [2, 4], 64: [4, 8], 128: [8, 16], 256: [16, 32] };
 const price = (size: number, cameras: boolean | null): number => GC_PRICE[size as OnlineSize][cameras === true ? 1 : 0];
+/** The 409's message when the confirmed total (or forfeit) moved and the size is still allowed. */
+const TOTAL_CHANGED = "The Online Chess total changed since it was shown; check the new total and confirm again";
 
 type Plan = "pro" | "community";
 /** The catalogue's monthly rate and per-division cap of each plan the rigs use (set in beforeAll, premises only). */
@@ -409,6 +412,7 @@ describe.skipIf(!HAS_DB)("payOnlinePackage: exactly once, by state, and the 409"
     const err = await refusal(payOnlinePackage(r.auth, r.divisionId, { size: 64, expectedOwed: tabB.owed }));
     expect(err.status).toBe(409);
     expect(err.code).toBe("ONLINE_QUOTE_CHANGED");
+    expect(err.message, "a changed total says so").toBe(TOTAL_CHANGED);
     const fresh = (err.extra as { quote: PackageQuote }).quote;
     expect(fresh, "the fresh quote: the difference from the state the first tab left").toMatchObject({ size: 64, owed: 4 - 2, refusal: null });
     expect(await orgLedgerCount(r.orgId), "no row").toBe(ledgerBefore);
@@ -429,6 +433,7 @@ describe.skipIf(!HAS_DB)("payOnlinePackage: exactly once, by state, and the 409"
     const before = await orgLedgerCount(r.orgId);
     const err = await refusal(payOnlinePackage(r.auth, r.divisionId, { size: 32, expectedOwed: shown.owed }));
     expect(err.code).toBe("ONLINE_QUOTE_CHANGED");
+    expect(err.message).toBe(TOTAL_CHANGED);
     expect((err.extra as { quote: PackageQuote }).quote).toMatchObject({ owed: 4, cameras: true });
     expect(await orgLedgerCount(r.orgId)).toBe(before);
     expect((await packageRow(r.packageId)).paid_at).toBeNull();
@@ -449,6 +454,7 @@ describe.skipIf(!HAS_DB)("payOnlinePackage: exactly once, by state, and the 409"
     expect(err.status).toBe(409);
     expect(err.code).toBe("ONLINE_QUOTE_CHANGED");
     expect((err.extra as { quote: PackageQuote }).quote, "same total, but the size is refused now").toMatchObject({ owed: 1, refusal: "rounds", rounds: 7 });
+    expect(err.message, "the total did not change: the message names the refusal instead").toBe("Online Chess cannot be bought at size 16: rounds");
     expect(await orgLedgerCount(r.orgId)).toBe(before);
     expect((await packageRow(r.packageId)).paid_at).toBeNull();
     // The positive pair: 32 includes 7.
@@ -469,6 +475,7 @@ describe.skipIf(!HAS_DB)("payOnlinePackage: exactly once, by state, and the 409"
     expect((err.extra as { quote: PackageQuote }).quote, "the owed figure did not move; the split did").toMatchObject({
       owed: -3, back: { pack: 0, monthly: 0, forfeited: 3 },
     });
+    expect(err.message, "not refused: the confirmed figures moved").toBe(TOTAL_CHANGED);
     expect(await orgLedgerCount(r.orgId), "nothing written").toBe(before);
     expect(await packageRow(r.packageId)).toMatchObject({ size: 64, credits_forfeited: 0 });
     // Confirmed with the receipt that says 3 will not come back.
@@ -477,6 +484,53 @@ describe.skipIf(!HAS_DB)("payOnlinePackage: exactly once, by state, and the 409"
     expect(await packageRow(r.packageId)).toMatchObject({ size: 16, credits_refunded: 0, credits_forfeited: 3 });
     expect(await orgLedgerCount(r.orgId), "a forfeit writes nothing").toBe(before);
     expect(await expectBooks(r.packageId, "after the forfeit")).toBe(2);
+  });
+});
+
+// ─── What changed between the receipt and the confirm ────────────────────────────────────────────────────────────────
+
+describe.skipIf(!HAS_DB)("payOnlinePackage: the receipt went stale in the other direction", () => {
+  it("the receipt was payable, then a staff revoke drained the balance: the confirm is 402 with the TRUE balance and writes nothing", async () => {
+    const r = await rig({ size: 32, pack: 3, monthly: 0 });
+    const shown = await quote(r, 32);
+    expect(shown, "premise: payable from the bought credits").toMatchObject({ owed: 2, take: { monthly: 0, pack: 2 }, shortBy: null, balance: 3 });
+    // The real staff writer, between the receipt and the confirm.
+    await revokeCredits({ orgId: r.orgId, delta: 2, createdBy: r.userId, note: "online chess pay test", idempotencyKey: `idem-${suffix()}` });
+    expect((await creditBreakdown(sql, r.orgId)).total, "premise: the revoke left 1").toBe(1);
+    const before = await orgLedgerCount(r.orgId);
+    // The confirmed total is still the server's (owed 2): no 409; the money is what is missing.
+    const err = await refusal(payOnlinePackage(r.auth, r.divisionId, { size: 32, expectedOwed: shown.owed }));
+    expect(err.status).toBe(402);
+    expect(err.code).toBe("ONLINE_CHESS_NO_CREDITS");
+    expect(err.extra, "the balance as it is now, not as the receipt showed it").toEqual({ owed: 2, balance: 1 });
+    expect(await orgLedgerCount(r.orgId), "nothing written").toBe(before);
+    expect((await packageRow(r.packageId)).paid_at).toBeNull();
+    // The positive pair: one more bought credit and the same confirm pays.
+    await buy(r.orgId, 1);
+    expect((await payOnlinePackage(r.auth, r.divisionId, { size: 32, expectedOwed: shown.owed })).applied).toBe(true);
+    expect(await packageRow(r.packageId)).toMatchObject({ size: 32, credits_paid: 2 });
+  });
+
+  it("a move down refused below the places held is allowed once an entrant withdraws", async () => {
+    const r = await rig({ size: 32, pack: 10, monthly: 0 });
+    await confirm(r, 32);
+    await seedEntrants(r, 17);
+    const refused = await quote(r, 16);
+    expect(refused, "premise: 17 held do not fit in 16").toMatchObject({ held: 17, refusal: "below_held" });
+    const err = await refusal(payOnlinePackage(r.auth, r.divisionId, { size: 16, expectedOwed: refused.owed }));
+    expect(err.code).toBe("ONLINE_QUOTE_CHANGED");
+    expect(err.message).toBe("Online Chess cannot be bought at size 16: below_held");
+    expect(await packageRow(r.packageId)).toMatchObject({ size: 32, credits_refunded: 0 });
+    // One entrant withdraws (a departed status leaves the held count): 16 places hold the 16 left.
+    await sql`
+      update entrants set status = 'withdrawn'
+       where id = (select id from entrants where division_id = ${r.divisionId} order by id limit 1)`;
+    const allowed = await quote(r, 16);
+    expect(allowed).toMatchObject({ held: 16, refusal: null, owed: 1 - 2, back: { pack: 1, monthly: 0, forfeited: 0 } });
+    const down = await payOnlinePackage(r.auth, r.divisionId, { size: 16, expectedOwed: allowed.owed });
+    expect(down.applied).toBe(true);
+    expect(await packageRow(r.packageId)).toMatchObject({ size: 16, credits_paid: 2, credits_refunded: 1 });
+    expect(await expectBooks(r.packageId, "after the move down")).toBe(2);
   });
 });
 
@@ -610,6 +664,7 @@ describe.skipIf(!HAS_DB)("payOnlinePackage: upgrade, add cameras, move down", ()
       const before = { ledger: await orgLedgerCount(r.orgId), row: await packageRow(r.packageId) };
       const err = await refusal(payOnlinePackage(r.auth, r.divisionId, { size, expectedOwed: shown.owed }));
       expect(err.code, label).toBe("ONLINE_QUOTE_CHANGED");
+      expect(err.message, label).toBe(`Online Chess cannot be bought at size ${size}: ${why}`);
       expect((err.extra as { quote: PackageQuote }).quote.refusal, label).toBe(why);
       expect(await orgLedgerCount(r.orgId), label).toBe(before.ledger);
       expect(await packageRow(r.packageId), label).toEqual(before.row);
@@ -876,6 +931,46 @@ describe.skipIf(!HAS_DB)("payOnlinePackage: the books guards", () => {
     expect(err.code).toBe("online_package_ledger_mismatch");
     expect(await orgLedgerCount(r.orgId)).toBe(before.ledger);
     expect(await packageRow(r.packageId)).toEqual(before.row);
+  });
+
+  it("a row frozen or refunded under the payment, on its own transaction, is a named 500: the write lands only on a writable row", async () => {
+    // The row is locked and the quote refuses a frozen one, so the only way it stops being writable is a writer on THIS
+    // transaction between the money and the row's write. The seam: the transaction handed to the door runs that writer just
+    // before the door's own UPDATE of the package (a Proxy over the real tx; every other statement passes through).
+    const changes: Record<string, (tx: Tx, id: string) => Promise<unknown>> = {
+      frozen: (tx, id) => tx`update division_online_packages set frozen_at = now() where id = ${id}`,
+      refunded: (tx, id) => tx`
+        update division_online_packages set refunded_at = now(), credits_refunded = credits_paid - credits_forfeited where id = ${id}`,
+    };
+    let checked = 0;
+    for (const [label, change] of Object.entries(changes)) {
+      const r = await rig({ size: 32, pack: 10, monthly: 0 });
+      await confirm(r, 32);
+      const before = { ledger: await orgLedgerCount(r.orgId), row: await packageRow(r.packageId) };
+      let injected = 0;
+      const err = await refusal(inTx(async (tx) => {
+        await tx`select pg_advisory_xact_lock(hashtext(${"division:" + r.divisionId}))`;
+        const facts = await readPackageFacts(tx, r.divisionId, null);
+        const seam = new Proxy(tx, {
+          apply(target, self, args) {
+            const strings = args[0] as unknown;
+            if (Array.isArray(strings) && strings.join("?").includes("update division_online_packages")) {
+              injected += 1;
+              return change(target, r.packageId).then(() => Reflect.apply(target, self, args));
+            }
+            return Reflect.apply(target, self, args);
+          },
+        });
+        return payOnlinePackageInTx(seam, { orgId: r.orgId, divisionId: r.divisionId, userId: r.userId, size: 64, expectedOwed: 2 }, facts, { rate: RATE.pro });
+      }));
+      expect(injected, `${label}: the writer ran once, before the door's own write`).toBe(1);
+      expect(err.status, label).toBe(500);
+      expect(err.code, label).toBe("online_package_not_writable");
+      expect(await orgLedgerCount(r.orgId), `${label}: the debit rolled back`).toBe(before.ledger);
+      expect(await packageRow(r.packageId), label).toEqual(before.row);
+      checked += 1;
+    }
+    expect(checked, "states").toBe(2);
   });
 
   it("payOnlinePackageInTx: a first payment with no payer is a named 500 before anything is written", async () => {
