@@ -18,6 +18,7 @@ import { hasHelpTokens, resolveHelpTokens } from "@/server/help-tokens";
 import { rehypeHelpHeadingIds, type HelpHeading } from "@/server/help-heading-ids";
 import { HELP_PUBLIC_ROOT, rehypeHelpFigures } from "@/server/help-figures";
 import { rehypeHelpCallouts } from "@/server/help-callouts";
+import { rehypeHelpScrollBoxes } from "@/server/help-scroll-boxes";
 import type { HelpSectionEntry } from "@/lib/help";
 
 export const HELP_ROOT = join(process.cwd(), "content", "help");
@@ -91,9 +92,12 @@ function buildPipeline(publicRoot: string) {
     // heading text. See help-heading-ids.ts. The figure step is after it for the same reason:
     // an author's image arrives with src/alt/title only, and the figure, its dimensions and
     // its lazy loading are ours. See help-figures.ts. Callouts likewise (help-callouts.ts): the
-    // sanitiser allows no div, role, class or data attribute, so only a labelled blockquote makes one.
+    // sanitiser allows no div, role, class or data attribute, so only a labelled blockquote makes one. And the
+    // scroll boxes (help-scroll-boxes.ts): the sanitiser drops tabindex, role and aria-label, so a code block's tab
+    // stop and a table's focusable, named wrapper are ours alone.
     .use(rehypeHelpFigures, { publicRoot })
     .use(rehypeHelpCallouts)
+    .use(rehypeHelpScrollBoxes)
     .use(rehypeHelpHeadingIds)
     .use(rehypeStringify);
 }

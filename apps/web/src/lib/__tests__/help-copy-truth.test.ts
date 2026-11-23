@@ -132,6 +132,11 @@ afterAll(async () => {
  * below is a real gap with a real issue, and listing it as data rather than
  * leaving it silently unscanned is the point.
  *
+ * The two prose-table gaps (#303: the scroll box had no tab stop, and `display: block` dropped the table role) are
+ * CLOSED, not listed: the renderer wraps every table in a focusable, named region and leaves the table a real table
+ * (server/help-scroll-boxes.ts), and server/__tests__/help-scroll-boxes.test.ts asserts the attributes on every
+ * shipped article's tables and code blocks.
+ *
  * #365: `scheduling/ai-officials.md` was the THIRD copy of #303's unmetered-run
  * falsehood, plus its own "Automatic officials assignment is a Pro Plus
  * feature" — untouched because #303's guard was only ever invoked on
@@ -145,8 +150,6 @@ const KNOWN_GAPS = [
   "lib/pricing-cards.ts + e2e/pro-plus-tier.spec.ts — card bullets pinned verbatim (#303)",
   "config/tips.ts + dictionaries/*/ui.json — tips.schedule.save-points.body is stale on BOTH sides vs schedule.checkpoints.max (community 2 since V319, pro 5, pro_plus unlimited); documented as the tip-mirror exception in dictionary-copy-truth.test.ts (#303)",
   "content/help/** link TARGETS are invisible to the inventory gate — claimSurfaces reduces [text](/url) to text, so repointing a URL raises 0 faults (sibling of the link-TITLE hole, #338)",
-  "app/globals.css .competition-prose table — the horizontal scroll box added for #299 is NOT keyboard-reachable: it needs tabindex=0, and renderHelpMarkdown's sanitiser (server/help-content.ts) drops the attribute, so it cannot be set from Markdown. Needs a rehype step or a wrapper element (#303)",
-  "app/globals.css .competition-prose table — `display: block` is what gives that scroll box its overflow, and it drops the implicit table role in some assistive tech (row/column relationships stop being announced). Mitigation is an explicit role=\"table\"/rowgroup set, which the same sanitiser strips (#303)",
   // ── Round 4 bookkeeping: the residuals, named rather than left implicit ────
   "THE AXIS IS CIRCULAR. `claiming` is computed by running `en.halfClaim` over the tree, so an article only joins the half-rate axis — and therefore only earns a gate — if that vocabulary already matches it. The vocabulary has been measured at 0/12 and 0/24, so an article stating the rate in an unseen shape is invisible to the axis AND ungated. The axis narrows the ungated set; it does not close it (#303)",
   "THE FOURTH ARTICLE. `billing/plans.md` states the plan org caps and the fee ladder and is inventory-gated. `billing/downgrade.md`, the `scheduling/ai-*` pages and `scheduling/ai-officials.md` now carry the fee-lock/run-cap/unmetered-run vocabulary scans (below), which is real coverage but NOT the word-for-word inventory gate — a reword that stays inside the vocabulary's blind spots is still possible. `billing/credits.md`, `billing/operator.md` and every other non-billing, non-scheduling article remain fully ungated and unscanned, defended only by the vocabulary above (#303, #365)",
