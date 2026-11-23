@@ -38,8 +38,9 @@ import "server-only";
 //       NOT called by the move's cleanup step (seazn-replays.ts), deliberately: a deleted row's copy reached there was either
 //       measured by the delete that deleted it (this function, before its own removal attempt) or failed its check and was never
 //       playable — measuring it again would count the same days twice. Nor by the removals of copies that were never served: a
-//       copy that failed its check (seazn-replays.ts, seazn-replay-webhook.ts), and a STRAY copy whose fetch answer was lost or
-//       whose row was deleted while it was being made (seazn-replays.ts, seazn-replay-webhook.ts) — nobody could have watched them.
+//       copy that failed its check (seazn-replays.ts, seazn-replay-webhook.ts), a failed row's copy removed before it is parked at
+//       day 30 (seazn-replays.ts `give_up`, Task 31b), and a STRAY copy whose fetch answer was lost or whose row was deleted while it
+//       was being made (seazn-replays.ts, seazn-replay-webhook.ts) — nobody could have watched them.
 //
 //   seaznVideoForOrg(orgId)
 //       The staff view (/admin/orgs/[id]): the org's last SEAZN_STAFF_SESSIONS_LIMIT Seazn sessions, what was measured, and each

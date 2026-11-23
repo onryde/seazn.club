@@ -291,8 +291,14 @@ async function failure(run: Run, row: Claimed, step: string, err?: unknown, sour
     ...(err === undefined ? {} : { errClass: errClass(err), ...(source === "provider" ? { detail: detail(err) } : {}) }),
   };
   if (o.kind === "give_up") {
-    log.error({ ...facts, state: row.state, parkedAs: o.state, guid: row.bunnyVideoId },
-      "seazn replays: a step still failing past the Cloudflare copy's life — given up: parked, never retried");
+    if (o.nextAttemptAt.getTime() !== REPLAY_PARKED_AT.getTime()) {
+      // Task 31b: parked as failed while it holds a host copy — due again after the backoff, when give_up removes the copy first.
+      log.error({ ...facts, state: row.state, parkedAs: o.state, guid: row.bunnyVideoId },
+        "seazn replays: a step still failing past the Cloudflare copy's life — given up; its host copy is removed before the row is parked");
+    } else {
+      log.error({ ...facts, state: row.state, parkedAs: o.state, guid: row.bunnyVideoId },
+        "seazn replays: a step still failing past the Cloudflare copy's life — given up: parked, never retried");
+    }
     const patch: Patch = { attempts: o.attempts, next_attempt_at: o.nextAttemptAt, ...(o.state === row.state ? {} : { state: o.state, state_at: run.now }) };
     if (await write(row, row.state, patch)) row.state = o.state;
     return "done";
@@ -545,6 +551,18 @@ const STEPS: { readonly [K in ReplayStep["kind"]]: Handler<K> } = {
   },
   settled: async () => "done",
   give_up: async (run, row) => {
+    if (row.bunnyVideoId !== null) {
+      // Task 31b: a failed row still holding a copy (one whose removal failed, or a row parked mid-move) has it removed BEFORE it is
+      // parked: parked, nothing would ever remove it. No final replay read is owed: a failed copy was never served (seazn-cost.ts's
+      // header). A removal that fails keeps the copy on the row and backs off (`replayFailureOutcome`), never parks it.
+      if (!run.canCall()) return defer(run, row);
+      try {
+        await run.deps.replay.remove(row.bunnyVideoId);
+      } catch (err) {
+        return failure(run, row, "remove_parked_copy", err);
+      }
+      if (!(await forgetCopy(row, row.bunnyVideoId))) return dropped(row, "failed");
+    }
     log.warn({ replayId: row.id, videoId: row.cfVideoId, attempts: row.attempts }, "seazn replays: a move still failing past the Cloudflare copy's life — given up");
     await write(row, "failed", { next_attempt_at: REPLAY_PARKED_AT });
     return "done";

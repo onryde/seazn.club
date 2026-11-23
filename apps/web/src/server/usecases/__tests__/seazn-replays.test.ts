@@ -782,9 +782,16 @@ describe.skipIf(!HAS_DB)("Task 24 — discovery and the move, on the fakes", () 
       expect([row.state, row.attempts, ms(row.next_attempt_at), row.bunny_video_id]).toEqual(["fetching", 1, e.t0 + 2 * MIN, e.rows[0]!.bunny_video_id]);
       expect(errors.mock.calls.filter(([o]) => replayIdOf(o) === row.id).map(([o]) => (o as { reason?: string; step?: string }).reason ?? (o as { step?: string }).step))
         .toEqual(["fetching_holds_video", "refuse:fetching_holds_video"]);
-      await move(w, ms(row.recorded_at)! + 30 * DAY);
+      const past = ms(row.recorded_at)! + 30 * DAY;
+      await move(w, past);
       row = await rowOf(cf);
-      expect([row.state, ms(row.next_attempt_at)], "past the window: parked").toEqual(["failed", PARKED]);
+      // Task 31b: the row holds a copy, so it is failed but not parked yet — due after the backoff (2^1 min), when give_up removes the
+      // copy and only then parks it.
+      expect([row.state, ms(row.next_attempt_at), row.bunny_video_id], "past the window: failed, its copy still to remove").toEqual(["failed", past + 2 * MIN, e.rows[0]!.bunny_video_id]);
+      await move(w, past + 2 * MIN);
+      row = await rowOf(cf);
+      expect([row.state, ms(row.next_attempt_at), row.bunny_video_id], "then parked, holding nothing").toEqual(["failed", PARKED, null]);
+      expect(w.host.videoIds(), "the copy is gone from the host").not.toContain(e.rows[0]!.bunny_video_id);
       expect([s.fetch.mock.calls.length, s.poll.mock.calls.length, s.del.mock.calls.length]).toEqual([0, 0, 0]);
     } finally {
       errors.mockRestore();
@@ -889,6 +896,51 @@ describe.skipIf(!HAS_DB)("Task 24 — discovery and the move, on the fakes", () 
     const row = await rowOf(cf);
     expect([row.state, ms(row.next_attempt_at), ms(row.verified_at), row.bunny_video_id, row.cf_deleted_at]).toEqual(["playable", PARKED, v, guid, null]);
     expect(await move(w, past + DAY)).toEqual(NOTHING);
+  });
+
+  // ─── Task 31b, item 2 (the Task 24 re-review 2 carry) ────────────────────────────────────────────────────────────────────
+  it("Task 31b: a failed row still holding its failed copy at day 30 has the copy removed BEFORE it is parked — no final read (never served); a removal failing then backs off, keeps the copy, and the next firing removes it and parks", async () => {
+    const w = await world();
+    const e = await toEncoding(w, w.fixtureIds[0], [{}]);
+    const cf = e.ids[0]!;
+    const copy = e.rows[0]!.bunny_video_id!;
+    w.host.fail(copy);
+    const remove = vi.spyOn(w.host, "remove").mockRejectedValueOnce(new Error("bunny remove: request failed before a response"));
+    await move(w, e.t0 + 15 * MIN);   // the check fails it; its removal fails: failed, holding the copy (re-review N2)
+    let row = await rowOf(cf);
+    expect([row.state, row.bunny_video_id], "PREMISE: failed, holding its copy").toEqual(["failed", copy]);
+    const reads = vi.spyOn(w.host, "watchMinutes");
+    const past = ms(row.recorded_at)! + 30 * DAY;
+    // Day 30, the host still refusing: the copy is kept on the row and the row is due again after its backoff — never parked holding it.
+    remove.mockRejectedValueOnce(new Error("bunny remove: HTTP 503"));
+    expect(await move(w, past)).toMatchObject({ failed: 1 });
+    row = await rowOf(cf);
+    expect([row.state, row.bunny_video_id, row.attempts, ms(row.next_attempt_at)], "not parked while it holds the copy").toEqual(["failed", copy, 2, past + 2 * MIN]);
+    expect(w.host.videoIds(), "still on the host").toContain(copy);
+    // The next firing after the backoff: removed, forgotten, THEN parked.
+    expect(await move(w, past + 2 * MIN)).toMatchObject({ failed: 0 });
+    row = await rowOf(cf);
+    expect([row.state, row.bunny_video_id, ms(row.next_attempt_at)], "removed, then parked").toEqual(["failed", null, PARKED]);
+    expect(w.host.videoIds(), "gone from the host").not.toContain(copy);
+    expect(remove.mock.calls.map(([id]) => id), "asked three times, for that copy only").toEqual([copy, copy, copy]);
+    expect(reads, "a failed copy was never served: no final read").not.toHaveBeenCalled();
+    expect(await move(w, past + DAY), "never claimed again").toEqual(NOTHING);
+  });
+
+  it("Task 31b: an ENCODING row whose poll still fails at day 30 is not parked holding its copy — failed, then the next firing removes the copy and parks it", async () => {
+    const w = await world();
+    const e = await toEncoding(w, w.fixtureIds[0], [{}]);
+    const cf = e.ids[0]!;
+    const copy = e.rows[0]!.bunny_video_id!;
+    vi.spyOn(w.host, "video").mockRejectedValue(new Error("bunny video: HTTP 503"));
+    const past = ms(e.rows[0]!.recorded_at)! + 30 * DAY;
+    expect(await move(w, past)).toMatchObject({ failed: 1 });
+    let row = await rowOf(cf);
+    expect([row.state, row.bunny_video_id, row.attempts, ms(row.next_attempt_at)], "failed, its copy still to remove").toEqual(["failed", copy, 1, past + MIN]);
+    await move(w, past + MIN);
+    row = await rowOf(cf);
+    expect([row.state, row.bunny_video_id, ms(row.next_attempt_at)]).toEqual(["failed", null, PARKED]);
+    expect(w.host.videoIds()).not.toContain(copy);
   });
 
   it("re-review N4 (review m3): a database error storing the org's first collection is logged by its step and class alone — no detail, so a connection string it echoes never reaches a log — and the row backs off", async () => {

@@ -130,6 +130,32 @@ describe("replayFailure — every state × a provider that throws gives the same
     }
     expect(checked, "rows").toBe(6);
   });
+
+  // Task 31b (the Task 24 re-review 2 carry): a row parked as `failed` while it still HOLDS a host copy (a failed copy whose removal
+  // failed, or an encoding row parked mid-move) was never due again, so nothing removed the copy — stored and billed for ever. Past
+  // the window such a row is due after the backoff instead, where `failed`'s give_up removes the copy and only then parks it. A
+  // playable row keeps its copy parked (it is the product) and a deleted one keeps its own cleanup's window: both park as before.
+  it("Task 31b: past the window, a row that would park as FAILED while holding a copy is due after the backoff (its copy is removed first); playable and deleted with a copy park as before", () => {
+    const DAY = 24 * 60 * MIN;
+    const PARKED = new Date("9999-12-31T00:00:00.000Z");
+    const at = (state: string) => ({ recordedAt: ago(30 * DAY), ...(state === "deleted" ? { deletedAt: ago(30 * DAY) } : {}) });
+    const EXPECTED: Record<string, { state: string; nextAttemptAt: Date }> = {
+      found: { state: "failed", nextAttemptAt: later(8 * MIN) }, downloading: { state: "failed", nextAttemptAt: later(8 * MIN) },
+      fetching: { state: "failed", nextAttemptAt: later(8 * MIN) }, encoding: { state: "failed", nextAttemptAt: later(8 * MIN) },
+      failed: { state: "failed", nextAttemptAt: later(8 * MIN) },
+      playable: { state: "playable", nextAttemptAt: PARKED }, deleted: { state: "deleted", nextAttemptAt: PARKED },
+    };
+    let checked = 0;
+    for (const state of REPLAY_ROW_STATES) {
+      const held = replayFailureOutcome(row({ state, attempts: 3, bunnyVideoId: "g1", ...at(state) }), NOW);
+      expect(held, `${state} holding a copy`).toEqual({ kind: "give_up", attempts: 4, ...EXPECTED[state] });
+      const none = replayFailureOutcome(row({ state, attempts: 3, bunnyVideoId: null, ...at(state) }), NOW);
+      expect(none.nextAttemptAt, `${state} holding nothing: parked`).toEqual(PARKED);
+      checked += 2;
+    }
+    expect(checked, "states × {holding, not}").toBe(14);
+    expect(Object.keys(EXPECTED).sort(), "PREMISE: the table names every state").toEqual([...REPLAY_ROW_STATES].sort());
+  });
 });
 
 describe("cfDeleteGate — the Cloudflare copy is deleted only at or after verified_at + 60 min, and never without a verification", () => {

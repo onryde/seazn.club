@@ -129,14 +129,21 @@ const KEPT_WHEN_PARKED: ReadonlySet<ReplayRowState> = new Set(["playable", "dele
 
 /** What a failed step leaves on its row (review I2): inside the retry window, the same state and the backoff; past it, the row is
  *  parked at REPLAY_PARKED_AT — as `failed`, or in its own state when that is playable or deleted — so it is never claimed again,
- *  rather than failing a provider call and logging an error every hour for ever. */
+ *  rather than failing a provider call and logging an error every hour for ever.
+ *  EXCEPT a row that would park as `failed` while it still holds a host copy (Task 31b): parked, nothing would ever remove the copy,
+ *  so it is due again after the backoff instead, and `failed`'s give_up removes the copy and only then parks it. A playable row's
+ *  copy is the product, and a deleted row keeps its own cleanup's window: both park as before. */
 export type ReplayFailureOutcome =
   | { kind: "backoff"; state: ReplayRowState; attempts: number; nextAttemptAt: Date }
   | { kind: "give_up"; state: ReplayRowState; attempts: number; nextAttemptAt: Date };
-export function replayFailureOutcome(row: Pick<ReplayRow, "state" | "attempts" | "recordedAt" | "deletedAt" | "stateAt">, now: Date): ReplayFailureOutcome {
+export function replayFailureOutcome(
+  row: Pick<ReplayRow, "state" | "attempts" | "recordedAt" | "deletedAt" | "stateAt" | "bunnyVideoId">, now: Date,
+): ReplayFailureOutcome {
   const f = replayFailure(row, now);
   if (!pastRetryWindow(row, now)) return { kind: "backoff", state: row.state, ...f };
-  return { kind: "give_up", state: KEPT_WHEN_PARKED.has(row.state) ? row.state : "failed", attempts: f.attempts, nextAttemptAt: REPLAY_PARKED_AT };
+  const state = KEPT_WHEN_PARKED.has(row.state) ? row.state : "failed";
+  const copyToRemove = state === "failed" && row.bunnyVideoId !== null;
+  return { kind: "give_up", state, attempts: f.attempts, nextAttemptAt: copyToRemove ? f.nextAttemptAt : REPLAY_PARKED_AT };
 }
 
 /** The title a copy is stored under on the replay host (the plan's form, `seazn:{sessionId}:{cfVideoId}`). Nothing searches the
