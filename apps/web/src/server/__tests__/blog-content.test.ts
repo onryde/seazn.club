@@ -259,7 +259,10 @@ describe("related: slugs planned but not yet written", () => {
     expect(blogRelatedProblems(self, new Set(["related-self"]))).toEqual(["related-self: related 'related-self' is the post itself"]);
   });
   it("the planned list is the approved topic list: kebab slugs, no duplicates, 32 posts after the pilot", () => {
-    expect(BLOG_PLANNED_SLUGS.size, "anti-vacuity: planned slugs").toBe(32);
+    // Blog batch 4: the list shrinks as each batch lands, so the 32 is planned + written (the pilot aside), never a typed remainder.
+    const written = allBlogPosts().filter((p) => p.slug !== "how-standings-points-work");
+    expect(written.every((p) => !BLOG_PLANNED_SLUGS.has(p.slug)), "a written post is no longer planned").toBe(true);
+    expect(BLOG_PLANNED_SLUGS.size + written.length, "anti-vacuity: planned slugs plus written posts").toBe(32);
     for (const s of BLOG_PLANNED_SLUGS) expect(s, s).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
     expect(BLOG_PLANNED_SLUGS.has("how-standings-points-work"), "the pilot is a post, not planned").toBe(false);
   });
