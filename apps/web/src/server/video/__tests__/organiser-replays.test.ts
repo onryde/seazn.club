@@ -456,7 +456,7 @@ describe.skipIf(!HAS_DB)("seaznReplayDownload — the organiser downloads a part
     expect(open).not.toHaveBeenCalled();
   });
 
-  it("T22 m6: a row that reads playable while the host cannot hand the file over (the host's refusal) is a retryable 409, never a 500; any other host failure is not dressed up as one", async () => {
+  it("T22 m6: a row that reads playable while the host cannot hand the file over (the host's refusal) is a retryable 409, never a 500; any other host failure (a timeout, a network fault — review m1) is a clean 503 replay_host_unavailable, never dressed up as the refusal and never quoting the host", async () => {
     const w = await world();
     const row = w.rows[0]!;
     await w.host.remove(row.bunny_video_id!);
@@ -464,11 +464,27 @@ describe.skipIf(!HAS_DB)("seaznReplayDownload — the organiser downloads a part
     expect(err).toBeInstanceOf(HttpError);
     expect((err as HttpError).status).toBe(409);
     expect((err as HttpError).message).not.toContain(row.bunny_video_id!);
-    const boom = new Error("replay host openDownload: request failed before a response");
+    const boom = new Error(`bunny openDownload: no response within 4000 ms (video ${row.bunny_video_id})`);
     vi.spyOn(w.host, "openDownload").mockRejectedValueOnce(boom);
-    expect(await seaznReplayDownload(w.auth, w.f, row.id, { replay: w.host }).then(() => null, (e: unknown) => e)).toBe(boom);
+    const failed = await seaznReplayDownload(w.auth, w.f, row.id, { replay: w.host }).then(() => null, (e: unknown) => e);
+    expect(failed).toBeInstanceOf(HttpError);
+    expect([(failed as HttpError).status, (failed as HttpError).code]).toEqual([503, "replay_host_unavailable"]);
+    expect((failed as HttpError).message, "the host's own words stay in the log").not.toContain(row.bunny_video_id!);
+    expect((failed as HttpError).message).not.toMatch(/bunny|4000/);
     // The refusal itself is the port's typed one (both hosts throw it; replay-bunny.test.ts and replay-fake.test.ts).
     expect(await w.host.openDownload(row.bunny_video_id!).then(() => null, (e: unknown) => e)).toBeInstanceOf(ReplayNotDownloadable);
+  });
+
+  it("review m1: the caller's cancel (the route's request.signal) is handed to the host with the video, so an abandoned download stops pulling from it; none given, none passed", async () => {
+    const w = await world();
+    const row = w.rows[0]!;
+    const open = vi.spyOn(w.host, "openDownload");
+    await seaznReplayDownload(w.auth, w.f, row.id, { replay: w.host });
+    expect(open.mock.calls[0], "EMPTY CASE: no signal").toEqual([row.bunny_video_id, undefined]);
+    const viewer = new AbortController();
+    await seaznReplayDownload(w.auth, w.f, row.id, { replay: w.host, signal: viewer.signal });
+    expect(open.mock.calls[1]![0]).toBe(row.bunny_video_id);
+    expect((open.mock.calls[1] as unknown as [string, AbortSignal | undefined])[1], "the caller's own signal").toBe(viewer.signal);
   });
 
   it("404 for another fixture's, another org's or an unknown part; 403 for anything but an editor's session — and the host is never asked", async () => {

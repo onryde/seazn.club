@@ -48,8 +48,9 @@ export interface ReplayHost {
   /** A short-lived player URL for the video. Pure: it makes no call and does not check that the video exists. */
   signedEmbed(videoId: string, now: Date, ttlSeconds: number): { src: string; expiresAt: string };
   /** The video's file as a stream, for the server to pass on. Never a URL a browser could keep. A video the host will not hand
-   *  over yet throws ReplayNotDownloadable. */
-  openDownload(videoId: string): Promise<ReplayDownload>;
+   *  over yet throws ReplayNotDownloadable. `signal` is the caller's cancel (the download route's request.signal): when it fires,
+   *  before the file starts or while it streams, the host stops sending (Task 26 review m1). */
+  openDownload(videoId: string, signal?: AbortSignal): Promise<ReplayDownload>;
   /** Minutes of the video watched between `from` and `to` (Phase 3). */
   watchMinutes(videoId: string, from: Date, to: Date): Promise<number>;
 }

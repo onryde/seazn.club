@@ -457,3 +457,147 @@ describe("BunnyReplayHost: no secret and no signed token in a message, a record 
     }
   });
 });
+
+// Task 26 review m1 (2026-11-23): the download's CDN GET gives up when its HEADERS do not arrive within the adapter's 4 s
+// (SEAZN_REPLAY_CALL_TIMEOUT_MS, the same deadline as every API call) — and only then: once the headers are in, the deadline is
+// cleared, because a 3 h file streams for as long as the viewer reads it (never AbortSignal.timeout on the whole request). The
+// caller's cancel (the route's request.signal) aborts the CDN request too, before the headers or after, so an abandoned download
+// stops pulling from Bunny. The fake CDN behaves as undici does: an abort before the headers rejects the fetch; an abort after them
+// errors the body.
+describe("BunnyReplayHost: openDownload times out on the headers only, and follows the caller's cancel (review m1)", () => {
+  const DEADLINE_MS = 4_000;
+  type Cdn = { headersAt: number | null; chunks?: [number, string][]; closeAt?: number };
+  function cdnRig(cdn: Cdn) {
+    const enc = new TextEncoder();
+    const upstream: { signal: AbortSignal | null; bodyError: unknown } = { signal: null, bodyError: null };
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).startsWith(API)) {
+        return new Response(JSON.stringify(videoBody({ status: 4, resolutions: "720p" })), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      const signal = init?.signal ?? null;
+      upstream.signal = signal;
+      return new Promise<Response>((resolve, reject) => {
+        const onAbort = () => reject(signal!.reason);
+        if (signal?.aborted) return onAbort();
+        signal?.addEventListener("abort", onAbort, { once: true });
+        if (cdn.headersAt === null) return; // the headers never come
+        setTimeout(() => {
+          signal?.removeEventListener("abort", onAbort);
+          const body = new ReadableStream<Uint8Array>({
+            start(c) {
+              signal?.addEventListener("abort", () => { upstream.bodyError = signal.reason; c.error(signal.reason); }, { once: true });
+              for (const [at, text] of cdn.chunks ?? []) setTimeout(() => { try { c.enqueue(enc.encode(text)); } catch { /* errored */ } }, at - cdn.headersAt!);
+              if (cdn.closeAt !== undefined) setTimeout(() => { try { c.close(); } catch { /* errored */ } }, cdn.closeAt - cdn.headersAt!);
+            },
+          });
+          resolve(new Response(body, { status: 200, headers: { "content-type": "video/mp4" } }));
+        }, cdn.headersAt);
+      });
+    }) as unknown as typeof fetch;
+    const recorder = new FakeRecorder();
+    const host = new BunnyReplayHost(CONFIG, { fetchImpl, recorder, now: () => NOW, videoOrigins: () => ["stg.seazn.club"] });
+    return { host, recorder, upstream };
+  }
+  const settledFlag = (p: Promise<unknown>) => {
+    const s = { done: false, value: undefined as unknown, error: undefined as unknown };
+    p.then((v) => { s.done = true; s.value = v; }, (e: unknown) => { s.done = true; s.error = e; });
+    return s;
+  };
+  const cdnRecord = (r: FakeRecorder) => r.calls.filter((c) => c.operation === "openDownload");
+
+  it("EMPTY CASE FIRST: headers that never arrive — nothing at 3999 ms, then at the adapter's 4 s our own failure, recorded `timeout` with no status, the CDN request aborted, no timer left; no token in the message or the record", async () => {
+    vi.useFakeTimers();
+    try {
+      const { host, recorder, upstream } = cdnRig({ headersAt: null });
+      const s = settledFlag(host.openDownload(GUID));
+      await vi.advanceTimersByTimeAsync(DEADLINE_MS - 1);
+      expect(s.done, "a ms short of the deadline: still waiting").toBe(false);
+      expect(upstream.signal?.aborted, "PREMISE: the CDN was asked, with a signal").toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(s.done).toBe(true);
+      const message = (s.error as Error).message;
+      expect(message).toMatch(/openDownload: no response within 4000 ms/);
+      expect(s.error).not.toBeInstanceOf(ReplayNotDownloadable);
+      expect(upstream.signal?.aborted, "the CDN request is aborted, not left hanging").toBe(true);
+      expect(vi.getTimerCount(), "no timer left behind").toBe(0);
+      await vi.advanceTimersByTimeAsync(0);
+      const rec = cdnRecord(recorder);
+      expect(rec.map((c) => [c.status, c.errorCode])).toEqual([[null, "timeout"]]);
+      for (const text of [message, JSON.stringify(rec)]) {
+        expect(text).not.toMatch(/bcdn_token|expires=/);
+        for (const secret of SECRETS) expect(text).not.toContain(secret);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("headers at 3.9 s, then a body that takes 12 s: every byte arrives — the deadline covered the headers only and was cleared with them", async () => {
+    vi.useFakeTimers();
+    // AbortSignal.timeout runs on a real timer that fake time never reaches: made to run on the fake clock here, so a deadline on
+    // the WHOLE request (the shape review m1 rules out) would cut this body at 4 s and fail the test.
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation((ms: number) => {
+      const c = new AbortController();
+      setTimeout(() => c.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError")), ms);
+      return c.signal;
+    });
+    try {
+      const { host, recorder, upstream } = cdnRig({ headersAt: 3_900, chunks: [[6_000, "one-"], [10_000, "two-"], [11_500, "three"]], closeAt: 12_000 });
+      const opened = settledFlag(host.openDownload(GUID));
+      await vi.advanceTimersByTimeAsync(3_900);
+      expect(opened.done, "PREMISE: the headers came in under the deadline").toBe(true);
+      expect(opened.error).toBeUndefined();
+      const reader = (opened.value as { body: ReadableStream<Uint8Array> }).body.getReader();
+      const dec = new TextDecoder();
+      let text = "";
+      const read = (async () => {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) return;
+          text += dec.decode(value);
+        }
+      })();
+      const finished = settledFlag(read);
+      await vi.advanceTimersByTimeAsync(12_000 - 3_900);
+      expect(finished.error, "the body was never cut").toBeUndefined();
+      expect(finished.done).toBe(true);
+      expect(text).toBe("one-two-three");
+      expect(upstream.signal?.aborted, "nothing aborted the CDN request").toBe(false);
+      expect(upstream.bodyError).toBeNull();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cdnRecord(recorder).map((c) => [c.status, c.errorCode])).toEqual([[200, null]]);
+    } finally {
+      timeout.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("the caller's cancel AFTER the headers aborts the CDN request (its body errors: no more bytes are pulled); BEFORE the headers it rejects at once, recorded `cancelled`, never `timeout`", async () => {
+    vi.useFakeTimers();
+    try {
+      const before = cdnRig({ headersAt: null });
+      const early = new AbortController();
+      const pending = settledFlag(before.host.openDownload(GUID, early.signal));
+      await vi.advanceTimersByTimeAsync(100);
+      early.abort(new Error("the viewer left"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pending.done, "rejected at the cancel, not at the deadline").toBe(true);
+      expect((pending.error as Error).message).toMatch(/openDownload: cancelled before a response/);
+      expect(before.upstream.signal?.aborted).toBe(true);
+      expect(vi.getTimerCount(), "the deadline went with it").toBe(0);
+      expect(cdnRecord(before.recorder).map((c) => [c.status, c.errorCode])).toEqual([[null, "cancelled"]]);
+
+      const after = cdnRig({ headersAt: 10, chunks: [[20, "one-"], [60_000, "never"]], closeAt: 120_000 });
+      const viewer = new AbortController();
+      const opened = settledFlag(after.host.openDownload(GUID, viewer.signal));
+      await vi.advanceTimersByTimeAsync(30);
+      expect(opened.error).toBeUndefined();
+      expect(after.upstream.signal?.aborted, "PREMISE: streaming, not aborted").toBe(false);
+      viewer.abort(new Error("the viewer left"));
+      expect(after.upstream.signal?.aborted, "the viewer's cancel reached the CDN request").toBe(true);
+      expect(after.upstream.bodyError, "and stopped its body").toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

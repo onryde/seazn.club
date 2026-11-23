@@ -70320,7 +70320,7 @@
     },
     "/api/v1/fixtures/{id}/replays/{replayId}/download": {
       "get": {
-        "summary": "Download one PLAYABLE part of the fixture's Seazn replay (an editor's session only) as a `video/mp4` attachment named for the match and the part (`seazn-<home>-v-<away>-part-<n>.mp4`), with its size when the host gives it. The file streams through this route: never a redirect, and no host address or token in any header. 409 replay_not_downloadable for a part that is processing, failed or deleted, or that the video host is not ready to hand over yet (try again later). A viewer is 403, and so is an API key (never key-reachable); an over-quota admin seat 402 and 404 as the delete. Served `Cache-Control: private, no-store`; refusals are the usual JSON envelope",
+        "summary": "Download one PLAYABLE part of the fixture's Seazn replay (an editor's session only) as a `video/mp4` attachment named for the match and the part (`seazn-<home>-v-<away>-part-<n>.mp4`), with its size when the host gives it. The file streams through this route: never a redirect, and no host address or token in any header. 409 replay_not_downloadable for a part that is processing, failed or deleted, or that the video host is not ready to hand over yet (try again later). A viewer is 403, and so is an API key (never key-reachable); an over-quota admin seat 402 and 404 as the delete. 503 replay_host_unavailable when the video host does not start the file (no response within its 4 s, or a network fault): try again. Served `Cache-Control: private, no-store`; refusals are the usual JSON envelope",
         "tags": [
           "fixtures"
         ],
@@ -70598,6 +70598,50 @@
           },
           "409": {
             "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Error",
             "content": {
               "application/json": {
                 "schema": {

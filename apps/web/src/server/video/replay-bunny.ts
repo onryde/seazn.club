@@ -130,8 +130,13 @@ export class BunnyReplayHost implements ReplayHost {
   }
 
   /** The video's tallest rendition at or under 720p, as `play_{h}p.mp4` (B9) under the B5 CDN token, sent with the first
-   *  SEAZN_VIDEO_ORIGINS host as Referer. The CDN's body is answered as it streams in, never buffered here. */
-  async openDownload(videoId: string): Promise<ReplayDownload> {
+   *  SEAZN_VIDEO_ORIGINS host as Referer. The CDN's body is answered as it streams in, never buffered here.
+   *
+   *  Task 26 review m1: the CDN's HEADERS must arrive within SEAZN_REPLAY_CALL_TIMEOUT_MS (4 s, every call's deadline), else the
+   *  request is aborted and recorded `timeout`; once they are in the deadline is cleared, so a 3 h file streams for as long as it
+   *  is read (never AbortSignal.timeout on the whole request). The caller's `cancel` aborts the CDN request at any point — before
+   *  the headers (recorded `cancelled`, not a failure of the host's) or while the body streams. */
+  async openDownload(videoId: string, cancel?: AbortSignal): Promise<ReplayDownload> {
     const v = await this.video(videoId);
     if (v.state !== "playable") throw new ReplayNotDownloadable(videoId, `not playable (${v.state})`);
     if (v.heights.length === 0) throw new ReplayNotDownloadable(videoId, `no rendition at or under ${MAX_HEIGHT}p`);
@@ -146,16 +151,40 @@ export class BunnyReplayHost implements ReplayHost {
     const url = `https://${this.config.cdnHost}/bcdn_token=${token}&expires=${expires}&token_path=${encodeURIComponent(dir)}${dir}${file}`;
     const recorded = `https://${this.config.cdnHost}/[signed]${dir}${file}`;
     const started = Date.now();
+    const upstream = new AbortController();
+    let why: "timeout" | "cancelled" | null = null;
+    const deadline = setTimeout(() => {
+      why = "timeout";
+      upstream.abort(new DOMException("no response headers in time", "TimeoutError"));
+    }, SEAZN_REPLAY_CALL_TIMEOUT_MS);
+    const onCancel = () => {
+      why ??= "cancelled";
+      upstream.abort(cancel?.reason);
+    };
+    // Left attached after the headers on purpose: the caller's cancel must still stop the body from streaming.
+    if (cancel?.aborted) onCancel();
+    else cancel?.addEventListener("abort", onCancel, { once: true });
     let res: Response;
     try {
-      res = await this.fetchImpl(url, { method: "GET", headers: { Referer: `https://${origin}/` } });
+      res = await this.fetchImpl(url, { method: "GET", headers: { Referer: `https://${origin}/` }, signal: upstream.signal });
     } catch {
+      clearTimeout(deadline);
+      cancel?.removeEventListener("abort", onCancel);
       // The fetch error's own text is dropped, not quoted: a network failure can quote the URL, and the URL is the token.
-      this.record("openDownload", "GET", recorded, [videoId], null, videoId, started, "network");
-      throw this.error(`openDownload: request failed before a response (video ${videoId})`);
+      this.record("openDownload", "GET", recorded, [videoId], null, videoId, started, why ?? "network");
+      throw this.error(
+        why === "timeout"
+          ? `openDownload: no response within ${SEAZN_REPLAY_CALL_TIMEOUT_MS} ms (video ${videoId})`
+          : why === "cancelled"
+            ? `openDownload: cancelled before a response (video ${videoId})`
+            : `openDownload: request failed before a response (video ${videoId})`,
+      );
     }
+    // The headers are in: the deadline was for them alone. The body streams for as long as the caller reads it.
+    clearTimeout(deadline);
     this.record("openDownload", "GET", recorded, [videoId], res.status, videoId, started, null);
     if (!res.ok || !res.body) {
+      cancel?.removeEventListener("abort", onCancel);
       await res.body?.cancel().catch(() => undefined);
       throw this.error(`openDownload: HTTP ${res.status} (video ${videoId})`);
     }

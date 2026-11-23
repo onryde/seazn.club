@@ -35,7 +35,8 @@ export async function GET(req: Request, { params }: Ctx) {
       if (err instanceof AuthError && err.message === NOT_A_MEMBER) throw new HttpError(404, "fixture not found");
       throw err;
     }
-    file = await seaznReplayDownload(auth, id, replayId);
+    // Review m1: the request's own signal goes to the host, so a viewer who leaves stops the host's stream too.
+    file = await seaznReplayDownload(auth, id, replayId, { signal: req.signal });
   } catch (err) {
     const refused = await v1(async () => {
       throw err;

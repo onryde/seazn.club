@@ -40,6 +40,9 @@ import { makeUser, seedOrg } from "@/server/usecases/__tests__/_seed";
 import { frozenMemberIds } from "@/server/usecases/entitlement-freeze";
 import { setReplayDriverForTest } from "@/server/video/replay-driver";
 import { FAKE_REPLAY_FILE, FakeReplayHost } from "@/server/video/replay-fake";
+import { BunnyReplayHost } from "@/server/video/replay-bunny";
+import { FakeRecorder } from "@/server/relay/fakes";
+import { SEAZN_REPLAY_CALL_TIMEOUT_MS, type BunnyConfig } from "@/server/relay/config";
 import { movedReplays } from "@/server/video/__tests__/_seazn-replay-rig";
 import { installSeaznEnv, seaznRigFor } from "@/server/video/__tests__/_seazn-session-rig";
 import { GET } from "../route";
@@ -71,6 +74,11 @@ async function organiser() {
   return { host, ownerId: owned.userId!, orgId: owned.orgId, fixtures, playable: m.rows[0]!, processing: m.rows[1]!, names: names! };
 }
 
+/** Fake Bunny settings (never a real key): the adapter under test is the real one, over a fetch that is not. */
+const BUNNY: BunnyConfig = {
+  apiKey: "ZZ-api-key-download-route", readOnlyKey: "ZZ-read-only-download-route", tokenKey: "ZZ-token-key-download-route",
+  libraryId: "424242", cdnHost: "vz-test0001.b-cdn.net",
+};
 const get = (fixtureId: string, replayId: string, headers: Record<string, string> = {}) =>
   GET(new Request(`${BASE}/fixtures/${fixtureId}/replays/${replayId}/download`, { method: "GET", headers }), { params: Promise.resolve({ id: fixtureId, replayId }) });
 const documented = (): string[] =>
@@ -106,6 +114,49 @@ const privateNoStore = (r: Response, label: string) => {
 };
 
 describe.skipIf(!HAS_DB)("GET …/fixtures/{id}/replays/{replayId}/download over HTTP", () => {
+  it("review m1: the video host's CDN never sends its headers — the REAL Bunny adapter gives up at its 4 s and the route answers a clean 503 replay_host_unavailable, private, with no token, address, key or host video id; the failure is recorded `timeout`", async () => {
+    const o = await organiser();
+    const cdn: { signal: AbortSignal | null } = { signal: null };
+    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).startsWith("https://video.bunnycdn.com/")) {
+        return new Response(JSON.stringify({ guid: "g", status: 4, length: 60, availableResolutions: "720p" }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      cdn.signal = init?.signal ?? null;
+      return new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true }));
+    }) as typeof fetch;
+    const recorder = new FakeRecorder();
+    const bunny = new BunnyReplayHost(BUNNY, { fetchImpl, recorder, videoOrigins: () => ["stg.seazn.club"] });
+    setReplayDriverForTest(bunny);
+    const started = Date.now();
+    const res = await get(o.fixtures[0], o.playable.id);
+    const waited = Date.now() - started;
+    expect(waited, "the adapter's own deadline, not sooner").toBeGreaterThanOrEqual(SEAZN_REPLAY_CALL_TIMEOUT_MS - 50);
+    expect(res.status).toBe(503);
+    const raw = await res.text();
+    expect((JSON.parse(raw) as Envelope).error?.code).toBe("replay_host_unavailable");
+    privateNoStore(res, "503");
+    expect(documented()).toContain("503");
+    for (const piece of ["bcdn_token", "expires=", "b-cdn.net", BUNNY.apiKey, BUNNY.readOnlyKey, BUNNY.tokenKey, o.playable.bunny_video_id!]) expect(raw).not.toContain(piece);
+    expect(cdn.signal?.aborted, "the CDN request was aborted, not left open").toBe(true);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(recorder.calls.filter((c) => c.operation === "openDownload").map((c) => [c.status, c.errorCode])).toEqual([[null, "timeout"]]);
+  });
+
+  it("review m1: the viewer's cancel reaches the host — the route hands the host its request's signal, and aborting the request aborts it", async () => {
+    const o = await organiser();
+    const open = vi.spyOn(o.host, "openDownload");
+    const viewer = new AbortController();
+    const res = await GET(new Request(`${BASE}/fixtures/${o.fixtures[0]}/replays/${o.playable.id}/download`, { method: "GET", signal: viewer.signal }), { params: Promise.resolve({ id: o.fixtures[0], replayId: o.playable.id }) });
+    expect(res.status).toBe(200);
+    // The fake's own signature takes no signal (its file is one closed chunk); the port's second argument is read off the call.
+    const handed = (open.mock.calls[0] as unknown as [string, AbortSignal | undefined] | undefined)?.[1];
+    expect(handed, "the host was given a signal").toBeInstanceOf(AbortSignal);
+    expect(handed!.aborted, "PREMISE: not yet").toBe(false);
+    viewer.abort();
+    expect(handed!.aborted, "the viewer's cancel reached the host").toBe(true);
+    await res.body?.cancel().catch(() => undefined);
+  });
+
   it("a FROZEN admin seat (over quota, doc 10 §2.4) is 402 members.max, private, the host never asked — the door's write scope, which the use case's role check does not see; the owner of the same org downloads", async () => {
     const o = await organiser();
     const open = vi.spyOn(o.host, "openDownload");

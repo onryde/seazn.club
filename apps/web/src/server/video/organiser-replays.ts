@@ -103,11 +103,16 @@ export async function fixtureSeaznReplays(orgId: string, fixtureId: string): Pro
 export interface OrganiserReplayDeps {
   now?: Date;
   replay?: ReplayHost;
+  /** The download's cancel (the route's request.signal), handed to the host so an abandoned download stops pulling (review m1). */
+  signal?: AbortSignal;
 }
 
 const REPLAY_NOT_FOUND = "replay not found";
 /** The answer to a download of a part that has no file to give yet (or any more): the panel offers Download on playable parts only. */
 export const REPLAY_NOT_DOWNLOADABLE = "This replay is not ready to download";
+/** The answer when the video host fails to start the file (no headers in its 4 s, a network fault; review m1): retryable, and
+ *  never the host's own words, which name its video. */
+export const REPLAY_HOST_UNAVAILABLE = "The video host did not answer. Try the download again in a moment";
 
 /** An editor (owner or admin) signed in with a session; anything else — an API key, a device link, a Match Day code, a viewer — is
  *  403. The routes' door already asks for an editor; this is the use case's own guard, so a second caller cannot skip it. */
@@ -184,10 +189,12 @@ export async function seaznReplayDownload(auth: AuthCtx, fixtureId: string, repl
   }
   let file;
   try {
-    file = await (deps.replay ?? replayDriver()).openDownload(row.bunny_video_id);
+    file = await (deps.replay ?? replayDriver()).openDownload(row.bunny_video_id, deps.signal);
   } catch (err) {
     if (err instanceof ReplayNotDownloadable) throw new HttpError(409, REPLAY_NOT_DOWNLOADABLE, "replay_not_downloadable");
-    throw err;
+    // The host's own message is redacted by its adapter (no key, no signed URL) and goes to the log; the caller gets a clean 503.
+    log.warn({ replayId, guid: row.bunny_video_id, errClass: err instanceof Error ? err.name : typeof err, detail: err instanceof Error ? err.message : null }, "seazn replay: the host did not start the download");
+    throw new HttpError(503, REPLAY_HOST_UNAVAILABLE, "replay_host_unavailable");
   }
   return { body: file.body, bytes: file.bytes, fileName: replayFileName(row.home ?? "", row.away ?? "", row.part_no) };
 }
