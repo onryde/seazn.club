@@ -4,14 +4,11 @@
 // (Community, Event Pass, Pro) or "platform fee": that figure goes stale on the
 // next pricing change.
 //
-// KNOWN is the conversion backlog: page -> why it still types figures. The
-// billing / registration content tasks delete their own entries as they convert.
-// The sweep fails when
-//   (a) a page types a plan figure and is NOT in KNOWN (a new typed figure), or
-//   (b) a KNOWN page no longer has a typed figure (a stale excuse that would
-//       hide the next regression), or names a page that does not exist.
-// Anti-vacuity: articles are scanned (> 0), the detector's own cases hit and
-// clean, and the KNOWN backlog must be hit by at least one real line.
+// There is no excuse list: every page is converted to tokens, and a page that types a plan
+// figure fails the sweep, whatever page it is. (The KNOWN backlog that used to sit here was
+// emptied and deleted when the billing / registration rewrites finished.)
+// Anti-vacuity: articles are scanned (> 0), and the detector's own cases hit and clean (the end
+// state has zero typed figures, so only those cases prove the detector can still fire).
 //
 // WHAT THE DETECTOR DOES NOT CATCH (it is a line scan, not a reader):
 //  - figures written in words ("five percent", "twelve dollars");
@@ -24,9 +21,9 @@
 // "platform fee" only, but "Pro" is matched as written, so a capitalised "Pro"
 // that is not the plan (a heading, "Pro-rata 50%") hits. Lowercase "pro" never
 // matches, so "pro-rata 50%" in running text is missed, not flagged; if it
-// ever is flagged, add the page to KNOWN with that reason rather than loosen
-// the rule. This guards the plan-price and platform-fee figures a pricing
-// change moves, not every number in help.
+// ever is flagged, reword the page rather than loosen the rule. This guards
+// the plan-price and platform-fee figures a pricing change moves, not every
+// number in help.
 //
 // The second describe block is a different guard on the same seam: a `{{` in
 // help that is not a valid plan token ships as raw text (and its page is
@@ -78,11 +75,8 @@ describe("typedPlanFigureLines: hand-written cases", () => {
   });
 });
 
-/** page -> why it still types a plan figure. Read every hit line before adding or removing one. */
-const KNOWN: Record<string, string> = {};
-
 describe("help articles type no plan figures", () => {
-  it("sweeps every Markdown article; only KNOWN pages type a plan figure, and each still does", () => {
+  it("sweeps every Markdown article; no page types a plan figure", () => {
     const articles = allHelpArticles();
     const hitsByPage = new Map<string, { line: number; text: string }[]>();
     for (const a of articles.values()) {
@@ -91,27 +85,14 @@ describe("help articles type no plan figures", () => {
     }
     const totalLines = [...hitsByPage.values()].reduce((n, h) => n + h.length, 0);
     console.log(
-      `help-no-typed-plan-figures: articles scanned=${articles.size}, pages with typed figures=${hitsByPage.size}, ` +
-        `lines=${totalLines}, KNOWN pages=${Object.keys(KNOWN).length}`,
+      `help-no-typed-plan-figures: articles scanned=${articles.size}, pages with typed figures=${hitsByPage.size}, lines=${totalLines}`,
     );
 
     expect(articles.size, "anti-vacuity: articles scanned").toBeGreaterThan(0);
-    // Hits are required only while KNOWN is non-empty: the end state (every page converted to
-    // tokens) has zero typed figures, and the detector's own hit/clean cases above prove it can fire.
-    if (Object.keys(KNOWN).length > 0) {
-      expect(hitsByPage.size, "anti-vacuity: the KNOWN backlog is hit by real lines").toBeGreaterThan(0);
-    }
 
     const problems: string[] = [];
     for (const [page, hits] of hitsByPage) {
-      if (!(page in KNOWN)) {
-        problems.push(`NEW TYPED FIGURE  ${page}: ${hits.slice(0, 3).map((h) => `L${h.line} '${h.text.slice(0, 70)}'`).join("; ")}`);
-      }
-    }
-    for (const page of Object.keys(KNOWN)) {
-      if (!articles.has(page)) problems.push(`STALE EXCUSE  ${page} is not a help article`);
-      else if (!hitsByPage.has(page)) problems.push(`STALE EXCUSE  ${page} no longer types a plan figure (remove it from KNOWN)`);
-      expect(KNOWN[page]!.length, `reason for ${page}`).toBeGreaterThan(10);
+      problems.push(`TYPED FIGURE  ${page}: ${hits.slice(0, 3).map((h) => `L${h.line} '${h.text.slice(0, 70)}'`).join("; ")}`);
     }
     expect(problems, `\n${problems.join("\n")}\n`).toEqual([]);
   });

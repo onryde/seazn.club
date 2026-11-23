@@ -4,18 +4,16 @@
 // detector; the sweep below runs it over EVERY Markdown help article and over
 // the rendered text of EVERY generated /help/formats page.
 //
-// KNOWN is the cleanup backlog, keyed by section. Each content section's PR
-// deletes its own entries as it cleans them. The sweep fails when
-//   (a) a page leaks and is NOT in KNOWN (a new leak), or
-//   (b) a KNOWN page leaks a rule that is not listed, or lists a rule it no
-//       longer trips (a stale excuse that would hide the next regression).
+// There is no excuse list: a page that leaks any rule fails the sweep, whatever page it is. (The
+// per-section KNOWN backlog that used to sit here was emptied and deleted when the help rewrite
+// closed; a leak found later is fixed in the copy, not listed.)
 // What is scanned: title, description and the body as helpPlainText gives it (inline code
 // included, as readers see it), PLUS fenced code blocks on every page outside
 // content/help/api (readers see those too; the API reference is the developer page).
 // Image alt text and captions are scanned too (pictureText below): a reader sees both, and
 // helpPlainText drops them. They are read from the REAL renderer's output, so what is scanned
-// is what is on the page. No help page carries a picture yet, so the real sweep scans none;
-// the unit case below proves a leak in an alt or a caption is caught.
+// is what is on the page; the sweep logs how many alt/caption strings it read, and the unit case
+// below proves a leak in an alt or a caption is caught.
 // Anti-vacuity: both sources (Markdown, generated formats) must scan > 0 pages
 // and every LEAK_ALLOW entry must have suppressed at least one real hit.
 import { join } from "node:path";
@@ -260,12 +258,8 @@ describe("findLeaks: one positive and one negative per rule", () => {
 // The sweep.
 // ---------------------------------------------------------------------------
 
-/** Generated pages sit under one pseudo-section so KNOWN stays keyed by section. */
+/** Generated pages sit under one pseudo-section so a leak report names it. */
 const FORMATS_PAGES = "formats-pages";
-
-type Known = Record<string, Record<string, LeakRule[]>>;
-/** section -> page -> the rules that page is excused for. Sections delete their own entries. */
-const KNOWN: Known = {};
 
 /** Strip tags from rendered markup; decode the few entities React emits. */
 function htmlToText(html: string): string {
@@ -336,10 +330,9 @@ describe("help copy carries no internal references", () => {
     }
 
     const leaking = scans.filter((s) => s.rules.size > 0);
-    const knownPages = Object.values(KNOWN).reduce((n, s) => n + Object.keys(s).length, 0);
     console.log(
       `help-no-internal-references: markdown pages scanned=${markdownScanned}, ` +
-        `picture alt/caption strings scanned=${picturesScanned}, generated formats pages scanned=${formatsScanned}, leaking pages=${leaking.length}, KNOWN pages=${knownPages}, ` +
+        `picture alt/caption strings scanned=${picturesScanned}, generated formats pages scanned=${formatsScanned}, leaking pages=${leaking.length}, ` +
         `allow-list uses=${JSON.stringify(Object.fromEntries(allowedUsed))}`,
     );
 
@@ -353,30 +346,14 @@ describe("help copy carries no internal references", () => {
     }
 
     const problems: string[] = [];
-    for (const s of scans) {
-      const listed = KNOWN[s.section]?.[s.page];
-      const sample = (rule: LeakRule) =>
-        s.hits
+    for (const s of leaking) {
+      for (const rule of s.rules) {
+        const sample = s.hits
           .filter((h) => h.rule === rule)
           .map((h) => `'${h.match}'`)
           .slice(0, 4)
           .join(", ");
-      if (!listed) {
-        for (const rule of s.rules) problems.push(`NEW LEAK  ${s.section} :: ${s.page} :: ${rule}: ${sample(rule)}`);
-        continue;
-      }
-      for (const rule of s.rules) {
-        if (!listed.includes(rule)) problems.push(`UNLISTED RULE on KNOWN page  ${s.page} :: ${rule}: ${sample(rule)}`);
-      }
-      for (const rule of listed) {
-        if (!s.rules.has(rule)) problems.push(`STALE EXCUSE  ${s.page} no longer trips '${rule}' (remove it from KNOWN)`);
-      }
-    }
-    // A KNOWN entry naming a page that does not exist is also a stale excuse.
-    const scannedKeys = new Set(scans.map((s) => `${s.section}::${s.page}`));
-    for (const [section, pages] of Object.entries(KNOWN)) {
-      for (const page of Object.keys(pages)) {
-        if (!scannedKeys.has(`${section}::${page}`)) problems.push(`STALE EXCUSE  ${section} :: ${page} is not a scanned page`);
+        problems.push(`LEAK  ${s.section} :: ${s.page} :: ${rule}: ${sample}`);
       }
     }
     expect(problems, `\n${problems.join("\n")}\n`).toEqual([]);
