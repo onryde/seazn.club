@@ -32,3 +32,9 @@ The last column says what the table is sorted by first. That is points in most s
 - **A generic division.** A new division starts on the score variant: a win earns {{fact:standings-points.genericWin}}, a draw earns each side {{fact:standings-points.genericDraw}}, and a loss earns {{fact:standings-points.genericLoss}}. The win/loss variant pays {{fact:standings-points.genericWinlossWin}} for a win and {{fact:standings-points.genericWinlossLoss}} for a loss, and has no level result.
 
 Points are one part of a ranking. The last column of the table shows what each sport sorts by first: {{fact:standings-points.footballRankedBy}} in football, and {{fact:standings-points.volleyballRankedBy}} in volleyball, {{fact:standings-points.badmintonRankedBy}} in badminton and {{fact:standings-points.tennisRankedBy}} in tennis.
+
+## Where you set it
+
+A division starts on its sport's own points, and you can change them in the division's Fixtures tab under **Points**. The picture shows a new football division, which pays a win {{fact:standings-points.footballWin}}, a draw {{fact:standings-points.footballDraw}} and a loss {{fact:standings-points.footballLoss}}.
+
+![The Points editor in a new football division's rules, with a win of {{fact:standings-points.footballWin}}, a draw of {{fact:standings-points.footballDraw}} and a loss of {{fact:standings-points.footballLoss}}](/help/blog/how-standings-points-work-1.webp "A new football division starts on {{fact:standings-points.footballWin}} for a win, {{fact:standings-points.footballDraw}} for a draw and {{fact:standings-points.footballLoss}} for a loss, and the Points editor changes them.")
