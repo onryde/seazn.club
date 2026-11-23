@@ -5,6 +5,8 @@ import standingsPoints from "./__golden__/standings-points.json";
 // ---- blog batch 2 (tie-breaks, posts #7 to #12) ----
 import levelOnPoints from "./__golden__/level-on-points.json";
 import threeWayTie from "./__golden__/three-way-tie.json";
+import netRunRate from "./__golden__/net-run-rate.json";
+import setRatioOrDifference from "./__golden__/set-ratio-or-difference.json";
 // ---- end blog batch 2 ----
 import type { ExampleResult } from "./types";
 
@@ -13,5 +15,7 @@ export const BLOG_GOLDENS: Record<string, ExampleResult> = {
   // ---- blog batch 2 ----
   "level-on-points": levelOnPoints as ExampleResult,
   "three-way-tie": threeWayTie as ExampleResult,
+  "net-run-rate": netRunRate as ExampleResult,
+  "set-ratio-or-difference": setRatioOrDifference as ExampleResult,
   // ---- end blog batch 2 ----
 };

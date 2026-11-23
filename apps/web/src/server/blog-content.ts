@@ -38,8 +38,6 @@ export const BLOG_PLANNED_SLUGS: ReadonlySet<string> = new Set([
   "chess-points-and-half-points",
   "why-matches-won-come-first",
   "table-tennis-loss-still-scores",
-  "net-run-rate-explained",
-  "set-ratio-or-set-difference",
   "buchholz-and-sonneborn-berger",
   "when-lots-decide-a-tie",
   "how-swiss-pairing-works",

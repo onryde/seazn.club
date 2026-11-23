@@ -1,0 +1,110 @@
+{
+  "facts": {
+    "anaSetDifference": "2",
+    "anaSetRatio": "1.67",
+    "anaPlaceOwn": "1st",
+    "anaPlaceRatio": "2nd",
+    "benSetDifference": "2",
+    "benSetRatio": "2.00",
+    "benPlaceOwn": "2nd",
+    "benPlaceRatio": "1st",
+    "cySetDifference": "1",
+    "cySetRatio": "1.33",
+    "cyPlaceOwn": "3rd",
+    "cyPlaceRatio": "3rd",
+    "devSetDifference": "-5",
+    "devSetRatio": "0.17",
+    "devPlaceOwn": "4th",
+    "devPlaceRatio": "4th",
+    "levelWins": 2,
+    "anaBeatBen": "2 — 0 · 18–16, 15–2",
+    "ownSplitBy": "head-to-head between the two",
+    "ratioSplitBy": "set ratio",
+    "footballMeasures": "no set or point measure",
+    "cricketMeasures": "no set or point measure",
+    "boardgameMeasures": "no set or point measure",
+    "carromMeasures": "set ratio, then board ratio, then point ratio",
+    "genericMeasures": "no set or point measure",
+    "volleyballMeasures": "set ratio, then point ratio",
+    "badmintonMeasures": "set difference, then point difference",
+    "tabletennisMeasures": "head-to-head set ratio, then head-to-head point ratio",
+    "tennisMeasures": "set ratio, then game ratio",
+    "icehockeyMeasures": "no set or point measure",
+    "hockeyMeasures": "no set or point measure",
+    "sportCount": 11
+  },
+  "table": {
+    "caption": "Ana, Ben and Cy each win two matches. Badminton's set difference puts Ana first; the same results ranked by set ratio put Ben first.",
+    "columns": [
+      "Player",
+      "Matches won",
+      "Sets won",
+      "Sets lost",
+      "Set difference",
+      "Set ratio",
+      "Place, badminton's order",
+      "Place, with set ratio instead"
+    ],
+    "rows": [
+      [
+        "Ana",
+        2,
+        5,
+        3,
+        "2",
+        "1.67",
+        "1st",
+        "2nd"
+      ],
+      [
+        "Ben",
+        2,
+        4,
+        2,
+        "2",
+        "2.00",
+        "2nd",
+        "1st"
+      ],
+      [
+        "Cy",
+        2,
+        4,
+        3,
+        "1",
+        "1.33",
+        "3rd",
+        "3rd"
+      ],
+      [
+        "Dev",
+        0,
+        1,
+        6,
+        "-5",
+        "0.17",
+        "4th",
+        "4th"
+      ]
+    ]
+  },
+  "text": [
+    "Ana 2 — 0 · 18–16, 15–2 Ben.",
+    "Ben 2 — 0 · 18–16, 15–2 Cy.",
+    "Cy 2 — 1 · 8–15, 16–14, 16–14 Ana.",
+    "Ana 2 — 1 · 8–15, 16–14, 16–14 Dev.",
+    "Ben 2 — 0 · 18–16, 15–2 Dev.",
+    "Cy 2 — 0 · 18–16, 15–2 Dev.",
+    "Football: no set or point measure.",
+    "Cricket: no set or point measure.",
+    "Chess: no set or point measure.",
+    "Carrom: set ratio, then board ratio, then point ratio.",
+    "Generic: no set or point measure.",
+    "Volleyball: set ratio, then point ratio.",
+    "Badminton: set difference, then point difference.",
+    "Table tennis: head-to-head set ratio, then head-to-head point ratio.",
+    "Tennis: set ratio, then game ratio.",
+    "Ice hockey: no set or point measure.",
+    "Hockey: no set or point measure."
+  ]
+}

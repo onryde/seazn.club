@@ -4,11 +4,13 @@ import { standingsPoints } from "./standings-points";
 // ---- blog batch 2 (tie-breaks, posts #7 to #12) ----
 import { levelOnPoints } from "./level-on-points";
 import { threeWayTie } from "./three-way-tie";
+import { netRunRate } from "./net-run-rate";
+import { setRatioOrDifference } from "./set-ratio-or-difference";
 // ---- end blog batch 2 ----
 import type { BlogExample } from "./types";
 
 /** Blog batch 2's examples (tie-breaks), in post order. */
-const BATCH_2: readonly BlogExample[] = [levelOnPoints, threeWayTie];
+const BATCH_2: readonly BlogExample[] = [levelOnPoints, threeWayTie, netRunRate, setRatioOrDifference];
 
 export const BLOG_EXAMPLES: readonly BlogExample[] = [standingsPoints, ...BATCH_2];
 
