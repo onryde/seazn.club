@@ -55,7 +55,7 @@ describe("POST /api/v1/public/client-reports: a valid report", () => {
 
   it("every outcome the pipeline can meet answers the same empty 204: the answer never says which (nor whether the fixture exists)", async () => {
     // Keyed by the outcome type, so an outcome added to the pipeline and missing here fails to compile.
-    const every: Record<ClientReportOutcome, true> = { capped: true, unknown: true, "over-budget": true, uncounted: true, logged: true, sent: true };
+    const every: Record<ClientReportOutcome, true> = { capped: true, unknown: true, uncounted: true, logged: true, "over-share": true, "over-budget": true, sent: true };
     const outcomes = Object.keys(every) as ClientReportOutcome[];
     let checked = 0;
     for (const outcome of outcomes) {

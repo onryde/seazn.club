@@ -4,19 +4,24 @@ import "server-only";
 //   1. the client IP's bucket across every kind and subject (CLIENT_REPORT_IP_LIMIT), then the bucket per kind, subject and IP
 //      (CLIENT_REPORT_LIMIT): past either the report is dropped, nothing logged. Both before the database is asked anything;
 //   2. the subject must exist (for a video report, a fixture that streamed to Seazn): otherwise dropped, nothing logged;
-//   3. the kind's Sentry budget (its `sentryBudget`, CLIENT_REPORT_SENTRY_BUDGET by default), across every client: past it the report
-//      is written to stdout ONLY (`unforwardedLine`), so it reaches neither a Sentry event nor Sentry Logs;
-//   4. one `log.warn` per report within the budget (pino: stdout, and Sentry Logs through Sentry.pinoIntegration);
-//   5. one Sentry event (level warning) per kind and dedupe key per window (CLIENT_REPORT_SENTRY_WINDOW_SECONDS), counted in Redis so
-//      every machine shares the window; later ones in the window are logged only.
-// The counters live in Redis. With NO Redis configured (a dev box, e2e) neither the limits nor the counts run, and every report is
-// logged and sent: the house fallback. With Redis configured and NOT answering (an outage: `incrWindow` null), a report is written to
-// stdout only (review m1): an outage must not make every report from anyone a Sentry event.
+//   3. only the FIRST report of its kind and dedupe key per window (CLIENT_REPORT_SENTRY_WINDOW_SECONDS) may reach Sentry; a repeat
+//      is a server-log line only (`unforwardedLine`) and spends nothing (review N1), so one fixture's viewers cannot crowd another
+//      fixture's first report out;
+//   4. the client IP's Sentry share across every kind (CLIENT_REPORT_IP_SENTRY_SHARE): past it, a server-log line only, so one IP
+//      cannot spend the kinds' budgets;
+//   5. the kind's Sentry budget across every client (its `sentryBudget`, CLIENT_REPORT_SENTRY_BUDGET by default): past it, a
+//      server-log line only;
+//   6. then, and only then, ONE `log.warn` (pino: stdout, and Sentry Logs through Sentry.pinoIntegration) and ONE Sentry event (level
+//      warning). So the budget and the share bound Sentry's events AND its Logs exactly.
+// Every counter lives in Redis, shared by every machine. With NO Redis configured (a dev box, e2e) none of them runs, and every
+// report is logged and sent: the house fallback. With Redis configured and NOT answering (an outage: `incrWindow` null), a report is
+// a server-log line only (review m1): an outage must not make every report from anyone a Sentry event.
 // The route answers 204 for every outcome, so it never says which one a report met (nor whether a fixture exists).
 //
 // The body is read with `readCapped` and parsed as JSON whatever its Content-Type: `navigator.sendBeacon` sends a string as
 // `text/plain`. Nothing read here is logged except the kind's own fields, which are codes.
 import * as Sentry from "@sentry/nextjs";
+import pino from "pino";
 import { cacheEnabled, incrWindow } from "@/lib/cache";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
@@ -24,13 +29,17 @@ import { CLIENT_REPORT_IP_LIMIT, CLIENT_REPORT_LIMIT, rateLimit, type RateLimitC
 import { log } from "@/server/logger";
 import { readCapped } from "@/server/relay/record-body";
 import { getRequestContext } from "@/server/request-context";
-import type { ReportDb } from "./define";
+import type { ReportDb, SentryBudget } from "./define";
 import { ClientReport, clientReportKind } from "./kinds";
 
 /** The largest body read. A video report is under 400 bytes; this leaves room for a kind with a few more codes. */
 export const CLIENT_REPORT_MAX_BYTES = 2048;
 /** One Sentry event per kind and dedupe key in this many seconds. */
 export const CLIENT_REPORT_SENTRY_WINDOW_SECONDS = 600;
+/** One client IP's share of Sentry, across every kind (review N1): at most 5 first reports an hour reach Sentry from one IP, a twelfth
+ *  of a kind's default hourly budget, so no single client can spend it. A venue behind one NAT whose viewers all see the same failure
+ *  sends ONE first report per fixture and reason; the rest are repeats, which spend no share. */
+export const CLIENT_REPORT_IP_SENTRY_SHARE: SentryBudget = { max: 5, windowSeconds: 3600 };
 
 const tooLarge = () => new HttpError(413, `a client report is at most ${CLIENT_REPORT_MAX_BYTES} bytes`, "REPORT_TOO_LARGE");
 
@@ -57,10 +66,10 @@ export async function readClientReport(req: Request): Promise<ClientReport> {
   return ClientReport.parse(body);
 }
 
-/** What became of a report: dropped past a limit, dropped for an unknown subject, written to stdout only (past the kind's Sentry
- *  budget, or with Redis configured and giving no count), logged only (a repeat in the window), or logged and sent to Sentry. The
- *  route answers 204 for all six. */
-export type ClientReportOutcome = "capped" | "unknown" | "over-budget" | "uncounted" | "logged" | "sent";
+/** What became of a report: dropped past a limit, dropped for an unknown subject, a server-log line only (with Redis configured and
+ *  giving no count; a repeat in the window, `logged`; past the IP's Sentry share; past the kind's Sentry budget), or logged and sent
+ *  to Sentry. The route answers 204 for all seven. */
+export type ClientReportOutcome = "capped" | "unknown" | "uncounted" | "logged" | "over-share" | "over-budget" | "sent";
 
 /** A limit's verdict: false past it (the limiter's 429, caught: the report is dropped, never refused). */
 async function withinLimit(key: string, cfg: RateLimitConfig): Promise<boolean> {
@@ -73,12 +82,19 @@ async function withinLimit(key: string, cfg: RateLimitConfig): Promise<boolean> 
   }
 }
 
-/** A warn line Sentry never sees: the app's JSON line (pino's level, time and name, the request context), written to stdout DIRECTLY.
- *  Not through pino: Sentry.pinoIntegration() forwards every pino instance's every level to Sentry Logs (sentry.server.config.ts), and
- *  its per-logger opt-out keys on a module-private symbol, so a line kept out of Sentry is one pino never writes. Its fields are the
- *  kind's codes, the only thing a report's line ever holds. */
+type PinoInternals = Record<symbol, unknown>;
+
+/** A warn line Sentry never sees, in the app logger's own line shape (its level and time, its base `pid`/`hostname`/`name` bindings,
+ *  the request context), written into the logger's OWN destination stream: one writer on fd 1, one buffer, one order (review N2).
+ *  Not through pino's serialiser: Sentry.pinoIntegration() listens on that serialiser's tracing channel (`pino_asJson`) and forwards
+ *  every pino line at every level to Sentry Logs (sentry.server.config.ts); its per-logger opt-out keys on a module-private symbol.
+ *  The fields are the kind's codes, the only thing a report's line ever holds, so pino's redaction has nothing to act on. */
 function unforwardedLine(fields: Record<string, unknown>, message: string): void {
-  process.stdout.write(`${JSON.stringify({ level: 40, time: Date.now(), name: "web", ...getRequestContext(), ...fields, msg: message })}\n`);
+  const internals = log as unknown as PinoInternals;
+  const destination = internals[pino.symbols.streamSym] as { write: (chunk: string) => unknown };
+  const bindings = (internals[pino.symbols.chindingsSym] as string | undefined) ?? "";
+  const rest = JSON.stringify({ ...getRequestContext(), ...fields, msg: message }).slice(1);
+  destination.write(`{"level":${log.levels.values.warn},"time":${Date.now()}${bindings},${rest}\n`);
 }
 
 export async function receiveClientReport(report: ClientReport, ip: string, deps: { db?: ReportDb } = {}): Promise<ClientReportOutcome> {
@@ -89,22 +105,20 @@ export async function receiveClientReport(report: ClientReport, ip: string, deps
   if (!(await facts.subjectExists(deps.db ?? sql))) return "unknown";
   const line = { clientReport: report.kind, ...facts.fields };
   const counted = cacheEnabled();
-  const spent = await incrWindow(`client-report-sentry-budget:${report.kind}`, kind.sentryBudget.windowSeconds);
-  if (counted && spent === null) {
-    unforwardedLine({ ...line, clientReportSentry: "uncounted" }, facts.message);
-    return "uncounted";
-  }
-  if (spent !== null && spent.count > kind.sentryBudget.max) {
-    unforwardedLine({ ...line, clientReportSentry: "over-budget" }, facts.message);
-    return "over-budget";
-  }
+  const serverLogOnly = <O extends ClientReportOutcome>(outcome: O, why: string): O => {
+    unforwardedLine({ ...line, clientReportSentry: why }, facts.message);
+    return outcome;
+  };
   const seen = await incrWindow(`client-report-sentry:${report.kind}:${facts.dedupeSubject}`, CLIENT_REPORT_SENTRY_WINDOW_SECONDS);
-  if (counted && seen === null) {
-    unforwardedLine({ ...line, clientReportSentry: "uncounted" }, facts.message);
-    return "uncounted";
-  }
+  if (counted && seen === null) return serverLogOnly("uncounted", "uncounted");
+  if (seen !== null && seen.count > 1) return serverLogOnly("logged", "repeat");
+  const share = await incrWindow(`client-report-sentry-ip:${ip}`, CLIENT_REPORT_IP_SENTRY_SHARE.windowSeconds);
+  if (counted && share === null) return serverLogOnly("uncounted", "uncounted");
+  if (share !== null && share.count > CLIENT_REPORT_IP_SENTRY_SHARE.max) return serverLogOnly("over-share", "over-share");
+  const spent = await incrWindow(`client-report-sentry-budget:${report.kind}`, kind.sentryBudget.windowSeconds);
+  if (counted && spent === null) return serverLogOnly("uncounted", "uncounted");
+  if (spent !== null && spent.count > kind.sentryBudget.max) return serverLogOnly("over-budget", "over-budget");
   log.warn(line, facts.message);
-  if (seen !== null && seen.count > 1) return "logged";
   Sentry.captureMessage(facts.message, { level: "warning", tags: { client_report: report.kind, ...facts.tags }, extra: { ...facts.fields } });
   return "sent";
 }

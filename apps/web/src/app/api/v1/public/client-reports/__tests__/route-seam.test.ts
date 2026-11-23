@@ -24,6 +24,7 @@ vi.mock("@sentry/nextjs", async (orig) => ({
 import { ApiError } from "@/lib/client";
 import { __setRateLimitCounterForTests } from "@/lib/rate-limit";
 import { incrWindow } from "@/lib/cache";
+import pino from "pino";
 import { log } from "@/server/logger";
 import { rigUser } from "@/server/relay/__tests__/_session-rig";
 import { seedOrg, startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
@@ -53,6 +54,8 @@ describe.skipIf(!HAS_DB)("a viewer's failure, from the player's own error to the
 
   let warn: ReturnType<typeof vi.spyOn>;
   const beacons: { url: string; body: string }[] = [];
+  /** What the pipeline wrote into the logger's own destination outside pino's serialiser (its server-log-only lines). */
+  const serverOnly: string[] = [];
   beforeEach(() => {
     counter.clear();
     sentry.messages.length = 0;
@@ -60,11 +63,14 @@ describe.skipIf(!HAS_DB)("a viewer's failure, from the player's own error to the
     __setRateLimitCounterForTests((key, windowSeconds) => incrWindow(key, windowSeconds));
     vi.stubGlobal("navigator", { sendBeacon: (url: string, body: string) => (beacons.push({ url, body }), true) });
     warn = vi.spyOn(log, "warn");
+    serverOnly.length = 0;
+    const destination = (log as unknown as Record<symbol, { write: (s: string) => boolean }>)[pino.symbols.streamSym]!;
+    vi.spyOn(destination, "write").mockImplementation((chunk: string) => (serverOnly.push(String(chunk)), true));
   });
   afterEach(() => {
     __setRateLimitCounterForTests(null);
     vi.unstubAllGlobals();
-    warn.mockRestore();
+    vi.restoreAllMocks();
   });
 
   /** Each recorded beacon, POSTed to the route as the browser sends it: its URL, a text/plain string, the viewer's IP. */
@@ -98,19 +104,20 @@ describe.skipIf(!HAS_DB)("a viewer's failure, from the player's own error to the
     expect(sentry.messages.map((m) => [m.message, (m.context as { level: string }).level])).toEqual([["seazn video: the player gave up", "warning"]]);
     let checked = 0;
     for (const bit of FORBIDDEN) {
-      expect(JSON.stringify([own, sentry.messages, beacons]).includes(bit), `"${bit}" reached the log, the event or the beacon`).toBe(false);
+      expect(JSON.stringify([own, sentry.messages, beacons, serverOnly]).includes(bit), `"${bit}" reached a log line, the event or the beacon`).toBe(false);
       checked++;
     }
     expect(checked).toBe(FORBIDDEN.length);
   });
 
-  it("a failed read of the route, twice, then a second viewer's: one beacon each, two lines, one warning (the window's dedupe)", async () => {
+  it("a failed read of the route, from two page views: one beacon each, one Sentry warning and its line, the repeat a server-log line only", async () => {
     createVideoReporter(beaconVideoReport).route(fixture.id, new ApiError("Request failed (503)", 503));
     createVideoReporter(beaconVideoReport).route(fixture.id, new ApiError("Request failed (503)", 503));
     expect(beacons).toHaveLength(2);
     expect(await deliver()).toEqual([204, 204]);
     const own = warn.mock.calls.filter((c: unknown[]) => c[1] === "seazn video: the video route could not be read");
-    expect(own, "every accepted report is a line").toHaveLength(2);
+    expect(own, "the first report's line, the one Sentry Logs gets").toHaveLength(1);
+    expect(serverOnly.filter((l) => l.includes('"clientReportSentry":"repeat"') && l.includes("the video route could not be read")), "the repeat: a server-log line only").toHaveLength(1);
     expect(sentry.messages, "one warning per fixture and reason in the window").toHaveLength(1);
     expect((sentry.messages[0]!.context as { tags: Record<string, string> }).tags).toEqual({
       client_report: "video", area: "seazn-video", event: "route_read_failed", reason: "http", fixture_id: fixture.id,

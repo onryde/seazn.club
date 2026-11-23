@@ -22,7 +22,7 @@ export const ReportCode = z
 export interface ReportFacts {
   /** The limit's subject: a client's reports are limited per kind, subject and IP (CLIENT_REPORT_LIMIT), and dropped past it. */
   rateSubject: string;
-  /** One Sentry event per kind and this key per window (CLIENT_REPORT_SENTRY_WINDOW_SECONDS); later ones are logged only. */
+  /** One Sentry event per kind and this key per window (CLIENT_REPORT_SENTRY_WINDOW_SECONDS); later ones are a server-log line only and spend no Sentry budget. */
   dedupeSubject: string;
   /** Whether the report is about something that exists and is this kind's to report on. False: dropped, nothing logged. */
   subjectExists: (db: ReportDb) => Promise<boolean>;
@@ -34,16 +34,18 @@ export interface ReportFacts {
   fields: Record<string, string | number | null>;
 }
 
-/** A kind's Sentry budget: at most `max` of its reports reach Sentry (a log line forwarded to Sentry Logs, and the event when it is
- *  the first of its key in the window) per `windowSeconds`, across every client and subject. Past it a report is written to stdout
- *  only. It bounds what any number of IPs naming any number of subjects can spend of the org's Sentry quota. */
+/** A kind's Sentry budget: at most `max` of its reports reach Sentry per `windowSeconds`, across every client and subject. Only a
+ *  report that is the FIRST of its dedupe key in the window spends it (one Sentry Log and one event); a repeat spends nothing. Past
+ *  it a report is a server-log line only. It bounds what any number of IPs naming any number of subjects can spend of the org's
+ *  Sentry quota. */
 export interface SentryBudget {
   max: number;
   windowSeconds: number;
 }
 
-/** The budget a kind gets unless it names its own (review I1: 60 a minute, the public routes' per-IP number, here per KIND). */
-export const CLIENT_REPORT_SENTRY_BUDGET: SentryBudget = { max: 60, windowSeconds: 60 };
+/** The budget a kind gets unless it names its own: 60 first reports an HOUR (review N1: at most 1,440 Sentry events and as many Logs a
+ *  day per kind; first reports only, so a long window costs no real report anything). */
+export const CLIENT_REPORT_SENTRY_BUDGET: SentryBudget = { max: 60, windowSeconds: 3600 };
 
 /** The body schema a kind is: a closed object whose `kind` is its literal name. */
 export type KindSchema = z.ZodObject<{ kind: z.ZodLiteral<string> } & z.ZodRawShape, z.core.$strict>;

@@ -6,7 +6,8 @@
 //   - EMPTY FIRST: a report about an id no fixture has is dropped, nothing logged and nothing sent;
 //   - a fixture that never streamed to Seazn (no session, or only a pasted-key one) is dropped the same way;
 //   - a Seazn fixture's first report is logged once and sent once (level warning, its codes as tags and extras);
-//   - a SECOND report in the window, from any viewer, is logged and not sent; another reason is sent; after the window it is sent again;
+//   - a SECOND report in the window, from any viewer, is a server-log line only (fix round 2: a repeat never reaches Sentry, Logs
+//     included); another reason is sent; after the window it is sent again;
 //   - past the per-IP-and-fixture limit a report is dropped silently; another IP is not; the cap on one fixture does not cap another; it
 //     reopens;
 //   - past the per-IP limit across EVERY fixture (fix round 1, review I1) a report is dropped before its fixture is looked up, on a
@@ -44,6 +45,7 @@ vi.mock("@sentry/nextjs", async (orig) => ({
 import { __setRateLimitCounterForTests, CLIENT_REPORT_IP_LIMIT, CLIENT_REPORT_LIMIT } from "@/lib/rate-limit";
 import { sql } from "@/lib/db";
 import { incrWindow } from "@/lib/cache";
+import pino from "pino";
 import { log } from "@/server/logger";
 import { rigUser } from "@/server/relay/__tests__/_session-rig";
 import { seedOrg, startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
@@ -64,9 +66,14 @@ const route = (fixtureId: string): ClientReport => ClientReport.parse({
   kind: "video", fixtureId, stage: "route", source: null, partNo: null, player: null, reason: "http",
   hlsType: null, hlsDetails: null, httpStatus: 503, mediaCode: null,
 });
-/** The pipeline's own log lines (other code logs too: a rig's Go live). */
+/** The pipeline's own `log.warn` lines, the ones Sentry Logs gets (other code logs too: a rig's Go live). */
 const lines = (warn: ReturnType<typeof vi.spyOn>) =>
   warn.mock.calls.filter((c: unknown[]) => typeof c[1] === "string" && (c[1] as string).startsWith("seazn video:"));
+/** The pipeline's server-log-only lines, written into the logger's own destination (receive.ts `unforwardedLine`), by why. */
+const serverOnly: string[] = [];
+const serverOnlyLines = (why?: string) =>
+  // `clientReportSentry` marks the pipeline's own server-only lines (the spied `log.warn` writes into the same destination too).
+  serverOnly.filter((l) => l.includes('"msg":"seazn video:') && l.includes(`"clientReportSentry":"${why ?? ""}`));
 /** A report's fields as the log line and the event carry them: everything but `kind`. */
 const fields = (r: ClientReport) => Object.fromEntries(Object.entries(r).filter(([k]) => k !== "kind"));
 
@@ -96,10 +103,13 @@ describe.skipIf(!HAS_DB)("receiveClientReport — the video kind, over a real da
     sentry.messages.length = 0;
     __setRateLimitCounterForTests((key, windowSeconds) => incrWindow(key, windowSeconds));
     warn = vi.spyOn(log, "warn");
+    serverOnly.length = 0;
+    const destination = (log as unknown as Record<symbol, { write: (s: string) => boolean }>)[pino.symbols.streamSym]!;
+    vi.spyOn(destination, "write").mockImplementation((chunk: string) => (serverOnly.push(String(chunk)), true));
   });
   afterEach(() => {
     __setRateLimitCounterForTests(null);
-    warn.mockRestore();
+    vi.restoreAllMocks();
   });
 
   it("EMPTY CASE FIRST: a report about an id no fixture has is dropped — nothing logged, nothing sent", async () => {
@@ -134,7 +144,8 @@ describe.skipIf(!HAS_DB)("receiveClientReport — the video kind, over a real da
     expect(await receiveClientReport(player(fx.seazn), IP), "the same reason again").toBe("logged");
     expect(await receiveClientReport(player(fx.seazn, { hlsDetails: "fragLoadError" }), OTHER_IP), "another viewer, the same reason").toBe("logged");
     expect(await receiveClientReport(route(fx.seazn), IP), "another reason: its own event").toBe("sent");
-    expect(lines(warn), "every accepted report is a line").toHaveLength(4);
+    expect(lines(warn), "the two first reports are the Sentry-forwarded lines").toHaveLength(2);
+    expect(serverOnlyLines("repeat"), "the two repeats are server-log lines only").toHaveLength(2);
     expect(sentry.messages.map((m) => [m.message, (m.context as { tags: { reason: string } }).tags.reason])).toEqual([
       ["seazn video: the player gave up", "hls"], ["seazn video: the video route could not be read", "http"],
     ]);
@@ -149,11 +160,11 @@ describe.skipIf(!HAS_DB)("receiveClientReport — the video kind, over a real da
     for (let i = 0; i < CLIENT_REPORT_LIMIT.max; i++) {
       expect(await receiveClientReport(route(fx.seazn), IP), `report ${i + 1} of ${CLIENT_REPORT_LIMIT.max}`).not.toBe("capped");
     }
-    const linesAtCap = lines(warn).length;
+    const linesAtCap = lines(warn).length + serverOnlyLines().length;
     const sentAtCap = sentry.messages.length;
-    expect(linesAtCap, "every report under the cap was logged").toBe(CLIENT_REPORT_LIMIT.max);
+    expect(linesAtCap, "every report under the cap was a line (the first forwarded, the repeats server-only)").toBe(CLIENT_REPORT_LIMIT.max);
     expect(await receiveClientReport(route(fx.seazn), IP), "one past the cap").toBe("capped");
-    expect([lines(warn).length, sentry.messages.length], "dropped: no line, no event").toEqual([linesAtCap, sentAtCap]);
+    expect([lines(warn).length + serverOnlyLines().length, sentry.messages.length], "dropped: no line, no event").toEqual([linesAtCap, sentAtCap]);
     expect(await receiveClientReport(route(fx.seazn), OTHER_IP), "another IP on the same fixture").toBe("logged");
     expect(await receiveClientReport(route(fx.none), IP), "the same IP on another fixture: its own bucket (and unknown)").toBe("unknown");
     clock.now += CLIENT_REPORT_LIMIT.windowSeconds * 1000;
@@ -173,7 +184,7 @@ describe.skipIf(!HAS_DB)("receiveClientReport — the video kind, over a real da
     expect(lookups, "each was looked up").toBe(CLIENT_REPORT_IP_LIMIT.max);
     expect(await receiveClientReport(route(fx.seazn), IP, { db }), "a real Seazn fixture this IP never named").toBe("capped");
     expect(lookups, "and it was not looked up").toBe(CLIENT_REPORT_IP_LIMIT.max);
-    expect([lines(warn).length, sentry.messages.length]).toEqual([0, 0]);
+    expect([lines(warn).length, serverOnlyLines().length, sentry.messages.length]).toEqual([0, 0, 0]);
     expect(await receiveClientReport(route(fx.seazn), OTHER_IP, { db }), "another IP").toBe("sent");
   });
 
