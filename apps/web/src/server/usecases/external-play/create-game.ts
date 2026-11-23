@@ -55,11 +55,15 @@ import "server-only";
 // matching stray before re-creating). Exactly one candidate ⇒ adopt (a
 // challenge is accepted with Black's token); none, with every lookup read ⇒
 // re-create; two, or any candidate that cannot be verified, or any lookup
-// failing ⇒ hold (`create_outcome_unknown`). The lookups run in parallel,
-// then the exports and the stray cancels in parallel; the marker write — or,
-// for an adopted challenge, a renewal before its accept — renews the claim,
-// so no stretch of a claim's life spans more than two Lichess call-times
-// (2 × LICHESS_TIMEOUT_MS < MINT_CLAIM_STALE_MS).
+// failing ⇒ hold (`create_outcome_unknown`). Every Lichess call here is made
+// ONE AT A TIME (Lichess API tips: "Only make one request at a time"): the two
+// lookups, then each export in turn, then each stray cancel. The lookups are
+// the claim's first segment; every later call is preceded by a claim write —
+// a renewal before each export, each cancel and an adopted challenge's accept,
+// or the marker write before a create — so no stretch of a claim's life spans
+// more than two Lichess call-times (2 × LICHESS_TIMEOUT_MS <
+// MINT_CLAIM_STALE_MS). A renewal that finds the claim gone ends the recovery
+// there: the new claimant makes the rest of the calls.
 //
 // A GAME THIS CALL MADE BUT COULD NOT RECORD (its claim lost mid-flight) is
 // cancelled at Lichess, best-effort, with White's token — unless another
@@ -406,6 +410,19 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
   const [claimRow] = claimed;
   if (!claimRow) return { stage: "lost" };
   let claim = claimAt;
+  // THIS call's claim renewed to now, conditional on still holding it — before any Lichess call that would otherwise make a
+  // claim segment longer than two call-times (the header). False: the claim is another claimant's now.
+  const renewClaim = async (): Promise<boolean> => {
+    const renewAt = fixedNow ?? new Date();
+    const renewed = await sql<{ fixture_id: string }[]>`
+      update fixture_external_play set mint_claimed_at = ${renewAt}, updated_at = now()
+       where fixture_id = ${fixtureId} and status = 'pending' and challenge_id is null
+         and mint_claimed_at = ${claim}
+       returning fixture_id`;
+    if (renewed.length === 0) return false;
+    claim = renewAt;
+    return true;
+  };
 
   // Both tokens BEFORE the create: a challenge Black's token cannot accept
   // must never be made. Read here, at the call, so a plaintext token lives
@@ -431,7 +448,8 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
   let accepted = false;
   let sentHere = false;
   if (claimRow.create_sent_at !== null) {
-    const found = await findSentGame(plan, whiteToken, claimRow.create_sent_at, () => fixedNow ?? new Date());
+    const found = await findSentGame(plan, whiteToken, claimRow.create_sent_at, () => fixedNow ?? new Date(), renewClaim);
+    if (found.kind === "lost") return { stage: "lost" };
     if (found.kind === "unknown") {
       const held = await holdForOrganiser(fixtureId, claim, {
         needsReason: "create_outcome_unknown",
@@ -446,17 +464,10 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
     }
     if (found.kind === "challenge") {
       // L1: an open challenge of ours, not yet a game — Black's token accepts
-      // it below. The lookups and the exports have spent two call-times of
-      // this claim and the accept is a third, so it is renewed first; a claim
-      // lost by now accepts nothing (whoever holds it will find the same one).
-      const renewAt = fixedNow ?? new Date();
-      const renewed = await sql<{ fixture_id: string }[]>`
-        update fixture_external_play set mint_claimed_at = ${renewAt}, updated_at = now()
-         where fixture_id = ${fixtureId} and status = 'pending' and challenge_id is null
-           and mint_claimed_at = ${claim}
-         returning fixture_id`;
-      if (renewed.length === 0) return { stage: "lost" };
-      claim = renewAt;
+      // it below. The calls before it may already fill this claim's segment
+      // (two call-times) and the accept is one more, so it is renewed first; a
+      // claim lost by now accepts nothing (whoever holds it will find the same one).
+      if (!(await renewClaim())) return { stage: "lost" };
       gameId = found.id;
     }
   }
@@ -593,7 +604,9 @@ type SentGame =
   | { kind: "none" }
   | { kind: "game"; id: string }
   | { kind: "challenge"; id: string }
-  | { kind: "unknown"; why: string };
+  | { kind: "unknown"; why: string }
+  /** The claim was lost at a renewal between two calls: nothing more is called, nothing written. */
+  | { kind: "lost" };
 
 /** Challenge statuses that are not a live invitation (ChallengeStatus,
  *  lichess-org/api spec): such a challenge can never become this game. */
@@ -670,7 +683,7 @@ function challengeVerdict(c: OutgoingChallenge, plan: CreationPlan): Verdict {
 
 /**
  * I2's lookup: did an earlier claimant's create reach Lichess? Both lists are
- * read with White's token — the challenger's — in parallel, and either one
+ * read with White's token — the challenger's — one after the other, and either one
  * failing (or a page too full to prove absence) is "unknown", never "none":
  * only proof of absence may re-create. A candidate is White's challenge to
  * Black that is still open, or White's ongoing game, as White, against Black;
@@ -678,22 +691,24 @@ function challengeVerdict(c: OutgoingChallenge, plan: CreationPlan): Verdict {
  * and beside another fixture of the same two players with a create out and
  * nothing recorded (N2), nothing is adopted and no stray is cancelled.
  * Each surviving candidate is then VERIFIED (N1): a game through its export
- * (in parallel — one more call-time), a challenge on its own fields and only
+ * (one export at a time, each on a renewed claim), a challenge on its own fields and only
  * inside the window (L1); an id in both lists is the game. Exactly one
  * verified candidate is adopted; two are "unknown" (ambiguous); any candidate
  * that cannot be verified is "unknown" too. A challenge that MATCHES but is
- * listed past the window is a stray, cancelled alongside the exports.
+ * listed past the window is a stray, cancelled after the exports, one at a
+ * time, each on a renewed claim. `renew` answering false (the claim lost) is
+ * `lost`: no further Lichess call.
  */
 async function findSentGame(
   plan: CreationPlan,
   whiteToken: string,
   sentAt: Date,
   clock: () => Date,
+  renew: () => Promise<boolean>,
 ): Promise<SentGame> {
-  const [outgoing, ongoing] = await Promise.all([
-    listOutgoingChallenges(whiteToken),
-    listOngoingGames(whiteToken),
-  ]);
+  // One request at a time (Lichess API tips): the challenges, then the games — both read, whatever the first answers.
+  const outgoing = await listOutgoingChallenges(whiteToken);
+  const ongoing = await listOngoingGames(whiteToken);
   if (!outgoing.ok) return { kind: "unknown", why: `challenge_list:${outgoing.code}: ${outgoing.raw}` };
   if (!ongoing.ok) return { kind: "unknown", why: `ongoing_list:${ongoing.code}: ${ongoing.raw}` };
   if (!ongoing.complete) return { kind: "unknown", why: "ongoing_list:page_full" };
@@ -772,10 +787,17 @@ async function findSentGame(
   }
   const toCancel = peers.length > 0 ? [] : strays;
   const gameIds = [...games];
-  const [metas] = await Promise.all([
-    Promise.all(gameIds.map((id) => exportGameMeta(id))),
-    Promise.all(toCancel.map((id) => cancelStray(plan.fixtureId, id, whiteToken))),
-  ]);
+  // One request at a time: each export in the ongoing list's order (`metas[i]` is `gameIds[i]`'s), then each stray cancel —
+  // every one on a renewed claim, so the serial calls never stretch a claim segment past two call-times (the header).
+  const metas: Array<Awaited<ReturnType<typeof exportGameMeta>>> = [];
+  for (const id of gameIds) {
+    if (!(await renew())) return { kind: "lost" };
+    metas.push(await exportGameMeta(id));
+  }
+  for (const id of toCancel) {
+    if (!(await renew())) return { kind: "lost" };
+    await cancelStray(plan.fixtureId, id, whiteToken);
+  }
   const now = clock();
   const ours: Array<{ id: string; kind: "game" | "challenge" }> = [];
   const unverified: string[] = [];

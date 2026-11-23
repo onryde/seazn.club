@@ -1346,8 +1346,10 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
   const WINDOW_MS = LICHESS_TIMEOUT_MS + LISTED_MS;
 
   it("premise: every claim segment (two Lichess calls) fits inside the stale window, by the declared constants", () => {
-    // The lookups run in parallel (one timeout), and the marker write renews
-    // the claim, so no stretch of a claim's life spans more than two calls.
+    // One request at a time (Lichess API tips): the two lookups are the first
+    // segment, and every later call is preceded by a claim write (a renewal,
+    // the marker write), so no stretch of a claim's life spans more than two
+    // calls ("one Lichess request at a time" below measures it).
     expect(2 * LICHESS_TIMEOUT_MS).toBeLessThan(MINT_CLAIM_STALE_MS);
   });
 
@@ -1586,12 +1588,14 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
     const s = await seed();
     const sent = await crashedAfterSend(s);
     const theirs = freshGameId();
-    exportsAnswer({ [theirs]: ourMeta(theirs, sent) });
-    board.listOngoingGames.mockImplementation(async () => {
+    board.listOngoingGames.mockResolvedValue({ ok: true, complete: true, games: [playing(theirs, s.away.lichessId)] });
+    // Taken DURING the export - after the renewal that precedes it - so it is the ready commit that finds the claim gone.
+    board.exportGameMeta.mockImplementation(async () => {
       await sql`update fixture_external_play set mint_claimed_at = ${new Date(NOW.getTime() + 1_000)} where fixture_id = ${s.fixtureId}`;
-      return { ok: true, complete: true, games: [playing(theirs, s.away.lichessId)] };
+      return { ok: true, meta: ourMeta(theirs, sent) };
     });
     expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: false, reason: "not_ready" });
+    expect(board.exportGameMeta, "premise: verified, so the commit is what lost").toHaveBeenCalledTimes(1);
     expect(board.cancelChallenge, "this call did not make it").not.toHaveBeenCalled();
     expect(board.createChallengeToUser).not.toHaveBeenCalled();
   });
@@ -2235,6 +2239,108 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
       expect(row?.last_error, label).toBe(`recover:recorded_elsewhere:${theirs}`);
       expect((await marker(other.fixtureId))?.challenge_id, `${label}: still the other fixture's`).toBe(theirs);
       expect(board.cancelChallenge, "the other fixture's game is never cancelled").not.toHaveBeenCalled();
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  // ─── One request at a time (Lichess API tips: "Only make one request at a time") ─────────────────────────────────────
+  // The recovery's Lichess calls, each held open for a beat so two calls in parallel WOULD overlap, and each stamped with
+  // the bridge row's `updated_at` as it starts: every claim write (the claim, a renewal) sets it, so calls that share a
+  // stamp ran on ONE claim segment. The segment bound is the stale window's own arithmetic (window.ts): a segment of k
+  // calls lasts up to k × LICHESS_TIMEOUT_MS, and the claim is retaken after MINT_CLAIM_STALE_MS.
+  const MAX_CALLS_PER_SEGMENT = Math.floor((MINT_CLAIM_STALE_MS - 1) / LICHESS_TIMEOUT_MS);
+  type Flight = { inFlight: number; max: number; calls: { name: string; stamp: string }[] };
+  const trackFlights = (fixtureId: string): Flight => {
+    const f: Flight = { inFlight: 0, max: 0, calls: [] };
+    for (const name of ["listOutgoingChallenges", "listOngoingGames", "exportGameMeta", "cancelChallenge", "acceptChallenge", "createChallengeToUser"] as const) {
+      const fn = board[name];
+      const answer = fn.getMockImplementation()!;
+      fn.mockImplementation(async (...args: unknown[]) => {
+        f.inFlight += 1;
+        f.max = Math.max(f.max, f.inFlight);
+        try {
+          const [row] = await sql<{ at: string }[]>`select updated_at::text as at from fixture_external_play where fixture_id = ${fixtureId}`;
+          f.calls.push({ name, stamp: row!.at });
+          await new Promise((r) => setTimeout(r, 15));
+          return await (answer as (...a: unknown[]) => Promise<unknown>)(...args);
+        } finally {
+          f.inFlight -= 1;
+        }
+      });
+    }
+    return f;
+  };
+  /** A recovery with every kind of call in it: White's two lookups, two ongoing games to export, two strays to cancel
+   *  (matching challenges listed PAST the window). The first game's export fails, the second's verifies. */
+  const busyRecovery = async () => {
+    const s = await seed();
+    const sent = await crashedAfterSend(s, WINDOW_MS + 1);
+    const [g1, g2, x1, x2] = [freshGameId(), freshGameId(), freshGameId(), freshGameId()];
+    board.listOngoingGames.mockResolvedValue({ ok: true, complete: true, games: [playing(g1, s.away.lichessId), playing(g2, s.away.lichessId)] });
+    board.listOutgoingChallenges.mockResolvedValue({ ok: true, challenges: [ourChallenge(x1, s), ourChallenge(x2, s)] });
+    exportsAnswer({ [g1]: "fail", [g2]: ourMeta(g2, sent) });
+    return { s, g1, g2, x1, x2 };
+  };
+
+  it("one Lichess request at a time across the whole recovery: lookups, then exports in game order, then stray cancels - same outcome", async () => {
+    const { s, g1, g2, x1, x2 } = await busyRecovery();
+    const flight = trackFlights(s.fixtureId);
+    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: false, reason: "provider_error" });
+    // Anti-vacuity: the recovery made every kind of call, so two of them COULD have overlapped.
+    expect(flight.calls.length, "the recovery's calls").toBe(6);
+    expect(flight.max, "never two Lichess requests in flight").toBe(1);
+    expect(flight.calls.map((c) => c.name)).toEqual(["listOutgoingChallenges", "listOngoingGames", "exportGameMeta", "exportGameMeta", "cancelChallenge", "cancelChallenge"]);
+    expect(board.exportGameMeta.mock.calls.map((c) => c[0]), "exports in the ongoing list's order").toEqual([g1, g2]);
+    expect(board.cancelChallenge.mock.calls.map((c) => (c[0] as { challengeId: string }).challengeId)).toEqual([x1, x2]);
+    // Each export is read against ITS game: the failed one is g1's, so g1 is what stays unverified (never g2).
+    const row = await marker(s.fixtureId);
+    expect(row).toMatchObject({ status: "needs_organiser", needs_reason: "create_outcome_unknown" });
+    expect(row?.last_error).toBe(`recover:unverified: ${g1}`);
+    expect(board.createChallengeToUser).not.toHaveBeenCalled();
+  });
+
+  it("serial calls take longer, so the claim is renewed: no claim segment spans more calls than the stale window allows", async () => {
+    expect(MAX_CALLS_PER_SEGMENT, "premise: the window's own arithmetic").toBe(2);
+    const { s } = await busyRecovery();
+    const flight = trackFlights(s.fixtureId);
+    await createGameIfReady(s.fixtureId, { now: NOW });
+    const perSegment = new Map<string, number>();
+    for (const c of flight.calls) perSegment.set(c.stamp, (perSegment.get(c.stamp) ?? 0) + 1);
+    expect(flight.calls.length, "anti-vacuity: more calls than one segment may hold").toBeGreaterThan(MAX_CALLS_PER_SEGMENT);
+    expect(Math.max(...perSegment.values()), JSON.stringify(flight.calls)).toBeLessThanOrEqual(MAX_CALLS_PER_SEGMENT);
+  });
+
+  it("a claim lost between two serial calls stops the recovery: no further Lichess call, nothing written over the new claimant - whether or not the club is offered a new start", async () => {
+    // Not offered (T20): a recovery still runs (a create already went out), and a lost claim is still `not_ready` - never
+    // `online_chess_disabled`, which is the answer for a club refused a NEW send, not for a claim someone else holds.
+    let checked = 0;
+    for (const offered of [true, false]) {
+      vi.clearAllMocks();
+      board.cancelChallenge.mockResolvedValue({ ok: true });
+      const { s, g1 } = await busyRecovery();
+      const thief = new Date(NOW.getTime() + 1_000);
+      const answer = board.exportGameMeta.getMockImplementation()!;
+      board.exportGameMeta.mockImplementation(async (id: string) => {
+        if (id === g1) await sql`update fixture_external_play set mint_claimed_at = ${thief} where fixture_id = ${s.fixtureId}`;
+        return answer(id);
+      });
+      if (!offered) vi.stubEnv("ONLINE_CHESS_ALWAYS", undefined);
+      forgetOnlineChessFlagCache();
+      try {
+        expect(await createGameIfReady(s.fixtureId, { now: NOW }), `offered=${offered}`).toEqual({ created: false, reason: "not_ready" });
+      } finally {
+        vi.unstubAllEnvs();
+        forgetOnlineChessFlagCache();
+      }
+      expect(board.listOngoingGames, `offered=${offered}: premise, the recovery ran`).toHaveBeenCalledTimes(1);
+      expect(board.exportGameMeta, `offered=${offered}: the second export is the new claimant's to make`).toHaveBeenCalledTimes(1);
+      expect(board.cancelChallenge, `offered=${offered}: no stray cancelled on a lost claim`).not.toHaveBeenCalled();
+      expect(board.createChallengeToUser).not.toHaveBeenCalled();
+      const row = await marker(s.fixtureId);
+      expect(row?.mint_claimed_at?.getTime(), `offered=${offered}: the new claimant's claim stands`).toBe(thief.getTime());
+      expect(row, `offered=${offered}`).toMatchObject({ status: "pending", needs_reason: null, last_error: null });
+      expect(row?.create_sent_at, `offered=${offered}: the marker stays`).not.toBeNull();
       checked += 1;
     }
     expect(checked).toBe(2);
