@@ -51,6 +51,8 @@ import {
   peakPerSecond,
   warningStats,
   poolOf,
+  RUN_FLOOR_MS,
+  runTimeoutMs,
   slowBound,
   stayCosts,
   type BoardCreate,
@@ -146,6 +148,35 @@ describe("boardTimes equals the server's window for every rank (a sweep, counted
   it("refuses a rank that is not a non-negative integer", () => {
     expect(() => boardTimes(0, -1, true)).toThrow(RangeError);
     expect(() => boardTimes(0, 1.5, true)).toThrow(RangeError);
+  });
+});
+
+describe("runTimeoutMs: the run's wall clock grows with the stagger of its biggest division (AGENTS.md #20)", () => {
+  it("is the floor plus where the server puts the LAST board's batch, for every division size up to 256 boards (a sweep, counted)", () => {
+    const opened = new Date("2026-10-15T10:00:00.000Z");
+    let checked = 0;
+    for (let boards = 1; boards <= 256; boards += 1) {
+      // The server's own window: the last board of a staggered round is rank boards - 1.
+      const lastBatchAt = boardAnchor(opened, boards - 1, true).at.getTime() - opened.getTime();
+      expect(runTimeoutMs(boards), `${boards} boards`).toBe(RUN_FLOOR_MS + lastBatchAt);
+      checked += 1;
+    }
+    expect(checked, "division sizes checked").toBe(256);
+  });
+
+  it("hand-counted: 8 boards are one batch (the floor alone); 128 boards are 13 batches, the last 12 gaps of 2 minutes in", () => {
+    expect([CHECKIN_BATCH_SIZE, CHECKIN_BATCH_GAP_MS], "premise: batches of 10, 2 minutes apart").toEqual([10, 120_000]);
+    expect(RUN_FLOOR_MS, "the floor: the flat 30 minutes every run had before").toBe(30 * 60_000);
+    expect(runTimeoutMs(8)).toBe(30 * 60_000);
+    expect(runTimeoutMs(10)).toBe(30 * 60_000);
+    expect(runTimeoutMs(11)).toBe(32 * 60_000);
+    // The 256-board run's two divisions of 128: the flat 30 minutes is what it would have had, and it is not enough.
+    expect(runTimeoutMs(128)).toBe(54 * 60_000);
+  });
+
+  it("refuses a division size that is not a positive integer", () => {
+    expect(() => runTimeoutMs(0)).toThrow(RangeError);
+    expect(() => runTimeoutMs(2.5)).toThrow(RangeError);
   });
 });
 

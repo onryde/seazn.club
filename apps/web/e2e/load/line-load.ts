@@ -80,6 +80,22 @@ export function boardTimes(openedAtMs: number, rank: number, staggered: boolean)
   return { batch, anchorAt, opensAt: batch === 0 ? anchorAt - LINE_LOAD.windowLeadMs : anchorAt, deadlineAt, capAt: deadlineAt + LINE_LOAD.lineGraceMs };
 }
 
+/** The floor of the run's wall clock: seeding, the arrivals, the games, teardown and the evidence wait of a round that opens in one batch.
+ *  It was the run's whole clock (a flat 30 minutes) until a 128-board division needed more. */
+export const RUN_FLOOR_MS = 30 * 60_000;
+
+/** The run's wall clock (the test's timeout) for a run whose biggest division seats `largestDivisionBoards` boards: the floor plus where
+ *  that division's LAST batch starts, (batches - 1) gaps after its first. Everything after a batch opens - its arrivals, its games, the
+ *  teardown and the evidence wait behind the last result - runs from there, so a flat clock is a latent red (AGENTS.md #20): 128 boards
+ *  are 13 batches, the last 24 minutes in - twelve minutes past the 64-board division's, whose real-lila run (45088539154) took 968 s
+ *  after seeding, which puts 128 at about 29.5 of the flat 30 minutes. Derived from the batch constants, so a retuned gap moves it. */
+export function runTimeoutMs(largestDivisionBoards: number): number {
+  if (!Number.isInteger(largestDivisionBoards) || largestDivisionBoards < 1) {
+    throw new RangeError(`a division's board count is a positive integer, got ${largestDivisionBoards}`);
+  }
+  return RUN_FLOOR_MS + boardTimes(0, largestDivisionBoards - 1, true).anchorAt;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────────── late / never-created boards (§5.6.8)
 
 export type BoardCreate = {

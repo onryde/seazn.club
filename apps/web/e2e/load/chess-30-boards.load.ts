@@ -162,6 +162,7 @@ import {
   nettingOwed,
   peakPerSecond,
   poolOf,
+  runTimeoutMs,
   slowBound,
   stayCosts,
   type BoardTimes,
@@ -381,7 +382,8 @@ type Player = {
 };
 
 test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' calls, the latencies, the connections, the sweep", async ({ request }) => {
-  test.setTimeout(30 * 60_000);
+  // The clock grows with the stagger of the biggest division (line-load.ts runTimeoutMs): a flat 30 minutes is about spent at 128 boards a division.
+  test.setTimeout(runTimeoutMs(Math.max(...POLICY_MIX.map((m) => m.boards))));
   const baseURL = test.info().project.use.baseURL!;
   const random = rng(SEED);
 
