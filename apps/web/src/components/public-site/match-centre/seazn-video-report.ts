@@ -86,6 +86,6 @@ export function sentryVideoReport(report: VideoFailureReport): void {
   Sentry.captureMessage(player ? "seazn video: the player gave up" : "seazn video: the video route could not be read", {
     level: "warning",
     tags: { area: "seazn-video", event: player ? "player_fatal" : "route_read_failed", reason: report.reason, fixture_id: report.fixtureId },
-    extra: report,
+    extra: { ...report },
   });
 }
