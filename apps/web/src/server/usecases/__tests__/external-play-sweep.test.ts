@@ -6462,31 +6462,35 @@ describe.runIf(HAS_DB)("T8 - the open-window deferral, the shared call cap and t
 // Job 7 (`close_strays`): its own behaviour is external-play-close-strays.test.ts's; here, only that its failure is listed AND
 // counted like every other job's (N-1), and that the board keeps its place for the next pass.
 describe.runIf(HAS_DB)("close_strays — a cleanup that THROWS is listed and counted, and the next pass finishes it", () => {
-  it("White's token unreadable: one close_strays failure, nothing stamped; the token readable again: no failure, stamped, never asked again", async () => {
+  it("White's token unreadable: one close_strays failure, one failed pass counted, nothing stamped; the token readable again: no failure, stamped, never asked again", async () => {
     const b = await openedBoard({ checkedIn: [] });
-    // LABELLED SQL: T9's marker on the board (a create that may have reached Lichess, nothing recorded, the claim long stale),
-    // then the fixture voided - the state a void mid-create leaves.
-    await sql`update fixture_external_play set create_sent_at = ${b.at(-1)}, mint_claimed_at = ${b.at(-1)} where fixture_id = ${b.fixtureId}`;
+    // LABELLED SQL: T9's marker on the board (a create that may have reached Lichess, nothing recorded), then the fixture
+    // voided - the state a void mid-create leaves. The passes run on one injected instant (`now` = `wallClock`) 31-35 s after
+    // the marker: past its claim, and inside the window in which anything listed could still be our create (close-strays).
+    const sent = b.at(-1).getTime();
+    await sql`update fixture_external_play set create_sent_at = ${new Date(sent)}, mint_claimed_at = ${new Date(sent)} where fixture_id = ${b.fixtureId}`;
     await sql`update fixtures set status = 'cancelled' where id = ${b.fixtureId}`;
     // A ciphertext the key cannot open: getLichessAccessToken's decrypt_failed path, 503 LICHESS_TOKEN_UNAVAILABLE.
     await sql`update user_external_accounts set access_token_enc = ${Buffer.from("not-a-sealed-token")} where user_id = ${b.home.userId}`;
-    const stamped = async () =>
-      (await sql<{ at: Date | null }[]>`select strays_closed_at as at from fixture_external_play where fixture_id = ${b.fixtureId}`)[0]?.at ?? null;
+    const strays = async () =>
+      (await sql<{ reason: string | null; attempts: number }[]>`
+        select strays_closed_reason as reason, strays_attempts as attempts from fixture_external_play where fixture_id = ${b.fixtureId}`)[0];
+    const at = (afterMs: number) => ({ now: new Date(sent + afterMs), wallClock: () => sent + afterMs, orgIds: [b.orgId] });
 
-    const refused = await checkedPass({ now: new Date(), orgIds: [b.orgId] });
+    const refused = await checkedPass(at(31_000));
     expect(refused.bridgesClosed, "premise: job 0 closed the bridge in the same pass").toBe(1);
     expect(refused.failures).toEqual([{ job: "close_strays", fixtureId: b.fixtureId, code: "LICHESS_TOKEN_UNAVAILABLE" }]);
     expect(board.listOutgoingChallenges, "nothing asked without a token").not.toHaveBeenCalled();
-    expect(await stamped(), "owed").toBeNull();
+    expect(await strays(), "owed, one failed pass").toEqual({ reason: null, attempts: 1 });
 
     await reconnectLichess(b.home);
-    const healed = await checkedPass({ now: new Date(), orgIds: [b.orgId] });
+    const healed = await checkedPass(at(33_000));
     expect([healed.failed, healed.straysCancelled]).toEqual([0, 0]);
     expect(board.listOutgoingChallenges, "one listing, with the readable token").toHaveBeenCalledTimes(1);
     expect(board.listOutgoingChallenges).toHaveBeenCalledWith(`lio_reconnect_${b.home.lichessId}`);
-    expect(await stamped(), "done: nothing matching was listed").not.toBeNull();
+    expect(await strays(), "done: nothing matching was listed").toEqual({ reason: "not_listed", attempts: 1 });
 
-    await checkedPass({ now: new Date(), orgIds: [b.orgId] });
+    await checkedPass(at(35_000));
     expect(board.listOutgoingChallenges, "a third pass asks nothing").toHaveBeenCalledTimes(1);
   });
 });

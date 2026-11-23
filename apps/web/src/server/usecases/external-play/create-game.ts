@@ -813,8 +813,10 @@ async function findSentGame(
   // A claim lost at a renewal leaves the strays not yet cancelled, ON PURPOSE (review m6): while the row is still `pending`
   // the claim's new holder runs this same lookup, lists the same strays and cancels them itself — two claimants cancelling
   // side by side is the overlap this serialisation exists to stop. A row that LEFT `pending` (a withdrawal or a void closed
-  // the bridge mid-recovery) has no next holder; its strays — like those of a board withdrawn before any recovery ran —
-  // are the sweep's `close_strays` job's (cancelClosedBoardStrays, below), once this claim has gone stale.
+  // the bridge mid-recovery) has no next holder, and its strays are left open ON PURPOSE (ruling I1, 2026-11-23): they are
+  // matches listed past our window - by L1, somebody's challenge kept alive elsewhere, never ours - and on a closed board
+  // nothing is re-created beside them. The sweep's `close_strays` (cancelClosedBoardStrays, below) cancels only what could
+  // still be our own create; by the time this claim is stale, that is past its window too.
   const metas: Array<Awaited<ReturnType<typeof exportGameMeta>>> = [];
   for (const id of gameIds) {
     if (!(await renew())) return { kind: "lost" };
@@ -865,7 +867,8 @@ async function cancelStray(fixtureId: string, challengeId: string, whiteToken: s
  *  `ids`, those already RECORDED on any bridge row (another fixture's game: never a candidate, never a stray), and the
  *  other fixtures of the same two players with a create IN FLIGHT (N5: the bridge `pending`, the marker set, nothing
  *  recorded, the fixture still playable) — a peer whose challenge cannot be told from this fixture's. Conservative on
- *  purpose (findSentGame's N2 note): any member of either entrant, colours and age unchecked. */
+ *  purpose (findSentGame's N2 note): any member of either entrant, colours and age unchecked. A HELD peer
+ *  (`needs_organiser`) is not in flight (N5) - carried into the closed-board cleanup unchanged; PARKED, rcs-review m5. */
 async function knownElsewhere(
   fixtureId: string,
   whiteLichessId: string,
@@ -899,37 +902,66 @@ async function knownElsewhere(
   };
 }
 
+/** Why the closed-board cleanup stamped a board done (`strays_closed_reason`, V543's CHECK lists exactly these). Done means
+ *  "nothing more THIS job can do", never "nothing of ours is open" - see cancelClosedBoardStrays. */
+export type StraysClosedReason = "cancelled" | "not_listed" | "token_refused" | "no_token" | "unidentifiable" | "gave_up";
+
 /** What the closed-board cleanup did for one board (the sweep's `close_strays`, sweep/close-strays.ts). */
 export type ClosedBoardStrays =
-  /** Nothing more is owed, stamped (`strays_closed_at`): every match cancelled or already over at Lichess, none listed,
-   *  or White's token refused or gone (nothing more can be cancelled with it). */
-  | { kind: "done"; cancelled: number }
-  /** Owed to a later pass, NOT stamped: a 429, an answer that proves nothing (a 5xx, a 404 - lila's 404 cannot be told
-   *  from a 5xx here, so the next pass's listing decides: a gone challenge is not listed), or a same-pair create in flight. */
-  | { kind: "retry"; cancelled: number; why: string }
+  /** Stamped (`strays_closed_at`, `strays_closed_reason`): nothing more this job can do for the board. `cancelled` - every
+   *  match listed inside the window was cancelled or was already over; `not_listed` - none was listed inside it, or the
+   *  board was reached only after it (no call made); `token_refused` / `no_token` - White's token cannot list or cancel;
+   *  `unidentifiable` - nothing to match ours by. NOT a promise that nothing of ours is open (the header's residual). */
+  | { kind: "done"; cancelled: number; reason: StraysClosedReason }
+  /** Owed to a later pass, NOT stamped: a 429 (`rateLimited` - the sweep stops the whole job for the pass), an answer that
+   *  proves nothing (a 5xx, a 404: lila's 404 cannot be told from a 5xx here, so the next pass's listing decides - a gone
+   *  challenge is not listed), or a same-pair create in flight. The sweep counts it and gives up after a bound. */
+  | { kind: "retry"; cancelled: number; why: string; rateLimited: boolean }
   /** The row is no longer a closed board with an unrecorded create and the cleanup owed: nothing done. */
   | { kind: "skipped" };
 
 /**
- * The strays a CLOSED board left at Lichess (review m6; the recovery-clock / strays task, 2026-11-23). A board whose bridge
- * closed (bridge-close: a withdrawal, a void, a result entered elsewhere) while it carried the sent marker and no recorded
- * game is never claimed again, so no recovery cancels what its create left: the dead sender's own challenge, and any stray
- * a recovery that lost its claim to the close was about to cancel. Black can accept any of them, for ever.
+ * The challenges a CLOSED board left at Lichess (review m6; the recovery-clock / strays task, 2026-11-23; fix round 1, I1).
+ * A board whose bridge closed (bridge-close: a withdrawal, a void, a result entered elsewhere) while it carried the sent
+ * marker and no recorded game is never claimed again, so no recovery cancels what its create left.
  *
- * One listing of White's outgoing challenges (White's token — the challenger's, the only one that can cancel), then each one
- * matching THIS fixture's create — to Black, still open, and `challengeVerdict` "ours" — cancelled one at a time (Lichess API
- * tips: no parallel calls). N2 holds here as in the recovery: a challenge recorded on any bridge is never touched, and beside
- * a same-pair create in flight nothing is cancelled (it may be the peer's) and the board waits. There is no claim: the row is
- * finished, which every T9 claim refuses, and the sweep reaches it only once T9's last claim has gone stale
- * (`liveMintClaimSince`) — after the last Lichess call a cut-off recovery could still make. Done is stamped once
- * (`strays_closed_at`), so a later pass never asks Lichess again.
+ * ONLY what could still be our create (controller ruling I1, 2026-11-23): a listed challenge is cancelled only while it can
+ * still be our send by the recovery's OWN rule - L1's window after the marker (`challengeWindowEnd`: LICHESS_TIMEOUT_MS for
+ * the send to land, CHALLENGE_LISTED_MS for it to stay listed), judged on the wall-clock instant of the listing, before the
+ * call. A challenge carries no createdAt (measured absent, T17), so the listing's instant is the only clock it has, exactly
+ * as in the recovery. A match listed later is somebody's challenge kept alive elsewhere - a player's own, or another
+ * fixture's - and is NEVER cancelled here; a board reached after its window is stamped `not_listed` with no call at all,
+ * which also bounds what a first deploy finds (every historical board is past it).
  *
- * The marker is KEPT (bridge-close's ruling: a game MAY exist; M-10's lock and the account-change hold read it). A challenge
- * Black already accepted is a game, out of the outgoing list and out of this cleanup's reach.
+ * THE RESIDUAL, accepted (I1): our own unaccepted challenge leaves the list ~36 s after the send and stays acceptable, while
+ * this job reaches a board only once T9's last claim is stale (30 s after the marker at the earliest, then the next pass).
+ * So it can almost never see our own challenge, and the board is stamped `not_listed` over a challenge Black can still
+ * accept - logged once at warn with its age. Only recording the challenge id the moment the create answers (before the
+ * accept) can close that: rcs-report.md residual 1, owed its own T9 task. With that id this job could cancel the one
+ * challenge that is certainly ours, listed or not.
+ *
+ * Inside the window: one listing of White's outgoing challenges (White's token - the challenger's, the only one that can
+ * cancel), then each match - to Black, still open, `challengeVerdict` "ours" - cancelled one at a time (Lichess API tips: no
+ * parallel calls). A match listed inside the window cannot be told from a lookalike sent in it (N3, as in the recovery).
+ * N2 holds here as in the recovery (`knownElsewhere`): a challenge recorded on any bridge is never touched, and beside a
+ * same-pair create in flight nothing is cancelled and the board waits. N5 is carried over unchanged: a HELD same-pair peer
+ * is not in flight, so its unrecorded challenge can be cancelled here - PARKED (rcs-review m5), its own task.
+ * There is no claim: the row is finished, which every T9 claim refuses, and the sweep reaches it only once T9's last claim
+ * has gone stale (`liveMintClaimSince`), after the last Lichess call a cut-off recovery could still make. The re-read below
+ * does not repeat that fence or the sweep's org scope: both only move one way (no writer re-opens a finished bridge or
+ * renews a claim on one, and a fixture never changes org), so a row the candidate read let through stays let through.
+ *
+ * `clock` is the wall clock (the sweep passes its own); the marker is the wall clock at its write (createAtDequeue).
  */
-export async function cancelClosedBoardStrays(fixtureId: string): Promise<ClosedBoardStrays> {
-  const [row] = await sql<{ orgId: string; homeEntrantId: string | null; awayEntrantId: string | null; config: unknown }[]>`
-    select f.org_id as "orgId", f.home_entrant_id as "homeEntrantId", f.away_entrant_id as "awayEntrantId", d.config
+export async function cancelClosedBoardStrays(
+  fixtureId: string,
+  { clock = () => new Date() }: { clock?: () => Date } = {},
+): Promise<ClosedBoardStrays> {
+  const [row] = await sql<
+    { orgId: string; homeEntrantId: string | null; awayEntrantId: string | null; config: unknown; sentAt: Date }[]
+  >`
+    select f.org_id as "orgId", f.home_entrant_id as "homeEntrantId", f.away_entrant_id as "awayEntrantId", d.config,
+           ep.create_sent_at as "sentAt"
       from fixture_external_play ep
       join fixtures f on f.id = ep.fixture_id
       join divisions d on d.id = f.division_id
@@ -938,15 +970,28 @@ export async function cancelClosedBoardStrays(fixtureId: string): Promise<Closed
        and ep.strays_closed_at is null
        and f.status not in ${sql(PLAYABLE_FIXTURE_STATUSES as string[])}`;
   if (!row) return { kind: "skipped" };
-  const done = async (cancelled: number, why: string): Promise<ClosedBoardStrays> => {
+  const done = async (cancelled: number, reason: StraysClosedReason): Promise<ClosedBoardStrays> => {
     await sql`
-      update fixture_external_play set strays_closed_at = now(), updated_at = now()
+      update fixture_external_play set strays_closed_at = now(), strays_closed_reason = ${reason}, updated_at = now()
        where fixture_id = ${fixtureId} and strays_closed_at is null`;
-    log.info({ fixtureId, cancelled, why }, "lichess: a closed board's strays are closed");
-    return { kind: "done", cancelled };
+    log.info({ fixtureId, cancelled, reason }, "lichess: a closed board's strays are closed");
+    return { kind: "done", cancelled, reason };
   };
+  const notListed = (listedAt: Date, called: boolean) => {
+    log.warn(
+      { fixtureId, ageMs: listedAt.getTime() - row.sentAt.getTime(), called },
+      "lichess: a closed board's create is no longer listed; a challenge of ours may still be acceptable at Lichess",
+    );
+    return done(0, "not_listed");
+  };
+
+  // I1: the listing's instant, read BEFORE anything else - on the wall clock, as the marker is. Past the window nothing
+  // listed can be our send: no call.
+  const listedAt = clock();
+  if (listedAt.getTime() > challengeWindowEnd(row.sentAt)) return notListed(listedAt, false);
+
   // A board with a create sent had both seats; one emptied since leaves no pair to match a challenge against.
-  if (row.homeEntrantId === null || row.awayEntrantId === null) return done(0, "no_pairing");
+  if (row.homeEntrantId === null || row.awayEntrantId === null) return done(0, "unidentifiable");
   const whiteSide = await whiteSideOf({ orgId: row.orgId, fixtureId });
   const { home, away } = await loadSides({ homeEntrantId: row.homeEntrantId, awayEntrantId: row.awayEntrantId });
   const white = whiteSide === "home" ? home : away;
@@ -959,26 +1004,27 @@ export async function cancelClosedBoardStrays(fixtureId: string): Promise<Closed
     return done(0, "unidentifiable");
   }
   const whiteToken = await getLichessAccessToken(white.userId);
-  if (whiteToken === null) return done(0, "white_token_absent");
+  if (whiteToken === null) return done(0, "no_token");
 
   const listed = await listOutgoingChallenges(whiteToken);
   if (!listed.ok) {
-    if (listed.code === "unauthorized") return done(0, "white_token_refused");
-    return { kind: "retry", cancelled: 0, why: `challenge_list:${listed.code}` };
+    if (listed.code === "unauthorized") return done(0, "token_refused");
+    return { kind: "retry", cancelled: 0, why: `challenge_list:${listed.code}`, rateLimited: listed.code === "rate_limited" };
   }
   const plan = { white: { userId: white.userId, lichessId: white.lichess.id }, tc };
   const blackId = black.lichess.id.toLowerCase();
   const matches = listed.challenges
     .filter((c) => c.destUserId?.toLowerCase() === blackId && !CLOSED_CHALLENGE.has(c.status) && challengeVerdict(c, plan) === "ours")
     .map((c) => c.id);
-  if (matches.length === 0) return done(0, "none_listed");
+  if (matches.length === 0) return notListed(listedAt, true);
   const known = await knownElsewhere(fixtureId, white.lichess.id, black.lichess.id, matches);
   if (known.peers.length > 0) {
     log.warn({ fixtureId, matches, peers: known.peers }, "lichess: a closed board's strays may be another fixture's create; left for a later pass");
-    return { kind: "retry", cancelled: 0, why: `peer_in_flight:${known.peers.join(",")}` };
+    return { kind: "retry", cancelled: 0, why: `peer_in_flight:${known.peers.join(",")}`, rateLimited: false };
   }
   const recorded = new Set(known.recorded);
   let cancelled = 0;
+  let over = 0;
   let owed: string | null = null;
   for (const challengeId of matches) {
     if (recorded.has(challengeId)) continue;
@@ -988,12 +1034,20 @@ export async function cancelClosedBoardStrays(fixtureId: string): Promise<Closed
       log.warn({ fixtureId, challengeId }, "lichess: cancelled a challenge a closed board left open");
       continue;
     }
-    if (out.code === "not_your_turn_or_over") continue; // lila: already over - nothing open to cancel
-    if (out.code === "unauthorized") return done(cancelled, "white_token_refused");
+    // lila's M6 400 ("Not your turn, or game already over"): nothing open to cancel. UNMEASURED for a challenge cancel - the
+    // sentence is the Board API's move refusal - so this arm reads it as over only because that is what the words say.
+    if (out.code === "not_your_turn_or_over") {
+      over += 1;
+      continue;
+    }
+    if (out.code === "unauthorized") return done(cancelled, "token_refused");
     owed = `cancel:${challengeId}:${out.code}`;
-    if (out.code === "rate_limited") break; // lila asked us to stop: the rest wait for a later pass
+    // lila asked us to stop: no further call this pass - the rest of this board, and (the sweep) every board after it.
+    if (out.code === "rate_limited") return { kind: "retry", cancelled, why: owed, rateLimited: true };
   }
-  return owed === null ? done(cancelled, "cancelled") : { kind: "retry", cancelled, why: owed };
+  if (owed !== null) return { kind: "retry", cancelled, why: owed, rateLimited: false };
+  // Nothing cancelled and nothing over: every match was another fixture's recorded game, so none of ours was listed.
+  return cancelled + over > 0 ? done(cancelled, "cancelled") : notListed(listedAt, true);
 }
 
 /** Minor b: a game this call created and could not record. Cancel it with

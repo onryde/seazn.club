@@ -34,7 +34,8 @@ import {
   type LichessFixtureServer,
 } from "../../../../e2e/lichess-fixture-server";
 import { createGameIfReady } from "../external-play/create-game";
-import { seedOnlineChessFixture } from "./_external-play-seed";
+import { sweepExternalPlay } from "../external-play/sweep";
+import { NO_PRUNE, NO_WINDOW, seedOnlineChessFixture } from "./_external-play-seed";
 
 const preflight = vi.hoisted(() => ({ seatPlayer: vi.fn() }));
 vi.mock("../external-play/preflight", async (importOriginal) => ({
@@ -212,5 +213,55 @@ describe.skipIf(!HAS_DB)("L1 — a lost create is recovered through the real ada
     expect(fx.calls.find((c) => c.path === `/api/challenge/${stray}/cancel`)?.token).toBe(s.whiteToken);
     expect(fx.game(id)?.status).toBe("started");
     expect(fx.games().filter((g) => g.status === "started").map((g) => g.id), "exactly one game").toEqual([id]);
+  });
+});
+
+// rcs fix round 1, ruling I1: the closed-board cleanup (the sweep's `close_strays`) driven through the REAL adapter against the
+// fixture, whose listing drops an unaccepted challenge at 30 s - inside the measured bracket (+32 s offline, gone by +36 s).
+// The sweep reaches a closed board only once T9's last claim is stale (30 s after the marker), so by then our own challenge is
+// off the list: the board is stamped `not_listed`, nothing is cancelled, and the challenge is STILL acceptable at Lichess. This
+// is the residual the ruling accepts (recording the id the moment the create answers closes it), witnessed rather than assumed.
+describe.skipIf(!HAS_DB)("I1 — close_strays through the real adapter: our own challenge has left the list before the job can look", () => {
+  it("a void 1 s after the send: at +29 s the claim is live and nothing is read; at +31 s one listing (White's token), nothing listed, nothing cancelled - stamped not_listed, the challenge still acceptable", async () => {
+    const s = await seed();
+    // The send, then the marker and its claim a moment later. T9 writes the marker first, but the fixture lists for 30 s from
+    // its OWN stamp of the send, so the marker must not precede it by an unknown seeding delay: with this order, at
+    // marker + 31 s the challenge is at least 31 s old - off the list whatever the machine's load.
+    const ours = await sendLikeTheCrashedMinter(s);
+    await crashedAfterSend(s, 0);
+    const [row] = await sql<{ sent: Date }[]>`select create_sent_at as sent from fixture_external_play where fixture_id = ${s.fixtureId}`;
+    // LABELLED SQL: the organiser voids the board (a cancelled fixture) right after the send.
+    await sql`update fixtures set status = 'cancelled' where id = ${s.fixtureId}`;
+    const sweepAt = async (afterMs: number) => {
+      vi.setSystemTime(row!.sent.getTime() + afterMs); // the fixture's clock and the sweep's, together
+      return sweepExternalPlay({
+        ...NO_PRUNE, ...NO_WINDOW, now: new Date(), orgIds: [s.orgId], serialise: false,
+        reconcile: async () => null, endMeeting: async () => {},
+      });
+    };
+    const strays = async () =>
+      (await sql<{ reason: string | null }[]>`select strays_closed_reason as reason from fixture_external_play where fixture_id = ${s.fixtureId}`)[0]?.reason ?? null;
+    const lookups = (n: number) => fx.calls.slice(n).filter((c) => c.method === "GET" && c.path === "/api/challenge");
+    const cancels = (n: number) => fx.calls.slice(n).filter((c) => /\/cancel$/.test(c.path));
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const mark = fx.calls.length;
+      const early = await sweepAt(MINT_CLAIM_STALE_MS - 1_000);
+      expect(early.failures).toEqual([]);
+      expect(early.bridgesClosed, "premise: job 0 closed the bridge").toBe(1);
+      expect(lookups(mark), "+29 s: the claim is live, the board is not read").toEqual([]);
+      expect(await strays()).toBeNull();
+
+      const late = await sweepAt(MINT_CLAIM_STALE_MS + 1_000);
+      expect(late.failures).toEqual([]);
+      expect(lookups(mark).map((c) => c.token), "+31 s: one listing, with White's token").toEqual([s.whiteToken]);
+      expect(cancels(mark), "nothing listed, so nothing cancelled").toEqual([]);
+      expect(late.straysCancelled).toBe(0);
+      expect(await strays()).toBe("not_listed");
+      expect(fx.game(ours)?.status, "THE RESIDUAL: our challenge is unlisted but still acceptable").toBe("created");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

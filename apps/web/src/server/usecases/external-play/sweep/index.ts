@@ -11,7 +11,8 @@
 //   camera-evidence.ts  job 5: the camera evidence after the match
 //   arbiter-revoke.ts   job 6: the arbiter watches the server removes - split (check-in capacity R5) into `arbiter_revocation`,
 //                       the pass's FIRST job (the safeguarding arms), and `arbiter_revoke` (the TTL and ended-room arms)
-//   close-strays.ts     job 7: the challenges a closed board (withdrawn, voided) left open at Lichess - the last network job
+//   close-strays.ts     job 7: what a closed board's (withdrawn, voided) create may have left open at Lichess, while it could
+//                       still be ours (the recovery's window) - the last network job; its give-up bound
 //   run.ts             the pass: the one-pass-at-a-time lock, runPass, sweepExternalPlay
 export {
   SWEEP_JOBS,
