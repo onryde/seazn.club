@@ -3,7 +3,11 @@
 // a claim must notice, every digit of every printed string is moved on by one and a claim must notice, and the load-bearing
 // claims fail on a result corrupted in the one way each exists to catch. Anti-vacuity: the counts swept are asserted.
 import { describe, expect, it } from "vitest";
+import { builtinModules } from "@seazn/engine/sports";
+import { declaredCfgs } from "@seazn/engine/testkit";
 import { BLOG_EXAMPLES } from "@/blog/examples";
+import { perMatchSpread } from "@/blog/examples/clinched-or-eliminated";
+import { startingVariantKey } from "@/blog/examples/starting-variant";
 import { BLOG_GOLDENS } from "@/blog/examples/goldens";
 import type { ExampleResult } from "@/blog/examples/types";
 
@@ -383,5 +387,19 @@ describe("batch 6: a digit moved on by one in any printed string is caught", () 
     expect(digits, "digits shifted (a golden with no digit in a string is allowed; this reports the count)").toBeGreaterThanOrEqual(0);
     expect(strings).toBeGreaterThanOrEqual(0);
     if (survivors.sort().join("|") !== Object.keys(UNCHECKED_DIGITS).sort().join("|")) expect.fail(`digits no claim reads (each needs a claim, or a reason in UNCHECKED_DIGITS): ${survivors.join(" | ")}`);
+  });
+});
+
+describe("clinched-or-eliminated reads each sport's per-match points under the variant a new division starts on", () => {
+  it("the sweep reads the starting variant of every sport, and the starting variant is not always the first declared one", () => {
+    const { visited, flat, read } = perMatchSpread();
+    expect(visited, "sports swept").toBe(builtinModules.length);
+    expect(flat, "sports with no spread").toEqual([]);
+    expect(read.length, "sports read").toBe(builtinModules.length);
+    // The expected variant is the builder's own pick (starting-variant.ts), not what the sweep says.
+    for (const m of builtinModules) expect(read.find((x) => x.sport === m.key)?.variant, m.key).toBe(startingVariantKey(m));
+    // The case with teeth: a sweep that read the first declared entry (the bare schema default) would read another one for these sports.
+    const differs = builtinModules.filter((m) => declaredCfgs(m)[0]?.name !== startingVariantKey(m)).map((m) => m.key);
+    expect(differs.length, "sports whose first declared variant is not the starting one").toBeGreaterThan(0);
   });
 });

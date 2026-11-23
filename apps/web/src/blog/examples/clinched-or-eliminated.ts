@@ -312,6 +312,27 @@ function statusOf(rows: readonly { team: string; points: number; left: number }[
 
 const labelOf = (s: Status): string => (s.kind === "through" ? DICT["table.qual.status.through"]! : s.kind === "out" ? DICT["table.qual.status.out"]! : s.kind === "help" ? DICT["table.qual.status.needsHelp"]! : s.k === 1 ? DICT["table.qual.status.winK.one"]! : DICT["table.qual.status.winK.other"]!.replace("{count}", String(s.k)));
 
+/**
+ * Every sport's own per-match points spread (`matchPointsBounds`) under one declared variant, and which variant that was: `read`
+ * names it per sport, so a test holds it to the variant a new division starts on. `flat` lists the sports whose win does not pay
+ * more than their loss (a status cannot be read there); `visited` counts the sports swept (zero is a failure for the caller).
+ */
+export function perMatchSpread(): { visited: number; flat: string[]; read: { sport: string; variant: string }[] } {
+  const flat: string[] = [];
+  const read: { sport: string; variant: string }[] = [];
+  const visited = forEachSport(({ key, module: sportModule }) => {
+    // The variant a new division starts on (the builder's own pick), not the first entry of `declaredCfgs`: that one is the bare schema default.
+    const start = startingVariantKey(sportModule);
+    const declared = declaredCfgs(sportModule).find((c) => c.name === start);
+    if (declared === undefined) throw new Error(`clinched-or-eliminated: ${key}: no declared cfg for the starting variant '${start}'`);
+    read.push({ sport: key, variant: declared.name });
+    const parsed = sportModule.configSchema.safeParse(declared.cfg);
+    const b = parsed.success ? sportModule.matchPointsBounds(parsed.data) : null;
+    if (b === null || !(b.max > b.min)) flat.push(key);
+  });
+  return { visited, flat, read };
+}
+
 const claims: Claim[] = [
   {
     says: "each team's points and matches left are what the printed results say: football's declared points for the first rounds, and the matches of the last round still to play",
@@ -531,15 +552,9 @@ const claims: Claim[] = [
   },
   {
     says: "in every sport the rule runs on that sport's own points per match, which pay more for a win than a loss, so a status can be read; and the sport count is the registry's",
-    source: "each sport's own declaration of the points a match can pay under its first declared variant (the module's matchPointsBounds), swept with forEachSport",
+    source: "each sport's own declaration of the points a match can pay under the variant a new division starts on (the module's matchPointsBounds), swept with forEachSport",
     check: guarded((r) => {
-      const flat: string[] = [];
-      const visited = forEachSport(({ key, module: sportModule }) => {
-        const cfg = declaredCfgs(sportModule)[0]?.cfg;
-        const parsed = sportModule.configSchema.safeParse(cfg ?? {});
-        const b = parsed.success ? sportModule.matchPointsBounds(parsed.data) : null;
-        if (b === null || !(b.max > b.min)) flat.push(key);
-      });
+      const { visited, flat } = perMatchSpread();
       if (visited === 0) return "the sweep visited no sport";
       if (flat.length > 0) return `no per-match spread for ${flat.join(", ")}`;
       return Number(r.facts.sportCount) === visited || `sportCount is ${String(r.facts.sportCount)}, the registry has ${visited}`;
