@@ -36,6 +36,9 @@
 // panel still on screen dims (`aria-busy`, opacity .45) until the new document lands. No prefetch: Next 16.3 sends nothing for
 // `router.prefetch` of a same-path `?tab=` URL (measured in the browser), so one here would be an inert seam. The target is
 // built from the division's own `basePath`, never from the address this document was served at.
+//
+// Round 2 (R3): a tap on a panel that IS here while another's document is still loading also goes through the router, so the
+// newest tap wins - a bare toggle would be overwritten by the load landing on top of it.
 import { useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useTabParam } from "./use-tab-param";
@@ -94,12 +97,22 @@ export function Tabs({ ids, labels, label, children, initial = 0, basePath }: Pr
     // stacking history entries would make Back walk the tab bar instead of
     // leaving the division.
     const url = urlOf(i);
+    const target = url.pathname + url.search + url.hash;
     // B3: a panel this document does not carry is loaded from its own URL - `router.replace`, so still no history entry.
     // The panel on screen stays until that document arrives (it opens on the tapped panel), never an empty one; the tapped
     // tab shows it is coming meanwhile (I3).
     if (children[i] == null) {
       setLoading(i);
-      startTransition(() => router.replace(url.pathname + url.search + url.hash, { scroll: false }));
+      startTransition(() => router.replace(target, { scroll: false }));
+      return;
+    }
+    // Round 2 (R3): a panel that IS here, tapped while another's document is still loading. A bare toggle would be overwritten
+    // when that load lands (its URL and its panel win), swallowing this newer tap. So it shows at once, nothing is left saying the
+    // other is on its way, and the router is told too: the later navigation supersedes the pending one, the newest tap wins.
+    if (busy !== null) {
+      setLoading(null);
+      setPicked(i);
+      startTransition(() => router.replace(target, { scroll: false }));
       return;
     }
     setPicked(i);
