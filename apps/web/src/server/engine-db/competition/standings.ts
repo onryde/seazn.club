@@ -229,10 +229,55 @@ export async function stageTablePoints(
   stageId: string,
 ): Promise<{ points: ReadonlyMap<string, number>; rule: PointsRule }> {
   const inputs = await loadStageInputs(tx, stageId);
-  const { tables } = completeTableStage(toTableStage(inputs, await loadLotsDraws(tx, stageId)), inputs.tableFixtures);
+  return { points: tablePointsOf(inputs, await loadLotsDraws(tx, stageId)), rule: inputs.rules.points };
+}
+
+/**
+ * Swiss float history (engine `SwissHistory.floats`; FIDE C.04.3 C14): each entrant's points on the stage's own table as they
+ * stood going INTO each of `rounds` - the score that round's boards were paired on, so the Pair can tell which earlier board
+ * was between different scores (`swissFloatHistory`, usecases/stages/swiss-gen.ts). The same load and the same fold as
+ * `stageTablePoints` (`tablePointsOf`), over the fixtures of the rounds before each one only: one authority for the number,
+ * never a second count of the results. Read-only, like `stageTablePoints` (no lots draw is stored).
+ *
+ * The table is read as it stands now: a result corrected after a later round was paired is read corrected, and a points
+ * adjustment (which names no round) is in every cut. No rounds asked, no read.
+ */
+export async function stageTablePointsBefore(
+  tx: Tx,
+  stageId: string,
+  rounds: readonly number[],
+): Promise<ReadonlyMap<number, ReadonlyMap<string, number>>> {
+  const out = new Map<number, ReadonlyMap<string, number>>();
+  if (rounds.length === 0) return out;
+  const inputs = await loadStageInputs(tx, stageId);
+  const lotsDraws = await loadLotsDraws(tx, stageId);
+  for (const round of new Set(rounds)) out.set(round, tablePointsOf(inputsBeforeRound(inputs, round), lotsDraws));
+  return out;
+}
+
+/** Every entrant's points on the stage's table: the published table's fold (`completeTableStage`), its rows' `points`. */
+function tablePointsOf(inputs: StageInputs, lotsDraws: Awaited<ReturnType<typeof loadLotsDraws>>): Map<string, number> {
+  const { tables } = completeTableStage(toTableStage(inputs, lotsDraws), inputs.tableFixtures);
   const points = new Map<string, number>();
   for (const pool of tables.pools) for (const row of pool.rows) points.set(row.entrantId, row.points);
-  return { points, rule: inputs.rules.points };
+  return points;
+}
+
+/** The stage as it stood before `round`: its fixtures of earlier rounds only, and a declared absence only from an earlier
+ *  round (the engine's map omits an entrant with none). The entrants are kept whole: one seated only later reads 0. */
+function inputsBeforeRound(inputs: StageInputs, round: number): StageInputs {
+  const before = (r: number | null | undefined): boolean => r != null && r < round;
+  const swissAbsentRounds = new Map<string, readonly number[]>();
+  for (const [entrantId, absent] of inputs.swissAbsentRounds) {
+    const earlier = absent.filter(before);
+    if (earlier.length > 0) swissAbsentRounds.set(entrantId, earlier);
+  }
+  return {
+    ...inputs,
+    fixtures: inputs.fixtures.filter((f) => before(f.round_no)),
+    tableFixtures: inputs.tableFixtures.filter((f) => before(f.roundNo)),
+    swissAbsentRounds,
+  };
 }
 
 /**

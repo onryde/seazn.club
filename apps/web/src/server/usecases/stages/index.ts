@@ -77,6 +77,8 @@ export {
   swissActiveEntrants,
   refuseSwissFieldUnderTwo,
   buildSwissHistory,
+  swissFloatHistory,
+  swissFloatRounds,
   swissPairsInColour,
   swissGen,
 } from "./swiss-gen";

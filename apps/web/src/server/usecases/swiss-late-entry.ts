@@ -362,6 +362,8 @@ export async function admitSwissLateEntrant(
           { entrantId: holder, score: 0, rank: 1 },
           { entrantId, score: 0, rank: 2 },
         ],
+        // No `floats`: two entrants on one score are one even group, which floats nobody, so the engine never reads them
+        // here. The round's real Pair (`swissGen`) sends them.
         { played: hist.played, colours: hist.colours, byes: hist.byes },
         { chess },
       );

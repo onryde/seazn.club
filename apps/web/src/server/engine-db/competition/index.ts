@@ -25,6 +25,7 @@ export {
   recomputeStandings,
   rankedStageStandings,
   stageTablePoints,
+  stageTablePointsBefore,
   tableStageCompletable,
 } from "./standings";
 export {
