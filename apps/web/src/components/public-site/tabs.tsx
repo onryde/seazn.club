@@ -91,9 +91,10 @@ export function Tabs({ ids, labels, label, children, initial = 0, basePath }: Pr
       const url = urlOf(i);
       router.prefetch(url.pathname + url.search);
     });
-    // Once per document: a new document is a new mount.
+    // Once per document. Keyed on `initial` too: should a Standings-to-Entrants load keep this instance (the same route, another
+    // param), the new document's absent panels are fetched as well.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [initial]);
 
   function select(i: number) {
     // Put the choice back in the URL so what a spectator shares is what they
