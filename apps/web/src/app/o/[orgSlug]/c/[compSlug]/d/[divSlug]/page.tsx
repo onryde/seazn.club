@@ -1201,6 +1201,8 @@ export default async function DivisionPage({
                 lichessGaps,
                 // FMT5: the Format button and the current format's chip (an editor's; a reader sees neither).
                 format: formatCard,
+                // A plan refusal on a save opens the upgrade gate (cap-256 re-review I-F1).
+                viewerPlan,
               }}
             />
           </>

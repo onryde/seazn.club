@@ -216,6 +216,7 @@ describe("the card's chip names the current format", () => {
       renderToStaticMarkup(
         <DictProvider dict={enUi as Dict} locale="en">
           <DivisionRulesStrip
+            viewerPlan="pro"
             divisionId="d1"
             sportKey={SPORT}
             variantKey={null}

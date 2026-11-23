@@ -242,6 +242,7 @@ describe("the Division rules strip", () => {
   const strip = (m: AnySportModule, canEdit: boolean, tableKinds: TableStageKind[], lockedFields: readonly RefusedField[] = [], onlineChessOffered = false) =>
     html(
       <DivisionRulesStrip
+        viewerPlan="pro"
         divisionId={ID}
         sportKey={m.key}
         variantKey={Object.keys(m.variants)[0] ?? null}
@@ -281,6 +282,7 @@ describe("the Division rules strip", () => {
     const m = SPORTS.find((s) => s.key === "badminton")!; // single-sport: open/closed is sport-blind
     const h = html(
       <DivisionRulesStrip
+        viewerPlan="pro"
         divisionId={ID}
         sportKey={m.key}
         variantKey={null}
@@ -306,6 +308,7 @@ describe("the Division rules strip", () => {
   const summaryOf = (m: AnySportModule, cfg: Record<string, unknown>): string => {
     const h = html(
       <DivisionRulesStrip
+        viewerPlan="pro"
         divisionId={ID}
         sportKey={m.key}
         variantKey={null}

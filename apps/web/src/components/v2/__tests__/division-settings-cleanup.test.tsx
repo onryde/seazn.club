@@ -165,6 +165,7 @@ describe("the pointer to Division rules names online play only where the divisio
       const markup = renderToStaticMarkup(
         <DictProvider dict={enUi as Dict} locale="en">
           <DivisionRulesStrip
+            viewerPlan="pro"
             divisionId="d1"
             sportKey={sportKey}
             variantKey={Object.keys(m.variants)[0] ?? null}
