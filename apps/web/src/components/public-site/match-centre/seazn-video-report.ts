@@ -19,6 +19,7 @@
 // body is the report itself with its `kind`: the same field names the route's closed schema takes, so a code the route would refuse is
 // never sent (seazn-playback.ts drops it to null first).
 import { ApiError } from "@/lib/client";
+import { sendClientReport } from "@/lib/client-report-beacon";
 import { CLIENT_REPORTS_PATH } from "@/lib/client-reports";
 import type { RouteFailureReason } from "@/lib/seazn-video-report-codes";
 import type { VideoClientReport } from "@/server/client-reports/video";
@@ -84,18 +85,9 @@ export function videoReportRequest(report: VideoFailureReport): { url: string; b
   return { url: CLIENT_REPORTS_PATH, body: JSON.stringify(body) };
 }
 
-/** The send: `navigator.sendBeacon` (a string goes as text/plain, which the route reads), else a keepalive `fetch`. Fire and forget: no
- *  answer is read, a failure is swallowed, nothing is retried. */
+/** The send: the shared client-report beacon (lib/client-report-beacon.ts: `navigator.sendBeacon`, else a keepalive `fetch`; fire and
+ *  forget). */
 export function beaconVideoReport(report: VideoFailureReport): void {
   const { url, body } = videoReportRequest(report);
-  try {
-    if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function" && navigator.sendBeacon(url, body)) return;
-  } catch {
-    // A beacon the browser refused outright: the fetch below.
-  }
-  try {
-    void fetch(url, { method: "POST", body, keepalive: true, headers: { "content-type": "application/json" } }).catch(() => undefined);
-  } catch {
-    // No fetch at all: the report is lost, the page is not.
-  }
+  sendClientReport(url, body);
 }

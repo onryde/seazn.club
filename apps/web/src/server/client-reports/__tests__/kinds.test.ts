@@ -20,6 +20,9 @@ const SEEDS: Record<string, unknown> = {
     kind: "video", fixtureId: "8c4f7a52-1f3e-4b9a-9d2c-3e5f6a7b8c9d", stage: "player", source: "live", partNo: null, player: "hls",
     reason: "hls", hlsType: "networkError", hlsDetails: "manifestLoadError", httpStatus: 403, mediaCode: null,
   },
+  "chess-room": {
+    kind: "chess-room", fixtureId: "8c4f7a52-1f3e-4b9a-9d2c-3e5f6a7b8c9d", surface: "player", side: "white", leaveState: "disconnected",
+  },
 };
 
 type Json = { [k: string]: unknown };
@@ -76,8 +79,9 @@ describe("the client-report registry", () => {
         checked++;
       }
     }
-    // The video kind alone: kind, fixtureId, stage, source, player, reason, hlsType, hlsDetails.
-    expect(checked).toBeGreaterThanOrEqual(8);
+    // The video kind: kind, fixtureId, stage, source, player, reason, hlsType, hlsDetails (8); chess-room: kind, fixtureId, surface,
+    // side, leaveState (5).
+    expect(checked).toBeGreaterThanOrEqual(13);
   });
 
   it("a code is a bare word that names no credential, in either case; the client's own check is the same rule", () => {
@@ -103,6 +107,7 @@ describe("the client-report registry", () => {
     }
     expect(checked).toBe(CLIENT_REPORT_KINDS.length);
     expect(clientReportKind("video").sentryBudget, "video names none: the default itself").toBe(CLIENT_REPORT_SENTRY_BUDGET);
+    expect(clientReportKind("chess-room").sentryBudget, "chess-room names none: the default itself").toBe(CLIENT_REPORT_SENTRY_BUDGET);
     const schema = z.strictObject({ kind: z.literal("probe") });
     const facts = () => ({ rateSubject: "s", dedupeSubject: "s", subjectExists: async () => true, message: "m", tags: {}, fields: {} });
     const own = { max: 5, windowSeconds: 30 };
@@ -117,6 +122,11 @@ describe("the client-report registry", () => {
     expect(() => video.facts({ kind: "video" })).toThrow();
     expect(() => video.facts({ ...(SEEDS.video as Json), hlsType: "https://x" })).toThrow();
     expect(video.facts(VideoClientReport.parse(SEEDS.video)).rateSubject).toBe((SEEDS.video as Json).fixtureId);
+    // A body of the OTHER kind is never read as this one's, in either direction.
+    const room = clientReportKind("chess-room");
+    expect(() => room.facts({ kind: "chess-room" })).toThrow();
+    expect(() => room.facts(SEEDS.video)).toThrow();
+    expect(() => video.facts(SEEDS["chess-room"])).toThrow();
     expect(() => clientReportKind("chess")).toThrow(UnknownClientReportKind);
     expect(() => clientReportKind("")).toThrow(UnknownClientReportKind);
   });
