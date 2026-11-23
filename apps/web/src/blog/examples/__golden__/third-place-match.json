@@ -1,0 +1,190 @@
+{
+  "facts": {
+    "semiLoserA": "Cy",
+    "semiLoserB": "Dev",
+    "sharedPlace": "3rd",
+    "nextPlaceAfterShared": "5th",
+    "playoffWinner": "Dev",
+    "playoffWinnerPlace": "3rd",
+    "playoffLoser": "Cy",
+    "playoffLoserPlace": "4th",
+    "matchesShared": 7,
+    "matchesPlayoff": 8,
+    "smallestPlayoffField": 4,
+    "players": 8,
+    "sportsOffered": 11,
+    "sportCount": 11
+  },
+  "table": {
+    "caption": "The same 8-player knockout, played twice with the same results: once with third place shared, once with a third-place match that the lower seed wins.",
+    "columns": [
+      "Player (seed)",
+      "Knocked out in",
+      "Place, third shared",
+      "Place, with a third-place match"
+    ],
+    "rows": [
+      [
+        "Ana (1)",
+        "Won the final",
+        "1st",
+        "1st"
+      ],
+      [
+        "Ben (2)",
+        "Final",
+        "2nd",
+        "2nd"
+      ],
+      [
+        "Cy (3)",
+        "Semi-finals",
+        "3rd",
+        "4th"
+      ],
+      [
+        "Dev (4)",
+        "Semi-finals",
+        "3rd",
+        "3rd"
+      ],
+      [
+        "Eli (5)",
+        "Quarter-finals",
+        "5th",
+        "5th"
+      ],
+      [
+        "Fay (6)",
+        "Quarter-finals",
+        "6th",
+        "6th"
+      ],
+      [
+        "Gus (7)",
+        "Quarter-finals",
+        "7th",
+        "7th"
+      ],
+      [
+        "Hal (8)",
+        "Quarter-finals",
+        "8th",
+        "8th"
+      ]
+    ]
+  },
+  "diagram": {
+    "kind": "bracket",
+    "title": "With a third-place match, Dev and Cy, who both lost their semi-finals, play each other once more. Dev, the lower seed, wins it and is placed 3rd, and Cy is placed 4th. Without the match, both would share 3rd.",
+    "rounds": [
+      {
+        "name": "Quarter-finals",
+        "matches": [
+          {
+            "id": "se-r0-i0",
+            "home": "Ana (1)",
+            "away": "Hal (8)",
+            "winner": "Ana (1)",
+            "label": "Quarter-finals"
+          },
+          {
+            "id": "se-r0-i1",
+            "home": "Eli (5)",
+            "away": "Dev (4)",
+            "winner": "Dev (4)",
+            "label": "Quarter-finals"
+          },
+          {
+            "id": "se-r0-i2",
+            "home": "Cy (3)",
+            "away": "Fay (6)",
+            "winner": "Cy (3)",
+            "label": "Quarter-finals"
+          },
+          {
+            "id": "se-r0-i3",
+            "home": "Gus (7)",
+            "away": "Ben (2)",
+            "winner": "Ben (2)",
+            "label": "Quarter-finals"
+          }
+        ]
+      },
+      {
+        "name": "Semi-finals",
+        "matches": [
+          {
+            "id": "se-r1-i0",
+            "home": "Ana (1)",
+            "away": "Dev (4)",
+            "winner": "Ana (1)",
+            "label": "Semi-finals",
+            "homeFrom": {
+              "id": "se-r0-i0",
+              "side": "winner"
+            },
+            "awayFrom": {
+              "id": "se-r0-i1",
+              "side": "winner"
+            }
+          },
+          {
+            "id": "se-r1-i1",
+            "home": "Cy (3)",
+            "away": "Ben (2)",
+            "winner": "Ben (2)",
+            "label": "Semi-finals",
+            "homeFrom": {
+              "id": "se-r0-i2",
+              "side": "winner"
+            },
+            "awayFrom": {
+              "id": "se-r0-i3",
+              "side": "winner"
+            }
+          }
+        ]
+      },
+      {
+        "name": "Final / Third place",
+        "matches": [
+          {
+            "id": "se-r2-i0",
+            "home": "Ana (1)",
+            "away": "Ben (2)",
+            "winner": "Ana (1)",
+            "label": "Final",
+            "homeFrom": {
+              "id": "se-r1-i0",
+              "side": "winner"
+            },
+            "awayFrom": {
+              "id": "se-r1-i1",
+              "side": "winner"
+            }
+          },
+          {
+            "id": "se-3p",
+            "home": "Dev (4)",
+            "away": "Cy (3)",
+            "winner": "Dev (4)",
+            "label": "Third place",
+            "homeFrom": {
+              "id": "se-r1-i0",
+              "side": "loser"
+            },
+            "awayFrom": {
+              "id": "se-r1-i1",
+              "side": "loser"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "text": [
+    "Fields of 2, 3 players are refused a third-place match.",
+    "The third-place match is Dev against Cy."
+  ]
+}

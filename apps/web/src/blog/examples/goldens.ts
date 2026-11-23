@@ -8,6 +8,20 @@ import shootoutPoints from "./__golden__/shootout-points.json";
 import standingsPoints from "./__golden__/standings-points.json";
 import tableTennisLoss from "./__golden__/table-tennis-loss.json";
 import type { ExampleResult } from "./types";
+// --- blog batch 4 (knockouts) ---
+import thirdPlaceMatch from "./__golden__/third-place-match.json";
+import knockoutMatchEndsLevel from "./__golden__/knockout-match-ends-level.json";
+import pagePlayoffAndStepladder from "./__golden__/page-playoff-and-stepladder.json";
+import doubleEliminationExplained from "./__golden__/double-elimination-explained.json";
+import whatIsAPlate from "./__golden__/what-is-a-plate.json";
+const BATCH_4: Record<string, ExampleResult> = {
+  "third-place-match": thirdPlaceMatch as ExampleResult,
+  "knockout-match-ends-level": knockoutMatchEndsLevel as ExampleResult,
+  "page-playoff-and-stepladder": pagePlayoffAndStepladder as ExampleResult,
+  "double-elimination-explained": doubleEliminationExplained as ExampleResult,
+  "what-is-a-plate": whatIsAPlate as ExampleResult,
+};
+// --- end blog batch 4 ---
 
 export const BLOG_GOLDENS: Record<string, ExampleResult> = {
   "chess-points": chessPoints as ExampleResult,
@@ -16,4 +30,5 @@ export const BLOG_GOLDENS: Record<string, ExampleResult> = {
   "shootout-points": shootoutPoints as ExampleResult,
   "standings-points": standingsPoints as ExampleResult,
   "table-tennis-loss": tableTennisLoss as ExampleResult,
+  ...BATCH_4,
 };

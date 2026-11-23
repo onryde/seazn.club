@@ -1,0 +1,241 @@
+// Blog batch 4 (knockouts): the claims of the five examples have teeth. Each test corrupts the committed golden the way a
+// wrong rule would and asserts that a claim notices, and that the untouched golden passes. The harness itself
+// (regenerate, every claim passes, leak scan) is blog-examples.test.ts; this file proves those claims are not decoration.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { builtinModules } from "@seazn/engine/sports";
+import { forEachSport } from "@seazn/engine/testkit";
+import { blogExample } from "@/blog/examples";
+import { BLOG_GOLDENS } from "@/blog/examples/goldens";
+import type { ExampleResult } from "@/blog/examples/types";
+import { sportLabel } from "@/blog/labels";
+import { FORFEIT_REASONS } from "@seazn/engine/core";
+import { appDraw, betterSeedWins, forfeitOutClaim, playBracket } from "@/blog/examples/bracket-play-b4";
+
+const B4 = ["third-place-match", "knockout-match-ends-level", "page-playoff-and-stepladder", "double-elimination-explained", "what-is-a-plate"];
+
+function failing(id: string, r: ExampleResult): string[] {
+  return blogExample(id)!.claims.filter((c) => c.check(r) !== true).map((c) => c.says);
+}
+function mutate(id: string, f: (r: ExampleResult) => void): ExampleResult {
+  const r = structuredClone(BLOG_GOLDENS[id]!);
+  f(r);
+  return r;
+}
+const rowWhere = (r: ExampleResult, col: number, value: string) => r.table!.rows.find((row) => String(row[col]) === value || String(row[col]).startsWith(`${value} (`))!;
+
+describe("batch 4 examples are registered, pass on their goldens, and say why they are 'all'", () => {
+  it("each is registered with claims, sweeps every sport, and passes", () => {
+    let checked = 0;
+    for (const id of B4) {
+      const e = blogExample(id);
+      expect(e, id).not.toBeNull();
+      expect(e!.sports, id).toBe("all");
+      expect(e!.claims.length, `${id}: claims`).toBeGreaterThanOrEqual(5);
+      expect(failing(id, BLOG_GOLDENS[id]!), id).toEqual([]);
+      expect(BLOG_GOLDENS[id]!.facts.sportCount, `${id}: sports swept`).toBe(builtinModules.length);
+      checked++;
+    }
+    expect(checked).toBe(B4.length);
+  });
+});
+
+describe("third-place-match", () => {
+  const id = "third-place-match";
+  it("a shared 3rd placed 4th, a 4th place in the shared bracket, or a play-off decided by seed is caught", () => {
+    expect(failing(id, mutate(id, (r) => { rowWhere(r, 0, "Dev")[2] = "4th"; })).length).toBeGreaterThan(0);
+    // "1-2-3-3-4": the wrong constant for the place after a shared third.
+    expect(failing(id, mutate(id, (r) => { rowWhere(r, 0, "Eli")[2] = "4th"; r.facts.nextPlaceAfterShared = "4th"; })).length).toBeGreaterThan(0);
+    expect(failing(id, mutate(id, (r) => { rowWhere(r, 0, "Cy")[3] = "3rd"; rowWhere(r, 0, "Dev")[3] = "4th"; })).length).toBeGreaterThan(0);
+    expect(failing(id, mutate(id, (r) => { rowWhere(r, 0, "Gus")[2] = "6th"; })).length).toBeGreaterThan(0);
+  });
+  it("a play-off allowed at three players, an extra match count or a sport left out is caught", () => {
+    expect(failing(id, mutate(id, (r) => { r.facts.smallestPlayoffField = 3; }))).toHaveLength(1);
+    expect(failing(id, mutate(id, (r) => { r.facts.matchesPlayoff = Number(r.facts.matchesShared) + 2; }))).toHaveLength(1);
+    expect(failing(id, mutate(id, (r) => { r.facts.sportsOffered = builtinModules.length - 1; }))).toHaveLength(1);
+  });
+});
+
+describe("knockout-match-ends-level", () => {
+  const id = "knockout-match-ends-level";
+  it("every sport's row is claimed: a wrong decider or a wrong 'still level' answer is caught by that sport's own claims", () => {
+    const e = blogExample(id)!;
+    let corrupted = 0;
+    const visited = forEachSport(({ key }) => {
+      const label = sportLabel(key);
+      for (const [col, value] of [[1, "Coin toss"], [2, "Maybe"]] as const) {
+        const r = mutate(id, (x) => { rowWhere(x, 0, label)[col] = value; });
+        const own = e.claims.filter((c) => c.sport === key && c.check(r) !== true);
+        expect(own.length, `${key} column ${col}`).toBeGreaterThan(0);
+        corrupted++;
+      }
+    });
+    expect(visited).toBe(builtinModules.length);
+    expect(corrupted).toBe(builtinModules.length * 2);
+  });
+  it("a youth shoot-out typed as the adult count, a missing kick number, or a league preset with deciders is caught", () => {
+    expect(failing(id, mutate(id, (r) => { r.facts.footballYouthKicks = r.facts.footballKicks!; }))).toHaveLength(1);
+    expect(failing(id, mutate(id, (r) => { rowWhere(r, 0, "Football")[1] = "Extra time, penalties"; })).length).toBeGreaterThan(0);
+    expect(failing(id, mutate(id, (r) => { r.facts.footballLeagueRulesPreset = 2; }))).toHaveLength(1);
+    expect(failing(id, mutate(id, (r) => { r.table!.rows = r.table!.rows.filter((row) => row[0] !== "Tennis"); })).length).toBeGreaterThan(0);
+  });
+});
+
+describe("page-playoff-and-stepladder", () => {
+  const id = "page-playoff-and-stepladder";
+  it("a Page playoff that knocks out the Qualifier 1 loser, pairs 1 v 3, or keeps the Eliminator loser is caught", () => {
+    expect(failing(id, mutate(id, (r) => { rowWhere(r, 1, "Qualifier 2")[2] = "Ben (2) v Cy (3)"; })).length).toBeGreaterThan(0);
+    expect(failing(id, mutate(id, (r) => { rowWhere(r, 1, "Qualifier 1")[2] = "Ana (1) v Cy (3)"; })).length).toBeGreaterThan(0);
+    expect(failing(id, mutate(id, (r) => { rowWhere(r, 1, "Final")[2] = "Ben (2) v Dev (4)"; })).length).toBeGreaterThan(0);
+  });
+  it("a stepladder with a missing rung, or a top seed playing twice, is caught", () => {
+    expect(failing(id, mutate(id, (r) => { r.table!.rows = r.table!.rows.filter((row) => row[1] !== "Rung 2"); })).length).toBeGreaterThan(0);
+    expect(failing(id, mutate(id, (r) => { r.facts.stepTopMatches = 2; })).length).toBeGreaterThan(0);
+    expect(failing(id, mutate(id, (r) => { r.facts.pageField = 5; })).length).toBeGreaterThan(0);
+  });
+});
+
+describe("double-elimination-explained", () => {
+  const id = "double-elimination-explained";
+  it("a player out after one defeat, a winners' loser who never plays again, or a reset after the unbeaten player won is caught", () => {
+    expect(failing(id, mutate(id, (r) => { r.table!.rows = r.table!.rows.filter((row) => row[1] !== "Losers' round 1"); })).length).toBeGreaterThan(0);
+    expect(failing(id, mutate(id, (r) => { r.table!.rows = r.table!.rows.filter((row) => row[1] !== "Grand final (reset)"); })).length).toBeGreaterThan(0);
+    expect(failing(id, mutate(id, (r) => { rowWhere(r, 1, "Grand final")[3] = "Ana (1)"; })).length).toBeGreaterThan(0);
+    // The wrong constant: without the reset the runner-up is NOT out after two defeats.
+    expect(failing(id, mutate(id, (r) => { r.facts.noResetRunnerUpDefeats = 2; }))).toHaveLength(1);
+  });
+});
+
+describe("what-is-a-plate", () => {
+  const id = "what-is-a-plate";
+  it("a walkover loser in the plate, the bye holder left out, or a later loser drawn in is caught", () => {
+    expect(failing(id, mutate(id, (r) => { rowWhere(r, 0, "Fay")[4] = "Yes"; })).length).toBeGreaterThan(0);
+    // The wrong constant: a round-one-losers-only plate leaves out the bye holder.
+    expect(failing(id, mutate(id, (r) => { rowWhere(r, 0, "Ana")[4] = "No"; })).length).toBeGreaterThan(0);
+    expect(failing(id, mutate(id, (r) => { rowWhere(r, 0, "Ben")[4] = "Yes"; })).length).toBeGreaterThan(0);
+    expect(failing(id, mutate(id, (r) => { r.facts.sportsOffered = 0; }))).toHaveLength(1);
+  });
+  it("review I-3: the walkover winner's first match is the NEXT one, and losing it puts them in the plate; the walkover-as-first-match reading is caught", () => {
+    const winner = String(BLOG_GOLDENS[id]!.facts.walkoverWinner);
+    const asWalkoverReading = (r: ExampleResult) => {
+      // The wrong reading: the walkover win counts as the player's first match, so a later loss is no first loss.
+      const row = rowWhere(r, 0, winner);
+      row[1] = "Quarter-finals";
+      row[2] = "Won";
+      row[4] = "No";
+    };
+    const caught = failing(id, mutate(id, asWalkoverReading));
+    expect(caught.length, "the wrong reading is caught").toBeGreaterThan(0);
+    expect(caught.some((c) => c.includes("WON a first-round walkover")), "by the walkover-winner claim itself").toBe(true);
+    // The untouched golden shows the two readings DIFFER: this player is in the plate.
+    expect(rowWhere(BLOG_GOLDENS[id]!, 0, winner)[4]).toBe("Yes");
+    // A plate list that drops the walkover winner, or a left-out name that is not the walkover loser, is caught.
+    expect(failing(id, mutate(id, (r) => { r.facts.plateNames = String(r.facts.plateNames).split(", ").filter((n) => n !== winner).join(", "); })).length).toBeGreaterThan(0);
+    expect(failing(id, mutate(id, (r) => { r.facts.excludedNames = winner; })).length).toBeGreaterThan(0);
+  });
+});
+
+describe("no batch 4 claim is vacuous: an empty result fails every one of them", () => {
+  it("claims never pass on an empty result", () => {
+    let checked = 0;
+    for (const id of B4) {
+      const e = blogExample(id)!;
+      for (const c of e.claims) {
+        expect(c.check({ facts: {}, text: [] }), `${id}: ${c.says}`).not.toBe(true);
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThan(B4.length * 5);
+  });
+});
+
+// ---- fix round 1: a forfeit loser is out at once (X-DE-1) ----
+describe("bracket-play-b4: a forfeiter is never seated on a loser edge (the app's advancingSides sends nobody)", () => {
+  const FOUR = ["Ana", "Ben", "Cy", "Dev"] as const;
+  const SEEDS4 = new Map<string, number>(FOUR.map((p, i) => [p, i + 1]));
+  type Kind = "knockout" | "double_elim" | "page_playoff";
+  const draw = (kind: Kind, cfg: Record<string, unknown>) => {
+    const d = appDraw(kind, cfg, FOUR, SEEDS4);
+    if ("refused" in d) throw new Error(`the four-player ${kind} draw was refused`);
+    return d;
+  };
+  /** The named line is forfeited by its home side; every other line goes to the better seed. */
+  const forfeitAt = (lineId: string) => (home: string, away: string, f: Parameters<ReturnType<typeof betterSeedWins>>[2]) =>
+    f.id === lineId ? { forfeitedBy: home } : betterSeedWins(SEEDS4)(home, away, f);
+
+  it("a forfeit in a line whose loser edge feeds another line is refused by name, for every format that has loser edges", () => {
+    // Each case forfeits a line that FEEDS a loser edge: a winners' round-one line, a semi-final with a third-place match,
+    // and Qualifier 1 (whose loser meets the Eliminator's winner).
+    const cases: { kind: Kind; cfg: Record<string, unknown>; line: (d: ReturnType<typeof draw>) => string }[] = [
+      { kind: "double_elim", cfg: {}, line: (d) => d.fixtures.find((f) => f.bracket === "WB" && f.round === 0)!.id },
+      { kind: "knockout", cfg: { thirdPlace: true }, line: (d) => d.fixtures.find((f) => f.round === 0)!.id },
+      { kind: "page_playoff", cfg: {}, line: (d) => d.fixtures.find((f) => f.id === "pp-q1")!.id },
+    ];
+    let refused = 0;
+    for (const c of cases) {
+      const d = draw(c.kind, c.cfg);
+      const line = c.line(d);
+      expect(() => playBracket(c.kind, d, forfeitAt(line) as never), `${c.kind}: forfeit at ${line}`).toThrow(/forfeited it and is out.*advancingSides/);
+      refused++;
+    }
+    expect(refused).toBe(cases.length);
+  });
+
+  it("the guard does not refuse a forfeit whose loser has no loser edge to fall down (the pair that keeps it from refusing everything)", () => {
+    // A plain knockout has no loser edges; a double elimination's losers' bracket line sends its loser out for good.
+    const ko = draw("knockout", {});
+    const koLines = playBracket("knockout", ko, forfeitAt(ko.fixtures.find((f) => f.round === 0)!.id) as never);
+    expect(koLines.filter((l) => l.row.walkedOver === "loser").length).toBe(1);
+    const de = draw("double_elim", {});
+    const lb = de.fixtures.find((f) => f.bracket === "LB")!.id;
+    const deLines = playBracket("double_elim", de, forfeitAt(lb) as never);
+    expect(deLines.filter((l) => l.row.walkedOver === "loser").length).toBe(1);
+  });
+});
+
+describe("the forfeit claim: a forfeit, withdrawal, retirement or disqualification loser is out, read from the app's own rule", () => {
+  const withRows = { facts: {}, text: [], table: { caption: "c", columns: ["a"], rows: [["x"]] } };
+  it("holds on the app's real rule for every reason the engine declares, and fails an empty result", () => {
+    expect(FORFEIT_REASONS.length, "anti-vacuity: declared forfeit reasons").toBeGreaterThan(0);
+    const claim = forfeitOutClaim();
+    expect(claim.check(withRows)).toBe(true);
+    expect(claim.check({ facts: {}, text: [] })).not.toBe(true);
+  });
+  it("fails a rule that sends the forfeit loser down the loser edge, or does not read the edge as dead", () => {
+    const sends = forfeitOutClaim({ advancingSides: (o) => ({ winner: (o as { winner: string }).winner, loser: (o as { loser: string }).loser }), killsLoserEdge: () => true });
+    expect(sends.check(withRows)).not.toBe(true);
+    const alive = forfeitOutClaim({ advancingSides: (o) => ({ winner: (o as { winner: string }).winner, loser: undefined }), killsLoserEdge: () => false });
+    expect(alive.check(withRows)).not.toBe(true);
+    // One reason only: a rule that forgets `retired` alone is caught, so the claim sweeps every declared reason.
+    const forgetsRetired = forfeitOutClaim({
+      advancingSides: (o) => ({ winner: (o as { winner: string }).winner, loser: (o as { reason: string }).reason === "retired" ? (o as { loser: string }).loser : undefined }),
+      killsLoserEdge: () => true,
+    });
+    expect(forgetsRetired.check(withRows)).not.toBe(true);
+  });
+});
+
+describe("every fact a batch 4 post prints is tied to a claim", () => {
+  // Minor 6 of review 1: prose facts (pageChampion, stepBottomWins, wbChampionPlace, plateNames, playoff places, semiLoserA/B ...)
+  // were printed in a post and tied to no claim, so a wrong golden value would have shipped as a true-looking sentence.
+  // The posts are the authority on WHICH facts are printed; each is corrupted in turn and some claim must fail.
+  const CONTENT = join(process.cwd(), "content", "blog");
+  const corrupt = (v: string | number): string | number => (typeof v === "number" ? v + 1 : `${v} (corrupted)`);
+  it("corrupting any single cited fact fails at least one claim, and the cited set is read from the posts", () => {
+    let cited = 0;
+    const survivors: string[] = [];
+    for (const id of B4) {
+      const body = readFileSync(join(CONTENT, `${id}.md`), "utf8");
+      const keys = [...new Set([...body.matchAll(new RegExp(`\\{\\{fact:${id}\\.([A-Za-z0-9]+)\\}\\}`, "g"))].map((m) => m[1]!))];
+      expect(keys.length, `${id}: the post cites no fact, so this check would be vacuous`).toBeGreaterThan(0);
+      for (const key of keys) {
+        expect(BLOG_GOLDENS[id]!.facts, `${id}: ${key} is cited by the post but absent from the golden`).toHaveProperty(key);
+        cited++;
+        if (failing(id, mutate(id, (r) => { r.facts[key] = corrupt(r.facts[key]!); })).length === 0) survivors.push(`${id}.${key}`);
+      }
+    }
+    expect(cited, "facts checked").toBeGreaterThan(40);
+    expect(survivors, "cited facts no claim notices").toEqual([]);
+  });
+});

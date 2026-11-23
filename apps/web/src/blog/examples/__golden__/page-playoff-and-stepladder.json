@@ -1,0 +1,184 @@
+{
+  "facts": {
+    "pageField": 4,
+    "pageMatches": 4,
+    "pageQ1Loser": "Ana",
+    "pageChampion": "Ana",
+    "stepPlayers": 4,
+    "stepMatches": 3,
+    "stepBottom": "Dev",
+    "stepBottomWins": 2,
+    "stepTop": "Ana",
+    "stepTopMatches": 1,
+    "stepChampion": "Ana",
+    "stepBottomPlace": "2nd",
+    "sportsOfferedPage": 11,
+    "sportsOfferedStep": 11,
+    "sportCount": 11
+  },
+  "table": {
+    "caption": "The same four players through both finals series. In the Page playoff the top seed loses its first match and still wins the title; in the stepladder the bottom seed wins two matches and loses the final.",
+    "columns": [
+      "Series",
+      "Match",
+      "Players (seed)",
+      "Winner",
+      "Where the loser finished"
+    ],
+    "rows": [
+      [
+        "Page playoff",
+        "Qualifier 1",
+        "Ana (1) v Ben (2)",
+        "Ben (2)",
+        "1st"
+      ],
+      [
+        "Page playoff",
+        "Eliminator",
+        "Cy (3) v Dev (4)",
+        "Cy (3)",
+        "4th"
+      ],
+      [
+        "Page playoff",
+        "Qualifier 2",
+        "Ana (1) v Cy (3)",
+        "Ana (1)",
+        "3rd"
+      ],
+      [
+        "Page playoff",
+        "Final",
+        "Ben (2) v Ana (1)",
+        "Ana (1)",
+        "2nd"
+      ],
+      [
+        "Stepladder",
+        "Rung 1",
+        "Cy (3) v Dev (4)",
+        "Dev (4)",
+        "4th"
+      ],
+      [
+        "Stepladder",
+        "Rung 2",
+        "Ben (2) v Dev (4)",
+        "Dev (4)",
+        "3rd"
+      ],
+      [
+        "Stepladder",
+        "Final",
+        "Ana (1) v Dev (4)",
+        "Ana (1)",
+        "2nd"
+      ]
+    ]
+  },
+  "diagram": {
+    "kind": "bracket",
+    "title": "Page playoff: Ana (1) loses Qualifier 1, wins Qualifier 2 and then the final, so the top seed can lose once and still take the title. Stepladder: Dev (4) wins 2 matches in a row from the bottom rung, then loses the final to Ana (1), who has played only that one match.",
+    "rounds": [
+      {
+        "name": "Qualifier 1 / Eliminator / Rung 1",
+        "matches": [
+          {
+            "id": "pp:pp-q1",
+            "home": "Ana (1)",
+            "away": "Ben (2)",
+            "winner": "Ben (2)",
+            "label": "Qualifier 1",
+            "lane": "Page playoff"
+          },
+          {
+            "id": "pp:pp-elim",
+            "home": "Cy (3)",
+            "away": "Dev (4)",
+            "winner": "Cy (3)",
+            "label": "Eliminator",
+            "lane": "Page playoff"
+          },
+          {
+            "id": "sl:sl-g0",
+            "home": "Cy (3)",
+            "away": "Dev (4)",
+            "winner": "Dev (4)",
+            "label": "Rung 1",
+            "lane": "Stepladder"
+          }
+        ]
+      },
+      {
+        "name": "Qualifier 2 / Rung 2",
+        "matches": [
+          {
+            "id": "pp:pp-q2",
+            "home": "Ana (1)",
+            "away": "Cy (3)",
+            "winner": "Ana (1)",
+            "label": "Qualifier 2",
+            "lane": "Page playoff",
+            "homeFrom": {
+              "id": "pp:pp-q1",
+              "side": "loser"
+            },
+            "awayFrom": {
+              "id": "pp:pp-elim",
+              "side": "winner"
+            }
+          },
+          {
+            "id": "sl:sl-g1",
+            "home": "Ben (2)",
+            "away": "Dev (4)",
+            "winner": "Dev (4)",
+            "label": "Rung 2",
+            "lane": "Stepladder",
+            "awayFrom": {
+              "id": "sl:sl-g0",
+              "side": "winner"
+            }
+          }
+        ]
+      },
+      {
+        "name": "Final / Final",
+        "matches": [
+          {
+            "id": "pp:pp-final",
+            "home": "Ben (2)",
+            "away": "Ana (1)",
+            "winner": "Ana (1)",
+            "label": "Final",
+            "lane": "Page playoff",
+            "homeFrom": {
+              "id": "pp:pp-q1",
+              "side": "winner"
+            },
+            "awayFrom": {
+              "id": "pp:pp-q2",
+              "side": "winner"
+            }
+          },
+          {
+            "id": "sl:sl-g2",
+            "home": "Ana (1)",
+            "away": "Dev (4)",
+            "winner": "Ana (1)",
+            "label": "Final",
+            "lane": "Stepladder",
+            "awayFrom": {
+              "id": "sl:sl-g1",
+              "side": "winner"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "text": [
+    "The Page playoff is drawn for 4 players only."
+  ]
+}

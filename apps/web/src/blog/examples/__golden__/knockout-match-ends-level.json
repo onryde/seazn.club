@@ -1,0 +1,127 @@
+{
+  "facts": {
+    "footballDecider": "Extra time (2 × 15 min), penalties (5 each)",
+    "footballStillLevel": "No",
+    "footballYouthDecider": "Extra time (2 × 15 min), penalties (3 each)",
+    "footballYouthStillLevel": "No",
+    "footballMinisoccerDecider": "Extra time (2 × 15 min), penalties (3 each)",
+    "footballMinisoccerStillLevel": "No",
+    "cricketDecider": "Super over",
+    "cricketStillLevel": "No",
+    "cricketTestDecider": "Level matches wait for the organiser",
+    "cricketTestStillLevel": "Yes: the organiser decides who goes through",
+    "boardgameDecider": "Rapid tie-break, blitz tie-break, Armageddon",
+    "boardgameStillLevel": "No",
+    "carromDecider": "Extra board",
+    "carromStillLevel": "No",
+    "genericDecider": "No decider: you enter who goes through",
+    "genericStillLevel": "No",
+    "genericWinlossDecider": "Nothing: a match always has a winner",
+    "genericWinlossStillLevel": "No",
+    "volleyballDecider": "Nothing: a match always has a winner",
+    "volleyballStillLevel": "No",
+    "badmintonDecider": "Nothing: a match always has a winner",
+    "badmintonStillLevel": "No",
+    "tabletennisDecider": "Nothing: a match always has a winner",
+    "tabletennisStillLevel": "No",
+    "tennisDecider": "Nothing: a match always has a winner",
+    "tennisStillLevel": "No",
+    "icehockeyDecider": "Overtime (10 min), shoot-out (5 each)",
+    "icehockeyStillLevel": "No",
+    "hockeyDecider": "Shoot-out (5 each)",
+    "hockeyStillLevel": "No",
+    "sportCount": 11,
+    "footballExtraTimeHalf": 15,
+    "footballKicks": 5,
+    "footballYouthKicks": 3,
+    "footballLeagueRulesPreset": 0
+  },
+  "table": {
+    "caption": "What a level match goes to in a new knockout stage, in all 11 sports. A variant gets its own row when its answer differs.",
+    "columns": [
+      "Sport",
+      "What a level knockout match goes to",
+      "Can it still be level after that?"
+    ],
+    "rows": [
+      [
+        "Football",
+        "Extra time (2 × 15 min), penalties (5 each)",
+        "No"
+      ],
+      [
+        "Football (Youth)",
+        "Extra time (2 × 15 min), penalties (3 each)",
+        "No"
+      ],
+      [
+        "Football (Mini-soccer)",
+        "Extra time (2 × 15 min), penalties (3 each)",
+        "No"
+      ],
+      [
+        "Cricket",
+        "Super over",
+        "No"
+      ],
+      [
+        "Cricket (Test match)",
+        "Level matches wait for the organiser",
+        "Yes: the organiser decides who goes through"
+      ],
+      [
+        "Chess",
+        "Rapid tie-break, blitz tie-break, Armageddon",
+        "No"
+      ],
+      [
+        "Carrom",
+        "Extra board",
+        "No"
+      ],
+      [
+        "Generic",
+        "No decider: you enter who goes through",
+        "No"
+      ],
+      [
+        "Generic (Win/loss)",
+        "Nothing: a match always has a winner",
+        "No"
+      ],
+      [
+        "Volleyball",
+        "Nothing: a match always has a winner",
+        "No"
+      ],
+      [
+        "Badminton",
+        "Nothing: a match always has a winner",
+        "No"
+      ],
+      [
+        "Table tennis",
+        "Nothing: a match always has a winner",
+        "No"
+      ],
+      [
+        "Tennis",
+        "Nothing: a match always has a winner",
+        "No"
+      ],
+      [
+        "Ice hockey",
+        "Overtime (10 min), shoot-out (5 each)",
+        "No"
+      ],
+      [
+        "Hockey",
+        "Shoot-out (5 each)",
+        "No"
+      ]
+    ]
+  },
+  "text": [
+    "A new football league stage starts with 0 preset deciders."
+  ]
+}

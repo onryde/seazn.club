@@ -258,9 +258,14 @@ describe("related: slugs planned but not yet written", () => {
     const self = new Map(valid).set("related-self", { ...parse("related-missing.md"), slug: "related-self", related: ["related-self", "how-swiss-pairs-round-two"] });
     expect(blogRelatedProblems(self, new Set(["related-self"]))).toEqual(["related-self: related 'related-self' is the post itself"]);
   });
-  it("the planned list is the approved topic list: kebab slugs, none already written, and with the posts on disk it makes the programme's 33", () => {
+  it("the planned list is the approved topic list: kebab slugs, none already written, and posts written plus planned always make the programme's 33", () => {
+    // The 33 is the programme's approved topic count (an input, not read from the code under test). The planned list
+    // shrinks as each batch lands, so no remainder is typed here: written + planned is the invariant.
+    const written = allBlogPosts();
     expect(BLOG_PLANNED_SLUGS.size, "anti-vacuity: planned slugs").toBeGreaterThan(0);
-    expect(allBlogPosts().length + BLOG_PLANNED_SLUGS.size, "posts written plus planned").toBe(33);
+    expect(written.length, "anti-vacuity: written posts").toBeGreaterThan(0);
+    expect(written.filter((p) => BLOG_PLANNED_SLUGS.has(p.slug)).map((p) => p.slug), "a written post is no longer planned").toEqual([]);
+    expect(written.length + BLOG_PLANNED_SLUGS.size, "posts written plus planned").toBe(33);
     for (const s of BLOG_PLANNED_SLUGS) expect(s, s).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
     expect(BLOG_PLANNED_SLUGS.has("how-standings-points-work"), "the pilot is a post, not planned").toBe(false);
   });
