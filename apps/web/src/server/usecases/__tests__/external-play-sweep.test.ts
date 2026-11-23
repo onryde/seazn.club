@@ -119,6 +119,7 @@ import {
 import {
   NO_PRUNE,
   NO_WINDOW,
+  reconnectLichess,
   seedOnlineChessFixture,
   seedOnlineChessRound,
   seedPlayer,
@@ -2735,7 +2736,7 @@ describe.runIf(HAS_DB)("M8 — one pass at a time", () => {
     await inside;
     const second = await lockedSweep(b, { now: b.at(8), reconcile: async () => { reads++; return null; } });
     expect(second).toEqual({
-      skipped: 1, bridgesClosed: 0, noShows: 0, mintRetries: 0, meetingsEnded: 0, reconciled: 0, heldForOrganiser: 0,
+      skipped: 1, bridgesClosed: 0, straysCancelled: 0, noShows: 0, mintRetries: 0, meetingsEnded: 0, reconciled: 0, heldForOrganiser: 0,
       cameraSettled: 0, cameraFlags: 0, connectionFlags: 0, deviceFlags: 0, arbitersRemoved: 0, windowsOpen: 0, scanned: 0, deferred: 0, failed: 0, failures: [],
     });
     release();
@@ -6458,6 +6459,38 @@ describe.runIf(HAS_DB)("T8 - the open-window deferral, the shared call cap and t
   });
 });
 
+// Job 7 (`close_strays`): its own behaviour is external-play-close-strays.test.ts's; here, only that its failure is listed AND
+// counted like every other job's (N-1), and that the board keeps its place for the next pass.
+describe.runIf(HAS_DB)("close_strays — a cleanup that THROWS is listed and counted, and the next pass finishes it", () => {
+  it("White's token unreadable: one close_strays failure, nothing stamped; the token readable again: no failure, stamped, never asked again", async () => {
+    const b = await openedBoard({ checkedIn: [] });
+    // LABELLED SQL: T9's marker on the board (a create that may have reached Lichess, nothing recorded, the claim long stale),
+    // then the fixture voided - the state a void mid-create leaves.
+    await sql`update fixture_external_play set create_sent_at = ${b.at(-1)}, mint_claimed_at = ${b.at(-1)} where fixture_id = ${b.fixtureId}`;
+    await sql`update fixtures set status = 'cancelled' where id = ${b.fixtureId}`;
+    // A ciphertext the key cannot open: getLichessAccessToken's decrypt_failed path, 503 LICHESS_TOKEN_UNAVAILABLE.
+    await sql`update user_external_accounts set access_token_enc = ${Buffer.from("not-a-sealed-token")} where user_id = ${b.home.userId}`;
+    const stamped = async () =>
+      (await sql<{ at: Date | null }[]>`select strays_closed_at as at from fixture_external_play where fixture_id = ${b.fixtureId}`)[0]?.at ?? null;
+
+    const refused = await checkedPass({ now: new Date(), orgIds: [b.orgId] });
+    expect(refused.bridgesClosed, "premise: job 0 closed the bridge in the same pass").toBe(1);
+    expect(refused.failures).toEqual([{ job: "close_strays", fixtureId: b.fixtureId, code: "LICHESS_TOKEN_UNAVAILABLE" }]);
+    expect(board.listOutgoingChallenges, "nothing asked without a token").not.toHaveBeenCalled();
+    expect(await stamped(), "owed").toBeNull();
+
+    await reconnectLichess(b.home);
+    const healed = await checkedPass({ now: new Date(), orgIds: [b.orgId] });
+    expect([healed.failed, healed.straysCancelled]).toEqual([0, 0]);
+    expect(board.listOutgoingChallenges, "one listing, with the readable token").toHaveBeenCalledTimes(1);
+    expect(board.listOutgoingChallenges).toHaveBeenCalledWith(`lio_reconnect_${b.home.lichessId}`);
+    expect(await stamped(), "done: nothing matching was listed").not.toBeNull();
+
+    await checkedPass({ now: new Date(), orgIds: [b.orgId] });
+    expect(board.listOutgoingChallenges, "a third pass asks nothing").toHaveBeenCalledTimes(1);
+  });
+});
+
 describe.runIf(HAS_DB)("N-1 — `failed` equals the listed failures, over every failure kind", () => {
   it("every pass in this file held failed = failures.length, and those passes reported every job's failure and the give-up", () => {
     const kinds: readonly string[] = [...SWEEP_JOBS, GIVE_UP];
@@ -6465,7 +6498,7 @@ describe.runIf(HAS_DB)("N-1 — `failed` equals the listed failures, over every 
     const missing = kinds.filter((k) => !failureKindsSeen.has(k));
     expect(missing, `kinds seen: ${JSON.stringify(Object.fromEntries(failureKindsSeen))}`).toEqual([]);
     expect([...failureKindsSeen.keys()].filter((k) => !kinds.includes(k)), "no kind outside the vocabulary").toEqual([]);
-    expect(kinds.length, "8 jobs and the give-up").toBe(9);
+    expect(kinds.length, "9 jobs and the give-up").toBe(10);
   });
 });
 

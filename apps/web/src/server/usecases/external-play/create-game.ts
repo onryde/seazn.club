@@ -98,9 +98,9 @@ import {
   ensureBridgeRow,
   loadOnlinePlayFixture,
   loadSides,
+  onlinePlayClock,
   resetStaleBridge,
   whiteSideOf,
-  type OnlinePlayFixture,
   type Side,
 } from "./guard";
 import { PLAYABLE_FIXTURE_STATUSES } from "./bridge-close";
@@ -237,7 +237,7 @@ export async function createGameIfReady(
   // {base, increment} (clock.ts), and a delay clock never reaches here (the
   // guard refuses it). Checked before the seats: a board that can never be
   // created should not open a meeting first.
-  const tc = playableTimeControl(f);
+  const tc = playableTimeControl(f.clock);
   if (!tc) return { created: false, reason: "unplayable" };
 
   // Re-verified HERE, immediately before creating: seatPlayer re-asks the meeting, which is what makes a pass that went
@@ -706,7 +706,7 @@ function gameVerdict(m: GameMeta, plan: CreationPlan, sentAt: Date, now: Date): 
  *  N3 (T17 re-review): so a challenge a player sent BY HAND with every one of these fields cannot be told from ours —
  *  adopted inside the window when ours never landed, and cancelled with White's token as a stray past it; that
  *  follows from the controller's ruling (L1, 2026-10-13) and is accepted, not an oversight. */
-function challengeVerdict(c: OutgoingChallenge, plan: CreationPlan): Verdict {
+function challengeVerdict(c: OutgoingChallenge, plan: Pick<CreationPlan, "white" | "tc">): Verdict {
   const tc = c.timeControl;
   // A declared non-clock type (correspondence, unlimited) is not ours.
   const isClock = tc === null ? null : tc.type === "clock";
@@ -782,34 +782,11 @@ async function findSentGame(
   // fixture cannot record what we adopt: its claim refuses an unplayable fixture and a row not pending.
   const peers: string[] = [];
   if (all.length > 0) {
-    const seen = await sql<{ kind: string; id: string }[]>`
-      select 'recorded' as kind, challenge_id as id from fixture_external_play where challenge_id = any(${all})
-      union all
-      select 'peer' as kind, b.fixture_id::text as id
-        from fixture_external_play b
-        join fixtures f on f.id = b.fixture_id
-       where b.fixture_id <> ${plan.fixtureId} and b.challenge_id is null and b.create_sent_at is not null
-         and b.status = 'pending'
-         and f.status in ${sql(PLAYABLE_FIXTURE_STATUSES as string[])}
-         and exists (
-           select 1 from entrant_members em
-             join persons p on p.id = em.person_id
-             join user_external_accounts uea on uea.user_id = p.user_id and uea.provider = 'lichess'
-            where em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
-              and uea.external_user_id = ${plan.white.lichessId})
-         and exists (
-           select 1 from entrant_members em
-             join persons p on p.id = em.person_id
-             join user_external_accounts uea on uea.user_id = p.user_id and uea.provider = 'lichess'
-            where em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
-              and uea.external_user_id = ${plan.black.lichessId})`;
-    for (const r of seen) {
-      if (r.kind === "peer") {
-        peers.push(r.id);
-        continue;
-      }
-      challenges.delete(r.id);
-      games.delete(r.id);
+    const known = await knownElsewhere(plan.fixtureId, plan.white.lichessId, plan.black.lichessId, all);
+    peers.push(...known.peers);
+    for (const id of known.recorded) {
+      challenges.delete(id);
+      games.delete(id);
     }
   }
 
@@ -836,9 +813,8 @@ async function findSentGame(
   // A claim lost at a renewal leaves the strays not yet cancelled, ON PURPOSE (review m6): while the row is still `pending`
   // the claim's new holder runs this same lookup, lists the same strays and cancels them itself — two claimants cancelling
   // side by side is the overlap this serialisation exists to stop. A row that LEFT `pending` (a withdrawal or a void closed
-  // the bridge mid-recovery) has no next holder, so its strays stay open at Lichess, unrecorded — exactly as they already do
-  // when the withdrawal lands before any recovery runs (a fixture no longer playable is never claimed). Owed to the
-  // bridge close, not to a claim this call no longer holds.
+  // the bridge mid-recovery) has no next holder; its strays — like those of a board withdrawn before any recovery ran —
+  // are the sweep's `close_strays` job's (cancelClosedBoardStrays, below), once this claim has gone stale.
   const metas: Array<Awaited<ReturnType<typeof exportGameMeta>>> = [];
   for (const id of gameIds) {
     if (!(await renew())) return { kind: "lost" };
@@ -883,6 +859,141 @@ async function cancelStray(fixtureId: string, challengeId: string, whiteToken: s
     return;
   }
   log.error({ fixtureId, challengeId, why: out.code }, "lichess: could not cancel a stray challenge matching ours");
+}
+
+/** N2's one read — ONE statement, one snapshot — for the recovery (findSentGame) and the closed-board cleanup alike: of
+ *  `ids`, those already RECORDED on any bridge row (another fixture's game: never a candidate, never a stray), and the
+ *  other fixtures of the same two players with a create IN FLIGHT (N5: the bridge `pending`, the marker set, nothing
+ *  recorded, the fixture still playable) — a peer whose challenge cannot be told from this fixture's. Conservative on
+ *  purpose (findSentGame's N2 note): any member of either entrant, colours and age unchecked. */
+async function knownElsewhere(
+  fixtureId: string,
+  whiteLichessId: string,
+  blackLichessId: string,
+  ids: readonly string[],
+): Promise<{ recorded: string[]; peers: string[] }> {
+  const seen = await sql<{ kind: string; id: string }[]>`
+    select 'recorded' as kind, challenge_id as id from fixture_external_play where challenge_id = any(${[...ids]})
+    union all
+    select 'peer' as kind, b.fixture_id::text as id
+      from fixture_external_play b
+      join fixtures f on f.id = b.fixture_id
+     where b.fixture_id <> ${fixtureId} and b.challenge_id is null and b.create_sent_at is not null
+       and b.status = 'pending'
+       and f.status in ${sql(PLAYABLE_FIXTURE_STATUSES as string[])}
+       and exists (
+         select 1 from entrant_members em
+           join persons p on p.id = em.person_id
+           join user_external_accounts uea on uea.user_id = p.user_id and uea.provider = 'lichess'
+          where em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
+            and uea.external_user_id = ${whiteLichessId})
+       and exists (
+         select 1 from entrant_members em
+           join persons p on p.id = em.person_id
+           join user_external_accounts uea on uea.user_id = p.user_id and uea.provider = 'lichess'
+          where em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
+            and uea.external_user_id = ${blackLichessId})`;
+  return {
+    recorded: seen.filter((r) => r.kind === "recorded").map((r) => r.id),
+    peers: seen.filter((r) => r.kind === "peer").map((r) => r.id),
+  };
+}
+
+/** What the closed-board cleanup did for one board (the sweep's `close_strays`, sweep/close-strays.ts). */
+export type ClosedBoardStrays =
+  /** Nothing more is owed, stamped (`strays_closed_at`): every match cancelled or already over at Lichess, none listed,
+   *  or White's token refused or gone (nothing more can be cancelled with it). */
+  | { kind: "done"; cancelled: number }
+  /** Owed to a later pass, NOT stamped: a 429, an answer that proves nothing (a 5xx, a 404 - lila's 404 cannot be told
+   *  from a 5xx here, so the next pass's listing decides: a gone challenge is not listed), or a same-pair create in flight. */
+  | { kind: "retry"; cancelled: number; why: string }
+  /** The row is no longer a closed board with an unrecorded create and the cleanup owed: nothing done. */
+  | { kind: "skipped" };
+
+/**
+ * The strays a CLOSED board left at Lichess (review m6; the recovery-clock / strays task, 2026-11-23). A board whose bridge
+ * closed (bridge-close: a withdrawal, a void, a result entered elsewhere) while it carried the sent marker and no recorded
+ * game is never claimed again, so no recovery cancels what its create left: the dead sender's own challenge, and any stray
+ * a recovery that lost its claim to the close was about to cancel. Black can accept any of them, for ever.
+ *
+ * One listing of White's outgoing challenges (White's token — the challenger's, the only one that can cancel), then each one
+ * matching THIS fixture's create — to Black, still open, and `challengeVerdict` "ours" — cancelled one at a time (Lichess API
+ * tips: no parallel calls). N2 holds here as in the recovery: a challenge recorded on any bridge is never touched, and beside
+ * a same-pair create in flight nothing is cancelled (it may be the peer's) and the board waits. There is no claim: the row is
+ * finished, which every T9 claim refuses, and the sweep reaches it only once T9's last claim has gone stale
+ * (`liveMintClaimSince`) — after the last Lichess call a cut-off recovery could still make. Done is stamped once
+ * (`strays_closed_at`), so a later pass never asks Lichess again.
+ *
+ * The marker is KEPT (bridge-close's ruling: a game MAY exist; M-10's lock and the account-change hold read it). A challenge
+ * Black already accepted is a game, out of the outgoing list and out of this cleanup's reach.
+ */
+export async function cancelClosedBoardStrays(fixtureId: string): Promise<ClosedBoardStrays> {
+  const [row] = await sql<{ orgId: string; homeEntrantId: string | null; awayEntrantId: string | null; config: unknown }[]>`
+    select f.org_id as "orgId", f.home_entrant_id as "homeEntrantId", f.away_entrant_id as "awayEntrantId", d.config
+      from fixture_external_play ep
+      join fixtures f on f.id = ep.fixture_id
+      join divisions d on d.id = f.division_id
+     where ep.fixture_id = ${fixtureId}
+       and ep.status = 'finished' and ep.challenge_id is null and ep.create_sent_at is not null
+       and ep.strays_closed_at is null
+       and f.status not in ${sql(PLAYABLE_FIXTURE_STATUSES as string[])}`;
+  if (!row) return { kind: "skipped" };
+  const done = async (cancelled: number, why: string): Promise<ClosedBoardStrays> => {
+    await sql`
+      update fixture_external_play set strays_closed_at = now(), updated_at = now()
+       where fixture_id = ${fixtureId} and strays_closed_at is null`;
+    log.info({ fixtureId, cancelled, why }, "lichess: a closed board's strays are closed");
+    return { kind: "done", cancelled };
+  };
+  // A board with a create sent had both seats; one emptied since leaves no pair to match a challenge against.
+  if (row.homeEntrantId === null || row.awayEntrantId === null) return done(0, "no_pairing");
+  const whiteSide = await whiteSideOf({ orgId: row.orgId, fixtureId });
+  const { home, away } = await loadSides({ homeEntrantId: row.homeEntrantId, awayEntrantId: row.awayEntrantId });
+  const white = whiteSide === "home" ? home : away;
+  const black = whiteSide === "home" ? away : home;
+  const mapped = onlinePlayClock(row.config);
+  const tc = mapped.ok ? playableTimeControl(mapped.clock) : null;
+  if (white.userId === null || white.lichess === null || black.lichess === null || tc === null) {
+    // Nothing to match ours by (an unlink, a clock no create could have sent): never a guess at whose challenge is whose.
+    log.warn({ fixtureId, white: white.lichess !== null, black: black.lichess !== null, clock: tc !== null }, "lichess: a closed board's strays cannot be identified; left");
+    return done(0, "unidentifiable");
+  }
+  const whiteToken = await getLichessAccessToken(white.userId);
+  if (whiteToken === null) return done(0, "white_token_absent");
+
+  const listed = await listOutgoingChallenges(whiteToken);
+  if (!listed.ok) {
+    if (listed.code === "unauthorized") return done(0, "white_token_refused");
+    return { kind: "retry", cancelled: 0, why: `challenge_list:${listed.code}` };
+  }
+  const plan = { white: { userId: white.userId, lichessId: white.lichess.id }, tc };
+  const blackId = black.lichess.id.toLowerCase();
+  const matches = listed.challenges
+    .filter((c) => c.destUserId?.toLowerCase() === blackId && !CLOSED_CHALLENGE.has(c.status) && challengeVerdict(c, plan) === "ours")
+    .map((c) => c.id);
+  if (matches.length === 0) return done(0, "none_listed");
+  const known = await knownElsewhere(fixtureId, white.lichess.id, black.lichess.id, matches);
+  if (known.peers.length > 0) {
+    log.warn({ fixtureId, matches, peers: known.peers }, "lichess: a closed board's strays may be another fixture's create; left for a later pass");
+    return { kind: "retry", cancelled: 0, why: `peer_in_flight:${known.peers.join(",")}` };
+  }
+  const recorded = new Set(known.recorded);
+  let cancelled = 0;
+  let owed: string | null = null;
+  for (const challengeId of matches) {
+    if (recorded.has(challengeId)) continue;
+    const out = await cancelChallenge({ token: whiteToken, challengeId });
+    if (out.ok) {
+      cancelled += 1;
+      log.warn({ fixtureId, challengeId }, "lichess: cancelled a challenge a closed board left open");
+      continue;
+    }
+    if (out.code === "not_your_turn_or_over") continue; // lila: already over - nothing open to cancel
+    if (out.code === "unauthorized") return done(cancelled, "white_token_refused");
+    owed = `cancel:${challengeId}:${out.code}`;
+    if (out.code === "rate_limited") break; // lila asked us to stop: the rest wait for a later pass
+  }
+  return owed === null ? done(cancelled, "cancelled") : { kind: "retry", cancelled, why: owed };
 }
 
 /** Minor b: a game this call created and could not record. Cancel it with
@@ -986,9 +1097,9 @@ function reportUnrecorded(fixtureId: string, challengeId: string, why: string): 
 
 /** T5's setup gate, read as a nullable. Only INVALID_TIME_CONTROL means
  *  "unplayable"; anything else propagates. */
-function playableTimeControl(f: OnlinePlayFixture): TimeControl | null {
+function playableTimeControl(clock: { limit: number; increment: number }): TimeControl | null {
   try {
-    return assertTimeControl({ base: f.clock.limit, increment: f.clock.increment });
+    return assertTimeControl({ base: clock.limit, increment: clock.increment });
   } catch (err) {
     if (err instanceof HttpError && err.code === "INVALID_TIME_CONTROL") return null;
     throw err;

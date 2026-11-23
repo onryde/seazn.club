@@ -13,6 +13,7 @@ import { endParkedRoom, parkedRoomCandidates, teardown, teardownCandidates } fro
 import { reconcileCandidates, sweepReconcile } from "./reconcile";
 import { cameraCandidates, cameraEvidence } from "./camera-evidence";
 import { arbiterCandidates, arbiterRevocation, arbiterRevocationCandidates, arbiterRevoke } from "./arbiter-revoke";
+import { closeStrays, strayCandidates } from "./close-strays";
 
 // ─── The pass ──────────────────────────────────────────────────────────────
 
@@ -34,6 +35,7 @@ function emptyReport(skipped: 0 | 1): SweepReport {
   return {
     skipped,
     bridgesClosed: 0,
+    straysCancelled: 0,
     noShows: 0,
     mintRetries: 0,
     meetingsEnded: 0,
@@ -143,6 +145,9 @@ async function runPass(deps: SweepDeps): Promise<SweepReport> {
   }
   // After the teardown too: a room ended in THIS pass took its watches with it. Only the TTL and the ended-room arms are left to it.
   await each(pass, "arbiter_revoke", await arbiterCandidates(pass), (c) => arbiterRevoke(pass, c, cappedRtk));
+  // Job 7, the last network job: the challenges a closed board left open at Lichess (close-strays.ts). After job 0 closed this
+  // pass's boards, and behind every job a live board needs, so the pass budget reaches it last.
+  await each(pass, "close_strays", await strayCandidates(pass), (c) => closeStrays(pass, c));
   // Task 10b retention: webhook deliveries and presence rows past their retention. Not a SWEEP_JOBS member (no vendor call, no budget,
   // no fixture), so a failure is logged and never `report.failures`; caught here so it can starve neither the jobs above nor job 3b
   // below, which must stay LAST.

@@ -52,6 +52,7 @@ export const SWEEP_JOBS = [
   "reconcile",
   "camera_evidence",
   "arbiter_revoke",
+  "close_strays",
 ] as const;
 export type SweepJob = (typeof SWEEP_JOBS)[number];
 
@@ -69,6 +70,9 @@ export type SweepReport = {
    *  fix round 1, I1): held, pending, ready or live rows under a fixture
    *  decided on the pad, settled, withdrawn, voided or cancelled. */
   bridgesClosed: number;
+  /** Challenges cancelled at Lichess this pass because their board closed with a create sent and nothing recorded
+   *  (job 7, `close_strays`): what a withdrawal or a void left open for Black to accept. */
+  straysCancelled: number;
   noShows: number;
   mintRetries: number;
   meetingsEnded: number;
@@ -203,6 +207,7 @@ const NETWORK_JOBS: ReadonlySet<SweepJob> = new Set<SweepJob>([
   "teardown",
   "camera_evidence",
   "arbiter_revoke",
+  "close_strays",
 ]);
 
 /** The window a board is playable in, anchored on the BOARD's batch of the round being opened (D12; spec §3.2.1). Every
