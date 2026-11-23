@@ -56,7 +56,7 @@ const BYE_PHANTOM = "__bye__";
  * as every decided fixture is — there is no "no rule" any more (the rule is the
  * pin, the stage's own, or its sport's).
  */
-function awardByeDelta(
+export function awardByeDelta(
   sportModule: AnySportModule,
   outcome: MatchOutcome,
   rawCfg: unknown,

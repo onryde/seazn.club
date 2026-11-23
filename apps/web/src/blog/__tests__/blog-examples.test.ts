@@ -460,6 +460,8 @@ describe("the registry is server-only: nothing a page loads imports the engine's
     // ---- end batch 5 ----
     new RegExp(spec + String.raw`@seazn/engine/testkit["']`),
     new RegExp(spec + String.raw`@/blog/labels["']`),
+    // blog batch 2: the screen-word labels pull the engine registry and the public standings view into the graph
+    new RegExp(spec + String.raw`@/blog/labels-screens["']`),
   ];
   const walk = (dir: string): string[] =>
     readdirSync(dir).flatMap((f) => {
@@ -474,7 +476,7 @@ describe("the registry is server-only: nothing a page loads imports the engine's
     expect(hits).toEqual([]);
   });
   it("the scan itself sees each forbidden import form", () => {
-    const forms = ['import "@/blog/labels";', 'const m = await import("@/blog/labels");', 'import { x } from "@/blog/examples";', "import x from '@/blog/examples/standings-points';", 'import { y } from "@seazn/engine/testkit";', 'import { t } from "@/blog/labels";', 'import { p } from "@/blog/examples/kit";', "import { c } from '@/blog/examples/cricket-points';", 'import { m } from "@/blog/examples/matches-won-first";'];
+    const forms = ['import "@/blog/labels";', 'const m = await import("@/blog/labels");', 'import { x } from "@/blog/examples";', "import x from '@/blog/examples/standings-points';", 'import { y } from "@seazn/engine/testkit";', 'import { t } from "@/blog/labels";', 'import { p } from "@/blog/examples/kit";', "import { c } from '@/blog/examples/cricket-points';", 'import { m } from "@/blog/examples/matches-won-first";', 'import { standingsLabel } from "@/blog/labels-screens";'];
     for (const f of forms) expect(FORBIDDEN.some((re) => re.test(f)), f).toBe(true);
     expect(FORBIDDEN.some((re) => re.test('import { g } from "@/blog/examples/goldens";'))).toBe(false);
     expect(FORBIDDEN.some((re) => re.test('import type { ExampleResult } from "@/blog/examples/types";'))).toBe(false);

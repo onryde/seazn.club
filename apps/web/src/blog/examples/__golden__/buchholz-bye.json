@@ -1,0 +1,117 @@
+{
+  "facts": {
+    "anaPoints": "3",
+    "anaCut1": "3½",
+    "anaBuchholz": "5",
+    "anaSonnebornBerger": "5",
+    "anaPlace": "1st",
+    "anaGames": "beat Ben, beat Cy, had a bye",
+    "benPoints": "2",
+    "benCut1": "4½",
+    "benBuchholz": "5½",
+    "benSonnebornBerger": "2½",
+    "benPlace": "2nd",
+    "benGames": "lost to Ana, beat Eve, beat Dev",
+    "cyPoints": "1½",
+    "cyCut1": "4½",
+    "cyBuchholz": "5½",
+    "cySonnebornBerger": "2",
+    "cyPlace": "3rd",
+    "cyGames": "had a bye, lost to Ana, drew with Eve",
+    "devPoints": "1½",
+    "devCut1": "3½",
+    "devBuchholz": "4½",
+    "devSonnebornBerger": "2",
+    "devPlace": "4th",
+    "devGames": "drew with Eve, had a bye, lost to Ben",
+    "evePoints": "1",
+    "eveCut1": "3½",
+    "eveBuchholz": "5",
+    "eveSonnebornBerger": "1½",
+    "evePlace": "5th",
+    "eveGames": "drew with Dev, lost to Ben, drew with Cy",
+    "rounds": 3,
+    "players": 5,
+    "dummyCap": "1½",
+    "cappedPlayer": "Ana",
+    "cappedPoints": "3",
+    "cappedBuchholz": "5",
+    "uncappedBuchholz": "6½"
+  },
+  "table": {
+    "caption": "5 players, 3 Swiss rounds, one bye in each. Cy and Dev finish level on 1½ points with a bye each, and Buchholz Cut-1 separates them.",
+    "columns": [
+      "Player",
+      "Points",
+      "Games",
+      "Buchholz Cut-1",
+      "Buchholz",
+      "Sonneborn–Berger",
+      "Place",
+      "Separated by"
+    ],
+    "rows": [
+      [
+        "Ana",
+        "3",
+        "beat Ben, beat Cy, had a bye",
+        "3½",
+        "5",
+        "5",
+        "1st",
+        "Points"
+      ],
+      [
+        "Ben",
+        "2",
+        "lost to Ana, beat Eve, beat Dev",
+        "4½",
+        "5½",
+        "2½",
+        "2nd",
+        "Points"
+      ],
+      [
+        "Cy",
+        "1½",
+        "had a bye, lost to Ana, drew with Eve",
+        "4½",
+        "5½",
+        "2",
+        "3rd",
+        "Buchholz Cut-1"
+      ],
+      [
+        "Dev",
+        "1½",
+        "drew with Eve, had a bye, lost to Ben",
+        "3½",
+        "4½",
+        "2",
+        "4th",
+        "Buchholz Cut-1"
+      ],
+      [
+        "Eve",
+        "1",
+        "drew with Dev, lost to Ben, drew with Cy",
+        "3½",
+        "5",
+        "1½",
+        "5th",
+        "Points"
+      ]
+    ]
+  },
+  "text": [
+    "Round 1: Ana 1 — 0 Ben.",
+    "Round 1: Dev ½ — ½ Eve.",
+    "Round 2: Ana 1 — 0 Cy.",
+    "Round 2: Ben 1 — 0 Eve.",
+    "Round 3: Ben 1 — 0 Dev.",
+    "Round 3: Cy ½ — ½ Eve.",
+    "Round 1: Cy has the bye.",
+    "Round 2: Dev has the bye.",
+    "Round 3: Ana has the bye."
+  ]
+}

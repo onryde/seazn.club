@@ -1,0 +1,90 @@
+{
+  "facts": {
+    "tigersBeatLions": "114/7 (11.3) — 113 (12)",
+    "bearsBeatTigers": "61/9 (20) — 35 (5)",
+    "lionsOversInTheirMatch": "20",
+    "lionsRunsInTheirMatch": 113,
+    "bearsOversInTheirMatch": "20",
+    "bearsRunsInTheirMatch": 61,
+    "tigersChaseOvers": "11.3",
+    "lionsOversLasted": "12",
+    "walkoverOversCharged": "20",
+    "walkoverRunsCharged": 0,
+    "walkoverOversToLions": "0",
+    "lionsNetRunRate": "-4.263",
+    "lionsOversFaced": "20",
+    "lionsPoints": 2,
+    "lionsPlace": "3rd",
+    "tigersNetRunRate": "+0.380",
+    "tigersOversFaced": "31.3",
+    "tigersPoints": 2,
+    "tigersPlace": "1st",
+    "bearsNetRunRate": "-0.225",
+    "bearsOversFaced": "40",
+    "bearsPoints": 2,
+    "bearsPlace": "2nd",
+    "levelWins": 1,
+    "levelPoints": 2,
+    "inningsOvers": "20",
+    "cricketOrder": "wins, net run rate, head-to-head, seeding, drawing of lots",
+    "netRunRateStep": 3
+  },
+  "table": {
+    "caption": "3 T20 sides, each on 1 win and 2 points: net run rate puts Tigers first and Lions last, and Bears are charged a full innings for not turning up.",
+    "columns": [
+      "Team",
+      "Played",
+      "Won",
+      "Points",
+      "Runs scored",
+      "Overs faced",
+      "Runs conceded",
+      "Overs bowled",
+      "Net run rate",
+      "Place"
+    ],
+    "rows": [
+      [
+        "Tigers",
+        2,
+        1,
+        2,
+        149,
+        "31.3",
+        174,
+        "40",
+        "+0.380",
+        "1st"
+      ],
+      [
+        "Bears",
+        2,
+        1,
+        2,
+        61,
+        "40",
+        35,
+        "20",
+        "-0.225",
+        "2nd"
+      ],
+      [
+        "Lions",
+        2,
+        1,
+        2,
+        113,
+        "20",
+        114,
+        "11.3",
+        "-4.263",
+        "3rd"
+      ]
+    ]
+  },
+  "text": [
+    "Tigers 114/7 (11.3) — 113 (12) Lions.",
+    "Bears 61/9 (20) — 35 (5) Tigers.",
+    "Lions against Bears: Bears did not turn up, a walkover to Lions."
+  ]
+}

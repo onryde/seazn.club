@@ -12,6 +12,15 @@ import { knockoutWithdrawal } from "./knockout-withdrawal";
 import { forfeitScores } from "./forfeit-scores";
 import { doubleWalkover } from "./double-walkover";
 // ---- end batch 5 ----
+// ---- blog batch 2 (tie-breaks, posts #7 to #12) ----
+import { levelOnPoints } from "./level-on-points";
+import { threeWayTie } from "./three-way-tie";
+import { netRunRate } from "./net-run-rate";
+import { setRatioOrDifference } from "./set-ratio-or-difference";
+import { buchholzSonnebornBerger } from "./buchholz-sonneborn-berger";
+import { buchholzBye } from "./buchholz-bye";
+import { drawingLots } from "./drawing-lots";
+// ---- end blog batch 2 ----
 import type { BlogExample } from "./types";
 // --- blog batch 4 (knockouts) ---
 import { thirdPlaceMatch } from "./third-place-match";
@@ -22,8 +31,11 @@ import { whatIsAPlate } from "./what-is-a-plate";
 const BATCH_4: readonly BlogExample[] = [thirdPlaceMatch, knockoutMatchEndsLevel, pagePlayoffAndStepladder, doubleEliminationExplained, whatIsAPlate];
 // --- end blog batch 4 ---
 
+/** Blog batch 2's examples (tie-breaks), in post order. */
+const BATCH_2: readonly BlogExample[] = [levelOnPoints, threeWayTie, netRunRate, setRatioOrDifference, buchholzSonnebornBerger, buchholzBye, drawingLots];
+
 export const BLOG_EXAMPLES: readonly BlogExample[] = [
-  standingsPoints, shootoutPoints, cricketPoints, chessPoints, tableTennisLoss, matchesWonFirst, ...BATCH_4,
+  standingsPoints, shootoutPoints, cricketPoints, chessPoints, tableTennisLoss, matchesWonFirst, ...BATCH_2, ...BATCH_4,
   // ---- batch 5 (Task 11) ----
   ladderChallenge,
   knockoutWithdrawal,
