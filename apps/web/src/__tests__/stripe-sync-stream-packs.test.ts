@@ -31,6 +31,7 @@ import {
   streamPackPriceAmounts,
   type StreamCreditPack,
 } from "@/lib/stream-credit-packs";
+import { MAX_DURATION_MINUTES } from "@/server/relay/config";
 
 type LivePrice = {
   id: string;
@@ -210,6 +211,12 @@ describe("ensureStreamPackProduct — found by its tag, oldest match wins", () =
     const f = fakeStripe({ products: [{ id: "prod_ai", created: 50, metadata: { kind: "credit_pack" } }] });
     expect(await ensureStreamPackProduct(f.stripe)).toBe("prod_created");
     expect(f.productsCreate).toHaveBeenCalledWith({ ...STREAM_PACK_PRODUCT, metadata: { kind: "stream_credits" } });
+  });
+
+  it("the product's copy, which Checkout shows the buyer, names Seazn credits and the relay's real cap (owner ruling 2026-11-23)", () => {
+    // The hours come from the relay's own constant: this description said "up to 5 hours" after the cap moved to 3.
+    expect(STREAM_PACK_PRODUCT.name).toBe("Seazn credits");
+    expect(STREAM_PACK_PRODUCT.description).toBe(`1 credit = 1 match stream, up to ${MAX_DURATION_MINUTES / 60} hours.`);
   });
 });
 

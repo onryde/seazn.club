@@ -8062,7 +8062,7 @@
   "externalPlay.checkinExtend.helper": "Voegt {minutes} minuten toe zolang de check-in open is. Maximaal {max} keer per bord.",
   "settings.credits.kind.label": "Soort credits",
   "settings.credits.kind.ai": "AI",
-  "settings.credits.kind.stream": "Streaming",
+  "settings.credits.kind.stream": "Seazn-credits",
   "settings.credits.stream.title": "Seazn-credits",
   "settings.credits.stream.balance": "Saldo",
   "settings.credits.stream.balanceCount.one": "{count} Seazn-credit",

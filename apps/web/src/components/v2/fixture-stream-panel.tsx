@@ -1997,8 +1997,8 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   // field red above it. Only where the Ready block is drawn; anywhere else the refusal falls to the generic line at the bottom.
   const ytRefusal = state === "idle" && !buyCard && !matchOver && p.createError ? youtubeRefusalOf(p.createError.code) : null;
   const ytRefusalBox = ytRefusal !== null;
-  // Spec §3.1: "Uses 1 credit · {n} credits · Buy more" — three parts, never one interpolated sentence (word order and
-  // plural agreement differ by locale). "Uses 1 credit" only while Go live is the action under it and the start would
+  // Spec §3.1: "Uses 1 Seazn credit · {n} credits · Buy more" (renamed 2026-11-23) — three parts, never one interpolated sentence (word order and
+  // plural agreement differ by locale). "Uses 1 Seazn credit" only while Go live is the action under it and the start would
   // spend one (not inside the reuse window, I-1). The balance keeps the plural key's own text (`stream.phone.credits.*`
   // — the mockup's "9 left" reads "9 credits": a plan decision, the plural key is what keeps every locale grammatical);
   // the monthly/bought split is its `title`, and a visually hidden copy keeps it for screen readers.

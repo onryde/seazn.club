@@ -453,7 +453,7 @@ export const APPROVED_PLANS_INVENTORY: string[] = [
  */
 export const APPROVED_ADD_ONS_INVENTORY: string[] = [
   "95758731e8170665",
-  "41f59869d0dbd02d",
+  "6c8a443f965af003",
   "e3cae01efe43902a",
   "ebaec4c9f5c3663d",
   "d5f73bda47875d4e",
@@ -478,7 +478,7 @@ export const APPROVED_ADD_ONS_INVENTORY: string[] = [
   "277dc6a416f9d610",
   "902edb76c61603ca",
   "960a7c4066c63744",
-  "fcaf46e826f9dd6c",
+  "5579e3868c146d8a",
   "16ff7beb0cc8f08f",
   "fc28ee19aff958ad",
   "b121e1d12d78af05",

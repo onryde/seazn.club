@@ -296,6 +296,21 @@ describe("buildRelayCheckoutParams", () => {
   });
 });
 
+describe("buildRelayCheckoutParams — the invoice names Seazn credits (owner ruling 2026-11-23)", () => {
+  // The line a buyer reads on the Stripe invoice, beside the AI packs' "AI Credit Pack — 40 credits". The count comes
+  // from each pack's own declaration, so a pack resized in STREAM_CREDIT_PACKS moves this with it.
+  it("says 'Seazn credit pack — N credit(s)' for every pack, singular for one (counted)", () => {
+    const got = STREAM_CREDIT_PACKS.map(
+      (pack) =>
+        buildRelayCheckoutParams({ priceId: "price_x", orgId: "org-1", pack, returnUrl: "https://seazn.club/x", currency: "gbp" })
+          .invoice_creation?.invoice_data?.description,
+    );
+    expect(STREAM_CREDIT_PACKS.length, "anti-vacuity: packs were read").toBeGreaterThan(0);
+    expect(got).toEqual(STREAM_CREDIT_PACKS.map((p) => `Seazn credit pack — ${p.credits} ${p.credits === 1 ? "credit" : "credits"}`));
+    expect(got.join(" "), "the retired name").not.toMatch(/match credit/i);
+  });
+});
+
 describe("buildRelayCheckoutParams — a purchase made from Settings has no fixture", () => {
   const settings = buildRelayCheckoutParams({
     priceId: "price_x",

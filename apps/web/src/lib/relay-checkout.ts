@@ -46,7 +46,7 @@ export function buildRelayCheckoutParams(args: {
     ...(args.customerId
       ? { customer: args.customerId, ...CUSTOMER_UPDATE_FOR_TAX }
       : { customer_email: args.customerEmail }),
-    invoice_creation: { enabled: true, invoice_data: { description: `Seazn credits — ${args.pack.credits}` } },
+    invoice_creation: { enabled: true, invoice_data: { description: `Seazn credit pack — ${args.pack.credits} credit${args.pack.credits === 1 ? "" : "s"}` } },
     currency: args.currency ?? "gbp",
     // Adaptive Pricing re-quotes at RENDER time from the buyer's IP unless
     // explicitly disabled — we quote one currency, we must charge in it.

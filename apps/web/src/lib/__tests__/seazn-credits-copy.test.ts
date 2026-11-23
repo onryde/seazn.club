@@ -7,10 +7,8 @@
 // matches, and the line under "Buy Seazn credits" says what one credit buys TODAY: one match stream, capped at the relay's
 // own MAX_DURATION_MINUTES.
 //
-// The three help pages below belong to the unmerged billing branch (PR A). It adapts their copy itself, so they are
-// excluded BY NAME here; the count of excluded files is reported, and an exclusion naming a file that no longer exists
-// fails, so the list cannot outlive the reason for it.
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+// No help page is excluded: an exclusion here would outlive its reason silently (review of #1290, I1).
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -29,7 +27,8 @@ const OLD_NAME: Record<Locale, RegExp> = {
   en: /(?<![/\w-])match[- ]credits?\b|(?<![/\w-])stream(?:ing)?[- ]credits?\b/i,
   es: /\bcr[ée]ditos? de (?:partido|retransmisi[oó]n|emisi[oó]n)\b/i,
   fr: /\bcr[ée]dits? de (?:match|diffusion)\b/i,
-  nl: /wedstrijdcredits?|streamingcredits?/i,
+  // nl's stream panel said "tegoed" before 2026-11-23. Bounded, so "accounttegoed" and "AI-credittegoed" stay legal.
+  nl: /wedstrijdcredits?|streamingcredits?|\btegoed(?:en)?\b/i,
 };
 
 /** The new name, per locale: the brand untranslated, "credit" translated. */
@@ -50,9 +49,6 @@ const CREDIT_WORD: Record<Locale, readonly [string, string]> = {
 
 /** The retired "1 match = 1 credit" line, in every locale. */
 const OLD_LINE = /^1 (?:match|partido|wedstrijd) = 1 /i;
-
-/** Owned by the unmerged billing branch (PR A), which adapts their copy itself. Paths under content/help/. */
-const BILLING_BRANCH_OWNS = ["billing/add-an-organisation.md", "billing/add-ons.md", "billing/groups.md"] as const;
 
 function dictionary(locale: Locale): Map<string, string> {
   const out = new Map<string, string>();
@@ -133,21 +129,13 @@ describe("Seazn credits: the retired names are gone from the dictionaries", () =
 });
 
 describe("Seazn credits: the retired names are gone from help", () => {
-  it("no English help article uses a retired name, front matter included (counted, with the billing branch's pages excluded by name)", () => {
-    const stale = BILLING_BRANCH_OWNS.filter((p) => !existsSync(join(HELP_ROOT, p)));
-    expect(stale, "an exclusion names a page that no longer exists — drop it").toEqual([]);
-
+  it("no English help article uses a retired name, front matter included (counted, none excluded)", () => {
     const files = helpFiles(HELP_ROOT);
     let checked = 0;
-    let excluded = 0;
     let lines = 0;
     const hits: string[] = [];
     for (const file of files) {
       const rel = relative(HELP_ROOT, file).split("\\").join("/");
-      if ((BILLING_BRANCH_OWNS as readonly string[]).includes(rel)) {
-        excluded++;
-        continue;
-      }
       checked++;
       readFileSync(file, "utf8")
         .split("\n")
@@ -156,8 +144,7 @@ describe("Seazn credits: the retired names are gone from help", () => {
           if (OLD_NAME.en.test(text) || OLD_LINE.test(text.trim())) hits.push(`${rel}:${i + 1}: ${text.trim().slice(0, 120)}`);
         });
     }
-    console.info(`seazn-credits help: ${checked} articles checked (${lines} lines), ${excluded} excluded (billing branch), ${hits.length} retired names`);
-    expect(excluded, "every billing-branch exclusion matched a file").toBe(BILLING_BRANCH_OWNS.length);
+    console.info(`seazn-credits help: ${checked} articles checked (${lines} lines), 0 excluded, ${hits.length} retired names`);
     expect(checked, "anti-vacuity: help articles were read").toBeGreaterThan(50);
     expect(hits).toEqual([]);
   });

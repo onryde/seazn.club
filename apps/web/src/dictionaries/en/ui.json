@@ -8062,7 +8062,7 @@
   "externalPlay.checkinExtend.helper": "Adds {minutes} minutes while check-in is open. Up to {max} times per board.",
   "settings.credits.kind.label": "Credit type",
   "settings.credits.kind.ai": "AI",
-  "settings.credits.kind.stream": "Streaming",
+  "settings.credits.kind.stream": "Seazn credits",
   "settings.credits.stream.title": "Seazn credits",
   "settings.credits.stream.balance": "Balance",
   "settings.credits.stream.balanceCount.one": "{count} Seazn credit",

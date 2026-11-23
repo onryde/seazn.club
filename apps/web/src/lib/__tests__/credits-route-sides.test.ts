@@ -18,6 +18,7 @@ import path from "node:path";
 import { routes } from "@/lib/routes";
 import { creditsKindOf } from "@/components/credits-kind-switch";
 import { helpArticleBySlug } from "./_help-copy";
+import en from "@/dictionaries/en/ui.json";
 
 const SRC = path.join(process.cwd(), "src");
 
@@ -102,19 +103,22 @@ describe("Settings → Credits: which side each link opens", () => {
     expect(link).not.toMatch(/routes\.credits\(/);
   });
 
-  it("the help articles tell the page's story: it opens on Streaming, listed first, and has no Invite & earn card (H1)", () => {
+  it("the help articles tell the page's story: it opens on the stream side (Seazn credits), listed first, and has no Invite & earn card (H1)", () => {
     // RE-POINTED (help rewrite, Task 14a): billing/credits was split. billing/match-credits covers the Streaming side
     // and billing/credits the AI side. The rules are the same ones, asked of the pair: the article for the side the
     // page opens on says so, the other side's article sends the reader to its tab, neither sends a reader to the side
     // they are already on, neither mentions the hidden card, and the opening side's article comes first in the nav.
-    const opens = creditsKindOf(undefined) === "stream" ? "Streaming" : "AI";
-    const other = opens === "Streaming" ? "AI" : "Streaming";
-    const bySide = { Streaming: helpArticleBySlug("billing/match-credits"), AI: helpArticleBySlug("billing/credits") };
+    // The tab labels as the switch renders them (credits-kind-switch.tsx), read from the dictionary, not typed here.
+    const label = { stream: en["settings.credits.kind.stream"], ai: en["settings.credits.kind.ai"] };
+    const opensKind = creditsKindOf(undefined);
+    const opens = label[opensKind];
+    const other = label[opensKind === "stream" ? "ai" : "stream"];
+    const bySide = { [label.stream]: helpArticleBySlug("billing/match-credits"), [label.ai]: helpArticleBySlug("billing/credits") };
     const order = (md: string) => Number(/^order:\s*([\d.]+)\s*$/m.exec(md)?.[1] ?? Number.NaN);
     const first = bySide[opens];
     const second = bySide[other];
     expect(first).toContain(`It opens on **${opens}**`);
-    expect(first).toContain("two sides, switched at the top — **Streaming** and **AI**");
+    expect(first).toContain(`two sides, switched at the top — **${label.stream}** and **${label.ai}**`);
     expect(second, "the other side's article names its tab").toContain(`Choose **${other}** at the top`);
     for (const article of [first, second]) {
       expect(article, "no step tells the reader to switch to the side the page already opens on").not.toContain(`switch to **${opens}**`);

@@ -8062,7 +8062,7 @@
   "externalPlay.checkinExtend.helper": "Ajoute {minutes} minutes tant que l'enregistrement est ouvert. Jusqu'à {max} fois par échiquier.",
   "settings.credits.kind.label": "Type de crédits",
   "settings.credits.kind.ai": "IA",
-  "settings.credits.kind.stream": "Diffusion",
+  "settings.credits.kind.stream": "Crédits Seazn",
   "settings.credits.stream.title": "Crédits Seazn",
   "settings.credits.stream.balance": "Solde",
   "settings.credits.stream.balanceCount.one": "{count} crédit Seazn",

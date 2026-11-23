@@ -471,8 +471,8 @@ export async function ensurePrice(
 /** The Stripe product the three pack prices hang off. Its copy is what a buyer
  *  reads on the payment page; only a product this script CREATES gets it. */
 export const STREAM_PACK_PRODUCT = {
-  name: "Seazn Club Match Credits",
-  description: "One match credit = one phone-streamed match, up to 5 hours.",
+  name: "Seazn credits",
+  description: "1 credit = 1 match stream, up to 3 hours.",
 } as const;
 
 /** MEASURED, 2026-09-28 (in the retired script): `stripe.products.search` is

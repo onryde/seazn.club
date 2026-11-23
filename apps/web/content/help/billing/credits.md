@@ -9,7 +9,7 @@ AI scheduling and AI officials spend **AI credits**. They work on every plan. Yo
 
 ## Open your AI wallet
 
-1. Open **Settings** and choose **Credits**. The page opens on **Streaming**, which holds Seazn credits (see [Seazn credits](/help/billing/match-credits)).
+1. Open **Settings** and choose **Credits**. The page opens on **Seazn credits**, the credits for streaming matches (see [Seazn credits](/help/billing/match-credits)).
 2. Choose **AI** at the top. The **Manage AI credits** link on **Plan & Billing** opens this side straight away.
 
 You see:
