@@ -11,7 +11,8 @@
 // text (hls.js quotes the URL in its message): the address is a key in this module's memory and goes nowhere else, and every field is
 // a code, a number or the fixture's id.
 //
-// The send (Task 25b, owner 2026-11-23): the browser has no Sentry of its own (its init is not wired: instrumentation-client.ts), so a
+// The send (Task 25b, owner 2026-11-23): NOT the browser's own Sentry (the lazy browser facade in lib/: consented visitors only, late, and
+// stoppable by an ad-blocker; sending there too would report each failure twice, past the server's dedupe and budgets). A
 // report goes to OUR server as a `video` client report (POST /api/v1/public/client-reports, server/client-reports/video.ts), which logs
 // it and sends the server's Sentry one warning per fixture and reason per window. A beacon first (it outlives the page's unload and
 // waits for nothing), else a keepalive fetch; a report that cannot be sent is lost, never retried, and never throws into the page. The

@@ -1,6 +1,7 @@
 // Client reports (Seazn-hosted Task 25b, owner 2026-11-23): what a browser tells our server about a failure it saw, through ONE generic
-// public beacon route, POST /api/v1/public/client-reports (server/client-reports/). The browser has no Sentry of its own (its init is
-// not wired: instrumentation-client.ts), so a viewer's failure reaches the server log and the server's Sentry only this way.
+// public beacon route, POST /api/v1/public/client-reports (server/client-reports/). The browser's own Sentry (lib/sentry-browser.ts)
+// runs only for a visitor who accepted analytics, loads late, and an ad-blocker can stop it; a beacon to our server reaches the server
+// log for EVERY viewer, and the server's Sentry under the server's own dedupe and budgets. Generic, so other kinds (chess) share it.
 // Zero imports: the client bundle, the route's schemas and the bare OpenAPI generator all load it.
 //
 // A report is CODES only. Each string it carries is a member of a closed list, a uuid, or a bare word (`CLIENT_REPORT_CODE`, the way

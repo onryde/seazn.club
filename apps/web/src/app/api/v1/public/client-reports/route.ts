@@ -3,7 +3,8 @@ import { reply, v1 } from "@/server/api-v1/http";
 import { readClientReport, receiveClientReport } from "@/server/client-reports";
 
 /** POST /api/v1/public/client-reports — Seazn-hosted Task 25b (owner 2026-11-23): a browser's report of a failure it saw, for the
- *  server's log and its Sentry, because the browser has no Sentry of its own. Public (a spectator is anonymous) and not bot-checked: a
+ *  server's log and its Sentry: unlike the browser's own Sentry (consented visitors only, loaded late, stoppable by an ad-blocker), it
+ *  reaches the server for every viewer, under the server's dedupe and budgets. Public (a spectator is anonymous) and not bot-checked: a
  *  beacon cannot solve a challenge, and the route writes nothing but a log line and a windowed warning.
  *
  *  The body is one registered kind (server/client-reports/kinds.ts), closed and made of codes: never an address, a token, an `expires`
