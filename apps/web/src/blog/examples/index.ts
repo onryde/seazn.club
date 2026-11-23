@@ -3,6 +3,7 @@
 import { standingsPoints } from "./standings-points";
 // ---- batch 3 (Swiss and seeding) ----
 import { swissBye, swissByeRounds } from "./swiss-bye";
+import { swissLateAndWithdraw } from "./swiss-late-and-withdraw";
 import { swissPairing } from "./swiss-pairing";
 // ---- end batch 3 ----
 import type { BlogExample } from "./types";
@@ -13,6 +14,7 @@ export const BLOG_EXAMPLES: readonly BlogExample[] = [
   swissPairing,
   swissBye,
   swissByeRounds,
+  swissLateAndWithdraw,
   // ---- end batch 3 ----
 ];
 

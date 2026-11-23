@@ -1,0 +1,90 @@
+{
+  "facts": {
+    "playerCount": 6,
+    "roundCount": 4,
+    "sportCount": 11,
+    "lateName": "Gil",
+    "lateFirstRound": 3,
+    "lateMissedRounds": 2,
+    "lateScoreBeforeFirst": "0",
+    "lateTotal": "1",
+    "leaverName": "Fay",
+    "leaverRound": 2,
+    "leaverTotal": "1",
+    "walkoverWinner": "Ana",
+    "fieldAfterLeaving": 6,
+    "regularsAfterLeaving": 5
+  },
+  "table": {
+    "caption": "A four-round chess Swiss: Fay leaves once round 2 is paired, and Gil joins from round 3.",
+    "columns": [
+      "Player",
+      "Round 1",
+      "Round 2",
+      "Round 3",
+      "Round 4",
+      "Total"
+    ],
+    "rows": [
+      [
+        "Ana",
+        "Beat Dev",
+        "Won without playing (Fay left)",
+        "Beat Ben",
+        "Lost to Eve",
+        "3"
+      ],
+      [
+        "Ben",
+        "Drew with Eve",
+        "Beat Dev",
+        "Lost to Ana",
+        "Lost to Cy",
+        "1½"
+      ],
+      [
+        "Cy",
+        "Lost to Fay",
+        "Beat Eve",
+        "Drew with Gil",
+        "Beat Ben",
+        "2½"
+      ],
+      [
+        "Dev",
+        "Lost to Ana",
+        "Lost to Ben",
+        "Beat Eve",
+        "Drew with Gil",
+        "1½"
+      ],
+      [
+        "Eve",
+        "Drew with Ben",
+        "Lost to Cy",
+        "Lost to Dev",
+        "Beat Ana",
+        "1½"
+      ],
+      [
+        "Fay",
+        "Beat Cy",
+        "Left: Ana wins without playing",
+        "Left",
+        "Left",
+        "1"
+      ],
+      [
+        "Gil",
+        "Not entered yet",
+        "Not entered yet",
+        "Drew with Cy",
+        "Drew with Dev",
+        "1"
+      ]
+    ]
+  },
+  "text": [
+    "Round 2: Fay left after the round was paired, so Ana wins that board without playing."
+  ]
+}

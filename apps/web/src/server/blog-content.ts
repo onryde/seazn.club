@@ -44,7 +44,6 @@ export const BLOG_PLANNED_SLUGS: ReadonlySet<string> = new Set([
   "set-ratio-or-set-difference",
   "buchholz-and-sonneborn-berger",
   "when-lots-decide-a-tie",
-  "joining-or-leaving-a-swiss",
   "knockout-seeds-and-byes",
   "third-place-match",
   "knockout-match-ends-level",

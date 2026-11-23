@@ -5,6 +5,7 @@ import standingsPoints from "./__golden__/standings-points.json";
 // ---- batch 3 (Swiss and seeding) ----
 import swissBye from "./__golden__/swiss-bye.json";
 import swissByeRounds from "./__golden__/swiss-bye-rounds.json";
+import swissLateAndWithdraw from "./__golden__/swiss-late-and-withdraw.json";
 import swissPairing from "./__golden__/swiss-pairing.json";
 // ---- end batch 3 ----
 import type { ExampleResult } from "./types";
@@ -15,5 +16,6 @@ export const BLOG_GOLDENS: Record<string, ExampleResult> = {
   "swiss-pairing": swissPairing as ExampleResult,
   "swiss-bye": swissBye as ExampleResult,
   "swiss-bye-rounds": swissByeRounds as ExampleResult,
+  "swiss-late-and-withdraw": swissLateAndWithdraw as ExampleResult,
   // ---- end batch 3 ----
 };
