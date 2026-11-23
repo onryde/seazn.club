@@ -33,6 +33,7 @@ import type { ExampleResult } from "./types";
 // ---- batch 6 (Task 12) ----
 import roundRobinSchedule from "./__golden__/round-robin-schedule.json";
 import groupsIntoKnockout from "./__golden__/groups-into-knockout.json";
+import bestThirdPlacedTeams from "./__golden__/best-third-placed-teams.json";
 // ---- end batch 6 ----
 // --- blog batch 4 (knockouts) ---
 import thirdPlaceMatch from "./__golden__/third-place-match.json";
@@ -82,5 +83,6 @@ export const BLOG_GOLDENS: Record<string, ExampleResult> = {
   // ---- batch 6 (Task 12) ----
   "round-robin-schedule": roundRobinSchedule as ExampleResult,
   "groups-into-knockout": groupsIntoKnockout as ExampleResult,
+  "best-third-placed-teams": bestThirdPlacedTeams as ExampleResult,
   // ---- end batch 6 ----
 };

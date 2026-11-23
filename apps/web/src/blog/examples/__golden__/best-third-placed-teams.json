@@ -1,0 +1,109 @@
+{
+  "facts": {
+    "teams": 10,
+    "groupCount": 3,
+    "groupSizes": "3, 3 and 4",
+    "topEach": 2,
+    "bestCount": 2,
+    "qualified": 8,
+    "signUpOrder": "Hawks, Rockets, Comets, Dynamos, Wolves, Tigers, Lions, Bears, Foxes, Eagles",
+    "comparedMatches": 2,
+    "largerGroup": "Group C",
+    "largerGroupSize": 4,
+    "smallestGroupSize": 3,
+    "largerThird": "Foxes",
+    "largerThirdFullPoints": 3,
+    "largerThirdFullRecord": "3 points, -3 from 3 matches",
+    "largerThirdComparedRecord": "0 points, -4 from 2 matches",
+    "leftOutTeam": "Eagles",
+    "leftOutPlace": "4th",
+    "fullRecordLeader": "Foxes",
+    "comparedLeader": "Bears",
+    "thirdsThrough": "Bears and Lions",
+    "outThird": "Foxes",
+    "footnoteLine": "Best 3rd-placed compared on 2 matches (results v 4th in Group C not counted)",
+    "footnoteNothingLeftOut": "Lions: nothing left out, Group A is the smallest group",
+    "footnoteLeftOutLine": "Foxes v Eagles (4th in Group C)",
+    "sportCount": 11
+  },
+  "table": {
+    "caption": "Three groups of three, three and four, the top two of each go through, and so do the two best third-placed teams. Each is compared on two matches, so Foxes are compared without their result against Eagles.",
+    "columns": [
+      "Third place of",
+      "Team",
+      "Record in its own group",
+      "Results left out",
+      "Compared on",
+      "Place among the thirds",
+      "Result"
+    ],
+    "rows": [
+      [
+        "Group B",
+        "Bears",
+        "1 point, -1 from 2 matches",
+        "nothing",
+        "1 point, -1 from 2 matches",
+        "1st",
+        "Through"
+      ],
+      [
+        "Group A",
+        "Lions",
+        "0 points, -2 from 2 matches",
+        "nothing",
+        "0 points, -2 from 2 matches",
+        "2nd",
+        "Through"
+      ],
+      [
+        "Group C",
+        "Foxes",
+        "3 points, -3 from 3 matches",
+        "v Eagles (4th)",
+        "0 points, -4 from 2 matches",
+        "3rd",
+        "Out"
+      ]
+    ]
+  },
+  "diagram": {
+    "kind": "bestPlaced",
+    "title": "The two best third-placed teams go through. Each is compared on two matches, so the result of a team in a larger group against its last-placed team is left out.",
+    "take": 2,
+    "candidates": [
+      {
+        "team": "Bears",
+        "group": "Group B, three teams",
+        "counted": "Counted: 1 point, -1 from 2 matches",
+        "leftOut": "Left out: nothing"
+      },
+      {
+        "team": "Lions",
+        "group": "Group A, three teams",
+        "counted": "Counted: 0 points, -2 from 2 matches",
+        "leftOut": "Left out: nothing"
+      },
+      {
+        "team": "Foxes",
+        "group": "Group C, four teams",
+        "counted": "Counted: 0 points, -4 from 2 matches",
+        "leftOut": "Left out: v Eagles (4th)"
+      }
+    ]
+  },
+  "text": [
+    "Hawks 1 — 0 Tigers.",
+    "Hawks 1 — 0 Lions.",
+    "Tigers 1 — 0 Lions.",
+    "Rockets 1 — 1 Wolves.",
+    "Rockets 1 — 0 Bears.",
+    "Wolves 0 — 0 Bears.",
+    "Comets 1 — 0 Dynamos.",
+    "Comets 3 — 0 Foxes.",
+    "Comets 1 — 0 Eagles.",
+    "Dynamos 1 — 0 Foxes.",
+    "Dynamos 1 — 0 Eagles.",
+    "Foxes 1 — 0 Eagles."
+  ]
+}

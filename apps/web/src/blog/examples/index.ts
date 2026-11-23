@@ -31,6 +31,7 @@ import type { BlogExample } from "./types";
 // ---- batch 6 (Task 12: round robins, groups, qualification, leaving and joining) ----
 import { roundRobinSchedule } from "./round-robin-schedule";
 import { groupsIntoKnockout } from "./groups-into-knockout";
+import { bestThirdPlacedTeams } from "./best-third-placed-teams";
 // ---- end batch 6 ----
 // --- blog batch 4 (knockouts) ---
 import { thirdPlaceMatch } from "./third-place-match";
@@ -62,6 +63,7 @@ export const BLOG_EXAMPLES: readonly BlogExample[] = [
   // ---- batch 6 (Task 12) ----
   roundRobinSchedule,
   groupsIntoKnockout,
+  bestThirdPlacedTeams,
   // ---- end batch 6 ----
 ];
 

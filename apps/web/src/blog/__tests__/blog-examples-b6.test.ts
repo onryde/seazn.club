@@ -7,7 +7,7 @@ import { BLOG_EXAMPLES } from "@/blog/examples";
 import { BLOG_GOLDENS } from "@/blog/examples/goldens";
 import type { ExampleResult } from "@/blog/examples/types";
 
-const B6 = ["round-robin-schedule", "groups-into-knockout"] as const;
+const B6 = ["round-robin-schedule", "groups-into-knockout", "best-third-placed-teams"] as const;
 const EMPTY: ExampleResult = { facts: {}, text: [] };
 const clone = (id: string): ExampleResult => JSON.parse(JSON.stringify(BLOG_GOLDENS[id]!)) as ExampleResult;
 const claimsOf = (id: string) => BLOG_EXAMPLES.find((e) => e.id === id)!.claims;
@@ -67,6 +67,33 @@ describe("batch 6 claims have teeth", () => {
     expect(failing("groups-into-knockout", size), "six places is not a power of two").toContain(says("the counts are the groups'"));
     expect(Number(BLOG_GOLDENS["groups-into-knockout"]!.facts.bracketSize), "the golden's own size is the next power of two").toBe(8);
     expect(Number(BLOG_GOLDENS["groups-into-knockout"]!.facts.qualifiers), "and it differs from the qualifiers").not.toBe(8);
+  });
+
+  it("best third-placed teams: nothing left out, ranking on the full records, and the larger group's match count used as the number compared are all caught", () => {
+    const says = (start: string) => claimsOf("best-third-placed-teams").find((c) => c.says.startsWith(start))!.says;
+    const id = "best-third-placed-teams";
+    // Nothing left out: the larger group's candidate keeps its win over the last-placed team.
+    const kept = clone(id);
+    const larger = kept.table!.rows.find((row) => row[3] !== "nothing")!;
+    larger[3] = "nothing";
+    larger[4] = larger[2]!;
+    expect(failing(id, kept), "a larger group compared on all its matches").toContain(says("the table is the third-placed team of each group"));
+    // Ranked on the full records: the larger group's third (3 points) is first.
+    const full = clone(id);
+    const rows = full.table!.rows;
+    const at = rows.findIndex((row) => row[3] !== "nothing");
+    const [moved] = rows.splice(at, 1);
+    rows.unshift(moved!);
+    expect(failing(id, full).length, "ranking on the full records").toBeGreaterThan(0);
+    // The right answer differs from the wrong constant: compared on the smallest group's two matches, not the larger group's three.
+    const matches = clone(id);
+    matches.facts.comparedMatches = 3;
+    expect(failing(id, matches), "the larger group's match count is not the number compared").toContain(says("every third-placed team is compared on the same number of matches"));
+    expect(Number(BLOG_GOLDENS[id]!.facts.comparedMatches), "the golden's own number differs from the larger group's").toBeLessThan(Number(BLOG_GOLDENS[id]!.facts.largerGroupSize));
+    // The contrast the post rests on: counting every result puts a different team first than the rule does.
+    const same = clone(id);
+    same.facts.fullRecordLeader = same.facts.comparedLeader;
+    expect(failing(id, same), "the full-record leader is not the compared leader").toContain(says("counting every result would rank a different team first"));
   });
 });
 

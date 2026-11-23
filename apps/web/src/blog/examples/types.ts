@@ -80,6 +80,12 @@ export type DiagramModel =
       groups: { name: string; entrants: string[]; advancing: number }[];
       bracket: { name: string; matches: { home: string | null; away: string | null }[] }[];
     }
+  // ---- batch 6 (Task 12): best-third-placed-teams ----
+  /** The best of one place across the groups (the third-placed teams): one card per group's team, best first as the cross-group
+   *  order ranks them on the matches they were compared on, the first `take` through. `group` is the card's group line
+   *  ("Group C, 4 teams"), `counted` what was counted ("0 points, -4 from 2 matches"), `leftOut` what was not ("Left out: v Eagles (4th)"
+   *  or "Nothing left out"). */
+  | { kind: "bestPlaced"; title: string; take: number; candidates: { team: string; group: string; counted: string; leftOut: string }[] }
   | { kind: "ladder"; title: string; rungs: string[]; challenger: string; target: string; swapped: boolean }
   // ---- batch 5, fix round 1 (M9): one picture for each of the walkover posts ----
   /** A walkover in a bracket: rounds left to right, each match with its two sides (a seat not filled reads as the words the

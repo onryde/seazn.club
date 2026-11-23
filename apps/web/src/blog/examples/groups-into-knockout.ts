@@ -39,15 +39,15 @@ const poolName = (key: string) => `Group ${key}`;
 /** The group matches, home side first. Each group's winner beats both; the runner-up beats the third team. The margins are chosen so the
  *  three winners finish A, B, C on goal difference and so do the three runners-up: Group C is the weakest of its rank, twice. */
 const SCORES: { home: string; away: string; h: number; a: number; seed: number }[] = [
-  { home: "hawks", away: "tigers", h: 1, a: 0, seed: 0 },
-  { home: "hawks", away: "lions", h: 3, a: 0, seed: 0 },
-  { home: "tigers", away: "lions", h: 3, a: 0, seed: 0 },
-  { home: "rockets", away: "wolves", h: 1, a: 0, seed: 0 },
-  { home: "rockets", away: "bears", h: 2, a: 0, seed: 0 },
-  { home: "wolves", away: "bears", h: 2, a: 0, seed: 0 },
-  { home: "comets", away: "dynamos", h: 1, a: 0, seed: 0 },
-  { home: "comets", away: "foxes", h: 1, a: 0, seed: 0 },
-  { home: "dynamos", away: "foxes", h: 1, a: 0, seed: 0 },
+  { home: "hawks", away: "tigers", h: 1, a: 0, seed: 5 },
+  { home: "hawks", away: "lions", h: 3, a: 0, seed: 202 },
+  { home: "tigers", away: "lions", h: 3, a: 0, seed: 202 },
+  { home: "rockets", away: "wolves", h: 1, a: 0, seed: 5 },
+  { home: "rockets", away: "bears", h: 2, a: 0, seed: 95 },
+  { home: "wolves", away: "bears", h: 2, a: 0, seed: 95 },
+  { home: "comets", away: "dynamos", h: 1, a: 0, seed: 5 },
+  { home: "comets", away: "foxes", h: 1, a: 0, seed: 5 },
+  { home: "dynamos", away: "foxes", h: 1, a: 0, seed: 5 },
 ];
 
 const football = () => builtinModules.find((m) => m.key === "football")!;

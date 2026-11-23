@@ -56,7 +56,7 @@ export function playGroups(spec: GroupSpec): PlayedGroups {
     const id = `blog-fixture-${i + 1}`;
     // `playMeeting` folds the match under the league kind: a match plays the same in a pool as in a league.
     const p = playMeeting(module, cfg, "league", rules, m);
-    played.push({ meeting: p.meeting, view: p.view, result: p.result, played: p.played });
+    played.push({ meeting: p.meeting, view: p.view, result: p.result, played: p.played, ...(p.seed === undefined ? {} : { seed: p.seed }) });
     gamePoints.set(p.result, p.gamePoints);
     fixtures.push({ id, status: "decided", round_no: m.round ?? 1, pool_id: pool, home_entrant_id: m.home, away_entrant_id: m.away } as FixtureRow);
     tableFixtures.push({ id, status: "decided", roundNo: m.round ?? 1, poolId: pool, result: p.result } as TableFixture);
