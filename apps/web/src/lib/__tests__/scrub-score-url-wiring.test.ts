@@ -21,7 +21,7 @@ import { generateRefCode } from "@/lib/ref-code";
 import { USER_ID } from "./_fake-sql";
 import { clientSpanDetails, otelTraceData, outgoingBreadcrumb, serverSpanDetails, transaction } from "./_sdk-span-data";
 import { credentialPages, setReplay } from "./_replay-fixtures";
-import { bootBrowserSentry } from "./_browser-sentry";
+import { bootBrowserSentry, integrationsOf } from "./_browser-sentry";
 
 // Only the Postgres round trip is a stand-in: the real minters (`createLoginLink`, `createVerificationToken`) run on it.
 vi.mock("@/lib/db", async (importOriginal) => ({
@@ -218,7 +218,7 @@ describe("Sentry client (src/instrumentation-client.ts, options from lib/sentry-
 
   it("registers an event processor that scrubs a replay_event's URL list (beforeSend never sees one)", async () => {
     const options = await clientInitOptions();
-    const integrations = options.integrations as { name: string; processEvent?: unknown }[];
+    const integrations = integrationsOf(options);
     const scrubbers = integrations.filter((i) => typeof i.processEvent === "function");
     expect(scrubbers.map((i) => i.name)).toEqual(["ScrubScoreTokens"]);
     const out = run(scrubbers[0]!.processEvent, { type: "replay_event", urls: [PAGE] }, {}, {});
@@ -240,7 +240,7 @@ describe("Sentry client (src/instrumentation-client.ts, options from lib/sentry-
       const options = await clientInitOptions();
       const Sentry = await import("@sentry/nextjs");
       expect(vi.mocked(Sentry.replayIntegration), `${p.name}: no replay is built`).not.toHaveBeenCalled();
-      expect((options.integrations as { name: string }[]).map((i) => i.name), p.name).toEqual(["ConsoleLogs", "ScrubScoreTokens"]);
+      expect(integrationsOf(options).map((i) => i.name), p.name).toEqual(["ConsoleLogs", "ScrubScoreTokens"]);
       expect([options.replaysSessionSampleRate, options.replaysOnErrorSampleRate], p.name).toEqual([0, 0]);
       checked++;
     }
@@ -350,7 +350,7 @@ describe("the match-room token (review I1): every config's real hooks scrub it",
     const { token, room, start, login } = await roomUrls();
     expectScrubbedOf(run(options.beforeSend, { event_id: "e1", request: { url: room } }, {}), token);
     expectScrubbedOf(run(options.beforeBreadcrumb, { category: "navigation", data: { from: login, to: room } }, {}), token);
-    const integrations = options.integrations as { name: string; processEvent?: unknown }[];
+    const integrations = integrationsOf(options);
     const scrubber = integrations.find((i) => typeof i.processEvent === "function")!;
     expectScrubbedOf(run(scrubber.processEvent, { type: "replay_event", urls: [room, start, login] }, {}, {}), token);
   });
@@ -429,7 +429,7 @@ describe("the one-time sign-in token: every config's real hooks scrub it", () =>
     const { login, verify, magicUrl, verifyUrl } = await signInUrls();
     expectGone(run(options.beforeSend, { event_id: "e1", request: { url: magicUrl, query_string: `token=${login}` } }, {}), login);
     expectGone(run(options.beforeBreadcrumb, { category: "navigation", data: { from: verifyUrl, to: magicUrl } }, {}), login, verify);
-    const integrations = options.integrations as { name: string; processEvent?: unknown }[];
+    const integrations = integrationsOf(options);
     const scrubber = integrations.find((i) => typeof i.processEvent === "function")!;
     expectGone(run(scrubber.processEvent, { type: "replay_event", urls: [magicUrl, verifyUrl] }, {}, {}), login, verify);
   });
@@ -493,7 +493,7 @@ describe("the profile-claim secret: every config's real hooks scrub it", () => {
     const { secret, page, accept, login } = claimUrls();
     expectGone(run(options.beforeSend, { event_id: "e1", request: { url: page } }, {}), secret);
     expectGone(run(options.beforeBreadcrumb, { category: "navigation", data: { from: login, to: page } }, {}), secret);
-    const integrations = options.integrations as { name: string; processEvent?: unknown }[];
+    const integrations = integrationsOf(options);
     const scrubber = integrations.find((i) => typeof i.processEvent === "function")!;
     expectGone(run(scrubber.processEvent, { type: "replay_event", urls: [page, accept, login] }, {}, {}), secret);
   });
@@ -567,7 +567,7 @@ describe("the invite token and the check-in code: every config's real hooks scru
     const { invite, checkin, joinUrl, claimApiUrl, checkinUrl } = await pathSecretUrls();
     expectGone(run(options.beforeSend, { event_id: "e1", request: { url: joinUrl } }, {}), invite);
     expectGone(run(options.beforeBreadcrumb, { category: "navigation", data: { from: joinUrl, to: checkinUrl } }, {}), invite, checkin);
-    const integrations = options.integrations as { name: string; processEvent?: unknown }[];
+    const integrations = integrationsOf(options);
     const scrubber = integrations.find((i) => typeof i.processEvent === "function")!;
     expectGone(run(scrubber.processEvent, { type: "replay_event", urls: [joinUrl, checkinUrl, claimApiUrl] }, {}, {}), invite, checkin);
   });
@@ -625,7 +625,7 @@ describe("a credential in a request body: every Sentry config's real hooks drop 
     expectBodyGone(run(options.beforeSend, consume, {}), login);
     expectBodyGone(run(options.beforeSend, claim, {}), invite);
     expectBodyKept(run(options.beforeSend, lookup, {}));
-    const integrations = options.integrations as { name: string; processEvent?: unknown }[];
+    const integrations = integrationsOf(options);
     const scrubber = integrations.find((i) => typeof i.processEvent === "function")!;
     expectBodyGone(run(scrubber.processEvent, consume, {}, {}), login);
   });
@@ -684,7 +684,7 @@ describe("a one-time token in a span's bare query, and a join code: every Sentry
     expect(spanData(run(options.beforeSendTransaction, child, {}))["url.query"]).toBe("?token=[token]&next=%2Fdashboard");
     expect(data(run(options.beforeSendTransaction, joinTx, {}))["http.query"]).toBe("?join_code=[code]");
     expect(JSON.stringify(run(options.beforeSend, error, {}))).not.toContain(login);
-    const integrations = options.integrations as { name: string; processEvent?: unknown }[];
+    const integrations = integrationsOf(options);
     const scrubber = integrations.find((i) => typeof i.processEvent === "function")!;
     expect(data(run(scrubber.processEvent, tx, {}, {}))["http.query"]).toBe("?token=[token]&next=%2Fdashboard");
     expect(JSON.stringify(run(scrubber.processEvent, joinError, {}, {}))).not.toContain(code);

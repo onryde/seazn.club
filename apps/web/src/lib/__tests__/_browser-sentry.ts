@@ -33,3 +33,10 @@ export async function bootBrowserSentry(): Promise<Record<string, unknown>> {
   expect(calls, "the browser client calls init once").toHaveLength(1);
   return calls[0]![0] as Record<string, unknown>;
 }
+
+/** The integrations a config hands `init`: its array (the server and edge configs), or what its function makes of the SDK's
+ *  defaults (the browser client's: it filters them, then adds its own). `defaults` stands in for the SDK's list. */
+export function integrationsOf(options: Record<string, unknown>, defaults: { name: string }[] = []): { name: string; processEvent?: unknown }[] {
+  const integrations = options.integrations;
+  return (typeof integrations === "function" ? integrations(defaults) : integrations) as { name: string; processEvent?: unknown }[];
+}

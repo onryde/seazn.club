@@ -16,7 +16,7 @@ import { readActiveLocale, clientCommon } from "@/lib/client-dict";
 import { DEFAULT_LOCALE } from "@/lib/i18n-constants";
 import { subscribeToStorage } from "@/lib/use-client-snapshot";
 import { isPublicHubPath } from "@/lib/routes";
-import { scheduleBrowserSentry } from "@/lib/sentry-browser";
+import { clearBreadcrumbs, scheduleBrowserSentry } from "@/lib/sentry-browser";
 
 /** The one route prefix that renders no chrome at all. Named rather than
  *  inlined so a future overlay route cannot forget it. */
@@ -64,7 +64,8 @@ const defaultLocaleOnServer = () => DEFAULT_LOCALE;
 /**
  * What a choice in the banner does, outside React: stores it against the current policy version, opts PostHog in or out,
  * loads the browser Sentry client on an Accept (lib/sentry-browser.ts: the SDK is fetched only once the visitor has
- * consented; a withdrawal is enforced at every send), and records the proof of consent on the server.
+ * consented; a withdrawal is enforced at every send, and clears the breadcrumbs it collected), and records the proof of
+ * consent on the server.
  */
 export function recordConsentChoice(choice: ConsentChoice): void {
   localStorage.setItem(CONSENT_KEY, choice);
@@ -84,6 +85,7 @@ export function recordConsentChoice(choice: ConsentChoice): void {
   }
   try {
     if (choice === "accepted") scheduleBrowserSentry();
+    else clearBreadcrumbs();
   } catch {
     // Error reporting must never block dismissing the banner either.
   }

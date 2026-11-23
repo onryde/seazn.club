@@ -48,9 +48,15 @@ export function addBreadcrumb(...args: Parameters<Sdk["addBreadcrumb"]>): void {
 }
 
 /** The router hook's half (instrumentation-client.ts `onRouterTransitionStart`). Never queued: a navigation span means
- *  something only when the navigation starts. With tracing at 0 the span is unsampled anyway. */
+ *  something only when the navigation starts. The client installs no tracing integration, so the SDK does nothing with it. */
 export function captureRouterTransitionStart(...args: Parameters<Sdk["captureRouterTransitionStart"]>): void {
   if (sdk) forward((s) => s.captureRouterTransitionStart(...args));
+}
+
+/** Forget the breadcrumbs the loaded client holds (the banner's Reject: components/cookie-consent.tsx). Nothing to forget
+ *  before the load: a breadcrumb made while the load is pending sits in the queue, which a withdrawal drops. */
+export function clearBreadcrumbs(): void {
+  if (sdk) forward((s) => s.clearBreadcrumbs());
 }
 
 /** The initialised client once the SDK has loaded, else undefined (lib/replay-guard looks a Replay integration up on it). */

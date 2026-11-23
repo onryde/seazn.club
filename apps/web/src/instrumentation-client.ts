@@ -17,7 +17,7 @@ import { captureRouterTransitionStart, scheduleBrowserSentry } from "@/lib/sentr
 scheduleBrowserSentry();
 
 // Exported because without it @sentry/nextjs logs an ACTION REQUIRED at build (withSentryConfig reads this file for the name).
-// It is a no-op until the SDK has loaded; with tracing at 0 its navigation span is unsampled. The client has no Replay
+// It is a no-op until the SDK has loaded, and after: the client installs no tracing integration. The client has no Replay
 // integration, so the replay guard (lib/replay-guard) finds none to stop; it stays for the day a replay is turned on: it stops
 // the replay before the app navigates to a page whose URL holds a credential. Sentry's own hook runs first, so the guard can
 // never cost the navigation span.

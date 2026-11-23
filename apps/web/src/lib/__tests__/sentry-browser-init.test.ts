@@ -15,7 +15,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CONSENT_KEY, COOKIE_POLICY_VERSION } from "@/lib/consent";
-import { TEST_DSN, bootBrowserSentry, stubConsent } from "./_browser-sentry";
+import { TEST_DSN, bootBrowserSentry, integrationsOf, stubConsent } from "./_browser-sentry";
 
 const fakeTransport = vi.hoisted(() => ({ send: vi.fn(async () => ({ statusCode: 200 })), flush: vi.fn(async () => true) }));
 vi.mock("posthog-js", () => ({
@@ -31,6 +31,8 @@ vi.mock("@sentry/nextjs", () => ({
   captureException: vi.fn(),
   captureMessage: vi.fn(),
   addBreadcrumb: vi.fn(),
+  getIsolationScope: vi.fn(() => ({ clearBreadcrumbs: vi.fn() })),
+  getCurrentScope: vi.fn(() => ({ clearBreadcrumbs: vi.fn() })),
 }));
 
 type Options = Record<string, unknown>;
@@ -54,9 +56,9 @@ afterEach(() => {
 });
 
 describe("loading the SDK (src/instrumentation-client.ts -> lib/sentry-browser.ts)", () => {
-  it("consented at boot: nothing is fetched while the page loads; the load waits for idle, then inits once with replay off, tracing 0 and the scrub hooks", async () => {
+  it("consented at boot: nothing is fetched while the page loads; the load waits for idle, then inits once with replay and tracing off and the scrub hooks", async () => {
     vi.stubEnv("NEXT_PUBLIC_SENTRY_DSN", TEST_DSN);
-    stubConsent("accepted");
+    const store = stubConsent("accepted");
     const idle = captureIdle();
     await import("../../instrumentation-client");
     const Sentry = await import("@sentry/nextjs");
@@ -70,17 +72,33 @@ describe("loading the SDK (src/instrumentation-client.ts -> lib/sentry-browser.t
 
     const options = vi.mocked(Sentry.init).mock.calls[0]![0] as Options;
     expect(options.dsn).toBe(TEST_DSN);
-    expect(options.tracesSampleRate, "no performance tracing (a 0 rate keeps the router hook's span unsampled)").toBe(0);
+    // Tracing OFF is the rate UNSET: a 0 counts as enabled and inherits a sampled server trace (review I1; the real sampler is
+    // pinned in sentry-browser-real-sdk.test.ts).
+    expect("tracesSampleRate" in options, "no tracesSampleRate").toBe(false);
+    expect("tracesSampler" in options, "no tracesSampler").toBe(false);
+    expect(options.tracePropagationTargets, "no trace header on any request").toEqual([]);
     expect(options.replaysSessionSampleRate, "no session replay").toBe(0);
     expect(options.replaysOnErrorSampleRate, "no replay on error either").toBe(0);
     expect(vi.mocked(Sentry.replayIntegration), "no Replay integration is built").not.toHaveBeenCalled();
-    expect((options.integrations as { name: string }[]).map((i) => i.name), "the exact set: a new integration is a decision").toEqual(["ConsoleLogs", "ScrubScoreTokens"]);
+    // The integrations this config adds and drops, over a stand-in for the SDK's defaults. The EFFECTIVE set after a real init
+    // is pinned in sentry-browser-real-sdk.test.ts.
+    const standInDefaults = ["InboundFilters", "BrowserTracing", "Breadcrumbs", "BrowserSession"].map((name) => ({ name }));
+    expect(integrationsOf(options, standInDefaults).map((i) => i.name), "the integrations this config adds and drops: a change is a decision").toEqual([
+      "InboundFilters",
+      "Breadcrumbs",
+      "ConsoleLogs",
+      "ScrubScoreTokens",
+    ]);
     expect(vi.mocked(Sentry.consoleLoggingIntegration)).toHaveBeenCalledWith({ levels: ["warn", "error"] });
     // The same module instance the load used (resetModules gives every test a fresh one).
     const { scrubScoreTokens, scrubSentryEvent } = await import("@/lib/scrub-score-url");
     expect(options.beforeSend).toBe(scrubSentryEvent);
     expect(options.beforeSendTransaction).toBe(scrubSentryEvent);
-    expect(options.beforeBreadcrumb).toBe(scrubScoreTokens);
+    const crumb = { category: "navigation", data: { to: "/score/dl_Q2hvb3NlIGEgcmVhbGx5IGxvbmcgcmFuZG9tIHRva2Vu_Ab-9" } };
+    expect((options.beforeBreadcrumb as (c: unknown) => unknown)(crumb), "consented: the crumb is scrubbed, as scrubScoreTokens does").toEqual(scrubScoreTokens(crumb));
+    store.set(CONSENT_KEY, "rejected");
+    expect((options.beforeBreadcrumb as (c: unknown) => unknown)(crumb), "withdrawn: nothing is collected").toBeNull();
+    store.set(CONSENT_KEY, "accepted");
     expect(typeof options.beforeSendLog).toBe("function");
     expect(typeof options.transport, "sending goes through the consent gate").toBe("function");
     expect(Object.keys(options).sort(), "the exact option set: a new one is a decision").toEqual([
@@ -94,7 +112,7 @@ describe("loading the SDK (src/instrumentation-client.ts -> lib/sentry-browser.t
       "integrations",
       "replaysOnErrorSampleRate",
       "replaysSessionSampleRate",
-      "tracesSampleRate",
+      "tracePropagationTargets",
       "transport",
     ]);
     // A second schedule or load is the same load.
@@ -208,6 +226,10 @@ describe("the facade (lib/sentry-browser.ts): a call before, during and after th
     expect(await facade.loadBrowserSentry()).toBe(true);
     const sent = vi.mocked(Sentry.captureException).mock.calls;
     expect(sent.map((c) => (c[0] as Error).message), "the first 20, in order").toEqual(errors.slice(0, 20).map((e) => e.message));
+    // AFTER init: a report forwarded to an SDK with no client yet is silently dropped (review m3).
+    expect(vi.mocked(Sentry.init).mock.invocationCallOrder[0]!, "init runs before the first queued call is forwarded").toBeLessThan(
+      vi.mocked(Sentry.captureException).mock.invocationCallOrder[0]!,
+    );
     expect(sent.every((c) => (c[1] as { level: string }).level === "warning"), "each call's own arguments").toBe(true);
     expect(vi.mocked(Sentry.captureRouterTransitionStart), "a navigation before the load is not replayed").not.toHaveBeenCalled();
     facade.captureMessage("realtimekit: room dropped", { level: "warning" });
