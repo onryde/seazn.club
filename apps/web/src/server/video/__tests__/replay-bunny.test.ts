@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { BunnyConfig } from "@/server/relay/config";
 import { FakeRecorder } from "@/server/relay/fakes";
 import { pathTemplate } from "@/server/relay/sanitise";
-import { BunnyReplayHost } from "../replay-bunny";
+import { BunnyReplayHost, WATCH_TIME_CHART_SECONDS_PER_UNIT } from "../replay-bunny";
 import { type ReplayHost, ReplayHostRefused, ReplayHostUnavailable, ReplayNotDownloadable } from "../replay-ports";
 
 const CONFIG: BunnyConfig = {
@@ -160,18 +160,104 @@ describe("BunnyReplayHost: the API calls (AccessKey header, library base URL)", 
     expect(calls.map((c) => c.method)).toEqual(["GET", "DELETE"]);
   });
 
-  it("watchMinutes is Task 30's and refuses until it is built", async () => {
-    const { host, calls } = harness(() => ({ status: 200, body: {} }));
+});
+
+// Task 30: the statistics read. `GET /library/{lib}/statistics?videoGuid=&dateFrom=&dateTo=` (Bunny's "Get Video Statistics", read
+// 2026-11-23: dateFrom/dateTo are UTC date-times, videoGuid filters to one video, and an omitted or INVALID dateFrom answers the
+// last 30 days instead of an error). `watchTimeChart` maps each UTC interval to an int64 "total watch time" whose unit the docs do
+// not state: WATCH_TIME_CHART_SECONDS_PER_UNIT holds the assumption (seconds) until the Task 20 probe measures it.
+describe("BunnyReplayHost: watchMinutes (Task 30)", () => {
+  const FROM = new Date("2026-11-01T00:00:00.000Z");
+  const TO = new Date("2026-11-22T23:59:59.999Z");
+  const stats = (watchTimeChart: unknown) => ({
+    viewsChart: { "2026-11-01T00:00:00Z": 2 }, watchTimeChart, countryViewCounts: {}, countryWatchTime: {}, engagementScore: 0,
+  });
+
+  it("the unit: one watchTimeChart unit is assumed to be ONE SECOND (Bunny does not document it; the Task 20 probe settles it)", () => {
+    expect(WATCH_TIME_CHART_SECONDS_PER_UNIT).toBe(1);
+  });
+
+  it("GETs /statistics with videoGuid, dateFrom and dateTo (ISO instants) and the AccessKey header, and sums watchTimeChart {a:60,b:30} to the minutes it means", async () => {
+    const { host, calls } = harness(() => ({ status: 200, body: stats({ a: 60, b: 30 }) }));
     const port: ReplayHost = host; // called as the application layer calls it
-    expect(await errorOf(port.watchMinutes(GUID, NOW, NOW))).toMatch(/Task 30/);
+    // {a:60, b:30} is 90 units; a unit is WATCH_TIME_CHART_SECONDS_PER_UNIT seconds; a minute is 60 seconds.
+    expect(await port.watchMinutes(GUID, FROM, TO)).toBe((90 * WATCH_TIME_CHART_SECONDS_PER_UNIT) / 60);
+    expect(calls).toHaveLength(1);
+    const url = new URL(calls[0].url);
+    expect(`${url.origin}${url.pathname}`).toBe(`${API}/statistics`);
+    expect(calls[0].method).toBe("GET");
+    expect([...url.searchParams.entries()]).toEqual([
+      ["videoGuid", GUID], ["dateFrom", "2026-11-01T00:00:00.000Z"], ["dateTo", "2026-11-22T23:59:59.999Z"],
+    ]);
+    expect(calls[0].headers.accesskey).toBe(CONFIG.apiKey);
+    for (const s of SECRETS) expect(calls[0].url).not.toContain(s);
+  });
+
+  it("a null chart (the schema's 'nullable': no watch data) and an empty one read 0; an answer with NO chart, or a value that is not a count, throws", async () => {
+    for (const chart of [null, {}]) {
+      const { host } = harness(() => ({ status: 200, body: stats(chart) }));
+      expect(await host.watchMinutes(GUID, FROM, TO), JSON.stringify(chart)).toBe(0);
+    }
+    const refused: [string, unknown][] = [
+      ["no chart", { viewsChart: {}, engagementScore: 0 }],
+      ["a chart that is a list", stats([60, 30])],
+      ["a value that is text", stats({ a: "60" })],
+      ["a negative value", stats({ a: -5 })],
+    ];
+    let checked = 0;
+    for (const [what, body] of refused) {
+      const { host } = harness(() => ({ status: 200, body }));
+      const message = await errorOf(host.watchMinutes(GUID, FROM, TO));
+      expect(message, what).toMatch(/^bunny watchMinutes: /);
+      expect(message, what).toContain(GUID);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: refused shapes").toBe(4);
+  });
+
+  it("a backwards window, or a date that is not one, is refused before any call (the host would answer an unreadable date with its last 30 days)", async () => {
+    const { host, calls } = harness(() => ({ status: 200, body: stats({ a: 60 }) }));
+    await expect(host.watchMinutes(GUID, TO, FROM)).rejects.toThrow(/before it starts/);
+    await expect(host.watchMinutes(GUID, new Date("nope"), TO)).rejects.toThrow(/not a date/);
+    await expect(host.watchMinutes(GUID, FROM, new Date(Number.NaN))).rejects.toThrow(/not a date/);
     expect(calls).toEqual([]);
+    expect(await host.watchMinutes(GUID, FROM, FROM), "a zero-length window is a window").toBe((60 * WATCH_TIME_CHART_SECONDS_PER_UNIT) / 60);
+  });
+
+  it("refusals map by status, as every other API call's do: 401/403 refuse our API key, 429/5xx are the host not answering, a 404 is neither", async () => {
+    const rows: [number, (e: unknown) => boolean][] = [
+      [401, (e) => e instanceof ReplayHostRefused && e.credential === "api_key"],
+      [403, (e) => e instanceof ReplayHostRefused && e.credential === "api_key"],
+      [429, (e) => e instanceof ReplayHostUnavailable],
+      [503, (e) => e instanceof ReplayHostUnavailable],
+      [404, (e) => !(e instanceof ReplayHostRefused) && !(e instanceof ReplayHostUnavailable) && /HTTP 404/.test((e as Error).message)],
+    ];
+    let checked = 0;
+    for (const [status, is] of rows) {
+      const { host } = harness(() => ({ status, body: { message: "no" } }));
+      const err = await host.watchMinutes(GUID, FROM, TO).then(() => null, (e: unknown) => e);
+      expect(is(err), `HTTP ${status}: ${String(err)}`).toBe(true);
+      expect((err as Error).message).toContain(GUID);
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
+
+  it("each read is one provider-call record about the video, its library id templated and no key in it", async () => {
+    const { host, recorder } = harness(() => ({ status: 200, body: stats({ a: 60 }) }));
+    await host.watchMinutes(GUID, FROM, TO);
+    await new Promise((r) => setTimeout(r, 0)); // the record is fire-and-forget
+    expect(recorder.calls).toHaveLength(1);
+    expect(recorder.calls[0]).toMatchObject({ provider: "bunny", operation: "watchMinutes", method: "GET", subjectId: GUID, status: 200 });
+    expect(pathTemplate(recorder.calls[0].url, recorder.calls[0].ids)).toBe("/library/{id}/statistics");
+    for (const s of SECRETS) expect(JSON.stringify(recorder.calls[0])).not.toContain(s);
   });
 });
 
 // Task 24 review I3 (2026-11-22): the move calls the host inside the tick's 8 s Seazn slice, and undici's own bound is 300 s. Every
 // API call therefore gives up at the move's call timeout: 4 s, the ruling's literal, typed here.
 describe("BunnyReplayHost: every API call gives up at the move's 4 s timeout (Task 24 review I3)", () => {
-  it("createCollection, fetchFromUrl, video and remove each carry AbortSignal.timeout(4000); the abort is a thrown failure of our own wording, recorded `timeout`, no key in it", async () => {
+  it("createCollection, fetchFromUrl, video, remove and watchMinutes each carry AbortSignal.timeout(4000); the abort is a thrown failure of our own wording, recorded `timeout`, no key in it", async () => {
     const deadlines: AbortController[] = [];
     const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => { const c = new AbortController(); deadlines.push(c); return c.signal; });
     try {
@@ -188,6 +274,7 @@ describe("BunnyReplayHost: every API call gives up at the move's 4 s timeout (Ta
         ["fetchFromUrl", () => host.fetchFromUrl({ collectionId: "c1", title: "Final, part 1", url: "https://example.test/x.mp4" })],
         ["video", () => host.video(GUID)],
         ["remove", () => host.remove(GUID)],
+        ["watchMinutes", () => host.watchMinutes(GUID, NOW, NOW)],
       ];
       let checked = 0;
       for (const [k, [op, call]] of calls.entries()) {
@@ -201,7 +288,7 @@ describe("BunnyReplayHost: every API call gives up at the move's 4 s timeout (Ta
         for (const secret of SECRETS) expect(err?.message).not.toContain(secret);
         checked++;
       }
-      expect(checked, "API calls timed").toBe(4);
+      expect(checked, "API calls timed").toBe(5);
       await new Promise((r) => setTimeout(r, 0));   // the record is fire-and-forget
       expect(recorder.calls.map((c) => [c.operation, c.status, c.errorCode])).toEqual(calls.map(([op]) => [op, null, "timeout"]));
     } finally {
@@ -236,6 +323,7 @@ describe("BunnyReplayHost: a body that never arrives is a failed call (Task 24 r
         ["fetchFromUrl", () => host.fetchFromUrl({ collectionId: "c1", title: "Final, part 1", url: "https://example.test/x.mp4" })],
         ["video", () => host.video(GUID)],
         ["remove", () => host.remove(GUID)],
+        ["watchMinutes", () => host.watchMinutes(GUID, NOW, NOW)],
       ];
       let checked = 0;
       for (const [k, [op, call]] of calls.entries()) {
@@ -247,7 +335,7 @@ describe("BunnyReplayHost: a body that never arrives is a failed call (Task 24 r
         for (const secret of SECRETS) expect(err?.message).not.toContain(secret);
         checked++;
       }
-      expect(checked, "API calls whose body stalled").toBe(4);
+      expect(checked, "API calls whose body stalled").toBe(5);
       await new Promise((r) => setTimeout(r, 0));   // the record is fire-and-forget
       expect(recorder.calls.map((c) => [c.operation, c.status, c.errorCode]), "a failure, never the 200").toEqual(calls.map(([op]) => [op, null, "timeout"]));
     } finally {
@@ -385,13 +473,15 @@ describe("BunnyReplayHost: no secret and no signed token in a message, a record 
     messages.push(await errorOf(echo.host.video(GUID)));
     messages.push(await errorOf(echo.host.createCollection("o1")));
     messages.push(await errorOf(echo.host.remove(GUID)));
+    messages.push(await errorOf(echo.host.watchMinutes(GUID, NOW, NOW)));
     const net = harness((c) => { throw new TypeError(`fetch failed: ${c.url} AccessKey=${CONFIG.apiKey} ${CONFIG.readOnlyKey} ${CONFIG.tokenKey}`); });
     messages.push(await errorOf(net.host.video(GUID)));
     messages.push(await errorOf(net.host.fetchFromUrl({ collectionId: "c1", title: "t", url: SOURCE })));
     // The floor under every message: even an id that carries a key (a caller's mistake) is redacted.
     const floor = harness(() => ({ status: 500 }));
     messages.push(await errorOf(floor.host.video(`x-${CONFIG.tokenKey}`)));
-    expect(messages).toHaveLength(6);
+    messages.push(await errorOf(floor.host.watchMinutes(`x-${CONFIG.tokenKey}`, NOW, NOW)));
+    expect(messages).toHaveLength(8);
     for (const m of messages) for (const s of SECRETS) expect(m, m).not.toContain(s);
     for (const h of [echo, net, floor]) {
       expect(h.recorder.calls.length).toBeGreaterThan(0);
@@ -408,7 +498,8 @@ describe("BunnyReplayHost: no secret and no signed token in a message, a record 
     await host.fetchFromUrl({ collectionId: "c1", title: "t", url: SOURCE });
     await host.video(GUID);
     await host.remove(GUID);
-    expect(calls).toHaveLength(4);
+    await errorOf(host.watchMinutes(GUID, NOW, NOW)); // 404 here: the URL is what is read
+    expect(calls).toHaveLength(5);
     for (const c of calls) {
       for (const s of SECRETS) expect(c.url, c.url).not.toContain(s);
       expect(c.headers.accesskey).toBe(CONFIG.apiKey);

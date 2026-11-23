@@ -246,6 +246,19 @@ describe("FakeReplayHost: watchMinutes (Phase 3, unmeasured against the real hos
     expect(fake.watchWindows(id)).toEqual([{ from, to }, { from, to }]);
     expect(fake.watchWindows("never-asked")).toEqual([]);
   });
+
+  it("refuses a backwards window and a date that is not one, as the real host's adapter does (Task 30), and logs no read for them", async () => {
+    const fake = new FakeReplayHost();
+    const id = await fetchOne(fake);
+    fake.setWatchMinutes(id, 7);
+    const from = new Date("2026-11-01T00:00:00.000Z");
+    const to = new Date("2026-11-21T00:00:00.000Z");
+    await expect(fake.watchMinutes(id, to, from)).rejects.toThrow(/before it starts/);
+    await expect(fake.watchMinutes(id, new Date("nope"), to)).rejects.toThrow(/not a date/);
+    await expect(fake.watchMinutes(id, from, new Date(Number.NaN))).rejects.toThrow(/not a date/);
+    expect(fake.watchWindows(id)).toEqual([]);
+    expect(await fake.watchMinutes(id, from, from), "a zero-length window is a window").toBe(7);
+  });
 });
 
 describe("FakeReplayHost implements the whole port", () => {

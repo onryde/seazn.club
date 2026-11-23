@@ -689,6 +689,38 @@ describe("bunnyConfig — the Bunny settings, from env only (Task 21)", () => {
   });
 });
 
+describe("cfAnalyticsConfig — the delivered-minutes reader's Cloudflare settings, from env only (Task 30)", () => {
+  // Owner ruling 2026-11-23 ("use existing token"): the relay's own pair, no new variable. The Stream token is granted Account
+  // Analytics: Read by the owner; the account is the one the Stream adapter creates inputs under.
+  const FULL = { CLOUDFLARE_ACCOUNT_ID: "acct-fake-6a1b", CLOUDFLARE_STREAM_TOKEN: "ZZ-fake-stream-token-3e9c" };
+  const NAMES = Object.keys(FULL);
+  const messageOf = (env: Record<string, string>) => { try { config.cfAnalyticsConfig(env); return null; } catch (e) { return (e as Error).message; } };
+
+  it("reads the relay's account id and Stream token, trimmed", () => {
+    expect(config.cfAnalyticsConfig({ CLOUDFLARE_ACCOUNT_ID: " acct-fake-6a1b ", CLOUDFLARE_STREAM_TOKEN: " ZZ-fake-stream-token-3e9c " }))
+      .toEqual({ accountId: "acct-fake-6a1b", token: "ZZ-fake-stream-token-3e9c" });
+  });
+
+  it("names exactly the variables that are missing (a blank one counts), and never a value", () => {
+    const all = messageOf({});
+    for (const name of NAMES) expect(all, name).toContain(name);
+    let checked = 0;
+    for (const missing of NAMES) {
+      for (const absent of [undefined, "   "]) {
+        const env: Record<string, string> = { ...FULL };
+        if (absent === undefined) delete env[missing];
+        else env[missing] = absent;
+        const message = messageOf(env);
+        expect(message, `${missing} ${absent === undefined ? "unset" : "blank"}`).toMatch(new RegExp(`\\b${missing}\\b`));
+        for (const other of NAMES.filter((n) => n !== missing)) expect(message, `${missing} missing, ${other} named`).not.toMatch(new RegExp(`\\b${other}\\b`));
+        for (const value of Object.values(FULL)) expect(message, "a value leaked").not.toContain(value);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: 2 variables x unset/blank").toBe(4);
+  });
+});
+
 describe("the replay move's numbers (Task 24): each is the ruling's or the recommendation's own figure, typed here", () => {
   it("owner ruling 2026-11-21 (G-A, G-E): 15 min after the result; recommendations 2026-11-21: the Cloudflare delete 60 min after the check, the undecided fallback 6 h", () => {
     expect(config.SEAZN_REPLAY_DELAY_MINUTES).toBe(15);

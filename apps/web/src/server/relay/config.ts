@@ -532,6 +532,27 @@ export function cfLiveWebhookSecret(env: Record<string, string | undefined> = pr
   const value = env[CF_LIVE_WEBHOOK_SECRET_ENV]?.trim();
   return value ? value : null;
 }
+/** Task 30: what the delivered-minutes reader (server/video/cf-analytics.ts, SEAZN_HOSTED_COST) queries Cloudflare's GraphQL
+ *  Analytics with — the relay's OWN pair, no new variable (owner ruling 2026-11-23: "use existing token"). The account is the one
+ *  the Stream adapter creates inputs under, and the token is the Stream adapter's, which the owner grants Account Analytics: Read
+ *  beside its Stream permission. Without that grant the query is refused, and the reader says so in Cloudflare's words. */
+const CF_ANALYTICS_ENV = { accountId: "CLOUDFLARE_ACCOUNT_ID", token: "CLOUDFLARE_STREAM_TOKEN" } as const;
+export type CfAnalyticsConfig = { accountId: string; token: string };
+/** Both settings, trimmed, read at the call (never at import, so a process without them still boots). A missing or blank one
+ *  throws NAMING every variable that is missing, and no message here carries a value. */
+export function cfAnalyticsConfig(env: Record<string, string | undefined> = process.env): CfAnalyticsConfig {
+  const found: Partial<CfAnalyticsConfig> = {};
+  const missing: string[] = [];
+  for (const key of Object.keys(CF_ANALYTICS_ENV) as (keyof CfAnalyticsConfig)[]) {
+    const value = env[CF_ANALYTICS_ENV[key]]?.trim();
+    if (value) found[key] = value;
+    else missing.push(CF_ANALYTICS_ENV[key]);
+  }
+  if (missing.length) {
+    throw new Error(`${missing.join(", ")} not set: reading Seazn live minutes (SEAZN_HOSTED_COST) needs the Cloudflare account and its Stream token (granted Account Analytics read), held as server env`);
+  }
+  return found as CfAnalyticsConfig; // every key was set: `missing` is empty
+}
 /** C9: simulcast outputs bill as delivery; Cloudflare caps 5 per input. */
 export const MAX_OUTPUTS_PER_INPUT = 5;
 

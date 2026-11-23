@@ -12,7 +12,7 @@
 //     copy twice. A test that wants a readable id names its own prefix (`{ idPrefix }`).
 import { createHash, randomUUID } from "node:crypto";
 import { FAKE_REPLAY_EMBED_HOST } from "@/server/relay/config";
-import { type ReplayDownload, type ReplayHost, ReplayNotDownloadable, type ReplayVideo } from "./replay-ports";
+import { assertWatchWindow, type ReplayDownload, type ReplayHost, ReplayNotDownloadable, type ReplayVideo } from "./replay-ports";
 
 /** The host the fake's embed URLs sit on (`.invalid` never resolves, so no fake URL can be followed by accident): config.ts's
  *  FAKE_REPLAY_EMBED_HOST, which Task 25's CSP adds to `frame-src` under the fake driver. Re-exported for the fake's callers. */
@@ -94,9 +94,11 @@ export class FakeReplayHost implements ReplayHost {
     };
   }
 
-  // UNMEASURED: the number a test sets is the answer for any window and any video, removed or not, and every read is logged
-  // (`watchWindows`). Task 30 settles what the real statistics read does with a backwards window or a deleted video.
+  // The number a test sets is the answer for any window and any video, removed or not, and every read is logged (`watchWindows`).
+  // A window the port refuses (backwards, or not a date) is refused here as the real adapter refuses it (Task 30), and is not
+  // logged: no read was made. What the real host answers for a DELETED video is still unmeasured, so the fake does not model it.
   async watchMinutes(videoId: string, from: Date, to: Date): Promise<number> {
+    assertWatchWindow(from, to);
     this.watchReads.push({ videoId, from, to });
     return this.watched.get(videoId) ?? 0;
   }

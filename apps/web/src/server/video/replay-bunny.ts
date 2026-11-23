@@ -8,6 +8,8 @@
 //  * A DELETE answers 200 every time, a second one included (B10). So `remove` decides `absent` from a GET that answers 404,
 //    never from the DELETE's status.
 //  * The embed token is B4's. A file needs B5's CDN token AND an allowed Referer (B3, B9).
+//  * Watch time (Task 30): `GET /statistics?videoGuid=&dateFrom=&dateTo=`, summing `watchTimeChart`, whose UNIT is not yet
+//    measured (WATCH_TIME_CHART_SECONDS_PER_UNIT; the Task 20 probe settles it).
 // Secrets (the API key, the read-only key, the token key) reach no URL, message, record or log line. A message is built from
 // the operation, the status and our own ids only (never the vendor's text, never a fetch error's text, which can quote the
 // URL), and it passes sanitise.ts's `redact` floor on its way out. A signed URL is never recorded: the CDN call is recorded
@@ -17,8 +19,8 @@ import { BUNNY_EMBED_HOST, SEAZN_REPLAY_CALL_TIMEOUT_MS, seaznVideoOrigins, type
 import { NOOP_RECORDER, type ProviderCallRecorder } from "@/server/relay/ports";
 import { redact } from "@/server/relay/sanitise";
 import {
-  type ReplayCredential, type ReplayDownload, type ReplayHost, ReplayHostRefused, ReplayHostUnavailable, ReplayNotDownloadable, type ReplayState,
-  type ReplayVideo,
+  assertWatchWindow, type ReplayCredential, type ReplayDownload, type ReplayHost, ReplayHostRefused, ReplayHostUnavailable, ReplayNotDownloadable,
+  type ReplayState, type ReplayVideo,
 } from "./replay-ports";
 
 export const BUNNY_API_BASE = "https://video.bunnycdn.com/library";
@@ -27,6 +29,13 @@ const MAX_HEIGHT = 720;
 /** How long the CDN token for one server-side download is valid. The server makes the request at once, so this only has to
  *  cover the start of one GET. A provider-protocol number, like the base URL above. */
 export const DOWNLOAD_TOKEN_TTL_SECONDS = 300;
+/** How many SECONDS one unit of the statistics answer's `watchTimeChart` is (Task 30). UNMEASURED, and the one line to change
+ *  when it is: Bunny's "Get Video Statistics" (read 2026-11-23) types each value as an int64 "total watch time" and names no
+ *  unit. Assumed seconds (1): a whole-minute count would drop every view under a minute, and nothing in the schema hints at
+ *  milliseconds. The Task 20 probe (bunny.live.test.ts, "watch time") settles it — it reads the chart after watching a video of
+ *  known length to its end: 1 if it holds seconds, 60 if minutes, 0.001 if milliseconds. A provider-protocol fact, like the
+ *  base URL above. */
+export const WATCH_TIME_CHART_SECONDS_PER_UNIT = 1;
 
 /** The video API's `status`, number by number (Task 21's table; B2 saw 2 -> 3 -> 4). A number not listed throws: a status
  *  Bunny adds later is reported, never guessed at. A Map, so a key like `constructor` cannot find Object.prototype. */
@@ -195,9 +204,25 @@ export class BunnyReplayHost implements ReplayHost {
     return { body: res.body, bytes: Number.isFinite(size) && size > 0 ? size : null, fileName: `${videoId}-${height}p.mp4` };
   }
 
-  /** Phase 3 (Task 30) builds the statistics read; until then this refuses, loudly. */
-  async watchMinutes(): Promise<number> {
-    throw new Error("BunnyReplayHost.watchMinutes is not built yet (Task 30)");
+  /** Task 30: `GET /statistics?videoGuid=&dateFrom=&dateTo=` (Bunny's "Get Video Statistics"), the window sent as ISO instants
+   *  after the port's own check (`assertWatchWindow`: Bunny answers an unreadable date with the last 30 days, never an error).
+   *  `watchTimeChart` maps each UTC interval to a watch-time count; their sum is converted through
+   *  WATCH_TIME_CHART_SECONDS_PER_UNIT. A null chart is the schema's "no data" and reads 0. An answer with no chart at all, or a
+   *  value that is not a count, throws: a shape we did not expect is reported, never read as nobody watching. */
+  async watchMinutes(videoId: string, from: Date, to: Date): Promise<number> {
+    assertWatchWindow(from, to);
+    const query = `videoGuid=${encodeURIComponent(videoId)}&dateFrom=${encodeURIComponent(from.toISOString())}&dateTo=${encodeURIComponent(to.toISOString())}`;
+    const r = await this.api<{ watchTimeChart?: unknown }>("GET", `/statistics?${query}`, undefined, { operation: "watchMinutes", ids: [videoId], subjectId: videoId });
+    if (!r.ok) throw this.httpError(r.status, `watchMinutes: HTTP ${r.status} (video ${videoId})`, "api_key");
+    const chart = r.json?.watchTimeChart;
+    if (chart === null) return 0;
+    if (typeof chart !== "object" || Array.isArray(chart)) throw this.error(`watchMinutes: HTTP ${r.status} answered no watch-time chart (video ${videoId})`);
+    let units = 0;
+    for (const value of Object.values(chart)) {
+      if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw this.error(`watchMinutes: a watch-time value is not a count (video ${videoId})`);
+      units += value;
+    }
+    return (units * WATCH_TIME_CHART_SECONDS_PER_UNIT) / 60;
   }
 
   // ---- helpers ------------------------------------------------------------------------------------------------------
