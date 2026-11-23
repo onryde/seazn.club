@@ -19,7 +19,7 @@ Decision log and session status. Read `_RULES.md` beside this file first.
 | W3 | Swiss | **in progress** — design `docs/superpowers/specs/2026-10-31-format-matrix-w3-swiss-design.md` (2026-10-31), rulings 250–259 and 262; plans `docs/superpowers/plans/2026-10-31-w3-swiss-app-a.md` (+ engine, app-b). **App A MERGED** (#1104, merge commit `eb13d11a3a`, 2026-11-02; migrations V485–V487; CI and e2e green, screens signed off). **App B MERGED** (#1121, merge commit `eca34c3051`, 2026-11-04; engine `^3.0.2`, placement #6 image `251624d`, migration V490; Step 6b passed on stg). The close-out, what Task 12 found and what is parked are in "W3 App B status (2026-11-04)"; engine scheduling issue onryde/seazn.club.engine#15 parked |
 | W4 | Knockout family | **DONE 2026-11-11** — all shipped; the three harness routes that kept it open were closed or re-routed (the vacant-title route closed by W4 T15; boardgame M6's prod-build e2e and the model's ko_plate/qualifying_main refusal re-routed to W10); `gap-routing.json` / `audit-verdicts.json` keep W4 as the historical owner of its gaps (the Q-A guard reads neither). Engine W4 released 5.0.0 → 7.0.0 (W4 proofs engine#42, web on ^7.0.0 via #1178); app A #1152 (738424cd52), app B #1167 (5269f72323); follow-ups #1173 (C38 group draw refuses a pool of one, STAGE_NOT_READY `group_too_few_entrants`), #1175 (owner ruling A: a recorded-walkover semi loser is out for the third place; RB4-T6 + engine X-TP-7 amended), #1182 (C42 mixed withdrawal/walkover semi tests; C43 room-token scrub order — a real telemetry leak). Stg validated 11-11 (checks 2–7 PASS with real results; Shared third place + public title text covered by unit/e2e only). Carried: (1) next truth run moves `group_group_ko|*|F1` from 409 STAGE_COMPLETED_SEEDING_FAILED to refused-by-name (C38) — EXPECTED, an improvement, triage by id, not a regression; (2) next engine bump owes web `AMENDED_TEXT` for X-TP-7 (scripts/__tests__/rules-reference.test.ts); (3) parked rare: C36, C37, C39, C40 (vacant 3rd not reversed by Reinstate), C41 (plate_too_small never reopens), C42b (double-walkover semi + walkover semi voids -3p), T16 m2/m3 — ledger .superpowers/sdd/2026-11-05-w4-knockout-app-b/carry-notes.md (main checkout, local, untracked). Was: design APPROVED 2026-11-04 (`docs/superpowers/specs/2026-11-04-format-matrix-w4-knockout-design.md`; rulebook `rulebook-W4-knockout.md` fully signed), rulings 263–275; engine rule rows recorded (engine `docs/w4-rule-rows`); plans `docs/superpowers/plans/2026-11-05-w4-knockout-engine.md`, `docs/superpowers/plans/2026-11-05-w4-knockout-app-a.md`, `docs/superpowers/plans/2026-11-05-w4-knockout-app-b.md` approved 2026-11-05, subagent-driven |
 | W5 | Round-robin family | **in progress** — design `docs/superpowers/specs/2026-11-05-format-matrix-w5-round-robin-design.md`, rulebook `rulebook-W5-round-robin.md`, rulings 276–292 (`_INDEX-w5-additions.md`). Engine rows PR (engine #50, released 9.1.0) and the rows bump (Task R, #1237, `9bbff1ce3a`) merged. **App PR A MERGED** (#1262, merge commit `260d95ca2e`, 2026-11-19; migration `V535__w5_table_waiting.sql`): everything in `apps/web`, `tools/matrix` and `scripts/` that needed no new engine API ("W5 app PR A status (2026-11-19)"); matrix truth run 44420793924 on `e12f43eaaa`: faults 0/0/0, complete, regressions 0. **App PR B built** (branch `feat/w5-round-robin-app-b`, 2026-11-21; engine `^10.0.1`; migration `V540__w5_qualification_frozen_cut.sql`): pool seating and results, unequal pools, `lateEntryFixtures`/`roundRobinLineKey` delegation, withdrawal-event counts, Adjust points, the cross-pool draw, the frozen best-Nth view, the per-format maximum entrants and the stress fixes ("W5 App B status (2026-11-21)"). **Owed:** PR B's truth run, e2e, whole-PR review and merge; the engine companion commit `docs(rules): W5 app PR A rows proved` (E Task 9); after the merge, engine 10.0.2 and E Task 10 / app Task 10 (the PR B rows' proofs; the `AWAITING_PROOF` deletions for PR A's rows shipped in PR B Task 0). `triple_rr` is deleted (ruling 287) |
-| W6 | Double elimination | not started |
+| W6 | Double elimination | **design in progress** (2026-11-23) — premises re-pinned on `276fff25d7` and engine 10.0.3 ("False premises found", W6 block); owner rulings 293–299; worktree `.claude/worktrees/w6-design`, branch `docs/format-matrix-w6-design`. Rulebook `rulebook-W6-double-elim.md` drafted (85 RB6 rows; S1–S6 applied as recommendations, sign-off owed). Design `docs/superpowers/specs/2026-11-23-format-matrix-w6-double-elim-design.md` drafted (engine 11.0.0, app PR A, app PR B; read, not driven). Prod census 2026-11-23: zero `double_elim` stages (23 stages: knockout 12, swiss 9, league 2). Design reviewed three times (60 findings, all fixed; now 1662 lines). **Plans written and reviewed 2026-11-23:** `docs/superpowers/plans/2026-11-23-w6-double-elim-engine.md` (10 tasks, release 11.0.0 on base 10.0.4; review Approved), `…-app-a.md` (18 tasks, passes on 10.0.x; two review rounds, fixes applied), `…-app-b.md` (20 tasks incl. 5b vacant title, after the bump; two review rounds, fixes applied). Plan reviews: `.superpowers/sdd/2026-11-23-w6-double-elim/plan-review-{engine,app-a,app-b}.md` (main checkout). Each plan ends with the premises its writer found false on opening the code; the plans follow the code, and the design's matching lines are stale where they differ. Owner sign-off: ruling 306. Narrowed while planning: 306(d) holds only through the next decided result (no new auto-advance trigger); the reset setting has no Undo (flip it back; the reset must be placed again). Owed before build: the owner's pick of the reset control layout and the "Not needed" look (app B Task 2, R24). Docs pushed to main 2026-11-23; build not started |
 | W7 | Americano, mexicano, ladder | not started — also owns the 10 L1 cells C9 routed here as 🚫 "no organiser path" (team-only / team+pair sports offered americano/mexicano; `NO_ORGANISER_PATH_ROUTE`, tools/matrix/lib/catalogue.ts): add the server refusal, refuse the cells, re-record evidence on CI |
 | W8 | Scorer sheets (lane) | not started |
 | W9 | Operational [O] (lane) | not started |
@@ -2282,6 +2282,65 @@ Elsewhere the text is the controller's record.
      that leaves the rounds still to come, a knockout walkover. A substitute partner is refused by name. Before Start
      nothing changes: a roster swap still renames a pair whose name its people derived. App PR A Task 10b.
 
+293. **Double elimination: the grand-final reset is on by default** (2026-11-23, owner "Ok go" on the W6
+     recommendation list, rec 1). A new double-elimination stage plays a second grand final only when the
+     losers'-bracket champion wins the first. One stage setting, "Grand final: reset if needed (default) / single
+     match". A stage already stored keeps its stored value. Before this the reset was reachable through the public
+     API only (`StageConfig.bracketReset`); no template, screen or matrix row set it.
+294. **A forfeit or no-show in a double elimination is one loss: the absent side drops to the losers' bracket**
+     (2026-11-23, owner "Ok go", rec 2). **Overturns the W2b rule X-DE-1** (a forfeit loser is out). Withdraw and
+     disqualify are unchanged: the entrant is out of the whole stage and every later seat walks over (ruling 264).
+     A double walkover is still two absent sides; each drops once, and a side already in the losers' bracket is out.
+295. **Losers'-bracket drops cross** (2026-11-23, owner "Ok go", rec 3). The rulebook fixes one published crossover
+     pattern; the reference model is written from the rulebook (R8, R9). It applies to a new or rebuilt bracket; a
+     bracket with a result keeps its lines.
+296. **Late entry into a started double elimination follows ruling 263 on winners'-bracket round 1 only**
+     (2026-11-23, owner "Ok go", rec 4). Case (1) a bye slot whose holder has not played round 2, case (2) a
+     withdrawn entrant's slot before their first match, otherwise a named refusal that offers Rebuild when no result
+     exists. A late player never enters the losers' bracket directly. Organiser's tap only (ruling 271).
+297. **Double-elimination places below 4th are shared by losers'-bracket round** (2026-11-23, owner "Ok go", rec 5).
+     1st to 4th are unique; entrants who went out in the same losers'-bracket round share the place (5=, 7=, 9= …).
+     Seed no longer orders them.
+298. **A reset the losers'-bracket champion earned cannot be voided** (2026-11-23, owner "Ok go", rec 6). The engine
+     refuses to treat `gf-reset` as void when the losers'-bracket champion won the first grand final; the stage is
+     not complete until that match is decided, walked over or the title rules of ruling 267 apply.
+299. **W6 scope and shape** (2026-11-23, owner "Ok go", recs 7–12). Boardgame takes no double-elimination rule of
+     its own: a drawn game in a bracket follows the knockout family's rule, checked on the truth run. The two W4
+     carries are fixed at their one authority (`isByeLine` and its SQL twin; Rebuild carries a double elimination by
+     role). The `formats.double_elim` gate is unchanged. The matrix gains a reset variant row, a full-order ranks
+     oracle and a field sweep that counts losers'-bracket rematches (zero checked fails, R25). Three PRs: engine,
+     app PR A (no engine change), app PR B (after the release).
+
+300. **The losers'-bracket drop pattern is the NCAA-type table as a four-step cycle (RB6-X1 to X3)** (2026-11-23,
+     owner "approved", rulebook item S1). Source: Smoothcomp, "Cross bracketing". First possible rematch in LB round
+     2, 3, 4, 5, 7, 8 at frames 4 to 128, confirmed by the reviewer's independent script (design review 1). "Exactly
+     one rematch, the LB final" is claimed only for a fully seeded field with the better seed winning.
+301. **A double walkover in the winners' bracket puts both sides out (X-DW-2 kept)** (2026-11-23, owner "approved",
+     S2). **Amends ruling 294**, whose "each drops once" does not hold: one WB match feeds one LB seat.
+302. **A retirement mid-match is one loss; the entrant drops to the losers' bracket** (2026-11-23, owner "approved",
+     S3). An entrant who cannot continue is withdrawn by the organiser.
+303. **A withdrawn or disqualified entrant takes the place of the LB round of the seat they vacate** (2026-11-23,
+     owner "approved", S4).
+304. **Late-entry case (1) closes once the entrant who advanced from that bye's LB line has started their next LB
+     match** (2026-11-23, owner "approved", S5). Fields of 2 and 3 stay offered (S6).
+305. **Design review 1 calls, approved 2026-11-23** (owner "approved" on the list shown). (a) The reset setting is
+     editable until the grand final has a result; changing it adds or removes the unplayed reset row; after that it
+     is locked with a named reason. (b) "Declare joint winners" is allowed on an earned reset. (c) Dead seats are
+     worked out fully at the draw, over both edges, and recognised by the existing bye-line authority with no second
+     copy of the rule; this departs from the brief's wording ("an arm in `isByeLine`") and keeps ruling 299's one
+     authority. (d) **Amends ruling 297:** 1st to 4th are unique when the matches that decide them are played; a
+     double walkover leaves its two sides sharing the place and the next place is skipped; completion never refuses
+     for an empty 3rd or 4th. (e) Everything that needs engine 11.0.0 is in app PR B.
+
+306. **W6 batch sign-off, 2026-11-23** (owner "apply rec" on the list shown after the plans). (a) The rulebook's
+     REC rows are signed "build as written" (including RB6-G8, G9, G11, C2's reset clause, R5, R8). (b) Shared places
+     keep the product's existing words (`table.sharedRank`, "5 (shared)"), not "5=". (c) Three or more entrants can
+     share a place (design call 26; widens 305(d)); a double walkover in the losers'-bracket final gives two at 2nd,
+     shared. (d) A stored void line is settled for every stage kind, so league, group and Swiss auto-advance over an
+     organiser's No result, agreeing with Complete (call 32). (e) An unneeded reset is listed as "Not needed" (call
+     34); its look, and the reset control's layout, are still owed to the owner as two options before build (R24;
+     app PR B Task 2). Calls 6, 22, 25 and 37 stand as designed.
+
 ## Recommendations (mine — not rulings)
 
 - A guard-only W0 before the real fixes — **declined** by ruling 3.
@@ -2452,6 +2511,23 @@ Elsewhere the text is the controller's record.
   - **D14 — the rules version (ruling 135).** Bumped by `refreezeFixture`, sent by the two scoring pads, checked in
     `appendEventInTx` only when sent; a source scan classifies every events POST site. As built, every write that
     changes a fixture's effective rules bumps it (controller ruling "Rules version"; ruling 144).
+- **W6 rulebook items S1–S6 (2026-11-23) — accepted, now rulings 300–304.**
+  Rulebook `rulebook-W6-double-elim.md` §15. S1: the drop pattern is Smoothcomp's NCAA-type table written as a
+  four-step cycle (RB6-X2); first possible rematch in LB round 3, 4, 5 at 8, 16, 32 (searched optimum), 7 and 8 at
+  64 and 128 (best of the named orders, not proven). S2: a double walkover in the winners' bracket keeps X-DW-2,
+  both out; ruling 294's "each drops once" was my loose wording and does not hold, because one WB match feeds one
+  LB seat. S3: a retirement mid-match is one loss, the entrant drops. S4: a withdrawn or disqualified entrant
+  takes the place of the LB round of the seat they vacate. S5: late-entry case (1) closes once the entrant who
+  advanced from that bye's LB line has started their next LB match. S6: fields of 2 and 3 stay offered.
+- **W6 design calls shown to the owner 2026-11-23 and applied as recommendations (not rulings):** call 6 (an
+  unneeded reset is stored void; one predicate, the engine's `resetOwed`), call 22 (a docs-only engine close-out
+  after PR B), call 25 (late-entry case (1) closes on any LB line the reopened bye changes; wider than ruling 304's
+  words), call 26 (three can share a place; wider than 305(d)'s "two sides"), call 32 (a stored void line is settled
+  for every stage kind, so league, group and Swiss auto-advance over an organiser's No result, agreeing with
+  Complete), call 34 (an unneeded reset is listed struck through as "Not needed"), call 37 (PR A's tests cite no W6
+  rule id until the bump). Design reviews 1–3: `.superpowers/sdd/2026-11-23-w6-double-elim/design-review-{1,2,3}.md`
+  in the main checkout (33 + 18 + 9 findings, all fixed; the crossover rule and the dead-seat rule confirmed by the
+  reviewer's own scripts). Fix round 3 was not re-reviewed; the plan writers re-pin it.
 
 ## Controller rulings (execution, W1c)
 
@@ -4314,6 +4390,33 @@ in execution (A0 and the task reports in the SDD ledger) and at the fold. The sp
     with `vi.mock`.
 45. **"Eight faults red at base."** They were measured against a base that already held W2e's cricket and points edits; PR A's
     T25 re-keyed every floor fault W2e moved.
+
+### W6 — premise re-pin (2026-11-23, by read on `276fff25d7` and engine 10.0.3; none of it driven yet)
+
+1. **"Nothing voids `gf-reset`; the stage cannot complete; the champion can be ranked last" (FX-G3, W6 brief
+   trap 1) is false since W4.** `engine-db/competition/bracket-stage.ts:237-240, 258-268` keeps `gf` final and reads
+   an untriggered reset as void; `usecases/scoring.ts:1385-1392` skips it in the open count
+   (`w4-knockout-b1.test.ts:95-140`). The engine falls back to GF1 and guards the ranks as a permutation
+   (`src/competition/stage.ts:825-834, 707, 767`). The `audit-verdicts.json` evidence for FX-G3 is stale. What is
+   left: the engine accepts a void reset after the losers'-bracket champion won GF1 (ruling 298).
+2. **FX-G24 is a ruling, not a gap.** W2b's X-DE-1 knocks a forfeit loser out on purpose
+   (`engine-db/fed-seats.ts:146-165`, `double-walkover-seating.test.ts:189`). Ruling 294 overturns it.
+3. **S3 "double-elimination late entry answers a generic error" has no double-elimination branch behind it.**
+   `lib/open-entry-stages.ts:53-56` leaves `double_elim` out of `ROOT_KNOCKOUT_KINDS`, so the start lock answers
+   (`usecases/entrants.ts:448-463`). Ruling 296 adds the branch.
+4. **Carried 1 is narrower than the brief says.** A bye award's loser edge already reads as dead
+   (`usecases/stages/bracket-seats.ts:222-236`) and the seat is stamped once the other seat fills (`:547-563`).
+   The gap is the both-seats-open window (`:507-512`) and the placement predicates (`lib/bye-line.ts:64-66`,
+   `engine-db/system-bye-sql.ts:47-54`, `usecases/schedule/board.ts:40-42`).
+5. **The brief's line numbers are all moved.** `stages.ts` is `usecases/stages/*`, `schedule.ts` is
+   `schedule/board.ts`, the generator is `src/scheduling/bracket.ts:430-537` (was `268-367`).
+6. **"No catalogue row sets `bracketReset`, so no run can reach it" is half true.** No template or matrix row sets
+   it, but `api-v1/schemas/stages.ts:263` accepts it and the generator honours it.
+7. **There are no per-format rule files.** One `rules/cross-sport.md` in the engine; double elimination has three
+   rows (X-DW-2, X-DE-1, X-DV-1) and none for structure, drop order, reset or ranks.
+8. **MB-007, MB-009 and MB-010 carry no wave.** `tools/matrix/catalogue/regressions.json:95, 132, 150` are "open"
+   with no issue and no wave field, held by two fences; neither `gap-routing.json` nor `audit-verdicts.json` names
+   them. W6 re-runs them on its truth run.
 
 ## Findings routed (W1b)
 
