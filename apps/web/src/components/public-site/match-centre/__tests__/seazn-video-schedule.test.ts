@@ -5,9 +5,12 @@
 //     within one poll, not ~55 minutes later at the token's refresh point; a re-read at 30 s also always lands inside the token's
 //     refresh window, so it carries the refresh too);
 //   - replay only, and every part is the replay host's embed (Task 25, carry 4): the 30 s floor while hot, the 60 s ceiling when
-//     cold and not yet final (review m5: an undecided fixture never settles), and no timer once FINAL — the fixture settled and
-//     nothing hot (the frame checked its token when it loaded, and a later answer never touches it, so the reads cost the frame
-//     nothing: they are how a second Go live and a Stop still reach an open page);
+//     cold and not yet final (review m5: an undecided fixture never settles), and every 5 min once FINAL — the fixture settled and
+//     nothing hot (Task 25 review m4: it used to set no timer, so an organiser's delete never reached an open page; the frame checked
+//     its token when it loaded, and a later answer never touches it, so the reads cost the frame nothing: they are how a second Go
+//     live, a Stop and a delete still reach an open page);
+//   - THE m4 BOUND: on a settled fixture no replay goes unread for longer than SEAZN_VIDEO_FINAL_READ_MS (5 min), so a deleted part
+//     leaves an open, shown page within it; an `hls` one still reads at its token's refresh point when that comes sooner;
 //   - replay only with an `hls` part (the interim Cloudflare recording): the 30 s floor too, whatever the parts' tokens (Task 19 fix
 //     round 1, I1: an organiser's second Go live after the first half's interim replay must reach a page that is open, within one
 //     poll, not ~55 minutes later at the recording token's refresh point).
@@ -16,7 +19,7 @@ import { describe, expect, it } from "vitest";
 import { SEAZN_TOKEN_REFRESH_BEFORE_SECONDS } from "@/server/relay/config";
 import type { PublicFixtureVideo } from "@/server/api-v1/schemas";
 import {
-  SEAZN_VIDEO_KICKOFF_WINDOW_MS, SEAZN_VIDEO_POLL_CEILING_MS, SEAZN_VIDEO_POLL_FLOOR_MS, type VideoReadContext, backoffMs, isHotRead,
+  SEAZN_VIDEO_FINAL_READ_MS, SEAZN_VIDEO_KICKOFF_WINDOW_MS, SEAZN_VIDEO_POLL_CEILING_MS, SEAZN_VIDEO_POLL_FLOOR_MS, type VideoReadContext, backoffMs, isHotRead,
   nextVideoFetchMs as nextVideoFetchAt,
 } from "../seazn-video-schedule";
 
@@ -202,16 +205,20 @@ describe("review I2: a SETTLED fixture (decided, past the window a new Go live c
     expect(nextVideoFetchAt({ live: live(60 * MIN), replay: [] }, settled(-10 * MIN))).toBe(SEAZN_VIDEO_POLL_FLOOR_MS);
   });
 
-  it("an hls replay is re-read at its token's refresh point, not at the floor: no restart is coming, and the token must still be refreshed", () => {
+  it("an hls replay is re-read at its token's refresh point when that comes before the m4 bound, else at the bound: no restart is coming, the token must still be refreshed, and a delete must still reach the page", () => {
+    // 8 min of token, refreshed 5 min before its end: 3 min, sooner than the bound.
+    expect(nextVideoFetchAt({ live: null, replay: [part(1, 8 * MIN)] }, settled(-10 * MIN))).toBe(8 * MIN - REFRESH_MS);
+    expect(8 * MIN - REFRESH_MS, "PREMISE: that refresh point is inside the bound").toBeLessThan(SEAZN_VIDEO_FINAL_READ_MS);
+    // 60 min of token: its refresh point (55 min) is past the bound, so the bound.
     const wait = nextVideoFetchAt({ live: null, replay: [part(1, 60 * MIN)] }, settled(-10 * MIN));
-    expect(wait, "60 min of token, refreshed 5 min before its end").toBe(60 * MIN - REFRESH_MS);
-    expect(wait).toBe(55 * MIN);
+    expect(wait, "the bound, not the refresh point").toBe(SEAZN_VIDEO_FINAL_READ_MS);
+    expect(wait).not.toBe(60 * MIN - REFRESH_MS);
   });
 
   it("several hls parts: the EARLIEST token's refresh point, in any order; an embed beside them sets nothing", () => {
-    const parts = [part(1, 60 * MIN), part(2, 20 * MIN), part(3, 40 * MIN), part(4, 5 * MIN, "embed")];
-    expect(nextVideoFetchAt({ live: null, replay: parts }, settled(-1))).toBe(20 * MIN - REFRESH_MS);
-    expect(nextVideoFetchAt({ live: null, replay: [...parts].reverse() }, settled(-1))).toBe(20 * MIN - REFRESH_MS);
+    const parts = [part(1, 9 * MIN), part(2, 7 * MIN), part(3, 8 * MIN), part(4, 5 * MIN, "embed")];
+    expect(nextVideoFetchAt({ live: null, replay: parts }, settled(-1))).toBe(7 * MIN - REFRESH_MS);
+    expect(nextVideoFetchAt({ live: null, replay: [...parts].reverse() }, settled(-1))).toBe(7 * MIN - REFRESH_MS);
   });
 
   it("a token inside its refresh window, already past, or not a date: the 30 s floor, never sooner", () => {
@@ -221,18 +228,41 @@ describe("review I2: a SETTLED fixture (decided, past the window a new Go live c
     expect(nextVideoFetchAt({ live: null, replay: [{ ...part(1, 60 * MIN), expiresAt: "not a date" }] }, settled(-1)), "NaN must not become the delay").toBe(30_000);
   });
 
-  it("carry 4: embeds alone on a SETTLED, cold fixture are final — no timer; a ms before the settle, the floor", () => {
+  it("carry 4 + review m4: embeds alone on a SETTLED, cold fixture are final — read every SEAZN_VIDEO_FINAL_READ_MS (never no timer: a delete must reach the page); a ms before the settle, the ceiling", () => {
     const embeds: PublicFixtureVideo = { live: null, replay: [part(1, 60 * MIN, "embed"), part(2, 60 * MIN, "embed")] };
-    expect(nextVideoFetchAt(embeds, settled(-1)), "settled a ms ago").toBeNull();
-    expect(nextVideoFetchAt(embeds, settled(0)), "settled at this very read").toBeNull();
+    expect(nextVideoFetchAt(embeds, settled(-1)), "settled a ms ago").toBe(SEAZN_VIDEO_FINAL_READ_MS);
+    expect(nextVideoFetchAt(embeds, settled(0)), "settled at this very read").toBe(SEAZN_VIDEO_FINAL_READ_MS);
     expect(nextVideoFetchAt(embeds, settled(1)), "settled a ms from now: not yet final, cold: the ceiling (review m5)").toBe(SEAZN_VIDEO_POLL_CEILING_MS);
   });
 
   it("carry 4: hot outranks settled for embeds alone, as it does for an empty answer — a session active as the page was drawn, or kick-off within the hour, holds the floor", () => {
     const embeds: PublicFixtureVideo = { live: null, replay: [part(1, 60 * MIN, "embed")] };
     expect(nextVideoFetchAt(embeds, { ...settled(-1), activeUntilMs: NOW.getTime() + 1 }), "active a ms longer").toBe(SEAZN_VIDEO_POLL_FLOOR_MS);
-    expect(nextVideoFetchAt(embeds, { ...settled(-1), activeUntilMs: NOW.getTime() }), "active until now: cold").toBeNull();
+    expect(nextVideoFetchAt(embeds, { ...settled(-1), activeUntilMs: NOW.getTime() }), "active until now: cold, final").toBe(SEAZN_VIDEO_FINAL_READ_MS);
     expect(nextVideoFetchAt(embeds, { ...settled(-1), kickoffAtMs: NOW.getTime() - SEAZN_VIDEO_KICKOFF_WINDOW_MS }), "kick-off an hour ago").toBe(SEAZN_VIDEO_POLL_FLOOR_MS);
-    expect(nextVideoFetchAt(embeds, { ...settled(-1), kickoffAtMs: NOW.getTime() - SEAZN_VIDEO_KICKOFF_WINDOW_MS - 1 }), "and a ms more").toBeNull();
+    expect(nextVideoFetchAt(embeds, { ...settled(-1), kickoffAtMs: NOW.getTime() - SEAZN_VIDEO_KICKOFF_WINDOW_MS - 1 }), "and a ms more").toBe(SEAZN_VIDEO_FINAL_READ_MS);
+  });
+
+  it("review m4, THE BOUND: on a settled fixture, every replay shape — embeds alone, hls alone, both, any token life — is read again within SEAZN_VIDEO_FINAL_READ_MS (5 min), never sooner than the floor; only an EMPTY answer stops (nothing left to delete)", () => {
+    expect(SEAZN_VIDEO_FINAL_READ_MS, "the bound the report states").toBe(5 * MIN);
+    expect(SEAZN_VIDEO_FINAL_READ_MS, "longer than the m5 ceiling: nothing new can arrive on a settled fixture").toBeGreaterThan(SEAZN_VIDEO_POLL_CEILING_MS);
+    const shapes: [string, PublicFixtureVideo["replay"]][] = [];
+    for (const life of [-MIN, 2 * MIN, 6 * MIN, 9 * MIN, 30 * MIN, 60 * MIN, 24 * 60 * MIN]) {
+      shapes.push([`embed ${life / MIN} min`, [part(1, life, "embed")]]);
+      shapes.push([`hls ${life / MIN} min`, [part(1, life)]]);
+      shapes.push([`both ${life / MIN} min`, [part(1, life, "embed"), part(2, life)]]);
+    }
+    let checked = 0;
+    for (const [label, replay] of shapes) {
+      for (const since of [-1, -10 * MIN, -7 * 24 * 60 * MIN]) {
+        const wait = nextVideoFetchAt({ live: null, replay }, settled(since));
+        expect(wait, `${label}, settled ${-since} ms ago`).not.toBeNull();
+        expect(wait!, label).toBeLessThanOrEqual(SEAZN_VIDEO_FINAL_READ_MS);
+        expect(wait!, label).toBeGreaterThanOrEqual(SEAZN_VIDEO_POLL_FLOOR_MS);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: 21 shapes x 3 settle times").toBe(63);
+    expect(nextVideoFetchAt({ live: null, replay: [] }, settled(-1)), "an empty answer on a settled fixture still stops").toBeNull();
   });
 });

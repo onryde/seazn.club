@@ -4,8 +4,9 @@
 //   - it reads at once, then at the schedule's delay (30 s with nothing to show, and 30 s while live too: Task 19, so a Stop reaches
 //     an open page within one poll; and 30 s while the interim replay plays: Task 19 fix round 1, I1, so a second Go live reaches
 //     it too), and a new answer moves the next read with it;
-//   - a replay of embeds alone (Task 25, carry 4) reads at the floor until it is FINAL (the fixture settled, nothing hot), then sets NO
-//     timer; a read the island asks for still happens: `refreshSoon` (a player gave up: the next answer rebuilds it) and `readSoon`
+//   - a replay of embeds alone (Task 25, carry 4) reads at the floor until it is FINAL (the fixture settled, nothing hot), then every
+//     5 min (Task 25 review m4: an organiser's delete reaches an open page within that; an EMPTY settled answer sets no timer); a read
+//     the island asks for still happens: `refreshSoon` (a player gave up: the next answer rebuilds it) and `readSoon`
 //     (the replay host's frame holds an address whose token has passed: a fresh read, never a rebuild, so the frame is not remounted);
 //   - a failed read keeps the last answer on screen and tries again in 30 s, and a later good answer replaces it;
 //   - a stop ends everything: no timer, the read in flight is aborted, and its late answer is never delivered.
@@ -13,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SEAZN_TOKEN_REFRESH_BEFORE_SECONDS } from "@/server/relay/config";
 import type { PublicFixtureVideo } from "@/server/api-v1/schemas";
 import { type PageVisibility, SEAZN_VIDEO_FETCH_TIMEOUT_MS, startVideoPoll } from "../seazn-video-poll";
-import { SEAZN_VIDEO_POLL_CEILING_MS, SEAZN_VIDEO_POLL_FLOOR_MS, nextVideoFetchMs } from "../seazn-video-schedule";
+import { SEAZN_VIDEO_FINAL_READ_MS, SEAZN_VIDEO_POLL_CEILING_MS, SEAZN_VIDEO_POLL_FLOOR_MS, nextVideoFetchMs } from "../seazn-video-schedule";
 
 const T0 = new Date("2026-11-21T12:00:00.000Z");
 const MIN = 60_000;
@@ -137,12 +138,21 @@ describe("startVideoPoll: the schedule", () => {
     poll.stop();
   });
 
-  it("carry 4: a replay of embeds alone on a SETTLED fixture is final — no timer: a day later there is still the one read", async () => {
-    const r = route(embedOnly);
-    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {}, settledAtMs: T0.getTime() - MIN });
+  it("review m4: a replay of embeds alone on a SETTLED fixture is final — read every SEAZN_VIDEO_FINAL_READ_MS, so the organiser's delete of a part, then of the last, reaches the open page within one bound each; the empty answer then stops the loop", async () => {
+    const twoParts: PublicFixtureVideo = { live: null, replay: [embedOnly.replay[0]!, { ...embedOnly.replay[0]!, partNo: 2, src: "https://embed.invalid/p2" }] };
+    const r = route(twoParts, embedOnly, EMPTY);
+    const seen: PublicFixtureVideo[] = [];
+    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: (v) => seen.push(v), settledAtMs: SETTLED });
     await flush();
+    expect(seen.map((v) => v.replay.map((p) => p.partNo)), "PREMISE: two parts on screen").toEqual([[1, 2]]);
+    await vi.advanceTimersByTimeAsync(SEAZN_VIDEO_FINAL_READ_MS - 1);
+    expect(r.calls, "not before the bound").toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(seen.at(-1)!.replay.map((p) => p.partNo), "part 2 deleted: gone within one bound").toEqual([1]);
+    await vi.advanceTimersByTimeAsync(SEAZN_VIDEO_FINAL_READ_MS);
+    expect(seen.at(-1), "the last part deleted: the empty answer, within one more").toEqual(EMPTY);
     await vi.advanceTimersByTimeAsync(24 * 60 * MIN);
-    expect(r.calls).toHaveLength(1);
+    expect(r.calls, "an empty answer on a settled fixture stops the loop: a day later, still three reads").toHaveLength(3);
     expect(vi.getTimerCount(), "no timer left").toBe(0);
     poll.stop();
   });
@@ -399,12 +409,14 @@ describe("startVideoPoll: readSoon (a frame holding a lapsed address)", () => {
     return { seen, onVideo: (video: PublicFixtureVideo, o: { rebuild: boolean }) => void seen.push({ video, rebuild: o.rebuild }) };
   };
 
-  it("EMPTY CASE FIRST: never asked, a final replay reads once and never again", async () => {
+  it("EMPTY CASE FIRST: never asked, a final replay reads once and then only at its bound (review m4)", async () => {
     const r = route(embedOnly);
     const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {}, settledAtMs: SETTLED });
     await flush();
-    await vi.advanceTimersByTimeAsync(10 * MIN);
+    await vi.advanceTimersByTimeAsync(SEAZN_VIDEO_FINAL_READ_MS - 1);
     expect(r.calls).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(r.calls).toHaveLength(2);
     poll.stop();
   });
 
@@ -413,7 +425,7 @@ describe("startVideoPoll: readSoon (a frame holding a lapsed address)", () => {
     const rec = record();
     const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: rec.onVideo, settledAtMs: SETTLED });
     await flush();
-    await vi.advanceTimersByTimeAsync(5 * MIN);
+    await vi.advanceTimersByTimeAsync(4 * MIN);   // under the m4 bound: no read of its own yet
     poll.readSoon();
     await flush();
     expect(r.calls).toHaveLength(2);
@@ -433,8 +445,8 @@ describe("startVideoPoll: readSoon (a frame holding a lapsed address)", () => {
     expect(r.calls, "a ms short of the floor").toHaveLength(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(r.calls).toHaveLength(2);
-    await vi.advanceTimersByTimeAsync(10 * MIN);
-    expect(r.calls, "one read for the burst").toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(SEAZN_VIDEO_FINAL_READ_MS - 1);
+    expect(r.calls, "one read for the burst (the next is the m4 bound's, after it)").toHaveLength(2);
     poll.stop();
   });
 
@@ -443,7 +455,7 @@ describe("startVideoPoll: readSoon (a frame holding a lapsed address)", () => {
     const rec = record();
     const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: rec.onVideo, settledAtMs: SETTLED });
     await flush();
-    await vi.advanceTimersByTimeAsync(5 * MIN);
+    await vi.advanceTimersByTimeAsync(4 * MIN);   // under the m4 bound: no read of its own yet
     poll.refreshSoon();
     poll.readSoon();
     await flush();
@@ -471,10 +483,10 @@ describe("startVideoPoll: readSoon (a frame holding a lapsed address)", () => {
     const r = timed(embedOnly, embedOnly);
     const hidden = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {}, visibility: page.visibility, settledAtMs: SETTLED });
     await flush();
-    await vi.advanceTimersByTimeAsync(5 * MIN);
+    await vi.advanceTimersByTimeAsync(4 * MIN);   // under the m4 bound: no read of its own yet
     page.hide();
     hidden.readSoon();
-    await vi.advanceTimersByTimeAsync(5 * MIN);
+    await vi.advanceTimersByTimeAsync(4 * MIN);   // under the m4 bound: no read of its own yet
     expect(r.at, "hidden: no read").toHaveLength(1);
     page.show();
     await flush();
@@ -692,13 +704,15 @@ describe("review I2: a settled fixture", () => {
     poll.stop();
   });
 
-  it("an hls replay once settled is re-read at its token's refresh point, and that read is the replay's token refresh", async () => {
-    const r = timed(replayFor(60 * MIN), replayFor(60 * MIN));
+  it("an hls replay once settled is re-read at its token's refresh point when that comes before the m4 bound — that read is the token refresh — and at the bound otherwise", async () => {
+    // A token with 8 min left: its refresh point (3 min) comes first; the answer there carries a fresh hour, whose refresh point (55
+    // min on) is past the bound, so the next read is the bound's, 5 min later.
+    const r = timed(replayFor(8 * MIN), replayFor(63 * MIN));
     const seen: PublicFixtureVideo[] = [];
     const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: (v) => seen.push(v), settledAtMs: T0.getTime() - MIN });
-    await vi.advanceTimersByTimeAsync(55 * MIN + 1);
-    expect(r.at).toEqual([0, 60 * MIN - REFRESH_MS]);
-    expect(seen).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(8 * MIN - REFRESH_MS + SEAZN_VIDEO_FINAL_READ_MS + 1);
+    expect(r.at).toEqual([0, 8 * MIN - REFRESH_MS, 8 * MIN - REFRESH_MS + SEAZN_VIDEO_FINAL_READ_MS]);
+    expect(seen).toHaveLength(3);
     poll.stop();
   });
 
@@ -819,19 +833,33 @@ describe("review I2: a hidden page reads nothing", () => {
     poll.stop();
   });
 
-  it("a loop the schedule stopped stays stopped when the page is shown (a settled empty fixture, and embeds alone)", async () => {
-    for (const [what, answer, settledAtMs] of [["settled, empty", EMPTY, T0.getTime() - MIN], ["settled, embeds alone", embedOnly, T0.getTime() - MIN]] as const) {
-      const page = fakePage();
-      const r = timed(answer);
-      const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {}, visibility: page.visibility, settledAtMs });
-      await flush();
-      page.hide();
-      await vi.advanceTimersByTimeAsync(MIN);
-      page.show();
-      await vi.advanceTimersByTimeAsync(10 * MIN);
-      expect(r.at, `${what}: the one read`).toHaveLength(1);
-      poll.stop();
-    }
+  it("a loop the schedule stopped stays stopped when the page is shown (a settled empty fixture)", async () => {
+    const page = fakePage();
+    const r = timed(EMPTY);
+    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: () => {}, visibility: page.visibility, settledAtMs: T0.getTime() - MIN });
+    await flush();
+    page.hide();
+    await vi.advanceTimersByTimeAsync(MIN);
+    page.show();
+    await vi.advanceTimersByTimeAsync(10 * MIN);
+    expect(r.at, "settled, empty: the one read").toHaveLength(1);
+    poll.stop();
+  });
+
+  it("review m4: a FINAL replay (settled, embeds alone) whose bound passes while the tab is hidden reads nothing hidden, and pays the owed read as it is shown — so a delete reaches a tab the moment it is looked at", async () => {
+    const page = fakePage();
+    const r = timed(embedOnly, EMPTY);
+    const seen: PublicFixtureVideo[] = [];
+    const poll = startVideoPoll({ fetchVideo: r.fetchVideo, onVideo: (v) => seen.push(v), visibility: page.visibility, settledAtMs: T0.getTime() - MIN });
+    await flush();
+    page.hide();
+    await vi.advanceTimersByTimeAsync(SEAZN_VIDEO_FINAL_READ_MS + MIN);
+    expect(r.at, "hidden past the bound: no read").toHaveLength(1);
+    page.show();
+    await flush();
+    expect(r.at, "shown: the owed read, at once").toHaveLength(2);
+    expect(seen.at(-1), "the replay deleted meanwhile is gone").toEqual(EMPTY);
+    poll.stop();
   });
 
   it("stop lets go of the page: its listener is removed, and a show after it reads nothing", async () => {

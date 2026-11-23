@@ -413,22 +413,22 @@ describe("Task 25: the frame's ask reaches the loop as a read, not a rebuild", (
     failure: { reason: "hls", hlsType: "networkError", hlsDetails: "manifestLoadError", httpStatus: 403, mediaCode: null },
   });
 
-  it("the island hands the stage an onStale that reads again (a final replay sets no timer of its own) and keeps the epoch; onFatal rebuilds", async () => {
+  it("the island hands the stage an onStale that reads again (a final replay's own next read waits out the m4 bound, 5 min) and keeps the epoch; onFatal rebuilds", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
     try {
       const fetchMock = route();
       vi.stubGlobal("fetch", fetchMock);
       const island = renderIsland(SeaznVideoIsland, { fixtureId: "f1", labels, settledAt: new Date(NOW - MIN).toISOString() });
-      await vi.advanceTimersByTimeAsync(10 * MIN);
-      expect(fetchMock, "premise: a settled replay of embeds reads once").toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(4 * MIN);   // under the m4 bound (SEAZN_VIDEO_FINAL_READ_MS): no read of its own
+      expect(fetchMock, "premise: a settled replay of embeds reads once before its 5 min bound").toHaveBeenCalledTimes(1);
       const stage = () => island.tree()[0] as unknown as StageEl;
       expect(stage().props.epoch).toBe(0);
       stage().props.onStale();
       await vi.advanceTimersByTimeAsync(0);
       expect(fetchMock, "the frame's ask: one fresh read").toHaveBeenCalledTimes(2);
       expect(stage().props.epoch, "a read, not a rebuild: the frame keeps its element").toBe(0);
-      await vi.advanceTimersByTimeAsync(10 * MIN);
+      await vi.advanceTimersByTimeAsync(4 * MIN);   // under the m4 bound (SEAZN_VIDEO_FINAL_READ_MS): no read of its own
       sentry.messages.length = 0;
       stage().props.onFatal(fatalOn(embeds.replay[1]!.src));
       await vi.advanceTimersByTimeAsync(0);
@@ -438,7 +438,7 @@ describe("Task 25: the frame's ask reaches the loop as a read, not a rebuild", (
       expect(sentry.messages.map((m) => (m.context as { extra: unknown }).extra)).toEqual([
         { stage: "player", fixtureId: "f1", source: "replay", partNo: 2, player: "hls", reason: "hls", hlsType: "networkError", hlsDetails: "manifestLoadError", httpStatus: 403, mediaCode: null },
       ]);
-      await vi.advanceTimersByTimeAsync(10 * MIN);
+      await vi.advanceTimersByTimeAsync(4 * MIN);   // under the m4 bound (SEAZN_VIDEO_FINAL_READ_MS): no read of its own
       stage().props.onFatal(fatalOn(embeds.replay[1]!.src));
       await vi.advanceTimersByTimeAsync(0);
       expect(stage().props.epoch, "rebuilt again").toBe(2);

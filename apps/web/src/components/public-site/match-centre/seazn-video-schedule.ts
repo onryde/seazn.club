@@ -29,8 +29,13 @@
 //   - A replay of the host's `embed` parts alone on a cold page that is not settled (an undecided fixture never settles) reads at the
 //     ceiling, 60 s (review m5); the frame never needs a re-read for its own sake.
 //   - A SETTLED fixture (decided, and past the stream code's grace after it finished, so no new Go live can start: the page's
-//     `settledAt`, seazn-video-plan.ts) has nothing more coming: an empty answer stops the loop, and an `hls` replay is re-read only at
-//     its token's refresh point (it must be: a player whose token lapses mid-watch fails, and a rebuilt one starts again from 0).
+//     `settledAt`, seazn-video-plan.ts) has nothing more coming: an empty answer stops the loop. A replay on it is FINAL, but not
+//     fixed: the organiser can still delete a part, or all of it (Task 26). So a final replay is read every 5 min
+//     (`SEAZN_VIDEO_FINAL_READ_MS`; Task 25 review m4: it used to set no timer, and an open page kept playing a deleted part until a
+//     reload), and an `hls` one at its token's refresh point when that comes sooner (it must: a player whose token lapses mid-watch
+//     fails, and a rebuilt one starts again from 0). THE BOUND: a deleted part leaves a page that is open and shown within 5 min (a
+//     hidden tab reads as it is shown again); the answer without it is an ordinary change of parts (a part gone from the list falls
+//     back to the first, and a replay emptied holds its box through the wait, seazn-video-hold.ts, then goes once).
 //   - The hidden tab is the loop's own rule, not the schedule's: no read while `document.hidden` (seazn-video-poll.ts).
 import { SEAZN_TOKEN_REFRESH_BEFORE_SECONDS } from "@/server/relay/config";
 import type { PublicFixtureVideo } from "@/server/api-v1/schemas";
@@ -39,6 +44,10 @@ import type { PublicFixtureVideo } from "@/server/api-v1/schemas";
 export const SEAZN_VIDEO_POLL_FLOOR_MS = 30_000;
 /** The longest the backoff waits: 60 s (Phase 1 re-review N1; I2 had 5 min). */
 export const SEAZN_VIDEO_POLL_CEILING_MS = 60_000;
+/** Task 25 review m4: the longest a FINAL replay (a settled fixture, nothing hot) goes unread, 5 min — the bound within which an
+ *  organiser's delete leaves an open page. Longer than the ceiling on purpose: nothing new can arrive on a settled fixture, only a
+ *  delete, so a forgotten tab pays one read in five minutes, not one a minute (the undecided fixture's m5 rule). */
+export const SEAZN_VIDEO_FINAL_READ_MS = 5 * 60_000;
 /** Phase 1 re-review N1: how long either side of a fixture's kick-off its page holds the floor (an hour). */
 export const SEAZN_VIDEO_KICKOFF_WINDOW_MS = 60 * 60_000;
 
@@ -82,12 +91,13 @@ export const isEmptyVideo = (video: PublicFixtureVideo): boolean => video.live =
  *     timer of their own);
  *   - nothing to show: the floor while the match is hot (N1); else no timer once settled; else the backoff (30 s, then 60 s);
  *   - replay with an `hls` part (the interim Cloudflare recording): the floor, so a second Go live reaches an open page within one
- *     poll; once settled, the earliest `hls` token's refresh point instead (never sooner than the floor; an expiry that is not a date
- *     is the floor);
+ *     poll; once settled, the earliest `hls` token's refresh point instead, never later than `SEAZN_VIDEO_FINAL_READ_MS` (review
+ *     m4: a delete must reach the page) and never sooner than the floor; an expiry that is not a date is the floor;
  *   - replay of `embed` parts alone (the replay host's own frame, Task 25, carry 4): the floor while the match is hot, so a second
  *     Go live (or its Stop) reaches an open page within one read; the frame loaded its address once and ignores a later answer's
  *     (seazn-replay-frame.tsx), so the reads never restart it. FINAL: the fixture settled (no Go live can start) and nothing hot (no
- *     session was active as the page was drawn, kick-off not within the hour): no timer. Cold and not final — an UNDECIDED fixture
+ *     session was active as the page was drawn, kick-off not within the hour): every `SEAZN_VIDEO_FINAL_READ_MS` (5 min), so an
+ *     organiser's delete leaves the page (review m4). Cold and not final — an UNDECIDED fixture
  *     never settles (review m5) — the ceiling (60 s): a later Go live still reaches an open page within one read, and a forgotten
  *     tab costs one read a minute. A frame holding an address whose token has passed asks for its own read (seazn-video-poll.ts
  *     `readSoon`). */
@@ -103,10 +113,10 @@ export function nextVideoFetchMs(video: PublicFixtureVideo | null, at: VideoRead
   const hls = video.replay.filter((p) => p.player === "hls");
   if (hls.length === 0) {
     if (isHotRead(at)) return SEAZN_VIDEO_POLL_FLOOR_MS;          // carry 4: hot outranks settled
-    return settled ? null : SEAZN_VIDEO_POLL_CEILING_MS;           // final; or cold, not settled (review m5)
+    return settled ? SEAZN_VIDEO_FINAL_READ_MS : SEAZN_VIDEO_POLL_CEILING_MS;   // final (review m4); or cold, not settled (review m5)
   }
   if (!settled) return SEAZN_VIDEO_POLL_FLOOR_MS;
   const refreshAt = Math.min(...hls.map((p) => Date.parse(p.expiresAt))) - SEAZN_TOKEN_REFRESH_BEFORE_SECONDS * 1000;
   const wait = refreshAt - at.nowMs;
-  return Number.isFinite(wait) ? Math.max(SEAZN_VIDEO_POLL_FLOOR_MS, wait) : SEAZN_VIDEO_POLL_FLOOR_MS;
+  return Number.isFinite(wait) ? Math.max(SEAZN_VIDEO_POLL_FLOOR_MS, Math.min(wait, SEAZN_VIDEO_FINAL_READ_MS)) : SEAZN_VIDEO_POLL_FLOOR_MS;
 }
