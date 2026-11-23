@@ -7,7 +7,7 @@
     "lateFirstRound": 3,
     "lateMissedRounds": 2,
     "lateScoreBeforeFirst": "0",
-    "lateTotal": "0",
+    "lateTotal": "1",
     "leaverName": "Fay",
     "leaverRound": 2,
     "leaverTotal": "1",
@@ -46,23 +46,23 @@
         "Dev (3)",
         "Lost to Cy",
         "Beat Ana",
-        "Drew with Ben",
+        "Lost to Gil",
         "Drew with Eve",
-        "2"
+        "1½"
       ],
       [
         "Gil (4)",
         "Not entered yet",
         "Not entered yet",
-        "Lost to Ana",
+        "Beat Dev",
         "Lost to Ben",
-        "0"
+        "1"
       ],
       [
         "Ben (5)",
         "Lost to Fay",
         "Lost to Eve",
-        "Drew with Dev",
+        "Drew with Ana",
         "Beat Gil",
         "1½"
       ],
@@ -70,17 +70,17 @@
         "Ana (6)",
         "Drew with Eve",
         "Lost to Dev",
-        "Beat Gil",
-        "Lost to Cy",
-        "1½"
+        "Drew with Ben",
+        "Beat Cy",
+        "2"
       ],
       [
         "Cy (7)",
         "Beat Dev",
         "Won without playing (Fay left)",
         "Lost to Eve",
-        "Beat Ana",
-        "3"
+        "Lost to Ana",
+        "2"
       ]
     ]
   },
@@ -101,10 +101,10 @@
       },
       {
         "board": 2,
-        "first": "Ana (6)",
-        "second": "Gil (4)",
-        "firstScore": "½",
-        "secondScore": "0",
+        "first": "Gil (4)",
+        "second": "Dev (3)",
+        "firstScore": "0",
+        "secondScore": "1",
         "result": "1 — 0",
         "firstWhite": true,
         "float": true
@@ -112,9 +112,9 @@
       {
         "board": 3,
         "first": "Ben (5)",
-        "second": "Dev (3)",
+        "second": "Ana (6)",
         "firstScore": "0",
-        "secondScore": "1",
+        "secondScore": "½",
         "result": "½ — ½",
         "firstWhite": true,
         "float": true

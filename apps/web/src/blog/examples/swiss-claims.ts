@@ -136,53 +136,84 @@ function* matchings(players: string[], met: ReadonlySet<string>): Generator<[str
   }
 }
 
-/** Per score group, highest score first: how many boards seat one of the group's players against a lower score (a float down). */
-function floatProfile(score: ReadonlyMap<string, number>, pairs: readonly [string, string][]): number[] {
-  const groups = [...new Set(score.values())].sort((a, b) => b - a);
-  return groups.map((g) =>
-    pairs.filter(([a, b]) => {
-      const [x, y] = [score.get(a)!, score.get(b)!];
-      return Math.max(x, y) === g && x !== y;
-    }).length,
-  );
+/** What one score group sent down in a pairing: how many of its players (carried-in ones too) were paired below it, and how many
+ *  rounds each of them had floated down before, fewest first. */
+interface GroupFloats {
+  out: number;
+  before: number[];
 }
 
-/** Compares two profiles from the top group down: negative when `a` floats fewer out of the highest group where they differ. */
-const compareProfiles = (a: number[], b: number[]): number => {
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i]! - b[i]!;
-  return 0;
-};
+/**
+ * Per score group, highest score first: who the group floats down. A player is carried down every group between their own and
+ * their opponent's, so a leader paired with the lowest score floats out of each group on the way (the engine's score-group pass
+ * carries a floater into the next group, where it can float again). `floatedBefore` is each player's count of earlier rounds they
+ * floated down in.
+ */
+function floatProfile(seated: readonly string[], score: ReadonlyMap<string, number>, pairs: readonly [string, string][], floatedBefore: ReadonlyMap<string, number>): GroupFloats[] {
+  const scores = [...new Set(seated.map((p) => score.get(p)!))].sort((a, b) => b - a);
+  const groupOf = (p: string) => scores.indexOf(score.get(p)!);
+  const opponent = new Map<string, string>();
+  for (const [a, b] of pairs) {
+    opponent.set(a, b);
+    opponent.set(b, a);
+  }
+  return scores.map((_, g) => {
+    const out = [...opponent].filter(([p, o]) => groupOf(p) <= g && g < groupOf(o)).map(([p]) => floatedBefore.get(p) ?? 0);
+    return { out: out.length, before: out.sort((a, b) => a - b) };
+  });
+}
 
 /**
- * The float rule, the way the engine words it (swiss.js header: it pairs each score group top-down and moves the fewest players
- * to the next group): over every rematch-free way to seat the round's players, the one this round has floats the fewest out
- * of the highest score group, then out of the next, and so on down. It is NOT the fewest mixed boards over the whole round:
- * a lower group can end up with more floats because the group above is settled first.
+ * Compares two profiles from the top group down: the group that floats fewer is better; with the same number, the group that floats
+ * players who have floated down less often is better (a repeat float is avoided before a lower group's floats are counted); only then
+ * is the next group looked at. Negative when `a` is the better.
+ */
+function compareProfiles(a: GroupFloats[], b: GroupFloats[]): number {
+  for (let i = 0; i < a.length; i++) {
+    if (a[i]!.out !== b[i]!.out) return a[i]!.out - b[i]!.out;
+    for (let j = 0; j < a[i]!.before.length; j++) if (a[i]!.before[j] !== b[i]!.before[j]) return a[i]!.before[j]! - b[i]!.before[j]!;
+  }
+  return 0;
+}
+
+const showProfile = (p: GroupFloats[]): string => p.map((g) => (g.before.some((n) => n > 0) ? `${g.out} (floated before: ${g.before.join(", ")})` : String(g.out))).join("; ");
+
+/**
+ * The float rule, the way the engine words it (swiss.js header: it pairs each score group top-down, moves the fewest players to the
+ * next, and among those the least-floated: FIDE C.04.3 ranks avoiding a repeat float above rank): over every rematch-free way to seat
+ * the round's players, the one this round has floats the fewest out of the highest score group, and among the same number the players
+ * who have floated down least, then does the same for the next group, and so on down. It is NOT the fewest mixed boards over the
+ * whole round: a lower group can end up with more floats because the group above is settled first, and with a repeat float avoided
+ * above.
  *
- * `rounds` is every round in order; a round's pairs join the rematch history for the next. Returns null when each round after the
- * first pairs that way, else why not. `checked` counts the rounds the oracle compared (zero is a failure for the caller).
+ * `rounds` is every round in order; a round's pairs join the rematch history for the next, and its mixed boards (the side that came in
+ * on more points floated down) the float history. Returns null when each round after the first pairs that way, else why not. `checked`
+ * counts the rounds the oracle compared (zero is a failure for the caller).
  */
 export function floatRuleProblem(rounds: readonly PairedRound[]): { problem: string | null; checked: number } {
   const met = new Set<string>();
+  const floatedBefore = new Map<string, number>();
   let checked = 0;
   for (const r of [...rounds].sort((a, b) => a.round - b.round)) {
     if (r.round > 1) {
       const seated = [...r.score.keys()].filter((p) => p !== r.bye).sort();
       const seatedHere = new Set(r.pairs.flat());
       if (seated.length !== seatedHere.size || seated.some((p) => !seatedHere.has(p))) return { problem: `round ${r.round}: the boards seat ${[...seatedHere].sort().join(", ")}, the field minus the bye is ${seated.join(", ")}`, checked };
-      const mine = floatProfile(r.score, r.pairs);
-      let best: number[] | null = null;
+      const mine = floatProfile(seated, r.score, r.pairs, floatedBefore);
+      let best: GroupFloats[] | null = null;
       for (const m of matchings(seated, met)) {
-        const p = floatProfile(r.score, m);
+        const p = floatProfile(seated, r.score, m, floatedBefore);
         if (best === null || compareProfiles(p, best) < 0) best = p;
       }
       if (best === null) return { problem: `round ${r.round}: no rematch-free pairing exists`, checked };
-      if (compareProfiles(mine, best) !== 0) return { problem: `round ${r.round}: floats out of each score group, top down, are ${mine.join(", ")}; the fewest possible are ${best.join(", ")}`, checked };
+      if (compareProfiles(mine, best) !== 0) return { problem: `round ${r.round}: floats out of each score group, top down, are ${showProfile(mine)}; the fewest possible are ${showProfile(best)}`, checked };
       checked++;
     }
     for (const [a, b] of r.pairs) {
       if (met.has(key(a, b))) return { problem: `round ${r.round}: ${a} and ${b} have met before`, checked };
       met.add(key(a, b));
+      const [x, y] = [r.score.get(a), r.score.get(b)];
+      if (x !== undefined && y !== undefined && x !== y) floatedBefore.set(x > y ? a : b, (floatedBefore.get(x > y ? a : b) ?? 0) + 1);
     }
   }
   return { problem: null, checked };

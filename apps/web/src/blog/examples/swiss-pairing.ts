@@ -247,8 +247,8 @@ const claims: Claim[] = [
     }),
   },
   {
-    says: "each round from round 2 floats as few players out of each score group as any rematch-free pairing can, taking the groups from the top",
-    source: "the engine's own statement of the rule (scheduling/swiss.js header: each score group is paired in turn from the top and moves the fewest players to the next) under FIDE Handbook C.04.3 [C1] no rematch; brute force over every rematch-free pairing, never the engine",
+    says: "each round from round 2 floats as few players out of each score group as any rematch-free pairing can, taking the groups from the top, and among the same number floats those who have floated down least often",
+    source: "the engine's own statement of the rule (scheduling/swiss.js header: each score group is paired in turn from the top and moves the fewest players to the next, the least-floated first) under FIDE Handbook C.04.3 [C1] no rematch and [C14] (avoid a repeat downfloat); brute force over every rematch-free pairing, never the engine, the float history read off the printed boards",
     check: guarded((r) => {
       const { problem, checked } = floatRuleProblem(roundsOf(r));
       return problem ?? (checked > 0 || "no round after the first");

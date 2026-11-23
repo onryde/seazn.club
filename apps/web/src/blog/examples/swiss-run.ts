@@ -2,7 +2,12 @@
 // (#13 how-swiss-pairing-works, #14 swiss-chess-bye, #15 joining-or-leaving-a-swiss). Every step is the app's or the
 // engine's own code, never a copy of it:
 //   - the field of each round: `swissFieldForRound` (a late entrant is in the field from its first round only);
-//   - the history (who met, colours, who may no longer take the bye): `buildSwissHistory`, over rows shaped as stored;
+//   - the history (who met, colours, who may no longer take the bye): `buildSwissHistory`, over rows shaped as stored, and
+//     the float history the Pair has sent since #1291 (how many earlier rounds each entrant floated DOWN in):
+//     `swissFloatHistory`, the app's own derivation, over the same rows. The one thing the harness cannot call is
+//     `stageTablePointsBefore`, which reads the table each earlier round started from out of the database: the run holds that table
+//     itself (its running points, paid by `payout` and `awardByeDelta` as `stageTablePoints` folds them) and snapshots it as each
+//     round begins. blog-swiss-floats.test.ts holds the result to the printed boards and to the engine's own `floated` lists;
 //   - the score each round is paired on: the stage's table points, every game paid by the web's one rules loader
 //     (`tableRulesOf`) and the engine's `payout`, the bye by the app's own bye credit (`awardByeDelta`);
 //   - the constraints `swissGen` sends: chess colours for chess (`isChessSport`), the look-ahead above the safe maximum
@@ -27,7 +32,7 @@ import { tableRulesOf, type LoadedTableRules } from "@/server/engine-db/table-ru
 import { liveCfg } from "@/server/engine-db/fixture-cfg";
 import { maxRoundPoints } from "@/server/engine-db/swiss-max-round-points";
 import { awardByeDelta } from "@/server/engine-db/competition";
-import { buildSwissHistory, swissFieldForRound } from "@/server/usecases/stages/swiss-gen";
+import { buildSwissHistory, swissFieldForRound, swissFloatHistory } from "@/server/usecases/stages/swiss-gen";
 import type { ActiveEntrant, SwissExistingFixture } from "@/server/usecases/stages/types";
 import { startingVariantKey } from "./starting-variant";
 import type { DiagramModel } from "./types";
@@ -78,9 +83,11 @@ export interface SwissRunRound {
   bye: { entrant: string; before: number; paid: number } | null;
   /** Table points after the round, every entrant who has been in a field so far. */
   after: Map<string, number>;
-  /** What the round was paired from: the app's history (who met, colours, who may no longer take the bye) and the standings the
-   *  engine saw. A test re-pairs the round from them with one thing changed, to show what that thing did. */
-  paired: { standings: SwissStanding[]; history: Parameters<typeof pairRound>[1] };
+  /** What the round was paired from: the app's history (who met, colours, who may no longer take the bye, and the float history) and
+   *  the standings the engine saw. A test re-pairs the round from them with one thing changed, to show what that thing did.
+   *  `floated` is the engine's own list of who floated down on THIS round (`SwissRound.floated`), the declaration the float history
+   *  of the rounds after it is checked against (blog-swiss-floats.test.ts). */
+  paired: { standings: SwissStanding[]; history: Parameters<typeof pairRound>[1]; floated: string[] };
 }
 
 export interface SwissRun {
@@ -184,6 +191,10 @@ export function runSwiss(input: SwissRunInput): SwissRun {
   const results = new Map<string, FixtureResult>();
   let withdrawal: SwissRun["withdrawal"] = null;
   const merged = liveCfg(cfg, { kind: "swiss", config: { rounds: input.rounds } }, sportModule);
+  // The table each round STARTED from (round -> points going in): what `stageTablePointsBefore` hands `swissFloatHistory` for each earlier
+  // round the Pair reads. The run's running `total` is that table (every game paid by `payout`, the bye by `awardByeDelta`, as
+  // `stageTablePoints` folds them), so a snapshot taken as each round begins is the cut the app reads from the database.
+  const pointsBefore = new Map<number, ReadonlyMap<string, number>>();
 
   for (let r = 1; r <= input.rounds; r++) {
     // The active list as the app selects it: withdrawn entrants are gone, the order is the seeding order.
@@ -193,11 +204,17 @@ export function runSwiss(input: SwissRunInput): SwissRun {
       .map((e) => ({ id: e.id, seed: e.seed, swiss_first_round: e.firstRound ?? null }));
     const field = swissFieldForRound(active, r);
     const { played, colours, byes } = buildSwissHistory(existing, field, playedFacts);
+    pointsBefore.set(r, new Map(total));
+    // The app's own derivation, over the rows paired so far: one float for the stronger side of every earlier two-seated board whose
+    // sides came in on different points (a bye is no board, a walked-over board was one when it was paired).
+    const floats = swissFloatHistory(existing, r, pointsBefore);
+    // One object: the history the engine pairs from is the history the run records (a test re-pairs from it).
+    const history: Parameters<typeof pairRound>[1] = { played, colours, byes, floats };
     const standings: SwissStanding[] = field.map((e) => ({ entrantId: e.id, score: total.get(e.id) ?? 0, rank: e.seed ?? 0 }));
     const lookAhead = r < input.rounds && input.rounds > swissRoundsGuidance(field.length).safeMax;
     const most = maxRoundPoints(rules.points, sportModule, merged);
     const finalMax = chess && r === input.rounds && input.rounds > 1 && most > 0 ? (input.rounds - 1) * most : undefined;
-    const paired = pairRound(standings, { played, colours, byes }, { chess, ...(lookAhead ? { lookAhead: true } : {}), ...(finalMax !== undefined ? { finalRoundMaxScore: finalMax } : {}) });
+    const paired = pairRound(standings, history, { chess, ...(lookAhead ? { lookAhead: true } : {}), ...(finalMax !== undefined ? { finalRoundMaxScore: finalMax } : {}) });
     if (!paired.ok) throw new Error(`swiss-run: round ${r} refused: ${paired.reason}`);
     const pairings = r === 1 && chess ? applyRoundOneColourLot(paired.pairings, swissColourLot(swissDrawSeed(input.stageId))) : paired.pairings;
     // An entrant leaving this paired round: the engine's withdrawal rule over their decided and paired boards.
@@ -257,7 +274,7 @@ export function runSwiss(input: SwissRunInput): SwissRun {
       bye = { entrant: paired.bye, before, paid: credit.points };
     }
     for (const e of field) if (!total.has(e.id)) total.set(e.id, 0);
-    rounds.push({ round: r, field: field.map((e) => e.id), boards, bye, after: new Map(total), paired: { standings, history: { played, colours, byes } } });
+    rounds.push({ round: r, field: field.map((e) => e.id), boards, bye, after: new Map(total), paired: { standings, history, floated: paired.floated } });
   }
   return { module: sportModule, cfg, rules, unit, chess, rounds, withdrawal, name, points: (n: number) => pointsText(n, unit) };
 }

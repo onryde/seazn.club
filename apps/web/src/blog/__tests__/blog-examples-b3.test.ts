@@ -325,7 +325,8 @@ describe("the float oracle takes the score groups from the top and refuses a rem
     { round: 2, score: new Map([["fay", 1], ["cy", 1], ["eve", 0.5], ["ana", 0.5], ["dev", 0], ["ben", 0]]), pairs: [["fay", "cy"], ["eve", "ben"], ["dev", "ana"]], bye: null },
   ];
   const score3 = new Map([["cy", 2], ["eve", 1.5], ["dev", 1], ["ana", 0.5], ["ben", 0], ["gil", 0]]);
-  const topDown: [string, string][] = [["cy", "eve"], ["ana", "gil"], ["ben", "dev"]];
+  // The committed round 3: the pairing the app makes with the float history it sends (Eve and Ana floated down in round 2).
+  const topDown: [string, string][] = [["cy", "eve"], ["gil", "dev"], ["ana", "ben"]];
   const fewestMixed: [string, string][] = [["cy", "ana"], ["eve", "dev"], ["ben", "gil"]];
   const mixed = (pairs: [string, string][]) => pairs.filter(([a, b]) => score3.get(a) !== score3.get(b)).length;
 
@@ -360,11 +361,33 @@ describe("the float oracle takes the score groups from the top and refuses a rem
     }
     expect(compared).toBe(3);
     const late = golden("swiss-late-and-withdraw");
-    const r3 = (name: string) => String(rowOf(late, name)[3]);
-    // Round 3 of the committed grid is the round of the unit case above: Cy v Eve, Ana v Gil, Ben v Dev.
-    expect(r3("Cy")).toBe("Lost to Eve");
-    expect(r3("Ana")).toBe("Beat Gil");
-    expect(r3("Ben")).toBe("Drew with Dev");
+    const cell = (name: string, round: number) => String(rowOf(late, name)[round]);
+    // Round 3 of the committed grid is the round of the unit case above: Cy v Eve, Gil v Dev, Ana v Ben.
+    expect(cell("Cy", 3)).toBe("Lost to Eve");
+    expect(cell("Dev", 3)).toBe("Lost to Gil");
+    expect(cell("Ana", 3)).toBe("Drew with Ben");
+  });
+
+  it("a repeat float is avoided before a lower group's floats are counted: round 4 of the late example floats one more board than the fewest", () => {
+    const score4 = new Map([["eve", 2.5], ["cy", 2], ["dev", 1], ["gil", 1], ["ana", 1], ["ben", 0.5]]);
+    const earlier: PairedRound[] = [...history(), { round: 3, score: score3, pairs: topDown, bye: null }];
+    // What the app seats (committed): Gil, who has never floated down, goes down to Ben. The other arrangement sends Cy down to Ben, whom
+    // round 3 already floated down, and leaves Gil and Ana level: one board fewer between different scores.
+    const seated: [string, string][] = [["eve", "dev"], ["cy", "ana"], ["gil", "ben"]];
+    const fewerBoards: [string, string][] = [["eve", "dev"], ["cy", "ben"], ["gil", "ana"]];
+    const mixed4 = (pairs: [string, string][]) => pairs.filter(([a, b]) => score4.get(a) !== score4.get(b)).length;
+    expect(mixed4(seated), "mixed boards seated").toBe(3);
+    expect(mixed4(fewerBoards), "mixed boards in the other arrangement").toBe(2);
+    const ok = floatRuleProblem([...earlier, { round: 4, score: score4, pairs: seated, bye: null }]);
+    expect(ok.problem).toBeNull();
+    expect(ok.checked, "rounds compared").toBe(3);
+    const refused = floatRuleProblem([...earlier, { round: 4, score: score4, pairs: fewerBoards, bye: null }]);
+    expect(refused.problem).toContain("round 4");
+    expect(refused.problem).toContain("floated before");
+    // The committed grid seats exactly the first arrangement in round 4.
+    const late = golden("swiss-late-and-withdraw");
+    const cell = (name: string) => String(rowOf(late, name)[4]);
+    expect([cell("Eve"), cell("Dev"), cell("Cy"), cell("Ana"), cell("Gil"), cell("Ben")]).toEqual(["Drew with Dev", "Drew with Eve", "Lost to Ana", "Beat Cy", "Lost to Ben", "Beat Gil"]);
   });
 });
 
