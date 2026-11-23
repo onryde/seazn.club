@@ -3,6 +3,9 @@ import { readFileSync } from "node:fs";
 import {
   BASE, type Session, newSession, cookieHeader, call, check, signIn, tag, insertEntitlementOverride, type V1Res, v1, v1data,
 } from "../harness.ts";
+// The cap and its refusal code from their import-free leaf (lib/online-chess.ts imports `@/`, which this runner cannot resolve): the
+// probe below follows the constant the server enforces.
+import { ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION as CAP, ONLINE_DIVISION_FULL } from "../../../apps/web/src/lib/online-chess-cap.ts";
 
 /**
  * Chess in-page board T16 — keyless (no Lichess, no RealtimeKit), against a
@@ -121,10 +124,11 @@ export async function onlineChessDeskSuite(): Promise<void> {
 }
 
 /**
- * The 128-entrant cap of an online chess division (review of the cap, 2026-11-21), through the REAL v1 route. The organiser's plan
- * is lifted to 1,000 entrants a division (and 50 active competitions: the suite's owner has built three by here) so the PLAN is not what refuses: an online division takes 128, the 129th is a 422
- * ONLINE_DIVISION_FULL carrying the limit, and an over-the-board division of the same size on the same plan takes all 129 - so the
- * refusal is the online cap's own. (The sign-up, promote, Reinstate and online-switch doors, the lock and the race are
+ * The entrant cap of an online chess division (owner ruling 2026-11-21 at 128, raised to 256 on 2026-11-23), through the REAL v1
+ * route. The organiser's plan is lifted to 1,000 entrants a division (and 50 active competitions: the suite's owner has built three by
+ * here) so the PLAN is not what refuses: an online division takes CAP (256) in one bulk POST (the route takes up to 500), the next is
+ * a 422 ONLINE_DIVISION_FULL carrying the limit, and an over-the-board division on the same plan takes CAP + 1 - so the refusal is the
+ * online cap's own. (The sign-up, promote, Reinstate and online-switch doors, the lock and the race are
  * usecases/__tests__/online-entrant-cap-doors.test.ts.)
  */
 async function onlineEntrantCap(owner: Session): Promise<void> {
@@ -156,17 +160,21 @@ async function onlineEntrantCap(owner: Session): Promise<void> {
   check(`online entrant cap: both divisions made (got ${made.online.status} and ${made.otb.status})`, made.online.status === 201 && made.otb.status === 201 && !!online?.id && !!otb?.id);
   if (!online?.id || !otb?.id) return;
 
-  const full = await v1(owner, `/api/v1/divisions/${online.id}/entrants`, "POST", entrants(1, 128));
-  check(`online entrant cap: 128 entrants fit an online division, 201 (got ${full.status} ${full.json.error?.code ?? ""})`, full.status === 201);
-  const over = await v1(owner, `/api/v1/divisions/${online.id}/entrants`, "POST", entrants(129, 1));
+  // The premise: the ruling's 256, and a plan override above both numbers the probe writes.
+  check(`online entrant cap: the cap is the ruling's 256 (got ${CAP})`, CAP === 256);
+  const full = await v1(owner, `/api/v1/divisions/${online.id}/entrants`, "POST", entrants(1, CAP));
+  check(`online entrant cap: ${CAP} entrants fit an online division, 201 (got ${full.status} ${full.json.error?.code ?? ""})`, full.status === 201);
+  const over = await v1(owner, `/api/v1/divisions/${online.id}/entrants`, "POST", entrants(CAP + 1, 1));
+  // The body spreads the refusal's `extra` into `error` (api-v1/http.ts errorResponse): the limit rides as `error.limit`.
+  const overLimit = (over.json.error as { limit?: unknown } | undefined)?.limit;
   check(
-    `online entrant cap: the 129th is a 422 ONLINE_DIVISION_FULL (got ${over.status} ${over.json.error?.code ?? ""})`,
-    over.status === 422 && over.json.error?.code === "ONLINE_DIVISION_FULL",
+    `online entrant cap: the ${CAP + 1}th is a 422 ${ONLINE_DIVISION_FULL} with limit ${CAP} (got ${over.status} ${over.json.error?.code ?? ""} limit ${String(overLimit)})`,
+    over.status === 422 && over.json.error?.code === ONLINE_DIVISION_FULL && overLimit === CAP,
   );
   const listed = v1data<unknown[]>(await v1(owner, `/api/v1/divisions/${online.id}/entrants`));
-  check(`online entrant cap: the refusal wrote nothing, 128 entrants stand (got ${Array.isArray(listed) ? listed.length : "?"})`, Array.isArray(listed) && listed.length === 128);
-  const sameSizeOtb = await v1(owner, `/api/v1/divisions/${otb.id}/entrants`, "POST", entrants(1, 129));
-  check(`online entrant cap: 129 fit an over-the-board division on the same plan, 201 (got ${sameSizeOtb.status} ${sameSizeOtb.json.error?.code ?? ""})`, sameSizeOtb.status === 201);
+  check(`online entrant cap: the refusal wrote nothing, ${CAP} entrants stand (got ${Array.isArray(listed) ? listed.length : "?"})`, Array.isArray(listed) && listed.length === CAP);
+  const sameSizeOtb = await v1(owner, `/api/v1/divisions/${otb.id}/entrants`, "POST", entrants(1, CAP + 1));
+  check(`online entrant cap: ${CAP + 1} fit an over-the-board division on the same plan, 201 (got ${sameSizeOtb.status} ${sameSizeOtb.json.error?.code ?? ""})`, sameSizeOtb.status === 201);
 }
 
 /**

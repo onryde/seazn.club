@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 import { BATCH_REREAD_JITTER_MS } from "../../../components/public-site/match-room/use-room";
 import { LINE_POLL_MIN_MS, LINE_POLL_MS } from "../../../components/public-site/match-room/room-snapshot";
-import { STRANDED_CREATE_AFTER_MS, SWEEP_CADENCE_MS } from "../../usecases/external-play/sweep";
+import { STRANDED_CREATE_AFTER_MS, SWEEP_CADENCE_MS, SWEEP_RTK_CALLS_PER_PASS } from "../../usecases/external-play/sweep";
 import {
   ADMIT_HOLD_MS,
   LINE_ABANDON_AFTER_MS,
@@ -44,6 +44,9 @@ import {
   drainOf,
   dryArrivalSpreadS,
   etaStats,
+  EVIDENCE_PASS_SLACK_MS,
+  EVIDENCE_READS_PER_ROOM,
+  evidenceWaitMs,
   gateLevels,
   heldStays,
   judgeCosts,
@@ -51,6 +54,8 @@ import {
   peakPerSecond,
   warningStats,
   poolOf,
+  RUN_FLOOR_MS,
+  runTimeoutMs,
   slowBound,
   stayCosts,
   type BoardCreate,
@@ -146,6 +151,87 @@ describe("boardTimes equals the server's window for every rank (a sweep, counted
   it("refuses a rank that is not a non-negative integer", () => {
     expect(() => boardTimes(0, -1, true)).toThrow(RangeError);
     expect(() => boardTimes(0, 1.5, true)).toThrow(RangeError);
+  });
+});
+
+describe("runTimeoutMs: the run's wall clock grows with the stagger of its biggest division (AGENTS.md #20)", () => {
+  it("is the floor plus where the server puts the LAST board's batch, for every division size up to 256 boards (a sweep, counted)", () => {
+    const opened = new Date("2026-10-15T10:00:00.000Z");
+    let checked = 0;
+    for (let boards = 1; boards <= 256; boards += 1) {
+      // The server's own window: the last board of a staggered round is rank boards - 1.
+      const lastBatchAt = boardAnchor(opened, boards - 1, true).at.getTime() - opened.getTime();
+      expect(runTimeoutMs(boards), `${boards} boards`).toBe(RUN_FLOOR_MS + lastBatchAt);
+      checked += 1;
+    }
+    expect(checked, "division sizes checked").toBe(256);
+  });
+
+  it("hand-counted: 8 boards are one batch (the floor alone); 128 boards are 13 batches, the last 12 gaps of 2 minutes in", () => {
+    expect([CHECKIN_BATCH_SIZE, CHECKIN_BATCH_GAP_MS], "premise: batches of 10, 2 minutes apart").toEqual([10, 120_000]);
+    expect(RUN_FLOOR_MS, "the floor: the flat 30 minutes every run had before").toBe(30 * 60_000);
+    expect(runTimeoutMs(8)).toBe(30 * 60_000);
+    expect(runTimeoutMs(10)).toBe(30 * 60_000);
+    expect(runTimeoutMs(11)).toBe(32 * 60_000);
+    // The 256-board run's two divisions of 128: the flat 30 minutes is what it would have had, and it is not enough.
+    expect(runTimeoutMs(128)).toBe(54 * 60_000);
+  });
+
+  it("refuses a division size that is not a positive integer", () => {
+    expect(() => runTimeoutMs(0)).toThrow(RangeError);
+    expect(() => runTimeoutMs(2.5)).toThrow(RangeError);
+  });
+});
+
+describe("evidenceWaitMs: the wind-down's evidence deadline grows with the rooms the sweep's own cap must read (AGENTS.md #20)", () => {
+  // Run 45148211317 (256 boards, both divisions Required: 512 rooms) settled 375 of 512 rooms' camera evidence inside the flat
+  // 420 s and failed on nothing else: every wind-down pass read exactly 45 RealtimeKit calls, 15 rooms of 3 reads each - the pass's
+  // own cap (SWEEP_RTK_CALLS_PER_PASS), not the vendor or the bucket. The deadline is the floor plus the passes that cap needs.
+  const KNOBS = { floorS: 420, everyS: 20, callsPerPass: 45 };
+  const ITERATION_MS = 20_000 + EVIDENCE_PASS_SLACK_MS;
+
+  it("premise: the cap is the server's 45 (one call a second of the 45 s pass), a room is 3 reads, and an iteration's slack is 5 s", () => {
+    expect(SWEEP_RTK_CALLS_PER_PASS, "the server's own cap").toBe(45);
+    expect(EVIDENCE_READS_PER_ROOM, "the session list, its participants, the one peer's report").toBe(3);
+    expect(EVIDENCE_PASS_SLACK_MS).toBe(5_000);
+  });
+
+  it("the empty case first: no Required room is the floor alone", () => {
+    expect(evidenceWaitMs(0, KNOBS)).toBe(420_000);
+  });
+
+  it("hand-counted: 15 rooms a pass at a cap of 45, so 15 rooms are one pass and the 16th a second; 30 boards are 4 passes; 256 are 35", () => {
+    expect(evidenceWaitMs(15, KNOBS)).toBe(420_000 + 1 * ITERATION_MS);
+    expect(evidenceWaitMs(16, KNOBS)).toBe(420_000 + 2 * ITERATION_MS);
+    expect(evidenceWaitMs(60, KNOBS), "30 Required boards, 2 rooms each").toBe(420_000 + 4 * ITERATION_MS);
+    expect(evidenceWaitMs(512, KNOBS), "256 Required boards: ceil(512 / 15) = 35 passes").toBe(420_000 + 35 * ITERATION_MS);
+    expect(evidenceWaitMs(512, KNOBS), "and it is past what the flat 420 s read in run 45148211317").toBeGreaterThan(420_000);
+  });
+
+  it("the cap is checked at a room's START (sweep/pass-limits.ts): a cap of 44 still starts 15 rooms (the 15th at 42 calls), a cap of 46 starts 16", () => {
+    expect(evidenceWaitMs(15, { ...KNOBS, callsPerPass: 44 })).toBe(420_000 + 1 * ITERATION_MS);
+    expect(evidenceWaitMs(16, { ...KNOBS, callsPerPass: 44 })).toBe(420_000 + 2 * ITERATION_MS);
+    expect(evidenceWaitMs(16, { ...KNOBS, callsPerPass: 46 })).toBe(420_000 + 1 * ITERATION_MS);
+    expect(evidenceWaitMs(17, { ...KNOBS, callsPerPass: 46 })).toBe(420_000 + 2 * ITERATION_MS);
+  });
+
+  it("for every room count up to 600: the passes it allows read every room, and one pass fewer would not (a sweep, counted)", () => {
+    let checked = 0;
+    for (let rooms = 0; rooms <= 600; rooms += 1) {
+      const passes = (evidenceWaitMs(rooms, KNOBS) - 420_000) / ITERATION_MS;
+      expect(Number.isInteger(passes), `${rooms} rooms: a whole number of passes`).toBe(true);
+      expect(passes * 15, `${rooms} rooms: read`).toBeGreaterThanOrEqual(rooms);
+      if (rooms > 0) expect((passes - 1) * 15, `${rooms} rooms: one pass fewer leaves some unread`).toBeLessThan(rooms);
+      checked += 1;
+    }
+    expect(checked, "room counts checked").toBe(601);
+  });
+
+  it("refuses a room count that is not a non-negative integer, and a cap that could never start a room", () => {
+    expect(() => evidenceWaitMs(-1, KNOBS)).toThrow(RangeError);
+    expect(() => evidenceWaitMs(2.5, KNOBS)).toThrow(RangeError);
+    expect(() => evidenceWaitMs(10, { ...KNOBS, callsPerPass: 0 })).toThrow(RangeError);
+    expect(() => evidenceWaitMs(10, { ...KNOBS, callsPerPass: 1.5 })).toThrow(RangeError);
   });
 });
 
@@ -488,9 +574,14 @@ describe("which pass bars a capacity scenario owes, by the shape of its run (har
 });
 
 describe("B-dry's arrival spread is derived: demand exceeds the bucket's supply by a margin made of the product's own constants", () => {
-  // A FULL online division: 128 players, 64 boards - the largest run the platform takes (ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION). The
-  // old 60 (30 boards, as B) no longer exceed the bucket's burst, so there is nothing for B-dry to run dry at that size.
-  const PLAYERS = ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION;
+  // B-dry's recipe size (the harness header: LOAD_BOARDS=64): 128 players, 64 boards, one division. It was the FULL online division
+  // while the cap was 128; the cap is 256 now (2026-11-23), and at 256 players B's own 60 s spread already outruns the bucket, so the
+  // recipe stays at 128 - still a division the platform takes (the premise below). The old 60 (30 boards, as B) no longer exceed the
+  // bucket's burst, so there is nothing for B-dry to run dry at that size.
+  const PLAYERS = 128;
+  it("premise: B-dry's 128 players are a division the platform takes", () => {
+    expect(PLAYERS).toBeLessThanOrEqual(ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION);
+  });
   const c = LINE_LOAD.instantCallsPerPlayer;
   const supply = (spreadS: number) => RTK_BUDGET_BURST + RTK_BUDGET_REFILL_PER_S * spreadS;
   const input = { players: PLAYERS, perPlayerCalls: c, burst: RTK_BUDGET_BURST, refillPerS: RTK_BUDGET_REFILL_PER_S, marginCalls: DRY_MARGIN_CALLS };

@@ -1,7 +1,7 @@
 // The online chess entrant cap's two refusals, said in the organiser's own language (owner ruling 2026-11-21). The server's
 // words are English-only by design, so a screen never shows `err.message` for these: it maps the code to localized copy.
 //
-//   ONLINE_DIVISION_FULL            an online chess division already holds its most (128): add / promote / confirm / waive / a
+//   ONLINE_DIVISION_FULL            an online chess division already holds its most (256): add / promote / confirm / waive / a
 //                                   registration capacity above it;
 //   ONLINE_PLAY_TOO_MANY_ENTRANTS   turning online play on, for a division that already holds more than that.
 //

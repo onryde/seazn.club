@@ -65,6 +65,7 @@ import { EntrantsPanel, type EntrantsPanelEligibility } from "@/components/v2/en
 import { DivisionRulesStrip, expandRules, stripPropsOf } from "./_rules-strip";
 import { ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION, ONLINE_DIVISION_FULL, ONLINE_PLAY_TOO_MANY_ENTRANTS } from "@/lib/online-chess";
 import { assertOnlinePlayFits, onlineDivisionFullError } from "@/server/external-play/online-entrant-cap";
+import { v1 } from "@/server/api-v1/http";
 import type { EffectiveEntrantModel } from "@seazn/engine/sport";
 
 beforeEach(() => {
@@ -91,7 +92,7 @@ const FULL = (): Refusal => asRefusal(onlineDivisionFullError());
 /** The REAL refusal of the online switch for a division holding `n` entrants. */
 function tooMany(n: number): Refusal {
   try {
-    assertOnlinePlayFits(n);
+    assertOnlinePlayFits(n, null); // an unlimited plan: the switch's own refusal, never the plan's
   } catch (e) {
     return asRefusal(e as { message: string; status: number; code?: string; extra?: unknown });
   }
@@ -218,10 +219,21 @@ describe("the registrant hub: Promote and Approve of an entry the full online di
 
 // ─── the Division rules strip: turning online play on ────────────────────────────────────────────────────────
 
+/** The REAL refusal of the online switch where a LOWER plan binds (cap-256 re-review I-F1), through the REAL v1 envelope: the switch throws
+ *  the plan's PaymentRequiredError and `v1()` serialises it as the 402 PAYMENT_REQUIRED the client reads (`feature_key`, `reason`). Its
+ *  wording is replaced as every refusal's here; the server's own sentence is kept aside to prove the screen never shows it. */
+async function planRefusalOf(held: number, planCap: number): Promise<Refusal & { serverMessage: string }> {
+  const res = await v1(async () => {
+    assertOnlinePlayFits(held, planCap);
+    throw new Error(`anti-vacuity: the switch must refuse ${held} held on a plan of ${planCap}`);
+  });
+  const body = (await res.json()) as { error: { code: string; message: string } & Record<string, unknown> };
+  const { code, message, ...extra } = body.error;
+  return { message: SERVER_WORDING, status: res.status, code, extra, serverMessage: message };
+}
+
 describe("the Division rules strip: Save match rules that turn online play on for a division holding too many entrants", () => {
-  it("says the entrants it holds and the limit, in the dictionary's words - never the server's English, never an upgrade", async () => {
-    const refusal = tooMany(MAX + 1);
-    net.refuse.set("division", refusal);
+  const stripOf = (viewerPlan: "community" | "pro") => {
     const division = {
       id: "d1",
       name: "Open",
@@ -246,18 +258,55 @@ describe("the Division rules strip: Save match rules that turn online play on fo
       autoPosts: false,
       canAutoPost: true,
       showSeeds: true,
-      viewerPlan: "pro",
+      viewerPlan,
       onlineChessOffered: true,
     };
-    const island = renderIsland(DivisionRulesStrip, stripPropsOf(props as unknown as Parameters<typeof stripPropsOf>[0]), expandRules);
+    return renderIsland(DivisionRulesStrip, stripPropsOf(props as unknown as Parameters<typeof stripPropsOf>[0]), expandRules);
+  };
+  type Strip = ReturnType<typeof stripOf>;
+  const clickSave = (island: Strip) => {
     const save = island.tree().find((n) => n.type === "button" && textOf(n).trim() === "Save match rules");
     expect(save, "premise: the save is there").toBeDefined();
     (propsOf(save!).onClick as () => void)();
+  };
+  const gateOf = (island: Strip) => island.tree().find((e) => e.type === UpgradeGate);
+  const errorLine = (island: Strip) => island.tree().find((e) => propsOf(e)["data-testid"] === "division-settings-error");
+
+  it("says the entrants it holds and the limit, in the dictionary's words - never the server's English, never an upgrade", async () => {
+    const refusal = tooMany(MAX + 1);
+    net.refuse.set("division", refusal);
+    const island = stripOf("pro");
+    clickSave(island);
     const want = tRuntime(EN_UI, "onlineChess.turnOnTooMany", { entrants: MAX + 1, limit: MAX });
     await vi.waitFor(() => expect(island.text()).toContain(want));
     expect(want).toContain(String(MAX + 1));
     expect(island.text(), "the server's sentence is never shown").not.toContain(refusal.message);
     expect(net.calls.some((c) => c === "PATCH /api/v1/divisions/d1"), "premise: the save went to the server").toBe(true);
+    expect(gateOf(island), "a capacity limit: no upgrade gate").toBeUndefined();
+  });
+
+  it("the plan's own refusal (a plan limit below the online cap: Community's 64, 65 held - cap-256 re-review I-F1) opens the upgrade gate on the viewer's plan, with no red line and never the server's English; a later cap refusal replaces it", async () => {
+    const refusal = await planRefusalOf(65, 64);
+    expect(refusal.status, "premise: the real envelope is the plan's 402").toBe(402);
+    expect(refusal.code).toBe("PAYMENT_REQUIRED");
+    expect(refusal.extra.feature_key, "premise: the feature the gate is opened for").toBe("entrants.per_division.max");
+    expect(refusal.serverMessage, "premise: the server's sentence is English with a feature key in it").toContain("entrants.per_division.max");
+    net.refuse.set("division", refusal);
+    const island = stripOf("community");
+    clickSave(island);
+    await vi.waitFor(() => expect(gateOf(island), "the gate opens").toBeDefined());
+    expect(propsOf(gateOf(island)!).feature).toBe("entrants.per_division.max");
+    expect(propsOf(gateOf(island)!).viewerPlan, "the viewer's own plan, from the page").toBe("community");
+    expect(errorLine(island), "a paywall is not a red sentence").toBeUndefined();
+    expect(island.text(), "neither the replaced wording").not.toContain(SERVER_WORDING);
+    expect(island.text(), "nor the server's own sentence").not.toContain(refusal.serverMessage);
+    expect(net.calls.filter((c) => c === "PATCH /api/v1/divisions/d1"), "premise: the save went to the server").toHaveLength(1);
+    // The sequence: the next save is refused by the switch's own 422 (the plan raised, the cap now binds): its sentence replaces the gate.
+    net.refuse.set("division", tooMany(MAX + 1));
+    clickSave(island);
+    const want = tRuntime(EN_UI, "onlineChess.turnOnTooMany", { entrants: MAX + 1, limit: MAX });
+    await vi.waitFor(() => expect(island.text()).toContain(want));
+    expect(gateOf(island), "the stale gate is gone").toBeUndefined();
   });
 });
 

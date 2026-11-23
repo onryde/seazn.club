@@ -1,6 +1,6 @@
 // The online chess entrant cap, driven through every REAL door that grows a division's entrant count or turns online play on
-// (owner ruling 2026-11-21): a division that plays online holds at most min(the plan's per-division cap, 128) entrants, on every
-// plan; over-the-board chess and every other sport keep the plan's cap alone. A CAPACITY limit, not an upsell - so the plan's own 402
+// (owner ruling 2026-11-21; the cap raised from 128 to 256 on 2026-11-23): a division that plays online holds at most min(the plan's
+// per-division cap, 256) entrants, on every plan; over-the-board chess and every other sport keep the plan's cap alone. A CAPACITY limit, not an upsell - so the plan's own 402
 // answers when the plan is what binds, and a 422 with its own code answers when the online cap is (and says nothing about plans).
 //
 // The doors (each its own describe): createEntrants (the organiser adds), the public sign-up (submit waitlists at the cap, as it does at
@@ -58,14 +58,17 @@ afterAll(async () => {
 // ─── The rig ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** The plan sizes of the ruling, each made real the way production makes them: Community and Pro are the catalogue's own rows, and the
- *  two the catalogue has no plan for here (a plan of exactly 128 - an Event Pass's size - and an unlimited plan) are an override row, the
- *  production shape of "the plan allows this many" (a staff cap, a size pack). `cap` is what `getLimit` must read back: the premise. */
-type PlanName = "community" | "size-pack-96" | "event-pass-sized" | "pro" | "unlimited";
+ *  ones the catalogue has no org plan for here (an Event Pass's 128, Event Pass L's 512, and an unlimited plan) are an override row, the
+ *  production shape of "the plan allows this many" (a staff cap, size packs). `cap` is what `getLimit` must read back: the premise.
+ *  Since the cap is 256, Pro's own 256 is the TIE (the online cap answers, no upgrade changes anything), an Event Pass's 128 is BELOW it
+ *  (the plan answers), and the plan ABOVE it that the old Pro row used to stand for is Event Pass L's 512. */
+type PlanName = "community" | "size-pack-96" | "event-pass-sized" | "pro" | "event-pass-l-sized" | "unlimited";
 const PLANS: Record<PlanName, { plan: "community" | "pro"; override?: number | null; cap: number | null }> = {
   community: { plan: "community", cap: 64 },
   "size-pack-96": { plan: "pro", override: 96, cap: 96 }, // a plan BELOW the online cap that is not Community: a size pack, a staff cap
-  "event-pass-sized": { plan: "pro", override: 128, cap: 128 },
-  pro: { plan: "pro", cap: 256 },
+  "event-pass-sized": { plan: "pro", override: 128, cap: 128 }, // below the online cap since 2026-11-23
+  pro: { plan: "pro", cap: 256 }, // exactly the online cap: the tie
+  "event-pass-l-sized": { plan: "pro", override: 512, cap: 512 }, // above the online cap: the online cap binds
   unlimited: { plan: "pro", override: null, cap: null },
 };
 
@@ -123,7 +126,7 @@ async function divisionOf(auth: AuthCtx, kind: Kind, visibility: "private" | "pu
   return { competition, division };
 }
 
-/** `n` spot-holding entrants, inserted directly (the cap's subject is the ONE entrant added on top, not 128 round trips). */
+/** `n` spot-holding entrants, inserted directly (the cap's subject is the ONE entrant added on top, not 256 round trips). */
 async function fillEntrants(divisionId: string, n: number): Promise<void> {
   if (n <= 0) return;
   await sql`
@@ -172,15 +175,18 @@ describe.skipIf(!HAS_DB)("door: createEntrants (the organiser adds an entrant)",
     ["community", "online", 64, "plan"], // the min: Community's 64 binds, with the plan's own message
     ["community", "otb", 64, "plan"],
     ["community", "badminton", 64, "plan"],
-    ["event-pass-sized", "online", 128, "online"], // the tie: 128 either way, and no upgrade changes it - the online cap answers
+    ["event-pass-sized", "online", 128, "plan"], // an Event Pass's 128 is below the online cap now: the plan's 402, an upgrade lifts it
     ["event-pass-sized", "otb", 128, "plan"],
     ["event-pass-sized", "badminton", 128, "plan"],
-    ["pro", "online", 128, "online"], // the 128th ok, the 129th refused with its own code
-    ["pro", "otb", 256, "plan"], // over the board keeps the plan's 256 - the 129th is fine
+    ["pro", "online", 256, "online"], // the tie: 256 either way, and no upgrade changes it - the online cap answers
+    ["pro", "otb", 256, "plan"],
     ["pro", "badminton", 256, "plan"],
-    ["unlimited", "online", 128, "online"], // an unlimited plan is still capped at 128 online
-    ["unlimited", "otb", 129, null], // ...and nothing caps the rest
-    ["unlimited", "badminton", 129, null],
+    ["event-pass-l-sized", "online", 256, "online"], // the 256th ok, the 257th refused with its own code
+    ["event-pass-l-sized", "otb", 512, "plan"], // over the board keeps the plan's 512 - the 257th is fine
+    ["event-pass-l-sized", "badminton", 512, "plan"],
+    ["unlimited", "online", 256, "online"], // an unlimited plan is still capped at 256 online
+    ["unlimited", "otb", 257, null], // ...and nothing caps the rest
+    ["unlimited", "badminton", 257, null],
   ];
 
   it("every plan x division kind: the last allowed entrant is admitted and the next is refused as the ruling says (the plan's 402 where the plan binds, ONLINE_DIVISION_FULL where the online cap does)", async () => {
@@ -220,16 +226,16 @@ describe.skipIf(!HAS_DB)("door: createEntrants (the organiser adds an entrant)",
     expect(message, "a capacity limit: no upsell").not.toMatch(/upgrade|plan|raise|pro\b/i);
   });
 
-  it("a batch is judged whole: 127 held + two refused with nothing written, + one admitted - and a Community org's batch past 64 is the plan's 402", async () => {
+  it("a batch is judged whole: 255 held + two refused with nothing written, + one admitted - and a Community org's batch past 64 is the plan's 402", async () => {
     const pro = await orgOn("pro");
     const { division } = await divisionOf(pro.auth, "online");
     await fillEntrants(division.id, MAX - 1);
     const two = [await linkedPlayer(pro.auth), await linkedPlayer(pro.auth)].map(
       (p, i): CreateEntrant => ({ display_name: `Batch ${i}`, kind: "individual", members: [{ person_id: p.personId, is_captain: false, roles: [] }] }),
     );
-    expect(await verdictOf(() => createEntrants(pro.auth, division.id, two)), "127 + 2 = 129").toBe("online");
+    expect(await verdictOf(() => createEntrants(pro.auth, division.id, two)), "255 + 2 = 257").toBe("online");
     expect(await entrantCount(division.id), "nobody written").toBe(MAX - 1);
-    expect(await verdictOf(() => createEntrants(pro.auth, division.id, [two[0]!])), "127 + 1 = 128").toBe("ok");
+    expect(await verdictOf(() => createEntrants(pro.auth, division.id, [two[0]!])), "255 + 1 = 256").toBe("ok");
     expect(await entrantCount(division.id)).toBe(MAX);
 
     const community = await orgOn("community");
@@ -243,19 +249,20 @@ describe.skipIf(!HAS_DB)("door: createEntrants (the organiser adds an entrant)",
   });
 
   it("a division already past the cap (it held more before the cap existed) takes no more; a withdrawn entrant holds no place, so a withdrawal frees exactly one and the next add refills it", async () => {
-    const { auth } = await orgOn("pro");
+    // A plan above the online cap: on Pro (exactly the cap) the plan's own count of ROWS would refuse the re-add at 259 rows first.
+    const { auth } = await orgOn("event-pass-l-sized");
     const { division } = await divisionOf(auth, "online");
-    await fillEntrants(division.id, MAX + 2); // 130, stored before the ruling
-    expect(await verdictOf(() => addOne(auth, "online", division.id)), "130 held: the 131st").toBe("online");
+    await fillEntrants(division.id, MAX + 2); // 258, stored before the cap
+    expect(await verdictOf(() => addOne(auth, "online", division.id)), "258 held: the 259th").toBe("online");
     expect(await entrantCount(division.id)).toBe(MAX + 2);
-    // Withdraw three: 127 live of 130 rows. The count the door reads is the LIVE one (the withdrawn rows stay in the table).
+    // Withdraw three: 255 live of 258 rows. The count the door reads is the LIVE one (the withdrawn rows stay in the table).
     await sql`update entrants set status = 'withdrawn' where id in (select id from entrants where division_id = ${division.id} order by id limit 3)`;
-    expect(await verdictOf(() => addOne(auth, "online", division.id)), "127 live: the 128th is admitted").toBe("ok");
-    expect(await verdictOf(() => addOne(auth, "online", division.id)), "128 live: the 129th is refused again").toBe("online");
-    expect(await entrantCount(division.id), "rows: 130 + the one admitted; the withdrawn three are still rows").toBe(MAX + 3);
+    expect(await verdictOf(() => addOne(auth, "online", division.id)), "255 live: the 256th is admitted").toBe("ok");
+    expect(await verdictOf(() => addOne(auth, "online", division.id)), "256 live: the 257th is refused again").toBe("online");
+    expect(await entrantCount(division.id), "rows: 258 + the one admitted; the withdrawn three are still rows").toBe(MAX + 3);
     // ...and a disqualified entrant holds no place either (the other departed status).
     await sql`update entrants set status = 'disqualified' where id = (select id from entrants where division_id = ${division.id} and status = 'confirmed' limit 1)`;
-    expect(await verdictOf(() => addOne(auth, "online", division.id)), "127 live after a disqualification").toBe("ok");
+    expect(await verdictOf(() => addOne(auth, "online", division.id)), "255 live after a disqualification").toBe("ok");
   });
 });
 
@@ -336,30 +343,33 @@ async function signUp(r: Awaited<ReturnType<typeof regRig>>, kind: Kind): Promis
 // ─── Door 2: the public sign-up waitlists at the cap ─────────────────────────────────────────────────────────
 
 describe.skipIf(!HAS_DB)("door: the public sign-up (submit) waitlists at the cap, as it does at the plan's", () => {
-  it("Pro, online: 127 held, the 128th is confirmed and the 129th is waitlisted; after a place frees, the next is confirmed again", async () => {
+  it("Pro, online: 255 held, the 256th is confirmed and the 257th is waitlisted; after a place frees, the next is confirmed again", async () => {
     const r = await regRig("pro", "online", "auto");
     const held = await r.holders(MAX - 1);
-    expect(await signUp(r, "online"), "the 128th").toBe("confirmed");
-    expect(await signUp(r, "online"), "the 129th").toBe("waitlisted");
+    expect(await signUp(r, "online"), "the 256th").toBe("confirmed");
+    expect(await signUp(r, "online"), "the 257th").toBe("waitlisted");
     // The sequence: a held place is withdrawn, so the division is no longer full.
     await r.withdrawHolder(held[0]!);
     expect(await signUp(r, "online"), "after a withdrawal frees a place").toBe("confirmed");
     expect(await signUp(r, "online"), "and it is full again").toBe("waitlisted");
   });
 
-  it("the same plan over the board keeps its 256: the 129th is confirmed, not waitlisted", async () => {
-    const r = await regRig("pro", "otb", "auto");
+  it("a plan above the cap: online waitlists the 257th, and the same plan over the board keeps its 512 - the 257th is confirmed", async () => {
+    const online = await regRig("event-pass-l-sized", "online", "auto");
+    await online.holders(MAX);
+    expect(await signUp(online, "online"), "online, the 257th").toBe("waitlisted");
+    const r = await regRig("event-pass-l-sized", "otb", "auto");
     await r.holders(MAX);
-    expect(await signUp(r, "otb")).toBe("confirmed");
+    expect(await signUp(r, "otb"), "over the board, the 257th").toBe("confirmed");
   });
 
-  it("unlimited plan, online: still waitlisted at 128; over the board it is not", async () => {
+  it("unlimited plan, online: still waitlisted at 256; over the board it is not", async () => {
     const online = await regRig("unlimited", "online", "auto");
     await online.holders(MAX);
-    expect(await signUp(online, "online"), "online, 129th").toBe("waitlisted");
+    expect(await signUp(online, "online"), "online, 257th").toBe("waitlisted");
     const otb = await regRig("unlimited", "otb", "auto");
     await otb.holders(MAX);
-    expect(await signUp(otb, "otb"), "over the board, 129th").toBe("confirmed");
+    expect(await signUp(otb, "otb"), "over the board, 257th").toBe("confirmed");
   });
 
   it("a plan below the cap still decides (the min): Community's 64 waitlists the 65th online, exactly as it did", async () => {
@@ -376,21 +386,21 @@ describe.skipIf(!HAS_DB)("door: the public register panel's places left agrees w
   const placesOf = async (r: Awaited<ReturnType<typeof regRig>>) =>
     (await publicRegistrationInfo(r.orgSlug, r.competition.slug)).divisions.find((d) => d.division_id === r.division.id)!;
 
-  it("online: 100 held leaves 28 (128 - 100), full at 128 with the reason `full`; over the board the same 100 leave 156 of Pro's 256", async () => {
-    const online = await regRig("pro", "online", "auto");
+  it("online: 100 held leaves 156 (256 - 100), full at 256 with the reason `full`; over the board the same 100 leave 412 of Event Pass L's 512", async () => {
+    const online = await regRig("event-pass-l-sized", "online", "auto");
     await online.holders(100);
     expect((await placesOf(online)).remaining, "online, 100 held").toBe(MAX - 100);
-    const otb = await regRig("pro", "otb", "auto");
+    const otb = await regRig("event-pass-l-sized", "otb", "auto");
     await otb.holders(100);
-    expect((await placesOf(otb)).remaining, "over the board, 100 held").toBe(PLANS.pro.cap! - 100);
+    expect((await placesOf(otb)).remaining, "over the board, 100 held").toBe(PLANS["event-pass-l-sized"].cap! - 100);
 
     await online.holders(MAX - 100);
     const full = await placesOf(online);
-    expect(full.remaining, "128 held").toBe(0);
+    expect(full.remaining, "256 held").toBe(0);
     expect(full.closed_reason, "still open - joins the waitlist").toBe("full");
   });
 
-  it("an unlimited plan with no capacity: online says 128 - held, over the board says no count at all", async () => {
+  it("an unlimited plan with no capacity: online says 256 - held, over the board says no count at all", async () => {
     const online = await regRig("unlimited", "online", "auto");
     await online.holders(5);
     expect((await placesOf(online)).remaining).toBe(MAX - 5);
@@ -403,12 +413,12 @@ describe.skipIf(!HAS_DB)("door: the public register panel's places left agrees w
 // ─── Door 4: the organiser's Promote / Confirm / Waive ───────────────────────────────────────────────────────
 
 describe.skipIf(!HAS_DB)("door: the organiser's Promote, Confirm and Waive check the room", () => {
-  it("Promote, online on Pro: the 128th place is promoted; with 128 held the promotion is refused ONLINE_DIVISION_FULL, even confirmed over capacity, and nothing is written", async () => {
+  it("Promote, online on Pro: the 256th place is promoted; with 256 held the promotion is refused ONLINE_DIVISION_FULL, even confirmed over capacity, and nothing is written", async () => {
     const r = await regRig("pro", "online", "manual");
     await r.holders(MAX - 1);
     const a = await r.waiting();
     const promoted = await promoteFromWaitlist(r.auth, r.division.id, { registrationId: a });
-    expect(promoted!.status, "the 128th").toBe("pending");
+    expect(promoted!.status, "the 256th").toBe("pending");
     const b = await r.waiting();
     for (const confirmOverCapacity of [false, true]) {
       await expect(promoteFromWaitlist(r.auth, r.division.id, { registrationId: b, confirmOverCapacity })).rejects.toMatchObject({
@@ -429,8 +439,8 @@ describe.skipIf(!HAS_DB)("door: the organiser's Promote, Confirm and Waive check
     expect(await r.statusOf(w)).toBe("waitlisted");
   });
 
-  it("over the board on Pro the same 128 held promote fine (the plan's 256); an unlimited plan online is capped, the Event-Pass-sized tie is the online cap's, Community's 64 is the plan's own refusal", async () => {
-    const otb = await regRig("pro", "otb", "manual");
+  it("over the board on Event Pass L the same 256 held promote fine (the plan's 512); an unlimited plan online is capped, Pro's tie is the online cap's, an Event Pass's 128 and Community's 64 are the plan's own refusal", async () => {
+    const otb = await regRig("event-pass-l-sized", "otb", "manual");
     await otb.holders(MAX);
     expect((await promoteFromWaitlist(otb.auth, otb.division.id, { registrationId: await otb.waiting() }))!.status).toBe("pending");
 
@@ -440,11 +450,18 @@ describe.skipIf(!HAS_DB)("door: the organiser's Promote, Confirm and Waive check
       code: ONLINE_DIVISION_FULL,
     });
 
-    const tie = await regRig("event-pass-sized", "online", "manual");
+    const tie = await regRig("pro", "online", "manual");
     await tie.holders(MAX);
     await expect(promoteFromWaitlist(tie.auth, tie.division.id, { registrationId: await tie.waiting() })).rejects.toMatchObject({
       status: 422,
       code: ONLINE_DIVISION_FULL,
+    });
+
+    const eventPass = await regRig("event-pass-sized", "online", "manual");
+    await eventPass.holders(PLANS["event-pass-sized"].cap!);
+    await expect(promoteFromWaitlist(eventPass.auth, eventPass.division.id, { registrationId: await eventPass.waiting() })).rejects.toMatchObject({
+      status: 422,
+      code: PROMOTE_PLAN_LIMIT_CODE,
     });
 
     const community = await regRig("community", "online", "manual");
@@ -465,6 +482,32 @@ describe.skipIf(!HAS_DB)("door: the organiser's Promote, Confirm and Waive check
     expect(await r.statusOf(w1)).toBe("waitlisted");
     expect(await r.statusOf(w2)).toBe("waitlisted");
     expect(held.length, "premise: the division was full").toBe(MAX);
+  });
+
+  it("an Event Pass's 128, below the cap (cap-256 review m3): Confirm and Waive seat the 128th and refuse the 129th with the PLAN's refusal, as Promote does", async () => {
+    // Typed from the ruling: the pass's 128 binds below the online cap's 256, so the plan answers (an upgrade lifts it), never the cap.
+    const seats: [string, (auth: AuthCtx, regId: string) => Promise<unknown>][] = [
+      ["Confirm", confirmRegistration],
+      ["Waive", confirmRegistrationWaived],
+    ];
+    let checked = 0;
+    for (const [door, seat] of seats) {
+      const r = await regRig("event-pass-sized", "online", "manual");
+      await r.holders(127);
+      const first = await r.waiting();
+      await expect(seat(r.auth, first), `${door}: the 128th`).resolves.toBeTruthy();
+      expect(await heldOf(r.division.id), `${door}: 128 held`).toBe(128);
+      const next = await r.waiting();
+      const err = await seat(r.auth, next).then(
+        () => null,
+        (e: unknown) => e as { status?: number; code?: string; extra?: unknown },
+      );
+      expect(err, `${door}: the 129th is the plan's own 422`).toMatchObject({ status: 422, code: PROMOTE_PLAN_LIMIT_CODE, extra: { limit: 128, taken: 128 } });
+      expect(err!.code, `${door}: never the online cap's code`).not.toBe(ONLINE_DIVISION_FULL);
+      expect(await r.statusOf(next), `${door}: still waitlisted`).toBe("waitlisted");
+      checked += 1;
+    }
+    expect(checked, "doors walked").toBe(2);
   });
 });
 
@@ -527,11 +570,11 @@ describe.skipIf(!HAS_DB)("door: an online division whose FORMAT max is below the
     expect(await heldOf(r.division.id), "nothing written").toBe(M);
   });
 
-  it("past BOTH the online cap and the format's max (M sign-ups + 128 - M added by hand), the format's max answers first: FORMAT_TOO_MANY_ENTRANTS, not ONLINE_DIVISION_FULL", async () => {
+  it("past BOTH the online cap and the format's max (M sign-ups + 256 - M added by hand), the format's max answers first: FORMAT_TOO_MANY_ENTRANTS, not ONLINE_DIVISION_FULL", async () => {
     const r = await leagueRig("pro", "manual");
     await r.holders(M);
     await fillEntrants(r.division.id, MAX - M);
-    expect(await heldOf(r.division.id), "premise: 128 held").toBe(MAX);
+    expect(await heldOf(r.division.id), "premise: 256 held").toBe(MAX);
     const w = await r.waiting();
     await expect(promoteFromWaitlist(r.auth, r.division.id, { registrationId: w, confirmOverCapacity: true })).rejects.toMatchObject({
       status: 422,
@@ -563,7 +606,7 @@ describe.skipIf(!HAS_DB)("door: an online division whose FORMAT max is below the
     expect(await below.statusOf(v)).toBe("waitlisted");
   });
 
-  it("the public panel and the sign-up agree: M - 1 held leaves 1 place; the M-th sign-up is confirmed and the panel reads 0 (not 128 - M), full; the next sign-up waits", async () => {
+  it("the public panel and the sign-up agree: M - 1 held leaves 1 place; the M-th sign-up is confirmed and the panel reads 0 (not 256 - M), full; the next sign-up waits", async () => {
     const r = await leagueRig("pro", "auto");
     await r.holders(M - 1);
     expect((await placesOf(r)).remaining, "M - 1 held").toBe(1);
@@ -582,16 +625,16 @@ describe.skipIf(!HAS_DB)("door: registration capacity cannot promise more than t
   const save = (r: Awaited<ReturnType<typeof regRig>>, capacity: number | null) =>
     putRegistrationSettings(r.auth, r.division.id, { ...SETTINGS_BASE, payment_method: "offline", fee_cents: 0, capacity, approval: "auto", allow_free_agents: false } as never);
 
-  it("online: a capacity of 128 saves and 129 is refused ONLINE_DIVISION_FULL; over the board 129 saves; no capacity saves everywhere", async () => {
-    const online = await regRig("pro", "online", "auto");
+  it("online: a capacity of 256 saves and 257 is refused ONLINE_DIVISION_FULL; over the board 257 saves; no capacity saves everywhere", async () => {
+    const online = await regRig("event-pass-l-sized", "online", "auto");
     await expect(save(online, MAX)).resolves.toBeTruthy();
     await expect(save(online, MAX + 1)).rejects.toMatchObject({ status: 422, code: ONLINE_DIVISION_FULL });
     await expect(save(online, null)).resolves.toBeTruthy();
-    const otb = await regRig("pro", "otb", "auto");
-    await expect(save(otb, MAX + 1), "over the board keeps the plan's 256").resolves.toBeTruthy();
+    const otb = await regRig("event-pass-l-sized", "otb", "auto");
+    await expect(save(otb, MAX + 1), "over the board keeps the plan's 512").resolves.toBeTruthy();
   });
 
-  it("an unlimited plan online refuses 129 as well; Community's own message answers past 64 (the min)", async () => {
+  it("an unlimited plan online refuses 257 as well; Community's own message answers past 64 (the min)", async () => {
     const unlimited = await regRig("unlimited", "online", "auto");
     await expect(save(unlimited, MAX + 1)).rejects.toMatchObject({ code: ONLINE_DIVISION_FULL });
     const community = await regRig("community", "online", "auto");
@@ -599,6 +642,19 @@ describe.skipIf(!HAS_DB)("door: registration capacity cannot promise more than t
     expect(err).toMatchObject({ status: 422 });
     expect((err as { code?: string }).code, "the plan's own refusal, not the online cap's").not.toBe(ONLINE_DIVISION_FULL);
     expect(String((err as { message: string }).message)).toContain(String(PLANS.community.cap));
+  });
+
+  it("an Event Pass's 128, online (cap-256 review m3): a capacity of 128 saves, 129 is the plan's own sentence naming 128, never ONLINE_DIVISION_FULL", async () => {
+    const r = await regRig("event-pass-sized", "online", "auto");
+    await expect(save(r, 128), "capacity 128: the plan's own line").resolves.toBeTruthy();
+    const err = await save(r, 129).then(
+      () => null,
+      (e: unknown) => e as { status?: number; code?: string; message?: string },
+    );
+    expect(err, "capacity 129 is refused").toMatchObject({ status: 422 });
+    expect(err!.code, "the plan's refusal, not the online cap's").not.toBe(ONLINE_DIVISION_FULL);
+    expect(String(err!.message)).toContain("plan's entrant limit (128)");
+    await expect(save(r, null), "and no capacity still saves").resolves.toBeTruthy();
   });
 });
 
@@ -610,7 +666,7 @@ describe.skipIf(!HAS_DB)("door: turning online play on (patchDivision)", () => {
   const storedOnline = async (divisionId: string): Promise<string | null> =>
     ((await sql<{ config: { onlinePlay?: string } }[]>`select config from divisions where id = ${divisionId}`)[0]!.config.onlinePlay ?? null);
 
-  it("an empty division, then 128 entrants: both can go online; 129 is refused ONLINE_PLAY_TOO_MANY_ENTRANTS with both numbers, and stays over the board", async () => {
+  it("an empty division, then 256 entrants: both can go online; 257 is refused ONLINE_PLAY_TOO_MANY_ENTRANTS with both numbers, and stays over the board", async () => {
     const { auth } = await orgOn("pro");
     let checked = 0;
     for (const [n, want] of [[0, "ok"], [MAX, "ok"], [MAX + 1, "too_many"]] as const) {
@@ -630,7 +686,7 @@ describe.skipIf(!HAS_DB)("door: turning online play on (patchDivision)", () => {
     });
   });
 
-  it("the other direction: a division ALREADY online with more than 128 (stored before the cap) re-saves its whole config untouched, and turning online OFF is never gated", async () => {
+  it("the other direction: a division ALREADY online with more than 256 (stored before the cap) re-saves its whole config untouched, and turning online OFF is never gated", async () => {
     const { auth } = await orgOn("pro");
     const { division } = await divisionOf(auth, "online");
     await fillEntrants(division.id, MAX + 2);
@@ -638,7 +694,7 @@ describe.skipIf(!HAS_DB)("door: turning online play on (patchDivision)", () => {
     expect(await storedOnline(division.id)).toBe("lichess");
     await expect(patchDivision(auth, division.id, { config: { ...(division.config as Record<string, unknown>), onlinePlay: "off" } })).resolves.toBeTruthy();
     expect(await storedOnline(division.id), "turned off").toBeNull();
-    // ...and now that it is over the board with 130 entrants, turning it back on is the refused transition.
+    // ...and now that it is over the board with 258 entrants, turning it back on is the refused transition.
     await expect(turnOn(auth, { id: division.id, config: { ...(division.config as Record<string, unknown>) } })).rejects.toMatchObject({
       code: ONLINE_PLAY_TOO_MANY_ENTRANTS,
     });
@@ -672,34 +728,34 @@ describe.skipIf(!HAS_DB)("one count at every door: direct adds and sign-ups are 
     expect(await heldOf(r.division.id)).toBe(2);
   });
 
-  it("direct adds THEN sign-ups: 100 added + 27 signed up = 127; the 128th sign-up is confirmed, the 129th waitlisted, and one more add is refused", async () => {
+  it("direct adds THEN sign-ups: 100 added + 155 signed up = 255; the 256th sign-up is confirmed, the 257th waitlisted, and one more add is refused", async () => {
     const r = await regRig("pro", "online", "auto");
     await fillEntrants(r.division.id, 100);
     await r.holders(MAX - 100 - 1);
-    expect(await heldOf(r.division.id), "premise: 127").toBe(MAX - 1);
-    expect(await signUp(r, "online"), "the 128th").toBe("confirmed");
-    expect(await signUp(r, "online"), "the 129th: the sign-up door sees the direct adds too").toBe("waitlisted");
+    expect(await heldOf(r.division.id), "premise: 255").toBe(MAX - 1);
+    expect(await signUp(r, "online"), "the 256th").toBe("confirmed");
+    expect(await signUp(r, "online"), "the 257th: the sign-up door sees the direct adds too").toBe("waitlisted");
     expect(await verdictOf(() => addOne(r.auth, "online", r.division.id)), "and the add door sees the sign-ups").toBe("online");
     expect(await heldOf(r.division.id), "never past the cap").toBe(MAX);
   });
 
-  it("sign-ups let in THEN direct adds: 100 pending (no entrant yet) + 27 added = 127; one more add is admitted, the next refused, and a sign-up waits", async () => {
+  it("sign-ups let in THEN direct adds: 100 pending (no entrant yet) + 155 added = 255; one more add is admitted, the next refused, and a sign-up waits", async () => {
     const r = await regRig("pro", "online", "manual");
     await r.pendingSignUps(100);
     await fillEntrants(r.division.id, MAX - 100 - 1);
-    expect(await heldOf(r.division.id), "premise: 127, of which 100 are not entrants").toBe(MAX - 1);
-    expect(await entrantCount(r.division.id), "premise: only 27 entrants - the old count would have said 27").toBe(MAX - 100 - 1);
-    expect(await verdictOf(() => addOne(r.auth, "online", r.division.id)), "the 128th").toBe("ok");
-    expect(await verdictOf(() => addOne(r.auth, "online", r.division.id)), "the 129th add: refused though only 28 rows exist").toBe("online");
+    expect(await heldOf(r.division.id), "premise: 255, of which 100 are not entrants").toBe(MAX - 1);
+    expect(await entrantCount(r.division.id), "premise: only 155 entrants - the old count would have said 155").toBe(MAX - 100 - 1);
+    expect(await verdictOf(() => addOne(r.auth, "online", r.division.id)), "the 256th").toBe("ok");
+    expect(await verdictOf(() => addOne(r.auth, "online", r.division.id)), "the 257th add: refused though only 156 rows exist").toBe("online");
     expect(await signUp(r, "online"), "a sign-up now waits").toBe("waitlisted");
     expect(await heldOf(r.division.id)).toBe(MAX);
   });
 
-  it("over the board the same mix is the plan's: 128 pending + 100 added is not refused on Pro's 256", async () => {
-    const r = await regRig("pro", "otb", "manual");
+  it("over the board the same mix is the plan's: 256 pending + 100 added is not refused on Event Pass L's 512", async () => {
+    const r = await regRig("event-pass-l-sized", "otb", "manual");
     await r.pendingSignUps(MAX);
     await fillEntrants(r.division.id, 100);
-    expect(await verdictOf(() => addOne(r.auth, "otb", r.division.id)), "228 of 256, over the board").toBe("ok");
+    expect(await verdictOf(() => addOne(r.auth, "otb", r.division.id)), "357 of 512, over the board").toBe("ok");
   });
 
   it("a free agent waiting for a team holds no place, and a paid sign-up that already has its entrant is counted once", async () => {
@@ -722,13 +778,13 @@ describe.skipIf(!HAS_DB)("one count at every door: direct adds and sign-ups are 
     expect(await placesOf(), "waitlisted sign-ups hold nothing: the 3 entrants remain").toBe(MAX - 3);
   });
 
-  it("places left counts the same: 100 added + 10 pending sign-ups leaves 18, not the 28 or 246 either half alone would say", async () => {
+  it("places left counts the same: 100 added + 10 pending sign-ups leaves 146, not the 156 or 246 either half alone would say", async () => {
     const r = await regRig("pro", "online", "manual");
     await fillEntrants(r.division.id, 100);
     await r.pendingSignUps(10);
     const placesOf = async () =>
       (await publicRegistrationInfo(r.orgSlug, r.competition.slug)).divisions.find((d) => d.division_id === r.division.id)!.remaining;
-    expect(await placesOf(), "128 - 110").toBe(MAX - 110);
+    expect(await placesOf(), "256 - 110").toBe(MAX - 110);
     await r.pendingSignUps(MAX - 110);
     expect(await placesOf(), "full").toBe(0);
   });
@@ -738,18 +794,18 @@ describe.skipIf(!HAS_DB)("a withdrawn entrant holds no place, and Reinstate is a
   const reinstate = (auth: AuthCtx, entrantId: string) => patchEntrant(auth, entrantId, { status: "confirmed" });
   const statusOfEntrant = async (id: string): Promise<string> => (await sql<{ status: string }[]>`select status from entrants where id = ${id}`)[0]!.status;
 
-  it("with room (the empty case): a withdrawn entrant is reinstated into a division holding 100; at 127 held it still fits the 128th", async () => {
+  it("with room (the empty case): a withdrawn entrant is reinstated into a division holding 100; at 255 held it still fits the 256th", async () => {
     const r = await regRig("pro", "online", "manual");
     await fillEntrants(r.division.id, 100);
     const [gone] = await idsOf(r.division.id);
     await sql`update entrants set status = 'withdrawn' where id = ${gone!}`;
     await expect(reinstate(r.auth, gone!)).resolves.toBeTruthy();
     expect(await statusOfEntrant(gone!)).toBe("confirmed");
-    await fillEntrants(r.division.id, MAX - 101); // 127 live
+    await fillEntrants(r.division.id, MAX - 101); // 255 live
     const [second] = await idsOf(r.division.id);
-    await sql`update entrants set status = 'withdrawn' where id = ${second!}`; // 126 live
-    await r.pendingSignUps(1); // 127 held
-    await expect(reinstate(r.auth, second!), "the 128th place").resolves.toBeTruthy();
+    await sql`update entrants set status = 'withdrawn' where id = ${second!}`; // 254 live
+    await r.pendingSignUps(1); // 255 held
+    await expect(reinstate(r.auth, second!), "the 256th place").resolves.toBeTruthy();
   });
 
   it("withdraw, the waitlist promotes into the freed place, then Reinstate: refused ONLINE_DIVISION_FULL, still withdrawn, nothing written", async () => {
@@ -771,11 +827,11 @@ describe.skipIf(!HAS_DB)("a withdrawn entrant holds no place, and Reinstate is a
     await sql`update entrants set status = 'disqualified' where id = ${dq!}`;
     await fillEntrants(r.division.id, 1); // the freed place is taken
     await expect(reinstate(r.auth, dq!)).rejects.toMatchObject({ code: ONLINE_DIVISION_FULL });
-    const otb = await regRig("pro", "otb", "manual");
+    const otb = await regRig("event-pass-l-sized", "otb", "manual");
     await fillEntrants(otb.division.id, MAX + 1);
     const [gone] = await idsOf(otb.division.id);
     await sql`update entrants set status = 'withdrawn' where id = ${gone!}`;
-    await expect(reinstate(otb.auth, gone!), "129 over the board, on Pro's 256").resolves.toBeTruthy();
+    await expect(reinstate(otb.auth, gone!), "257 over the board, on Event Pass L's 512").resolves.toBeTruthy();
   });
 
   it("a status patch that is not a Reinstate (a rename, a re-send of the same status) is never gated at the cap", async () => {
@@ -791,7 +847,7 @@ describe.skipIf(!HAS_DB)("the online switch counts the sign-ups already let in (
   const turnOn = (auth: AuthCtx, division: { id: string; config: unknown }) =>
     patchDivision(auth, division.id, { config: { ...(division.config as Record<string, unknown>), onlinePlay: "lichess" } });
 
-  it("an empty division goes online; 128 pending sign-ups and no entrant go online; 129 do not - and the refusal names both numbers", async () => {
+  it("an empty division goes online; 256 pending sign-ups and no entrant go online; 257 do not - and the refusal names both numbers", async () => {
     let checked = 0;
     for (const [pending, want] of [[0, "ok"], [MAX, "ok"], [MAX + 1, "too_many"]] as const) {
       const r = await regRig("pro", "otb", "manual");
@@ -802,16 +858,16 @@ describe.skipIf(!HAS_DB)("the online switch counts the sign-ups already let in (
     }
     expect(checked).toBe(3);
     const r = await regRig("pro", "otb", "manual");
-    await r.pendingSignUps(60);
-    await fillEntrants(r.division.id, 69);
-    await expect(turnOn(r.auth, r.division), "60 pending + 69 entrants").rejects.toMatchObject({
+    await r.pendingSignUps(120);
+    await fillEntrants(r.division.id, 137);
+    await expect(turnOn(r.auth, r.division), "120 pending + 137 entrants").rejects.toMatchObject({
       status: 422,
       code: ONLINE_PLAY_TOO_MANY_ENTRANTS,
-      extra: { limit: MAX, entrants: 129 },
+      extra: { limit: MAX, entrants: 257 },
     });
   });
 
-  it("withdrawn entrants and waitlisted sign-ups do not count: 128 live + 30 withdrawn + 30 waitlisted still goes online", async () => {
+  it("withdrawn entrants and waitlisted sign-ups do not count: 256 live + 30 withdrawn + 30 waitlisted still goes online", async () => {
     const r = await regRig("pro", "otb", "manual");
     await fillEntrants(r.division.id, MAX + 30);
     await sql`update entrants set status = 'withdrawn' where id in (select id from entrants where division_id = ${r.division.id} order by id limit 30)`;
@@ -907,7 +963,7 @@ describe.skipIf(!HAS_DB)("every door takes the division's lock before it counts 
       return holdingDivisionLock(
         r.division.id,
         () => patchEntrant(r.auth, gone!, { status: "confirmed" }),
-        fillWhileQueued ? () => fillEntrants(r.division.id, MAX - 2) : undefined, // 128 live while it waits: it would be the 129th
+        fillWhileQueued ? () => fillEntrants(r.division.id, MAX - 2) : undefined, // 256 live while it waits: it would be the 257th
       );
     };
     const control = await attempt(false);
@@ -928,14 +984,15 @@ describe.skipIf(!HAS_DB)("every door takes the division's lock before it counts 
   });
 
   it("the public sign-up reads whether the division plays online UNDER the lock (review M2): switched online while it queues, a full division waitlists it", async () => {
-    // Control first: the same sequence with no switch confirms - the division is over the board, 128 held of Pro's 256.
-    const control = await regRig("pro", "otb", "auto");
+    // Control first: the same sequence with no switch confirms - the division is over the board, 256 held of Event Pass L's 512 (on
+    // Pro's 256 the plan itself would waitlist the 257th, and the control would prove nothing).
+    const control = await regRig("event-pass-l-sized", "otb", "auto");
     await control.holders(MAX);
     const plain = await holdingDivisionLock(control.division.id, () => signUp(control, "otb"));
     expect(plain.waited, "premise: the sign-up queued").toBe(true);
-    expect(plain.outcome, "control: an over-the-board division at 128 still admits").toMatchObject({ status: "fulfilled", value: "confirmed" });
+    expect(plain.outcome, "control: an over-the-board division at 256 still admits").toMatchObject({ status: "fulfilled", value: "confirmed" });
     // The switch lands while the sign-up waits for the lock; a read taken before the lock would still see over-the-board.
-    const r = await regRig("pro", "otb", "auto");
+    const r = await regRig("event-pass-l-sized", "otb", "auto");
     await r.holders(MAX);
     const { waited, outcome } = await holdingDivisionLock(
       r.division.id,
@@ -964,7 +1021,7 @@ describe.skipIf(!HAS_DB)("two doors racing for the last place: exactly one wins 
     members: [{ person_id: (await linkedPlayer(auth)).personId, is_captain: false, roles: [] }],
   });
 
-  it("two adds at 127 held, on two connections: one is admitted, one refused ONLINE_DIVISION_FULL, and the division ends at 128 (five rounds)", async () => {
+  it("two adds at 255 held, on two connections: one is admitted, one refused ONLINE_DIVISION_FULL, and the division ends at 256 (five rounds)", async () => {
     let rounds = 0;
     for (let i = 0; i < 5; i++) {
       const { auth } = await orgOn("pro");
@@ -981,7 +1038,7 @@ describe.skipIf(!HAS_DB)("two doors racing for the last place: exactly one wins 
     expect(rounds, "anti-vacuity: five rounds ran").toBe(5);
   });
 
-  it("an add, a public sign-up and an organiser's Promote at 127 held: exactly one gets the place, none deadlocks, the count ends at 128 (three rounds)", async () => {
+  it("an add, a public sign-up and an organiser's Promote at 255 held: exactly one gets the place, none deadlocks, the count ends at 256 (three rounds)", async () => {
     let rounds = 0;
     for (let i = 0; i < 3; i++) {
       const r = await regRig("pro", "online", "auto");
@@ -1019,14 +1076,14 @@ describe.skipIf(!HAS_DB)("materialise never throws on the cap; a breach is a log
     };
     const error = vi.spyOn(log, "error").mockImplementation(() => undefined);
     try {
-      const first = await paid(); // 127 + 1 paid, no entrant yet = 128 held
+      const first = await paid(); // 255 + 1 paid, no entrant yet = 256 held
       expect(await heldOf(r.division.id), "premise: exactly at the cap").toBe(MAX);
       await expect(confirmRegistration(r.auth, first), "a paid sign-up holds its place already: confirming it grows nothing").resolves.toBeTruthy();
       expect(await heldOf(r.division.id), "its place moved from the sign-up term to the entrant term").toBe(MAX);
       expect(error.mock.calls.filter(([, msg]) => /over its entrant cap/.test(String(msg))), "at the cap exactly: no breach line").toHaveLength(0);
-      // Breach: a paid sign-up that no door admitted (the seed bypasses them) pushes the division to 129 before it is confirmed.
+      // Breach: a paid sign-up that no door admitted (the seed bypasses them) pushes the division to 257 before it is confirmed.
       const stray = await paid();
-      expect(await heldOf(r.division.id), "premise: 129 held - past the cap").toBe(MAX + 1);
+      expect(await heldOf(r.division.id), "premise: 257 held - past the cap").toBe(MAX + 1);
       await expect(confirmRegistration(r.auth, stray), "confirming never throws on the cap").resolves.toBeTruthy();
       const lines = error.mock.calls.filter(([, msg]) => /over its entrant cap/.test(String(msg)));
       expect(lines, "one breach line").toHaveLength(1);
@@ -1041,7 +1098,7 @@ describe.skipIf(!HAS_DB)("materialise never throws on the cap; a breach is a log
 
 const statusOfReg = async (id: string): Promise<string> => (await sql<{ status: string }[]>`select status from registrations where id = ${id}`)[0]!.status;
 
-describe.skipIf(!HAS_DB)("a plan below 128 holds the mixed count too (re-review N2)", () => {
+describe.skipIf(!HAS_DB)("a plan below 256 holds the mixed count too (re-review N2)", () => {
   const placesOf = async (r: Awaited<ReturnType<typeof regRig>>): Promise<number | null> =>
     (await publicRegistrationInfo(r.orgSlug, r.competition.slug)).divisions.find((d) => d.division_id === r.division.id)!.remaining;
 
@@ -1099,15 +1156,16 @@ describe.skipIf(!HAS_DB)("auto-promotion never takes an online division past its
   });
 
   it("an organiser frees a place from the TABLE (withdraws the entrant), fills it, and then the registrant withdraws: the place is not freed twice", async () => {
-    const r = await regRig("pro", "online", "manual");
+    // Event Pass L's 512: on Pro's 256 (the tie) the add of N would be the plan's 257th ROW and refused before the online count spoke.
+    const r = await regRig("event-pass-l-sized", "online", "manual");
     const [holder] = await r.holders(1);
     await fillEntrants(r.division.id, MAX - 1);
     const w = await r.waiting();
     const [{ entrant_id: entrantId }] = await sql<{ entrant_id: string }[]>`select entrant_id from registrations where id = ${holder!}`;
     await patchEntrant(r.auth, entrantId, { status: "withdrawn" }); // the organiser withdraws E: the registration is untouched
-    expect(await heldNow(r), "premise: 127").toBe(MAX - 1);
+    expect(await heldNow(r), "premise: 255").toBe(MAX - 1);
     await addOne(r.auth, "online", r.division.id); // N takes the place
-    expect(await heldNow(r), "premise: 128 again").toBe(MAX);
+    expect(await heldNow(r), "premise: 256 again").toBe(MAX);
     await withdrawRegistration(r.auth, holder!); // the registrant of E's row now withdraws too
     expect(await statusOfReg(holder!), "premise: the registration did withdraw").toBe("withdrawn");
     expect(await statusOfReg(w), "no place was freed: the waitlisted one stays waitlisted").toBe("waitlisted");
@@ -1115,7 +1173,8 @@ describe.skipIf(!HAS_DB)("auto-promotion never takes an online division past its
   });
 
   it("the same sequence over the board promotes (the cap is the online division's)", async () => {
-    const r = await regRig("pro", "otb", "manual");
+    // Event Pass L's 512: on Pro's 256 the add of N would be the plan's 257th ROW and refused before the sequence got anywhere.
+    const r = await regRig("event-pass-l-sized", "otb", "manual");
     const [holder] = await r.holders(1);
     await fillEntrants(r.division.id, MAX - 1);
     const w = await r.waiting();
@@ -1123,7 +1182,7 @@ describe.skipIf(!HAS_DB)("auto-promotion never takes an online division past its
     await patchEntrant(r.auth, entrantId, { status: "withdrawn" });
     await addOne(r.auth, "otb", r.division.id);
     await withdrawRegistration(r.auth, holder!);
-    expect(await statusOfReg(w), "Pro's 256 has room: the waitlist is served").toBe("pending");
+    expect(await statusOfReg(w), "Event Pass L's 512 has room: the waitlist is served").toBe("pending");
   });
 
   it("an expiry frees a place: with room the waitlist is served; with the division already full it is not", async () => {
@@ -1137,12 +1196,12 @@ describe.skipIf(!HAS_DB)("auto-promotion never takes an online division past its
       await sql`update registration_groups set expires_at = now() - interval '1 hour' where id = ${registration.group_id}`;
       return registration.id;
     };
-    const room = await rigWith(MAX - 2); // 127 held with the expiring one: 126 after it
+    const room = await rigWith(MAX - 2); // 255 held with the expiring one: 254 after it
     const roomHolder = await lapsedCard(room.r);
     await sweepRegistrations("https://example.test");
     expect(await statusOfReg(roomHolder), "premise: the sweep expired it").toBe("expired");
     expect(await statusOfReg(room.w), "room: served").toBe("pending");
-    const full = await rigWith(MAX); // 128 live + the expiring one = 129 held: 128 after it
+    const full = await rigWith(MAX); // 256 live + the expiring one = 257 held: 256 after it
     const fullHolder = await lapsedCard(full.r);
     expect(await heldNow(full.r), "premise: stored past the cap").toBe(MAX + 1);
     await sweepRegistrations("https://example.test");
@@ -1242,7 +1301,7 @@ describe.skipIf(!HAS_DB)("a withdrawal AFTER Start still promotes at the online 
   const entrantStatus = async (id: string): Promise<string> => (await sql<{ status: string }[]>`select status from entrants where id = ${id}`)[0]!.status;
   const isStarted = async (divisionId: string): Promise<string> => (await sql<{ status: string }[]>`select status from divisions where id = ${divisionId}`)[0]!.status;
 
-  it("128 held, started, one waitlisted: the registrant withdraws, the waitlisted one is promoted and the division stays at 128", async () => {
+  it("256 held, started, one waitlisted: the registrant withdraws, the waitlisted one is promoted and the division stays at 256", async () => {
     const { r, holder, w, entrantId } = await started(MAX - 1);
     expect(await isStarted(r.division.id), "premise: started").toBe("active");
     expect(await heldOf(r.division.id), "premise: at the cap").toBe(MAX);
@@ -1262,12 +1321,12 @@ describe.skipIf(!HAS_DB)("a withdrawal AFTER Start still promotes at the online 
     expect(await heldOf(r.division.id)).toBe(MAX - 1);
   });
 
-  it("a started division stored PAST the cap (129 held): the withdrawal frees exactly ONE place, so 128 remain and nobody is promoted", async () => {
-    const { r, holder, w } = await started(MAX); // MAX others + the holder = 129
+  it("a started division stored PAST the cap (257 held): the withdrawal frees exactly ONE place, so 256 remain and nobody is promoted", async () => {
+    const { r, holder, w } = await started(MAX); // MAX others + the holder = 257
     expect(await heldOf(r.division.id), "premise: stored past the cap").toBe(MAX + 1);
     await withdrawRegistration(r.auth, holder);
     expect(await statusOfReg(holder)).toBe("withdrawn");
-    expect(await statusOfReg(w), "128 after the leaver: still full").toBe("waitlisted");
+    expect(await statusOfReg(w), "256 after the leaver: still full").toBe("waitlisted");
     expect(await heldOf(r.division.id)).toBe(MAX);
   });
 
@@ -1275,9 +1334,9 @@ describe.skipIf(!HAS_DB)("a withdrawal AFTER Start still promotes at the online 
     const { r, holder, w, entrantId } = await started(MAX - 1);
     await patchEntrant(r.auth, entrantId, { status: "withdrawn" }); // started: through the cascade; the registration is untouched
     expect(await entrantStatus(entrantId), "premise: the organiser's withdrawal took").toBe("withdrawn");
-    expect(await heldOf(r.division.id), "premise: 127").toBe(MAX - 1);
+    expect(await heldOf(r.division.id), "premise: 255").toBe(MAX - 1);
     await sql`insert into entrants (division_id, kind, display_name, status) values (${r.division.id}, 'individual', 'Filler N', 'confirmed')`; // N takes the place
-    expect(await heldOf(r.division.id), "premise: 128 again").toBe(MAX);
+    expect(await heldOf(r.division.id), "premise: 256 again").toBe(MAX);
     await withdrawRegistration(r.auth, holder);
     expect(await statusOfReg(holder), "premise: the registration did withdraw").toBe("withdrawn");
     expect(await statusOfReg(w), "no place was freed: W stays waitlisted").toBe("waitlisted");
@@ -1312,7 +1371,7 @@ describe.skipIf(!HAS_DB)("the breach log ignores a withdrawal in flight (fix rou
     }
   });
 
-  it("the check itself: a withdrawal in flight (live entrant, withdrawn registration) is not counted; a real 129 still logs, with or without one", async () => {
+  it("the check itself: a withdrawal in flight (live entrant, withdrawn registration) is not counted; a real 257 still logs, with or without one", async () => {
     const r = await regRig("pro", "online", "auto");
     const [holder] = await r.holders(1);
     await fillEntrants(r.division.id, MAX - 1);
@@ -1320,26 +1379,26 @@ describe.skipIf(!HAS_DB)("the breach log ignores a withdrawal in flight (fix rou
     try {
       await checkBreach(r.division.id);
       expect(breachLines(error), "empty case: exactly at the cap logs nothing").toHaveLength(0);
-      // One more live entrant while the holder's registration is withdrawn and its entrant still live: 129 live rows, one leaving.
+      // One more live entrant while the holder's registration is withdrawn and its entrant still live: 257 live rows, one leaving.
       await sql`insert into entrants (division_id, kind, display_name, status) values (${r.division.id}, 'individual', 'Inflow', 'confirmed')`;
       await sql`update registrations set status = 'withdrawn', withdrawn_at = now() where id = ${holder!}`;
-      expect(await heldOf(r.division.id), "premise: 129 rows count as held").toBe(MAX + 1);
+      expect(await heldOf(r.division.id), "premise: 257 rows count as held").toBe(MAX + 1);
       await checkBreach(r.division.id);
-      expect(breachLines(error), "128 once the leaving one is out: no breach").toHaveLength(0);
+      expect(breachLines(error), "256 once the leaving one is out: no breach").toHaveLength(0);
       // A real breach next to the same withdrawal in flight.
       await sql`insert into entrants (division_id, kind, display_name, status) values (${r.division.id}, 'individual', 'Stray', 'confirmed')`;
       await checkBreach(r.division.id);
       const real = breachLines(error);
-      expect(real, "a real 129 still logs").toHaveLength(1);
+      expect(real, "a real 257 still logs").toHaveLength(1);
       expect(real[0]![0], "with the numbers net of the leaving place").toMatchObject({ divisionId: r.division.id, held: MAX + 1, limit: MAX });
       // The withdrawal finished (its entrant departed): the registration is still withdrawn, and the departed entrant is not a place to subtract.
       await sql`update entrants set status = 'withdrawn' where id = (select entrant_id from registrations where id = ${holder!})`;
       error.mockClear();
-      expect(await heldOf(r.division.id), "premise: 129 live (the departed one is no place)").toBe(MAX + 1);
+      expect(await heldOf(r.division.id), "premise: 257 live (the departed one is no place)").toBe(MAX + 1);
       await checkBreach(r.division.id);
       const left = breachLines(error);
       expect(left, "nothing is left to exclude: still a breach").toHaveLength(1);
-      expect(left[0]![0], "at 129, not 128").toMatchObject({ held: MAX + 1 });
+      expect(left[0]![0], "at 257, not 256").toMatchObject({ held: MAX + 1 });
     } finally {
       error.mockRestore();
     }
@@ -1350,21 +1409,270 @@ describe.skipIf(!HAS_DB)("the breach log ignores a withdrawal in flight (fix rou
     const [holder] = await r.holders(1);
     await fillEntrants(r.division.id, MAX - 1);
     await sql`insert into entrants (division_id, kind, display_name, status) values (${r.division.id}, 'individual', 'Stray', 'confirmed')`;
-    expect(await heldOf(r.division.id), "premise: 129 held").toBe(MAX + 1);
+    expect(await heldOf(r.division.id), "premise: 257 held").toBe(MAX + 1);
     const error = vi.spyOn(log, "error").mockImplementation(() => undefined);
     try {
       for (const status of ["confirmed", "paid", "pending"]) {
         error.mockClear();
         await sql`update registrations set status = ${status} where id = ${holder!}`;
         await checkBreach(r.division.id);
-        expect(breachLines(error), `a ${status} registration's entrant is not leaving: 129 is a breach`).toHaveLength(1);
+        expect(breachLines(error), `a ${status} registration's entrant is not leaving: 257 is a breach`).toHaveLength(1);
       }
       error.mockClear();
       await sql`update registrations set status = 'withdrawn' where id = ${holder!}`;
       await checkBreach(r.division.id);
-      expect(breachLines(error), "the same state with the registration withdrawn: that place is leaving, 128").toHaveLength(0);
+      expect(breachLines(error), "the same state with the registration withdrawn: that place is leaving, 256").toHaveLength(0);
     } finally {
       error.mockRestore();
     }
+  });
+});
+
+describe.skipIf(!HAS_DB)("the 256 line, typed from the ruling, at every door (owner 2026-11-23: the online cap raised from 128 to 256)", () => {
+  // Every block above walks its door at MAX, so a cap moved by mistake would move them with it and stay green. This one types the
+  // ruling's own numbers - 256 accepted, the 257th refused - on a plan above the cap (Event Pass L's 512), so the online cap is the
+  // only line in play at every door.
+  const ACCEPTED = 256;
+  const REFUSED = 257;
+  const PLAN: PlanName = "event-pass-l-sized";
+  const placesOf = async (r: Awaited<ReturnType<typeof regRig>>) =>
+    (await publicRegistrationInfo(r.orgSlug, r.competition.slug)).divisions.find((d) => d.division_id === r.division.id)!;
+  const turnOn = (auth: AuthCtx, division: { id: string; config: unknown }) =>
+    patchDivision(auth, division.id, { config: { ...(division.config as Record<string, unknown>), onlinePlay: "lichess" } });
+  const full = { status: 422, code: ONLINE_DIVISION_FULL, extra: { limit: ACCEPTED } };
+
+  it("premise: the constant is the ruling's 256, and the plan is above it", () => {
+    expect(MAX, "lib/online-chess.ts").toBe(ACCEPTED);
+    expect(PLANS[PLAN].cap!, "the plan cannot be the line").toBeGreaterThan(REFUSED);
+  });
+
+  it("add, sign-up, places left, Promote, Confirm, Waive, capacity save, the online switch and Reinstate: the 256th in, the 257th out", async () => {
+    let doors = 0;
+
+    // The organiser adds.
+    {
+      const { auth } = await orgOn(PLAN);
+      const { division } = await divisionOf(auth, "online");
+      await fillEntrants(division.id, ACCEPTED - 1);
+      expect(await verdictOf(() => addOne(auth, "online", division.id)), "add: the 256th").toBe("ok");
+      expect(await verdictOf(() => addOne(auth, "online", division.id)), "add: the 257th").toBe("online");
+      expect(await entrantCount(division.id), "add: the 257th was not written").toBe(ACCEPTED);
+      doors += 1;
+    }
+
+    // The public sign-up, and the places-left panel that announces it.
+    {
+      const r = await regRig(PLAN, "online", "auto");
+      await r.holders(ACCEPTED - 1);
+      expect((await placesOf(r)).remaining, "places left at 255 held").toBe(1);
+      expect(await signUp(r, "online"), "sign-up: the 256th").toBe("confirmed");
+      const panel = await placesOf(r);
+      expect(panel.remaining, "places left at 256 held").toBe(0);
+      expect(panel.closed_reason, "places left: full, the waitlist is open").toBe("full");
+      expect(await signUp(r, "online"), "sign-up: the 257th").toBe("waitlisted");
+      expect(await heldOf(r.division.id)).toBe(ACCEPTED);
+      doors += 2;
+    }
+
+    // The organiser seats a waitlisted entry: Promote, Confirm, Waive.
+    const seats: [string, (auth: AuthCtx, divisionId: string, regId: string) => Promise<unknown>][] = [
+      ["Promote", (auth, divisionId, regId) => promoteFromWaitlist(auth, divisionId, { registrationId: regId })],
+      ["Confirm", (auth, _divisionId, regId) => confirmRegistration(auth, regId)],
+      ["Waive", (auth, _divisionId, regId) => confirmRegistrationWaived(auth, regId)],
+    ];
+    for (const [door, seat] of seats) {
+      const r = await regRig(PLAN, "online", "manual");
+      await r.holders(ACCEPTED - 1);
+      const first = await r.waiting();
+      await expect(seat(r.auth, r.division.id, first), `${door}: the 256th`).resolves.toBeTruthy();
+      expect(await heldOf(r.division.id), `${door}: 256 held`).toBe(ACCEPTED);
+      const next = await r.waiting();
+      await expect(seat(r.auth, r.division.id, next), `${door}: the 257th`).rejects.toMatchObject(full);
+      expect(await r.statusOf(next), `${door}: still waitlisted`).toBe("waitlisted");
+      doors += 1;
+    }
+
+    // The registration capacity a save may promise.
+    {
+      const r = await regRig(PLAN, "online", "auto");
+      const save = (capacity: number) =>
+        putRegistrationSettings(r.auth, r.division.id, { ...SETTINGS_BASE, payment_method: "offline", fee_cents: 0, capacity, approval: "auto", allow_free_agents: false } as never);
+      await expect(save(ACCEPTED), "capacity 256").resolves.toBeTruthy();
+      await expect(save(REFUSED), "capacity 257").rejects.toMatchObject({ status: 422, code: ONLINE_DIVISION_FULL });
+      doors += 1;
+    }
+
+    // Turning online play on.
+    {
+      const { auth } = await orgOn(PLAN);
+      const fits = await divisionOf(auth, "otb");
+      await fillEntrants(fits.division.id, ACCEPTED);
+      await expect(turnOn(auth, fits.division), "switch: 256 entrants").resolves.toBeTruthy();
+      const over = await divisionOf(auth, "otb");
+      await fillEntrants(over.division.id, REFUSED);
+      await expect(turnOn(auth, over.division), "switch: 257 entrants").rejects.toMatchObject({
+        status: 422,
+        code: ONLINE_PLAY_TOO_MANY_ENTRANTS,
+        extra: { limit: ACCEPTED, entrants: REFUSED },
+      });
+      doors += 1;
+    }
+
+    // Reinstate a departed entrant.
+    {
+      const r = await regRig(PLAN, "online", "manual");
+      await fillEntrants(r.division.id, ACCEPTED);
+      const [a, b] = await idsOf(r.division.id);
+      await sql`update entrants set status = 'withdrawn' where id = ${a!}`; // 255 live
+      await expect(patchEntrant(r.auth, a!, { status: "confirmed" }), "reinstate: the 256th").resolves.toBeTruthy();
+      await sql`update entrants set status = 'withdrawn' where id = ${b!}`;
+      await fillEntrants(r.division.id, 1); // the freed place is taken: 256 live
+      await expect(patchEntrant(r.auth, b!, { status: "confirmed" }), "reinstate: the 257th").rejects.toMatchObject(full);
+      doors += 1;
+    }
+
+    expect(doors, "anti-vacuity: every door the blocks above cover was walked").toBe(9);
+  });
+});
+
+// ─── Cap-256 fix round 1 (review m1): Reinstate and the online switch ask min(plan cap, 256) too ──────────────────────────────
+//
+// At a cap of 128 an Event Pass's 128 EQUALLED the cap, so the flat "past 128" check at these two doors held the pass by coincidence.
+// At 256 it does not: the flat check let a 128-plan online division reach 129 by a Reinstate, or switch online holding 200. The ruling
+// (controller, 2026-11-23): both doors judge the places held against min(plan cap, 256), the plan read before the transaction; where
+// the plan binds they answer with the plan's own refusal (the add door's 402), otherwise the online cap's own code. Every expected
+// verdict below is typed from that ruling.
+
+describe.skipIf(!HAS_DB)("Reinstate and the online switch judge min(plan cap, 256), as every door (cap-256 review m1)", () => {
+  const reinstate = (auth: AuthCtx, entrantId: string) => patchEntrant(auth, entrantId, { status: "confirmed" });
+  const statusOfEntrant = async (id: string): Promise<string> => (await sql<{ status: string }[]>`select status from entrants where id = ${id}`)[0]!.status;
+  const turnOn = (auth: AuthCtx, division: { id: string; config: unknown }) =>
+    patchDivision(auth, division.id, { config: { ...(division.config as Record<string, unknown>), onlinePlay: "lichess" } });
+  const storedOnline = async (divisionId: string): Promise<string | null> =>
+    ((await sql<{ config: { onlinePlay?: string } }[]>`select config from divisions where id = ${divisionId}`)[0]!.config.onlinePlay ?? null);
+
+  it("an Event Pass's 128, online: two withdraw, one is reinstated with room, a sign-up takes the last place, and the second Reinstate is the PLAN's refusal", async () => {
+    const r = await regRig("event-pass-sized", "online", "auto");
+    await fillEntrants(r.division.id, 128);
+    const [a, b] = await idsOf(r.division.id);
+    await sql`update entrants set status = 'withdrawn' where id in ${sql([a!, b!])}`;
+    expect(await heldOf(r.division.id), "premise: two places freed").toBe(126);
+    await expect(reinstate(r.auth, a!), "with room: the 127th place").resolves.toBeTruthy();
+    expect(await signUp(r, "online"), "a sign-up takes the 128th place").toBe("confirmed");
+    expect(await heldOf(r.division.id), "premise: full at the plan's 128").toBe(128);
+    expect(await verdictOf(() => reinstate(r.auth, b!)), "the 129th: the plan's own 402 (the flat 256 check admitted it)").toBe("plan");
+    expect(await statusOfEntrant(b!), "still withdrawn: nothing written").toBe("withdrawn");
+    expect(await heldOf(r.division.id), "never past the plan").toBe(128);
+  });
+
+  it("every plan size: Reinstate into a division full at its line is refused by whichever line binds - the plan below 256, the online cap at and above", async () => {
+    // [plan, the line (min(plan, 256)), the refusal past it]
+    const table: [PlanName, number, Verdict][] = [
+      ["community", 64, "plan"],
+      ["size-pack-96", 96, "plan"],
+      ["event-pass-sized", 128, "plan"],
+      ["pro", 256, "online"], // the tie goes to the online cap
+      ["event-pass-l-sized", 256, "online"],
+      ["unlimited", 256, "online"],
+    ];
+    let checked = 0;
+    for (const [plan, line, past] of table) {
+      const r = await regRig(plan, "online", "manual");
+      await fillEntrants(r.division.id, line);
+      const [leaver] = await idsOf(r.division.id);
+      await sql`update entrants set status = 'withdrawn' where id = ${leaver!}`;
+      expect(await verdictOf(() => reinstate(r.auth, leaver!)), `${plan}: back into the place it left`).toBe("ok");
+      await sql`update entrants set status = 'withdrawn' where id = ${leaver!}`;
+      await fillEntrants(r.division.id, 1); // the freed place is taken
+      expect(await heldOf(r.division.id), `${plan}: premise, full at ${line}`).toBe(line);
+      expect(await verdictOf(() => reinstate(r.auth, leaver!)), `${plan}: the ${line + 1}th place`).toBe(past);
+      expect(await statusOfEntrant(leaver!), `${plan}: still withdrawn`).toBe("withdrawn");
+      checked += 1;
+    }
+    expect(checked, "plans walked").toBe(table.length);
+  });
+
+  it("over the board a Reinstate is never capped online, on the same lower plan (the control: the plan's ROW count is not the door's)", async () => {
+    const r = await regRig("event-pass-sized", "otb", "manual");
+    await fillEntrants(r.division.id, 128);
+    const [gone] = await idsOf(r.division.id);
+    await sql`update entrants set status = 'withdrawn' where id = ${gone!}`;
+    await r.pendingSignUps(5); // over the board the sign-ups are a separate count
+    await expect(reinstate(r.auth, gone!)).resolves.toBeTruthy();
+  });
+
+  it("every plan size: the online switch takes a division holding its line and refuses one more - the plan's 402 below 256, the switch's own 422 at and above", async () => {
+    // [plan, the line (min(plan, 256)), the refusal past it]. The state past the line is one the product reaches: over the board the
+    // plan counts entrant ROWS, so the line's rows plus a sign-up let in (no entrant yet) is a division the plan admitted.
+    const table: [PlanName, number, Verdict][] = [
+      ["community", 64, "plan"],
+      ["size-pack-96", 96, "plan"],
+      ["event-pass-sized", 128, "plan"],
+      ["pro", 256, "too_many"], // the tie goes to the online cap
+      ["event-pass-l-sized", 256, "too_many"],
+      ["unlimited", 256, "too_many"],
+    ];
+    let checked = 0;
+    for (const [plan, line, past] of table) {
+      const fits = await regRig(plan, "otb", "manual");
+      await fillEntrants(fits.division.id, line);
+      expect(await verdictOf(() => turnOn(fits.auth, fits.division)), `${plan}: ${line} held`).toBe("ok");
+      expect(await storedOnline(fits.division.id)).toBe("lichess");
+      const over = await regRig(plan, "otb", "manual");
+      await fillEntrants(over.division.id, line);
+      await over.pendingSignUps(1);
+      expect(await heldOf(over.division.id), `${plan}: premise, one past the line`).toBe(line + 1);
+      expect(await verdictOf(() => turnOn(over.auth, over.division)), `${plan}: ${line + 1} held`).toBe(past);
+      expect(await storedOnline(over.division.id), `${plan}: refused, still over the board`).toBeNull();
+      checked += 1;
+    }
+    expect(checked, "plans walked").toBe(table.length);
+  });
+
+  it("an Event Pass's 128 switching online holding 200 (rows 128 + 72 sign-ups): the plan's refusal, not the 256 that used to let it through", async () => {
+    const r = await regRig("event-pass-sized", "otb", "manual");
+    await fillEntrants(r.division.id, 128);
+    await r.pendingSignUps(72);
+    expect(await heldOf(r.division.id), "premise").toBe(200);
+    const err = await turnOn(r.auth, r.division).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err, "the plan's own 402, an upgrade lifts it").toBeInstanceOf(PaymentRequiredError);
+    expect((err as { code?: string }).code, "never the switch's own code").not.toBe(ONLINE_PLAY_TOO_MANY_ENTRANTS);
+    expect(await storedOnline(r.division.id)).toBeNull();
+  });
+});
+
+// ─── Cap-256 fix round 1 (review m4): a late add into a STARTED online Swiss ────────────────────────────────────────────────
+//
+// After Start a running Swiss takes a late entrant (`admitSwissLateEntrant`), and the add door judges the online cap BEFORE it: the
+// 257th is refused before the Swiss writes anything. A round-robin late entry cannot reach the cap (a league's format max is below
+// 256, door 4b's premise). Single sport: online play exists for boardgame alone.
+
+describe.skipIf(!HAS_DB)("a late add into a started online Swiss at the cap (cap-256 review m4)", () => {
+  const lateEntries = async (divisionId: string): Promise<number> =>
+    (await sql<{ n: number }[]>`select count(*)::int as n from division_events where division_id = ${divisionId} and type = 'swiss_late_entry'`)[0]!.n;
+
+  it("Event Pass L (512), online, a root Swiss, started: 255 held, the 256th is admitted into the running Swiss, the 257th refused ONLINE_DIVISION_FULL with nothing written", async () => {
+    const { auth } = await orgOn("event-pass-l-sized");
+    const { division } = await divisionOf(auth, "online");
+    await createStages(auth, division.id, { seq: 1, name: "Swiss", progression: null, kind: "swiss", config: { rounds: 5 } } as never);
+    await fillEntrants(division.id, 255);
+    await sql`update divisions set status = 'active' where id = ${division.id}`;
+    expect(await lateEntries(division.id), "premise: nobody has arrived late").toBe(0);
+    expect(await verdictOf(() => addOne(auth, "online", division.id)), "the 256th").toBe("ok");
+    expect(await lateEntries(division.id), "the 256th went through the running Swiss's late entry").toBe(1);
+    await expect(addOne(auth, "online", division.id), "the 257th").rejects.toMatchObject({ status: 422, code: ONLINE_DIVISION_FULL, extra: { limit: 256 } });
+    expect(await entrantCount(division.id), "the 257th was not written").toBe(256);
+    expect(await lateEntries(division.id), "the refusal came before the Swiss wrote anything").toBe(1);
+  });
+
+  it("the control: the same started online division with no stage that takes a late entrant refuses the add as STARTED, at any count", async () => {
+    const { auth } = await orgOn("event-pass-l-sized");
+    const { division } = await divisionOf(auth, "online");
+    await fillEntrants(division.id, 10);
+    await sql`update divisions set status = 'active' where id = ${division.id}`;
+    await expect(addOne(auth, "online", division.id)).rejects.toMatchObject({ status: 422, message: expect.stringMatching(/has started/) });
   });
 });

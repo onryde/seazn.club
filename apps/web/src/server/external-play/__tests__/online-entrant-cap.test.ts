@@ -1,5 +1,6 @@
-// The online chess entrant cap's arithmetic (online-entrant-cap.ts): min(plan cap, 128) for a division that plays online, the plan's
-// own cap for every other division. Expected answers are written from the owner's ruling (2026-11-21) as a hand table, never read back
+// The online chess entrant cap's arithmetic (online-entrant-cap.ts): min(plan cap, 256) for a division that plays online, the plan's
+// own cap for every other division. Expected answers are written from the owner's ruling (2026-11-21; the cap raised from 128 to 256
+// on 2026-11-23) as a hand table, never read back
 // from the functions: a CAPACITY limit, not an upsell - so when the plan cap is lower the plan's 402 (upgrade copy) answers, and when it
 // is not the cap answers with its own 422 code.
 //
@@ -18,12 +19,15 @@ import {
 import { ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION as FROM_ONLINE_PLAY } from "../online-play";
 import {
   assertEntrantRoom,
+  assertOnlineHeldRoom,
   assertOnlinePlayFits,
   assertOnlineRoom,
   effectiveEntrantCap,
   onlineCapBinds,
   onlineDivisionFullError,
   onlineRoomLeft,
+  PLAN_LIMIT_NOT_READ,
+  readPlanLimit,
 } from "../online-entrant-cap";
 import { supportsOnlinePlay } from "../online-play";
 
@@ -53,23 +57,24 @@ const verdictOf = (division: { sport_key: string; config: unknown }, planCap: nu
   verdictForCounts(division, planCap, { rows: wouldBe - 1, held: wouldBe - 1 }, 1);
 
 describe("the constant", () => {
-  it("is the owner's 128, and is the one number the predicate's module re-exports", () => {
-    expect(MAX).toBe(128);
+  it("is the owner's 256 (2026-11-23: lifted from 128 after the 256-board real-lila load run), and is the one number the predicate's module re-exports", () => {
+    expect(MAX).toBe(256);
     expect(FROM_ONLINE_PLAY, "online-play.ts re-exports the one constant (it does not declare a second)").toBe(MAX);
   });
 });
 
-describe("effectiveEntrantCap: min(plan cap, 128) for an online division, the plan's cap for every other", () => {
+describe("effectiveEntrantCap: min(plan cap, 256) for an online division, the plan's cap for every other", () => {
   it("the table, from the ruling (every plan cap the catalogue holds, and unlimited)", () => {
     // [online, plan cap, effective cap]
     const table: [boolean, number | null, number | null][] = [
       [true, 64, 64], // Community: the plan binds
-      [true, 127, 127],
-      [true, 128, 128], // exactly the online cap
-      [true, 256, 128], // Pro: the online cap binds
-      [true, null, 128], // unlimited: the online cap is the only cap
+      [true, 128, 128], // an Event Pass's 128: the plan binds now (at a cap of 128 it was the tie)
+      [true, 255, 255],
+      [true, 256, 256], // Pro: exactly the online cap
+      [true, 512, 256], // Event Pass L: the online cap binds
+      [true, null, 256], // unlimited: the online cap is the only cap
       [false, 64, 64],
-      [false, 256, 256], // not online: Pro keeps 256
+      [false, 512, 512], // not online: Event Pass L keeps 512
       [false, null, null], // not online and unlimited: no cap
     ];
     let checked = 0;
@@ -78,35 +83,38 @@ describe("effectiveEntrantCap: min(plan cap, 128) for an online division, the pl
       checked += 1;
     }
     expect(checked, "rows checked").toBe(table.length);
-    expect(table.length, "anti-vacuity: the table is not empty").toBeGreaterThanOrEqual(8);
+    expect(table.length, "anti-vacuity: the table is not empty").toBeGreaterThanOrEqual(9);
   });
 
-  it("onlineCapBinds: only for an online division whose plan cap is absent or no lower than 128 (the tie goes to the online cap)", () => {
+  it("onlineCapBinds: only for an online division whose plan cap is absent or no lower than 256 (the tie goes to the online cap)", () => {
     expect(onlineCapBinds(true, 64), "a lower plan cap binds first - an upgrade lifts it").toBe(false);
+    expect(onlineCapBinds(true, 128), "an Event Pass's 128 is below the cap now: an upgrade does lift it").toBe(false);
     expect(onlineCapBinds(true, MAX - 1)).toBe(false);
-    expect(onlineCapBinds(true, MAX), "equal: no upgrade changes anything").toBe(true);
-    expect(onlineCapBinds(true, 256)).toBe(true);
+    expect(onlineCapBinds(true, MAX), "equal (Pro's 256): no upgrade changes anything").toBe(true);
+    expect(onlineCapBinds(true, 512)).toBe(true);
     expect(onlineCapBinds(true, null)).toBe(true);
-    expect(onlineCapBinds(false, 256), "not online: never").toBe(false);
+    expect(onlineCapBinds(false, 512), "not online: never").toBe(false);
     expect(onlineCapBinds(false, null)).toBe(false);
   });
 });
 
 describe("assertEntrantRoom: which refusal answers, and where the line falls", () => {
-  it("online division, the table - 128 is the last entrant it holds on every plan that allows it; a lower plan cap answers with its own 402", () => {
+  it("online division, the table - 256 is the last entrant it holds on every plan that allows it; a lower plan cap answers with its own 402", () => {
     // [plan cap, would-be count, verdict]
     const table: [number | null, number, Verdict][] = [
       [64, 64, "ok"],
       [64, 65, "plan"], // Community: still refused at 65, with the plan message - the min
-      [64, 129, "plan"],
-      [127, 128, "plan"],
+      [64, 257, "plan"],
       [128, 128, "ok"],
-      [128, 129, "online"], // a plan of exactly 128 (an Event Pass): the online cap answers
-      [256, 127, "ok"],
-      [256, 128, "ok"], // the 128th
-      [256, 129, "online"], // the 129th: the online cap, not the plan's 256
-      [null, 128, "ok"],
-      [null, 129, "online"], // unlimited plan: still 128
+      [128, 129, "plan"], // an Event Pass's 128 is below the online cap now: the plan answers, and an upgrade lifts it
+      [255, 256, "plan"],
+      [256, 255, "ok"],
+      [256, 256, "ok"], // the 256th, on Pro
+      [256, 257, "online"], // the 257th on Pro (exactly the online cap): the online cap answers, no upgrade changes anything
+      [512, 256, "ok"],
+      [512, 257, "online"], // Event Pass L: the online cap, not the plan's 512
+      [null, 256, "ok"],
+      [null, 257, "online"], // unlimited plan: still 256
       [null, 5_000, "online"],
     ];
     let checked = 0;
@@ -117,14 +125,16 @@ describe("assertEntrantRoom: which refusal answers, and where the line falls", (
     expect(checked).toBe(table.length);
   });
 
-  it("an over-the-board division follows the plan's cap alone: 129 is fine on Pro, refused past 256, and unlimited stays unlimited", () => {
+  it("an over-the-board division follows the plan's cap alone: 257 is fine on Event Pass L, refused past 512, and unlimited stays unlimited", () => {
     const table: [number | null, number, Verdict][] = [
       [64, 64, "ok"],
       [64, 65, "plan"],
-      [256, 129, "ok"],
       [256, 256, "ok"],
-      [256, 257, "plan"],
-      [null, 129, "ok"],
+      [256, 257, "plan"], // Pro over the board: the plan's own 402, at the line the online cap draws for an online division
+      [512, 257, "ok"],
+      [512, 512, "ok"],
+      [512, 513, "plan"],
+      [null, 257, "ok"],
       [null, 5_000, "ok"],
     ];
     let checked = 0;
@@ -138,13 +148,14 @@ describe("assertEntrantRoom: which refusal answers, and where the line falls", (
   it("the two counts are separate (review C1): the online cap reads `held`, the plan's cap reads `rows` - each refuses on its own count only", () => {
     // [plan cap, rows (every entrants row), held (places held), adding, verdict]
     const table: [number | null, number, number, number, Verdict][] = [
-      [256, 300, 100, 1, "plan"], // 300 rows, 200 of them withdrawn: the plan's count refuses; the online count (100) would not
-      [null, 300, 100, 1, "ok"], // unlimited: no plan cap, and 100 held is under the online cap - withdrawn rows are not places
-      [256, 130, 127, 1, "ok"], // the 128th place, whatever the rows say
-      [256, 130, 128, 1, "online"], // the 129th place: held says full though only 130 rows exist
-      [256, 10, 128, 1, "online"], // sign-ups let in fill places that are not rows at all: 10 rows, 128 held
-      [256, 10, 127, 2, "online"], // a batch of two on 127 held
-      [128, 128, 128, 1, "online"], // the tie: both full, the online cap answers (no upgrade changes anything)
+      [512, 600, 200, 1, "plan"], // 600 rows, 400 of them withdrawn: the plan's count refuses; the online count (200) would not
+      [null, 600, 200, 1, "ok"], // unlimited: no plan cap, and 200 held is under the online cap - withdrawn rows are not places
+      [512, 300, 255, 1, "ok"], // the 256th place, whatever the rows say
+      [512, 300, 256, 1, "online"], // the 257th place: held says full though only 300 rows exist
+      [512, 10, 256, 1, "online"], // sign-ups let in fill places that are not rows at all: 10 rows, 256 held
+      [512, 10, 255, 2, "online"], // a batch of two on 255 held
+      [256, 256, 256, 1, "online"], // the tie (Pro): both full, the online cap answers (no upgrade changes anything)
+      [128, 40, 128, 1, "plan"], // an Event Pass's 128, below the online cap: the PLAN's refusal, on the places held
       [64, 64, 10, 1, "plan"], // Community: its own 64 rows bind, online or not
       [64, 10, 64, 1, "plan"], // ...a plan BELOW the online cap judges the places held too (re-review N2): 64 held on a plan of 64, rows (10) or not
       [96, 40, 95, 1, "ok"], // a size pack's 96: the 96th place
@@ -158,13 +169,13 @@ describe("assertEntrantRoom: which refusal answers, and where the line falls", (
     }
     expect(checked).toBe(table.length);
     // Over the board `held` is not looked at at all.
-    expect(verdictForCounts(OVER_THE_BOARD, 256, { rows: 10, held: 5_000 }, 1), "over the board: held is ignored").toBe("ok");
-    expect(verdictForCounts(OVER_THE_BOARD, 256, { rows: 256, held: 0 }, 1), "over the board: the plan's rows still refuse").toBe("plan");
+    expect(verdictForCounts(OVER_THE_BOARD, 512, { rows: 10, held: 5_000 }, 1), "over the board: held is ignored").toBe("ok");
+    expect(verdictForCounts(OVER_THE_BOARD, 512, { rows: 512, held: 0 }, 1), "over the board: the plan's rows still refuse").toBe("plan");
   });
 
-  it("onlineRoomLeft and assertOnlineRoom: 128 minus what is held, never below 0, and the line falls between 128 and 129", () => {
+  it("onlineRoomLeft and assertOnlineRoom: 256 minus what is held, never below 0, and the line falls between 256 and 257", () => {
     expect([onlineRoomLeft(0), onlineRoomLeft(100), onlineRoomLeft(MAX), onlineRoomLeft(MAX + 2)], "the empty case first").toEqual([MAX, MAX - 100, 0, 0]);
-    // Under a plan cap below the online cap (re-review N2) the room is the plan's: min(plan, 128) is the cap the doors pass in.
+    // Under a plan cap below the online cap (re-review N2) the room is the plan's: min(plan, 256) is the cap the doors pass in.
     expect([onlineRoomLeft(0, 96), onlineRoomLeft(95, 96), onlineRoomLeft(96, 96), onlineRoomLeft(120, 96)]).toEqual([96, 1, 0, 0]);
     expect(() => assertOnlineRoom(0)).not.toThrow();
     expect(() => assertOnlineRoom(MAX)).not.toThrow();
@@ -178,12 +189,12 @@ describe("assertEntrantRoom: which refusal answers, and where the line falls", (
       const division = { sport_key: key, config: { onlinePlay: "lichess" } };
       if (supportsOnlinePlay(key)) {
         online += 1;
-        expect(verdictOf(division, 256, MAX + 1), `${key}: online, the 129th`).toBe("online");
+        expect(verdictOf(division, 512, MAX + 1), `${key}: online, the 257th`).toBe("online");
         return;
       }
       others += 1;
-      expect(verdictOf(division, 256, MAX + 1), `${key}: not an online sport, the 129th follows the plan`).toBe("ok");
-      expect(verdictOf(division, 256, 257), `${key}: ...and the plan's own line is still the plan's 402`).toBe("plan");
+      expect(verdictOf(division, 512, MAX + 1), `${key}: not an online sport, the 257th follows the plan`).toBe("ok");
+      expect(verdictOf(division, 512, 513), `${key}: ...and the plan's own line is still the plan's 402`).toBe("plan");
     });
     expect(visited, "sports in the registry").toBeGreaterThan(1);
     expect(online + others, "every sport was classified").toBe(visited);
@@ -202,17 +213,17 @@ describe("assertEntrantRoom: which refusal answers, and where the line falls", (
 });
 
 describe("assertOnlinePlayFits: turning online play on", () => {
-  it("the empty case first, then the line: 0 and 128 entrants fit, 129 is refused with its own code and both numbers", () => {
-    expect(() => assertOnlinePlayFits(0), "an empty division").not.toThrow();
-    expect(() => assertOnlinePlayFits(MAX - 1)).not.toThrow();
-    expect(() => assertOnlinePlayFits(MAX), "exactly the cap fits").not.toThrow();
+  it("the empty case first, then the line: 0 and 256 entrants fit, 257 is refused with its own code and both numbers", () => {
+    expect(() => assertOnlinePlayFits(0, null), "an empty division").not.toThrow();
+    expect(() => assertOnlinePlayFits(MAX - 1, null)).not.toThrow();
+    expect(() => assertOnlinePlayFits(MAX, null), "exactly the cap fits").not.toThrow();
     const err = (() => {
       try {
-        assertOnlinePlayFits(MAX + 1);
+        assertOnlinePlayFits(MAX + 1, null);
       } catch (e) {
         return e as { status: number; code: string; extra: unknown; message: string };
       }
-      throw new Error("anti-vacuity: 129 entrants must be refused");
+      throw new Error("anti-vacuity: 257 entrants must be refused");
     })();
     expect(err.status).toBe(422);
     expect(err.code, "its own code, not the add door's").toBe(ONLINE_PLAY_TOO_MANY_ENTRANTS);
@@ -220,6 +231,75 @@ describe("assertOnlinePlayFits: turning online play on", () => {
     expect(err.extra).toEqual({ limit: MAX, entrants: MAX + 1 });
     expect(err.message).toContain(String(MAX + 1));
     expect(err.message).toContain(String(MAX));
+  });
+
+  // Cap-256 review m1 (controller ruling 2026-11-23): the switch judges the places held against min(plan cap, 256), as every door.
+  // [plan cap, places held, verdict] - typed from the ruling.
+  it("against min(plan cap, 256): a lower plan cap answers with the plan's own 402, the tie and above with the switch's own 422", () => {
+    const table: [number | null, number, "ok" | "plan" | "too_many"][] = [
+      [128, 0, "ok"], // the empty case first
+      [128, 128, "ok"],
+      [128, 129, "plan"], // an Event Pass's 128: more than the plan holds is the plan's refusal, and an upgrade lifts it
+      [128, 257, "plan"], // past both: the lower line (the plan's) answers
+      [64, 65, "plan"],
+      [256, 256, "ok"],
+      [256, 257, "too_many"], // Pro's 256: the tie goes to the online cap
+      [512, 257, "too_many"],
+      [null, 257, "too_many"],
+    ];
+    let checked = 0;
+    for (const [plan, held, want] of table) {
+      let got: "ok" | "plan" | "too_many" = "ok";
+      try {
+        assertOnlinePlayFits(held, plan);
+      } catch (e) {
+        if (e instanceof PaymentRequiredError) got = "plan";
+        else if ((e as { code?: string }).code === ONLINE_PLAY_TOO_MANY_ENTRANTS) got = "too_many";
+        else throw e;
+      }
+      expect(got, `plan ${plan}, ${held} held`).toBe(want);
+      checked += 1;
+    }
+    expect(checked, "rows checked").toBe(table.length);
+  });
+});
+
+describe("readPlanLimit: a plan never read fails closed (cap-256 re-review n2)", () => {
+  it("an unopened guard throws by name; an unlimited plan (null) and a plan's number come back as read", () => {
+    expect(() => readPlanLimit(undefined), "never read is not unlimited").toThrow(PLAN_LIMIT_NOT_READ);
+    expect(PLAN_LIMIT_NOT_READ).toContain("plan limit not read");
+    expect(readPlanLimit({ planLimit: null }), "null IS an unlimited plan: only an unread guard is refused").toBeNull();
+    expect(readPlanLimit({ planLimit: 128 })).toBe(128);
+  });
+});
+
+describe("assertOnlineHeldRoom: a door that adds a place but no row (Reinstate) asks min(plan cap, 256) too (cap-256 review m1)", () => {
+  it("the table, typed from the ruling: a lower plan cap is the plan's 402, the tie and above ONLINE_DIVISION_FULL", () => {
+    // [plan cap, places held after the write, verdict]
+    const table: [number | null, number, "ok" | "plan" | "online"][] = [
+      [128, 1, "ok"], // the empty case first: the first place back
+      [128, 128, "ok"],
+      [128, 129, "plan"], // an Event Pass's 128: the plan's refusal (the bug this closes: the flat check admitted it, up to 256)
+      [96, 97, "plan"],
+      [256, 256, "ok"],
+      [256, 257, "online"], // Pro's 256: the tie goes to the online cap
+      [512, 257, "online"],
+      [null, 257, "online"],
+    ];
+    let checked = 0;
+    for (const [plan, wouldHold, want] of table) {
+      let got: "ok" | "plan" | "online" = "ok";
+      try {
+        assertOnlineHeldRoom(plan, wouldHold);
+      } catch (e) {
+        if (e instanceof PaymentRequiredError) got = "plan";
+        else if ((e as { code?: string }).code === ONLINE_DIVISION_FULL) got = "online";
+        else throw e;
+      }
+      expect(got, `plan ${plan}, ${wouldHold} held`).toBe(want);
+      checked += 1;
+    }
+    expect(checked, "rows checked").toBe(table.length);
   });
 });
 

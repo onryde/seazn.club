@@ -4,6 +4,8 @@
 //
 //   pass.ts             the shared shape: SweepJob / SweepReport / SweepDeps, the budgets, the pass state, `each`,
 //                       playableWindow, the "game may be on file" predicate, anchorIfClosedNow, ParkedRoom
+//   pass-limits.ts      the pass's two budgets (SWEEP_PASS_BUDGET_MS, SWEEP_RTK_CALLS_PER_PASS), import-free for the load harness;
+//                       pass.ts re-exports both
 //   no-show.ts          job 0 (a fixture no longer playable closes its bridge) and job 1 (the deadline no-show)
 //   mint-retry.ts       job 2: the mint retry (a 429-throttled create, a stranded board with both players in)
 //   teardown.ts         job 3 (meeting teardown) and job 3b (parked rooms, V460)

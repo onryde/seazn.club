@@ -92,10 +92,10 @@ export function freesTeamSlot(row: { status: string; free_agent: boolean }): boo
  *  - at or past the FORMAT's max entrants (`divisionFormatMaxes`: the largest field the first stage's draw fits): always refused,
  *    422 `FORMAT_TOO_MANY_ENTRANTS`, on any plan and confirmed or not. It answers FIRST, before the online cap (owner "apply rec"
  *    2026-11-22): no plan or cap raises it, so its sentence is the one that says what to change;
- *  - past the cap of a division that plays ONLINE, min(`planLimit`, 128) (owner ruling 2026-11-21), where the online cap is what
+ *  - past the cap of a division that plays ONLINE, min(`planLimit`, 256) (owner ruling 2026-11-21, 256 since 2026-11-23), where the online cap is what
  *    binds (the plan's limit is absent or no lower): always refused, 422 `ONLINE_DIVISION_FULL` - a capacity limit, with no plan to
  *    raise. It is judged by the places the division HOLDS (`countOnlineHeld`: live entrants plus sign-ups let in), the count every
- *    online-cap door shares, not by the plan's count below, and it comes before the plan's refusal (at a plan of exactly 128 no
+ *    online-cap door shares, not by the plan's count below, and it comes before the plan's refusal (at a plan of exactly 256 no
  *    upgrade changes anything);
  *  - past the PLAN's per-division limit (`planLimit`, the limit submit honours: `getLimit` with its add-on bonus; null = unlimited):
  *    always refused, 422 `PROMOTE_PLAN_LIMIT`. In an online division a plan limit LOWER than the cap also judges the online held
@@ -139,9 +139,9 @@ export async function assertOrganiserPromotionHasRoom(
   // It answers BEFORE the online cap (2026-11-22, owner "apply rec"): where both are past, the format's max is the tighter, real limit
   // (a 100-entrant league cannot be drawn with more however the cap moves) and its sentence says what to change.
   if (verdict.kind === "format_max") throw formatMaxPromotionRefusal(verdict.max, verdict.active);
-  // Owner ruling 2026-11-21: past min(plan limit, 128) places an online chess division is full, and no confirmation lifts it. Judged by
+  // Owner ruling 2026-11-21 (256 since 2026-11-23): past min(plan limit, 256) places an online chess division is full, and no confirmation lifts it. Judged by
   // the one online count (live entrants + sign-ups let in), the promoted entry being the +1. Where the online cap binds (the plan's
-  // limit is absent or no lower) it is the online refusal, and it comes before the plan's (the tie at a plan of exactly 128: no upgrade
+  // limit is absent or no lower) it is the online refusal, and it comes before the plan's (the tie at a plan of exactly 256: no upgrade
   // changes anything) - after the format's max above; where a LOWER plan limit binds (re-review N2: a size pack's 96) the same count
   // answers with the plan's own refusal.
   const held = online ? await countOnlineHeld(tx, divisionId) : 0;
