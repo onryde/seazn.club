@@ -123,7 +123,9 @@ export type CreateOutcome =
 
 export type CreateGameDeps = {
   /** The caller's clock: judges the board's window, the dequeue's phase, the row's expiry and the recovery's create window
-   *  (and dates the marker, `create_sent_at`, which only that window reads). Never a claim's liveness stamp. */
+   *  (and dates the marker, `create_sent_at`). Never a claim's liveness stamp. KNOWN SKEW: the recovery compares
+   *  `create_sent_at` with ANOTHER request's clock and with Lichess's `createdAt`, so a sender clock more than ~16s old
+   *  can cancel our own challenge as a stray and re-create it (churn, never two games); owed to the recovery-clock task. */
   now?: Date;
   publish?: (fixtureId: string) => Promise<void>;
   /** The WALL clock that stamps the claim, every renewal and the marker write's claim (`mint_claimed_at`), and the takeover
@@ -502,8 +504,9 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined, c
   if (gameId === null) {
     // The marker, as its own committed write, BEFORE the HTTP call — and the
     // claim renewed to this instant (the wall clock), so the two calls below
-    // cannot outlive it. The marker's own date stays on the CALLER's clock:
-    // only the recovery's create window reads it, against that same clock.
+    // cannot outlive it. The marker's own date stays on the CALLER's clock
+    // for now; the recovery reads it against another request's clock and
+    // Lichess's createdAt, a known skew owed to the recovery-clock task.
     const sentAt = fixedNow ?? new Date();
     const markAt = clock();
     const marked = await sql<{ fixture_id: string }[]>`
