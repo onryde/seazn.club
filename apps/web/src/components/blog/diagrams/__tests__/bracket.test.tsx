@@ -47,6 +47,62 @@ describe("every batch 4 bracket post carries a bracket picture, drawn without ov
     expect(edges, "anti-vacuity: edges laid out").toBeGreaterThan(15);
   });
 
+  it("no two lines run on top of each other, and parallel vertical runs keep their distance (review N4)", () => {
+    // An edge is `M x1 y1 H xm V y2 H x2`: out of its source, down a channel, into its seat. Read each back from its path.
+    const MIN_APART = 7;
+    let pairs = 0;
+    let sharedSource = 0;
+    let horizontals = 0;
+    for (const id of POSTS) {
+      const layout = layoutBracket(modelOf(id));
+      const segs = layout.edges.map((e) => {
+        const m = /^M ([\d.]+) ([\d.]+) H ([\d.]+) V ([\d.]+) H ([\d.]+)$/.exec(e.d);
+        if (m === null) throw new Error(`${id}: an edge is not an elbow: ${e.d}`);
+        const [x1, y1, xm, y2, x2] = m.slice(1).map(Number) as [number, number, number, number, number];
+        return { e, x1, y1, xm, y2, x2 };
+      });
+      for (let i = 0; i < segs.length; i++) {
+        for (let j = i + 1; j < segs.length; j++) {
+          const a = segs[i]!;
+          const b = segs[j]!;
+          pairs++;
+          // First horizontal runs: the same row of the same column may not overlap in x.
+          if (a.y1 === b.y1 && Math.min(a.xm, a.x1) < Math.max(b.xm, b.x1) && Math.min(b.xm, b.x1) < Math.max(a.xm, a.x1)) {
+            throw new Error(`${id}: the lines ${a.e.from}->${a.e.to} and ${b.e.from}->${b.e.to} run on top of each other leaving their sources`);
+          }
+          // Any two horizontal runs of different lines at the same height may not overlap (a line leaving a match along the line entering the next).
+          const hRuns = (x: (typeof a)) => [
+            { y: x.y1, lo: Math.min(x.x1, x.xm), hi: Math.max(x.x1, x.xm) },
+            { y: x.y2, lo: Math.min(x.xm, x.x2), hi: Math.max(x.xm, x.x2) },
+          ];
+          for (const ra of hRuns(a)) {
+            for (const rb of hRuns(b)) {
+              horizontals++;
+              if (Math.abs(ra.y - rb.y) < 2 && ra.lo < rb.hi - 0.5 && rb.lo < ra.hi - 0.5) {
+                throw new Error(`${id}: a line of ${a.e.from}->${a.e.to} runs along a line of ${b.e.from}->${b.e.to} at y=${ra.y}`);
+              }
+            }
+          }
+          if (a.e.from === b.e.from) {
+            sharedSource++;
+            expect(a.y1, `${id}: ${a.e.from} sends a winner line and a loser line from different rows`).not.toBe(b.y1);
+          }
+          // Vertical runs whose spans overlap may not sit closer than MIN_APART.
+          const aLo = Math.min(a.y1, a.y2);
+          const aHi = Math.max(a.y1, a.y2);
+          const bLo = Math.min(b.y1, b.y2);
+          const bHi = Math.max(b.y1, b.y2);
+          if (aLo < bHi && bLo < aHi) {
+            expect(Math.abs(a.xm - b.xm), `${id}: ${a.e.from}->${a.e.to} and ${b.e.from}->${b.e.to} run side by side`).toBeGreaterThanOrEqual(MIN_APART);
+          }
+        }
+      }
+    }
+    expect(pairs, "anti-vacuity: line pairs compared").toBeGreaterThan(100);
+    expect(horizontals, "anti-vacuity: horizontal runs compared").toBeGreaterThan(400);
+    expect(sharedSource, "anti-vacuity: a source that sends both a winner and a loser line (the third-place and double elimination figures)").toBeGreaterThan(0);
+  });
+
   it("renders the title as the SVG's <title> and as the caption, every match and every seat, in a named, focusable scroll box", () => {
     let seats = 0;
     for (const id of POSTS) {

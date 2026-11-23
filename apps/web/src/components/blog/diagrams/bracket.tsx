@@ -19,10 +19,11 @@ export const BOX_W = 116;
 export const ROW_H = 20;
 export const BOX_H = ROW_H * 2;
 export const LABEL_H = 14;
-export const GAP_X = 26;
+export const GAP_X = 48;
 export const GAP_Y = 12;
 export const SLOT = LABEL_H + BOX_H + GAP_Y;
 const PAD = 8;
+const LINE_DY = 5;
 const HEAD_H = 18;
 const LEGEND_H = 20;
 
@@ -102,9 +103,22 @@ export function layoutBracket(model: BracketModel): BracketLayout {
   });
 
   const boxes = [...placed.values()];
-  // Every edge is an elbow: out of the source's right side, down (or up) a channel in the gap before the target, into the seat.
-  // Edges into the same column each take their own channel, so two lines never share a vertical run and read as one.
-  const pending: { from: string; to: string; side: BracketFeed["side"]; x1: number; y1: number; x2: number; y2: number; col: number }[] = [];
+  // Every edge is an elbow: out of its source's right side, down (or up) a channel in the gap before the target, into the seat.
+  // A line leaves the ROW it is about: the winner's line from the winner's seat, the loser's from the other, so the two lines of
+  // one match never start on top of each other. Edges into one column that would run side by side are given different channels
+  // (a channel is shared only by edges whose vertical spans do not meet), spread across the gap.
+  // A line leaves a row a little above its middle and enters a seat a little below it, so a line leaving one match never runs along
+  // the line entering another that happens to sit at the same height (a third-place match beside a semi-final).
+  const rowMid = (b: PlacedMatch, row: 0 | 1 | null) => b.y + LABEL_H + (row === null ? BOX_H / 2 : ROW_H * row + ROW_H / 2) - LINE_DY;
+  const rowOf = (b: PlacedMatch, side: BracketFeed["side"]): 0 | 1 | null => {
+    const { home, away, winner } = b.match;
+    if (winner === undefined || home === null || away === null) return null;
+    const winnerRow = winner === home ? 0 : winner === away ? 1 : null;
+    if (winnerRow === null) return null;
+    return side === "winner" ? winnerRow : winnerRow === 0 ? 1 : 0;
+  };
+  interface Pending { from: string; to: string; side: BracketFeed["side"]; x1: number; y1: number; x2: number; y2: number; col: number; channel: number }
+  const pending: Pending[] = [];
   for (const to of boxes) {
     for (const [seat, feed] of [["home", to.match.homeFrom], ["away", to.match.awayFrom]] as const) {
       if (feed === undefined) continue;
@@ -114,20 +128,31 @@ export function layoutBracket(model: BracketModel): BracketLayout {
         to: to.key,
         side: feed.side,
         x1: from.x + BOX_W,
-        y1: from.y + LABEL_H + BOX_H / 2,
+        y1: rowMid(from, rowOf(from, feed.side)),
         x2: to.x,
-        y2: to.y + LABEL_H + (seat === "home" ? ROW_H / 2 : ROW_H * 1.5),
+        y2: to.y + LABEL_H + (seat === "home" ? ROW_H / 2 : ROW_H * 1.5) + LINE_DY,
         col: to.col,
+        channel: 0,
       });
     }
   }
   const edges: PlacedEdge[] = [];
   for (const col of new Set(pending.map((e) => e.col))) {
-    const group = pending.filter((e) => e.col === col).sort((a, b) => a.y1 - b.y1 || a.y2 - b.y2);
-    group.forEach((e, k) => {
-      const xm = e.x2 - GAP_X + (GAP_X * (k + 1)) / (group.length + 1);
+    const group = pending.filter((e) => e.col === col).sort((a, c) => a.y1 - c.y1 || a.y2 - c.y2);
+    const taken: { lo: number; hi: number; channel: number }[] = [];
+    for (const e of group) {
+      const lo = Math.min(e.y1, e.y2) - 2;
+      const hi = Math.max(e.y1, e.y2) + 2;
+      let channel = 0;
+      while (taken.some((t) => t.channel === channel && t.lo < hi && lo < t.hi)) channel++;
+      taken.push({ lo, hi, channel });
+      e.channel = channel;
+    }
+    const channels = Math.max(...group.map((e) => e.channel)) + 1;
+    for (const e of group) {
+      const xm = e.x2 - GAP_X + (GAP_X * (e.channel + 1)) / (channels + 1);
       edges.push({ from: e.from, to: e.to, side: e.side, d: `M ${e.x1} ${e.y1} H ${xm} V ${e.y2} H ${e.x2}` });
-    });
+    }
   }
   const hasLoserEdge = edges.some((e) => e.side === "loser");
   const maxBottom = Math.max(...boxes.map((b) => b.y + LABEL_H + BOX_H));

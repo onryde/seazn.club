@@ -20,9 +20,9 @@ The plate exists so that everyone gets more than one match. A round-one loser ha
 
 So the plate counts matches, not rounds. In the example the top seed, {{fact:what-is-a-plate.byeHolder}}, has a bye, loses their first real match in round two and joins the plate. A player who wins their first match and loses later has already had more than one match, so they stay out of the plate.
 
-## Why a walkover does not count
+## What a walkover does to the plate
 
-A walkover is a match nobody played, and a player who withdraws, retires or is disqualified is leaving the event. Drawing any of them into the plate would hand a plate opponent a walkover, or a match that was never finished. So a first match lost by walkover, withdrawal, retirement or disqualification is left out. In the example, {{fact:what-is-a-plate.excludedNames}} does not turn up and is left out.
+A first match lost by walkover, withdrawal, retirement or disqualification is left out of the plate. In the example, {{fact:what-is-a-plate.excludedNames}} does not turn up and is left out.
 
 The opponent who goes through on that walkover has not played yet either, so their first match is their next one. In the example, {{fact:what-is-a-plate.walkoverWinner}} goes through on the walkover, plays a first match in the {{fact:what-is-a-plate.walkoverWinnerRound}}, loses it, and joins the plate. A plate that counted the walkover as a first match would leave {{fact:what-is-a-plate.walkoverWinner}} out, because {{fact:what-is-a-plate.walkoverWinner}} won it.
 

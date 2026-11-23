@@ -1,6 +1,6 @@
 ---
 title: How does double elimination work, and what is a grand final reset?
-description: In double elimination one bad match does not end your event. You are out after a second defeat, and a reset keeps that true in the final too.
+description: In double elimination you are out after a second defeat, or at once if you forfeit, withdraw or retire. A reset keeps that true in the grand final too.
 date: 2026-11-23
 author: Seazn
 topic: knockout
@@ -10,7 +10,7 @@ related: third-place-match, page-playoff-and-stepladder, what-is-a-plate, withdr
 examples: double-elimination-explained
 ---
 
-In a single knockout, one bad match ends your event. Double elimination gives every player a second life: you are out only after your second defeat. A first defeat moves you from the winners bracket to the losers bracket, and the two bracket champions meet in the grand final. A grand final reset keeps the promise in the final too, so the player who has never lost must also be beaten twice.
+In a single knockout, one bad match ends your event. Double elimination gives every player a second life: you are out only after your second defeat, unless you forfeit, withdraw or retire, which puts you out at once. A first defeat moves you from the winners bracket to the losers bracket, and the two bracket champions meet in the grand final. A grand final reset keeps the promise in the final too, so the player who has never lost must also be beaten twice.
 
 In Seazn today, a new double elimination is set up without the reset, so the grand final is one match. The example below plays the bracket with the reset on, to show what the reset does, and the post says where it differs.
 
