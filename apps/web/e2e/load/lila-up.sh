@@ -146,7 +146,11 @@ const users = rows.map(([id]) => {
 });
 db.user4.insertMany(users);
 db.pref.insertMany(rows.map(([id]) => Object.assign({}, ptpl, { _id: id })));
-db.oauth2_access_token.insertMany(rows.map(([id, h]) => ({ _id: h, userId: id, created: now, description: 'seazn load', scopes })));
+// `plain` is NON-optional in lila's full AccessToken reader (AccessToken.scala): without it the auth path (a projection) still
+// works, but any full read - POST /api/token/test, which the harness uses to read every stored grant - is a 500. lila's own
+// docs hold the plaintext there; ours hold a placeholder so the container still never sees a token. lila reads `plain` only to
+// show a just-created token and to revoke one a secret scan found, neither of which a load run reaches.
+db.oauth2_access_token.insertMany(rows.map(([id, h]) => ({ _id: h, plain: 'not-stored:seazn-load-mints-by-sha256', userId: id, created: now, description: 'seazn load', scopes })));
 const ids = rows.map(([id]) => id);
 print(JSON.stringify({
   users: db.user4.countDocuments({ _id: { $in: ids } }),

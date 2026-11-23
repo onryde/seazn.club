@@ -402,9 +402,10 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
     // parseLilaAccounts compares the accounts file to playScopes(), but that file and lila's token doc are written from one
     // copy of the grant: only lila's /api/token/test answer says what lila STORED.
     const verified = await verifyLilaTokens(LILA_URL, lilaAccounts, playScopes());
+    // `bad` first: it names WHY (by index and id, never by token), which a count mismatch alone does not.
+    expect(verified.bad, "every minted lila token is its own account's, granted exactly the play scopes").toEqual([]);
     expect(verified.checked, "anti-vacuity: every minted lila token was asked for its account").toBe(BOARDS * 2);
     expect(verified.scopesChecked, "anti-vacuity: lila answered for every minted token's stored grant").toBe(BOARDS * 2);
-    expect(verified.bad, "every minted lila token is its own account's, granted exactly the play scopes").toEqual([]);
   }
   const fixture: LichessFixtureServer | null = LICHESS_BACKEND === "fixture" ? await startLichessFixtureServer() : null;
   const proxy: LichessRecordingProxy | null = LICHESS_BACKEND === "lila" ? await startLichessRecordingProxy({ upstream: LILA_URL }) : null;
