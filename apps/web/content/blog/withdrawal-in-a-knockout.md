@@ -10,7 +10,7 @@ related: forfeits-and-walkovers-by-sport, double-walkover, joining-or-leaving-a-
 examples: knockout-withdrawal
 ---
 
-When a player leaves a knockout, Seazn does not redraw the bracket and does not bring anyone back. The player they were due to meet goes through by walkover, and every result already played stays as it was.
+When a player leaves a knockout, Seazn does not redraw the bracket. The player they were due to meet goes through by walkover, and every result already played stays as it was.
 
 {{example:knockout-withdrawal}}
 
@@ -22,11 +22,11 @@ A bracket is a set of paths drawn before play starts. Bringing back the player {
 
 ## What the walkover shows
 
-The match is marked as forfeited, with a note that a withdrawal was recorded, and it shows the walkover score of your sport, as any forfeit would. The table and the bracket treat it as a win for the opponent, who moves on to the next round. This is the same in every sport: in all {{fact:knockout-withdrawal.sportCount}} the opponent wins the match and goes on.
+The match is marked as forfeited, with a note that a withdrawal was recorded, and it shows the walkover score of your sport where your sport has one, as any forfeit would. The table and the bracket treat it as a win for the opponent, who moves on to the next round. This is the same in every sport: in all {{fact:knockout-withdrawal.sportCount}} the opponent wins the match and goes on.
 
 ## When the next opponent is not known yet
 
-A player can also withdraw before their next opponent is known, for example while the other semi-final is still to be played. The walkover then waits for that match: whoever wins it goes straight through to the round after.
+A player can also withdraw before their next opponent is known. Say {{fact:knockout-withdrawal.withdrawn}} has won a quarter-final, and the quarter-final beside it, which feeds the same semi-final, is still to be played. The semi-final waits for that match: whoever wins it walks over {{fact:knockout-withdrawal.withdrawn}} and goes straight through.
 
 ## When both players have gone
 

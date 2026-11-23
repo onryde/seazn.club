@@ -11,7 +11,11 @@
     "tennisScore": "2 — 0",
     "icehockeyScore": "5 — 0",
     "hockeyScore": "5 — 0",
-    "sportCount": 11
+    "sportCount": 11,
+    "volleyballVariant": "Beach",
+    "volleyballIndoorScore": "3 — 0",
+    "cricketVariant": "T20",
+    "cricketOvers": 20
   },
   "table": {
     "caption": "One walkover in each sport, on the settings a new division starts with: the score the match shows, and what the table counts for it.",
@@ -22,60 +26,110 @@
     ],
     "rows": [
       [
-        "Football",
+        "Football (11-a-side)",
         "3 — 0",
         "3 goals to 0"
       ],
       [
-        "Cricket",
+        "Cricket (T20)",
         "No score",
         "the side that did not turn up is charged 20 overs at no runs"
       ],
       [
-        "Chess",
+        "Chess (Blitz)",
         "1 — 0",
         "a win, with no colour counted"
       ],
       [
-        "Carrom",
+        "Carrom (Club (29 points))",
         "2 — 0",
         "2 sets to 0; 58 points to 0"
       ],
       [
-        "Generic",
+        "Any other game (Score)",
         "W/O — L",
         "a win, with no score"
       ],
       [
-        "Volleyball",
+        "Volleyball (Beach)",
         "2 — 0",
         "2 sets to 0; 42 points to 0"
       ],
       [
-        "Badminton",
+        "Badminton (BWF 3×15 (15 points))",
         "2 — 0",
         "2 sets to 0; 30 points to 0"
       ],
       [
-        "Table tennis",
+        "Table tennis (Best of 5)",
         "3 — 0",
         "3 sets to 0; 33 points to 0"
       ],
       [
-        "Tennis",
+        "Tennis (Tour)",
         "2 — 0",
         "2 sets to 0; no games"
       ],
       [
-        "Ice hockey",
+        "Ice hockey (IIHF)",
         "5 — 0",
         "5 goals to 0"
       ],
       [
-        "Hockey",
+        "Hockey (FIH outdoor)",
         "5 — 0",
         "5 goals to 0"
       ]
+    ]
+  },
+  "diagram": {
+    "kind": "scoreTiles",
+    "title": "The score a walkover shows in each sport. It comes from that sport's own rules, so it is not the same everywhere, and cricket and any other game show no score.",
+    "tiles": [
+      {
+        "sport": "Football",
+        "score": "3 — 0"
+      },
+      {
+        "sport": "Cricket",
+        "score": "No score"
+      },
+      {
+        "sport": "Chess",
+        "score": "1 — 0"
+      },
+      {
+        "sport": "Carrom",
+        "score": "2 — 0"
+      },
+      {
+        "sport": "Any other game",
+        "score": "W/O — L"
+      },
+      {
+        "sport": "Volleyball",
+        "score": "2 — 0"
+      },
+      {
+        "sport": "Badminton",
+        "score": "2 — 0"
+      },
+      {
+        "sport": "Table tennis",
+        "score": "3 — 0"
+      },
+      {
+        "sport": "Tennis",
+        "score": "2 — 0"
+      },
+      {
+        "sport": "Ice hockey",
+        "score": "5 — 0"
+      },
+      {
+        "sport": "Hockey",
+        "score": "5 — 0"
+      }
     ]
   },
   "text": []

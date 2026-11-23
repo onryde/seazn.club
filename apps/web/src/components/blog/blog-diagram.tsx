@@ -8,6 +8,8 @@
 import type { DiagramModel } from "@/blog/examples/types";
 import { AmericanoPartnerGrid } from "@/components/blog/diagrams/americano-partner-grid";
 import { LadderSwap } from "@/components/blog/diagrams/ladder-swap";
+import { ScoreTiles } from "@/components/blog/diagrams/score-tiles";
+import { WalkoverBracket } from "@/components/blog/diagrams/walkover-bracket";
 
 export function BlogDiagram({ model }: { model: DiagramModel }) {
   switch (model.kind) {
@@ -16,6 +18,11 @@ export function BlogDiagram({ model }: { model: DiagramModel }) {
       return <AmericanoPartnerGrid model={model} />;
     case "ladder":
       return <LadderSwap model={model} />;
+    // ---- batch 5, fix round 1: withdrawal-in-a-knockout, double-walkover, forfeits-and-walkovers-by-sport ----
+    case "walkoverBracket":
+      return <WalkoverBracket model={model} />;
+    case "scoreTiles":
+      return <ScoreTiles model={model} />;
     // ---- end batch 5 ----
     default:
       throw new Error(`blog diagram: there is no drawing for '${model.kind}' yet (add it to components/blog/blog-diagram.tsx with the first post that uses it)`);

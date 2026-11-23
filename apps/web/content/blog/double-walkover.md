@@ -6,7 +6,7 @@ author: Seazn
 topic: forfeits
 sports: all
 help: scoring/basics
-related: forfeits-and-walkovers-by-sport, withdrawal-in-a-knockout, what-is-a-plate
+related: forfeits-and-walkovers-by-sport, withdrawal-in-a-knockout, how-a-ladder-works, what-is-a-plate
 examples: double-walkover
 ---
 
@@ -18,14 +18,16 @@ Sometimes nobody comes. A double walkover is a match that neither side turned up
 
 The match was on the schedule and neither side played it, so the table counts it as played and lost by both. That keeps the played column honest: everyone can see a match was due and was not played. Neither side earns a point, and nothing goes into goals, sets, games or runs, so the match cannot help or hurt anyone's goal difference or ratio.
 
-It is not the same as each side losing a played match. In table tennis a played loss still earns a point, but a double walkover earns {{fact:double-walkover.tabletennisPoints}}, the same as any walkover loss ({{fact:double-walkover.tabletennisWalkoverLoss}}). Nobody is rewarded for not turning up.
+Because nothing is credited, the lists of results, the brackets and the posters do not print a 0 against a 0 for it. The match reads {{fact:double-walkover.tag}}, with the line "{{fact:double-walkover.sentence}}", in every sport.
+
+It is not the same as each side losing a played match. In table tennis a played loss still pays {{fact:double-walkover.tabletennisPlayedLoss}} in the table, but a double walkover pays {{fact:double-walkover.tabletennisPoints}}, the same as any walkover loss ({{fact:double-walkover.tabletennisWalkoverLoss}}). Nobody is rewarded for not turning up.
 
 ## In a knockout
 
 In a knockout a match has to send someone on, and here there is nobody to send. So nobody goes through, and the player waiting in the next round gets a walkover instead. This is the same in all {{fact:double-walkover.sportCount}} sports.
 
-That is also why a final cannot end this way. A final feeds no next match, and a competition needs a winner, so Seazn does not offer both sides as the forfeiting side there. Reschedule the final, or record a walkover if one side did turn up.
+That is also why a match that feeds no next match cannot end this way: a final, a third-place match, or the last step of a stepladder. Someone has to be left standing there, so Seazn does not offer "neither" on those matches. Reschedule it, or record a walkover if one side did turn up.
 
 ## On a ladder
 
-A ladder has no next match to feed. A double walkover on a ladder challenge leaves both players where they were.
+A ladder has no next match to feed, so a double walkover is accepted there on any challenge. It leaves both players where they were, as the ladder post shows.

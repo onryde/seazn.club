@@ -12,14 +12,17 @@
     "icehockeyPoints": 0,
     "hockeyPoints": 0,
     "tabletennisWalkoverLoss": 0,
+    "tabletennisPlayedLoss": 1,
     "sportCount": 11,
-    "nobodyAdvancesIn": 11
+    "nobodyAdvancesIn": 11,
+    "tag": "2× w/o",
+    "sentence": "Neither side turned up — both lose"
   },
   "table": {
-    "caption": "A double walkover in each sport, on the settings a new division starts with: what each of the two sides gets in the table.",
+    "caption": "A double walkover in each sport, on the settings a new division starts with: what the match shows, and what each of the two sides gets in the table.",
     "columns": [
       "Sport",
-      "Score shown",
+      "What the match shows",
       "Points each side gets",
       "Counts as played",
       "Counts as a loss"
@@ -27,81 +30,124 @@
     "rows": [
       [
         "Football",
-        "0 — 0",
+        "2× w/o · Neither side turned up — both lose",
         0,
         "Yes",
         "Yes"
       ],
       [
         "Cricket",
-        "No score",
+        "2× w/o · Neither side turned up — both lose",
         0,
         "Yes",
         "Yes"
       ],
       [
         "Chess",
-        "0 — 0",
+        "2× w/o · Neither side turned up — both lose",
         0,
         "Yes",
         "Yes"
       ],
       [
         "Carrom",
-        "0 — 0",
+        "2× w/o · Neither side turned up — both lose",
         0,
         "Yes",
         "Yes"
       ],
       [
-        "Generic",
-        "L — L",
+        "Any other game",
+        "2× w/o · Neither side turned up — both lose",
         0,
         "Yes",
         "Yes"
       ],
       [
         "Volleyball",
-        "0 — 0",
+        "2× w/o · Neither side turned up — both lose",
         0,
         "Yes",
         "Yes"
       ],
       [
         "Badminton",
-        "0 — 0",
+        "2× w/o · Neither side turned up — both lose",
         0,
         "Yes",
         "Yes"
       ],
       [
         "Table tennis",
-        "0 — 0",
+        "2× w/o · Neither side turned up — both lose",
         0,
         "Yes",
         "Yes"
       ],
       [
         "Tennis",
-        "0 — 0",
+        "2× w/o · Neither side turned up — both lose",
         0,
         "Yes",
         "Yes"
       ],
       [
         "Ice hockey",
-        "0 — 0",
+        "2× w/o · Neither side turned up — both lose",
         0,
         "Yes",
         "Yes"
       ],
       [
         "Hockey",
-        "0 — 0",
+        "2× w/o · Neither side turned up — both lose",
         0,
         "Yes",
         "Yes"
       ]
+    ]
+  },
+  "diagram": {
+    "kind": "walkoverBracket",
+    "title": "Neither Eli nor Dev turned up for the second quarter-final, so nobody goes on from it. Ana, who won the first, walks over the semi-final and goes through.",
+    "rounds": [
+      {
+        "name": "Quarter-finals",
+        "matches": [
+          {
+            "sides": [
+              "Ana",
+              "Hal"
+            ],
+            "winner": "Ana",
+            "result": "Ana won"
+          },
+          {
+            "sides": [
+              "Eli",
+              "Dev"
+            ],
+            "struck": [
+              "Eli",
+              "Dev"
+            ],
+            "result": "Neither turned up"
+          }
+        ]
+      },
+      {
+        "name": "Semi-final",
+        "matches": [
+          {
+            "sides": [
+              "Ana",
+              "nobody"
+            ],
+            "winner": "Ana",
+            "result": "Walkover"
+          }
+        ]
+      }
     ]
   },
   "text": []

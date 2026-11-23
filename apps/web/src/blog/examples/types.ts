@@ -38,7 +38,17 @@ export type DiagramModel =
       bracket: { name: string; matches: { home: string | null; away: string | null }[] }[];
     }
   | { kind: "ladder"; title: string; rungs: string[]; challenger: string; target: string; swapped: boolean }
-  | { kind: "partnerGrid"; title: string; players: string[]; rounds: { pairs: [string, string][] }[] };
+  | { kind: "partnerGrid"; title: string; players: string[]; rounds: { pairs: [string, string][] }[] }
+  // ---- batch 5, fix round 1 (M9): one picture for each of the walkover posts ----
+  /** A walkover in a bracket: rounds left to right, each match with its two sides (a seat not filled reads as the words the
+   *  example gives it), the sides to strike (the ones that left or did not turn up), the winner, and one short result line. */
+  | {
+      kind: "walkoverBracket";
+      title: string;
+      rounds: { name: string; matches: { sides: [string, string]; struck?: string[]; winner?: string; result: string }[] }[];
+    }
+  /** One tile per sport: its name and the score a walkover shows there (the example's own words, never a key). */
+  | { kind: "scoreTiles"; title: string; tiles: { sport: string; score: string }[] };
 
 /** What an example produces, and what the committed golden holds: plain JSON, nothing that needs the engine to read. */
 export interface ExampleResult {

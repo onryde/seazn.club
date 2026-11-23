@@ -13,7 +13,8 @@ import { setsToWinOf } from "@seazn/engine/competition";
 import { resolvePositions, type AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { declaredCfgs, forEachSport, lineupFromCatalog } from "@seazn/engine/testkit";
-import { sportLabel } from "@/blog/labels";
+import { variantLabel } from "@/blog/labels";
+import { pickerSportName } from "./sport-name";
 import { foldFrom } from "@/server/engine-db/fold";
 import { startingVariantKey } from "./starting-variant";
 import type { Claim, EngineExample, ExampleResult } from "./types";
@@ -26,6 +27,11 @@ const C = { sport: 0, score: 1, counts: 2 } as const;
 
 type Ledger = Record<string, number>;
 
+/** A row's first cell: the sport as the picker names it, and the variant the table was folded under ("Volleyball (Beach)"). */
+export function rowLabel(module: AnySportModule): string {
+  return `${pickerSportName(module.key)} (${variantLabel(module.key, startingVariantKey(module))})`;
+}
+
 export function startingCfg(module: AnySportModule): unknown {
   const key = startingVariantKey(module);
   return declaredCfgs(module).find((c) => c.name === key)!.cfg;
@@ -37,8 +43,8 @@ export function lineupsFor(module: AnySportModule, cfg: unknown) {
 }
 
 /** One match decided by a single `core.forfeit` (nothing played), folded by the app's read fold. */
-export function forfeitFold(module: AnySportModule, by: string, reason: string) {
-  const cfg = startingCfg(module);
+export function forfeitFold(module: AnySportModule, by: string, reason: string, variantCfg?: unknown) {
+  const cfg = variantCfg ?? startingCfg(module);
   const lineups = lineupsFor(module, cfg);
   const envelopes: EventEnvelope[] = [
     { id: `wo-${module.key}`, fixtureId: `wo-${module.key}`, seq: 1, type: "core.forfeit", payload: { by, reason }, recordedAt: "2026-11-01T10:00:00.000Z", recordedBy: null },
@@ -54,8 +60,9 @@ export function scoreShown(headline: string): string {
   return /[0-9A-Za-z]/.test(headline) ? headline : "No score";
 }
 
-/** What the table counts for the walkover, in words, from the two sides' booked metrics. */
-function countsWords(w: Ledger, l: Ledger): string {
+/** What the table counts for the walkover, in words, from the two sides' booked metrics. `ballsPerOver` is the variant's
+ *  own (fix round 1, M12: it was a typed 6), read only when a side was charged balls. */
+function countsWords(w: Ledger, l: Ledger, ballsPerOver: number | undefined): string {
   const parts: string[] = [];
   if ("gf" in w) parts.push(`${w.gf} goals to ${l.gf}`);
   if ("sets_won" in w) {
@@ -63,7 +70,10 @@ function countsWords(w: Ledger, l: Ledger): string {
     if ((w.points_won ?? 0) > 0) parts.push(`${w.points_won} points to ${l.points_won}`);
     if ("games_won" in w && w.games_won === 0) parts.push("no games");
   }
-  if ((l.balls_faced_eff ?? 0) > 0) parts.push(`the side that did not turn up is charged ${(l.balls_faced_eff ?? 0) / 6} overs at no runs`);
+  if ((l.balls_faced_eff ?? 0) > 0) {
+    if (typeof ballsPerOver !== "number" || ballsPerOver <= 0) throw new Error("forfeit-scores: a side was charged balls but the variant declares no balls per over");
+    parts.push(`the side that did not turn up is charged ${(l.balls_faced_eff ?? 0) / ballsPerOver} overs at no runs`);
+  }
   if ("wins" in w) parts.push("a win, with no colour counted");
   if ("for" in w && w.for === 0 && l.for === 0) parts.push("a win, with no score");
   return parts.join("; ");
@@ -72,20 +82,41 @@ function countsWords(w: Ledger, l: Ledger): string {
 function build(): ExampleResult {
   const rows: (string | number)[][] = [];
   const facts: Record<string, string | number> = {};
+  const tileNames: string[] = [];
   const visited = forEachSport(({ module }) => {
-    const { headline, delta } = forfeitFold(module, AWAY, "walkover");
+    const { cfg, headline, delta } = forfeitFold(module, AWAY, "walkover");
     const [w, l] = [delta[0]!.metrics as Ledger, delta[1]!.metrics as Ledger];
     const shown = scoreShown(headline);
-    rows.push([sportLabel(module.key), shown, countsWords(w, l)]);
+    rows.push([rowLabel(module), shown, countsWords(w, l, (cfg as { ballsPerOver?: number }).ballsPerOver)]);
+    tileNames.push(pickerSportName(module.key));
     facts[`${module.key}Score`] = shown;
   });
   facts.sportCount = visited;
+  // Two sports whose walkover depends on the variant, so the post can say which one a new division starts on (fix round 1, I2):
+  // volleyball starts on Beach (two sets to 21), and the Indoor variant (best of five to 25) shows another score; cricket's
+  // new-division variant fixes the overs a side is charged.
+  const volleyball = builtinModules.find((m) => m.key === "volleyball")!;
+  const cricket = builtinModules.find((m) => m.key === "cricket")!;
+  const indoor = declaredCfgs(volleyball).find((c) => c.name === "indoor")!.cfg;
+  facts.volleyballVariant = variantLabel("volleyball", startingVariantKey(volleyball));
+  facts.volleyballIndoorScore = scoreShown(forfeitFold(volleyball, AWAY, "walkover", indoor).headline);
+  facts.cricketVariant = variantLabel("cricket", startingVariantKey(cricket));
+  const cricketCfg = startingCfg(cricket) as { ballsPerInnings: number; ballsPerOver: number };
+  facts.cricketOvers = cricketCfg.ballsPerInnings / cricketCfg.ballsPerOver;
+  // The picture (M9): one tile per sport. The sports whose walkover shows no digit say so in the caption, from the rows.
+  const lower = tileNames.filter((_, i) => !/\d/.test(String(rows[i]![C.score]))).map((n) => n.toLowerCase());
+  const names = lower.length <= 1 ? (lower[0] ?? "no sport") : `${lower.slice(0, -1).join(", ")} and ${lower[lower.length - 1]}`;
   return {
     facts,
     table: {
       caption: "One walkover in each sport, on the settings a new division starts with: the score the match shows, and what the table counts for it.",
       columns: ["Sport", "Score shown", "What the table counts"],
       rows,
+    },
+    diagram: {
+      kind: "scoreTiles",
+      title: `The score a walkover shows in each sport. It comes from that sport's own rules, so it is not the same everywhere, and ${names} ${lower.length === 1 ? "shows" : "show"} no score.`,
+      tiles: tileNames.map((sport, i) => ({ sport, score: String(rows[i]![C.score]) })),
     },
     text: [],
   };
@@ -102,7 +133,7 @@ export const RULEBOOK_WALKOVER: Readonly<Record<string, { winner: number; source
 };
 
 function rowOf(r: ExampleResult, module: AnySportModule): (string | number)[] | undefined {
-  return r.table?.rows.find((row) => row[C.sport] === sportLabel(module.key));
+  return r.table?.rows.find((row) => row[C.sport] === rowLabel(module));
 }
 
 /** The walkover the sport DECLARES (`forfeitCredit` over the opening state), winner's and loser's ledgers. */
@@ -111,6 +142,24 @@ function declared(module: AnySportModule): { cfg: unknown; w: Ledger; l: Ledger;
   const state = module.init(cfg as never, lineupsFor(module, cfg) as never);
   const credit = module.forfeitCredit(cfg as never, state, "walkover", "away");
   return { cfg, w: credit.perSide[0] as Ledger, l: credit.perSide[1] as Ledger, excluded: credit.excluded };
+}
+
+/** What the table counts for the walkover in words, read from the sport's own DECLARATION (`forfeitCredit` over the opening
+ *  state), not from the folded booking `build()` words: fix round 1 (I5), so a changed "What the table counts" cell is
+ *  caught in every sport. */
+function declaredWords(module: AnySportModule): string {
+  const { cfg, w, l, excluded } = declared(module);
+  const parts: string[] = [];
+  if ("gf" in w) parts.push(`${w.gf} goals to ${l.gf}`);
+  if ("sets_won" in w) {
+    parts.push(`${w.sets_won} sets to ${l.sets_won}`);
+    if ((w.points_won ?? 0) > 0) parts.push(`${w.points_won} points to ${l.points_won}`);
+    if (excluded.includes("games_won")) parts.push("no games");
+  }
+  if ((l.balls_faced_eff ?? 0) > 0) parts.push(`the side that did not turn up is charged ${(l.balls_faced_eff ?? 0) / (cfg as { ballsPerOver: number }).ballsPerOver} overs at no runs`);
+  if ("wins" in w && excluded.includes("white") && excluded.includes("black")) parts.push("a win, with no colour counted");
+  if ("for" in w && w.for === 0 && l.for === 0) parts.push("a win, with no score");
+  return parts.join("; ");
 }
 
 /** The two numbers a headline shows, or null when it shows none. */
@@ -134,6 +183,18 @@ function claimsFor(module: AnySportModule): Claim[] {
       },
     },
   ];
+  out.push({
+    says: `${key}: the "What the table counts" cell is the walkover's declared credit, in words`,
+    source: `${key} forfeitCredit (perSide and excluded, over the match's opening state)`,
+    sport: key,
+    check(r) {
+      const row = rowOf(r, module);
+      if (row === undefined) return "no row";
+      const want = declaredWords(module);
+      if (want === "") return "anti-vacuity: the declaration credits nothing to word";
+      return row[C.counts] === want || `counts '${String(row[C.counts])}', the declaration says '${want}'`;
+    },
+  });
   const rule = RULEBOOK_WALKOVER[key];
   if (rule !== undefined)
     out.push({
@@ -201,9 +262,47 @@ const claims: Claim[] = [
     source: "the sport registry (builtinModules, via forEachSport)",
     check(r) {
       const labels: string[] = [];
-      const visited = forEachSport(({ module }) => labels.push(sportLabel(module.key)));
+      const visited = forEachSport(({ module }) => labels.push(rowLabel(module)));
       if (r.facts.sportCount !== visited) return `sportCount ${String(r.facts.sportCount)}, registry ${visited}`;
       return JSON.stringify((r.table?.rows ?? []).map((x) => x[C.sport])) === JSON.stringify(labels) || "rows differ from the registry";
+    },
+  },
+  {
+    says: "the picture holds one tile for each sport of the registry, in order, with the score the table shows for it",
+    source: "the sport registry (forEachSport) and the picker's sport names, against the table and the diagram model",
+    check(r) {
+      const d = r.diagram;
+      if (d?.kind !== "scoreTiles") return "no score tiles";
+      const rows = r.table?.rows ?? [];
+      if (rows.length === 0) return "the table has no rows";
+      const names: string[] = [];
+      forEachSport(({ module }) => names.push(pickerSportName(module.key)));
+      const same = d.tiles.length === rows.length && d.tiles.every((t, i) => t.sport === names[i] && t.score === rows[i]![C.score]);
+      return same || "the tiles and the table disagree";
+    },
+  },
+  {
+    says: "volleyball starts a new division on the Beach variant, and its Indoor walkover is a different score (more sets, each to a higher score)",
+    source: "volleyball variant declarations (beach, indoor: bestOf and setTo), setsToWinOf, and the starting variant read from the builder's own order; class 19: the beach and indoor scores differ",
+    check(r) {
+      const volleyball = builtinModules.find((m) => m.key === "volleyball")!;
+      const beach = startingCfg(volleyball);
+      const indoor = declaredCfgs(volleyball).find((c) => c.name === "indoor")!.cfg;
+      const beachSets = setsToWinOf(volleyball, beach);
+      const indoorSets = setsToWinOf(volleyball, indoor);
+      if (beachSets === undefined || indoorSets === undefined || beachSets === indoorSets) return "anti-vacuity: the variants must differ in sets to win";
+      if (r.facts.volleyballVariant !== variantLabel("volleyball", startingVariantKey(volleyball))) return `the starting variant is '${String(r.facts.volleyballVariant)}'`;
+      return (r.facts.volleyballIndoorScore === `${indoorSets} \u2014 0` && r.facts.volleyballScore === `${beachSets} \u2014 0`) || `indoor '${String(r.facts.volleyballIndoorScore)}', beach '${String(r.facts.volleyballScore)}'`;
+    },
+  },
+  {
+    says: "cricket's new-division variant charges its full innings of overs, and the facts name that variant and its overs",
+    source: "cricket variant declaration (ballsPerInnings, ballsPerOver) and the starting variant read from the builder's own order",
+    check(r) {
+      const cricket = builtinModules.find((m) => m.key === "cricket")!;
+      const cfg = startingCfg(cricket) as { ballsPerInnings: number; ballsPerOver: number };
+      if (r.facts.cricketVariant !== variantLabel("cricket", startingVariantKey(cricket))) return `the starting variant is '${String(r.facts.cricketVariant)}'`;
+      return r.facts.cricketOvers === cfg.ballsPerInnings / cfg.ballsPerOver || `overs ${String(r.facts.cricketOvers)}`;
     },
   },
   {

@@ -457,20 +457,31 @@ describe("pieces that guard themselves", () => {
   });
 
   // ---- batch 5 (Task 11) ----
-  it("batch 5's two drawings render their golden's model: an SVG whose title is the model's title, naming every player", () => {
+  it("batch 5's four drawings render their golden's model: an SVG whose title is the model's title, naming every word the model holds", () => {
     let drawn = 0;
-    for (const id of ["americano-rotation", "ladder-challenge"]) {
+    const kinds = new Set<string>();
+    for (const id of ["ladder-challenge", "knockout-withdrawal", "double-walkover", "forfeit-scores"]) {
       const model = BLOG_GOLDENS[id]?.diagram;
       expect(model, `${id} carries a diagram`).toBeDefined();
       const html = renderToStaticMarkup(<BlogDiagram model={model!} />);
       expect(html, id).toContain("<svg");
-      expect(html, id).toContain(`>${model!.title}</title>`);
-      const names = model!.kind === "ladder" ? model!.rungs : model!.kind === "partnerGrid" ? model!.players : [];
-      expect(names.length, `${id}: anti-vacuity`).toBeGreaterThan(0);
-      for (const n of names) expect(html, `${id} names ${n}`).toContain(`>${n}<`);
+      expect(html, id).toContain(`>${model!.title.replace(/'/g, "&#x27;")}</title>`);
+      // Every name, round heading, result line and score the model holds must be on the page (an apostrophe is escaped by React).
+      const words: string[] =
+        model!.kind === "ladder"
+          ? model!.rungs
+          : model!.kind === "walkoverBracket"
+            ? model!.rounds.flatMap((r) => [r.name, ...r.matches.flatMap((m) => [...m.sides, m.result])])
+            : model!.kind === "scoreTiles"
+              ? model!.tiles.flatMap((t) => [t.sport, t.score])
+              : [];
+      expect(words.length, `${id}: anti-vacuity`).toBeGreaterThan(3);
+      for (const w of words) expect(html, `${id} shows ${w}`).toContain(`>${w.replace(/'/g, "&#x27;")}<`);
+      kinds.add(model!.kind);
       drawn++;
     }
-    expect(drawn).toBe(2);
+    expect(drawn).toBe(4);
+    expect([...kinds].sort(), "the three drawings batch 5 keeps").toEqual(["ladder", "scoreTiles", "walkoverBracket"]);
   });
   // ---- end batch 5 ----
 

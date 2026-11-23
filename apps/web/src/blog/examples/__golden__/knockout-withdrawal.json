@@ -1,7 +1,6 @@
 {
   "facts": {
     "withdrawn": "Dev",
-    "withdrawnSeed": 4,
     "opponent": "Ana",
     "walkovers": 1,
     "playedResults": 4,
@@ -60,8 +59,49 @@
       [
         "Final",
         "Not drawn yet",
-        "Unchanged"
+        "Ana against not known yet"
       ]
+    ]
+  },
+  "diagram": {
+    "kind": "walkoverBracket",
+    "title": "Dev withdrew before the semi-final. Ana goes through by walkover and is seated in the final, where the other seat waits for the winner of semi-final 2.",
+    "rounds": [
+      {
+        "name": "Semi-finals",
+        "matches": [
+          {
+            "sides": [
+              "Ana",
+              "Dev"
+            ],
+            "struck": [
+              "Dev"
+            ],
+            "winner": "Ana",
+            "result": "Walkover"
+          },
+          {
+            "sides": [
+              "Cy",
+              "Ben"
+            ],
+            "result": "Not played yet"
+          }
+        ]
+      },
+      {
+        "name": "Final",
+        "matches": [
+          {
+            "sides": [
+              "Ana",
+              "not known yet"
+            ],
+            "result": "Not played yet"
+          }
+        ]
+      }
     ]
   },
   "text": []
