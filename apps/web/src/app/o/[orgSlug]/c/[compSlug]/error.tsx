@@ -28,7 +28,7 @@
 // falls back to the shipped `en/ui.json` catalog when no provider is present
 // (dict-provider.tsx), so there is no render path where reading a key throws.
 import { useEffect } from "react";
-import * as Sentry from "@sentry/nextjs";
+import * as Sentry from "@/lib/sentry-browser";
 import { useMsg } from "@/components/i18n/dict-provider";
 
 export default function CompetitionError({

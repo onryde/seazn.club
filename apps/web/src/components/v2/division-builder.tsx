@@ -1291,6 +1291,7 @@ export function DivisionBuilder({
             lockedFields={[]}
             onlineChessOffered={onlineChessOffered}
             initialOpen={["format"]}
+            viewerPlan={viewerPlan}
             draft={{
               variantKey,
               onVariantChange: selectVariant,

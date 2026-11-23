@@ -104,9 +104,9 @@ const EXEMPT: readonly Exemption[] = [
   },
   {
     file: "src/server/usecases/external-play/create-game.ts",
-    fn: "findSentGame",
+    fn: "knownElsewhere",
     sites: 1,
-    reason: "Lichess create recovery: another fixture of the same two players with a create in flight (a peer), so an ambiguous challenge is held, never adopted; credits nothing",
+    reason: "Lichess create recovery and the closed-board stray cleanup (N2, one statement shared by both): another fixture of the same two players with a create in flight (a peer), so an ambiguous challenge is held, never adopted or cancelled; credits nothing",
   },
   {
     file: "src/server/usecases/external-play/account-changed.ts",

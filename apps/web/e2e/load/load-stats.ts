@@ -1,18 +1,25 @@
 // T17B fix 2, D22 — the arithmetic behind e2e/load/chess-30-boards.load.ts's report. Pure, so the numbers a reader
 // takes away (calls per vendor per five minutes, p50/p95) are checked by hand-counted cases in
 // src/server/external-play/__tests__/load-stats.test.ts rather than trusted.
+import {
+  RTK_BUDGET_BURST,
+  RTK_BUDGET_REFILL_PER_S,
+  RTK_BUDGET_WINDOW_MS,
+  RTK_CALLS_PER_WINDOW,
+  RTK_VENDOR_LIMIT_PER_WINDOW,
+} from "../../src/server/external-play/video/budget-limits";
 
-/** The limits the run is judged against. The RealtimeKit pair is video/budget.ts's (RTK_VENDOR_LIMIT_PER_WINDOW,
- *  RTK_CALLS_PER_WINDOW, RTK_BUDGET_WINDOW_MS), which a Playwright runner cannot import (`server-only`) - load-stats.test.ts
- *  pins the two against each other. Lichess: 500 challenge creates per ten minutes per IP (the coordinator's brief for
+/** The limits the run is judged against. The RealtimeKit numbers are the call budget's OWN constants, read from
+ *  video/budget-limits.ts (the import-free leaf video/budget.ts spends by - budget.ts itself is `server-only`, which a Playwright
+ *  runner cannot import), never a copy. Lichess: 500 challenge creates per ten minutes per IP (the coordinator's brief for
  *  D22). Database: the production connection budget (60). */
 export const LOAD_LIMITS = {
-  windowMs: 5 * 60_000,
-  rtkVendor: 3_500,
-  rtkCeiling: 2_625,
-  /** The call budget's bucket (video/budget.ts RTK_BUDGET_BURST / RTK_BUDGET_REFILL_PER_S): capacity and tokens per second. */
-  rtkBurst: 525,
-  rtkRefillPerS: 7,
+  windowMs: RTK_BUDGET_WINDOW_MS,
+  rtkVendor: RTK_VENDOR_LIMIT_PER_WINDOW,
+  rtkCeiling: RTK_CALLS_PER_WINDOW,
+  /** The call budget's bucket (RTK_BUDGET_BURST / RTK_BUDGET_REFILL_PER_S): capacity and tokens per second. */
+  rtkBurst: RTK_BUDGET_BURST,
+  rtkRefillPerS: RTK_BUDGET_REFILL_PER_S,
   lichessCreateWindowMs: 10 * 60_000,
   lichessCreatesPer10Min: 500,
   dbConnectionBudget: 60,

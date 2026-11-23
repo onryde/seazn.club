@@ -39,9 +39,11 @@ import { afterScheduleWrite } from "./schedule/after-write";
 import { divisionPlaysOnline, readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
 import {
   assertEntrantRoomIn,
-  assertOnlineRoom,
+  assertOnlineHeldRoom,
   countOnlineHeld,
   lockDivisionForCap,
+  openOnlineCapGuard,
+  readPlanLimit,
 } from "@/server/external-play/online-entrant-cap";
 import { assertChessKindIndividual } from "@/lib/chess-individual-only";
 import { onlineChessOffered } from "./external-play/online-chess-flag";
@@ -465,7 +467,7 @@ export async function createEntrants(
 
     // Doc 10 §1: `entrants.per_division.max` (V311: 32/64/256/∞) — the whole batch
     // must fit; count in the same tx as the inserts (doc 10 §2 rule 1). A division that plays
-    // online holds at most min(that cap, 128) (owner ruling 2026-11-21): `assertEntrantRoom`
+    // online holds at most min(that cap, 256) (owner ruling 2026-11-21, 256 since 2026-11-23): `assertEntrantRoom`
     // answers with the plan's 402 where the plan binds, the online cap's own 422 where it does.
     // The online cap counts what the division HOLDS (live entrants + sign-ups let in, `countOnlineHeld`), the plan's cap every row,
     // as ever; the `division:` lock is taken first so two adds cannot both pass on the last place (review C1 / I2).
@@ -1153,13 +1155,20 @@ export async function writeEntrantPatch(
 ): Promise<EntrantWithMembers & { late_entry?: LateEntryResult }> {
   // A roster replace seats people: on an online division each must hold a Lichess link that plays, as `createEntrants` demands.
   // Asked out here, before the transaction (see online-seat-gate.ts); a patch that names no roster seats nobody and asks nothing.
-  const [home] = patch.members
-    ? await sql<{ division_id: string }[]>`select division_id from entrants where id = ${id}`
-    : [];
+  // A status that puts an entrant in the field MAY be a Reinstate (the stored status, read inside, decides): the online cap judges it
+  // against min(plan cap, 256) (cap-256 review m1), and the plan's limit is an entitlement read - made out here too, never inside the
+  // tenant transaction (the pool self-deadlock, lib/db.ts), as the automatic promotions read it (`openOnlineCapGuard`).
+  const mayReinstate = patch.status !== undefined && !DEPARTED_STATUSES.has(patch.status);
+  const [home] =
+    patch.members || mayReinstate
+      ? await sql<{ division_id: string }[]>`select division_id from entrants where id = ${id}`
+      : [];
   const seatGate =
     patch.members && home
       ? await openRosterSeatGate(auth, { divisionId: home.division_id, personIds: patch.members.map((m) => m.person_id) })
       : undefined;
+  // undefined for a sport that can never play online: nothing to ask, and the division below cannot be playing online either.
+  const capGuard = mayReinstate && home ? await openOnlineCapGuard(home.division_id) : undefined;
   const { out, fieldChanged, departed, pinsDroppedIn, refresh } = await withTenant(auth.orgId, async (tx) => {
     // RS011: `eligibility_override` is request metadata for the gate below,
     // never an `entrants` column — destructured out alongside `members` so
@@ -1182,12 +1191,16 @@ export async function writeEntrantPatch(
     if (reinstating || departing) await lockDivisionForCap(tx, prior!.division_id);
     // Owner ruling 2026-11-21 (review I1): bringing a withdrawn / disqualified entrant back is a door that grows an online chess
     // division - it holds a place again - judged by the same count as every other door, under the lock just taken. A division that
-    // filled while they were away (a waitlisted sign-up was promoted into their place) refuses them, ONLINE_DIVISION_FULL. A plan
-    // lower than the cap has no say here: no plan door guards a Reinstate (the rows do not change), and 128 bounds every plan.
+    // filled while they were away (a waitlisted sign-up was promoted into their place) refuses them. Against min(plan cap, 256), as
+    // every door (cap-256 review m1): ONLINE_DIVISION_FULL where the online cap binds, the plan's own 402 where a lower plan cap does.
+    // The plan's ROW count is not asked: the row is already there, a Reinstate does not change it.
     if (reinstating) {
       const [division] = await tx<{ sport_key: string; config: unknown }[]>`
         select sport_key, config from divisions where id = ${prior!.division_id}`;
-      if (division && divisionPlaysOnline(division)) assertOnlineRoom((await countOnlineHeld(tx, prior!.division_id)) + 1);
+      if (division && divisionPlaysOnline(division)) {
+        // Fails closed when the plan was never read (re-review n2): an unread plan is not an unlimited one.
+        assertOnlineHeldRoom(readPlanLimit(capGuard), (await countOnlineHeld(tx, prior!.division_id)) + 1);
+      }
     }
     let row: EntrantRow | undefined;
     if (Object.keys(fields).length > 0) {

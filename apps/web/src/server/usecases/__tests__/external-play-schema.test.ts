@@ -202,7 +202,7 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V451/V452)", (
       "last_move_at", "last_polled_at", "mint_claimed_at", "move_count", "moves_uci",
       "needs_reason", "org_id", "pending_move_at", "pending_move_ply", "pending_move_uci",
       "provider", "revoked_seat", "round_open_id",
-      "scheduled_at_basis", "started_at", "status", "sweep_no_truth_reads", "updated_at",
+      "scheduled_at_basis", "started_at", "status", "strays_attempts", "strays_closed_at", "strays_closed_reason", "sweep_no_truth_reads", "updated_at",
       "video_override_at", "white_draw_offer_ply", "white_emailed_at", "white_lichess_id",
       "white_ms", "white_side",
     ]);

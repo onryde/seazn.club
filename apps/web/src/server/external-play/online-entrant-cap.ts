@@ -1,14 +1,14 @@
 import "server-only";
-// The hard entrant cap of an ONLINE chess division (owner ruling 2026-11-21): min(the plan's `entrants.per_division.max`,
+// The hard entrant cap of an ONLINE chess division (owner ruling 2026-11-21; 256 since 2026-11-23): min(the plan's `entrants.per_division.max`,
 // ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION), on every plan, for a division that plays online (`divisionPlaysOnline`) and for no other.
 // Over-the-board chess and every other sport keep the plan's own cap, untouched.
 //
 // It is a CAPACITY limit, not a plan upsell, and the two refusals differ for exactly that reason:
-//   - a plan cap BELOW the online cap (Community's 64) is the one that binds, and an upgrade does lift it: the plan's own 402
+//   - a plan cap BELOW the online cap (Community's 64, an Event Pass's 128) is the one that binds, and an upgrade does lift it: the plan's own 402
 //     answers, with its upgrade copy, as it always did;
 //   - a plan cap AT OR ABOVE the online cap (or none: null = unlimited) is not what stops the division, and no plan lifts the
 //     online cap: ONLINE_DIVISION_FULL answers - a 422 with its own code, never the plan-limit 402, never upgrade wording.
-// The tie goes to the online cap (a plan of exactly 128, an Event Pass's 128): there an upgrade would change nothing.
+// The tie goes to the online cap (a plan of exactly 256, Pro's 256): there an upgrade would change nothing.
 //
 // ONE count answers the online cap at every door (fix round 1, review C1): an entrant that is not withdrawn or disqualified, plus a
 // sign-up that holds a spot (`SPOT_HOLDERS`: pending, paid, confirmed) and has not become an entrant yet (entrant_id null, never a solo
@@ -17,9 +17,12 @@ import "server-only";
 // place; a sign-up holds one from the moment it is let in; a registration that becomes an entrant is the SAME place (it leaves the
 // second term and enters the first), so confirming never grows the count. The plan's own cap keeps its own count, untouched.
 //
-// The count is judged against min(plan cap, 128) for EVERY division that plays online (re-review N2): where the online cap binds
-// (a plan at or above it, or none) its own refusal answers; where a LOWER plan cap does (a size pack's 96) the plan's refusal answers
-// - on the same count, so direct adds and sign-ups share one allowance instead of 96 + 96.
+// The count is judged against min(plan cap, 256) for EVERY division that plays online (re-review N2), at every door below: where the
+// online cap binds (a plan at or above it, or none) its own refusal answers; where a LOWER plan cap does (a size pack's 96, an Event
+// Pass's 128) the plan's refusal answers - on the same count, so direct adds and sign-ups share one allowance instead of 96 + 96.
+// Reinstate and the online switch ask the plan too (cap-256 review m1, controller ruling 2026-11-23): at a cap of 128 an Event Pass's
+// 128 equalled the cap, so the flat check held the pass by coincidence; at 256 it would not (`assertOnlineHeldRoom`,
+// `assertOnlinePlayFits`).
 //
 // A place is not always freed when a registration leaves (re-review N1): an organiser may have withdrawn the entrant from the table
 // already and filled the place. So the AUTOMATIC promotions (a withdrawal, an expiry, a lapsed pay window, a rejection) ask the count
@@ -136,11 +139,20 @@ export function assertOnlineRoom(wouldBe: number): void {
   if (wouldBe > ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION) throw onlineDivisionFullError();
 }
 
+/** A door that adds a PLACE but no entrants row - Reinstate (the row is already there) - on a division that plays online: the
+ *  division would hold `wouldHold` places, judged against min(plan cap, 256) as every other door judges them (cap-256 review m1).
+ *  Where the online cap binds (a plan at or above it, or none) ONLINE_DIVISION_FULL answers; where a lower plan cap does, the plan's
+ *  own 402, as the add door's. `planCap` is read before the caller's transaction (`openOnlineCapGuard`). */
+export function assertOnlineHeldRoom(planCap: number | null, wouldHold: number): void {
+  if (onlineCapBinds(true, planCap)) assertOnlineRoom(wouldHold);
+  else assertWithinLimit(planCap, "entrants.per_division.max", wouldHold);
+}
+
 /** The entrant door's judgements, from counts the caller read. A division that plays online is judged on `held` (the places it holds):
  *  against the online cap where that binds (a plan cap at or above it, or none), and against the plan's cap where THAT is lower (re-review
  *  N2: 96 added and 96 signed up is 192 places on a plan of 96, and neither count alone says so). The plan's own check on `rows` (every
  *  entrants row, withdrawn included) stays as it was, for every division. The online refusal comes first: at the tie (a plan of exactly
- *  128) no upgrade changes anything. */
+ *  256) no upgrade changes anything. */
 export function assertEntrantRoom(
   division: { sport_key: string; config: unknown },
   planCap: number | null,
@@ -199,6 +211,18 @@ export async function openOnlineCapGuard(divisionId: string): Promise<OnlineCapG
   return { planLimit: await getLimit(d.org_id, "entrants.per_division.max", d.competition_id) };
 }
 
+/** The message a door fails with when it judges an online division and its plan was never read (cap-256 re-review n2). */
+export const PLAN_LIMIT_NOT_READ = "online entrant cap: plan limit not read";
+
+/** The plan limit a door judging an ONLINE division read before its transaction (Reinstate, the online switch). Fails closed (cap-256
+ *  re-review n2): a guard that was never opened is NOT an unlimited plan - `planLimit: null` is - so reading one as `null` would put the
+ *  flat 256 back where a lower plan binds (the m1 hole). An assertion, not a refusal: no state the product reaches gets here (the
+ *  guard is undefined only for a sport that cannot play online, and both doors ask only of a division that plays online). */
+export function readPlanLimit(guard: OnlineCapGuard | undefined): number | null {
+  if (guard === undefined) throw new Error(PLAN_LIMIT_NOT_READ);
+  return guard.planLimit;
+}
+
 /** Take the division lock a promotion will need, EARLY: right after the caller's registration row lock and before any entrant row
  *  is written, so the order is registration row -> `division:` -> entrants (the edge materialise's late entry already makes), never
  *  an entrant row and then `division:` against a Reinstate going the other way. A no-op without a guard. */
@@ -209,7 +233,7 @@ export async function lockForPromotionCap(tx: Tx, divisionId: string, guard: Onl
 /** Re-review N1: does an online division ALREADY hold its cap, so that an automatic promotion must not fill a place that is not there?
  *  A place can be freed twice - an organiser withdraws an entrant from the table (the registration is untouched) and the registrant
  *  then withdraws too - so "a registration left" is not "a place was freed". The truth is the count (`countOnlineHeld`, read under the
- *  `division:` lock) against `min(plan cap, 128)`: at or over it the promotion is skipped and the entry stays waitlisted, to be picked
+ *  `division:` lock) against `min(plan cap, 256)`: at or over it the promotion is skipped and the entry stays waitlisted, to be picked
  *  by the next place that really frees. A division that does not play online (config read under the lock) never holds anything back. */
 export async function onlineCapHoldsPromotion(
   tx: Tx,
@@ -235,8 +259,14 @@ export async function onlineCapHoldsPromotion(
 
 /** The door that turns online play ON: a division already holding more places (`held`: the count above) than an online chess division may is refused, 422
  *  ONLINE_PLAY_TOO_MANY_ENTRANTS (`limit`, `entrants`). Its own code and sentence: the organiser's way out is removing entrants,
- *  which "full" would not say. */
-export function assertOnlinePlayFits(entrants: number): void {
+ *  which "full" would not say. Judged against min(plan cap, 256) (cap-256 review m1): where a LOWER plan cap binds, holding more than
+ *  it is the plan's own 402 - over the board the plan counts rows, online it counts the places held, and the switch is where that
+ *  count starts to apply. `planCap` is read before the caller's transaction (`openOnlineCapGuard`). */
+export function assertOnlinePlayFits(entrants: number, planCap: number | null): void {
+  if (!onlineCapBinds(true, planCap)) {
+    assertWithinLimit(planCap, "entrants.per_division.max", entrants);
+    return;
+  }
   if (entrants > ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION) {
     throw new HttpError(
       422,

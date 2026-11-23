@@ -106,6 +106,7 @@ const MOUNTS: Mount[] = [
         label: `canEdit=${canEdit}`,
         markup: html(
           <DivisionRulesStrip
+            viewerPlan="pro"
             divisionId={ID}
             sportKey={m.key}
             variantKey={Object.keys(m.variants)[0] ?? null}

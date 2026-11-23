@@ -10,8 +10,10 @@
 // and details, the HTTP status, the element's MediaError code). NEVER the address, its token, its `expires`, a query, or an error's
 // text (hls.js quotes the URL in its message): the address is a key in this module's memory and goes nowhere else, and every field is
 // a code, a number or the fixture's id. The send is the client's existing Sentry path (`Sentry.capture*` with area/event tags, as the
-// match room's camera reports), under the client's `beforeSend` scrubber (lib/scrub-score-url.ts) where the client init runs.
-import * as Sentry from "@sentry/nextjs";
+// match room's camera reports), under the browser client's `beforeSend` scrubber (lib/scrub-score-url.ts). The path is
+// lib/sentry-browser.ts, which loads the SDK lazily and only with the viewer's analytics consent, queues a report while it loads
+// and drops it otherwise.
+import * as Sentry from "@/lib/sentry-browser";
 import { ApiError } from "@/lib/client";
 import type { PlaybackFailure } from "./seazn-playback";
 

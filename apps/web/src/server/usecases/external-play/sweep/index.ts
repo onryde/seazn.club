@@ -4,6 +4,8 @@
 //
 //   pass.ts             the shared shape: SweepJob / SweepReport / SweepDeps, the budgets, the pass state, `each`,
 //                       playableWindow, the "game may be on file" predicate, anchorIfClosedNow, ParkedRoom
+//   pass-limits.ts      the pass's two budgets (SWEEP_PASS_BUDGET_MS, SWEEP_RTK_CALLS_PER_PASS), import-free for the load harness;
+//                       pass.ts re-exports both
 //   no-show.ts          job 0 (a fixture no longer playable closes its bridge) and job 1 (the deadline no-show)
 //   mint-retry.ts       job 2: the mint retry (a 429-throttled create, a stranded board with both players in)
 //   teardown.ts         job 3 (meeting teardown) and job 3b (parked rooms, V460)
@@ -11,7 +13,9 @@
 //   camera-evidence.ts  job 5: the camera evidence after the match
 //   arbiter-revoke.ts   job 6: the arbiter watches the server removes - split (check-in capacity R5) into `arbiter_revocation`,
 //                       the pass's FIRST job (the safeguarding arms), and `arbiter_revoke` (the TTL and ended-room arms)
-//   run.ts              the pass: the one-pass-at-a-time lock, runPass, sweepExternalPlay
+//   close-strays.ts     job 7: what a closed board's (withdrawn, voided) create may have left open at Lichess, while it could
+//                       still be ours (the recovery's window) - the last network job; its give-up bound
+//   run.ts             the pass: the one-pass-at-a-time lock, runPass, sweepExternalPlay
 export {
   SWEEP_JOBS,
   SWEEP_PASS_BUDGET_MS,

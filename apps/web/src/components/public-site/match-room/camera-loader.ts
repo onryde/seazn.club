@@ -55,7 +55,7 @@
 // read back from the room read (§5.6.3).
 import type RealtimeKitClient from "@cloudflare/realtimekit";
 import type { LeaveRoomState, MediaConnectionUpdate, SocketConnectionState } from "@cloudflare/realtimekit";
-import * as Sentry from "@sentry/nextjs";
+import * as Sentry from "@/lib/sentry-browser";
 
 export type OwnCamera = {
   /** The local camera track while publishing, else null. */
@@ -131,10 +131,10 @@ const DROP_STATES: ReadonlySet<LeaveRoomState> = new Set<LeaveRoomState>(["disco
 /** Connection drops, reported with what we already have (owner 2026-11-22: "we have logger and sentry"; no table, no
  *  endpoint).
  *
- *  SENDS NOTHING IN PRODUCTION YET (review I2): the browser Sentry client is never initialised -
- *  `Sentry.init` is not called on the client (instrumentation-client.ts: sentry.client.config.ts is webpack-only and the app
- *  builds with Turbopack), so every capture and breadcrumb below is a no-op until the owner has the client init wired. The
- *  D7 guard's own browser reports are in the same state. What follows is what is sent once it is.
+ *  Sent through the browser Sentry client (lib/sentry-browser.ts, owner 2026-11-23; review I2), as the D7 guard's own
+ *  browser reports are: only where NEXT_PUBLIC_SENTRY_DSN is set, and only for a visitor who has accepted analytics (the SDK
+ *  is not even loaded until then; a report made while it loads is queued, one made without consent is dropped). What follows
+ *  is what is sent.
  *
  *  For one joined meeting, on either surface:
  *   - a `roomLeft` that is NOT our own leave and is a DROP - "disconnected" (a socket or media-node drop), "failed" (the

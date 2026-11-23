@@ -19,6 +19,8 @@
 import { useEffect, useId, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
+import { UpgradeGate } from "@/components/upgrade-gate";
+import type { ViewerPlan } from "@/lib/viewer-plan";
 import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import type { TableStageKind, TiebreakerKey } from "@seazn/engine/sport";
 import type { Dict } from "@/lib/i18n-constants";
@@ -77,6 +79,9 @@ export interface DivisionRulesStripProps {
   draft?: DivisionRulesDraft;
   /** FMT5: the division's format, changed from this card (saved divisions only; the builder has its own Format step). */
   format?: DivisionFormatProps;
+  /** The plan the viewer's org holds, for the upgrade gate a plan refusal opens (cap-256 re-review I-F1: turning online play on
+   *  over a plan limit below the online cap is the plan's 402). Required, as `UpgradeGate`'s own prop is. */
+  viewerPlan: ViewerPlan;
 }
 
 /** The builder's draft state, owned by the builder so it survives moving between its steps. */
@@ -105,6 +110,8 @@ interface Feedback {
   refused: RefusedField[];
   partial: boolean;
   keptPinned: KeptPinnedStage[];
+  /** A plan refusal (402 PAYMENT_REQUIRED): the feature it names opens the upgrade gate, in place of a red sentence. */
+  paywall: string | null;
 }
 
 export const TOGGLE_ON = "border-purple-200 bg-purple-50 text-purple-800";
@@ -127,6 +134,7 @@ export function DivisionRulesStrip({
   initialOpen = [],
   draft,
   format,
+  viewerPlan,
 }: DivisionRulesStripProps) {
   const msg = useMsg();
   const plural = useMsgPlural();
@@ -290,6 +298,7 @@ export function DivisionRulesStrip({
         refused,
         partial: refused.length > 0,
         keptPinned: keptPinnedOf(saved),
+        paywall: null,
       });
       router.refresh();
     } catch (err) {
@@ -298,7 +307,14 @@ export function DivisionRulesStrip({
         setLearnedLocks((prev) => mergeLocks(prev, refused));
         restoreRefused(refused);
       }
-      setFeedback({ panel, notice: null, error: saveErrorText(err), refused, partial: false, keptPinned: [] });
+      // The plan's own refusal (cap-256 re-review I-F1: online play turned on over a plan limit below the online cap) opens the
+      // upgrade gate, as the entrants panel's add does - the server's sentence is English and names a feature key.
+      const feature = err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED" ? err.extra.feature_key : undefined;
+      if (typeof feature === "string" && feature !== "") {
+        setFeedback({ panel, notice: null, error: null, refused, partial: false, keptPinned: [], paywall: feature });
+        return;
+      }
+      setFeedback({ panel, notice: null, error: saveErrorText(err), refused, partial: false, keptPinned: [], paywall: null });
     } finally {
       setBusy(false);
     }
@@ -393,6 +409,7 @@ export function DivisionRulesStrip({
             {refusedItems(lines)}
           </div>
         )}
+        {feedback.paywall !== null && <UpgradeGate feature={feedback.paywall} viewerPlan={viewerPlan} />}
         {feedback.error !== null && (
           <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-600" data-testid="division-settings-error">
             {feedback.error}

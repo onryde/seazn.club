@@ -11,6 +11,7 @@ import { PointsEditor } from "@/components/v2/rules/points-editor";
 import { TiebreaksEditor } from "@/components/v2/rules/tiebreaks-editor";
 import type { RefusedField } from "@/lib/rule-errors";
 import type { LinkGapsSummary } from "@/lib/online-link-gaps";
+import type { ViewerPlan } from "@/lib/viewer-plan";
 
 export { DivisionRulesStrip };
 
@@ -25,6 +26,7 @@ export interface DivisionShape {
   canEdit?: boolean;
   onlineChessOffered?: boolean;
   lichessGaps?: LinkGapsSummary;
+  viewerPlan?: ViewerPlan;
 }
 
 export function stripPropsOf(p: DivisionShape, over: Partial<DivisionRulesStripProps> = {}): DivisionRulesStripProps {
@@ -41,6 +43,7 @@ export function stripPropsOf(p: DivisionShape, over: Partial<DivisionRulesStripP
     onlineChessOffered: p.onlineChessOffered ?? true,
     lichessGaps: p.lichessGaps,
     initialOpen: ALL_PANELS,
+    viewerPlan: p.viewerPlan ?? "pro",
     ...over,
   };
 }

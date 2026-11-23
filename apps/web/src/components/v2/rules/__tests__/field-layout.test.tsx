@@ -61,6 +61,7 @@ function expectContentSized(tag: string, what: string): void {
 const strip = (m: AnySportModule, over: { variantKey?: string | null; divisionConfig?: Record<string, unknown>; variants?: ReturnType<typeof variantsOf>; ruleDict?: Dict | undefined; onlineChessOffered?: boolean } = {}) =>
   html(
     <DivisionRulesStrip
+      viewerPlan="pro"
       divisionId={ID}
       sportKey={m.key}
       variantKey={over.variantKey === undefined ? (Object.keys(m.variants)[0] ?? null) : over.variantKey}

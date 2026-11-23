@@ -62,7 +62,7 @@ const settings = {
   autoPosts: false,
   canAutoPost: true,
   showSeeds: true,
-  viewerPlan: "community",
+  viewerPlan: "community" as const,
   onlineChessOffered: true,
 };
 const props = stripPropsOf(settings);
