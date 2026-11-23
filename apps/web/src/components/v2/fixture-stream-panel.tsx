@@ -34,7 +34,7 @@ import { FixtureDestinationPicker } from "./fixture-destination-picker";
 import { platformName } from "./stream-platform-mark";
 import { YoutubeIcon } from "./youtube-icon";
 import { ReplayCopyButton } from "./stream-replay-copy";
-import { SeaznReplaysCard } from "./seazn-replays-card";
+import { SeaznReplaysCard, type SeaznReplayActions, useSeaznReplayActions } from "./seazn-replays-card";
 import { REFUSAL_FOCUS_RING, focusRefusalBlock } from "./refusal-focus";
 import { channelStatus, youtubeTargetLabel } from "./youtube-connect-panel";
 import { D3Warning, PhoneStripView, SignalChain } from "./stream-signal-chain";
@@ -798,6 +798,8 @@ export function PhoneTab({
   // T9b: the page's ONE session (StreamSessionProvider, mounted by the console) — the Stream button's dot reads it too.
   const session = useSharedPhoneSession(fixtureId);
   const { view, shown, state, read, setBusy } = session;
+  // Task 26: the organiser's Delete on a Seazn replay part — the house confirm, the route, then this session's own read.
+  const replayActions = useSeaznReplayActions(fixtureId, read);
   // The provider read `current` when the PAGE loaded; opening the tab reads it again, as opening it always did — an idle
   // page does not poll, so a session started elsewhere since then shows now rather than at the next reload. Only when a
   // read had ALREADY landed: a session still on its first read (the page just loaded, or no provider at all) is about to
@@ -1266,6 +1268,7 @@ export function PhoneTab({
       <PhoneTabBody
         fixtureId={fixtureId}
         view={shown}
+        replayActions={replayActions}
         balance={balance}
         targets={targets}
         busy={session.busy}
@@ -1703,6 +1706,9 @@ export interface PhoneTabBodyProps {
   /** m12: scopes the picker's DOM id, so two mounted panels never share one. */
   fixtureId: string;
   view: StreamSessionView | null;
+  /** Task 26: the Seazn replays card's Delete (useSeaznReplayActions) — which part is being deleted, which failed to, the parts
+   *  deleted here, and the action. */
+  replayActions: SeaznReplayActions;
   balance: number;
   /** Task 14b (R4): the page's split of the balance by bucket. Shown as "{m} free this month · {p} bought" under the
    *  chip only while the org holds free credits AND the split still adds up to `balance` — once a session's projection
@@ -2715,7 +2721,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
           </div>
           {restartEl}
           {/* Seazn-hosted video (Task 25): the fixture's Seazn replays and their state (it draws nothing when there is none). */}
-          <SeaznReplaysCard replays={p.view.seaznReplays} />
+          <SeaznReplaysCard fixtureId={p.fixtureId} replays={p.view.seaznReplays} actions={p.replayActions} />
           {(() => {
             // YouTube Connect T16 (O6): the after-match area lists the match's replay PARTS (a restart makes a second broadcast),
             // then the club's own link when it is not one of them. With no parts it is the single row it always was.

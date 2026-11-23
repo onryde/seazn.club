@@ -1041,6 +1041,7 @@ const BODY: PhoneTabBodyProps = {
   onSelectTarget: () => {}, onPickAnother: () => {}, pickerOpenSignal: 0, onRetryTargets: () => {}, onGoLive: () => {}, safetyNotice: false, onDismissSafety: () => {}, onStop: () => {}, onCancel: () => {},
   onBuy: () => {}, onAgain: () => {}, onCopy: () => {}, onToggleCode: () => {}, onReissue: () => {}, onRetryCode: () => {},
   onShowBuy: () => {}, onTileIntent: () => {}, score: SCORE_OFF,
+  replayActions: { deleting: null, failed: null, gone: new Set(), onDelete: () => {} },
 };
 /** A loaded list — what most states render with. */
 const ok = (list: StreamTarget[]): TargetsState => ({ status: "ok", list });
@@ -6459,9 +6460,13 @@ describe("Task 25: the ended card's Seazn replays", () => {
     expect(cards(tree).map((el) => propsOf(el).replays)).toEqual([[]]);
   });
 
-  it("an ended session hands the card the view's list, inside the ended card", () => {
-    const tree = body({ view: session({ ...ENDED, seaznReplays: R }), balance: 1 });
+  it("an ended session hands the card the view's list, inside the ended card — with the body's own fixture id and Delete state (Task 26)", () => {
+    const actions = { ...BODY.replayActions, deleting: R[1]!.id, gone: new Set([R[0]!.id]) };
+    const tree = body({ fixtureId: "f-7", view: session({ ...ENDED, seaznReplays: R }), balance: 1, replayActions: actions });
     expect(cards(tree).map((el) => propsOf(el).replays)).toEqual([R]);
+    expect(cards(tree).map((el) => propsOf(el).fixtureId), "the body's fixture, not a constant").toEqual(["f-7"]);
+    expect(cards(tree).map((el) => propsOf(el).actions), "the body's Delete state, as given").toEqual([actions]);
+    expect(propsOf(cards(tree)[0]!).actions).toBe(actions);
     const ended = walk([byTestId(tree, "stream-ended")!]);
     expect(ended.filter((el) => el.type === SeaznReplaysCard), "inside the ended card").toHaveLength(1);
   });
