@@ -259,7 +259,11 @@ describe("related: slugs planned but not yet written", () => {
     expect(blogRelatedProblems(self, new Set(["related-self"]))).toEqual(["related-self: related 'related-self' is the post itself"]);
   });
   it("the planned list is the approved topic list: kebab slugs, no duplicates, 32 posts after the pilot", () => {
-    expect(BLOG_PLANNED_SLUGS.size, "anti-vacuity: planned slugs").toBe(32);
+    // Batch 5: each batch takes its written slugs off the list, so the pin is the 32 after the pilot, counted as the
+    // planned plus every post written past the pilot (none of them still planned: blog-tree.test.ts).
+    const written = allBlogPosts().filter((p) => p.slug !== "how-standings-points-work").length;
+    expect(written, "anti-vacuity: batch 5's six posts are written").toBeGreaterThanOrEqual(6);
+    expect(BLOG_PLANNED_SLUGS.size + written, "anti-vacuity: planned slugs").toBe(32);
     for (const s of BLOG_PLANNED_SLUGS) expect(s, s).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
     expect(BLOG_PLANNED_SLUGS.has("how-standings-points-work"), "the pilot is a post, not planned").toBe(false);
   });

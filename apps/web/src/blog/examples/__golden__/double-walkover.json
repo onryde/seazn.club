@@ -1,0 +1,108 @@
+{
+  "facts": {
+    "footballPoints": 0,
+    "cricketPoints": 0,
+    "boardgamePoints": 0,
+    "carromPoints": 0,
+    "genericPoints": 0,
+    "volleyballPoints": 0,
+    "badmintonPoints": 0,
+    "tabletennisPoints": 0,
+    "tennisPoints": 0,
+    "icehockeyPoints": 0,
+    "hockeyPoints": 0,
+    "tabletennisWalkoverLoss": 0,
+    "sportCount": 11,
+    "nobodyAdvancesIn": 11
+  },
+  "table": {
+    "caption": "A double walkover in each sport, on the settings a new division starts with: what each of the two sides gets in the table.",
+    "columns": [
+      "Sport",
+      "Score shown",
+      "Points each side gets",
+      "Counts as played",
+      "Counts as a loss"
+    ],
+    "rows": [
+      [
+        "Football",
+        "0 — 0",
+        0,
+        "Yes",
+        "Yes"
+      ],
+      [
+        "Cricket",
+        "No score",
+        0,
+        "Yes",
+        "Yes"
+      ],
+      [
+        "Chess",
+        "0 — 0",
+        0,
+        "Yes",
+        "Yes"
+      ],
+      [
+        "Carrom",
+        "0 — 0",
+        0,
+        "Yes",
+        "Yes"
+      ],
+      [
+        "Generic",
+        "L — L",
+        0,
+        "Yes",
+        "Yes"
+      ],
+      [
+        "Volleyball",
+        "0 — 0",
+        0,
+        "Yes",
+        "Yes"
+      ],
+      [
+        "Badminton",
+        "0 — 0",
+        0,
+        "Yes",
+        "Yes"
+      ],
+      [
+        "Table tennis",
+        "0 — 0",
+        0,
+        "Yes",
+        "Yes"
+      ],
+      [
+        "Tennis",
+        "0 — 0",
+        0,
+        "Yes",
+        "Yes"
+      ],
+      [
+        "Ice hockey",
+        "0 — 0",
+        0,
+        "Yes",
+        "Yes"
+      ],
+      [
+        "Hockey",
+        "0 — 0",
+        0,
+        "Yes",
+        "Yes"
+      ]
+    ]
+  },
+  "text": []
+}

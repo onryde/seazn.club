@@ -53,12 +53,7 @@ export const BLOG_PLANNED_SLUGS: ReadonlySet<string> = new Set([
   "page-playoff-and-stepladder",
   "double-elimination-explained",
   "what-is-a-plate",
-  "how-americano-works",
-  "how-mexicano-works",
-  "how-a-ladder-works",
-  "withdrawal-in-a-knockout",
-  "forfeits-and-walkovers-by-sport",
-  "double-walkover",
+  // batch 5 (#22 to #27) is written: its slugs came off this list.
   "round-robin-schedule",
   "groups-into-knockout",
   "best-third-placed-teams",
