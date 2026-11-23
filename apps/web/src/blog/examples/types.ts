@@ -17,11 +17,38 @@ export interface ExampleTable {
  * types only; a member's fields are the minimum its diagram needs and may be widened by that component's task.
  * Every member carries `title`, which the SVG's <title> and its caption repeat in text.
  */
+export interface BracketFeed {
+  /** The `id` of the match the seat is filled from. */
+  id: string;
+  /** `winner`: the winner goes on (a solid line). `loser`: the loser goes here (a dashed one). */
+  side: "winner" | "loser";
+}
+
+/** One match of a bracket diagram: the two seats, who won, and where each seat's player came from. */
+export interface BracketMatchModel {
+  /** Names the match for a later `homeFrom` / `awayFrom`; a match nobody feeds from may leave it out. */
+  id?: string;
+  /** The seat's player as the page prints it ("Ana (1)"). `null`: a bye, nobody on that side. */
+  home: string | null;
+  away: string | null;
+  /** One of the two seat strings above. */
+  winner?: string;
+  /** The product's name for the round ("Semi-finals", "Qualifier 1"), printed above the box. */
+  label?: string;
+  /** Matches of different lanes are stacked in separate blocks, each headed by its name (one figure, two formats). */
+  lane?: string;
+  homeFrom?: BracketFeed;
+  awayFrom?: BracketFeed;
+  /** A short word printed beside a seat's player ("plate", "walkover"), keyed by the seat string. */
+  tags?: Record<string, string>;
+}
+
 export type DiagramModel =
   | {
       kind: "bracket";
       title: string;
-      rounds: { name: string; matches: { home: string | null; away: string | null; winner?: string }[] }[];
+      /** The COLUMNS, left to right; the builder lays them out so every feed comes from an earlier column. */
+      rounds: { name: string; matches: BracketMatchModel[] }[];
     }
   | {
       kind: "swissRound";
