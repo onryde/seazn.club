@@ -120,7 +120,7 @@ describe.skipIf(!HAS_DB)("V542__seazn_replays.sql — the replay tables are real
       .toEqual(["encoding", "playable"]);
   });
 
-  it("deleted_reason is organiser or org_deleted (or null); a row starts with no attempts, due now, and none of its marks set", async () => {
+  it("deleted_reason is organiser, org_deleted or fixture_deleted (V551, Task 31b) (or null); a row starts with no attempts, due now, and none of its marks set", async () => {
     const r = await rig(1);
     let probes = 0;
     await rolledBack(async (tx) => {
@@ -128,7 +128,9 @@ describe.skipIf(!HAS_DB)("V542__seazn_replays.sql — the replay tables are real
         .toBe("23514:fixture_video_replays_deleted_reason_check");
       expect(await probe(tx, (sp) => insertReplay(sp, r, { state: "deleted", deletedReason: "organiser", partNo: 1 })), "organiser").toBe("landed");
       expect(await probe(tx, (sp) => insertReplay(sp, r, { state: "deleted", deletedReason: "org_deleted", partNo: 2 })), "org_deleted").toBe("landed");
-      probes = 3;
+      // V551: the sweep's reason for a replay whose fixture was deleted (seazn-cost.ts `purgeFixturelessReplays`).
+      expect(await probe(tx, (sp) => insertReplay(sp, r, { state: "deleted", deletedReason: "fixture_deleted", partNo: 4 })), "fixture_deleted").toBe("landed");
+      probes = 4;
       const [row] = await insertReplay(tx, r, { partNo: 3 });
       const [fresh] = await tx<Record<string, unknown>[]>`
         select attempts, next_attempt_at <= now() as due, state_at is not null as stamped, bunny_video_id, length_seconds,
@@ -139,7 +141,7 @@ describe.skipIf(!HAS_DB)("V542__seazn_replays.sql — the replay tables are real
         cf_deleted_at: null, verified_at: null, bunny_cleaned_at: null, deleted_at: null, deleted_by: null, deleted_reason: null,
       });
     });
-    expect(probes).toBe(3);
+    expect(probes).toBe(4);
   });
 
   it("one row per recording (cf_video_id 23505) and one part number per fixture ((fixture_id, part_no) 23505); another fixture's part 1, and parts whose fixture is gone, are their own", async () => {

@@ -28,7 +28,7 @@ import { FakeReplayHost } from "@/server/video/replay-fake";
 import { movedReplays } from "@/server/video/__tests__/_seazn-replay-rig";
 import { installSeaznEnv, live, seaznRig, stopAndSettle } from "@/server/video/__tests__/_seazn-session-rig";
 import { deleteSeaznReplay } from "@/server/video/organiser-replays";
-import { measureSeaznDelivery, purgeDeletedOrgReplays, seaznVideoForOrg } from "../seazn-cost";
+import { measureSeaznDelivery, purgeDeletedOrgReplays, purgeFixturelessReplays, seaznVideoForOrg } from "../seazn-cost";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const DAY_MS = 86_400_000;
@@ -585,6 +585,118 @@ describe.skipIf(!HAS_DB)("purgeDeletedOrgReplays — a deleted org's replays, af
   });
 });
 
+// Task 31b (T23 review G1): `fixture_video_replays.fixture_id` is ON DELETE SET NULL (V542), so a fixture deleted by a format change, a
+// stage rebuild or a division delete leaves its replay rows with no fixture — on no page (the view inner-joins fixtures), while the
+// copy stays stored and billed. The fixture here is deleted for real: the FK's own action is what nulls the rows (no row is written
+// by hand). The pass deletes each such row as the org purge does — `fixture_deleted`, no author, the cleanup one lease after the
+// commit — its copy's last read first, then the removal.
+describe.skipIf(!HAS_DB)("purgeFixturelessReplays — a deleted fixture's replays (Task 31b)", () => {
+  const orphan = async (w: Awaited<ReturnType<typeof world>>) => {
+    await sql`delete from fixtures where id = ${w.f}`;
+    const rows = await sql<{ fixture_id: string | null }[]>`select fixture_id from fixture_video_replays where session_id = ${w.sid}`;
+    expect(rows.length, "PREMISE: the rows survive the fixture").toBe(w.rows.length);
+    expect(rows.every((x) => x.fixture_id === null), "PREMISE: the FK nulled every row").toBe(true);
+  };
+
+  it("EMPTY CASE FIRST: every replay still has its fixture — nothing purged, the host never asked", async () => {
+    const w = await world(1);
+    const remove = vi.spyOn(w.host, "remove");
+    const read = vi.spyOn(w.host, "watchMinutes");
+    expect(await purgeFixturelessReplays({ replay: w.host }, new Date(), scope(w.auth.orgId))).toEqual({ purged: 0, failed: 0 });
+    expect(remove).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("the fixture deleted: every part is deleted (fixture_deleted, no author, attempts 0, the cleanup one lease after the commit), its minutes read just BEFORE its copy is removed; a fixture still there keeps its replay; a second run purges nothing", async () => {
+    vi.stubEnv("SEAZN_HOSTED_COST", "true");
+    const gone = await world(2);
+    const kept = await world(1);
+    gone.host.setWatchMinutes(gone.copies[0]!, 4);
+    gone.host.setWatchMinutes(gone.copies[1]!, 1.5);
+    await orphan(gone);
+    const removed: string[] = [];
+    const hostFor = new Map([gone, kept].flatMap((x) => x.copies.map((c) => [c, x.host] as const)));
+    const host = Object.assign(Object.create(FakeReplayHost.prototype) as FakeReplayHost, {
+      remove: async (id: string) => { removed.push(id); return hostFor.get(id)!.remove(id); },
+      watchMinutes: (id: string, from: Date, to: Date) => hostFor.get(id)!.watchMinutes(id, from, to),
+    });
+    const s = scope(gone.auth.orgId, kept.auth.orgId);
+    const now = new Date();
+    expect(await purgeFixturelessReplays({ replay: host }, now, s)).toEqual({ purged: 2, failed: 0 });
+    const after = Date.now();
+    const rows = await sql<{ state: string; deleted_reason: string | null; deleted_by: string | null; deleted_at: Date; next_attempt_at: Date; attempts: number; bunny_video_id: string | null }[]>`
+      select state, deleted_reason, deleted_by, deleted_at, next_attempt_at, attempts, bunny_video_id from fixture_video_replays where session_id = ${gone.sid} order by part_no`;
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row).toMatchObject({ state: "deleted", deleted_reason: "fixture_deleted", deleted_by: null, attempts: 0, bunny_video_id: null });
+      expect(new Date(row.deleted_at).getTime()).toBe(now.getTime());
+      const due = new Date(row.next_attempt_at).getTime();
+      expect(due, "the cleanup due one lease after the commit").toBeGreaterThanOrEqual(now.getTime() + LEASE_MS);
+      expect(due).toBeLessThanOrEqual(after + LEASE_MS);
+    }
+    expect(removed.sort(), "both of the deleted fixture's copies, nothing else").toEqual([...gone.copies].sort());
+    for (const c of gone.copies) {
+      expect(gone.host.videoIds()).not.toContain(c);
+      expect(gone.host.watchWindows(c).map((x) => x.to.getTime()), `${c}: read once, up to now, before its removal`).toEqual([now.getTime()]);
+    }
+    expect(await deliveryOf(gone.sid)).toMatchObject({ replay_minutes: "5.5", replay_through: null });
+    expect((await sql<{ state: string }[]>`select state from fixture_video_replays where id = ${kept.rows[0]!.id}`)[0]!.state).toBe("playable");
+    expect(kept.host.videoIds()).toContain(kept.copies[0]);
+    expect(kept.host.watchWindows(kept.copies[0]!), "never read").toEqual([]);
+
+    expect(await purgeFixturelessReplays({ replay: host }, new Date(now.getTime() + DAY_MS), s), "the second run").toEqual({ purged: 0, failed: 0 });
+    expect(removed).toHaveLength(2);
+  });
+
+  it("a part already deleted (the organiser's) keeps its reason and author and is not counted; a part holding no copy is deleted without asking the host", async () => {
+    vi.stubEnv("SEAZN_HOSTED_COST", "true");
+    const w = await world(2);
+    await deleteSeaznReplay(w.auth, w.f, w.rows[0]!.id, { now: new Date(), replay: w.host });
+    // Part 2 lost its copy (a failed row's removal went through: item 2's give_up), still not deleted.
+    await w.host.remove(w.copies[1]!);
+    await sql`update fixture_video_replays set state = 'failed', bunny_video_id = null where id = ${w.rows[1]!.id}`;
+    await orphan(w);
+    const remove = vi.spyOn(w.host, "remove");
+    const read = vi.spyOn(w.host, "watchMinutes");
+    expect(await purgeFixturelessReplays({ replay: w.host }, new Date(), scope(w.auth.orgId))).toEqual({ purged: 1, failed: 0 });
+    const rows = await sql<{ deleted_reason: string; deleted_by: string | null; state: string }[]>`
+      select deleted_reason, deleted_by, state from fixture_video_replays where session_id = ${w.sid} order by part_no`;
+    expect(rows.map((r) => [r.state, r.deleted_reason, r.deleted_by])).toEqual([["deleted", "organiser", w.auth.userId], ["deleted", "fixture_deleted", null]]);
+    expect(remove, "nothing left to remove").not.toHaveBeenCalled();
+    expect(read, "nothing left to read").not.toHaveBeenCalled();
+  });
+
+  it("a removal that THROWS still deletes the row — it keeps the copy's id for the move's cleanup — and is counted and reported ONCE, on its own route", async () => {
+    const w = await world(1);
+    await orphan(w);
+    vi.spyOn(w.host, "remove").mockRejectedValueOnce(new Error(`bunny remove: HTTP 503 (video ${w.copies[0]})`));
+    sentry.captureError.mockClear();
+    expect(await purgeFixturelessReplays({ replay: w.host }, new Date(), scope(w.auth.orgId))).toEqual({ purged: 1, failed: 1 });
+    const [row] = await sql<{ state: string; deleted_reason: string; bunny_video_id: string | null }[]>`
+      select state, deleted_reason, bunny_video_id from fixture_video_replays where id = ${w.rows[0]!.id}`;
+    expect(row).toEqual({ state: "deleted", deleted_reason: "fixture_deleted", bunny_video_id: w.copies[0] });
+    expect(w.host.videoIds(), "PREMISE: still on the host").toContain(w.copies[0]);
+    expect(sentry.captureError).toHaveBeenCalledTimes(1);
+    expect(sentry.captureError.mock.calls[0]![1]).toMatchObject({ route: "relay.sweep.seazn_fixtureless", extra: { failed: 1, sessionIds: [w.sid] } });
+  });
+
+  it("the org purge and this pass never take each other's rows: a deleted org's fixture-held replay is org_deleted, a live org's fixtureless one is fixture_deleted", async () => {
+    const orgGone = await world(1);
+    const fixtureGone = await world(1);
+    const now = new Date();
+    await sql`update organizations set deleted_at = ${new Date(now.getTime() - (SEAZN_ORG_DELETED_REPLAY_GRACE_DAYS + 1) * DAY_MS)} where id = ${orgGone.auth.orgId}`;
+    await orphan(fixtureGone);
+    const s = scope(orgGone.auth.orgId, fixtureGone.auth.orgId);
+    expect(await purgeFixturelessReplays({ replay: fixtureGone.host }, now, s), "only the fixtureless row").toEqual({ purged: 1, failed: 0 });
+    expect(await purgeDeletedOrgReplays({ replay: orgGone.host }, now, s), "only the deleted org's row").toEqual({ purged: 1, failed: 0 });
+    const reasons = await sql<{ id: string; deleted_reason: string }[]>`
+      select id, deleted_reason from fixture_video_replays where id in (${orgGone.rows[0]!.id}, ${fixtureGone.rows[0]!.id})`;
+    expect(Object.fromEntries(reasons.map((r) => [r.id, r.deleted_reason]))).toEqual({
+      [orgGone.rows[0]!.id]: "org_deleted", [fixtureGone.rows[0]!.id]: "fixture_deleted",
+    });
+  });
+});
+
 describe.skipIf(!HAS_DB)("seaznVideoForOrg — the staff view's rows", () => {
   it("EMPTY CASE FIRST, then the row: an org with only a YouTube session reads []; a measured Seazn session reads its fixture, end, minutes as stored, the day each runs through, and every part — another org's read never sees it", async () => {
     const r = await seaznRig();
@@ -613,10 +725,11 @@ describe.skipIf(!HAS_DB)("seaznVideoForOrg — the staff view's rows", () => {
 
 // A scope nobody owns never reads as "everything" (relay-sweep's SweepScopeEmpty rule).
 describe("an EMPTY scope is refused by name", () => {
-  it("measure and purge both refuse orgIds: []", async () => {
+  it("measure and both purges refuse orgIds: []", async () => {
     const deps = { liveMinutes: fakeLive().read, replay: new FakeReplayHost() };
     await expect(measureSeaznDelivery(deps, new Date(), { orgIds: [] })).rejects.toThrow(/orgIds is empty/);
     await expect(purgeDeletedOrgReplays(deps, new Date(), { orgIds: [] })).rejects.toThrow(/orgIds is empty/);
+    await expect(purgeFixturelessReplays(deps, new Date(), { orgIds: [] }), "Task 31b").rejects.toThrow(/orgIds is empty/);
     expect(randomUUID()).toBeTruthy();
   });
 });

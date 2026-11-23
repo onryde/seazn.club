@@ -35,9 +35,14 @@ import "server-only";
 //       copy's minutes are read one last time (`measureReplayBeforeRemoval`, ruling 2a), THEN the copy is removed and the row
 //       forgets it.
 //
+//   purgeFixturelessReplays(deps, now, scope)
+//       Task 31b (T23 review G1): every replay not yet deleted whose fixture was deleted (`fixture_id` SET NULL, V542) — on no page,
+//       still stored and billed — is deleted the same way, reason `fixture_deleted` (V551), its copy read one last time first. Its
+//       one report is route relay.sweep.seazn_fixtureless.
+//
 //   measureReplayBeforeRemoval(host, copy, now)
 //       The last read of a copy about to be removed, from the day after the session's `replay_measured_through` up to NOW (today's
-//       partial day included: nothing can be read after). Called by the purge and by the organiser's delete (ruling 2b); never
+//       partial day included: nothing can be read after). Called by both purges and by the organiser's delete (ruling 2b); never
 //       throws and never holds a delete back. It ADDS without moving `replay_measured_through` — the copy leaves the daily read
 //       with its row's `deleted`, and the session's other copies are still owed those days. Off unless SEAZN_HOSTED_COST.
 //       NOT called by the move's cleanup step (seazn-replays.ts), deliberately: a deleted row's copy reached there was either
@@ -89,7 +94,7 @@ export interface SeaznMeasureResult {
   skipped: number;
 }
 export interface SeaznPurgeResult {
-  /** Replay rows deleted (`org_deleted`) this run. */
+  /** Replay rows deleted this run (`org_deleted`, or `fixture_deleted` by the fixtureless pass). */
   purged: number;
   /** Rows whose delete or copy removal failed (a removal is retried by the move's cleanup step). */
   failed: number;
@@ -352,16 +357,28 @@ export async function measureReplayBeforeRemoval(
   }
 }
 
-export async function purgeDeletedOrgReplays(deps: Pick<SeaznCostDeps, "replay">, now: Date, scope: SeaznCostScope = {}): Promise<SeaznPurgeResult> {
-  const orgIds = orgIdsOf(scope);
-  const cutoff = new Date(now.getTime() - SEAZN_ORG_DELETED_REPLAY_GRACE_DAYS * DAY_MS);
-  const due = await sql<{ id: string; org_id: string; session_id: string }[]>`
-    select r.id, r.org_id, r.session_id
-      from fixture_video_replays r
-      join organizations o on o.id = r.org_id
-     where o.deleted_at is not null and o.deleted_at < ${cutoff} and r.state <> 'deleted'
-       ${orgIds ? sql`and r.org_id in ${sql(orgIds)}` : sql``}
-     order by r.org_id, r.session_id, r.part_no, r.id`;
+/** Why a sweep pass deletes a replay row (V542's CHECK, widened by V551), and what its log lines and its one report say. */
+type PurgeReason = "org_deleted" | "fixture_deleted";
+const PURGE: Record<PurgeReason, { whose: string; report: string; route: string }> = {
+  org_deleted: {
+    whose: "a deleted org's replay",
+    report: "relay sweep: a deleted organisation's Seazn replays were not all removed, or not all measured first",
+    route: "relay.sweep.seazn_purge",
+  },
+  fixture_deleted: {
+    whose: "a deleted fixture's replay",
+    report: "relay sweep: a deleted fixture's Seazn replays were not all removed, or not all measured first",
+    route: "relay.sweep.seazn_fixtureless",
+  },
+};
+
+/** The two sweep purges' one body: each due row deleted as the organiser's delete does (one short transaction, FOR UPDATE, `reason`,
+ *  no author, the cleanup due one lease after THIS commit), then — after the commit — its copy's last read, then the removal, then the
+ *  row forgets the copy. A row deleted since the selection is left as it is. One report for the pass. */
+async function deleteAndRemove(
+  deps: Pick<SeaznCostDeps, "replay">, now: Date, due: readonly { id: string; org_id: string; session_id: string }[], reason: PurgeReason,
+): Promise<SeaznPurgeResult> {
+  const lines = PURGE[reason];
   let purged = 0;
   const failures: { sessionId: string; err: unknown }[] = [];
   const unmeasured: string[] = [];
@@ -377,7 +394,7 @@ export async function purgeDeletedOrgReplays(deps: Pick<SeaznCostDeps, "replay">
         const commitAt = new Date(Math.max(now.getTime(), Date.now()));
         await tx`
           update fixture_video_replays
-             set state = 'deleted', state_at = ${now}, deleted_at = coalesce(deleted_at, ${now}), deleted_reason = 'org_deleted',
+             set state = 'deleted', state_at = ${now}, deleted_at = coalesce(deleted_at, ${now}), deleted_reason = ${reason},
                  deleted_by = null, next_attempt_at = ${cleanupDueAfterDelete(commitAt)}, attempts = 0
            where id = ${row.id}`;
         return cur.bunny_video_id;
@@ -386,7 +403,7 @@ export async function purgeDeletedOrgReplays(deps: Pick<SeaznCostDeps, "replay">
       purged++;
     } catch (err) {
       failures.push({ sessionId: row.session_id, err });
-      log.error({ replayId: row.id, errClass: errClass(err), detail: detail(err) }, "seazn cost: a deleted org's replay could not be deleted — the next pass retries it");
+      log.error({ replayId: row.id, reason, errClass: errClass(err), detail: detail(err) }, `seazn cost: ${lines.whose} could not be deleted — the next pass retries it`);
       continue;
     }
     if (copy === null) continue;
@@ -396,7 +413,7 @@ export async function purgeDeletedOrgReplays(deps: Pick<SeaznCostDeps, "replay">
       await deps.replay.remove(copy);
     } catch (err) {
       failures.push({ sessionId: row.session_id, err });
-      log.error({ replayId: row.id, copy, errClass: errClass(err), detail: detail(err) }, "seazn cost: a deleted org's replay copy could not be removed — the move's cleanup retries it");
+      log.error({ replayId: row.id, copy, reason, errClass: errClass(err), detail: detail(err) }, `seazn cost: ${lines.whose} copy could not be removed — the move's cleanup retries it`);
       continue;
     }
     try {
@@ -409,8 +426,8 @@ export async function purgeDeletedOrgReplays(deps: Pick<SeaznCostDeps, "replay">
   // ONE report for the pass: rows it could not delete or copies it could not remove (retried), and copies removed without their
   // last read (lost minutes, logged each).
   if (failures.length > 0 || unmeasured.length > 0) {
-    captureError(new Error("relay sweep: a deleted organisation's Seazn replays were not all removed, or not all measured first"), {
-      route: "relay.sweep.seazn_purge",
+    captureError(new Error(lines.report), {
+      route: lines.route,
       extra: {
         failed: failures.length, sessionIds: failures.slice(0, REPORTED_IDS_MAX).map((f) => f.sessionId),
         firstError: failures[0] ? detail(failures[0].err) : null,
@@ -419,6 +436,34 @@ export async function purgeDeletedOrgReplays(deps: Pick<SeaznCostDeps, "replay">
     });
   }
   return { purged, failed: failures.length };
+}
+
+export async function purgeDeletedOrgReplays(deps: Pick<SeaznCostDeps, "replay">, now: Date, scope: SeaznCostScope = {}): Promise<SeaznPurgeResult> {
+  const orgIds = orgIdsOf(scope);
+  const cutoff = new Date(now.getTime() - SEAZN_ORG_DELETED_REPLAY_GRACE_DAYS * DAY_MS);
+  const due = await sql<{ id: string; org_id: string; session_id: string }[]>`
+    select r.id, r.org_id, r.session_id
+      from fixture_video_replays r
+      join organizations o on o.id = r.org_id
+     where o.deleted_at is not null and o.deleted_at < ${cutoff} and r.state <> 'deleted'
+       ${orgIds ? sql`and r.org_id in ${sql(orgIds)}` : sql``}
+     order by r.org_id, r.session_id, r.part_no, r.id`;
+  return deleteAndRemove(deps, now, due, "org_deleted");
+}
+
+/** Task 31b (T23 review G1): every replay row not deleted whose fixture is gone (`fixture_id` is ON DELETE SET NULL, V542: a format
+ *  change, a stage rebuild, a division delete). It plays on no page — the public view inner-joins fixtures — while its copy is stored
+ *  and billed, so it is deleted (`fixture_deleted`, V551) exactly as the org purge deletes, its copy read one last time first. No grace:
+ *  a fixture does not come back, and nothing shows the row meanwhile. */
+export async function purgeFixturelessReplays(deps: Pick<SeaznCostDeps, "replay">, now: Date, scope: SeaznCostScope = {}): Promise<SeaznPurgeResult> {
+  const orgIds = orgIdsOf(scope);
+  const due = await sql<{ id: string; org_id: string; session_id: string }[]>`
+    select r.id, r.org_id, r.session_id
+      from fixture_video_replays r
+     where r.fixture_id is null and r.state <> 'deleted'
+       ${orgIds ? sql`and r.org_id in ${sql(orgIds)}` : sql``}
+     order by r.org_id, r.session_id, r.part_no, r.id`;
+  return deleteAndRemove(deps, now, due, "fixture_deleted");
 }
 
 export interface SeaznVideoPart { partNo: number; state: string; deletedReason: string | null }

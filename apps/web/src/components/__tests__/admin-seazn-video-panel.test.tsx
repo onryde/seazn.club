@@ -48,7 +48,7 @@ describe("AdminSeaznVideoPanel", () => {
   it("never measured, not ended, no fixture, no parts: each reads — rather than a zero or a blank; a removed part says who removed it", () => {
     const html = render([
       row({ sessionId: "s-2", fixture: null, endedAt: null, liveMinutes: null, replayMinutes: null, liveThrough: null, replayThrough: null, parts: [] }),
-      row({ sessionId: "s-3", parts: [{ partNo: 1, state: "deleted", deletedReason: "org_deleted" }, { partNo: 2, state: "deleted", deletedReason: "organiser" }, { partNo: 3, state: "encoding", deletedReason: null }] }),
+      row({ sessionId: "s-3", parts: [{ partNo: 1, state: "deleted", deletedReason: "org_deleted" }, { partNo: 2, state: "deleted", deletedReason: "organiser" }, { partNo: 3, state: "encoding", deletedReason: null }, { partNo: 4, state: "deleted", deletedReason: "fixture_deleted" }] }),
     ]);
     expect(rowsOf(html)).toBe(2);
     const s2 = html.slice(html.indexOf('data-session-id="s-2"'), html.indexOf('data-session-id="s-3"'));
@@ -58,6 +58,7 @@ describe("AdminSeaznVideoPanel", () => {
     expect(html).toContain("Part 1: deleted (org deleted)");
     expect(html).toContain("Part 2: deleted (by organiser)");
     expect(html).toContain("Part 3: encoding");
+    expect(html, "Task 31b (V551)").toContain("Part 4: deleted (fixture deleted)");
   });
 
   // Task 31 fix round 1 (review m8): both minute columns are NOT NULL DEFAULT 0 (V546), so a delivery row written by ONE half reads

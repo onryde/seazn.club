@@ -91,6 +91,8 @@ vi.mock("@/server/sponsors/airings", async (importOriginal) => {
 // passes otherwise.
 const costFault = vi.hoisted(() => ({
   measure: null as Error | null, purge: null as Error | null,
+  /** Task 31b: the fixtureless pass (a deleted fixture's replays) refused as a whole. */
+  fixtureless: null as Error | null,
   /** Task 31b: fields laid over the real measure pass's answer (its `skipped`: the breaker, driven by seazn-cost.test.ts). */
   measureAs: null as Record<string, number> | null,
 }));
@@ -102,6 +104,8 @@ vi.mock("@/server/usecases/seazn-cost", async (importOriginal) => {
       costFault.measure ? Promise.reject(costFault.measure) : actual.measureSeaznDelivery(...a).then((r) => ({ ...r, ...costFault.measureAs })),
     purgeDeletedOrgReplays: (...a: Parameters<typeof actual.purgeDeletedOrgReplays>) =>
       costFault.purge ? Promise.reject(costFault.purge) : actual.purgeDeletedOrgReplays(...a),
+    purgeFixturelessReplays: (...a: Parameters<typeof actual.purgeFixturelessReplays>) =>
+      costFault.fixtureless ? Promise.reject(costFault.fixtureless) : actual.purgeFixturelessReplays(...a),
   };
 });
 
@@ -239,6 +243,7 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
       seaznHeld: 0, seaznHeldPastPromise: 0,   // Seazn-hosted video Task 18
       seaznMeasured: 0, seaznMeasureFailed: 0, seaznReplaysPurged: 0, seaznPurgeFailed: 0,   // Seazn-hosted video Task 31 (flag off)
       seaznMeasureSkipped: 0,   // Seazn-hosted video Task 31b (the live read's breaker)
+      seaznFixturelessPurged: 0, seaznFixturelessFailed: 0,   // Seazn-hosted video Task 31b (a deleted fixture's replays)
       bunnyEventsDeleted: 0, bunnyEventsPurgeFailed: 0,   // Seazn-hosted video Task 31b 7f (a scoped run never reaches it)
     });
     expect(listMachines).not.toHaveBeenCalled();   // no composed session in scope ever held a runner
@@ -2055,6 +2060,7 @@ describe.skipIf(!HAS_DB)("Seazn-hosted video Task 31: step 7e measures Seazn del
     costFault.measure = null;
     costFault.purge = null;
     costFault.measureAs = null;
+    costFault.fixtureless = null;
   });
   const costReports = () => sentry.captureError.mock.calls.filter(([, c]) => /^relay\.sweep\.seazn_(measure|purge)$/.test((c as { route?: string }).route ?? ""));
 
@@ -2165,6 +2171,50 @@ describe.skipIf(!HAS_DB)("Seazn-hosted video Task 31: step 7e measures Seazn del
     const outside = (x: typeof res) => Object.fromEntries(Object.entries(x).filter(([k]) => !k.startsWith("seazn") && k !== "headroomMinutes"));
     expect(Object.keys(outside(res)).length, "anti-vacuity: counters compared").toBeGreaterThan(20);
     expect(outside(res)).toEqual(outside(baseline));
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from stream_storage_snapshots where source = 'sweep' and taken_at = ${w.r.deps.now()}`;
+    expect(n, "step 8 ran").toBe(1);
+  });
+
+  it("Task 31b: a DELETED FIXTURE's replay — with SEAZN_HOSTED_COST on, 7e deletes it (fixture_deleted), its copy read from today up to the sweep and then removed, counted; with the flag off nothing is read, removed or deleted", async () => {
+    let checked = 0;
+    for (const on of [false, true]) {
+      const w = await endedSeazn();
+      await sql`delete from fixtures where id = ${w.r.fixtureId}`;
+      const [orphan] = await sql<{ fixture_id: string | null }[]>`select fixture_id from fixture_video_replays where id = ${w.replayId}`;
+      expect(orphan, "PREMISE: the FK nulled the replay's fixture").toEqual({ fixture_id: null });
+      if (on) vi.stubEnv("SEAZN_HOSTED_COST", "true");
+      const removes = vi.spyOn(w.host, "remove");
+      const res = await sweepLater(w);
+      const [row] = await sql<{ state: string; deleted_reason: string | null; bunny_video_id: string | null }[]>`
+        select state, deleted_reason, bunny_video_id from fixture_video_replays where id = ${w.replayId}`;
+      if (!on) {
+        expect(res, "off").toMatchObject({ seaznFixturelessPurged: 0, seaznFixturelessFailed: 0 });
+        expect(row, "off: untouched").toEqual({ state: "playable", deleted_reason: null, bunny_video_id: w.copy });
+        expect(removes).not.toHaveBeenCalled();
+      } else {
+        expect(res, "on").toMatchObject({ seaznFixturelessPurged: 1, seaznFixturelessFailed: 0, seaznReplaysPurged: 0 });
+        expect(row, "on").toEqual({ state: "deleted", deleted_reason: "fixture_deleted", bunny_video_id: null });
+        expect(removes.mock.calls).toEqual([[w.copy]]);
+        // 7e's daily read took the whole days through yesterday; the fixtureless pass's last read starts at today's midnight.
+        const now = w.r.deps.now();
+        const windows = w.host.watchWindows(w.copy);
+        expect(windows.at(-1), "the last read: today, up to the sweep").toEqual({ from: new Date(`${now.toISOString().slice(0, 10)}T00:00:00.000Z`), to: now });
+      }
+      vi.unstubAllEnvs();
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("Task 31b: the fixtureless pass THROWING as a whole is counted (+1), reported once on its own route, and the other passes and step 8 still run", async () => {
+    const w = await endedSeazn();
+    vi.stubEnv("SEAZN_HOSTED_COST", "true");
+    costFault.fixtureless = new Error("database refused the fixtureless pass");
+    sentry.captureError.mockClear();
+    const res = await sweepLater(w);
+    expect(res).toMatchObject({ seaznMeasured: 1, seaznMeasureFailed: 0, seaznPurgeFailed: 0, seaznFixturelessPurged: 0, seaznFixturelessFailed: 1 });
+    const reports = sentry.captureError.mock.calls.filter(([, c]) => ((c as { route?: string }).route ?? "").startsWith("relay.sweep.seazn"));
+    expect(reports.map(([e, c]) => [(e as Error).message, (c as { route: string }).route])).toEqual([["database refused the fixtureless pass", "relay.sweep.seazn_fixtureless"]]);
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from stream_storage_snapshots where source = 'sweep' and taken_at = ${w.r.deps.now()}`;
     expect(n, "step 8 ran").toBe(1);
   });

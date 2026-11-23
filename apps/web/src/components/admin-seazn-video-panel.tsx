@@ -3,7 +3,7 @@
 // no handlers. /admin is staff-only and desktop-only (AGENTS.md), so English only and no phone layout.
 import type { SeaznVideoPart, SeaznVideoSession } from "@/server/usecases/seazn-cost";
 
-const DELETED_BY: Record<string, string> = { organiser: "by organiser", org_deleted: "org deleted" };
+const DELETED_BY: Record<string, string> = { organiser: "by organiser", org_deleted: "org deleted", fixture_deleted: "fixture deleted" };
 
 /** An instant as staff read it on every machine alike: UTC, to the minute. */
 const utcMinute = (at: Date) => `${at.toISOString().slice(0, 16).replace("T", " ")} UTC`;
