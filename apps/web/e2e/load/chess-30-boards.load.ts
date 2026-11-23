@@ -61,8 +61,9 @@
  * uniformly over this; with LOAD_ARRIVE_AT_DEADLINE=1, uniformly over the LAST this-many seconds before the board's deadline), LOAD_THINK_MIN_S / LOAD_THINK_MAX_S (1.5 / 4), LOAD_SWEEP_EVERY_S (40), LOAD_SWEEP_FIRST_S (30, or the cadence if shorter: where the first pass falls), LOAD_SEED (1),
  * LOAD_CAMERA_LAG_MIN_S / LOAD_CAMERA_LAG_MAX_S (1 / 3: the camera's report arrives that long after the join; 0 / 0
  * reports it at the join), LOAD_METERED (1), LOAD_REPORTS_FINAL (1: a left peer's report finalises, as RealtimeKit's
- * does ~70 s after; 0 = never, which makes every sweep pass re-read every unsettled meeting), LOAD_EVIDENCE_WAIT_S (420)
- * and LOAD_EVIDENCE_SWEEP_EVERY_S (20: after the last result the run keeps sweeping until every meeting is ended and its
+ * does ~70 s after; 0 = never, which makes every sweep pass re-read every unsettled meeting), LOAD_EVIDENCE_WAIT_S (420: the
+ * floor of the deadline, which grows by the passes the sweep's own call cap needs for the run's Required rooms - line-load.ts
+ * evidenceWaitMs) and LOAD_EVIDENCE_SWEEP_EVERY_S (20: after the last result the run keeps sweeping until every meeting is ended and its
  * camera evidence settled - the sweep reads it at least two minutes after a room ends), LOAD_SERVER_LOG (the server's
  * stdout file, to count the seat deferrals it logged), LOAD_DUMP_CALLS=1 (every recorded vendor call with its time, next
  * to the report), LOAD_PRESENCE_PROOF (0, or unset: the server's one-read proof is OFF and a stay is priced at 21 / its re-verify at 3; 1: the server runs with EXTERNAL_PLAY_PRESENCE_PROOF=1 and the bars are the table's flag-on prices, 9 / 1 - it must equal the server's own flag; B-dry refuses 1), LOAD_WEBHOOKS (0: the fixture emits webhooks but delivers none, the baseline; 1: delivered over HTTP to the server under
@@ -144,6 +145,8 @@ import { CLIENT_POLL, CLIENT_SEAT, LOAD_LIMITS, callsPerWindow, cameraRetryWaitM
 import { positionRises, completionReorders, type PositionSample } from "./line-checks";
 // A root script with no `@/` imports (presence-shadow-report.ts's header): the harness runs the report's own SQL, never a retyped copy.
 import { shadowReportSql } from "../../../../scripts/presence-shadow-report";
+// The sweep's pass budgets, from their import-free leaf (pass.ts is `server-only`): the evidence deadline is derived from the server's own cap.
+import { SWEEP_RTK_CALLS_PER_PASS } from "../../src/server/usecases/external-play/sweep/pass-limits";
 import {
   LINE_LOAD,
   admissionPace,
@@ -155,6 +158,7 @@ import {
   drainOf,
   dryArrivalSpreadS,
   etaStats,
+  evidenceWaitMs,
   warningStats,
   gateLevels,
   heldStays,
@@ -298,6 +302,15 @@ const POLICY_MIX: { policy: Policy; boards: number }[] = (process.env.LOAD_POLIC
   return { policy, boards };
 });
 if (POLICY_MIX.reduce((a, m) => a + m.boards, 0) !== BOARDS) throw new Error(`LOAD_POLICY_MIX must add up to LOAD_BOARDS (${BOARDS})`);
+/** D16 (spec 5.6.1): a meeting per PLAYER, so a board with a camera has TWO rooms - home's and away's - and the ledger counts rooms,
+ *  not boards. The two is the spec's number, typed here; `boardsWithBothRooms` proves the rooms are one of each side and not two of the same. */
+const MEETINGS_PER_BOARD = 2;
+/** The wind-down's deadline for the camera evidence (line-load.ts evidenceWaitMs): the floor plus the passes the sweep's own
+ *  RealtimeKit cap needs to read every Required room - run 45148211317's 512 rooms settled 375 inside the flat 420 s. */
+const EVIDENCE_DEADLINE_MS = evidenceWaitMs(
+  POLICY_MIX.filter((m) => m.policy === "required").reduce((n, m) => n + m.boards, 0) * MEETINGS_PER_BOARD,
+  { floorS: EVIDENCE_WAIT_S, everyS: EVIDENCE_SWEEP_EVERY_S, callsPerPass: SWEEP_RTK_CALLS_PER_PASS },
+);
 // A policy may be named twice: "required:64,required:64" seeds TWO divisions of the same policy, each its own round opened at the same
 // moment - two big events starting in the same quarter-hour on the one shared call budget (costing paper §2, "not proven"). byPolicy
 // then sums both divisions of a policy; byDivision says what each saw.
@@ -383,7 +396,9 @@ type Player = {
 
 test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' calls, the latencies, the connections, the sweep", async ({ request }) => {
   // The clock grows with the stagger of the biggest division (line-load.ts runTimeoutMs): a flat 30 minutes is about spent at 128 boards a division.
-  test.setTimeout(runTimeoutMs(Math.max(...POLICY_MIX.map((m) => m.boards))));
+  // The floor already holds the flat evidence wait; what the evidence deadline adds past it is added here, so the deadline never
+  // outlives the test and a slow settle reports as itself, not as a timeout (AGENTS.md #20).
+  test.setTimeout(runTimeoutMs(Math.max(...POLICY_MIX.map((m) => m.boards))) + EVIDENCE_DEADLINE_MS - EVIDENCE_WAIT_S * 1_000);
   const baseURL = test.info().project.use.baseURL!;
   const random = rng(SEED);
 
@@ -1032,11 +1047,8 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
     // two minutes after a room ends (sweep.ts CAMERA_EVIDENCE_AFTER_MS), so this is where the sweep's reads of the
     // vendor's session and peer reports - the part of the platform's RealtimeKit demand that is not a seat - show up.
     const fixtureIds = round.boards.map((b) => b.fixtureId);
-    // Camera off makes no meeting; the camera evidence is read for REQUIRED boards only (sweep.ts job 5).
-    // D16 (spec 5.6.1): a meeting per PLAYER, so a board with a camera has TWO rooms - home's and away's - and the ledger
-    // counts rooms, not boards. The two is the spec's number, typed here; `boardsWithBothRooms` proves the rooms are one of
-    // each side and not two of the same.
-    const MEETINGS_PER_BOARD = 2;
+    // Camera off makes no meeting; the camera evidence is read for REQUIRED boards only (sweep.ts job 5). Two rooms a board
+    // (MEETINGS_PER_BOARD, D16).
     const meetingIds = round.boards.filter((b) => b.policy !== "off").map((b) => b.fixtureId);
     const requiredIds = round.boards.filter((b) => b.policy === "required").map((b) => b.fixtureId);
     const evidenceState = async () => {
@@ -1052,7 +1064,7 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
          where fixture_id = any(${monitor.array(meetingIds)}::uuid[])`;
       return row!;
     };
-    const settleBy = Date.now() + EVIDENCE_WAIT_S * 1_000;
+    const settleBy = Date.now() + EVIDENCE_DEADLINE_MS;
     let evidence = await evidenceState();
     let evidenceChecks = 0;
     while (Date.now() < settleBy) {
@@ -1499,7 +1511,7 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
     };
     const sweepMintRetries = sweepRuns.reduce((n, s2) => n + (((s2.report as { mintRetries?: number }).mintRetries) ?? 0), 0);
     const report = {
-      config: { policyMix: POLICY_MIX, metered: METERED, boards: BOARDS, players: players.length, plies: PLIES, arrivalSpreadS: ARRIVAL_SPREAD_S, thinkS: [THINK_MIN_S, THINK_MAX_S], seed: SEED, cameraLagS: CAMERA_LAG_S, reportsFinal: REPORTS_FINAL, evidenceWaitS: EVIDENCE_WAIT_S },
+      config: { policyMix: POLICY_MIX, metered: METERED, boards: BOARDS, players: players.length, plies: PLIES, arrivalSpreadS: ARRIVAL_SPREAD_S, thinkS: [THINK_MIN_S, THINK_MAX_S], seed: SEED, cameraLagS: CAMERA_LAG_S, reportsFinal: REPORTS_FINAL, evidenceWaitS: EVIDENCE_WAIT_S, evidenceDeadlineS: EVIDENCE_DEADLINE_MS / 1_000 },
       runSeconds,
       note: runSeconds < LOAD_LIMITS.windowMs / 1_000 ? "the run is shorter than five minutes: the busiest 5 minutes is the whole run" : "the run is longer than five minutes",
       lichess: {

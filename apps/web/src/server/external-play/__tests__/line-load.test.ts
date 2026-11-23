@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 import { BATCH_REREAD_JITTER_MS } from "../../../components/public-site/match-room/use-room";
 import { LINE_POLL_MIN_MS, LINE_POLL_MS } from "../../../components/public-site/match-room/room-snapshot";
-import { STRANDED_CREATE_AFTER_MS, SWEEP_CADENCE_MS } from "../../usecases/external-play/sweep";
+import { STRANDED_CREATE_AFTER_MS, SWEEP_CADENCE_MS, SWEEP_RTK_CALLS_PER_PASS } from "../../usecases/external-play/sweep";
 import {
   ADMIT_HOLD_MS,
   LINE_ABANDON_AFTER_MS,
@@ -44,6 +44,9 @@ import {
   drainOf,
   dryArrivalSpreadS,
   etaStats,
+  EVIDENCE_PASS_SLACK_MS,
+  EVIDENCE_READS_PER_ROOM,
+  evidenceWaitMs,
   gateLevels,
   heldStays,
   judgeCosts,
@@ -177,6 +180,58 @@ describe("runTimeoutMs: the run's wall clock grows with the stagger of its bigge
   it("refuses a division size that is not a positive integer", () => {
     expect(() => runTimeoutMs(0)).toThrow(RangeError);
     expect(() => runTimeoutMs(2.5)).toThrow(RangeError);
+  });
+});
+
+describe("evidenceWaitMs: the wind-down's evidence deadline grows with the rooms the sweep's own cap must read (AGENTS.md #20)", () => {
+  // Run 45148211317 (256 boards, both divisions Required: 512 rooms) settled 375 of 512 rooms' camera evidence inside the flat
+  // 420 s and failed on nothing else: every wind-down pass read exactly 45 RealtimeKit calls, 15 rooms of 3 reads each - the pass's
+  // own cap (SWEEP_RTK_CALLS_PER_PASS), not the vendor or the bucket. The deadline is the floor plus the passes that cap needs.
+  const KNOBS = { floorS: 420, everyS: 20, callsPerPass: 45 };
+  const ITERATION_MS = 20_000 + EVIDENCE_PASS_SLACK_MS;
+
+  it("premise: the cap is the server's 45 (one call a second of the 45 s pass), a room is 3 reads, and an iteration's slack is 5 s", () => {
+    expect(SWEEP_RTK_CALLS_PER_PASS, "the server's own cap").toBe(45);
+    expect(EVIDENCE_READS_PER_ROOM, "the session list, its participants, the one peer's report").toBe(3);
+    expect(EVIDENCE_PASS_SLACK_MS).toBe(5_000);
+  });
+
+  it("the empty case first: no Required room is the floor alone", () => {
+    expect(evidenceWaitMs(0, KNOBS)).toBe(420_000);
+  });
+
+  it("hand-counted: 15 rooms a pass at a cap of 45, so 15 rooms are one pass and the 16th a second; 30 boards are 4 passes; 256 are 35", () => {
+    expect(evidenceWaitMs(15, KNOBS)).toBe(420_000 + 1 * ITERATION_MS);
+    expect(evidenceWaitMs(16, KNOBS)).toBe(420_000 + 2 * ITERATION_MS);
+    expect(evidenceWaitMs(60, KNOBS), "30 Required boards, 2 rooms each").toBe(420_000 + 4 * ITERATION_MS);
+    expect(evidenceWaitMs(512, KNOBS), "256 Required boards: ceil(512 / 15) = 35 passes").toBe(420_000 + 35 * ITERATION_MS);
+    expect(evidenceWaitMs(512, KNOBS), "and it is past what the flat 420 s read in run 45148211317").toBeGreaterThan(420_000);
+  });
+
+  it("the cap is checked at a room's START (sweep/pass-limits.ts): a cap of 44 still starts 15 rooms (the 15th at 42 calls), a cap of 46 starts 16", () => {
+    expect(evidenceWaitMs(15, { ...KNOBS, callsPerPass: 44 })).toBe(420_000 + 1 * ITERATION_MS);
+    expect(evidenceWaitMs(16, { ...KNOBS, callsPerPass: 44 })).toBe(420_000 + 2 * ITERATION_MS);
+    expect(evidenceWaitMs(16, { ...KNOBS, callsPerPass: 46 })).toBe(420_000 + 1 * ITERATION_MS);
+    expect(evidenceWaitMs(17, { ...KNOBS, callsPerPass: 46 })).toBe(420_000 + 2 * ITERATION_MS);
+  });
+
+  it("for every room count up to 600: the passes it allows read every room, and one pass fewer would not (a sweep, counted)", () => {
+    let checked = 0;
+    for (let rooms = 0; rooms <= 600; rooms += 1) {
+      const passes = (evidenceWaitMs(rooms, KNOBS) - 420_000) / ITERATION_MS;
+      expect(Number.isInteger(passes), `${rooms} rooms: a whole number of passes`).toBe(true);
+      expect(passes * 15, `${rooms} rooms: read`).toBeGreaterThanOrEqual(rooms);
+      if (rooms > 0) expect((passes - 1) * 15, `${rooms} rooms: one pass fewer leaves some unread`).toBeLessThan(rooms);
+      checked += 1;
+    }
+    expect(checked, "room counts checked").toBe(601);
+  });
+
+  it("refuses a room count that is not a non-negative integer, and a cap that could never start a room", () => {
+    expect(() => evidenceWaitMs(-1, KNOBS)).toThrow(RangeError);
+    expect(() => evidenceWaitMs(2.5, KNOBS)).toThrow(RangeError);
+    expect(() => evidenceWaitMs(10, { ...KNOBS, callsPerPass: 0 })).toThrow(RangeError);
+    expect(() => evidenceWaitMs(10, { ...KNOBS, callsPerPass: 1.5 })).toThrow(RangeError);
   });
 });
 

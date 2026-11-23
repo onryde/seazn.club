@@ -96,6 +96,29 @@ export function runTimeoutMs(largestDivisionBoards: number): number {
   return RUN_FLOOR_MS + boardTimes(0, largestDivisionBoards - 1, true).anchorAt;
 }
 
+/** The camera evidence's vendor reads of ONE room in the load fixture (sweep/camera-evidence.ts readCameraEvidence): the meeting's
+ *  session list, the one session's participants, and the one peer's report - the fixture opens one session with one peer a room. */
+export const EVIDENCE_READS_PER_ROOM = 3;
+/** What one wind-down iteration costs past its sleep: the pass itself and the evidence-state read (each pass took under 1 s in run
+ *  45148211317; the rest is margin). */
+export const EVIDENCE_PASS_SLACK_MS = 5_000;
+
+/** The wind-down's deadline for every Required room's camera evidence: the floor (LOAD_EVIDENCE_WAIT_S - the read waits
+ *  CAMERA_EVIDENCE_AFTER_MS after a room ends, and a left peer's report finalises ~70 s after) plus the passes the sweep's own
+ *  RealtimeKit cap needs to read `rooms` rooms, at `everyS` plus the slack each. The cap is checked at a room's START (a room started
+ *  under it is read to the end), so a pass starts ceil(cap / reads) rooms. A flat deadline is a latent red (AGENTS.md #20): run
+ *  45148211317's 512 rooms settled 375 inside a flat 420 s, 15 rooms a pass, and failed on nothing else. A deadline, not a duration:
+ *  the wind-down stops at the pass that settles the last room. */
+export function evidenceWaitMs(rooms: number, knobs: { floorS: number; everyS: number; callsPerPass: number }): number {
+  if (!Number.isInteger(rooms) || rooms < 0) throw new RangeError(`a room count is a non-negative integer, got ${rooms}`);
+  if (!Number.isInteger(knobs.callsPerPass) || knobs.callsPerPass < 1) {
+    throw new RangeError(`a pass that can start no room never settles one: the call cap is a positive integer, got ${knobs.callsPerPass}`);
+  }
+  const roomsPerPass = Math.ceil(knobs.callsPerPass / EVIDENCE_READS_PER_ROOM);
+  const passes = Math.ceil(rooms / roomsPerPass);
+  return knobs.floorS * 1_000 + passes * (knobs.everyS * 1_000 + EVIDENCE_PASS_SLACK_MS);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────────── late / never-created boards (§5.6.8)
 
 export type BoardCreate = {
