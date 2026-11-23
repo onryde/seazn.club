@@ -185,16 +185,28 @@ export async function lilaGameStatuses(lilaUrl: string, ids: readonly string[]):
   return out;
 }
 
-/** Every minted token answers GET /api/account as ITS account (straight to lila, not through the proxy). `bad` names failures by
- *  index and id, never by token. Eight at a time. */
-export async function verifyLilaTokens(lilaUrl: string, accounts: readonly LilaAccount[]): Promise<{ checked: number; bad: string[] }> {
+/** lila's own account of every minted token, straight to lila (not through the proxy), asked twice:
+ *  - identity: GET /api/account answers as ITS account (eight at a time) - but it answers for any scope, so it proves no grant;
+ *  - the STORED grant: POST /api/token/test (lila OAuth.testTokens: a text body of tokens, comma-separated, at most 1000; each
+ *    answered null or {userId, scopes comma-joined, expires}) must be exactly `scopes`, compared as a multiset - the accounts
+ *    file and the minted token doc are written from the same copy of the grant, so only lila's answer is evidence of it.
+ *  That body is KEYED BY TOKEN: it is read here and never logged or returned. `bad` names failures by index and id, never by
+ *  token; `scopesChecked` counts the grants lila actually answered for (a refused batch adds none). */
+export async function verifyLilaTokens(
+  lilaUrl: string,
+  accounts: readonly LilaAccount[],
+  scopes: readonly string[],
+): Promise<{ checked: number; scopesChecked: number; bad: string[] }> {
+  const base = lilaUrl.replace(/\/$/, "");
+  const want = [...scopes].sort().join(" ");
   const bad: { i: number; why: string }[] = [];
   let checked = 0;
+  let scopesChecked = 0;
   for (let i = 0; i < accounts.length; i += 8) {
     await Promise.all(
       accounts.slice(i, i + 8).map(async (a, j) => {
         const n = i + j;
-        const res = await fetch(`${lilaUrl.replace(/\/$/, "")}/api/account`, { headers: { Authorization: `Bearer ${a.token}`, Accept: "application/json" }, signal: AbortSignal.timeout(30_000) });
+        const res = await fetch(`${base}/api/account`, { headers: { Authorization: `Bearer ${a.token}`, Accept: "application/json" }, signal: AbortSignal.timeout(30_000) });
         checked += 1;
         if (res.status !== 200) {
           await res.body?.cancel();
@@ -206,5 +218,29 @@ export async function verifyLilaTokens(lilaUrl: string, accounts: readonly LilaA
       }),
     );
   }
-  return { checked, bad: bad.sort((x, y) => x.i - y.i).map((b) => b.why) };
+  for (let i = 0; i < accounts.length; i += 500) {
+    const batch = accounts.slice(i, i + 500);
+    const res = await fetch(`${base}/api/token/test`, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain", Accept: "application/json" },
+      body: batch.map((a) => a.token).join(","),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (res.status !== 200) {
+      await res.body?.cancel();
+      bad.push({ i, why: `/api/token/test answered ${res.status} for accounts ${i}-${i + batch.length - 1}` });
+      continue;
+    }
+    const answer = (await res.json()) as Record<string, { userId?: unknown; scopes?: unknown } | null | undefined>;
+    batch.forEach((a, j) => {
+      const n = i + j;
+      const t = answer[a.token];
+      scopesChecked += 1;
+      if (!t) return void bad.push({ i: n, why: `account ${n} (${a.id}): lila does not know the token` });
+      if (t.userId !== a.id) bad.push({ i: n, why: `account ${n} (${a.id}): lila's token belongs to ${String(t.userId)}` });
+      const got = (typeof t.scopes === "string" ? t.scopes.split(",") : Array.isArray(t.scopes) ? t.scopes.map(String) : []).map((s) => s.trim()).filter(Boolean).sort().join(" ");
+      if (got !== want) bad.push({ i: n, why: `account ${n} (${a.id}): lila's grant is ${got || "(none)"}, not ${want}` });
+    });
+  }
+  return { checked, scopesChecked, bad: bad.sort((x, y) => x.i - y.i).map((b) => b.why) };
 }

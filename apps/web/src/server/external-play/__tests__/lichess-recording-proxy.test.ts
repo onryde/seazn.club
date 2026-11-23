@@ -145,6 +145,17 @@ describe("startLichessRecordingProxy: forwards untouched, records {method, path,
     expect(proxy.calls).toEqual([expect.objectContaining({ method: "GET", path: "/api/account/playing", status: 0 })]);
   });
 
+  it("refuses to start in front of anything but a plain-http lila (the runner's own; it never fronts an https host)", async () => {
+    let checked = 0;
+    for (const upstream of ["https://127.0.0.1:9", "ws://127.0.0.1:9"]) {
+      const started = startLichessRecordingProxy({ upstream, port: 0 });
+      started.then((p) => open.push(p), () => undefined); // a proxy that wrongly starts is still closed
+      await expect(started, upstream).rejects.toThrow(/the upstream must be a plain http lila on the runner, got (https|ws):/);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
   it("the sequence: a second call and twenty concurrent ones are each recorded once, in arrival order, with lila's own status", async () => {
     const lila = await fakeLila((req, res) => {
       const code = req.url!.includes("bad") ? 400 : 200;
@@ -234,6 +245,8 @@ describe("parseLilaAccounts: the minted lila users the harness links its players
       [[acct(1), acct(2, { token: "lip_tok1secret" })], 2, /account 1: duplicate token/],
       [[acct(1, { id: "Not An Id" })], 1, /account 0: id/],
       [[acct(1, { token: "lio_e2e_x" })], 1, /account 0: token/],
+      // The same SET as the grant, but a scope listed twice: the set comparison alone would pass it.
+      [[acct(1, { scopes: [...SCOPES, "board:play"] })], 1, /account 0: scopes/],
       [{ accounts: [] }, 1, /not an array/],
       [[], 1, /1 needed, 0 minted/],
     ];
@@ -253,7 +266,7 @@ describe("parseLilaAccounts: the minted lila users the harness links its players
   });
 });
 
-describe("lilaGameStatuses and verifyLilaTokens: read lila's own account of the run", () => {
+describe("lilaGameStatuses: lila's own account of the run's games", () => {
   it("exports by ids in batches of at most 300 (lila's anonymous cap) and returns every game lila sent", async () => {
     const lila = await fakeLila((req, res, body) => {
       if (req.url !== "/api/games/export/_ids") return res.writeHead(404).end();
@@ -279,24 +292,83 @@ describe("lilaGameStatuses and verifyLilaTokens: read lila's own account of the 
     expect(lila.seen.length).toBe(0);
   });
 
-  it("verifyLilaTokens: every token is asked for its account, and one that is not its account's is named by index, never by token", async () => {
-    const owner: Record<string, string> = { "Bearer lip_a1": "szl0001", "Bearer lip_a2": "szl0002", "Bearer lip_a3": "someoneelse" };
-    const lila = await fakeLila((req, res) => {
-      const who = owner[String(req.headers.authorization)];
-      if (!who) return res.writeHead(401, { "content-type": "application/json" }).end('{"error":"No such token"}');
+  it("an export lila refuses (a 429, a 500) is a named throw, never a body parsed into a game", async () => {
+    let checked = 0;
+    for (const [code, body] of [[429, '{"error":"Too many requests. Try again later."}'], [500, "<html>oops</html>"]] as const) {
+      const lila = await fakeLila((_req, res) => res.writeHead(code, { "content-type": "application/json" }).end(body));
+      await track(lila.server);
+      await expect(lilaGameStatuses(lila.url, ["g1", "g2"]), `export answered ${code}`).rejects.toThrow(`lila export by ids answered ${code}`);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+});
+
+describe("verifyLilaTokens: lila's own account of every minted token - whose it is, and the grant lila STORED", () => {
+  const SCOPES = ["board:play", "challenge:write", "challenge:read"];
+  /** A stand-in lila: `/api/account` by bearer, `/api/token/test` keyed by token (lila OAuth.testTokens: the body is the tokens,
+   *  comma-separated; each answered null or {userId, scopes comma-joined, expires}). */
+  async function lilaKnowing(tokens: Record<string, { userId: string; scopes: string } | null>) {
+    return fakeLila((req, res, body) => {
+      if (req.url === "/api/token/test" && req.method === "POST") {
+        const out = Object.fromEntries(body.split(",").map((t) => [t, tokens[t] ? { ...tokens[t], expires: null } : null]));
+        return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(out));
+      }
+      const t = String(req.headers.authorization ?? "").replace(/^Bearer /, "");
+      const who = tokens[t]?.userId;
+      if (req.url !== "/api/account" || !who) return res.writeHead(401, { "content-type": "application/json" }).end('{"error":"No such token"}');
       res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ id: who, username: who }));
     });
+  }
+  const acct = (n: number) => ({ id: `szl000${n}`, token: `lip_a${n}`, scopes: [...SCOPES] });
+
+  it("every token asked twice (identity, then grant) - and a clean set reports nothing", async () => {
+    const lila = await lilaKnowing({
+      lip_a1: { userId: "szl0001", scopes: "board:play,challenge:write,challenge:read" },
+      lip_a2: { userId: "szl0002", scopes: "challenge:read,board:play,challenge:write" }, // lila's order is not ours
+    });
     await track(lila.server);
-    const accounts = [
-      { id: "szl0001", token: "lip_a1", scopes: [] },
-      { id: "szl0002", token: "lip_a2", scopes: [] },
-      { id: "szl0003", token: "lip_a3", scopes: [] },
-      { id: "szl0004", token: "lip_a4", scopes: [] },
-    ];
-    const out = await verifyLilaTokens(lila.url, accounts);
-    expect(out.checked, "every account asked").toBe(4);
-    expect(out.bad).toEqual(["account 2 (szl0003): /api/account is someoneelse", "account 3 (szl0004): /api/account answered 401"]);
-    expect(JSON.stringify(out)).not.toContain("lip_a");
-    expect(lila.seen.every((s) => s.url === "/api/account" && s.method === "GET")).toBe(true);
+    const out = await verifyLilaTokens(lila.url, [acct(1), acct(2)], SCOPES);
+    expect(out).toEqual({ checked: 2, scopesChecked: 2, bad: [] });
+    expect(lila.seen.filter((s) => s.url === "/api/account").length, "one identity read per token").toBe(2);
+    const tested = lila.seen.filter((s) => s.url === "/api/token/test");
+    expect(tested.length, "one grant read for the batch").toBe(1);
+    expect(tested[0]!.body, "the tokens, comma-separated, as lila reads them").toBe("lip_a1,lip_a2");
+  });
+
+  it("names, by index and id and never by token: a stranger's token, an unknown one, a narrower grant, a wider grant, a repeated scope", async () => {
+    const lila = await lilaKnowing({
+      lip_a1: { userId: "szl0001", scopes: "board:play,challenge:write,challenge:read" },
+      lip_a2: { userId: "someoneelse", scopes: "board:play,challenge:write,challenge:read" },
+      lip_a3: null,
+      lip_a4: { userId: "szl0004", scopes: "board:play,challenge:write" },
+      lip_a5: { userId: "szl0005", scopes: "board:play,challenge:write,challenge:read,challenge:bulk" },
+      lip_a6: { userId: "szl0006", scopes: "board:play,challenge:write,challenge:read,board:play" },
+    });
+    await track(lila.server);
+    const out = await verifyLilaTokens(lila.url, [1, 2, 3, 4, 5, 6].map(acct), SCOPES);
+    expect(out.checked).toBe(6);
+    expect(out.scopesChecked).toBe(6);
+    expect(out.bad).toEqual([
+      "account 1 (szl0002): /api/account is someoneelse",
+      "account 1 (szl0002): lila's token belongs to someoneelse",
+      "account 2 (szl0003): /api/account answered 401",
+      "account 2 (szl0003): lila does not know the token",
+      "account 3 (szl0004): lila's grant is board:play challenge:write, not board:play challenge:read challenge:write",
+      "account 4 (szl0005): lila's grant is board:play challenge:bulk challenge:read challenge:write, not board:play challenge:read challenge:write",
+      "account 5 (szl0006): lila's grant is board:play board:play challenge:read challenge:write, not board:play challenge:read challenge:write",
+    ]);
+    expect(JSON.stringify(out), "no token in the verdict").not.toMatch(/lip_a/);
+  });
+
+  it("a token test lila refuses is one named failure for the batch, never a pass", async () => {
+    const lila = await fakeLila((req, res) => {
+      if (req.url === "/api/token/test") return res.writeHead(429, { "content-type": "application/json" }).end('{"error":"Too many requests. Try again later."}');
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ id: "szl0001" }));
+    });
+    await track(lila.server);
+    const out = await verifyLilaTokens(lila.url, [acct(1)], SCOPES);
+    expect(out.bad).toEqual(["/api/token/test answered 429 for accounts 0-0"]);
+    expect(out.scopesChecked, "nothing was checked, and the count says so").toBe(0);
   });
 });

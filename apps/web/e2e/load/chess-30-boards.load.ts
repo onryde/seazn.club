@@ -399,9 +399,12 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
       throw new Error(`LOAD_LILA_ACCOUNTS: ${file} is not readable JSON`);
     }
     lilaAccounts = parseLilaAccounts(raw, BOARDS * 2, playScopes());
-    const verified = await verifyLilaTokens(LILA_URL, lilaAccounts);
+    // parseLilaAccounts compares the accounts file to playScopes(), but that file and lila's token doc are written from one
+    // copy of the grant: only lila's /api/token/test answer says what lila STORED.
+    const verified = await verifyLilaTokens(LILA_URL, lilaAccounts, playScopes());
     expect(verified.checked, "anti-vacuity: every minted lila token was asked for its account").toBe(BOARDS * 2);
-    expect(verified.bad, "every minted lila token is its own account's").toEqual([]);
+    expect(verified.scopesChecked, "anti-vacuity: lila answered for every minted token's stored grant").toBe(BOARDS * 2);
+    expect(verified.bad, "every minted lila token is its own account's, granted exactly the play scopes").toEqual([]);
   }
   const fixture: LichessFixtureServer | null = LICHESS_BACKEND === "fixture" ? await startLichessFixtureServer() : null;
   const proxy: LichessRecordingProxy | null = LICHESS_BACKEND === "lila" ? await startLichessRecordingProxy({ upstream: LILA_URL }) : null;
