@@ -41,8 +41,8 @@
 //   F3 refundForPackage honours a caller's clock          -> "ONE clock"
 //   F4 returnableFor honours a caller's clock             -> same test
 //   F5 the refunded-row check removed                     -> "a debit on a refunded package", "a refund on a refunded package"
-//   F6 the frozen-row check removed                       -> "a refund on a frozen package"
-//   F7 the frozen-row check refuses a debit too           -> same test (an upgrade after the freeze still pays)
+//   F6 the frozen-row check removed                       -> "a debit on a frozen package", "a refund on a frozen package"
+//   F7 the frozen-row check refuses a refund only (round 1's code, which let a debit through) -> "a debit on a frozen package"
 //   F8 refundForPackage's monthly count check removed     -> "refundForPackage checks both counts before anything"
 //   F9 refundForPackage's pack count check removed        -> same test
 //   F10 the count checks run after the lock and the package read -> same test (a foreign package answers the count)
@@ -525,18 +525,40 @@ describe.skipIf(!HAS_DB)("a package's state: refunded and frozen", () => {
     expect(await rowsSince(r.orgId, before)).toEqual([]);
   });
 
-  it("a refund on a frozen package is refused by name (online_package_frozen) and writes nothing — and an upgrade after the freeze still pays", async () => {
+  /** Spec §7.1's state table: Paid is "upgradable, refundable"; Frozen is "a round has opened. Nothing changes." (§7.4
+   *  item 3 "Refused: frozen"; the mid-event rule: the size "can no longer be raised"). The positive pair first: on the
+   *  SAME package, BEFORE the freeze, a debit (pay 64) and then a return (move down to 32) both go through. Then the round
+   *  opens, and the org still holds enough for another debit and the package's rows enough for another return. */
+  async function frozenRig(): Promise<Rig> {
     const r = await rig({ monthly: 0, pack: 5 });
-    await pay(r, PRICE_32);
-    await settlePackage(r.packageId, { size: 32, paid: PRICE_32, refunded: 0, forfeited: 0 });
+    let before = await rowIds(r.orgId);
+    expect(await pay(r, PRICE_64), "before the freeze: the debit pays").toEqual({ monthly: 0, pack: 4 });
+    expect(await rowsSince(r.orgId, before)).toEqual([["consume", "pack", -4, 1]]);
+    before = await rowIds(r.orgId);
+    await giveBack(r, { pack: PRICE_64 - PRICE_32, monthly: 0 }); // before the freeze: the return goes through
+    expect(await rowsSince(r.orgId, before)).toEqual([["refund", "pack", 2, 3]]);
+    await settlePackage(r.packageId, { size: 32, paid: PRICE_64, refunded: PRICE_64 - PRICE_32, forfeited: 0 });
     await sql`update division_online_packages set frozen_at = now() where id = ${r.packageId}`;
     expect(await returnable(r), "premise: the package's rows alone would return 2").toEqual({ pack: 2, monthlyThisMonth: 0, monthlyExpired: 0 });
+    await expectBalance(r.orgId, 3, "premise: the org could pay another 2");
+    return r;
+  }
+
+  it("a debit on a frozen package is refused by name (online_package_frozen) and writes nothing — the size can no longer be raised", async () => {
+    const r = await frozenRig();
+    const before = await rowIds(r.orgId);
+    // Moving up 32 → 64 would cost 4 − 2 = 2, and the org holds 3.
+    await expect(pay(r, PRICE_64 - PRICE_32)).rejects.toMatchObject({ status: 500, code: "online_package_frozen" });
+    expect(await rowsSince(r.orgId, before)).toEqual([]);
+    await expectBalance(r.orgId, 3, "nothing debited");
+  });
+
+  it("a refund on a frozen package is refused by name (online_package_frozen) and writes nothing", async () => {
+    const r = await frozenRig();
     const before = await rowIds(r.orgId);
     await expect(giveBack(r, { pack: 1, monthly: 0 })).rejects.toMatchObject({ status: 500, code: "online_package_frozen" });
     expect(await rowsSince(r.orgId, before)).toEqual([]);
-    // The positive pair: a frozen package's credits are committed, not closed — moving UP (64 costs 4 − 2 = 2) pays.
-    expect(await pay(r, PRICE_64 - PRICE_32)).toEqual({ monthly: 0, pack: 2 });
-    await expectBalance(r.orgId, 5 - PRICE_64, "upgraded after the freeze");
+    await expectBalance(r.orgId, 3, "nothing returned");
   });
 });
 

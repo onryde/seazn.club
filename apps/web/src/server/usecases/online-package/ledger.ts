@@ -79,8 +79,9 @@ export function planDebit(split: StreamCreditBreakdown, credits: number): Bucket
  *  package row's lock, and checked its state. A package of another org (or none: a stale id) would put one org's credits
  *  on another's package — money moved across tenants, which an append-only ledger can only compensate, never correct. A
  *  REFUNDED package is history (spec §7.1): nothing is debited for it and nothing more comes back from it. A FROZEN one
- *  has opened a round (P7, P8): its credits are committed, so nothing comes back. Postgres returns uuids lower-case; a
- *  caller's id may not be. */
+ *  has opened a round (P7, P8; §7.1 "Nothing changes", §7.4 item 3 "Refused: frozen", the mid-event rule: the size "can
+ *  no longer be raised"): nothing is debited for it and nothing comes back. Paying and moving down happen only BEFORE
+ *  the freeze. Postgres returns uuids lower-case; a caller's id may not be. */
 async function assertPackageWritable(tx: Tx, a: { orgId: string; packageId: string }, op: "debit" | "refund"): Promise<void> {
   const [p] = await tx<{ org_id: string; frozen_at: Date | null; refunded_at: Date | null }[]>`
     select org_id, frozen_at, refunded_at from division_online_packages where id = ${a.packageId}`;
@@ -90,8 +91,8 @@ async function assertPackageWritable(tx: Tx, a: { orgId: string; packageId: stri
   if (p.refunded_at !== null) {
     throw new HttpError(500, `Online Chess package ${a.packageId} was refunded; refusing a ${op} on it`, "online_package_refunded");
   }
-  if (op === "refund" && p.frozen_at !== null) {
-    throw new HttpError(500, `Online Chess package ${a.packageId} is frozen (a round has opened); refusing to return credits from it`, "online_package_frozen");
+  if (p.frozen_at !== null) {
+    throw new HttpError(500, `Online Chess package ${a.packageId} is frozen (a round has opened); refusing a ${op} on it`, "online_package_frozen");
   }
 }
 
@@ -99,7 +100,8 @@ async function assertPackageWritable(tx: Tx, a: { orgId: string; packageId: stri
  *  resolved plan rate, `streamMonthlyRate`, read before the transaction), so last month's leftover included credits are
  *  expired and this month's granted before anything is drawn; then `planDebit`'s split, written as one `consume` row per
  *  bucket that moves (monthly, then pack), each `balance_after` the running org total. Answers the split. 402 when the
- *  balance is short, before any consume row (the rollover's rows roll back with the caller's transaction). */
+ *  balance is short, before any consume row (the rollover's rows roll back with the caller's transaction). REFUSED,
+ *  before the rollover and any row, on a refunded or frozen package. */
 export async function debitForPackage(
   tx: Tx, a: { orgId: string; packageId: string; credits: number; rate: number },
 ): Promise<BucketSplit> {
