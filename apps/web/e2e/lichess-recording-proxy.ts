@@ -231,7 +231,13 @@ export async function verifyLilaTokens(
       bad.push({ i, why: `/api/token/test answered ${res.status} for accounts ${i}-${i + batch.length - 1}` });
       continue;
     }
-    const answer = (await res.json()) as Record<string, { userId?: unknown; scopes?: unknown } | null | undefined>;
+    // The body is KEYED BY TOKEN: a parse error would quote a slice of it, which no job-log mask can hide. Fixed message only.
+    let answer: Record<string, { userId?: unknown; scopes?: unknown } | null | undefined>;
+    try {
+      answer = JSON.parse(await res.text()) as typeof answer;
+    } catch {
+      throw new Error(`/api/token/test answered a body that is not JSON for accounts ${i}-${i + batch.length - 1}`);
+    }
     batch.forEach((a, j) => {
       const n = i + j;
       const t = answer[a.token];
