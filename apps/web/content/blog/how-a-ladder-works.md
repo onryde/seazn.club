@@ -16,7 +16,7 @@ A ladder is a ranking you climb at your own pace. There is no fixed schedule: pl
 
 ## Why you can only reach so far
 
-In Seazn a player can challenge someone up to {{fact:ladder-challenge.reach}} places above them. In the example, {{fact:ladder-challenge.winChallenger}} was {{fact:ladder-challenge.winPlacesUp}} places below {{fact:ladder-challenge.winTarget}}, so the challenge was allowed, and the win swapped them. Then {{fact:ladder-challenge.rangeChallenger}} tried to challenge {{fact:ladder-challenge.rangeTarget}}, who was {{fact:ladder-challenge.rangePlacesUp}} places up, and Seazn refused it.
+By default a player can challenge someone up to {{fact:ladder-challenge.reach}} places above them. In the example, {{fact:ladder-challenge.winChallenger}} was {{fact:ladder-challenge.winPlacesUp}} places below {{fact:ladder-challenge.winTarget}}, so the challenge was allowed, and the win swapped them. Then {{fact:ladder-challenge.rangeChallenger}} tried to challenge {{fact:ladder-challenge.rangeTarget}}, who was {{fact:ladder-challenge.rangePlacesUp}} places up, and Seazn refused it.
 
 The limit does two jobs. It stops a player at the bottom from jumping to the top with one lucky game, so a high place has to be earned step by step. And it keeps the top players busy with the people just below them, instead of letting them choose whom to play.
 
@@ -27,6 +27,8 @@ You can only challenge upward. A challenge to someone below you is refused, beca
 A challenger who loses changes nothing: {{fact:ladder-challenge.lossChallenger}} lost to {{fact:ladder-challenge.lossTarget}} and both kept their places. Defending a place earns nothing more than keeping it.
 
 A walkover counts like a win. When {{fact:ladder-challenge.walkoverTarget}} did not turn up for the challenge from {{fact:ladder-challenge.walkoverChallenger}}, {{fact:ladder-challenge.walkoverChallenger}} took the place. Without that, a player could stay at the top just by never playing.
+
+If neither of you turns up, nobody wins, so nobody moves. In the example {{fact:ladder-challenge.bothChallenger}} challenged {{fact:ladder-challenge.bothTarget}} and neither side came: it was recorded as a double walkover, and both kept their places.
 
 ## Where the ladder starts, and who joins later
 

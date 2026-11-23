@@ -25,6 +25,8 @@ export interface LadderStep {
   refused?: "LADDER_CHALLENGE_OUT_OF_RANGE" | "LADDER_CHALLENGE_NOT_UPWARD";
   won?: boolean;
   walkover?: boolean;
+  /** Neither side turned up (a double walkover recorded against the challenge). */
+  both?: boolean;
   order: string[];
 }
 
@@ -53,6 +55,7 @@ const placesUp = (order: readonly string[], challenger: string, target: string) 
 function resultWords(step: LadderStep, before: readonly string[]): string {
   if (step.refused === "LADDER_CHALLENGE_OUT_OF_RANGE") return `Refused: ${step.target} is ${placesUp(before, step.challenger, step.target)} places up`;
   if (step.refused === "LADDER_CHALLENGE_NOT_UPWARD") return `Refused: ${step.target} is below ${step.challenger}`;
+  if (step.both) return "Neither side turned up; nobody moves";
   const how = step.walkover ? `${step.target} did not turn up` : step.won ? `${step.challenger} won` : `${step.target} won`;
   return step.won ? `${how}; they swap places` : `${how}; nobody moves`;
 }
@@ -69,8 +72,9 @@ export function ladderResult(seen: LadderObserved): ExampleResult {
   const firstWinBefore = seen.steps.indexOf(firstWin) === 0 ? seen.start : seen.steps[seen.steps.indexOf(firstWin) - 1]!.order;
   const range = seen.steps.find((s) => s.refused === "LADDER_CHALLENGE_OUT_OF_RANGE");
   const rangeBefore = range === undefined ? [] : seen.steps.indexOf(range) === 0 ? seen.start : seen.steps[seen.steps.indexOf(range) - 1]!.order;
-  const loss = seen.steps.find((s) => s.refused === undefined && s.won === false);
+  const loss = seen.steps.find((s) => s.refused === undefined && s.both !== true && s.won === false);
   const walkover = seen.steps.find((s) => s.walkover === true);
+  const both = seen.steps.find((s) => s.both === true);
   return {
     facts: {
       reach: seen.reach,
@@ -88,6 +92,8 @@ export function ladderResult(seen: LadderObserved): ExampleResult {
       lossTarget: loss?.target ?? "",
       walkoverChallenger: walkover?.challenger ?? "",
       walkoverTarget: walkover?.target ?? "",
+      bothChallenger: both?.challenger ?? "",
+      bothTarget: both?.target ?? "",
       finalOrder: seen.steps[seen.steps.length - 1]!.order.join(", "),
     },
     table: {
@@ -125,7 +131,7 @@ function rowsOf(r: ExampleResult): Row[] | string {
   return rows.length > 0 ? rows : "no challenges";
 }
 const swap = (order: readonly string[], a: string, b: string) => order.map((p) => (p === a ? b : p === b ? a : p));
-const startOrder = [...LADDER_PLAYERS];
+const startOrder: string[] = [...LADDER_PLAYERS];
 
 const claims: Claim[] = [
   {
@@ -151,7 +157,8 @@ const claims: Claim[] = [
         const expected = swapped ? swap(before, row.challenger, row.target) : before;
         if (JSON.stringify(row.order) !== JSON.stringify(expected)) return `step ${i + 1}: ladder ${row.order.join(", ")}, expected ${expected.join(", ")}`;
         if (swapped !== (row.result.includes(`${row.challenger} won`) || row.result.includes(`${row.target} did not turn up`))) return `step ${i + 1}: '${row.result}' swaps without a challenger win`;
-        swapped ? swaps++ : still++;
+        if (swapped) swaps++;
+        else still++;
         before = row.order;
       }
       if (r.facts.finalOrder !== before.join(", ")) return "finalOrder differs from the last row";
@@ -196,6 +203,71 @@ const claims: Claim[] = [
         before = row.order;
       }
       return seen > 0 || "anti-vacuity: no downward challenge";
+    },
+  },
+  {
+    says: "every row reads exactly as the rules give it: the step number, the places up counted from the ladder before it, who the result names, and the ladder after",
+    source: "issueChallenge (reach, direction), the ladder swap in usecases/scoring.ts (a win or a walkover swaps, anything else leaves the order); a double walkover keeps both places (lib/double-walkover-next-match.ts: the ladder is exempt)",
+    check(r) {
+      const rows = rowsOf(r);
+      if (typeof rows === "string") return rows;
+      const reach = ladderTemplateReach();
+      let before = startOrder;
+      for (const [i, row] of rows.entries()) {
+        const { challenger: c, target: t, result } = row;
+        const up = placesUp(before, c, t);
+        if (String(r.table!.rows[i]![0]) !== String(i + 1)) return `row ${i + 1} is numbered '${String(r.table!.rows[i]![0])}'`;
+        const allowed = up > 0 && up <= reach;
+        let swaps: boolean;
+        if (result === `${c} won; they swap places` || result === `${t} did not turn up; they swap places`) swaps = allowed;
+        else if (result === `${t} won; nobody moves` || result === "Neither side turned up; nobody moves") swaps = false;
+        else if (up > reach && result === `Refused: ${t} is ${up} places up`) swaps = false;
+        else if (up <= 0 && result === `Refused: ${t} is below ${c}`) swaps = false;
+        else return `step ${i + 1}: '${result}' for ${c} and ${t}, ${up} places up (reach ${reach})`;
+        if (!swaps && (result.startsWith("Refused") ? false : !allowed)) return `step ${i + 1}: a played challenge ${up} places up is outside the reach`;
+        if (swaps && !allowed) return `step ${i + 1}: swapped outside the reach`;
+        const expected = swaps ? swap(before, c, t) : before;
+        if (JSON.stringify(row.order) !== JSON.stringify(expected)) return `step ${i + 1}: ladder ${row.order.join(", ")}, expected ${expected.join(", ")}`;
+        before = row.order;
+      }
+      return true;
+    },
+  },
+  {
+    says: "the facts name the table's steps: the first win, the refused challenge, the loss, the walkover and the double walkover, the places up, and the last ladder",
+    source: "a recount of the table's rows with the claims' own parsing (no value read from the formatter)",
+    check(r) {
+      const rows = rowsOf(r);
+      if (typeof rows === "string") return rows;
+      let before = startOrder;
+      const seen: Record<string, { c: string; t: string; up: number }> = {};
+      for (const row of rows) {
+        const up = placesUp(before, row.challenger, row.target);
+        const kind = row.result.endsWith("they swap places")
+          ? row.result.includes("did not turn up")
+            ? "walkover"
+            : "win"
+          : row.result.startsWith("Refused") && row.result.includes("places up")
+            ? "range"
+            : row.result.endsWith("nobody moves")
+              ? row.result.startsWith("Neither")
+                ? "both"
+                : "loss"
+              : "other";
+        if (seen[kind] === undefined) seen[kind] = { c: row.challenger, t: row.target, up };
+        before = row.order;
+      }
+      const f = r.facts;
+      const need = ["win", "range", "loss", "walkover", "both"] as const;
+      for (const k of need) if (seen[k] === undefined) return `anti-vacuity: no ${k} step`;
+      const same =
+        f.players === startOrder.length &&
+        f.winChallenger === seen.win!.c && f.winTarget === seen.win!.t && f.winPlacesUp === seen.win!.up &&
+        f.rangeChallenger === seen.range!.c && f.rangeTarget === seen.range!.t && f.rangePlacesUp === seen.range!.up &&
+        f.lossChallenger === seen.loss!.c && f.lossTarget === seen.loss!.t &&
+        f.walkoverChallenger === seen.walkover!.c && f.walkoverTarget === seen.walkover!.t &&
+        f.bothChallenger === seen.both!.c && f.bothTarget === seen.both!.t;
+      return same || "a fact names a different step than the table shows";
     },
   },
   {

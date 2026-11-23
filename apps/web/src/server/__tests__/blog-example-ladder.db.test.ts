@@ -83,7 +83,7 @@ async function storedOrder(r: Rig): Promise<string[]> {
   return (row!.config.ladder_order ?? []).map((id) => r.nameOf.get(id)!);
 }
 
-type How = { won: boolean; walkover?: boolean };
+type How = { won: boolean; walkover?: boolean } | { both: true };
 
 /** One challenge, through the real usecases: refused (its wire code), or played to `how` and scored. */
 async function challenge(r: Rig, challenger: string, target: string, how: How | null): Promise<LadderStep> {
@@ -97,6 +97,14 @@ async function challenge(r: Rig, challenger: string, target: string, how: How | 
     return { challenger, target, refused: e.code, order: await storedOrder(r) };
   }
   expect(how, `${challenger} -> ${target} was allowed but the script expected a refusal`).not.toBeNull();
+  if ("both" in how!) {
+    // Neither turns up: the organiser records a double walkover on the challenge (fix round 1, claim 27.6). A ladder is the one
+    // bracket-kind stage that accepts it with no next match, and it keeps both places.
+    await scoreEvent(r.auth, fixtureId, { expected_seq: 0, type: "core.forfeit", payload: { by: "both", reason: "walkover" } });
+    const [d] = await sql<{ status: string; outcome: { kind?: string } | null }[]>`select status, outcome from fixtures where id = ${fixtureId}`;
+    expect(d!.outcome?.kind, `${challenger} -> ${target}: stored as a double walkover`).toBe("double_walkover");
+    return { challenger, target, both: true, order: await storedOrder(r) };
+  }
   if (how!.walkover) {
     // The holder does not turn up: the organiser records the walkover against them.
     await scoreEvent(r.auth, fixtureId, { expected_seq: 0, type: "core.forfeit", payload: { by: r.idOf.get(target)!, reason: "walkover" } });
@@ -124,6 +132,7 @@ describe.skipIf(!HAS_DB)("blog example 'ladder-challenge': the ladder, run throu
     steps.push(await challenge(r, "Fay", "Dev", { won: false })); // loses: nobody moves
     steps.push(await challenge(r, "Dev", "Cy", { won: true, walkover: true })); // Cy does not turn up: walkover, swap
     steps.push(await challenge(r, "Ben", "Fay", null)); // downward: refused
+    steps.push(await challenge(r, "Ben", "Cy", { both: true })); // Cy is 4th, Ben 5th: 1 place up, allowed; neither turns up: nobody moves
 
     let offeredIn = 0;
     const visited = forEachSport(({ module }) => {
@@ -137,5 +146,5 @@ describe.skipIf(!HAS_DB)("blog example 'ladder-challenge': the ladder, run throu
     const result = ladderResult(seen);
     if (UPDATE) writeFileSync(GOLDEN, stable(result));
     expect(JSON.parse(JSON.stringify(result)), "the ladder no longer matches its golden (UPDATE_BLOG_EXAMPLES=1 moves it)").toEqual(JSON.parse(readFileSync(GOLDEN, "utf8")));
-  }, 60_000);
+  });
 });
