@@ -22,6 +22,7 @@ import { isCatchUpRoundExtKey } from "@/lib/roundrobin-late-entry";
 import {
   ROUND_SEQUENCE_STAGE_KINDS,
   BRACKET_STAGE_KINDS,
+  buildRunSheet,
   isBye,
   latchedOpen,
   roundDone,
@@ -34,6 +35,7 @@ import {
   type RunSheetOnlinePlay,
 } from "@/lib/run-sheet-groups";
 import type { FeedLabelPair } from "@/lib/schedule-board";
+import { foldedRoundShows, withFoldedRounds, type FoldedRunSheetRound } from "@/lib/run-sheet-paging";
 import type { Venue } from "@/components/v2/shared/court-multi-picker";
 import { bracketRoundLabel } from "@/components/v2/stages-panel";
 import type { MessageKey } from "@/lib/messages";
@@ -150,6 +152,8 @@ export function RunSheet({
   endsCard = true,
   pools,
   sitsOut,
+  foldedRounds,
+  loadRound,
 }: {
   blocks: RunSheetBlock[];
   stages: RunSheetStageInfo[];
@@ -250,6 +254,11 @@ export function RunSheet({
    *  (`sitsOutByRound` over `config.round_byes`, departed entrants already left out). A round with a line ends its bar with
    *  "· Sits out: Eve". Absent, or a round it does not list: the bar says nothing, as before. */
   sitsOut?: ReadonlyMap<number, readonly string[]>;
+  /** Embedded only (W5 follow-ups C, Option A "by round"): the DIVISION's folded rounds - a big division's league/group rounds the page
+   *  sent as a tally (`lib/run-sheet-paging.ts`); this sheet draws its own stage's as bars whose rows `loadRound` reads when opened.
+   *  A new array (the page re-rendered) drops what was loaded: those rows belong to the old render. */
+  foldedRounds?: readonly FoldedRunSheetRound[];
+  loadRound?: (stageId: string, round: number) => Promise<RunSheetFixture[]>;
 }) {
   const msg = useMsg();
   const msgPlural = useMsgPlural();
@@ -297,6 +306,13 @@ export function RunSheet({
   // Controller ruling 2: that default is decided the FIRST time a round is seen and then held (`latchedOpen`), so a round that finishes
   // during the visit stays open until a reload or a tap. Written during render (React's "adjust state during render"), never in an effect.
   const [roundLatch, setRoundLatch] = useState<ReadonlyMap<number, boolean>>(() => new Map());
+  // W5 follow-ups C: a folded round's rows once its bar is opened, by round number ("loading" / "error" while they are not here).
+  const [loadedRounds, setLoadedRounds] = useState<ReadonlyMap<number, readonly RunSheetFixture[] | "loading" | "error">>(() => new Map());
+  const [foldedSeen, setFoldedSeen] = useState(foldedRounds);
+  if (foldedSeen !== foldedRounds) {
+    setFoldedSeen(foldedRounds);
+    setLoadedRounds(new Map());
+  }
 
   // Empty division (spec, "Error and empty states"): no header, nothing —
   // the stage rail (Task 5) is the whole story until then.
@@ -620,11 +636,40 @@ export function RunSheet({
   const roundsStage = embedded && stageId !== null ? stageById.get(stageId) : undefined;
   const poolOrder = new Map((pools ?? []).map((p, i) => [p.id, i] as const));
   const poolLabelOf = new Map((pools ?? []).map((p) => [p.id, p.label] as const));
+  // W5 follow-ups C: read a folded round's rows (its bar was opened, or Try again).
+  const openFolded = (round: number) => {
+    if (stageId === null || loadRound === undefined) return;
+    setLoadedRounds((prev) => new Map(prev).set(round, "loading"));
+    loadRound(stageId, round)
+      .then((rows) => setLoadedRounds((prev) => new Map(prev).set(round, rows)))
+      .catch(() => setLoadedRounds((prev) => new Map(prev).set(round, "error")));
+  };
   const renderRounds = (withBars: boolean): React.ReactElement | null => {
     if (stageId === null) return null;
-    const sections = (withBars ? stageRoundSections(blocks, stageId, poolOrder) : stageFlatSection(blocks, stageId))
-      .map((section) => ({ ...section, all: section.fixtures, rows: section.fixtures.filter(keep) }))
-      .filter((section) => section.rows.length > 0);
+    // W5 follow-ups C: this stage's folded rounds. A loaded one's rows join the blocks (grouped by the same `buildRunSheet`, so they
+    // read exactly as shipped rows do); one not loaded yet is a bar carrying its tally, among the sections by kickoff.
+    const foldedHere = withBars ? (foldedRounds ?? []).filter((r) => r.stageId === stageId) : [];
+    const loadedRows = foldedHere.flatMap((r) => {
+      const got = loadedRounds.get(r.round);
+      return Array.isArray(got) ? got : [];
+    });
+    const loadedSet = new Set(foldedHere.filter((r) => Array.isArray(loadedRounds.get(r.round))).map((r) => r.round));
+    // `seq` orders rows ACROSS stages in `buildRunSheet`; these are one stage's, so any constant reads them in round order.
+    const sheetBlocks =
+      loadedRows.length > 0
+        ? [...blocks, ...buildRunSheet({ fixtures: loadedRows, stages: stages.map((st) => ({ id: st.id, kind: st.kind, seq: 0 })), tz, nowMs })]
+        : blocks;
+    const sections = (withBars
+      ? withFoldedRounds(stageRoundSections(sheetBlocks, stageId, poolOrder), foldedHere, loadedSet)
+      : stageFlatSection(blocks, stageId)
+    )
+      .map((section) => ({
+        round: section.round,
+        folded: "folded" in section ? (section.folded as FoldedRunSheetRound) : null,
+        all: section.fixtures as RunSheetFixture[],
+        rows: (section.fixtures as RunSheetFixture[]).filter(keep),
+      }))
+      .filter((section) => (section.folded !== null ? foldedRoundShows(section.folded, filter) : section.rows.length > 0));
     if (sections.length === 0) return null;
     // ONE NOW rule per card: before the first row of today still to come, else after the last row of today (a stage with nothing
     // timed today carries none). Rows read round by round, so "the first still to come" is the first in that order. A group stage's
@@ -647,6 +692,8 @@ export function RunSheet({
     const latchMoves = new Map<number, boolean>();
     const opens = sections.map((section) => {
       if (!withBars) return true;
+      // A folded round starts shut: its rows are not here until it is opened.
+      if (section.folded !== null) return roundToggled.get(section.round) ?? false;
       const was = roundLatch.get(section.round);
       const now = latchedOpen(was, !roundStartsCollapsed(section.all, settleIds));
       if (now !== was) latchMoves.set(section.round, now);
@@ -667,8 +714,15 @@ export function RunSheet({
               {withBars && (
                 <RoundBar
                   title={msg("schedule.round", { n: section.round })}
-                  done={roundDoneText(msgPlural, section.all, settleIds)}
-                  toggle={{ open, controls: listId, onToggle: () => setRoundToggled((prev) => new Map(prev).set(section.round, !open)) }}
+                  done={section.folded !== null ? roundDoneWords(msgPlural, section.folded) : roundDoneText(msgPlural, section.all, settleIds)}
+                  toggle={{
+                    open,
+                    controls: listId,
+                    onToggle: () => {
+                      setRoundToggled((prev) => new Map(prev).set(section.round, !open));
+                      if (section.folded !== null && !open && loadedRounds.get(section.round) !== "loading") openFolded(section.round);
+                    },
+                  }}
                 >
                   {dates !== null && <span data-run-sheet-round-dates>{" · "}{dates}</span>}
                   {sameDay && when !== null && (
@@ -679,7 +733,7 @@ export function RunSheet({
                   )}
                   {/* W5 T23 (X-CU-7; R24 pick 2A): a round appended for a late player's catch-up matches keeps its number and says
                       so — on the WHOLE round (`section.all`), so a filter that hides its row does not drop the tag. */}
-                  {section.all.some((f) => isCatchUpRoundExtKey(f.ext_key)) && (
+                  {(section.folded !== null ? section.folded.catchUp : section.all.some((f) => isCatchUpRoundExtKey(f.ext_key))) && (
                     <span data-run-sheet-round-catch-up>
                       {" · "}
                       {msg("runsheet.round.catchUp")}
@@ -702,6 +756,20 @@ export function RunSheet({
                   rows were in the HTML and in hydration (half the run sheet's DOM at the caps). The list stays, empty and hidden, so the
                   bar's `aria-controls` still names it. */}
               <ul id={listId} hidden={!open} className="divide-y divide-slate-50">
+                {open && section.folded !== null && (
+                  <li className="px-4 py-3 text-sm text-slate-500" data-run-sheet-round-load={loadedRounds.get(section.round) === "error" ? "error" : "loading"}>
+                    {loadedRounds.get(section.round) === "error" ? (
+                      <span role="alert" className="flex flex-wrap items-center gap-3">
+                        {msg("runsheet.round.loadFailed")}
+                        <button type="button" onClick={() => openFolded(section.round)} className="min-h-11 font-semibold text-indigo-700 hover:underline">
+                          {msg("runsheet.round.retry")}
+                        </button>
+                      </span>
+                    ) : (
+                      <span role="status">{msg("runsheet.round.loading")}</span>
+                    )}
+                  </li>
+                )}
                 {open && section.rows.map((f, i) => (
                   <RowWithNow
                     key={f.id}
@@ -930,6 +998,7 @@ export function RunSheetFilterBar({
   filter,
   onFilter,
   className,
+  foldedUnscheduled = 0,
 }: {
   blocks: readonly RunSheetBlock[];
   tz: string;
@@ -939,9 +1008,13 @@ export function RunSheetFilterBar({
   filter: RunSheetFilter;
   onFilter: (filter: RunSheetFilter) => void;
   className?: string;
+  /** W5 follow-ups C: the unscheduled matches in folded rounds (their rows are not in `blocks`). */
+  foldedUnscheduled?: number;
 }) {
   const msg = useMsg();
-  const { needsResult, unscheduled } = runSheetCounts(blocks, { stageId: null, nowMs, matchMinutes, onlinePlay });
+  const counted = runSheetCounts(blocks, { stageId: null, nowMs, matchMinutes, onlinePlay });
+  const needsResult = counted.needsResult;
+  const unscheduled = counted.unscheduled + foldedUnscheduled;
   const filters: { value: RunSheetFilter; label: string; count?: number }[] = [
     { value: "today", label: msg("runsheet.filter.today") },
     { value: "needs_result", label: msg("runsheet.filter.needsResult"), count: needsResult },
@@ -1057,7 +1130,15 @@ function roundDoneText(
   held: ReadonlySet<string>,
 ): string {
   const { done, total } = roundDone(fixtures, held);
-  if (total === 0) return msgPlural("runsheet.round.byes", fixtures.length);
+  return roundDoneWords(msgPlural, { done, total, rows: fixtures.length });
+}
+
+/** The bar's "N of M done" from its numbers - a shipped round's (`roundDone` over its rows) and a folded round's tally alike. */
+function roundDoneWords(
+  msgPlural: (key: string, count: number, vars?: Record<string, string | number>) => string,
+  { done, total, rows }: { done: number; total: number; rows: number },
+): string {
+  if (total === 0) return msgPlural("runsheet.round.byes", rows);
   return msgPlural("runsheet.round.done", total, { done, total });
 }
 

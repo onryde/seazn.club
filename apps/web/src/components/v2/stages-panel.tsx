@@ -150,6 +150,7 @@ import { ROOT_KNOCKOUT_KINDS, isRunningRootSwiss } from "@/lib/open-entry-stages
 import { buildRunSheet, isBye, latchedOpen, roundDone, type RunSheetFixture, type RunSheetOnlinePlay } from "@/lib/run-sheet-groups";
 import type { ForfeitEntrantStatuses } from "@/lib/forfeit-tag";
 import { RUN_SHEET_FILTER_LABEL, RunSheet, RunSheetFilterBar, runSheetHasRows, type RunSheetFilter } from "@/components/v2/desk/run-sheet";
+import { foldedTally, type FoldedRunSheetRound } from "@/lib/run-sheet-paging";
 import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
 import { isOnlineGameExists } from "@/lib/open-round";
 import { venueNoun } from "@/lib/venue";
@@ -279,6 +280,9 @@ interface FixtureRow {
  *  picks from. The real page always sends every field (`listDivisionFixtures`
  *  selects them all); this only normalises the gap for TypeScript and for any
  *  hand-built test fixture that omits one. */
+/** No folded rounds - one array, so the run sheet's "the page sent new rounds" check never fires on a re-render. */
+const NO_FOLDED_ROUNDS: readonly FoldedRunSheetRound[] = [];
+
 function toRunSheetFixture(f: FixtureRow): RunSheetFixture {
   return {
     ...f,
@@ -346,6 +350,10 @@ interface Props {
   divSlug: string;
   stages: StageRow[];
   fixtures: FixtureRow[];
+  /** W5 follow-ups C (Option A, "by round"): a big division's folded league/group rounds - the page ships their TALLY, not their rows
+   *  (`lib/run-sheet-paging.ts`), so every per-stage figure below adds the folded share, and the run sheet draws each as a bar whose
+   *  rows load when it is opened. Absent or empty: every row is in `fixtures`, as before. */
+  foldedRounds?: readonly FoldedRunSheetRound[];
   entrantNames: Record<string, string>;
   /** W3 T15 ruling 2 — entrant id → status (the page's roster read), threaded to the run sheet's rows only: a
    *  DISQUALIFIED entrant's cascade walkover is worded as the disqualification, never as a withdrawal. Optional, so the
@@ -691,7 +699,7 @@ function scrollIntoViewIfHidden(el: HTMLElement) {
   el.scrollIntoView({ block: "nearest", behavior: reduce ? "auto" : "smooth" });
 }
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, canSettle, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift, knockoutCutDrift, tableCutDrift, knockoutWaiting = [], tableWaiting = [], tableLatePools = null, drawSeeds = {}, crossPoolDraws = {}, thirdPlaceDropped = [], startedKnockoutStageIds = [] }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, foldedRounds = NO_FOLDED_ROUNDS, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, canSettle, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift, knockoutCutDrift, tableCutDrift, knockoutWaiting = [], tableWaiting = [], tableLatePools = null, drawSeeds = {}, crossPoolDraws = {}, thirdPlaceDropped = [], startedKnockoutStageIds = [] }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -1267,18 +1275,33 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
        filtered), and never a second query. */
     feedLabels: runSheetFeedLabels,
     pools,
+    // W5 follow-ups C: the division's folded rounds (each sheet draws its own stage's) and the read that loads one's rows.
+    foldedRounds,
+    loadRound: async (stageId: string, round: number): Promise<RunSheetFixture[]> => {
+      const q = new URLSearchParams({ division: divisionId, stage: stageId, round: String(round) });
+      const res = await fetch(`${routes.division(orgSlug, compSlug, divSlug)}/rounds?${q}`, { headers: { accept: "application/json" } });
+      if (!res.ok) throw new Error(`rounds ${res.status}`);
+      // The v1 envelope (`server/api-v1/http.ts`).
+      return ((await res.json()) as { data: FixtureRow[] }).data.map(toRunSheetFixture);
+    },
   };
+  // The folded rounds' unscheduled matches: the Unscheduled chip counts them, and the filter keeps their bars.
+  const foldedUnscheduled = foldedRounds.reduce((n, r) => n + r.unscheduled, 0);
   // Does the filter leave ANY row in ANY stage? When none does, the panel says so once (with the way back) and the stage sheets stay
   // quiet instead of each repeating it.
-  const anyRowsKept = runSheetHasRows(runSheetBlocks, filter, {
-    stageId: null,
-    tz,
-    today: dayKeyInTz(nowMs, tz),
-    nowMs,
-    matchMinutes,
-    streamStates,
-    onlinePlay,
-  });
+  const anyRowsKept =
+    runSheetHasRows(runSheetBlocks, filter, {
+      stageId: null,
+      tz,
+      today: dayKeyInTz(nowMs, tz),
+      nowMs,
+      matchMinutes,
+      streamStates,
+      onlinePlay,
+    }) ||
+    // A folded round keeps its bar under All, and under Unscheduled while it holds an unscheduled match (`foldedRoundShows`).
+    (filter === "all" && foldedRounds.length > 0) ||
+    (filter === "unscheduled" && foldedUnscheduled > 0);
 
   return (
     <div className="space-y-6">
@@ -1401,6 +1424,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
               onlinePlay={onlinePlay}
               filter={filter}
               onFilter={setFilter}
+              foldedUnscheduled={foldedUnscheduled}
             />
           </div>
         )}
@@ -1425,6 +1449,9 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         .sort((a, b) => a.seq - b.seq)
         .map((stage) => {
         const stageFixtures = fixtures.filter((f) => f.stage_id === stage.id);
+        // W5 follow-ups C: the stage's folded rounds' share of every figure below (zero for a stage that ships every row).
+        const foldedShare = foldedTally(foldedRounds, stage.id);
+        const stageRowCount = stageFixtures.length + foldedShare.rows;
         // Pinned unscheduled section (v3/04 §3 item 3): count + CTA now live
         // on `<StageRail>` (Task 4, fix round 1 — see stage-rail.tsx's own
         // header for the harness fix that made this possible) — this is only
@@ -1443,6 +1470,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
             isUnscheduledFixture({ status: f.status, scheduledAt: f.scheduled_at }) &&
             !isBye(toRunSheetFixture(f)),
         );
+        const unscheduledCount = unscheduled.length + foldedShare.unscheduled;
         // Owner-approved redesign, "Option A" (Task 10 follow-up) — the
         // stage card BODY used to say nothing beyond the header (measured:
         // 814x234px of nothing but a title and a rule). This computes the
@@ -1474,7 +1502,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         const stageInPlay = stageFixtures.filter(
           (f) => f.status === "in_play" && !isBye(toRunSheetFixture(f)),
         );
-        const stageNonByeCount = stageFixtures.filter((f) => !isBye(toRunSheetFixture(f))).length;
+        const stageNonByeCount = stageFixtures.filter((f) => !isBye(toRunSheetFixture(f))).length + foldedShare.nonBye;
         // D12 (T16): online boards whose round nobody has opened — not invited, not playable, owing nothing yet.
         const stageNotOpened = stageFixtures.filter((f) => onlinePlay?.[f.id]?.unopened === true);
         // Match Day C3: the buttons follow the stage's state. `stageCounts` over ALL the stage's fixtures - Swiss unseated shells and
@@ -1484,11 +1512,16 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         // A HELD match is open: `needs_decision`, or a plain abandon the page lists as awaiting its settle (`awaitingSettle`, the
         // list the run sheet's own rows read - not re-derived here), which keeps `status = 'abandoned'` while the verdict is owed.
         const awaitingIds = new Set(awaitingSettle ?? []);
-        const counts = stageCounts(stageFixtures, awaitingIds);
+        const shippedCounts = stageCounts(stageFixtures, awaitingIds);
+        const counts = {
+          played: shippedCounts.played + foldedShare.counts.played,
+          inPlay: shippedCounts.inPlay + foldedShare.counts.inPlay,
+          unplayed: shippedCounts.unplayed + foldedShare.counts.unplayed,
+        };
         // Match Day E1 fix round 1 (controller ruling): the counts line's "N done" is the SAME number the stage's round bars add up to -
         // `roundDone` over the stage's real matches (byes out), i.e. `stageCounts`' settled bucket with a held match open. It used to be a
         // strict "decided / finalized" filter of its own, which read "1 played" beside the bar's "2 of 3 done" once a walkover existed.
-        const stageDone = roundDone(stageFixtures.map(toRunSheetFixture), awaitingIds).done;
+        const stageDone = roundDone(stageFixtures.map(toRunSheetFixture), awaitingIds).done + foldedShare.done;
         // The stage's three settings buttons, built ONCE: the header row (from `md`) and the "Stage tools" sheet's top rows (below `md`,
         // an editor only) are the same list. Points and Tie-breaks only on a table stage whose rules read.
         const takesPoints = stageTakesPoints(stage.kind);
@@ -1630,7 +1663,10 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         const deletable =
           stage.seq === Math.max(...stages.map((s) => s.seq)) &&
           // W2a: a held (`needs_decision`) fixture was PLAYED — same rule as deleteStage's server guard.
-          !stageFixtures.some((f) => ["in_play", "decided", "finalized", "needs_decision"].includes(f.status));
+          !stageFixtures.some((f) => ["in_play", "decided", "finalized", "needs_decision"].includes(f.status)) &&
+          // A folded round with a live match or a result (`FoldedRunSheetRound.played`, wider than the set above by the voids:
+          // hiding Delete over a round of voids is the safe side - the server guard decides).
+          foldedShare.played === 0;
         const swissShellFixtures = stageFixtures.map((f) => ({ ...f, ext_key: f.ext_key ?? null }));
         const swissHasUnseated =
           stage.kind === "swiss" && nextUnseatedSwissRound(swissShellFixtures) !== null;
@@ -1692,7 +1728,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           status: stage.status,
           config: stage.config,
           activeEntrantIds,
-          fixtureCount: stageFixtures.length,
+          fixtureCount: stageRowCount,
           round: swissLegendRound(swissShellFixtures),
           stageId: stage.id,
           entrantFirstRounds: entrantSwissFirstRounds,
@@ -1755,9 +1791,9 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         const updateDraw = knockoutUpdateDrawOffered({
           stage,
           divisionStatus,
-          fixtureCount: stageFixtures.length,
+          fixtureCount: stageRowCount,
           // Byes out: a bye line is stored `forfeited`, so `counts.played` reads every bracket with a bye as begun.
-          matchesBegun: stageFixtures.filter((f) => !isBye(toRunSheetFixture(f)) && f.status !== "scheduled").length,
+          matchesBegun: stageFixtures.filter((f) => !isBye(toRunSheetFixture(f)) && f.status !== "scheduled").length + foldedShare.begun,
           rosterDrifted: hasDrift,
         });
         // The stage's required court tags: built ONCE and drawn once, at the card's foot, for an editor and a viewer alike (Match Day E1
@@ -1789,7 +1825,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           stageRailActions({
             stage,
             counts,
-            fixtureCount: stageFixtures.length,
+            fixtureCount: stageRowCount,
             adhoc: ADHOC_STAGE_KINDS.has(stage.kind),
             swissHasUnseated,
             canUnpairSwiss,
@@ -1803,7 +1839,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
             stage={stage}
             canEdit={canEdit}
             busy={busy}
-            fixtureCount={stageFixtures.length}
+            fixtureCount={stageRowCount}
             counts={counts}
             matchCount={stageNonByeCount}
             deletable={deletable}
@@ -2051,7 +2087,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     pools={tableLatePools?.stageId === stage.id ? tableLatePools.pools : undefined}
                     defaultPool={tableLatePools?.stageId === stage.id ? tableLatePools.defaultKey : null}
                     rebuildable={tableLatePools?.stageId === stage.id && tableLatePools.rebuildable}
-                    fixtureCount={stageFixtures.length}
+                    fixtureCount={stageRowCount}
                     rebuildAttachments={rosterDrift[stage.id]?.attachments}
                     onRebuildRefused={(err) => {
                       setNotice(null);
@@ -2344,7 +2380,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     fill was closed by Option B's stacking, not by the bar,
                     so its removal reopens nothing. This line remains the
                     card's one statement of where the stage is up to. */}
-                {stageFixtures.length > 0 && stageNonByeCount > 0 && (
+                {stageRowCount > 0 && stageNonByeCount > 0 && (
                   <div className="px-4 py-3" data-testid="stage-progress">
                     {/* Suppress any clause whose count is zero (_RULES.md:
                         "an empty cell is not information" — this programme
@@ -2360,8 +2396,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                         stageDone > 0 ? { text: msgPlural("schedule.progress.done", stageDone) } : null,
                         stageInPlay.length > 0 ? { text: msgPlural("schedule.progress.inPlay", stageInPlay.length) } : null,
                         stageHeld.length > 0 ? { text: msgPlural("schedule.progress.held", stageHeld.length) } : null,
-                        unscheduled.length > 0
-                          ? { text: msgPlural("schedule.progress.toSchedule", unscheduled.length), href: routes.divisionSchedule(orgSlug, compSlug, divSlug) }
+                        unscheduledCount > 0
+                          ? { text: msgPlural("schedule.progress.toSchedule", unscheduledCount), href: routes.divisionSchedule(orgSlug, compSlug, divSlug) }
                           : null,
                         stageNotOpened.length > 0 ? { text: msgPlural("schedule.progress.notOpened", stageNotOpened.length) } : null,
                       ].filter((c): c is { text: string; href?: string } => c !== null);
@@ -2406,7 +2442,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     no "View N fixtures" trip to a separate list. The rows are the run sheet's own (`RunSheet embedded`: the same
                     `buildRunSheet` blocks, the same rows, the same filter), narrowed to this stage; the filter itself is the one
                     bar above the cards. */}
-                {stageFixtures.length > 0 && (
+                {stageRowCount > 0 && (
                   <RunSheet
                     {...runSheetProps}
                     embedded
@@ -2424,7 +2460,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     it is waiting on instead (owner-approved "Option 1,
                     wording only"). Every other empty stage keeps today's
                     copy. */}
-                {stageFixtures.length === 0 && (() => {
+                {stageRowCount === 0 && (() => {
                   const waitingOn = progressionWaitSource(stage, stages);
                   return (
                     <p className="px-4 py-4 text-sm text-slate-500" data-testid="stage-no-fixtures">
