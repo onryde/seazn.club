@@ -18,6 +18,7 @@ import { buildTemplateStages } from "@/lib/format-templates";
 import { CROSS_POOL_SHAPES, pooledSeeds } from "@/lib/cross-pool-ties";
 import { resolveStoredProgression } from "@/server/usecases/stored-progression";
 import { seededSnake } from "@/server/usecases/stages/generators";
+import uiDict from "@/dictionaries/en/ui.json";
 import { playGroups } from "./group-play";
 import { declaredLeaguePoints } from "./kit";
 import { startingVariantKey } from "./starting-variant";
@@ -29,6 +30,7 @@ export const GROUPS_INTO_KNOCKOUT_ID = "groups-into-knockout";
 
 /** Best seed first: the order the organiser signed the teams up in. */
 const TEAMS = ["Hawks", "Rockets", "Comets", "Dynamos", "Wolves", "Tigers", "Lions", "Bears", "Foxes"] as const;
+const DICT = uiDict as Record<string, string>;
 const GROUPS = 3;
 const ADVANCE = 2;
 const idOf = (name: string) => name.toLowerCase();
@@ -126,6 +128,11 @@ function build(): ExampleResult {
       fourGroupsQualified: four.qualified,
       fourGroupsRoundOne: four.pairs.join(", "),
       fourGroupsSamePool: four.samePool,
+      proposalBadge: DICT["progression.pendingProposal.badge"]!,
+      proposalHeading: DICT["progression.heading"]!,
+      confirmButton: DICT["progression.confirmCta"]!,
+      confirmFinal: DICT["progression.confirmFinal"]!,
+      drawNote: DICT["knockout.crossPoolDrawSeedHint"]!,
       sportCount: forEachSport(() => undefined),
     },
     table: {
@@ -454,6 +461,24 @@ const claims: Claim[] = [
       const rows = qualifiersOf(r);
       if (rows.length === 0) return "no rows";
       return rows.every((x, i) => x.drawnSeed === i + 1) || `the rows run ${rows.map((x) => x.drawnSeed).join(", ")}`;
+    }),
+  },
+  {
+    says: "the organiser confirms the seats before the bracket is filled: the notice, the list's heading, the confirm button, the warning that Undo cannot take the draw back, and the draw's own note, all in the dictionary's own words",
+    source: "the English dictionary's progression.pendingProposal.badge, progression.heading, progression.confirmCta, progression.confirmFinal and knockout.crossPoolDrawSeedHint strings, as the fixtures tab prints them",
+    check: guarded((r) => {
+      let seen = 0;
+      for (const [fact, key] of [
+        ["proposalBadge", "progression.pendingProposal.badge"],
+        ["proposalHeading", "progression.heading"],
+        ["confirmButton", "progression.confirmCta"],
+        ["confirmFinal", "progression.confirmFinal"],
+        ["drawNote", "knockout.crossPoolDrawSeedHint"],
+      ] as const) {
+        if (r.facts[fact] !== DICT[key]) return `${fact} is '${String(r.facts[fact])}', the dictionary gives '${String(DICT[key])}'`;
+        seen++;
+      }
+      return seen === 5;
     }),
   },
   offeredInEverySportClaim("groups_ko", "groups-then-knockout", "sportCount"),

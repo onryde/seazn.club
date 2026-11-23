@@ -15,6 +15,9 @@
 import { withdrawTableEntrant } from "@seazn/engine/competition";
 import { declaredCfgs, forEachSport } from "@seazn/engine/testkit";
 import { tableWithdrawalInputs, type WithdrawalFixtureRow } from "@/lib/table-withdrawal";
+import { withdrawalNoteText } from "@/lib/table-withdrawal-note";
+import publicDict from "@/dictionaries/en/public.json";
+import { t, type TKey } from "@/lib/i18n-runtime";
 import { builtinModules } from "@seazn/engine/sports";
 import { forfeitFold } from "./forfeit-scores";
 import { declaredLeaguePoints } from "./kit";
@@ -47,6 +50,16 @@ const GOALS: Record<string, Record<string, number>> = {
   [pairKey("Wolves", "Hawks")]: { Wolves: 1, Hawks: 2 },
   [pairKey("Comets", "Hawks")]: { Comets: 0, Hawks: 0 },
   [pairKey("Rockets", "Wolves")]: { Rockets: 1, Wolves: 0 },
+};
+
+const PUBLIC = publicDict as Record<string, string>;
+/** The line the public table prints under a table for the leaver, in the real English dictionary (`withdrawalNoteText`). */
+const footnote = (s: { mode: string; played: number; total: number }): string => {
+  const line = withdrawalNoteText(
+    { entrantId: idOf(LEAVER), name: LEAVER, status: "withdrawn", policy: s.mode === "voided" ? "expunge" : "walkover", played: s.played, scheduled: s.total },
+    (key: TKey, vars?: Record<string, string | number>) => t(publicDict as never, key, vars),
+  );
+  return `${line.lead} ${line.body}`;
 };
 
 const football = () => builtinModules.find((m) => m.key === "football")!;
@@ -161,6 +174,8 @@ function build(): ExampleResult {
     leaverEarlyPoints: rowOf(early, LEAVER).points,
     leaverEarlyPlayed: rowOf(early, LEAVER).played,
     leaverLatePoints: rowOf(late, LEAVER).points,
+    earlyNote: footnote({ mode: early.mode, played: early.played, total: early.total }),
+    lateNote: footnote({ mode: late.mode, played: late.played, total: late.total }),
     sportCount: forEachSport(() => undefined),
   };
   const columns = ["Team", `Played (out after round ${EARLY})`, `Points (out after round ${EARLY})`, `Played (out after round ${LATE})`, `Points (out after round ${LATE})`];
@@ -313,6 +328,23 @@ const claims: Claim[] = [
       if (Number(f.latePlayed) * 2 !== Number(f.lateTotal)) return `${String(f.latePlayed)} of ${String(f.lateTotal)} is not exactly half`;
       if (Number(f.half) !== Number(f.lateTotal) / 2) return `half is ${String(f.half)}, half of ${String(f.lateTotal)} is ${Number(f.lateTotal) / 2}`;
       return Number(f.earlyTotal) === Number(f.lateTotal) && Number(f.earlyTotal) === Number(f.matchesEach) || "the leaver's schedule is not the same length at both moments, or not one match against each other team";
+    }),
+  },
+  {
+    says: "under the table the app prints one line for the leaver, naming how many of their matches were played and what became of the rest, in the dictionary's own words",
+    source: "the English public dictionary's table.withdrawalNote.* sentences, filled with the played and scheduled counts of each case, chosen by the half-way rule",
+    check: guarded((r) => {
+      const f = r.facts;
+      let seen = 0;
+      for (const [fact, played, total] of [["earlyNote", Number(f.earlyPlayed), Number(f.earlyTotal)], ["lateNote", Number(f.latePlayed), Number(f.lateTotal)]] as const) {
+        const remaining = total - played;
+        const key = modeOfRule(played, total) === "voided" ? "table.withdrawalNote.expunged" : remaining === 1 ? "table.withdrawalNote.walkedOverOne" : "table.withdrawalNote.walkedOver";
+        const body = PUBLIC[key]!.replace("{played}", String(played)).replace("{scheduled}", String(total)).replace("{remaining}", String(remaining));
+        const want = `${PUBLIC["table.withdrawalNote.lead"]!.replace("{name}", String(f.leaver)).replace("{status}", PUBLIC["table.withdrawalNote.status.withdrawn"]!)} ${body}`;
+        if (f[fact] !== want) return `${fact} is '${String(f[fact])}', the dictionary gives '${want}'`;
+        seen++;
+      }
+      return seen === 2;
     }),
   },
   {

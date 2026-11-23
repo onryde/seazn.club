@@ -23,6 +23,8 @@
     "leaverEarlyPoints": 0,
     "leaverEarlyPlayed": 0,
     "leaverLatePoints": 3,
+    "earlyNote": "Dynamos (withdrawn): left after 1 of 4, so their results are removed and their other matches are void.",
+    "lateNote": "Dynamos (withdrawn): left after 2 of 4, so their results stand and their other 2 matches are walkovers.",
     "sportCount": 11
   },
   "table": {

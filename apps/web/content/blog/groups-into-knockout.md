@@ -32,6 +32,8 @@ A knockout holds a power of two places. {{fact:groups-into-knockout.qualifiers}}
 
 By the table alone, round one would pit {{fact:groups-into-knockout.tableOrderMatch}}, two teams from {{fact:groups-into-knockout.tableOrderClashGroup}}. They already met in the group, and a knockout should not open with a rematch. So the seats are arranged. The group winners keep theirs. The runners-up are tried in the order of the table, and the first arrangement in which no group meets itself is the one used. Here {{fact:groups-into-knockout.movedUp}} goes up a seat and {{fact:groups-into-knockout.movedDown}} goes down one, and round one is {{fact:groups-into-knockout.drawnMatches}}.
 
+You see this before it is final. When every group is done, the fixtures page says "{{fact:groups-into-knockout.proposalBadge}}". Under "{{fact:groups-into-knockout.proposalHeading}}" it lists each team with the group place it came from and the seat it takes, and the bracket carries a note: "{{fact:groups-into-knockout.drawNote}}" Nothing is filled in until the organiser presses "{{fact:groups-into-knockout.confirmButton}}". {{fact:groups-into-knockout.confirmFinal}}
+
 Often the table's own order is already enough. With four groups and two through from each, round one is {{fact:groups-into-knockout.fourGroupsRoundOne}}. The letter is the group, and the number is the place in it: A1 is the winner of group A and B2 is the runner-up of group B. No group meets itself, so nothing moves.
 
 If no arrangement keeps every group apart, Seazn does not seat the bracket, and says so. It never draws a first round that pairs a group with itself.

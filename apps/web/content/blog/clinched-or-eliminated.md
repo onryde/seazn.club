@@ -10,7 +10,7 @@ related: best-third-placed-teams, round-robin-schedule, level-on-points-who-fini
 examples: clinched-or-eliminated
 ---
 
-When a league has a cut, its table says more than who leads. Next to each team it says Through, Win and in, Needs help or Out, before the last round is played. Those words are not a guess. Seazn works out the fewest and the most points each team can still finish on, and compares them with the other teams.
+When a league has a cut, its table says more than who leads. Next to each team's rank it draws a mark: a tick for Through, a ring for a place that is still open and a dash for Out. A tap on the rank says it in words: Through, Win and in, Needs help or Out. All of this appears before the last round is played, and none of it is a guess. Seazn works out the fewest and the most points each team can still finish on, and compares them with the other teams.
 
 ## The example
 
@@ -24,11 +24,11 @@ A team's fewest points are the points it has now, plus {{fact:clinched-or-elimin
 
 ## Through
 
-{{fact:clinched-or-eliminated.throughTeam}} are through. They have {{fact:clinched-or-eliminated.throughPoints}} points, so they cannot finish on fewer than that. Only {{fact:clinched-or-eliminated.throughRivals}} can still reach {{fact:clinched-or-eliminated.throughPoints}} or more, and {{fact:clinched-or-eliminated.cut}} places go on. With fewer teams able to catch them than there are places, nothing still to be played can push them out. The table says: "{{fact:clinched-or-eliminated.throughHeadline}}"
+{{fact:clinched-or-eliminated.throughTeam}} are through. They have {{fact:clinched-or-eliminated.throughPoints}} points, so they cannot finish on fewer than that. Only {{fact:clinched-or-eliminated.throughRivals}} can still reach {{fact:clinched-or-eliminated.throughPoints}} or more, and {{fact:clinched-or-eliminated.cut}} places go on. With fewer teams able to catch them than there are places, nothing still to be played can push them out. Tapping the rank says: "{{fact:clinched-or-eliminated.throughHeadline}}"
 
 ## Win and in
 
-{{fact:clinched-or-eliminated.winAndInTeam}} have {{fact:clinched-or-eliminated.levelTeamPoints}} points. If they lose their last match, they finish on {{fact:clinched-or-eliminated.levelTeamPoints}}, and {{fact:clinched-or-eliminated.levelRivals}} can reach that. That is as many teams as there are places, so a loss does not keep them through. If they win, they reach {{fact:clinched-or-eliminated.winAndInBest}}, and only {{fact:clinched-or-eliminated.winAndInRivalsAfterWin}} can still reach that, which is fewer teams than places. So the table says "{{fact:clinched-or-eliminated.winAndInLabel}}". A team with more matches left gets the number of wins that is enough, such as "{{fact:clinched-or-eliminated.winManyLabel}}". The table also answers the other question: "{{fact:clinched-or-eliminated.winAndInIfLose}}"
+{{fact:clinched-or-eliminated.winAndInTeam}} have {{fact:clinched-or-eliminated.levelTeamPoints}} points. If they lose their last match, they finish on {{fact:clinched-or-eliminated.levelTeamPoints}}, and {{fact:clinched-or-eliminated.levelRivals}} can reach that. That is as many teams as there are places, so a loss does not keep them through. If they win, they reach {{fact:clinched-or-eliminated.winAndInBest}}, and only {{fact:clinched-or-eliminated.winAndInRivalsAfterWin}} can still reach that, which is fewer teams than places. So the rank is labelled "{{fact:clinched-or-eliminated.winAndInLabel}}". A team with more matches left gets the number of wins that is enough, such as "{{fact:clinched-or-eliminated.winManyLabel}}". The same details answer the other question: "{{fact:clinched-or-eliminated.winAndInIfLose}}"
 
 ## A team that can only draw level still counts
 
@@ -38,19 +38,19 @@ What Seazn does instead is say how such a tie would be settled: "{{fact:clinched
 
 ## Out
 
-A team is out when as many teams as there are places are already ahead of the most it can reach. {{fact:clinched-or-eliminated.outFirstTeam}} can reach {{fact:clinched-or-eliminated.outFirstBest}} points at most. {{fact:clinched-or-eliminated.aheadOfOut}} cannot finish on fewer than {{fact:clinched-or-eliminated.aheadOfOutFewest}}, so both are already ahead of that, and that fills the {{fact:clinched-or-eliminated.cut}} places. The teams that are out here are {{fact:clinched-or-eliminated.outTeams}}. The table says: "{{fact:clinched-or-eliminated.outHeadline}}"
+A team is out when as many teams as there are places are already ahead of the most it can reach. {{fact:clinched-or-eliminated.outFirstTeam}} can reach {{fact:clinched-or-eliminated.outFirstBest}} points at most. {{fact:clinched-or-eliminated.aheadOfOut}} cannot finish on fewer than {{fact:clinched-or-eliminated.aheadOfOutFewest}}, so both are already ahead of that, and that fills the {{fact:clinched-or-eliminated.cut}} places. The teams that are out here are {{fact:clinched-or-eliminated.outTeams}}. Tapping the rank says: "{{fact:clinched-or-eliminated.outHeadline}}"
 
 This test is stricter than the one for going through. A team is out only when its most is below the fewest of the teams ahead. A team whose most is exactly level with a rival's fewest is not out, because on level points the tie-break could still go its way. {{fact:clinched-or-eliminated.needsHelpTeams}} can reach {{fact:clinched-or-eliminated.needsHelpBest}}, and {{fact:clinched-or-eliminated.levelTeam}} cannot finish on fewer than {{fact:clinched-or-eliminated.levelTeamPoints}}, so they are not out.
 
 ## Needs help
 
-{{fact:clinched-or-eliminated.needsHelpTeams}} have {{fact:clinched-or-eliminated.needsHelpPoints}} points and can reach {{fact:clinched-or-eliminated.needsHelpBest}}. They are not through, because the teams above them can finish ahead even if those teams lose. They are not out, because fewer than {{fact:clinched-or-eliminated.cut}} teams are ahead of the most they can reach. And a win is not enough on its own, because as many teams as there are places can still reach {{fact:clinched-or-eliminated.needsHelpBest}} or more. Their place depends on other results, and the table says: "{{fact:clinched-or-eliminated.needsHelpHeadline}}"
+{{fact:clinched-or-eliminated.needsHelpTeams}} have {{fact:clinched-or-eliminated.needsHelpPoints}} points and can reach {{fact:clinched-or-eliminated.needsHelpBest}}. They are not through, because the teams above them can finish ahead even if those teams lose. They are not out, because fewer than {{fact:clinched-or-eliminated.cut}} teams are ahead of the most they can reach. And a win is not enough on its own, because as many teams as there are places can still reach {{fact:clinched-or-eliminated.needsHelpBest}} or more. Their place depends on other results, and tapping the rank says: "{{fact:clinched-or-eliminated.needsHelpHeadline}}"
 
 ## When the round is played
 
-Once the last match is decided, the words stop being a forecast. The first {{fact:clinched-or-eliminated.cut}} places read Qualified and the rest read Out: {{fact:clinched-or-eliminated.qualifiedTeams}} went through. A team that was through stays through, and a team that was out stays out, so a word never reverses. {{fact:clinched-or-eliminated.needsHelpTeams}} needed help, and did not get it. The table says: "{{fact:clinched-or-eliminated.finalOutHeadline}}"
+Once the last match is decided, the words stop being a forecast. The first {{fact:clinched-or-eliminated.cut}} places read Qualified and the rest read Out: {{fact:clinched-or-eliminated.qualifiedTeams}} went through. A team that was through stays through, and a team that was out stays out, so a word never reverses. {{fact:clinched-or-eliminated.needsHelpTeams}} needed help, and did not get it. Tapping a team that is out says: "{{fact:clinched-or-eliminated.finalOutHeadline}}"
 
-Before the first match is played there is nothing to read, so the table shows no word at all.
+Before the first match is played there is nothing to read, so the table shows no qualification mark at all: every team is level, with no results yet.
 
 ## In every sport
 

@@ -19,6 +19,10 @@
     "noticeOpponents": "Their opponents are not notified. Tell them about the new matches.",
     "rebuildOffered": "No match in this stage has started yet. Rebuild fixtures would draw it again with Tigers in it, instead of the catch-up matches.",
     "finishedRefusal": "This table has finished. Late players can't join it.",
+    "waitingTitle": "Waiting to join the table",
+    "addToTable": "Add to the table",
+    "rebuildButton": "Rebuild fixtures",
+    "lockedNote": "This tournament has started — the entrant list is locked. Withdrawals still work; no one new can be added.",
     "sportCount": 11
   },
   "table": {

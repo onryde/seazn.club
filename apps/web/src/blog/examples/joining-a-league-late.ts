@@ -102,6 +102,10 @@ function build(): ExampleResult {
       noticeOpponents: notice[2] ?? "",
       rebuildOffered: msg("roundrobin.lateEntry.rebuildOffered", { name: NEWCOMER }),
       finishedRefusal: msg(`roundrobin.refusal.${finished.code}` as TKey),
+      waitingTitle: msg("roundrobin.waiting.title"),
+      addToTable: msg("roundrobin.addToTable"),
+      rebuildButton: msg("progression.rosterDrift.rebuildCta"),
+      lockedNote: msg("entrants.locked.note"),
       sportCount: forEachSport(() => undefined),
     },
     table: {
@@ -235,12 +239,21 @@ const claims: Claim[] = [
     }),
   },
   {
-    says: "before any match is played the app offers to draw the league again with the newcomer in it, and a finished league takes no one: both in the dictionary's own words",
-    source: "the English dictionary's roundrobin.lateEntry.rebuildOffered and roundrobin.refusal.RR_LATE_ENTRY_STAGE_COMPLETE strings",
+    says: "a team that arrives by itself waits in a strip with an add button, and before any match is played the strip offers to draw the league again; a complete league shows no add box and refuses a team sent anyway: all in the dictionary's own words",
+    source: "the English dictionary's roundrobin.waiting.title, roundrobin.addToTable, roundrobin.lateEntry.rebuildOffered, progression.rosterDrift.rebuildCta, entrants.locked.note and roundrobin.refusal.RR_LATE_ENTRY_STAGE_COMPLETE strings, as the waiting strip and the entrants page print them",
     check: guarded((r) => {
       const rebuild = DICT["roundrobin.lateEntry.rebuildOffered"]!.replace("{name}", String(r.facts.newcomer));
       if (r.facts.rebuildOffered !== rebuild) return `rebuildOffered is '${String(r.facts.rebuildOffered)}', the dictionary gives '${rebuild}'`;
-      return r.facts.finishedRefusal === DICT["roundrobin.refusal.RR_LATE_ENTRY_STAGE_COMPLETE"] || `finishedRefusal is '${String(r.facts.finishedRefusal)}'`;
+      for (const [fact, key] of [
+        ["waitingTitle", "roundrobin.waiting.title"],
+        ["addToTable", "roundrobin.addToTable"],
+        ["rebuildButton", "progression.rosterDrift.rebuildCta"],
+        ["lockedNote", "entrants.locked.note"],
+        ["finishedRefusal", "roundrobin.refusal.RR_LATE_ENTRY_STAGE_COMPLETE"],
+      ] as const) {
+        if (r.facts[fact] !== DICT[key]) return `${fact} is '${String(r.facts[fact])}', the dictionary gives '${String(DICT[key])}'`;
+      }
+      return true;
     }),
   },
   {

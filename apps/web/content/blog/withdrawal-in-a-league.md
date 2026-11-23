@@ -20,13 +20,13 @@ Here are {{fact:withdrawal-in-a-league.teams}} football teams, listed best seed 
 
 ## Fewer than half: the team is taken out
 
-After round {{fact:withdrawal-in-a-league.earlyRound}}, {{fact:withdrawal-in-a-league.leaver}} have played {{fact:withdrawal-in-a-league.earlyPlayed}} of their {{fact:withdrawal-in-a-league.earlyTotal}} matches. Half would be {{fact:withdrawal-in-a-league.half}}, so this is under half, and their matches are {{fact:withdrawal-in-a-league.earlyMode}}: all of them, including the one already played. {{fact:withdrawal-in-a-league.leaver}} stay in the table with {{fact:withdrawal-in-a-league.leaverEarlyPlayed}} played and {{fact:withdrawal-in-a-league.leaverEarlyPoints}} points, and nothing they did counts for anybody.
+After round {{fact:withdrawal-in-a-league.earlyRound}}, {{fact:withdrawal-in-a-league.leaver}} have played {{fact:withdrawal-in-a-league.earlyPlayed}} of their {{fact:withdrawal-in-a-league.earlyTotal}} matches. Half would be {{fact:withdrawal-in-a-league.half}}, so this is under half, and their matches are {{fact:withdrawal-in-a-league.earlyMode}}: all of them, including the one already played. {{fact:withdrawal-in-a-league.leaver}} stay in the table with {{fact:withdrawal-in-a-league.leaverEarlyPlayed}} played and {{fact:withdrawal-in-a-league.leaverEarlyPoints}} points, and nothing they did counts for anybody. Under the table Seazn prints one line to say so: "{{fact:withdrawal-in-a-league.earlyNote}}"
 
 That includes {{fact:withdrawal-in-a-league.firstOpponent}}'s win over them in round 1. It is removed, and {{fact:withdrawal-in-a-league.firstOpponent}} finish on {{fact:withdrawal-in-a-league.firstOpponentPointsEarly}} points.
 
 ## Half or more: the results stand
 
-After round {{fact:withdrawal-in-a-league.lateRound}}, {{fact:withdrawal-in-a-league.leaver}} have played {{fact:withdrawal-in-a-league.latePlayed}} of {{fact:withdrawal-in-a-league.lateTotal}}. That is exactly half, and half counts: the rule's line is "fewer than half", so a team that has played half is not taken out. Their played results stand. Their remaining matches, in rounds {{fact:withdrawal-in-a-league.walkoverRounds}}, are walkovers, and the opponents, {{fact:withdrawal-in-a-league.walkoverWinners}}, are given the win.
+After round {{fact:withdrawal-in-a-league.lateRound}}, {{fact:withdrawal-in-a-league.leaver}} have played {{fact:withdrawal-in-a-league.latePlayed}} of {{fact:withdrawal-in-a-league.lateTotal}}. That is exactly half, and half counts: the rule's line is "fewer than half", so a team that has played half is not taken out. Their played results stand. Their remaining matches, in rounds {{fact:withdrawal-in-a-league.walkoverRounds}}, are walkovers, and the opponents, {{fact:withdrawal-in-a-league.walkoverWinners}}, are given the win. The line under the table now reads: "{{fact:withdrawal-in-a-league.lateNote}}"
 
 Now {{fact:withdrawal-in-a-league.firstOpponent}}'s win over {{fact:withdrawal-in-a-league.leaver}} counts, and {{fact:withdrawal-in-a-league.firstOpponent}} finish on {{fact:withdrawal-in-a-league.firstOpponentPointsLate}} points: a win more than when it was removed.
 

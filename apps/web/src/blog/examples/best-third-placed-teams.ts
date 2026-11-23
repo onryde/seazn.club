@@ -178,6 +178,7 @@ function build(): ExampleResult {
       footnoteLine: note.line,
       footnoteNothingLeftOut: note.leftOut.find((l) => !l.includes(" v ")) ?? "",
       footnoteLeftOutLine: note.leftOut.find((l) => l.includes(" v ")) ?? "",
+      leftOutButton: DICT["table.bestNth.leftOut.title"]!,
       sportCount: forEachSport(() => undefined),
     },
     table: {
@@ -447,6 +448,7 @@ const claims: Claim[] = [
       if (r.facts.footnoteLeftOutLine !== left) return `footnoteLeftOutLine is '${String(r.facts.footnoteLeftOutLine)}', the dictionary gives '${left}'`;
       const smallest = want.filter((w) => w.leftOut.length === 0).sort((a, b) => a.group - b.group)[0]!;
       const none = DICT["table.bestNth.leftOut.none"]!.replace("{name}", smallest.team).replace("{pool}", DICT["table.poolLabel"]!.replace("{key}", groupLetter(smallest.group)));
+      if (r.facts.leftOutButton !== DICT["table.bestNth.leftOut.title"]) return `leftOutButton is '${String(r.facts.leftOutButton)}', the dictionary gives '${String(DICT["table.bestNth.leftOut.title"])}'`;
       return r.facts.footnoteNothingLeftOut === none || `footnoteNothingLeftOut is '${String(r.facts.footnoteNothingLeftOut)}', the dictionary gives '${none}'`;
     }),
   },

@@ -36,9 +36,11 @@ No round that is already played is touched, and no result changes. The newcomer 
 
 After the team is added, Seazn says how many matches it owes and in which rounds: "{{fact:joining-a-league-late.noticeCatchUp}}" It also says what is left to do: "{{fact:joining-a-league-late.noticeUnscheduled}}" And it says what it does not do: "{{fact:joining-a-league-late.noticeOpponents}}"
 
-## Before the first match, and after the last
+## A team that arrives by itself, and a league that is over
 
-If no match has started yet, Seazn offers another way as well: "{{fact:joining-a-league-late.rebuildOffered}}" Once the league has finished, it takes no one: "{{fact:joining-a-league-late.finishedRefusal}}" What happens when a team leaves instead is in [what happens to a team's results when it withdraws from a league](/blog/withdrawal-in-a-league).
+A team added by the organiser is placed at once, as above. A team that arrives some other way, such as an import or a registration, is not placed by Seazn. It waits in a strip headed "{{fact:joining-a-league-late.waitingTitle}}", with a button, "{{fact:joining-a-league-late.addToTable}}", that places it the same way and shows the same three lines. If no match has started yet, the strip also offers another way: "{{fact:joining-a-league-late.rebuildOffered}}" The "{{fact:joining-a-league-late.rebuildButton}}" button next to it does that.
+
+Once the league is complete, the entrants page has no box to add a team in. It says: "{{fact:joining-a-league-late.lockedNote}}" A team sent in anyway is refused: "{{fact:joining-a-league-late.finishedRefusal}}" A league whose last match has only just been played is not complete yet, and still takes a team. What happens when a team leaves instead is in [what happens to a team's results when it withdraws from a league](/blog/withdrawal-in-a-league).
 
 ## In every sport
 

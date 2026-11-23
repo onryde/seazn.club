@@ -42,7 +42,7 @@ The compared records are put in order by the sport's own table rules, with the h
 
 ## What Seazn writes down
 
-Seazn writes the comparison down under the group tables, so nobody has to work it out. The line is "{{fact:best-third-placed-teams.footnoteLine}}", and each result left out is listed: "{{fact:best-third-placed-teams.footnoteLeftOutLine}}". A group that left nothing out says so too: "{{fact:best-third-placed-teams.footnoteNothingLeftOut}}". Where [the groups feed the knockout](/blog/groups-into-knockout), these third-placed teams take the seats after the group winners and runners-up.
+Seazn writes the comparison down under the group tables, so nobody has to work it out. The line is "{{fact:best-third-placed-teams.footnoteLine}}". A "{{fact:best-third-placed-teams.leftOutButton}}" button opens the list of results that were left out: "{{fact:best-third-placed-teams.footnoteLeftOutLine}}". A group that left nothing out says so too: "{{fact:best-third-placed-teams.footnoteNothingLeftOut}}". Where [the groups feed the knockout](/blog/groups-into-knockout), these third-placed teams take the seats after the group winners and runners-up.
 
 ## In every sport
 

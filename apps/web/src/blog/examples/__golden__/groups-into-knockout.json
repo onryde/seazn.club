@@ -17,6 +17,11 @@
     "fourGroupsQualified": 8,
     "fourGroupsRoundOne": "A1 v D2, D1 v A2, C1 v B2, B1 v C2",
     "fourGroupsSamePool": 0,
+    "proposalBadge": "A seed proposal is waiting for you to confirm",
+    "proposalHeading": "Proposed qualifiers",
+    "confirmButton": "Confirm proposal",
+    "confirmFinal": "Once confirmed, Undo can't take this draw back.",
+    "drawNote": "No round-one match is between entrants from the same group. Entrants level across groups are ordered by this number. The same entrants and this number always produce this draw. Rebuild keeps it.",
     "sportCount": 11
   },
   "table": {
