@@ -128,5 +128,47 @@ describe("I2 sweep: the Add match form on a windowed stage plans over every line
     const whole = renderToStaticMarkup(createElement(el.type as never, { ...propsOf(el), roundRows: [], roundRowsFailed: false } as never));
     expect(whole, "premise: with lines the select is drawn").toContain('data-testid="add-match-round"');
   });
+
+  // Review N1: the failure line tells the organiser to close the form and open it again - so that must read the lines again.
+  it("the read fails; closing and reopening the form by the rail reads again and plans over the whole list", async () => {
+    const all = league();
+    let n = 0;
+    vi.stubGlobal("fetch", async (url: string) => {
+      calls.push(url);
+      n += 1;
+      return n === 1 ? new Response("{}", { status: 500 }) : new Response(JSON.stringify({ ok: true, data: all }), { status: 200 });
+    });
+    const w = windowRunSheet(all, [{ id: "s1", kind: "league" }], { held: new Set(), nowMs: NOW, matchMinutes: 60, tz: "UTC" });
+    const island = renderIsland(StagesPanel, props(w.shipped, w.folded) as never);
+    await openAddMatch(island);
+    expect(form(island).roundRowsFailed, "premise: the first read failed").toBe(true);
+    // Close by the rail's own toggle, then open again.
+    await openAddMatch(island);
+    expect(island.tree().some((x) => "roundRows" in propsOf(x) && typeof propsOf(x).onCancel === "function"), "premise: closed").toBe(false);
+    await openAddMatch(island);
+    expect(calls.length, "reopened: read again").toBe(2);
+    expect(form(island).roundRows?.length).toBe(231);
+    expect(form(island).roundRowsFailed).toBe(false);
+  });
+
+  it("a failed read, then Cancel, then open: read again", async () => {
+    const all = league();
+    let n = 0;
+    vi.stubGlobal("fetch", async (url: string) => {
+      calls.push(url);
+      n += 1;
+      return n === 1 ? new Response("{}", { status: 500 }) : new Response(JSON.stringify({ ok: true, data: all }), { status: 200 });
+    });
+    const w = windowRunSheet(all, [{ id: "s1", kind: "league" }], { held: new Set(), nowMs: NOW, matchMinutes: 60, tz: "UTC" });
+    const island = renderIsland(StagesPanel, props(w.shipped, w.folded) as never);
+    await openAddMatch(island);
+    expect(form(island).roundRowsFailed, "premise: the first read failed").toBe(true);
+    const cancel = island.tree().find((x) => "roundRows" in propsOf(x) && typeof propsOf(x).onCancel === "function")!;
+    (propsOf(cancel).onCancel as () => void)();
+    await flush();
+    await openAddMatch(island);
+    expect(calls.length, "reopened after Cancel: read again").toBe(2);
+    expect(form(island).roundRows?.length).toBe(231);
+  });
 });
 

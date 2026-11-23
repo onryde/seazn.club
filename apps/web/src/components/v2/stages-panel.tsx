@@ -828,6 +828,12 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   };
   const adhocRowsFailed = (stageId: string) =>
     stageLines?.stageId === stageId && stageLines.from === foldedRounds && stageLines.failed === true;
+  /** Open or shut the Add match form. Review N1: a failed read is forgotten either way - the failure line says "close the form and
+   *  open it again", so the next open reads the stage's lines again. */
+  const showAddMatch = (stageId: string | null) => {
+    setAddingTo(stageId);
+    setStageLines((prev) => (prev?.failed === true ? null : prev));
+  };
   // Task 10 — stage id whose phone "Stage tools" bottom sheet is open.
   // Owned here, not as a local `useState` inside `<StageRail>` (stage-
   // rail.tsx's own header explains why: `expandWithHooks`, the test harness
@@ -1906,7 +1912,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
             addingTo={addingTo}
             onToggleAddMatch={(stageId) => {
               const opening = addingTo !== stageId;
-              setAddingTo(opening ? stageId : null);
+              showAddMatch(opening ? stageId : null);
               if (opening && isPhone()) {
                 setOpenRailFor((cur) => (cur === stageId ? null : cur));
                 setAddMatchScroll((n) => n + 1);
@@ -2328,10 +2334,10 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     roundRowsFailed={adhocRowsFailed(stage.id)}
                     boardSlotOptions={boardSlotOptions}
                     onDone={() => {
-                      setAddingTo(null);
+                      showAddMatch(null);
                       router.refresh();
                     }}
-                    onCancel={() => setAddingTo(null)}
+                    onCancel={() => showAddMatch(null)}
                   />
                 )}
 
