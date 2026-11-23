@@ -7,15 +7,16 @@
 //
 // A meeting names the result it wants ("Hawks win 1-0"); the first seeded walk, in seed order, whose refolded result
 // satisfies it is the match. The search is deterministic, so the example holds no typed score.
-import type { MatchOutcome } from "@seazn/engine/core";
+import type { MatchOutcome, StageCtx } from "@seazn/engine/core";
 import { playRecorded } from "@seazn/engine/core";
 import { completeTableStage, decidedInFor, forfeitShaped, payout, setsToWinOf, unplayedSidesOf, type FixtureResult, type MembersKey, type NewLotsDraw, type StoredLotsDraw, type TableFixture } from "@seazn/engine/competition";
 import type { StandingsRow } from "@seazn/engine/competition";
 import { resolvePositions, type AnySportModule, type TiebreakerKey } from "@seazn/engine/sport";
 import { buildWalk, lineupFromCatalog, makeEnvelope } from "@seazn/engine/testkit";
+import { byeAward } from "@/lib/fixture-bye";
 import { foldFrom } from "@/server/engine-db/fold";
 import { tableRulesOf, type LoadedTableRules } from "@/server/engine-db/table-rules";
-import { toTableStage } from "@/server/engine-db/competition/stage-inputs";
+import { awardByeDelta, toTableStage } from "@/server/engine-db/competition/stage-inputs";
 import type { FixtureRow, StageInputs } from "@/server/engine-db/competition/types";
 import { tableLayoutFor, type DisplayLayout } from "@/server/public-site/standings-view";
 
@@ -48,6 +49,16 @@ export interface Meeting {
   want?: (m: MatchView) => boolean;
   /** The side that did not turn up: the match is a walkover with nothing played (`core.forfeit`, reason walkover). */
   walkoverBy?: string;
+  /**
+   * Scheduled and not played yet: the stage holds the fixture and nothing is decided, which is what a head-to-head step reads
+   * as an incomplete mini-schedule. Such a meeting is not in `played`; it is in `pending`.
+   */
+  pending?: true;
+  /**
+   * A Swiss round the player `home` sits out: a one-sided award bye, paid and read as the app's own producer does
+   * (`awardByeDelta`). `away` is "" (nobody). Not in `played`; it is in `byes`.
+   */
+  bye?: true;
   /**
    * Where the search starts: the walk seed that reached `want` when the example was written, so a build does not
    * replay every seed before it. Only a speed-up: the walk is still played, folded and checked against `want`, and a
@@ -89,6 +100,10 @@ export interface RankedStage {
   played: PlayedMeeting[];
   /** The lots this ranking drew (none were stored for their tied set), for the caller to store. */
   newLotsDraws: readonly NewLotsDraw[];
+  /** The meetings that were scheduled and not played (`Meeting.pending`). */
+  pending: Meeting[];
+  /** The rounds somebody sat out (`Meeting.bye`). */
+  byes: Meeting[];
 }
 
 /** A stage's rules as the web reads them: a new division on this cfg, a stage not yet started, its own order if any. */
@@ -170,12 +185,29 @@ export function playAndRank(spec: StageSpec): RankedStage {
   const played: PlayedMeeting[] = [];
   const fixtures: FixtureRow[] = [];
   const tableFixtures: TableFixture[] = [];
+  const pending: Meeting[] = [];
+  const byes: Meeting[] = [];
   spec.meetings.forEach((m, i) => {
+    const id = `blog-fixture-${i + 1}`;
+    const round = m.round ?? 1;
+    if (m.pending === true) {
+      // The fixture exists and nothing is decided: the schedule counts it, the table does not.
+      fixtures.push({ id, status: "scheduled", round_no: round, pool_id: null, home_entrant_id: m.home, away_entrant_id: m.away } as FixtureRow);
+      tableFixtures.push({ id, status: "scheduled", roundNo: round });
+      pending.push(m);
+      return;
+    }
+    if (m.bye === true) {
+      const award = byeAward(m.home) as MatchOutcome;
+      const ctx: StageCtx = { kind, roundNo: round };
+      fixtures.push({ id, status: "decided", round_no: round, pool_id: null, home_entrant_id: m.home, away_entrant_id: null, outcome: award } as FixtureRow);
+      tableFixtures.push({ id, status: "decided", roundNo: round, awardDelta: awardByeDelta(module, award, cfg, ctx, rules.points, m.home) });
+      byes.push(m);
+      return;
+    }
     const p = playMeeting(module, cfg, kind, rules, m);
     played.push({ meeting: p.meeting, view: p.view, result: p.result, played: p.played });
     gamePoints.set(p.result, p.gamePoints);
-    const id = `blog-fixture-${i + 1}`;
-    const round = m.round ?? 1;
     fixtures.push({ id, status: "decided", round_no: round, pool_id: null, home_entrant_id: m.home, away_entrant_id: m.away } as FixtureRow);
     tableFixtures.push({
       id,
@@ -210,7 +242,7 @@ export function playAndRank(spec: StageSpec): RankedStage {
   const done = completeTableStage(toTableStage(inputs, spec.lotsDraws ?? new Map()), tableFixtures);
   const pools = done.tables.pools;
   if (pools.length !== 1) throw new Error(`${module.key}: one table expected, got ${pools.length}`);
-  return { rows: [...pools[0]!.rows], rules, layout: tableLayoutFor({ points: rules.points, reachable: [...rules.reachable], ...(rules.ballsPerOver === undefined ? {} : { ballsPerOver: rules.ballsPerOver }) }, kind), played, newLotsDraws: done.newLotsDraws };
+  return { rows: [...pools[0]!.rows], rules, layout: tableLayoutFor({ points: rules.points, reachable: [...rules.reachable], ...(rules.ballsPerOver === undefined ? {} : { ballsPerOver: rules.ballsPerOver }) }, kind), played, newLotsDraws: done.newLotsDraws, pending, byes };
 }
 
 /** A row's entrant, by id; throws on an id the stage does not hold (never a silent blank). */
