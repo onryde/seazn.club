@@ -30,7 +30,7 @@ import type Stripe from "stripe";
 import { sql } from "@/lib/db";
 import { seedOrg } from "./_rig";
 import { processStripeEvent, runEvent, type StreamClawbackAlert } from "../billing-events";
-import { creditBalance } from "../stream-credits";
+import { creditBalance, recordStreamPackRefund } from "../stream-credits";
 import { staffDisputeAlertEmail, streamCreditClawbackAlertEmail } from "@/lib/email";
 import { captureError } from "@/lib/sentry";
 import { log } from "@/server/logger";
@@ -817,6 +817,7 @@ describe.skipIf(!HAS_DB)("charge.dispute.* → match-credit claw-back", () => {
 //   C1 the marker written only when something is clawed           -> "a zero claw-back writes the reversal marker …"
 //   C2 the marker insert without `on conflict do nothing`          -> same test (the redelivery and the dispute 500 on the key)
 //   C3 the netting dropped (consumes only)                         -> "a package refunded BEFORE the card refund …"
+//   C4 the replay path reports its own row's delta (review m3)     -> "worked example 1, then a redelivered refund …"
 describe.skipIf(!HAS_DB)("Online Chess packages and the claw-back (§7.5)", () => {
   const ALWAYS = process.env.ONLINE_CHESS_ALWAYS;
   const reversals = (orgId: string) =>
@@ -889,6 +890,32 @@ describe.skipIf(!HAS_DB)("Online Chess packages and the claw-back (§7.5)", () =
       [-16, null, intent],
     ]);
     expect((await packageById(pkg.id))!.refunded_at).not.toBeNull();
+    expect(await balance(o.orgId)).toEqual({ monthly: 0, pack: 0, total: 0 });
+  });
+
+  // Review m3: the replay path reports what is taken back IN TOTAL (the claw-back's 4 and the settle row's 16), not its own row's
+  // 4 — so once the settle step has taken the rest, a redelivery sees the pack fully clawed and pages nobody.
+  it("worked example 1, then a redelivered refund: the replay reports all 20 taken back, and no staff alert", async () => {
+    const o = await ocOrg();
+    await spendTheMonth(o.orgId);
+    const { intent } = await buyPack(o.orgId, 20);
+    const d = await ocDivision(o, await ocCompetition(o));
+    await pay(o, d.id, 256);
+    const chargeId = `ch_${RUN}_${uniq()}`;
+    const ev = refundEvent({ paymentIntent: intent, chargeId });
+    clawbackAlert.mockClear();
+    await processStripeEvent(ev);
+    expect(clawbackAlert, "premise: the first delivery takes 4 of 20 and alerts").toHaveBeenCalledTimes(1);
+    expect(clawbackAlert.mock.calls[0]![0]).toMatchObject({ purchased: 20, clawedBack: 4 });
+    await deleteDivision(o.auth, d.id);
+    expect((await revokeRows(o.orgId)).map((r) => r.delta), "premise: the settle row took the 16").toEqual([-4, -16]);
+
+    clawbackAlert.mockClear();
+    await processStripeEvent(ev); // the same charge, redelivered
+    expect(clawbackAlert, "every credit of the pack is back: nothing short to page").not.toHaveBeenCalled();
+    const replay = await recordStreamPackRefund({ paymentIntentId: intent, via: "refund", reference: chargeId });
+    expect(replay).toMatchObject({ matched: true, purchased: 20, clawedBack: 20, applied: false });
+    expect((await revokeRows(o.orgId)).map((r) => r.delta), "no row written by either replay").toEqual([-4, -16]);
     expect(await balance(o.orgId)).toEqual({ monthly: 0, pack: 0, total: 0 });
   });
 });

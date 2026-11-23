@@ -86,10 +86,12 @@ import {
   applyOnlineSave,
   applyPackageDelete,
   decideOnlineSize,
+  lockCompetitionDivisions,
   planPackageDelete,
   prepareOnlineSave,
   writeOnlineSize,
   type OnlineSavePrelude,
+  type OnlineSaveResult,
   type PackageDeletePlan,
 } from "./online-package";
 import type { OnlineSize } from "@/lib/online-chess-package";
@@ -453,13 +455,23 @@ export async function createDivision(
       planCap: onlinePlanCap,
     });
     return created;
-  }, onlineAsked || input.online_size !== undefined ? {
-    privilegedEpilogue: async (etx, created) => {
-      if (onlineSize !== null) {
-        await writeOnlineSize(etx, { orgId: auth.orgId, divisionId: created.id, divisionName: created.name, size: onlineSize });
-      }
+  }, {
+    // Review m1: SHARED, held to the commit, so a competition delete (EXCLUSIVE, its prelude's first statement) never misses a
+    // division created behind its read of the list: this create commits before that read, or waits and meets no competition.
+    // Every create, online or not: an over-the-board division can be switched on and paid before the delete's cascade.
+    privilegedPrelude: async (ptx) => {
+      await lockCompetitionDivisions(ptx, competitionId, "shared");
     },
-  } : {});
+    ...(onlineAsked || input.online_size !== undefined
+      ? {
+          privilegedEpilogue: async (etx: Tx, created: DivisionRow) => {
+            if (onlineSize !== null) {
+              await writeOnlineSize(etx, { orgId: auth.orgId, divisionId: created.id, divisionName: created.name, size: onlineSize });
+            }
+          },
+        }
+      : {}),
+  });
   await expireCompetitionShell(auth.orgId, { competitionId, divisionId: row.id });
   // Activation funnel (feature 1): step after competition_created.
   await fireDivisionCreated(auth, input.sport_key, competitionId);
@@ -768,7 +780,11 @@ function restoreKey(target: Record<string, unknown>, from: Record<string, unknow
 /** `stagesKeptPinned` (W2d Task 10, spec §5.4): the started (pinned) stages whose live table rules this save moved — they
  *  keep their pin, board order. A stage that started with no pin (an ad-hoc match on a pending stage) is pinned by the save
  *  first and listed with them (fix round 1, I1). */
-export type PatchDivisionResult = DivisionRow & { refused: RefusedField[]; stagesKeptPinned: KeptPinned[] };
+/** `online` (Online Chess, spec 2026-11-23 §7.1/§7.4, review I2): what the save did to the division's package — the capacity
+ *  its size write lowered and what its switch-off refund gave back and gave up — `{ capacityLoweredTo: null, refunded: null }`
+ *  when it did neither. The row above is the one the tenant callback wrote, BEFORE the package epilogue: a lowered capacity
+ *  lives on the registration settings, never on this row, so `capacityLoweredTo` is the only place the save reports it. */
+export type PatchDivisionResult = DivisionRow & { refused: RefusedField[]; stagesKeptPinned: KeptPinned[]; online: OnlineSaveResult };
 
 // Keys on the constraint NAME, not just the Postgres 23514 code — divisions
 // also carries divisions_category_check, which shares the code but means a
@@ -866,6 +882,8 @@ export async function patchDivision(
   const turnsOnlineOff = onlinePatch !== undefined && "onlinePlay" in onlinePatch && onlinePatch.onlinePlay !== "lichess";
   let onlinePrelude: OnlineSavePrelude | null = null;
   let onlineSize: OnlineSize | null = null;
+  // Out of the epilogue through this closure (it returns void): the response's `online`.
+  let onlineSaved: OnlineSaveResult = { capacityLoweredTo: null, refunded: null };
   // T6 / D9: the camera requirement. Validated before anything is read. The
   // round-open question is asked INSIDE the write's own transaction (review
   // M9, fix round 1), in withTenant's privileged prelude: stage_round_opens is
@@ -1539,7 +1557,7 @@ export async function patchDivision(
     ...(onlineNamed
       ? {
           privilegedEpilogue: async (etx: Tx, written: DivisionRow) => {
-            await applyOnlineSave(etx, { orgId: auth.orgId, division: written, prelude: onlinePrelude!, size: onlineSize });
+            onlineSaved = await applyOnlineSave(etx, { orgId: auth.orgId, division: written, prelude: onlinePrelude!, size: onlineSize });
           },
         }
       : {}),
@@ -1636,7 +1654,7 @@ export async function patchDivision(
       peersExpired,
     );
   }
-  return { ...row, refused, stagesKeptPinned };
+  return { ...row, refused, stagesKeptPinned, online: onlineSaved };
 }
 
 /** The sports this organisation has run divisions in, most recent first (C9 R2: the builder's Sport picker leads with

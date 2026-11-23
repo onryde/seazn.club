@@ -15,7 +15,7 @@ import { z } from "zod";
 import { isValidCutoffDay, REASON_MIN, REASON_MAX } from "../../../lib/registration-rules.ts";
 import { CAMERA_POLICIES } from "../../../lib/camera-policy.ts";
 import { Slug, DivisionStatus, RequiredCourtTags, Uuid } from "./common.ts";
-import { OnlineSizeS } from "./online-package.ts";
+import { OnlineSaveResultS, OnlineSizeS } from "./online-package.ts";
 
 // ---------------------------------------------------------------------------
 // Divisions
@@ -312,12 +312,13 @@ export const RefusedFieldS = z.object({
  *  would give (the division's order, the points its sport layer pays). */
 export const KeptPinnedStageS = z.object({ stageId: Uuid, name: z.string() });
 
-/** PATCH /divisions/{id}'s 200: the division as saved, what was refused beside it (applied per field), and the pinned
+/** PATCH /divisions/{id}'s 200: the division as saved, what was refused beside it (applied per field), the pinned
  *  stages the save did not reach (W2d: a started stage is pinned, so a division order or points change is never refused
- *  for it; it is listed here instead). */
+ *  for it; it is listed here instead), and what the save did to its Online Chess package (`online`). */
 export const PatchedDivision = Division.extend({
   refused: z.array(RefusedFieldS),
   stagesKeptPinned: z.array(KeptPinnedStageS),
+  online: OnlineSaveResultS,
 });
 
 // ---------------------------------------------------------------------------

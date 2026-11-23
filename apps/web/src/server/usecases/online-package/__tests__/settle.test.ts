@@ -21,6 +21,7 @@
 //   S5 the marker not written on a zero claw-back                     -> "a zero claw-back still writes a reversal marker"
 //   S6 the per-package bound on the netting dropped (spec's raw sum)  -> "a package paid BEFORE the pack was bought"
 //   S7 the claw-back's already-revoked term dropped                   -> "a dispute after a settled reversal"
+//   I1 the bound read as "held before `since`" (round-1 formula)      -> both "a package straddling the purchase" cases
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/posthog-server", async (importOriginal) => {
@@ -188,6 +189,51 @@ describe.skipIf(!HAS_DB)("a card refund and a package refund settle in both orde
     const claw = await cardRefund(a);
     expect(claw, "A spent nothing: all of A, and none of X").toMatchObject({ clawedBack: PACK, applied: true });
     expect(await balance(o.orgId)).toEqual({ monthly: 0, pack: PAID, total: PAID });
+  });
+
+  // Review I1: a package that STRADDLES the purchase. Pack X (16) pays the 128 (8) before pack A is bought; the upgrade to 256 draws
+  // 8 more from the pack after A; the move down returns 8. Those 8 were drawn from the pack since A was bought and came back, so
+  // they are not spent: A's claw-back takes them, in either order. X's other 8 are the club's, and the frozen 128 keeps its own.
+  const UPGRADE = gcPrice(256) - gcPrice(128);
+  async function straddle(): Promise<{ o: Org; divisionId: string; a: string }> {
+    const { o, divisionId } = await rig();
+    await buy(o.orgId, PAID); // pack X
+    await pay(o, divisionId, 128); // 8 from X, before A
+    const a = await buy(o.orgId, PACK);
+    await pay(o, divisionId, 256); // the upgrade: 8 from the pack, after A
+    expect(await balance(o.orgId), "premise: X's 8 left and A's 20, less the upgrade's 8").toMatchObject({
+      monthly: 0, pack: PAID - gcPrice(128) + PACK - UPGRADE,
+    });
+    return { o, divisionId, a };
+  }
+  async function endsFrozenAtX(o: Org, packageId: string): Promise<void> {
+    await freeze(packageId);
+    expect(await inTx((tx) => settleReversals(tx, o.orgId)), "nothing left to settle").toBe(0);
+    expect(await balance(o.orgId), "X's unspent 8, and none of A").toEqual({
+      monthly: 0, pack: PAID - gcPrice(128), total: PAID - gcPrice(128),
+    });
+    expect(await expectBooks(packageId, "the frozen 128")).toBe(2);
+  }
+
+  it("a package straddling the purchase, card refund AFTER the move down: the 8 it returned are A's (claws all 20)", async () => {
+    const s = await straddle();
+    const down = await pay(s.o, s.divisionId, 128);
+    expect(down.quote.owed, "the move down returns the upgrade").toBe(-UPGRADE);
+    const claw = await cardRefund(s.a);
+    expect(claw, "A spent nothing it kept: the upgrade's 8 came back").toMatchObject({ clawedBack: PACK, applied: true });
+    await endsFrozenAtX(s.o, down.package.id);
+  });
+
+  it("a package straddling the purchase, card refund BEFORE the move down: claws 12, then the move down's settle takes the 8", async () => {
+    const s = await straddle();
+    const claw = await cardRefund(s.a);
+    expect(claw, "the upgrade's 8 are spent while the package holds them").toMatchObject({ clawedBack: PACK - UPGRADE, applied: true });
+    const down = await pay(s.o, s.divisionId, 128);
+    expect(await revokes(s.o.orgId), "the claw-back's 12, then the settle row's 8").toEqual([
+      { delta: -(PACK - UPGRADE), idempotency_key: `stream_pack_refund:${s.a}`, stripe_payment_intent_id: s.a },
+      { delta: -UPGRADE, idempotency_key: null, stripe_payment_intent_id: s.a },
+    ]);
+    await endsFrozenAtX(s.o, down.package.id);
   });
 
   it("settle is bounded by the attribution: a second run writes nothing; a dispute after a settled reversal claws nothing more", async () => {

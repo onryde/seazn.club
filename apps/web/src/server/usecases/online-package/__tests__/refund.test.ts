@@ -75,7 +75,7 @@ describe.skipIf(!HAS_DB)("the full refund of a package (§7.4 item 4)", () => {
   it("full refund: bought back in full; included back only inside its month; forfeited counted; refunded_at set", async () => {
     // Inside the month: everything comes back, each bucket to itself.
     const a = await paidRig();
-    expect(await refundNow(a.pkg.id)).toEqual({ returned: PAID, forfeited: 0 });
+    expect(await refundNow(a.pkg.id), "each bucket back to itself").toEqual({ pack: PAID - INCLUDED, monthly: INCLUDED, forfeited: 0 });
     expect(await packageById(a.pkg.id)).toMatchObject({ credits_paid: PAID, credits_refunded: PAID, credits_forfeited: 0 });
     expect((await packageById(a.pkg.id))!.refunded_at).not.toBeNull();
     expect(await balance(a.o.orgId), "the org holds what it held before paying").toEqual({ monthly: INCLUDED, pack: PACK, total: INCLUDED + PACK });
@@ -85,7 +85,7 @@ describe.skipIf(!HAS_DB)("the full refund of a package (§7.4 item 4)", () => {
     // come back.
     const b = await paidRig();
     await backdateOrgLedger(b.o.orgId);
-    expect(await refundNow(b.pkg.id)).toEqual({ returned: PAID - INCLUDED, forfeited: INCLUDED });
+    expect(await refundNow(b.pkg.id)).toEqual({ pack: PAID - INCLUDED, monthly: 0, forfeited: INCLUDED });
     expect(await packageById(b.pkg.id)).toMatchObject({ credits_paid: PAID, credits_refunded: PAID - INCLUDED, credits_forfeited: INCLUDED });
     expect((await packageById(b.pkg.id))!.refunded_at).not.toBeNull();
     expect(await packageLedger(b.pkg.id), "one bought return, no included one").toEqual([
@@ -99,10 +99,10 @@ describe.skipIf(!HAS_DB)("the full refund of a package (§7.4 item 4)", () => {
 
   it("refund twice writes once; refund of a frozen row is refused; an unpaid row is not refundable", async () => {
     const a = await paidRig();
-    expect(await refundNow(a.pkg.id)).toEqual({ returned: PAID, forfeited: 0 });
+    expect(await refundNow(a.pkg.id)).toEqual({ pack: PAID - INCLUDED, monthly: INCLUDED, forfeited: 0 });
     const rows = await orgLedgerCount(a.o.orgId);
     const stamped = (await packageById(a.pkg.id))!.refunded_at;
-    expect(await refundNow(a.pkg.id), "the second call").toEqual({ returned: 0, forfeited: 0 });
+    expect(await refundNow(a.pkg.id), "the second call").toEqual({ pack: 0, monthly: 0, forfeited: 0 });
     expect(await orgLedgerCount(a.o.orgId), "no row written").toBe(rows);
     expect((await packageById(a.pkg.id))!.refunded_at, "the stamp is the first call's").toEqual(stamped);
 
@@ -129,7 +129,7 @@ describe.skipIf(!HAS_DB)("the full refund of a package (§7.4 item 4)", () => {
     const a = await paidRig();
     const down = await pay(a.o, a.d.id, 64);
     expect(down.quote.owed).toBe(-(gcPrice(256) - gcPrice(64)));
-    expect(await refundNow(a.pkg.id)).toEqual({ returned: gcPrice(64), forfeited: 0 });
+    expect(await refundNow(a.pkg.id), "the move down took the bought first: the last 4 are included").toEqual({ pack: 0, monthly: gcPrice(64), forfeited: 0 });
     const p = (await packageById(a.pkg.id))!;
     expect(p.credits_refunded + p.credits_forfeited, "refunded + forfeited = paid").toBe(PAID);
     expect(p.credits_refunded).toBe(PAID);
@@ -141,7 +141,7 @@ describe.skipIf(!HAS_DB)("the full refund of a package (§7.4 item 4)", () => {
     await backdateOrgLedger(b.o.orgId);
     const d2 = await pay(b.o, b.d.id, 32);
     expect(d2.quote.back, "the receipt's split").toEqual({ pack: PAID - INCLUDED, monthly: 0, forfeited: INCLUDED - gcPrice(32) });
-    expect(await refundNow(b.pkg.id)).toEqual({ returned: 0, forfeited: gcPrice(32) });
+    expect(await refundNow(b.pkg.id)).toEqual({ pack: 0, monthly: 0, forfeited: gcPrice(32) });
     const q = (await packageById(b.pkg.id))!;
     expect(q).toMatchObject({ credits_paid: PAID, credits_refunded: PAID - INCLUDED, credits_forfeited: INCLUDED });
     expect(q.refunded_at).not.toBeNull();

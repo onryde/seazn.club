@@ -27,12 +27,27 @@ import { livePackageById } from "./read";
 import { settleReversals } from "./settle";
 import type { PackageRow } from "./types";
 
+/** The competition's DIVISIONS lock (review m1). A competition delete reads its divisions in its prelude and plans their packages;
+ *  a division created after that read — and paid before the delete's cascade — would go with the competition and leave its paid
+ *  package live, orphaned (`division_id` null). A division create holds this lock SHARED from its prelude to its commit (two creates
+ *  never wait for each other); the competition delete takes it EXCLUSIVE as its prelude's FIRST statement, so a create either
+ *  committed before the delete read the list (its package is in the plan, paid or not, under its `division:` lock) or waits for
+ *  the delete and meets no competition (404). Lock order: this, then the `division:` locks, then the org money lock. An advisory
+ *  key, never the competition row `for update` (the review's ruling: a row lock here deadlocks). Keyed on the id lower-cased: both
+ *  doors take it from a route parameter. */
+export const competitionDivisionsLockKey = (competitionId: string): string => `competition-divisions:${competitionId.toLowerCase()}`;
+export async function lockCompetitionDivisions(tx: Tx, competitionId: string, mode: "shared" | "exclusive"): Promise<void> {
+  const key = competitionDivisionsLockKey(competitionId);
+  if (mode === "shared") await tx`select pg_advisory_xact_lock_shared(hashtext(${key}))`;
+  else await tx`select pg_advisory_xact_lock(hashtext(${key}))`;
+}
+
 /** What the prelude decided for the packages of the divisions a door takes away: the paid, unfrozen rows to refund, and the ids of
  *  the unpaid rows to delete. A frozen row is in neither: it is left alone. */
 export type PackageDeletePlan = { refund: PackageRow[]; drop: string[] /* unpaid ids */ };
 
-/** What a refund (or a door's refunds, summed) gave back and gave up. */
-export type RefundResult = { returned: number; forfeited: number };
+/** What a refund (or a door's refunds, summed) gave back, by bucket, and gave up (the included credits of an earlier month). */
+export type RefundResult = { pack: number; monthly: number; forfeited: number };
 
 /** The PRELUDE half (privileged, before the role drops): take each division's `division:` lock in ascending id order, read every
  *  LIVE package of those divisions that belongs to `orgId` (paid, unpaid and frozen alike) under those locks, and sort them; then
@@ -62,13 +77,14 @@ export async function planPackageDelete(ptx: Tx, a: { orgId: string; divisionIds
  *  planned unpaid one, by the ids the prelude read. Answers the credits returned and forfeited, summed. A refund that fails throws,
  *  and the whole transaction — the delete with it — rolls back: money first (§7.3). */
 export async function applyPackageDelete(etx: Tx, orgId: string, plan: PackageDeletePlan): Promise<RefundResult> {
-  const total: RefundResult = { returned: 0, forfeited: 0 };
+  const total: RefundResult = { pack: 0, monthly: 0, forfeited: 0 };
   for (const row of plan.refund) {
     if (row.orgId !== orgId.toLowerCase()) {
       throw new HttpError(500, `Online Chess package ${row.id} does not belong to organisation ${orgId}; nothing was refunded`, "online_package_not_of_org");
     }
     const r = await refundOnlinePackageLocked(etx, row);
-    total.returned += r.returned;
+    total.pack += r.pack;
+    total.monthly += r.monthly;
     total.forfeited += r.forfeited;
   }
   for (const id of plan.drop) {
@@ -97,7 +113,7 @@ export async function refundOnlinePackageLocked(tx: Tx, row: PackageRow): Promis
   if (now === null || now.orgId !== row.orgId.toLowerCase()) {
     throw new HttpError(500, `Online Chess package ${row.id} is not a package of organisation ${row.orgId}; nothing was refunded`, "online_package_not_of_org");
   }
-  if (now.refundedAt !== null) return { returned: 0, forfeited: 0 };
+  if (now.refundedAt !== null) return { pack: 0, monthly: 0, forfeited: 0 };
   if (now.frozenAt !== null) {
     throw new HttpError(409, `Online Chess package ${row.id} is frozen (a round has opened); it is never refunded`, "online_package_frozen");
   }
@@ -120,5 +136,5 @@ export async function refundOnlinePackageLocked(tx: Tx, row: PackageRow): Promis
     throw new HttpError(500, `Online Chess package ${now.id} was frozen or refunded under its refund; nothing was refunded`, "online_package_not_writable");
   }
   await settleReversals(tx, now.orgId);
-  return { returned, forfeited: back.forfeited };
+  return { pack: back.pack, monthly: back.monthly, forfeited: back.forfeited };
 }

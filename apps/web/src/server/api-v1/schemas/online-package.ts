@@ -77,6 +77,16 @@ export const OnlinePackageRow = z.object({
   createdAt: z.string(),
 });
 
+/** What a division save did to its Online Chess package (PATCH /divisions/{id}'s `online`; usecases/online-package/size.ts
+ *  `OnlineSaveResult`). `capacityLoweredTo`: the size, when the save's size write lowered a stored registration capacity above it
+ *  to it (the division row in the same response does not carry the capacity). `refunded`: a switch-off's full refund — the
+ *  credits given back by bucket and the included credits of an earlier month given up — or null when the save turned nothing
+ *  off (all zeros for an unpaid or frozen package, which is deleted or left). */
+export const OnlineSaveResultS = z.object({
+  capacityLoweredTo: z.number().int().nullable(),
+  refunded: ReturnPlanS.nullable(),
+});
+
 /** `applied` false: the package was already at the target and nothing was written. `quote`: the quote the server acted on.
  *  `capacityLoweredTo`: the size, when a stored registration capacity above it was lowered to it. */
 export const OnlinePackagePayResult = z.object({

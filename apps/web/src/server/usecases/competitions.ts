@@ -11,7 +11,7 @@ import { captureServer } from "@/lib/posthog-server";
 import { EVENTS, type AnalyticsEvent } from "@/lib/analytics-events";
 import { FIXTURE_DELETED_REASON } from "@/server/email-outbox/cancel";
 import { cancelBoardInvites } from "./external-play/cancel-invites";
-import { applyPackageDelete, planPackageDelete, type PackageDeletePlan } from "./online-package";
+import { applyPackageDelete, lockCompetitionDivisions, planPackageDelete, type PackageDeletePlan } from "./online-package";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { page, type ListQuery, type Page } from "@/server/api-v1/http";
 import { CompetitionStatus, ENDS_BEFORE_STARTS, type CreateCompetition, type PatchCompetition, type PublicQuotaDegraded } from "@/server/api-v1/schemas";
@@ -1009,6 +1009,9 @@ export async function deleteCompetition(auth: AuthCtx, id: string): Promise<void
     return deleted;
   }, {
     privilegedPrelude: async (ptx) => {
+      // FIRST (review m1): EXCLUSIVE, so no division is created behind the read below (a create holds it SHARED to its commit).
+      // Then the `division:` locks, then the money lock (planPackageDelete).
+      await lockCompetitionDivisions(ptx, id, "exclusive");
       const divisions = await ptx<{ id: string }[]>`
         select id from divisions where competition_id = ${id} and org_id = ${auth.orgId}`;
       packages = await planPackageDelete(ptx, { orgId: auth.orgId, divisionIds: divisions.map((d) => d.id) });

@@ -19,6 +19,7 @@
 //   D5 the money lock taken in the prelude BEFORE the division lock      -> "a delete parked on the division lock holds neither …"
 //   D6 the prelude's org scope dropped (another org's division planned)  -> expected EQUIVALENT: the tenant callback 404s the foreign
 //      division and the transaction rolls back before the epilogue; "another org's division id: 404 …" pins the outcome, not the scope
+//   M1 the competition lock dropped from the create (review m1)           -> "delete first: the create waits …" (an orphaned live row)
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/posthog-server", async (importOriginal) => {
@@ -33,7 +34,7 @@ import { deleteCompetition } from "@/server/usecases/competitions";
 import { archiveDivision, deleteDivision, restoreDivision } from "@/server/usecases/divisions";
 import { forgetOnlineChessFlagCache } from "@/server/usecases/external-play/online-chess-flag";
 import { orgMoneyLockKey } from "@/server/usecases/stream-credits";
-import { payOnlinePackage } from "@/server/usecases/online-package";
+import { competitionDivisionsLockKey, payOnlinePackage } from "@/server/usecases/online-package";
 import {
   balance, buy, divisionExists, expectBooks, expectLeafPrices, freeze, gcPrice, liveOf, ocCompetition, ocDivision, ocOrg,
   orgLedgerCount, packageById, packageLedger, pay, refusal, spendTheMonth, type Org,
@@ -301,4 +302,81 @@ describe.skipIf(!HAS_DB)("a delete racing a payment: exactly one wins, the books
       expect(live, "no live row left").toBe(0);
     });
   }
+});
+
+// ─── Review m1: a division created (and paid) while its competition is being deleted ─────────────────────────────────────
+
+/** Advisory-lock waiters on `key`: pg_locks splits the bigint key, `objid` its low half, `objsubid` 1. */
+async function advisoryWaitersOn(key: string): Promise<number> {
+  const [row] = await sql<{ n: number }[]>`
+    select count(*)::int as n from pg_locks
+     where locktype = 'advisory' and not granted and objsubid = 1
+       and objid = ((hashtext(${key})::bigint) & 4294967295)::oid`;
+  return row!.n;
+}
+
+/** The org's live package rows (unrefunded), wherever their division went. */
+async function liveRows(orgId: string): Promise<number> {
+  const [{ live }] = await sql<{ live: number }[]>`
+    select count(*)::int as live from division_online_packages where org_id = ${orgId} and refunded_at is null`;
+  return live!;
+}
+
+describe.skipIf(!HAS_DB)("a competition delete racing a division create and its payment (review m1)", () => {
+  it("delete first: the create waits for the delete and meets no competition; nothing paid, no orphaned live row", async () => {
+    const o = await moneyOrg(10);
+    const c = await ocCompetition(o);
+    const d1 = await ocDivision(o, c, { online: false }); // the division the delete reads and then waits on
+    const ledgerBefore = await orgLedgerCount(o.orgId);
+    const holder = await hold((tx) => tx`select pg_advisory_xact_lock(hashtext(${"division:" + d1.id}))`);
+    const del = settle(deleteCompetition(o.auth, c));
+    expect(await advisoryWaitersBehind(holder.pid, 1), "the delete has read its divisions and waits on d1's lock").toBe(1);
+
+    // The create and its payment, while the delete is parked after its read. Without the competition lock both commit here, and
+    // the delete's cascade then takes the new division with its paid package still live.
+    let finished = false;
+    const created = settle((async () => {
+      const d2 = await ocDivision(o, c);
+      await payOnlinePackage(o.auth, d2.id, { size: 32, expectedOwed: gcPrice(32) });
+      return d2.id;
+    })()).finally(() => { finished = true; });
+    let parked = 0;
+    for (const deadline = Date.now() + 5000; !finished && parked === 0 && Date.now() < deadline;) {
+      parked = await advisoryWaitersOn(competitionDivisionsLockKey(c));
+      if (parked === 0) await new Promise((res) => setTimeout(res, 25));
+    }
+    await holder.release();
+    const [rd, rc] = await Promise.all([del, created]);
+
+    expect(rd, "the delete succeeds").toEqual({ ok: undefined });
+    expect(await liveRows(o.orgId), "no orphaned live row").toBe(0);
+    expect((await balance(o.orgId)).pack, "the books balance: every bought credit is still the club's").toBe(10);
+    expect(await orgLedgerCount(o.orgId), "no money moved").toBe(ledgerBefore);
+    expect("err" in rc, "the create failed: it ran after the competition went").toBe(true);
+    const e = (rc as { err: unknown }).err as HttpError;
+    expect({ status: e.status, message: e.message }).toEqual({ status: 404, message: "competition not found" });
+    expect(parked, "the create waited on the competition lock, behind the delete").toBe(1);
+  });
+
+  it("create first: the division exists when the delete reads, its payment lands first, and the delete refunds it", async () => {
+    const o = await moneyOrg(10);
+    const c = await ocCompetition(o);
+    const d2 = await ocDivision(o, c);
+    const unpaid = await liveOf(d2.id);
+    const holder = await hold((tx) => tx`select pg_advisory_xact_lock(hashtext(${"division:" + d2.id}))`);
+    const paying = settle(payOnlinePackage(o.auth, d2.id, { size: 32, expectedOwed: gcPrice(32) }));
+    expect(await advisoryWaitersBehind(holder.pid, 1), "the payment parked").toBe(1);
+    const del = settle(deleteCompetition(o.auth, c));
+    expect(await advisoryWaitersBehind(holder.pid, 2), "the delete read d2 and parked behind it").toBe(2);
+    await holder.release();
+    const [rp, rd] = await Promise.all([paying, del]);
+
+    expect("ok" in rp, "the payment committed first").toBe(true);
+    expect(rd, "the delete succeeds").toEqual({ ok: undefined });
+    expect(await packageById(unpaid.id), "refunded with the delete").toMatchObject({
+      division_id: null, credits_paid: gcPrice(32), credits_refunded: gcPrice(32),
+    });
+    expect(await liveRows(o.orgId), "no orphaned live row").toBe(0);
+    expect((await balance(o.orgId)).pack, "the books balance").toBe(10);
+  });
 });

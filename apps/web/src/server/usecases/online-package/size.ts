@@ -143,13 +143,18 @@ export async function writeOnlineSize(
   return { capacityLoweredTo: await clampCapacity(etx, a.divisionId, a.size) };
 }
 
+/** What a division save did to its Online Chess package, for the save's response (PATCH /divisions/{id} `online`): the capacity
+ *  the size write lowered (null when it lowered none, or wrote no size), and what a switch-off's refund gave back by bucket and
+ *  gave up (null when the save turned nothing off; all zeros for a switch-off whose row was unpaid or frozen). */
+export type OnlineSaveResult = { capacityLoweredTo: number | null; refunded: RefundResult | null };
+
 /** EPILOGUE of the save: the division as written (`division`, the row the callback returned) decides. Online play turned off on a
  *  division that played online → the prelude's plan is applied (refund the paid row, delete the unpaid one, leave a frozen one).
  *  Otherwise a size the callback decided → `writeOnlineSize`. Answers what moved, for the save's response. */
 export async function applyOnlineSave(
   etx: Tx,
   a: { orgId: string; division: { id: string; name: string; sport_key: string; config: unknown }; prelude: OnlineSavePrelude; size: OnlineSize | null },
-): Promise<{ capacityLoweredTo: number | null; refunded: RefundResult | null }> {
+): Promise<OnlineSaveResult> {
   const onlineAfter = divisionPlaysOnline(a.division);
   if (a.prelude.storedOnline && !onlineAfter) {
     // "Cannot happen": online play turns off only through a save that names it off, and the prelude planned for exactly that.

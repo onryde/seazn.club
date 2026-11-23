@@ -247,6 +247,37 @@ describe.skipIf(!HAS_DB)("a save that names online play or a size", () => {
     expect(await packageById(paid.id)).toMatchObject({ credits_refunded: gcPrice(32) });
     expect((await balance(o.orgId)).pack).toBe(10);
   });
+
+  // Review I2: the row a save answers is the tenant callback's, written BEFORE the package epilogue, so what the epilogue did
+  // reaches the caller only through `online`.
+  it("the save's response carries what it did to the package: a capacity lowered by a size, a switch-off's refund by bucket", async () => {
+    const NOTHING = { capacityLoweredTo: null, refunded: null };
+    const o = await ocOrg();
+    const c = await ocCompetition(o);
+    const capacity = async (id: string) =>
+      (await sql<{ c: number | null }[]>`select capacity as c from registration_settings where division_id = ${id}`)[0]!.c;
+
+    // A size below a stored capacity lowers it and says so; the same size again, or a save naming nothing online, says nothing.
+    const d = await ocDivision(o, c, { size: 64 });
+    await sql`insert into registration_settings (division_id, org_id, enabled, capacity) values (${d.id}, ${o.orgId}, true, 50)`;
+    expect((await patchDivision(o.auth, d.id, { online_size: 32 })).online, "50 > 32").toEqual({ capacityLoweredTo: 32, refunded: null });
+    expect(await capacity(d.id)).toBe(32);
+    expect((await patchDivision(o.auth, d.id, { online_size: 32 })).online, "the same size: nothing moved").toEqual(NOTHING);
+    expect((await patchDivision(o.auth, d.id, { name: `Renamed ${suffix()}` })).online, "a save naming nothing online").toEqual(NOTHING);
+
+    // Switch-offs: the month's included credits come back to the month (P4: paid from them first), bought ones to the pack, and
+    // an unpaid row is deleted with nothing to give back.
+    const monthly = await ocDivision(o, c);
+    await pay(o, monthly.id, 32);
+    expect((await switchOff(o, monthly.id)).online).toEqual({ capacityLoweredTo: null, refunded: { pack: 0, monthly: gcPrice(32), forfeited: 0 } });
+    await spendTheMonth(o.orgId);
+    await buy(o.orgId, 10);
+    const bought = await ocDivision(o, c);
+    await pay(o, bought.id, 64);
+    expect((await switchOff(o, bought.id)).online).toEqual({ capacityLoweredTo: null, refunded: { pack: gcPrice(64), monthly: 0, forfeited: 0 } });
+    const unpaid = await ocDivision(o, c);
+    expect((await switchOff(o, unpaid.id)).online).toEqual({ capacityLoweredTo: null, refunded: { pack: 0, monthly: 0, forfeited: 0 } });
+  });
 });
 
 /** An over-the-board division, made while the flag is still on (the create door asks it only for an online one). */

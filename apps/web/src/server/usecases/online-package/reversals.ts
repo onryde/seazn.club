@@ -30,24 +30,25 @@ export async function markReversal(tx: Tx, a: { intent: string; orgId: string; p
 /** What a pack bought at `since` has spent (§7.5): the org's bought (`pack`) consumes from `since` on (`>=`: a tie counts as spent,
  *  the claw-back's conservative direction), net of the package returns of credits that were spent from `since` on.
  *
- *  The netting is PER PACKAGE and starts from what the package already held at `since`: a package's bought returns from `since`
- *  on are first counted against the bought credits it held before `since` (they were never this pack's), and only the rest
- *  against the bought credits it drew from `since` on. So a package paid for BEFORE the pack was bought and refunded after it
- *  nets nothing here, and its returned credits are not taken to settle a later pack's reversal — the spec's "pack consumes
- *  minus pack refunds since the purchase", read without that bound, would take them (buy X, pay 16 from X, buy A, refund the
- *  package, card-refund A: 0 − 16 = −16 spent, and A's claw-back would take X's 16 too). Equal to the spec's sum whenever every
- *  package was paid after `since` (both worked examples). The bound only ever counts MORE spent, so it can only claw less.
+ *  The netting is PER PACKAGE: a package nets `least(returned_since, consumed_since)` — its bought returns from `since` on, but
+ *  never more than the bought credits it drew from `since` on (review I1). A return beyond what the package drew since was
+ *  bought before `since`, so it was never this pack's: a package paid for BEFORE the pack and refunded after it nets 0, and its
+ *  returned credits are not taken to settle the later pack's reversal — the spec's "pack consumes minus pack refunds since the
+ *  purchase", read without the bound, would take them (buy X, pay 16 from X, buy A, refund the package, card-refund A: 0 − 16 =
+ *  −16 spent, and A's claw-back would take X's 16 too). A package that STRADDLES the purchase (8 of X before, an upgrade's 8 of
+ *  the pack after, a move down that returns 8) nets the 8 it drew since: those came back, so A's claw-back takes them. Equal to
+ *  the spec's sum whenever every package was paid after `since` (both worked examples).
  *
- *  Never below 0: a package never returns more than it held (`refundForPackage` refuses it), so the netted sum is at most the
- *  package consumes it nets. A negative answer is a ledger that breaks that, refused by name rather than read as unspent. */
+ *  Never below 0: a package's netted share is at most its own consumes since `since`, each one of the consumes summed here. A
+ *  negative answer is a ledger that breaks that, refused by name rather than read as unspent. */
 export async function netPackSpendSince(tx: Tx, orgId: string, since: Date): Promise<number> {
   const [r] = await tx<{ consumed: number; netted: number }[]>`
     select
       (select coalesce(-sum(delta), 0)::int from org_stream_credits
         where org_id = ${orgId} and reason = 'consume' and bucket = 'pack' and created_at >= ${since}) as consumed,
-      (select coalesce(sum(greatest(0, p.returned_since - p.held_before)), 0)::int
+      (select coalesce(sum(least(p.returned_since, p.consumed_since)), 0)::int
          from (select coalesce(sum(delta) filter (where reason = 'refund' and created_at >= ${since}), 0) as returned_since,
-                      coalesce(-sum(delta) filter (where created_at < ${since}), 0) as held_before
+                      coalesce(-sum(delta) filter (where reason = 'consume' and created_at >= ${since}), 0) as consumed_since
                  from org_stream_credits
                 where org_id = ${orgId} and bucket = 'pack' and online_package_id is not null
                 group by online_package_id) p) as netted`;
