@@ -79,7 +79,7 @@ import {
 import { anyRoundOpened } from "@/server/external-play/round-open";
 import { assertTimeControl } from "@/server/external-play/time-controls";
 import type { BoardgameClockInput } from "@/server/external-play/clock";
-import { assertOnlinePlayFits, countOnlineHeld } from "@/server/external-play/online-entrant-cap";
+import { assertOnlinePlayFits, countOnlineHeld, openOnlineCapGuard } from "@/server/external-play/online-entrant-cap";
 import { assertOnlineChessOffered, onlineChessDisabled, onlineChessOffered } from "./external-play/online-chess-flag";
 import { audit } from "./audit";
 
@@ -803,6 +803,10 @@ export async function patchDivision(
     (patch.config as Record<string, unknown> | undefined)?.onlinePlay === "lichess"
       ? await onlineChessOffered(auth)
       : null;
+  // The online switch judges the places held against min(plan cap, 256) (cap-256 review m1): the plan's limit is an entitlement
+  // read, asked out here like the flag above and only when the patch names 'lichess'. undefined for a sport that cannot play online.
+  const onlineCapGuard =
+    (patch.config as Record<string, unknown> | undefined)?.onlinePlay === "lichess" ? await openOnlineCapGuard(id) : undefined;
   // T6 / D9: the camera requirement. Validated before anything is read. The
   // round-open question is asked INSIDE the write's own transaction (review
   // M9, fix round 1), in withTenant's privileged prelude: stage_round_opens is
@@ -1265,13 +1269,13 @@ export async function patchDivision(
         ) {
           throw onlineChessDisabled();
         }
-        // Owner ruling 2026-11-21 (256 since 2026-11-23): an online chess division holds at most 256 entrants, so a division already holding more cannot be turned
-        // online. Only the same off -> lichess transition (a re-send of a stored 'lichess' or turning it off is never gated, for a division
+        // Owner ruling 2026-11-21 (256 since 2026-11-23): an online chess division holds at most min(plan cap, 256) entrants (the plan
+        // asked since cap-256 review m1), so a division already holding more cannot be turned online. Only the same off -> lichess transition (a re-send of a stored 'lichess' or turning it off is never gated, for a division
         // saved before the cap must still save), counted as every online-cap door counts: the places the division HOLDS - live entrants
         // plus sign-ups already let in (review C1: 200 pending sign-ups and no entrants used to pass, then materialise made 200). The
         // `division:` lock is held here (the config save and the camera gate both took it above), so the count cannot move under it.
         if (readOnlinePlay(nextConfig) === "lichess" && readOnlinePlay(currentConfig) !== "lichess") {
-          assertOnlinePlayFits(await countOnlineHeld(tx, id));
+          assertOnlinePlayFits(await countOnlineHeld(tx, id), onlineCapGuard?.planLimit ?? null);
         }
         const clockOrOnlineChanged =
           canonicalJson(nextConfig.clock ?? null) !== canonicalJson(currentConfig.clock ?? null) ||

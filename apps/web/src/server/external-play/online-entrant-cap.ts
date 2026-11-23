@@ -17,9 +17,12 @@ import "server-only";
 // place; a sign-up holds one from the moment it is let in; a registration that becomes an entrant is the SAME place (it leaves the
 // second term and enters the first), so confirming never grows the count. The plan's own cap keeps its own count, untouched.
 //
-// The count is judged against min(plan cap, 256) for EVERY division that plays online (re-review N2): where the online cap binds
-// (a plan at or above it, or none) its own refusal answers; where a LOWER plan cap does (a size pack's 96) the plan's refusal answers
-// - on the same count, so direct adds and sign-ups share one allowance instead of 96 + 96.
+// The count is judged against min(plan cap, 256) for EVERY division that plays online (re-review N2), at every door below: where the
+// online cap binds (a plan at or above it, or none) its own refusal answers; where a LOWER plan cap does (a size pack's 96, an Event
+// Pass's 128) the plan's refusal answers - on the same count, so direct adds and sign-ups share one allowance instead of 96 + 96.
+// Reinstate and the online switch ask the plan too (cap-256 review m1, controller ruling 2026-11-23): at a cap of 128 an Event Pass's
+// 128 equalled the cap, so the flat check held the pass by coincidence; at 256 it would not (`assertOnlineHeldRoom`,
+// `assertOnlinePlayFits`).
 //
 // A place is not always freed when a registration leaves (re-review N1): an organiser may have withdrawn the entrant from the table
 // already and filled the place. So the AUTOMATIC promotions (a withdrawal, an expiry, a lapsed pay window, a rejection) ask the count
@@ -136,6 +139,15 @@ export function assertOnlineRoom(wouldBe: number): void {
   if (wouldBe > ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION) throw onlineDivisionFullError();
 }
 
+/** A door that adds a PLACE but no entrants row - Reinstate (the row is already there) - on a division that plays online: the
+ *  division would hold `wouldHold` places, judged against min(plan cap, 256) as every other door judges them (cap-256 review m1).
+ *  Where the online cap binds (a plan at or above it, or none) ONLINE_DIVISION_FULL answers; where a lower plan cap does, the plan's
+ *  own 402, as the add door's. `planCap` is read before the caller's transaction (`openOnlineCapGuard`). */
+export function assertOnlineHeldRoom(planCap: number | null, wouldHold: number): void {
+  if (onlineCapBinds(true, planCap)) assertOnlineRoom(wouldHold);
+  else assertWithinLimit(planCap, "entrants.per_division.max", wouldHold);
+}
+
 /** The entrant door's judgements, from counts the caller read. A division that plays online is judged on `held` (the places it holds):
  *  against the online cap where that binds (a plan cap at or above it, or none), and against the plan's cap where THAT is lower (re-review
  *  N2: 96 added and 96 signed up is 192 places on a plan of 96, and neither count alone says so). The plan's own check on `rows` (every
@@ -235,8 +247,14 @@ export async function onlineCapHoldsPromotion(
 
 /** The door that turns online play ON: a division already holding more places (`held`: the count above) than an online chess division may is refused, 422
  *  ONLINE_PLAY_TOO_MANY_ENTRANTS (`limit`, `entrants`). Its own code and sentence: the organiser's way out is removing entrants,
- *  which "full" would not say. */
-export function assertOnlinePlayFits(entrants: number): void {
+ *  which "full" would not say. Judged against min(plan cap, 256) (cap-256 review m1): where a LOWER plan cap binds, holding more than
+ *  it is the plan's own 402 - over the board the plan counts rows, online it counts the places held, and the switch is where that
+ *  count starts to apply. `planCap` is read before the caller's transaction (`openOnlineCapGuard`). */
+export function assertOnlinePlayFits(entrants: number, planCap: number | null): void {
+  if (!onlineCapBinds(true, planCap)) {
+    assertWithinLimit(planCap, "entrants.per_division.max", entrants);
+    return;
+  }
   if (entrants > ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION) {
     throw new HttpError(
       422,

@@ -91,7 +91,7 @@ const FULL = (): Refusal => asRefusal(onlineDivisionFullError());
 /** The REAL refusal of the online switch for a division holding `n` entrants. */
 function tooMany(n: number): Refusal {
   try {
-    assertOnlinePlayFits(n);
+    assertOnlinePlayFits(n, null); // an unlimited plan: the switch's own refusal, never the plan's
   } catch (e) {
     return asRefusal(e as { message: string; status: number; code?: string; extra?: unknown });
   }
