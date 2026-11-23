@@ -2,6 +2,7 @@ import { v1, reply } from "@/server/api-v1/http";
 import { publicCompetitionHub, publicPollRateLimit, PUBLIC_CACHE_CONTROL } from "@/server/usecases/public";
 import { hubDocEtag } from "@/server/public-site/hub-doc-etag";
 import { HUB_BUILD_HEADER } from "@/lib/hub-doc-stamp";
+import { windowHubDoc } from "@/lib/hub-round-paging";
 
 type Ctx = { params: Promise<{ orgSlug: string; slug: string }> };
 
@@ -15,7 +16,8 @@ export async function GET(req: Request, { params }: Ctx) {
   return v1(async () => {
     await publicPollRateLimit(req);
     const { orgSlug, slug } = await params;
-    const doc = await publicCompetitionHub(orgSlug, slug);
+    // W5 follow-ups C: served windowed, as the page is (`windowHubDoc`): a big division's folded rounds are `roundPages` headers.
+    const doc = windowHubDoc(await publicCompetitionHub(orgSlug, slug));
     const etag = hubDocEtag(doc);
     // The build a 304 confirms: the page re-stamps the document it holds with it (`restampHubDoc`).
     const headers = { "Cache-Control": PUBLIC_CACHE_CONTROL, ETag: etag, [HUB_BUILD_HEADER]: doc.generatedAt };

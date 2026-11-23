@@ -104940,6 +104940,79 @@
                             "additionalProperties": false
                           }
                         },
+                        "roundPages": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "key": {
+                                "type": "string"
+                              },
+                              "state": {
+                                "type": "string",
+                                "enum": [
+                                  "finished",
+                                  "live",
+                                  "inProgress",
+                                  "next",
+                                  "upcoming"
+                                ]
+                              },
+                              "open": {
+                                "type": "boolean"
+                              },
+                              "total": {
+                                "type": "number"
+                              },
+                              "live": {
+                                "type": "number"
+                              },
+                              "upcoming": {
+                                "type": "number"
+                              },
+                              "result": {
+                                "type": "number"
+                              },
+                              "divisionId": {
+                                "type": "string"
+                              },
+                              "divisionSlug": {
+                                "type": "string"
+                              },
+                              "stageName": {
+                                "type": "string"
+                              },
+                              "roundNo": {
+                                "type": "number"
+                              },
+                              "label": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "state",
+                              "open",
+                              "total",
+                              "live",
+                              "upcoming",
+                              "result",
+                              "divisionId",
+                              "divisionSlug",
+                              "stageName",
+                              "roundNo",
+                              "label"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
                         "tables": {
                           "type": "array",
                           "items": {

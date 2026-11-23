@@ -519,6 +519,27 @@ export const CompetitionHubDoc = z.object({
   generatedAt: z.string(),
   divisions: z.array(HubDivision),
   matches: z.array(HubMatch),
+  /** W5 follow-ups C (Option A, "by round"): a BIG division's rounds as the served document heads them (`lib/hub-round-paging.ts`):
+   *  an open round's matches are in `matches`, a folded one's are read on a tap. OPTIONAL: the cached document never carries it (the
+   *  window is applied when the document is served), and absent reads as "every match is here". */
+  roundPages: z
+    .array(
+      z.object({
+        key: z.string(),
+        state: z.enum(["finished", "live", "inProgress", "next", "upcoming"]),
+        open: z.boolean(),
+        total: z.number(),
+        live: z.number(),
+        upcoming: z.number(),
+        result: z.number(),
+        divisionId: z.string(),
+        divisionSlug: z.string(),
+        stageName: z.string(),
+        roundNo: z.number(),
+        label: z.string().nullable(),
+      }),
+    )
+    .optional(),
   tables: z.array(TableView),
   /** One per bracket stage with fixtures, division order then stage `seq`. */
   knockouts: z.array(KnockoutView),

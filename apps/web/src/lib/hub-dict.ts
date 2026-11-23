@@ -55,6 +55,8 @@ export const HUB_DICT_PREFIXES = [
   // tab's champion banner and the Table tab's champion strip read them client-side. Missing, a joint final printed the
   // raw keys "title.joint" / "title.jointNames" on the public knockout view.
   "title.",
+  // W5 follow-ups C: a big division's Matches tab by round (`matches-hub/hub-rounds.tsx`) - its round states, counts and load words.
+  "paging.",
 ] as const;
 
 /**

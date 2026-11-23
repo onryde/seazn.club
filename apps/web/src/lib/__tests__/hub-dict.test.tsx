@@ -37,6 +37,7 @@ import {
   tableView,
   team,
 } from "@/components/public-site/__tests__/hub-fixtures";
+import { windowHubDoc } from "@/lib/hub-round-paging";
 
 const full = en as Dict;
 const slice = hubDict(full);
@@ -244,7 +245,8 @@ const TABS: [string, (d: Dict) => string][] = [
       renderToStaticMarkup(<MatchesTab doc={doc} dict={d} locale="en" now={NOW} />) +
       renderToStaticMarkup(<MatchesTab doc={bare} dict={d} locale="en" now={NOW} />) +
       renderToStaticMarkup(<MatchesTab doc={calledOff} dict={d} locale="en" now={NOW} />) +
-      renderToStaticMarkup(<MatchesTab doc={abandoned} dict={d} locale="en" now={NOW} />),
+      renderToStaticMarkup(<MatchesTab doc={abandoned} dict={d} locale="en" now={NOW} />) +
+      renderToStaticMarkup(<MatchesTab doc={pagedDoc()} dict={d} locale="en" now={NOW} initialFilter="upcoming" />),
   ],
   [
     "Table",
@@ -282,6 +284,16 @@ const TABS: [string, (d: Dict) => string][] = [
       renderToStaticMarkup(<InfoTab doc={bare} dict={d} locale="en" />),
   ],
 ];
+
+/** W5 follow-ups C: a division over the paging line, served by round (`windowHubDoc`) - its round headers read `paging.*`. */
+function pagedDoc() {
+  const matches = Array.from({ length: 210 }, (_, i) =>
+    m(`P${i}`, i < 105 ? "completed" : "upcoming", new Date(NOW + (Math.floor(i / 15) - 7) * 86_400_000).toISOString(), "premier", { roundNo: Math.floor(i / 15) + 1 }),
+  );
+  const served = windowHubDoc(hubDoc({ matches }));
+  if (served.roundPages === undefined) throw new Error("premise: the paged fixture must page");
+  return served;
+}
 
 describe("hubDict", () => {
   it.each(TABS)("%s renders identically from the slice and from the full dictionary", (_n, render) => {

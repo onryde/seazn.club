@@ -1125,3 +1125,25 @@ describe("a competition that is not there", () => {
     expect(nav.permanentRedirect).not.toHaveBeenCalled();
   });
 });
+
+// ------------------------------------------------------------- W5 follow-ups C: a big division by round
+
+describe("C: a big division reaches the landing by round", () => {
+  it("a 71-team double league (4,970 cards) hands the landing round 72's 35 cards and 142 round headers, a fraction of the bytes", async () => {
+    // The perf report's cap shape, generated here: rounds 1-71 played, 72-142 to come, one day apart.
+    const matches = [];
+    for (let r = 1; r <= 142; r++) {
+      for (let s = 1; s <= 35; s++) {
+        matches.push(m(`L${r}-${s}`, r <= 71 ? "completed" : "upcoming", new Date(Date.UTC(2026, 8, 5) + (r - 72) * 86_400_000).toISOString(), "premier", { roundNo: r }));
+      }
+    }
+    const hub = hubDoc({ matches, divisions: [division("premier", { entrantCount: 71 })] });
+    stub.getPublicCompetitionHub.mockResolvedValue(hub);
+    const mount = (await treeOf()).find((el) => el.type === CompetitionLanding);
+    const initial = (propsOf(mount!) as { initial: never }).initial;
+    const sent = unpackHubDoc(initial) as CompetitionHubDocT;
+    expect(sent.matches.map((x) => x.fixtureId)).toEqual(matches.filter((x) => x.roundNo === 72).map((x) => x.fixtureId));
+    expect(sent.roundPages?.length).toBe(142);
+    expect(JSON.stringify(initial).length / JSON.stringify(hub).length).toBeLessThan(0.1);
+  });
+});
