@@ -28,6 +28,8 @@ const spies = vi.hoisted(() => ({
   matchRules: vi.fn(),
   // Match Day C2: everyone who is not offered the block reads the match's format line alone.
   formatLines: vi.fn(async (_auth: unknown, ids: readonly string[]) => new Map(ids.map((i) => [i, `line of ${i}`]))),
+  // Task 31b: the fixture's Seazn replays, read for an organiser the Stream panel is not mounted for.
+  replays: vi.fn(),
 }));
 
 vi.mock("@/server/page-auth", () => ({
@@ -111,9 +113,12 @@ vi.mock("@/components/v2/fixture-officials-strip", () => ({ FixtureOfficialsStri
 vi.mock("@/components/v2/fixture-console", () => ({ FixtureConsole: () => null }));
 vi.mock("@/server/stream-panel-context", () => ({ loadStreamPanelContext: spies.loader }));
 vi.mock("@/server/usecases/stream-sessions", () => ({ openStreamStates: spies.openStreams }));
+vi.mock("@/server/video/organiser-replays", () => ({ fixtureSeaznReplays: spies.replays }));
+vi.mock("@/components/v2/fixture-replays-section", () => ({ FixtureReplaysSection: () => null }));
 
 import FixturePage from "../page";
 import { FixtureConsole } from "@/components/v2/fixture-console";
+import { FixtureReplaysSection } from "@/components/v2/fixture-replays-section";
 
 /** What `loadFixtureMatchRules` answers: the serialisable facts, plus a function-valued `fields` an RSC payload cannot carry. */
 const MATCH_RULES = {
@@ -131,6 +136,11 @@ const MATCH_RULES = {
 };
 
 const CONTEXT = { entitled: true, relayEntitled: true, relayDisabled: false, orgId: "org-1", streamBalance: 2 };
+/** What `fixtureSeaznReplays` answers: two parts, one playable (Download and Delete), one failed (Delete). */
+const REPLAYS = [
+  { id: "r-1", partNo: 1, state: "playable", lengthSeconds: 3600, onMatchPage: false },
+  { id: "r-2", partNo: 2, state: "failed", lengthSeconds: null, onMatchPage: false },
+];
 
 function find(node: ReactNode, type: unknown): ReactElement | null {
   if (Array.isArray(node)) {
@@ -167,6 +177,8 @@ beforeEach(() => {
   spies.openStreams.mockImplementation(async () => Object.fromEntries(scene.open.map((id) => [id, "live"])));
   spies.matchRules.mockReset();
   spies.matchRules.mockImplementation(async () => MATCH_RULES);
+  spies.replays.mockReset();
+  spies.replays.mockImplementation(async () => REPLAYS);
 });
 
 describe("the organiser fixture page mounts Stream (spec 2026-09-30 §2)", () => {
@@ -389,5 +401,61 @@ describe("PB2 — a billing-frozen page keeps the pad, the organiser's actions a
     expect((await consoleProps()).deviceHandover).toBe(false);
     Object.assign(scene, { frozen: false });
     expect((await consoleProps()).deviceHandover).toBe(false);
+  });
+});
+
+// Seazn-hosted video Task 31b (T26 review m8): Delete and Download live in the replays list, which lives in the Stream panel, which
+// mounts only for an entitled, unfrozen page. Every other organiser gets the list ON ITS OWN, below the console — read by the page
+// for THIS fixture and this org — and never the panel (start and stop stay where they were). The truth is the brief's sentence; the
+// real loader's early return is not what keeps it (the loader here is a spy that answers entitled unless told otherwise).
+describe("Task 31b: an organiser whose page mounts no Stream panel still reaches the fixture's replays", () => {
+  async function page(query: Record<string, string> = {}) {
+    const tree = await FixturePage({
+      params: Promise.resolve({ orgSlug: "org", compSlug: "comp", divSlug: "div-one", no: "7" }),
+      searchParams: Promise.resolve(query),
+    });
+    return { console: find(tree as ReactNode, FixtureConsole), replays: find(tree as ReactNode, FixtureReplaysSection) };
+  }
+
+  it("the whole table over canEdit x entitled x frozen x a session on air: the list stands alone exactly when the panel is not mounted, for an organiser; the replays are read only then", async () => {
+    let checked = 0;
+    let alone = 0;
+    for (const canEdit of [false, true]) for (const entitled of [false, true]) for (const frozen of [false, true]) for (const onAir of [false, true]) {
+      Object.assign(scene, { canEdit, frozen, open: onAir ? ["fx-7"] : [] });
+      spies.loader.mockImplementation(async () => ({ ...CONTEXT, entitled }));
+      spies.replays.mockClear();
+      const p = await page();
+      const label = JSON.stringify({ canEdit, entitled, frozen, onAir });
+      const panel = (p.console!.props as { stream?: { mode: string } }).stream?.mode === "panel";
+      const want = canEdit && !(entitled && !frozen);
+      expect(panel, `${label}: PREMISE: the panel mounts for an entitled, unfrozen organiser`).toBe(canEdit && entitled && !frozen);
+      expect(p.replays !== null, label).toBe(want);
+      expect(spies.replays.mock.calls.length, `${label}: read only when shown`).toBe(want ? 1 : 0);
+      if (want) {
+        expect(spies.replays.mock.calls[0], label).toEqual(["org-1", "fx-7"]);
+        expect(p.replays!.props).toEqual({ fixtureId: "fx-7", replays: REPLAYS });
+        alone++;
+      }
+      checked++;
+    }
+    expect(checked).toBe(16);
+    expect(alone, "anti-vacuity").toBe(6);
+  });
+
+  it("EMPTY CASE: a frozen organiser's fixture with no replay gets no list (no empty card)", async () => {
+    Object.assign(scene, { frozen: true });
+    spies.replays.mockImplementation(async () => []);
+    const p = await page();
+    expect(spies.replays, "PREMISE: read").toHaveBeenCalledTimes(1);
+    expect(p.replays).toBeNull();
+  });
+
+  it("a read that fails costs only the list: the page still renders its console", async () => {
+    Object.assign(scene, { frozen: true });
+    spies.replays.mockImplementation(async () => { throw new Error("database is down"); });
+    const p = await page();
+    expect(spies.replays, "PREMISE: read").toHaveBeenCalledTimes(1);
+    expect(p.replays).toBeNull();
+    expect(p.console, "the page rendered").not.toBeNull();
   });
 });

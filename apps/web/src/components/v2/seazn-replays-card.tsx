@@ -117,16 +117,37 @@ export function replayLength(seconds: number | null): string | null {
   return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
 }
 
+/** The card's frame: `inset`, the Stream panel's slate box (the panel names the card's place); `page`, a house card of its own on the
+ *  fixture page, whose title is the section's heading (Task 31b: the list without the panel). */
+const FRAME = {
+  inset: "min-w-0 space-y-2 rounded-lg border border-slate-200 p-3",
+  page: "card min-w-0 space-y-2 p-5 max-md:p-3",
+} as const;
+
 /** `replays` absent: a view from a server older than the field (a deploy in flight), which has none to show. */
-export function SeaznReplaysCard({ fixtureId, replays, actions }: { fixtureId: string; replays: readonly Replay[] | undefined; actions: SeaznReplayActions }) {
+export function SeaznReplaysCard({
+  fixtureId,
+  replays,
+  actions,
+  frame = "inset",
+}: {
+  fixtureId: string;
+  replays: readonly Replay[] | undefined;
+  actions: SeaznReplayActions;
+  frame?: keyof typeof FRAME;
+}) {
   const msg = useMsg();
   if (replays === undefined) return null;
   const parts = replays.filter((p) => !actions.gone.has(p.id)).sort((a, b) => a.partNo - b.partNo);
   if (parts.length === 0) return null;
   const multi = parts.length > 1;
   return (
-    <section data-testid="stream-seazn-replays" className="min-w-0 space-y-2 rounded-lg border border-slate-200 p-3">
-      <p className="text-sm font-semibold text-slate-900">{msg("stream.replay.seazn.title")}</p>
+    <section data-testid="stream-seazn-replays" className={FRAME[frame]}>
+      {frame === "page" ? (
+        <h2 className="text-sm font-semibold text-slate-900">{msg("stream.replay.seazn.title")}</h2>
+      ) : (
+        <p className="text-sm font-semibold text-slate-900">{msg("stream.replay.seazn.title")}</p>
+      )}
       <ul className="space-y-3">
         {parts.map((p) => {
           const length = p.state === "playable" ? replayLength(p.lengthSeconds) : null;

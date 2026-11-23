@@ -22,6 +22,14 @@ export function fixtureStreamMode(i: {
   return i.activeSession ? "stop-only" : null;
 }
 
+/** Seazn-hosted video Task 31b (T26 review m8): whether the fixture page shows the fixture's Seazn replays ON ITS OWN, below the
+ *  console. The replays list is the only door to a replay's Delete and Download, and it lives in the Stream panel, which mounts only
+ *  for an entitled, unfrozen page. An organiser whose org lost the plan or is frozen still owns the replays already made — so the list
+ *  stands alone exactly when the panel is not mounted: never both, never neither. Start and stop stay with the panel (and Stop-only). */
+export function offersStandaloneReplays(i: { canEdit: boolean; mode: FixtureStreamMode }): boolean {
+  return i.canEdit && i.mode !== "panel";
+}
+
 /** The console opens at most ONE of its five header panels at a time (owner 2026-11-11): Stream, Remote scoring
  *  (`handover`), Lineup, Match rules, Match actions. */
 export type OpenPanel = "stream" | "handover" | "lineup" | "rules" | "actions" | null;
