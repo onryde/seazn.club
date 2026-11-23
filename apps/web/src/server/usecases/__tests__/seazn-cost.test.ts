@@ -19,11 +19,13 @@ const sentry = vi.hoisted(() => ({ captureError: vi.fn() }));
 vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
 
 import { sql } from "@/lib/db";
-import { SEAZN_LIVE_MEASURE_DAYS, SEAZN_ORG_DELETED_REPLAY_GRACE_DAYS } from "@/server/relay/config";
+import { log } from "@/server/logger";
+import { SEAZN_CLAIM_LEASE_SECONDS, SEAZN_LIVE_MEASURE_DAYS, SEAZN_ORG_DELETED_REPLAY_GRACE_DAYS } from "@/server/relay/config";
 import type { LiveMinutesReader } from "@/server/video/cf-analytics";
 import { FakeReplayHost } from "@/server/video/replay-fake";
 import { movedReplays } from "@/server/video/__tests__/_seazn-replay-rig";
 import { installSeaznEnv, live, seaznRig, stopAndSettle } from "@/server/video/__tests__/_seazn-session-rig";
+import { deleteSeaznReplay } from "@/server/video/organiser-replays";
 import { measureSeaznDelivery, purgeDeletedOrgReplays, seaznVideoForOrg } from "../seazn-cost";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -35,6 +37,9 @@ installSeaznEnv("t31-seazn-cost");
 const ymd = (at: Date) => at.toISOString().slice(0, 10);
 const midnight = (at: Date) => new Date(`${ymd(at)}T00:00:00.000Z`);
 const daysAfter = (at: Date, n: number) => new Date(midnight(at).getTime() + n * DAY_MS);
+/** The last millisecond of the UTC day `n` days after `at`'s. */
+const endOfDayAfter = (at: Date, n: number) => new Date(daysAfter(at, n + 1).getTime() - 1);
+const LEASE_MS = SEAZN_CLAIM_LEASE_SECONDS * 1000;
 /** The sweep's daily slot on the day `n` days after `at`'s UTC date. */
 const slot = (at: Date, n: number) => new Date(daysAfter(at, n).getTime() + (4 * 60 + 17) * 60_000);
 
@@ -132,17 +137,20 @@ describe.skipIf(!HAS_DB)("measureSeaznDelivery — live minutes (Cloudflare)", (
     expect(results.map((r) => r.failed)).toEqual([0, 0]);
   });
 
-  it("a session is read while it ended within SEAZN_LIVE_MEASURE_DAYS — and never after: the day past it asks Cloudflare nothing, while its replay is still read", async () => {
+  it("a session is read while it ended within SEAZN_LIVE_MEASURE_DAYS — a minute inside the edge — and never a minute past it, while its replay is still read", async () => {
     const w = await world(1);
     const [{ ended_at }] = await sql<{ ended_at: Date }[]>`select ended_at from fixture_stream_sessions where id = ${w.sid}`;
-    const ended = new Date(ended_at).getTime();
+    const edge = new Date(ended_at).getTime() + SEAZN_LIVE_MEASURE_DAYS * DAY_MS;
     const cf = fakeLive({ [w.inputUid]: 1 });
     const deps = { liveMinutes: cf.read, replay: w.host };
-    await measureSeaznDelivery(deps, new Date(ended + (SEAZN_LIVE_MEASURE_DAYS - 1) * DAY_MS), scope(w.auth.orgId));
-    expect(cf.calls, "inside the window: read").toHaveLength(1);
+    await measureSeaznDelivery(deps, new Date(edge - 60_000), scope(w.auth.orgId));
+    expect(cf.calls, "a minute inside the edge: read").toHaveLength(1);
+    // Review m6: each probe starts UNMEASURED, so only the end-date rule decides — the same-day rule would hide the second probe,
+    // and a probe a day past the edge lets a rule a day too wide pass.
+    await sql`delete from fixture_video_delivery where session_id = ${w.sid}`;
     const windowsBefore = w.host.watchWindows(w.copies[0]!).length;
-    await measureSeaznDelivery(deps, new Date(ended + (SEAZN_LIVE_MEASURE_DAYS + 1) * DAY_MS + 60_000), scope(w.auth.orgId));
-    expect(cf.calls, "past it: never asked again").toHaveLength(1);
+    await measureSeaznDelivery(deps, new Date(edge + 60_000), scope(w.auth.orgId));
+    expect(cf.calls, "a minute past it: never asked again").toHaveLength(1);
     expect(w.host.watchWindows(w.copies[0]!).length, "the replay has no such limit").toBe(windowsBefore + 1);
   });
 
@@ -199,14 +207,20 @@ describe.skipIf(!HAS_DB)("measureSeaznDelivery — replay minutes (the replay ho
     expect(await deliveryOf(w.sid)).toMatchObject({ replay_minutes: "11.0", replay_through: ymd(daysAfter(w.createdAt, 2)) });
   });
 
-  it("a copy the host no longer holds answers null — gone: counted, adds nothing, never fails the session — and stored minutes are NEVER overwritten with 0 when every copy is gone", async () => {
+  it("a copy the host no longer holds answers null — gone: counted, adds nothing, never fails the session, warned and named in the pass's ONE report (a row not deleted whose copy is gone is a broken public replay) — and stored minutes are NEVER overwritten with 0 when every copy is gone", async () => {
     const w = await world(2);
     w.host.setWatchMinutes(w.copies[0]!, 4);
     w.host.setWatchMinutes(w.copies[1]!, 2);
     await w.host.remove(w.copies[1]!);   // gone from the host while its row still reads playable
     const deps = { liveMinutes: fakeLive().read, replay: w.host };
+    sentry.captureError.mockClear();
+    const warn = vi.spyOn(log, "warn");
     expect(await measureSeaznDelivery(deps, slot(w.createdAt, 2), scope(w.auth.orgId))).toEqual({ measured: 1, failed: 0, gone: 1 });
     expect(await deliveryOf(w.sid)).toMatchObject({ replay_minutes: "4.0", replay_through: ymd(daysAfter(w.createdAt, 1)) });
+    // Review m3: warned, and reported once for the pass — the count and the session, beside the (empty) failures.
+    expect(warn.mock.calls.filter(([o]) => (o as { sid?: string }).sid === w.sid && JSON.stringify(o).includes('"gone":1')), "warned").toHaveLength(1);
+    expect(sentry.captureError, "ONE report for the pass").toHaveBeenCalledTimes(1);
+    expect(sentry.captureError.mock.calls[0]![1]).toMatchObject({ route: "relay.sweep.seazn_measure", extra: { failed: 0, gone: 1, goneSessionIds: [w.sid] } });
     await w.host.remove(w.copies[0]!);
     expect(await measureSeaznDelivery(deps, slot(w.createdAt, 3), scope(w.auth.orgId))).toEqual({ measured: 1, failed: 0, gone: 2 });
     expect(await deliveryOf(w.sid), "kept, not zeroed; the day still counts as measured").toMatchObject({ replay_minutes: "4.0", replay_through: ymd(daysAfter(w.createdAt, 2)) });
@@ -229,6 +243,44 @@ describe.skipIf(!HAS_DB)("measureSeaznDelivery — replay minutes (the replay ho
     read.mockRestore();
     await measureSeaznDelivery(deps, slot(w.createdAt, 2), scope(w.auth.orgId));
     expect(await deliveryOf(w.sid)).toMatchObject({ replay_minutes: "6.0", replay_through: ymd(daysAfter(w.createdAt, 1)) });
+  });
+});
+
+describe.skipIf(!HAS_DB)("measureSeaznDelivery x a part deleted mid-pass (review m1)", () => {
+  // The daily pass reads every copy of a session, THEN writes their sum. A part the organiser deletes between the two has its
+  // copy's last read ADDED by the delete (from the day after the session's replay_measured_through, up to the delete) — so the
+  // pass's sum, which holds the same copy's days, must not be added on top. The pass adds nothing for the session; the next day
+  // reads the surviving copies over the whole window again, and the deleted copy never again.
+  it("a part DELETED while the pass reads its session: the pass adds nothing (the delete's last read stands alone); the next day reads the surviving copy from its first day, the deleted one never — no day counted twice, none lost", async () => {
+    vi.stubEnv("SEAZN_HOSTED_COST", "true");
+    const w = await world(2);
+    const [a, b] = w.copies as [string, string];
+    const d = [0, 1, 2].map((n) => ymd(daysAfter(w.createdAt, n)));
+    w.host.setWatchMinutesByDay(a, { [d[0]!]: 1, [d[1]!]: 2, [d[2]!]: 0.5 });
+    w.host.setWatchMinutesByDay(b, { [d[0]!]: 0.5, [d[1]!]: 1.5, [d[2]!]: 1 });
+    const daily = slot(w.createdAt, 2);
+    const deleteAt = new Date(daily.getTime() + 60_000);
+    const read = vi.spyOn(w.host, "watchMinutes");
+    let interleaved = 0;
+    read.mockImplementationOnce(async (id, from, to) => {
+      const m = await FakeReplayHost.prototype.watchMinutes.call(w.host, id, from, to);   // the pass has copy A's answer...
+      await deleteSeaznReplay(w.auth, w.f, w.rows[0]!.id, { now: deleteAt, replay: w.host });   // ...then the organiser deletes A
+      interleaved++;
+      return m;
+    });
+    const deps = { liveMinutes: fakeLive().read, replay: w.host };
+    await measureSeaznDelivery(deps, daily, scope(w.auth.orgId));
+    expect(interleaved, "PREMISE: the delete ran inside the pass").toBe(1);
+    expect(w.host.watchWindows(a), "PREMISE: A read by the pass, then by its delete up to the delete").toEqual([
+      { from: daysAfter(w.createdAt, 0), to: endOfDayAfter(w.createdAt, 1) },
+      { from: daysAfter(w.createdAt, 0), to: deleteAt },
+    ]);
+    expect(await deliveryOf(w.sid), "only A's last read (1 + 2 + 0.5): the pass's A + B is not added, its day not stored").toMatchObject({ replay_minutes: "3.5", replay_through: null });
+
+    await measureSeaznDelivery(deps, slot(w.createdAt, 3), scope(w.auth.orgId));
+    expect(w.host.watchWindows(a), "A is never read again").toHaveLength(2);
+    expect(w.host.watchWindows(b).at(-1), "B over the whole window again").toEqual({ from: daysAfter(w.createdAt, 0), to: endOfDayAfter(w.createdAt, 2) });
+    expect(await deliveryOf(w.sid), "3.5 + B's 0.5 + 1.5 + 1").toMatchObject({ replay_minutes: "6.5", replay_through: d[2] });
   });
 });
 
@@ -262,7 +314,8 @@ describe.skipIf(!HAS_DB)("purgeDeletedOrgReplays — a deleted org's replays, af
     const [row] = await sql<{ state: string; deleted_reason: string | null; deleted_by: string | null; deleted_at: Date; next_attempt_at: Date; attempts: number; bunny_video_id: string | null }[]>`
       select state, deleted_reason, deleted_by, deleted_at, next_attempt_at, attempts, bunny_video_id from fixture_video_replays where id = ${gone.rows[0]!.id}`;
     expect(row).toMatchObject({ state: "deleted", deleted_reason: "org_deleted", deleted_by: null, attempts: 0, bunny_video_id: null });
-    expect([row!.deleted_at, row!.next_attempt_at].map((d) => new Date(d).getTime()), "deleted now; the move's cleanup due now").toEqual([now.getTime(), now.getTime()]);
+    // Review m2: the purge holds the row as a claim does — the move's cleanup is due one lease later, never ahead of the last read.
+    expect([row!.deleted_at, row!.next_attempt_at].map((d) => new Date(d).getTime()), "deleted now; the move's cleanup due one lease later").toEqual([now.getTime(), now.getTime() + LEASE_MS]);
     expect(removed, "only the deleted org's copy").toEqual([gone.copies[0]]);
     expect(gone.host.videoIds()).not.toContain(gone.copies[0]);
     // The final read came BEFORE the removal: the host still held the copy and answered its minutes.
@@ -291,6 +344,79 @@ describe.skipIf(!HAS_DB)("purgeDeletedOrgReplays — a deleted org's replays, af
     expect(w.host.videoIds(), "PREMISE: still on the host").toContain(w.copies[0]);
     expect(sentry.captureError).toHaveBeenCalledTimes(1);
     expect(sentry.captureError.mock.calls[0]![1]).toMatchObject({ route: "relay.sweep.seazn_purge", extra: { failed: 1 } });
+
+    // Review m5: the row is deleted but still names its copy (the cleanup will remove it). The next day's pass reaches the session
+    // (its live half is measured) and never reads that copy — its days were the delete's to read, not the pass's.
+    expect(w.host.watchWindows(w.copies[0]!), "PREMISE: flag off, the purge read nothing").toEqual([]);
+    await measureSeaznDelivery({ liveMinutes: fakeLive().read, replay: w.host }, new Date(now.getTime() + DAY_MS), scope(w.auth.orgId));
+    expect((await deliveryOf(w.sid))?.live_through, "PREMISE: the pass reached the session").not.toBeNull();
+    expect(w.host.watchWindows(w.copies[0]!), "a deleted row's copy is not read").toEqual([]);
+  });
+
+  it("I1: a copy measured through yesterday has its LAST read start the day after — today only, up to the purge — never the session's first day, so no day is counted twice", async () => {
+    vi.stubEnv("SEAZN_HOSTED_COST", "true");
+    const w = await world(1);
+    const copy = w.copies[0]!;
+    const d = [0, 1, 2].map((n) => ymd(daysAfter(w.createdAt, n)));
+    w.host.setWatchMinutesByDay(copy, { [d[0]!]: 1.5, [d[1]!]: 2, [d[2]!]: 0.5 });
+    const daily = slot(w.createdAt, 2);
+    await measureSeaznDelivery({ liveMinutes: fakeLive().read, replay: w.host }, daily, scope(w.auth.orgId));
+    expect(await deliveryOf(w.sid), "PREMISE: measured through yesterday (1.5 + 2)").toMatchObject({ replay_minutes: "3.5", replay_through: d[1] });
+    const now = new Date(daily.getTime() + 3 * 3_600_000);
+    await sql`update organizations set deleted_at = ${new Date(now.getTime() - (SEAZN_ORG_DELETED_REPLAY_GRACE_DAYS + 1) * DAY_MS)} where id = ${w.auth.orgId}`;
+    expect(await purgeDeletedOrgReplays({ replay: w.host }, now, scope(w.auth.orgId))).toEqual({ purged: 1, failed: 0 });
+    expect(w.host.watchWindows(copy), "the pass's whole days, then the purge's from today's midnight up to the purge").toEqual([
+      { from: daysAfter(w.createdAt, 0), to: endOfDayAfter(w.createdAt, 1) },
+      { from: daysAfter(w.createdAt, 2), to: now },
+    ]);
+    expect(await deliveryOf(w.sid), "3.5 + today's 0.5 — the first two days never again; the day not moved").toMatchObject({ replay_minutes: "4.0", replay_through: d[1] });
+  });
+
+  it("m2: the move's cleanup running while the purge takes a copy's last read does not remove the copy first — the purge holds the row for SEAZN_CLAIM_LEASE_SECONDS — so the minutes since the last pass are kept, and the cleanup takes the row once the lease is out", async () => {
+    vi.stubEnv("SEAZN_HOSTED_COST", "true");
+    const w = await world(1);
+    const copy = w.copies[0]!;
+    const now = new Date();
+    await sql`update organizations set deleted_at = ${new Date(now.getTime() - (SEAZN_ORG_DELETED_REPLAY_GRACE_DAYS + 1) * DAY_MS)} where id = ${w.auth.orgId}`;
+    w.host.setWatchMinutes(copy, 6);
+    const remove = vi.spyOn(w.host, "remove");
+    let moved = 0;
+    vi.spyOn(w.host, "watchMinutes").mockImplementationOnce(async (id, from, to) => {
+      await w.move(now.getTime());   // a mover run between the purge's commit and its read reaching the host
+      moved++;
+      return FakeReplayHost.prototype.watchMinutes.call(w.host, id, from, to);
+    });
+    expect(await purgeDeletedOrgReplays({ replay: w.host }, now, scope(w.auth.orgId))).toEqual({ purged: 1, failed: 0 });
+    expect(moved, "PREMISE: the move ran inside the last read").toBe(1);
+    expect(remove.mock.calls, "removed once, by the purge, after its read").toEqual([[copy]]);
+    expect(await deliveryOf(w.sid), "the copy's minutes kept").toMatchObject({ replay_minutes: "6.0" });
+    await w.move(now.getTime() + LEASE_MS);
+    const [row] = await sql<{ bunny_video_id: string | null; attempts: number }[]>`select bunny_video_id, attempts from fixture_video_replays where id = ${w.rows[0]!.id}`;
+    expect(row, "after the lease the cleanup takes the row: nothing left to remove, nothing failed").toEqual({ bunny_video_id: null, attempts: 0 });
+    expect(remove).toHaveBeenCalledTimes(1);
+  });
+
+  it("m4: a part the organiser deletes AFTER the purge selected it stays the organiser's delete — not re-deleted as org_deleted, its author kept, not counted, its copy not read or removed by the purge", async () => {
+    vi.stubEnv("SEAZN_HOSTED_COST", "true");
+    const w = await world(2);
+    const [a, b] = w.copies as [string, string];
+    const now = new Date();
+    await sql`update organizations set deleted_at = ${new Date(now.getTime() - (SEAZN_ORG_DELETED_REPLAY_GRACE_DAYS + 1) * DAY_MS)} where id = ${w.auth.orgId}`;
+    const remove = vi.spyOn(w.host, "remove");
+    let interleaved = 0;
+    vi.spyOn(w.host, "watchMinutes").mockImplementationOnce(async (id, from, to) => {
+      const m = await FakeReplayHost.prototype.watchMinutes.call(w.host, id, from, to);   // the purge's last read of part 1...
+      await deleteSeaznReplay(w.auth, w.f, w.rows[1]!.id, { now, replay: w.host });          // ...while the organiser deletes part 2
+      interleaved++;
+      return m;
+    });
+    expect(await purgeDeletedOrgReplays({ replay: w.host }, now, scope(w.auth.orgId)), "part 1 only").toEqual({ purged: 1, failed: 0 });
+    expect(interleaved, "PREMISE: part 2 was deleted after the selection").toBe(1);
+    const rows = await sql<{ id: string; deleted_reason: string; deleted_by: string | null }[]>`
+      select id, deleted_reason, deleted_by from fixture_video_replays where id in (${w.rows[0]!.id}, ${w.rows[1]!.id}) order by part_no`;
+    expect(rows.map((r) => [r.deleted_reason, r.deleted_by])).toEqual([["org_deleted", null], ["organiser", w.auth.userId]]);
+    expect(remove.mock.calls.flat().sort(), "each copy removed once: part 1 by the purge, part 2 by its delete").toEqual([a, b].sort());
+    expect(w.host.watchWindows(b), "part 2's copy read once, by its own delete").toHaveLength(1);
   });
 });
 

@@ -41,7 +41,7 @@ describe("AdminSeaznVideoPanel", () => {
     expect(html).toContain(">15.5<");
     expect(html).toContain(">4.0<");
     expect(html.match(/through 2026-11-22/g), "both halves' days").toHaveLength(2);
-    expect(html).toContain("Part 1: playable");
+    expect(html).toContain('data-testid="seazn-video-part" class="block">Part 1: playable<');
     expect(html).not.toContain('data-testid="seazn-video-empty"');
   });
 
@@ -58,6 +58,28 @@ describe("AdminSeaznVideoPanel", () => {
     expect(html).toContain("Part 1: deleted (org deleted)");
     expect(html).toContain("Part 2: deleted (by organiser)");
     expect(html).toContain("Part 3: encoding");
+  });
+
+  // Task 31 fix round 1 (review m8): both minute columns are NOT NULL DEFAULT 0 (V546), so a delivery row written by ONE half reads
+  // the other half as 0.0 with no day. That half was never measured — not "measured, nobody watched" — and reads "—". Keyed on BOTH:
+  // a copy's last read before its removal can add minutes to a session the daily pass never reached (through still null).
+  it("m8: a half with 0.0 and no day was never measured and reads —; minutes with no day (a removed copy's last read) read as stored; 0.0 with a day is a measured zero", () => {
+    const cell = (html: string, half: "live" | "replay") => html.match(new RegExp(`data-testid="seazn-video-${half}-minutes"[^>]*>([^<]*)<`))?.[1];
+    const day = (html: string, half: "live" | "replay") => html.match(new RegExp(`data-testid="seazn-video-${half}-through"[^>]*>([^<]*)<`))?.[1] ?? null;
+    const cases: [string, Partial<SeaznVideoSession>, [string, string | null], [string, string | null]][] = [
+      ["live measured, replay never", { replayMinutes: "0.0", replayThrough: null }, ["15.5", "through 2026-11-22"], ["—", null]],
+      ["replay measured, live never", { liveMinutes: "0.0", liveThrough: null }, ["—", null], ["4.0", "through 2026-11-22"]],
+      ["a removed copy's last read only", { liveMinutes: "0.0", liveThrough: null, replayMinutes: "7.5", replayThrough: null }, ["—", null], ["7.5", null]],
+      ["a measured zero", { liveMinutes: "0.0", replayMinutes: "0.0" }, ["0.0", "through 2026-11-22"], ["0.0", "through 2026-11-22"]],
+    ];
+    let checked = 0;
+    for (const [what, over, live, replay] of cases) {
+      const html = render([row(over)]);
+      expect([cell(html, "live"), day(html, "live")], `${what}: live`).toEqual(live);
+      expect([cell(html, "replay"), day(html, "replay")], `${what}: replay`).toEqual(replay);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
   });
 
   it("says the minutes are estimates, and how many sessions it shows — from its prop, never a number of its own", () => {

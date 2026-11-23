@@ -264,6 +264,28 @@ describe("FakeReplayHost: watchMinutes (Phase 3)", () => {
     expect(fake.watchWindows("never-asked")).toEqual([]);
   });
 
+  // Task 31 fix round 1 (review I1): a flat answer is the same for every window, so a caller reading the WRONG window reads the same
+  // number. A ledger by UTC day answers the sum of the days a window touches — a window that starts a day early reads that day too.
+  it("a per-day ledger answers the sum of the UTC days the window touches — midnight to the last millisecond is one whole day, a partial day counts, an untouched day does not, and a flat number set before is overridden", async () => {
+    const fake = new FakeReplayHost();
+    const id = await fetchOne(fake);
+    fake.setWatchMinutes(id, 99);
+    fake.setWatchMinutesByDay(id, { "2026-11-01": 1.5, "2026-11-02": 2, "2026-11-03": 0.5 });
+    const at = (s: string) => new Date(s);
+    const cases: [string, Date, Date, number][] = [
+      ["the first two whole days", at("2026-11-01T00:00:00.000Z"), at("2026-11-02T23:59:59.999Z"), 3.5],
+      ["the third, partial", at("2026-11-03T00:00:00.000Z"), at("2026-11-03T09:30:00.000Z"), 0.5],
+      ["all three", at("2026-11-01T00:00:00.000Z"), at("2026-11-03T09:30:00.000Z"), 4],
+      ["the last millisecond of a day is that day only", at("2026-11-02T23:59:59.999Z"), at("2026-11-02T23:59:59.999Z"), 2],
+      ["a day with nothing in the ledger", at("2026-11-04T00:00:00.000Z"), at("2026-11-05T23:59:59.999Z"), 0],
+    ];
+    for (const [what, from, to, want] of cases) expect(await fake.watchMinutes(id, from, to), what).toBe(want);
+    expect(fake.watchWindows(id), "every read logged").toHaveLength(cases.length);
+    expect(() => fake.setWatchMinutesByDay(id, { "2026-11-1": 1 }), "a key that is not a UTC day is refused, never read as no day").toThrow(/not a UTC day/);
+    expect(await fake.remove(id)).toBe("deleted");
+    expect(await fake.watchMinutes(id, at("2026-11-01T00:00:00.000Z"), at("2026-11-03T09:30:00.000Z")), "removed: null, ledger or not").toBeNull();
+  });
+
   it("refuses a backwards window and a date that is not one, as the real host's adapter does (Task 30), and logs no read for them", async () => {
     const fake = new FakeReplayHost();
     const id = await fetchOne(fake);

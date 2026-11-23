@@ -488,10 +488,12 @@ test("the staff Seazn video table: EMPTY for an org with no Seazn session, then 
   const row = panel.getByTestId("seazn-video-row");
   await expect(row).toHaveCount(1, { timeout: 30_000 });
   await expect(row).toHaveAttribute("data-session-id", sessionId);
-  await expect(row).toContainText("15.5");
-  await expect(row).toContainText("4.0");
-  await expect(row).toContainText(`through ${through}`);
-  await expect(row).toContainText("Part 1: playable");
+  // Each cell by its own testid, as WHOLE text (toHaveText): a substring probe on the row also passes on 115.5 or 14.0 (review m9).
+  await expect(row.getByTestId("seazn-video-live-minutes")).toHaveText("15.5");
+  await expect(row.getByTestId("seazn-video-live-through")).toHaveText(`through ${through}`);
+  await expect(row.getByTestId("seazn-video-replay-minutes")).toHaveText("4.0");
+  await expect(row.getByTestId("seazn-video-replay-through")).toHaveText(`through ${through}`);
+  await expect(row.getByTestId("seazn-video-part")).toHaveText(["Part 1: playable"]);
   await expect(panel.getByTestId("seazn-video-empty")).toHaveCount(0);
   await expect(panel).toContainText("estimates");
   await shot(page, "seazn-video-admin-1280.png");

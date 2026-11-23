@@ -17,15 +17,17 @@ import "server-only";
 //       reads exactly one new day (ruling 3). The write ADDS, compare-and-set on the `*_measured_through` it read, so two passes
 //       racing on one session cannot both add the same days: the loser writes nothing and is warned. A half that fails — a
 //       read throws, the write throws — writes NOTHING for that session (a replay half is all of its copies or none), so the next
-//       run reads its whole window again: nothing is lost, nothing is counted twice. Every failure is counted and logged; the
+//       run reads its whole window again: nothing is lost, nothing is counted twice. So does a replay half one of whose parts was
+//       deleted while it was read: that delete's last read took the copy's days (review m1). Every failure is counted and logged; the
 //       pass reports ONCE (route relay.sweep.seazn_measure), never once per session.
 //
 //   purgeDeletedOrgReplays(deps, now, scope)
 //       Every replay of an organisation whose `organizations.deleted_at` is more than SEAZN_ORG_DELETED_REPLAY_GRACE_DAYS before
 //       `now`, not yet deleted, is deleted as the organiser's delete does (organiser-replays.ts): one short transaction takes the
-//       row FOR UPDATE and writes `deleted`, reason `org_deleted`, no `deleted_by`, the move's cleanup due now (it deletes the
-//       Cloudflare copy and retries a removal that fails here). After the commit, the copy's minutes are read one last time
-//       (`measureReplayBeforeRemoval`, ruling 2a), THEN the copy is removed and the row forgets it.
+//       row FOR UPDATE and writes `deleted`, reason `org_deleted`, no `deleted_by`, the move's cleanup due one claim lease later
+//       (`cleanupDueAfterDelete`: the cleanup deletes the Cloudflare copy and retries a removal that fails here — never ahead of
+//       the last read). After the commit, the copy's minutes are read one last time (`measureReplayBeforeRemoval`, ruling 2a),
+//       THEN the copy is removed and the row forgets it.
 //
 //   measureReplayBeforeRemoval(host, copy, now)
 //       The last read of a copy about to be removed, from the day after the session's `replay_measured_through` up to NOW (today's
@@ -34,7 +36,9 @@ import "server-only";
 //       with its row's `deleted`, and the session's other copies are still owed those days. Off unless SEAZN_HOSTED_COST.
 //       NOT called by the move's cleanup step (seazn-replays.ts), deliberately: a deleted row's copy reached there was either
 //       measured by the delete that deleted it (this function, before its own removal attempt) or failed its check and was never
-//       playable — measuring it again would count the same days twice.
+//       playable — measuring it again would count the same days twice. Nor by the removals of copies that were never served: a
+//       copy that failed its check (seazn-replays.ts, seazn-replay-webhook.ts), and a STRAY copy whose fetch answer was lost or
+//       whose row was deleted while it was being made (seazn-replays.ts, seazn-replay-webhook.ts) — nobody could have watched them.
 //
 //   seaznVideoForOrg(orgId)
 //       The staff view (/admin/orgs/[id]): the org's last SEAZN_STAFF_SESSIONS_LIMIT Seazn sessions, what was measured, and each
@@ -46,7 +50,7 @@ import { sql } from "@/lib/db";
 import { scrubScoreUrl } from "@/lib/scrub-score-url";
 import { captureError } from "@/lib/sentry";
 import { log } from "@/server/logger";
-import { SEAZN_LIVE_MEASURE_DAYS, SEAZN_ORG_DELETED_REPLAY_GRACE_DAYS, seaznHostedCost } from "@/server/relay/config";
+import { SEAZN_CLAIM_LEASE_SECONDS, SEAZN_LIVE_MEASURE_DAYS, SEAZN_ORG_DELETED_REPLAY_GRACE_DAYS, seaznHostedCost } from "@/server/relay/config";
 import { CF_ANALYTICS_MAX_WINDOW_DAYS, type LiveMinutesReader } from "@/server/video/cf-analytics";
 import { dailyWindow, dayOf, dayText, endOfDay, finalWindow, utcDay } from "@/server/video/domain/delivery-window";
 import type { ReplayHost } from "@/server/video/replay-ports";
@@ -113,8 +117,13 @@ const COLUMNS = {
 } as const;
 
 /** ADDS `minutes` to one half of a session's delivery row and stores `through` as its last day measured — only while that half's
- *  `*_measured_through` still reads `readThrough` (compare-and-set). False: another writer moved it first; nothing was written. */
-async function addMinutes(half: Half, a: { sessionId: string; orgId: string; minutes: number; readThrough: string | null; through: string | null }): Promise<boolean> {
+ *  `*_measured_through` still reads `readThrough` (compare-and-set), and, given `unlessDeleted` (the replay rows whose copies were
+ *  read), only while none of those rows has gone `deleted` since (review m1: a delete's last read already ADDED that copy's days,
+ *  without moving the day, so the daily sum holding the same days must not land on top of it). Ids, not copies: a removed copy's
+ *  row forgets its copy. False: nothing was written. */
+async function addMinutes(half: Half, a: {
+  sessionId: string; orgId: string; minutes: number; readThrough: string | null; through: string | null; unlessDeleted?: readonly string[];
+}): Promise<boolean> {
   if (!Number.isFinite(a.minutes) || a.minutes < 0) throw new RangeError(`seazn cost: ${half} minutes ${a.minutes} for session ${a.sessionId} is not a count`);
   const c = COLUMNS[half];
   const rows = await sql`
@@ -125,17 +134,9 @@ async function addMinutes(half: Half, a: { sessionId: string; orgId: string; min
            ${sql(c.through)} = excluded.${sql(c.through)},
            updated_at = now()
      where d.${sql(c.through)} is not distinct from ${a.readThrough}::date
+       ${a.unlessDeleted ? sql`and not exists (select 1 from fixture_video_replays r where r.id = any(${a.unlessDeleted as string[]}::uuid[]) and r.state = 'deleted')` : sql``}
     returning d.session_id`;
   return rows.length === 1;
-}
-
-/** The pass's ONE report for every session that failed: a constant message, the count and the first ids in `extra`. */
-function reportOnce(route: string, message: string, failures: { sessionId: string; err: unknown }[], extra: Record<string, unknown> = {}): void {
-  if (failures.length === 0) return;
-  captureError(new Error(message), {
-    route,
-    extra: { ...extra, failed: failures.length, sessionIds: failures.slice(0, REPORTED_IDS_MAX).map((f) => f.sessionId), firstError: detail(failures[0]!.err) },
-  });
 }
 
 export async function measureSeaznDelivery(deps: SeaznCostDeps, now: Date, scope: SeaznCostScope = {}): Promise<SeaznMeasureResult> {
@@ -147,6 +148,7 @@ export async function measureSeaznDelivery(deps: SeaznCostDeps, now: Date, scope
   const written = new Set<string>();
   const failures: { sessionId: string; half: Half; err: unknown }[] = [];
   let gone = 0;
+  const goneSessions: string[] = [];
 
   // LIVE. The uids: the session's own input uid, its programme input's (the same, on a composed session: kept for a session whose
   // row was never stamped), every recording the video-facts step stamped on it, every one the Seazn lock pass locked, and every one
@@ -184,10 +186,12 @@ export async function measureSeaznDelivery(deps: SeaznCostDeps, now: Date, scope
     }
   }
 
-  // REPLAY. Every copy of a row not deleted; a session whose copies are all deleted is no longer read.
-  const replay = await sql<{ id: string; org_id: string; created_at: Date; through: string | null; copies: string[] }[]>`
+  // REPLAY. Every copy of a row not deleted; a session whose copies are all deleted is no longer read. A part deleted while its
+  // session is being read sends the whole half back (`unlessDeleted`): its delete read that copy's days; the next pass reads the
+  // surviving copies over the whole window again.
+  const replay = await sql<{ id: string; org_id: string; created_at: Date; through: string | null; copies: string[]; replay_ids: string[] }[]>`
     select s.id, s.org_id, s.created_at, d.replay_measured_through::text as through,
-           array_agg(r.bunny_video_id order by r.part_no, r.id) as copies
+           array_agg(r.bunny_video_id order by r.part_no, r.id) as copies, array_agg(r.id order by r.part_no, r.id) as replay_ids
       from fixture_video_replays r
       join fixture_stream_sessions s on s.id = r.session_id
       left join fixture_video_delivery d on d.session_id = s.id
@@ -207,10 +211,15 @@ export async function measureSeaznDelivery(deps: SeaznCostDeps, now: Date, scope
         if (m === null) goneHere++;   // gone: nothing more can be read of it — never a 0 written over what is stored
         else minutes += m;
       }
-      if (goneHere > 0) log.info({ sid: s.id, gone: goneHere, copies: s.copies.length }, "seazn cost: a replay copy is gone from the host — nothing read for it");
+      // Review m3: a row NOT deleted whose copy the host no longer holds is a broken public replay, and this pass is the only daily
+      // reader that would notice — warned here and named in the pass's one report, every day it stays so.
+      if (goneHere > 0) {
+        log.warn({ sid: s.id, gone: goneHere, copies: s.copies.length }, "seazn cost: a replay copy is gone from the host while its row is not deleted — nothing read for it");
+        goneSessions.push(s.id);
+      }
       gone += goneHere;
-      if (await addMinutes("replay", { sessionId: s.id, orgId: s.org_id, minutes, readThrough: s.through, through: dayText(w.through) })) written.add(s.id);
-      else log.warn({ sid: s.id, half: "replay" }, "seazn cost: another pass measured this session first — nothing added");
+      if (await addMinutes("replay", { sessionId: s.id, orgId: s.org_id, minutes, readThrough: s.through, through: dayText(w.through), unlessDeleted: s.replay_ids })) written.add(s.id);
+      else log.warn({ sid: s.id, half: "replay" }, "seazn cost: another pass measured this session first, or a part was deleted while it was read — nothing added; the next pass reads the window again");
     } catch (err) {
       failures.push({ sessionId: s.id, half: "replay", err });
       log.error({ sid: s.id, half: "replay", errClass: errClass(err), detail: detail(err) }, "seazn cost: a replay measurement failed — nothing written; the next pass reads its whole window");
@@ -218,13 +227,30 @@ export async function measureSeaznDelivery(deps: SeaznCostDeps, now: Date, scope
   }
 
   const failedSessions = new Set(failures.map((f) => f.sessionId));
-  reportOnce("relay.sweep.seazn_measure", "relay sweep: Seazn delivery could not be measured for some sessions — nothing written for them; the next pass reads their whole window",
-    [...failedSessions].map((sessionId) => ({ sessionId, err: failures.find((f) => f.sessionId === sessionId)!.err })),
-    { halves: failures.map((f) => f.half).slice(0, REPORTED_IDS_MAX) });
+  // ONE report for the pass: sessions that failed (nothing written; re-read whole next pass) and copies gone from the host while
+  // their rows are not deleted (review m3).
+  if (failedSessions.size > 0 || goneSessions.length > 0) {
+    const first = failures[0];
+    captureError(new Error("relay sweep: Seazn delivery was not all measured — failed sessions are read again whole next pass; a gone copy's row is not deleted"), {
+      route: "relay.sweep.seazn_measure",
+      extra: {
+        failed: failedSessions.size, sessionIds: [...failedSessions].slice(0, REPORTED_IDS_MAX), firstError: first ? detail(first.err) : null,
+        halves: failures.map((f) => f.half).slice(0, REPORTED_IDS_MAX),
+        gone, goneSessionIds: goneSessions.slice(0, REPORTED_IDS_MAX),
+      },
+    });
+  }
   return { measured: written.size, failed: failedSessions.size, gone };
 }
 
 export type FinalMeasure = "off" | "measured" | "nothing_left" | "gone" | "raced" | "failed";
+
+/** When the move's cleanup may first take a replay row a delete (the organiser's, or the purge's) has just written: one claim lease
+ *  later, as a mover run holds a row it claimed (review m2). Due at once, a mover run could take the row between the delete's commit
+ *  and its last read and remove the copy first — the read then answers "gone" and the copy's minutes since the last pass are lost.
+ *  The delete reads and removes in well under the lease (each host call gives up after SEAZN_REPLAY_CALL_TIMEOUT_MS); the cleanup
+ *  only retries a removal that failed, and its Cloudflare delete waits out `verified_at` + SEAZN_CF_DELETE_DELAY_MINUTES anyway. */
+export const cleanupDueAfterDelete = (now: Date): Date => new Date(now.getTime() + SEAZN_CLAIM_LEASE_SECONDS * 1000);
 
 /** The last read of a copy about to be removed (ruling 2a/2b): ADDED to the session's replay minutes, `replay_measured_through`
  *  left where it is. Never throws: a failure is logged and answered `failed`, and the removal goes ahead — a removed copy cannot be
@@ -278,7 +304,7 @@ export async function purgeDeletedOrgReplays(deps: Pick<SeaznCostDeps, "replay">
         await tx`
           update fixture_video_replays
              set state = 'deleted', state_at = ${now}, deleted_at = coalesce(deleted_at, ${now}), deleted_reason = 'org_deleted',
-                 deleted_by = null, next_attempt_at = ${now}, attempts = 0
+                 deleted_by = null, next_attempt_at = ${cleanupDueAfterDelete(now)}, attempts = 0
            where id = ${row.id}`;
         return cur.bunny_video_id;
       })) as string | null | undefined;

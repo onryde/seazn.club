@@ -2053,12 +2053,13 @@ describe.skipIf(!HAS_DB)("Seazn-hosted video Task 31: step 7e measures Seazn del
     const [{ uid }] = await sql<{ uid: string }[]>`select ingest_input_uid as uid from fixture_stream_sessions where id = ${r.sessionId}`;
     const host = new FakeReplayHost();
     const copy = await host.fetchFromUrl({ collectionId: "c", title: "part 1", url: "https://cf.example.invalid/x/downloads/default.mp4" });
+    const cf = `v-${randomUUID()}`;
     const [{ id: replayId }] = await sql<{ id: string }[]>`
       insert into fixture_video_replays (org_id, session_id, fixture_id, cf_video_id, recorded_at, part_no, state, bunny_video_id, verified_at)
-      values (${r.orgId}, ${r.sessionId}, ${r.fixtureId}, ${`v-${randomUUID()}`}, now(), 1, 'playable', ${copy}, now()) returning id`;
+      values (${r.orgId}, ${r.sessionId}, ${r.fixtureId}, ${cf}, now(), 1, 'playable', ${copy}, now()) returning id`;
     const calls: string[][] = [];
     const live: LiveMinutesReader = async (uids) => { calls.push([...uids]); return Object.fromEntries(uids.map((u) => [u, u === uid ? 12.5 : 3])); };
-    return { r, uid, host, copy, replayId, calls, live };
+    return { r, uid, host, copy, cf, replayId, calls, live };
   }
   type World = Awaited<ReturnType<typeof endedSeazn>>;
   /** The sweep two days after the match (a whole UTC day between), with the cost fakes in its deps, scoped to the rig's org. */
@@ -2094,21 +2095,33 @@ describe.skipIf(!HAS_DB)("Seazn-hosted video Task 31: step 7e measures Seazn del
     expect(checked).toBe(3);
   });
 
-  it("SEAZN_HOSTED_COST on: the session's live minutes are the input's plus its recordings' (12.5 + 3), its copy is measured, and the deleted org's replay is purged — its copy read first, then removed", async () => {
+  it("SEAZN_HOSTED_COST on: the session's live minutes are the input's plus its recording's plus its replay's source (12.5 + 3 + 3), its copy is measured through yesterday, and the deleted org's replay is purged — its copy read first, from TODAY only, then removed", async () => {
     const w = await endedSeazn();
     await sql`update organizations set deleted_at = now() - interval '31 days' where id = ${w.r.orgId}`;
-    w.host.setWatchMinutes(w.copy, 2);
     vi.stubEnv("SEAZN_HOSTED_COST", "true");
-    // One video uid for the session, as step 5 stamps it: the sum is the input's AND the recording's.
+    // One video uid for the session, as step 5 stamps it: the sum is the input's AND the recording's AND the replay row's source.
     const video = `v-${randomUUID()}`;
     await sql`update fixture_stream_sessions set video_uids = array[${video}]::text[] where id = ${w.r.sessionId}`;
+    // The copy's watch time BY DAY (review I1): a read of the wrong window reads a different number.
+    const [{ created_at }] = await sql<{ created_at: Date }[]>`select created_at from fixture_stream_sessions where id = ${w.r.sessionId}`;
+    const day = (n: number) => new Date(Date.parse(`${new Date(created_at).toISOString().slice(0, 10)}T00:00:00.000Z`) + n * DAY_MS);
+    const ymd = (d: Date) => d.toISOString().slice(0, 10);
+    w.host.setWatchMinutesByDay(w.copy, { [ymd(day(0))]: 1.5, [ymd(day(1))]: 2, [ymd(day(2))]: 0.5 });
     sentry.captureError.mockClear();
     const res = await sweepLater(w);
+    const now = w.r.deps.now();
+    expect(ymd(now), "PREMISE: the sweep runs on the match's day + 2").toBe(ymd(day(2)));
     expect(res).toMatchObject({ seaznMeasured: 1, seaznMeasureFailed: 0, seaznReplaysPurged: 1, seaznPurgeFailed: 0 });
     expect(w.calls).toHaveLength(1);
-    expect([...w.calls[0]!].sort()).toEqual(expect.arrayContaining([w.uid, video]));
-    // Measured through yesterday (2), then the purge's last read up to the sweep (2 again: the fake answers per read).
-    expect(await deliveryOf(w.r.sessionId)).toEqual({ live_minutes: String(12.5 + 3 * (w.calls[0]!.length - 1)), replay_minutes: "4.0" });
+    // Review m7: EXACTLY these three uids, typed here — never the count the code asked for.
+    expect([...w.calls[0]!].sort(), "the input, the recording, the replay's source").toEqual([w.uid, video, w.cf].sort());
+    // Review I1: step 7e's measure reads the copy's whole days through yesterday; the purge's last read starts the day after
+    // (today's midnight) and runs up to the sweep — never from the session's first day again.
+    expect(w.host.watchWindows(w.copy)).toEqual([
+      { from: day(0), to: new Date(day(2).getTime() - 1) },
+      { from: day(2), to: now },
+    ]);
+    expect(await deliveryOf(w.r.sessionId), "12.5 + 3 + 3; 1.5 + 2, then today's 0.5").toEqual({ live_minutes: "18.5", replay_minutes: "4.0" });
     expect(w.host.videoIds()).not.toContain(w.copy);
     expect((await sql<{ state: string; deleted_reason: string }[]>`select state, deleted_reason from fixture_video_replays where id = ${w.replayId}`)[0])
       .toEqual({ state: "deleted", deleted_reason: "org_deleted" });

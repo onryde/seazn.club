@@ -14,12 +14,17 @@ function partWord(p: SeaznVideoPart): string {
   return `Part ${p.partNo}: deleted${by ? ` (${by})` : ""}`;
 }
 
-function Minutes({ value, through }: { value: string | null; through: string | null }) {
-  if (value === null) return <span className="text-slate-500">—</span>;
+/** One half's minutes as stored, and the UTC day they run through. "—" for a half never measured: no delivery row, or a row the
+ *  OTHER half wrote — both columns are NOT NULL DEFAULT 0 (V546), so that half reads 0.0 with no day (Task 31 fix round 1, m8).
+ *  Minutes with no day are kept: a copy's last read before its removal adds them without moving the day. */
+function Minutes({ half, value, through }: { half: "live" | "replay"; value: string | null; through: string | null }) {
+  if (value === null || (through === null && Number(value) === 0)) {
+    return <span data-testid={`seazn-video-${half}-minutes`} className="text-slate-500">—</span>;
+  }
   return (
     <>
-      <span className="font-mono text-slate-200">{value}</span>
-      {through !== null && <span className="block text-xs text-slate-500">through {through}</span>}
+      <span data-testid={`seazn-video-${half}-minutes`} className="font-mono text-slate-200">{value}</span>
+      {through !== null && <span data-testid={`seazn-video-${half}-through`} className="block text-xs text-slate-500">through {through}</span>}
     </>
   );
 }
@@ -54,12 +59,12 @@ export function AdminSeaznVideoPanel({ rows, limit }: { rows: SeaznVideoSession[
                   <td className="px-3 py-2 text-xs text-slate-400 whitespace-nowrap">
                     {r.endedAt === null ? <span className="text-slate-500">—</span> : utcMinute(r.endedAt)}
                   </td>
-                  <td className="px-3 py-2 text-right"><Minutes value={r.liveMinutes} through={r.liveThrough} /></td>
-                  <td className="px-3 py-2 text-right"><Minutes value={r.replayMinutes} through={r.replayThrough} /></td>
+                  <td className="px-3 py-2 text-right"><Minutes half="live" value={r.liveMinutes} through={r.liveThrough} /></td>
+                  <td className="px-3 py-2 text-right"><Minutes half="replay" value={r.replayMinutes} through={r.replayThrough} /></td>
                   <td className="px-3 py-2 text-xs text-slate-300">
                     {r.parts.length === 0
                       ? <span className="text-slate-500">—</span>
-                      : r.parts.map((p) => <span key={p.partNo} className="block">{partWord(p)}</span>)}
+                      : r.parts.map((p) => <span key={p.partNo} data-testid="seazn-video-part" className="block">{partWord(p)}</span>)}
                   </td>
                 </tr>
               ))}

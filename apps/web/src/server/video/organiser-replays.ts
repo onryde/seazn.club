@@ -41,7 +41,7 @@ import { scrubScoreUrl } from "@/lib/scrub-score-url";
 import { EDITOR_ROLES } from "@/lib/types";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
-import { measureReplayBeforeRemoval } from "@/server/usecases/seazn-cost";
+import { cleanupDueAfterDelete, measureReplayBeforeRemoval } from "@/server/usecases/seazn-cost";
 import type { ReplayRowState } from "./domain/replay-move";
 import { replayDriver } from "./replay-driver";
 import { type ReplayCredential, type ReplayHost, ReplayHostRefused, ReplayHostUnavailable, ReplayNotDownloadable } from "./replay-ports";
@@ -156,13 +156,14 @@ export async function deleteSeaznReplay(auth: AuthCtx, fixtureId: string, replay
     await tx`
       update fixture_video_replays
          set state = 'deleted', state_at = ${now}, deleted_at = coalesce(deleted_at, ${now}), deleted_reason = 'organiser',
-             deleted_by = ${auth.userId}, next_attempt_at = ${now}, attempts = 0
+             deleted_by = ${auth.userId}, next_attempt_at = ${cleanupDueAfterDelete(now)}, attempts = 0
        where id = ${replayId}`;
     return row.bunny_video_id === null ? null : { copy: row.bunny_video_id, sessionId: row.session_id };
   });
   if (removal !== null) {
     // Task 31 (ruling 2b): the copy's minutes FIRST — the host forgets a removed copy's watch time with it. Best-effort: it never
-    // throws, and with SEAZN_HOSTED_COST off it reads nothing.
+    // throws, and with SEAZN_HOSTED_COST off it reads nothing. The row's cleanup is due one claim lease after the delete
+    // (`cleanupDueAfterDelete`, review m2), so a mover run cannot remove the copy ahead of this read.
     await measureReplayBeforeRemoval(() => deps.replay ?? replayDriver(), { sessionId: removal.sessionId, orgId: auth.orgId, copy: removal.copy }, now);
     await removeCopy(replayId, removal.copy, deps);
   }
