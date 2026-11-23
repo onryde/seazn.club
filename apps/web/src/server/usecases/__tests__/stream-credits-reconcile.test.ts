@@ -230,7 +230,7 @@ describe.skipIf(!HAS_DB)("reconcileStreamCreditsCheckout — the return render l
       // The positive pair: the webhook for the same session pages, once.
       expect(await runEvent(completedEvent(structuredClone(session)))).toBe(true);
       expect(await staffRows(KIND, "checkout_session", sid), "the webhook pages, once").toEqual([
-        { ref_id: sid, dedupe_key: sid, status: "queued", recipient: staff, subject: `Match credits could not be granted: ${sid}` },
+        { ref_id: sid, dedupe_key: sid, status: "queued", recipient: staff, subject: `Seazn credits could not be granted: ${sid}` },
       ]);
       expect(alertMock).toHaveBeenCalledWith(expect.objectContaining({ sessionId: sid, orgId: auth.orgId }));
       expect(staffAlertDrops(errors, vi.mocked(captureError)), "the alert was queued, not dropped").toEqual({ logged: 0, issues: 0 });

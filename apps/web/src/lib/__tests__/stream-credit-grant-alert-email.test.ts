@@ -31,15 +31,15 @@ describe("match-credit grant failure alert", () => {
     expect(body).toContain(base.reason);
     // The sentence that decides whether the ticket is triaged or filed: money
     // has already moved, and nothing retries.
-    expect(body).toMatch(/charged but holds no match credits/i);
+    expect(body).toMatch(/charged but holds no Seazn credits/i);
     // …and where to fix it, naming the panel and the action as the admin page
     // actually labels them (admin-stream-credits-panel.tsx:64, :199).
     expect(body).toContain(`/admin/orgs/${base.orgId}`);
-    expect(body).toContain("Match credits (streaming)");
+    expect(body).toContain("Seazn credits (streaming)");
     expect(body).toContain("Grant — add credits");
   });
 
-  it("names MATCH credits, never the AI credit wallet", () => {
+  it("names Seazn (stream) credits, never the AI credit wallet", () => {
     // The two currencies have separate ledgers and separate admin panels. An
     // alert that said "credits" would send whoever triages it to the wrong
     // balance — and the donor alert for the OTHER currency
@@ -47,7 +47,7 @@ describe("match-credit grant failure alert", () => {
     // is why this is a distinct builder rather than a shared one.
     const mail = streamCreditGrantFailedAlertEmail(base);
     const body = `${mail.subject}\n${mail.html}\n${mail.text}`;
-    expect(mail.subject).toBe(`Match credits could not be granted: ${base.sessionId}`);
+    expect(mail.subject).toBe(`Seazn credits could not be granted: ${base.sessionId}`);
     expect(body).not.toMatch(/AI credit/i);
     expect(body).not.toContain("credit_pack");
   });

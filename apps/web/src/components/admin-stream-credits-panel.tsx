@@ -196,13 +196,13 @@ export function AdminStreamCreditsPanel({
 
   return (
     <section data-testid="stream-credits-panel">
-      <h2 className="mb-2 text-sm font-semibold text-slate-300">Match credits (streaming)</h2>
+      <h2 className="mb-2 text-sm font-semibold text-slate-300">Seazn credits (streaming)</h2>
       <div className="space-y-3 rounded-lg bg-slate-800 p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0 space-y-1">
             <p className="text-2xl font-bold text-white">
               <span data-testid="stream-credits-balance">{balance}</span>{" "}
-              <span className="text-sm font-normal text-slate-300">match credits</span>
+              <span className="text-sm font-normal text-slate-300">Seazn credits</span>
             </p>
             <p className="text-xs text-slate-400">
               Up to {maxDelta} credits per adjustment. A refund adds credits back; to tie it to a failed
@@ -228,7 +228,7 @@ export function AdminStreamCreditsPanel({
 
         {rows.length === 0 ? (
           <p data-testid="stream-credits-empty" className="text-xs text-slate-400">
-            No match-credit ledger entries for this org.
+            No Seazn credit ledger entries for this org.
           </p>
         ) : (
           <div
@@ -236,7 +236,7 @@ export function AdminStreamCreditsPanel({
             className="overflow-x-auto rounded-lg border border-slate-700"
             tabIndex={0}
             role="region"
-            aria-label="Match credits ledger"
+            aria-label="Seazn credits ledger"
           >
             <table className="w-full text-sm">
               <thead className="bg-slate-900 text-xs text-slate-400">
@@ -266,7 +266,7 @@ export function AdminStreamCreditsPanel({
 
       {open && (
         <Modal
-          title="Adjust match credits"
+          title="Adjust Seazn credits"
           onClose={() => setOpen(false)}
           footer={
             <>

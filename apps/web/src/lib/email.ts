@@ -861,17 +861,17 @@ export interface StreamCreditGrantFailedAlertEmail {
  *  email outbox through `queueStaffAlert` (kind `staff_stream_credit_grant_failed`), once per Checkout Session. Nothing
  *  sends it directly. */
 export function streamCreditGrantFailedAlertEmail(opts: StreamCreditGrantFailedAlertEmail): EmailContent {
-  const subject = `Match credits could not be granted: ${opts.sessionId}`;
+  const subject = `Seazn credits could not be granted: ${opts.sessionId}`;
   const bodyText =
-    `A completed match-credit checkout session (${opts.sessionId}, org ${opts.orgId}` +
+    `A completed Seazn credit checkout session (${opts.sessionId}, org ${opts.orgId}` +
     `${opts.packRaw ? `, pack ${opts.packRaw}` : ""}) could not be granted: ${opts.reason}. ` +
-    `The buyer was charged but holds no match credits — inspect and grant manually from ` +
-    `/admin/orgs/${opts.orgId}, panel "Match credits (streaming)", action "Grant — add credits".`;
+    `The buyer was charged but holds no Seazn credits — inspect and grant manually from ` +
+    `/admin/orgs/${opts.orgId}, panel "Seazn credits (streaming)", action "Grant — add credits".`;
   const html = renderEmail({
     subject,
-    preheader: `Paid match credits ungranted — org ${opts.orgId}`,
-    eyebrow: "Billing · Match credits",
-    title: "Match credit grant failed",
+    preheader: `Paid Seazn credits ungranted — org ${opts.orgId}`,
+    eyebrow: "Billing · Seazn credits",
+    title: "Seazn credit grant failed",
     contentHtml:
       paragraph(escapeHtml(bodyText)) +
       panel(
@@ -879,7 +879,7 @@ export function streamCreditGrantFailedAlertEmail(opts: StreamCreditGrantFailedA
         `${opts.sessionId}\norg: ${opts.orgId}` +
           `${opts.packRaw ? `\npack: ${opts.packRaw}` : ""}\nreason: ${opts.reason}`,
       ),
-    footerNote: "Automated staff alert — match credits webhook (streaming R1).",
+    footerNote: "Automated staff alert — Seazn credits webhook (streaming R1).",
   });
   const text = `${bodyText}\n\nSession: ${opts.sessionId} · org ${opts.orgId} · reason: ${opts.reason}`;
   return { subject, html, text };
@@ -924,23 +924,23 @@ export interface StreamCreditClawbackAlertEmail {
  *  `<charge>:short`, `<charge>:ungranted` or `<dispute>:lost` — and never throws, so it can never block the webhook ACK.
  *  Nothing sends it directly. */
 export function streamCreditClawbackAlertEmail(opts: StreamCreditClawbackAlertEmail): EmailContent {
-  const subject = `Match credits claw-back needs review: ${opts.chargeId}`;
+  const subject = `Seazn credits claw-back needs review: ${opts.chargeId}`;
   const movement =
     opts.purchased === undefined
-      ? "No match-credit purchase row matched this charge, so nothing was reversed."
-      : `The pack granted ${opts.purchased} match credit${opts.purchased === 1 ? "" : "s"}; ` +
+      ? "No Seazn credit purchase row matched this charge, so nothing was reversed."
+      : `The pack granted ${opts.purchased} Seazn credit${opts.purchased === 1 ? "" : "s"}; ` +
         `${opts.clawedBack ?? 0} ${(opts.clawedBack ?? 0) === 1 ? "was" : "were"} revoked.`;
   const bodyText =
-    `A match-credit charge (${opts.chargeId}, org ${opts.orgId}) was refunded: ${opts.reason}. ` +
+    `A Seazn credit charge (${opts.chargeId}, org ${opts.orgId}) was refunded: ${opts.reason}. ` +
     `${movement} ` +
     `Credits already spent cannot be reversed — the streams they paid for have already gone out and ` +
     `Cloudflare has already billed us for the minutes. Review the refund in Stripe and decide whether ` +
     `to chase it; nothing further happens automatically.`;
   const html = renderEmail({
     subject,
-    preheader: `Refunded match credits — org ${opts.orgId}`,
-    eyebrow: "Billing · Match credits",
-    title: "Match credit claw-back",
+    preheader: `Refunded Seazn credits — org ${opts.orgId}`,
+    eyebrow: "Billing · Seazn credits",
+    title: "Seazn credit claw-back",
     contentHtml:
       paragraph(escapeHtml(bodyText)) +
       panel(
@@ -949,7 +949,7 @@ export function streamCreditClawbackAlertEmail(opts: StreamCreditClawbackAlertEm
           `${opts.purchased === undefined ? "" : `\npurchased: ${opts.purchased}\nclawed back: ${opts.clawedBack ?? 0}`}` +
           `\nreason: ${opts.reason}`,
       ),
-    footerNote: "Automated staff alert — match credits webhook (streaming R1).",
+    footerNote: "Automated staff alert — Seazn credits webhook (streaming R1).",
   });
   const text = `${bodyText}\n\nCharge: ${opts.chargeId} · org ${opts.orgId} · reason: ${opts.reason}`;
   return { subject, html, text };
@@ -973,7 +973,7 @@ export interface StreamPackPriceDriftAlertEmail {
  *  `alertStreamPackPriceDrift` (lib/relay-checkout.ts, kind `staff_stream_pack_price_drift`), once per drifted price per
  *  UTC day, never per refused checkout; nothing sends it directly. */
 export function streamPackPriceDriftAlertEmail(opts: StreamPackPriceDriftAlertEmail): EmailContent {
-  const subject = `Match-credit pack price differs from the table: ${opts.lookupKey}`;
+  const subject = `Seazn credit pack price differs from the table: ${opts.lookupKey}`;
   const bodyText =
     `The live Stripe price ${opts.priceId} for ${opts.lookupKey} does not charge what ` +
     `apps/web/src/lib/stream-credit-packs.ts says (${opts.drift}). Every checkout for this pack is refused ` +
@@ -982,12 +982,12 @@ export function streamPackPriceDriftAlertEmail(opts: StreamPackPriceDriftAlertEm
   const html = renderEmail({
     subject,
     preheader: `Pack checkouts refused — ${opts.lookupKey}`,
-    eyebrow: "Billing · Match credits",
-    title: "Match-credit pack price drift",
+    eyebrow: "Billing · Seazn credits",
+    title: "Seazn credit pack price drift",
     contentHtml:
       paragraph(escapeHtml(bodyText)) +
       panel("Price", `lookup key: ${opts.lookupKey}\nprice: ${opts.priceId}\ndrift: ${opts.drift}`),
-    footerNote: "Automated staff alert — match-credit checkout drift guard (streaming R1).",
+    footerNote: "Automated staff alert — Seazn credit checkout drift guard (streaming R1).",
   });
   const text = `${bodyText}\n\nlookup key: ${opts.lookupKey} · price: ${opts.priceId} · drift: ${opts.drift}`;
   return { subject, html, text };

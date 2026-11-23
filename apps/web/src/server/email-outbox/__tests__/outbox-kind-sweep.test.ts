@@ -1964,7 +1964,7 @@ function streamCreditGrantFailedScenario(): LiteralKindScenario {
   const sessionId = `cs_${RUN}_stream_${randomUUID().slice(0, 8)}`;
   return {
     locale: "en",
-    subjectLiteral: `Match credits could not be granted: ${sessionId}`,
+    subjectLiteral: `Seazn credits could not be granted: ${sessionId}`,
     recipient,
     firstAttempt: "worker",
     run: async () => {
@@ -2066,7 +2066,7 @@ function streamCreditClawbackScenario(): LiteralKindScenario {
   const chargeId = `ch_${RUN}_claw_${randomUUID().slice(0, 8)}`;
   return {
     locale: "en",
-    subjectLiteral: `Match credits claw-back needs review: ${chargeId}`,
+    subjectLiteral: `Seazn credits claw-back needs review: ${chargeId}`,
     recipient,
     firstAttempt: "worker",
     run: async () => {
@@ -2160,7 +2160,7 @@ function streamPackPriceDriftScenario(): LiteralKindScenario {
   const recipient = address();
   return {
     locale: "en",
-    subjectLiteral: "Match-credit pack price differs from the table: seazn_stream_pack_5",
+    subjectLiteral: "Seazn credit pack price differs from the table: seazn_stream_pack_5",
     recipient,
     firstAttempt: "worker",
     run: async () => {

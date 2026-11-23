@@ -138,7 +138,7 @@ describe("AdminStreamCreditsPanel — the closed panel", () => {
     const rail = tag(render({ rows: [row({})] }), "div", "stream-credits-ledger");
     expect(rail).toContain('tabindex="0"');
     expect(rail).toContain('role="region"');
-    expect(rail).toContain('aria-label="Match credits ledger"');
+    expect(rail).toContain('aria-label="Seazn credits ledger"');
     expect(rail).toMatch(/class="[^"]*\boverflow-x-auto\b/);
   });
 });
@@ -150,7 +150,7 @@ describe("AdminStreamCreditsPanel — the Adjust-credits modal, opened by its ow
     click(is, "stream-credits-adjust");
     const modal = is.tree().find((e) => e.type === Modal);
     expect(modal, "the trigger's onClick did not open the modal").toBeTruthy();
-    expect(propsOf(modal!).title).toBe("Adjust match credits");
+    expect(propsOf(modal!).title).toBe("Adjust Seazn credits");
 
     // Every one of these is a PROP, not text — textOf would never see a single one of them.
     const kind = must(is, "stream-credits-kind");

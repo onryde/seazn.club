@@ -63,7 +63,7 @@ const clawbackAlert = vi.mocked(streamCreditClawbackAlertEmail);
 const disputeAlert = vi.mocked(staffDisputeAlertEmail);
 const KIND = "staff_stream_credit_clawback";
 const RUN = `scc-${randomUUID().slice(0, 8)}`;
-const clawSubject = (ref: string): string => `Match credits claw-back needs review: ${ref}`;
+const clawSubject = (ref: string): string => `Seazn credits claw-back needs review: ${ref}`;
 
 // The guarded PaymentIntent retrieve the `matched === false` branch uses to tell
 // a paid-but-ungranted match-credit pack from a genuine non-stream charge. Only

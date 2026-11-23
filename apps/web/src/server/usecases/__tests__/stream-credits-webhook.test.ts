@@ -405,7 +405,7 @@ describe.skipIf(!HAS_DB)("checkout.session.completed → stream credits", () => 
     // relying on. One row, keyed by the session; the subject is the sender's
     // inline English, typed from its source.
     expect(await staffRows(KIND, "checkout_session", sid)).toEqual([
-      { ref_id: sid, dedupe_key: sid, status: "queued", recipient: staff, subject: `Match credits could not be granted: ${sid}` },
+      { ref_id: sid, dedupe_key: sid, status: "queued", recipient: staff, subject: `Seazn credits could not be granted: ${sid}` },
     ]);
     expect(alertMock, "what the alert says").toHaveBeenCalledWith({
       sessionId: sid,
@@ -477,7 +477,7 @@ describe.skipIf(!HAS_DB)("checkout.session.completed → stream credits", () => 
       reason: "checkout session id already recorded for another organisation",
     });
     expect(await staffRows(KIND, "checkout_session", sid)).toEqual([
-      { ref_id: sid, dedupe_key: sid, status: "queued", recipient: staff, subject: `Match credits could not be granted: ${sid}` },
+      { ref_id: sid, dedupe_key: sid, status: "queued", recipient: staff, subject: `Seazn credits could not be granted: ${sid}` },
     ]);
     expect(staffAlertDrops(errors, vi.mocked(captureError)), "the redelivery was deduplicated, not dropped").toEqual({ logged: 0, issues: 0 });
   });

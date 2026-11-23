@@ -266,7 +266,7 @@ test("staff grant, refund and revoke through the real Adjust-credits modal — a
   await expect(balance).toHaveText("2", { timeout: 30_000 });
   await expect(rows).toHaveCount(4);
   const log = page.getByRole("region", { name: "Adjustments log" });
-  for (const [label, n] of [["Match credits granted", 1], ["Match credits refunded", 2], ["Match credits revoked", 1]] as const) {
+  for (const [label, n] of [["Seazn credits granted", 1], ["Seazn credits refunded", 2], ["Seazn credits revoked", 1]] as const) {
     await expect(log.getByText(label, { exact: true }), label).toHaveCount(n);
   }
 

@@ -51,7 +51,7 @@ type Executor = Tx | typeof sql;
 
 export class NoCreditsError extends HttpError {
   constructor(orgId: string) {
-    super(402, "This organisation has no match credits", "no_credits", { featureKey: "streaming.relay", orgId });
+    super(402, "This organisation has no Seazn credits", "no_credits", { featureKey: "streaming.relay", orgId });
   }
 }
 
@@ -608,7 +608,7 @@ async function staffRow(kind: StaffKind, args: StaffCreditArgs & { sessionId?: s
   // The ruled 1..STAFF_CREDIT_MAX bound, at the single writer (review I4). Written as two
   // comparisons so each end can be mutated on its own rather than covering for the other.
   if (!Number.isInteger(args.delta) || args.delta < 1 || args.delta > STAFF_CREDIT_MAX) {
-    throw new HttpError(422, `A ${kind} must move between 1 and ${STAFF_CREDIT_MAX} match credits; got ${args.delta}`, "delta_out_of_range");
+    throw new HttpError(422, `A ${kind} must move between 1 and ${STAFF_CREDIT_MAX} Seazn credits; got ${args.delta}`, "delta_out_of_range");
   }
   // The REASON, validated here and not only in 7A's zod (re-review I5) — same argument as the cap
   // above: `note: string` accepts `""` and `"   "`, and an empty reason is a money movement the
@@ -666,7 +666,7 @@ async function staffRow(kind: StaffKind, args: StaffCreditArgs & { sessionId?: s
         debit(split.pack, args.delta);
       } catch (e) {
         if (e instanceof InsufficientCredits) {
-          throw new HttpError(422, `Revoking ${args.delta} would take this organisation's bought match credits (${split.pack}) below zero`, "insufficient_credits");
+          throw new HttpError(422, `Revoking ${args.delta} would take this organisation's bought Seazn credits (${split.pack}) below zero`, "insufficient_credits");
         }
         throw e;
       }

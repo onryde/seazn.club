@@ -91,7 +91,7 @@ export async function maybeAlertOrgRepriceFailed(opts: ExtraOrgRepriceFailedAler
 export const STREAM_CLAWBACK_REASON = {
   short: "full refund clawed back fewer credits than the pack granted — the rest were already spent on live streams",
   partial: "partial refund — no automatic claw-back",
-  ungranted: "refunded match-credit charge has no purchase ledger row to claw back",
+  ungranted: "refunded Seazn credit charge has no purchase ledger row to claw back",
 } as const;
 
 /** What `alertStreamClawback` is told: the incident's shape, with the ref type and fields that shape is keyed by. */

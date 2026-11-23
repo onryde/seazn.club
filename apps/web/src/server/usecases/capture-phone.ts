@@ -813,7 +813,7 @@ export function phoneStartRefusal(err: unknown): CaptureRefusalError | { already
       const sid = err.extra?.sessionId;
       return { alreadyLive: typeof sid === "string" ? sid : null };
     }
-    case "no_credits": return new CaptureRefusalError(402, "no_credit", "this organisation has no match credits");
+    case "no_credits": return new CaptureRefusalError(402, "no_credit", "this organisation has no Seazn credits");
     // The pre-pick is held by another match, refused by the allowlist, or its key will not open: the organiser picks or
     // fixes the destination (the panel names which).
     case "target_in_use": return noDestination("the picked destination is streaming another match");

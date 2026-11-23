@@ -542,7 +542,7 @@ describe("createRelayCheckout", () => {
         suffix: `${streamPack(5)!.lookupKey}:${DAY}`,
       });
       const mail = (await call.render()) as { subject: string; text: string };
-      expect(mail.subject).toBe(`Match-credit pack price differs from the table: ${streamPack(5)!.lookupKey}`);
+      expect(mail.subject).toBe(`Seazn credit pack price differs from the table: ${streamPack(5)!.lookupKey}`);
       expect(mail.text).toContain(
         `eur: live 1, table ${streamPackPriceAmounts(streamPack(5)!).currency_options.eur!.unit_amount}`,
       );

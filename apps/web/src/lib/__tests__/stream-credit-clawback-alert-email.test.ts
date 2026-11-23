@@ -34,7 +34,7 @@ describe("match-credit claw-back alert", () => {
     // The two numbers ARE the judgement: 2 of 5 revoked means three streams
     // went out and were then refunded. An alert that named neither would be a
     // notification with nothing to act on.
-    expect(body(mail)).toMatch(/granted 5 match credits/i);
+    expect(body(mail)).toMatch(/granted 5 Seazn credits/i);
     expect(body(mail)).toMatch(/2 were revoked/i);
   });
 
@@ -44,13 +44,13 @@ describe("match-credit claw-back alert", () => {
     // triages a claw-back to add credits to an account that just took its money
     // back, which is why this is a separate builder.
     const mail = streamCreditClawbackAlertEmail(base);
-    expect(mail.subject).toBe(`Match credits claw-back needs review: ${base.chargeId}`);
+    expect(mail.subject).toBe(`Seazn credits claw-back needs review: ${base.chargeId}`);
     expect(mail.subject).not.toMatch(/could not be granted/i);
     expect(body(mail)).not.toMatch(/grant manually/i);
     expect(body(mail)).not.toMatch(/Grant — add credits/);
-    // …and it names MATCH credits, never the AI credit wallet: two currencies,
+    // …and it names Seazn (stream) credits, never the AI credit wallet: two currencies,
     // two ledgers, two admin panels.
-    expect(mail.subject).toMatch(/match credits/i);
+    expect(mail.subject).toMatch(/Seazn credits/i);
     expect(body(mail)).not.toMatch(/AI credit/i);
   });
 
@@ -68,16 +68,16 @@ describe("match-credit claw-back alert", () => {
     const mail = streamCreditClawbackAlertEmail({
       chargeId: base.chargeId,
       orgId: base.orgId,
-      reason: "refunded match-credit charge has no purchase ledger row to claw back",
+      reason: "refunded Seazn credit charge has no purchase ledger row to claw back",
     });
     expect(body(mail)).not.toMatch(/\bundefined\b/);
-    expect(body(mail)).toMatch(/No match-credit purchase row matched/i);
+    expect(body(mail)).toMatch(/No Seazn credit purchase row matched/i);
     expect(body(mail)).toContain(base.chargeId);
     // Positive pair: with the numbers present, the movement line IS printed —
     // otherwise the assertion above is satisfied by copy that never names them.
     const withNumbers = streamCreditClawbackAlertEmail(base);
-    expect(body(withNumbers)).not.toMatch(/No match-credit purchase row matched/i);
-    expect(body(withNumbers)).toMatch(/granted 5 match credits/i);
+    expect(body(withNumbers)).not.toMatch(/No Seazn credit purchase row matched/i);
+    expect(body(withNumbers)).toMatch(/granted 5 Seazn credits/i);
   });
 
   it("reads correctly when a fully-spent pack clawed back nothing at all", () => {
