@@ -1,6 +1,7 @@
 import { v1, reply } from "@/server/api-v1/http";
 import { publicCompetitionHub, publicPollRateLimit, PUBLIC_CACHE_CONTROL } from "@/server/usecases/public";
 import { hubDocEtag } from "@/server/public-site/hub-doc-etag";
+import { HUB_BUILD_HEADER } from "@/lib/hub-doc-stamp";
 
 type Ctx = { params: Promise<{ orgSlug: string; slug: string }> };
 
@@ -16,7 +17,8 @@ export async function GET(req: Request, { params }: Ctx) {
     const { orgSlug, slug } = await params;
     const doc = await publicCompetitionHub(orgSlug, slug);
     const etag = hubDocEtag(doc);
-    const headers = { "Cache-Control": PUBLIC_CACHE_CONTROL, ETag: etag };
+    // The build a 304 confirms: the page re-stamps the document it holds with it (`restampHubDoc`).
+    const headers = { "Cache-Control": PUBLIC_CACHE_CONTROL, ETag: etag, [HUB_BUILD_HEADER]: doc.generatedAt };
     if (req.headers.get("If-None-Match") === etag) return reply(304, null, headers);
     return reply(200, doc, headers);
   });

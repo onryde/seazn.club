@@ -6,11 +6,12 @@
 // split exists to prevent repeating is that unwrapping it a SECOND time here
 // would silently replace the whole document with `undefined` on every poll.
 import { ApiError, api } from "@/lib/client";
+import { HUB_BUILD_HEADER, restampHubDoc } from "@/lib/hub-doc-stamp";
 import type { CompetitionHubDocT } from "@/server/public-site/competition-hub-schema";
 
-/** W5 follow-ups B4: the build each competition's document came from, and that document - the poll sends the build back
- *  (`If-None-Match`), and a 304 is answered with the document already held, the SAME object, so nothing re-renders. Keyed
- *  per competition URL; one entry each, replaced by every 200. */
+/** W5 follow-ups B4: the content tag (ETag) of each competition's document, and that document - the poll sends the tag back
+ *  (`If-None-Match`), and a 304 is answered with the document already held, re-stamped with the server's current build
+ *  (`restampHubDoc`: the SAME object when the build has not moved). Keyed per competition URL; one entry each. */
 const held = new Map<string, { etag: string; doc: CompetitionHubDocT }>();
 
 export async function fetchCompetitionHub(
@@ -20,6 +21,7 @@ export async function fetchCompetitionHub(
   const url = `/api/v1/public/orgs/${orgSlug}/competitions/${competitionSlug}/hub`;
   const seen = held.get(url);
   let etag: string | null = null;
+  let build: string | null = null;
   try {
     // R10 H1: never the browser's HTTP cache. The route answers `Cache-Control:
     // public, s-maxage=30, stale-while-revalidate=300`, which is meant for the
@@ -34,13 +36,18 @@ export async function fetchCompetitionHub(
       headers: seen === undefined ? {} : { "If-None-Match": seen.etag },
       onResponse: (res) => {
         etag = res.headers.get("ETag");
+        build = res.headers.get(HUB_BUILD_HEADER);
       },
     });
     if (etag !== null) held.set(url, { etag, doc });
     else held.delete(url);
     return doc;
   } catch (err) {
-    if (err instanceof ApiError && err.status === 304 && seen !== undefined) return seen.doc;
+    if (err instanceof ApiError && err.status === 304 && seen !== undefined) {
+      const doc = build === null ? seen.doc : restampHubDoc(seen.doc, build);
+      held.set(url, { etag: seen.etag, doc });
+      return doc;
+    }
     throw err;
   }
 }

@@ -23,8 +23,17 @@ import { GET } from "../orgs/[orgSlug]/competitions/[slug]/hub/route";
 import { fetchCompetitionHub } from "@/components/public-site/competition-hub-data";
 
 const ctx = { params: Promise.resolve({ orgSlug: "riverside", slug: "autumn-cup" }) };
+// The builder's own shape for what matters here: it stamps `generatedAt` AND every card's `header.updatedAt` with the
+// build instant (competition-hub.ts `updatedAt: generatedAt`), and a LIVE card reads that as "Updated Ns ago". A second
+// card carries an instant of its own, which is content.
 const docAt = (generatedAt: string, score: string) =>
-  ({ competitionId: "c1", orgSlug: "riverside", competitionSlug: "autumn-cup", generatedAt, matches: [{ fixtureId: "f1", resultLine: score }] }) as unknown as CompetitionHubDocT;
+  ({
+    competitionId: "c1", orgSlug: "riverside", competitionSlug: "autumn-cup", generatedAt,
+    matches: [
+      { fixtureId: "f1", resultLine: score, header: { status: "in_play", updatedAt: generatedAt } },
+      { fixtureId: "f2", resultLine: "", header: { status: "decided", updatedAt: "2026-11-21T08:00:00.000Z" } },
+    ],
+  }) as unknown as CompetitionHubDocT;
 
 beforeEach(() => {
   current.doc = docAt("2026-11-22T10:00:00.000Z", "1-0");
@@ -51,6 +60,7 @@ describe("B4 the hub poll costs a document only when the document changed", () =
     const rebuilt = await GET(new Request("http://x/hub", { headers: { "If-None-Match": etag! } }), ctx);
     expect(rebuilt.status, "rebuilt, same content: 304").toBe(304);
     expect(rebuilt.headers.get("ETag")).toBe(etag);
+    expect(rebuilt.headers.get("X-Hub-Generated-At"), "the 304 names the build it confirms").toBe("2026-11-22T10:00:15.000Z");
 
     current.doc = docAt("2026-11-22T10:00:20.000Z", "2-0");
     const moved = await GET(new Request("http://x/hub", { headers: { "If-None-Match": etag! } }), ctx);
@@ -70,14 +80,23 @@ describe("B4 the hub poll costs a document only when the document changed", () =
     const b = await fetchCompetitionHub("riverside", "autumn-cup");
     expect(sent[0], "the first poll holds nothing").toBeNull();
     expect(sent[1], "the second sends the ETag of the first").toMatch(/^W\/".+"$/);
-    expect(b, "a 304 hands back the very document already held").toBe(a);
+    expect(b, "a 304 for the same build hands back the very document already held").toBe(a);
+    // Rebuilt with the same content: still a 304, and the held document is re-stamped with the new build - the live card's
+    // "Updated Ns ago" resets as a full answer would have reset it; everything else is what it was.
+    current.doc = docAt("2026-11-22T10:00:15.000Z", "1-0");
+    const r = await fetchCompetitionHub("riverside", "autumn-cup");
+    expect(r.generatedAt).toBe("2026-11-22T10:00:15.000Z");
+    expect((r.matches[0] as { header: { updatedAt: string } }).header.updatedAt, "the build-stamped card moves").toBe("2026-11-22T10:00:15.000Z");
+    expect((r.matches[1] as { header: { updatedAt: string } }).header.updatedAt, "a card's own instant stays").toBe("2026-11-21T08:00:00.000Z");
+    expect(r, "...and that is exactly the document a full answer would have carried").toEqual(current.doc);
     current.doc = docAt("2026-11-22T10:00:20.000Z", "2-0");
     const c = await fetchCompetitionHub("riverside", "autumn-cup");
     expect(c.generatedAt, "a change arrives").toBe("2026-11-22T10:00:20.000Z");
     expect((c.matches[0] as { resultLine: string }).resultLine).toBe("2-0");
     const d = await fetchCompetitionHub("riverside", "autumn-cup");
     expect(d, "and is then held in its turn").toBe(c);
-    expect(sent.length, "anti-vacuity: four polls").toBe(4);
+    expect(sent.length, "anti-vacuity: five polls").toBe(5);
+    expect(sent.slice(1).every((e) => e !== null), "every poll after the first sends its tag").toBe(true);
   });
 
   it("the empty case: a fetch layer that has never seen this competition sends no ETag, even after another competition's", async () => {
