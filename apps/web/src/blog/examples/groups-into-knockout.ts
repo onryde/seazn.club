@@ -12,7 +12,7 @@
 // pool meeting itself is taken). A second field, four groups of two qualifiers, is reported as facts.
 import { builtinModules } from "@seazn/engine/sports";
 import { declaredCfgs, defaultOrderOf, forEachSport } from "@seazn/engine/testkit";
-import { expandSources, placeDescriptors, type ProgressionSpec, type SourceShape, type SourceTables } from "@seazn/engine/competition";
+import { expandSources, isHeadToHeadKey, placeDescriptors, type ProgressionSpec, type SourceShape, type SourceTables } from "@seazn/engine/competition";
 import { crossPoolDraw, nextPowerOfTwo, seedPositions } from "@seazn/engine/scheduling";
 import { buildTemplateStages } from "@/lib/format-templates";
 import { CROSS_POOL_SHAPES, pooledSeeds } from "@/lib/cross-pool-ties";
@@ -269,7 +269,7 @@ const claims: Claim[] = [
     says: "the seats by the table are every group's winner, then every runner-up; within a place the best record comes first, by points and then goal difference (football's declared first two keys, with no head-to-head between groups)",
     source: "rank_order over the take (topNPerGroup: wave by wave) and football's declared table order, without its head-to-head steps (entrants of different groups never met)",
     check: guarded((r) => {
-      const declared = defaultOrderOf(football()).filter((k) => !String(k).startsWith("h2h"));
+      const declared = defaultOrderOf(football()).filter((k) => !isHeadToHeadKey(k));
       if (declared[0] !== "points" || declared[1] !== "diff") return `football's declared order is ${declared.join(", ")}`;
       const rows = [...qualifiersOf(r)].sort((a, b) => a.tableSeed - b.tableSeed);
       if (rows.some((x, i) => x.tableSeed !== i + 1)) return "the seeds by the table are not 1..n once each";
