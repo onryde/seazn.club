@@ -1,8 +1,9 @@
 import "server-only";
 // server/usecases/online-package/gate.ts — the payment door at "Open round" (spec 2026-11-23-online-chess-credits-design.md §7.6
 // "openRound" and "Pay and open", §8.5; decisions 12 and 15; P8, P18, P20). Asked by `openRound` INSIDE its transaction, under the
-// `division:` lock it already holds, and only once the open has decided it will open something (a press that opens nothing writes
-// nothing, so it must pay nothing):
+// `division:` lock it already holds, only once the open has decided it will open something (a press that opens nothing writes
+// nothing, so it must pay nothing), and LAST - after the invites are attached and queued (review m4), so the org money lock this
+// takes is held for the payment and the freeze alone, never across the fan-out:
 //
 //  * A FROZEN row asks nothing. A round of this division has opened before (P8), or the row is the backfill's grandfathered one
 //    (frozen, never paid): every later open of every round goes through with nothing asked, whatever the balance and whatever the
@@ -13,12 +14,13 @@ import "server-only";
 //    it; it is never silently re-picked) and, when that size is itself refused, the smallest size that would hold the division.
 //  * `pay` (the organiser confirmed the receipt that 402 showed): the payment runs FIRST, on this transaction (`payOnlinePackageInTx`:
 //    the org money lock, the row lock, the quote under them, the debit), then the cover is asked again of the row it left. The debit,
-//    the stamp and the freeze commit together or not at all: any refusal after this point - in the gate or in the open after it -
-//    rolls the payment back with the round.
+//    the stamp and the freeze commit together or not at all: a refusal in the open before the gate, in the gate, or at the commit
+//    rolls the payment back with the round (and the queued invites with it: they are sent after the commit).
 //  * Then the package FREEZES (P8), on the database clock, in a statement V549's CHECK holds: `paid_at` is set before or with
 //    `frozen_at` (frozen and unpaid is only ever the backfill's row).
 //
-// The locks, in the spec's order: the caller's `division:` lock, then the org money lock, then the package row `for update`. The
+// The locks, in the spec's order: the caller's `division:` lock (then the bridge rows its fan-out takes), then the org money lock,
+// then the package row `for update`. The
 // money facts the transaction cannot read (the plan's monthly rate, the plan's entrant cap) are read by the caller BEFORE it
 // (lib/db.ts forbids a pooled read inside one) and passed in as `money`.
 import type { Tx } from "@/lib/db";

@@ -13,7 +13,7 @@
 //   * included rounds: P1, log2(size) + 2: 16 -> 6, 32 -> 7;
 //   * the non-opening results of openRound: `OPEN_ROUND_REFUSALS` plus `already_open`, read from lib/open-round.ts.
 //
-// Mutant table (each run once by hand from a `cp` backup, the suite's total pinned at 27; all killed - the killers named):
+// Mutant table (each run once by hand from a `cp` backup, the suite's total pinned (27, then 29 with review m4); all killed):
 //   G1   an unpaid row opens (the cover check and the freeze dropped)  -> 15, "unpaid: 402 ..." first
 //   G2   "paid" judged by paid_at alone, not by cover                  -> the three "paid but not covering" cases
 //   G3   the gate (and its payment) moved to the top of the transaction, before the decision -> "... does not open writes no debit"
@@ -26,7 +26,8 @@
 //   G9   the missing-row refusal dropped                                -> "no live package"
 //   G10  the pay-and-open format gate dropped (beforeCharge)            -> "pay and open on a legacy league ..."
 //   G11  `next` never offered                                           -> "Swiss rounds raised ...", "places held grown ..."
-//   G12  the payment committed on a transaction of its own (not the open's) -> "ROUND_CHANGED after the payment was written"
+//   G12  the payment committed on a transaction of its own (not the open's) -> "a failure AFTER the payment ... rolls it back"
+//   M4   the gate put back before the invite fan-out (the money lock held across it) -> "the org money lock is not held ..."
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeliverMessage } from "@/server/email-outbox/transport";
 import { stubOutboxEnv, type SentInvite } from "@/server/usecases/__tests__/_invite-mail";
@@ -47,16 +48,23 @@ beforeEach(() => {
 });
 
 // Staging for the two "the round changed" cases: a hook between the unlocked reads and the locked transaction (the fresh re-check
-// refuses BEFORE the gate), and a one-shot throw from the first board's attach (AFTER the gate and its payment, inside the transaction).
+// refuses BEFORE the gate), and a one-shot throw from the first board's attach (DURING the invite fan-out, inside the transaction,
+// before the gate: the payment is taken last). `duringAttach` runs once while the fan-out is under way (review m4's witness).
 const race = vi.hoisted(() => ({
   afterSeats: null as null | (() => Promise<void>),
   attachThrows: false,
+  duringAttach: null as null | (() => Promise<void>),
 }));
 vi.mock("../invite", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../invite")>();
   return {
     ...actual,
     attachToOpen: async (...args: Parameters<typeof actual.attachToOpen>) => {
+      if (race.duringAttach) {
+        const hook = race.duringAttach;
+        race.duringAttach = null;
+        await hook();
+      }
       if (race.attachThrows) {
         race.attachThrows = false;
         const { HttpError } = await import("@/lib/errors");
@@ -106,6 +114,7 @@ import { patchDivision } from "../../divisions";
 import { createCompetition } from "../../competitions";
 import { createDivision } from "../../divisions";
 import { onlinePackageQuote, payOnlinePackage, type PackageQuote } from "../../online-package";
+import { orgMoneyLockKey } from "../../stream-credits";
 import {
   paySeededPackage,
   seedOnlineChessRound,
@@ -512,7 +521,7 @@ describe.skipIf(!HAS_DB)("Open round: the payment door (Online Chess credits §7
   }, 120_000);
 
   describe("a refusal inside the transaction rolls the payment back (ruling: all or nothing)", () => {
-    it("ROUND_CHANGED after the payment was written (a board's attach refuses): no debit, no stamp, not frozen", async () => {
+    it("ROUND_CHANGED during the invite fan-out (a board's attach refuses): no debit, no stamp, not frozen; the press again opens", async () => {
       const s = await seedOnlineSwiss({ players: 4, onlinePackage: "unpaid" });
       const body = await confirmFor(s.owner, s.divisionId, 16);
       const ledgerBefore = await ledgerCount(s.orgId);
@@ -526,6 +535,53 @@ describe.skipIf(!HAS_DB)("Open round: the payment door (Online Chess credits §7
       expect([p.paid_at, p.frozen_at, p.credits_paid]).toEqual([null, null, 0]);
       // And the press again goes through: nothing was left half-done.
       expect((await openRound({ stageId: s.stageId, roundNo: 1, actorUserId: s.ownerUserId, pay: body })).opened).toBe(true);
+    }, 120_000);
+
+    it("a failure AFTER the payment, in the same transaction (the database refuses the freeze): the payment rolls back with the round", async () => {
+      const s = await seedOnlineSwiss({ players: 4, onlinePackage: "unpaid" });
+      const body = await confirmFor(s.owner, s.divisionId, 16);
+      const row = await liveOf(s.divisionId);
+      const ledgerBefore = await ledgerCount(s.orgId);
+      // The one step after the payment is the freeze: a trigger refuses it for THIS row only (named per run, dropped after), so the
+      // debit is already written on the open's transaction when the open fails.
+      const fn = `t9_refuse_freeze_${randomUUID().replaceAll("-", "")}`;
+      await sql.unsafe(`create function ${fn}() returns trigger language plpgsql as $$
+        begin
+          if new.id = '${row.id}'::uuid and new.frozen_at is not null then raise exception 't9: the freeze is refused'; end if;
+          return new;
+        end $$`);
+      await sql.unsafe(`create trigger ${fn} before update on division_online_packages for each row execute function ${fn}()`);
+      let failed: unknown = null;
+      try {
+        await openRound({ stageId: s.stageId, roundNo: 1, actorUserId: s.ownerUserId, pay: body });
+      } catch (e) {
+        failed = e;
+      } finally {
+        await sql.unsafe(`drop trigger ${fn} on division_online_packages`);
+        await sql.unsafe(`drop function ${fn}()`);
+      }
+      expect(String(failed), "premise: the open failed at the freeze").toMatch(/the freeze is refused/);
+      expect(await ledgerCount(s.orgId), "no debit, no month's rollover").toBe(ledgerBefore);
+      expect(await stampsOf(s.stageId), "no stamp").toBe(0);
+      expect(mail.sent, "nobody mailed").toEqual([]);
+      const p = await liveOf(s.divisionId);
+      expect([p.paid_at, p.frozen_at, p.credits_paid], "unpaid and changeable, as before the press").toEqual([null, null, 0]);
+    }, 120_000);
+
+    it("the org money lock is not held while the invites fan out: it is taken last, after them (review m4)", async () => {
+      const s = await seedOnlineSwiss({ players: 4, onlinePackage: "unpaid" });
+      const body = await confirmFor(s.owner, s.divisionId, 16);
+      const free: boolean[] = [];
+      // Another transaction asks for the org's money lock while the open is attaching its first board.
+      race.duringAttach = async () => {
+        free.push(await sql.begin(async (t) =>
+          (await t<{ got: boolean }[]>`select pg_try_advisory_xact_lock(hashtext(${orgMoneyLockKey(s.orgId)})) as got`)[0]!.got));
+      };
+      const r = await openRound({ stageId: s.stageId, roundNo: 1, actorUserId: s.ownerUserId, pay: body });
+      expect(free, "the fan-out ran, and the money lock was free during it").toEqual([true]);
+      expect(r.opened).toBe(true);
+      const p = await liveOf(s.divisionId);
+      expect([p.paid_at !== null, p.frozen_at !== null, await takenFor(p.id)], "paid and frozen at the end of the same open").toEqual([true, true, gcPrice(16)]);
     }, 120_000);
 
     it("ROUND_CHANGED at the locked re-check (a board re-paired before the lock): no debit, no stamp", async () => {

@@ -633,12 +633,6 @@ export async function openRound(
       if (pending.length === 0) return { kind: "nothing", skipped: [...closedSkips, ...heldReport()] };
     }
 
-    // Online Chess credits §7.6: this press WILL open something (the 'nothing' answer is above, and pays nothing), so the package is
-    // asked now - after the decision, before a single invite is attached or queued. Frozen: nothing asked (a round opened before, or the
-    // grandfathered row). Otherwise a paid package that covers the division, paid here first when the organiser confirmed `pay`, or 402
-    // ONLINE_CHESS_UNPAID with the quote; then the freeze (P8). Every refusal after this line rolls the payment back with the round.
-    const gate = await gateFirstOpen(tx, { orgId: st.orgId, divisionId: st.divisionId, userId: a.actorUserId, pay: a.pay }, money);
-
     // D17: the re-arm, only now that the board WILL be invited (a reset answered `window_closed` would hand it to the
     // sweep's no-show). As a re-pair resets a board (stages/swiss-boards.ts clearSwissFixtureSeats, M-10): its row goes, and with
     // it the closed pairing's stamps, so the attach below mints it afresh for this open. Its video meeting goes too —
@@ -713,6 +707,15 @@ export async function openRound(
       // (as releaseSeat does for a seat it clears) - or "every send failed" would leave the round reading "someone was invited".
       if (queueFailed.has(fixtureId)) await unbindIfUnstamped(tx, fixtureId, open.id);
     }
+
+    // Online Chess credits §7.6: this press opens something (the 'nothing' answer is above, and pays nothing), so the package is asked
+    // - LAST, after the invite fan-out and still on this transaction (review m4): the org money lock is taken here and held only for
+    // the payment and the freeze, never across the attaches and the queued mail, so a stream of the same org is not kept waiting on it.
+    // The lock order stays `division:` -> the bridge rows -> the org money lock -> the package row. Frozen: nothing asked (a round
+    // opened before, or the grandfathered row). Otherwise a paid package that covers the division, paid here when the organiser
+    // confirmed `pay`, or 402 ONLINE_CHESS_UNPAID with the quote; then the freeze (P8). Any refusal - here, or anywhere above - rolls
+    // the whole open back, the queued invites with it: they are sent only after the commit.
+    const gate = await gateFirstOpen(tx, { orgId: st.orgId, divisionId: st.divisionId, userId: a.actorUserId, pay: a.pay }, money);
     return {
       kind, open, claims, queueFailed: [...queueFailed], retireBoards: [...new Set(retireBoards)], closedSkips: [...closedSkips, ...heldReport()],
       movedUp: gate.movedUp,
