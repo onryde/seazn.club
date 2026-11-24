@@ -230,6 +230,29 @@ describe("fetchRelayCheckoutClientSecret", () => {
     expect(Object.keys(body)).not.toContain("fixtureId");
   });
 
+  it("a division purchase posts the org, pack, returnTo and divisionId — `size` only when an upgrade names one — and NO fixtureId", async () => {
+    const fetchFn = vi.fn().mockResolvedValue(
+      jsonResponse({ ok: true, data: { client_secret: "cs_d" } }),
+    );
+    const first = await fetchRelayCheckoutClientSecret(
+      { orgId: "org-1", pack: 5, returnTo: "division", divisionId: "dv-1" },
+      fetchFn as unknown as typeof fetch,
+    );
+    expect(first).toEqual({ ok: true, clientSecret: "cs_d" });
+    const [path, init] = fetchFn.mock.calls[0]!;
+    expect(path).toBe("/api/billing/relay-checkout");
+    const body = JSON.parse(init.body as string);
+    expect(body).toEqual({ orgId: "org-1", pack: 5, returnTo: "division", divisionId: "dv-1" });
+    expect(Object.keys(body)).not.toContain("fixtureId");
+    expect(Object.keys(body), "a first payment sends no size").not.toContain("size");
+
+    await fetchRelayCheckoutClientSecret(
+      { orgId: "org-1", pack: 20, returnTo: "division", divisionId: "dv-1", size: 64 },
+      fetchFn as unknown as typeof fetch,
+    );
+    expect(JSON.parse(fetchFn.mock.calls[1]![1].body as string)).toEqual({ orgId: "org-1", pack: 20, returnTo: "division", divisionId: "dv-1", size: 64 });
+  });
+
   it("carries the 402 paywall refusal back as a status, with the server's sentence", async () => {
     const fetchFn = vi.fn().mockResolvedValue(
       jsonResponse({ ok: false, error: "Phone streaming is switched off for this organisation" }, 402),

@@ -139,6 +139,7 @@ import { withdrawalNotesFor } from "@/lib/table-withdrawal-note";
 import { adjustmentNotesFor } from "@/lib/points-adjustment-note";
 import { loadPointsAdjustments } from "@/server/public-site/points-adjustments";
 import { formatPublicInstant } from "@/lib/public-date-locale";
+import { reconcileStreamCreditsCheckout } from "@/server/usecases/stream-credits-checkout";
 
 const TABS = ["entrants", "fixtures", "standings", "stats"] as const;
 // v8: editors get a Settings tab (general/format/sharing/danger).
@@ -152,7 +153,9 @@ export default async function DivisionPage({
   searchParams,
 }: {
   params: Promise<{ orgSlug: string; compSlug: string; divSlug: string }>;
-  searchParams: Promise<{ tab?: string; format?: string; section?: string }>;
+  // `oc`, `checkout`, `session_id` and `size` are the return from buying Seazn credits on this division (the relay-checkout route's
+  // `returnTo: "division"`): the receipt reopens (`oc=pay`, a later task's) and Stripe's session is reconciled below.
+  searchParams: Promise<{ tab?: string; format?: string; section?: string; oc?: string; checkout?: string; session_id?: string; size?: string }>;
 }) {
   const [
     { orgSlug, compSlug, divSlug },
@@ -169,6 +172,13 @@ export default async function DivisionPage({
   const page = await requireDivisionPage(orgSlug, compSlug, divSlug, { search: searchOf(query) });
   const { auth, canEdit } = page;
   const id = page.division.id;
+  // Back from Stripe after buying Seazn credits FROM this division (spec 2026-11-23 §7.6, §8.4): reconcile the session BEFORE any
+  // balance is read, so the credits are in the ledger even when this render beats the webhook — exactly as the Settings tab and the
+  // fixture page do on their own returns. Organisers only (the people who may pay a package); best-effort and idempotent (it and the
+  // webhook converge on one ledger row), it never throws, and it grants only a COMPLETE match-credit session that names this org.
+  if (canEdit && query.checkout === "success" && typeof query.session_id === "string" && query.session_id !== "") {
+    await reconcileStreamCreditsCheckout(auth.orgId, query.session_id);
+  }
   const locale = await resolveLocale();
   const dict = await getDictionary(locale, "ui");
   const division = await getDivision(auth, id);
