@@ -20,9 +20,9 @@
 // No sport dimension: every claim here is catalog/DDL shape, identical for every sport, so there is no registry sweep.
 import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import postgres from "postgres";
 import { afterAll, describe, expect, it } from "vitest";
-import { connectionOptions, sql, type Tx } from "@/lib/db";
+import { connectionOptions, sql } from "@/lib/db";
+import { hasRealtime, readPolicies, rolledBack, stubRealtime, visibility } from "./helpers/realtime-stub";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const REPO = resolve(__dirname, "../../../../..");
@@ -237,92 +237,16 @@ describe.skipIf(!HAS_DB)("billing_events_unprocessed_idx (real Postgres)", () =>
 
 // ── Realtime policies ────────────────────────────────────────────────────────
 
-type Policy = { policyname: string; cmd: string; roles: string[]; permissive: string; qual: string; with_check: string | null };
 const POLICY_NAMES = ["external play lobby read by claim", "fixture broadcast read by claim"];
 const WRAPPED = "( SELECT realtime.topic() AS topic)";
-
-async function readPolicies(tx: Tx | typeof sql): Promise<Policy[]> {
-  return tx<Policy[]>`
-    select policyname, cmd, roles::text[] as roles, permissive, qual, with_check
-      from pg_policies
-     where schemaname = 'realtime' and tablename = 'messages' and policyname = any(${POLICY_NAMES}::text[])
-     order by policyname`;
-}
-
-const ROLLBACK = new Error("rollback");
-
-/** `body` on its own one-connection client inside a transaction that is always rolled back; the notices it raised. */
-async function rolledBack<T>(body: (tx: Tx, notices: string[]) => Promise<T>): Promise<{ value: T; notices: string[] }> {
-  const url = process.env.DATABASE_URL!;
-  const notices: string[] = [];
-  const client = postgres(url, {
-    max: 1,
-    ssl: connectionOptions(url).ssl,
-    connection: { search_path: SCHEMA },
-    onnotice: (n) => notices.push(String(n.message)),
-  });
-  let value: T | undefined;
-  try {
-    await expect(
-      client.begin(async (tx) => {
-        value = await body(tx, notices);
-        throw ROLLBACK;
-      }),
-    ).rejects.toBe(ROLLBACK);
-  } finally {
-    await client.end();
-  }
-  return { value: value as T, notices };
-}
-
-async function hasRealtime(): Promise<boolean> {
-  const [r] = await sql<{ n: number }[]>`select count(*)::int as n from pg_namespace where nspname = 'realtime'`;
-  return r!.n > 0;
-}
-
-/** Supabase's Realtime surface, as far as these two policies touch it. topic() and jwt() are Supabase's own bodies. */
-async function stubRealtime(tx: Tx): Promise<void> {
-  await tx.unsafe(`
-    create schema realtime;
-    create table realtime.messages (topic text not null, extension text not null, payload jsonb);
-    alter table realtime.messages enable row level security;
-    create function realtime.topic() returns text language sql stable as
-      $f$ select nullif(current_setting('realtime.topic', true), '')::text $f$;
-    create schema if not exists auth;
-    create or replace function auth.jwt() returns jsonb language sql stable as
-      $f$ select coalesce(nullif(current_setting('request.jwt.claim', true), ''),
-                          nullif(current_setting('request.jwt.claims', true), ''))::jsonb $f$;
-    do $r$ begin
-      if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated nologin; end if;
-    end $r$;
-    grant usage on schema realtime, auth to authenticated;
-    grant select on realtime.messages to authenticated;
-    insert into realtime.messages (topic, extension) values ('any', 'broadcast'), ('any', 'presence');
-  `).simple();
-}
 
 const TOPICS = ["fixture:A", "fixture:B", "external-play:A", "external-play:B", ""];
 const CLAIMS = [{ fixture_id: "A" }, { lobby_fixture_id: "A" }, {}];
 
-/** For every (channel topic, token claims) pair: how many rows an `authenticated` subscriber can read. */
-async function visibility(tx: Tx): Promise<Record<string, number>> {
-  const out: Record<string, number> = {};
-  for (const topic of TOPICS) {
-    for (const claims of CLAIMS) {
-      await tx`select set_config('realtime.topic', ${topic}, true), set_config('request.jwt.claims', ${JSON.stringify(claims)}, true)`;
-      await tx`set local role authenticated`;
-      const [r] = await tx<{ n: number }[]>`select count(*)::int as n from realtime.messages`;
-      await tx`reset role`;
-      out[`${topic} | ${JSON.stringify(claims)}`] = r!.n;
-    }
-  }
-  return out;
-}
-
 describe.skipIf(!HAS_DB)("the Realtime policies evaluate realtime.topic() once", () => {
   it("on a database WITH Supabase Realtime: both live policies wrap topic()", async ({ skip }) => {
     if (!(await hasRealtime())) return skip();
-    const live = await readPolicies(sql);
+    const live = await readPolicies(sql, POLICY_NAMES);
     expect(live.map((p) => p.policyname)).toEqual(POLICY_NAMES);
     for (const p of live) expect(p.qual, p.policyname).toContain(WRAPPED);
   });
@@ -355,13 +279,13 @@ describe.skipIf(!HAS_DB)("the Realtime policies evaluate realtime.topic() once",
       await stubRealtime(tx);
       await tx.unsafe(V403.text).simple();
       await tx.unsafe(V452.text).simple();
-      const before = await readPolicies(tx);
-      const seenBefore = await visibility(tx);
+      const before = await readPolicies(tx, POLICY_NAMES);
+      const seenBefore = await visibility(tx, TOPICS, CLAIMS);
       await tx.unsafe(REALTIME_BLOCK).simple();
-      const after = await readPolicies(tx);
-      const seenAfter = await visibility(tx);
+      const after = await readPolicies(tx, POLICY_NAMES);
+      const seenAfter = await visibility(tx, TOPICS, CLAIMS);
       await tx.unsafe(REALTIME_BLOCK).simple();
-      const again = await readPolicies(tx);
+      const again = await readPolicies(tx, POLICY_NAMES);
       return { before, after, again, seenBefore, seenAfter };
     });
     const { before, after, again, seenBefore, seenAfter } = value;
@@ -400,12 +324,12 @@ describe.skipIf(!HAS_DB)("the Realtime policies evaluate realtime.topic() once",
       await stubRealtime(tx);
       await tx.unsafe(V403.text).simple();
       await tx.unsafe(V452.text).simple();
-      const before = await readPolicies(tx);
+      const before = await readPolicies(tx, POLICY_NAMES);
       await tx`grant usage on schema realtime to app_user`;
       await tx`set local role app_user`;
       await tx.unsafe(REALTIME_BLOCK).simple();
       await tx`reset role`;
-      return { before, after: await readPolicies(tx) };
+      return { before, after: await readPolicies(tx, POLICY_NAMES) };
     });
     expect(notices).toContain(`V${THIS.version}: insufficient privilege on realtime.messages — skip (not owner)`);
     expect(value.before).toHaveLength(2);
