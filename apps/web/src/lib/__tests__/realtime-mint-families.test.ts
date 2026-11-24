@@ -186,6 +186,40 @@ describe("realtime token families", () => {
     expect(payload.capture_pairing_id).toBe("pr-1");
   });
 
+  // Review m2 (T1.1): a blank id names no pairing, code or division, and `'capture:' || ''` would bind a token to the
+  // bare `capture:` topic. Each family refuses one — in its topic builder AND its mint — with a plain Error that names
+  // the family, never a token.
+  const BLANK = ["", " ", "\t\n"];
+  const GUARDED: { family: string; topic: (id: string) => string; mint: (id: string) => Promise<string> }[] = [
+    { family: "capture", topic: (id) => realtime.captureTopic(id), mint: (id) => realtime.mintCaptureToken(id, EXPIRES_AT) },
+    { family: "match day", topic: (id) => realtime.matchDayTopic(id), mint: (id) => realtime.mintMatchDayToken(id, EXPIRES_AT) },
+    {
+      family: "division",
+      topic: (id) => realtime.divisionTopic(id),
+      mint: (id) => realtime.mintDivisionToken("cp-1", ["dv-1", id], EXPIRES_AT),
+    },
+  ];
+
+  it.each(GUARDED)("$family: a blank id is refused by the topic builder and by the mint, naming the family", async (g) => {
+    const named = new RegExp(`^Realtime ${g.family}: `);
+    let checked = 0;
+    for (const id of BLANK) {
+      expect(() => g.topic(id), JSON.stringify(id)).toThrow(named);
+      const err = await g.mint(id).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err, `${JSON.stringify(id)} minted a token`).toBeInstanceOf(Error);
+      expect((err as Error).message, JSON.stringify(id)).toMatch(named);
+      expect((err as Error).message, "never a token").not.toMatch(/eyJ/);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: every blank shape").toBe(BLANK.length);
+    // The positive pair: a real id still builds and mints.
+    expect(g.topic("x-1")).toMatch(/:x-1$/);
+    await expect(g.mint("x-1")).resolves.toMatch(/^eyJ/);
+  });
+
   it("a family claim may never set a claim the mint owns (role, sub, aud, the times, iss, jti)", async () => {
     // RFC 7519 §4.1's registered claims, plus `role` (what Supabase authorises on).
     const OWNED = ["role", "sub", "aud", "exp", "iat", "nbf", "iss", "jti"];

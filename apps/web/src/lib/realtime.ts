@@ -120,17 +120,24 @@ export type CaptureTopic = `capture:${string}`;
 export type MatchDayTopic = `match-day:${string}`;
 export type DivisionTopic = `division:${string}`;
 
+/** A family's id, refused when empty or blank: it names no pairing, code or division, and a policy's
+ *  `'capture:' || ''` would bind a token for it to the bare `capture:` topic. The Error names the family only. */
+function familyId(family: "capture" | "match day" | "division", what: string, id: string): string {
+  if (id.trim() === "") throw new Error(`Realtime ${family}: the ${what} is blank`);
+  return id;
+}
+
 /** Private topic of one capture pairing (V554 keys it on `capture_pairing_id`). */
 export function captureTopic(pairingId: string): CaptureTopic {
-  return `capture:${pairingId}`;
+  return `capture:${familyId("capture", "pairing id", pairingId)}`;
 }
 /** Private topic of one Match Day code (V555 keys it on `md_code_id`). */
 export function matchDayTopic(codeId: string): MatchDayTopic {
-  return `match-day:${codeId}`;
+  return `match-day:${familyId("match day", "code id", codeId)}`;
 }
 /** Topic of one division (V556 keys its private messages on `division_ids`). */
 export function divisionTopic(divisionId: string): DivisionTopic {
-  return `division:${divisionId}`;
+  return `division:${familyId("division", "division id", divisionId)}`;
 }
 
 /** A score or schedule change on one fixture: private `state_changed`. */
@@ -193,7 +200,15 @@ export async function publishFixtureUpdate(fixtureId: string, reason: FixtureUpd
  * Fire-and-forget, never throws.
  */
 export async function publishDivisionUpdate(divisionId: string, reason: DivisionUpdateReason): Promise<void> {
-  await broadcast(divisionMessages(divisionId, reason), `division ${divisionId}`);
+  let messages: RealtimeMessage[];
+  try {
+    messages = divisionMessages(divisionId, reason);
+  } catch (err) {
+    // A blank id (divisionTopic refuses it). Still fire-and-forget: callers `void` this, so it must not reject.
+    console.warn(`[realtime] division ${divisionId} broadcast failed (${err instanceof Error ? err.name : typeof err})`);
+    return;
+  }
+  await broadcast(messages, `division ${divisionId}`);
 }
 
 type MintKey = {
@@ -356,11 +371,13 @@ export async function mintRealtimeToken({
 
 /** Subscriber JWT for one capture pairing's private topic (`captureTopic`). */
 export async function mintCaptureToken(pairingId: string, expiresAt: Date): Promise<string> {
+  familyId("capture", "pairing id", pairingId);
   return mintRealtimeToken({ sub: `capture:${pairingId}`, claims: { capture_pairing_id: pairingId }, expiresAt });
 }
 
 /** Subscriber JWT for one Match Day code's private topic (`matchDayTopic`). */
 export async function mintMatchDayToken(codeId: string, expiresAt: Date): Promise<string> {
+  familyId("match day", "code id", codeId);
   return mintRealtimeToken({ sub: `md:${codeId}`, claims: { md_code_id: codeId }, expiresAt });
 }
 
@@ -373,6 +390,8 @@ export async function mintDivisionToken(
   divisionIds: readonly string[],
   expiresAt: Date,
 ): Promise<string> {
+  // Each id is refused when blank; an empty LIST still mints (it authorises no topic — T0.1's ruling).
+  for (const id of divisionIds) familyId("division", "division id", id);
   return mintRealtimeToken({
     sub: `public-competition:${competitionId}`,
     claims: { division_ids: [...divisionIds] },

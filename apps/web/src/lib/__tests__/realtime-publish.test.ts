@@ -39,6 +39,17 @@ describe("publishFixtureUpdate", () => {
     });
   });
 
+  // T1.1 review m2: divisionTopic refuses a blank id, and publishDivisionUpdate is still fire-and-forget — it resolves,
+  // sends nothing and warns in broadcast()'s own shape. Its callers `void` it, so a rejection would go unhandled.
+  it("publishDivisionUpdate with a blank division id resolves, sends nothing and warns once", async () => {
+    const { publishDivisionUpdate } = await import("../realtime");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(publishDivisionUpdate(" ", "score")).resolves.toBeUndefined();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(warn.mock.calls).toEqual([["[realtime] division   broadcast failed (Error)"]]);
+    warn.mockRestore();
+  });
+
   // Review m1 (player-stats refresh): a caller that awaits a broadcast must not
   // be held by a realtime endpoint that never answers. The lobby publisher had
   // no timeout until it moved onto broadcast() (realtime push-nudges T0.1).
