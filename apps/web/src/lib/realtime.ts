@@ -37,9 +37,13 @@ export const BROADCAST_TIMEOUT_MS = 3_000;
  * project, so every local e2e/smoke score event posted a real broadcast there
  * (~370k/day, 2026-11-03). Blanking the key instead would break
  * `supabaseAdmin()` storage uploads, which read the same variables.
+ *
+ * Read case- and whitespace-insensitively: the repo's .env.local carries
+ * `REALTIME_PUBLISH=Off`, which an exact `=== "off"` read as "publish", so
+ * local servers kept broadcasting to stg (T0.2 review, m5).
  */
 function publishTarget(): { url: string; key: string } | null {
-  if (process.env.REALTIME_PUBLISH === "off") return null;
+  if (process.env.REALTIME_PUBLISH?.trim().toLowerCase() === "off") return null;
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   return url && key ? { url, key } : null;
