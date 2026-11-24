@@ -1,7 +1,8 @@
 // The competition page's header and divisions list change shape once the competition is FINISHED (owner, Option 1): the
 // finished divisions are listed, Registration and the Multi Schedule Board are gone, and "Add division" steps back to a quiet
 // link. Separately - in BOTH phases - a completed or archived competition has no "Add division" at all (the server answers 409
-// COMPETITION_ENDED). `deskChrome` is the one rule the async page reads, so it is reachable from a unit test.
+// COMPETITION_ENDED), and, being over, no Registration and no Multi Schedule Board either (owner, 2026-11-24). `deskChrome` is the one
+// rule the async page reads, so it is reachable from a unit test.
 import { describe, expect, it } from "vitest";
 import { deskChrome } from "@/lib/competition-desk-chrome";
 import type { CompetitionPillPhase } from "@/server/usecases/competition-desk";
@@ -57,21 +58,38 @@ describe("deskChrome - finished competition", () => {
   });
 });
 
-describe("deskChrome - an ended (completed/archived) competition has no Add division, in both phases", () => {
-  it("every terminal status x every phase kind (and no phase) hides it", () => {
+describe("deskChrome - an ended (completed/archived) competition: no Add division, no Registration, no schedule board, in every phase", () => {
+  it("every terminal status x every phase kind (and no phase) hides all three; `finished` and the ledger stay the phase's own", () => {
     let judged = 0;
     for (const status of ["completed", "archived"]) {
       for (const phaseKind of [...COMPETITION_PHASE_KINDS, null]) {
-        expect(deskChrome({ status, canEdit: true, frozen: false, phaseKind }).addDivision, `${status}/${phaseKind}`).toBe("none");
+        const c = deskChrome({ status, canEdit: true, frozen: false, phaseKind });
+        expect(c.addDivision, `${status}/${phaseKind}`).toBe("none");
+        expect(c.showRegistration, `${status}/${phaseKind}`).toBe(false);
+        expect(c.showScheduleBoard, `${status}/${phaseKind}`).toBe(false);
+        expect(c.finished, `${status}/${phaseKind}: the phase's own`).toBe(phaseKind === "finished");
+        expect(c.ledgerListsFinished, `${status}/${phaseKind}: the phase's own`).toBe(phaseKind === "finished");
         judged++;
       }
     }
     expect(judged).toBe(2 * (COMPETITION_PHASE_KINDS.length + 1));
   });
-  it("a non-terminal status does not hide it (the pairing the negative needs)", () => {
+  it("a non-terminal status does not hide them (the pairing the negative needs)", () => {
+    let judged = 0;
     for (const status of ["draft", "published", "live"]) {
-      expect(deskChrome({ status, canEdit: true, frozen: false, phaseKind: "scheduled" }).addDivision, status).toBe("primary");
-      expect(deskChrome({ status, canEdit: true, frozen: false, phaseKind: "finished" }).addDivision, status).toBe("quiet");
+      for (const phaseKind of COMPETITION_PHASE_KINDS.filter((k) => k !== "finished")) {
+        const c = deskChrome({ status, canEdit: true, frozen: false, phaseKind });
+        expect(c.addDivision, `${status}/${phaseKind}`).toBe("primary");
+        expect(c.showRegistration, `${status}/${phaseKind}`).toBe(true);
+        expect(c.showScheduleBoard, `${status}/${phaseKind}`).toBe(true);
+        judged++;
+      }
+      expect(deskChrome({ status, canEdit: true, frozen: false, phaseKind: "finished" }).addDivision, `${status} finished`).toBe("quiet");
     }
+    expect(judged).toBe(3 * (COMPETITION_PHASE_KINDS.length - 1));
+  });
+  it("a view-only member of an ended competition sees none of them either (Registration and the board are the competition's, not the role's)", () => {
+    const c = deskChrome({ status: "completed", canEdit: false, frozen: false, phaseKind: "scheduled" });
+    expect([c.addDivision, c.showRegistration, c.showScheduleBoard]).toEqual(["none", false, false]);
   });
 });

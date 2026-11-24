@@ -180,7 +180,8 @@ test.describe("competition desk", () => {
   });
 
   // Owner, 2026-11-24 (bug, both phases): a completed or archived competition takes no new division - the write answers 409
-  // COMPETITION_ENDED - so neither "Add division" button is offered and /d/new is not a form that can only fail on submit.
+  // COMPETITION_ENDED - so neither "Add division" button is offered and /d/new is not a form that can only fail on submit. Being over,
+  // an ended competition also drops Registration and the Multi Schedule Board, as the finished phase does (owner, 2026-11-24).
   for (const status of ["completed", "archived"]) {
     test(`a ${status} competition offers no Add division, and /d/new sends the organiser back to the competition`, async ({ page, request }) => {
       const org = await activeOrg(page);
@@ -188,11 +189,16 @@ test.describe("competition desk", () => {
       const base = `/o/${org.slug}/c/${rig.compSlug}`;
       await page.goto(base);
       await expect(page.getByTestId("desk-add-division"), "the positive pair: a live competition offers it").toHaveAttribute("data-variant", "primary");
+      await expect(page.getByTestId("desk-tool-schedule"), "the positive pair: a live competition offers the board").not.toHaveCount(0);
+      await expect(page.locator(`a[href$="/c/${rig.compSlug}/registration"]`), "the positive pair: and Registration").not.toHaveCount(0);
       const patched = await apiJson(request, `/api/v1/competitions/${rig.compId}`, "PATCH", { status });
       expect(patched.status, `PATCH status=${status}`).toBe(200);
       await page.goto(base);
       await expect(page.getByTestId("desk-ledger-row"), "rendered in the state under test").toHaveCount(1);
       await expect(page.getByTestId("desk-add-division")).toHaveCount(0);
+      await expect(page.getByTestId("desk-tool-schedule"), `${status}: no Multi Schedule Board`).toHaveCount(0);
+      await expect(page.locator(`a[href$="/c/${rig.compSlug}/registration"]`), `${status}: no Registration`).toHaveCount(0);
+      await expect(page.getByTestId("desk-open-menu"), `${status}: Open stays`).toBeVisible();
       await page.goto(`${base}/d/new`);
       await expect(page).toHaveURL(new RegExp(`${base}$`));
       await expect(page.getByTestId("desk-ledger")).toBeVisible();

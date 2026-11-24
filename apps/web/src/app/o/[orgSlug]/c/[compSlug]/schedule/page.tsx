@@ -19,6 +19,7 @@ import { getScheduleSettings } from "@/server/usecases/schedule";
 import { listVenues } from "@/server/usecases/venues";
 import { omit } from "@/lib/omit";
 import { hasFeature, orgPlanKey } from "@/lib/entitlements";
+import { deskChrome } from "@/lib/competition-desk-chrome";
 import { viewerPlanFrom } from "@/lib/viewer-plan";
 import { preferredCurrency } from "@/lib/currency-server";
 import { withTenant } from "@/lib/db";
@@ -87,7 +88,8 @@ export default async function CompetitionSchedulePage({
           </h1>
           <div className="card p-6 text-sm text-slate-500">
             {t(dict, "comp.schedule.empty")}{" "}
-            {canEdit && !(competition.frozen ?? false) && (
+            {/* The one rule the competition header and /d/new read: a completed or archived competition takes no division (409). */}
+            {deskChrome({ phaseKind: null, status: competition.status, canEdit, frozen: competition.frozen ?? false }).addDivision !== "none" && (
               <Link
                 href={routes.divisionNew(orgSlug, compSlug)}
                 className="font-medium text-purple-600 hover:text-purple-700"

@@ -4,7 +4,8 @@
 //   - finished competition: finished divisions listed, no "Show finished" switch, no all-finished card, no Registration entry,
 //     no Multi Schedule Board, Open menu + Settings kept, "Add another division" a quiet link (not the primary button);
 //   - a LIVE competition keeps the switch, Registration, the board and the primary button;
-//   - completed / archived, in BOTH phases: no Add division anywhere (the write answers 409 COMPETITION_ENDED).
+//   - completed / archived, in BOTH phases: no Add division anywhere (the write answers 409 COMPETITION_ENDED), and - being over - no
+//     Registration entry and no Multi Schedule Board either, whatever the derived phase (owner, 2026-11-24).
 // Empty case first: a competition with no divisions is not finished.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -195,6 +196,8 @@ describe("a completed or archived competition offers no Add division, in both ph
     expect(addLinks(html), status).toBe(0);
     expect(html).not.toContain(ADD_QUIET);
     expect(has(html, "desk-add-division")).toBe(false);
+    expect(has(html, "desk-tool-schedule"), `${status}: no schedule board`).toBe(false);
+    expect(registrationLinks(html), `${status}: no Registration`).toBe(0);
   });
 
   it.each(["completed", "archived"])("%s: live phase (a division still scheduled) - no primary button either", async (status) => {
@@ -204,8 +207,13 @@ describe("a completed or archived competition offers no Add division, in both ph
     expect(rows(html)).toBeGreaterThan(0);
     expect(addLinks(html), status).toBe(0);
     expect(html).not.toContain(ADD_PRIMARY);
-    // ...but the rest of a live phase's header is untouched.
-    expect(has(html, "desk-tool-schedule")).toBe(true);
+    // An ended competition is over whatever its phase says: Registration and the Multi Schedule Board go too (owner, 2026-11-24)...
+    expect(has(html, "desk-tool-schedule"), `${status}: no schedule board`).toBe(false);
+    expect(html).not.toContain(`href="${BASE}/schedule"`);
+    expect(registrationLinks(html), `${status}: no Registration`).toBe(0);
+    // ...and the rest of the header stays: the Open menu and Settings.
+    expect(has(html, "desk-open-menu"), `${status}: Open stays`).toBe(true);
+    expect(html.match(new RegExp(`href="${BASE}/settings"`, "g"))?.length, `${status}: Settings stays`).toBe(2);
   });
 
   it.each(["completed", "archived"])("%s with no divisions: the empty state's own 'Add a division' CTA is gone too", async (status) => {
@@ -215,13 +223,18 @@ describe("a completed or archived competition offers no Add division, in both ph
     expect(html).toContain(t(en, "card.empty.divisions"));
     expect(addLinks(html), status).toBe(0);
     expect(html).not.toContain(t(en, "card.empty.divisions.cta"));
+    expect(has(html, "desk-tool-schedule"), `${status}: no schedule board`).toBe(false);
+    expect(registrationLinks(html), `${status}: no Registration`).toBe(0);
   });
 
-  it("the positive pair: draft / published / live still offer it (primary on a live phase, quiet on a finished one)", async () => {
+  it("the positive pair: draft / published / live still offer it (primary on a live phase, quiet on a finished one), with Registration and the board", async () => {
     for (const status of ["draft", "published", "live"]) {
       h.status = status;
       seed(0, 2);
-      expect(addLinks(await render()), `${status} live`).toBe(1);
+      const live = await render();
+      expect(addLinks(live), `${status} live`).toBe(1);
+      expect(registrationLinks(live), `${status}: Registration`).toBe(1);
+      expect(has(live, "desk-tool-schedule"), `${status}: board`).toBe(true);
       seed(2, 0);
       expect(addLinks(await render()), `${status} finished`).toBe(1);
     }

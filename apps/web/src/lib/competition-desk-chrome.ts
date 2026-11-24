@@ -1,8 +1,9 @@
 // The competition page's header and divisions list, as ONE rule the async server component reads (it is not reachable from a
 // unit test itself). Owner, Option 1: once the competition is FINISHED its page is a record, not a control room - finished
 // divisions are listed, the tools that run a live event (Registration, the Multi Schedule Board) go, and "Add division" steps
-// back from the primary button to a quiet link. Independently of phase, a COMPLETED or ARCHIVED competition cannot take a new
-// division at all (the write answers 409 COMPETITION_ENDED), so it is not offered.
+// back from the primary button to a quiet link. Independently of phase, a COMPLETED or ARCHIVED competition is over (owner,
+// 2026-11-24): it cannot take a new division (the write answers 409 COMPETITION_ENDED), and Registration and the Multi Schedule Board
+// go as they do for the finished phase - one `ended` reading of the status, whatever the derived phase says.
 
 import { competitionIsEnded } from "@/lib/entitlements";
 
@@ -28,11 +29,12 @@ export interface DeskChrome {
 
 export function deskChrome({ phaseKind, status, canEdit, frozen }: DeskChromeInput): DeskChrome {
   const finished = phaseKind === "finished";
-  const mayAdd = canEdit && !frozen && !competitionIsEnded(status);
+  const ended = competitionIsEnded(status);
+  const mayAdd = canEdit && !frozen && !ended;
   return {
     finished,
-    showRegistration: !finished,
-    showScheduleBoard: !finished,
+    showRegistration: !finished && !ended,
+    showScheduleBoard: !finished && !ended,
     addDivision: !mayAdd ? "none" : finished ? "quiet" : "primary",
     ledgerListsFinished: finished,
   };
