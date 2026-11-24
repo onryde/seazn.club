@@ -16,7 +16,7 @@ import "server-only";
 //    the org money lock, the row lock, the quote under them, the debit), then the cover is asked again of the row it left. The debit,
 //    the stamp and the freeze commit together or not at all: a refusal in the open before the gate, in the gate, or at the commit
 //    rolls the payment back with the round (and the queued invites with it: they are sent after the commit).
-//  * Then the package FREEZES (P8), on the database clock, in a statement V549's CHECK holds: `paid_at` is set before or with
+//  * Then the package FREEZES (P8), on the database clock, in a statement V556's CHECK holds: `paid_at` is set before or with
 //    `frozen_at` (frozen and unpaid is only ever the backfill's row).
 //
 // The locks, in the spec's order: the caller's `division:` lock (then the bridge rows its fan-out takes), then the org money lock,
@@ -98,7 +98,7 @@ function unpaidMessage(row: PackageRow, quote: PackageQuote, next: PackageQuote 
   return `The first round needs a paid Online Chess package, and size ${row.size} cannot be bought for this division${why === null ? "" : ` (${why})`}${offer}`;
 }
 
-/** The division's live package, under the caller's transaction, asserted present: every online division has one (V549's backfill,
+/** The division's live package, under the caller's transaction, asserted present: every online division has one (V556's backfill,
  *  the online switch). None is a bug upstream, a named 500, and never a reason to open a round nobody paid for. */
 async function liveOrRefuse(tx: Tx, divisionId: string, forUpdate: boolean): Promise<PackageRow> {
   const row = await livePackage(tx, divisionId, { forUpdate });
@@ -115,7 +115,7 @@ export async function gateFirstOpen(
   a: { orgId: string; divisionId: string; userId: string; pay?: PayInput },
   money: GateMoney,
 ): Promise<GateResult> {
-  // Frozen is for good (V549: a frozen row is never refunded, and nothing un-freezes one), so an unlocked read under the division
+  // Frozen is for good (V556: a frozen row is never refunded, and nothing un-freezes one), so an unlocked read under the division
   // lock settles it - and a later open never touches the org money lock.
   const first = await liveOrRefuse(tx, a.divisionId, false);
   if (first.frozenAt !== null) {
@@ -161,7 +161,7 @@ export async function gateFirstOpen(
   return { asked: true, movedUp, payment };
 }
 
-/** P8: the package freezes at the first open of any round, on the transaction's clock. Only a PAID, live, not yet frozen row (V549:
+/** P8: the package freezes at the first open of any round, on the transaction's clock. Only a PAID, live, not yet frozen row (V556:
  *  frozen and unpaid is the backfill's row alone, and the CHECK refuses any other); exactly that one row, or a named 500 that rolls
  *  the open back. */
 export async function freezeOnlinePackage(tx: Tx, packageId: string): Promise<void> {

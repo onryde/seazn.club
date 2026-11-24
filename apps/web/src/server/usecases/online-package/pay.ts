@@ -145,7 +145,7 @@ export async function payOnlinePackageInTx(
   if (quote.refusal !== null || quote.owed !== a.expectedOwed) throw quoteChanged(quote);
   const forfeited = quote.back?.forfeited ?? 0;
   if (a.expectedForfeited !== undefined && a.expectedForfeited !== forfeited) throw quoteChanged(quote);
-  // paid_at and paid_by are set together (V549's CHECK): a first payment names who paid.
+  // paid_at and paid_by are set together (V556's CHECK): a first payment names who paid.
   if (row.paidAt === null && a.userId === null) {
     throw new HttpError(500, `Online Chess package ${row.id} cannot be paid without naming who paid`, "online_package_payer_missing");
   }
@@ -166,7 +166,7 @@ export async function payOnlinePackageInTx(
     await refundForPackage(tx, { orgId: a.orgId, packageId: row.id, pack: back.pack, monthly: back.monthly, size: a.size });
     returned = back.pack + back.monthly;
   }
-  // The row in ONE statement (V549's CHECKs hold per statement). `cameras_paid` is the quote's camera figure, which already
+  // The row in ONE statement (V556's CHECKs hold per statement). `cameras_paid` is the quote's camera figure, which already
   // includes a camera price paid before (P19: never lowered). paid_at and paid_by keep the FIRST payment. Written only while
   // the row is still writable (not frozen, not refunded) and asserted to be exactly that one row: the row is locked and the
   // quote refused a frozen one, so a miss is a writer that changed it on this transaction — a named 500, never a silent payment.

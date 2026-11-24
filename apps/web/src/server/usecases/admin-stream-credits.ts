@@ -32,14 +32,14 @@ export interface StreamCreditLedgerRow {
   createdBy: string | null;
   createdByEmail: string | null;
   sessionId: string | null;
-  /** The Online Chess package the row moved for (`online_package_id`, V550) — a package's debit or return; null on every other row. Printed
+  /** The Online Chess package the row moved for (`online_package_id`, V557) — a package's debit or return; null on every other row. Printed
    *  even when the package is not this org's (a corrupt row), so staff see the id they must chase. */
   onlinePackageId: string | null;
   /** That package's division's name NOW, else the snapshot the package keeps once the division is gone (the org history's rule: a renamed
-   *  division reads under its new name in every ledger), only when the package belongs to THIS org — V549 does not make the package's org
+   *  division reads under its new name in every ledger), only when the package belongs to THIS org — V556 does not make the package's org
    *  the ledger row's, so the join checks it. Null for a row with no package, or one whose package is not this org's. */
   divisionName: string | null;
-  /** The package's size at the time of the row (V550 `package_size`; the package's own size now for a row written before the column),
+  /** The package's size at the time of the row (V557 `package_size`; the package's own size now for a row written before the column),
    *  only when the package belongs to THIS org. Null for a row with no package, or one whose package is not this org's. */
   packageSize: number | null;
   /** ISO-8601, UTC. */

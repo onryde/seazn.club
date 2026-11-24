@@ -2,7 +2,7 @@
 // 2026-11-23-online-chess-credits-design.md §7.1, §7.4). Types only.
 import type { OnlineSize } from "@/lib/online-chess-package";
 
-/** One `division_online_packages` row (V549), as the package doors read it. The four states (§7.1): unpaid (`paidAt` null,
+/** One `division_online_packages` row (V556), as the package doors read it. The four states (§7.1): unpaid (`paidAt` null,
  *  `frozenAt` null), paid (`paidAt` set, `frozenAt` null), frozen (`frozenAt` set; frozen with `paidAt` null is a
  *  grandfathered row of the backfill, and only that) and refunded (`refundedAt` set; history, never live). */
 export interface PackageRow {

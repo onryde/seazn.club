@@ -234,7 +234,7 @@ async function rig(o: { monthly?: number; pack?: number; size?: number; lastMont
   return { orgId, divisionId: division.id, division, packageId, rate: monthly };
 }
 
-/** What Tasks 5 and 6 write on the package row after a step, in ONE statement (V549's CHECKs hold per statement). */
+/** What Tasks 5 and 6 write on the package row after a step, in ONE statement (V556's CHECKs hold per statement). */
 const settlePackage = (id: string, s: { size: number; cameras: boolean; paid: number; refunded: number; forfeited: number }) => sql`
   update division_online_packages
      set size = ${s.size}, cameras_paid = ${s.cameras}, credits_paid = ${s.paid}, credits_refunded = ${s.refunded},
@@ -765,7 +765,7 @@ describe.skipIf(!HAS_DB)("quoteLocked: refusals", () => {
     expect(q).toMatchObject({ refusal: "frozen", take: null, back: null });
     expect((await quote(paid, 16)).refusal, "a move down on a frozen row").toBe("frozen");
     expect((await quote(paid, 64)).refusal, "the row's own size on a frozen row").toBe("frozen");
-    // The backfill's grandfathered row: frozen and unpaid, at 256 (frozen_at = created_at, V549's own CHECK).
+    // The backfill's grandfathered row: frozen and unpaid, at 256 (frozen_at = created_at, V556's own CHECK).
     const old = await rig({ pack: 100, size: 256 });
     await sql`update division_online_packages set frozen_at = created_at where id = ${old.packageId}`;
     expect(await quote(old, 256)).toMatchObject({ refusal: "frozen", take: null, back: null });

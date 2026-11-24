@@ -44,7 +44,7 @@ export interface LedgerWriterSite {
   byStaff: boolean;
   /** The row's `session_id`: always set, never set, or either. */
   session: "always" | "never" | "either";
-  /** The row's `online_package_id` (V550): set on every Online Chess package row, never on any other writer's. */
+  /** The row's `online_package_id` (V557): set on every Online Chess package row, never on any other writer's. */
   package: "always" | "never";
   /** The shape of the row's idempotency key, or null for a site that writes none. */
   key_shape: RegExp | null;
@@ -70,7 +70,7 @@ export const LEDGER_WRITER_SITES: readonly LedgerWriterSite[] = [
   { key: "monthly-grant", file: STREAM_WRITER_FILE, fn: "rollMonthlyLocked", needle: "streamMonthlyGrantKey", reasons: ["grant"], buckets: ["monthly"], byStaff: false, session: "never", package: "never", key_shape: new RegExp(`^stream-monthly:${ORG}:\\d{4}-\\d{2}$`), kinds: ["monthlyGrant"] },
   { key: "event-pass", file: STREAM_WRITER_FILE, fn: "grantPassStreamCredits", needle: "'grant', 'pack'", reasons: ["grant"], buckets: ["pack"], byStaff: false, session: "never", package: "never", key_shape: /^stream-pass:.+$/, kinds: ["passGrant"] },
   // Online Chess (§7.1, §7.5): the package writer. A debit is a consume and a return a refund, each naming the package and no
-  // session or staff author, with no key (V550's org_stream_credits_package_row_check); the settle step's claw-back is a keyless pack
+  // session or staff author, with no key (V557's org_stream_credits_package_row_check); the settle step's claw-back is a keyless pack
   // revoke carrying the payment intent, no package and no session (stream_pack_reversals attributes it, not a key).
   { key: "package-debit", file: PACKAGE_WRITER_FILE, fn: "debitForPackage", needle: "'consume'", reasons: ["consume"], buckets: ["monthly", "pack"], byStaff: false, session: "never", package: "always", key_shape: null, kinds: ["onlinePackagePaid", "onlinePackageResized"] },
   { key: "package-return", file: PACKAGE_WRITER_FILE, fn: "refundForPackage", needle: "'refund'", reasons: ["refund"], buckets: ["monthly", "pack"], byStaff: false, session: "never", package: "always", key_shape: null, kinds: ["onlinePackageResized", "onlinePackageRefunded"] },

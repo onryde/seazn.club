@@ -274,7 +274,7 @@ export async function divisionExists(id: string): Promise<boolean> {
   return d !== undefined;
 }
 
-/** The grandfathered row of the V549 backfill: FROZEN and UNPAID (frozen_at = created_at, the one unpaid shape the schema allows
+/** The grandfathered row of the V556 backfill: FROZEN and UNPAID (frozen_at = created_at, the one unpaid shape the schema allows
  *  frozen). A division that was already running when Online Chess shipped reads like this: nothing asks it for credits. */
 export async function freezeGrandfathered(packageId: string): Promise<void> {
   await sql`update division_online_packages set frozen_at = created_at where id = ${packageId}`;
