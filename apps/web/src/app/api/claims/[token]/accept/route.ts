@@ -1,5 +1,5 @@
 import { headers } from "next/headers";
-import { clientIp } from "@/lib/client-ip";
+import { clientIp, limiterSubject } from "@/lib/client-ip";
 import { createSession, getCurrentUser } from "@/lib/auth";
 import { handler } from "@/lib/http";
 import { HttpError } from "@/lib/errors";
@@ -50,7 +50,8 @@ export async function POST(req: Request, { params }: Ctx) {
     // touched or counted, and only here — the signed-in branch above mints nothing.
     if (!isSameOriginRequest(req.headers)) throw new HttpError(403, "Forbidden");
 
-    const ip = clientIp(await headers());
+    // Task 25d: the limiter keys the client's SUBJECT (lib/client-ip.ts `limiterSubject`): an IPv6 /64 is one client.
+    const ip = limiterSubject(clientIp(await headers()));
     await rateLimit(`claim-signin:${ip}`, AUTH_LIMIT);
 
     // The terms acceptance (the button sits under the clickwrap notice) is stamped inside the claim's own

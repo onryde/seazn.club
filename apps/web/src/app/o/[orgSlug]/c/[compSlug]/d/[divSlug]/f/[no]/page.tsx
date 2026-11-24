@@ -32,7 +32,10 @@ import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary } from "@/lib/i18n";
 import { matchRulesBlockProps, offersMatchRules } from "@/components/v2/match-rules-block-model";
 import { loadStreamPanelContext } from "@/server/stream-panel-context";
-import { fixtureStreamMode } from "@/lib/fixture-stream-mount";
+import { fixtureStreamMode, offersStandaloneReplays } from "@/lib/fixture-stream-mount";
+import { fixtureSeaznReplays } from "@/server/video/organiser-replays";
+import { FixtureReplaysSection } from "@/components/v2/fixture-replays-section";
+import { log } from "@/server/logger";
 import { openStreamStates } from "@/server/usecases/stream-sessions";
 import { listFixtureAvailability } from "@/server/usecases/me";
 import { CheckinQr } from "@/components/v2/checkin-qr";
@@ -219,6 +222,15 @@ export default async function FixturePage({
       : streamMode === "stop-only"
         ? { mode: "stop-only" }
         : undefined;
+  // Task 31b (T26 review m8): an organiser the Stream panel is NOT mounted for (no plan, or a frozen org) still reaches the fixture's
+  // Seazn replays — the list on its own, below the console, with Delete and Download and nothing of the panel's start or stop. A read
+  // that fails costs only the list, never the page.
+  const replaysAlone = offersStandaloneReplays({ canEdit, mode: streamMode })
+    ? await fixtureSeaznReplays(auth.orgId, id).catch((err: unknown) => {
+        log.warn({ fixtureId: id, err: String(err) }, "fixture page: the Seazn replays could not be read — the list is not shown");
+        return [];
+      })
+    : [];
 
   // S13/#422 — the v2 pad's bootstrap, resolved unconditionally now that the
   // feature flag that used to gate it is gone. `null` only on a resolution failure
@@ -358,6 +370,7 @@ export default async function FixturePage({
           matchFormatLine={formatLine ?? undefined}
           viewerPlan={viewerPlan}
         />
+        {replaysAlone.length > 0 && <FixtureReplaysSection fixtureId={id} replays={replaysAlone} />}
       </main>
     </>
   );

@@ -31,7 +31,9 @@
 import { test, expect, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { addEntrantsViaApi, apiJson, createStageAndGenerate, expectNoHorizontalScroll, withDb } from "../helpers";
+import {
+  addEntrantsViaApi, apiJson, createStageAndGenerate, expectNoHorizontalScroll, invalidateOrgEntitlements, setBoolEntitlementOverrideSql, withDb,
+} from "../helpers";
 import { dismissCookieBanner } from "../scorepad-a11y-kit";
 import { offeredTargetIds, targetPicker } from "../helpers/stream-target-picker";
 import { FAKE_CONNECT_MS, poolHoldProblem, releaseStreamSlot, takeWholePool } from "../helpers/stream-slot-pool";
@@ -621,6 +623,121 @@ test("Task 26: the organiser's panel lists both parts with Download and Delete; 
       frame.evaluate((el, source) => new RegExp(source).test((el as HTMLIFrameElement).src), signedEmbedPattern(bunnyId).source);
     await expect.poll(() => frameHolds(bunny[0]!), { message: "part 1 still plays" }).toBe(true);
     await expect(region.getByRole("tab"), "one part: no picker, and no part 2").toHaveCount(0);
+  } finally {
+    await finishSeaznMatch(m);
+  }
+});
+
+// ===========================================================================
+// Task 31b (T31b review m1): the replays list WITHOUT the Stream panel
+// ===========================================================================
+// An organiser whose org lost the panel (here `streaming.overlay` switched off by an org-wide override — every plan grants it since
+// V426, so an override is the one negative left; written on this test's OWN fresh org, never the shared Pro one) still owns the replays
+// already made: the fixture page shows the list on its own (`[data-role="fixture-replays"]`, fixture-replays-section.tsx), the same
+// card and the same routes, and no Stream control. Before the switch the same page shows the panel and NOT the list: never both, never
+// neither (lib/fixture-stream-mount.ts `offersStandaloneReplays`). Download is the link the page gives, answered by the route itself
+// (409 "not ready": this server's replay host holds no copy of a seeded part, as Task 26 says). Keep sends nothing. Delete removes the
+// part, and the section re-reads the PAGE (`router.refresh`): part 1, deleted meanwhile from another tab, leaves with it — the one
+// witness that the re-read happened, because the deleted part itself is hidden at once whether or not it did. Not gated on LIVE (as
+// Tasks 25 and 26). At 1280, then 320 for the card's fit.
+test("Task 31b: with the Stream panel switched off, the fixture page lists the replays on their own — no Stream control; Download is our route; Keep sends nothing; Delete removes the part and re-reads the page", async ({ browser }) => {
+  test.setTimeout(REPLAY_SEED_MS + 30_000 + 3 * NAV_MS + 4 * CALL_MS);
+  const org = await seedStandInOrg(browser, "szr", { orgName: "Seazn Replays Alone" });
+  rigs.push(org);
+  const page = org.page;
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const m = await seedSeaznMatch(page, { name: `Seazn Alone ${Date.now().toString(36)}`, live: true });
+  try {
+    expect(m.orgId, "premise: the match is this test's own org's (the override below is org-wide)").toBe(org.orgId);
+    await finishSeaznMatch(m);
+    expect(await seedPlayableReplays(m, await lockRecordings(m, 3)), "premise: three playable parts").toHaveLength(3);
+    const ids = (await withDb((sql) => sql<{ id: string }[]>`select id from fixture_video_replays where fixture_id = ${m.fixtureId} order by part_no`)).map((r) => r.id);
+    expect(ids, "premise: one row per part").toHaveLength(3);
+    const replayPath = (id: string) => `/api/v1/fixtures/${m.fixtureId}/replays/${id}`;
+    // Any Stream control in the page at all (the negative), and the one a person sees (the positive: openPhoneTab's locator).
+    const streamControl = page.locator('[data-role="fixture-stream"], [data-role="fixture-stream-phone"]');
+    const visibleStreamControl = page.locator('[data-role="fixture-stream"]:visible, [data-role="fixture-stream-phone"]:visible');
+    const section = page.locator('[data-role="fixture-replays"]');
+
+    // Before: the panel is mounted, so the list is not on its own.
+    await page.goto(m.fixturePath);
+    await expect(visibleStreamControl, "entitled: the page offers the Stream control").toHaveCount(1, { timeout: NAV_MS });
+    await expect(section, "entitled: no list on its own beside the panel").toHaveCount(0);
+
+    // The panel goes: streaming.overlay off for this org (and its cached entitlements dropped).
+    await setBoolEntitlementOverrideSql(org.orgId, "streaming.overlay", false);
+    await invalidateOrgEntitlements(page.request, org.orgId);
+    await page.goto(m.fixturePath);
+    await expect(section, "the list stands alone").toBeVisible({ timeout: NAV_MS });
+    await expect(streamControl, "and the page offers no Stream control").toHaveCount(0);
+    await expect(section.getByRole("heading", { name: ui("stream.replay.seazn.title") })).toBeVisible();
+    const rows = section.getByTestId("stream-seazn-replay");
+    await expect(rows).toHaveCount(3);
+    for (const n of [1, 2, 3]) await expect(rows.nth(n - 1)).toContainText(ui("stream.replay.seazn.part").replace("{n}", String(n)));
+
+    // Download: the link the page gives is our route, and the route answers it itself.
+    const downloads = section.getByTestId("stream-seazn-replay-download");
+    await expect(downloads).toHaveCount(3);
+    for (const [i, id] of ids.entries()) {
+      await expect(downloads.nth(i), `part ${i + 1}: our route, the ids and nothing else`).toHaveAttribute("href", `${replayPath(id)}/download`);
+      await expect(downloads.nth(i)).toHaveAttribute("download", "");
+    }
+    const href = await downloads.first().getAttribute("href");
+    expect(href, "premise: the link has an address").toBeTruthy();
+    const answer = await page.request.get(href!, { maxRedirects: 0 });
+    expect(answer.status(), "the route answers itself without the panel's plan (the e2e host holds no copy: not ready), never a redirect").toBe(409);
+    expect(answer.headers()["cache-control"] ?? "").toMatch(/private/);
+    expect(answer.headers()["cache-control"] ?? "").toMatch(/no-store/);
+    expect(answer.headers()["location"], "no redirect").toBeUndefined();
+
+    // Keep: the house confirm, and nothing sent.
+    const deletes: string[] = [];
+    page.on("request", (r) => { if (r.method() === "DELETE") deletes.push(new URL(r.url()).pathname); });
+    let nativeDialog = false;
+    page.on("dialog", (d) => { nativeDialog = true; void d.dismiss(); });
+    const deleteButtons = section.getByTestId("stream-seazn-replay-delete");
+    await expect(deleteButtons).toHaveCount(3);
+    await deleteButtons.nth(2).click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toBeVisible({ timeout: CALL_MS });
+    await expect(dialog).toContainText(ui("stream.replay.deletePartTitle").replace("{n}", "3"));
+    await dialog.getByRole("button", { name: ui("stream.replay.deleteKeep") }).click();
+    await expect(dialog).toBeHidden();
+    await expect(rows, "Keep: every part stays").toHaveCount(3);
+    expect(deletes, "Keep sends nothing").toEqual([]);
+
+    // Meanwhile, part 1 is deleted from another tab: this page still lists it until it reads the page again.
+    const elsewhere = await page.request.delete(replayPath(ids[0]!));
+    expect(elsewhere.status(), "premise: the other tab's delete").toBe(200);
+    await expect(rows, "premise: this page has not re-read yet").toHaveCount(3);
+    const sentBefore = deletes.length;
+
+    // Delete part 3: it leaves at once, and the re-read takes part 1 with it — one part left, part 2.
+    await deleteButtons.nth(2).click();
+    await expect(dialog).toBeVisible({ timeout: CALL_MS });
+    await dialog.getByRole("button", { name: ui("stream.replay.delete") }).click();
+    await expect(rows, "part 3 hidden, and part 1 gone on the re-read: one part left").toHaveCount(1, { timeout: CALL_MS });
+    await expect(downloads, "the part left is part 2").toHaveAttribute("href", `${replayPath(ids[1]!)}/download`);
+    await expect(rows.first(), "one part left: no part label").not.toContainText(ui("stream.replay.seazn.part").replace("{n}", "2"));
+    expect(deletes.slice(sentBefore), "one DELETE from this page, to part 3's route").toEqual([replayPath(ids[2]!)]);
+    expect(nativeDialog, "never the browser's confirm()").toBe(false);
+    const stored = await withDb((sql) => sql<{ state: string; deleted_reason: string | null; deleted_by: string | null }[]>`
+      select state, deleted_reason, deleted_by from fixture_video_replays where fixture_id = ${m.fixtureId} order by part_no`);
+    expect(stored.map((r) => [r.state, r.deleted_reason, r.deleted_by]), "parts 1 and 3 deleted by this organiser; part 2 kept").toEqual([
+      ["deleted", "organiser", org.userId], ["playable", null, null], ["deleted", "organiser", org.userId],
+    ]);
+    await expect(streamControl, "still no Stream control after the re-read").toHaveCount(0);
+
+    for (const width of [1280, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      await expectNoHorizontalScroll(page);
+      for (const action of [downloads, deleteButtons]) {
+        const box = await action.first().boundingBox();
+        expect(box, `${width}: laid out`).not.toBeNull();
+        expect(box!.height, `${width}: a 44 px target`).toBeGreaterThanOrEqual(44);
+        expect(box!.x + box!.width, `${width}: inside the right edge`).toBeLessThanOrEqual(width);
+      }
+    }
   } finally {
     await finishSeaznMatch(m);
   }

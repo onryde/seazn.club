@@ -3,7 +3,7 @@ import { assertUuid } from "@/server/api-v1/auth";
 import { baseUrl } from "@/lib/oauth";
 import { publicRateLimit } from "@/server/usecases/public";
 import { rateLimit, CHECKOUT_LIMIT } from "@/lib/rate-limit";
-import { clientIp } from "@/lib/client-ip";
+import { clientIp, limiterSubject } from "@/lib/client-ip";
 import { PublicRegistrationToken } from "@/server/api-v1/schemas";
 import { resumeRegistrationCheckout } from "@/server/usecases/registrations";
 
@@ -17,7 +17,8 @@ type Ctx = { params: Promise<{ id: string }> };
 export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {
     await publicRateLimit(req);
-    const ip = clientIp(req.headers);
+    // Task 25d: the limiter keys the client's SUBJECT (lib/client-ip.ts `limiterSubject`): an IPv6 /64 is one client.
+    const ip = limiterSubject(clientIp(req.headers));
     await rateLimit(`regcheckout:${ip}`, CHECKOUT_LIMIT);
     const { id } = await params;
     assertUuid(id, "registration");

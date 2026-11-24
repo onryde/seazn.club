@@ -18,7 +18,7 @@
 //
 // Single-sport on purpose: the route reads no sport, only ids, codes and orgs.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 // Held, not started: a task runs only when `flush()` says so.
 const tail = vi.hoisted(() => ({ tasks: [] as Array<() => unknown> }));
@@ -358,6 +358,23 @@ describe.skipIf(!HAS_DB)("GET /s/[key] — the write is filtered, never the redi
       expect(k.includes("203.0.113")).toBe(false);
     }
     expect(CLICK_DEDUPE_WINDOW_SECONDS, "the window the ruling names").toBe(30);
+  });
+
+  // Task 25d m1 (Phase 3 review m7): the MISS budget keys an IPv6 client by its /64 (a limiter); the click DEDUPE is not a limiter —
+  // it asks "is this the same tap again", so it keys the address itself. A "finish the job" edit that grouped it by /64 would
+  // merge two people on one household /64 into one click. The digests are sha256 of the hand-written addresses, never the helper's.
+  it("Task 25d m1, with Redis: two IPv6 visitors in ONE /64 are TWO clicks; one of them tapping twice is one — the dedupe keys each FULL address", async () => {
+    redis.on = true;
+    const r = await rig();
+    const id = await seedSponsor(r.orgId);
+    const A = "2001:db8:1::7";
+    const B = "2001:db8:1:0:aaaa:bbbb:cccc:dddd";
+    for (const ip of [A, A, B]) expect((await click(id, "?src=site", { ip })).status, ip).toBe(302);
+    expect(await flush(), "every redirect queued its tail").toBe(3);
+    expect(await countOf(id), "A's repeat dropped, B counted").toBe(2);
+    const sha = (ip: string) => createHash("sha256").update(ip).digest("hex");
+    expect(redis.keys.filter((k) => k.startsWith("sclick:"))).toEqual([`sclick:${id}:${sha(A)}`, `sclick:${id}:${sha(A)}`, `sclick:${id}:${sha(B)}`]);
+    expect(redis.keys.some((k) => k.includes(sha("2001:db8:1:0::/64"))), "never the /64's digest").toBe(false);
   });
 
   it("with Redis: a code typed in two cases from one IP is still one link — one click", async () => {

@@ -51,23 +51,25 @@ import { headers } from "next/headers";
 import { previewJoinEntry } from "@/server/usecases/registration-submit";
 import { HttpError } from "@/lib/errors";
 import { rateLimit } from "@/lib/rate-limit";
-import { clientIp } from "@/lib/client-ip";
+import { clientIp, limiterSubject } from "@/lib/client-ip";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { JoinForm } from "./join-form";
 import { routes } from "@/lib/routes";
 
-/** The shared reader (`lib/client-ip.ts`) the sibling API route keys the same
- *  bucket on, read off `headers()` (the Next request-scoped store) since a
+/** The client's LIMITER SUBJECT (an IPv4 as it is, an IPv6 as its /64: Task 25d;
+ *  renamed from `requestClientIp`, Phase 3 review m7) — a bucket name, never an
+ *  address to keep — from the shared reader (`lib/client-ip.ts`) the sibling API
+ *  route keys the same bucket on, read off `headers()` (the Next request-scoped store) since a
  *  Server Component has no `Request`. `headers()` throws SYNCHRONOUSLY outside
  *  a real request — the shape of this page called directly in tests (no jsdom;
  *  see resolve-locale.ts's identical guard) — so this falls back to "unknown"
  *  the same way that module does, rather than breaking every existing test
  *  here that renders the page with no join_code at all. */
-async function requestClientIp(): Promise<string> {
+async function requestLimiterSubject(): Promise<string> {
   try {
-    return clientIp(await headers());
+    return limiterSubject(clientIp(await headers()));
   } catch {
     return "unknown";
   }
@@ -97,7 +99,7 @@ export default async function RegisterJoinPage({ params, searchParams }: Props) 
   let throttled = false;
   if (join_code) {
     try {
-      await rateLimit(`regjoinpreview:${await requestClientIp()}`, { max: 5, windowSeconds: 300 });
+      await rateLimit(`regjoinpreview:${await requestLimiterSubject()}`, { max: 5, windowSeconds: 300 });
     } catch (err) {
       if (!(err instanceof HttpError && err.status === 429)) throw err;
       throttled = true;

@@ -83,6 +83,10 @@ export const SUPERUSER_ONLY: ReadonlySet<string> = new Set([
   "org_video_collections",
   // One row per Seazn recording moved to Bunny (the Bunny ids Task 31 deletes); privileged client only, zero policies.
   "fixture_video_replays",
+  // Seazn delivered minutes (V552, seazn-hosted Task 29): one row per Seazn session, written by the daily measurement pass
+  // and read by /admin, both on the privileged client. V410's pattern, zero policies, no app_user grant; asserted by
+  // seazn-delivery-migration.test.ts and rls-static.test.ts.
+  "fixture_video_delivery",
   // Match Day codes (V509, capture S4 design §3; MD-1 Task 1): V410's pattern — RLS FORCEd, ZERO policies, no trg_set_org,
   // no app_user grant. The phone's md_ routes carry no org session (the token is their auth), so every read and write is
   // on the non-tenant `sql` client with org_id from the competition (mint) or the code row (resolve), and the desk sees a

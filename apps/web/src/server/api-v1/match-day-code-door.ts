@@ -22,7 +22,7 @@ import {
   rateLimit,
   type RateLimitConfig,
 } from "@/lib/rate-limit";
-import { clientIpOf } from "@/server/api-v1/capture-http";
+import { limiterSubjectOf } from "@/server/api-v1/capture-http";
 import { MATCH_DAY_CODE_PREFIX, resolveMatchDayCode, type MatchDayCodeRow, type MatchDayRefusal } from "@/server/usecases/match-day-codes";
 
 /** The plan's refusal table: each resolve refusal, its status and a developer string (the phone keys on the word). */
@@ -59,7 +59,7 @@ export async function matchDayCodeOf(req: Request, now: Date, budget: MdBudget):
     ? await resolveMatchDayCode(token, now)
     : ({ ok: false, refusal: "MD_UNKNOWN" } as const);
   if (!got.ok) {
-    if (FAILED_LOOKUP.has(got.refusal)) await rateLimit(`mdfail:${clientIpOf(req)}`, MD_FAIL_LIMIT);
+    if (FAILED_LOOKUP.has(got.refusal)) await rateLimit(`mdfail:${limiterSubjectOf(req)}`, MD_FAIL_LIMIT);
     const { status, message } = REFUSED[got.refusal];
     const extra = got.refusal === "MD_NOT_OPEN" && got.opensAt ? { opens_at: got.opensAt.toISOString() } : undefined;
     throw new HttpError(status, message, got.refusal, extra);

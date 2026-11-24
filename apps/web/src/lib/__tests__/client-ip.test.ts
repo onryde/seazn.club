@@ -9,7 +9,7 @@
 // Expected values: the ranges are Cloudflare's published lists (https://www.cloudflare.com/ips-v4, /ips-v6), the edges are
 // each range's first and last address and the addresses either side - arithmetic on the published CIDR, not the code's.
 //
-// Every limiter that keys on it moves with it: capture's failed-401 budget (`clientIpOf`, its route pin is
+// Every limiter that keys on it moves with it: capture's failed-401 budget (`limiterSubjectOf`, its route pin is
 // limits-route.test.ts), the public read limiters (`publicClientIp`), and the /s/ redirect's miss budget and click dedupe.
 // The auth, registration, device-link, consent and funnel limiters are pinned in client-ip-limiters.test.ts,
 // and client-ip-readers.test.ts fails any other source file that reads one of these headers itself.
@@ -37,8 +37,9 @@ import {
   CLOUDFLARE_IPV4_RANGES,
   CLOUDFLARE_IPV6_RANGES,
   isCloudflarePeer,
+  limiterSubject,
 } from "../client-ip";
-import { clientIpOf } from "@/server/api-v1/capture-http";
+import { limiterSubjectOf } from "@/server/api-v1/capture-http";
 import { publicPollRateLimit, publicRateLimit } from "@/server/usecases/public";
 import { GET as sponsorLink } from "@/app/s/[key]/route";
 import { scrubSentryEvent } from "../scrub-score-url";
@@ -50,6 +51,11 @@ const CF_EDGE6 = "2606:4700:10::ac43:1";
 /** The visitor, as Cloudflare names them. */
 const VISITOR = "203.0.113.50";
 const VISITOR6 = "2001:db8:1::7";
+/** Task 25d: VISITOR6's /64, written by hand (RFC 4291: the first four groups), and another address in it and another /64. */
+const VISITOR6_64 = "2001:db8:1:0::/64";
+const VISITOR6_SAME64 = "2001:db8:1:0:aaaa:bbbb:cccc:dddd";
+const OTHER_64 = "2001:db8:1:1::7";
+const OTHER_64_SUBJECT = "2001:db8:1:1::/64";
 /** A client reaching the fly.dev origin directly: not Cloudflare. */
 const DIRECT = "198.51.100.60";
 const XFF_FIRST = "192.0.2.7";
@@ -524,7 +530,7 @@ describe("every limiter the batch names keys on it (the real callers)", () => {
   const keys = () => vi.mocked(rateLimit).mock.calls.map(([k]) => k);
   const allOf = async (headers: Record<string, string>) => {
     vi.mocked(rateLimit).mockClear();
-    const capture = clientIpOf(req(headers));
+    const capture = limiterSubjectOf(req(headers));
     await publicRateLimit(req(headers));
     await publicPollRateLimit(req(headers));
     const res = await sponsorLink(req(headers, "http://x/s/zz"), { params: Promise.resolve({ key: "zz" }) });
@@ -537,11 +543,162 @@ describe("every limiter the batch names keys on it (the real callers)", () => {
     const one = await allOf({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR });
     expect(one).toEqual({ capture: VISITOR, keys: bucketsOf(VISITOR) });
     const two = await allOf({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR6 });
-    expect(two, "a second visitor through the SAME edge is another bucket").toEqual({ capture: VISITOR6, keys: bucketsOf(VISITOR6) });
+    // Task 25d: an IPv6 visitor is keyed by its /64 (limiterSubject), in every one of these limiters.
+    expect(two, "a second visitor through the SAME edge is another bucket").toEqual({ capture: VISITOR6_64, keys: bucketsOf(VISITOR6_64) });
+  });
+
+  it("Task 25d: two IPv6 addresses in ONE /64 are ONE bucket in capture's failed-401 budget (and every limiterSubjectOf limiter: mdfail, dlmint), the public read limiters and the /s/ miss budget; another /64 is another", async () => {
+    const a = await allOf({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR6 });
+    const b = await allOf({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR6_SAME64 });
+    const c = await allOf({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": OTHER_64 });
+    expect(a).toEqual({ capture: VISITOR6_64, keys: bucketsOf(VISITOR6_64) });
+    expect(b, "the same /64: the same buckets").toEqual(a);
+    expect(c, "another /64").toEqual({ capture: OTHER_64_SUBJECT, keys: bucketsOf(OTHER_64_SUBJECT) });
+    // IPv4 is untouched by the grouping.
+    expect(await allOf({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR })).toEqual({ capture: VISITOR, keys: bucketsOf(VISITOR) });
   });
 
   it("straight to the origin, a forged CF-Connecting-IP moves none of them: Fly's peer keys every one", async () => {
     const got = await allOf({ "fly-client-ip": DIRECT, "cf-connecting-ip": VISITOR, "x-forwarded-for": XFF_FIRST });
     expect(got).toEqual({ capture: DIRECT, keys: bucketsOf(DIRECT) });
+  });
+});
+
+// Task 25c: one subscriber is routinely given a whole IPv6 /64 (RFC 6177's end-site assignment; SLAAC and privacy addresses rotate
+// the low 64 bits at will), so a limiter keyed on the raw IPv6 address can be walked past one address at a time. The limiter subject
+// is the /64 prefix; IPv4 is keyed as it is. The expected strings below are written out by hand from RFC 4291 (text forms, `::`
+// compression, the IPv4-mapped form), never read back from the helper.
+describe("limiterSubject — the key a per-IP limiter uses: IPv4 as it is, an IPv6 as its /64", () => {
+  it("EMPTY CASE FIRST: not an address (\"unknown\", blank, junk) is returned unchanged", () => {
+    let checked = 0;
+    for (const v of ["unknown", "", "not-an-ip", "2001:db8::/64"]) {
+      expect(limiterSubject(v), JSON.stringify(v)).toBe(v);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("IPv4 is unchanged", () => {
+    let checked = 0;
+    for (const v of ["203.0.113.7", "198.51.100.42", "10.0.0.1", "0.0.0.0", "255.255.255.255"]) {
+      expect(limiterSubject(v), v).toBe(v);
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
+
+  it("two addresses in ONE /64 are one subject; another /64 is another", () => {
+    expect(limiterSubject("2001:db8:aa:1::1")).toBe("2001:db8:aa:1::/64");
+    expect(limiterSubject("2001:db8:aa:1:dead:beef:cafe:f00d")).toBe("2001:db8:aa:1::/64");
+    expect(limiterSubject("2001:db8:aa:2::1"), "the next /64").toBe("2001:db8:aa:2::/64");
+    expect(limiterSubject("2001:db9:aa:1::1"), "another network").toBe("2001:db9:aa:1::/64");
+  });
+
+  it("every text form of one address maps the same: compressed, expanded, leading zeros, upper case, a zone id", () => {
+    const forms = [
+      "2001:db8::1",
+      "2001:0db8:0000:0000:0000:0000:0000:0001",
+      "2001:db8:0:0:0:0:0:1",
+      "2001:DB8::1",
+      "2001:db8:0::1",
+      "2001:db8::0:1",
+      "fe80::1%eth0".replace("fe80", "2001:db8"),
+    ];
+    let checked = 0;
+    for (const v of forms) {
+      expect([v, limiterSubject(v)]).toEqual([v, "2001:db8:0:0::/64"]);
+      checked++;
+    }
+    expect(checked).toBe(7);
+    expect(limiterSubject("::"), "the unspecified address").toBe("0:0:0:0::/64");
+    expect(limiterSubject("::1"), "loopback").toBe("0:0:0:0::/64");
+    expect(limiterSubject("fe80::1%eth0"), "link-local with a zone id").toBe("fe80:0:0:0::/64");
+  });
+
+  it("an IPv4-mapped IPv6 (::ffff:a.b.c.d, either spelling) is the IPv4, one subject with the IPv4 itself", () => {
+    let checked = 0;
+    for (const v of ["::ffff:203.0.113.7", "::FFFF:203.0.113.7", "0:0:0:0:0:ffff:203.0.113.7", "::ffff:cb00:7107"]) {
+      expect([v, limiterSubject(v)]).toEqual([v, "203.0.113.7"]);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    expect(limiterSubject("64:ff9b::203.0.113.7"), "NAT64's prefix is NOT the mapped form: an IPv6 like any other").toBe("64:ff9b:0:0::/64");
+  });
+});
+
+// Task 25d (T25c review m2): limiterSubject checked against an independent /64 oracle, Node's own `net.BlockList` subnet check, over
+// generated addresses in several text forms. For each: the address is INSIDE the subnet its subject names, an address that differs
+// only in its low 64 bits maps to the SAME subject, and one that differs in a bit of the prefix is OUTSIDE that subnet.
+describe("limiterSubject against net.BlockList's /64 check (generated addresses, counted)", () => {
+  // A seeded generator (mulberry32), so a failure reproduces.
+  const rand = (() => {
+    let a = 0x25d0c0de;
+    return () => {
+      a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  })();
+  const group = () => Math.floor(rand() * 0x10000);
+  const hex = (g: number[]) => g.map((n) => n.toString(16)).join(":");
+  /** One address, written one of four ways: expanded with leading zeros, plain, upper case, or with its longest zero run as `::`. */
+  const spell = (g: number[], form: number): string => {
+    if (form === 0) return g.map((n) => n.toString(16).padStart(4, "0")).join(":");
+    if (form === 1) return hex(g);
+    if (form === 2) return hex(g).toUpperCase();
+    let best = [-1, 0];
+    for (let i = 0; i < 8; ) {
+      if (g[i] !== 0) { i++; continue; }
+      let j = i;
+      while (j < 8 && g[j] === 0) j++;
+      if (j - i > best[1]!) best = [i, j - i];
+      i = j;
+    }
+    if (best[1]! < 2) return hex(g);
+    return `${hex(g.slice(0, best[0]))}::${hex(g.slice(best[0]! + best[1]!))}`;
+  };
+
+  it("every generated address is inside the /64 its subject names; its low 64 bits never move the subject; a prefix bit always does", async () => {
+    const { BlockList } = await import("node:net");
+    let checked = 0;
+    for (let i = 0; i < 2000; i++) {
+      const g = Array.from({ length: 8 }, group);
+      if (i % 5 === 0) g[2] = g[3] = 0; // zero runs in the prefix, so `::` lands there too
+      if (i % 7 === 0) g[4] = g[5] = g[6] = 0;
+      if (g.slice(0, 5).every((n) => n === 0) && g[5] === 0xffff) g[0] = 0x2001; // not the IPv4-mapped form (its own test)
+      const text = spell(g, i % 4);
+      const subject = limiterSubject(text);
+      const m = /^(.+)::\/64$/.exec(subject);
+      expect(m, `${text} -> ${subject}: a /64`).not.toBeNull();
+      const net = new BlockList();
+      net.addSubnet(`${m![1]}::`, 64, "ipv6");
+      expect([text, net.check(hex(g), "ipv6")]).toEqual([text, true]);
+      const low = [...g.slice(0, 4), group(), group(), group(), group()];
+      expect([text, limiterSubject(spell(low, (i + 1) % 4))], "the same /64, other low bits").toEqual([text, subject]);
+      const flipped = [...g];
+      const bit = Math.floor(rand() * 64);
+      flipped[Math.floor(bit / 16)] = g[Math.floor(bit / 16)]! ^ (1 << (bit % 16));
+      expect([text, bit, net.check(hex(flipped), "ipv6")], "a prefix bit flipped: outside").toEqual([text, bit, false]);
+      expect([text, limiterSubject(hex(flipped)) === subject], "and another subject").toEqual([text, false]);
+      checked++;
+    }
+    expect(checked).toBe(2000);
+  });
+
+  it("every generated IPv4-mapped address is its IPv4, inside a /32 BlockList of that IPv4", async () => {
+    const { BlockList } = await import("node:net");
+    let checked = 0;
+    for (let i = 0; i < 500; i++) {
+      const v4 = [0, 0, 0, 0].map(() => Math.floor(rand() * 256)).join(".");
+      const [a, b, c, d] = v4.split(".").map(Number) as [number, number, number, number];
+      const text = i % 2 ? `::ffff:${v4}` : `::ffff:${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+      const net = new BlockList();
+      net.addSubnet(v4, 32, "ipv4");
+      expect([text, limiterSubject(text)]).toEqual([text, v4]);
+      expect(net.check(limiterSubject(text), "ipv4")).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(500);
   });
 });

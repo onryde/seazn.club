@@ -20,9 +20,11 @@ import "server-only";
 //
 // THE CLOUDFLARE DELETE (the binding rule, 2026-11-20: 25 recordings were lost to a filtered listing): `deleteVideo` is called only
 // with the CLAIMED ROW's own `cf_video_id` — checked against its input at discovery (C6) — and only when the pure gate
-// (`cfDeleteGate`, inside `nextReplayStep`) says `verified_at + SEAZN_CF_DELETE_DELAY_MINUTES` has passed. A copy that fails the
-// check is never followed by a delete; a row never verified never earns one (its Cloudflare copy is left to Cloudflare's own
-// scheduled deletion, Task 13).
+// (`cfDeleteGate`, inside `nextReplayStep`) says `verified_at + SEAZN_CF_DELETE_DELAY_MINUTES` has passed AND, with
+// SEAZN_HOSTED_COST on, that the session's Cloudflare minutes are measured through its end day (Phase 3 review I1: the claim reads
+// the session's `ended_at` and its `fixture_video_delivery.live_measured_through` for it). A copy that fails the check is never
+// followed by a delete; a row never verified never earns one (its Cloudflare copy is left to Cloudflare's own scheduled deletion,
+// Task 13).
 //
 // SECRETS: the fetch URL carries a downloadable token. It goes to the replay host and nowhere else: never logged, never stored,
 // never in an error this module raises. A provider's error message is logged only through the shared scrubber
@@ -38,13 +40,15 @@ import {
 import { TERMINAL_STATES } from "@/server/relay/domain/session";
 import type { IngestProvider, IngestVideo } from "@/server/relay/ports";
 import { type PlaybackTokenCache, signDownload } from "@/server/video/cf-playback";
+import { dayOf } from "@/server/video/domain/delivery-window";
 import {
-  REPLAY_PARKED_AT, type ReplayRow, type ReplayRowState, type ReplayStep, nextReplayStep, pollOutcome, replayCopyTitle, replayFailure,
-  replayFailureOutcome,
+  type LiveMeasure, REPLAY_PARKED_AT, type ReplayRow, type ReplayRowState, type ReplayStep, nextReplayStep, pollOutcome, replayCopyTitle,
+  replayFailure, replayFailureOutcome,
 } from "@/server/video/domain/replay-move";
 import { partNumbers } from "@/server/video/domain/replay-parts";
 import { readReplayEntries } from "@/server/video/replay-entries";
 import type { ReplayHost } from "@/server/video/replay-ports";
+import { seaznCostArmed } from "./seazn-cost";
 import { SEAZN_PASS_CALL_FLOOR_MS, SEAZN_PASS_LOGGED_IDS_MAX } from "./seazn-recordings";
 
 const MIN = 60_000;
@@ -228,7 +232,8 @@ export async function discoverSeaznRecordings(deps: SeaznReplayDeps, opts: Seazn
 /** The claim: every row due now and still to be acted on — the WHERE is V542's `fixture_video_replays_due_idx` predicate, word
  *  for word, so the planner proves the index serves it (seazn-replays-migration.test.ts explains this very query) — leased for
  *  SEAZN_CLAIM_LEASE_SECONDS in the same statement, so a run starting after it commits does not claim the row again, and a
- *  crashed run's rows come back once the lease runs out. `skip locked`: a row another run is claiming is left to it. */
+ *  crashed run's rows come back once the lease runs out. `skip locked`: a row another run is claiming is left to it. Each row
+ *  carries its session's end and the day its Cloudflare minutes are measured through, for the delete gate (Phase 3 review I1). */
 export function replayClaimQuery(exec: typeof sql | Tx, a: { now: Date; leaseUntil: Date; limit: number; orgIds?: readonly string[] }) {
   return exec<ClaimedDbRow[]>`
     update fixture_video_replays set next_attempt_at = ${a.leaseUntil}
@@ -243,15 +248,24 @@ export function replayClaimQuery(exec: typeof sql | Tx, a: { now: Date; leaseUnt
         limit ${a.limit}
         for update skip locked)
     returning id, org_id, session_id, cf_video_id, state, state_at, recorded_at, bunny_video_id, verified_at, cf_deleted_at,
-              bunny_cleaned_at, deleted_at, cf_duration_seconds, cf_height, attempts`;
+              bunny_cleaned_at, deleted_at, cf_duration_seconds, cf_height, attempts,
+              (select s.ended_at from fixture_stream_sessions s where s.id = fixture_video_replays.session_id) as session_ended_at,
+              (select d.live_measured_through::text from fixture_video_delivery d
+                where d.session_id = fixture_video_replays.session_id) as live_measured_through`;
 }
 
 interface ClaimedDbRow {
   id: string; org_id: string; session_id: string; cf_video_id: string; state: ReplayRowState; state_at: Date; recorded_at: Date;
   bunny_video_id: string | null; verified_at: Date | null; cf_deleted_at: Date | null; bunny_cleaned_at: Date | null;
   deleted_at: Date | null; cf_duration_seconds: number | null; cf_height: number | null; attempts: number;
+  session_ended_at: Date | null; live_measured_through: string | null;
 }
-interface Claimed extends ReplayRow { id: string; orgId: string; sessionId: string; cfVideoId: string }
+interface Claimed extends ReplayRow {
+  id: string; orgId: string; sessionId: string; cfVideoId: string;
+  /** The delete gate's session facts (Phase 3 review I1): when the session ended, and the last UTC day its Cloudflare minutes were
+   *  measured through. */
+  sessionEndedAt: Date | null; liveMeasuredThrough: Date | null;
+}
 
 const dateOrNull = (d: Date | null) => (d === null ? null : new Date(d));
 function claimedOf(r: ClaimedDbRow): Claimed {
@@ -260,6 +274,7 @@ function claimedOf(r: ClaimedDbRow): Claimed {
     recordedAt: new Date(r.recorded_at), bunnyVideoId: r.bunny_video_id, verifiedAt: dateOrNull(r.verified_at),
     cfDeletedAt: dateOrNull(r.cf_deleted_at), bunnyCleanedAt: dateOrNull(r.bunny_cleaned_at), deletedAt: dateOrNull(r.deleted_at),
     cfDurationSeconds: r.cf_duration_seconds, cfHeight: r.cf_height, attempts: r.attempts,
+    sessionEndedAt: dateOrNull(r.session_ended_at), liveMeasuredThrough: dayOf(r.live_measured_through),
   };
 }
 
@@ -274,7 +289,12 @@ async function write(row: Claimed, expected: ReplayRowState, patch: Patch): Prom
   return done.length === 1;
 }
 
-interface Run { deps: SeaznReplayDeps; now: Date; out: SeaznReplayResult; canCall: () => boolean }
+interface Run {
+  deps: SeaznReplayDeps; now: Date; out: SeaznReplayResult; canCall: () => boolean;
+  /** SEAZN_HOSTED_COST, read once per run (`seaznCostArmed`: a malformed value reads as off, warned): the daily pass measures
+   *  Cloudflare minutes, so the delete gate waits for them (Phase 3 review I1). */
+  measureLive: boolean;
+}
 /** What a handler leaves: `again` — the row moved and its next step may run now; `done` — nothing more this run. */
 type Outcome = "again" | "done";
 type Handler<K extends ReplayStep["kind"]> = (run: Run, row: Claimed, step: Extract<ReplayStep, { kind: K }>) => Promise<Outcome>;
@@ -291,8 +311,14 @@ async function failure(run: Run, row: Claimed, step: string, err?: unknown, sour
     ...(err === undefined ? {} : { errClass: errClass(err), ...(source === "provider" ? { detail: detail(err) } : {}) }),
   };
   if (o.kind === "give_up") {
-    log.error({ ...facts, state: row.state, parkedAs: o.state, guid: row.bunnyVideoId },
-      "seazn replays: a step still failing past the Cloudflare copy's life — given up: parked, never retried");
+    if (o.nextAttemptAt.getTime() !== REPLAY_PARKED_AT.getTime()) {
+      // Task 31b: parked as failed while it holds a host copy — due again after the backoff, when give_up removes the copy first.
+      log.error({ ...facts, state: row.state, parkedAs: o.state, guid: row.bunnyVideoId },
+        "seazn replays: a step still failing past the Cloudflare copy's life — given up; its host copy is removed before the row is parked");
+    } else {
+      log.error({ ...facts, state: row.state, parkedAs: o.state, guid: row.bunnyVideoId },
+        "seazn replays: a step still failing past the Cloudflare copy's life — given up: parked, never retried");
+    }
     const patch: Patch = { attempts: o.attempts, next_attempt_at: o.nextAttemptAt, ...(o.state === row.state ? {} : { state: o.state, state_at: run.now }) };
     if (await write(row, row.state, patch)) row.state = o.state;
     return "done";
@@ -545,6 +571,18 @@ const STEPS: { readonly [K in ReplayStep["kind"]]: Handler<K> } = {
   },
   settled: async () => "done",
   give_up: async (run, row) => {
+    if (row.bunnyVideoId !== null) {
+      // Task 31b: a failed row still holding a copy (one whose removal failed, or a row parked mid-move) has it removed BEFORE it is
+      // parked: parked, nothing would ever remove it. No final replay read is owed: a failed copy was never served (seazn-cost.ts's
+      // header). A removal that fails keeps the copy on the row and backs off (`replayFailureOutcome`), never parks it.
+      if (!run.canCall()) return defer(run, row);
+      try {
+        await run.deps.replay.remove(row.bunnyVideoId);
+      } catch (err) {
+        return failure(run, row, "remove_parked_copy", err);
+      }
+      if (!(await forgetCopy(row, row.bunnyVideoId))) return dropped(row, "failed");
+    }
     log.warn({ replayId: row.id, videoId: row.cfVideoId, attempts: row.attempts }, "seazn replays: a move still failing past the Cloudflare copy's life — given up");
     await write(row, "failed", { next_attempt_at: REPLAY_PARKED_AT });
     return "done";
@@ -555,9 +593,13 @@ const STEPS: { readonly [K in ReplayStep["kind"]]: Handler<K> } = {
   },
 };
 
+/** What the delete gate reads beside the row (Phase 3 review I1). */
+const liveMeasureOf = (run: Run, row: Claimed): LiveMeasure =>
+  run.measureLive ? { measured: true, sessionEndedAt: row.sessionEndedAt, measuredThrough: row.liveMeasuredThrough } : { measured: false };
+
 async function stepRow(run: Run, row: Claimed): Promise<void> {
   for (let n = 0; n < MAX_STEPS_PER_ROW; n++) {
-    const step = nextReplayStep(row, run.now);
+    const step = nextReplayStep(row, run.now, liveMeasureOf(run, row));
     const handler = STEPS[step.kind] as Handler<typeof step.kind>;
     if ((await handler(run, row, step as never)) === "done") return;
   }
@@ -569,11 +611,13 @@ export async function moveSeaznRecordings(deps: SeaznReplayDeps, opts: SeaznRepl
   const orgIds = checkOpts(opts);
   const wallClock = opts.wallClock ?? Date.now;
   const started = wallClock();
-  const run: Run = { deps, now: opts.now, out: zero(), canCall: () => opts.budgetMs - (wallClock() - started) >= SEAZN_PASS_CALL_FLOOR_MS };
-  if (!run.canCall()) return run.out;   // no slice: nothing claimed, so nothing waits out a lease
+  const canCall = () => opts.budgetMs - (wallClock() - started) >= SEAZN_PASS_CALL_FLOOR_MS;
+  if (!canCall()) return zero();   // no slice: nothing claimed, so nothing waits out a lease
   const leaseUntil = new Date(opts.now.getTime() + SEAZN_CLAIM_LEASE_SECONDS * 1000);
   const claimed = (await replayClaimQuery(sql, { now: opts.now, leaseUntil, limit: SEAZN_REPLAY_CLAIM_BATCH, orgIds })).map(claimedOf)
     .sort((a, b) => a.recordedAt.getTime() - b.recordedAt.getTime() || a.id.localeCompare(b.id));
+  // Read only with rows to step: a malformed flag then warns once per run that has work, never once a minute on an idle tick.
+  const run: Run = { deps, now: opts.now, out: zero(), canCall, measureLive: claimed.length > 0 && seaznCostArmed() };
   for (const row of claimed) {
     try {
       await stepRow(run, row);

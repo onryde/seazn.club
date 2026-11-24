@@ -445,3 +445,56 @@ test("a signed-in NON-staff user gets neither the route (401, no row) nor the pa
   expect(await ledgerSql(rig.orgId)).toEqual([]);
   expect(await auditSql(rig.orgId)).toEqual([]);
 });
+
+// Seazn-hosted video Task 31: the staff "Seazn video" table on the same page — the org's last Seazn sessions, the minutes the daily
+// sweep measured (fixture_video_delivery, V552) and each replay part's state, read by `seaznVideoForOrg` and rendered by
+// AdminSeaznVideoPanel. The rows are seeded by SQL for the reason `consumedSession` gives (the usecases sit behind "server-only");
+// the measurement itself is proven in vitest (usecases/__tests__/seazn-cost.test.ts). /admin is desktop-only: 1280 alone (AGENTS.md).
+// The session names no fixture (its column is nullable), so the row's fixture reads "—"; `destination_kind` is written as admission
+// writes it for the org's Seazn destination (V541's trigger made that row).
+async function seaznSession(rig: Rig): Promise<{ sessionId: string; through: string }> {
+  return withDb(async (sql) => {
+    const [{ id: targetId }] = await sql<{ id: string }[]>`select id from org_stream_targets where org_id = ${rig.orgId} and kind = 'seazn'`;
+    const [{ id: sessionId }] = await sql<{ id: string }[]>`
+      insert into fixture_stream_sessions (org_id, mode, state, target_id, created_by, sport_key, competition_id, division_id,
+                                           entitlement_via_override, destination_kind, ended_at)
+      values (${rig.orgId}, 'passthrough', 'completed', ${targetId}, ${rig.userId}, 'badminton', gen_random_uuid(), gen_random_uuid(),
+              false, 'seazn', now() - interval '2 days') returning id`;
+    const [{ through }] = await sql<{ through: string }[]>`
+      insert into fixture_video_delivery (session_id, org_id, live_minutes, replay_minutes, live_measured_through, replay_measured_through)
+      values (${sessionId}, ${rig.orgId}, 15.5, 4.0, current_date - 1, current_date - 1) returning live_measured_through::text as through`;
+    const tag = randomBytes(6).toString("hex");
+    await sql`
+      insert into fixture_video_replays (org_id, session_id, fixture_id, cf_video_id, recorded_at, part_no, state, bunny_video_id, verified_at)
+      values (${rig.orgId}, ${sessionId}, null, ${`v-e2e-${tag}`}, now() - interval '2 days', 1, 'playable', ${`copy-e2e-${tag}`}, now())`;
+    return { sessionId, through };
+  });
+}
+
+test("the staff Seazn video table: EMPTY for an org with no Seazn session, then one measured session's row — its minutes as stored, the day they run through, and its replay part (1280: /admin is desktop-only)", async ({ page }) => {
+  test.setTimeout(90_000);
+  const rig = await seedRig("support");
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await signInAs(page, rig.userEmail);
+  await page.goto(`/admin/orgs/${rig.orgId}`);
+  await expect(page.getByRole("heading", { level: 1, name: rig.orgName })).toBeVisible({ timeout: 30_000 });
+  const panel = page.getByTestId("seazn-video-panel");
+  await expect(panel.getByRole("heading", { name: "Seazn video" })).toBeVisible();
+  await expect(panel.getByTestId("seazn-video-empty")).toBeVisible();
+  await expect(panel.getByTestId("seazn-video-row")).toHaveCount(0);
+
+  const { sessionId, through } = await seaznSession(rig);
+  await page.reload();
+  const row = panel.getByTestId("seazn-video-row");
+  await expect(row).toHaveCount(1, { timeout: 30_000 });
+  await expect(row).toHaveAttribute("data-session-id", sessionId);
+  // Each cell by its own testid, as WHOLE text (toHaveText): a substring probe on the row also passes on 115.5 or 14.0 (review m9).
+  await expect(row.getByTestId("seazn-video-live-minutes")).toHaveText("15.5");
+  await expect(row.getByTestId("seazn-video-live-through")).toHaveText(`through ${through}`);
+  await expect(row.getByTestId("seazn-video-replay-minutes")).toHaveText("4.0");
+  await expect(row.getByTestId("seazn-video-replay-through")).toHaveText(`through ${through}`);
+  await expect(row.getByTestId("seazn-video-part")).toHaveText(["Part 1: playable"]);
+  await expect(panel.getByTestId("seazn-video-empty")).toHaveCount(0);
+  await expect(panel).toContainText("estimates");
+  await shot(page, "seazn-video-admin-1280.png");
+});

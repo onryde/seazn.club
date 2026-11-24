@@ -19,6 +19,8 @@ import "server-only";
 //                                          commit, and never inside it, the host's copy the row named is removed; a failure there
 //                                          still answers the delete, and the move's cleanup step (Task 24) retries it, removes any
 //                                          copy still in flight and deletes the Cloudflare copy. A second delete answers the same.
+//                                          Task 31: with SEAZN_HOSTED_COST on, the copy's watch time is read one last time just
+//                                          before its removal (usecases/seazn-cost.ts `measureReplayBeforeRemoval`; best-effort).
 //   seaznReplayDownload(auth, fixtureId, replayId)
 //                                          a playable part's file, as the host's own stream (never buffered, never a URL), named
 //                                          for the match and the part (`replayFileName`). Anything but a playable part is 409; so is
@@ -39,6 +41,7 @@ import { scrubScoreUrl } from "@/lib/scrub-score-url";
 import { EDITOR_ROLES } from "@/lib/types";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
+import { cleanupDueAfterDelete, measureReplayBeforeRemoval } from "@/server/usecases/seazn-cost";
 import type { ReplayRowState } from "./domain/replay-move";
 import { replayDriver } from "./replay-driver";
 import { type ReplayCredential, type ReplayHost, ReplayHostRefused, ReplayHostUnavailable, ReplayNotDownloadable } from "./replay-ports";
@@ -142,9 +145,9 @@ export async function deleteSeaznReplay(auth: AuthCtx, fixtureId: string, replay
   requireReplayEditor(auth);
   if (!UUID.test(fixtureId) || !UUID.test(replayId)) throw new HttpError(404, REPLAY_NOT_FOUND);
   const now = deps.now ?? new Date();
-  const copy = await sql.begin(async (tx) => {
-    const [row] = await tx<{ state: string; bunny_video_id: string | null }[]>`
-      select state, bunny_video_id from fixture_video_replays
+  const removal = await sql.begin(async (tx) => {
+    const [row] = await tx<{ state: string; bunny_video_id: string | null; session_id: string }[]>`
+      select state, bunny_video_id, session_id from fixture_video_replays
        where id = ${replayId} and fixture_id = ${fixtureId} and org_id = ${auth.orgId}
          for update`;
     if (!row) throw new HttpError(404, REPLAY_NOT_FOUND);
@@ -153,11 +156,17 @@ export async function deleteSeaznReplay(auth: AuthCtx, fixtureId: string, replay
     await tx`
       update fixture_video_replays
          set state = 'deleted', state_at = ${now}, deleted_at = coalesce(deleted_at, ${now}), deleted_reason = 'organiser',
-             deleted_by = ${auth.userId}, next_attempt_at = ${now}, attempts = 0
+             deleted_by = ${auth.userId}, next_attempt_at = ${cleanupDueAfterDelete(now)}, attempts = 0
        where id = ${replayId}`;
-    return row.bunny_video_id;
+    return row.bunny_video_id === null ? null : { copy: row.bunny_video_id, sessionId: row.session_id };
   });
-  if (copy !== null) await removeCopy(replayId, copy, deps);
+  if (removal !== null) {
+    // Task 31 (ruling 2b): the copy's minutes FIRST — the host forgets a removed copy's watch time with it. Best-effort: it never
+    // throws, and with SEAZN_HOSTED_COST off it reads nothing. The row's cleanup is due one claim lease after the delete
+    // (`cleanupDueAfterDelete`, review m2), so a mover run cannot remove the copy ahead of this read.
+    await measureReplayBeforeRemoval(() => deps.replay ?? replayDriver(), { sessionId: removal.sessionId, orgId: auth.orgId, copy: removal.copy }, now);
+    await removeCopy(replayId, removal.copy, deps);
+  }
   return { deleted: true };
 }
 

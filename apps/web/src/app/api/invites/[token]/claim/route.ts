@@ -5,7 +5,7 @@ import { stampTermsAcceptance } from "@/lib/legal";
 import { rateLimit, AUTH_LIMIT } from "@/lib/rate-limit";
 import { saveQuickMatchesForVerifiedUser } from "@/server/usecases/quick-match-save";
 import { headers } from "next/headers";
-import { clientIp } from "@/lib/client-ip";
+import { clientIp, limiterSubject } from "@/lib/client-ip";
 
 /**
  * One-click accept for an email invite by someone who is NOT signed in. For a
@@ -23,7 +23,8 @@ export async function POST(
   { params }: { params: Promise<{ token: string }> },
 ) {
   return handler(async () => {
-    const ip = clientIp(await headers());
+    // Task 25d: the limiter keys the client's SUBJECT (lib/client-ip.ts `limiterSubject`): an IPv6 /64 is one client.
+    const ip = limiterSubject(clientIp(await headers()));
     await rateLimit(`invite-claim:${ip}`, AUTH_LIMIT);
 
     const { token } = await params;

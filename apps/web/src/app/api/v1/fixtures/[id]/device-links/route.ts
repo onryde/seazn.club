@@ -3,7 +3,7 @@ import { requireResourceAuth } from "@/server/api-v1/auth";
 // Per-IP limit on the mint doors (doc 08 §6 pattern; PROMPT-21 item 5), shared
 // with …/reissue. Route files may export only handlers, so it lives in lib.
 import { DEVICE_LINK_MINT_LIMIT, rateLimit } from "@/lib/rate-limit";
-import { clientIp } from "@/lib/client-ip";
+import { clientIp, limiterSubject } from "@/lib/client-ip";
 import { CreateDeviceLink } from "@/server/api-v1/schemas";
 import { ensureDeviceLink, getActiveDeviceLink } from "@/server/usecases/device-links";
 
@@ -18,7 +18,8 @@ type Ctx = { params: Promise<{ id: string }> };
 export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {
     const { id } = await params;
-    const ip = clientIp(req.headers);
+    // Task 25d: the limiter keys the client's SUBJECT (lib/client-ip.ts `limiterSubject`): an IPv6 /64 is one client.
+    const ip = limiterSubject(clientIp(req.headers));
     await rateLimit(`dlmint:${ip}`, DEVICE_LINK_MINT_LIMIT);
     const body = await parseBody(req, CreateDeviceLink);
     const auth = await requireResourceAuth(req, "fixture", id, "write");

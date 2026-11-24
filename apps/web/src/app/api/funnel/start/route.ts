@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { headers } from "next/headers";
-import { clientIp } from "@/lib/client-ip";
+import { clientIp, limiterSubject } from "@/lib/client-ip";
 import { sql } from "@/lib/db";
 import { handler } from "@/lib/http";
 import { rateLimit, EMAIL_LIMIT, FUNNEL_RECIPIENT_LIMIT } from "@/lib/rate-limit";
@@ -46,7 +46,8 @@ const schema = z
  *  starts a day. */
 export async function POST(req: Request) {
   return handler(async () => {
-    const ip = clientIp(await headers());
+    // Task 25d: the limiter keys the client's SUBJECT (lib/client-ip.ts `limiterSubject`): an IPv6 /64 is one client.
+    const ip = limiterSubject(clientIp(await headers()));
     await rateLimit(`funnel-start:${ip}`, EMAIL_LIMIT);
     // Bot check (Cloudflare Turnstile): before the body is read or a draft is written. 403 TURNSTILE_FAILED.
     await requireTurnstile(req, "start");

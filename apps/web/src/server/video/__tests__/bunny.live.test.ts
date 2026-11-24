@@ -14,6 +14,12 @@
 //       to answer 404; it answers 200, so the probe pins what was measured.)
 //   B8 also reads the CDN token the embed was handed (its form and its own `expires`) and re-requests the embed's
 //   last playlist and segment URLs after the embed's expiry, since a fully buffered 3-min video fetches little late.
+//   B11 watch time (Task 30): the UNIT of `watchTimeChart`. After B8 has played `long` to its end in the embed, its statistics are
+//       read through the production adapter (`BunnyReplayHost.watchMinutes`) every 30 s for up to 10 min, until they show any
+//       watch time. `impliedSecondsPerUnit` (the seconds the embed played over the chart's sum) is the answer: ~1 means seconds,
+//       ~60 minutes, ~0.001 milliseconds; replay-bunny.ts's WATCH_TIME_CHART_SECONDS_PER_UNIT must equal it. Control: `hd`, never
+//       played in a player, must read 0, or `videoGuid` was not applied and the reading means nothing. Also recorded, not asserted:
+//       what the read answers for `long` once B10 has deleted it (Task 31 measures replays until they are deleted).
 //
 // Gate: the flag BUNNY_LIVE_PROBE=1 first; only behind it the four BUNNY_* values, from the environment only (the POC
 // credentials file; .env.local is never read for them). Without the flag nothing else is read and the file skips
@@ -22,7 +28,8 @@
 // SAFETY: the target is the owner's Bunny POC library (the one ~/.config/seazn/bunny-poc.env names), nothing else;
 // whether it is also the staging library of Operator setup Phase 2 is not confirmed. This run creates one collection and two
 // videos and deletes only those, each by the id its own create/fetch answered, tracked in-process. No list endpoint is
-// ever called: `bunny()` refuses any GET or DELETE that is not a single id path. Before each delete the item is re-read
+// ever called: `bunny()` refuses any GET or DELETE that is not a single id path, and B11's adapter is handed a fetch that refuses
+// anything but a GET of one video's statistics. Before each delete the item is re-read
 // by id (a video must carry its own guid and sit in this run's collection or under this run's title; the collection
 // must carry this run's name).
 // Cleanup is in `afterAll`, one try per item, so one failure strands nothing else. The API key, the token key, every
@@ -33,6 +40,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
 import type { Browser, BrowserContext, Frame } from "playwright";
+import { BunnyReplayHost, WATCH_TIME_CHART_SECONDS_PER_UNIT } from "../replay-bunny";
 
 type BunnyGate =
   | { enabled: true; libraryId: string; cdnHost: string; apiKey: string; tokenKey: string }
@@ -77,6 +85,9 @@ const ONE_ID_PATH = new RegExp(`^/(videos|collections)/${ID}$`);
 const FETCH_PATH = new RegExp(`^/videos/fetch\\?collectionId=${ID}$`);
 
 const RUN = `seazn-task20-probe-${Date.now().toString(36)}`;
+/** B11: how long the watch-time read waits for the embed's view to show (Bunny states no delay), and how often it asks. */
+const WATCH_STATS_WAIT_MS = 10 * 60_000;
+const WATCH_STATS_POLL_MS = 30_000;
 const TITLES: Record<SourceKey, string> = { long: `${RUN}-long`, hd: `${RUN}-hd` };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -450,6 +461,64 @@ describe.skipIf(!GATE.enabled)("Bunny Stream — collections, embed past expiry,
       samples: samples.filter((_, i) => i % 3 === 0 || i === samples.length - 1).map((s) => `${s.at}s:t=${s.t?.toFixed(1)}${s.paused ? ",paused" : ""}${s.ended ? ",ended" : ""}${s.err ? `,err${s.err}` : ""},buf=${s.buf?.toFixed(0)}`),
     });
 
+    // ---- B11 (Task 30): the unit of watchTimeChart, read through the production adapter. Its fetch is fenced: one video's
+    // statistics, GET only, on this library — anything else is refused before it leaves. The raw answers are kept in memory for
+    // their numbers; no header, key or URL is recorded. ----
+    const watch: Record<string, unknown> = {};
+    obs.watchTime = watch;
+    const rawCharts = new Map<string, unknown>();   // videoGuid -> the last watchTimeChart Bunny answered for it (absent: "absent")
+    let fenceRefusals = 0;
+    const statsOnly: typeof fetch = async (input, init) => {
+      const u = new URL(String(input));
+      const guid = u.searchParams.get("videoGuid") ?? "";
+      if ((init?.method ?? "GET") !== "GET" || `${u.origin}${u.pathname}` !== `${API_BASE}/${libraryId}/statistics` || !new RegExp(`^${ID}$`).test(guid)) {
+        fenceRefusals++;
+        throw new Error("refused: B11 reads one video's statistics only");
+      }
+      const res = await fetch(input, init);
+      const body = (await res.clone().json().catch(() => null)) as { watchTimeChart?: unknown } | null;
+      rawCharts.set(guid, body && "watchTimeChart" in body ? body.watchTimeChart : "absent");
+      return res;
+    };
+    const stats = new BunnyReplayHost({ libraryId, apiKey, readOnlyKey: "", cdnHost, tokenKey }, { fetchImpl: statsOnly });
+    const chartSum = (chart: unknown) =>
+      chart && typeof chart === "object" ? Object.values(chart).reduce<number>((n, v) => n + (typeof v === "number" ? v : 0), 0) : 0;
+    const kindOf = (chart: unknown) =>
+      chart === undefined ? "not read" : chart === null ? "null" : chart === "absent" ? "absent" : Array.isArray(chart) ? "list" : typeof chart;
+    const control = embed.expiredControl as { played: boolean; sample: Sample | null };
+    // What the players actually played: the main embed from 0 to its last position, plus the control's, if it played at all.
+    const watchedSeconds = (lastSample?.t ?? 0) + (control.played ? control.sample?.t ?? 0 : 0);
+    const statsFrom = new Date(fetchStarted - 86_400_000);   // a day's margin: the chart is bucketed by UTC day
+    const statsUntil = Date.now() + WATCH_STATS_WAIT_MS;
+    let minutes = 0;
+    let polls = 0;
+    let lastError: string | null = null;
+    for (;;) {
+      polls++;
+      try {
+        minutes = (await stats.watchMinutes(videoIds.long!, statsFrom, new Date())) ?? 0;   // null: the host holds no such video (Task 31)
+        lastError = null;
+      } catch (e) {
+        lastError = redact((e as Error).message);
+      }
+      if (minutes > 0 || Date.now() > statsUntil) break;
+      await sleep(WATCH_STATS_POLL_MS);
+    }
+    let hdMinutes: number | null = null;
+    try { hdMinutes = await stats.watchMinutes(videoIds.hd!, statsFrom, new Date()); } catch (e) { watch.hdError = redact((e as Error).message); }
+    const rawSum = chartSum(rawCharts.get(videoIds.long!));
+    Object.assign(watch, {
+      watchedSeconds: Math.round(watchedSeconds * 10) / 10,
+      rawChartSum: rawSum,
+      rawChartNonZeroPoints: kindOf(rawCharts.get(videoIds.long!)) === "object" ? Object.values(rawCharts.get(videoIds.long!) as object).filter((v) => v !== 0).length : 0,
+      rawChartKind: kindOf(rawCharts.get(videoIds.long!)),
+      adapterMinutes: minutes,
+      impliedSecondsPerUnit: rawSum > 0 ? Math.round((watchedSeconds / rawSum) * 1000) / 1000 : null,
+      assumedSecondsPerUnit: WATCH_TIME_CHART_SECONDS_PER_UNIT,
+      hdControl: { minutes: hdMinutes, rawChartSum: chartSum(rawCharts.get(videoIds.hd!)), rawChartKind: kindOf(rawCharts.get(videoIds.hd!)) },
+      polls, waitedSeconds: Math.round((Date.now() - (statsUntil - WATCH_STATS_WAIT_MS)) / 1000), lastError, fenceRefusals,
+    });
+
     // ---- B10: delete answers 200, and the video then reads 404. The brief expected a second DELETE to answer 404;
     // run 1 (2026-11-21) measured 200 (Bunny's delete is idempotent), so absence is read with a GET, not a DELETE. ----
     for (const key of Object.keys(SOURCES) as SourceKey[]) {
@@ -464,6 +533,12 @@ describe.skipIf(!GATE.enabled)("Bunny Stream — collections, embed past expiry,
       const second = await bunny("DELETE", `/videos/${id}`);
       const reread = await getVideo(id);
       obs[`delete_${key}`] = { first: first.status, second: second.status, getAfter: reread.status };
+    }
+    // B11, recorded only: what the statistics read answers for `long` once B10 has deleted it.
+    try {
+      watch.afterDelete = { minutes: await stats.watchMinutes(videoIds.long!, statsFrom, new Date()), rawChartKind: kindOf(rawCharts.get(videoIds.long!)) };
+    } catch (e) {
+      watch.afterDelete = { error: redact((e as Error).message) };
     }
 
     // Facts, each asserted softly so one red does not hide the others.
@@ -487,7 +562,12 @@ describe.skipIf(!GATE.enabled)("Bunny Stream — collections, embed past expiry,
     expect.soft(embed.frameFound, "B8 the embed frame loaded").toBe(true);
     expect.soft(reachedEnd, "B8 the embed played to its end").toBe(true);
     expect.soft(embed.wallSecondsAfterExpiry as number, "B8 the run watched well past the expiry").toBeGreaterThan(60);
-  }, 30 * 60_000);
+    // B11 (Task 30): the adapter's minutes for `long` match the minutes the embed played, within a factor of 2 either way — a wrong
+    // WATCH_TIME_CHART_SECONDS_PER_UNIT is off by 60 or 1000. OBSERVED.watchTime.impliedSecondsPerUnit is the measured unit.
+    const ratio = minutes / (watchedSeconds / 60);
+    expect.soft(Math.abs(Math.log2(ratio)) < 1, `B11 watchMinutes / minutes played = ${ratio} (WATCH_TIME_CHART_SECONDS_PER_UNIT = ${WATCH_TIME_CHART_SECONDS_PER_UNIT})`).toBe(true);
+    expect.soft(hdMinutes, "B11 control: hd, never played in a player, reads 0 minutes (else videoGuid was not applied)").toBe(0);
+  }, 45 * 60_000);
 
   // An OWNER LIBRARY SETTING, not code and not vendor behaviour (Operator setup, Phase 2: "resolutions capped at
   // 720p"; B2). Kept in its own test so a red here is never mistaken for a vendor fact that moved. Only `hd` (a 1080p

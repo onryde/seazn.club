@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import * as config from "../config";
+import { CF_ANALYTICS_MAX_WINDOW_DAYS } from "../../video/cf-analytics";
 import {
   AUTO_START_RETRY_SECONDS, AUTO_STOP_AFTER_RESULT_SECONDS, COURT_AUTO_STOP_AFTER_RESULT_SECONDS, CODE_GRACE_AFTER_FINISH_MINUTES, DEAD_PHONE_TAKEOVER_SECONDS,
   FLY_RELAY_APP_RETIRED_DEFAULT, LOCAL_ENV_NAME, PHONE_LOST_LIVE_MINUTES, PHONE_NOT_READY_SHOW_AFTER_SECONDS,
@@ -689,6 +690,38 @@ describe("bunnyConfig — the Bunny settings, from env only (Task 21)", () => {
   });
 });
 
+describe("cfAnalyticsConfig — the delivered-minutes reader's Cloudflare settings, from env only (Task 30)", () => {
+  // Owner ruling 2026-11-23 ("use existing token"): the relay's own pair, no new variable. The Stream token is granted Account
+  // Analytics: Read by the owner; the account is the one the Stream adapter creates inputs under.
+  const FULL = { CLOUDFLARE_ACCOUNT_ID: "acct-fake-6a1b", CLOUDFLARE_STREAM_TOKEN: "ZZ-fake-stream-token-3e9c" };
+  const NAMES = Object.keys(FULL);
+  const messageOf = (env: Record<string, string>) => { try { config.cfAnalyticsConfig(env); return null; } catch (e) { return (e as Error).message; } };
+
+  it("reads the relay's account id and Stream token, trimmed", () => {
+    expect(config.cfAnalyticsConfig({ CLOUDFLARE_ACCOUNT_ID: " acct-fake-6a1b ", CLOUDFLARE_STREAM_TOKEN: " ZZ-fake-stream-token-3e9c " }))
+      .toEqual({ accountId: "acct-fake-6a1b", token: "ZZ-fake-stream-token-3e9c" });
+  });
+
+  it("names exactly the variables that are missing (a blank one counts), and never a value", () => {
+    const all = messageOf({});
+    for (const name of NAMES) expect(all, name).toContain(name);
+    let checked = 0;
+    for (const missing of NAMES) {
+      for (const absent of [undefined, "   "]) {
+        const env: Record<string, string> = { ...FULL };
+        if (absent === undefined) delete env[missing];
+        else env[missing] = absent;
+        const message = messageOf(env);
+        expect(message, `${missing} ${absent === undefined ? "unset" : "blank"}`).toMatch(new RegExp(`\\b${missing}\\b`));
+        for (const other of NAMES.filter((n) => n !== missing)) expect(message, `${missing} missing, ${other} named`).not.toMatch(new RegExp(`\\b${other}\\b`));
+        for (const value of Object.values(FULL)) expect(message, "a value leaked").not.toContain(value);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: 2 variables x unset/blank").toBe(4);
+  });
+});
+
 describe("the replay move's numbers (Task 24): each is the ruling's or the recommendation's own figure, typed here", () => {
   it("owner ruling 2026-11-21 (G-A, G-E): 15 min after the result; recommendations 2026-11-21: the Cloudflare delete 60 min after the check, the undecided fallback 6 h", () => {
     expect(config.SEAZN_REPLAY_DELAY_MINUTES).toBe(15);
@@ -705,6 +738,25 @@ describe("the replay move's numbers (Task 24): each is the ruling's or the recom
     // The retry window is the Cloudflare copy's own life: past it there is nothing left to fetch.
     expect(config.SEAZN_REPLAY_RETRY_DAYS).toBe(30);
     expect(config.SEAZN_REPLAY_RETRY_DAYS).toBe(config.DELETE_RECORDING_AFTER_DAYS);
+  });
+});
+
+describe("Seazn cost (Task 31): the measurement window and the deleted-org grace", () => {
+  it("the brief's numbers: live minutes are read while a session ended within 31 days; a deleted org's replays go 30 days after deleted_at", () => {
+    expect(config.SEAZN_LIVE_MEASURE_DAYS).toBe(31);
+    expect(config.SEAZN_ORG_DELETED_REPLAY_GRACE_DAYS).toBe(30);
+  });
+  it("Task 31b's numbers: Bunny's webhook dedupe marks are kept 30 days", () => {
+    expect(config.BUNNY_WEBHOOK_EVENT_RETENTION_DAYS).toBe(30);
+  });
+  it("Task 31b's scale guard (T31 review m11): at most 100 uids per live query, and the live pass stops after 3 failed queries in a row", () => {
+    expect(config.SEAZN_LIVE_MEASURE_UIDS_PER_QUERY).toBe(100);
+    expect(config.SEAZN_LIVE_MEASURE_BREAKER_FAILURES).toBe(3);
+  });
+  it("a live read never needs more dates than Cloudflare answers in one query: 31 days back, plus the extra date a session's start can cross (it lasts at most MAX_DURATION_MINUTES), fits its 32", () => {
+    const startCrosses = Math.ceil(config.MAX_DURATION_MINUTES / (24 * 60));
+    expect(startCrosses, "PREMISE: a session lasts less than a day").toBe(1);
+    expect(config.SEAZN_LIVE_MEASURE_DAYS + startCrosses).toBeLessThanOrEqual(CF_ANALYTICS_MAX_WINDOW_DAYS);
   });
 });
 

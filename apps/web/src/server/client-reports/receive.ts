@@ -27,6 +27,7 @@ import pino from "pino";
 import { cacheDel, cacheEnabled, incrWindow } from "@/lib/cache";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { limiterSubject } from "@/lib/client-ip";
 import { CLIENT_REPORT_IP_LIMIT, CLIENT_REPORT_LIMIT, rateLimit, type RateLimitConfig } from "@/lib/rate-limit";
 import { log } from "@/server/logger";
 import { readCapped } from "@/server/relay/record-body";
@@ -104,8 +105,10 @@ function unforwardedLine(fields: Record<string, unknown>, message: string): void
 export async function receiveClientReport(report: ClientReport, ip: string, deps: { db?: ReportDb } = {}): Promise<ClientReportOutcome> {
   const kind = clientReportKind(report.kind);
   const facts = kind.facts(report);
-  if (!(await withinLimit(`client-report:${ip}`, CLIENT_REPORT_IP_LIMIT))) return "capped";
-  if (!(await withinLimit(`client-report:${report.kind}:${facts.rateSubject}:${ip}`, CLIENT_REPORT_LIMIT))) return "capped";
+  // Every limiter and share key takes the client's SUBJECT, not its raw address: an IPv6 /64 is one client (Task 25c).
+  const client = limiterSubject(ip);
+  if (!(await withinLimit(`client-report:${client}`, CLIENT_REPORT_IP_LIMIT))) return "capped";
+  if (!(await withinLimit(`client-report:${report.kind}:${facts.rateSubject}:${client}`, CLIENT_REPORT_LIMIT))) return "capped";
   if (!(await facts.subjectExists(deps.db ?? sql))) return "unknown";
   const line = { clientReport: report.kind, ...facts.fields };
   const counted = cacheEnabled();
@@ -122,7 +125,7 @@ export async function receiveClientReport(report: ClientReport, ip: string, deps
     if (seen !== null && seen.count === 1) await cacheDel(dedupeKey);
     return serverLogOnly(outcome, outcome);
   };
-  const share = await incrWindow(`client-report-sentry-ip:${ip}`, CLIENT_REPORT_IP_SENTRY_SHARE.windowSeconds);
+  const share = await incrWindow(`client-report-sentry-ip:${client}`, CLIENT_REPORT_IP_SENTRY_SHARE.windowSeconds);
   if (counted && share === null) return serverLogOnly("uncounted", "uncounted");
   if (share !== null && share.count > CLIENT_REPORT_IP_SENTRY_SHARE.max) return refused("over-share");
   const spent = await incrWindow(`client-report-sentry-budget:${report.kind}`, kind.sentryBudget.windowSeconds);

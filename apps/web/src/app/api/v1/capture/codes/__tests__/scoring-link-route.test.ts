@@ -217,6 +217,23 @@ describe.skipIf(!HAS_DB)("POST /api/v1/capture/codes/{code}/scoring-link", () =>
     expect(await linkCount(r), "every 200 was the same link").toBe(1);
   });
 
+  // Task 25d m3 (Phase 3 review m7): the route hands the use-case `limiterSubjectOf(req)`, so an IPv6 client's mint bucket is its /64
+  // (one subscriber routinely holds a whole /64 and can rotate the low bits). The keys are written by hand from RFC 4291.
+  it("Task 25d m3: two IPv6 clients in ONE /64 spend ONE dlmint bucket (rl:dlmint:<the /64>); a client in another /64 spends its own", async () => {
+    const redis = windowedRedis();
+    const r = await captureRig();
+    const A = phoneId("a");
+    await claim(r, A);
+    const auth = `Bearer ${r.tok}`;
+    let checked = 0;
+    for (const ip of ["2001:db8:1::7", "2001:db8:1:0:aaaa:bbbb:cccc:dddd", "2001:db8:1:1::7"]) {
+      expect((await read(await call(r.code, { phone: A }, { auth, ip }))).status, ip).toBe(200);
+      checked++;
+    }
+    expect(checked).toBe(3);
+    expect(redis.spent.filter((k) => k.includes("dlmint:"))).toEqual(["rl:dlmint:2001:db8:1:0::/64", "rl:dlmint:2001:db8:1:0::/64", "rl:dlmint:2001:db8:1:1::/64"]);
+  });
+
   it("the mint budget is spent ONLY past the tok and holder checks (review M2): no Bearer, a wrong tok, a stranger phone and a replaced phone are refused WITHOUT touching dlmint:<ip>; the current phone then spends it exactly once", async () => {
     const redis = windowedRedis();
     const r = await captureRig();

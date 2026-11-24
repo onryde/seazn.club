@@ -12,7 +12,7 @@
 //     copy twice. A test that wants a readable id names its own prefix (`{ idPrefix }`).
 import { createHash, randomUUID } from "node:crypto";
 import { FAKE_REPLAY_EMBED_HOST } from "@/server/relay/config";
-import { type ReplayDownload, type ReplayHost, ReplayNotDownloadable, type ReplayVideo } from "./replay-ports";
+import { assertWatchWindow, type ReplayDownload, type ReplayHost, ReplayNotDownloadable, type ReplayVideo } from "./replay-ports";
 
 /** The host the fake's embed URLs sit on (`.invalid` never resolves, so no fake URL can be followed by accident): config.ts's
  *  FAKE_REPLAY_EMBED_HOST, which Task 25's CSP adds to `frame-src` under the fake driver. Re-exported for the fake's callers. */
@@ -28,6 +28,7 @@ export const FAKE_REPLAY_FILE = new TextEncoder().encode("fake replay: not a rea
 type Held = "processing" | "playable" | "failed";
 interface Stored { collectionId: string; title: string; url: string; state: Held }
 /** The transition table: what each test-driven move does from each state. A state a move has no entry for refuses it. */
+const DAY_MS = 86_400_000;
 const MOVES: Record<"advance" | "fail", Partial<Record<Held, Held>>> = {
   advance: { processing: "playable", playable: "playable" },
   fail: { processing: "failed", failed: "failed" },
@@ -43,6 +44,7 @@ export class FakeReplayHost implements ReplayHost {
   private readonly collections = new Map<string, string>(); // id -> name
   private readonly videos = new Map<string, Stored>();
   private readonly watched = new Map<string, number>();
+  private readonly watchedByDay = new Map<string, Readonly<Record<string, number>>>();
   private readonly watchReads: { videoId: string; from: Date; to: Date }[] = [];
 
   async createCollection(orgId: string): Promise<string> {
@@ -94,11 +96,23 @@ export class FakeReplayHost implements ReplayHost {
     };
   }
 
-  // UNMEASURED: the number a test sets is the answer for any window and any video, removed or not, and every read is logged
-  // (`watchWindows`). Task 30 settles what the real statistics read does with a backwards window or a deleted video.
-  async watchMinutes(videoId: string, from: Date, to: Date): Promise<number> {
+  // The number a test sets is the answer for any window, for a video the fake holds, and every read is logged (`watchWindows`). A
+  // per-day ledger (`setWatchMinutesByDay`), when set, answers instead the sum of the UTC days the window touches — so a caller that
+  // reads the wrong window reads a different number (Task 31 fix round 1, review I1). A video it does not hold — removed, or never fetched — answers null, as the real host's 404 does (Task 31: the controller's read,
+  // 2026-11-23, saw a deleted video's statistics answer 404), whatever a test set. A window the port refuses (backwards, or not a
+  // date) is refused here as the real adapter refuses it (Task 30), and is not logged: no read was made.
+  async watchMinutes(videoId: string, from: Date, to: Date): Promise<number | null> {
+    assertWatchWindow(from, to);
     this.watchReads.push({ videoId, from, to });
-    return this.watched.get(videoId) ?? 0;
+    if (!this.videos.has(videoId)) return null;
+    const byDay = this.watchedByDay.get(videoId);
+    if (byDay === undefined) return this.watched.get(videoId) ?? 0;
+    let sum = 0;
+    for (const [day, minutes] of Object.entries(byDay)) {
+      const start = Date.parse(`${day}T00:00:00.000Z`);
+      if (start <= to.getTime() && start + DAY_MS - 1 >= from.getTime()) sum += minutes;
+    }
+    return sum;
   }
 
   // ---- the control surface: tests only ------------------------------------------------------------------------------
@@ -108,6 +122,12 @@ export class FakeReplayHost implements ReplayHost {
   /** processing -> failed (a repeat is harmless). Throws on a playable video or an id the fake does not hold. */
   fail(videoId: string): void { this.move(videoId, "fail"); }
   setWatchMinutes(videoId: string, minutes: number): void { this.watched.set(videoId, minutes); }
+  /** A video's watch minutes by UTC day (`YYYY-MM-DD`); a read answers the sum of the days its window touches. Overrides
+   *  `setWatchMinutes` for that video. */
+  setWatchMinutesByDay(videoId: string, byDay: Readonly<Record<string, number>>): void {
+    for (const day of Object.keys(byDay)) if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || Number.isNaN(Date.parse(`${day}T00:00:00.000Z`))) throw new RangeError(`fake replay host: ${day} is not a UTC day (YYYY-MM-DD)`);
+    this.watchedByDay.set(videoId, { ...byDay });
+  }
   /** The windows `watchMinutes` was asked about for a video, in call order. */
   watchWindows(videoId: string): { from: Date; to: Date }[] {
     return this.watchReads.filter((r) => r.videoId === videoId).map(({ from, to }) => ({ from, to }));

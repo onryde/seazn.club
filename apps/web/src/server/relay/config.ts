@@ -407,6 +407,11 @@ export const SEAZN_REPLAY_DELAY_MINUTES = 15;
 /** Recommendation 2026-11-21 (G-D; the owner's ruling is "1–2 h after the swap"): the Cloudflare copy is deleted no sooner than
  *  this long after the replay host's copy passed the check (`verified_at`), so open players on the interim recording finish. */
 export const SEAZN_CF_DELETE_DELAY_MINUTES = 60;
+/** Phase 3 review I1 (controller ruling 2026-11-24): with SEAZN_HOSTED_COST on, a recording's Cloudflare copy is also kept until its
+ *  session's Cloudflare minutes are measured through the session's end day (video/domain/replay-move.ts `liveMeasureGate`). A row
+ *  waiting on that measure is asked again this often once the end day has closed — the daily pass runs once a day, so an hour
+ *  costs ~24 database claims a day per waiting row and no provider call. */
+export const SEAZN_CF_DELETE_MEASURE_RECHECK_MINUTES = 60;
 /** Recommendation 2026-11-21 (G-F): a fixture never decided still has its recordings moved this long after its session ended. */
 export const SEAZN_REPLAY_UNDECIDED_FALLBACK_HOURS = 6;
 /** Plan decision: a `fetching` row with no host id this old lost the fetch's answer (a crash or a timeout after the host
@@ -532,6 +537,50 @@ export function cfLiveWebhookSecret(env: Record<string, string | undefined> = pr
   const value = env[CF_LIVE_WEBHOOK_SECRET_ENV]?.trim();
   return value ? value : null;
 }
+/** Task 30: what the delivered-minutes reader (server/video/cf-analytics.ts, SEAZN_HOSTED_COST) queries Cloudflare's GraphQL
+ *  Analytics with — the relay's OWN pair, no new variable (owner ruling 2026-11-23: "use existing token"). The account is the one
+ *  the Stream adapter creates inputs under, and the token is the Stream adapter's, which the owner grants Account Analytics: Read
+ *  beside its Stream permission. Without that grant the query is refused, and the reader says so in Cloudflare's words. */
+const CF_ANALYTICS_ENV = { accountId: "CLOUDFLARE_ACCOUNT_ID", token: "CLOUDFLARE_STREAM_TOKEN" } as const;
+export type CfAnalyticsConfig = { accountId: string; token: string };
+/** Both settings, trimmed, read at the call (never at import, so a process without them still boots). A missing or blank one
+ *  throws NAMING every variable that is missing, and no message here carries a value. */
+export function cfAnalyticsConfig(env: Record<string, string | undefined> = process.env): CfAnalyticsConfig {
+  const found: Partial<CfAnalyticsConfig> = {};
+  const missing: string[] = [];
+  for (const key of Object.keys(CF_ANALYTICS_ENV) as (keyof CfAnalyticsConfig)[]) {
+    const value = env[CF_ANALYTICS_ENV[key]]?.trim();
+    if (value) found[key] = value;
+    else missing.push(CF_ANALYTICS_ENV[key]);
+  }
+  if (missing.length) {
+    throw new Error(`${missing.join(", ")} not set: reading Seazn live minutes (SEAZN_HOSTED_COST) needs the Cloudflare account and its Stream token (granted Account Analytics read), held as server env`);
+  }
+  return found as CfAnalyticsConfig; // every key was set: `missing` is empty
+}
+/** Task 30 fix round 1 (review m1, 2026-11-23): one live-minutes read gives up after this long (`AbortSignal.timeout`, the request
+ *  and the body read alike; recorded `timeout`). The daily sweep reads each session's uids in turn, and undici's own bound is
+ *  300 s, so with Cloudflare down one hung read held the sweep for five minutes. A day's answer is a few groups. */
+export const SEAZN_LIVE_MINUTES_TIMEOUT_MS = 20_000;
+/** Task 31 (the plan's brief): the daily pass reads a Seazn session's LIVE minutes while it ended within this many days. Live
+ *  viewing ends with the session, and the interim replay (by video uid) ends once the replay host's copy is verified, within hours;
+ *  31 days back plus the one extra date a session's start can cross stays inside Cloudflare's 32-date query (config.test.ts). */
+export const SEAZN_LIVE_MEASURE_DAYS = 31;
+/** Task 31 (plan decision; spec §5.5): an organisation's Seazn replays are removed from the replay host this many days after its
+ *  `organizations.deleted_at` (V021) — the schema's only "closed or deleted" mark, set by staff until a product path sets it. */
+export const SEAZN_ORG_DELETED_REPLAY_GRACE_DAYS = 30;
+/** Task 31b (the Task 27 follow-up): a Bunny webhook dedupe mark (`bunny_webhook_events`, V542) is deleted by the daily sweep
+ *  this many days after it was received. Bunny's redeliveries of one event span minutes to hours, so a mark this old guards
+ *  nothing; without it the table grew by every event for ever. */
+export const BUNNY_WEBHOOK_EVENT_RETENTION_DAYS = 30;
+/** Task 31b (T31 review m11, the scale guard): the daily live read asks Cloudflare for the sessions that share a window in ONE query
+ *  (`uid_in`), at most this many uids per query. The dataset groups by uid only, so a query of 100 uids is 100 groups, far inside
+ *  its 10,000-group limit (cf-analytics.ts), and a body of a few KB; a day of 1,000 sessions is about 10 queries, not 1,000. */
+export const SEAZN_LIVE_MEASURE_UIDS_PER_QUERY = 100;
+/** Task 31b (T31 review m11): the live read stops for the pass once this many Cloudflare queries IN A ROW have failed — Cloudflare
+ *  is down, and each further query would wait out SEAZN_LIVE_MINUTES_TIMEOUT_MS. A query that answers resets the count. The
+ *  sessions not asked are counted `skipped` and read whole the next day (nothing is written for them, so nothing is lost). */
+export const SEAZN_LIVE_MEASURE_BREAKER_FAILURES = 3;
 /** C9: simulcast outputs bill as delivery; Cloudflare caps 5 per input. */
 export const MAX_OUTPUTS_PER_INPUT = 5;
 

@@ -1,6 +1,6 @@
 import { v1, parseBody, reply } from "@/server/api-v1/http";
 import { rateLimit } from "@/lib/rate-limit";
-import { clientIp } from "@/lib/client-ip";
+import { clientIp, limiterSubject } from "@/lib/client-ip";
 import { requireTurnstile } from "@/server/turnstile";
 import { PublicJoinRequest } from "@/server/api-v1/schemas";
 import { joinTeamEntry, previewJoinEntry } from "@/server/usecases/registration-submit";
@@ -18,7 +18,7 @@ type Ctx = { params: Promise<{ orgSlug: string; slug: string }> };
  */
 export async function GET(req: Request, { params }: Ctx) {
   return v1(async () => {
-    await rateLimit(`regjoinpreview:${clientIp(req.headers)}`, { max: 5, windowSeconds: 300 });
+    await rateLimit(`regjoinpreview:${limiterSubject(clientIp(req.headers))}`, { max: 5, windowSeconds: 300 });
     // orgSlug/slug unused — see the POST handler's own comment below.
     await params;
     const url = new URL(req.url);
@@ -40,7 +40,7 @@ export async function GET(req: Request, { params }: Ctx) {
  */
 export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {
-    await rateLimit(`regjoin:${clientIp(req.headers)}`, { max: 5, windowSeconds: 300 });
+    await rateLimit(`regjoin:${limiterSubject(clientIp(req.headers))}`, { max: 5, windowSeconds: 300 });
     // Bot check (Cloudflare Turnstile), POST only: the preview GET above stays open. 403 TURNSTILE_FAILED.
     await requireTurnstile(req, "join");
     // orgSlug/slug are unused: joinTeamEntry needs no org/competition scoping

@@ -6,7 +6,7 @@ import { consumeLoginLink } from "@/lib/login-link";
 import { saveQuickMatchesForVerifiedUser } from "@/server/usecases/quick-match-save";
 import { rateLimit, AUTH_LIMIT } from "@/lib/rate-limit";
 import { headers } from "next/headers";
-import { clientIp } from "@/lib/client-ip";
+import { clientIp, limiterSubject } from "@/lib/client-ip";
 
 // `next` is the post-login redirect carried by the emailed link (invite
 // pages); postAuthLanding re-validates it via safeNextPath.
@@ -20,7 +20,8 @@ const schema = z
 /** Consume a passwordless sign-in token and start a session. */
 export async function POST(req: Request) {
   return handler(async () => {
-    const ip = clientIp(await headers());
+    // Task 25d: the limiter keys the client's SUBJECT (lib/client-ip.ts `limiterSubject`): an IPv6 /64 is one client.
+    const ip = limiterSubject(clientIp(await headers()));
     await rateLimit(`magic-link-consume:${ip}`, AUTH_LIMIT);
 
     const body = schema.parse(await req.json());

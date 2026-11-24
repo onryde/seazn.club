@@ -1,7 +1,7 @@
 // Spec 2026-09-30 §2 — the fixture page's Stream gate and the console's one-open-panel rule. Pure, so every row of both
 // tables is pinned here; the console and page tests pin the wiring.
 import { describe, expect, it } from "vitest";
-import { fixtureStreamMode, nextOpenPanel, streamButtonState, type OpenPanel } from "../fixture-stream-mount";
+import { fixtureStreamMode, nextOpenPanel, offersStandaloneReplays, streamButtonState, type OpenPanel } from "../fixture-stream-mount";
 import { OUTPUT_WARNING_AFTER_MS } from "../stream-session-view";
 import { StreamOutput, StreamSessionState } from "@/server/api-v1/schemas";
 import { TERMINAL_STATES } from "@/server/relay/domain/session";
@@ -32,6 +32,30 @@ describe("fixtureStreamMode — who sees Stream on the fixture page (spec §2)",
     expect(fixtureStreamMode({ canEdit: true, entitled: false, frozen: false, activeSession: false })).toBeNull();
     // …and a viewer who cannot edit never does, whatever is on air (the organisers-only gate).
     expect(fixtureStreamMode({ canEdit: false, entitled: true, frozen: false, activeSession: true })).toBeNull();
+  });
+});
+
+// Seazn-hosted video Task 31b (T26 review m8): the replays list is the only door to a replay's Delete and Download, and it lives in the
+// Stream panel, which mounts only for an entitled, unfrozen page. An organiser whose org lost the plan or is frozen still owns the
+// replays already made, so the page shows the list on its own exactly when the panel is NOT mounted — never both, never neither.
+describe("offersStandaloneReplays — the replays reachable without the Stream panel (Task 31b)", () => {
+  it("the whole 16-row table: every organiser reaches the list, through the panel (entitled, unfrozen) or on its own (otherwise); a viewer never does", () => {
+    let checked = 0;
+    let alone = 0;
+    for (const canEdit of [false, true]) for (const entitled of [false, true]) for (const frozen of [false, true]) for (const activeSession of [false, true]) {
+      const mode = fixtureStreamMode({ canEdit, entitled, frozen, activeSession });
+      const got = offersStandaloneReplays({ canEdit, mode });
+      // The brief's sentence restated: the panel mounts for canEdit && entitled && !frozen; the list stands alone for every other
+      // organiser — with or without Stop on air.
+      const want = canEdit && !(entitled && !frozen);
+      expect(got, JSON.stringify({ canEdit, entitled, frozen, activeSession })).toBe(want);
+      if (canEdit) expect(got || mode === "panel", "an organiser always reaches the list").toBe(true);
+      expect(got && mode === "panel", "never both").toBe(false);
+      if (got) alone++;
+      checked++;
+    }
+    expect(checked).toBe(16);
+    expect(alone, "anti-vacuity: rows where the list stands alone (3 entitled/frozen combos x 2 session states)").toBe(6);
   });
 });
 

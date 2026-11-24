@@ -45,7 +45,7 @@ Spec §5.7. **Owner ruling 2026-11-21, the sequence and only the sequence:** mat
 
 ## Global Constraints
 
-- **Migration numbers: V538 and V539 for Phase 0 (it ships first), then V541, V542, V543 for Phases 1–3.** V538 `youtube_auto_backoff` (Task 1), V539 `youtube_channel_created_at` (Task 3), V541 `seazn_destination` (Task 9), V542 `seazn_replays` (Task 23), V543 `seazn_delivery` (Task 29). Renumbered 2026-11-22: main's W5 shipped `V540__w5_qualification_frozen_cut.sql` first, so the Seazn destination moved V540 → V541, the replays V541 → V542, and delivered minutes takes V543. The Seazn spec's "next is V531" and the YouTube plan's "next free V" are both resolved here: this branch already has V531–V537 (no V533). Never reuse a number. Re-check `ls db/migration/deltas | sort -V | tail -3` at each rebase and renumber if main has moved.
+- **Migration numbers: V538 and V539 for Phase 0 (it ships first), then V541, V542, V543 for Phases 1–3.** V538 `youtube_auto_backoff` (Task 1), V539 `youtube_channel_created_at` (Task 3), V541 `seazn_destination` (Task 9), V542 `seazn_replays` (Task 23), V543 `seazn_delivery` (Task 29; **built as V552** — main's chess delta took V543 and main's stage-lots delta took V546, the next number it was given, so the 2026-11-24 rebase moved it to V552, the first number free on main and on every open branch). Renumbered 2026-11-22: main's W5 shipped `V540__w5_qualification_frozen_cut.sql` first, so the Seazn destination moved V540 → V541, the replays V541 → V542, and delivered minutes takes V543. The Seazn spec's "next is V531" and the YouTube plan's "next free V" are both resolved here: this branch already has V531–V537 (no V533). Never reuse a number. Re-check `ls db/migration/deltas | sort -V | tail -3` at each rebase and renumber if main has moved.
 - **Phase 0 has no flag.** Its source plan defines none: it changes YouTube Connect for every org and ships first, alone or as its own PR (`feat/youtube-channel-safety` off main) before Phases 1–3 rebase on it.
 - **Three server flags, all off by default**, read in `apps/web/src/server/relay/config.ts`, the one place relay numbers and settings live, and parsed the way `STREAM_SRT_ENABLED` is (`"true"`/`"false"`, anything else throws): `SEAZN_HOSTED_LIVE` (Phase 1), `SEAZN_HOSTED_REPLAY` (Phase 2, which needs LIVE), `SEAZN_HOSTED_COST` (Phase 3). With LIVE off, no reader lists, picks, resolves or admits a `seazn` row, so no new Seazn stream can start. Controller ruling (2026-11-20): a fixture that already streamed to Seazn keeps showing its Seazn live and replay whatever LIVE is. The flag gates new picks and starts, never playback of what exists.
 - **No per-org opt-in** (owner, 2026-11-20: "No need, as we will test in stage then promote to Prod"). Every org gets the Seazn destination once `SEAZN_HOSTED_LIVE` is on in that environment; staging first, then prod. No Enable card, admin route or panel prompt.
@@ -1058,15 +1058,15 @@ Bunny calls a library's webhook on every status change (B6). It is the primary "
 
 # Phase 3 — Cost and lifecycle (`SEAZN_HOSTED_COST`)
 
-### Task 29: Migration V543 — delivered minutes
+### Task 29: Migration V552 (planned V543) — delivered minutes
 
 **Files:**
 
-- Create: `db/migration/deltas/V543__seazn_delivery.sql`. Table `fixture_video_delivery (session_id uuid primary key references fixture_stream_sessions(id) on delete restrict, org_id uuid not null, live_minutes numeric(12,1) not null default 0, replay_minutes numeric(12,1) not null default 0, live_measured_through date null, replay_measured_through date null, updated_at timestamptz not null default now())`, with RLS as in V430.
+- Create: `db/migration/deltas/V552__seazn_delivery.sql` (planned V543; see the migration-number note above). Table `fixture_video_delivery (session_id uuid primary key references fixture_stream_sessions(id) on delete restrict, org_id uuid not null, live_minutes numeric(12,1) not null default 0, replay_minutes numeric(12,1) not null default 0, live_measured_through date null, replay_measured_through date null, updated_at timestamptz not null default now())`, with RLS as in V430.
 - Test: `apps/web/src/server/relay/__tests__/seazn-delivery-migration.test.ts`
 
-- [ ] **Step 1: Write the test** (table shape, `numeric(12,1)`, RLS listed), see it fail, write V543, apply it locally, and see it pass.
-- [ ] **Step 2: Commit** `feat(db): V543 Seazn delivered minutes`.
+- [ ] **Step 1: Write the test** (table shape, `numeric(12,1)`, RLS listed), see it fail, write the delta, apply it locally, and see it pass.
+- [ ] **Step 2: Commit** `feat(db): V543 Seazn delivered minutes` (shipped under V552).
 
 ### Task 30: Read delivered minutes
 
@@ -1074,11 +1074,11 @@ Bunny calls a library's webhook on every status change (B6). It is the primary "
 
 - Create: `apps/web/src/server/video/cf-analytics.ts`: `liveMinutesViewed(uids: string[], from: Date, to: Date): Promise<Record<string, number>>`. It POSTs to `https://api.cloudflare.com/client/v4/graphql` with `streamMinutesViewedAdaptiveGroups(filter: { uid_in, date_geq, date_leq }, limit)` and sums `sum.minutesViewed` per uid. Windows longer than 32 days are refused.
 - Modify: `replay-bunny.ts` and `replay-fake.ts`. `watchMinutes(videoId, from, to)` reads `GET /library/{lib}/statistics?videoGuid=&dateFrom=&dateTo=` and sums `watchTimeChart` values. The probe settles the unit; the docs do not state it.
-- Modify: `apps/web/src/server/relay/config.ts`: `CLOUDFLARE_ANALYTICS_TOKEN` and the account id reuse the relay's account env.
+- Modify: `apps/web/src/server/relay/config.ts`: the analytics read reuses the relay's own account env (`CLOUDFLARE_ACCOUNT_ID` and the Stream token, granted Account Analytics read) — no `CLOUDFLARE_ANALYTICS_TOKEN` (T30 review m8).
 - Modify: the Task 20 probe file and the Task 7 probe file, adding one assertion each: Task 7, whether a live HLS view of a programme input is keyed by the **input uid** or by its live video uid; Task 20, the `watchTimeChart` unit.
 - Test: `video/__tests__/cf-analytics.test.ts` (mocked fetch), `replay-bunny.test.ts`
 
-**Plan decision:** query the programme input uid **and** each of its video uids, and sum them. The Cloudflare docs key `uid` as "Video ID (for HLS/DASH)", and whether a live input's live HLS minutes sit under the input uid is unmeasured. Summing both counts the minutes wherever they land; the probe then drops the key that never carries any.
+**Plan decision:** query the programme input uid **and** each of its video uids, and sum them. The Cloudflare docs key `uid` as "Video ID (for HLS/DASH)", and whether a live input's live HLS minutes sit under the input uid is unmeasured. Summing both counts the minutes wherever they land; the probe then drops the key that never carries any. **Settled 2026-11-23:** Cloudflare keys minutes by the RECORDING uid only (the input uid answers 0, so the sum is harmless). Ruled 2026-11-24 (Phase 3 review I2): the figure is "Cloudflare minutes delivered" and keeps the replay host's one-off MP4 fetch in it; no `mediaType` filter.
 
 - [ ] **Step 1: Write the failing tests.**
   - The GraphQL body carries `uid_in` with the given uids, and the date filters are ISO dates.

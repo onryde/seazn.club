@@ -27,11 +27,16 @@ const V525_TABLES = ["court_stream_links"];
 const V541_TABLES = ["seazn_held_alerts", "seazn_locked_videos"];
 /** V542's three replay tables (Seazn-hosted video, Task 23), by name — the V430 pattern. */
 const V542_TABLES = ["org_video_collections", "fixture_video_replays", "bunny_webhook_events"];
+/** V552's delivered-minutes table (Seazn-hosted video, Task 29), by name — the V430 pattern. */
+const V552_TABLES = ["fixture_video_delivery"];
 
 describe("the stream deltas — RLS is static text, not a runtime hope", () => {
   it("every created table has `enable row level security` AND `force row level security`", () => {
-    // V410's eight, plus V430's four (R1), plus V525's court table, plus V541's two Seazn marks, plus V542's three replay tables.
-    expect(STREAM_TABLES.length).toBeGreaterThanOrEqual(8 + V430_TABLES.length + V525_TABLES.length + V541_TABLES.length + V542_TABLES.length);
+    // V410's eight, plus V430's four (R1), plus V525's court table, plus V541's two Seazn marks, plus V542's three replay tables,
+    // plus V552's delivered-minutes table.
+    expect(STREAM_TABLES.length).toBeGreaterThanOrEqual(
+      8 + V430_TABLES.length + V525_TABLES.length + V541_TABLES.length + V542_TABLES.length + V552_TABLES.length,
+    );
     let checked = 0;
     for (const t of STREAM_TABLES) {
       expect(SQL_ONLY, t).toMatch(new RegExp(`alter table ${t}\\s+enable\\s+row level security;`));
@@ -91,6 +96,21 @@ describe("the stream deltas — RLS is static text, not a runtime hope", () => {
     expect(checked).toBe(3);
     expect(SQL_ONLY).toMatch(/create view public_fixture_seazn_replays_v\b/);
     expect(SQL_ONLY).not.toMatch(/grant [^;]*public_fixture_seazn_replays_v/i);
+  });
+
+  // The delivered-minutes delta only REFERENCES fixture_stream_sessions (an FK target), so the content sweep below does not count it
+  // as touching a stream table: only its file name keeps it in the fold. Pinned by NAME, never by number (Phase 3 review m3: a
+  // rebase renumbers it), so a rename that drops `seazn` reds here and a renumber is a `git mv`.
+  it("the delivered-minutes delta (V552) is in the fold, enabled AND forced", () => {
+    expect(STREAM_DELTA_FILES.filter((f) => /^V\d+__seazn_delivery\.sql$/.test(f)), "the fold reads exactly one delivered-minutes delta").toHaveLength(1);
+    let checked = 0;
+    for (const t of V552_TABLES) {
+      expect(STREAM_TABLES, t).toContain(t);
+      expect(SQL_ONLY, t).toMatch(new RegExp(`alter table ${t}\\s+enable\\s+row level security;`));
+      expect(SQL_ONLY, t).toMatch(new RegExp(`alter table ${t}\\s+force\\s+row level security;`));
+      checked++;
+    }
+    expect(checked).toBe(1);
   });
 
   // m-2 (B3 review): the fold selects deltas by FILENAME (/stream|capture/), so a later `V4xx__relay_*.sql` that alters

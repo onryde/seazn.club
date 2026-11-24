@@ -5,6 +5,7 @@ import { AdminOrgActions } from "@/components/admin-org-actions";
 import { AdminPlanPanel } from "@/components/admin-plan-panel";
 import { AdminCreditsPanel } from "@/components/admin-credits-panel";
 import { AdminStreamCreditsPanel } from "@/components/admin-stream-credits-panel";
+import { AdminSeaznVideoPanel } from "@/components/admin-seazn-video-panel";
 import { AdminDiscoveryActions } from "@/components/admin-discovery-actions";
 import { hasFeature } from "@/lib/entitlements";
 import { cardsForCustomer, planPanel } from "@/server/usecases/admin-plan";
@@ -14,6 +15,7 @@ import { walletIdFor, balance as walletBalance } from "@/lib/credits";
 import { adjustmentsForOrg } from "@/server/usecases/admin-adjustments-log";
 import { STREAM_CREDIT_ADJUST_MAX, STREAM_CREDIT_LEDGER_LIMIT, streamCreditsForOrg } from "@/server/usecases/admin-stream-credits";
 import { STAFF_NOTE_MAX } from "@/server/usecases/stream-credits";
+import { SEAZN_STAFF_SESSIONS_LIMIT, seaznVideoForOrg } from "@/server/usecases/seazn-cost";
 import { slotConsumingDivisions } from "@/server/usecases/admin-divisions";
 import { SlotWaiverButton } from "./slot-waiver-button";
 import { ADJUSTMENT_LABELS } from "./adjustment-labels";
@@ -80,6 +82,7 @@ export default async function AdminOrgPage({
     where coalesce(subscription_id, id)::text = ${walletId}`;
   const adjustments = await adjustmentsForOrg(id, { limit: 50 });
   const streamCredits = await streamCreditsForOrg(id);
+  const seaznVideo = await seaznVideoForOrg(id);
 
   // V354: archived divisions still holding a `divisions.per_competition.max`
   // slot, because they have recorded results. The only rows the waiver means
@@ -148,6 +151,10 @@ export default async function AdminOrgPage({
         ledgerLimit={STREAM_CREDIT_LEDGER_LIMIT}
         noteMax={STAFF_NOTE_MAX}
       />
+
+      {/* Seazn video (Seazn-hosted video Task 31): the org's last Seazn sessions and the delivered minutes the daily sweep
+          measured (SEAZN_HOSTED_COST), with each replay part's state. Read only. */}
+      <AdminSeaznVideoPanel rows={seaznVideo} limit={SEAZN_STAFF_SESSIONS_LIMIT} />
 
       <div className="grid gap-4 lg:grid-cols-2">
         {/* Stats */}

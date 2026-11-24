@@ -25,7 +25,7 @@ import { currentSession } from "@/server/usecases/stream-sessions";
 import { createPlaybackTokenCache } from "../cf-playback";
 import { REPLAY_ROW_STATES } from "../domain/replay-move";
 import { posterFileName } from "@/lib/poster-file-name";
-import { SEAZN_CF_DELETE_DELAY_MINUTES, SEAZN_REPLAY_RETRY_DAYS } from "@/server/relay/config";
+import { SEAZN_CF_DELETE_DELAY_MINUTES, SEAZN_CLAIM_LEASE_SECONDS, SEAZN_REPLAY_RETRY_DAYS } from "@/server/relay/config";
 import { log } from "@/server/logger";
 import { REPLAY_PARKED_AT } from "../domain/replay-move";
 import { UnknownOrganiserReplayState, deleteSeaznReplay, fixtureSeaznReplays, organiserReplayState, seaznReplayDownload } from "../organiser-replays";
@@ -224,7 +224,8 @@ describe.skipIf(!HAS_DB)("deleteSeaznReplay — the organiser deletes a part (Ta
     expect(await deleteSeaznReplay(w.auth, w.f, row.id, { now: new Date(at), replay: w.host })).toEqual({ deleted: true });
     const c = await colsOf(row.id);
     expect(c).toMatchObject({ state: "deleted", deleted_reason: "organiser", deleted_by: w.auth.userId, attempts: 0, bunny_video_id: null });
-    expect([c.state_at, c.deleted_at, c.next_attempt_at].map((d) => new Date(d!).getTime()), "state_at, deleted_at and the cleanup's due time are the delete's").toEqual([at, at, at]);
+    // The cleanup is due one claim lease after the delete — never ahead of the delete's own last read and removal (T31 review m2).
+    expect([c.state_at, c.deleted_at, c.next_attempt_at].map((d) => new Date(d!).getTime()), "state_at and deleted_at are the delete's; the cleanup due one lease later").toEqual([at, at, at + SEAZN_CLAIM_LEASE_SECONDS * 1000]);
     expect(remove.mock.calls, "the copy is removed, once").toEqual([[guid]]);
     expect(w.host.videoIds()).not.toContain(guid);
     expect(await fixtureSeaznReplays(w.auth.orgId, w.f)).toEqual([]);
@@ -281,6 +282,8 @@ describe.skipIf(!HAS_DB)("deleteSeaznReplay — the organiser deletes a part (Ta
     expect(line![0]).toMatchObject({ replayId: row.id, errClass: "Error" });
     errors.mockRestore();
     await w.move(at);
+    expect(w.host.videoIds(), "inside the delete's lease (T31 review m2) the cleanup leaves the row alone").toContain(guid);
+    await w.move(at + SEAZN_CLAIM_LEASE_SECONDS * 1000);
     expect(w.host.videoIds(), "the cleanup removed it").not.toContain(guid);
     expect((await colsOf(row.id)).bunny_video_id).toBeNull();
   });
@@ -293,7 +296,7 @@ describe.skipIf(!HAS_DB)("deleteSeaznReplay — the organiser deletes a part (Ta
     const remove = vi.spyOn(w.host, "remove");
     remove.mockRejectedValueOnce(new Error("replay host remove: HTTP 503")).mockRejectedValueOnce(new Error("replay host remove: HTTP 503"));
     expect(await deleteSeaznReplay(w.auth, w.f, row.id, { now: new Date(at), replay: w.host })).toEqual({ deleted: true });
-    await w.move(at);
+    await w.move(at + SEAZN_CLAIM_LEASE_SECONDS * 1000);   // the cleanup's first turn: one lease after the delete (T31 review m2)
     const c = await colsOf(row.id);
     expect(c.state).toBe("deleted");
     expect(new Date(c.next_attempt_at).getTime(), "backed off from the delete, not parked").toBeLessThan(REPLAY_PARKED_AT.getTime());
@@ -404,6 +407,79 @@ describe.skipIf(!HAS_DB)("deleteSeaznReplay — the organiser deletes a part (Ta
     expect(remove).not.toHaveBeenCalled();
     expect((await colsOf(row.id)).state).toBe("playable");
     expect(await deleteSeaznReplay({ ...w.auth, role: "admin" }, w.f, row.id, { replay: w.host }), "the positive pair: an admin").toEqual({ deleted: true });
+  });
+
+  // Task 31 (controller ruling 2b, 2026-11-23): the host forgets a removed copy's watch time with it, so with SEAZN_HOSTED_COST on the
+  // delete reads the copy's minutes one last time BEFORE it removes it — from the session's first day (nothing measured yet) up to the
+  // delete — and ADDS them to the session's replay minutes without moving `replay_measured_through`. Best-effort: a read that fails
+  // never holds the delete back, and with the flag off nothing is read at all.
+  const deliveryOf = async (sid: string) => (await sql<{ replay_minutes: string; replay_through: string | null }[]>`
+    select replay_minutes::text, replay_measured_through::text as replay_through from fixture_video_delivery where session_id = ${sid}`)[0] ?? null;
+
+  it("SEAZN_HOSTED_COST on: the copy's minutes are read up to the delete, BEFORE the removal, and added to the session's replay minutes", async () => {
+    vi.stubEnv("SEAZN_HOSTED_COST", "true");
+    const w = await world();
+    const row = w.rows[0]!;
+    const guid = row.bunny_video_id!;
+    const at = new Date(w.t0 + 16 * MIN);
+    w.host.setWatchMinutes(guid, 7.5);
+    const order: string[] = [];
+    const read = vi.spyOn(w.host, "watchMinutes");
+    read.mockImplementation(async (id, from, to) => { order.push("read"); return FakeReplayHost.prototype.watchMinutes.call(w.host, id, from, to); });
+    const remove = vi.spyOn(w.host, "remove");
+    remove.mockImplementation(async (id) => { order.push("remove"); return FakeReplayHost.prototype.remove.call(w.host, id); });
+
+    expect(await deleteSeaznReplay(w.auth, w.f, row.id, { now: at, replay: w.host })).toEqual({ deleted: true });
+    expect(order, "read first: a removed copy answers nothing").toEqual(["read", "remove"]);
+    const [{ created_at }] = await sql<{ created_at: Date }[]>`select created_at from fixture_stream_sessions where id = ${w.sid}`;
+    const firstDay = new Date(`${new Date(created_at).toISOString().slice(0, 10)}T00:00:00.000Z`);
+    expect(w.host.watchWindows(guid), "from the session's first UTC day up to the delete").toEqual([{ from: firstDay, to: at }]);
+    expect(await deliveryOf(w.sid), "added; the daily pass's day not moved").toEqual({ replay_minutes: "7.5", replay_through: null });
+    expect((await colsOf(row.id)).bunny_video_id, "the copy still removed and forgotten").toBeNull();
+  });
+
+  it("T31 review m2: the move's cleanup running while the delete takes the copy's last read does not remove the copy first — the delete holds the row for SEAZN_CLAIM_LEASE_SECONDS — so its minutes since the last pass are kept", async () => {
+    vi.stubEnv("SEAZN_HOSTED_COST", "true");
+    const w = await world();
+    const row = w.rows[0]!;
+    const guid = row.bunny_video_id!;
+    const at = w.t0 + 16 * MIN;
+    w.host.setWatchMinutes(guid, 7.5);
+    const remove = vi.spyOn(w.host, "remove");
+    let moved = 0;
+    vi.spyOn(w.host, "watchMinutes").mockImplementationOnce(async (id, from, to) => {
+      await w.move(at);   // a mover run between the delete's commit and its read reaching the host
+      moved++;
+      return FakeReplayHost.prototype.watchMinutes.call(w.host, id, from, to);
+    });
+    expect(await deleteSeaznReplay(w.auth, w.f, row.id, { now: new Date(at), replay: w.host })).toEqual({ deleted: true });
+    expect(moved, "PREMISE: the move ran inside the last read").toBe(1);
+    expect(remove.mock.calls, "removed once, by the delete, after its read").toEqual([[guid]]);
+    expect(await deliveryOf(w.sid), "the copy's minutes kept").toEqual({ replay_minutes: "7.5", replay_through: null });
+  });
+
+  it("SEAZN_HOSTED_COST off — or malformed — reads nothing; a read that THROWS still deletes and removes the copy", async () => {
+    let checked = 0;
+    for (const flag of ["", "false", "yes"]) {
+      vi.stubEnv("SEAZN_HOSTED_COST", flag);
+      const w = await world();
+      const read = vi.spyOn(w.host, "watchMinutes");
+      expect(await deleteSeaznReplay(w.auth, w.f, w.rows[0]!.id, { replay: w.host })).toEqual({ deleted: true });
+      expect(read, `SEAZN_HOSTED_COST=${JSON.stringify(flag)}`).not.toHaveBeenCalled();
+      expect(await deliveryOf(w.sid)).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(3);
+
+    vi.stubEnv("SEAZN_HOSTED_COST", "true");
+    const w = await world();
+    const row = w.rows[0]!;
+    vi.spyOn(w.host, "watchMinutes").mockRejectedValueOnce(new Error("bunny watchMinutes: request failed before a response"));
+    const remove = vi.spyOn(w.host, "remove");
+    expect(await deleteSeaznReplay(w.auth, w.f, row.id, { replay: w.host })).toEqual({ deleted: true });
+    expect(remove.mock.calls).toEqual([[row.bunny_video_id]]);
+    expect(await colsOf(row.id)).toMatchObject({ state: "deleted", bunny_video_id: null });
+    expect(await deliveryOf(w.sid), "nothing written").toBeNull();
   });
 });
 

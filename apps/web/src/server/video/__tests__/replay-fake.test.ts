@@ -234,7 +234,24 @@ describe("FakeReplayHost: openDownload", () => {
   });
 });
 
-describe("FakeReplayHost: watchMinutes (Phase 3, unmeasured against the real host)", () => {
+describe("FakeReplayHost: watchMinutes (Phase 3)", () => {
+  // Task 31 (controller ruling 2, 2026-11-23): the real host answers 404 for a video it no longer holds (deleted) or never held, and
+  // its adapter reads that as null. The fake models it from its own state: a removed or unknown id reads null whatever a test set,
+  // and the read is still logged (a read was made).
+  it("a video the fake does not hold — removed, or never fetched — answers null (the real host's 404), never the minutes a test set, and the read is logged", async () => {
+    const fake = new FakeReplayHost();
+    const id = await fetchOne(fake);
+    const from = new Date("2026-11-01T00:00:00.000Z");
+    const to = new Date("2026-11-21T00:00:00.000Z");
+    fake.setWatchMinutes(id, 9);
+    expect(await fake.watchMinutes(id, from, to), "PREMISE: held, it answers what was set").toBe(9);
+    expect(await fake.remove(id)).toBe("deleted");
+    expect(await fake.watchMinutes(id, from, to), "removed").toBeNull();
+    expect(await fake.watchMinutes("never-fetched", from, to), "never held").toBeNull();
+    expect(fake.watchWindows(id)).toEqual([{ from, to }, { from, to }]);
+    expect(fake.watchWindows("never-fetched")).toEqual([{ from, to }]);
+  });
+
   it("reads 0 until a test sets it, then the number it was given, and logs each window it was asked", async () => {
     const fake = new FakeReplayHost();
     const id = await fetchOne(fake);
@@ -245,6 +262,41 @@ describe("FakeReplayHost: watchMinutes (Phase 3, unmeasured against the real hos
     expect(await fake.watchMinutes(id, from, to)).toBe(42.5);
     expect(fake.watchWindows(id)).toEqual([{ from, to }, { from, to }]);
     expect(fake.watchWindows("never-asked")).toEqual([]);
+  });
+
+  // Task 31 fix round 1 (review I1): a flat answer is the same for every window, so a caller reading the WRONG window reads the same
+  // number. A ledger by UTC day answers the sum of the days a window touches — a window that starts a day early reads that day too.
+  it("a per-day ledger answers the sum of the UTC days the window touches — midnight to the last millisecond is one whole day, a partial day counts, an untouched day does not, and a flat number set before is overridden", async () => {
+    const fake = new FakeReplayHost();
+    const id = await fetchOne(fake);
+    fake.setWatchMinutes(id, 99);
+    fake.setWatchMinutesByDay(id, { "2026-11-01": 1.5, "2026-11-02": 2, "2026-11-03": 0.5 });
+    const at = (s: string) => new Date(s);
+    const cases: [string, Date, Date, number][] = [
+      ["the first two whole days", at("2026-11-01T00:00:00.000Z"), at("2026-11-02T23:59:59.999Z"), 3.5],
+      ["the third, partial", at("2026-11-03T00:00:00.000Z"), at("2026-11-03T09:30:00.000Z"), 0.5],
+      ["all three", at("2026-11-01T00:00:00.000Z"), at("2026-11-03T09:30:00.000Z"), 4],
+      ["the last millisecond of a day is that day only", at("2026-11-02T23:59:59.999Z"), at("2026-11-02T23:59:59.999Z"), 2],
+      ["a day with nothing in the ledger", at("2026-11-04T00:00:00.000Z"), at("2026-11-05T23:59:59.999Z"), 0],
+    ];
+    for (const [what, from, to, want] of cases) expect(await fake.watchMinutes(id, from, to), what).toBe(want);
+    expect(fake.watchWindows(id), "every read logged").toHaveLength(cases.length);
+    expect(() => fake.setWatchMinutesByDay(id, { "2026-11-1": 1 }), "a key that is not a UTC day is refused, never read as no day").toThrow(/not a UTC day/);
+    expect(await fake.remove(id)).toBe("deleted");
+    expect(await fake.watchMinutes(id, at("2026-11-01T00:00:00.000Z"), at("2026-11-03T09:30:00.000Z")), "removed: null, ledger or not").toBeNull();
+  });
+
+  it("refuses a backwards window and a date that is not one, as the real host's adapter does (Task 30), and logs no read for them", async () => {
+    const fake = new FakeReplayHost();
+    const id = await fetchOne(fake);
+    fake.setWatchMinutes(id, 7);
+    const from = new Date("2026-11-01T00:00:00.000Z");
+    const to = new Date("2026-11-21T00:00:00.000Z");
+    await expect(fake.watchMinutes(id, to, from)).rejects.toThrow(/before it starts/);
+    await expect(fake.watchMinutes(id, new Date("nope"), to)).rejects.toThrow(/not a date/);
+    await expect(fake.watchMinutes(id, from, new Date(Number.NaN))).rejects.toThrow(/not a date/);
+    expect(fake.watchWindows(id)).toEqual([]);
+    expect(await fake.watchMinutes(id, from, from), "a zero-length window is a window").toBe(7);
   });
 });
 

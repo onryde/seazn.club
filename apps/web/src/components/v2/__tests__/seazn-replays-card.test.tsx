@@ -185,6 +185,26 @@ describe("SeaznReplaysCard", () => {
     expect(checked, "anti-vacuity: every locale").toBe(LOCALES.length);
   });
 
+  it("Task 31b: framed for the PAGE (the list on its own, no Stream panel around it), the card is a house card whose title is a heading; framed for the panel (the default) it stays the panel's inset box — the same rows and actions either way", () => {
+    const parts = [r(1, "playable", 75), r(2, "failed")];
+    const open = (h: string) => /^<section ([^>]*)>/.exec(h)![1]!;
+    const inset = html(parts);
+    const page = renderToStaticMarkup(
+      <DictProvider dict={en} locale="en">
+        <SeaznReplaysCard fixtureId={FIXTURE} replays={parts} actions={IDLE} frame="page" />
+      </DictProvider>,
+    );
+    expect(open(inset)).toContain('class="min-w-0 space-y-2 rounded-lg border border-slate-200 p-3"');
+    expect(open(page)).toMatch(/class="card min-w-0 space-y-2 p-5 max-md:p-3"/);
+    expect(inset, "the panel's title is not a heading (the panel has its own)").not.toMatch(/<h2/);
+    expect(page).toMatch(new RegExp(`<h2 [^>]*>${en["stream.replay.seazn.title"]}</h2>`));
+    expect(rows(page), "the same rows").toEqual(rows(inset));
+    expect(actionsOf(page), "the same actions").toEqual(actionsOf(inset));
+    expect(actionsOf(page).flat().map((a) => a.testid), "anti-vacuity").toEqual([
+      "stream-seazn-replay-download", "stream-seazn-replay-delete", "stream-seazn-replay-delete",
+    ]);
+  });
+
   it("replayLength: m:ss under an hour, h:mm:ss from an hour, nothing for a length that is not one", () => {
     expect([replayLength(0), replayLength(59), replayLength(60), replayLength(125), replayLength(3_599), replayLength(3_600), replayLength(36_061)])
       .toEqual(["0:00", "0:59", "1:00", "2:05", "59:59", "1:00:00", "10:01:01"]);

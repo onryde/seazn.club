@@ -70,6 +70,22 @@ export interface ReplayHost {
    *  over yet throws ReplayNotDownloadable. `signal` is the caller's cancel (the download route's request.signal): when it fires,
    *  before the file starts or while it streams, the host stops sending (Task 26 review m1). */
   openDownload(videoId: string, signal?: AbortSignal): Promise<ReplayDownload>;
-  /** Minutes of the video watched between `from` and `to` (Phase 3). */
-  watchMinutes(videoId: string, from: Date, to: Date): Promise<number>;
+  /** Minutes of the video watched between `from` and `to` (Phase 3). A window `assertWatchWindow` refuses is refused before any
+   *  call, by every host. Null: the host holds no such video — never stored, or removed — so nothing about it can be read any more
+   *  (Task 31: the host forgets a removed video's watch time with it). Never 0 in its place: a caller adds a number as minutes. */
+  watchMinutes(videoId: string, from: Date, to: Date): Promise<number | null>;
+}
+
+/** The window a `watchMinutes` read may ask about: two real instants, `from` no later than `to` (Task 30). Every host checks it
+ *  first and makes no call for anything else — a backwards window has no honest answer, and the real host reads a date it cannot
+ *  parse as "the last 30 days" instead of refusing it, so an invalid date would come back as someone else's month. Equal instants
+ *  are a window. A RangeError in our own words, naming the two instants and nothing else. (The parameters are not named after
+ *  `watchMinutes`' own: port-boundary.test.ts reads an `export` line that holds the word for the start as an import.) */
+export function assertWatchWindow(start: Date, end: Date): void {
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) {
+    throw new RangeError("watchMinutes: the window's start or end is not a date");
+  }
+  if (start.getTime() > end.getTime()) {
+    throw new RangeError(`watchMinutes: the window ends (${end.toISOString()}) before it starts (${start.toISOString()})`);
+  }
 }

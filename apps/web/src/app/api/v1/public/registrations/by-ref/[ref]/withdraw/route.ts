@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { v1, parseBody, reply } from "@/server/api-v1/http";
 import { rateLimit } from "@/lib/rate-limit";
-import { clientIp } from "@/lib/client-ip";
+import { clientIp, limiterSubject } from "@/lib/client-ip";
 import { requireTurnstile } from "@/server/turnstile";
 import { withdrawRegistrationByRef } from "@/server/usecases/registrations";
 
@@ -15,7 +15,8 @@ const Body = z.object({ token: z.string().min(1), registration_id: z.string().uu
  *  belongs to the ref's own group before anything is withdrawn. */
 export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {
-    const ip = clientIp(req.headers);
+    // Task 25d: the limiter keys the client's SUBJECT (lib/client-ip.ts `limiterSubject`): an IPv6 /64 is one client.
+    const ip = limiterSubject(clientIp(req.headers));
     await rateLimit(`regwithdraw:${ip}`, { max: 10, windowSeconds: 60 });
     // Bot check (Cloudflare Turnstile): before the body is read or anything is withdrawn. 403 TURNSTILE_FAILED.
     await requireTurnstile(req, "withdraw");
