@@ -8,10 +8,13 @@ import "server-only";
 // and swallowed. A message, a url or a key never reaches a log line (a publish error's message can quote the request).
 //
 //   nudgeReasonFor   the pure table: a session move -> the reason it sends, or null
-//   nudgePairings    the one sender: pairing ids -> ONE request (the id is validated before a topic is built — Task 3 review m-b)
+//   pairingMessages  the one builder: pairing ids -> messages (the id is validated before a topic is built — Task 3 review m-b)
+//   nudgePairings    the one sender: pairing ids -> ONE request of those messages
 //   nudgeSession     a session's state changed: the pairing that is its phone NOW
 //   nudgeCodesOver   a code ended by reissue or withdraw: every open pairing it has. EXPIRY sends nothing: it is lazy, found on the
 //                    phone's own next call, which already answers 401 (the spec's table lists it; this is the deviation)
+//   courtPairingNudges  fixtures a schedule write moved -> the `next-match` messages for their courts' phones, returned (not sent):
+//                    `afterScheduleWrite` puts them in the SAME broadcast as the division and fixture messages
 //   fireNudge        the fire-and-forget seam `apply` and the claim use, so a test can wait out what the code under test forgot
 import { sql } from "@/lib/db";
 import { captureTopic, nudgeMessage, type CaptureNudgeReason, type RealtimeMessage } from "@/lib/realtime";
@@ -60,20 +63,28 @@ export async function nudgesSettled(): Promise<void> {
 }
 
 /**
- * Nudge `pairingIds` with `reason`, in ONE request. A blank id is refused by `captureTopic`; it is skipped with a warn (the id only)
- * and the rest still go — a throw here would be an unhandled rejection in every fire-and-forget caller. With nothing left to send,
- * nothing is published. A publish that throws is warned by the pairing ids and the error's class name.
+ * The messages that nudge `pairingIds` with `reason`. A blank id is refused by `captureTopic`; it is skipped with a warn (the id
+ * only) and the rest still go — a throw here would be an unhandled rejection in every fire-and-forget caller.
+ */
+function pairingMessages(pairingIds: readonly string[], reason: CaptureNudgeReason): RealtimeMessage[] {
+  const messages: RealtimeMessage[] = [];
+  for (const id of pairingIds) {
+    try {
+      messages.push(nudgeMessage(captureTopic(id), reason));
+    } catch {
+      log.warn({ pairingId: id, reason }, "capture nudge: a blank pairing id is skipped");
+    }
+  }
+  return messages;
+}
+
+/**
+ * Nudge `pairingIds` with `reason`, in ONE request. With nothing left to send, nothing is published. A publish that throws is
+ * warned by the pairing ids and the error's class name.
  */
 export async function nudgePairings(pairingIds: readonly string[], reason: CaptureNudgeReason, deps?: NudgeDeps): Promise<void> {
   try {
-    const messages: RealtimeMessage[] = [];
-    for (const id of pairingIds) {
-      try {
-        messages.push(nudgeMessage(captureTopic(id), reason));
-      } catch {
-        log.warn({ pairingId: id, reason }, "capture nudge: a blank pairing id is skipped");
-      }
-    }
+    const messages = pairingMessages(pairingIds, reason);
     if (messages.length === 0) return;
     await publishOf(deps)(messages, LABEL);
   } catch (err) {
@@ -111,5 +122,39 @@ export async function nudgeCodesOver(codeIds: readonly string[], deps?: NudgeDep
     await nudgePairings(rows.map((r) => r.id), "over", deps);
   } catch (err) {
     log.warn({ codeIds, err: errName(err) }, "capture nudge: the ended codes' pairings could not be read");
+  }
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The `next-match` messages for a schedule write that moved `fixtureIds`: one per COURT PHONE, however many of the fixtures sit on
+ * its court. The phone is the slot-0 pairing OPEN on the court's code, found through ONE pooled read: fixture -> its court ->
+ * that court's link (this fixture's competition, not withdrawn, open NOW: `opens_at <= now < expires_at`) -> the link's open code
+ * -> slot 0 open. A court with no link today, a withdrawn or elapsed link, an ended code, no open slot-0 pairing, or a link of
+ * another competition has no phone to tell; a fixture's OWN code never matches (its code has `court_link_id` null).
+ *
+ * The caller (`afterScheduleWrite`) sends what this returns inside its own broadcast, so this sends nothing. Never throws: a read
+ * that fails is warned (the error's class name; the ids of a write are not logged) and answers [], and so is a call with no id that
+ * is a uuid (a non-uuid would only make the read fail). The caller must run it AFTER the write's commit, outside any transaction.
+ */
+export async function courtPairingNudges(fixtureIds: readonly string[]): Promise<RealtimeMessage[]> {
+  try {
+    const ids = fixtureIds.filter((id) => UUID.test(id));
+    if (ids.length === 0) return [];
+    const rows = await sql<{ id: string }[]>`
+      select distinct p.id
+        from fixtures f
+        join divisions d on d.id = f.division_id
+        join court_stream_links l on l.court_id = f.court_id and l.competition_id = d.competition_id
+                                 and l.withdrawn_at is null and l.opens_at <= now() and now() < l.expires_at
+        join fixture_stream_codes c on c.court_link_id = l.id and c.ended_at is null
+        join fixture_stream_pairings p on p.code_id = c.id and p.slot = 0 and p.ended_at is null
+       where f.id in ${sql(ids)}
+       order by p.id`;
+    return pairingMessages(rows.map((r) => r.id), "next-match");
+  } catch (err) {
+    log.warn({ err: errName(err) }, "capture nudge: the courts' pairings could not be read");
+    return [];
   }
 }

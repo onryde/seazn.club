@@ -4,8 +4,9 @@ import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { publicFixtureCacheKey } from "@/server/public-site/fixture-doc-cache-key";
 import { publicDivisionCacheKeys } from "@/server/public-site/division-doc-cache-keys";
 import { publicHubCacheKey } from "@/server/public-site/hub-doc-cache-keys";
-import { broadcast, divisionMessages, fixtureMessage } from "@/lib/realtime";
+import { BROADCAST_TIMEOUT_MS, broadcast, divisionMessages, fixtureMessage, type RealtimeMessage } from "@/lib/realtime";
 import { log } from "@/server/logger";
+import { courtPairingNudges, fireNudge } from "@/server/usecases/stream-sessions/nudge";
 
 // Every schedule write invalidates both public cache layers (the same pattern
 // as scoring, doc 09 §3 / doc 12 §2) and refreshes any open boards.
@@ -65,12 +66,42 @@ export function afterScheduleWrite(
   const pushFixtures = (opts.fixturePushes ?? true) && fixtureIds.length <= SCHEDULE_FIXTURE_PUSH_CAP;
   // Realtime push-nudges T0.2: the division message and every fixture message go out in ONE broadcast (one POST under
   // the cap), where they used to be one POST each.
+  //
+  // T1.5: the `next-match` nudges to the courts' camera phones ride in that SAME broadcast, so a write is still one POST. They
+  // are read first (`courtNudges`, below) and only under the cap (`pushFixtures`): past it nobody is told per fixture, and the
+  // read is not made. The read is best-effort and BOUNDED: it can neither reject nor hold the division message past
+  // BROADCAST_TIMEOUT_MS, so a slow pool costs the write its court nudges and nothing else.
   sendAfterDeleteOrBound(deleted, () => {
-    void broadcast(
-      [...divisionMessages(divisionId, reason), ...(pushFixtures ? fixtureIds.map((id) => fixtureMessage(id, "schedule")) : [])],
-      "schedule",
+    fireNudge(
+      (async () => {
+        const court = pushFixtures ? await courtNudges(fixtureIds) : [];
+        await broadcast(
+          [...divisionMessages(divisionId, reason), ...(pushFixtures ? fixtureIds.map((id) => fixtureMessage(id, "schedule")) : []), ...court],
+          "schedule",
+        );
+      })().catch((err: unknown) => {
+        log.warn({ err: err instanceof Error ? err.name : "error", divisionId }, "schedule: the realtime push failed (the write stands)");
+      }),
     );
   });
+}
+
+/** The court nudges of a write, or [] — never rejects, and never takes longer than BROADCAST_TIMEOUT_MS (the read is abandoned, not
+ *  cancelled: a pooled statement cannot be). A fixed set of nothing reads nothing. */
+async function courtNudges(fixtureIds: readonly string[]): Promise<RealtimeMessage[]> {
+  if (fixtureIds.length === 0) return [];
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const bound = new Promise<RealtimeMessage[]>((resolve) => {
+      timer = setTimeout(() => { resolve([]); }, BROADCAST_TIMEOUT_MS);
+    });
+    return await Promise.race([courtPairingNudges(fixtureIds), bound]);
+  } catch (err) {
+    log.warn({ err: err instanceof Error ? err.name : "error" }, "schedule: the courts' next-match nudges could not be read");
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** R10d n2: a schedule write that changed MORE fixtures than this sends no

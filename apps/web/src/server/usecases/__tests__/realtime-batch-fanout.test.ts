@@ -83,6 +83,7 @@ import { randomUUID } from "node:crypto";
 import { builtinModules } from "@seazn/engine/sports";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { sql } from "@/lib/db";
+import { nudgesSettled } from "../stream-sessions/nudge";
 import { afterScheduleWrite, moveFixture, startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
 import { createCompetition } from "../competitions";
@@ -131,8 +132,13 @@ const fixtureMsg = (id: string, reason: "event" | "schedule"): Shape => ({
 });
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-/** The DEL settles at once; a macrotask later every push chained on it has been sent. */
-const settled = () => sleep(30);
+/** The DEL settles at once; a macrotask later every push chained on it has been sent. A schedule write's push first makes the one
+ *  pooled read of its courts' phones (T1.5, bounded and best-effort), so the pushes in flight are awaited too: under load that read
+ *  outlasts the 30 ms, and the write's POST would land in the NEXT step's count. */
+const settled = async () => {
+  await sleep(30);
+  await nudgesSettled();
+};
 
 beforeEach(() => {
   fetchSpy.mockClear();
