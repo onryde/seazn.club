@@ -312,7 +312,7 @@ describe("the shard job (ruling 64; D4, D12; item 19, 27)", () => {
     expect(shard).toContain("timeout-minutes: ${{ matrix.timeout }}");
   });
   it("a fresh Postgres per job, db:apply then sync:sports before the run, its own data dir proven", () => {
-    expect(shard).toMatch(/services:\s*\n\s*postgres:\s*\n\s*image: postgres:16/);
+    expect(shard).toMatch(/services:\s*\n\s*postgres:\s*\n\s*image: postgres:17/);
     const heads = stepHeads(shard);
     const at = (n: string) => heads.indexOf(`      - name: ${n}`);
     expect(at("Apply migrations")).toBeGreaterThan(0);
