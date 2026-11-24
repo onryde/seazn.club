@@ -47,14 +47,14 @@ interface Groups {
 }
 
 /** A division whose first stage is `pools` groups over `entrants` entrants, drawn and started. */
-async function groups(o: { sport: SportKey; entrants: number; pools: number; start?: boolean }): Promise<Groups> {
+async function groups(o: { sport: SportKey; entrants: number; pools: number; start?: boolean; rngSeed?: number }): Promise<Groups> {
   const { auth } = await seedOrg("pro");
   const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Group take", visibility: "private", branding: {} });
   const [variant] = await sql<{ key: string; config: Record<string, unknown> }[]>`
     select key, config from sport_variants where sport_key = ${o.sport} and is_system order by key limit 1`;
   const div = await createDivision(auth, comp.id, { name: "Open", slug: "open", sport_key: o.sport, variant_key: variant!.key, config: variant!.config } as never);
   await createEntrants(auth, div.id, Array.from({ length: o.entrants }, (_, i) => ({ kind: "individual" as const, display_name: `E${i + 1}`, seed: i + 1, members: [] })));
-  const [src] = await createStages(auth, div.id, [{ seq: 1, kind: "group", name: "Groups", config: { legs: 1, pools: { count: o.pools } } }] as never);
+  const [src] = await createStages(auth, div.id, [{ seq: 1, kind: "group", name: "Groups", config: { legs: 1, pools: { count: o.pools }, ...(o.rngSeed === undefined ? {} : { rngSeed: o.rngSeed }) } }] as never);
   await generateStageFixtures(auth, src!.id);
   if (o.start !== false) await startDivision(auth, div.id);
   return { auth, divId: div.id, srcId: src!.id, sport: o.sport };
@@ -242,22 +242,35 @@ describe.skipIf(!HAS_DB)("Add stage after groups: impossible shapes are refused 
     expect(groupTakeWorkingCounts("knockout", 4, 16), "anti-vacuity: and still offers counts").toContain(8);
   });
 
-  it("a saved 'can refuse' shape is then DRAWN by the real Complete, and which way it goes is the groups' (the draw's own rule, X-PD-4): seats 5 with no pool-mates, or is refused SEEDING_POOL_SEPARATION_IMPOSSIBLE by name - never a silent stall", async () => {
-    const g = await groups({ sport: "generic", entrants: 16, pools: 4 });
+  // The group draw is the stage's own `config.rngSeed` (random per stage when none is given, stage-defaults.ts), so which groups the 16
+  // entrants land in - and with it whether the 5th qualifier (the best runner-up) is drawn against a pool-mate - is the seed's, not
+  // luck. Two FIXED seeds pin both outcomes of the same saved shape (4 groups, take 5 = 4 winners + the best 2nd); the seeds were found
+  // by running the real draw and each outcome is checked against the rule, not just recorded: 5 qualifiers fill a bracket of 8 with
+  // 3 byes, so round one is ONE line (seed 4 v seed 5), and it can be separated unless a pool supplies both its players (X-PD-4).
+  const drawn = async (rngSeed: number) => {
+    const g = await groups({ sport: "generic", entrants: 16, pools: 4, rngSeed });
     const [saved] = await createStages(g.auth, g.divId, formBody(5, 4) as never);
     const err = await refusalOf(completeGroups(g));
-    const lines = async () => (await sql<{ n: number }[]>`select count(*)::int as n from fixtures where stage_id = ${saved!.id}`)[0]!.n;
-    if (err === null) {
-      const field = await knockoutField(g, saved!.id);
-      expect(field.seated, "the knockout seats the 5 qualifiers").toBe(5);
-      // Rule: 5 into a bracket of 8 puts 3 seeds on byes, so round one holds 5 - 4 = 1 real line.
-      expect(field.realPairs, "anti-vacuity: round one has its one real line").toBe(1);
-      expect(field.sameGroupPairs, "no pool-mates meet in round one").toBe(0);
-    } else {
-      expect(err.status).toBe(422);
-      expect(err.code, "refused by the draw, by name").toBe("SEEDING_POOL_SEPARATION_IMPOSSIBLE");
-      expect(await lines(), "nothing was half-seeded").toBe(0);
-    }
+    const lines = (await sql<{ n: number }[]>`select count(*)::int as n from fixtures where stage_id = ${saved!.id}`)[0]!.n;
+    return { g, saved: saved!, err, lines };
+  };
+
+  it("a saved 'can refuse' shape DRAWN by the real Complete, seed 1: the groups let the draw separate - the knockout seats the 5 qualifiers, one real line, no pool-mates", async () => {
+    const { g, saved, err } = await drawn(1);
+    expect(err, "completed, not refused").toBeNull();
+    const field = await knockoutField(g, saved.id);
+    expect(field.seated, "the knockout seats the 5 qualifiers").toBe(5);
+    expect(field.realPairs, "anti-vacuity: round one has its one real line (5 into a bracket of 8: 3 byes)").toBe(1);
+    expect(field.sameGroupPairs, "no pool-mates meet in round one").toBe(0);
+  });
+
+  it("the same saved shape DRAWN by the real Complete, seed 4: a pool supplies both players of round one - refused by name as STAGE_COMPLETED_SEEDING_FAILED (409) whose cause is SEEDING_POOL_SEPARATION_IMPOSSIBLE, nothing seeded", async () => {
+    const { err, lines } = await drawn(4);
+    expect(err, "refused, not completed").not.toBeNull();
+    expect(err!.status).toBe(409);
+    expect(err!.code).toBe("STAGE_COMPLETED_SEEDING_FAILED");
+    expect(err!.extra, "the cause by name; a pool supplying 2 of the 5 qualifiers (the winner and the best 2nd)").toMatchObject({ cause: "SEEDING_POOL_SEPARATION_IMPOSSIBLE", count: 2, entrants: 5, shape: "single_elim" });
+    expect(lines, "nothing was half-seeded: the knockout holds no fixture").toBe(0);
   });
 
   it("the tables-w2d rig: 2 groups, take [top 1, best 2nd, best 3rd] into a knockout saves (three of its four outcomes refuse, one does not)", async () => {
