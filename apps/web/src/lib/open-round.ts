@@ -21,14 +21,22 @@ export type OpenRoundSkipReason = (typeof OPEN_ROUND_SKIP_REASONS)[number];
 
 export type OpenRoundSkip = { fixtureId: string; reason: OpenRoundSkipReason };
 
+/** Online Chess credits: what the `pay` sent with an Open press did (pay-and-open, spec §7.6). Null on the answer when the press
+ *  sent no `pay`. `applied` false: the `pay` moved nothing — the package was frozen (a round opened before, or the backfill's
+ *  grandfathered row: a `pay` is ignored) or was already paid at that size and camera state — and `credits` is then 0, never
+ *  the total the receipt confirmed. `credits`: what this press took (> 0) or gave back (< 0, a move down). `size`: the
+ *  package's size after the press. `capacityLoweredTo`: the size, when the payment lowered a stored registration capacity
+ *  above it to it; null otherwise. */
+export type OpenRoundPayment = { applied: boolean; credits: number; size: number; capacityLoweredTo: number | null };
+
 export type OpenRoundResult =
   /** This call stamped the round, or invited (or tried to invite) someone not
    *  yet invited. `invited` counts SEATS whose invite was accepted by the
    *  provider — two per board — never boards. `retrying` counts the seats whose
    *  invite is queued and not yet accepted (the provider is down or rate
    *  limiting): they stay stamped and the mail worker keeps trying, so they are
-   *  neither invited yet nor skipped. */
-  | { opened: true; invited: number; retrying: number; skipped: OpenRoundSkip[] }
+   *  neither invited yet nor skipped. `payment`: see `OpenRoundPayment`. */
+  | { opened: true; invited: number; retrying: number; skipped: OpenRoundSkip[]; payment: OpenRoundPayment | null }
   /** Already open and nothing left that can be invited. `skipped` names the
    *  boards that could not be (a closed window). */
   | { opened: false; reason: "already_open"; skipped: OpenRoundSkip[] }

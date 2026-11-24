@@ -53,6 +53,7 @@ import { POST as openRoute } from "@/app/api/v1/stages/[id]/open-round/route";
 import { POST as resendRoute } from "@/app/api/v1/fixtures/[id]/external-play/resend/route";
 import { seedOnlineChessRound, seedOnlineSwiss, seedOwner } from "@/server/usecases/__tests__/_external-play-seed";
 import { onlinePackageQuote } from "@/server/usecases/online-package";
+import { OpenRoundResult as OpenRoundResultSchema } from "@/server/api-v1/schemas";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -104,7 +105,7 @@ describe.skipIf(!HAS_DB)("POST /stages/{id}/open-round", () => {
     authState.userId = r.ownerUserId;
     const res = await read(await openRoute(post(`/stages/${r.stageId}/open-round`, { roundNo: 1 }), ctx(r.stageId)));
     expect(res.status).toBe(200);
-    expect(res.body.data).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+    expect(res.body.data).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
     expect(await stamps(r.stageId)).toHaveLength(1);
     expect(mail.sent).toHaveLength(2);
   });
@@ -215,6 +216,10 @@ describe.skipIf(!HAS_DB)("POST /stages/{id}/open-round - the first open needs a 
       post(`/stages/${s.stageId}/open-round`, { roundNo: 1, pay: { size: 16, expectedOwed: error.quote.owed } }), ctx(s.stageId),
     ));
     expect([paid.status, (paid.body.data as { opened: boolean }).opened]).toEqual([200, true]);
+    // The receipt rides the answer (review m1), in the shape the OpenAPI schema declares: parsing it through the schema keeps it whole.
+    const payment = (paid.body.data as { payment: unknown }).payment;
+    expect(payment).toEqual({ applied: true, credits: error.quote.owed, size: 16, capacityLoweredTo: null });
+    expect(OpenRoundResultSchema.parse(paid.body.data), "the schema declares every field the route sends").toEqual(paid.body.data);
     expect(await packageOf(s.divisionId)).toEqual({ paid: true, frozen: true, credits: error.quote.owed });
     expect(await stamps(s.stageId)).toHaveLength(1);
   });
@@ -266,7 +271,7 @@ describe.skipIf(!HAS_DB)("Match Day O4 - a billing-frozen competition: the START
     expect(mail.sent, "nobody mailed").toHaveLength(0);
     await setLimit(r.orgId, 50);
     const lifted = await read(await openRoute(post(`/stages/${r.stageId}/open-round`, { roundNo: 1 }), ctx(r.stageId)));
-    expect([lifted.status, lifted.body.data], "the same round, the freeze lifted").toEqual([200, { opened: true, invited: 2, retrying: 0, skipped: [] }]);
+    expect([lifted.status, lifted.body.data], "the same round, the freeze lifted").toEqual([200, { opened: true, invited: 2, retrying: 0, skipped: [], payment: null }]);
     expect(await stamps(r.stageId)).toHaveLength(1);
   });
 

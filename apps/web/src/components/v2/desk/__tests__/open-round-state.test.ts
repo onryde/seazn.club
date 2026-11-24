@@ -24,7 +24,7 @@ import {
   type OpenRoundUiState,
 } from "../open-round-state";
 
-const OPENED: OpenRoundResult = { opened: true, invited: 4, retrying: 0, skipped: [] };
+const OPENED: OpenRoundResult = { opened: true, invited: 4, retrying: 0, skipped: [], payment: null };
 const s0 = initialOpenRoundUi();
 const run = (...actions: OpenRoundUiAction[]) => actions.reduce(openRoundUi, s0);
 

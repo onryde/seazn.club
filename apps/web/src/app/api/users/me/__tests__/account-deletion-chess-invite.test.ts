@@ -514,7 +514,7 @@ describe.skipIf(!HAS_DB)("the seat of a deleted account's invite (the chess hook
   it("an invite still queued behind a retry ends expired and RELEASES the seat; the opponent's invite and stamp are untouched", async () => {
     const { r, b } = await openedBoard();
     mail.retry.add(b.home.email); // the provider answers 503: the leaver's invite is queued for a retry
-    expect(await open(r)).toEqual({ opened: true, invited: 1, retrying: 1, skipped: [] });
+    expect(await open(r)).toEqual({ opened: true, invited: 1, retrying: 1, skipped: [], payment: null });
     const mine = await colourOf(b.fixtureId, b.home.email);
     const theirs = other(mine);
     const [queued] = await seatRows(b.fixtureId, mine);
@@ -560,7 +560,7 @@ describe.skipIf(!HAS_DB)("the seat of a deleted account's invite (the chess hook
 
   it("an invite already `sent`: the address goes, the seat stays stamped; a bounce that arrives later still releases it", async () => {
     const { r, b } = await openedBoard();
-    expect(await open(r)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+    expect(await open(r)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
     const mine = await colourOf(b.fixtureId, b.home.email);
     const [sent] = await seatRows(b.fixtureId, mine);
     expect(sent!.status).toBe("sent");
@@ -658,7 +658,7 @@ describe.skipIf(!HAS_DB)("a Resend after a player deleted their account", () => 
 
   it("the seat whose invite had already been sent keeps its stamp and gets no second email", async () => {
     const { r, b } = await openedBoard();
-    expect(await open(r)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+    expect(await open(r)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
     const mine = await colourOf(b.fixtureId, b.home.email);
     asLeaver(b);
     expect((await del()).status).toBe(200);

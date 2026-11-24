@@ -54,7 +54,7 @@ import type postgres from "postgres";
 import { getOrgRole } from "@/lib/auth";
 import { sql, type Tx as DbTx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import type { OpenRoundResult, OpenRoundSkip } from "@/lib/open-round";
+import type { OpenRoundPayment, OpenRoundResult, OpenRoundSkip } from "@/lib/open-round";
 import { EDITOR_ROLES } from "@/lib/types";
 import type { BoardgameClockInput } from "@/server/external-play/clock";
 import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
@@ -253,6 +253,8 @@ type Decision =
       closedSkips: OpenRoundSkip[];
       /** Online Chess credits P18: a payment on this open moved the package's size UP; the waitlist is promoted after the commit. */
       movedUp: boolean;
+      /** Online Chess credits: what the press's `pay` did, for the answer (null when none was sent). */
+      payment: OpenRoundPayment | null;
     };
 
 type LinkHold = LinkHoldReason;
@@ -718,7 +720,7 @@ export async function openRound(
     const gate = await gateFirstOpen(tx, { orgId: st.orgId, divisionId: st.divisionId, userId: a.actorUserId, pay: a.pay }, money);
     return {
       kind, open, claims, queueFailed: [...queueFailed], retireBoards: [...new Set(retireBoards)], closedSkips: [...closedSkips, ...heldReport()],
-      movedUp: gate.movedUp,
+      movedUp: gate.movedUp, payment: gate.payment,
     };
   });
 
@@ -803,5 +805,5 @@ export async function openRound(
     ...decision.closedSkips,
     ...[...failed].map((fixtureId) => ({ fixtureId, reason: "send_failed" as const })),
   ];
-  return { opened: true, invited, retrying, skipped };
+  return { opened: true, invited, retrying, skipped, payment: decision.payment };
 }

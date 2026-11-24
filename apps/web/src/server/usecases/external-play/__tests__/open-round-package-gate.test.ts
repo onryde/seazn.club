@@ -224,6 +224,7 @@ describe.skipIf(!HAS_DB)("Open round: the payment door (Online Chess credits §7
     const ledgerBefore = await ledgerCount(s.orgId);
     const r = await openRound({ stageId: s.stageId, roundNo: 1, actorUserId: s.ownerUserId });
     expect(r.opened).toBe(true);
+    if (r.opened) expect(r.payment, "no `pay` on the press: no payment to report").toBeNull();
     const after = await liveOf(s.divisionId);
     expect(after.frozen_at, "the first open froze the package").not.toBeNull();
     expect(after.frozen_at!.getTime(), "frozen at or after it was paid").toBeGreaterThanOrEqual(paid.paid_at!.getTime());
@@ -291,6 +292,9 @@ describe.skipIf(!HAS_DB)("Open round: the payment door (Online Chess credits §7
     const r = await openRound({ stageId: s.stageId, roundNo: 1, actorUserId: s.ownerUserId, pay: body });
     expect(r.opened).toBe(true);
     if (r.opened) expect(r.invited, "both boards' four seats").toBe(4);
+    if (r.opened) {
+      expect(r.payment, "the receipt: this press paid 16's price").toEqual({ applied: true, credits: gcPrice(16), size: 16, capacityLoweredTo: null });
+    }
     const p = await liveOf(s.divisionId);
     expect(p.paid_at, "paid").not.toBeNull();
     expect(p.frozen_at, "frozen").not.toBeNull();
@@ -420,12 +424,56 @@ describe.skipIf(!HAS_DB)("Open round: the payment door (Online Chess credits §7
     const row = await liveOf(s.divisionId);
     await freezeGrandfathered(row.id);
     const ledgerBefore = await ledgerCount(s.orgId);
-    expect((await openRound({ stageId: s.stageId, roundNo: 1, actorUserId: s.ownerUserId, pay: { size: 16, expectedOwed: 1 } })).opened).toBe(true);
+    const r = await openRound({ stageId: s.stageId, roundNo: 1, actorUserId: s.ownerUserId, pay: { size: 16, expectedOwed: 1 } });
+    expect(r.opened).toBe(true);
+    if (r.opened) {
+      expect(r.payment, "the `pay` was not taken, and the answer says so: nothing applied, nothing charged")
+        .toEqual({ applied: false, credits: 0, size: row.size, capacityLoweredTo: null });
+    }
     const after = await liveOf(s.divisionId);
     expect([after.paid_at, after.credits_paid], "never paid").toEqual([null, 0]);
     expect(after.frozen_at?.getTime(), "the backfill's freeze, untouched").toBe(row.created_at.getTime());
     expect(await ledgerCount(s.orgId)).toBe(ledgerBefore);
   }, 120_000);
+
+  describe("the payment the answer reports (review m1, m2)", () => {
+    it("a `pay` on a row already paid at that size (a second tab's receipt): applied false and 0 credits, never the total it confirmed", async () => {
+      const s = await seedOnlineSwiss({ players: 4, onlinePackage: "unpaid" });
+      const tabB = await confirmFor(s.owner, s.divisionId, 16);
+      await payOnlinePackage(s.owner, s.divisionId, await confirmFor(s.owner, s.divisionId, 16));
+      expect(tabB.expectedOwed, "premise: the stale receipt confirmed a non-zero total (the witness differs from 0)").toBe(gcPrice(16));
+      const ledgerBefore = await ledgerCount(s.orgId);
+      const r = await openRound({ stageId: s.stageId, roundNo: 1, actorUserId: s.ownerUserId, pay: tabB });
+      expect(r.opened).toBe(true);
+      if (r.opened) expect(r.payment).toEqual({ applied: false, credits: 0, size: 16, capacityLoweredTo: null });
+      expect(await ledgerCount(s.orgId), "and indeed nothing was charged").toBe(ledgerBefore);
+      expect(await takenFor((await liveOf(s.divisionId)).id)).toBe(gcPrice(16));
+    }, 120_000);
+
+    it("pay and open at a size below the stored registration capacity: the capacity is lowered, and the answer says to what", async () => {
+      const s = await seedOnlineSwiss({ players: 4, onlineSize: 32, onlinePackage: "unpaid" });
+      await sql`
+        insert into registration_settings (division_id, org_id, enabled, capacity) values (${s.divisionId}, ${s.orgId}, true, 50)
+        on conflict (division_id) do update set capacity = 50`;
+      const r = await openRound({ stageId: s.stageId, roundNo: 1, actorUserId: s.ownerUserId, pay: await confirmFor(s.owner, s.divisionId, 16) });
+      expect(r.opened).toBe(true);
+      if (r.opened) expect(r.payment, "50 > 16").toEqual({ applied: true, credits: gcPrice(16), size: 16, capacityLoweredTo: 16 });
+      const [{ c }] = await sql<{ c: number }[]>`select capacity as c from registration_settings where division_id = ${s.divisionId}`;
+      expect(c, "the stored capacity is the one the answer named").toBe(16);
+    }, 120_000);
+
+    it("a move down on the open itself (32 paid, the open pays 16): credits is negative - what came back", async () => {
+      const s = await seedOnlineSwiss({ players: 4, onlinePackage: "unpaid" });
+      await payOnlinePackage(s.owner, s.divisionId, await confirmFor(s.owner, s.divisionId, 32));
+      const down = await onlinePackageQuote(s.owner, s.divisionId, 16);
+      expect(down.owed, "premise: the price difference, given back").toBe(gcPrice(16) - gcPrice(32));
+      const r = await openRound({ stageId: s.stageId, roundNo: 1, actorUserId: s.ownerUserId, pay: { size: 16, expectedOwed: down.owed } });
+      expect(r.opened).toBe(true);
+      if (r.opened) expect(r.payment).toEqual({ applied: true, credits: gcPrice(16) - gcPrice(32), size: 16, capacityLoweredTo: null });
+      const p = await liveOf(s.divisionId);
+      expect([p.size, p.frozen_at !== null, await takenFor(p.id)]).toEqual([16, true, gcPrice(16)]);
+    }, 120_000);
+  });
 
   describe("an upgrade racing the open: whichever commits first wins; the loser is refused, never both", () => {
     it("the upgrade first: the stale pay-and-open (16 at 1 credit) is 409 and opens nothing", async () => {

@@ -168,7 +168,7 @@ describe.skipIf(!HAS_DB)("the outbox — a throwing provider is a retry, not a f
     mail.throws.add(b.away.email);
     // Before the outbox this seat read send_failed and was un-stamped. Its row is now queued for the worker's next try, so the
     // seat is `retrying` and keeps its stamp - the player is not told "failed" for a mail that may still go.
-    expect(await open(r)).toEqual({ opened: true, invited: 1, retrying: 1, skipped: [] });
+    expect(await open(r)).toEqual({ opened: true, invited: 1, retrying: 1, skipped: [], payment: null });
     const row = (await rowOf(b.fixtureId))!;
     expect([row.white_emailed_at, row.black_emailed_at].filter((x) => x !== null)).toHaveLength(2);
   });

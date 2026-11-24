@@ -423,7 +423,7 @@ describe("RoundFocus: Open round - the row's own stage and round, answered throu
     block().on.open();
     block().on.open();
     expect(net.calls.map((c) => [c.url, c.json]), "one POST, this row's own stage").toEqual([["/api/v1/stages/stage-old/open-round", { roundNo: 2 }]]);
-    const answer: OpenRoundResult = { opened: true, invited: 6, retrying: 0, skipped: [] };
+    const answer: OpenRoundResult = { opened: true, invited: 6, retrying: 0, skipped: [], payment: null };
     net.calls[0]!.resolve(answer);
     await flush();
     expect(onChanged, "the shell's read, once").toHaveBeenCalledTimes(1);

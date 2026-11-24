@@ -206,8 +206,22 @@ export const OpenRoundSkip = z.object({ fixtureId: Uuid, reason: z.enum(OPEN_ROU
 
 /** `invited` counts SEATS whose invite the mail provider accepted (two per
  *  board), never boards; `retrying` counts the seats whose invite is queued and still being tried. Every refusal wrote nothing. */
+/** What the `pay` sent with an Open press did (Online Chess credits, pay-and-open). Null on the answer when no `pay` was sent.
+ *  `applied` false: the `pay` moved nothing (the package was frozen, or already paid at that size and camera state) and `credits`
+ *  is 0. `credits`: what the press took (> 0) or gave back (< 0, a move down). `size`: the package size after the press.
+ *  `capacityLoweredTo`: the size, when the payment lowered a stored registration capacity above it to it. */
+export const OpenRoundPayment = z.object({
+  applied: z.boolean(),
+  credits: z.number().int(),
+  size: z.number().int(),
+  capacityLoweredTo: z.number().int().nullable(),
+});
+
 export const OpenRoundResult = z.union([
-  z.object({ opened: z.literal(true), invited: z.number().int(), retrying: z.number().int(), skipped: z.array(OpenRoundSkip) }),
+  z.object({
+    opened: z.literal(true), invited: z.number().int(), retrying: z.number().int(), skipped: z.array(OpenRoundSkip),
+    payment: OpenRoundPayment.nullable(),
+  }),
   z.object({ opened: z.literal(false), reason: z.literal("already_open"), skipped: z.array(OpenRoundSkip) }),
   z.object({ opened: z.literal(false), reason: z.enum(OPEN_ROUND_REFUSALS) }),
 ]);

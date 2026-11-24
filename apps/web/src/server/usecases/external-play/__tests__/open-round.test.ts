@@ -237,7 +237,7 @@ describe.skipIf(!HAS_DB)("openRound — the stamp", () => {
     const res = await openRound({ stageId: r.stageId, roundNo: 1, actorUserId: r.ownerUserId });
     // Two seats per board, two boards: a COUNT, so an invite that silently
     // reaches nobody is visible.
-    expect(res).toEqual({ opened: true, invited: 4, retrying: 0, skipped: [] });
+    expect(res).toEqual({ opened: true, invited: 4, retrying: 0, skipped: [], payment: null });
 
     const at = await roundOpenedAt({ stageId: r.stageId, roundNo: 1 });
     expect(at).toBeInstanceOf(Date);
@@ -274,14 +274,14 @@ describe.skipIf(!HAS_DB)("openRound — the stamp", () => {
       scheduled_at: "2026-10-01T13:10:00.000Z",
     });
 
-    expect(await open(r)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+    expect(await open(r)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
     expect(await roundOpenedAt({ stageId: r.stageId, roundNo: 2 })).toBeNull();
     expect(await roundOpenedAt({ stageId: other.stageId, roundNo: 1 })).toBeNull();
     expect(sentTo()).toEqual(emailsOf(r).sort());
 
     // Round 2 opens on its own stamp and leaves round 1's alone.
     const r1 = (await stampRows(r.stageId, 1))[0]!;
-    expect(await open(r, 2)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+    expect(await open(r, 2)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
     expect((await stampRows(r.stageId, 2))).toHaveLength(1);
     expect((await stampRows(r.stageId, 1))[0]!.opened_at.getTime()).toBe(r1.opened_at.getTime());
   });
@@ -319,7 +319,7 @@ describe.skipIf(!HAS_DB)("openRound — idempotent per seat, in BOTH directions"
   it("re-opening sends nothing, but a board added after the open still gets invited", async () => {
     const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1, spares: 1 });
 
-    expect(await open(r)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+    expect(await open(r)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
     expect(mail.sent).toHaveLength(2);
     const first = (await stampRows(r.stageId))[0]!;
 
@@ -337,7 +337,7 @@ describe.skipIf(!HAS_DB)("openRound — idempotent per seat, in BOTH directions"
       round_no: 1,
       scheduled_at: "2026-10-01T12:10:00.000Z",
     });
-    expect(await open(r)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+    expect(await open(r)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
     expect(mail.sent).toHaveLength(4);
     expect(new Set(mail.sent.map((m) => m.to)).size).toBe(4); // nobody emailed twice
     expect(mail.sent.slice(2).map((m) => m.to).sort()).toEqual([late.home.email, late.away.email].sort());
@@ -423,7 +423,7 @@ describe.skipIf(!HAS_DB)("openRound — the window (Q2)", () => {
     async (_name, become) => {
       const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1, spares: 1 });
       const t0 = new Date(Date.now() - DEADLINE_AFTER_MS - 10 * MIN);
-      expect(await open(r, 1, t0)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+      expect(await open(r, 1, t0)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
       await become(r.boards[0]!.fixtureId, t0);
       const { fixtureId } = await lateBoard(r);
       mail.sent.length = 0;
@@ -447,7 +447,7 @@ describe.skipIf(!HAS_DB)("openRound — the window (Q2)", () => {
     // read as "nobody was ever invited" and re-stamp the round.
     const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
     const t0 = new Date(Date.now() - DEADLINE_AFTER_MS - 10 * MIN);
-    expect(await open(r, 1, t0)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+    expect(await open(r, 1, t0)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
     const fixtureId = r.boards[0]!.fixtureId;
     await moveFixture(r.owner, fixtureId, { scheduled_at: "2026-10-01T16:00:00.000Z" });
     mail.sent.length = 0;
@@ -466,7 +466,7 @@ describe.skipIf(!HAS_DB)("openRound — the window (Q2)", () => {
     await open(r2, 1, t1);
     await moveFixture(r2.owner, r2.boards[0]!.fixtureId, { scheduled_at: "2026-10-01T16:00:00.000Z" });
     mail.sent.length = 0;
-    expect(await open(r2, 1, new Date())).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+    expect(await open(r2, 1, new Date())).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
     expect((await stampRows(r2.stageId))[0]!.opened_at.getTime()).toBe(t1.getTime());
   });
 
@@ -478,7 +478,7 @@ describe.skipIf(!HAS_DB)("openRound — the window (Q2)", () => {
     const { late } = await lateBoard(r);
     mail.sent.length = 0;
 
-    expect(await open(r, 1, now)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+    expect(await open(r, 1, now)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
     expect(sentTo()).toEqual([late.home.email, late.away.email].sort());
     expect((await stampRows(r.stageId))[0]!.opened_at.getTime()).toBe(openedAt.getTime());
   });
@@ -495,6 +495,7 @@ describe.skipIf(!HAS_DB)("openRound — stamp before send, un-stamp on a failed 
       invited: 3,
       retrying: 0,
       skipped: [{ fixtureId: b0.fixtureId, reason: "send_failed" }],
+      payment: null,
     });
     const row = (await bridgeOf(b0.fixtureId))!;
     const stamped = [row.white_emailed_at, row.black_emailed_at].filter((x) => x !== null);
@@ -502,7 +503,7 @@ describe.skipIf(!HAS_DB)("openRound — stamp before send, un-stamp on a failed 
     const first = (await stampRows(r.stageId))[0]!;
 
     mail.fail.clear();
-    expect(await open(r)).toEqual({ opened: true, invited: 1, retrying: 0, skipped: [] });
+    expect(await open(r)).toEqual({ opened: true, invited: 1, retrying: 0, skipped: [], payment: null });
     expect(mail.sent.filter((m) => m.to === b0.home.email)).toHaveLength(1);
     expect(new Set(mail.sent.map((m) => m.to)).size).toBe(4);
     expect(mail.sent).toHaveLength(4); // each player exactly once
@@ -519,7 +520,7 @@ describe.skipIf(!HAS_DB)("openRound — stamp before send, un-stamp on a failed 
     const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 2 });
     const [b0, b1] = r.boards as [(typeof r.boards)[0], (typeof r.boards)[0]];
     race.sendThrows.add(`${b0.fixtureId}|white`);
-    expect(await open(r)).toEqual({ opened: true, invited: 3, retrying: 0, skipped: [{ fixtureId: b0.fixtureId, reason: "send_failed" }] });
+    expect(await open(r)).toEqual({ opened: true, invited: 3, retrying: 0, skipped: [{ fixtureId: b0.fixtureId, reason: "send_failed" }], payment: null });
     expect(mail.sent).toHaveLength(3);
     expect(mail.sent.filter((m) => m.fixtureUrl.includes(b1.fixtureId))).toHaveLength(2);
     const row = (await bridgeOf(b0.fixtureId))!;
@@ -529,7 +530,7 @@ describe.skipIf(!HAS_DB)("openRound — stamp before send, un-stamp on a failed 
     // ...and the retry is that seat alone.
     race.sendThrows.clear();
     mail.sent.length = 0;
-    expect(await open(r)).toEqual({ opened: true, invited: 1, retrying: 0, skipped: [] });
+    expect(await open(r)).toEqual({ opened: true, invited: 1, retrying: 0, skipped: [], payment: null });
     expect(mail.sent).toHaveLength(1);
   });
 
@@ -539,7 +540,7 @@ describe.skipIf(!HAS_DB)("openRound — stamp before send, un-stamp on a failed 
     // A claimed seat that reached nobody is un-stamped after the commit: staged here as a seat whose mail queued no row.
     race.noRows.add(`${b0.fixtureId}|white`);
     race.releaseThrows.add(`${b0.fixtureId}|white`);
-    expect(await open(r)).toEqual({ opened: true, invited: 3, retrying: 0, skipped: [{ fixtureId: b0.fixtureId, reason: "send_failed" }] });
+    expect(await open(r)).toEqual({ opened: true, invited: 3, retrying: 0, skipped: [{ fixtureId: b0.fixtureId, reason: "send_failed" }], payment: null });
     expect(mail.sent.filter((m) => m.fixtureUrl.includes(b1.fixtureId))).toHaveLength(2);
     expect((await bridgeOf(b0.fixtureId))!.white_emailed_at, "the seat whose un-stamp threw stays stamped (reported, not hidden)").not.toBeNull();
     expect(await auditTypes(r.competitionId)).toEqual(["external_play.round_opened"]);
@@ -554,12 +555,13 @@ describe.skipIf(!HAS_DB)("openRound — stamp before send, un-stamp on a failed 
       invited: 0,
       retrying: 0,
       skipped: [{ fixtureId: r.boards[0]!.fixtureId, reason: "send_failed" }],
+      payment: null,
     });
     expect((await stampRows(r.stageId))[0]!.opened_at.getTime()).toBe(t0.getTime());
 
     mail.fail.clear();
     const t1 = new Date();
-    expect(await open(r, 1, t1)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+    expect(await open(r, 1, t1)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
     const stamps = await stampRows(r.stageId);
     expect(stamps).toHaveLength(1);
     expect(stamps[0]!.opened_at.getTime(), "fresh window").toBe(t1.getTime());
@@ -598,7 +600,7 @@ describe.skipIf(!HAS_DB)("openRound — refusals write nothing, each with its po
     // The brief's predicate (any null seat ⇒ not_paired) refused every
     // odd-field Swiss round; a bye is a settled award, not a board.
     const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1, bye: true });
-    expect(await open(r)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+    expect(await open(r)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
     expect(sentTo()).toEqual(emailsOf(r).sort());
     expect(mail.sent.map((m) => m.to)).not.toContain(r.bye!.side.email);
     expect(await bridgeOf(r.bye!.fixtureId)).toBeNull();
@@ -637,7 +639,7 @@ describe.skipIf(!HAS_DB)("openRound — refusals write nothing, each with its po
         fixtures: 1,
         clock: { base: tc.limitSeconds, increment: tc.incrementSeconds },
       });
-      expect(await open(r), tc.key).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+      expect(await open(r), tc.key).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
       checked++;
     }
     expect(checked).toBe(SHIP1_TIME_CONTROLS.length);
@@ -679,7 +681,7 @@ describe.skipIf(!HAS_DB)("openRound — boards with NO start time (ruling 2026-1
   it("are invited, and their bridge rows are minted on the round's opened_at", async () => {
     const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 2, scheduledAt: null });
     const t0 = new Date(Date.now() - 2 * MIN);
-    expect(await open(r, 1, t0)).toEqual({ opened: true, invited: 4, retrying: 0, skipped: [] });
+    expect(await open(r, 1, t0)).toEqual({ opened: true, invited: 4, retrying: 0, skipped: [], payment: null });
     expect(sentTo()).toEqual(emailsOf(r).sort());
     // The mail's one time is the deadline — the OPEN's the deadline (T14, review
     // M2), never a start time and never the epoch a NULL formats as. A
@@ -770,7 +772,7 @@ describe.skipIf(!HAS_DB)("openRound — boards with NO start time (ruling 2026-1
     const b = r.boards[0]!;
     await organiserOverrideVideo({ fixtureId: b.fixtureId, actorUserId: r.ownerUserId, note: "vendor outage" });
     const t0 = new Date(Date.now() - 2 * MIN);
-    expect(await open(r, 1, t0)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+    expect(await open(r, 1, t0)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
     const [row] = await sql<{ basis: Date; override: Date | null }[]>`
       select scheduled_at_basis as basis, video_override_at as override
         from fixture_external_play where fixture_id = ${b.fixtureId}`;
@@ -876,7 +878,7 @@ describe.skipIf(!HAS_DB)("openRound — boards with NO start time (ruling 2026-1
     // round's own window; the game board's row is untouched, and its stamps
     // still count as invited, so the round is NOT re-stamped (review I1).
     const [before] = await stampRows(r.stageId);
-    expect(await open(r)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+    expect(await open(r)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
     expect((await stampRows(r.stageId))[0]!.opened_at.getTime(), "opened_at did not move").toBe(
       before!.opened_at.getTime(),
     );
@@ -943,6 +945,7 @@ describe.skipIf(!HAS_DB)("openRound — authorised FIRST, and an unauthorised ca
       invited: 2,
       retrying: 0,
       skipped: [],
+      payment: null,
     });
     expect((await stampRows(r.stageId))[0]!.opened_by).toBe(admin);
   });
@@ -1026,7 +1029,7 @@ describe.skipIf(!HAS_DB)("openRound — the real producer feeds the real consume
       await until(holderPid, 2, "the upgrade never queued on the division lock (its gate was read outside it)");
       await holder`commit`;
       const o = await opening;
-      expect(o.ok && o.v).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+      expect(o.ok && o.v).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
       expect(await upgrading).toEqual({ status: 409, code: "POLICY_LOCKED" });
     } finally {
       await holder`rollback`.catch(() => undefined);
@@ -1177,7 +1180,7 @@ describe.skipIf(!HAS_DB)("openRound — re-pairing after the open", () => {
     const before = await swissRound1(s.stageId);
     expect(before, "premise: 4 players ⇒ 2 boards").toHaveLength(2);
     const t0 = new Date(Date.now() - 30 * MIN);
-    expect(await open(s, 1, t0)).toEqual({ opened: true, invited: 4, retrying: 0, skipped: [] });
+    expect(await open(s, 1, t0)).toEqual({ opened: true, invited: 4, retrying: 0, skipped: [], payment: null });
 
     await unpairSwissRound(s.owner, s.stageId);
     for (const b of before) {
@@ -1192,7 +1195,7 @@ describe.skipIf(!HAS_DB)("openRound — re-pairing after the open", () => {
 
     mail.sent.length = 0;
     const t1 = new Date();
-    expect(await open(s, 1, t1)).toEqual({ opened: true, invited: 4, retrying: 0, skipped: [] });
+    expect(await open(s, 1, t1)).toEqual({ opened: true, invited: 4, retrying: 0, skipped: [], payment: null });
     const stamps = await stampRows(s.stageId);
     expect(stamps).toHaveLength(1);
     expect(stamps[0]!.opened_at.getTime(), "a fresh window").toBe(t1.getTime());
@@ -1396,7 +1399,7 @@ describe.skipIf(!HAS_DB)("openRound — re-pairing after the open", () => {
     await generateStageFixtures(s.owner, s.stageId, { pairing: "rank_adjacent" });
     expect(await swissRound1(s.stageId), "re-paired").toHaveLength(2);
     mail.sent.length = 0;
-    expect(await open(s, 1, new Date())).toEqual({ opened: true, invited: 4, retrying: 0, skipped: [] });
+    expect(await open(s, 1, new Date())).toEqual({ opened: true, invited: 4, retrying: 0, skipped: [], payment: null });
   });
 
   it("M-10: rebuild of a stage whose one game Lichess aborted goes through too", async () => {
@@ -1801,13 +1804,14 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
     const t0 = new Date();
     expect(await open(s, 1, t0)).toEqual({
       opened: true, invited: 2, retrying: 0, skipped: [{ fixtureId: held!.fixtureId, reason: "lichess_unlinked" }],
+      payment: null,
     });
     expect((await meetingsOf(held!.fixtureId)).map((m) => m.meeting_id), "its pre-minted rooms are untouched").toEqual(heldRooms);
     expect(rtk.http.slice(mark), "the open made or ended no room").toEqual([]);
     expect(await meetingsOf(fine!.fixtureId), "the other board's rooms stand").toHaveLength(2);
     // Link and open again: the board opens, on its own pre-minted rooms.
     await reconnectLichess(homePlayer);
-    expect(await open(s, 1, new Date(t0.getTime() + MIN))).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+    expect(await open(s, 1, new Date(t0.getTime() + MIN))).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
     expect((await meetingsOf(held!.fixtureId)).map((m) => m.meeting_id), "the same rooms").toEqual(heldRooms);
     expect(await auditTypes(s.competitionId)).toEqual(["external_play.round_opened", "external_play.round_reinvited"]);
   });
@@ -1922,7 +1926,7 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
       const refuse = vi.fn(async () => {
         throw new Error("staged: RealtimeKit down");
       });
-      expect(await reopen(s, new Date(t0.getTime() + 2 * MIN), refuse)).toEqual({ opened: true, invited: 4, retrying: 0, skipped: [] });
+      expect(await reopen(s, new Date(t0.getTime() + 2 * MIN), refuse)).toEqual({ opened: true, invited: 4, retrying: 0, skipped: [], payment: null });
       expect(refuse.mock.calls).toEqual([[old!.meeting_id]]);
       expect(mail.sent, "every invite went out").toHaveLength(4);
       expect(await meetingsOf(b!.fixtureId), "the row is KEPT, unended: the room is still active upstream and still tracked").toEqual([{ meeting_id: old!.meeting_id, ended_at: null }]);
@@ -2047,7 +2051,7 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
     expect(before, "premise: a meeting").toHaveLength(1);
     mail.fail.clear();
     const mark = rtk.http.length;
-    expect(await reopen(s, new Date(t0.getTime() + 2 * MIN), rtk.end)).toEqual({ opened: true, invited: 1, retrying: 0, skipped: [] });
+    expect(await reopen(s, new Date(t0.getTime() + 2 * MIN), rtk.end)).toEqual({ opened: true, invited: 1, retrying: 0, skipped: [], payment: null });
     expect(await auditTypes(s.competitionId), "premise: a re-invite, the window kept").toEqual(["external_play.round_opened", "external_play.round_reinvited"]);
     expect(await meetingsOf(b!.fixtureId)).toEqual(before);
     expect(rtk.http.slice(mark), "nothing ended at RealtimeKit").toEqual([]);
@@ -2775,7 +2779,7 @@ describe.skipIf(!HAS_DB)("openRound — a board voided after No result is re-arm
   async function closedRound() {
     const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 2 });
     const t0 = new Date(Date.now() - DEADLINE_AFTER_MS - 10 * MIN);
-    expect(await open(r, 1, t0)).toEqual({ opened: true, invited: 4, retrying: 0, skipped: [] });
+    expect(await open(r, 1, t0)).toEqual({ opened: true, invited: 4, retrying: 0, skipped: [], payment: null });
     const [a, b] = r.boards as [SeedOnlineChessRoundResult["boards"][number], SeedOnlineChessRoundResult["boards"][number]];
     return { r, t0, a, b };
   }
@@ -2799,7 +2803,7 @@ describe.skipIf(!HAS_DB)("openRound — a board voided after No result is re-arm
     mail.sent.length = 0;
     const now = new Date();
 
-    expect(await open(r, 1, now)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+    expect(await open(r, 1, now)).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
     expect(sentTo(), "only the re-armed board's players").toEqual([a.home.email, a.away.email].sort());
     const [stamp] = await stampRows(r.stageId);
     expect(stamp!.opened_at.getTime(), "a fresh window").toBe(now.getTime());
@@ -2850,7 +2854,7 @@ describe.skipIf(!HAS_DB)("openRound — a board voided after No result is re-arm
     await noResultThenVoid(r, a.fixtureId);
     mail.sent.length = 0;
 
-    expect(await open(r, 1, new Date())).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+    expect(await open(r, 1, new Date())).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
     expect(sentTo()).toEqual([a.home.email, a.away.email].sort());
     expect((await stampRows(r.stageId))[0]!.opened_at.getTime(), "the window did not move").toBe(t0.getTime());
     expect(await auditTypes(r.competitionId)).toEqual(["external_play.round_opened", "external_play.round_reinvited"]);
@@ -2988,7 +2992,7 @@ describe.skipIf(!HAS_DB)("openRound — a board voided after No result is re-arm
       expect(
         await openRound({ stageId: r.stageId, roundNo: 1, actorUserId: r.ownerUserId }, { endMeeting: async (id) => void ended.push(id) }),
         "premise: re-invited inside the window",
-      ).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+      ).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
       const rows = await sql`select meeting_id from fixture_video_meetings where fixture_id = ${a.fixtureId}`;
       expect(rows, "the closed pairing's meeting is gone").toEqual([]);
       expect(ended, endedAt === null ? "active: ended at the vendor" : "already ended: not asked again").toEqual(endedAt === null ? [meetingId] : []);
@@ -3053,7 +3057,7 @@ describe.skipIf(!HAS_DB)("openRound — a board voided after No result is re-arm
     try {
       expect(
         await openRound({ stageId: r.stageId, roundNo: 1, actorUserId: r.ownerUserId }, { endMeeting: async () => { throw new Error("test: down"); } }),
-      ).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+      ).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
     } finally {
       error.mockRestore();
     }
@@ -3098,7 +3102,7 @@ describe.skipIf(!HAS_DB)("openRound — a board voided after No result is re-arm
           { stageId: r.stageId, roundNo: 1, actorUserId: r.ownerUserId },
           { endMeeting: async () => { throw failure; } },
         );
-        expect(out, "the open is never blocked by it").toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+        expect(out, "the open is never blocked by it").toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
         const logged = (spy: typeof warn) => spy.mock.calls.filter((c) => message.test(String(c[1]))).length;
         const deferred = failure instanceof RealtimeKitDeferred;
         expect([logged(warn), logged(error)], deferred ? "deferred: a warning" : "a failure: an error").toEqual(deferred ? [1, 0] : [0, 1]);
@@ -3219,6 +3223,7 @@ describe.skipIf(!HAS_DB)("openRound — the stored `staggered` flag decides the 
       invited: 2,
       retrying: 0,
       skipped: [{ fixtureId: first.fixtureId, reason: "window_closed" }],
+      payment: null,
     });
     expect(sentTo(), "only the ranked board's players were mailed").toEqual([r.ranked.home.email, r.ranked.away.email].sort());
     // The pair: once batch 2's own deadline has passed too, nobody is left to invite.
@@ -3240,6 +3245,7 @@ describe.skipIf(!HAS_DB)("openRound — a board whose player has no Lichess link
     const t0 = new Date(Date.now() - 2 * MIN);
     expect(await open(r, 1, t0)).toEqual({
       opened: true, invited: 4, retrying: 0, skipped: [{ fixtureId: b!.fixtureId, reason: "lichess_unlinked" }],
+      payment: null,
     });
     expect(sentTo(), "nobody on the held board was mailed - the OTHER seat included").toEqual(
       [a!.home.email, a!.away.email, c!.home.email, c!.away.email].sort(),
@@ -3254,7 +3260,7 @@ describe.skipIf(!HAS_DB)("openRound — a board whose player has no Lichess link
     // The sequence: the player links, the organiser opens again - the board opens, the others are not re-mailed.
     mail.sent.length = 0;
     await reconnectLichess(b!.away);
-    expect(await open(r, 1, new Date(t0.getTime() + MIN))).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+    expect(await open(r, 1, new Date(t0.getTime() + MIN))).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
     expect(sentTo()).toEqual([b!.home.email, b!.away.email].sort());
     expect((await bridgeOf(b!.fixtureId))?.white_emailed_at).not.toBeNull();
     // Nothing left to invite: the same press now reports nothing.
@@ -3282,6 +3288,7 @@ describe.skipIf(!HAS_DB)("openRound — a board whose player has no Lichess link
     const t0 = new Date(Date.now() - 2 * MIN);
     expect(await open(r, 1, t0)).toEqual({
       opened: true, invited: 2, retrying: 0, skipped: [{ fixtureId: a!.fixtureId, reason: "lichess_reconnect" }],
+      payment: null,
     });
     expect(sentTo()).toEqual([b!.home.email, b!.away.email].sort());
     // Re-opening while it is still unreconnected reports it again and invites nobody.
@@ -3291,7 +3298,7 @@ describe.skipIf(!HAS_DB)("openRound — a board whose player has no Lichess link
     });
     expect(mail.sent).toEqual([]);
     await reconnectLichess(a!.home);
-    expect(await open(r, 1, new Date(t0.getTime() + 2 * MIN))).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
+    expect(await open(r, 1, new Date(t0.getTime() + 2 * MIN))).toEqual({ opened: true, invited: 2, retrying: 0, skipped: [], payment: null });
   });
 
   it("a round whose EVERY board is held still opens (nothing invited), and the first link + re-open invites exactly that board", async () => {
