@@ -2152,6 +2152,53 @@ describe.skipIf(!HAS_DB)("Seazn-hosted video Task 31: step 7e measures Seazn del
     expect(costReports()).toEqual([]);
   });
 
+  // Phase 3 review m1: Cloudflare keys minutes by the RECORDING uid (stg 2026-11-23), and every real Seazn session also records on its
+  // CAMERA input — a recording that carries the relay's own pull of the phone (~1 min per min of match), never a viewer. Keeping it
+  // out of the measured set is structural: step 5 (video facts) stamps `video_uids` only with recordings of the input the session is
+  // keyed by (`ingest_input_uid`: the programme input on a composed session), and 7e measures `video_uids`. No case listed a camera
+  // recording beside the programme's, so the seam step 5 → 7e was proven by a hand-stamped fixture. Here both are listed and the
+  // REAL step 5 stamps; nothing else in this world names the programme recording (no lock pass, no replay row), so 7e asking for it
+  // proves the seam, and never asking for the camera's proves the exclusion. The camera recording SURVIVES step 1c, as stg's did
+  // (c0856cbc…, finalised ~21 min after the end: 1c's delete is answered "still finalising") — deleted by 1c, step 5's listing
+  // would never hold it, and the exclusion would rest on 1c instead of on step 5's keying (a first draft of this case did).
+  it("m1: a composed Seazn session that recorded on BOTH inputs, its camera recording still finalising — the real step 5 stamps only the programme recording, and 7e asks Cloudflare for it and NEVER for the camera's (mutant: step 5 keyed on any of the session's inputs → red)", async () => {
+    vi.stubEnv("SEAZN_HOSTED_LIVE", "true");
+    vi.stubEnv("SEAZN_VIDEO_ORIGINS", "seazn.club");
+    const r = await rig("composed", { seazn: true });
+    await goLive(r);
+    const inputs = await sql<{ role: string; uid: string }[]>`
+      select role, ingest_input_id as uid from fixture_stream_inputs where session_id = ${r.sessionId} order by role`;
+    expect(inputs.map((i) => i.role), "PREMISE: a composed session holds a camera and a programme input").toEqual(["camera", "programme"]);
+    const [camera, programme] = [inputs[0]!.uid, inputs[1]!.uid];
+    const [{ keyed }] = await sql<{ keyed: string }[]>`select ingest_input_uid as keyed from fixture_stream_sessions where id = ${r.sessionId}`;
+    expect(keyed, "PREMISE: the session is keyed by its programme input").toBe(programme);
+    const tag = randomUUID().slice(0, 8);
+    const cameraVideo = `vc-${tag}`;
+    const programmeVideo = `vp-${tag}`;
+    r.ingest.addVideo({ videoId: cameraVideo, inputId: camera, createdAt: justBefore(), inProgress: false, durationSeconds: 540 });
+    r.ingest.addVideo({ videoId: programmeVideo, inputId: programme, createdAt: justBefore(), inProgress: false, durationSeconds: 540 });
+    r.ingest.scriptDeleteVideo(cameraVideo, ["in_progress"]);   // Cloudflare: still finalising — 1c leaves it for tomorrow
+    await stopSession(r.auth, r.fixtureId, r.sessionId, r.deps);
+    await currentSession(r.auth, r.fixtureId, r.deps);
+    expect((await r.state()).state, "PREMISE: the session ended").toBe("completed");
+    vi.unstubAllEnvs();
+    vi.stubEnv("SEAZN_HOSTED_COST", "true");
+    const asked: string[] = [];
+    const live: LiveMinutesReader = async (uids) => { asked.push(...uids); return Object.fromEntries(uids.map((u) => [u, 0])); };
+    r.tick(2 * DAY_MS);
+    const res = await sweepStreamSessions({ ...r.deps, liveMinutes: live, replay: new FakeReplayHost() }, { orgIds: [r.orgId] });
+    expect(res, "PREMISE: 1c met the camera recording and left it (still finalising), so step 5's listing holds it").toMatchObject({
+      cameraRecordingsDeferred: 1, cameraRecordingsDeleted: 0, seaznMeasured: 1, seaznMeasureFailed: 0,
+    });
+    expect(r.ingest.deletedVideos, "PREMISE: nothing deleted the camera recording").not.toContain(cameraVideo);
+    const [{ video_uids }] = await sql<{ video_uids: string[] }[]>`select video_uids from fixture_stream_sessions where id = ${r.sessionId}`;
+    expect(video_uids, "step 5 stamped the programme recording, and only it").toEqual([programmeVideo]);
+    expect(asked.length, "anti-vacuity: 7e asked Cloudflare").toBeGreaterThan(0);
+    expect(asked, "the programme recording reached 7e through step 5").toContain(programmeVideo);
+    expect(asked, "the camera recording (the relay's pull) is never asked").not.toContain(cameraVideo);
+    expect(asked, "nor the camera input").not.toContain(camera);
+  });
+
   it("Cloudflare THROWING: counted (seaznMeasureFailed 1), reported ONCE, nothing written — and every other counter, the purge and step 8's snapshot still run", async () => {
     // The baseline: the same world, swept at the same distance from its match, with Cloudflare answering.
     const twin = await endedSeazn();
