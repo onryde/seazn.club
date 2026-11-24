@@ -1,5 +1,7 @@
--- V546 — Seazn delivered minutes (Seazn-hosted video, Phase 3, Task 29; behind SEAZN_HOSTED_COST). Planned as V543, which
--- main's chess strays_closed delta took first; V544 and V547 are held by unmerged billing branches, and V545 is this branch's.
+-- V552 — Seazn delivered minutes (Seazn-hosted video, Phase 3, Task 29; behind SEAZN_HOSTED_COST). Planned as V543 (main's chess
+-- strays_closed delta took it), then V546 (main's stage_lots_draws_stage_key took it; renumbered at the 2026-11-24 rebase). V544
+-- and V547 are billing's, V548 plan-limits', V549 and V550 online chess's (all unmerged); V551 is this branch's replay reason,
+-- which this table does not depend on, so their order does not matter. The tests find this file by name, never by number.
 --
 -- One row per Seazn session: the minutes viewers watched of it, live (Cloudflare stream analytics) and as a replay (Bunny
 -- statistics), each with the last day it was measured through. The daily measurement pass (Task 31,
@@ -11,8 +13,9 @@
 --
 -- session_id is ON DELETE RESTRICT: a measured session cannot vanish under its cost record. Sessions cascade from their org
 -- (V410), so an org with a measured session cannot be hard-deleted either; no product path hard-deletes an org
--- (extra-orgs.ts), as V542 records for the replay rows. org_id carries no foreign key: it is copied from the session row by
--- the pass, and the session's own org FK already ties the two.
+-- (extra-orgs.ts), as V542 records for the replay rows. org_id carries no foreign key, and nothing in the schema makes it equal
+-- the session's org (sessions have no unique (id, org_id) to point at): keeping them equal is the writer's job — the pass
+-- copies it from the session or replay row it has just read (usecases/seazn-cost.ts).
 --
 -- RLS: the V430 pattern (R1). Enable + force, NO policy, NO trg_set_org trigger, NO grant to app_user; every read and write
 -- goes through the app's non-tenant client. The file name says `seazn`, so the stream fold (_stream-migration.ts) reads it

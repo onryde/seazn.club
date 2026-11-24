@@ -61,7 +61,7 @@ describe("AdminSeaznVideoPanel", () => {
     expect(html, "Task 31b (V551)").toContain("Part 4: deleted (fixture deleted)");
   });
 
-  // Task 31 fix round 1 (review m8): both minute columns are NOT NULL DEFAULT 0 (V546), so a delivery row written by ONE half reads
+  // Task 31 fix round 1 (review m8): both minute columns are NOT NULL DEFAULT 0 (V552), so a delivery row written by ONE half reads
   // the other half as 0.0 with no day. That half was never measured — not "measured, nobody watched" — and reads "—". Keyed on BOTH:
   // a copy's last read before its removal can add minutes to a session the daily pass never reached (through still null).
   it("m8: a half with 0.0 and no day was never measured and reads —; minutes with no day (a removed copy's last read) read as stored; 0.0 with a day is a measured zero", () => {

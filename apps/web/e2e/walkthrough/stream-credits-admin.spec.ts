@@ -447,7 +447,7 @@ test("a signed-in NON-staff user gets neither the route (401, no row) nor the pa
 });
 
 // Seazn-hosted video Task 31: the staff "Seazn video" table on the same page — the org's last Seazn sessions, the minutes the daily
-// sweep measured (fixture_video_delivery, V546) and each replay part's state, read by `seaznVideoForOrg` and rendered by
+// sweep measured (fixture_video_delivery, V552) and each replay part's state, read by `seaznVideoForOrg` and rendered by
 // AdminSeaznVideoPanel. The rows are seeded by SQL for the reason `consumedSession` gives (the usecases sit behind "server-only");
 // the measurement itself is proven in vitest (usecases/__tests__/seazn-cost.test.ts). /admin is desktop-only: 1280 alone (AGENTS.md).
 // The session names no fixture (its column is nullable), so the row's fixture reads "—"; `destination_kind` is written as admission

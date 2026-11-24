@@ -15,7 +15,7 @@ function partWord(p: SeaznVideoPart): string {
 }
 
 /** One half's minutes as stored, and the UTC day they run through. "—" for a half never measured: no delivery row, or a row the
- *  OTHER half wrote — both columns are NOT NULL DEFAULT 0 (V546), so that half reads 0.0 with no day (Task 31 fix round 1, m8).
+ *  OTHER half wrote — both columns are NOT NULL DEFAULT 0 (V552), so that half reads 0.0 with no day (Task 31 fix round 1, m8).
  *  Minutes with no day are kept: a copy's last read before its removal adds them without moving the day. */
 function Minutes({ half, value, through }: { half: "live" | "replay"; value: string | null; through: string | null }) {
   if (value === null || (through === null && Number(value) === 0)) {

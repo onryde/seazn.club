@@ -3,7 +3,7 @@ import "server-only";
 // replays removed (Seazn-hosted video, Phase 3, Task 31; behind SEAZN_HOSTED_COST, which the daily sweep reads: relay-sweep.ts 7e).
 //
 //   measureSeaznDelivery(deps, now, scope)
-//       Per Seazn session, two halves, each written to `fixture_video_delivery` (V546) on its own:
+//       Per Seazn session, two halves, each written to `fixture_video_delivery` (V552) on its own:
 //       LIVE   — a session that ENDED within SEAZN_LIVE_MEASURE_DAYS: the minutes Cloudflare reports viewed for its programme input
 //                uid AND every recording (video uid) of it, SUMMED (controller ruling 1, 2026-11-23). The input's minutes are the
 //                live audience; a recording's are the interim replay's, played before the replay host's copy took over. If the two

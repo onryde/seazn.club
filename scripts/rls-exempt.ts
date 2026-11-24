@@ -83,7 +83,7 @@ export const SUPERUSER_ONLY: ReadonlySet<string> = new Set([
   "org_video_collections",
   // One row per Seazn recording moved to Bunny (the Bunny ids Task 31 deletes); privileged client only, zero policies.
   "fixture_video_replays",
-  // Seazn delivered minutes (V546, seazn-hosted Task 29): one row per Seazn session, written by the daily measurement pass
+  // Seazn delivered minutes (V552, seazn-hosted Task 29): one row per Seazn session, written by the daily measurement pass
   // and read by /admin, both on the privileged client. V410's pattern, zero policies, no app_user grant; asserted by
   // seazn-delivery-migration.test.ts and rls-static.test.ts.
   "fixture_video_delivery",

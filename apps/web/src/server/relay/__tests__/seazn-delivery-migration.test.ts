@@ -1,4 +1,4 @@
-// V546 (Seazn-hosted video, Phase 3, Task 29): `fixture_video_delivery`, one row per Seazn session holding the minutes viewers
+// The delivered-minutes delta, V552 (Seazn-hosted video, Phase 3, Task 29): `fixture_video_delivery`, one row per Seazn session holding the minutes viewers
 // watched of it — live (Cloudflare analytics) and replay (Bunny statistics) — each with the last day it was measured through, so
 // the daily pass (Task 31) never counts a day twice. The minutes are `numeric(12,1)`: tenths of a minute, up to 99,999,999,999.9.
 // The session is `on delete restrict`: a measured session cannot vanish under the cost record (and with it, since sessions
@@ -18,8 +18,11 @@ import { STREAM_DELTA_FILES, stripSqlComments } from "./_stream-migration";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const DELTAS = resolve(import.meta.dirname, "../../../../../../db/migration/deltas");
-const V546 = readdirSync(DELTAS).find((f) => /^V546__.+\.sql$/.test(f));
-const V546_SQL = V546 ? stripSqlComments(readFileSync(join(DELTAS, V546), "utf8")) : "";
+/** Found by NAME, never by number (Phase 3 review m3): a rebase renumbers it (V543 → V546 → V552 so far), and `^V546__` then matched
+ *  main's unrelated stage_lots delta. Every file of that name is kept, so two of them read as two, never as the first. */
+const DELIVERY_FILES = readdirSync(DELTAS).filter((f) => /^V\d+__seazn_delivery\.sql$/.test(f));
+const DELIVERY = DELIVERY_FILES.length === 1 ? DELIVERY_FILES[0] : undefined;
+const DELIVERY_SQL = DELIVERY ? stripSqlComments(readFileSync(join(DELTAS, DELIVERY), "utf8")) : "";
 const TABLE = "fixture_video_delivery";
 
 /** The table's columns, in declaration order, as the plan states them (Task 29). */
@@ -66,7 +69,7 @@ async function sessions(tx: Tx, n = 1): Promise<{ orgId: string; sessionIds: str
   const { fixtureIds } = await divisionRig(auth, { entrants: 2 });
   const fixtureId = fixtureIds[0]!;
   const [t] = await tx<{ id: string }[]>`
-    insert into org_stream_targets (org_id, kind, label, rtmp_enc) values (${auth.orgId}, 'youtube', 'V546', ${Buffer.from("not-a-real-envelope")}) returning id`;
+    insert into org_stream_targets (org_id, kind, label, rtmp_enc) values (${auth.orgId}, 'youtube', 'delivery', ${Buffer.from("not-a-real-envelope")}) returning id`;
   const sessionIds: string[] = [];
   for (let i = 0; i < n; i++) {
     const [s] = await tx<{ id: string }[]>`
@@ -80,19 +83,20 @@ async function sessions(tx: Tx, n = 1): Promise<{ orgId: string; sessionIds: str
   return { orgId: auth.orgId, sessionIds };
 }
 
-describe("V546: the migration text", () => {
+describe("the delivered-minutes delta: the migration text", () => {
   it("exists, is in the stream fold (its name says seazn), creates the table, and enables AND forces RLS on it with no policy or grant", () => {
-    expect(V546, "V546's delta file").toBeDefined();
-    expect(STREAM_DELTA_FILES, "the fold reads V546, so rls-static and migration-shape scan its table").toContain(V546);
-    expect(V546_SQL).toMatch(new RegExp(`^create table ${TABLE} \\(`, "m"));
-    expect(V546_SQL).toMatch(new RegExp(`alter table ${TABLE}\\s+enable\\s+row level security;`));
-    expect(V546_SQL).toMatch(new RegExp(`alter table ${TABLE}\\s+force\\s+row level security;`));
-    expect(V546_SQL).not.toMatch(/create policy/i);
-    expect(V546_SQL).not.toMatch(/grant /i);
+    expect(DELIVERY_FILES, "exactly one V<n>__seazn_delivery.sql delta").toHaveLength(1);
+    expect(DELIVERY, "the delta file").toBeDefined();
+    expect(STREAM_DELTA_FILES, "the fold reads it, so rls-static and migration-shape scan its table").toContain(DELIVERY);
+    expect(DELIVERY_SQL).toMatch(new RegExp(`^create table ${TABLE} \\(`, "m"));
+    expect(DELIVERY_SQL).toMatch(new RegExp(`alter table ${TABLE}\\s+enable\\s+row level security;`));
+    expect(DELIVERY_SQL).toMatch(new RegExp(`alter table ${TABLE}\\s+force\\s+row level security;`));
+    expect(DELIVERY_SQL).not.toMatch(/create policy/i);
+    expect(DELIVERY_SQL).not.toMatch(/grant /i);
   });
 });
 
-describe.skipIf(!HAS_DB)("V546: the schema", () => {
+describe.skipIf(!HAS_DB)("the delivered-minutes delta: the schema", () => {
   it("the table has the plan's seven columns, in order: the minutes numeric(12,1) not null default 0, the measured-through days nullable dates", async () => {
     const cols = await sql<Record<string, unknown>[]>`
       select column_name, data_type, numeric_precision, numeric_scale, is_nullable, column_default
@@ -187,6 +191,9 @@ describe.skipIf(!HAS_DB)("V546: the schema", () => {
   });
 
   it("a measured session cannot be deleted, nor its org (the session cascade meets RESTRICT, 23503); with the row gone, both deletes land", async () => {
+    // T29 review m5: 23503 is the same under NO ACTION, so the refusals alone do not make this title true — the action is read too.
+    const [{ del }] = await sql<{ del: string }[]>`select confdeltype as del from pg_constraint where conname = ${`${TABLE}_session_id_fkey`}`;
+    expect(del, "the session FK's ON DELETE action is RESTRICT ('r'), not NO ACTION ('a')").toBe("r");
     await rolledBack(async (tx) => {
       const { orgId, sessionIds: [sid] } = await sessions(tx, 1);
       await tx`insert into fixture_video_delivery (session_id, org_id, live_minutes) values (${sid!}, ${orgId}, 15.5)`;

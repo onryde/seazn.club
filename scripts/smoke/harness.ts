@@ -1697,7 +1697,7 @@ export async function cleanup(tag: string): Promise<void> {
     // the mover recorded, or the org's replay collection, would block the org delete.
     await sql`delete from fixture_video_replays where org_id in (${doomedOrgs})`;
     await sql`delete from org_video_collections where org_id in (${doomedOrgs})`;
-    // fixture_video_delivery.session_id is ON DELETE RESTRICT (V546): a measured session would block the sessions cascade.
+    // fixture_video_delivery.session_id is ON DELETE RESTRICT (V552): a measured session would block the sessions cascade.
     // Keyed by the session, the restricted edge: its org_id is a copy with no foreign key.
     await sql`delete from fixture_video_delivery
               where session_id in (select id from fixture_stream_sessions where org_id in (${doomedOrgs}))`;

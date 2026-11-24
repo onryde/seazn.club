@@ -1327,7 +1327,7 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
     // A run killed before its `finally` leaves its rows decades back, where they would sit under the next run's clock. No
     // other code writes a session that old, so a row there is this test's debris: its org is deleted first (taking the
     // decades-old events with it), not swept.
-    // Task 31 (ruling 4): a delivery row (V546) holds its session ON DELETE RESTRICT, so it goes first, or the org delete is 23503.
+    // Task 31 (ruling 4): a delivery row (V552) holds its session ON DELETE RESTRICT, so it goes first, or the org delete is 23503.
     await sql`delete from fixture_video_delivery where session_id in (select id from fixture_stream_sessions where created_at < now() - interval '20 years')`;
     await sql`delete from organizations where id in (select org_id from fixture_stream_sessions where created_at < now() - interval '20 years')`;
     await shift("-");

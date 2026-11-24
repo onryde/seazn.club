@@ -2,7 +2,7 @@
 // video, Phase 3, Task 31). PURE: no database, no network, no clock of its own (the caller passes `now`).
 //
 // Both vendors bucket viewing by UTC day (Cloudflare's GraphQL takes `date_geq`/`date_leq` dates; the replay host charts its watch
-// time per UTC day), so a measurement is a run of whole UTC dates, and `fixture_video_delivery.*_measured_through` (V546) holds the
+// time per UTC day), so a measurement is a run of whole UTC dates, and `fixture_video_delivery.*_measured_through` (V552) holds the
 // last one counted. The rules (controller ruling 3, 2026-11-23):
 //   * DAILY (`dailyWindow`): from the day after the last one measured — or the session's first day, when it was never measured —
 //     THROUGH YESTERDAY, both included. Today is never read: it has not finished. A second run on the same day therefore reads

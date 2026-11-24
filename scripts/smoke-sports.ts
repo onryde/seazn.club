@@ -186,7 +186,7 @@ async function cleanup(): Promise<void> {
     await sql`
       delete from org_video_collections
       where org_id in (select id from organizations where created_by in (select id from users where email = any(${emails})))`;
-    // fixture_video_delivery.session_id is RESTRICT (V546): a measured session would block the sessions cascade. Keyed by the
+    // fixture_video_delivery.session_id is RESTRICT (V552): a measured session would block the sessions cascade. Keyed by the
     // session, the restricted edge: its org_id is a copy with no foreign key.
     await sql`
       delete from fixture_video_delivery
