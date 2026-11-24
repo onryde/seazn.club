@@ -664,7 +664,7 @@ describe("I-1 — which D3 box: phone first (owner 2026-10-01, option a)", () =>
 type Phone = NonNullable<StreamPhone["phone"]>;
 const phoneFacts = (over: Partial<Phone> = {}): Phone => ({
   present: true, silent: false, notResponding: false, model: "Pixel 8", appVersion: "capture/2", mode: "operator",
-  state: "paired", notReady: null, notReadyShown: false, health: null, startFailed: null,
+  state: "paired", notReady: null, notReadyShown: false, health: null, startFailed: null, pairedAt: "2026-09-14T11:05:00.000Z",
   lastBeatAt: "2026-09-14T12:09:50Z", elapsedMs: 10_000,
   beat: { battery: null, bitrateKbps: null, delivery: null, thermal: null, dataUsedMB: null }, farPoll: false, ...over,
 });
@@ -2017,9 +2017,11 @@ describe("seaznRefinedCode (Task 16)", () => {
 // takeover's instant (`lastTakeover.at`, §7.5), so that is the pairing's identity here.
 // ---------------------------------------------------------------------------------------------------------------------
 describe("closeCodeOnPair — an open QR closes once when a phone pairs (Task 35)", () => {
-  const T1 = "2026-09-14T11:30:00.000Z";
-  const T2 = "2026-09-14T11:45:00.000Z";
-  const paired = (id: string | null = null): PairSeen => ({ id });
+  // Three pairings, named as the read model names them: by the instant each was claimed (T35 review m1: `phone.pairedAt`).
+  const A = "2026-09-14T11:05:00.000Z"; // phoneFacts()'s own pairing
+  const B = "2026-09-14T11:30:00.000Z";
+  const C = "2026-09-14T11:45:00.000Z";
+  const paired = (id: string): PairSeen => ({ id });
   /** The rule folded over a run of reads, poll after poll, from what the surface last saw: the steps that closed it. */
   const closesAt = (start: PairSeen, reads: PairSeen[]): number[] => {
     const at: number[] = [];
@@ -2031,21 +2033,14 @@ describe("closeCodeOnPair — an open QR closes once when a phone pairs (Task 35
     return at;
   };
 
-  it("row by row: the EMPTY case first, then a phone pairing, the same pairing re-polled, another phone, and a reissue", () => {
+  it("row by row: the EMPTY case first, then a phone pairing, the same pairing re-polled, another phone, and a second", () => {
     const rows: [string, PairSeen, PairSeen, boolean][] = [
       ["empty: no phone before, none now", null, null, false],
-      ["no phone now (the pairing ended): nothing paired", paired(), null, false],
-      ["no phone now, after a takeover", paired(T1), null, false],
-      ["a phone pairs where there was none", null, paired(), true],
-      ["a phone pairs onto a slot an earlier takeover marked", null, paired(T1), true],
-      ["the same pairing, re-polled", paired(), paired(), false],
-      ["the same taken-over pairing, re-polled", paired(T1), paired(T1), false],
-      ["another phone takes the slot", paired(), paired(T1), true],
-      ["a second takeover", paired(T1), paired(T2), true],
-      // B7 review I-2: Revoke & reissue is the organiser's answer to a takeover, and the server stops serving it with the old
-      // code. The phone a live session holds stays — an identity going unknown is not a new pairing, and the organiser is
-      // looking at the new code they just asked for.
-      ["a reissue answers the takeover (identity unknown, the same phone)", paired(T1), paired(), false],
+      ["no phone now (the pairing ended): nothing paired", paired(A), null, false],
+      ["a phone pairs where there was none", null, paired(A), true],
+      ["the same pairing, re-polled", paired(A), paired(A), false],
+      ["another phone takes the slot", paired(A), paired(B), true],
+      ["a second takeover", paired(B), paired(C), true],
     ];
     let checked = 0;
     for (const [name, prev, next, want] of rows) {
@@ -2053,29 +2048,29 @@ describe("closeCodeOnPair — an open QR closes once when a phone pairs (Task 35
       checked++;
     }
     expect(checked).toBe(rows.length);
-    expect(rows.filter(([, , , want]) => want).length, "PREMISE: both answers are reached").toBe(4);
+    expect(rows.filter(([, , , want]) => want).length, "PREMISE: both answers are reached").toBe(3);
   });
 
   it("sequences: once per pairing — re-polls after the close leave a re-opened QR open; a re-pair after Revoke & reissue closes it again", () => {
     // Paired, the code shown again; then nothing but re-polls of that pairing: it never closes (the organiser opened it).
-    expect(closesAt(paired(), [paired(), paired(), paired()]), "the same pairing re-polled").toEqual([]);
+    expect(closesAt(paired(A), [paired(A), paired(A), paired(A)]), "the same pairing re-polled").toEqual([]);
     // Revoke & reissue: the new code has no phone (the card shows it), re-polled; a phone scans it (CLOSE); re-polled.
-    expect(closesAt(paired(), [null, null, paired(), paired()]), "the re-pair after a reissue, once").toEqual([2]);
+    expect(closesAt(paired(A), [null, null, paired(B), paired(B)]), "the re-pair after a reissue, once").toEqual([2]);
     // Two takeovers in a row, each re-polled: each closes once.
-    expect(closesAt(paired(), [paired(T1), paired(T1), paired(T2), paired(T2)])).toEqual([0, 2]);
+    expect(closesAt(paired(A), [paired(B), paired(B), paired(C), paired(C)])).toEqual([0, 2]);
     // The empty run: nothing ever pairs.
     expect(closesAt(null, [null, null, null]), "empty").toEqual([]);
   });
 
-  it("streamPairSeen reads the Phone tab's read model: no read or no phone → nothing paired; a phone → its takeover instant, or unknown", () => {
-    const took = { at: T1, model: "Galaxy S24", elapsedMs: 1_000 };
+  it("streamPairSeen reads the Phone tab's read model: no read or no phone → nothing paired; a phone → its pairing's claim instant", () => {
+    const took = { at: B, model: "Galaxy S24", elapsedMs: 1_000 };
     const rows: [string, StreamPhone | null, PairSeen][] = [
       ["nothing read yet", null, null],
       ["a read with no phone", readModel({ phone: null }), null],
       ["no phone, though a takeover is still served", readModel({ phone: null, lastTakeover: took }), null],
-      ["a paired, present phone", readModel(), { id: null }],
-      ["the same phone gone silent is still that pairing", readModel({ phone: SILENT }), { id: null }],
-      ["a phone that took the slot", readModel({ lastTakeover: took }), { id: T1 }],
+      ["a paired, present phone", readModel(), { id: A }],
+      ["the same phone gone silent is still that pairing", readModel({ phone: SILENT }), { id: A }],
+      ["a phone that took the slot: ITS pairing, not the takeover's instant", readModel({ lastTakeover: took, phone: phoneFacts({ pairedAt: C }) }), { id: C }],
     ];
     let checked = 0;
     for (const [name, read, want] of rows) {
@@ -2085,13 +2080,18 @@ describe("closeCodeOnPair — an open QR closes once when a phone pairs (Task 35
     expect(checked).toBe(rows.length);
   });
 
-  it("over read models poll after poll: the phone's own facts changing (silent, a later beat, the takeover notice ageing) never close it; a takeover does", () => {
+  it("over read models poll after poll: the phone's own facts changing (silent, a later beat, the notice ageing, a reissue answering it) never close it; a takeover does", () => {
+    const takeover = (elapsedMs: number) => ({ at: B, model: "Galaxy S24", elapsedMs });
+    const taken = phoneFacts({ model: "Galaxy S24", pairedAt: B });
     const reads = [
       readModel(),
       readModel({ phone: SILENT }),
       readModel({ phone: phoneFacts({ elapsedMs: 20_000, lastBeatAt: "2026-09-14T12:10:00Z" }) }),
-      readModel({ lastTakeover: { at: T1, model: "Galaxy S24", elapsedMs: 0 }, phone: phoneFacts({ model: "Galaxy S24" }) }),
-      readModel({ lastTakeover: { at: T1, model: "Galaxy S24", elapsedMs: 5_000 }, phone: phoneFacts({ model: "Galaxy S24" }) }),
+      readModel({ lastTakeover: takeover(0), phone: taken }),
+      readModel({ lastTakeover: takeover(5_000), phone: taken }),
+      // B7 review I-2: Revoke & reissue answers the takeover — the server stops serving it — while a live session holds its
+      // phone: the SAME pairing, so the code the organiser just asked for stays in front of them.
+      readModel({ lastTakeover: null, phone: taken }),
     ];
     expect(closesAt(streamPairSeen(readModel()), reads.map(streamPairSeen))).toEqual([3]);
   });

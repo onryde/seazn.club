@@ -59,7 +59,7 @@ const phoneRead = (court: StreamPhone["court"] = null): StreamPhone => ({
   code: { issuedAt: "2026-09-14T11:00:00.000Z", state: "active", endCause: null },
   phone: {
     present: true, silent: false, notResponding: false, model: "Pixel 8", appVersion: "capture/2", mode: "operator", state: "paired", notReady: null,
-    notReadyShown: false, health: null, startFailed: null, lastBeatAt: "2026-09-14T11:59:55.000Z", elapsedMs: 5_000,
+    notReadyShown: false, health: null, startFailed: null, pairedAt: "2026-09-14T11:05:00.000Z", lastBeatAt: "2026-09-14T11:59:55.000Z", elapsedMs: 5_000,
     beat: { battery: null, bitrateKbps: null, delivery: null, thermal: null, dataUsedMB: null }, farPoll: false,
   },
   destination: null, lastTakeover: null, auto: null, legacy: false, finished: false, session: null, court,

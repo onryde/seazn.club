@@ -353,6 +353,10 @@ export const StreamPhone = z
          *  phone's last readings are stale and are not judged: only `not_responding` (a held phone's silence) can name it. */
         health: z.enum(HEALTH_REASONS).nullable(),
         startFailed: CaptureStartFailed.nullable(),
+        /** T35 review m1: when this pairing was claimed — the pairing's identity as the panel reads it (Task 35: a different value
+         *  is a different phone's pairing, so an open code fold closes). A later beat never moves it; a reissue under a live
+         *  session keeps the held pairing, and so its instant. ISO. */
+        pairedAt: z.string(),
         lastBeatAt: z.string(),
         /** `now − lastBeatAt` on the SERVER's clock at this response (the D3 M6 rule): the panel never compares its own
          *  clock with a server timestamp. */

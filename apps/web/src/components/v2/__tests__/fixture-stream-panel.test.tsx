@@ -667,7 +667,7 @@ type Facts = NonNullable<StreamPhone["phone"]>;
 /** The paired phone's facts as the T9 read model serves them — present, answering, nothing wrong. */
 const facts = (over: Partial<Facts> = {}): Facts => ({
   present: true, silent: false, notResponding: false, model: "Pixel 8", appVersion: "capture/2", mode: "operator",
-  state: "paired", notReady: null, notReadyShown: false, health: null, startFailed: null,
+  state: "paired", notReady: null, notReadyShown: false, health: null, startFailed: null, pairedAt: "2026-09-14T11:05:00.000Z",
   lastBeatAt: "2026-09-14T11:59:55.000Z", elapsedMs: 5_000,
   beat: { battery: null, bitrateKbps: null, delivery: null, thermal: null, dataUsedMB: null }, farPoll: false, ...over,
 });
@@ -3682,6 +3682,8 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
   // same pairing, so re-opened it stays open. The read model has no pairing id; a takeover's instant is the identity it serves.
   describe("Task 35: the fold the organiser opened closes once a phone pairs", () => {
     const TOOK_AT = "2026-09-14T11:50:00.000Z";
+    /** The pairing the takeover made: a new phone's claim, at the takeover's instant (T35 review m1: the read names it by `pairedAt`). */
+    const TAKEN = facts({ model: "Galaxy S24", pairedAt: TOOK_AT });
     const NEW = CaptureQrV2.parse({ v: 2, code: "m3n4p5q6r7s8", slot: 0, tok: "Zz9_Yy8-Xx7Ww6Vv5Uu4Tt" });
     const NEW_AT = "2026-09-14T11:55:00.000Z";
     const NEW_CODE = { issuedAt: NEW_AT, state: "active" as const, endCause: null };
@@ -3710,14 +3712,14 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
       await poll(2);
       expect(phoneReads() - before, "PREMISE: two more reads landed").toBe(2);
       expect(bodyOf(island).codeOpen, "the same pairing re-polled: still open").toBe(true);
-      // Another phone scans the shown code and takes the slot (§7.5): the read model serves the takeover's instant.
-      s.phone = readModel({ lastTakeover: { at: TOOK_AT, model: "Galaxy S24", elapsedMs: 0 }, phone: facts({ model: "Galaxy S24" }) });
+      // Another phone scans the shown code and takes the slot (§7.5): a new pairing, and the takeover's notice.
+      s.phone = readModel({ lastTakeover: { at: TOOK_AT, model: "Galaxy S24", elapsedMs: 0 }, phone: TAKEN });
       await poll();
       expect(bodyOf(island).codeOpen, "a new pairing closes it").toBe(false);
       expect(fold(island), "closed: the fold is drawn, shut, no QR").toEqual({ drawn: true, open: false, qr: false });
       // Re-opened ("Show the code again" still works), and that pairing re-polled — the notice ageing — leaves it open.
       bodyOf(island).onToggleCode(true);
-      s.phone = readModel({ lastTakeover: { at: TOOK_AT, model: "Galaxy S24", elapsedMs: 10_000 }, phone: facts({ model: "Galaxy S24" }) });
+      s.phone = readModel({ lastTakeover: { at: TOOK_AT, model: "Galaxy S24", elapsedMs: 10_000 }, phone: TAKEN });
       await poll(2);
       expect(fold(island), "the close was once: re-opened, it stays open").toEqual({ drawn: true, open: true, qr: true });
     });
@@ -3754,7 +3756,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
       expect(bodyOf(island).code).toMatchObject({ status: "ok", text: captureQrV2Text(NEW) });
       await poll();
       expect(bodyOf(island).codeOpen, "no phone on the new code: nothing paired, nothing closed").toBe(true);
-      s.phone = readModel({ code: NEW_CODE });
+      s.phone = readModel({ code: NEW_CODE, phone: facts({ pairedAt: "2026-09-14T11:56:00.000Z" }) });
       await poll();
       expect(bodyOf(island).codeOpen, "the phone on the new code closes it").toBe(false);
       expect(fold(island)).toEqual({ drawn: true, open: false, qr: false });
@@ -3764,11 +3766,11 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
       const s = serve({
         current: session({ state: "live", startedAt: "2026-09-14T11:40:00Z" }),
         targets: TARGETS,
-        phone: readModel({ lastTakeover: { at: TOOK_AT, model: "Galaxy S24", elapsedMs: 60_000 }, phone: facts({ model: "Galaxy S24" }) }),
+        phone: readModel({ lastTakeover: { at: TOOK_AT, model: "Galaxy S24", elapsedMs: 60_000 }, phone: TAKEN }),
       });
       s.reissue = () => {
-        // B7 review I-2: a takeover on an ended code is never served; the session's phone is held (C1b), so it is still read.
-        s.phone = readModel({ code: NEW_CODE, lastTakeover: null, phone: facts({ model: "Galaxy S24" }) });
+        // B7 review I-2: a takeover on an ended code is never served; the session's phone is held (C1b): the SAME pairing.
+        s.phone = readModel({ code: NEW_CODE, lastTakeover: null, phone: TAKEN });
         return { qr: NEW, issuedAt: NEW_AT };
       };
       const island = track(await mount(s));
@@ -3780,6 +3782,24 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
       await poll(2);
       expect(bodyOf(island).codeOpen, "the organiser's new code stays in front of them").toBe(true);
       expect(fold(island)).toEqual({ drawn: true, open: true, qr: true });
+    });
+
+    it("T35 review m1: a REPLACEMENT phone read in the old one's place — no takeover served, never empty in between — closes it; re-polled, it stays open", async () => {
+      // A live session's phone dies; another phone pairs on the code between two polls. The read model names the new pairing by
+      // its claim, with no takeover notice (a replacement, not a slot taken from a live phone): it was invisible to the old
+      // takeover-instant identity.
+      const s = serve({ current: session({ state: "live", startedAt: "2026-09-14T11:40:00Z" }), targets: TARGETS });
+      const island = track(await mount(s));
+      bodyOf(island).onToggleCode(true);
+      await settle();
+      expect(bodyOf(island).phone?.phone?.pairedAt, "PREMISE: the first phone's pairing").toBe("2026-09-14T11:05:00.000Z");
+      s.phone = readModel({ lastTakeover: null, phone: facts({ model: "iPhone 15", pairedAt: "2026-09-14T11:58:00.000Z" }) });
+      await poll();
+      expect(bodyOf(island).phone?.lastTakeover, "PREMISE: no takeover served").toBeNull();
+      expect(bodyOf(island).codeOpen, "the replacement phone closes it").toBe(false);
+      bodyOf(island).onToggleCode(true);
+      await poll(2);
+      expect(bodyOf(island).codeOpen, "that phone re-polled: the re-opened fold stays open").toBe(true);
     });
   });
 

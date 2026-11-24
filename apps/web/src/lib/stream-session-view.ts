@@ -487,12 +487,12 @@ export function readClearsW5(watch: PresenceWatch, read: { seq: number; present:
   return read.present && read.seq > watch.refusedAtRead;
 }
 
-/** Task 35: the Phone tab's read model as `closeCodeOnPair` reads it. The read model carries no pairing id (it serves no secret
- *  and names no row); the one field that moves when a DIFFERENT phone takes the slot without it passing through empty is the
- *  takeover's instant (`lastTakeover.at`, §7.5), so that is the pairing's identity. A phone with no takeover served is unknown. */
+/** Task 35: the Phone tab's read model as `closeCodeOnPair` reads it: no phone → nothing paired; a phone → its pairing, named by
+ *  the instant it was claimed (`phone.pairedAt`, T35 review m1). A takeover, a replacement or a re-pair after a reissue is a new
+ *  claim; a later beat, a silence or a reissue under a live session (the held pairing) is not. */
 export function streamPairSeen(read: StreamPhone | null): PairSeen {
   if (!read?.phone) return null;
-  return { id: read.lastTakeover?.at ?? null };
+  return { id: read.phone.pairedAt };
 }
 
 /** O5 (§6.12, ruled 2026-10-01): why a live phone that still beats sends no video. */

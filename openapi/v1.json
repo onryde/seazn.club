@@ -69665,6 +69665,9 @@
                                     }
                                   ]
                                 },
+                                "pairedAt": {
+                                  "type": "string"
+                                },
                                 "lastBeatAt": {
                                   "type": "string"
                                 },
@@ -69791,6 +69794,7 @@
                                 "notReadyShown",
                                 "health",
                                 "startFailed",
+                                "pairedAt",
                                 "lastBeatAt",
                                 "elapsedMs",
                                 "beat",
@@ -70049,6 +70053,7 @@
                       "notReadyShown": true,
                       "health": "not_responding",
                       "startFailed": "not-found",
+                      "pairedAt": "example",
                       "lastBeatAt": "example",
                       "elapsedMs": 0,
                       "beat": {

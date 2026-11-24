@@ -308,7 +308,7 @@ describe("SignalChain (spec §3.2)", () => {
   it("the Seazn node's stalled word, in every locale: 'Waiting for video' while the server says stalled, 'Receiving' when it does not", () => {
     const facts = (health: "stalled" | null) => ({
       present: true, silent: false, notResponding: false, model: "Pixel 8", appVersion: null, mode: "automatic" as const, state: "publishing" as const,
-      notReady: null, notReadyShown: false, health, startFailed: null, lastBeatAt: "2026-10-08T12:00:00Z",
+      notReady: null, notReadyShown: false, health, startFailed: null, pairedAt: "2026-10-08T11:30:00Z", lastBeatAt: "2026-10-08T12:00:00Z",
       elapsedMs: 4_000, beat: { battery: null, bitrateKbps: null, delivery: null, thermal: null, dataUsedMB: null }, farPoll: false,
     });
     const seaznOf = (health: "stalled" | null, locale: Locale) => {
@@ -446,7 +446,7 @@ describe("PhoneStripView — PR-2's line, lead values and remedies (Option A)", 
   type Facts = NonNullable<StreamPhone["phone"]>;
   const facts = (over: Partial<Facts> = {}): Facts => ({
     present: true, silent: false, notResponding: false, model: "Pixel 8", appVersion: "1.4.0", mode: "automatic", state: "publishing",
-    notReady: null, notReadyShown: false, health: null, startFailed: null, lastBeatAt: "2026-10-08T12:00:00Z",
+    notReady: null, notReadyShown: false, health: null, startFailed: null, pairedAt: "2026-10-08T11:30:00Z", lastBeatAt: "2026-10-08T12:00:00Z",
     elapsedMs: 4_000, beat: { battery: null, bitrateKbps: null, delivery: null, thermal: null, dataUsedMB: null }, farPoll: false, ...over,
   });
   const readModel = (f: Facts | null, over: Partial<StreamPhone> = {}): StreamPhone => ({

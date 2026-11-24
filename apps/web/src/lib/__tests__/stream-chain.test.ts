@@ -280,7 +280,7 @@ describe("R2006 — a composed session's destination is neutral, never Connectin
 type CapturePhone = NonNullable<Parameters<typeof chainFor>[1]>["capture"];
 const beating = (over: Record<string, unknown> = {}) => ({
   present: true, silent: false, notResponding: false, model: null, appVersion: null, mode: null, state: "publishing",
-  notReady: null, notReadyShown: false, health: null, startFailed: null, lastBeatAt: "2026-09-30T12:00:00.000Z", elapsedMs: 5_000,
+  notReady: null, notReadyShown: false, health: null, startFailed: null, pairedAt: "2026-09-30T11:30:00.000Z", lastBeatAt: "2026-09-30T12:00:00.000Z", elapsedMs: 5_000,
   beat: { battery: null, bitrateKbps: null, delivery: null, thermal: null, dataUsedMB: null }, farPoll: false, ...over,
 }) as NonNullable<NonNullable<CapturePhone>["phone"]>;
 const LIVE_CD = { kind: "live" as const, reason: "phone_lost" as const, elapsedMs: 160_000, remainingMs: 740_000 };

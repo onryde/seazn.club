@@ -88,8 +88,8 @@ const readRig = (r: CaptureRig) => read(r.auth, r.fixtureId, r.now);
 
 /** The pairing row the REAL beat wrote for `phone` (its latest), for the cadence it answered. */
 async function pairingOf(r: CaptureRig, phone: string) {
-  const [p] = await sql<{ id: string; answered_poll_seconds: number; ended_at: Date | null; end_cause: string | null }[]>`
-    select p.id, p.answered_poll_seconds, p.ended_at, p.end_cause from fixture_stream_pairings p
+  const [p] = await sql<{ id: string; answered_poll_seconds: number; ended_at: Date | null; end_cause: string | null; claimed_at: Date }[]>`
+    select p.id, p.answered_poll_seconds, p.ended_at, p.end_cause, p.claimed_at from fixture_stream_pairings p
       join fixture_stream_codes c on c.id = p.code_id
      where c.fixture_id = ${r.fixtureId} and p.phone = ${phone} order by p.claimed_at desc, p.id desc limit 1`;
   expect(p, `PREMISE: ${phone} has a pairing`).toBeDefined();
@@ -176,6 +176,8 @@ describe.skipIf(!HAS_DB)("streamPhone — the panel's read model (§9)", () => {
     expect(v.phone).toEqual({
       present: true, silent: false, notResponding: false, model: "Pixel 8", appVersion: "capture/2.1", mode: "automatic",
       state: "armed", notReady: "camera", startFailed: "config", lastBeatAt: beatAt.toISOString(), elapsedMs: 7_000,
+      // T35 review m1: the pairing, named by its claim — the claim beat's instant on the server's clock.
+      pairedAt: beatAt.toISOString(),
       beat: { battery: { percent: 15, charging: false, drainPctPerHour: 4.5 }, bitrateKbps: 2400, delivery: "stalled", thermal: 3, dataUsedMB: 12.5 },
       farPoll: (await pairingOf(r, a)).answered_poll_seconds === POLL_FAR_SECONDS,
       // PR-2 T6: this beat has THREE problems at once (stalled, hot at HOT_THERMAL_STATUS, battery 15 on no charger); W9's
@@ -230,13 +232,18 @@ describe.skipIf(!HAS_DB)("streamPhone — the panel's read model (§9)", () => {
     const a = phoneId("a");
     const b = phoneId("b");
     await beat(r, a, { claim: "new", device: { model: "Phone A" } });
-    r.tick(2_000);
+    const aAt = r.now();
+    r.tick(1_000);
+    await beat(r, a);
+    expect((await readRig(r)).phone?.pairedAt, "T35 review m1: A's pairing, its claim — a later beat does not move it").toBe(aAt.toISOString());
+    r.tick(1_000);
     await beat(r, b, { claim: "new", device: { model: "Phone B" } });
     const tookAt = r.now();
     expect((await pairingOf(r, a)).end_cause, "PREMISE: A was replaced").toBe("replaced");
     r.tick(1_000);
     const v = await readRig(r);
     expect([v.phone?.model, v.phone?.present, v.phone?.lastBeatAt]).toEqual(["Phone B", true, tookAt.toISOString()]);
+    expect(v.phone?.pairedAt, "B's own pairing: claimed when it took the slot").toBe(tookAt.toISOString());
     // PR-2 T12: `elapsedMs` is the server clock's age of the takeover — the rig ticked 1 000 ms since B took the slot.
     expect(v.lastTakeover).toEqual({ at: tookAt.toISOString(), model: "Phone B", elapsedMs: 1_000 });
   });
@@ -278,9 +285,13 @@ describe.skipIf(!HAS_DB)("streamPhone — the panel's read model (§9)", () => {
     const live = await captureRig();
     const a = phoneId("a");
     await live.start(a);
+    const pairedBefore = (await readRig(live)).phone?.pairedAt;
+    expect(pairedBefore, "PREMISE: the session's phone is named").toBeTypeOf("string");
     await reissueStreamCode(live.auth, live.fixtureId);
     const held = await readRig(live);
     expect([held.phone?.present, held.code?.state], "the reissued code's phone still streaming is the current phone").toEqual([true, "active"]);
+    // T35 review m1: the SAME pairing — Task 35's open code fold stays open over a reissue under a live session.
+    expect(held.phone?.pairedAt, "the held phone's pairing is unchanged by the reissue").toBe(pairedBefore);
 
     const idle = await captureRig({ credits: 2 });
     await beat(idle, phoneId("b"), { claim: "new" });
