@@ -221,11 +221,13 @@ async function onlineEntrantCap(owner: Session): Promise<void> {
  * - an online one with a stage and no fixtures: Match Day has no round of it (no online block) and the Fixtures tab says to start
  *   the division but has no card, because the hint does not need fixtures and the card does (§8);
  * - one over the board, with a league: Match Day has no online block and the tab has no card, no hint and no Open round (§7);
- * - an online one with a league, read before and after Start: the round's row and its panel (`?round=`, "start the division
+ * - an online one with a knockout, read before and after Start: the round's row and its panel (`?round=`, "start the division
  *   first" and no press), the card's fixed line and the tab's start hint first; then the panel's Open round press, ON THE PANEL
  *   AND NOWHERE ELSE, and the card saying the round is ready. A signed-in stranger and a signed-out visitor are refused in the
  *   last state.
- * Neither league has a player in it. An online division demands a Lichess link only of an entrant that HAS members
+ * An online division takes Swiss and knockout stages only (Online Chess credits, Task 8: a league is a 422 ONLINE_FORMAT_NOT_SUPPORTED
+ * there), so both online divisions are staged as a knockout; the over-the-board one keeps its league, which an over-the-board division
+ * may have. Neither stage has a player in it. An online division demands a Lichess link only of an entrant that HAS members
  * (entrants.ts: `members.length > 0`) and `members` defaults to [], so two member-less individual entrants make a fixture, and
  * nothing here needs the Lichess consent no smoke can give. What a round needs once opened (seated, linked players) is the e2e's.
  * The flag is ONLINE_CHESS_ALWAYS=1 on the smoke server (ci.yml, smoke-e2e). A create or a start it refuses FAILS here with the
@@ -346,23 +348,26 @@ async function onlineChessDivisionPages(owner: Session, stranger: Session): Prom
   const fixturesTab = (div: { slug: string }): string => at(div, "?tab=fixtures");
   const codeOf = (r: V1Res): string => r.json.error?.code ?? "";
 
-  /** Two member-less individual entrants, one league stage and its fixtures. Records each step and answers the generated fixtures'
-   *  round numbers and its stage id, or null once a step is refused (the caller returns: one cause, one red). */
-  const buildLeague = async (div: { id: string }, label: string): Promise<{ rounds: number[]; stageId: string } | null> => {
+  /** Two member-less individual entrants, one stage of `kind` and its fixtures. Records each step and answers the generated fixtures'
+   *  round numbers and its stage id, or null once a step is refused (the caller returns: one cause, one red).
+   *  Two entrants make ONE match in either format (a single knockout of n entrants plays n - 1; one round-robin pairing of two is one),
+   *  so a knockout answers exactly one fixture. */
+  const buildStage = async (div: { id: string }, label: string, kind: "league" | "knockout"): Promise<{ rounds: number[]; stageId: string } | null> => {
     const ents = await v1(owner, `/api/v1/divisions/${div.id}/entrants`, "POST", [
       { kind: "individual", display_name: `${label} A ${tag}` },
       { kind: "individual", display_name: `${label} B ${tag}` },
     ]);
     check(`online division, ${label}: two member-less entrants, 201 (got ${ents.status} ${codeOf(ents)})`, ents.status === 201);
     if (ents.status !== 201) return null;
-    const staged = await v1(owner, `/api/v1/divisions/${div.id}/stages`, "POST", { seq: 1, kind: "league", name: "League" });
+    const staged = await v1(owner, `/api/v1/divisions/${div.id}/stages`, "POST", { seq: 1, kind, name: kind === "league" ? "League" : "Knockout", config: {} });
     const stage = v1data<{ id: string }>(staged);
-    check(`online division, ${label}: a league stage (got ${staged.status} ${codeOf(staged)})`, staged.status < 300 && !!stage?.id);
+    check(`online division, ${label}: a ${kind} stage (got ${staged.status} ${codeOf(staged)})`, staged.status < 300 && !!stage?.id);
     if (staged.status >= 300 || !stage?.id) return null;
     const generated = await v1(owner, `/api/v1/stages/${stage.id}/generate`, "POST");
     const rounds = (v1data<{ fixtures?: { round_no: number }[] }>(generated)?.fixtures ?? []).map((f) => f.round_no);
-    check(`online division, ${label}: the league has at least one fixture (got ${generated.status} ${codeOf(generated)}; ${rounds.length} fixtures)`, generated.status < 300 && rounds.length >= 1);
-    return generated.status < 300 && rounds.length >= 1 ? { rounds, stageId: stage.id } : null;
+    const enough = kind === "knockout" ? rounds.length === 1 : rounds.length >= 1;
+    check(`online division, ${label}: the ${kind} has ${kind === "knockout" ? "its one" : "at least one"} fixture (got ${generated.status} ${codeOf(generated)}; ${rounds.length} fixtures)`, generated.status < 300 && enough);
+    return generated.status < 300 && enough ? { rounds, stageId: stage.id } : null;
   };
 
   // 1. CREATED playing online, with a stage and nothing generated: no entrant, so no fixture.
@@ -375,8 +380,8 @@ async function onlineChessDivisionPages(owner: Session, stranger: Session): Prom
     empty?.config?.onlinePlay === "lichess",
   );
   if (made.status !== 201 || !empty?.slug || empty.config?.onlinePlay !== "lichess") return;
-  const emptyStaged = await v1(owner, `/api/v1/divisions/${empty.id}/stages`, "POST", { seq: 1, kind: "league", name: "League" });
-  check(`online division: a league stage and no Generate (got ${emptyStaged.status} ${codeOf(emptyStaged)})`, emptyStaged.status < 300);
+  const emptyStaged = await v1(owner, `/api/v1/divisions/${empty.id}/stages`, "POST", { seq: 1, kind: "knockout", name: "Knockout", config: {} });
+  check(`online division: a knockout stage and no Generate (got ${emptyStaged.status} ${codeOf(emptyStaged)})`, emptyStaged.status < 300);
   if (emptyStaged.status >= 300) return;
   await run("created online, a stage and no fixtures", [
     // Match Day answers the competition whose online division has a stage and no fixture: the page is there (its header).
@@ -400,7 +405,7 @@ async function onlineChessDivisionPages(owner: Session, stranger: Session): Prom
   const otb = v1data<{ id: string; slug: string; config?: { onlinePlay?: string } }>(otbMade);
   check(`online division: it has no onlinePlay (got ${JSON.stringify(otb?.config?.onlinePlay)})`, otb?.config?.onlinePlay === undefined);
   if (otbMade.status !== 201 || !otb?.id || otb.config?.onlinePlay !== undefined) return;
-  const otbBuilt = await buildLeague(otb, "over the board");
+  const otbBuilt = await buildStage(otb, "over the board", "league");
   if (otbBuilt === null) return;
   await run("over the board, with fixtures", [
     // Over the board: Match Day is the competition's page and answers 200, but the division's stage has no online round (a round row's key
@@ -416,17 +421,17 @@ async function onlineChessDivisionPages(owner: Session, stranger: Session): Prom
     },
   ]);
 
-  // 3. Created online, with a league.
-  const onlineName = `Chess online league ${tag}`;
+  // 3. Created online, with a knockout.
+  const onlineName = `Chess online knockout ${tag}`;
   const onlineMade = await divisionIn(onlineName, true);
-  check(`online division: a league division created playing online, 201 (got ${onlineMade.status} ${codeOf(onlineMade)})`, onlineMade.status === 201);
+  check(`online division: a division created playing online, 201 (got ${onlineMade.status} ${codeOf(onlineMade)})`, onlineMade.status === 201);
   const online = v1data<{ id: string; slug: string; config?: { onlinePlay?: string } }>(onlineMade);
   check(
     `online division: its config says onlinePlay lichess (got ${JSON.stringify(online?.config?.onlinePlay)})`,
     online?.config?.onlinePlay === "lichess",
   );
   if (onlineMade.status !== 201 || !online?.id || online.config?.onlinePlay !== "lichess") return;
-  const built = await buildLeague(online, "online");
+  const built = await buildStage(online, "online", "knockout");
   if (built === null) return;
   const firstRound = Math.min(...built.rounds);
   check(`online division: its first round is a number (got ${firstRound})`, Number.isInteger(firstRound));
@@ -462,7 +467,7 @@ async function onlineChessDivisionPages(owner: Session, stranger: Session): Prom
   check(`online division: started (got ${started.status} ${codeOf(started)})`, started.status < 300);
   if (started.status >= 300) return;
 
-  // Started, a league has paired round 1 and none is opened: the round's panel is "before" and now holds the press, and the card
+  // Started, the knockout's first round stands paired and none is opened: the round's panel is "before" and now holds the press, and the card
   // says the round is ready (§8 rule 4). The press is the panel's: the tab has the card and not the label.
   await run("online, started, nothing opened", [
     {
