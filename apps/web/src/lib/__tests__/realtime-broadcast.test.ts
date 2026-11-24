@@ -183,3 +183,107 @@ describe("broadcast()", () => {
     expect(sentBodies().map((b) => b.messages)).toEqual([msgs(2, "a"), msgs(1, "b")]);
   });
 });
+
+// The message and topic builders (design §1, the family table). Expected
+// topics, events, reasons and shapes are written from the design and from
+// today's publishers' bodies — never read back from the module.
+describe("message and topic builders", () => {
+  /** 2026-11-24T10:00:00.123Z */
+  const FROZEN_MS = 1795514400123;
+  const FROZEN_AT = "2026-11-24T10:00:00.123Z";
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"], now: FROZEN_MS });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("topic builders give the design's topic names", async () => {
+    const { captureTopic, matchDayTopic, divisionTopic } = await import("../realtime");
+    expect(captureTopic("p-1")).toBe("capture:p-1");
+    expect(matchDayTopic("c-1")).toBe("match-day:c-1");
+    expect(divisionTopic("d-1")).toBe("division:d-1");
+  });
+
+  it("fixtureMessage is today's private state_changed on fixture:{id}", async () => {
+    const { fixtureMessage } = await import("../realtime");
+    expect(fixtureMessage("fx-1", "event")).toStrictEqual({
+      topic: "fixture:fx-1",
+      event: "state_changed",
+      payload: { v: FROZEN_MS, reason: "event", at: FROZEN_AT },
+      private: true,
+    });
+  });
+
+  it("divisionMessages is today's ONE public message: score → state_changed, every other reason → schedule_changed", async () => {
+    const { divisionMessages } = await import("../realtime");
+    // Every reason publishDivisionUpdate declares, with the event today's body carries.
+    const EXPECTED = [
+      ["schedule", "schedule_changed"],
+      ["publish", "schedule_changed"],
+      ["start", "schedule_changed"],
+      ["score", "state_changed"],
+    ] as const;
+    let checked = 0;
+    for (const [reason, event] of EXPECTED) {
+      const out = divisionMessages("dv-1", reason);
+      expect(out, reason).toStrictEqual([
+        { topic: "division:dv-1", event, payload: { v: FROZEN_MS, reason, at: FROZEN_AT } },
+      ]);
+      // Public until the §4 dual-publish window (Task 14 adds the private twin).
+      expect("private" in out[0]!, reason).toBe(false);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: every division reason").toBe(4);
+  });
+
+  it("the nudge reasons are the design's, per family", async () => {
+    const { CAPTURE_NUDGE_REASONS, MATCH_DAY_NUDGE_REASONS } = await import("../realtime");
+    expect(CAPTURE_NUDGE_REASONS).toEqual(["go-live", "stop", "replaced", "over", "next-match"]);
+    expect(MATCH_DAY_NUDGE_REASONS).toEqual(["score", "schedule", "call"]);
+  });
+
+  it("nudgeMessage is a PRIVATE ping {v, reason, at} on its topic — for every reason of both families", async () => {
+    const { nudgeMessage, captureTopic, matchDayTopic, CAPTURE_NUDGE_REASONS, MATCH_DAY_NUDGE_REASONS } =
+      await import("../realtime");
+    let checked = 0;
+    for (const reason of CAPTURE_NUDGE_REASONS) {
+      expect(nudgeMessage(captureTopic("p-1"), reason), reason).toStrictEqual({
+        topic: "capture:p-1",
+        event: "nudge",
+        payload: { v: FROZEN_MS, reason, at: FROZEN_AT },
+        private: true,
+      });
+      checked += 1;
+    }
+    for (const reason of MATCH_DAY_NUDGE_REASONS) {
+      expect(nudgeMessage(matchDayTopic("c-1"), reason), reason).toStrictEqual({
+        topic: "match-day:c-1",
+        event: "nudge",
+        payload: { v: FROZEN_MS, reason, at: FROZEN_AT },
+        private: true,
+      });
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: 5 capture + 3 Match Day reasons").toBe(8);
+  });
+
+  it("a second nudge later is a new ping: v and at move with the clock", async () => {
+    const { nudgeMessage, captureTopic } = await import("../realtime");
+    const first = nudgeMessage(captureTopic("p-1"), "go-live");
+    vi.setSystemTime(FROZEN_MS + 1_000);
+    const second = nudgeMessage(captureTopic("p-1"), "stop");
+    expect(first.payload).toStrictEqual({ v: FROZEN_MS, reason: "go-live", at: FROZEN_AT });
+    expect(second.payload).toStrictEqual({ v: FROZEN_MS + 1_000, reason: "stop", at: "2026-11-24T10:00:01.123Z" });
+  });
+
+  it("a reason from the other family does not type-check (compile-time guard)", async () => {
+    const { nudgeMessage, captureTopic, matchDayTopic } = await import("../realtime");
+    // @ts-expect-error — "score" is a Match Day reason, not a capture one.
+    nudgeMessage(captureTopic("p-1"), "score");
+    // @ts-expect-error — "go-live" is a capture reason, not a Match Day one.
+    nudgeMessage(matchDayTopic("c-1"), "go-live");
+    // @ts-expect-error — a division topic carries no nudge event.
+    nudgeMessage("division:d-1", "score");
+  });
+});

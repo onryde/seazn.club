@@ -92,6 +92,66 @@ export async function broadcast(messages: readonly RealtimeMessage[], label: str
   }
 }
 
+export type FixtureUpdateReason = "event" | "finalize" | "schedule";
+export type DivisionUpdateReason = "schedule" | "publish" | "start" | "score";
+
+/** Why a capture phone is told to beat now (design §2.3). */
+export const CAPTURE_NUDGE_REASONS = ["go-live", "stop", "replaced", "over", "next-match"] as const;
+export type CaptureNudgeReason = (typeof CAPTURE_NUDGE_REASONS)[number];
+/** Why a Match Day screen is told to re-read its day (design §3). */
+export const MATCH_DAY_NUDGE_REASONS = ["score", "schedule", "call"] as const;
+export type MatchDayNudgeReason = (typeof MATCH_DAY_NUDGE_REASONS)[number];
+export type NudgeReason = CaptureNudgeReason | MatchDayNudgeReason;
+
+export type CaptureTopic = `capture:${string}`;
+export type MatchDayTopic = `match-day:${string}`;
+export type DivisionTopic = `division:${string}`;
+
+/** Private topic of one capture pairing (V554 keys it on `capture_pairing_id`). */
+export function captureTopic(pairingId: string): CaptureTopic {
+  return `capture:${pairingId}`;
+}
+/** Private topic of one Match Day code (V555 keys it on `md_code_id`). */
+export function matchDayTopic(codeId: string): MatchDayTopic {
+  return `match-day:${codeId}`;
+}
+/** Topic of one division (V556 keys its private messages on `division_ids`). */
+export function divisionTopic(divisionId: string): DivisionTopic {
+  return `division:${divisionId}`;
+}
+
+/** A score or schedule change on one fixture: private `state_changed`. */
+export function fixtureMessage(fixtureId: string, reason: FixtureUpdateReason): RealtimeMessage {
+  const payload = { v: Date.now(), reason, at: new Date().toISOString() };
+  return { topic: `fixture:${fixtureId}`, event: "state_changed", payload, private: true };
+}
+
+/** A change on one division: `state_changed` for a score, `schedule_changed`
+ *  for every other reason. Today the ONE public message; the private twin of
+ *  the design's §4.3 dual-publish window is added beside it later (Task 14),
+ *  which is why this returns a list. */
+export function divisionMessages(divisionId: string, reason: DivisionUpdateReason): RealtimeMessage[] {
+  return [
+    {
+      topic: divisionTopic(divisionId),
+      event: reason === "score" ? "state_changed" : "schedule_changed",
+      payload: { v: Date.now(), reason, at: new Date().toISOString() },
+    },
+  ];
+}
+
+/**
+ * A nudge: a private ping `{v, reason, at}` that tells the subscriber to
+ * re-read through its own read path (design §1). It carries no state, ids,
+ * scores or URLs. The overloads tie each reason list to its family's topic,
+ * so a Match Day reason on a capture topic does not compile.
+ */
+export function nudgeMessage(topic: CaptureTopic, reason: CaptureNudgeReason): RealtimeMessage;
+export function nudgeMessage(topic: MatchDayTopic, reason: MatchDayNudgeReason): RealtimeMessage;
+export function nudgeMessage(topic: CaptureTopic | MatchDayTopic, reason: NudgeReason): RealtimeMessage {
+  return { topic, event: "nudge", payload: { v: Date.now(), reason, at: new Date().toISOString() }, private: true };
+}
+
 /**
  * Broadcast a state_changed event on `fixture:{id}` after a v2 scoring write
  * (doc 08 §4 — publish after commit). Same transport as tournaments; fire-and-
@@ -108,13 +168,8 @@ export async function broadcast(messages: readonly RealtimeMessage[], label: str
  * — bypassed the `realtime` entitlement gate on the token-mint route
  * (`api/v1/public/fixtures/[id]/realtime-token/route.ts`). Removed.
  */
-export async function publishFixtureUpdate(
-  fixtureId: string,
-  reason: "event" | "finalize" | "schedule",
-): Promise<void> {
-  const payload = { v: Date.now(), reason, at: new Date().toISOString() };
-  const topic = `fixture:${fixtureId}`;
-  await broadcast([{ topic, event: "state_changed", payload, private: true }], `fixture ${fixtureId}`);
+export async function publishFixtureUpdate(fixtureId: string, reason: FixtureUpdateReason): Promise<void> {
+  await broadcast([fixtureMessage(fixtureId, reason)], `fixture ${fixtureId}`);
 }
 
 /**
@@ -124,20 +179,8 @@ export async function publishFixtureUpdate(
  * listeners like the slideshow refresh without one channel per fixture.
  * Fire-and-forget, never throws.
  */
-export async function publishDivisionUpdate(
-  divisionId: string,
-  reason: "schedule" | "publish" | "start" | "score",
-): Promise<void> {
-  await broadcast(
-    [
-      {
-        topic: `division:${divisionId}`,
-        event: reason === "score" ? "state_changed" : "schedule_changed",
-        payload: { v: Date.now(), reason, at: new Date().toISOString() },
-      },
-    ],
-    `division ${divisionId}`,
-  );
+export async function publishDivisionUpdate(divisionId: string, reason: DivisionUpdateReason): Promise<void> {
+  await broadcast(divisionMessages(divisionId, reason), `division ${divisionId}`);
 }
 
 type MintKey = {
@@ -261,14 +304,69 @@ export async function resolveRealtimeMintKey(): Promise<MintKey> {
   return { key: new TextEncoder().encode(secret), alg: "HS256" };
 }
 
+/** Claims `mintRealtimeToken` sets itself: RFC 7519 §4.1's registered claims,
+ *  plus `role`, which is what Supabase authorises on. */
+const MINT_OWNED_CLAIMS = ["role", "sub", "aud", "exp", "iat", "nbf", "iss", "jti"] as const;
+
 /**
- * Mint a subscriber JWT for a PUBLIC fixture channel (doc 09 §4). No user —
- * spectators are anonymous; entitlement (org `realtime` feature) is checked by
- * the route before minting. Short TTL: a spectator page re-requests freely.
- *
- * Header must include `kid` when signing with an asymmetric key so Realtime
- * can pick the matching JWKS entry.
+ * Mint a subscriber JWT for one private realtime topic family. Every family
+ * gets the same header (`kid` when the key is asymmetric, so Realtime can pick
+ * the JWKS entry), `aud` and `role: authenticated`, `iat` now, and
+ * `exp = floor(expiresAt / 1000)`. `claims` is the family's OWN claim — one
+ * name per family, never shared (the V452 rule): its realtime.messages policy
+ * keys on that name alone. A claim the mint owns (`role`, `sub`, the times…)
+ * is refused rather than silently overriding the mint's own value.
  */
+export async function mintRealtimeToken({
+  sub,
+  claims,
+  expiresAt,
+}: {
+  sub: string;
+  claims: Record<string, unknown>;
+  expiresAt: Date;
+}): Promise<string> {
+  const owned = MINT_OWNED_CLAIMS.filter((claim) => claim in claims);
+  if (owned.length > 0) {
+    throw new Error(`Realtime JWT mint: claims may not set ${owned.join(", ")}`);
+  }
+  const { key, alg, kid } = await resolveRealtimeMintKey();
+  const header: { alg: typeof alg; typ: "JWT"; kid?: string } = { alg, typ: "JWT" };
+  if (kid) header.kid = kid;
+  return new SignJWT({ role: "authenticated", sub, ...claims })
+    .setProtectedHeader(header)
+    .setIssuedAt()
+    .setExpirationTime(Math.floor(expiresAt.getTime() / 1000))
+    .setAudience("authenticated")
+    .sign(key);
+}
+
+/** Subscriber JWT for one capture pairing's private topic (`captureTopic`). */
+export async function mintCaptureToken(pairingId: string, expiresAt: Date): Promise<string> {
+  return mintRealtimeToken({ sub: `capture:${pairingId}`, claims: { capture_pairing_id: pairingId }, expiresAt });
+}
+
+/** Subscriber JWT for one Match Day code's private topic (`matchDayTopic`). */
+export async function mintMatchDayToken(codeId: string, expiresAt: Date): Promise<string> {
+  return mintRealtimeToken({ sub: `md:${codeId}`, claims: { md_code_id: codeId }, expiresAt });
+}
+
+/** Subscriber JWT for the private `division:{id}` topics of one competition.
+ *  `division_ids` is a JSON array even for one division (V556 matches with
+ *  jsonb `?`, which reads nothing from a scalar); an empty list mints a token
+ *  that authorises no topic. */
+export async function mintDivisionToken(
+  competitionId: string,
+  divisionIds: readonly string[],
+  expiresAt: Date,
+): Promise<string> {
+  return mintRealtimeToken({
+    sub: `public-competition:${competitionId}`,
+    claims: { division_ids: [...divisionIds] },
+    expiresAt,
+  });
+}
+
 /** Private lobby topic. Not the paid `fixture:{id}` score channel. */
 export function externalPlayLobbyTopic(fixtureId: string): string {
   return `external-play:${fixtureId}`;
@@ -291,19 +389,7 @@ export async function mintExternalPlayLobbyToken(
   subject: string,
   expiresAt: Date,
 ): Promise<string> {
-  const { key, alg, kid } = await resolveRealtimeMintKey();
-  const header: { alg: typeof alg; typ: "JWT"; kid?: string } = { alg, typ: "JWT" };
-  if (kid) header.kid = kid;
-  return new SignJWT({
-    role: "authenticated",
-    sub: subject,
-    lobby_fixture_id: fixtureId,
-  })
-    .setProtectedHeader(header)
-    .setIssuedAt()
-    .setExpirationTime(Math.floor(expiresAt.getTime() / 1000))
-    .setAudience("authenticated")
-    .sign(key);
+  return mintRealtimeToken({ sub: subject, claims: { lobby_fixture_id: fixtureId }, expiresAt });
 }
 
 /** Tell the other lobby screen that Ready changed. Fire-and-forget. Through
@@ -375,21 +461,16 @@ export async function publishRoomBroadcast(fixtureId: string, body: RoomBroadcas
   );
 }
 
-export async function mintPublicFixtureToken(
-  fixtureId: string,
-  ttlSeconds = 3600,
-): Promise<string> {
-  const { key, alg, kid } = await resolveRealtimeMintKey();
-  const header: { alg: typeof alg; typ: "JWT"; kid?: string } = { alg, typ: "JWT" };
-  if (kid) header.kid = kid;
-  return new SignJWT({
-    role: "authenticated",
+/**
+ * Mint a subscriber JWT for a PUBLIC fixture channel (doc 09 §4). No user —
+ * spectators are anonymous; entitlement (org `realtime` feature) is checked by
+ * the route before minting. Short TTL: a spectator page re-requests freely.
+ * `ttlSeconds` from now, as the `${ttl}s` lifetime it always had.
+ */
+export async function mintPublicFixtureToken(fixtureId: string, ttlSeconds = 3600): Promise<string> {
+  return mintRealtimeToken({
     sub: `public:${fixtureId}`,
-    fixture_id: fixtureId,
-  })
-    .setProtectedHeader(header)
-    .setIssuedAt()
-    .setExpirationTime(`${ttlSeconds}s`)
-    .setAudience("authenticated")
-    .sign(key);
+    claims: { fixture_id: fixtureId },
+    expiresAt: new Date(Date.now() + ttlSeconds * 1000),
+  });
 }
