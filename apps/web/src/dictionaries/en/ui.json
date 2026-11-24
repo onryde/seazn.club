@@ -1870,7 +1870,7 @@
   "streaming.seazn.chip.matchPage": "Plays on the match page",
   "streaming.seazn.chip.replay": "Replay kept",
   "streaming.seazn.cost": "Uses one Seazn credit per match, the same as YouTube.",
-  "streaming.seazn.off": "Off. Matches can't pick {name} for new streams. Replays already made stay up on their match pages.",
+  "streaming.seazn.off": "Off. Matches can't pick {name} for new streams. Replays already made stay up on their match pages. Matches that picked {name} will ask for another destination.",
   "streaming.seazn.switch": "Offer {name} on matches",
   "streaming.seazn.state.on": "On",
   "streaming.seazn.state.off": "Off",

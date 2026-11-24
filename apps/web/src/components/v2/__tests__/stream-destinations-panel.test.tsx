@@ -989,6 +989,21 @@ describe("the Seazn Hosted card and the org's own channels (Task 33b)", () => {
     expect(html({ targets: [target()], canEdit: false, seazn: { offered: true } })).not.toContain(OWN_NONE);
   });
 
+  it("the divider's line tells an EDITOR how to add a channel; a viewer, with no button to follow it, gets the heading without it — with and without channels of the org's own (4 checked)", () => {
+    const SUB = `>${esc(m("streaming.own.sub"))}<`;
+    let checked = 0;
+    for (const targets of [[], [target()]]) {
+      for (const canEdit of [true, false]) {
+        const h = html({ targets, canEdit, seazn: { offered: true } });
+        const what = `${targets.length} of its own, ${canEdit ? "editor" : "viewer"}`;
+        expect(h, `${what}: the heading is there`).toContain(`>${m("streaming.own.heading")}<`);
+        expect(h.includes(SUB), `${what}: the instruction line only for an editor`).toBe(canEdit);
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
+  });
+
   it("NO card (SEAZN_HOSTED_LIVE off): no divider, and the page is what it was — the empty state for an org with nothing, the list otherwise", () => {
     const empty = html({ targets: [], seazn: null });
     expect(empty).not.toContain(CARD);

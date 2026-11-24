@@ -1870,7 +1870,7 @@
   "streaming.seazn.chip.matchPage": "Speelt af op de wedstrijdpagina",
   "streaming.seazn.chip.replay": "Herhaling blijft bewaard",
   "streaming.seazn.cost": "Kost één Seazn-credit per wedstrijd, net als YouTube.",
-  "streaming.seazn.off": "Uit. Wedstrijden kunnen {name} niet kiezen voor nieuwe streams. Herhalingen die al gemaakt zijn, blijven op hun wedstrijdpagina staan.",
+  "streaming.seazn.off": "Uit. Wedstrijden kunnen {name} niet kiezen voor nieuwe streams. Herhalingen die al gemaakt zijn, blijven op hun wedstrijdpagina staan. Wedstrijden die {name} kozen, vragen om een andere bestemming.",
   "streaming.seazn.switch": "{name} aanbieden bij wedstrijden",
   "streaming.seazn.state.on": "Aan",
   "streaming.seazn.state.off": "Uit",

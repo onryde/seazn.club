@@ -1870,7 +1870,7 @@
   "streaming.seazn.chip.matchPage": "Se ve en la página del partido",
   "streaming.seazn.chip.replay": "Repetición guardada",
   "streaming.seazn.cost": "Usa un crédito Seazn por partido, igual que YouTube.",
-  "streaming.seazn.off": "Desactivado. Los partidos no pueden elegir {name} para nuevas emisiones. Las repeticiones ya hechas siguen en las páginas de sus partidos.",
+  "streaming.seazn.off": "Desactivado. Los partidos no pueden elegir {name} para nuevas emisiones. Las repeticiones ya hechas siguen en las páginas de sus partidos. Los partidos que eligieron {name} pedirán otro destino.",
   "streaming.seazn.switch": "Ofrecer {name} en los partidos",
   "streaming.seazn.state.on": "Activado",
   "streaming.seazn.state.off": "Desactivado",

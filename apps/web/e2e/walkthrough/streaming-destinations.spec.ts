@@ -280,10 +280,11 @@ async function openStreaming(page: Page): Promise<Locator> {
   return panel;
 }
 const rowOf = (page: Page, id: string): Locator => page.locator(`[data-testid="stream-dest-row"][data-target-id="${id}"]`);
-/** The org's OWN destination rows. The Seazn destination is never a row (Task 33b moved it to the card); the old fixed row's
- *  selector stays excluded, and `seaznRows` is asserted EMPTY, so a row coming back is a red, not a miscount. */
-const rows = (page: Page): Locator => page.locator('[data-testid="stream-dest-row"]:not([data-fixed="seazn"])');
-const seaznRows = (page: Page): Locator => page.locator('[data-testid="stream-dest-row"][data-fixed="seazn"]');
+/** Every row of the list, which is the org's OWN destinations: the Seazn destination is never a row (Task 33b moved it to the card).
+ *  A Seazn row coming back is a red, not a miscount: every `rows` count in this file is exact (0, 1, 3), and where a case knows the
+ *  Seazn id, `rowOf(page, seazn.id)` is asserted EMPTY beside a `rowOf` that finds the org's key (review m6: the old `data-fixed`
+ *  selector named an attribute nothing renders any more). */
+const rows = (page: Page): Locator => page.locator('[data-testid="stream-dest-row"]');
 /** The Seazn Hosted card (Task 33b) and its switch, named as a screen reader names it (the dictionary's own words). */
 const SEAZN_NAME = en("streaming.seazn.name");
 const seaznCard = (page: Page): Locator => page.getByTestId("seazn-card");
@@ -299,17 +300,19 @@ const ADD_FIRST: "stream-dest-add" | "stream-dest-empty-add" = SEAZN_LIVE ? "str
  *  state (Seazn IS a destination) — the Seazn Hosted card with its switch on (the default), the "Your own channels" divider, and no
  *  Seazn row in the list. */
 async function expectNoOwnDestinations(page: Page): Promise<void> {
-  await expect(rows(page), "no destination of the org's own").toHaveCount(0);
-  await expect(seaznRows(page), "the Seazn destination is never a row of the list").toHaveCount(0);
+  // The positive first — what the page draws with nothing of the org's own — so the count of none below is read on a rendered page.
   if (SEAZN_LIVE) {
-    await expect(page.getByTestId("stream-dest-empty"), "LIVE on: the card is there, so there is no empty state").toHaveCount(0);
     await expect(seaznCard(page), "LIVE on: the Seazn Hosted card").toBeVisible();
     await expect(seaznSwitch(page), "on by default").toHaveAttribute("aria-checked", "true");
     await expect(page.getByTestId("stream-own-divider")).toContainText(en("streaming.own.heading"));
+    await expect(page.getByTestId("stream-dest-empty"), "LIVE on: the card is there, so there is no empty state").toHaveCount(0);
   } else {
     await expect(page.getByTestId("stream-dest-empty")).toContainText(en("streamDest.empty"));
     await expect(seaznCard(page), "LIVE off: no card").toHaveCount(0);
   }
+  // No row at all: nothing of the org's own, and never a Seazn row (with LIVE on, one coming back would make this 1). The selector's
+  // positive pair is this file's exact `rows` counts of 1 and 3 once destinations are added.
+  await expect(rows(page), "no row: nothing of the org's own, and no Seazn row").toHaveCount(0);
 }
 
 /** A row action, the width's own way: the ⋯ menu below 768, the inline button at and above it. */
@@ -1186,10 +1189,10 @@ for (const width of [320, 768, 1280] as const) {
     // The Streaming page (Task 33b): Seazn is the card at the top — on, saying what it is — and never a row of the list; the card is
     // fixed (no Rename / Replace key / Remove / menu: the server refuses all three, seazn_destination_fixed), its one control the switch.
     await openStreaming(page);
-    await expect(rowOf(page, seazn!.id), "the Seazn destination is not a row").toHaveCount(0);
-    await expect(seaznRows(page)).toHaveCount(0);
     const card = seaznCard(page);
-    await expect(card).toBeVisible();
+    await expect(card, "the positive first: the card, on the rendered page").toBeVisible();
+    await expect(rowOf(page, seazn!.id), "the Seazn destination is not a row").toHaveCount(0);
+    await expect(rows(page), "no row at all: this org has nothing of its own, and Seazn is the card").toHaveCount(0);
     await expect(card.getByRole("heading", { name: SEAZN_NAME, exact: true })).toBeVisible();
     await expect(card).toContainText(en("streaming.seazn.why"));
     await expect(seaznSwitch(page)).toHaveAttribute("aria-checked", "true");
@@ -1259,7 +1262,10 @@ for (const width of [320, 768, 1280] as const) {
     expect(box, "the switch has a box").not.toBeNull();
     expect(Math.min(box!.width, box!.height), "a 44 px tap target").toBeGreaterThanOrEqual(44);
     await expect(rowOf(dir, yt.id), "the org's own key, under the divider").toBeVisible();
-    await expect(seaznRows(dir)).toHaveCount(0);
+    await expect(rowOf(dir, seazn!.id), "by the same selector that found the key: the Seazn destination is no row").toHaveCount(0);
+    await expect(rows(dir), "the key is the list's one row").toHaveCount(1);
+    await expect(rowOf(dir, yt.id).getByTestId("stream-dest-rename"), "an owner's key row has its Rename (the viewer's pair, step 6)").toHaveCount(1);
+    await expect(dir.getByTestId("stream-own-divider"), "the owner is told how to add a channel").toContainText(en("streaming.own.sub"));
     await expectNoHorizontalScroll(dir);
     await shot(seaznCard(dir), `12-${width}-card-on.png`);
 
@@ -1311,7 +1317,10 @@ for (const width of [320, 768, 1280] as const) {
     await expect(seaznCard(page).getByRole("switch"), "read-only: no switch").toHaveCount(0);
     await expect(seaznCard(page).locator("button"), "read-only: nothing to press").toHaveCount(0);
     await expect(seaznCard(page).getByTestId("seazn-card-state")).toHaveText(en("streaming.seazn.state.on"));
-    await expect(rowOf(page, yt.id).getByTestId("stream-dest-rename")).toHaveCount(0);
+    await expect(rowOf(page, yt.id), "the viewer sees the org's key").toBeVisible();
+    await expect(rowOf(page, yt.id).getByTestId("stream-dest-rename"), "…without its Rename (step 2: the owner's row has one)").toHaveCount(0);
+    await expect(page.getByTestId("stream-own-divider"), "the divider's heading").toContainText(en("streaming.own.heading"));
+    await expect(page.getByTestId("stream-own-divider"), "…without the editor's instruction (step 2: the owner's has it)").not.toContainText(en("streaming.own.sub"));
     await expectNoHorizontalScroll(page);
     await shot(seaznCard(page), `12-${width}-card-viewer.png`);
   });

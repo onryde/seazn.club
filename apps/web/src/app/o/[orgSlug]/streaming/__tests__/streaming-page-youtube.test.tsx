@@ -50,12 +50,18 @@ const channelRow = {
 };
 
 beforeEach(() => {
+  // This file is the YouTube landing's: it pins the Seazn Hosted flag OFF itself, so a developer's SEAZN_HOSTED_LIVE (.env.local) cannot
+  // make the page read the org's switch (Task 33b), which this file's stream-targets mock does not double (review m8).
+  vi.stubEnv("SEAZN_HOSTED_LIVE", "");
   m.requirePageAuth.mockReset().mockResolvedValue({ auth: { orgId: ORG, userId: "u-1", role: "owner", via: "session", keyId: null }, org: { id: "org-1", name: "Riverside CC", slug: "riverside", role: "owner" }, canEdit: true });
   m.hasFeature.mockReset().mockResolvedValue(true);
   m.listStreamTargets.mockReset().mockResolvedValue([]);
   setRelayDriversForTest({ ingest: new FakeIngest(), runner: new FakeRunner() });
 });
-afterEach(() => setRelayDriversForTest(null));
+afterEach(() => {
+  setRelayDriversForTest(null);
+  vi.unstubAllEnvs();
+});
 
 describe("Streaming page + real panel — the connect round trip's landing reaches the screen", () => {
   it("EVERY banner code in the URL shows ITS sentence (twelve checked), and only that one", async () => {

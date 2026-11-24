@@ -1870,7 +1870,7 @@
   "streaming.seazn.chip.matchPage": "Diffusé sur la page du match",
   "streaming.seazn.chip.replay": "Replay conservé",
   "streaming.seazn.cost": "Utilise un crédit Seazn par match, comme YouTube.",
-  "streaming.seazn.off": "Désactivé. Les matchs ne peuvent pas choisir {name} pour de nouveaux directs. Les replays déjà faits restent sur la page de leur match.",
+  "streaming.seazn.off": "Désactivé. Les matchs ne peuvent pas choisir {name} pour de nouveaux directs. Les replays déjà faits restent sur la page de leur match. Les matchs qui avaient choisi {name} demanderont une autre destination.",
   "streaming.seazn.switch": "Proposer {name} sur les matchs",
   "streaming.seazn.state.on": "Activé",
   "streaming.seazn.state.off": "Désactivé",

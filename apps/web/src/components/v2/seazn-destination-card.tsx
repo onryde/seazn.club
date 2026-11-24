@@ -175,7 +175,8 @@ export function SeaznDestinationCard({ orgId, offered, canEdit }: {
             </li>
           ))}
         </ul>
-        {/* The off line REPLACES the credit line, so the card does not grow when it is turned off. */}
+        {/* The off line REPLACES the credit line. It is longer (a boxed note of two to five lines against the credit line's one), so the
+            card GROWS when it is turned off — after the tap, so no layout shift is counted; the owner sees it at sign-off (review m1). */}
         {on ? (
           <p id={lineId} data-testid="seazn-card-cost" className="mt-2.5 text-xs text-slate-500">{msg("streaming.seazn.cost")}</p>
         ) : (

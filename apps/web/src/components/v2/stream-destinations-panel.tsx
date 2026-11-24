@@ -217,7 +217,8 @@ export function StreamDestinationsPanel({
           <h2 className="flex items-center gap-3 text-sm font-semibold text-slate-700 after:h-px after:flex-1 after:bg-slate-200 after:content-['']">
             {msg("streaming.own.heading")}
           </h2>
-          <p className="mt-1 text-sm text-slate-500">{msg("streaming.own.sub")}</p>
+          {/* The line is an instruction ("connect it, or add its streaming key"): only an editor has the buttons to follow it. */}
+          {canEdit && <p className="mt-1 text-sm text-slate-500">{msg("streaming.own.sub")}</p>}
         </div>
       )}
       {canEdit && (own.length > 0 || divided) && (

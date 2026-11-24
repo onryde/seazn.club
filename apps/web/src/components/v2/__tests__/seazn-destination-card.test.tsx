@@ -70,6 +70,12 @@ const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replac
 const LOCALES = ["en", "es", "fr", "nl"] as const;
 const dictOf = (locale: (typeof LOCALES)[number]): Dict =>
   JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "dictionaries", locale, "ui.json"), "utf8")) as Dict;
+/** The state word's opening tag alone (its attributes, nothing after it); throws when the word is missing, so a probe on it is never vacuous. */
+const stateTag = (h: string): string => {
+  const tag = /<span[^>]*data-testid="seazn-card-state"[^>]*>/.exec(h)?.[0];
+  if (tag === undefined) throw new Error("the state word is not on the card");
+  return tag;
+};
 
 type Props = Parameters<typeof SeaznDestinationCard>[0];
 const props = (over: Partial<Props> = {}): Props => ({ orgId: ORG, offered: true, canEdit: true, ...over });
@@ -141,6 +147,7 @@ describe("what an editor sees", () => {
     expect(html).toMatch(/role="switch"[^>]*aria-checked="true"/);
     expect(html).toContain(`aria-label="${esc(m("streaming.seazn.switch", { name: NAME }))}"`);
     expect(html).toMatch(/data-testid="seazn-card-state"[^>]*>On</);
+    expect(stateTag(html), "beside the switch the word repeats aria-checked, so assistive tech skips it").toContain('aria-hidden="true"');
   });
 
   it("OFF: a switch that reads off and the off line in place of the credit line — the line says new streams only, and that replays already made stay up (owner Q2)", () => {
@@ -155,6 +162,8 @@ describe("what an editor sees", () => {
     // The rulings themselves (owner 2026-11-23, Q2), typed here on purpose: the sentence must keep saying both.
     expect(m("streaming.seazn.off", { name: NAME })).toMatch(/replays already made stay up on their match pages/i);
     expect(m("streaming.seazn.off", { name: NAME })).toMatch(/new streams/i);
+    // A match that had SAVED Seazn has no destination while it is off (T33, openapi.ts): the line says so (review m9, owner rec).
+    expect(off![1]).toMatch(new RegExp(`Matches that picked ${NAME} will ask for another destination\\.$`));
     // Muted, not hidden: the explanation and the chips stay, so an organiser can see what they turned off.
     expect(html).toContain(esc(m("streaming.seazn.why")));
     expect([...html.matchAll(/data-testid="seazn-card-chip"/g)].length).toBe(3);
@@ -179,6 +188,7 @@ describe("what a member who cannot edit sees: the card, read-only", () => {
       expect(html, `${offered}: no switch`).not.toContain('role="switch"');
       expect(html, `${offered}: nothing to press`).not.toContain("<button");
       expect(html, `${offered}: the state in words`).toMatch(new RegExp(`data-testid="seazn-card-state"[^>]*>${offered ? "On" : "Off"}<`));
+      expect(stateTag(html), `${offered}: the word is the viewer's ONLY statement of the state — read by assistive tech`).not.toContain("aria-hidden");
       expect(html.includes('data-testid="seazn-card-off"'), `${offered}: the off line only when off`).toBe(!offered);
       checkedStates++;
     }
@@ -202,7 +212,8 @@ describe("every locale", () => {
         expect(typeof dict[k] === "string" && dict[k] !== "", `${locale}: ${k}`).toBe(true);
         expect(on, `${locale}: ${k}`).toContain(esc(dict[k] as string));
       }
-      expect(off, `${locale}: the off line`).toContain(esc((dict["streaming.seazn.off"] as string).replace("{name}", "Seazn Hosted")));
+      expect(((dict["streaming.seazn.off"] as string).match(/\{name\}/g) ?? []).length, `${locale}: the brand in both sentences of the off line`).toBe(2);
+      expect(off, `${locale}: the off line`).toContain(esc((dict["streaming.seazn.off"] as string).replaceAll("{name}", "Seazn Hosted")));
       expect(on + off, `${locale}: no raw key leaked`).not.toMatch(/streaming\.seazn\./);
       expect(on + off, `${locale}: no unfilled var`).not.toContain("{name}");
       checked++;
@@ -321,7 +332,7 @@ describe("the switch, driven", () => {
 });
 
 describe("a refusal reads as the page's own sentence — never the server's English", () => {
-  it("each refusal the route can give (5 checked)", async () => {
+  it("each refusal the route can give, and the network failing (6 checked)", async () => {
     const cases: [string, () => Promise<unknown>, string][] = [
       ["403 FORBIDDEN (a viewer)", () => wire(new HttpError(403, "Insufficient permissions")), m("streamDest.error.forbidden")],
       ["401 UNAUTHENTICATED (signed out in another tab)", () => wire(new AuthError("Not signed in")), m("streamDest.error.signedOut")],
@@ -342,6 +353,7 @@ describe("a refusal reads as the page's own sentence — never the server's Engl
       checkedCases++;
     }
     expect(checkedCases).toBe(cases.length);
+    expect(checkedCases, "the title's count").toBe(6);
   });
 });
 
