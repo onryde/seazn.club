@@ -17,7 +17,8 @@
 //   - an empty input: a token with no claims reads nothing; a blank capture id reads only the bare `capture:` topic,
 //     which captureTopic and mintCaptureToken refuse to make; no realtime schema / no realtime.messages skip;
 //   - after a withdrawal: the policy dropped by hand reads nothing, and a re-run restores the identical row;
-//   - another surface: fixture and lobby tokens read no capture topic, and a capture token reads neither of theirs;
+//   - another surface: fixture, lobby, match-day and division tokens read no capture topic, and a capture token reads
+//     none of theirs (V555 and V556 add their own pairs to this one matrix);
 //   - not the table's owner: the delta skips with its notice and leaves the earlier policies as they were.
 //
 // Applies to another sport: N/A (no sport rules).
@@ -27,10 +28,14 @@ import { decodeJwt } from "jose";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   captureTopic,
+  divisionTopic,
   externalPlayLobbyTopic,
   fixtureMessage,
+  matchDayTopic,
   mintCaptureToken,
+  mintDivisionToken,
   mintExternalPlayLobbyToken,
+  mintMatchDayToken,
   mintPublicFixtureToken,
 } from "@/lib/realtime";
 import { sql, type Tx } from "@/lib/db";
@@ -107,12 +112,18 @@ async function tokens(): Promise<Token[]> {
   const until = new Date(Date.now() + 10 * 60_000);
   const decoded = async (t: Promise<string>) => ({ ...decodeJwt(await t) }) as Record<string, unknown>;
   const captureA = await decoded(mintCaptureToken("A", until));
+  const matchDayA = await decoded(mintMatchDayToken("A", until));
+  const divisionA = await decoded(mintDivisionToken("C", ["A"], until));
   return [
     { name: "capture A", claims: captureA },
     { name: "capture B", claims: await decoded(mintCaptureToken("B", until)) },
     { name: "fixture A", claims: await decoded(mintPublicFixtureToken("A")) },
     { name: "lobby A", claims: await decoded(mintExternalPlayLobbyToken("A", "person:p-1", until)) },
+    { name: "match day A", claims: matchDayA },
+    { name: "division A", claims: divisionA },
     { name: "capture blank id", claims: blanked(captureA) },
+    { name: "match day blank id", claims: blanked(matchDayA) },
+    { name: "division blank id", claims: blanked(divisionA) },
     { name: "no claims", claims: {} },
   ];
 }
@@ -125,15 +136,19 @@ async function captureClaim(): Promise<string> {
   return own[0]!;
 }
 
-/** Channel topics, from the real builders; the last three are the near-miss and empty cases. The bare `capture:` is
- *  typed: captureTopic refuses a blank id (review m2), so no builder can make it. */
+/** Channel topics, from the real builders; the last five are the near-miss and empty cases. The bare family topics
+ *  are typed: every family's builder refuses a blank id (review m2), so none can make them. */
 const TOPICS: { name: string; topic: string }[] = [
   { name: "capture:A", topic: captureTopic("A") },
   { name: "capture:B", topic: captureTopic("B") },
   { name: "fixture:A", topic: fixtureMessage("A", "event").topic },
   { name: "external-play:A", topic: externalPlayLobbyTopic("A") },
+  { name: "match-day:A", topic: matchDayTopic("A") },
+  { name: "division:A", topic: divisionTopic("A") },
   { name: "capture:AB", topic: captureTopic("AB") },
   { name: "capture:", topic: "capture:" },
+  { name: "match-day:", topic: "match-day:" },
+  { name: "division:", topic: "division:" },
   { name: "(none)", topic: "" },
 ];
 
@@ -201,10 +216,11 @@ describe("capture pairing read by claim", () => {
     it("anti-vacuity: every (topic, token) pair was read, and exactly the own-family pairs read anything", async ({ skip }) => {
       if (await hasRealtime()) return skip();
       const { pairs, tokens: n, reads } = await afterAllFour();
-      expect(n, "tokens in the matrix").toBe(6);
+      expect(n, "tokens in the matrix").toBe(10);
       expect(pairs, "pairs checked").toBe(TOPICS.length * n);
       // One row each — the broadcast row, never the presence one. The last is the blank-id token on the bare
       // `capture:` topic: V554 binds by string equality, so `'capture:' || ''` matches it (see the blank-id case).
+      // The match-day and division tokens read nothing yet: V555 and V556 add their own pairs to THIS list.
       expect(reads).toEqual([
         ["capture:A <- capture A", 1],
         ["capture:B <- capture B", 1],
@@ -235,6 +251,22 @@ describe("capture pairing read by claim", () => {
       const leaks = reads.map(([k]) => k).filter((k) => k.startsWith("capture:") && !k.includes("<- capture "));
       expect(leaks).toEqual([]);
       expect(reads.map(([k]) => k)).not.toContain("capture:A <- fixture A");
+    });
+
+    // Review m3: the families V555 and V556 bind. They extend this matrix rather than build a second one.
+    it("another surface: a capture token reads neither match-day: nor division:, and their tokens read no capture topic", async ({
+      skip,
+    }) => {
+      if (await hasRealtime()) return skip();
+      const { reads } = await afterAllFour();
+      const keys = reads.map(([k]) => k);
+      const captureOnTheirs = keys.filter((k) => /^(match-day|division):/.test(k) && k.includes("<- capture "));
+      const theirsOnCapture = keys.filter((k) => k.startsWith("capture:") && /<- (match day|division) /.test(k));
+      expect(captureOnTheirs).toEqual([]);
+      expect(theirsOnCapture).toEqual([]);
+      // Non-vacuous: both sides of the check are in the matrix.
+      expect(TOPICS.filter((t) => /^(match-day|division):/.test(t.topic))).toHaveLength(4);
+      expect((await tokens()).filter((t) => /^(match day|division) /.test(t.name))).toHaveLength(4);
     });
 
     it("empty input: a token with no claims reads nothing, on any topic", async ({ skip }) => {
