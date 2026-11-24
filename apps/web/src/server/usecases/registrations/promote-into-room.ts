@@ -57,37 +57,57 @@ export async function promoteIntoNewRoom(divisionId: string, actorId: string | n
   const promoted: RegistrationWithGroupRow[] = [];
   // Whoever the seat gate passes over stays passed over for the places after: one skip is one ledger row and one mail, not one per place.
   const passedOver: string[] = [];
-  for (let place = 0; place < ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION; place++) {
-    const one = await sql.begin(async (tx) => {
-      if (seatGate) await seatGate.load(tx); // a superuser transaction: the link read needs no prelude
-      // The division lock before any registration or entrant row is written (online-entrant-cap.ts: registration row -> `division:`
-      // -> entrants; this promotion locks the waitlisted row only after it, as a withdrawal's does).
-      await lockForPromotionCap(tx, divisionId, capGuard);
-      try {
-        await assertOrganiserPromotionHasRoom(tx, divisionId, { planLimit, confirmOverCapacity: false });
-      } catch (err) {
-        // Reads and locks only: nothing was written, so the transaction is whole and the answer is simply "no more room".
-        if (err instanceof HttpError && err.code !== undefined && NO_ROOM_CODES.has(err.code)) return null;
-        throw err;
-      }
-      const next = await promoteOldestWaitlisted(tx, divisionId, settings, undefined, seatGate, undefined, passedOver);
-      if (next === null) return null; // nobody waiting (or nobody the seat gate lets in)
-      await audit(tx, ctx.competition_id, ctx.org_id, "registration.promoted", {
-        registration_id: next.id,
-        from: "waitlist",
-        reason: "online_size_up",
-      }, actorId);
-      return next;
-    });
-    if (one === null) break;
-    promoted.push(one);
+  try {
+    for (let place = 0; place < ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION; place++) {
+      const one = await sql.begin(async (tx) => {
+        if (seatGate) await seatGate.load(tx); // a superuser transaction: the link read needs no prelude
+        // The division lock before any registration or entrant row is written (online-entrant-cap.ts: registration row -> `division:`
+        // -> entrants; this promotion locks the waitlisted row only after it, as a withdrawal's does).
+        await lockForPromotionCap(tx, divisionId, capGuard);
+        try {
+          await assertOrganiserPromotionHasRoom(tx, divisionId, { planLimit, confirmOverCapacity: false });
+        } catch (err) {
+          // Reads and locks only: nothing was written, so the transaction is whole and the answer is simply "no more room".
+          if (err instanceof HttpError && err.code !== undefined && NO_ROOM_CODES.has(err.code)) return null;
+          throw err;
+        }
+        const next = await promoteOldestWaitlisted(tx, divisionId, settings, undefined, seatGate, undefined, passedOver);
+        if (next === null) return null; // nobody waiting (or nobody the seat gate lets in)
+        await audit(tx, ctx.competition_id, ctx.org_id, "registration.promoted", {
+          registration_id: next.id,
+          from: "waitlist",
+          reason: "online_size_up",
+        }, actorId);
+        return next;
+      });
+      if (one === null) break;
+      promoted.push(one);
+    }
+  } finally {
+    // Every promotion that COMMITTED is announced even when a later place threw: each is its own commit, so the registrant already holds
+    // the place (a card division's pay window is running) and the public pages already differ. The error then goes on to the caller.
+    await announce(promoted, divisionId, ctx, settings);
   }
-  if (promoted.length > 0) {
+  return promoted.map((p) => p.id);
+}
+
+/** The after-commit half of a promotion: the log line, the public pages and each registrant's notice. Never throws - it runs in a
+ *  `finally`, where a throw would hide the error that got us there (`notifyPromoted` and `fireDivisionRevalidate` already swallow their
+ *  own failures; this is the belt over them). */
+async function announce(
+  promoted: RegistrationWithGroupRow[],
+  divisionId: string,
+  ctx: Awaited<ReturnType<typeof divisionCtx>>,
+  settings: NonNullable<Awaited<ReturnType<typeof loadSettings>>>,
+): Promise<void> {
+  if (promoted.length === 0) return;
+  try {
     log.info({ divisionId, promoted: promoted.length }, "registrations: waitlist promoted into the room a bigger Online Chess size made");
     fireDivisionRevalidate(divisionId, ctx.competition_id);
     // Queued, not awaited one by one: `notifyPromoted` swallows its own failures (a promotion mail must never undo the promotion), so
     // waiting for the lot only means the registrants' notices are on the outbox when the payment that made the room returns.
     await Promise.all(promoted.map((p) => notifyPromoted(p, ctx, settings, fallbackOrigin(), { firstAttempt: "request" })));
+  } catch (err) {
+    log.error({ err, divisionId }, "registrations: announcing the promotions into a bigger Online Chess size failed");
   }
-  return promoted.map((p) => p.id);
 }

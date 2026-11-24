@@ -20,7 +20,8 @@
 //   P6  the promotion fires although the payment was refused       -> "a refused payment promotes nobody"
 //   P7  the pay door's error swallow dropped                        -> "a failed promotion never fails the payment"
 //   P8  the passed-over set not shared between places               -> "a registrant the seat gate turns away is passed over"
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+//   P9  the announcement is not in a `finally` (a throw skips it)    -> "a later place that throws"
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/posthog-server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/posthog-server")>();
@@ -30,6 +31,34 @@ const sentry = vi.hoisted(() => ({ captured: [] as unknown[] }));
 vi.mock("@/lib/sentry", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/sentry")>();
   return { ...actual, captureError: vi.fn((err: unknown) => void sentry.captured.push(err)) };
+});
+
+// Fault injection for "a later place throws": the ledger write of the Nth PROMOTION fails, so that place's transaction rolls back
+// while the places before it stay committed. Armed per test (`failOnPromotion` = which promotion), counted per armed run.
+const inject = vi.hoisted(() => ({ failOnPromotion: 0, seen: 0 }));
+vi.mock("@/server/usecases/audit", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/usecases/audit")>();
+  return {
+    ...actual,
+    audit: vi.fn(async (...args: Parameters<typeof actual.audit>) => {
+      if (args[3] === "registration.promoted" && inject.failOnPromotion > 0 && ++inject.seen === inject.failOnPromotion) {
+        throw new Error("injected: the ledger write of a later promotion fails");
+      }
+      return actual.audit(...args);
+    }),
+  };
+});
+// Every public-page revalidation, by division (the real one still runs, and finds no Next request here).
+const revalidated = vi.hoisted(() => ({ divisions: [] as string[] }));
+vi.mock("@/server/public-site/revalidate", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/public-site/revalidate")>();
+  return {
+    ...actual,
+    fireDivisionRevalidate: vi.fn((divisionId: string, competitionId?: string) => {
+      revalidated.divisions.push(divisionId);
+      return actual.fireDivisionRevalidate(divisionId, competitionId);
+    }),
+  };
 });
 
 import { sql } from "@/lib/db";
@@ -188,6 +217,72 @@ describe.skipIf(!HAS_DB)("the promotion honours every other line: the registrati
     expect(await r.statusOf(linked), "the next in line is seated").toBe("confirmed");
     const skipped = await auditRows(r.division.id, "registration.promotion_skipped");
     expect(skipped.map((s) => s.registration_id), "the skip is on the ledger, as a freed place leaves it").toEqual([unlinked]);
+  }, 120_000);
+});
+
+describe.skipIf(!HAS_DB)("a later place that throws still announces the places that committed", () => {
+  const noticesFor = async (ids: string[]): Promise<number> =>
+    (await sql<{ n: number }[]>`select count(*)::int as n from email_outbox where kind = 'registration_promoted' and ref_id in ${sql(ids)}`)[0]!.n;
+  const arm = (nth: number) => {
+    inject.failOnPromotion = nth;
+    inject.seen = 0;
+    revalidated.divisions.length = 0;
+  };
+  afterEach(() => {
+    inject.failOnPromotion = 0;
+    inject.seen = 0;
+  });
+
+  it("the second promotion fails: the first stays promoted AND is mailed AND the public pages are revalidated; the error reaches the caller; the others wait", async () => {
+    const r = await sizeRig({ size: 16, approval: "manual" });
+    await buy(r.orgId, 40);
+    await fillEntrants(r.division.id, 16);
+    const waiting = await queue(r, 3);
+    // The size moves WITHOUT the pay door's wrapper (which would swallow the error), so the caller sees what the loop threw.
+    await sql`update division_online_packages set size = 32 where division_id = ${r.division.id}`;
+    arm(2);
+    await expect(promoteIntoNewRoom(r.division.id, null)).rejects.toThrow(/injected: the ledger write of a later promotion fails/);
+    expect(await statuses(r, waiting), "place 1 committed; place 2 rolled back whole; place 3 never reached").toEqual(["pending", "waitlisted", "waitlisted"]);
+    expect(await auditRows(r.division.id, "registration.promoted"), "one ledger row: the committed place's").toHaveLength(1);
+    expect(await noticesFor([waiting[0]!]), "the committed registrant is told").toBe(1);
+    expect(await noticesFor([waiting[1]!, waiting[2]!]), "nobody who is still waiting is told they were promoted").toBe(0);
+    expect(revalidated.divisions.filter((d) => d === r.division.id), "the public pages are revalidated once for the committed promotion").toHaveLength(1);
+  }, 120_000);
+
+  it("the first promotion fails: nothing committed, so nothing is announced (the empty case of the finally)", async () => {
+    const r = await sizeRig({ size: 16, approval: "manual" });
+    await buy(r.orgId, 40);
+    await fillEntrants(r.division.id, 16);
+    const waiting = await queue(r, 2);
+    await sql`update division_online_packages set size = 32 where division_id = ${r.division.id}`;
+    arm(1);
+    await expect(promoteIntoNewRoom(r.division.id, null)).rejects.toThrow(/injected/);
+    expect(await statuses(r, waiting)).toEqual(["waitlisted", "waitlisted"]);
+    expect(await noticesFor(waiting), "no promotion, no notice").toBe(0);
+    expect(revalidated.divisions.filter((d) => d === r.division.id), "and no revalidation").toHaveLength(0);
+  }, 120_000);
+
+  it("through the pay door: the payment still applies and nothing is thrown, the failure is logged and reported, and the committed places are mailed", async () => {
+    const r = await sizeRig({ size: 16, approval: "auto" });
+    await buy(r.orgId, 40);
+    await fillEntrants(r.division.id, 16);
+    const waiting = await queue(r, 3);
+    const logged = vi.spyOn(log, "error");
+    sentry.captured.length = 0;
+    arm(3); // two places promote, the third fails
+    try {
+      const result = await pay(orgOf(r), r.division.id, 32);
+      expect(result.applied, "the payment applied despite the failed promotion").toBe(true);
+      expect(await r.sizeNow(), "the size moved").toBe(32);
+      expect(await statuses(r, waiting), "two seated, the third waits").toEqual(["confirmed", "confirmed", "waitlisted"]);
+      expect(await noticesFor(waiting.slice(0, 2)), "both committed registrants are told").toBe(2);
+      expect(await noticesFor([waiting[2]!])).toBe(0);
+      expect(revalidated.divisions.filter((d) => d === r.division.id), "revalidated once for the two").toHaveLength(1);
+      expect(logged.mock.calls.length, "the failure is logged once").toBe(1);
+      expect(sentry.captured.length, "and reported once").toBe(1);
+    } finally {
+      logged.mockRestore();
+    }
   }, 120_000);
 });
 
