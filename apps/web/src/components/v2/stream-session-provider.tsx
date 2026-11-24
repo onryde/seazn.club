@@ -4,7 +4,7 @@
 // the provider ALWAYS (a stable root — B5 review m-1) with `enabled` following its stream mount: no stream on the page,
 // no read and no poll. Everything below it reads `useSharedPhoneSession`.
 //
-// `usePhoneSession` moved here from fixture-stream-panel.tsx unchanged but for its options (`enabled`, `initialView`):
+// `usePhoneSession` moved here from the former fixture-stream-panel.tsx (now fixture-stream-panel/) unchanged but for its options (`enabled`, `initialView`):
 // the panel imports it from here, so the provider importing the panel would have been a cycle.
 //
 // Known limit, recorded not fixed (T9b brief): the poll runs only while a session is NOT terminal, so a session started

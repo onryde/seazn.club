@@ -16,7 +16,7 @@ import { enlargedQrSize, holdScreenWakeLock, snapQrSize } from "@/lib/qr-enlarge
 import type { SeaznQr } from "@/lib/seazn-qr";
 
 /** The phone-handover QR's cap, CSS px: ONE value for the two QRs a phone scans to take a job over at a match — the
- *  stream camera's (`fixture-stream-panel.tsx`, the Stream tab's code card) and Remote scoring's (`device-link-panel.tsx`,
+ *  stream camera's (`fixture-stream-panel/phone-tab-body.tsx`, the Stream tab's code card) and Remote scoring's (`device-link-panel.tsx`,
  *  the fixture console's hand-over and Match Day's scorer panel) — so the two can never drift (owner 2026-11-03: "increase
  *  the size of remote scoring QR like streaming"). It is §8a's `QR size` cap (amended 2026-10-01, B6 fix round 1 ruling
  *  I-2): 363. Both payloads are a 57-module symbol (v8 + the quiet zone) — capture QR v2's stream code (§6.12, Option B

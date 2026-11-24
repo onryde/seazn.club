@@ -3,7 +3,7 @@
 // through. The staff gallery uses it now and R2006's template picker must use it too, so what a staff member signs off
 // and what an organiser picks are the same render.
 //
-// It lifts the organiser console's preview pattern (`fixture-stream-panel.tsx`'s strip): the authored 1920×1080 canvas,
+// It lifts the organiser console's preview pattern (`fixture-stream-panel/panel.tsx`'s strip): the authored 1920×1080 canvas,
 // scaled from the top-left into a box whose height is width × 1080 / 1920, so the whole frame is visible at every size
 // and never a crop. It renders THE stage — not a picture of it — with `snapshotOnly`, so no request ever leaves the page
 // (a sample snapshot's fixture id does not exist), and `realtime={false}` with no purpose or key, so no token is minted.

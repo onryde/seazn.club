@@ -399,7 +399,7 @@ describe("useLiveFixture", () => {
   // the guard's own comment names, through the one door it left open.
   //
   // Unreachable in production today (`?delay=` is resolved server-side and
-  // `fixture-stream-panel.tsx` remounts the island by `key`), so this is a
+  // `fixture-stream-panel/` remounts the island by `key`), so this is a
   // latent trap rather than a live defect — and a latent trap in a hook that
   // is now shared with the public match centre.
   it("delayMs 0 → N: the undelayed pass counts as seeded — no wind-back to the mount-time score", async () => {

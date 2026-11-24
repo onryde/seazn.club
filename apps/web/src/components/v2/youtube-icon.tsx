@@ -20,7 +20,7 @@
 // clickable and link back to YouTube content"). So it has exactly two homes, and a test sweeps the source for any third
 // (__tests__/youtube-icon.test.tsx):
 //   * `YoutubeIconLink` — a connected channel's row on the Streaming page: the logo links to that channel on YouTube;
-//   * the fixture panel's "Watch replay" link — a link to a YouTube replay, drawn inside that link (fixture-stream-panel.tsx).
+//   * the fixture panel's "Watch replay" link — a link to a YouTube replay, drawn inside that link (fixture-stream-panel/phone-tab-body.tsx).
 // Every other YouTube row (the destination picker, a pasted-key row, the Connect YouTube buttons) wears `PlatformMark`'s neutral tile
 // or nothing: a row or a button is not a link to YouTube, so it may not carry the logo.
 //

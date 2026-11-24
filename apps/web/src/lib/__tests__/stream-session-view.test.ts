@@ -351,7 +351,7 @@ describe("I1 (B4 review): a Go live whose destination was removed in Directory",
 
 describe("target_in_use names the match (spec §3.3, §5.5)", () => {
   // Every case runs BOTH real functions in production order — createErrorHolder on the raw wire error, then
-  // createErrorText on what it returned (fixture-stream-panel.tsx `setCreateError` and the create-error render).
+  // createErrorText on what it returned (fixture-stream-panel/phone-tab.tsx `setCreateError` and the create-error render).
   const holderOf = async (holder: unknown) => createErrorHolder(await wire(new HttpError(409, "in use", "target_in_use", { holder })));
   const textOf = async (holder: unknown, m = msg) => createErrorText({ code: "target_in_use", holder: await holderOf(holder) }, m);
 
@@ -1576,7 +1576,7 @@ describe("PR-2 §7.1 — Live's read-only line, and §7.4's Details data (owner 
 // ---------------------------------------------------------------------------------------------------------------------
 // Owner ruling 2026-10-09 ("A"): a W5 refusal clears once the phone read flips to present
 // ---------------------------------------------------------------------------------------------------------------------
-/** The panel's glue, exactly as fixture-stream-panel.tsx wires the two helpers: a refusal sets the error and tells the
+/** The panel's glue, exactly as fixture-stream-panel/phone-tab.tsx wires the two helpers: a refusal sets the error and tells the
  *  watch; a read that LANDS asks `readClearsW5`, and a yes retires a W5 error (any other error stays). */
 type Panel = { watch: PresenceWatch; error: CreateFailureCode | null };
 const refuse = (p: Panel, code: CreateFailureCode, issued: number): Panel => ({ watch: presenceAfterRefusal(p.watch, code, issued), error: code });

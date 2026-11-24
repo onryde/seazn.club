@@ -1,7 +1,7 @@
 // A made-for-kids replay is never embedded (owner 2026-10-29; Google YouTube API Services Developer Policies III.E.4.j). The rule lives
 // in ONE predicate (`mayEmbedReplay`, lib/youtube.ts) and ONE component that builds an iframe and a thumbnail request from it
 // (components/public-site/match-centre/replay-embed.tsx), mounted on the public match page and Match Day's live preview. The organiser's panel
-// (components/v2/fixture-stream-panel.tsx) draws links only - controller ruling R6, verified here rather than asserted.
+// (components/v2/fixture-stream-panel/) draws links only - controller ruling R6, verified here rather than asserted.
 //
 // A SWEEP OF THE SOURCE, because the failure it guards is a surface added tomorrow that embeds a YouTube video without going through the
 // rule: a rendered test has not met that surface yet. Every non-test source file that can make a browser load YouTube's player or a

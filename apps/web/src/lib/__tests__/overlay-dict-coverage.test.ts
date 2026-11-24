@@ -150,7 +150,7 @@ function referencedKeys(prefix: string): Set<string> {
  * `` `stream.preview.${style}` `` yields `"stream.preview."`.
  *
  * The orphan check below needs this or it reports a false positive for every
- * key resolved by concatenation: `fixture-stream-panel.tsx:206` renders its
+ * key resolved by concatenation: `fixture-stream-panel/` renders its
  * per-style caption that way, and `stream.preview.slate` therefore appears in
  * no source file as a literal while being fully wired.
  *
@@ -295,7 +295,7 @@ describe("overlay + panel copy is complete in every locale", () => {
   it("finds the keys at all — a scan that matched nothing would pass vacuously", () => {
     expect(referencedKeys("overlay").size).toBeGreaterThanOrEqual(8);
     // RE-PIN (2026-09-10, task 6): the panel has landed, so the floor moves
-    // past the brief's own `>= 12`. `fixture-stream-panel.tsx` resolves 29
+    // past the brief's own `>= 12`. `fixture-stream-panel/` resolves 29
     // `stream.*` literals and `template-registry.ts` (née `theme-registry.ts`) two more (`stream.tab.bar`
     // / `.bug`) — slate's tab key retired with the match-card layer (2026-09-12).
     // 24 is a FLOOR, not that count: it is low enough that adding or merging a

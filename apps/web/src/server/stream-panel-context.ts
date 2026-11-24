@@ -197,7 +197,7 @@ export async function loadStreamPanelContext(args: {
     overlaySides: previewSides,
     // Streaming R1 lane D: the Phone tab's routes address the org, and its idle state needs the balance before any
     // session exists (C1). Read only when the relay is entitled and running — otherwise the tab shows its switched-off
-    // or unavailable state (fixture-stream-panel.tsx), which reads no balance.
+    // or unavailable state (fixture-stream-panel/panel.tsx), which reads no balance.
     orgId: auth.orgId,
     streamBalance: credits?.total ?? 0,
     // Task 14b (R4): the split behind the chip ("{m} free this month · {p} bought") and the plan's monthly allowance for

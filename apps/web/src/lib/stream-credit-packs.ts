@@ -6,7 +6,7 @@
 // changes — this header once called the tile fields INERT for a lane after the
 // Phone tab had wired them, and this repo has six recorded cases of a comment
 // describing the plan as if it had already happened):
-//   * the Phone tab's credit tiles (components/v2/fixture-stream-panel.tsx):
+//   * the Phone tab's credit tiles (components/v2/fixture-stream-panel/credits.tsx):
 //     `labelKey`, `popular`, and the amounts through `streamPackAmountMinor` /
 //     `streamPackPerMatchMinor`;
 //   * `/api/billing/relay-checkout` → lib/relay-checkout.ts: `size` → the pack,

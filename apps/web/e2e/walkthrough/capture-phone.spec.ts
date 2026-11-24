@@ -615,7 +615,7 @@ test("operator start from the phone: 200 {sid}; the panel open at Ready shows it
   // I-2 within ONE poll, counted in answers, not seconds (B9 review I-1): read-model requests issued after the start
   // resolved go through until one of their answers has been DELIVERED; from then on a request is HELD unanswered —
   // unless an earlier one is still in flight, because the panel keeps only the NEWEST read's answer
-  // (fixture-stream-panel.tsx `phoneSeq`): holding the request that supersedes an in-flight answer would discard that
+  // (fixture-stream-panel/phone-tab.tsx `phoneSeq`): holding the request that supersedes an in-flight answer would discard that
   // answer and leave the panel nothing to land (re-review n-1: a first answer slower than one poll was a false red).
   // So the panel can land exactly ONE answer after the start — the newest of the batch that went through — and a pickup
   // on any later answer never sees one and reds, however long it waits. Seconds are not the measure here, answers are:

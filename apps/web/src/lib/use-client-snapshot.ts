@@ -20,7 +20,7 @@
 //
 // The repo already had this shape, privately, in three places
 // (`v3/scorebug.tsx` useIsPhone, `kiosk-phone-card.tsx`'s storage read,
-// `fixture-stream-panel.tsx`'s origin). Those are left as they are; this is the
+// `fixture-stream-panel/panel.tsx`'s origin). Those are left as they are; this is the
 // shared copy for the rest.
 import { useCallback, useSyncExternalStore } from "react";
 
