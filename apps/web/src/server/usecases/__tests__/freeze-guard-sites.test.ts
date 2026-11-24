@@ -94,7 +94,7 @@ const LEDGER: Record<string, [file: string, words: string]> = {
   ],
   "competition-schedule-apply.ts#applyCompetitionSchedule": [SWEEP, '"competition-schedule-apply.ts#applyCompetitionSchedule"'],
   "competitions.ts#patchCompetition": [SWEEP, '"competitions.ts#patchCompetition"'],
-  "divisions.ts#createDivision": [SWEEP, '"divisions.ts#createDivision"'],
+  "divisions/create.ts#createDivision": [SWEEP, '"divisions/create.ts#createDivision"'],
   "entrants.ts#createEntrants": [SWEEP, '"entrants.ts#createEntrants"'],
   "event-import.ts#runImport": [
     "server/usecases/__tests__/event-import-freeze.test.ts",

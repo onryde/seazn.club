@@ -136,7 +136,7 @@ function writes(s: SeededBracket): Array<[site: string, attempt: () => Promise<u
         }),
     ],
     [
-      "divisions.ts#createDivision",
+      "divisions/create.ts#createDivision",
       () =>
         createDivision(s.auth, s.competitionId, {
           name: "Plate",

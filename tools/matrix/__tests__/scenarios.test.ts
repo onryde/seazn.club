@@ -7,6 +7,7 @@ import { generatePagePlayoff } from "@seazn/engine/scheduling";
 import { resolvePositions, validateLineup } from "@seazn/engine/sport";
 import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { divisionsSource } from "./divisions-source.ts";
 import { stagesSource } from "./stages-source.ts";
 import { buildRuleOverride } from "../../../apps/web/src/lib/match-rules/index.ts";
 import { RULES, decide } from "../lib/applicability.ts";
@@ -328,7 +329,7 @@ describe("shared assertions — empty case first, then each way to go red", () =
   });
   it("m-3 (W2c, P-2 A): FORMAT_LOCK is the product's own PATCH lock answer — the code the per-started-stage lock emits for a match-format key, with the status the rule-error table gives it (derived, not typed)", () => {
     const read = (rel: string) => readFileSync(resolve(REPO, rel), "utf8");
-    const divisions = read("apps/web/src/server/usecases/divisions.ts");
+    const divisions = divisionsSource(REPO);
     const locks = read("apps/web/src/server/usecases/rule-locks.ts");
     const table = read("apps/web/src/lib/rule-errors.ts");
     // 1. The PATCH door throws the FIRST refusal's own code, with that code's table status (so the answer is whatever
@@ -433,7 +434,7 @@ describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
     expect((bodies.filter((b) => b.entrants !== undefined)[0]!.entrants as { kinds: string[] }).kinds).toEqual([entrantKindFor("generic", resolveSportCfg("generic", "score"))]);
   });
   it("T12-R1: the fake's guard is the product's — divisions.ts still selects the active kinds and refuses 422 ENTRANT_KIND_IN_USE", () => {
-    const src = readFileSync(resolve(REPO, "apps/web/src/server/usecases/divisions.ts"), "utf8");
+    const src = divisionsSource(REPO);
     expect(src).toContain("select distinct kind from entrants");
     expect(src).toContain("status not in ('withdrawn', 'disqualified')");
     // FU1 throws the shared constant, not a literal; pin the identifier here and its wire value below, so the fake's

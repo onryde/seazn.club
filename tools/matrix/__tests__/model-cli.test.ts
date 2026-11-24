@@ -38,6 +38,7 @@ import { MATCH_MIN_LENGTH, MATCH_REQUIRED_CHECKS, parseRegressions, type Regress
 import { DataDirMismatch } from "../lib/seed-org.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import { baseLiteralsIn } from "./loopback-literals.ts";
+import { divisionsSource } from "./divisions-source.ts";
 import { offlineVariantOrder } from "../lib/variants.ts";
 import { ModelFakeDriver, StaleBracketDriver } from "./model-fake-driver.ts";
 
@@ -889,7 +890,7 @@ describe("model.ts", () => {
 // competition before it is reached.
 describe("the per-competition division cap (T15 fix round 1)", () => {
   /** The key the product's createDivision gate reads (divisions.ts), lifted from its source — never typed. */
-  const DIVISIONS_TS = readFileSync(resolve(REPO, "apps/web/src/server/usecases/divisions.ts"), "utf8");
+  const DIVISIONS_TS = divisionsSource(REPO);
   const PRODUCT_KEY = /const divisionCap = await getLimit\(\s*auth\.orgId,\s*"([^"]+)",\s*competitionId,?\s*\)/.exec(DIVISIONS_TS)?.[1];
   /** The product's gate as the fake enforces it: the (cap+1)-th division in ONE competition is a 402 naming the key. */
   class CappedDivisions extends ModelFakeDriver {

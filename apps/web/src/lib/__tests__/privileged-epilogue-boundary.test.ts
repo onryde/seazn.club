@@ -30,8 +30,12 @@ const DEFINER = "lib/db.ts";
 /** The allow-list: each file allowed to use the epilogue, and why. */
 const ALLOWED: Record<string, string> = {
   "server/usecases/match-day-code-open.ts": "the open's match_day_code_uses row, in the link's own transaction (spec §3)",
-  "server/usecases/divisions.ts":
-    "the Online Chess package a division create, save or delete carries: the unpaid row and its size, the full refund, the unpaid row deleted (spec 2026-11-23 §7.3)",
+  "server/usecases/divisions/create.ts":
+    "the Online Chess package a division create carries: the unpaid row and its size (spec 2026-11-23 §7.3)",
+  "server/usecases/divisions/patch.ts":
+    "the Online Chess package a division save carries: the unpaid row and its size, the full refund, the unpaid row deleted (spec 2026-11-23 §7.3)",
+  "server/usecases/divisions/lifecycle.ts":
+    "the Online Chess package a division delete carries: the full refund, the unpaid row deleted (spec 2026-11-23 §7.3)",
   "server/usecases/competitions.ts":
     "the Online Chess packages a competition delete carries: each paid one refunded, each unpaid one deleted (spec 2026-11-23 §7.3)",
 };
@@ -55,12 +59,19 @@ describe("privilegedEpilogue is used only by its allow-listed callers", () => {
 
   it("no file outside the allow-list names privilegedEpilogue, and every allow-listed file does", () => {
     const named = naming(files, (f) => readFileSync(join(SRC, f), "utf8"));
-    expect(Object.keys(ALLOWED)).toHaveLength(3);
+    expect(Object.keys(ALLOWED)).toHaveLength(5);
     expect(named).toEqual(Object.keys(ALLOWED).sort());
   });
 
-  it("the epilogue allow-list names divisions.ts and competitions.ts and fails for an unnamed file", () => {
-    expect(Object.keys(ALLOWED)).toEqual(expect.arrayContaining(["server/usecases/divisions.ts", "server/usecases/competitions.ts"]));
+  it("the epilogue allow-list names the divisions modules and competitions.ts and fails for an unnamed file", () => {
+    expect(Object.keys(ALLOWED)).toEqual(
+      expect.arrayContaining([
+        "server/usecases/divisions/create.ts",
+        "server/usecases/divisions/patch.ts",
+        "server/usecases/divisions/lifecycle.ts",
+        "server/usecases/competitions.ts",
+      ]),
+    );
     // The real tree, plus one file that names the epilogue and is on no list: the judgement must see it.
     const intruder = "server/usecases/an-unlisted-door.ts";
     const read = (f: string) => (f === intruder ? "await withTenant(org, fn, { privilegedEpilogue: write });" : readFileSync(join(SRC, f), "utf8"));
