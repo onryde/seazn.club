@@ -23,7 +23,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
-import { createStages } from "../stages";
+import { createStagesOnLegacyOnline } from "./_legacy-online-stage";
 import { startDivision } from "../schedule";
 import { PLAY_SCOPES, upsertLichessLink } from "../external-accounts";
 import { createGameIfReady } from "../external-play/create-game";
@@ -114,7 +114,7 @@ async function seedBoard(owner: AuthCtx, config: Record<string, unknown>, member
   const [away] = await createEntrants(owner, division.id, [
     { display_name: "Black", kind: "individual", members: [{ person_id: members[1], is_captain: false, roles: [] }] },
   ]);
-  const [stage] = await createStages(owner, division.id, { seq: 1, kind: "league", name: "RR", config: {} });
+  const [stage] = await createStagesOnLegacyOnline(owner, division.id, { seq: 1, kind: "league", name: "RR", config: {} });
   const [fixture] = await sql<{ id: string }[]>`
     insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key,
                           status, home_entrant_id, away_entrant_id, scheduled_at)

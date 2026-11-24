@@ -98,6 +98,7 @@ import { undoDivision } from "../../history";
 import { startDivision } from "../../schedule";
 import { scoreEvent } from "../../scoring";
 import { createStages, deleteStage, generateStageFixtures, previewReplaceStages, rebuildStageFixtures, replaceStages, unpairSwissRound } from "../../stages";
+import { createStagesOnLegacyOnline } from "../../__tests__/_legacy-online-stage";
 import { withdrawEntrantCascade } from "../../withdrawal";
 import { finishSwissNow } from "../../swiss-rounds-admin";
 
@@ -192,7 +193,7 @@ async function openedGeneratedLeague(players = 4) {
     return e!.id;
   };
   for (let i = 0; i < players; i++) await entrant(`G${i + 1}`, i + 1);
-  const [stage] = await createStages(owner, division.id, { seq: 1, kind: "league", name: "RR", config: {}, progression: null });
+  const [stage] = await createStagesOnLegacyOnline(owner, division.id, { seq: 1, kind: "league", name: "RR", config: {}, progression: null });
   await generateStageFixtures(owner, stage!.id);
   const generated = (await sql<{ id: string }[]>`select id from fixtures where stage_id = ${stage!.id} order by id`).map((f) => f.id);
   const [{ seq }] = await sql<{ seq: number }[]>`

@@ -7,7 +7,7 @@ import type { CameraPolicy } from "@/lib/camera-policy";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { startDivision } from "../schedule";
-import { createStages } from "../stages";
+import { createStagesOnLegacyOnline } from "./_legacy-online-stage";
 import { seedLinkedPair, type SeedOnlineChessRoundResult, type SeedRoundBoard } from "./_external-play-seed";
 
 export type SecondOnlineRound = {
@@ -38,7 +38,7 @@ export async function seedSecondOnlineRound(
     ...(opts.cameraPolicy ? { camera_policy: opts.cameraPolicy } : {}),
   });
   const pair = await seedLinkedPair(a.owner, division.id);
-  const [stage] = await createStages(a.owner, division.id, { seq: 1, kind: "league", name: "RR", config: {} });
+  const [stage] = await createStagesOnLegacyOnline(a.owner, division.id, { seq: 1, kind: "league", name: "RR", config: {} });
   const [board] = await sql<{ id: string }[]>`
     insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status, home_entrant_id, away_entrant_id, scheduled_at)
     values (${stage!.id}, ${division.id}, ${a.orgId}, 1, 1, ${"o4-" + randomUUID().slice(0, 8)}, 'scheduled', ${pair.home.entrantId}, ${pair.away.entrantId}, ${opts.scheduledAt})

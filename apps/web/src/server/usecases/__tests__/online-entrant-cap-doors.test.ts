@@ -42,6 +42,7 @@ import { confirmRegistration, confirmRegistrationWaived, putRegistrationSettings
 import { promoteFromWaitlist, rejectRegistration, withdrawRegistration } from "../registration-approval";
 import { submitRegistrationGroup } from "../registration-submit";
 import { createStages } from "../stages";
+import { createStagesOnLegacyOnline } from "./_legacy-online-stage";
 import { SETTINGS_BASE, seedRegistration } from "./_registration-fixtures";
 import { seedOwner, seedPlayer, type SeedPlayer } from "./_external-play-seed";
 
@@ -543,7 +544,7 @@ describe.skipIf(!HAS_DB)("door: an online division whose FORMAT max is below the
   /** The registration rig, online, with its first stage set to the league while the division is still empty. */
   async function leagueRig(plan: PlanName, approval: "auto" | "manual") {
     const r = await regRig(plan, "online", approval);
-    await createStages(r.auth, r.division.id, { seq: 1, name: "League", progression: null, ...LEAGUE } as never);
+    await createStagesOnLegacyOnline(r.auth, r.division.id, { seq: 1, name: "League", progression: null, ...LEAGUE } as never);
     const [first] = await sql<{ kind: string; config: unknown }[]>`
       select kind, config from stages where division_id = ${r.division.id} order by seq limit 1`;
     expect(formatMaxEntrants(first!), "premise: the stored first stage is the league of max M").toBe(M);

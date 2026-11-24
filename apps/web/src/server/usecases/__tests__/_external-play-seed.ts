@@ -7,6 +7,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { boardgame } from "@seazn/engine/sports/boardgame";
 import { sql } from "@/lib/db";
+import { sizeFor } from "@/lib/online-chess-package";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -16,6 +17,7 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { startDivision } from "../schedule";
+import { createStagesOnLegacyOnline } from "./_legacy-online-stage";
 import { PLAY_SCOPES, upsertLichessLink } from "../external-accounts";
 
 // A linked seed now seals a REAL token (T2), so `upsertLichessLink` needs
@@ -240,7 +242,7 @@ export async function seedOnlineChessFixture(
   if (deferOnlinePlay) {
     await sql`update divisions set config = config || '{"onlinePlay":"lichess"}'::jsonb where id = ${division.id}`;
   }
-  const [stage] = await createStages(owner, division.id, {
+  const [stage] = await createStagesOnLegacyOnline(owner, division.id, {
     seq: 1,
     kind: "league",
     name: "RR",
@@ -358,6 +360,8 @@ export async function seedLinkedPair(
 
 export async function seedOnlineChessRound(opts: SeedOnlineChessRoundOpts): Promise<SeedOnlineChessRoundResult> {
   const roundNo = opts.roundNo ?? 1;
+  // Every entrant this seed will create: two per board, the lone and bye sides, two per spare pair.
+  const onlineEntrants = opts.fixtures * 2 + (opts.unpaired ? 1 : 0) + (opts.bye ? 1 : 0) + (opts.spares ?? 0) * 2;
   const owner = await seedOwner();
   const ownerUserId = owner.userId;
   if (!ownerUserId) throw new Error("seedOwner returned a session with no userId");
@@ -378,8 +382,11 @@ export async function seedOnlineChessRound(opts: SeedOnlineChessRoundOpts): Prom
       clock: opts.clock ?? { base: 900, increment: 10 },
     },
     ...(opts.cameraPolicy ? { camera_policy: opts.cameraPolicy } : {}),
+    // A division made online opens at size 16 (Online Chess credits P14) and the size caps its entrants (Task 7): a round of more
+    // boards than that names the size that holds every entrant it seeds, as an organiser who bought one would.
+    ...(onlineEntrants > 16 && (opts.onlinePlay ?? "lichess") === "lichess" ? { online_size: sizeFor(onlineEntrants)! } : {}),
   });
-  const [stage] = await createStages(owner, division.id, { seq: 1, kind: "league", name: "RR", config: {} });
+  const [stage] = await createStagesOnLegacyOnline(owner, division.id, { seq: 1, kind: "league", name: "RR", config: {} });
   const at = opts.scheduledAt === undefined ? ROUND_T : opts.scheduledAt;
   let seq = 0;
   const insertBoard = async (home: string | null, away: string | null, extra?: { status: string; outcome: unknown }) => {

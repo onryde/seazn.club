@@ -290,7 +290,8 @@ describe.skipIf(!HAS_DB)("putStageRules (design §T3)", () => {
   it("chess (D1), the create doors: createStages and replaceStages refuse a stage clock on a Lichess division by name, writing no stage; over the board both take it", async () => {
     const auth = await seedOrg();
     const STAGE_CLOCK = { base: 300, increment: 3 };
-    const batch = (rules: Record<string, unknown>) => ({ seq: 1, kind: "league" as const, name: "S1", config: { rules }, progression: null });
+    // A knockout: the division plays Online Chess, which takes Swiss and knockout only (a league is 422 ONLINE_FORMAT_NOT_SUPPORTED).
+    const batch = (rules: Record<string, unknown>) => ({ seq: 1, kind: "knockout" as const, name: "S1", config: { rules }, progression: null });
     const stagesOf = async (divisionId: string) =>
       sql<{ id: string; config: { rules?: Record<string, unknown> } }[]>`select id, config from stages where division_id = ${divisionId} order by seq`;
     const DOORS = [
