@@ -6472,7 +6472,7 @@
   "templates.detail.noSports": "Er is op dit moment geen sport beschikbaar om dit sjabloon op te bouwen, dus het kan niet worden ingesteld. Laad de pagina opnieuw of start een lege competitie.",
   "templates.detail.shape.pools": "{count} poules van {size}",
   "templates.detail.take.topNPerGroup": "De beste {n} per groep",
-  "templates.detail.take.bestNth": "{count} beste nummers {nth}",
+  "templates.detail.take.bestNth": "{count} van de beste {nth} plaatsen",
   "templates.detail.take.ordinal.one": "{n}e",
   "templates.detail.take.ordinal.two": "{n}e",
   "templates.detail.take.ordinal.few": "{n}e",

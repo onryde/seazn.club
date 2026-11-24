@@ -132,6 +132,29 @@ describe("takeRuleText — one take rule -> one translated phrase", () => {
     expect(checked, "anti-vacuity: 4 locales x 12 places").toBe(48);
     expect(takeRuleText({ en: enMsg }.en, { kind: "bestNth", nth: 3, count: 2 }, "en"), "the form's own example").toBe("2 best 3rd-placed");
   });
+  // The WHOLE phrase, per language, for the offered places 1..8 and for count 1 and count > 1 (the plural must not leak: French
+  // "4 meilleurs 1er" and Dutch "4 beste nummers 3e" were the broken forms). Written from each language's own grammar: the French
+  // ordinal after "au" and before "rang" (1er, 2e ...), "parmi les meilleurs" reads right for 1 and for 4; the Dutch "van de beste
+  // 3e plaatsen" is right for 1 and for 4.
+  it("bestNth: the whole phrase reads correctly for places 1..8 and for count 1 and count > 1 (no plural agreement left to break)", () => {
+    const ORD: Record<"fr" | "nl", (n: number) => string> = { fr: (n) => (n === 1 ? "1er" : `${n}e`), nl: (n) => `${n}e` };
+    const PHRASE: Record<"fr" | "nl", (c: number, n: number) => string> = {
+      fr: (c, n) => `${c} parmi les meilleurs au ${ORD.fr(n)} rang`,
+      nl: (c, n) => `${c} van de beste ${ORD.nl(n)} plaatsen`,
+    };
+    let checked = 0;
+    for (const locale of ["fr", "nl"] as const) {
+      const dict = ALL_DICTS.find(([l]) => l === locale)![1];
+      const msg: Msg = (key, vars) => tRuntime(dict, key, vars);
+      for (let nth = 1; nth <= 8; nth++) {
+        for (const count of [1, 4]) {
+          expect(takeRuleText(msg, { kind: "bestNth", nth, count }, locale), `${locale} nth ${nth} count ${count}`).toBe(PHRASE[locale](count, nth));
+          checked++;
+        }
+      }
+    }
+    expect(checked, "anti-vacuity: 2 locales x 8 places x 2 counts").toBe(32);
+  });
   it("rankRange", () => {
     expect(takeRuleText(enMsg, { kind: "rankRange", from: 1, to: 4 }, "en")).toBe("Ranked 1–4");
   });
