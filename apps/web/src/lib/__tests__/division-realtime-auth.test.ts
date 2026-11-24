@@ -21,6 +21,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const rt = vi.hoisted(() => {
   const families: string[] = [];
   const setAuth: string[] = [];
+  /** Runs inside `realtimeClient(...)`: between the door's answer and `setAuth`. */
+  const hook = { onClient: null as null | (() => void) };
   const client = {
     realtime: {
       setAuth: async (token: string) => {
@@ -29,19 +31,24 @@ const rt = vi.hoisted(() => {
     },
     channel: () => ({}),
   };
-  return { families, setAuth, client };
+  return { families, setAuth, client, hook };
 });
 vi.mock("@/lib/supabase-browser", () => ({
   realtimeClient: (family: string) => {
     rt.families.push(family);
+    const run = rt.hook.onClient;
+    rt.hook.onClient = null;
+    run?.();
     return rt.client;
   },
 }));
 
 import {
+  DIVISION_AUTH_BACKOFF_JITTER,
   DIVISION_AUTH_BACKOFF_MS,
   DIVISION_TOKEN_REFRESH_MS,
   _resetDivisionRealtimeAuth,
+  _setDivisionAuthRandom,
   acquireDivisionRealtime,
   divisionRealtimeTokenPath,
 } from "../division-realtime-auth";
@@ -91,7 +98,10 @@ beforeEach(() => {
   process.env.NEXT_PUBLIC_SUPABASE_URL = "https://proj.supabase.co";
   rt.families.length = 0;
   rt.setAuth.length = 0;
+  rt.hook.onClient = null;
   _resetDivisionRealtimeAuth();
+  // The backoff's jitter at its middle: every wait is exactly its rung. The jitter has its own tests below.
+  _setDivisionAuthRandom(() => 0.5);
 });
 afterEach(() => {
   _resetDivisionRealtimeAuth();
@@ -221,6 +231,42 @@ describe("acquireDivisionRealtime: sharing and the second call", () => {
     expect(d.calls).toHaveLength(1);
     expect(rt.setAuth).toEqual(["tok-A"]);
   });
+
+  // A page navigated to competition B before A's door answered: A's caller can only release once the answer
+  // lands, so A still has a reference. A set nothing yet, so B gets its own fetch rather than null for the
+  // life of the page.
+  it("a competition still WAITING on its door gives way to the next one: its own fetch, its token; the first answers null", async () => {
+    const d = door({ status: 200, token: "tok-A" }, { status: 200, token: "tok-B", divisionIds: [D3] });
+    const first = acquireDivisionRealtime(COMP);
+    const second = acquireDivisionRealtime(OTHER_COMP);
+    const [a, b] = await Promise.all([first, second]);
+
+    expect(d.calls.map((c) => c.url)).toEqual([divisionRealtimeTokenPath(COMP), divisionRealtimeTokenPath(OTHER_COMP)]);
+    expect(a).toBeNull();
+    expect(b).not.toBeNull();
+    expect(b!.covers(D3)).toBe(true);
+    expect(rt.setAuth, "the first competition's token reached the socket").toEqual(["tok-B"]);
+    // B is now the holder: its refresh runs, and a second ask for B shares it.
+    expect(await acquireDivisionRealtime(OTHER_COMP)).not.toBeNull();
+    expect(d.calls).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(DIVISION_TOKEN_REFRESH_MS);
+    expect(d.calls.at(-1)!.url).toBe(divisionRealtimeTokenPath(OTHER_COMP));
+  });
+
+  it("superseded between the door's answer and setAuth (the client module still loading), the first never sets its token", async () => {
+    door({ status: 200, token: "tok-A" }, { status: 200, token: "tok-B" });
+    let second: Promise<unknown> | null = null;
+    // A's answer is in; while A builds its client, the page asks for B.
+    rt.hook.onClient = () => {
+      second = acquireDivisionRealtime(OTHER_COMP);
+    };
+    const a = await acquireDivisionRealtime(COMP);
+    expect(second, "premise: B was asked inside A's window").not.toBeNull();
+    const b = await second!;
+    expect(a).toBeNull();
+    expect(b).not.toBeNull();
+    expect(rt.setAuth).toEqual(["tok-B"]);
+  });
 });
 
 describe("refresh at 50 minutes", () => {
@@ -295,6 +341,52 @@ describe("refresh at 50 minutes", () => {
 });
 
 describe("CHANNEL_ERROR / CLOSED re-fetch with backoff", () => {
+  // Cross-tab jitter: N tabs behind one NAT, failing together, must not all hit the door's shared 120/min bucket
+  // at +1 s. Each rung waits rung × (1 − J + 2J·random()); both ends are pinned with an injected random source.
+  it("the jitter is ±50% of each rung", () => {
+    expect(DIVISION_AUTH_BACKOFF_JITTER).toBe(0.5);
+  });
+
+  const ends: [string, () => number, (rung: number) => number][] = [
+    ["low end (random 0): half the rung", () => 0, (rung) => rung / 2],
+    ["high end (random → 1): one and a half rungs", () => 1 - 1e-9, (rung) => rung * 1.5],
+  ];
+  for (const [name, source, expected] of ends) {
+    it(`${name}, on every rung, not a millisecond before`, async () => {
+      _setDivisionAuthRandom(source);
+      const d = door({ status: 200 });
+      const s = await acquireDivisionRealtime(COMP);
+      let checked = 0;
+      for (const rung of DIVISION_AUTH_BACKOFF_MS) {
+        const before = d.calls.length;
+        s!.channelStatus("CHANNEL_ERROR");
+        await vi.advanceTimersByTimeAsync(expected(rung) - 1);
+        expect(d.calls.length, `rung ${rung}: re-fetched early`).toBe(before);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(d.calls.length, `rung ${rung}: no re-fetch at ${expected(rung)} ms`).toBe(before + 1);
+        checked += 1;
+      }
+      expect(checked, "anti-vacuity: every rung").toBe(DIVISION_AUTH_BACKOFF_MS.length);
+    });
+  }
+
+  it("two tabs failing together re-fetch at different instants (a real spread, not one burst)", async () => {
+    const draws = [0.1, 0.9];
+    const at: number[] = [];
+    for (const r of draws) {
+      _resetDivisionRealtimeAuth();
+      _setDivisionAuthRandom(() => r);
+      const t0 = Date.now();
+      const d = door({ status: 200 });
+      const s = await acquireDivisionRealtime(COMP);
+      s!.channelStatus("CHANNEL_ERROR");
+      while (d.calls.length < 2) await vi.advanceTimersByTimeAsync(10);
+      at.push(Date.now() - t0);
+    }
+    expect(at).toHaveLength(2);
+    expect(at[1]! - at[0]!).toBeGreaterThanOrEqual(DIVISION_AUTH_BACKOFF_MS[0] * 0.8 - 10);
+  });
+
   it("the backoff ladder grows and is bounded", () => {
     expect(DIVISION_AUTH_BACKOFF_MS.length).toBeGreaterThan(1);
     for (let i = 1; i < DIVISION_AUTH_BACKOFF_MS.length; i += 1) {

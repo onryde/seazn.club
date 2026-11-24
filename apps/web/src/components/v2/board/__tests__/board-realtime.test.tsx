@@ -94,6 +94,8 @@ import {
   DIVISION_AUTH_BACKOFF_MS,
   DIVISION_TOKEN_REFRESH_MS,
   _resetDivisionRealtimeAuth,
+  _setDivisionAuthRandom,
+  acquireDivisionRealtime,
 } from "@/lib/division-realtime-auth";
 
 const COMP = "c-0001";
@@ -133,6 +135,8 @@ beforeEach(() => {
   vi.stubGlobal("fetch", fetchDoor);
   process.env.NEXT_PUBLIC_SUPABASE_URL = "https://proj.supabase.co";
   _resetDivisionRealtimeAuth();
+  // The backoff's jitter at its middle: every wait is exactly its rung.
+  _setDivisionAuthRandom(() => 0.5);
   rt.reset();
   router.refreshes = 0;
   doorAnswers({ status: 200, token: "door-token-1", divisionIds: ["d1", "d2"] });
@@ -248,5 +252,18 @@ describe("the board's division topics go private", () => {
     expect(rt.channels[0]!.unsubscribed).toBe(1);
     await vi.advanceTimersByTimeAsync(2 * DIVISION_TOKEN_REFRESH_MS);
     expect(door.calls).toHaveLength(1);
+  });
+
+  it("unmounted before the door answers: the late session is handed back — no 50-minute refresh, and another competition can hold the client", async () => {
+    const board = mountBoard([division("d1")], COMP);
+    board.unmount(); // the door's answer is still on its way
+    await vi.advanceTimersByTimeAsync(0);
+    expect(door.calls, "premise: the door was asked").toHaveLength(1);
+    expect(rt.channels).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(DIVISION_TOKEN_REFRESH_MS);
+    expect(door.calls, "a refresh ran for a board that has gone").toHaveLength(1);
+    doorAnswers({ status: 200, token: "door-token-next", divisionIds: ["d1"] });
+    expect(await acquireDivisionRealtime("c-0002")).not.toBeNull();
   });
 });

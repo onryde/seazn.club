@@ -17,8 +17,11 @@
 // session hands its caller the client (to open channels on) and `covers(id)`.
 //
 // One division client means one socket-wide token, so ONE competition is held
-// at a time. A page asking for a second competition while the first is held is
-// refused (null, it polls) rather than overwriting the first one's token.
+// at a time. A page asking for a second competition while the first holds a
+// token is refused (null, it polls) rather than overwriting the first one's
+// token. A first competition still WAITING on its door gives way instead: it
+// has set nothing, and the page that asked has almost always just navigated
+// to the second one (its release only lands once the answer does).
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 /** Re-fetch the door this long after a token was set (spec §4.1: "at about 50 min"; the TTL is 60). */
@@ -27,6 +30,13 @@ export const DIVISION_TOKEN_REFRESH_MS = 50 * 60_000;
 /** The wait before re-fetching after a channel reported CHANNEL_ERROR or CLOSED, by failures in a row.
  *  The last rung repeats. A channel that reaches SUBSCRIBED puts the ladder back on its first rung. */
 export const DIVISION_AUTH_BACKOFF_MS = [1_000, 5_000, 30_000, 120_000, 300_000] as const;
+
+/** Each rung is jittered to [rung × (1 − J), rung × (1 + J)): N tabs behind one NAT, failing together, would
+ *  otherwise all re-fetch at the same instant into the door's shared per-IP bucket (120/min). */
+export const DIVISION_AUTH_BACKOFF_JITTER = 0.5;
+
+/** The backoff's random source: `Math.random`, replaced only by the test seam below. */
+let random: () => number = Math.random;
 
 /** The door's path for a competition. */
 export function divisionRealtimeTokenPath(competitionId: string): string {
@@ -115,6 +125,9 @@ async function start(h: Holder): Promise<boolean> {
   try {
     const { realtimeClient } = await import("@/lib/supabase-browser");
     const client = realtimeClient("division");
+    // Given way to another competition while the import loaded: its token must not be overwritten. (A manual
+    // token is applied synchronously inside setAuth, so this check cannot race it.)
+    if (!h.alive) return false;
     await client.realtime.setAuth(got.token);
     if (!h.alive) return false;
     h.client = client;
@@ -136,7 +149,8 @@ function scheduleRefresh(h: Holder, wait = DIVISION_TOKEN_REFRESH_MS) {
 function scheduleRetry(h: Holder) {
   clearTimer(h);
   h.retrying = true;
-  const wait = DIVISION_AUTH_BACKOFF_MS[Math.min(h.attempt, DIVISION_AUTH_BACKOFF_MS.length - 1)]!;
+  const rung = DIVISION_AUTH_BACKOFF_MS[Math.min(h.attempt, DIVISION_AUTH_BACKOFF_MS.length - 1)]!;
+  const wait = Math.round(rung * (1 - DIVISION_AUTH_BACKOFF_JITTER + 2 * DIVISION_AUTH_BACKOFF_JITTER * random()));
   h.attempt += 1;
   h.timer = setTimeout(() => void renew(h), wait);
 }
@@ -184,8 +198,10 @@ async function renew(h: Holder) {
  */
 export async function acquireDivisionRealtime(competitionId: string): Promise<DivisionRealtimeSession | null> {
   if (held !== null && held.competitionId !== competitionId) {
-    // Another competition holds the client's token. Released but not yet torn down: it goes now.
-    if (held.refs > 0) return null;
+    // Another competition holds the client's token: refuse rather than overwrite it. Released but not yet torn
+    // down, or still waiting on its door (nothing set yet; its caller has navigated away): it gives way now, and
+    // its own acquirers get null.
+    if (held.refs > 0 && held.client !== null) return null;
     drop(held);
   }
   if (held === null) {
@@ -267,8 +283,15 @@ export async function acquireDivisionRealtime(competitionId: string): Promise<Di
   };
 }
 
-/** Test seam: forget the held competition and its timers (vitest runs many pages in one module instance). */
+/** Test seam: forget the held competition and its timers (vitest runs many pages in one module instance), and
+ *  put the backoff's random source back to `Math.random`. */
 export function _resetDivisionRealtimeAuth(): void {
   if (held !== null) drop(held);
   held = null;
+  random = Math.random;
+}
+
+/** Test seam: the backoff jitter's random source, in [0, 1). `() => 0.5` makes every wait exactly its rung. */
+export function _setDivisionAuthRandom(source: () => number): void {
+  random = source;
 }

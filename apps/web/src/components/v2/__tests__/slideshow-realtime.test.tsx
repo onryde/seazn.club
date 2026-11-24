@@ -121,6 +121,8 @@ import {
   DIVISION_AUTH_BACKOFF_MS,
   DIVISION_TOKEN_REFRESH_MS,
   _resetDivisionRealtimeAuth,
+  _setDivisionAuthRandom,
+  acquireDivisionRealtime,
 } from "@/lib/division-realtime-auth";
 import DivisionSlideshowPage from "@/app/slideshow/divisions/[id]/page";
 
@@ -166,6 +168,8 @@ beforeEach(() => {
   vi.stubGlobal("fetch", fetchDoor);
   process.env.NEXT_PUBLIC_SUPABASE_URL = "https://proj.supabase.co";
   _resetDivisionRealtimeAuth();
+  // The backoff's jitter at its middle: every wait is exactly its rung.
+  _setDivisionAuthRandom(() => 0.5);
   rt.reset();
   router.refreshes = 0;
   doorAnswers({ status: 200, token: "door-token-1", divisionIds: [D1, D2] });
@@ -304,6 +308,40 @@ describe("<Slideshow> realtime: the division door and private topics", () => {
     expect(rt.channels.every((c) => c.unsubscribed === 1)).toBe(true);
     await vi.advanceTimersByTimeAsync(2 * DIVISION_TOKEN_REFRESH_MS);
     expect(door.calls).toHaveLength(1);
+  });
+
+  it("unmounted before the door answers: the late session is handed back — no 50-minute refresh, and another competition can hold the client", async () => {
+    const island = renderIsland(Slideshow, board());
+    island.unmount(); // the door's answer is still on its way
+    await vi.advanceTimersByTimeAsync(0);
+    expect(door.calls, "premise: the door was asked").toHaveLength(1);
+    expect(rt.channels).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(DIVISION_TOKEN_REFRESH_MS);
+    expect(door.calls, "a refresh ran for a board that has gone").toHaveLength(1);
+    // The next page, for another competition, is not refused.
+    doorAnswers({ status: 200, token: "door-token-next", divisionIds: [D1] });
+    expect(await acquireDivisionRealtime("c-0002")).not.toBeNull();
+  });
+
+  it("a channel that fails after SUBSCRIBED puts the board back on the 45 s poll while the door refuses to renew", async () => {
+    doorAnswers({ status: 200, token: "door-token-1", divisionIds: [D1, D2] }, { status: 429 });
+    renderIsland(Slideshow, board());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(rt.channels.map((c) => c.name)).toEqual([`division:${D1}`, `division:${D2}`]);
+
+    // Premise: push is up, so nothing refreshes at 45 s.
+    await vi.advanceTimersByTimeAsync(SLIDESHOW_POLL_MS);
+    expect(router.refreshes).toBe(0);
+    // t = 45 s: one channel fails; the door's renewal is refused (429), so nothing rejoins it.
+    rt.channels[0]!.status!("CHANNEL_ERROR");
+    await vi.advanceTimersByTimeAsync(SLIDESHOW_POLL_MS - 1);
+    expect(router.refreshes).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
+    // Premise: the renewal was asked and refused (again on each backoff rung meanwhile).
+    expect(door.calls.length).toBeGreaterThanOrEqual(2);
+    expect(rt.channels, "premise: nothing rejoined").toHaveLength(2);
+    expect(router.refreshes, "the board stayed on the 60 s push-up poll with a dead channel").toBe(1);
   });
 });
 

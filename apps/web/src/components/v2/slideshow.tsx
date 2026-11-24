@@ -259,6 +259,10 @@ export function Slideshow({
         });
         await leavingRef.current;
         if (cancelled) return;
+        // The divisions whose channel is SUBSCRIBED now. Push carries the board only while EVERY division has one:
+        // a channel that fails later (and a renewal the door refuses) puts it back on the 45 s poll, and so does a
+        // division the token does not cover.
+        const up = new Set<string>();
         for (const id of ids) {
           if (!held.covers(id)) continue;
           channels.push(
@@ -269,8 +273,10 @@ export function Slideshow({
               .subscribe((status: string) => {
                 // After cleanup: the CLOSED is the leave this board asked for.
                 if (cancelled) return;
-                if (status === "SUBSCRIBED") setSubscribed(true);
+                if (status === "SUBSCRIBED") up.add(id);
+                else up.delete(id);
                 if (status === "CHANNEL_ERROR" || status === "CLOSED") failed = true;
+                setSubscribed(up.size === ids.length);
                 held.channelStatus(status);
               }),
           );

@@ -215,6 +215,7 @@ import {
   DIVISION_AUTH_BACKOFF_MS,
   DIVISION_TOKEN_REFRESH_MS,
   _resetDivisionRealtimeAuth,
+  _setDivisionAuthRandom,
 } from "@/lib/division-realtime-auth";
 import {
   HUB_BUILD_MARGIN_MS,
@@ -369,6 +370,8 @@ function mount(orgSlug: string, competitionSlug: string, initial: CompetitionHub
 beforeEach(() => {
   vi.useFakeTimers();
   _resetDivisionRealtimeAuth();
+  // The backoff's jitter at its middle: every wait is exactly its rung.
+  _setDivisionAuthRandom(() => 0.5);
   door.reset();
   log.entries.length = 0;
   log.families.length = 0;
