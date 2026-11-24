@@ -274,6 +274,57 @@ describe.skipIf(!HAS_DB)("the beat answer's realtime — the current pairing onl
     expect(mintFailures()).toEqual([]);
   });
 
+  it("replaced AFTER its beat committed — B's takeover lands during A's own tick — A hears no channel: never B's topic, never B's token", async () => {
+    // The window: A's armed beat commits with A current (decided.mine = A), then ticks its session OUTSIDE any transaction;
+    // the tick's ingest read is where B's `new` claim (T2, armed slot) is run, so the post-commit re-read finds B holding.
+    // The answer must be judged on BOTH: A is no longer the holder, so A is served nothing — and a guard that trusted the
+    // re-read alone would hand A the NEW holder's channel. Deterministic: the claim runs inside the read, exactly once.
+    const { r, port } = await rig({ credits: 1, connectAfterMs: NEVER });
+    const [A, B] = [phoneId("a"), phoneId("b")];
+    await post(r, A, { claim: "new" });
+    const aPid = (await pairingOf(r, A)).id;
+    const S = await r.start(A);
+    r.tick(SEC);
+    const read = r.ingest.inputStatus.bind(r.ingest);
+    let fired = 0;
+    let bAnswer: Answer | undefined;
+    let bPid = "";
+    let mintsBeforeA = 0;
+    let bMint: StubRealtime["mints"][number] | undefined;
+    // No assertion inside the hook: a throw there is the TICK's failure, which runBeat reports and answers past.
+    vi.spyOn(r.ingest, "inputStatus").mockImplementation(async (inputId, meta) => {
+      if (fired++ === 0) {
+        bAnswer = await post(r, B, { claim: "new" });
+        bPid = (await pairingOf(r, B)).id;
+        mintsBeforeA = port.mints.length;
+        bMint = port.mints.at(-1);
+      }
+      return read(inputId, meta);
+    });
+    const a = await post(r, A, { sid: S, state: "armed" });
+    expect(fired, "PREMISE: A's beat ticked its session and the ingest read ran B's claim, once").toBe(1);
+    expect(bAnswer, "PREMISE: B's claim took over the armed session (T2) and is told to go live on it").toMatchObject({ state: "go-live", sid: S });
+    expect(bPid, "PREMISE: B holds its own pairing").not.toBe(aPid);
+    expect(rtOf(bAnswer!), "PREMISE: B is served ITS pairing's channel").toMatchObject({ topic: `capture:${bPid}`, url: RIG_SUPABASE_URL });
+    expect(bMint, "PREMISE: the mint for B's beat was B's").toMatchObject({ pairingId: bPid, token: rtOf(bAnswer!)!.token });
+    expect(await pairingOf(r, A), "PREMISE: B's takeover ended A's pairing").toMatchObject({ id: aPid, end_cause: "replaced" });
+    const [{ pairing_id }] = await sql<{ pairing_id: string }[]>`select pairing_id from fixture_stream_sessions where id = ${S}`;
+    expect(pairing_id, "PREMISE: the session moved to B").toBe(bPid);
+    const servedStates = contractAnswerBranches().filter((b) => b.realtime).map((b) => b.state);
+    expect(servedStates, "PREMISE: A's answer is a branch the contract admits realtime on, so its absence is a decision").toContain(a.state);
+    expect(a, "A, no longer the holder, is served no channel").not.toHaveProperty("realtime");
+    const text = JSON.stringify(a);
+    expect(text.includes(`capture:${bPid}`), "A's answer never names B's topic").toBe(false);
+    expect(text.includes(rtOf(bAnswer!)!.token), "A's answer never carries B's token").toBe(false);
+    expect(port.mints.length, "nothing minted for A's beat").toBe(mintsBeforeA);
+    expect(port.mints.map((m) => m.pairingId)).toEqual([aPid, bPid]);
+    r.tick(5 * SEC);
+    const next = await post(r, A, { sid: S, state: "armed" });
+    expect(next.state).toBe("replaced");
+    expect(next).not.toHaveProperty("realtime");
+    expect(mintFailures()).toEqual([]);
+  });
+
   it("a mint that THROWS never fails the beat: answered without the key, the beat stored, logged {err, codeId} with Sentry route capture.beat.realtime_mint — on the next beat too", async () => {
     const port = stubRealtime({ mint: async () => { throw new Error("signing key unavailable"); } });
     const errors = vi.spyOn(log, "error");
@@ -499,25 +550,45 @@ describe.skipIf(!HAS_DB)("the token is a secret", () => {
     const r = await captureRig({ credits: 1, connectAfterMs: CONNECT_MS });   // the PROCESS port: real JWTs
     const [A, B] = [phoneId("a"), phoneId("b")];
     const tokens: string[] = [];
-    const keep = (a: Answer) => { const rt = rtOf(a); if (rt) tokens.push(rt.token); return a; };
-    keep(await post(r, A, { claim: "new" }));
+    // Records: every row this fixture's capture wrote, whole — scanned after EVERY beat for every token served so far. A
+    // single scan at the end reads only the final rows, and a token written into a row a later beat overwrites (the pairing's
+    // `last_beat`, the session's `phone_beat`) would be gone by then (review m1, mutant R).
+    let recordScans = 0;
+    let recordRows = 0;
+    const scanRecords = async (when: string) => {
+      const rows = await sql<{ t: string }[]>`
+        select row_to_json(p)::text as t from fixture_stream_pairings p join fixture_stream_codes c on c.id = p.code_id where c.fixture_id = ${r.fixtureId}
+        union all select row_to_json(c)::text from fixture_stream_codes c where c.fixture_id = ${r.fixtureId}
+        union all select row_to_json(s)::text from fixture_stream_sessions s where s.fixture_id = ${r.fixtureId}
+        union all select row_to_json(e)::text from fixture_stream_events e join fixture_stream_sessions s on s.id = e.session_id where s.fixture_id = ${r.fixtureId}
+        union all select row_to_json(b)::text from fixture_stream_phone_beats b join fixture_stream_pairings p on p.id = b.pairing_id
+          join fixture_stream_codes c on c.id = p.code_id where c.fixture_id = ${r.fixtureId}`;
+      expect(rows.length, `records read after ${when}`).toBeGreaterThan(1);
+      for (const { t } of rows) for (const tok of tokens) expect(t.includes(tok), `a stored record carries a token, after ${when}`).toBe(false);
+      recordScans++;
+      recordRows += rows.length;
+    };
+    const keep = async (when: string, a: Answer) => { const rt = rtOf(a); if (rt) tokens.push(rt.token); await scanRecords(when); return a; };
+    await keep("the claim", await post(r, A, { claim: "new" }));
     const S = await r.start(A);
     r.tick(SEC);
-    keep(await post(r, A, { sid: S, state: "armed" }));
+    await keep("go-live", await post(r, A, { sid: S, state: "armed" }));
     r.tick(PAST_CONNECT_MS);
-    keep(await post(r, A, { sid: S, state: "publishing", transport: "srt" }));
+    await keep("live", await post(r, A, { sid: S, state: "publishing", transport: "srt" }));
     r.tick(5 * SEC);
-    keep(await post(r, B, { claim: "new" }));   // taken
+    await keep("B's taken claim", await post(r, B, { claim: "new" }));
     await stopSession(r.auth, r.fixtureId, S, r.deps);
     r.tick(SEC);
-    keep(await post(r, A, { sid: S, state: "publishing", transport: "srt" }));   // over, still current
+    await keep("over, still current", await post(r, A, { sid: S, state: "publishing", transport: "srt" }));
     // A refusal (warn) and a failed mint (error + Sentry) on the same pairing, so our own lines are among those scanned.
     r.tick(SEC);
-    keep(await post(r, A, {}, { ...r.deps, realtime: stubRealtime({ config: { url: "http://rigproject.supabase.co", apikey: RIG_ANON_KEY } }) }));
+    await keep("a refused project", await post(r, A, {}, { ...r.deps, realtime: stubRealtime({ config: { url: "http://rigproject.supabase.co", apikey: RIG_ANON_KEY } }) }));
     r.tick(SEC);
-    keep(await post(r, A, {}, { ...r.deps, realtime: stubRealtime({ mint: async () => { throw new Error("mint down"); } }) }));
+    await keep("a failed mint", await post(r, A, {}, { ...r.deps, realtime: stubRealtime({ mint: async () => { throw new Error("mint down"); } }) }));
     expect(tokens.length, "real tokens minted across the sequence").toBe(4);
     expect(new Set(tokens).size, "each beat's own").toBe(4);
+    expect(recordScans, "the records were scanned after every beat").toBe(7);
+    expect(recordRows, "records scanned in all").toBeGreaterThan(5 * 7);
 
     const text = (v: unknown): string => {
       if (typeof v === "string") return v;
@@ -540,15 +611,5 @@ describe.skipIf(!HAS_DB)("the token is a secret", () => {
     expect(vi.mocked(log.warn).mock.calls.length, "PREMISE: the refusal was logged (and scanned)").toBeGreaterThan(0);
     expect(mintFailures().length, "PREMISE: the failed mint was captured (and scanned)").toBe(1);
 
-    // Records: every row this fixture's capture wrote, whole.
-    const rows = await sql<{ t: string }[]>`
-      select row_to_json(p)::text as t from fixture_stream_pairings p join fixture_stream_codes c on c.id = p.code_id where c.fixture_id = ${r.fixtureId}
-      union all select row_to_json(c)::text from fixture_stream_codes c where c.fixture_id = ${r.fixtureId}
-      union all select row_to_json(s)::text from fixture_stream_sessions s where s.fixture_id = ${r.fixtureId}
-      union all select row_to_json(e)::text from fixture_stream_events e join fixture_stream_sessions s on s.id = e.session_id where s.fixture_id = ${r.fixtureId}
-      union all select row_to_json(b)::text from fixture_stream_phone_beats b join fixture_stream_pairings p on p.id = b.pairing_id
-        join fixture_stream_codes c on c.id = p.code_id where c.fixture_id = ${r.fixtureId}`;
-    expect(rows.length, "records scanned").toBeGreaterThan(5);
-    for (const { t } of rows) for (const tok of tokens) expect(t.includes(tok), "a stored record carries a token").toBe(false);
   });
 });
