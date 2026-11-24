@@ -18,6 +18,7 @@
 // URL), and it passes sanitise.ts's `redact` floor on its way out. A signed URL is never recorded: the CDN call is recorded
 // with its token replaced by `[signed]`, and the fetch's source URL (a signed Cloudflare download) goes only to Bunny.
 import { createHash } from "node:crypto";
+import { z } from "zod";
 import { BUNNY_EMBED_HOST, SEAZN_REPLAY_CALL_TIMEOUT_MS, seaznVideoOrigins, type BunnyConfig } from "@/server/relay/config";
 import { NOOP_RECORDER, type ProviderCallRecorder } from "@/server/relay/ports";
 import { redact } from "@/server/relay/sanitise";
@@ -70,19 +71,28 @@ export function heightsOf(list: unknown): number[] {
   return [...new Set(all)];
 }
 
-const MP4_PATH = /(?:^|\/)play_(\d+)p\.mp4$/i;
-const MP4_SCAN_DEPTH = 6;
-/** The heights of the `play_{h}p.mp4` paths in a `/resolutions` answer, without repeats and in no promised order. The answer is
- *  scanned for the PATHS (the files themselves), wherever the answer nests them, so a field Bunny renames or wraps differently does
- *  not turn into "no file". Nothing else in the answer is read: a height named only in a label (`720p`) is not a file. */
-export function mp4HeightsIn(json: unknown, depth = 0): number[] {
+/** `GET /videos/{id}/resolutions` as stg answered it (the controller's probe, 2026-11-24, two videos): `data.mp4Resolutions` is the list of
+ *  MP4 FALLBACK FILES, each `{resolution: "1080p", path: "play_1080p.mp4"}`. `data.storageResolutions` and `data.storageObjects` hold
+ *  paths too, and are NOT downloadable, so only `mp4Resolutions` is read. `success` is the answer's own verdict. Unknown keys pass. */
+const Mp4Answer = z.object({
+  success: z.literal(true),
+  data: z.object({
+    mp4Resolutions: z.array(z.object({ resolution: z.string().optional(), path: z.string().optional() }).passthrough()),
+  }).passthrough(),
+}).passthrough();
+const MP4_FILE = /^play_(\d+)p\.mp4$/;
+const MP4_LABEL = /^(\d+)p$/;
+/** The heights of the MP4 files a `/resolutions` answer lists, without repeats and in no promised order. A file's height is its `path`
+ *  (`play_{h}p.mp4`), else its `resolution` label when it has no path. An answer that is not the documented shape, is not `success:
+ *  true`, or has no `data.mp4Resolutions` list, has no file: an empty set (the download answers "not ready"), never a guess. */
+export function mp4HeightsIn(json: unknown): number[] {
+  const parsed = Mp4Answer.safeParse(json);
+  if (!parsed.success) return [];
   const found = new Set<number>();
-  if (typeof json === "string") {
-    const m = MP4_PATH.exec(json.trim());
+  for (const f of parsed.data.data.mp4Resolutions) {
+    const m = f.path !== undefined ? MP4_FILE.exec(f.path) : f.resolution !== undefined ? MP4_LABEL.exec(f.resolution) : null;
     const h = m ? Number.parseInt(m[1]!, 10) : 0;
     if (h > 0) found.add(h);
-  } else if (depth < MP4_SCAN_DEPTH && json !== null && typeof json === "object") {
-    for (const v of Array.isArray(json) ? json : Object.values(json)) for (const h of mp4HeightsIn(v, depth + 1)) found.add(h);
   }
   return [...found];
 }

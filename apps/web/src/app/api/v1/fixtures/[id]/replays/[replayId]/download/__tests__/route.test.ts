@@ -51,6 +51,7 @@ import { ReplayHostRefused } from "@/server/video/replay-ports";
 import { BunnyReplayHost } from "@/server/video/replay-bunny";
 import { FakeRecorder } from "@/server/relay/fakes";
 import { SEAZN_REPLAY_CALL_TIMEOUT_MS, type BunnyConfig } from "@/server/relay/config";
+import { bunnyResolutionsBody } from "@/server/video/__tests__/_bunny-resolutions";
 import { movedReplays } from "@/server/video/__tests__/_seazn-replay-rig";
 import { installSeaznEnv, seaznRigFor } from "@/server/video/__tests__/_seazn-session-rig";
 import { GET } from "../route";
@@ -132,7 +133,7 @@ describe.skipIf(!HAS_DB)("GET …/fixtures/{id}/replays/{replayId}/download over
         // headers, so the 4 s are counted on it and the test waits for none of them.
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
         const body = String(url).endsWith("/resolutions")
-          ? { data: { resolutions: [{ path: "/g/play_720p.mp4" }] } }
+          ? bunnyResolutionsBody({ guid: "g", mp4: [720] })
           : { guid: "g", status: 4, length: 60, availableResolutions: "720p" };
         return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
       }
@@ -295,7 +296,7 @@ describe.skipIf(!HAS_DB)("GET …/fixtures/{id}/replays/{replayId}/download over
   it("Task 48: a part the library reads playable but holds no MP4 file for — an empty file list, or the CDN's 404 — is 409 replay_not_downloadable through the REAL Bunny adapter: one info line, no Sentry, no 500, and nothing of the host in the body; a 403 from the same CDN is still a reported fault", async () => {
     const o = await organiser();
     const GUID = o.playable.bunny_video_id!;
-    const files = (heights: number[]) => ({ data: { resolutions: heights.map((h) => ({ path: `/${GUID}/play_${h}p.mp4` })) } });
+    const files = (heights: number[]) => bunnyResolutionsBody({ guid: GUID, mp4: heights, storage: [240, 720, 1080] });
     const answer = (mp4: number[], cdnStatus: number) => (async (url: string | URL | Request) => {
       const u = String(url);
       const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { "content-type": "application/json" } });

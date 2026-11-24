@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { BunnyConfig } from "@/server/relay/config";
 import { FakeRecorder } from "@/server/relay/fakes";
 import { pathTemplate } from "@/server/relay/sanitise";
+import { bunnyResolutionsBody } from "./_bunny-resolutions";
 import { BunnyReplayHost, WATCH_TIME_CHART_SECONDS_PER_UNIT, mp4HeightsIn } from "../replay-bunny";
 import { type ReplayHost, ReplayHostRefused, ReplayHostUnavailable, ReplayNotDownloadable } from "../replay-ports";
 
@@ -57,11 +58,8 @@ const videoBody = (o: { status: number; resolutions?: string | null; length?: nu
   availableResolutions: o.resolutions ?? null, hasMP4Fallback: true,
 });
 
-/** The `/resolutions` answer: the MP4 fallback FILES the video holds, as paths (the shape is the controller's reading of Bunny's
- *  answer; mp4HeightsIn finds the paths wherever they nest). */
-const mp4Body = (heights: readonly number[]) => ({
-  success: true, statusCode: 200, data: { videoId: GUID, resolutions: heights.map((h) => ({ resolution: `${h}p`, path: `/${GUID}/play_${h}p.mp4` })) },
-});
+/** The `/resolutions` answer in the shape stg returned (_bunny-resolutions.ts). */
+const mp4Body = (heights: readonly number[], o: { storage?: readonly number[]; success?: boolean } = {}) => bunnyResolutionsBody({ guid: GUID, mp4: heights, ...o });
 /** The API's answer to a playable video with one 720 rendition and one 720 file: `GET /videos/{id}` or `GET /videos/{id}/resolutions`. */
 const playable720 = (url: string): { status: number; body: unknown } =>
   url.endsWith("/resolutions") ? { status: 200, body: mp4Body([720]) } : { status: 200, body: videoBody({ status: 4, resolutions: "720p" }) };
@@ -469,15 +467,36 @@ describe("BunnyReplayHost: openDownload (B5, B9)", () => {
     expect(cdnUrlOf(mp4Taller.calls)).toMatch(/\/play_1080p\.mp4$/);
   });
 
-  it("Task 48: mp4HeightsIn reads the file PATHS wherever the answer nests them, and nothing else (a label is not a file)", () => {
-    const p = (h: number) => `/${GUID}/play_${h}p.mp4`;
-    expect(mp4HeightsIn({ data: { resolutions: [{ path: p(720) }, { path: p(1080) }] } }).sort((a, b) => a - b)).toEqual([720, 1080]);
-    expect(mp4HeightsIn({ files: [p(360), p(360), `https://x/${p(480)}`] }).sort((a, b) => a - b), "flat list, repeats once, a full URL's tail").toEqual([360, 480]);
-    expect(mp4HeightsIn({ enabledResolutions: "240p,360p,720p", list: ["720p", "play_720p.m3u8", "/g/play_720p.mp4.bak", "/g/xplay_720p.mp4"] }), "labels, an HLS playlist, a near miss").toEqual([]);
-    expect([mp4HeightsIn(null), mp4HeightsIn(undefined), mp4HeightsIn({}), mp4HeightsIn([]), mp4HeightsIn(7), mp4HeightsIn("")], "the empty case").toEqual([[], [], [], [], [], []]);
-    let deep: unknown = p(720);
-    for (let i = 0; i < 12; i++) deep = { n: deep };
-    expect(mp4HeightsIn(deep), "a path nested past the scan's depth is not read (a bound, not a crash)").toEqual([]);
+  it("Task 48: mp4HeightsIn reads data.mp4Resolutions EXACTLY — the storage lists and storage objects (which hold the same paths) are never read — and an answer of any other shape is an empty set", () => {
+    const asc = (xs: number[]) => xs.sort((a, b) => a - b);
+    expect(asc(mp4HeightsIn(mp4Body([240, 360, 480, 720, 1080])))).toEqual([240, 360, 480, 720, 1080]);
+    expect(mp4HeightsIn(mp4Body([720, 240, 720])), "unordered; a repeat once").toHaveLength(2);
+    expect(mp4HeightsIn(mp4Body([360], { storage: [360, 720, 1080] })), "storageResolutions/storageObjects name 1080 and 720: not files").toEqual([360]);
+    expect(mp4HeightsIn(mp4Body([], { storage: [720, 1080] })), "storage only: no MP4 file").toEqual([]);
+    const body = mp4Body([480]);
+    expect(mp4HeightsIn({ ...body, extra: { x: 1 }, data: { ...body.data, unknownKey: ["play_1080p.mp4"] } }), "unknown keys pass and are not read").toEqual([480]);
+    const label = { ...body, data: { ...body.data, mp4Resolutions: [{ resolution: "720p" }, { resolution: "1080p", path: "play_480p.mp4" }, { path: "play_720p.m3u8" }, { path: "x/play_240p.mp4" }, { path: "play_0p.mp4" }, {}] } };
+    expect(mp4HeightsIn(label), "a label only when there is no path; the path wins; a non-file path, a nested one, zero, and an empty entry are not files").toEqual([720, 480]);
+    const none: unknown[] = [null, undefined, {}, [], 7, "", "play_720p.mp4", { success: true }, { success: true, data: {} },
+      { success: true, data: { mp4Resolutions: null } }, { success: true, data: { mp4Resolutions: "720p" } }, { success: true, data: { mp4Resolutions: [7, null] } },
+      { ...body, success: false }, { ...body, success: "true" }, { data: body.data }, { ...body, data: [] }];
+    let checked = 0;
+    for (const j of none) { expect(mp4HeightsIn(j), JSON.stringify(j)).toEqual([]); checked++; }
+    expect(checked, "anti-vacuity: every malformed shape").toBe(none.length);
+  });
+
+  it("Task 48: a body whose storageResolutions holds play_1080p.mp4 while mp4Resolutions tops out at 720 downloads the 720; `success: false` is not downloadable (the CDN is never asked)", async () => {
+    const h = harness((c) => {
+      if (c.url === `${API}/videos/${GUID}`) return { status: 200, body: videoBody({ status: 4, resolutions: "240p,720p,1080p" }) };
+      if (c.url === `${API}/videos/${GUID}/resolutions`) return { status: 200, body: mp4Body([240, 720], { storage: [240, 720, 1080] }) };
+      return cdnAnswer(200).res;
+    });
+    await h.host.openDownload(GUID);
+    expect(cdnUrlOf(h.calls)).toMatch(/\/play_720p\.mp4$/);
+    const failed = harness((c) => (c.url.endsWith("/resolutions") ? { status: 200, body: mp4Body([720, 1080], { success: false }) } : { status: 200, body: videoBody({ status: 4, resolutions: "720p,1080p" }) }));
+    const err = await failed.host.openDownload(GUID).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(ReplayNotDownloadable);
+    expect(failed.calls.map((c) => c.url), "never reaches the CDN").toEqual([`${API}/videos/${GUID}`, `${API}/videos/${GUID}/resolutions`]);
   });
 
   it("matches the B5 formula on a second vector", async () => {
