@@ -15,7 +15,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type XhrSetup = (xhr: { open: (method: string, url: string, async: boolean) => void }, url: string) => void;
 interface FakeHlsInstance {
-  config: { enableWorker?: boolean; autoStartLoad?: boolean; startPosition: number; xhrSetup?: XhrSetup };
+  config: { enableWorker?: boolean; autoStartLoad?: boolean; capLevelToPlayerSize?: boolean; startPosition: number; xhrSetup?: XhrSetup };
+  startLevel: number;
   calls: string[];
   loadedAt: { src: string; autoStartLoad: boolean | undefined }[];
   handlers: Map<string, (event: string, data: unknown) => void>;
@@ -24,7 +25,7 @@ interface FakeHlsInstance {
 const hls = vi.hoisted(() => ({ instances: [] as FakeHlsInstance[], supported: true, isSupportedCalls: 0 }));
 vi.mock("hls.js", () => {
   class FakeHls implements FakeHlsInstance {
-    static Events = { ERROR: "hlsError" };
+    static Events = { ERROR: "hlsError", MANIFEST_PARSED: "hlsManifestParsed" };
     static isSupported() {
       hls.isSupportedCalls++;
       return hls.supported;
@@ -34,7 +35,16 @@ vi.mock("hls.js", () => {
     loadedAt: FakeHlsInstance["loadedAt"] = [];
     handlers = new Map<string, (event: string, data: unknown) => void>();
     loadedSrc: string | null = null;
-    constructor(config: { enableWorker?: boolean; autoStartLoad?: boolean; xhrSetup?: XhrSetup }) {
+    // hls.js: -1 until set (config.startLevel unset); a set is recorded in `calls` so its order against `startLoad` is visible.
+    private _startLevel = -1;
+    get startLevel() {
+      return this._startLevel;
+    }
+    set startLevel(n: number) {
+      this.calls.push(`startLevel:${n}`);
+      this._startLevel = n;
+    }
+    constructor(config: { enableWorker?: boolean; autoStartLoad?: boolean; capLevelToPlayerSize?: boolean; xhrSetup?: XhrSetup }) {
       this.config = { startPosition: -1, ...config };
       hls.instances.push(this);
     }
@@ -84,6 +94,8 @@ class FakeVideo {
   native = false;
   currentTime = 0;
   duration = Number.NaN;
+  /** The element's rendered height in CSS px (0 = not laid out). */
+  clientHeight = 0;
   paused = true;
   ended = false;
   src = "";
@@ -123,7 +135,10 @@ beforeEach(() => {
   hls.supported = true;
   hls.isSupportedCalls = 0;
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe("createPlayback: hls.js (a browser that does not play HLS itself)", () => {
   it("EMPTY CASE FIRST: with no source nothing is built, and disposing is safe", async () => {
@@ -354,6 +369,95 @@ describe("createPlayback: hls.js (a browser that does not play HLS itself)", () 
     playback.dispose();
     await flush();
     expect(hls.instances).toHaveLength(0);
+  });
+});
+
+// Task 42: the player is told its own size. The rung table, the box and the pixel ratio below are the test's own; the expected rung is
+// read off the table (the tallest rung that fits the box in device pixels), never off the helper (seazn-player-config.test.ts sweeps it).
+describe("createPlayback: the rung the player starts on (hls.js)", () => {
+  const LEVELS = [240, 360, 480, 720, 1080].map((height, i) => ({ height, bitrate: (i + 1) * 500_000 }));
+  const parsed = (h: FakeHlsInstance, levels = LEVELS) => h.handlers.get("hlsManifestParsed")!("hlsManifestParsed", { levels });
+  const fit = (deviceHeight: number) => LEVELS.map((l, i) => ({ l, i })).filter(({ l }) => l.height <= deviceHeight).at(-1)?.i ?? -1;
+
+  it("EMPTY CASE FIRST: a manifest with no rungs leaves hls.js to choose (nothing is written to startLevel)", async () => {
+    const { playback, video } = make();
+    video.clientHeight = 360;
+    playback.setSource(A);
+    await flush();
+    parsed(hls.instances[0]!, []);
+    expect(hls.instances[0]!.calls.filter((c) => c.startsWith("startLevel:"))).toEqual([]);
+    expect(hls.instances[0]!.startLevel, "still hls.js's own -1").toBe(-1);
+    playback.dispose();
+  });
+
+  it("the instance is built with its rung capped to the player's box", async () => {
+    const { playback } = make();
+    playback.setSource(A);
+    await flush();
+    expect(hls.instances[0]!.config.capLevelToPlayerSize).toBe(true);
+    playback.dispose();
+  });
+
+  it("the start rung follows the box x pixel ratio, and is set BEFORE the first play starts loading", async () => {
+    let checked = 0;
+    const seen = new Set<number>();
+    for (const [height, dpr] of [[200, 1], [200, 3], [394, 1], [394, 2], [450, 3]] as const) {
+      hls.instances.length = 0;
+      vi.stubGlobal("devicePixelRatio", dpr);
+      const { playback, video } = make();
+      video.clientHeight = height;
+      playback.setSource(A);
+      await flush();
+      const h = hls.instances[0]!;
+      parsed(h);
+      video.fire("play");
+      expect(h.startLevel, `box ${height}px at dpr ${dpr}`).toBe(Math.max(0, fit(height * dpr)));
+      const order = h.calls.filter((c) => c.startsWith("startLevel:") || c.startsWith("startLoad:"));
+      expect(order, "the rung is chosen, then loading starts").toEqual([`startLevel:${h.startLevel}`, "startLoad:"]);
+      seen.add(h.startLevel);
+      checked++;
+      playback.dispose();
+    }
+    expect(checked).toBe(5);
+    expect(seen.size, "the start rung moves with the box (a constant 0 cannot pass)").toBeGreaterThan(2);
+  });
+
+  it("a box that is not laid out yet (height 0) does not pin a rung", async () => {
+    const { playback, video } = make();
+    video.clientHeight = 0;
+    playback.setSource(A);
+    await flush();
+    parsed(hls.instances[0]!);
+    expect(hls.instances[0]!.calls.some((c) => c.startsWith("startLevel:"))).toBe(false);
+    playback.dispose();
+  });
+
+  it("the T15 seam survives a level switch: after the rung is chosen and a rendition playlist is asked for, a refresh still swaps the token of every later request, and nothing is reloaded", async () => {
+    const { playback, video } = make();
+    video.clientHeight = 394;
+    playback.setSource(A);
+    await flush();
+    const h = hls.instances[0]!;
+    parsed(h);
+    video.fire("play");
+    const setup = h.config.xhrSetup!;
+    const open = (token: string, path: string) => {
+      const x = xhr();
+      setup(x, underToken(token, path));
+      return x.opened[0]![1];
+    };
+    // A rendition on the start rung, then the ABR's switch to another: both before and after a refresh, under the newest token.
+    expect(open("tokenA", "manifest/stream_4/video.m3u8")).toBe(underToken("tokenA", "manifest/stream_4/video.m3u8"));
+    playback.setSource(B);
+    let checked = 0;
+    for (const path of ["manifest/stream_4/video.m3u8", "manifest/stream_5/video.m3u8", "video/stream_5/seg_1.ts"]) {
+      expect(open("tokenA", path), path).toBe(underToken("tokenB", path));
+      checked++;
+    }
+    expect(checked).toBe(3);
+    expect(h.calls.filter((c) => c.startsWith("loadSource:")), "the one load").toEqual([`loadSource:${A}`]);
+    expect(hls.instances, "one instance").toHaveLength(1);
+    playback.dispose();
   });
 });
 

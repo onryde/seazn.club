@@ -139,18 +139,36 @@ export async function lockRecordings(m: SeaznSession, n: number): Promise<string
  *  asks for nothing more. Served in place of the fake host (`playback.fake.invalid` never resolves). */
 export const STUB_MANIFEST = "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:10\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:10.0,\nseg0.ts\n#EXT-X-ENDLIST\n";
 
+/** A master playlist of one 16:9 rung per height (240p..1080p is Cloudflare's live ladder, seazn-hosted-probes.md C4), BANDWIDTH rising with the
+ *  height. Rung URLs are `rung-<height>.m3u8`, relative to the master. */
+export const STUB_LADDER_HEIGHTS: readonly number[] = [240, 360, 480, 720, 1080];
+const stubMaster = (heights: readonly number[]): string =>
+  `#EXTM3U\n#EXT-X-VERSION:3\n${heights
+    .map((h) => `#EXT-X-STREAM-INF:BANDWIDTH=${h * 4000},AVERAGE-BANDWIDTH=${h * 3000},RESOLUTION=${Math.round((h * 16) / 9 / 2) * 2}x${h}\nrung-${h}.m3u8\n`)
+    .join("")}`;
+
 const FAKE_HOST_URL = /^https:\/\/playback\.fake\.invalid\//;
 const CORS = { "access-control-allow-origin": "*" };
 
 /** Answers the fake playback host (it never resolves) the way a Stream customer host answers a manifest, and records every request
  *  made to it. `healthy()` turns it from refusing (503) to serving; it starts healthy. This is the browser's stand-in for Cloudflare
  *  ONLY: the signed ADDRESS under test is the real server's, and the request URL is what the specs assert. */
-export async function stubFakePlaybackHost(page: Page, o: { healthy?: boolean } = {}): Promise<{ requests: string[]; healthy: (on: boolean) => void }> {
+export async function stubFakePlaybackHost(page: Page, o: { healthy?: boolean; ladder?: readonly number[] } = {}): Promise<{ requests: string[]; healthy: (on: boolean) => void }> {
   const requests: string[] = [];
   let up = o.healthy ?? true;
   await page.route(FAKE_HOST_URL, async (route) => {
-    requests.push(route.request().url());
+    const url = route.request().url();
+    requests.push(url);
     if (!up) return route.fulfill({ status: 503, headers: CORS, body: "unavailable" });
+    // With a ladder the address answers as a Cloudflare MASTER playlist (one rung per height, `rung-<height>.m3u8`, ascending BANDWIDTH
+    // as hls.js orders them) and each rung as a media playlist: the specs read which rung hls.js asked for (Task 42). Without one every
+    // request gets the one-segment manifest, as before.
+    if (o.ladder !== undefined) {
+      if (/\/manifest\/video\.m3u8$/.test(url)) {
+        return route.fulfill({ status: 200, contentType: "application/vnd.apple.mpegurl", headers: CORS, body: stubMaster(o.ladder) });
+      }
+      if (!/\/rung-\d+\.m3u8$/.test(url)) return route.fulfill({ status: 404, headers: CORS, body: "no media in the stub" });
+    }
     return route.fulfill({ status: 200, contentType: "application/vnd.apple.mpegurl", headers: CORS, body: STUB_MANIFEST });
   });
   return { requests, healthy: (on) => void (up = on) };

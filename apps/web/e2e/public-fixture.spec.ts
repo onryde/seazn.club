@@ -27,7 +27,7 @@ import { routes } from "../src/lib/routes";
 import publicEn from "../src/dictionaries/en/public.json" with { type: "json" };
 import { SEAZN_VIDEO_POLL_FLOOR_MS } from "../src/components/public-site/match-centre/seazn-video-schedule";
 import { SEAZN_TOKEN_REFRESH_BEFORE_SECONDS } from "../src/server/relay/config";
-import { finishSeaznMatch, goLive, lockRecordings, playsHlsNatively, seedSeaznMatch, signedAddressPattern, stubFakePlaybackHost } from "./helpers/seazn-video-seed";
+import { finishSeaznMatch, goLive, lockRecordings, playsHlsNatively, seedSeaznMatch, signedAddressPattern, STUB_LADDER_HEIGHTS, stubFakePlaybackHost } from "./helpers/seazn-video-seed";
 
 const SPONSOR_HOST = "sponsor-s10.example";
 /** A realistic long title sponsor (AGENTS.md: a 43-character name is what found the last phone overflow). */
@@ -413,6 +413,52 @@ for (const width of [320, 768, 1280] as const) {
         }
       });
     }
+  });
+}
+
+// Task 42: the rung hls.js STARTS on is the tallest the player's box can show, not the lowest. Three boxes (a 320 phone at 3x, a 768
+// tablet at 1x, a 1280 laptop at 3x), the master playlist a five-rung ladder; the page is a real server's, the host the browser's
+// stand-in. The expected rung is read off the ladder and the box the browser actually laid out (its CSS height x its pixel ratio), never
+// off the player's code. A browser that plays HLS itself (Chromium, per build) takes the master as `video.src` and picks its own rung:
+// nothing of this applies there, which that branch asserts instead of skipping (a skipped case would read as a pass).
+for (const [width, deviceScaleFactor] of [[320, 3], [768, 1], [1280, 3]] as const) {
+  test.describe(`the Seazn player's start rung at ${width}px, ${deviceScaleFactor}x`, () => {
+    test.use({ viewport: { width, height: 900 }, deviceScaleFactor });
+
+    test("the first rung playlist asked for is the tallest rung the box fits", async ({ page }) => {
+      test.setTimeout(SEAZN_SEED_MS + SEAZN_NAV_MS + ONE_RE_READ_MS + 20_000);
+      const m = await seedSeaznMatch(page, { name: `Seazn Start Rung ${width} ${TAG}`, live: true });
+      try {
+        const stub = await stubFakePlaybackHost(page, { ladder: STUB_LADDER_HEIGHTS });
+        await page.goto(m.publicPath);
+        await dismissCookieBanner(page);
+        const video = seaznPlayer(page);
+        await expect(video).toBeVisible({ timeout: ONE_RE_READ_MS });
+        const address = (await video.getAttribute("data-src"))!;
+        if (await playsHlsNatively(page)) {
+          // The platform picks (Safari does the same): hls.js is not loaded, so no rung playlist is ever asked for by the page's code.
+          await expect(video).toHaveAttribute("src", address);
+          expect(stub.requests.filter((u) => /\/rung-\d+\.m3u8$/.test(u)), "no hls.js, no rung choice").toEqual([]);
+          return;
+        }
+        // The manifest is read at once; media (and so a rung) only from the first play.
+        await expect.poll(() => stub.requests, { message: "hls.js read the master playlist" }).toContain(address);
+        expect(stub.requests.filter((u) => /\/rung-\d+\.m3u8$/.test(u)), "no rung before play").toEqual([]);
+        const { boxHeight, dpr } = await video.evaluate((el: HTMLVideoElement) => ({ boxHeight: el.clientHeight, dpr: window.devicePixelRatio }));
+        expect(dpr, "premise: the page runs at the pixel ratio this case sets").toBe(deviceScaleFactor);
+        expect(boxHeight, "premise: the box is laid out").toBeGreaterThan(0);
+        await video.evaluate((el: HTMLVideoElement) => { el.muted = true; void el.play().catch(() => undefined); });
+        const rungs = (): number[] => stub.requests.flatMap((u) => { const r = /\/rung-(\d+)\.m3u8$/.exec(u); return r ? [Number(r[1])] : []; });
+        await expect.poll(() => rungs().length, { message: "hls.js asked for a rung after play", timeout: 20_000 }).toBeGreaterThan(0);
+        const fitting = STUB_LADDER_HEIGHTS.filter((h) => h <= boxHeight * dpr);
+        const expected = fitting.length > 0 ? Math.max(...fitting) : Math.min(...STUB_LADDER_HEIGHTS);
+        expect(rungs()[0], `box ${boxHeight}px x ${dpr} = ${boxHeight * dpr} device px: the first rung asked for`).toBe(expected);
+        // Every request stays on the manifest's host under its own token (nothing the start-rung change added leaves it).
+        expect(stub.requests.every((u) => u.startsWith("https://playback.fake.invalid/")), "all requests on the playback host").toBe(true);
+      } finally {
+        await finishSeaznMatch(m);
+      }
+    });
   });
 }
 

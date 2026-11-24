@@ -18,6 +18,8 @@
 //   - No MEDIA is fetched until the viewer presses play: a page that is only visited streams no video (Cloudflare bills what it
 //     delivers). hls.js is built with `autoStartLoad: false` and started by the first `play`, but it DOES ask for the manifest at
 //     `loadSource` (a small text file; it also lets a refused address show its note early); a native element has `preload="none"`.
+//   - The player is told its own size (seazn-player-config.ts): the rung is capped to the box, and the start rung is the tallest that fits
+//     it, so a viewer reaches full resolution at once on a box that can show it instead of climbing from the lowest rung.
 //   - A failure the player cannot recover from (a fatal hls.js error, a browser hls.js cannot run in, a bundle that will not load,
 //     an element error) is `onFatal`: the player says so and the island reads the route again for a fresh address. It comes with
 //     WHY, as codes only (`PlaybackFailure`: hls.js's error type and details, the HTTP status it got, the element's MediaError code),
@@ -26,6 +28,7 @@
 import type Hls from "hls.js";
 import { isClientReportCode } from "@/lib/client-reports";
 import type { PlayerFailureReason } from "@/lib/seazn-video-report-codes";
+import { SEAZN_HLS_PLAYER_CONFIG, startLevelFor } from "./seazn-player-config";
 import { parseSignedAddress, withToken, type SignedAddress } from "./seazn-signed-address";
 
 export const HLS_MIME = "application/vnd.apple.mpegurl";
@@ -106,11 +109,20 @@ export function createPlayback(video: HTMLVideoElement, { onFatal }: { onFatal: 
         }
         const h = new HlsCtor({
           enableWorker: false,
+          // The rung is capped to the box (seazn-player-config.ts, which also says why the start rung is chosen below).
+          ...SEAZN_HLS_PLAYER_CONFIG,
           autoStartLoad: started,
           // The request is opened here (hls.js skips its own `open` once the element is open), under the token held NOW.
           xhrSetup: (xhr, url) => xhr.open("GET", held === null ? url : withToken(url, held), true),
         });
         h.attachMedia(video);
+        // The start rung comes from the box, once the rungs are known and before the first play starts loading (`autoStartLoad` is off
+        // until then, so this always lands first). A box with no size yet leaves hls.js's own choice.
+        h.on(HlsCtor.Events.MANIFEST_PARSED, (_event, data) => {
+          const dpr = typeof globalThis.devicePixelRatio === "number" ? globalThis.devicePixelRatio : 1;
+          const rung = startLevelFor(data.levels, video.clientHeight, dpr);
+          if (rung >= 0) h.startLevel = rung;
+        });
         h.on(HlsCtor.Events.ERROR, (_event, data) => {
           if (data.fatal) onFatal(hlsFailureOf(data));
         });
