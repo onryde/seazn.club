@@ -33,7 +33,7 @@ import type { MessageKey } from "@/lib/messages";
 import type { StageTableRules } from "@/server/api-v1/schemas";
 import { ruleRefusalText } from "@/lib/rule-errors";
 import { liveStageCfg } from "@/lib/stage-decider-off";
-import { foldTiebreaks, unitLabelKey } from "@/lib/stage-card/summaries";
+import { foldTiebreaks, unitExplainKey, unitLabelKey } from "@/lib/stage-card/summaries";
 import {
   addPosition,
   addableAt,
@@ -80,6 +80,19 @@ export function shownBadge(badge: TiebreakBadge): ShownBadge {
 /** A step's name in the sport's own unit (C1 `unitLabelKey`, item 7). */
 const stepNameOf = (msg: Msg, sportKey: string) => (key: string): string => msg(unitLabelKey(key, sportKey));
 
+/** A step's one-line explainer in the sport's own unit ("Buchholz" -> "Total score of the opponents you played."). */
+const stepExplainOf = (msg: Msg, sportKey: string) => (key: string): string => msg(unitExplainKey(key, sportKey));
+
+/** The explainer line under a step's label: muted, wraps, and sits in the label's own column so the row's controls keep
+ *  their place at 320px. Plain text, no control, no second DOM. */
+function StepExplain({ index, text }: { index: number; text: string }) {
+  return (
+    <span className="block break-words pb-1 text-xs leading-snug text-slate-600" data-testid={`stage-tiebreaks-explain-${index}`}>
+      {text}
+    </span>
+  );
+}
+
 /** The phone row's summary: the first three real criteria. */
 export function foldedSummary(keys: readonly TiebreakerKey[], name: (k: string) => string): string {
   const steps = foldTiebreaks(keys).steps;
@@ -90,6 +103,7 @@ export function foldedSummary(keys: readonly TiebreakerKey[], name: (k: string) 
 function FoldedOrder({ keys, sportKey }: { keys: readonly TiebreakerKey[]; sportKey: string }) {
   const msg = useMsg();
   const name = stepNameOf(msg, sportKey);
+  const explain = stepExplainOf(msg, sportKey);
   const { steps, twoWayH2h } = foldTiebreaks(keys);
   return (
     <div className="rounded-lg border border-slate-200 bg-white" data-testid="stage-tiebreaks-body">
@@ -100,9 +114,14 @@ function FoldedOrder({ keys, sportKey }: { keys: readonly TiebreakerKey[]; sport
       ) : (
         <ol className="divide-y divide-slate-100" data-testid="stage-tiebreaks-list">
           {steps.map((key, i) => (
-            <li key={`${key}-${i}`} data-testid={`stage-tiebreaks-row-${i}`} data-key={key} className="flex items-center gap-2 px-3 py-2">
+            <li key={`${key}-${i}`} data-testid={`stage-tiebreaks-row-${i}`} data-key={key} className="flex items-start gap-2 px-3 py-2">
               <span className="w-5 shrink-0 text-right text-xs tabular-nums text-slate-500">{i + 1}</span>
-              <span className="min-w-0 flex-1 break-words text-sm leading-snug text-slate-800">{name(key)}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block break-words text-sm leading-snug text-slate-800">{name(key)}</span>
+                <span className="block break-words text-xs leading-snug text-slate-600" data-testid={`stage-tiebreaks-explain-${i}`}>
+                  {explain(key)}
+                </span>
+              </span>
             </li>
           ))}
         </ol>
@@ -143,6 +162,7 @@ function OrderEditor({
 }) {
   const msg = useMsg();
   const name = stepNameOf(msg, sportKey);
+  const explain = stepExplainOf(msg, sportKey);
   const rows = tiebreakRows(draft, ctx, false);
   const at = addPosition(draft);
   const addable = addableAt(draft, at, ctx);
@@ -162,13 +182,16 @@ function OrderEditor({
               <li key={`${r.key}-${i}`} data-testid={`stage-tiebreaks-row-${i}`} data-key={r.key} data-pinned={r.pinned ?? undefined} className="pl-3 pr-1">
                 <div className="flex items-center gap-1">
                   <span className="w-5 shrink-0 text-right text-xs tabular-nums text-slate-500">{i + 1}</span>
-                  <span className="min-w-0 flex-1 break-words py-2 text-sm leading-snug text-slate-800">
-                    {stepName}
-                    {r.pinned !== null && (
-                      <span className="ml-2 text-[11px] text-slate-500" data-testid={`stage-tiebreaks-pinned-${i}`}>
-                        {msg(r.pinned === "first" ? "stageTiebreaks.alwaysFirst" : "stageTiebreaks.alwaysLast")}
-                      </span>
-                    )}
+                  <span className="min-w-0 flex-1 py-1">
+                    <span className="block break-words pt-1 text-sm leading-snug text-slate-800">
+                      {stepName}
+                      {r.pinned !== null && (
+                        <span className="ml-2 text-[11px] text-slate-500" data-testid={`stage-tiebreaks-pinned-${i}`}>
+                          {msg(r.pinned === "first" ? "stageTiebreaks.alwaysFirst" : "stageTiebreaks.alwaysLast")}
+                        </span>
+                      )}
+                    </span>
+                    <StepExplain index={i} text={explain(r.key)} />
                   </span>
                   {r.pinned === null && (
                     <>
@@ -236,7 +259,7 @@ function OrderEditor({
           >
             <option value="">{msg("stageTiebreaks.add")}</option>
             {addable.map((key) => (
-              <option key={key} value={key}>
+              <option key={key} value={key} title={explain(key)}>
                 {name(key)}
               </option>
             ))}

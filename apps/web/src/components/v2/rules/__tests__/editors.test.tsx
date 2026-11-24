@@ -18,7 +18,7 @@ import type { Dict } from "@/lib/i18n-constants";
 import type { RefusedField } from "@/lib/rule-errors";
 import { rulesFor } from "@/lib/match-rules";
 import { rulesChipText, rulesLineDict } from "@/lib/rules-line";
-import { foldTiebreaks, unitLabelKey } from "@/lib/stage-card/summaries";
+import { foldTiebreaks, unitExplainKey, unitLabelKey } from "@/lib/stage-card/summaries";
 import { MatchFormatEditor, type MatchFormatEditorProps } from "../match-format-editor";
 import { PointsEditor, divisionPointsKeys, divisionPointsOf, hydrateDivisionPoints, type PointsEditorProps } from "../points-editor";
 import { TiebreaksEditor, divisionSportOrder, type TiebreaksEditorProps } from "../tiebreaks-editor";
@@ -184,6 +184,53 @@ describe("Tie-breaks — every scope × mode, every sport", () => {
       checked++;
     }
     expect(checked, "sports swept").toBe(SPORTS.length);
+  });
+
+  it("every step carries its one-line explainer under the label, in the sport's own unit - edit (stage and division) and locked; the add menu says it as a title", () => {
+    let rows = 0;
+    let options = 0;
+    for (const m of SPORTS) {
+      const kind: TableStageKind = "league";
+      const tableRules = tableRulesOf(m, kind);
+      const stage = { id: ID, kind, pooled: false, bestNth: false, tableRules };
+      const stageProps = { stage, module: m, divisionConfig: divisionCfg(m), stageConfig: {}, onSaved: () => undefined };
+      const cfg = divisionCfg(m);
+      const divProps = { module: m, value: null, onChange: () => undefined, divisionConfig: cfg, kinds: [kind] };
+      const views = {
+        stageEdit: html(<TiebreaksEditor scope="stage" mode="edit" started={false} {...stageProps} />),
+        stageLocked: html(<TiebreaksEditor scope="stage" mode="locked" started {...stageProps} />),
+        divisionEdit: html(<TiebreaksEditor scope="division" mode="edit" {...divProps} />),
+      };
+      for (const [view, h] of Object.entries(views)) {
+        // The rows this view shows, in order, each by the key its own markup names.
+        const shown = [...h.matchAll(/data-testid="stage-tiebreaks-row-(\d+)" data-key="([a-z0-9_]+)"/g)];
+        expect(shown.length, `${m.key} ${view}: rows shown`).toBeGreaterThan(0);
+        for (const [, i, key] of shown) {
+          const explain = UI[unitExplainKey(key!, m.key)]!;
+          expect(explain, `${m.key}: ${key} has an explainer`).toBeTruthy();
+          const cell = new RegExp(`data-testid="stage-tiebreaks-explain-${i}"[^>]*>([^<]*)<`).exec(h);
+          expect(cell?.[1]?.replace(/&#x27;/g, "'").replace(/&amp;/g, "&"), `${m.key} ${view}: row ${i} (${key}) explainer`).toBe(explain);
+          rows++;
+        }
+      }
+      // The add menu: an option per offered key, each titled with its explainer (cheap; a native title, no layout cost).
+      for (const [, key] of views.stageEdit.matchAll(/<option value="([a-z0-9_]+)" title="([^"]*)"/g)) {
+        expect(views.stageEdit, `${m.key}: option ${key} titled`).toContain(`value="${key}" title="${UI[unitExplainKey(key!, m.key)]!.replace(/'/g, "&#x27;")}"`);
+        options++;
+      }
+    }
+    expect(rows, "anti-vacuity: explainer rows checked").toBeGreaterThan(SPORTS.length);
+    expect(options, "anti-vacuity: titled add options checked").toBeGreaterThan(0);
+  });
+
+  it("the owner's case: badminton Swiss shows Buchholz and Buchholz Cut-1 with their one-liners, and game ratio in games", () => {
+    const m = SPORTS.find((s) => s.key === "badminton")!; // single-sport: the screenshot the owner sent
+    const rules = tableRulesOf(m, "swiss");
+    const stage = { id: ID, kind: "swiss" as TableStageKind, pooled: false, bestNth: false, tableRules: rules };
+    const h = text(html(<TiebreaksEditor scope="stage" mode="edit" started={false} stage={stage} module={m} divisionConfig={divisionCfg(m)} stageConfig={{}} onSaved={() => undefined} />));
+    expect(h).toContain("Buchholz Cut-1 Buchholz without your weakest opponent.");
+    expect(h).toContain("Buchholz Total score of the opponents you played.");
+    expect(h).toContain("game ratio Games won divided by games lost.");
   });
 
   it("division, edit: the sport's own order, editable, while the division keeps none; locked: read-only", () => {
