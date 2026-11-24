@@ -5,13 +5,19 @@
 // database is a Supabase one, over the live catalog):
 //
 //   (a) no policy outside `realtime.messages` lists `authenticated`, `anon`
-//       or `public` in its roles (a policy with no TO clause applies to
-//       PUBLIC, so it counts);
+//       or `public` in its roles — `create policy` or `alter policy … to`
+//       (a create with no TO clause applies to PUBLIC, so it counts);
 //   (b) every SELECT granted to `authenticated` is also granted to `anon`
-//       (a token never widens anon);
+//       (a token never widens anon), column lists included;
 //   (c) every `realtime.messages` policy keys on exactly one JWT claim
 //       (`auth.jwt() ->> '<claim>'`, or `-> '<claim>'` for a jsonb array),
 //       and no two policies share one (the V452 rule).
+//
+// Backstop: any non-comment `authenticated` or `anon` anywhere else in a
+// migration fails, so a shape the parsers miss (`execute format('grant …')`, a
+// revoke from anon, default privileges, a role-membership grant, `granted by`)
+// still reds. The mentions inside realtime.messages policies are pinned by
+// file and policy.
 //
 // Anti-vacuity: each half reports what it scanned (files, policies, grants);
 // zero files, zero policies, zero grants, or fewer than two realtime policies
@@ -51,40 +57,65 @@ const stripComments = (sql: string) => sql.replace(/\/\*[\s\S]*?\*\//g, " ").rep
 
 const unquote = (s: string) => s.trim().replace(/^"|"$/g, "").toLowerCase();
 
-/** The text of each statement starting at `start`: up to the next `;` or `$sql$` (a statement run by `execute`). */
-function statements(sql: string, start: RegExp): string[] {
-  const out: string[] = [];
+/** Each statement starting at `start`, with where it starts: up to the next `;` or `$sql$` (a statement run by `execute`). */
+function statements(sql: string, start: RegExp): { index: number; text: string }[] {
+  const out: { index: number; text: string }[] = [];
   for (const m of sql.matchAll(start)) {
     const rest = sql.slice(m.index);
     const end = rest.search(/;|\$sql\$/);
-    out.push(end === -1 ? rest : rest.slice(0, end));
+    out.push({ index: m.index, text: end === -1 ? rest : rest.slice(0, end) });
   }
   return out;
 }
 
-function parsePolicies(file: string, raw: string): Policy[] {
-  return statements(stripComments(raw), /\bcreate\s+policy\b/gi).map((text) => {
-    const m = /^create\s+policy\s+("(?:[^"]|"")+"|\S+)\s+on\s+(\S+)([\s\S]*)$/i.exec(text);
-    if (!m) throw new Error(`${file}: unparsed create policy: ${text.slice(0, 120)}`);
-    const head = m[3]!.split(/\busing\b|\bwith\s+check\b/i)[0]!;
-    const to = /\bto\s+([\s\S]+)$/i.exec(head);
-    // PostgreSQL: a policy with no TO clause applies to PUBLIC.
-    const roles = to ? to[1]!.split(",").map(unquote).filter(Boolean) : ["public"];
-    return { file, name: unquote(m[1]!), table: unquote(m[2]!), roles, text };
+/** `s` split on `sep` outside parentheses: `select (id, name), insert` is two privileges, not three. */
+function splitTopLevel(s: string, sep = ","): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let cur = "";
+  for (const ch of s) {
+    if (ch === "(") depth += 1;
+    if (ch === ")") depth -= 1;
+    if (ch === sep && depth === 0) {
+      parts.push(cur);
+      cur = "";
+    } else cur += ch;
+  }
+  parts.push(cur);
+  return parts.map((p) => p.trim()).filter(Boolean);
+}
+
+/** Every `create policy` and `alter policy`, with its span in the comment-stripped text. A create with no TO
+ *  clause applies to PUBLIC; an alter with no TO clause (or a rename) changes no roles, so it lists none. */
+function policyStatements(file: string, sql: string): (Policy & { start: number; end: number })[] {
+  return statements(sql, /\b(?:create|alter)\s+policy\b/gi).map(({ index, text }) => {
+    const m = /^(create|alter)\s+policy\s+("(?:[^"]|"")+"|\S+)\s+on\s+(\S+)([\s\S]*)$/i.exec(text);
+    if (!m) throw new Error(`${file}: unparsed policy statement: ${text.slice(0, 120)}`);
+    const create = m[1]!.toLowerCase() === "create";
+    const rest = m[4]!;
+    const head = rest.split(/\busing\b|\bwith\s+check\b/i)[0]!;
+    const to = /^\s*rename\s+to\b/i.test(rest) ? null : /\bto\s+([\s\S]+)$/i.exec(head);
+    const roles = to ? to[1]!.split(",").map(unquote).filter(Boolean) : create ? ["public"] : [];
+    return { file, name: unquote(m[2]!), table: unquote(m[3]!), roles, text, start: index, end: index + text.length };
   });
 }
 
+function parsePolicies(file: string, raw: string): Policy[] {
+  return policyStatements(file, stripComments(raw));
+}
+
 function parseGrants(file: string, raw: string): Grant[] {
-  return statements(stripComments(raw), /\bgrant\s+(?!option\b)/gi).flatMap((text) => {
-    const m = /^grant\s+([\s\S]+?)\s+on\s+([\s\S]+?)\s+to\s+([\s\S]+?)(?:\s+with\s+grant\s+option)?\s*$/i.exec(
-      text.trim(),
-    );
-    if (!m) return []; // `grant <role> to <role>`: membership, not a privilege on an object
+  return statements(stripComments(raw), /\bgrant\s+(?!option\b)/gi).flatMap(({ text }) => {
+    const m =
+      /^grant\s+([\s\S]+?)\s+on\s+([\s\S]+?)\s+to\s+([\s\S]+?)(?:\s+with\s+grant\s+option)?(?:\s+granted\s+by\s+\S+)?\s*$/i.exec(
+        text.trim(),
+      );
+    if (!m) return []; // `grant <role> to <role>`: membership, not a privilege on an object (the backstop sees it)
     const objects = m[2]!.trim().toLowerCase().replace(/\s+/g, " ").replace(/^table /, "");
     return [
       {
         file,
-        privileges: m[1]!.split(",").map((p) => p.trim().toLowerCase().replace(/\s+/g, " ")),
+        privileges: splitTopLevel(m[1]!).map((p) => p.toLowerCase().replace(/\s+/g, " ")),
         objects: objects.startsWith("all ") ? [objects] : objects.split(",").map(unquote),
         grantees: m[3]!.split(",").map(unquote),
       },
@@ -92,11 +123,29 @@ function parseGrants(file: string, raw: string): Grant[] {
   });
 }
 
+/**
+ * Backstop: every non-comment `authenticated` / `anon` in a migration. Inside a realtime.messages policy it is a
+ * hit (pinned by file and policy below); anywhere else it fails — whatever the shape: `execute format('grant …')`,
+ * a revoke from anon, default privileges, a role-membership grant, `granted by`, a policy the parsers miss.
+ */
+function tokenRoleMentions(file: string, raw: string): { hits: { file: string; policy: string }[]; failures: string[] } {
+  const sql = stripComments(raw);
+  const realtime = policyStatements(file, sql).filter((p) => p.table === REALTIME_TABLE);
+  const hits: { file: string; policy: string }[] = [];
+  const failures: string[] = [];
+  for (const m of sql.matchAll(/\b(authenticated|anon)\b/gi)) {
+    const inside = realtime.find((p) => m.index >= p.start && m.index < p.end);
+    if (inside) hits.push({ file, policy: inside.name });
+    else failures.push(`${file}: '${m[1]}' outside a realtime.messages policy: …${sql.slice(Math.max(0, m.index - 60), m.index + 30).replace(/\s+/g, " ")}…`);
+  }
+  return { hits, failures };
+}
+
 /** The JWT claims a policy's text reads: `auth.jwt() ->> 'x'`, `(select auth.jwt()) -> 'x'`. */
 const claimsRead = (text: string) =>
   [...text.matchAll(/auth\.jwt\(\)\s*\)?\s*->>?\s*'([^']+)'/gi)].map((m) => m[1]!.toLowerCase());
 
-const grantsSelect = (g: Grant) => g.privileges.some((p) => p === "select" || p === "all" || p === "all privileges");
+const grantsSelect = (g: Grant) => g.privileges.some((p) => /^select\b/.test(p) || p === "all" || p === "all privileges");
 
 /** (a) Policies outside realtime.messages that name a token role. */
 function tokenRolePolicies(policies: Policy[]): string[] {
@@ -164,6 +213,42 @@ describe("§4.5 role sweep — the checkers fire (synthetic SQL, both ways)", ()
     expect(grt("grant select on t to app_user with grant option;")).toHaveLength(1);
   });
 
+  it("(a) reads `alter policy … to …` too; a rename or an alter with no TO changes no roles", () => {
+    expect(tokenRolePolicies(pol("alter policy p on public.fixtures to authenticated;"))).toHaveLength(1);
+    expect(tokenRolePolicies(pol("alter policy p on fixtures to app_user, anon using (true);"))).toHaveLength(1);
+    expect(tokenRolePolicies(pol("alter policy p on fixtures rename to q;"))).toEqual([]);
+    expect(tokenRolePolicies(pol("alter policy p on fixtures using (org_id = x);"))).toEqual([]);
+  });
+
+  it("(b) reads a column-list SELECT and strips `granted by`", () => {
+    expect(authenticatedOnlySelects(grt("grant select (id, name) on x to authenticated;")).failures).toHaveLength(1);
+    expect(grt("grant select (id, name), insert on x to app_user;")[0]!.privileges).toEqual(["select (id, name)", "insert"]);
+    expect(authenticatedOnlySelects(grt("grant select on x to authenticated granted by postgres;")).failures).toHaveLength(1);
+  });
+
+  it("backstop: authenticated/anon anywhere outside a realtime.messages policy fails — every shape a parser could miss", () => {
+    const mention = (sql: string) => tokenRoleMentions("synthetic.sql", sql);
+    const SHAPES = [
+      "do $$ begin execute format('grant select on %I to authenticated', 't'); end $$;",
+      "revoke select on public_x_v from anon;",
+      "alter default privileges in schema public grant select on tables to authenticated;",
+      "grant authenticated to app_user;",
+      "grant select on x to app_user granted by anon;",
+      "create policy p on fixtures for select to anon using (true);",
+    ];
+    let checked = 0;
+    for (const sql of SHAPES) {
+      expect(mention(sql).failures, sql).toHaveLength(1);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: every shape").toBe(SHAPES.length);
+    // Inside a realtime.messages policy it is a hit with its policy, not a failure; a comment is nothing.
+    expect(
+      mention('execute $sql$ create policy "r p" on realtime.messages for select to authenticated using (true) $sql$;'),
+    ).toEqual({ hits: [{ file: "synthetic.sql", policy: "r p" }], failures: [] });
+    expect(mention("-- grant select on x to anon\nselect 1;")).toEqual({ hits: [], failures: [] });
+  });
+
   it("(c) flags zero claims, two claims, and a shared claim; passes one claim per policy and a re-created policy", () => {
     const rt = (name: string, using: string) =>
       `create policy "${name}" on realtime.messages for select to authenticated using (${using}) $sql$;`;
@@ -213,6 +298,20 @@ describe("§4.5 role sweep — every migration (static)", () => {
 
   it("(c) every realtime.messages policy keys on exactly one claim, and no two share one", () => {
     expect(realtimeClaimFailures(policies).failures).toEqual([]);
+  });
+
+  it("backstop: authenticated/anon appear only inside the four known realtime.messages policies", () => {
+    const all = files.map((f) => tokenRoleMentions(relative(MIGRATIONS, f), readFileSync(f, "utf8")));
+    const hits = all.flatMap((m) => m.hits).map((h) => `${h.file} :: ${h.policy}`);
+    console.log(`[role-sweep static] authenticated/anon mentions: ${hits.length} (all inside realtime.messages policies)`);
+    expect(all.flatMap((m) => m.failures)).toEqual([]);
+    // Pinned by file and policy: a new realtime policy (V554–V556) adds its line here on purpose.
+    expect(hits.sort()).toEqual([
+      "deltas/V403__realtime_fixture_broadcast_policy.sql :: fixture broadcast read by claim",
+      "deltas/V452__online_chess_realtime_policy.sql :: external play lobby read by claim",
+      "deltas/V537__org_has_feature_plpgsql.sql :: external play lobby read by claim",
+      "deltas/V537__org_has_feature_plpgsql.sql :: fixture broadcast read by claim",
+    ]);
   });
 });
 
