@@ -115,6 +115,8 @@ import { createCompetition } from "../../competitions";
 import { createDivision } from "../../divisions";
 import { onlinePackageQuote, payOnlinePackage, type PackageQuote } from "../../online-package";
 import { orgMoneyLockKey } from "../../stream-credits";
+import { withdrawEntrantCascade } from "../../withdrawal";
+import { backendPid, pollWaitersBehind } from "./_lock-waiters";
 import {
   paySeededPackage,
   seedOnlineChessRound,
@@ -516,6 +518,73 @@ describe.skipIf(!HAS_DB)("Open round: the payment door (Online Chess credits §7
         expect([p.size, p.frozen_at, await takenFor(p.id), await stampsOf(s.stageId)]).toEqual([32, null, gcPrice(32), 0]);
       }
     }, 120_000);
+  });
+
+  describe("concurrent presses and a shrinking field (review m7)", () => {
+    it("two pay-and-open presses at once on one division (both seen waiting on the division lock together): one debit, one stamp; the other opens nothing and pays nothing", async () => {
+      const s = await seedOnlineSwiss({ players: 4, onlinePackage: "unpaid" });
+      const body = await confirmFor(s.owner, s.divisionId, 16);
+      const ledgerBefore = await ledgerCount(s.orgId);
+      // The overlap witness: this session holds the division lock; both presses queue behind it and the lock is let go only once
+      // BOTH are seen blocked on it - so both made every read before the lock against an unopened round and an unpaid package.
+      const holder = await sql.reserve();
+      let waiting = 0;
+      let presses: Promise<{ ok: true; v: Awaited<ReturnType<typeof openRound>> } | { ok: false; e: unknown }>[] = [];
+      try {
+        await holder`begin`;
+        await holder`select pg_advisory_xact_lock(hashtext(${"division:" + s.divisionId}))`;
+        const pid = await backendPid(holder);
+        let settled = 0;
+        presses = [0, 1].map(() =>
+          openRound({ stageId: s.stageId, roundNo: 1, actorUserId: s.ownerUserId, pay: body }).then(
+            (v) => { settled += 1; return { ok: true as const, v }; },
+            (e: unknown) => { settled += 1; return { ok: false as const, e }; },
+          ));
+        waiting = await pollWaitersBehind(pid, { atLeast: 2, queryLike: "%pg_advisory_xact_lock%", finished: () => settled > 0, tries: 400 });
+      } finally {
+        await holder`rollback`.catch(() => undefined);
+        holder.release();
+      }
+      expect(waiting, "both presses were blocked on the division lock at the same time").toBe(2);
+      const results = await Promise.all(presses);
+      const refused = results.filter((r) => !r.ok);
+      expect(refused.map((r) => (r.ok ? null : String(r.e))), "neither press failed").toEqual([]);
+      const answers = results.map((r) => (r.ok ? r.v : null));
+      const opened = answers.filter((a) => a?.opened === true);
+      expect(opened, "exactly one press opened the round").toHaveLength(1);
+      expect(opened[0]!.opened && opened[0]!.payment, "and it paid 16's price").toEqual({ applied: true, credits: gcPrice(16), size: 16, capacityLoweredTo: null });
+      expect(answers.filter((a) => a?.opened === false), "the other found it open, with nobody left to invite").toEqual([
+        { opened: false, reason: "already_open", skipped: [] },
+      ]);
+      const p = await liveOf(s.divisionId);
+      expect(await packageLedger(p.id), "ONE debit").toEqual([{ reason: "consume", bucket: "monthly", delta: -gcPrice(16) }]);
+      const added = await sql<{ reason: string; n: number }[]>`
+        select reason, count(*)::int as n from org_stream_credits where org_id = ${s.orgId} group by reason order by reason`;
+      const consumes = added.find((r) => r.reason === "consume")?.n ?? 0;
+      expect(consumes, "one consume row for the org (the other ledger row the payment writes is the month's rollover)").toBe(1);
+      expect(await ledgerCount(s.orgId) - ledgerBefore, "premise: the payment wrote rows, so the count above is not vacuous").toBeGreaterThan(0);
+      expect([p.paid_at !== null, p.frozen_at !== null, p.credits_paid, await stampsOf(s.stageId)], "paid once, frozen, one stamp").toEqual([true, true, gcPrice(16), 1]);
+      expect(mail.sent, "each of the four seats mailed once").toHaveLength(4);
+    }, 120_000);
+
+    it("a withdrawal brings the places held under the paid size: the open goes through with nothing more taken, and the size stays as paid", async () => {
+      const s = await seedOnlineSwiss({ players: 4, onlinePackage: "unpaid" });
+      await fillEntrants(s.divisionId, 17 - 4);
+      expect(quoteIn(await refusal(openRound({ stageId: s.stageId, roundNo: 1, actorUserId: s.ownerUserId }))).held, "premise: 17 held").toBe(17);
+      await payOnlinePackage(s.owner, s.divisionId, await confirmFor(s.owner, s.divisionId, 32));
+      const [{ id: leaving }] = await sql<{ id: string }[]>`
+        select id from entrants where division_id = ${s.divisionId} and display_name like 'Seed %' order by id limit 1`;
+      await withdrawEntrantCascade(s.owner, leaving!);
+      const q = await onlinePackageQuote(s.owner, s.divisionId, 32);
+      expect([q.held, q.covers], "premise: 16 held now, under the 32 paid for, and still covered").toEqual([16, true]);
+      const ledgerBefore = await ledgerCount(s.orgId);
+      const r = await openRound({ stageId: s.stageId, roundNo: 1, actorUserId: s.ownerUserId });
+      expect(r.opened).toBe(true);
+      if (r.opened) expect(r.payment, "no `pay` on the press").toBeNull();
+      expect(await ledgerCount(s.orgId), "nothing taken, nothing given back").toBe(ledgerBefore);
+      const p = await liveOf(s.divisionId);
+      expect([p.size, p.frozen_at !== null, await takenFor(p.id)], "32 as paid, now frozen").toEqual([32, true, gcPrice(32)]);
+    }, 180_000);
   });
 
   it("pay and open with a stale expectedOwed answers 409 with the fresh quote and opens nothing", async () => {
