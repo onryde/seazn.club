@@ -39,13 +39,16 @@ export async function targetConnectionId(tx: Tx, orgId: string, targetId: string
   return t?.connection_id ?? null;
 }
 
-/** Seazn-hosted video (Task 11): is `targetId` this org's ACTIVE `seazn` destination (V541)? Another org's target, an archived
- *  or a missing one answers false, so admission carries on and `admit` answers it 404 as before (no oracle). A row's kind is
- *  fixed when it is made (no code updates it), so a read before the admission's row lock answers as one under it would. */
-export async function isSeaznTarget(exec: Tx | typeof sql, orgId: string, targetId: string): Promise<boolean> {
-  const [t] = await exec<{ seazn: boolean }[]>`
-    select kind = 'seazn' as seazn from org_stream_targets where id = ${targetId} and org_id = ${orgId} and archived_at is null`;
-  return t?.seazn === true;
+/** Seazn-hosted video (Task 11): is `targetId` this org's ACTIVE `seazn` destination (V541), and is it offered (the org's switch,
+ *  V553, Task 33)? Another org's target, an archived or a missing one answers `{ seazn: false }`, so admission carries on and `admit`
+ *  answers it 404 as before (no oracle). A row's kind is fixed when it is made (no code updates it), so a read before the admission's
+ *  row lock answers as one under it would. `offered` is NOT fixed: it is read once, here, and a switch-off that commits after this
+ *  read does not stop this start — the same as a switch-off never stops a session already running (owner ruling: the switch gates
+ *  only NEW starts). An external row always reads `offered: true` (V553's check). */
+export async function isSeaznTarget(exec: Tx | typeof sql, orgId: string, targetId: string): Promise<{ seazn: boolean; offered: boolean }> {
+  const [t] = await exec<{ seazn: boolean; offered: boolean }[]>`
+    select kind = 'seazn' as seazn, offered from org_stream_targets where id = ${targetId} and org_id = ${orgId} and archived_at is null`;
+  return { seazn: t?.seazn === true, offered: t?.offered ?? true };
 }
 
 /** Seazn-hosted video (Task 12, G5): the signing a Seazn session's programme input is CREATED with — signed, for the deployment's

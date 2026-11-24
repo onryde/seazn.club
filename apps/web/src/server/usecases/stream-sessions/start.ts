@@ -11,7 +11,6 @@ import {
   MAX_DURATION_MINUTES,
   PHONE_SILENT_FLOOR_SECONDS,
   overlayDelayDefaultMs,
-  seaznHostedLive,
   seaznVideoOrigins,
   tunable,
 } from "@/server/relay/config";
@@ -37,7 +36,7 @@ import { recordEvent, recordStorageSnapshot, type EventSource } from "@/server/r
 import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
 import { creditBalance, ensureMonthlyStreamGrant, restartAllowance } from "../stream-credits";
-import { DestinationNotAllowedError } from "../stream-targets";
+import { DestinationNotAllowedError, seaznClosed } from "../stream-targets";
 import { clearLatchAfterStart, lockFixtureCode, writeStreamSettings } from "../stream-codes";
 import { codeEnded } from "@/server/api-v1/capture-http";
 import { assertCompetitionNotFrozen } from "../entitlement-freeze";
@@ -267,7 +266,8 @@ export async function startBroadcast(
   // match publishes to a programme input we play back — so it runs composed whatever mode the caller resolved (the phone's
   // and the automatic start read the fixture's stored `stream_mode`; refusing passthrough would strand them). Coerced here,
   // before `composedRunnerDown`, so the composed gate below judges the mode that will actually run.
-  const seazn = await isSeaznTarget(sql, orgId, opts.targetId);
+  const target = await isSeaznTarget(sql, orgId, opts.targetId);
+  const seazn = target.seazn;
   const body = { mode: seazn ? "composed" as const : opts.mode, targetId: opts.targetId, themeId: opts.themeId ?? null, overlayDelayMs: opts.overlayDelayMs };
   // R2001: can this deployment run a composed session at all (drivers.ts `composedUnavailable()`, the ONE authority the
   // organiser UI reads too)? Read ONCE, here, and handed to every `admit` below. Asked only for a composed start — a
@@ -314,9 +314,11 @@ export async function startBroadcast(
   }
   // Task 11: with SEAZN_HOSTED_LIVE off the Seazn destination does not exist for this deployment (no list or pick offers it),
   // so a start that names it anyway — a direct `targetId`, a pick saved while the flag was on — is refused by the pick's own
-  // 422, before the mode is weighed and before anything is read, written or asked of a provider.
-  if (seazn && !seaznHostedLive()) {
-    log.warn({ fixtureId, orgId }, "stream session: the Seazn destination is not available on this deployment — start refused");
+  // 422, before the mode is weighed and before anything is read, written or asked of a provider. Task 33: the same refusal, at
+  // the same place, when the ORG switched Seazn off (V553 `offered`; `seaznClosed` is the one rule, shared with the pick's write).
+  // It gates only this NEW start: a Seazn session already running never comes through here, so it keeps running and Stops normally.
+  if (seaznClosed(target)) {
+    log.warn({ fixtureId, orgId }, "stream session: the Seazn destination is not offered (deployment flag or the org's switch off) — start refused");
     throw seaznUnavailable();
   }
   // R2001: a composed start on a deployment with no compositor runner is refused HERE — admission's FIRST gate, asked
