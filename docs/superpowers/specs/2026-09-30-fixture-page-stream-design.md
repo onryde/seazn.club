@@ -169,7 +169,7 @@ those two states.
   - "Manage destinations", which opens `/directory?tab=streaming` in a new tab;
   - **Go live** (btn-primary, full width);
   - the credits line.
-- **Waiting:** the QR (§7) at ≥320 px on desktop and full width on a phone, the paste code, and Cancel.
+- **Waiting:** the QR (§7) at ≥320 px on desktop and full width on a phone, the paste code, and Cancel. (Amended 2026-11-24: the paste code only where `STREAM_PASTE_CODE` allows — unset, a fake relay or outside production; hidden on stg and prod. See capture QR v2 design §6.2.)
 - **Live:**
   - "On air" with the elapsed time (Geist Mono, large);
   - a full-width red **Stop stream** with today's confirm dialog;

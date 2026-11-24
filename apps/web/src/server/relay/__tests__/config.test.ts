@@ -616,7 +616,7 @@ describe("streamPasteCodeShown — STREAM_PASTE_CODE, the stream code's paste fi
           try {
             mode = config.relayDriverMode(env);
           } catch {
-            counts.refused++; // a server that refuses to boot serves no page
+            counts.refused++; // a refused setting answers 500 to every request (config.ts relayDriverMode), so no panel renders
             continue;
           }
           if (mode === "fake") {

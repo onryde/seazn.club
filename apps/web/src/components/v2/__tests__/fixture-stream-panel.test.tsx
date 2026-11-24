@@ -1048,6 +1048,7 @@ const BODY: PhoneTabBodyProps = {
   onToggleAuto: () => {}, onDismissTakeover: () => {},
   onSelectTarget: () => {}, onPickAnother: () => {}, pickerOpenSignal: 0, onRetryTargets: () => {}, onGoLive: () => {}, safetyNotice: false, onDismissSafety: () => {}, onStop: () => {}, onCancel: () => {},
   onBuy: () => {}, onAgain: () => {}, onCopy: () => {}, onToggleCode: () => {}, onReissue: () => {}, onRetryCode: () => {},
+  qrFailed: false, onRetryQr: () => {},
   onShowBuy: () => {}, onTileIntent: () => {}, score: SCORE_OFF,
   replayActions: { deleting: null, failed: null, gone: new Set(), onDelete: () => {} },
 };
@@ -1465,6 +1466,34 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
       if (state.code.image) expect(propsOf(qrImageOf(on, "stream-qr")!).qr).toBe(SYMBOL);
     }
     expect(checked, "anti-vacuity: 3 states x 3 testids").toBe(9);
+  });
+
+  // Task 34 fix round 1 (m1): with the paste code hidden, a QR that failed to encode used to leave the placeholder pulsing
+  // forever with no way in. It is now the code's own error line, with a Retry that re-encodes (the container's nonce).
+  it("Task 34 m1: a QR that FAILED to encode is the code's error with Retry — never the placeholder — paste code off and on; not failed, the placeholder", () => {
+    const onRetryQr = vi.fn();
+    const failed = { view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", phone: readModel({ phone: null }), code: { status: "ok", text: CODE_TEXT, image: null }, qrFailed: true, onRetryQr } satisfies BodyArgs;
+    let checked = 0;
+    for (const pasteCodeShown of [false, true]) {
+      const tree = body({ ...failed, pasteCodeShown });
+      expect(tree.find((el) => el.type === SeaznQrPlaceholder), `paste ${pasteCodeShown}: no placeholder`).toBeUndefined();
+      expect(qrImageOf(tree, "stream-qr"), `paste ${pasteCodeShown}: no QR`).toBeUndefined();
+      expect(attr(byTestId(tree, "stream-qr-error")!, "role"), "an alert, like the code's own error").toBe("alert");
+      expect(textAt(tree, "stream-qr-error")).toContain(m("stream.code.error"));
+      expect(textAt(tree, "stream-qr-retry")).toBe(m("stream.dest.retry"));
+      expect(byTestId(tree, "stream-code-error"), "not the ASK's error: the code itself was answered").toBeUndefined();
+      click(byTestId(tree, "stream-qr-retry"));
+      expect(onRetryQr, `paste ${pasteCodeShown}: Retry re-encodes`).toHaveBeenCalledTimes(checked + 1);
+      expect(byTestId(tree, "stream-code-reissue"), "Revoke & reissue stays").toBeDefined();
+      // The paste code is still the flag's: shown where it is on, beside the error.
+      expect(byTestId(tree, "stream-qr-text") !== undefined, `paste ${pasteCodeShown}`).toBe(pasteCodeShown);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // The empty case: not failed — the placeholder for this text, and no error line.
+    const encoding = body({ ...failed, qrFailed: false, pasteCodeShown: false });
+    expect(encoding.find((el) => el.type === SeaznQrPlaceholder), "still encoding: the placeholder").toBeDefined();
+    expect(byTestId(encoding, "stream-qr-error")).toBeUndefined();
   });
 
   // Court stream (plan Task 13, spec 2026-11-14 §5.2): a match the court's phone streams names it, in place of the code.
@@ -3446,6 +3475,85 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     apiV1.mockClear();
     track(await mount({ current: null, targets: TARGETS, phone: readModel({ court: null, phone: null }) }));
     expect(ensures(), "regression: switch off, no phone — the card asks at once").toBe(1);
+  });
+
+  it("Task 34 m1: an encode that FAILS reports qrFailed, and a poll does not re-encode it; Retry re-encodes the SAME text (a nonce: the re-ask would answer the same code) — a second failure stays failed, the next Retry lands the QR", async () => {
+    seaznQr.renderSeaznQr.mockRejectedValueOnce(new Error("encoder chunk failed"));
+    const island = track(await mount({ current: null, targets: TARGETS, phone: readModel({ phone: null }) }));
+    expect(seaznQr.renderSeaznQr.mock.calls).toEqual([[CODE_TEXT]]);
+    expect(bodyOf(island).code).toEqual({ status: "ok", text: CODE_TEXT, image: null });
+    expect(bodyOf(island).qrFailed, "the failure reaches the body").toBe(true);
+    await vi.advanceTimersByTimeAsync(STREAM_POLL_MS * 2);
+    await settle();
+    expect(seaznQr.renderSeaznQr, "no re-encode on a poll: only Retry asks again").toHaveBeenCalledTimes(1);
+    expect(bodyOf(island).qrFailed).toBe(true);
+    // Retry 1 fails again: still failed, and the encoder was asked for the same text.
+    seaznQr.renderSeaznQr.mockRejectedValueOnce(new Error("encoder chunk failed again"));
+    bodyOf(island).onRetryQr();
+    await settle();
+    expect(seaznQr.renderSeaznQr.mock.calls).toEqual([[CODE_TEXT], [CODE_TEXT]]);
+    expect(bodyOf(island).qrFailed, "a second failure stays failed").toBe(true);
+    // Retry 2 lands: while it is in flight the error is gone (the placeholder says "trying"); then the QR.
+    let land!: (qr: { src: string; modules: number }) => void;
+    seaznQr.renderSeaznQr.mockImplementationOnce(() => new Promise((resolve) => { land = resolve; }));
+    bodyOf(island).onRetryQr();
+    await settle();
+    expect(seaznQr.renderSeaznQr.mock.calls).toEqual([[CODE_TEXT], [CODE_TEXT], [CODE_TEXT]]);
+    expect(bodyOf(island).qrFailed, "in flight: no error line, the placeholder").toBe(false);
+    expect(bodyOf(island).code).toEqual({ status: "ok", text: CODE_TEXT, image: null });
+    land({ src: `data:image/svg+xml;charset=utf-8,len${CODE_TEXT.length}`, modules: 113 });
+    await settle();
+    expect(bodyOf(island).qrFailed).toBe(false);
+    expect(bodyOf(island).code).toEqual({ status: "ok", text: CODE_TEXT, image: { src: `data:image/svg+xml;charset=utf-8,len${CODE_TEXT.length}`, modules: 113 } });
+    expect(calls().filter((c) => c === ENSURE).length, "Retry re-encodes; it never re-asks the server for the code").toBe(1);
+  });
+
+  it("Task 34 m1: a failed encode belongs to ITS text — Revoke & reissue after one draws the new code's placeholder (not the old error) and encodes it", async () => {
+    const NEW = CaptureQrV2.parse({ v: 2, code: "m3n4p5q6r7s8", slot: 0, tok: "Zz9_Yy8-Xx7Ww6Vv5Uu4Tt" });
+    const s = serve({ current: null, targets: TARGETS, phone: readModel({ phone: null }) });
+    s.reissue = () => ({ qr: NEW, issuedAt: "2026-09-14T11:40:00.000Z" });
+    seaznQr.renderSeaznQr.mockRejectedValueOnce(new Error("encoder chunk failed"));
+    const island = track(await mount(s));
+    expect(bodyOf(island).qrFailed).toBe(true);
+    let land!: (qr: { src: string; modules: number }) => void;
+    seaznQr.renderSeaznQr.mockImplementationOnce(() => new Promise((resolve) => { land = resolve; }));
+    confirmMock.mockResolvedValueOnce(true);
+    bodyOf(island).onReissue();
+    await settle();
+    expect(calls().filter((c) => c === REISSUE)).toHaveLength(1);
+    expect(seaznQr.renderSeaznQr.mock.calls).toEqual([[CODE_TEXT], [captureQrV2Text(NEW)]]);
+    expect(bodyOf(island).code).toEqual({ status: "ok", text: captureQrV2Text(NEW), image: null });
+    expect(bodyOf(island).qrFailed, "the new code is encoding: the old text's failure is not its").toBe(false);
+    land({ src: "data:image/svg+xml;charset=utf-8,new", modules: 113 });
+    await settle();
+    expect(bodyOf(island).code).toEqual({ status: "ok", text: captureQrV2Text(NEW), image: { src: "data:image/svg+xml;charset=utf-8,new", modules: 113 } });
+    expect(bodyOf(island).qrFailed).toBe(false);
+  });
+
+  it("Task 34 m1: an encode OVERTAKEN (a refused reissue blanks the code, Retry brings the same code back) never reports its late failure over the live encode", async () => {
+    const s = serve({ current: null, targets: TARGETS, phone: readModel({ phone: null }) });
+    s.reissue = () => { throw new ApiV1Error("the match is over", 422, "fixture_finished"); };
+    let failFirst!: (e: Error) => void;
+    let landSecond!: (qr: { src: string; modules: number }) => void;
+    seaznQr.renderSeaznQr
+      .mockImplementationOnce(() => new Promise((_, reject) => { failFirst = reject; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { landSecond = resolve; }));
+    const island = track(await mount(s));
+    confirmMock.mockResolvedValueOnce(true);
+    bodyOf(island).onReissue();
+    await settle();
+    expect(bodyOf(island).code, "the refused reissue: the code's error card").toEqual({ status: "error" });
+    bodyOf(island).onRetryCode();
+    await settle();
+    expect(seaznQr.renderSeaznQr.mock.calls, "the same code back: a second encode").toEqual([[CODE_TEXT], [CODE_TEXT]]);
+    failFirst(new Error("the first, overtaken, encode fails late"));
+    await settle();
+    expect(bodyOf(island).qrFailed, "the live encode is still running: no error line").toBe(false);
+    expect(bodyOf(island).code).toEqual({ status: "ok", text: CODE_TEXT, image: null });
+    landSecond({ src: "data:image/svg+xml;charset=utf-8,second", modules: 113 });
+    await settle();
+    expect(bodyOf(island).code).toEqual({ status: "ok", text: CODE_TEXT, image: { src: "data:image/svg+xml;charset=utf-8,second", modules: 113 } });
+    expect(bodyOf(island).qrFailed).toBe(false);
   });
 
   it("W3: the code is encoded CLIENT-side from its own text — exactly the four keys (a fixture's code carries no `exp`; only a court code does, court stream §5.1) — once per text; Copy writes that text", async () => {

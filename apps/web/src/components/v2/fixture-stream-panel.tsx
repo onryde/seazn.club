@@ -1120,6 +1120,11 @@ export function PhoneTab({
   }, [wantCode, code.status, codeStale, codeSeen, askCode, landCode]);
   const codeText = code.status === "ok" ? captureQrV2Text(code.qr) : null;
   const [codeImage, setCodeImage] = useState<{ text: string; qr: SeaznQr } | null>(null);
+  // Task 34 fix round 1 (m1): the text whose encode FAILED (null: none) and Retry's nonce. Where the paste code is hidden
+  // (stg, prod) a failed encode is otherwise a placeholder pulsing forever. Re-asking the server answers the SAME code, so
+  // `codeText` would not change and the encode would not re-run: the nonce re-runs it.
+  const [qrFailedFor, setQrFailedFor] = useState<string | null>(null);
+  const [encodeTry, setEncodeTry] = useState(0);
   useEffect(() => {
     if (!codeText) return;
     let cancelled = false;
@@ -1129,12 +1134,17 @@ export function PhoneTab({
         if (!cancelled) setCodeImage({ text: codeText, qr });
       })
       .catch(() => {
-        // the placeholder stays; where the paste code shows (dev, e2e, smoke: `pasteCodeShown`) it is still a way in
+        // The code's error line with Retry takes the placeholder's place (PhoneTabBody `qrFailed`).
+        if (!cancelled) setQrFailedFor(codeText);
       });
     return () => {
       cancelled = true;
     };
-  }, [codeText]);
+  }, [codeText, encodeTry]);
+  const onRetryQr = () => {
+    setQrFailedFor(null);
+    setEncodeTry((n) => n + 1);
+  };
   const codeCard: CodeCard =
     code.status === "ok" && !codeStale
       ? { status: "ok", text: codeText!, image: codeImage && codeImage.text === codeText ? codeImage.qr : null }
@@ -1359,6 +1369,8 @@ export function PhoneTab({
         onToggleCode={setCodeOpen}
         onReissue={() => void onReissue()}
         onRetryCode={() => void ensureCode()}
+        qrFailed={codeCard.status === "ok" && qrFailedFor === codeCard.text}
+        onRetryQr={onRetryQr}
         // Buy more and the chooser's Close (B6) are one toggle; either way a refusal from the last attempt goes.
         onShowBuy={() => {
           setShowBuy((v) => !v);
@@ -1793,6 +1805,10 @@ export interface PhoneTabBodyProps {
   onToggleCode: (open: boolean) => void;
   onReissue: () => void;
   onRetryCode: () => void;
+  /** Task 34 fix round 1 (m1): the code's QR failed to encode (the code itself was answered) — its error line with Retry
+   *  replaces the placeholder. `onRetryQr` re-encodes the same text; it never re-asks the server. */
+  qrFailed: boolean;
+  onRetryQr: () => void;
   onShowBuy: () => void;
   /** M2: a hand is on a credit tile (pointerenter, focus, touchstart) — warm the checkout sheet's chunk now. */
   onTileIntent: () => void;
@@ -2052,23 +2068,30 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   // code both carry a live tok: `ph-no-capture` on each (the QR's is `sensitive`). A finished match has no reissue (the
   // route refuses it, 422). Task 34: the paste code and Copy only where the server shows them (`pasteCodeShown`: dev, e2e
   // and smoke); stg and prod show the QR alone.
+  // The code's error line with Retry: the ask refused (`stream-code-*`), or the answered code's QR failed to encode
+  // (`stream-qr-*`, Task 34 fix round 1 m1). One look and one sentence; each Retry does its own thing.
+  const codeError = (testId: string, retryTestId: string, onRetry: () => void) => (
+    <div data-testid={testId} role="alert" className="flex flex-wrap items-center gap-2 text-sm text-red-700">
+      <span>{msg("stream.code.error")}</span>
+      <button type="button" data-testid={retryTestId} onClick={onRetry} className="btn btn-ghost min-h-11 md:min-h-10">
+        {msg("stream.dest.retry")}
+      </button>
+    </div>
+  );
   const codeInner = (
     <>
       <div className="mt-2">
         {p.code.status === "ok" ? (
           p.code.image ? (
             <SeaznQrImage testId="stream-qr" sensitive qr={p.code.image} alt={msg("stream.phone.qr.alt")} maxSize={PHONE_HANDOVER_QR_MAX_PX} />
+          ) : p.qrFailed ? (
+            codeError("stream-qr-error", "stream-qr-retry", p.onRetryQr)
           ) : (
             // The QR's own square and caption line, so the card keeps its size when the symbol lands (review m-7).
             <SeaznQrPlaceholder maxSize={PHONE_HANDOVER_QR_MAX_PX} modules={seaznQrModules(p.code.text)} />
           )
         ) : p.code.status === "error" ? (
-          <div data-testid="stream-code-error" role="alert" className="flex flex-wrap items-center gap-2 text-sm text-red-700">
-            <span>{msg("stream.code.error")}</span>
-            <button type="button" data-testid="stream-code-retry" onClick={p.onRetryCode} className="btn btn-ghost min-h-11 md:min-h-10">
-              {msg("stream.dest.retry")}
-            </button>
-          </div>
+          codeError("stream-code-error", "stream-code-retry", p.onRetryCode)
         ) : (
           <SeaznQrPlaceholder maxSize={PHONE_HANDOVER_QR_MAX_PX} modules={null} />
         )}

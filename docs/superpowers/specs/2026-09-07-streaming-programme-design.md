@@ -1193,6 +1193,10 @@ re-taken against a real provisioned pair in the change that checksums the
 contract fixtures, and the paste-code fallback (already unconditional here) is
 what keeps a larger code from being a blocker if it lands badly on a phone
 screen.
+(Amended 2026-11-24, seazn-hosted Task 34: the paste code is no longer
+unconditional. It renders only where `STREAM_PASTE_CODE` allows: unset, that is
+a fake relay or outside production, so it is hidden on stg and prod. See capture
+QR v2 design §6.2.)
 Everything else about the phone app (libraries, ABR, thermal, five screens)
 is the `seazn-capture` spec's, not this one's.
 

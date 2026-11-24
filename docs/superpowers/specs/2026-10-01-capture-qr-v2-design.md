@@ -403,6 +403,7 @@ unless a status is shown.
 - The QR now sits in the **Ready** state, before Go live (§6.12).
 - The **paste code** is the same JSON (`qrText`). It keeps `ph-no-capture` and the D10a treatment: the tok is a
   bearer secret that authorises pairing and `POST start`.
+  - **Amended 2026-11-24 (seazn-hosted Task 34; owner 2026-11-23: "can we hide in non dev env?"):** the paste code and its Copy render only where the server's `STREAM_PASTE_CODE` allows (`config.ts` `streamPasteCodeShown`). Unset, they show where `RELAY_DRIVERS=fake` (every e2e, CI and smoke server) or outside production (`next dev`), and are hidden on stg and prod. An explicit `true`/`false` wins, and anything else throws. The QR is unchanged and is the only carrier where the field is hidden. A QR that fails to encode shows the code's error line with Retry, never a placeholder that pulses forever.
 - **The QR never carries credentials** (W3). A regression test asserts that the payload has exactly the four keys.
 - **Size gate.** The QR version is measured on the real payload at EC H and pinned in a test. It replaces v1's
   "<600 B, version 8–20 at EC M" gate. The real-phone scan gate (fixture-page design §7) is re-run on the v2 QR.
@@ -1020,7 +1021,8 @@ unchanged.
     - At 768 the card column is the QR plus its padding (370 px), and the controls narrow to fit.
     - **From 1024 the two columns are equal.**
     - The paste code's Copy button sits beneath the field, inside the card, at every width, and Revoke & reissue stays
-      in the card.
+      in the card. (Amended 2026-11-24: the field and Copy render only where `STREAM_PASTE_CODE` allows — hidden on stg
+      and prod by default; see §6.2.)
   - **The Phone node is 80 px wide below 768.** At ≥768 it stays 96 px; below 768 it was 64. The change lets
     "Reconnecting…" (76 px at 11 px) fit on one line.
     - The word keeps `overflow-wrap: anywhere` only as a fallback for a longer translation.
