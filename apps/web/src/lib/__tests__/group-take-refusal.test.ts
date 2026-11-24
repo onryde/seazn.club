@@ -9,6 +9,7 @@
 // Pure: no DB, no DOM.
 import { describe, expect, it } from "vitest";
 import { crossPoolDrawCanRefuse } from "@/lib/cross-pool-draw-risk";
+import { CROSS_POOL_SHAPES } from "@/lib/cross-pool-ties";
 import { FORMAT_BOUNDS } from "@/lib/format-bounds";
 import { PAGE_PLAYOFF_SIZE } from "@/lib/format-size-gates";
 import { buildTemplateStages, groupsKoTake } from "@/lib/format-templates";
@@ -185,6 +186,34 @@ describe("save policy: only an 'always' refusal is a 422; a 'can' refusal saves"
     const counts = groupTakeWorkingCounts("knockout", 2, null);
     expect(counts).not.toContain(3);
     expect(counts).toEqual(expect.arrayContaining([2, 4]));
+  });
+});
+
+// The save door never refuses what the form offers: every count the form shows (groupTakeWorkingCounts, the "can" reading) passes the save
+// reading ("always") - else an organiser picks a count from the list and is refused for it at save. Swept over every pool count the form
+// serves and every target kind it offers (the cross-pool kinds the draw knows, plus double elimination, which the form also offers).
+describe("sweep: every count the form offers saves", () => {
+  it("pools 2..8 x every offered target kind x field unknown / 8 / 16: groupTakeRefusal(...) is null for each offered count", () => {
+    const kinds = [...Object.keys(CROSS_POOL_SHAPES), "double_elim"];
+    let checked = 0;
+    let withCounts = 0;
+    for (const destKind of kinds) {
+      for (let pools = FORMAT_BOUNDS.pools.min; pools <= FORMAT_BOUNDS.pools.max; pools++) {
+        for (const entrants of [null, 8, 16]) {
+          const counts = groupTakeWorkingCounts(destKind, pools, entrants);
+          if (counts.length > 0) withCounts += 1;
+          for (const q of counts) {
+            const refusal = groupTakeRefusal({ destKind, placement: "rank_order", pools, take: groupsKoTake(q, pools), entrants });
+            expect(refusal, `${destKind}, ${pools} groups, field ${entrants}, count ${q}: the form offers it, so save must accept it`).toBeNull();
+            checked += 1;
+          }
+        }
+      }
+    }
+    expect(kinds.length, "anti-vacuity: every target kind swept").toBeGreaterThanOrEqual(4);
+    expect(withCounts, "anti-vacuity: shapes that offer counts").toBeGreaterThan(0);
+    expect(checked, "anti-vacuity: offered counts checked (zero = a failure)").toBeGreaterThan(100);
+    console.log(`group-take form-offered counts checked: ${checked}`);
   });
 });
 
