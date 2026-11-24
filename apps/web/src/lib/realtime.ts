@@ -277,9 +277,11 @@ export async function resolveRealtimeMintKey(): Promise<MintKey> {
       } catch (err) {
         // Unguarded JSON.parse used to throw a raw SyntaxError straight out of
         // mintPublicFixtureToken, 500ing the token route on a malformed key
-        // (review 2026-09-14, I7a).
+        // (review 2026-09-14, I7a). The parse error by NAME only: V8's message
+        // quotes the input around the bad token, i.e. a piece of the private
+        // key, and this error reaches log lines and Sentry (push nudges T5, m5).
         throw new Error(
-          `Realtime JWT mint: SUPABASE_JWT_PRIVATE_KEY is not valid JWK JSON (${err instanceof Error ? err.message : String(err)})`,
+          `Realtime JWT mint: SUPABASE_JWT_PRIVATE_KEY is not valid JWK JSON (${err instanceof Error ? err.name : "parse error"})`,
         );
       }
       // Use the JWK's own declared alg when it is one this function can mint

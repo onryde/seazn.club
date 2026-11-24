@@ -7,7 +7,8 @@
 //     per path, so dropping any one path reds its case;
 //  2. a SPY on the app's `log`: every call it receives while each phone route runs — success AND every error path — is
 //     serialised through that same real configuration, and no captured line contains the tok, the session's stream key
-//     or its passphrase. Zero captured lines is a FAILURE (anti-vacuity): a route that logged nothing proves nothing.
+//     or its passphrase — nor (push nudges T5) a beat answer's realtime token, served here through the real route.
+//     Zero captured lines is a FAILURE (anti-vacuity): a route that logged nothing proves nothing.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomBytes } from "node:crypto";
 import pino from "pino";
@@ -36,12 +37,24 @@ beforeAll(() => {
 });
 afterAll(() => vi.restoreAllMocks());
 
-const ENV_KEYS = ["RELAY_KEK", "AUTH_SECRET", "OAUTH_BASE_URL", "NEXT_PUBLIC_BASE_URL", "STREAM_PLAYBACK_HOST", "STREAM_SRT_ENABLED", "RELAY_DRIVERS", "DEVICE_LINK_KEK"] as const;
+const ENV_KEYS = [
+  "RELAY_KEK", "AUTH_SECRET", "OAUTH_BASE_URL", "NEXT_PUBLIC_BASE_URL", "STREAM_PLAYBACK_HOST", "STREAM_SRT_ENABLED", "RELAY_DRIVERS", "DEVICE_LINK_KEK",
+  "NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_ANON_KEY", "SUPABASE_JWT_SECRET", "SUPABASE_JWT_ALG", "SUPABASE_JWT_PRIVATE_KEY",
+  "SUPABASE_JWT_SIGNING_KEY_B64", "SUPABASE_JWT_KID",
+] as const;
 const saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
+/** Push nudges (T5 review I1): the phone routes run with a Supabase project configured, as on stg and prod, so the beats
+ *  route serves `realtime` through the PROCESS's own port (the real HS256 mint) — the one CI lane that sees it through the
+ *  real route (CI smoke runs with no Supabase url; the e2e harness and the probe are manual). Its token is a secret here. */
+const SUPABASE_URL = "https://logger-redact.supabase.co";
 beforeAll(() => {
   for (const k of ENV_KEYS) delete process.env[k];
   process.env.RELAY_KEK = randomBytes(32).toString("hex");
   process.env.AUTH_SECRET = "logger-redact-test-secret";
+  process.env.NEXT_PUBLIC_SUPABASE_URL = SUPABASE_URL;
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "sb_publishable_logger_redact";
+  process.env.SUPABASE_JWT_SECRET = `logger-redact-${randomBytes(24).toString("hex")}`;
+  process.env.SUPABASE_JWT_ALG = "HS256";
 });
 afterAll(() => {
   for (const k of ENV_KEYS) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
@@ -78,6 +91,11 @@ describe("the logger's redaction, path by path (§10.2)", () => {
     ["accessToken (top level)", { accessToken: SECRET }],
     ["refresh_token (top level)", { refresh_token: SECRET }],
     ["access_token (top level)", { access_token: SECRET }],
+    // Push nudges (T5 review m2): the capture beat's realtime subscriber JWT, alone or inside the realtime object, at the top
+    // level and one level down (an answer logged whole).
+    ["token (top level)", { token: SECRET }],
+    ["realtime.token (top level)", { realtime: { topic: "capture:x", token: SECRET } }],
+    ["*.realtime.token", { answer: { state: "live", realtime: { topic: "capture:x", token: SECRET } } }],
   ];
   it.each(cases)("%s → [Redacted]", (_path, obj) => {
     log.warn(obj, "redaction probe");
@@ -90,6 +108,17 @@ describe("the logger's redaction, path by path (§10.2)", () => {
   it("the positive pair: a field that is not a secret is written as it is", () => {
     log.warn({ fixtureId: SECRET }, "not a secret");
     expect(lines[0]).toContain(SECRET);
+  });
+
+  it("the positive pair for the realtime paths: only the token goes — the object's topic is written, at both levels", () => {
+    const topic = "capture:00000000-0000-4000-8000-000000000001";
+    log.warn({ realtime: { topic, token: SECRET } }, "top");
+    log.warn({ answer: { realtime: { topic, token: SECRET } } }, "nested");
+    expect(lines).toHaveLength(2);
+    for (const line of lines) {
+      expect(line).toContain(topic);
+      expect(line).not.toContain(SECRET);
+    }
   });
 });
 
@@ -128,7 +157,19 @@ describe.skipIf(!HAS_DB)("the phone routes never log a secret (§10.2): each rou
       return res;
     };
 
-    await beat(r.tok, beatOf(r, A, { claim: "new" }));                       // 200 claim
+    // Every 200 beat answer's realtime token: a secret, scanned for in every line below.
+    const tokens: string[] = [];
+    const served = async (res: Response) => {
+      const a = (await res.json()) as { state: string; realtime?: { topic: string; token: string } };
+      if (a.realtime) tokens.push(a.realtime.token);
+      return a;
+    };
+    const claimed = await served(await beat(r.tok, beatOf(r, A, { claim: "new" })));   // 200 claim
+    const [{ id: pairingId }] = await sql<{ id: string }[]>`
+      select p.id from fixture_stream_pairings p join fixture_stream_codes c on c.id = p.code_id
+       where c.fixture_id = ${r.fixtureId} and p.phone = ${A} and p.ended_at is null`;
+    expect(claimed.realtime?.topic, "the claim's answer, through the REAL route and the process's port, carries the claimed pairing's channel")
+      .toBe(`capture:${pairingId}`);
     await saveStreamSettings(r.auth, r.fixtureId, { targetId: r.target.id });
     // The relay disabled on this deployment: the start path logs its refusal (503).
     setRelayDriversForTest(disabledRelayDrivers());
@@ -145,14 +186,17 @@ describe.skipIf(!HAS_DB)("the phone routes never log a secret (§10.2): each rou
     await get(r.code, null);                                                  // 401 no Bearer
     await get("NOT_A_CODE!", r.tok);                                          // 404
     await get(r.code, r.tok, "?slot=1");                                      // 422
-    await beat(r.tok, beatOf(r, A, { sid: started.sid, state: "armed" }));    // 200 go-live
+    const goLive = await served(await beat(r.tok, beatOf(r, A, { sid: started.sid, state: "armed" })));   // 200 go-live
     await beat(r.tok, null, "{nope");                                         // 422
     await beat(null, beatOf(r, A, {}));                                       // 401
-    await beat(r.tok, beatOf(r, A, { state: "ended", sid: started.sid, endReason: "operator-stopped" }));   // 200 the operator's Stop
+    const stopped = await served(await beat(r.tok, beatOf(r, A, { state: "ended", sid: started.sid, endReason: "operator-stopped" })));   // 200 the operator's Stop
 
     expect(withCred.cred, "PREMISE: the session's phone was served its cred").toBeDefined();
-    const secrets = [r.tok, withCred.cred!.rtmps.streamKey, ...(withCred.cred!.srt ? [withCred.cred!.srt.passphrase] : [])];
-    expect(secrets.length).toBeGreaterThanOrEqual(2);
+    expect(goLive.realtime?.topic, "the go-live answer carries the same pairing's channel").toBe(`capture:${pairingId}`);
+    expect(stopped.realtime, "the phone's own Stop ended its pairing: no channel on that answer").toBeUndefined();
+    expect(tokens, "a fresh token on the claim and on go-live").toHaveLength(2);
+    const secrets = [r.tok, withCred.cred!.rtmps.streamKey, ...(withCred.cred!.srt ? [withCred.cred!.srt.passphrase] : []), ...tokens];
+    expect(secrets.length).toBeGreaterThanOrEqual(4);
     expect(new Set(statuses)).toEqual(new Set([200, 401, 404, 409, 422, 503]));
     expect(lines.length, "anti-vacuity: the routes logged").toBeGreaterThan(0);
     let checked = 0;
@@ -183,6 +227,8 @@ describe.skipIf(!HAS_DB)("the phone routes never log a secret (§10.2): each rou
               values (${r.auth.orgId}, ${r.fixtureId}, ${hashDeviceLinkToken(swappedSecret)}, ${sealWith("DEVICE_LINK_KEK", mintDeviceLinkSecret())}, null, ${issued_by}, null)`;
     const claimed = await BEATS(new Request(`${BASE}/${r.code}/beats`, { method: "POST", headers: headersOf(r.tok), body: JSON.stringify(beatOf(r, A, { claim: "new" })) }), params(r.code));
     expect(claimed.status, "PREMISE: A claimed the slot").toBe(200);
+    const claimToken = ((await claimed.json()) as { realtime?: { token: string } }).realtime?.token;
+    expect(claimToken, "PREMISE: the claim was served its realtime token (a secret below)").toBeDefined();
     const { url } = (await (await link(r.tok, { phone: A })).json()) as { url: string };   // 200 (passes over the swapped row)
     await link(r.tok, { phone: A });                                          // 200 the same link
     await link(r.tok, { phone: phoneId("x") });                               // 409 replaced
@@ -195,7 +241,7 @@ describe.skipIf(!HAS_DB)("the phone routes never log a secret (§10.2): each rou
 
     expect(url, "PREMISE: the phone was served its link").toMatch(/\/score\/dl_/);
     const secret = url.slice(url.lastIndexOf("/") + 1);
-    const secrets = [r.tok, url, secret, swappedSecret];
+    const secrets = [r.tok, url, secret, swappedSecret, claimToken!];
     expect(new Set(statuses)).toEqual(new Set([200, 401, 409, 422, 503]));
     expect(lines.length, "anti-vacuity: the route logged").toBeGreaterThan(0);
     expect(lines.some((l) => l.includes("passed over")), "the passed-over envelope was logged").toBe(true);

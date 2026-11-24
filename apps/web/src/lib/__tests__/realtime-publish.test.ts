@@ -276,6 +276,44 @@ describe("mintPublicFixtureToken", () => {
     );
   });
 
+  // Push nudges T5 review (m5): V8's JSON.parse message QUOTES the input for some malformations ("Unexpected token 'S',
+  // "{"d":SECRET…}" is not valid JSON"), and the mint error reaches a log line and Sentry (the capture beat's
+  // realtime_mint report). So the error names the parse error by NAME only. Both env sources, both minters.
+  it("a malformed JWK's error carries no fragment of the key — raw or base64, the fixture mint or the capture mint", async () => {
+    const FRAGMENT = "KEYFRAG7Zx";   // short: V8 quotes a window of ~10 characters either side of the bad token
+    const malformed = `{"kty":"EC","d":${FRAGMENT}}`;
+    let parseMessage = "";
+    try {
+      JSON.parse(malformed);
+    } catch (err) {
+      parseMessage = (err as Error).message;
+    }
+    expect(parseMessage, "PREMISE: this engine's JSON.parse message quotes the input").toContain(FRAGMENT);
+    let checked = 0;
+    for (const source of ["raw", "b64"] as const) {
+      for (const minter of ["fixture", "capture"] as const) {
+        vi.resetModules();
+        delete process.env.SUPABASE_JWT_PRIVATE_KEY;
+        delete process.env.SUPABASE_JWT_SIGNING_KEY_B64;
+        delete process.env.SUPABASE_JWT_SECRET;
+        if (source === "raw") process.env.SUPABASE_JWT_PRIVATE_KEY = malformed;
+        else process.env.SUPABASE_JWT_SIGNING_KEY_B64 = Buffer.from(malformed, "utf8").toString("base64");
+        const m = await import("../realtime");
+        const minted = minter === "fixture" ? m.mintPublicFixtureToken("fx-5", 60) : m.mintCaptureToken("pairing-5", new Date(Date.now() + 60_000));
+        const err = await minted.then(() => null, (e: unknown) => e);
+        expect(err, `${source}/${minter}: refused`).toBeInstanceOf(Error);
+        const e = err as Error;
+        expect(e.message, `${source}/${minter}: the refusal names the variable`).toMatch(/SUPABASE_JWT_PRIVATE_KEY is not valid JWK JSON/);
+        for (const text of [e.message, e.stack ?? "", JSON.stringify(e, Object.getOwnPropertyNames(e))]) {
+          expect(text.includes(FRAGMENT), `${source}/${minter}: a key fragment in the error`).toBe(false);
+        }
+        expect(e.message, `${source}/${minter}: the parse error by name`).toContain("SyntaxError");
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
+  });
+
   // Review 2026-09-14, I7c — an unrecognized jwk.alg (ES512, EdDSA, …) used to
   // be silently coerced to ES256 rather than rejected, so the minted token's
   // header would lie about the algorithm that actually signed it.
