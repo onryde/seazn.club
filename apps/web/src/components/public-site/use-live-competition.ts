@@ -380,19 +380,28 @@ export function useLiveCompetition({
 
   // ONE door session for the page, asked for lazily — an idle hub (nothing
   // live) never calls the door — and held across every change of the live
-  // set: a second division going live joins on the token already set. A
-  // refusal is remembered as null for the page (it polls; the door is not
-  // asked again on every change of the live set).
+  // set: a second division going live joins on the token already set. A FINAL
+  // refusal (403, 404) is remembered as null for the page (it polls; the door
+  // is not asked again on every change of the live set). A TEMPORARY one (429,
+  // 5xx, the network) keeps this promise pending while the door module retries
+  // it on its backoff ladder; the page polls meanwhile and joins when it lands.
   const competitionId = initial.competitionId;
   const sessionRef = useRef<Promise<DivisionRealtimeSession | null> | null>(null);
   // The same session once it has resolved, so unmount can hand it back at once.
   const sessionHeldRef = useRef<DivisionRealtimeSession | null>(null);
+  // Ends the door's retries when the page goes (a new one per acquire: the unmount effect below also runs on a
+  // dev remount, which asks again).
+  const doorAbortRef = useRef<AbortController | null>(null);
   const divisionSession = useCallback(() => {
-    sessionRef.current ??= acquireDivisionRealtime(competitionId).then((session) => {
-      sessionHeldRef.current = session;
-      session?.onRenewed(() => rejoin(session));
-      return session;
-    });
+    if (sessionRef.current === null) {
+      const abort = new AbortController();
+      doorAbortRef.current = abort;
+      sessionRef.current = acquireDivisionRealtime(competitionId, { signal: abort.signal }).then((session) => {
+        sessionHeldRef.current = session;
+        session?.onRenewed(() => rejoin(session));
+        return session;
+      });
+    }
     return sessionRef.current;
   }, [competitionId, rejoin]);
 
@@ -437,6 +446,8 @@ export function useLiveCompetition({
       channels.clear();
       // Synchronously when it has resolved (no door timer outlives the hook);
       // otherwise once it does. `release` is idempotent.
+      doorAbortRef.current?.abort();
+      doorAbortRef.current = null;
       sessionHeldRef.current?.release();
       sessionHeldRef.current = null;
       const session = sessionRef.current;

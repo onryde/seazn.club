@@ -235,6 +235,8 @@ export function Slideshow({
     if (!realtime || ids.length === 0) return;
     if (!process.env.NEXT_PUBLIC_SUPABASE_URL) return;
     let cancelled = false;
+    // Ends the door's retries (a temporary refusal keeps the acquire pending) when this run is let go.
+    const doorAbort = new AbortController();
     let session: DivisionRealtimeSession | null = null;
     // A channel of THIS run reported CHANNEL_ERROR or CLOSED.
     let failed = false;
@@ -246,8 +248,8 @@ export function Slideshow({
     };
     (async () => {
       try {
-        const held = await acquireDivisionRealtime(competitionId);
-        // Null: the door refused (403, 429, …) or there is no client — the poll carries the board.
+        const held = await acquireDivisionRealtime(competitionId, { signal: doorAbort.signal });
+        // Null: the door refused for good (403, 404, …) or there is no client — the poll carries the board.
         if (held === null) return;
         if (cancelled) {
           held.release();
@@ -287,6 +289,7 @@ export function Slideshow({
     })();
     return () => {
       cancelled = true;
+      doorAbort.abort();
       if (debounceRef.current) clearTimeout(debounceRef.current);
       setSubscribed(false);
       leavingRef.current = Promise.all(channels.map((ch) => ch.unsubscribe?.())).catch(() => undefined);

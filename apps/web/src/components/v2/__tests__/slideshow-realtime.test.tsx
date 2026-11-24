@@ -211,7 +211,7 @@ describe("<Slideshow> realtime: the division door and private topics", () => {
     expect(router.refreshes).toBe(1);
   });
 
-  for (const status of [403, 429]) {
+  for (const status of [403, 404]) {
     it(`a ${status}: no setAuth, no channel, and the board refreshes on its 45 s poll`, async () => {
       doorAnswers({ status });
       renderIsland(Slideshow, board());
@@ -223,6 +223,31 @@ describe("<Slideshow> realtime: the division door and private topics", () => {
       expect(router.refreshes).toBe(1);
     });
   }
+
+  it("a 503 at boot: the board polls at 45 s, the door is asked again at the first rung, and the topics join", async () => {
+    doorAnswers({ status: 503 }, { status: 200, token: "door-token-late", divisionIds: [D1, D2] });
+    renderIsland(Slideshow, board());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(door.calls).toHaveLength(1);
+    expect(rt.channels).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(DIVISION_AUTH_BACKOFF_MS[0] - 1);
+    expect(door.calls).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(door.calls).toHaveLength(2);
+    expect(rt.log[0]).toBe("setAuth door-token-late");
+    expect(rt.channels).toHaveLength(2);
+  });
+
+  it("unmounted while the door is down: the retries stop", async () => {
+    doorAnswers({ status: 503 });
+    const island = renderIsland(Slideshow, board());
+    await vi.advanceTimersByTimeAsync(DIVISION_AUTH_BACKOFF_MS[0]);
+    const asked = door.calls.length;
+    expect(asked).toBeGreaterThan(1);
+    island.unmount();
+    await vi.advanceTimersByTimeAsync(DIVISION_AUTH_BACKOFF_MS.reduce((a, b) => a + b, 0) * 2);
+    expect(door.calls).toHaveLength(asked);
+  });
 
   it("realtime={false} asks the door nothing and polls at 45 s (positive pair)", async () => {
     renderIsland(Slideshow, board({ realtime: false }));

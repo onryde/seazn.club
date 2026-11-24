@@ -143,26 +143,34 @@ describe("acquireDivisionRealtime: the first fetch", () => {
     expect(JSON.stringify(s)).not.toContain("tok-SECRET");
   });
 
-  // Every refusal is "poll": 403 (no_divisions, too_many_divisions, not
-  // entitled), 404 (private/unknown), 429 (the door's bucket), 503
-  // (REALTIME_UNAVAILABLE), a network failure, and a 200 whose body is not the
-  // door's. None of them touches the client.
-  const refusals: [string, Answer, number?][] = [
+  // A FINAL refusal is "poll", and the door is never asked again: 403 (no_divisions, too_many_divisions, not
+  // entitled), 404 (private/unknown), any other 4xx. None of them touches the client.
+  const finalRefusals: [string, Answer][] = [
     ["403", { status: 403 }],
-    ["429", { status: 429 }],
     ["404", { status: 404 }],
-    ["503", { status: 503 }],
-    ["network", "network"],
+    ["400", { status: 400 }],
+    ["401", { status: 401 }],
   ];
-  for (const [name, answer] of refusals) {
-    it(`a ${name} answers null and sets no token`, async () => {
+  for (const [name, answer] of finalRefusals) {
+    it(`a ${name} answers null, sets no token, and is NEVER retried`, async () => {
       const d = door(answer);
       const s = await acquireDivisionRealtime(COMP);
       expect(s).toBeNull();
       expect(d.calls).toHaveLength(1);
       expect(rt.setAuth).toEqual([]);
+      // The whole ladder, and then some: not one more ask.
+      await vi.advanceTimersByTimeAsync(DIVISION_AUTH_BACKOFF_MS.reduce((a, b) => a + b, 0) * 2);
+      expect(d.calls).toHaveLength(1);
     });
   }
+
+  it("a 200 whose body is not the door's is FINAL too (not retried)", async () => {
+    const fn = vi.fn(async () => new Response("<html>captive portal</html>", { status: 200 }));
+    vi.stubGlobal("fetch", fn);
+    expect(await acquireDivisionRealtime(COMP)).toBeNull();
+    await vi.advanceTimersByTimeAsync(DIVISION_AUTH_BACKOFF_MS[0] * 10);
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
 
   it("a 200 without a token string, or with an empty division list, answers null", async () => {
     vi.stubGlobal(
@@ -185,6 +193,178 @@ describe("acquireDivisionRealtime: the first fetch", () => {
     expect(await acquireDivisionRealtime(COMP)).toBeNull();
     expect(d.calls).toHaveLength(1);
     expect(rt.families).toEqual([]);
+  });
+});
+
+// A TEMPORARY refusal (429, any 5xx, the network) is not the door saying no. The acquire stays PENDING (the page
+// polls meanwhile) while the door is asked again on the backoff ladder, jittered; a kiosk that met one 503 at
+// boot joins as soon as the door is back, instead of polling all day (final-review m2).
+describe("acquireDivisionRealtime: a temporary refusal is retried on the backoff ladder", () => {
+  /** An acquire whose settlement can be read without awaiting it. */
+  function watch(signal?: AbortSignal) {
+    const out: { state: "pending" | "settled"; value: Awaited<ReturnType<typeof acquireDivisionRealtime>> | undefined } = {
+      state: "pending",
+      value: undefined,
+    };
+    const p = acquireDivisionRealtime(COMP, signal ? { signal } : {}).then((v) => {
+      out.state = "settled";
+      out.value = v;
+      return v;
+    });
+    return { out, p };
+  }
+
+  const temporaries: [string, Answer][] = [
+    ["503", { status: 503 }],
+    ["500", { status: 500 }],
+    ["502", { status: 502 }],
+    ["429", { status: 429 }],
+    ["network failure", "network"],
+  ];
+  for (const [name, answer] of temporaries) {
+    it(`a ${name}: pending (no token, nothing sets) until the first rung, then the retry joins`, async () => {
+      const d = door(answer, { status: 200, token: "tok-late", divisionIds: [D1] });
+      const { out } = watch();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(d.calls).toHaveLength(1);
+      expect(out.state, "the acquire answered null on a temporary refusal").toBe("pending");
+      expect(rt.setAuth).toEqual([]);
+
+      // One ms short of the first rung (jitter pinned at its middle): not asked yet.
+      await vi.advanceTimersByTimeAsync(DIVISION_AUTH_BACKOFF_MS[0] - 1);
+      expect(d.calls).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(d.calls).toHaveLength(2);
+      expect(out.state).toBe("settled");
+      expect(out.value).not.toBeNull();
+      expect(rt.setAuth).toEqual(["tok-late"]);
+      expect(out.value!.covers(D1)).toBe(true);
+      // Joined: nothing is asked for again.
+      await vi.advanceTimersByTimeAsync(DIVISION_AUTH_BACKOFF_MS[1]);
+      expect(d.calls).toHaveLength(2);
+    });
+  }
+
+  it("a second temporary failure goes UP the ladder: 1 s, then 5 s, then 30 s", async () => {
+    const d = door({ status: 503 }, { status: 503 }, { status: 429 }, { status: 200, token: "tok-4", divisionIds: [D1] });
+    const { out } = watch();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(d.calls).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(DIVISION_AUTH_BACKOFF_MS[0]);
+    expect(d.calls).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(DIVISION_AUTH_BACKOFF_MS[1] - 1);
+    expect(d.calls, "the second retry came before its 5 s rung").toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(d.calls).toHaveLength(3);
+    expect(out.state).toBe("pending");
+    await vi.advanceTimersByTimeAsync(DIVISION_AUTH_BACKOFF_MS[2] - 1);
+    expect(d.calls).toHaveLength(3);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(d.calls).toHaveLength(4);
+    expect(out.value).not.toBeNull();
+    expect(rt.setAuth).toEqual(["tok-4"]);
+  });
+
+  it("the last rung repeats: a door down for hours is asked every ~5 minutes, not never", async () => {
+    const d = door({ status: 503 });
+    watch();
+    const last = DIVISION_AUTH_BACKOFF_MS.at(-1)!;
+    // Walk the whole ladder, then three more rungs.
+    for (const rung of DIVISION_AUTH_BACKOFF_MS) await vi.advanceTimersByTimeAsync(rung);
+    expect(d.calls).toHaveLength(1 + DIVISION_AUTH_BACKOFF_MS.length);
+    for (let i = 0; i < 3; i += 1) await vi.advanceTimersByTimeAsync(last);
+    expect(d.calls).toHaveLength(1 + DIVISION_AUTH_BACKOFF_MS.length + 3);
+  });
+
+  it("each wait is jittered into [rung x 0.5, rung x 1.5): the extremes, and one ms outside", async () => {
+    const rung = DIVISION_AUTH_BACKOFF_MS[0];
+    const lo = Math.round(rung * (1 - DIVISION_AUTH_BACKOFF_JITTER));
+    expect(lo).toBeLessThan(rung);
+    // random() = 0: the shortest wait.
+    _setDivisionAuthRandom(() => 0);
+    let d = door({ status: 503 });
+    watch();
+    await vi.advanceTimersByTimeAsync(lo - 1);
+    expect(d.calls).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(d.calls).toHaveLength(2);
+    _resetDivisionRealtimeAuth();
+    // random() just under 1: the longest.
+    _setDivisionAuthRandom(() => 0.999999);
+    d = door({ status: 503 });
+    watch();
+    const hi = Math.round(rung * (1 + DIVISION_AUTH_BACKOFF_JITTER * 0.999998));
+    await vi.advanceTimersByTimeAsync(hi - 2);
+    expect(d.calls).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(3);
+    expect(d.calls).toHaveLength(2);
+  });
+
+  it("a temporary refusal and then a FINAL one ends it: null, and nothing more is asked", async () => {
+    const d = door({ status: 503 }, { status: 403 });
+    const { out } = watch();
+    await vi.advanceTimersByTimeAsync(DIVISION_AUTH_BACKOFF_MS[0]);
+    expect(d.calls).toHaveLength(2);
+    expect(out.state).toBe("settled");
+    expect(out.value).toBeNull();
+    await vi.advanceTimersByTimeAsync(DIVISION_AUTH_BACKOFF_MS.reduce((a, b) => a + b, 0));
+    expect(d.calls).toHaveLength(2);
+  });
+
+  it("the ladder starts over once the door has answered: a channel failing after a late join waits the FIRST rung", async () => {
+    const d = door({ status: 503 }, { status: 503 }, { status: 200, token: "tok-3", divisionIds: [D1] }, { status: 200, token: "tok-4", divisionIds: [D1] });
+    const { out } = watch();
+    await vi.advanceTimersByTimeAsync(DIVISION_AUTH_BACKOFF_MS[0] + DIVISION_AUTH_BACKOFF_MS[1]);
+    expect(out.value).not.toBeNull();
+    expect(d.calls).toHaveLength(3);
+
+    out.value!.channelStatus("CHANNEL_ERROR");
+    await vi.advanceTimersByTimeAsync(DIVISION_AUTH_BACKOFF_MS[0] - 1);
+    expect(d.calls, "the failure re-fetch waited a later rung: the first fetch's attempts were carried over").toHaveLength(3);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(d.calls).toHaveLength(4);
+  });
+
+  it("an aborted wait (the page went) resolves null and stops asking", async () => {
+    const d = door({ status: 503 });
+    const ac = new AbortController();
+    const { out } = watch(ac.signal);
+    await vi.advanceTimersByTimeAsync(DIVISION_AUTH_BACKOFF_MS[0] * 3);
+    expect(d.calls.length).toBeGreaterThan(1);
+    expect(out.state).toBe("pending");
+
+    ac.abort();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(out.state).toBe("settled");
+    expect(out.value).toBeNull();
+    const asked = d.calls.length;
+    await vi.advanceTimersByTimeAsync(DIVISION_AUTH_BACKOFF_MS.reduce((a, b) => a + b, 0) * 2);
+    expect(d.calls, "the door was asked after its only caller had gone").toHaveLength(asked);
+  });
+
+  it("an abort that comes BEFORE the call settles it null without leaving a retry running", async () => {
+    const d = door({ status: 503 });
+    const ac = new AbortController();
+    ac.abort();
+    const { out } = watch(ac.signal);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(out.value).toBeNull();
+    const asked = d.calls.length;
+    await vi.advanceTimersByTimeAsync(DIVISION_AUTH_BACKOFF_MS[2]);
+    expect(d.calls).toHaveLength(asked);
+  });
+
+  it("one caller going does not strand another waiting on the same door", async () => {
+    const d = door({ status: 503 }, { status: 200, token: "tok-2", divisionIds: [D1] });
+    const ac = new AbortController();
+    watch(ac.signal);
+    const second = watch();
+    await vi.advanceTimersByTimeAsync(0);
+    ac.abort();
+    await vi.advanceTimersByTimeAsync(DIVISION_AUTH_BACKOFF_MS[0]);
+    expect(d.calls).toHaveLength(2);
+    expect(second.out.value).not.toBeNull();
   });
 });
 

@@ -202,7 +202,7 @@ describe("the board's division topics go private", () => {
     expect(router.refreshes).toBe(1);
   });
 
-  for (const status of [403, 429]) {
+  for (const status of [403, 404]) {
     it(`a ${status}: no setAuth and no channel (the 60 s poll carries the board)`, async () => {
       doorAnswers({ status });
       mountBoard([division("d1")], COMP);
@@ -211,6 +211,29 @@ describe("the board's division topics go private", () => {
       expect(rt.log).toEqual([]);
     });
   }
+
+  it("a 503 at boot: the door is asked again at the first rung and the topic joins", async () => {
+    doorAnswers({ status: 503 }, { status: 200, token: "door-token-late", divisionIds: ["d1"] });
+    mountBoard([division("d1")], COMP);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(door.calls).toHaveLength(1);
+    expect(rt.channels).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(DIVISION_AUTH_BACKOFF_MS[0]);
+    expect(door.calls).toHaveLength(2);
+    expect(rt.log[0]).toBe("setAuth door-token-late");
+    expect(rt.channels).toHaveLength(1);
+  });
+
+  it("unmounted while the door is down: the retries stop", async () => {
+    doorAnswers({ status: 503 });
+    const board = mountBoard([division("d1")], COMP);
+    await vi.advanceTimersByTimeAsync(DIVISION_AUTH_BACKOFF_MS[0]);
+    const asked = door.calls.length;
+    expect(asked).toBeGreaterThan(1);
+    board.unmount();
+    await vi.advanceTimersByTimeAsync(DIVISION_AUTH_BACKOFF_MS.reduce((a, b) => a + b, 0) * 2);
+    expect(door.calls).toHaveLength(asked);
+  });
 
   it("no competition: the door is not asked", async () => {
     mountBoard([division("d1")], null);

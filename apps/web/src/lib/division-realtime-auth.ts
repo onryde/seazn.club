@@ -7,9 +7,12 @@
 // TTL, `private, no-store`). This module fetches it, hands the token to the
 // DIVISION family's client (`realtimeClient("division")`) with `setAuth`, and
 // keeps it fresh: a re-fetch at 50 minutes, and on a channel's CHANNEL_ERROR or
-// CLOSED with backoff. Every refusal (403 no_divisions / too_many_divisions /
-// not entitled, 404, 429, 503, a network failure, a body that is not the door's)
-// answers null, and the page polls with no error UI.
+// CLOSED with backoff. Every refusal answers no session and the page polls with
+// no error UI. A FINAL refusal (403 no_divisions / too_many_divisions / not
+// entitled, 404, any other 4xx, a body that is not the door's) is not asked
+// again. A TEMPORARY one (429, any 5xx, a network failure) is retried on the
+// backoff ladder below, jittered, while the caller's acquire stays pending and
+// the page keeps polling: a kiosk that met one 503 at boot must not poll all day.
 //
 // THE TOKEN IS A CREDENTIAL. It never leaves this module except into the
 // client's `setAuth`: it is not stored here, not returned to a caller, never
@@ -34,6 +37,12 @@ export const DIVISION_AUTH_BACKOFF_MS = [1_000, 5_000, 30_000, 120_000, 300_000]
 /** Each rung is jittered to [rung × (1 − J), rung × (1 + J)): N tabs behind one NAT, failing together, would
  *  otherwise all re-fetch at the same instant into the door's shared per-IP bucket (120/min). */
 export const DIVISION_AUTH_BACKOFF_JITTER = 0.5;
+
+/** The door answered "not now" rather than "no": 429 (its per-IP bucket) or any 5xx. A network failure is the
+ *  same, in askDoor. Every other non-2xx (403, 404, 400, 401...) is final. */
+function temporaryStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
 
 /** The backoff's random source: `Math.random`, replaced only by the test seam below. */
 let random: () => number = Math.random;
@@ -73,6 +82,10 @@ interface Holder {
   /** A re-fetch is running now. */
   inFlight: boolean;
   timer: ReturnType<typeof setTimeout> | null;
+  /** The wait between FIRST-fetch retries, and the call that ends it early. Apart from `timer`: a release
+   *  stops `timer` (the refresh), and must not strand a first fetch another acquirer is still waiting on. */
+  waitTimer: ReturnType<typeof setTimeout> | null;
+  endWait: (() => void) | null;
   /** When the scheduled 50-minute refresh is due (epoch ms), so a holder re-acquired in the same commit resumes
    *  it rather than starting the 50 minutes again. */
   refreshAt: number;
@@ -81,23 +94,32 @@ interface Holder {
 
 let held: Holder | null = null;
 
-/** The door's answer, or null for every refusal. The token goes nowhere but the return value. */
-async function askDoor(competitionId: string): Promise<{ token: string; divisionIds: string[] } | null> {
+type DoorAnswer = { kind: "ok"; token: string; divisionIds: string[] } | { kind: "final" } | { kind: "temporary" };
+
+/** The door's answer. The token goes nowhere but the return value. */
+async function askDoor(competitionId: string): Promise<DoorAnswer> {
+  let res: Response;
   try {
-    const res = await fetch(divisionRealtimeTokenPath(competitionId), {
+    res = await fetch(divisionRealtimeTokenPath(competitionId), {
       cache: "no-store",
       credentials: "same-origin",
       headers: { accept: "application/json" },
     });
-    if (!res.ok) return null;
+  } catch {
+    // fetch itself threw (offline, DNS, aborted): the network, not the door's answer.
+    return { kind: "temporary" };
+  }
+  if (!res.ok) return { kind: temporaryStatus(res.status) ? "temporary" : "final" };
+  try {
     const body = (await res.json()) as { data?: { token?: unknown; divisionIds?: unknown } } | null;
     const token = body?.data?.token;
     const ids = body?.data?.divisionIds;
-    if (typeof token !== "string" || token === "") return null;
-    if (!Array.isArray(ids) || ids.length === 0 || !ids.every((id) => typeof id === "string" && id !== "")) return null;
-    return { token, divisionIds: ids as string[] };
+    if (typeof token !== "string" || token === "") return { kind: "final" };
+    if (!Array.isArray(ids) || ids.length === 0 || !ids.every((id) => typeof id === "string" && id !== "")) return { kind: "final" };
+    return { kind: "ok", token, divisionIds: ids as string[] };
   } catch {
-    return null;
+    // A 200 whose body is not JSON (a captive portal, a proxy page): not the door's, and not worth asking again.
+    return { kind: "final" };
   }
 }
 
@@ -112,16 +134,43 @@ function clearTimer(h: Holder) {
   h.timer = null;
 }
 
+function endWait(h: Holder) {
+  if (h.waitTimer !== null) clearTimeout(h.waitTimer);
+  h.waitTimer = null;
+  const end = h.endWait;
+  h.endWait = null;
+  end?.();
+}
+
+/** The next rung of the backoff ladder, jittered; advances the ladder. */
+function nextWait(h: Holder): number {
+  const rung = DIVISION_AUTH_BACKOFF_MS[Math.min(h.attempt, DIVISION_AUTH_BACKOFF_MS.length - 1)]!;
+  h.attempt += 1;
+  return Math.round(rung * (1 - DIVISION_AUTH_BACKOFF_JITTER + 2 * DIVISION_AUTH_BACKOFF_JITTER * random()));
+}
+
 function drop(h: Holder) {
   h.alive = false;
   clearTimer(h);
+  endWait(h);
   h.listeners.clear();
   if (held === h) held = null;
 }
 
 async function start(h: Holder): Promise<boolean> {
-  const got = await askDoor(h.competitionId);
-  if (got === null || !h.alive || stubProject()) return false;
+  let got = await askDoor(h.competitionId);
+  // A TEMPORARY refusal waits out the next rung and asks again, for as long as the holder lives: the callers'
+  // acquire stays pending and their pages poll meanwhile. A FINAL one ends it (null: poll, not asked again).
+  while (got.kind === "temporary" && h.alive) {
+    await new Promise<void>((resolve) => {
+      h.endWait = resolve;
+      h.waitTimer = setTimeout(() => endWait(h), nextWait(h));
+    });
+    if (!h.alive) return false;
+    got = await askDoor(h.competitionId);
+  }
+  if (got.kind !== "ok" || !h.alive || stubProject()) return false;
+  h.attempt = 0;
   try {
     const { realtimeClient } = await import("@/lib/supabase-browser");
     const client = realtimeClient("division");
@@ -149,10 +198,7 @@ function scheduleRefresh(h: Holder, wait = DIVISION_TOKEN_REFRESH_MS) {
 function scheduleRetry(h: Holder) {
   clearTimer(h);
   h.retrying = true;
-  const rung = DIVISION_AUTH_BACKOFF_MS[Math.min(h.attempt, DIVISION_AUTH_BACKOFF_MS.length - 1)]!;
-  const wait = Math.round(rung * (1 - DIVISION_AUTH_BACKOFF_JITTER + 2 * DIVISION_AUTH_BACKOFF_JITTER * random()));
-  h.attempt += 1;
-  h.timer = setTimeout(() => void renew(h), wait);
+  h.timer = setTimeout(() => void renew(h), nextWait(h));
 }
 
 async function renew(h: Holder) {
@@ -164,7 +210,7 @@ async function renew(h: Holder) {
   try {
     const got = await askDoor(h.competitionId);
     if (!h.alive) return;
-    if (got === null) {
+    if (got.kind !== "ok") {
       // Refused or unreachable: the token already set stays until it expires; try again on the next rung.
       scheduleRetry(h);
       return;
@@ -195,8 +241,15 @@ async function renew(h: Holder) {
 /**
  * A session on the division client for `competitionId`, or null: poll. The first call for a competition asks the
  * door; every later call while it is held shares that token (a second division going live needs no re-fetch).
+ *
+ * A temporary refusal at the door (429, 5xx, the network) keeps this promise PENDING while the door is retried on
+ * the backoff ladder; null means a final refusal (or no client). `signal` ends the wait for a caller that has gone:
+ * it resolves null and lets go of its hold, so a page that unmounted mid-retry stops the retries.
  */
-export async function acquireDivisionRealtime(competitionId: string): Promise<DivisionRealtimeSession | null> {
+export async function acquireDivisionRealtime(
+  competitionId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<DivisionRealtimeSession | null> {
   if (held !== null && held.competitionId !== competitionId) {
     // Another competition holds the client's token: refuse rather than overwrite it. Released but not yet torn
     // down, or still waiting on its door (nothing set yet; its caller has navigated away): it gives way now, and
@@ -216,6 +269,8 @@ export async function acquireDivisionRealtime(competitionId: string): Promise<Di
       retrying: false,
       inFlight: false,
       timer: null,
+      waitTimer: null,
+      endWait: null,
       refreshAt: 0,
       listeners: new Set(),
     };
@@ -248,7 +303,13 @@ export async function acquireDivisionRealtime(competitionId: string): Promise<Di
     });
   };
 
-  const ok = await h.ready;
+  const gone = opts.signal
+    ? new Promise<false>((resolve) => {
+        if (opts.signal!.aborted) resolve(false);
+        else opts.signal!.addEventListener("abort", () => resolve(false), { once: true });
+      })
+    : null;
+  const ok = await (gone ? Promise.race([h.ready, gone]) : h.ready);
   if (!ok || !h.alive || h.client === null) {
     release();
     if (h.refs === 0) drop(h);

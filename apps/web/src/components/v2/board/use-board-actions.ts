@@ -825,13 +825,15 @@ export function useBoardActions(
     if (competitionId === null || ids.length === 0) return;
     if (!process.env.NEXT_PUBLIC_SUPABASE_URL) return;
     let cancelled = false;
+    // Ends the door's retries (a temporary refusal keeps the acquire pending) when this run is let go.
+    const doorAbort = new AbortController();
     let session: DivisionRealtimeSession | null = null;
     let failed = false;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const channels: any[] = [];
     (async () => {
       try {
-        const held = await acquireDivisionRealtime(competitionId);
+        const held = await acquireDivisionRealtime(competitionId, { signal: doorAbort.signal });
         if (held === null) return;
         if (cancelled) {
           held.release();
@@ -863,6 +865,7 @@ export function useBoardActions(
     })();
     return () => {
       cancelled = true;
+      doorAbort.abort();
       leavingRef.current = Promise.all(channels.map((ch) => ch?.unsubscribe?.())).catch(() => undefined);
       session?.release();
     };

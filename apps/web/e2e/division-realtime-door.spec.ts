@@ -163,14 +163,38 @@ test.describe("division realtime door: the hub, the slideshow and the board ask 
       await page.goto(`/live/${orgSlug}/${competition.slug}`);
       const res = await asked;
       expect(new URL(res.url()).search, "the door is asked with nothing in its query").toBe("");
-      // 200 where the mint is configured; 503 REALTIME_UNAVAILABLE on a build without it. Never a 4xx for this org.
-      expect([200, 503]).toContain(res.status());
-      if (res.status() === 200) {
-        expect(res.headers()["cache-control"]).toBe("private, no-store");
-        const token = ((await res.json()) as { data: { token: string } }).data.token;
-        expect(token.length).toBeGreaterThan(20);
-        expect(await page.content(), "the token is in the page's HTML").not.toContain(token);
-        expect(page.url()).not.toContain(token);
+      // 200, not "200 or 503": e2e.yml gives the server a stub Supabase project, an anon key and the JWT secret, so the
+      // door MINTS (match-day.spec.ts asserts the same 200 on the same env). A 503 here is a server missing that env,
+      // and must fail loudly rather than skip every token-leak check below.
+      expect(res.status(), "the e2e server mints (e2e.yml: NEXT_PUBLIC_SUPABASE_URL, _ANON_KEY, SUPABASE_JWT_SECRET)").toBe(200);
+      expect(res.headers()["cache-control"]).toBe("private, no-store");
+      const token = ((await res.json()) as { data: { token: string } }).data.token;
+      expect(token.length).toBeGreaterThan(20);
+      expect(await page.content(), "the token is in the page's HTML").not.toContain(token);
+      expect(page.url()).not.toContain(token);
+
+      // Browser storage, every key and every value, both areas. A canary proves the scan reads what a page holds (a
+      // scan of an empty area would pass for any token); the token is then asked of the SAME dump.
+      await page.evaluate(() => {
+        localStorage.setItem("__scan_canary_local__", "canary-local");
+        sessionStorage.setItem("__scan_canary_session__", "canary-session");
+      });
+      const stored = await page.evaluate(() => {
+        const dump: { area: string; key: string; value: string }[] = [];
+        for (const [area, store] of [["localStorage", localStorage], ["sessionStorage", sessionStorage]] as const) {
+          for (let i = 0; i < store.length; i += 1) {
+            const key = store.key(i)!;
+            dump.push({ area, key, value: store.getItem(key) ?? "" });
+          }
+        }
+        return dump;
+      });
+      expect(stored.map((e) => e.key), "the storage scan read nothing: it proves nothing").toEqual(
+        expect.arrayContaining(["__scan_canary_local__", "__scan_canary_session__"]),
+      );
+      for (const entry of stored) {
+        expect(entry.key, `${entry.area} key`).not.toContain(token);
+        expect(entry.value, `${entry.area}[${entry.key}]`).not.toContain(token);
       }
       await expect(page.getByTestId("mh-root")).toBeVisible();
     } finally {
