@@ -45,21 +45,30 @@ vi.mock("@/lib/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/db")>();
   return {
     ...actual,
-    withTenant: (orgId: string, fn: Parameters<typeof actual.withTenant>[1]) =>
-      actual.withTenant(orgId, (tx) => {
-        if (!probe.blankLookup) return fn(tx);
-        const handed = new Proxy(tx, {
-          apply(target, thisArg, args: unknown[]) {
-            const strings = args[0];
-            if (Array.isArray(strings) && "raw" in strings && strings.join("").includes("c.org_id, c.discoverable")) {
-              probe.blankHits += 1;
-              return Promise.resolve([]);
-            }
-            return Reflect.apply(target, thisArg, args);
-          },
-        });
-        return fn(handed);
-      }),
+    // The third argument (`opts`: `privilegedPrelude` / `privilegedEpilogue`) passes through, armed or not.
+    withTenant: (
+      orgId: string,
+      fn: Parameters<typeof actual.withTenant>[1],
+      opts?: Parameters<typeof actual.withTenant>[2],
+    ) =>
+      actual.withTenant(
+        orgId,
+        (tx) => {
+          if (!probe.blankLookup) return fn(tx);
+          const handed = new Proxy(tx, {
+            apply(target, thisArg, args: unknown[]) {
+              const strings = args[0];
+              if (Array.isArray(strings) && "raw" in strings && strings.join("").includes("c.org_id, c.discoverable")) {
+                probe.blankHits += 1;
+                return Promise.resolve([]);
+              }
+              return Reflect.apply(target, thisArg, args);
+            },
+          });
+          return fn(handed);
+        },
+        opts,
+      ),
   };
 });
 // A deciding score schedules a player-stats refresh, which (with no request scope) runs at once and pushes its own
