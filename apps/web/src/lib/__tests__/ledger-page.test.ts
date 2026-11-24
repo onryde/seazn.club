@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DIVISION_PHASES } from "@/lib/division-phase";
-import { ledgerHref, ledgerQueryOf, pageLedger, LEDGER_PER_PAGE } from "@/lib/ledger-page";
+import { ledgerFilter, ledgerHref, ledgerQueryOf, pageLedger, LEDGER_PER_PAGE } from "@/lib/ledger-page";
 
 // Match Day B2 (spec 2026-10-31 §9, owner request): the competition page's divisions list shows 5 at a time and hides finished
 // divisions until asked. Every expected value below is read off the input (counts of rows built here) or the engine's own
@@ -168,5 +168,26 @@ describe("ledgerHref", () => {
       const sp = Object.fromEntries(new URL(href, "http://x").searchParams);
       expect(ledgerQueryOf(sp), href).toEqual({ ...next, rest: [["tab", "x"]] });
     }
+  });
+});
+
+// Finished competition (owner, Option 1): once the COMPETITION is finished its finished divisions are simply listed - no
+// "Show finished (N)" switch and no hidden-by-default. A live competition keeps today's behaviour exactly.
+describe("ledgerFilter", () => {
+  it("a live competition: the URL decides, and the switch is offered", () => {
+    expect(ledgerFilter({ competitionFinished: false, showFinished: false })).toEqual({ showFinished: false, toggle: true });
+    expect(ledgerFilter({ competitionFinished: false, showFinished: true })).toEqual({ showFinished: true, toggle: true });
+  });
+  it("a finished competition lists finished divisions whatever the URL says, and offers no switch", () => {
+    for (const showFinished of [false, true]) {
+      expect(ledgerFilter({ competitionFinished: true, showFinished }), String(showFinished)).toEqual({ showFinished: true, toggle: false });
+    }
+  });
+  it("through pageLedger: the same rows hidden on a live competition are all listed on a finished one", () => {
+    const rows = many(3, "finished");
+    const live = ledgerFilter({ competitionFinished: false, showFinished: false });
+    const done = ledgerFilter({ competitionFinished: true, showFinished: false });
+    expect(pageLedger(rows, { page: 1, showFinished: live.showFinished }).rows).toHaveLength(0);
+    expect(pageLedger(rows, { page: 1, showFinished: done.showFinished }).rows).toHaveLength(3);
   });
 });

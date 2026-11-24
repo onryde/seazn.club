@@ -85,3 +85,12 @@ export function ledgerHref(base: string, rest: readonly (readonly [string, strin
   const s = q.toString();
   return s === "" ? base : `${base}?${s}`;
 }
+
+/**
+ * Which divisions the list shows, and whether it offers the "Show finished" switch. A FINISHED competition (the derived competition
+ * phase, not a division's) lists its finished divisions outright - the switch exists to keep a live list short, and a competition
+ * that is over has nothing else to show. A live competition is the URL's `?finished=1`, as before.
+ */
+export function ledgerFilter(opts: { competitionFinished: boolean; showFinished: boolean }): { showFinished: boolean; toggle: boolean } {
+  return opts.competitionFinished ? { showFinished: true, toggle: false } : { showFinished: opts.showFinished, toggle: true };
+}
