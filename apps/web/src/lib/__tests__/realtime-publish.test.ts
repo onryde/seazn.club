@@ -40,8 +40,9 @@ describe("publishFixtureUpdate", () => {
   });
 
   // Review m1 (player-stats refresh): a caller that awaits a broadcast must not
-  // be held by a realtime endpoint that never answers.
-  it.each(["publishFixtureUpdate", "publishDivisionUpdate"] as const)(
+  // be held by a realtime endpoint that never answers. The lobby publisher had
+  // no timeout until it moved onto broadcast() (realtime push-nudges T0.1).
+  it.each(["publishFixtureUpdate", "publishDivisionUpdate", "publishExternalPlayLobby"] as const)(
     "%s aborts a broadcast that never answers after BROADCAST_TIMEOUT_MS, and resolves",
     async (fn) => {
       const realtime = await import("../realtime");
@@ -58,7 +59,9 @@ describe("publishFixtureUpdate", () => {
       const sent =
         fn === "publishFixtureUpdate"
           ? realtime.publishFixtureUpdate("fx-1", "event")
-          : realtime.publishDivisionUpdate("div-1", "score");
+          : fn === "publishDivisionUpdate"
+            ? realtime.publishDivisionUpdate("div-1", "score")
+            : realtime.publishExternalPlayLobby("fx-1");
       void sent.then(() => {
         settled = true;
       });
@@ -422,6 +425,7 @@ describe("golden wire bodies (byte-identical across the broadcast() delegation)"
     const { publishExternalPlayLobby } = await import("../realtime");
     await publishExternalPlayLobby("fx-1");
     const init = onlyRequest();
+    expect(init.signal, "the lobby publish carries the 3 s timeout too").toBeInstanceOf(AbortSignal);
     expect(init.body).toBe(
       '{"messages":[{"topic":"external-play:fx-1","event":"lobby_changed","payload":{"v":1795514400123},"private":true}]}',
     );

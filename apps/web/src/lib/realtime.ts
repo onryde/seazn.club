@@ -306,36 +306,22 @@ export async function mintExternalPlayLobbyToken(
     .sign(key);
 }
 
-/** Tell the other lobby screen that Ready changed. Fire-and-forget. */
+/** Tell the other lobby screen that Ready changed. Fire-and-forget. Through
+ *  `broadcast()`, so it carries the 3 s timeout it lacked before (realtime
+ *  push-nudges T0.1): a lobby click must not be held by an endpoint that
+ *  never answers. */
 export async function publishExternalPlayLobby(fixtureId: string): Promise<void> {
-  const target = publishTarget();
-  if (!target) return;
-  const { url, key } = target;
-  try {
-    const res = await fetch(`${url}/realtime/v1/api/broadcast`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${key}`,
-        apikey: key,
+  await broadcast(
+    [
+      {
+        topic: externalPlayLobbyTopic(fixtureId),
+        event: "lobby_changed",
+        payload: { v: Date.now() },
+        private: true,
       },
-      body: JSON.stringify({
-        messages: [
-          {
-            topic: externalPlayLobbyTopic(fixtureId),
-            event: "lobby_changed",
-            payload: { v: Date.now() },
-            private: true,
-          },
-        ],
-      }),
-    });
-    if (!res.ok) {
-      console.warn(`[realtime] lobby broadcast failed (${res.status}) for ${fixtureId}`);
-    }
-  } catch (err) {
-    console.warn("[realtime] lobby broadcast error:", err);
-  }
+    ],
+    `lobby ${fixtureId}`,
+  );
 }
 
 /** The match room's whole state after an accepted move (chess design §3.4,
@@ -353,10 +339,10 @@ export type RoomBroadcast = {
   drawOfferBy: "white" | "black" | null;
 };
 
-/** Push the room state to both players, and the board to spectators. Same endpoint, headers and topic as
- *  `publishExternalPlayLobby` — the topic's realtime policy (V452) already
- *  admits a seated player, so no new policy — plus the timeout that
- *  `publishFixtureUpdate` carries. Fire-and-forget: never throws. */
+/** Push the room state to both players, and the board to spectators. Same
+ *  transport and topic as `publishExternalPlayLobby` — the topic's realtime
+ *  policy (V452) already admits a seated player, so no new policy.
+ *  Fire-and-forget: never throws. */
 export async function publishRoomBroadcast(fixtureId: string, body: RoomBroadcast): Promise<void> {
   // Publishing off or unconfigured: skip the spectators' projection too, so a
   // board nobody would be sent never warns.
