@@ -64978,7 +64978,7 @@
                             },
                             "topic": {
                               "type": "string",
-                              "pattern": "^capture:[0-9a-f-]{36}$"
+                              "pattern": "^capture:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
                             },
                             "token": {
                               "type": "string",
@@ -65120,7 +65120,7 @@
                             },
                             "topic": {
                               "type": "string",
-                              "pattern": "^capture:[0-9a-f-]{36}$"
+                              "pattern": "^capture:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
                             },
                             "token": {
                               "type": "string",
@@ -65265,7 +65265,7 @@
                             },
                             "topic": {
                               "type": "string",
-                              "pattern": "^capture:[0-9a-f-]{36}$"
+                              "pattern": "^capture:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
                             },
                             "token": {
                               "type": "string",
@@ -65401,7 +65401,7 @@
                             },
                             "topic": {
                               "type": "string",
-                              "pattern": "^capture:[0-9a-f-]{36}$"
+                              "pattern": "^capture:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
                             },
                             "token": {
                               "type": "string",

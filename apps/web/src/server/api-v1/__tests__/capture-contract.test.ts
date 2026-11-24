@@ -53,7 +53,7 @@ const SHA256: Record<string, string> = {
   "capture-qr.v2.json": "0943072e30489dad04822cf266cc62d4e004e3a2ef46fe20e712a274ae272fbe",
   "capture-descriptor.v1.json": "308d58807d3b3754ccf5b400c18827d09ffb5dd0177aaed7d10b31b307c027f4",
   // Realtime push nudges (spec 2026-11-24 §2.1, plan Task 4): + the answer's optional `realtime`, additive.
-  "capture-beat.v1.json": "a98113fd7eb340e9bb898a4a419d2a09e220da11af19efb518d7778ad054abf2",
+  "capture-beat.v1.json": "b86686ca4690a57b63830600c25fbdb8739b761d203dce113e32a70d4667ecef",
   "capture-start.v1.json": "46162c64e4b9e0da3f17a571103c3ba7e3e9e972997367c916bf7f6ea8e08778",
   "capture-scoring-link.v1.json": "daa81ed4f907545f0fb1a8265d11011fab3b90a52d880dda8e3839f7651b5032",
   "capture-record.v1.json": "213f766043b7682f198cc98da13e93995b6602e46533ecf60c78bf562aebd6f8",
@@ -1382,6 +1382,8 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       ["url", "http://fixtureproject.supabase.co", false], ["url", "wss://fixtureproject.supabase.co", false],
       ["url", "https://", false], ["url", "fixtureproject.supabase.co", false],
       ["url", "https://fixtureproject.supabase.co?apikey=k", false], ["url", "https://fixtureproject.supabase.co#k", false],
+      // …and after a path, where the host's own refusal no longer reaches (the path part refuses them).
+      ["url", "https://fixtureproject.supabase.co/?apikey=k", false], ["url", "https://fixtureproject.supabase.co/p#k", false],
       ["url", "https://user:k@fixtureproject.supabase.co", false],
     ];
     for (const [field, value, admitted] of cases) judge({ ...live, realtime: { ...rt, [field]: value } }, admitted, `${field} ${JSON.stringify(value).slice(0, 40)}`);
@@ -1396,6 +1398,13 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     const pairing = "7b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e";
     expect(rt.topic, "premise: the fixture's topic is the builder's").toBe(captureTopic(pairing));
     const ids = [pairing, "00000000-0000-4000-8000-000000000000", "ffffffff-ffff-4fff-bfff-ffffffffffff", "01936f3e-8b2a-7c4d-9e5f-0a1b2c3d4e5f"];
+    // 36 characters that are not the lowercase 8-4-4-4-12 shape: 36 hex with no dashes, the first dash one place early,
+    // and 36 dashes. Premise: each is 36 long, so only the shape can refuse it.
+    const impostors = [
+      ...ids.flatMap((id) => [id.replaceAll("-", "").padEnd(36, "0"), `${id.slice(0, 7)}-${id.slice(7, 8)}${id.slice(9)}`]),
+      "-".repeat(36),
+    ];
+    for (const s of impostors) expect(s, `premise: ${s} is 36 characters`).toHaveLength(36);
     const topics: [topic: string, admitted: boolean][] = [
       ...ids.map((id): [string, boolean] => [captureTopic(id), true]),
       ...ids.flatMap((id): [string, boolean][] => [
@@ -1404,6 +1413,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
         [captureTopic(`https://fixtureproject.supabase.co/${id}`), false],
         [matchDayTopic(id), false], [divisionTopic(id), false], [`fixture:${id}`, false],
       ]),
+      ...impostors.map((s): [string, boolean] => [captureTopic(s), false]),
       [captureTopic(pairing.toUpperCase()), false],  // a pairing id is a lowercase uuid (Postgres writes uuids lowercase)
       ["capture:", false],
     ];
@@ -1415,7 +1425,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       if (ok) admitted++; else refused++;
     }
     expect(admitted).toBe(ids.length);
-    expect(refused).toBe(ids.length * 7 + 2);
+    expect(refused).toBe(ids.length * 9 + 3);
   });
 
   it("realtime reuses no read name: neither the answer's new key nor any key inside it is a name the phone already reads (plan Global Constraints; phone constraint 1)", () => {
@@ -1443,6 +1453,9 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       ["realtime", "v epoch milliseconds"], ["realtime", "at ISO-8601"], ["realtime", `reason ${reasons}`],
       ["realtime", "an unknown reason is still a ping"], ["realtime", "not a refresh signal"], ["realtime", "under 10 minutes left"],
       ["realtime", "channel error or refusal"], ["realtime", "never on replaced or taken"], ["realtime", "Omitted, never null"],
+      // The TTL (spec §2.1) and what an answer WITHOUT realtime means (spec §6: absent means poll only).
+      ["realtime", "Each token lives 30 minutes"], ["realtime", "keep a joined channel until its expiresAt"],
+      ["realtime", "absent means poll only"], ["realtime", "On replaced or taken, leave the channel"],
       ["realtime.url", "https"], ["realtime.url", "wss"], ["realtime.topic", "capture:{pairingId}"], ["realtime.topic", "realtime:{topic}"],
       ["realtime.token", "never in a record, snapshot, log line or URL"], ["realtime.expiresAt", "epoch seconds"],
     ];

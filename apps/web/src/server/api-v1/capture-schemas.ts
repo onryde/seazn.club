@@ -185,13 +185,13 @@ export type CaptureBeat = z.infer<typeof CaptureBeat>;
 
 /** Realtime push nudges (spec 2026-11-24 §2.1): the current pairing's private push channel on the beat answer — the
  *  Supabase project's https URL and public anon key (the phone bakes in no Supabase config), the bare topic
- *  `capture:{pairingId}` (lib/realtime.ts captureTopic; the phone joins `realtime:{topic}`), the subscriber JWT and its
- *  expiry in epoch seconds. The url carries no userinfo, query or fragment: a token never rides a URL. Strict: a later
- *  field is a contract bump. */
+ *  `capture:{pairingId}` (lib/realtime.ts captureTopic; the phone joins `realtime:{topic}`; the id a lowercase
+ *  8-4-4-4-12 uuid), the subscriber JWT and its expiry in epoch seconds. The url carries no userinfo, query or fragment:
+ *  a token never rides a URL. Strict: a later field is a contract bump. */
 export const CaptureRealtime = z.strictObject({
   url: z.url().regex(new RegExp("^https://[^\\s/?#@]+(/[^\\s?#]*)?$")),
   apikey: z.string().min(1).max(512),
-  topic: z.string().regex(/^capture:[0-9a-f-]{36}$/),
+  topic: z.string().regex(/^capture:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
   token: z.string().min(1).max(4096),
   expiresAt: EpochS,
 });
