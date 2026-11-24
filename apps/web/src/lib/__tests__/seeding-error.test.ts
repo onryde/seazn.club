@@ -76,6 +76,8 @@ describe("seedingErrorMessage — mechanics", () => {
       "SEEDING_CROSS_POOL_DRAW_TOO_LARGE",
       // W5 follow-ups A2: a Top N (rankRange) take saved against a source of several groups, refused at save by name.
       "SEEDING_TOP_N_ACROSS_GROUPS",
+      // Add stage after groups (owner Option C): a count under a knockout's minimum, refused at save.
+      "SEEDING_QUALIFY_TOO_FEW",
     ];
     expect([...SEEDING_ERROR_CODES].sort()).toEqual([...expected].sort());
   });
@@ -87,7 +89,7 @@ describe("seedingErrorMessage — real dictionaries, all 4 locales, every code",
       it(`${locale}: ${code} resolves to real copy — never the raw code, never the PREFIXED dictionary key, never empty, no leftover {placeholder}`, () => {
         // W5 app PR B T4: the two best-Nth refusals carry the engine's numbers (rank, available, pool); every code is given them
         // and a code that names none ignores them, so the leftover-{placeholder} check still catches a misspelt name.
-        const out = seedingErrorMessage(locale, code, "SHOULD_NOT_SEE_FALLBACK", { rank: 3, available: 2, pool: "A", count: 5, entrants: 8, reason: "tier_invalid", pools: 9, maxPools: 8, maxEntrants: 32 });
+        const out = seedingErrorMessage(locale, code, "SHOULD_NOT_SEE_FALLBACK", { rank: 3, available: 2, pool: "A", count: 5, entrants: 8, reason: "tier_invalid", pools: 9, maxPools: 8, maxEntrants: 32, min: 2, qualified: 1 });
         expect(out).not.toBe("SHOULD_NOT_SEE_FALLBACK");
         expect(out).not.toBe(code);
         // A genuinely missing dictionary entry does NOT fall back to the bare
