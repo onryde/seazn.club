@@ -65,13 +65,20 @@ export function crossPoolDrawCanRefuse(stages: readonly StageDraft[]): boolean {
     if (typeof poolCount !== "number" || poolCount < 2) continue;
     const take = progression.sources[0]!.take;
     if (take.length === 0 || !take.every((t) => t.kind === "topNPerGroup" || t.kind === "bestNth")) continue;
-    const key = JSON.stringify([shape, poolCount, take]);
-    let refused = answered.get(key);
-    if (refused === undefined) {
-      refused = refusedForSomeSupply(shape, poolCount, take);
-      answered.set(key, refused);
-    }
-    if (refused) return true;
+    if (crossPoolShapeCanRefuse(shape, poolCount, take)) return true;
   }
   return false;
+}
+
+/** The same question for ONE field: `poolCount` pools feeding a stage drawn in `shape` by `take` (pool places and best places only).
+ *  The Add stage form and its save door ask it of the stage they are adding (`group-take-refusal.ts`), so the builder's warning,
+ *  the save refusal and the draw's own refusal are one rule. Answered once per field. */
+export function crossPoolShapeCanRefuse(shape: FirstRoundShape, poolCount: number, take: readonly TakeRule[]): boolean {
+  const key = JSON.stringify([shape, poolCount, take]);
+  let refused = answered.get(key);
+  if (refused === undefined) {
+    refused = refusedForSomeSupply(shape, poolCount, take);
+    answered.set(key, refused);
+  }
+  return refused;
 }
