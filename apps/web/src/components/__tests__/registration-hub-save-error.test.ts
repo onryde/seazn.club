@@ -13,6 +13,8 @@ import { describe, expect, it } from "vitest";
 import { ApiV1Error } from "@/lib/client-v1";
 import { mapSaveError } from "@/components/registration-hub-save-error";
 import { ENTRANT_KIND_NOT_ALLOWED } from "@/lib/division-entrant-kinds";
+import { ONLINE_PACKAGE_CODES } from "@/lib/online-chess-package";
+import { onlineSizeFullError } from "@/server/external-play/online-entrant-cap";
 // RS004 review finding 2: api-v1/schemas/ is explicitly NOT server-only (pure
 // Zod, shared with the OpenAPI generator — see its own file header), and
 // AGE_MAX_BEFORE_MIN is exported specifically so callers can raise/assert
@@ -173,5 +175,36 @@ describe("mapSaveError - ENTRANT_KIND_NOT_ALLOWED", () => {
       message: "this division doesn't take 'team' entrants",
       code: ENTRANT_KIND_NOT_ALLOWED,
     });
+  });
+});
+
+// Online Chess credits, Task 7: a capacity above the paid size is a 422 ONLINE_SIZE_FULL whose sentence names the size and the next
+// one up, so the mapper routes it to the capacity field AND keeps the code and the refusal's numbers for the panel to say it in the
+// organiser's language. The refusal here is the one the server really throws, converted to what the client receives.
+describe("mapSaveError - ONLINE_SIZE_FULL", () => {
+  // The ladder (spec 5.2), typed here: each size below the platform's 256 and the one above it.
+  const LADDER: [number, number][] = [[16, 32], [32, 64], [64, 128], [128, 256]];
+
+  it("routes the code to capacity and carries the code and both numbers, for every size under 256", () => {
+    let checked = 0;
+    for (const [size, next] of LADDER) {
+      const refusal = onlineSizeFullError(size as 16 | 32 | 64 | 128);
+      const err = new ApiV1Error(refusal.message, refusal.status, refusal.code!, refusal.extra as Record<string, unknown>);
+      expect(mapSaveError(err), `size ${size}`).toEqual({
+        field: "capacity",
+        message: refusal.message,
+        code: ONLINE_PACKAGE_CODES.sizeFull,
+        extra: { size, nextSize: next },
+      });
+      checked++;
+    }
+    expect(checked, "anti-vacuity: four sizes checked").toBe(4);
+  });
+
+  it("a refusal with no extra still routes to capacity (the panel then keeps the server's sentence)", () => {
+    const info = mapSaveError(new ApiV1Error("sized for 16", 422, ONLINE_PACKAGE_CODES.sizeFull));
+    expect(info.field).toBe("capacity");
+    expect(info.code).toBe(ONLINE_PACKAGE_CODES.sizeFull);
+    expect(info.extra, "no size numbers to name").not.toHaveProperty("size");
   });
 });

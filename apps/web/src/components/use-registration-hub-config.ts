@@ -70,8 +70,9 @@ export interface SaveResult {
 export function useRegistrationConfigPanelState(
   division: RegistrationHubConfigDivisionLike,
   onSaved: () => void,
-  /** Localises a refusal code the server only words in English (see mapSaveError); null = show the server's text. */
-  localiseCode?: (code: string) => string | null,
+  /** Localises a refusal code the server only words in English (see mapSaveError), given the refusal's own numbers (`extra`) for a
+   *  sentence that names them; null = show the server's text. */
+  localiseCode?: (code: string, extra?: Record<string, unknown>) => string | null,
 ) {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -156,7 +157,7 @@ export function useRegistrationConfigPanelState(
     for (const result of [patchResult, putResult]) {
       if (result.status !== "rejected") continue;
       const info = mapSaveError(result.reason);
-      const text = (info.code ? localiseCode?.(info.code) : null) ?? info.message;
+      const text = (info.code ? localiseCode?.(info.code, info.extra) : null) ?? info.message;
       if (info.field) nextErrors[info.field] = text;
       else banner = text;
     }
