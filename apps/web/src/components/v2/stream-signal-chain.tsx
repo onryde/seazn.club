@@ -81,7 +81,22 @@ const PlayIcon = () => (
   </svg>
 );
 
-function Node({ id, node, icon, name, wide }: { id: "phone" | "seazn" | "dest"; node: ChainNode; icon: ReactNode; name: ReactNode; wide?: boolean }) {
+function Node({
+  id,
+  node,
+  icon,
+  name,
+  wide,
+  nameWraps,
+}: {
+  id: "phone" | "seazn" | "dest";
+  node: ChainNode;
+  icon: ReactNode;
+  name: ReactNode;
+  wide?: boolean;
+  /** The destination's name wraps at EVERY width (no `truncate` below 768): Seazn's brand is wider than the 64-px node. */
+  nameWraps?: boolean;
+}) {
   const msg = useMsg();
   return (
     // `min-w-0`, not the mockup's `shrink-0`: at 125% zoom on a 320-px phone (a 256-px layout, A11) three fixed 64-px nodes
@@ -112,10 +127,16 @@ function Node({ id, node, icon, name, wide }: { id: "phone" | "seazn" | "dest"; 
       </span>
       {wide ? (
         // B5 review m-3: the destination's name is the one the panel cannot spare at ≥768 (in Live the picker is gone),
-        // so it wraps there rather than truncating; below 768 it is the platform alone, and its label has its own line.
+        // so it wraps there rather than truncating. Below 768 it is the platform alone and its label has its own line, so it
+        // keeps one truncating line, EXCEPT Seazn's (T33c review I1): "Seazn Hosted" is ~83 px of 12-px semibold in a 64-px node
+        // and has no label line, so it wraps ("Seazn / Hosted") at every width. The test measures every kind's name in the font.
         <span
           data-testid="stream-chain-dest-name"
-          className="mt-2 max-w-full truncate text-xs font-semibold text-slate-800 md:whitespace-normal md:text-sm md:[overflow-wrap:anywhere]"
+          className={
+            nameWraps
+              ? "mt-2 max-w-full whitespace-normal text-xs font-semibold text-slate-800 [overflow-wrap:anywhere] md:text-sm"
+              : "mt-2 max-w-full truncate text-xs font-semibold text-slate-800 md:whitespace-normal md:text-sm md:[overflow-wrap:anywhere]"
+          }
         >
           {name}
         </span>
@@ -195,6 +216,7 @@ export function SignalChain({
             node={chain.dest}
             icon={<PlayIcon />}
             wide
+            nameWraps={seazn}
             name={
               seazn ? (
                 platform

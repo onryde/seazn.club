@@ -24,9 +24,10 @@ import {
   GOOGLE_THIRD_PARTY_ACCESS_URL, YOUTUBE_DEAD_GRANT_PURGE_DAYS, YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_GUIDELINES_URL, YOUTUBE_PRIVACIES, YOUTUBE_TOS_URL, youtubeLanding,
   type YoutubeLandingCode, type YoutubePrivacy,
 } from "@/lib/youtube";
-import type { StreamTarget, YoutubeConnectionSaved, YoutubeDisconnected, YoutubePendingChannels } from "@/server/api-v1/schemas";
+import type { StreamTarget, StreamTargetKind, YoutubeConnectionSaved, YoutubeDisconnected, YoutubePendingChannels } from "@/server/api-v1/schemas";
 import { REFUSAL_FOCUS_RING, focusRefusalBlock } from "./refusal-focus";
 import { YoutubeIconLink } from "./youtube-icon";
+import { STREAM_KIND_BRAND } from "./stream-platform-mark";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -68,6 +69,13 @@ export function youtubeErrorText(msg: Msg, err: unknown): string {
  *  (token-store.ts), so it is swapped for the dictionary's. Any other label is the customer's own words and passes through. */
 export function youtubeTargetLabel(msg: Msg, label: string): string {
   return label === YOUTUBE_DISCONNECTED_LABEL ? msg("streaming.youtube.disconnectedLabel") : label;
+}
+
+/** One destination's NAME, wherever a surface names the destination a match streams to (the picker's row, the "Flushing the last
+ *  seconds to …" line): Seazn's own destination is its brand (owner 2026-11-23: "Seazn Hosted", never the label V541 stores), any
+ *  other its label as the customer reads it. Takes the whole target, because its kind decides (T33c review m4). */
+export function targetName(msg: Msg, target: { kind: StreamTargetKind; label: string }): string {
+  return target.kind === "seazn" ? STREAM_KIND_BRAND.seazn : youtubeTargetLabel(msg, target.label);
 }
 
 // ─── shared bits ─────────────────────────────────────────────────────────────────────────────────────────────────────────

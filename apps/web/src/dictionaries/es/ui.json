@@ -1863,7 +1863,6 @@
   "streaming.eyebrow": "Destinos y canales",
   "streaming.title": "Emisión",
   "streaming.desc": "A dónde se emiten tus partidos. Cada partido elige uno de estos.",
-  "streaming.seazn.name": "Seazn Hosted",
   "streaming.seazn.recommended": "Recomendado",
   "streaming.seazn.why": "Emite directamente en la página del partido. El público lo ve allí y la repetición se queda allí.",
   "streaming.seazn.chip.noAccount": "Sin cuenta ni clave",

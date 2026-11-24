@@ -36,7 +36,7 @@ import { YoutubeIcon } from "./youtube-icon";
 import { ReplayCopyButton } from "./stream-replay-copy";
 import { SeaznReplaysCard, type SeaznReplayActions, useSeaznReplayActions } from "./seazn-replays-card";
 import { REFUSAL_FOCUS_RING, focusRefusalBlock } from "./refusal-focus";
-import { channelStatus, youtubeTargetLabel } from "./youtube-connect-panel";
+import { channelStatus, targetName, youtubeTargetLabel } from "./youtube-connect-panel";
 import { D3Warning, PhoneStripView, SignalChain } from "./stream-signal-chain";
 import { PHONE_HANDOVER_QR_MAX_PX, SeaznQrImage, SeaznQrPlaceholder } from "./seazn-qr-image";
 import { useProvidedPhoneSession, useSharedPhoneSession } from "./stream-session-provider";
@@ -746,7 +746,7 @@ export function PhoneStopProbe({ fixtureId, label }: { fixtureId: string; label?
       )}
       {s.state === "ending" && (
         <p data-testid="stream-ending" className="text-xs text-slate-600">
-          {msg("stream.phone.ending", { destination: youtubeTargetLabel(msg, v.target.label) })}
+          {msg("stream.phone.ending", { destination: targetName(msg, v.target) })}
         </p>
       )}
       {s.stopFailed && stopError(msg, s.state)}
@@ -2630,7 +2630,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
             </div>
           ) : (
             <p data-testid="stream-ending" className="text-xs text-slate-600">
-              {msg("stream.phone.ending", { destination: youtubeTargetLabel(msg, p.view.target.label) })}
+              {msg("stream.phone.ending", { destination: targetName(msg, p.view.target) })}
             </p>
           )}
           {state === "live" && p.view.mode === "composed" && (

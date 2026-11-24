@@ -143,8 +143,11 @@ const matchName = (no: number): string => en("breadcrumb.match", { no });
 
 /** Seazn-hosted video (Task 19): the mode this run is in — the runner's flag, which e2e.yml sets beside the server's. */
 const SEAZN_LIVE = process.env.SEAZN_HOSTED_LIVE === "true";
+/** Owner 2026-11-23: Seazn's own destination is called "Seazn Hosted", a brand in every locale. A literal, never read from the code
+ *  under test (T33c review m2), so a wrong brand reds here. */
+const SEAZN_BRAND = "Seazn Hosted";
 /** What the match's picker offers AHEAD of the org's own destinations: Seazn's name with LIVE on, nothing with it off. */
-const SEAZN_OFFERED: string[] = SEAZN_LIVE ? [STREAM_KIND_BRAND.seazn] : [];
+const SEAZN_OFFERED: string[] = SEAZN_LIVE ? [SEAZN_BRAND] : [];
 /** The platforms' names from the product's own table (m11), never typed here. */
 const BRAND: Record<StreamPlatform, string> = STREAM_KIND_BRAND;
 /** The subline's key-hint words ("key ends …" in en), cut from the dictionary's own template around `{hint}` (m11) — so a
@@ -285,8 +288,8 @@ const rowOf = (page: Page, id: string): Locator => page.locator(`[data-testid="s
  *  Seazn id, `rowOf(page, seazn.id)` is asserted EMPTY beside a `rowOf` that finds the org's key (review m6: the old `data-fixed`
  *  selector named an attribute nothing renders any more). */
 const rows = (page: Page): Locator => page.locator('[data-testid="stream-dest-row"]');
-/** The Seazn Hosted card (Task 33b) and its switch, named as a screen reader names it (the dictionary's own words). */
-const SEAZN_NAME = en("streaming.seazn.name");
+/** The Seazn Hosted card (Task 33b) and its switch, named as a screen reader names it (the brand, and the dictionary's own words). */
+const SEAZN_NAME = SEAZN_BRAND;
 const seaznCard = (page: Page): Locator => page.getByTestId("seazn-card");
 const seaznSwitch = (page: Page): Locator => seaznCard(page).getByRole("switch", { name: en("streaming.seazn.switch", { name: SEAZN_NAME }), exact: true });
 /** The org's Seazn switch as the API reads it back (`GET /api/v1/orgs/{id}/seazn-hosted`, Task 33). */
@@ -1187,7 +1190,7 @@ for (const width of [320, 768, 1280] as const) {
     await expect(body.locator(`[data-testid="stream-target-option"][data-target-id="${seazn!.id}"]`)).toHaveAttribute("aria-selected", "true");
     await body.getByTestId("stream-target").press("Escape");
     await expect(targetPicker(body)).toHaveAttribute("data-value", seazn!.id);
-    await expect(targetPicker(body).getByTestId("stream-target-name"), "the brand, \"Seazn Hosted\" (owner 11-23)").toHaveText(STREAM_KIND_BRAND.seazn);
+    await expect(targetPicker(body).getByTestId("stream-target-name"), "the brand, \"Seazn Hosted\" (owner 11-23)").toHaveText(SEAZN_BRAND);
     await expect(targetPicker(body).getByTestId("stream-target-kind")).toHaveText(en("stream.dest.seazn.sub"));
     await expect(body.getByTestId("stream-safety-notice"), "no YouTube safety notice for Seazn").toHaveCount(0);
     await expectNoHorizontalScroll(page);

@@ -3,9 +3,12 @@
 // the court card where a YouTube replay would sit. The page is ISR (`revalidate = 30`), so a signed address minted in its server render
 // would be served past its token's life; the island asks the video route itself, after hydration, and keeps asking:
 //   - `live`: the live player, and no picker (recordings listed beside a live source do not play); under it, ONE quiet line saying
-//     how far the picture runs behind the court (owner 2026-11-23, Task 33c: the live VIDEO only, never a replay, the held box, or after
-//     the stream ends). Where the page expects a live next (`liveExpected`) the held box keeps that line's row, invisible, so the live
-//     player's arrival still moves nothing (below);
+//     how far the picture runs behind the live action (owner 2026-11-23, Task 33c: the live VIDEO only, never a replay, the held box, or
+//     after the stream ends; "the live action", not "the court", 2026-11-24, so it reads for a pitch or a board too). Where the page
+//     expects a live next (`liveExpected`) the held box keeps that line's row, invisible, so the live player's arrival still moves
+//     nothing (below). Its LEAVING does move the page: when the stream ends the region loses the row and what follows rises by one
+//     line (24 px at ≥768, 40 at 320, where the line wraps). Accepted (T33c review m1): the stream has ended, and a shift then is
+//     fine; holding an empty row after Stop would leave a blank line under the replay for good;
 //   - no live, one or more parts: the parts in `partNo` order, ONE player at a time, with a picker ("Part {n}") only when there are two
 //     or more. A part plays in its own kind: an `hls` part (the interim Cloudflare recording, signed from the moment the session's
 //     recording is locked) in the <video> player, an `embed` part (the replay host's copy, Task 25) in the host's frame
@@ -169,6 +172,8 @@ export function SeaznVideoStage({ video, epoch, labels, onFatal, onStale, reserv
             unavailable={labels.unavailable}
             onFatal={(failure, address) => onFatal({ address, source: "live", partNo: null, player: "hls", failure })}
           />
+          {/* Gone with the live answer, and NOT held afterwards: Stop moves the page up by this one line, an accepted trade (T33c
+              review m1, see the header). */}
           <p data-testid="seazn-video-delay" className={DELAY_LINE}>
             {delayText(labels)}
           </p>

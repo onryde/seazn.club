@@ -11272,7 +11272,6 @@ export type DictionaryKey =
   | "streaming.seazn.chip.noAccount"
   | "streaming.seazn.chip.replay"
   | "streaming.seazn.cost"
-  | "streaming.seazn.name"
   | "streaming.seazn.off"
   | "streaming.seazn.recommended"
   | "streaming.seazn.state.off"

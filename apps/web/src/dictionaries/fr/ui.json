@@ -1863,7 +1863,6 @@
   "streaming.eyebrow": "Destinations et chaînes",
   "streaming.title": "Diffusion",
   "streaming.desc": "Où vos matchs sont diffusés. Chaque match choisit l’une de ces destinations.",
-  "streaming.seazn.name": "Seazn Hosted",
   "streaming.seazn.recommended": "Recommandé",
   "streaming.seazn.why": "Diffusez directement sur la page du match. Le public regarde là, et le replay y reste.",
   "streaming.seazn.chip.noAccount": "Ni compte ni clé",

@@ -20,6 +20,7 @@ import { apiV1 } from "@/lib/client-v1";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { wireOf } from "./youtube-connect-panel";
+import { STREAM_KIND_BRAND } from "./stream-platform-mark";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -68,7 +69,8 @@ export function SeaznDestinationCard({ orgId, offered, canEdit }: {
   const lineId = useId();
   if (choice !== null && choice.saved && offered !== choice.base) setChoice(null);
   const on = choice !== null ? choice.value : offered;
-  const name = msg("streaming.seazn.name");
+  // The brand, not copy (owner 2026-11-23): ONE authority for every surface that names this destination (T33c review m3).
+  const name = STREAM_KIND_BRAND.seazn;
 
   const turn = async () => {
     if (!canEdit || inFlight.current) return;

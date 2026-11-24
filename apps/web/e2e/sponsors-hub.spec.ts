@@ -144,7 +144,7 @@ test("an unknown tab falls back to Overview, and the page does not scroll sidewa
   await expectNoHorizontalScroll(page);
 });
 
-test("the hub carries no breadcrumb bar on any tab (owner, 2026-11-12: like Streaming and Directory); Settings still does", async ({ page }) => {
+test("the hub carries no breadcrumb bar on any tab (owner, 2026-11-12); Settings still does", async ({ page }) => {
   const trail = page.getByRole("navigation", { name: "Breadcrumb" });
   // The positive pair first: the same console shell, one page over, renders the trail - so a zero on the hub means the bar is
   // gone from THAT page, not that the selector matches nothing anywhere (the bar's desktop <nav> is `sm:flex`; the default viewport is wide).
@@ -165,6 +165,30 @@ test("the hub carries no breadcrumb bar on any tab (owner, 2026-11-12: like Stre
   }
   expect(checked, "every declared tab was checked").toBe(SPONSORS_TABS.length);
   expect(SPONSORS_TABS.length, "anti-vacuity: the hub declares tabs").toBeGreaterThan(0);
+});
+
+// T33c (owner, 2026-11-23): the club's other top-nav pages, Streaming and Directory, lose the bar too (the 11-12 title above used
+// to claim they already had none; they had it until T33c). In the browser, against the same positive pair: Settings keeps its trail.
+test("Streaming and Directory carry no breadcrumb bar either (owner, 2026-11-23); Settings still does", async ({ page }) => {
+  const trail = page.getByRole("navigation", { name: "Breadcrumb" });
+  await page.goto(`/o/${org.slug}/settings`);
+  await expect(trail, "premise: Settings keeps its breadcrumb trail").toBeVisible();
+  await expect(page.locator(".app-crumbs"), "premise: ...inside the night apron").toHaveCount(1);
+
+  const PAGES = [
+    { path: "streaming", marker: "streaming-org" },
+    { path: "directory", marker: "directory-org" },
+  ] as const;
+  let checked = 0;
+  for (const { path, marker } of PAGES) {
+    await page.goto(`/o/${org.slug}/${path}`);
+    await expect(page.getByTestId(marker), `${path}: the page rendered`).toBeVisible();
+    await expect(trail, `${path}: no breadcrumb trail`).toHaveCount(0);
+    await expect(page.locator(".app-crumbs"), `${path}: no night apron under the gantry`).toHaveCount(0);
+    await expect(page.locator("main").getByRole("link", { name: UI["common.dashboard"] ?? "", exact: true }), `${path}: the Dashboard back link`).toHaveAttribute("href", "/dashboard");
+    checked++;
+  }
+  expect(checked, "both pages were checked").toBe(PAGES.length);
 });
 
 test("settings?tab=sponsors lands on the hub's Sponsors tab, keeps a second param, and Settings drops the tab", async ({ page }) => {

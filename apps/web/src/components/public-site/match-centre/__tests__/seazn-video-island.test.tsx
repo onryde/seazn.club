@@ -158,11 +158,17 @@ describe("the island: live", () => {
 });
 
 // Owner 2026-11-23 (stg live test): a viewer at the court sees the score move before the picture does. Under the LIVE Seazn player only,
-// one quiet line says by how much: "Video runs about 15–20 seconds behind the court." It is keyed on the VIDEO being live (the answer's
-// `live`), never on the match's status: no line for a replay, for the held box before the start, or after the stream ends.
-const OWNER_DELAY_LINE = "Video runs about 15–20 seconds behind the court."; // the owner's words, verbatim
+// one quiet line says by how much. It is keyed on the VIDEO being live (the answer's `live`), never on the match's status: no line for a
+// replay, for the held box before the start, or after the stream ends. Words revised 2026-11-24 (T33c review m6, recommendation
+// applied): "court" is wrong for a pitch or a board, so the line says "the live action", in every sport and every locale.
+const OWNER_DELAY_LINE = "Video runs about 15–20 seconds behind the live action."; // the owner's words, verbatim
+/** A playing-surface word in any of the four locales: the line must not name one (a pitch, a court, a board). */
+const SURFACE_WORD = /\b(court|pitch|board|field|pista|cancha|campo|terrain|plateau|veld|baan|bord)\b/i;
+/** The markup's text, its entities decoded (French "l'action" is serialised `l&#x27;action`). */
+const unescapeHtml = (s: string): string =>
+  s.replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
 /** The VISIBLE delay line's text, one entry per line drawn (the held row, `seazn-video-delay-reserved`, is not one). */
-const delayLines = (out: string): string[] => [...out.matchAll(/<p data-testid="seazn-video-delay"[^>]*>(.*?)<\/p>/g)].map((m) => m[1]!);
+const delayLines = (out: string): string[] => [...out.matchAll(/<p data-testid="seazn-video-delay"[^>]*>(.*?)<\/p>/g)].map((m) => unescapeHtml(m[1]!));
 const delayFor = (template: string): string =>
   template.replace("{min}", String(SEAZN_LIVE_DELAY_SECONDS.min)).replace("{max}", String(SEAZN_LIVE_DELAY_SECONDS.max));
 
@@ -229,6 +235,7 @@ describe("owner 11-23: the delay line, under the LIVE player only", () => {
       expect(lines, loc).toEqual([delayFor(template!)]);
       expect(lines[0], loc).not.toMatch(/\{|seaznVideo\./);
       if (loc !== "en") expect(lines[0], `${loc} is not the English`).not.toBe(OWNER_DELAY_LINE);
+      expect(template, `${loc}: m6, the line names no playing surface (it reads for football, cricket and chess too)`).not.toMatch(SURFACE_WORD);
       checked++;
     }
     expect(checked, "anti-vacuity: the four locales").toBe(4);

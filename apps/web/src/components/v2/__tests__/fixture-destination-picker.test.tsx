@@ -665,18 +665,19 @@ describe("the Seazn destination (Task 16)", () => {
     expect(destinationRow(msg, { ...seazn(), label: "stored-label" }).name).toBe("Seazn Hosted");
   });
 
-  // One destination, one name, on every surface that names it: the Streaming page's card heading (T33b, `streaming.seazn.name`), this
-  // picker's row, and the panel's chain (platformName). Read from each locale's dictionary, so a locale that drifts reds here.
-  it("one name on every surface, in every locale: the Streaming card's heading is the picker's row name and the chain's platform", () => {
+  // One destination, one name, on every surface that names it: the Streaming page's card heading (T33b), this picker's row, and the
+  // panel's chain (platformName). T33c review m3: the brand has ONE authority, `STREAM_KIND_BRAND.seazn` (no dictionary spells it), so
+  // each locale's picker and chain are compared against the owner's literal, and every dictionary is read to prove none carries it.
+  it("one name on every surface, in every locale: the picker's row name and the chain's platform are the owner's brand, and no dictionary spells it", () => {
+    const BRAND = "Seazn Hosted"; // the owner's words (2026-11-23)
     let checked = 0;
     for (const loc of ["en", "es", "fr", "nl"] as const) {
       const d = JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "dictionaries", loc, "ui.json"), "utf8")) as Record<string, string>;
       const msgLoc = (k: MessageKey, vars: Record<string, string | number> = {}): string =>
         Object.entries(vars).reduce((s, [n, v]) => s.replaceAll(`{${n}}`, String(v)), d[k] ?? `MISSING:${k}`);
-      const card = d["streaming.seazn.name"];
-      expect(card, `${loc}: premise, the card's heading exists`).toEqual(expect.any(String));
-      expect(destinationRow(msgLoc, seazn()).name, loc).toBe(card);
-      expect(platformName(msgLoc, "seazn"), loc).toBe(card);
+      expect(d["streaming.seazn.name"], `${loc}: the brand is not copy`).toBeUndefined();
+      expect(destinationRow(msgLoc, seazn()).name, loc).toBe(BRAND);
+      expect(platformName(msgLoc, "seazn"), loc).toBe(BRAND);
       checked++;
     }
     expect(checked, "anti-vacuity: the four locales").toBe(4);

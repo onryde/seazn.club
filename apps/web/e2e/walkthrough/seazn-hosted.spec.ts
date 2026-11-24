@@ -45,8 +45,6 @@ import {
   stubFakeEmbedHost, stubFakePlaybackHost,
 } from "../helpers/seazn-video-seed";
 import { routes } from "../../src/lib/routes";
-import { STREAM_KIND_BRAND } from "../../src/components/v2/stream-platform-mark";
-import { SEAZN_LIVE_DELAY_SECONDS } from "../../src/server/relay/config";
 
 // ===========================================================================
 // Clocks — DERIVED from the constants that set the pace (AGENTS.md class 20): helpers/seazn-hosted-clock.ts, one term per wait in
@@ -78,8 +76,11 @@ const copy = (d: Dict, key: string): string => {
 };
 const ui = (key: string) => copy(EN_UI, key);
 const pub = (key: string) => copy(EN_PUBLIC, key);
-/** Task 33c (owner 2026-11-23): the line under the LIVE player, from the dictionary's template and the one constant. */
-const DELAY_LINE = pub("seaznVideo.delay").replace("{min}", String(SEAZN_LIVE_DELAY_SECONDS.min)).replace("{max}", String(SEAZN_LIVE_DELAY_SECONDS.max));
+/** Task 33c: the owner's words, literal (2026-11-23, "the live action" 2026-11-24), never rebuilt from the code under test's template
+ *  and constant (T33c review m2), so a wrong figure or a wrong word reds here. */
+const DELAY_LINE = "Video runs about 15–20 seconds behind the live action.";
+/** Owner 2026-11-23: Seazn's own destination is called "Seazn Hosted", a brand in every locale. Literal for the same reason. */
+const SEAZN_BRAND = "Seazn Hosted";
 
 // ===========================================================================
 // Kit
@@ -322,7 +323,7 @@ test("Seazn pre-selected → a spectator opens the page before kick-off → Go l
   await expect(body.locator(`[data-testid="stream-target-option"][data-target-id="${rig.seaznId}"]`)).toHaveAttribute("aria-selected", "true");
   await body.getByTestId("stream-target").press("Escape");
   await expect(targetPicker(body), "picked with no choice of the organiser's own").toHaveAttribute("data-value", rig.seaznId);
-  await expect(targetPicker(body).getByTestId("stream-target-name"), "the brand, \"Seazn Hosted\" (owner 11-23)").toHaveText(STREAM_KIND_BRAND.seazn);
+  await expect(targetPicker(body).getByTestId("stream-target-name"), "the brand, \"Seazn Hosted\" (owner 11-23)").toHaveText(SEAZN_BRAND);
 
   // 2. BEFORE KICK-OFF (the plan's arm 3: LIVE on, no session yet, the match resolving to Seazn): a signed-out spectator opens the public
   //    match page at 1280. The island is mounted and reading the route, and draws nothing yet.
@@ -346,7 +347,7 @@ test("Seazn pre-selected → a spectator opens the page before kick-off → Go l
   //    of its kick-off, so its reads stayed on the floor (re-review N1): a viewer who keeps watching sees Go live within ONE read.
   await expect.poll(addressIs(player, first.programme.uid), { message: "the open page's player holds the signed address for the programme input", timeout: ONE_RE_READ_MS }).toBe(true);
   await expect(region, "the region is the LIVE one").toHaveAttribute("aria-label", pub("seaznVideo.live"));
-  // Task 33c (owner 2026-11-23): while the VIDEO is live, one line under the player says how far it runs behind the court, inside the live
+  // Task 33c (owner 2026-11-23): while the VIDEO is live, one line under the player says how far it runs behind the live action, inside the live
   // region and below the picture (never over it). Before kick-off (step 2) there was no region at all, so no line either.
   const delay = viewer.page.getByTestId("seazn-video-delay");
   await expect(delay, "the delay line, while live").toBeVisible();

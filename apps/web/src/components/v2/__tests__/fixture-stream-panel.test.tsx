@@ -4383,6 +4383,12 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
       expect(island.tree()).toEqual([]);
     });
 
+    it("m4 (T33c review): an ending Seazn session's probe names the destination by its brand, 'Seazn Hosted', never the stored 'Seazn'", async () => {
+      const seazn = { id: "t-seazn", kind: "seazn" as const, label: "Seazn" }; // V541's stored label
+      const island = await probe({ current: session({ id: "s1", state: "ending", target: seazn }), targets: TARGETS });
+      expect(textAt(island.tree(), "stream-ending")).toBe(m("stream.phone.ending", { destination: "Seazn Hosted" }));
+    });
+
     it("F1: a probe the frozen division page mounts NAMES its fixture; a row's own probe (no label) adds no line", async () => {
       const live = () => ({ current: session({ id: "s1", state: "live", startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS }) as Server;
       serve(live());
@@ -6416,13 +6422,32 @@ describe("T12: after a match — the replay row, and the destination's name read
     expect(marks("https://youtu.be/abc", "twitch"), "twitch kind, YouTube link: the link is YouTube's").toBe(1);
   });
 
-  it("EVERY place that prints the 'ending' destination passes it through youtubeTargetLabel — the card AND the stop probe (the probe needs a live provider, so its call site is swept)", () => {
+  // T33c review m4: the ending line names the destination as every other surface does (`targetName`: Seazn's own destination is its
+  // brand, any other its localised label), so it is handed the whole TARGET (its kind decides), never the bare stored label.
+  it("EVERY place that prints the 'ending' destination passes the whole target through targetName — the card AND the stop probe (swept, beside the behaviour tests)", () => {
     const src = readFileSync(join(__dirname, "..", "fixture-stream-panel.tsx"), "utf8");
     const sites = [...src.matchAll(/msg\("stream\.phone\.ending",\s*\{([^}]*)\}\)/g)].map((m) => m[1]!);
     expect(sites.length, "anti-vacuity: the card's and the probe's call sites were both found").toBeGreaterThanOrEqual(2);
     for (const [i, args] of sites.entries()) {
-      expect(args, `call site ${i}: the destination is localised, never the raw stored label`).toMatch(/destination:\s*youtubeTargetLabel\(msg,/);
+      expect(args, `call site ${i}: the destination is named from the whole target, never the raw stored label`).toMatch(/destination:\s*targetName\(msg,\s*[\w.]*target\)/);
     }
+  });
+
+  // Owner 2026-11-23: Seazn's own destination is "Seazn Hosted" (V541 stores the label 'Seazn'). The panel's chain says so; the
+  // ending line under it said "…to Seazn" (T33c review m4). Both surfaces that print it, in the owner's literal.
+  it("m4: the ending line names a Seazn destination by its brand, 'Seazn Hosted', never the stored label; a YouTube one keeps its label", () => {
+    const BRAND = "Seazn Hosted"; // the owner's words, a brand in every locale
+    let checked = 0;
+    for (const label of ["Seazn", "Club stored label"]) {
+      const tree = body({ view: session({ state: "ending", target: { id: "t-seazn", kind: "seazn", label } }), balance: 1 });
+      expect(textAt(tree, "stream-ending"), `stored label ${label}`).toBe(m("stream.phone.ending", { destination: BRAND }));
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // The positive pair: another kind still names its own label.
+    expect(textAt(body({ view: session({ state: "ending", target: { id: "t1", kind: "youtube", label: "Seazn" } }), balance: 1 }), "stream-ending")).toBe(
+      m("stream.phone.ending", { destination: "Seazn" }),
+    );
   });
 
   it("the ending line and the Signal path name a disconnected channel in the dictionary's words (read in es), never the stored English literal", () => {

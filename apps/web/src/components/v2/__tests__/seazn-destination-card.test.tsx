@@ -65,7 +65,9 @@ afterEach(() => vi.restoreAllMocks());
 // ─── copy, from the dictionaries themselves ───────────────────────────────────────────────────────────────────────────────
 const m = (k: MessageKey, vars: Record<string, string | number> = {}): string =>
   Object.entries(vars).reduce((s, [n, v]) => s.replaceAll(`{${n}}`, String(v)), messages[k] as string);
-const NAME = m("streaming.seazn.name");
+// The owner's brand (2026-11-23), a literal here so the test does not read it from the code under test. T33c review m3: it has ONE
+// authority, `STREAM_KIND_BRAND.seazn`; no dictionary carries it (the 4 locales test below pins the key's absence).
+const NAME = "Seazn Hosted";
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#x27;");
 const LOCALES = ["en", "es", "fr", "nl"] as const;
 const dictOf = (locale: (typeof LOCALES)[number]): Dict =>
@@ -205,8 +207,9 @@ describe("every locale", () => {
     let checked = 0;
     for (const locale of LOCALES) {
       const dict = dictOf(locale);
-      expect(dict["streaming.seazn.name"], `${locale}: the brand`).toBe("Seazn Hosted");
+      expect(dict["streaming.seazn.name"], `${locale}: m3, the brand is not copy, so no dictionary spells it a second time`).toBeUndefined();
       const on = cardHtml({ offered: true }, dict, locale);
+      expect(on, `${locale}: the heading is the brand, the same proper noun in every locale`).toContain(`>${NAME}<`);
       const off = cardHtml({ offered: false }, dict, locale);
       for (const k of KEYS) {
         expect(typeof dict[k] === "string" && dict[k] !== "", `${locale}: ${k}`).toBe(true);

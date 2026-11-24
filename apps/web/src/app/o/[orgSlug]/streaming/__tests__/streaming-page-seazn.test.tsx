@@ -70,7 +70,7 @@ describe("Streaming page + real panel + real card — the switch the page read i
       expect(m.seaznOfferOf).toHaveBeenCalledWith(ORG);
       expect(html).toContain('data-testid="seazn-card"');
       expect(html).toMatch(/role="switch"[^>]*aria-checked="false"/);
-      expect(html).toContain(esc((messages["streaming.seazn.off"] as string).replaceAll("{name}", messages["streaming.seazn.name"] as string)));
+      expect(html).toContain(esc((messages["streaming.seazn.off"] as string).replaceAll("{name}", "Seazn Hosted" /* the owner's brand, 2026-11-23 */)));
       expect(html, "the switch is reachable: an owner's button").toMatch(/<button[^>]*role="switch"/);
       checked++;
     }

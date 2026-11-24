@@ -18,6 +18,7 @@ import { HEALTH_REASONS } from "@/server/relay/domain/health-reasons";
 import type { StreamPhone, StreamSessionCurrent } from "@/server/api-v1/schemas";
 import { StreamTargetKind } from "@/server/api-v1/schemas";
 import { LOCALES, type Dict, type Locale } from "@/lib/i18n-constants";
+import { minContentWidth, openFace, textWidth } from "@/components/public-site/__tests__/font-advance";
 
 const W = OUTPUT_WARNING_AFTER_MS;
 const view = (state: string, ingest: string | null, output: string | null, elapsedMs = 0) =>
@@ -165,6 +166,41 @@ describe("SignalChain (spec §3.2)", () => {
       checked++;
     }
     expect(checked, "anti-vacuity: every non-Seazn kind").toBe(StreamTargetKind.options.length - 1);
+  });
+
+  // T33c review I1: below 768 the destination node is 64 px (`w-16`) and its name is 12 px semibold Geist. "Seazn Hosted" is wider
+  // than that, so a `truncate` there painted "Seazn Ho…", and in Live the node is the only place the panel names the destination.
+  // The oracle is the FONT, not the markup: every kind's name, in every locale, must show whole below 768. A name that truncates
+  // must fit on one line; a name that wraps must fit word by word. Geist Bold (700) is measured for the semibold (600) run, so every
+  // width is an over-estimate, the safe direction for a "fits" gate (font-advance.ts).
+  it("I1: below 768 every destination's name shows WHOLE in its 64-px node, in every locale: one line when it truncates, word by word when it wraps", () => {
+    const NODE_PX = 64; // `w-16` below md (the A11 test below pins the class)
+    const NAME_PX = 12; // `text-xs` below md
+    const bold = openFace(resolve(import.meta.dirname, "../../../../assets/fonts/Geist-Bold.ttf"), "Geist Bold");
+    const BRAND = "Seazn Hosted"; // the owner's words (2026-11-23)
+    expect(textWidth(bold, BRAND, NAME_PX), "premise: the brand cannot sit on one 64-px line, so a truncating node would cut it").toBeGreaterThan(NODE_PX);
+    let checked = 0;
+    let wraps = 0;
+    for (const kind of StreamTargetKind.options) {
+      const html = chainHtml(chainFor(null)!, { kind, label: "Club stored label" });
+      const cls = ` ${/<span data-testid="stream-chain-dest-name" class="([^"]*)">/.exec(html)?.[1] ?? ""} `;
+      const truncates = cls.includes(" truncate ");
+      const wrapsHere = cls.includes(" whitespace-normal ");
+      expect(truncates !== wrapsHere, `${kind}: the name below 768 either truncates or wraps, never both or neither (${cls.trim()})`).toBe(true);
+      if (wrapsHere) wraps++;
+      for (const locale of LOCALES) {
+        const d = dict(locale);
+        const name = platformName((k) => String(d[k] ?? messages[k]), kind);
+        if (truncates) {
+          expect(textWidth(bold, name, NAME_PX), `${kind} in ${locale}: "${name}" truncates below 768, so it must fit one line`).toBeLessThanOrEqual(NODE_PX);
+        } else {
+          expect(minContentWidth(bold, name, NAME_PX), `${kind} in ${locale}: "${name}" wraps below 768, so each word must fit`).toBeLessThanOrEqual(NODE_PX);
+        }
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: every kind in every locale").toBe(StreamTargetKind.options.length * LOCALES.length);
+    expect(wraps, "the Seazn name is the one that wraps below 768").toBe(1);
   });
 
   // A11 (stream-relay.spec.ts): browser zoom at 125% on a 320-px phone is a 256-CSS-px layout. Three 64-px nodes that
