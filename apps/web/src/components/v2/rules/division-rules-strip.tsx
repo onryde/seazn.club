@@ -461,6 +461,10 @@ export function DivisionRulesStrip({
       });
       if (sportKey === "boardgame") {
         if (onlinePlay === "lichess") config.onlinePlay = "lichess";
+        // A save that does not name online play keeps what is stored (patch.ts: "a save that does not mention it never switches it"),
+        // so turning a stored-online division OFF must say "off": the omitted key left it online, refunded nothing and answered
+        // "Rules saved". A division that was never online names nothing.
+        else if (divisionConfig.onlinePlay === "lichess") config.onlinePlay = "off";
         else delete config.onlinePlay;
       }
       // Online Chess credits: the size the select shows rides the save only when it is not already the stored one. A paid package

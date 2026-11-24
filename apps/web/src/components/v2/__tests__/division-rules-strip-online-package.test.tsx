@@ -383,6 +383,27 @@ describe("the builder's draft: the same select, owned by the builder", () => {
 /** A draft draws no Save button anywhere (the builder sends it at Create). */
 const lastNoSave = (island: Strip) => island.tree().every((e) => !(e.type === "button" && /Save/.test(textOf(e))));
 
+describe("the wire shape of a switch-off (found by driving a real server: an omitted key kept the division online and refunded nothing)", () => {
+  const configOf = (island: Strip) => {
+    (propsOf(saveButton(island)!).onClick as () => void)();
+    return vi.waitFor(() => expect(apiV1Mock).toHaveBeenCalled()).then(() => lastPatch().config as Record<string, unknown>);
+  };
+
+  it("a division stored ONLINE, switched off, says onlinePlay: off (the key the server reads; absent means keep what is stored)", async () => {
+    const island = mount(ON, unpaid());
+    pickOnlinePlay(island, "off");
+    expect(await configOf(island)).toHaveProperty("onlinePlay", "off");
+  });
+
+  it("a division stored offline sends no online key at all, and one staying on says lichess (the pair)", async () => {
+    const offline = mount(OFF, unpaid({ stored: null }));
+    expect(await configOf(offline)).not.toHaveProperty("onlinePlay");
+    apiV1Mock.mockClear();
+    const staying = mount(ON, unpaid());
+    expect(await configOf(staying)).toHaveProperty("onlinePlay", "lichess");
+  });
+});
+
 describe("switching Online play off a PAID package: asked first, and the refund said after (T11 fix round 1, the review's gap)", () => {
   const paid = (size: 16 | 32 | 64 | 128 | 256, camerasPaid = false, frozen = false) => unpaid({ stored: { size, paid: { size, camerasPaid }, frozen } });
   const save = (island: Strip) => (propsOf(saveButton(island)!).onClick as () => void)();
@@ -406,7 +427,7 @@ describe("switching Online play off a PAID package: asked first, and the refund 
     });
     expect(confirmOpts().body, "what may not come back is said").toMatch(/earlier month may not come back/);
     expect(confirmOpts().body, "the amount and the size are in the sentence").toContain("4 credits for up to 64 players");
-    expect((lastPatch().config as Record<string, unknown>).onlinePlay, "the switch-off is what was saved").toBeUndefined();
+    expect((lastPatch().config as Record<string, unknown>).onlinePlay, "the switch-off is NAMED: the server keeps a stored value a save does not name").toBe("off");
   });
 
   it("the Fair-play camera's price is part of what was paid: 64 with cameras says 8, and a single credit says 'credit'", async () => {
