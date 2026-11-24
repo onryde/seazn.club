@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { expandWithHooks, propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
+import { OnlinePackageHost } from "@/components/v2/online-chess/package-host";
 import { OnlinePriceLine } from "@/components/v2/online-chess/price-line";
 import { OnlineSizeSelect } from "@/components/v2/online-chess/size-select";
 import type { DivisionRulesDraft, OnlinePackageStrip } from "@/components/v2/rules/division-rules-strip";
@@ -48,7 +49,7 @@ const OFF = { variant: "classical", clock: CLOCK };
 /** The strip's facts about a division with an unpaid 16 that holds nothing, on a plan with no cap and 11 credits. */
 const unpaid = (over: Partial<OnlinePackageStrip> = {}): OnlinePackageStrip => ({
   planCap: null, held: 0, rounds: 0, cameras: false, balance: 11, buyMoreHref: "/o/acme/settings/credits?kind=stream", stageKinds: ["swiss"],
-  stored: { size: 16, paid: null, frozen: false }, receipt: null, ...over,
+  stored: { size: 16, paid: null, frozen: false }, receipt: null, buy: { orgId: "org-1", currency: "gbp" }, ...over,
 });
 
 /** The tree with the select and price line opened one level (each reads `useMsg` only), as a browser renders them. */
@@ -73,6 +74,7 @@ function mount(config: Record<string, unknown>, onlinePackage: OnlinePackageStri
 type Strip = ReturnType<typeof mount>;
 const byTestId = (island: Strip, id: string) => island.tree().find((e) => propsOf(e)["data-testid"] === id);
 const sizeSelect = (island: Strip) => island.tree().find((e) => e.type === OnlineSizeSelect);
+const hostOf = (island: Strip) => island.tree().find((e) => e.type === OnlinePackageHost);
 const optionsOf = (island: Strip) => island.tree().filter((e) => e.type === "option");
 const lichessOption = (island: Strip) => island.tree().find((e) => e.type === "option" && propsOf(e).value === "lichess");
 const saveButton = (island: Strip) => island.tree().find((n) => n.type === "button" && textOf(n).trim() === "Save match rules");
@@ -165,9 +167,11 @@ describe("the size a Save sends", () => {
   it("a PAID package never sends a size, and a pick opens the receipt instead of saving", async () => {
     const island = mount(ON, unpaid({ stored: { size: 32, paid: { size: 32, camerasPaid: false }, frozen: false }, rounds: 7 }));
     expect(propsOf(sizeSelect(island)!)).toMatchObject({ value: 32, paid: { size: 32, camerasPaid: false } });
-    expect(byTestId(island, "online-receipt-request"), "no receipt asked yet").toBeUndefined();
+    expect(propsOf(hostOf(island)!).pick, "no pick yet").toBeNull();
     (propsOf(sizeSelect(island)!).onPaidPick as (n: number) => void)(128);
-    expect(propsOf(byTestId(island, "online-receipt-request")!)["data-receipt-size"], "the receipt is asked for the picked size").toBe("128");
+    expect(propsOf(hostOf(island)!).pick, "the package host is told the picked size, which it turns into a receipt").toEqual({ size: 128, n: 1 });
+    (propsOf(sizeSelect(island)!).onPaidPick as (n: number) => void)(128);
+    expect(propsOf(hostOf(island)!).pick, "the same size picked twice is a second pick (the counter moves)").toEqual({ size: 128, n: 2 });
     expect(propsOf(sizeSelect(island)!).value, "the select keeps the paid size").toBe(32);
     (propsOf(saveButton(island)!).onClick as () => void)();
     await vi.waitFor(() => expect(apiV1Mock).toHaveBeenCalled());
@@ -209,11 +213,77 @@ describe("the size a Save sends", () => {
   });
 });
 
-describe("the receipt request the checkout return carries (oc=pay)", () => {
-  it("opens on mount with the size the address named, or the stored size when it named none", () => {
-    expect(propsOf(byTestId(mount(ON, unpaid({ receipt: { size: 64 } })), "online-receipt-request")!)["data-receipt-size"]).toBe("64");
-    expect(propsOf(byTestId(mount(ON, unpaid({ receipt: { size: null } })), "online-receipt-request")!)["data-receipt-size"]).toBe("stored");
-    expect(byTestId(mount(ON, unpaid({ receipt: null })), "online-receipt-request")).toBeUndefined();
+describe("the package line (amber pay line, paid chip) and the receipt request the checkout return carries (oc=pay)", () => {
+  it("hands the host the checkout return exactly as the page read it, and null on an ordinary visit", () => {
+    expect(propsOf(hostOf(mount(ON, unpaid({ receipt: { size: 64, key: "cs_test_1" } })))!).request).toEqual({ size: 64, key: "cs_test_1" });
+    expect(propsOf(hostOf(mount(ON, unpaid({ receipt: { size: null, key: "" } })))!).request).toEqual({ size: null, key: "" });
+    expect(propsOf(hostOf(mount(ON, unpaid({ receipt: null })))!).request).toBeNull();
+  });
+
+  it("hands the host the stored package, the facts the receipt shows, who may pay and who is charged", () => {
+    const island = mount(ON, unpaid({ held: 41, rounds: 5, planCap: 64, cameras: true, stored: { size: 64, paid: null, frozen: false } }), { viewerPlan: "community" });
+    expect(propsOf(hostOf(island)!)).toMatchObject({
+      divisionId: "d1",
+      stored: { size: 64, paid: null, frozen: false },
+      held: 41,
+      rounds: 5,
+      planCap: 64,
+      cameras: true,
+      viewerPlan: "community",
+      canEdit: true,
+      buy: { orgId: "org-1", currency: "gbp" },
+      buyMoreHref: "/o/acme/settings/credits?kind=stream",
+    });
+  });
+
+  it("is drawn for every stored state (unpaid, paid, frozen) and for none of: no live row, online play off, the builder's draft, another sport", () => {
+    let checked = 0;
+    for (const stored of [{ size: 16, paid: null, frozen: false }, { size: 32, paid: { size: 32, camerasPaid: false }, frozen: false }, { size: 64, paid: null, frozen: true }] as const) {
+      expect(hostOf(mount(ON, unpaid({ stored }))), JSON.stringify(stored)).toBeDefined();
+      checked += 1;
+    }
+    expect(hostOf(mount(ON, unpaid({ stored: null }))), "no live row").toBeUndefined();
+    expect(hostOf(mount(OFF, unpaid({ stored: null }))), "online play off").toBeUndefined();
+    expect(hostOf(mount(ON, unpaid(), { sport: "badminton" })), "another sport never gets it").toBeUndefined();
+    expect(checked).toBe(3);
+  });
+
+  it("a view-only reader is handed the host with canEdit false: the line is read, nothing can be paid", () => {
+    const island = renderIsland(
+      DivisionRulesStrip,
+      stripPropsOf(
+        { division: { id: "d1", sport_key: "boardgame", variant_key: "classical", config: ON }, variants: CHESS_VARIANTS, onlineChessOffered: true, canEdit: false },
+        { initialOpen: ALL_PANELS, tableKinds: ["league"], onlinePackage: unpaid() },
+      ),
+      expandAll,
+    );
+    expect(hostOf(island), "premise: the line is drawn for a reader").toBeDefined();
+    expect(propsOf(hostOf(island)!).canEdit).toBe(false);
+  });
+
+  it("'Change size' on the amber line opens the Match rules panel (closed on arrival) and then focuses the select, once", () => {
+    const island = renderIsland(
+      DivisionRulesStrip,
+      stripPropsOf(
+        { division: { id: "d1", sport_key: "boardgame", variant_key: "classical", config: ON }, variants: CHESS_VARIANTS, onlineChessOffered: true },
+        { initialOpen: [], tableKinds: ["league"], onlinePackage: unpaid() },
+      ),
+      expandAll,
+    );
+    expect(sizeSelect(island), "premise: the panel that holds the select is shut").toBeUndefined();
+    const select = { focus: vi.fn(), scrollIntoView: vi.fn() };
+    const query = vi.fn(() => select);
+    vi.stubGlobal("document", { querySelector: query });
+    try {
+      expect(query, "nothing is focused before the press").not.toHaveBeenCalled();
+      (propsOf(hostOf(island)!).onChangeSize as () => void)();
+      expect(sizeSelect(island), "the press opened the panel").toBeDefined();
+      expect(query).toHaveBeenCalledWith('[data-testid="online-size-select"]');
+      expect(select.focus).toHaveBeenCalledTimes(1);
+      expect(select.scrollIntoView).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
@@ -348,6 +418,19 @@ describe("the builder's draft: the same select, owned by the builder", () => {
       expandAll,
     );
 
+  it("a draft pays nothing: even handed a live package row, the builder's strip draws no pay line, chip or receipt", () => {
+    const island = renderIsland(
+      DivisionRulesStrip,
+      stripPropsOf(
+        { division: { id: "", sport_key: "boardgame", variant_key: "classical", config: { ...(mod("boardgame").variants.classical as object), onlinePlay: "lichess" } }, variants: CHESS_VARIANTS, onlineChessOffered: true },
+        { draft: draftOn({ onlinePackage: { ...facts, rounds: 5, size: null, setSize: vi.fn() } }), onlinePackage: unpaid(), initialOpen: ALL_PANELS, tableKinds: ["league"] },
+      ),
+      expandAll,
+    );
+    expect(sizeSelect(island), "premise: the builder's select is drawn").toBeDefined();
+    expect(hostOf(island)).toBeUndefined();
+  });
+
   it("follows the rounds of the drafted format until a size is picked, and a pick calls the builder's setter", () => {
     const setSize = vi.fn();
     const island = mountDraft(draftOn({ onlinePackage: { ...facts, rounds: 7, size: null, setSize } }));
@@ -460,11 +543,11 @@ describe("switching Online play off a PAID package: asked first, and the refund 
     expect(confirmMock, "the second Save asked again").toHaveBeenCalledTimes(2);
   });
 
-  it("asks nothing when nothing is refunded: an unpaid package, a frozen one, a division that stays online, and one that was never online", async () => {
+  it("asks nothing when nothing is refunded and nothing is running: an unpaid package, a division that stays online, and one that was never online", async () => {
     const cases: [string, Record<string, unknown>, OnlinePackageStrip, "off" | "lichess"][] = [
       ["unpaid", ON, unpaid(), "off"],
-      ["frozen: the server leaves it alone", ON, paid(32, false, true), "off"],
       ["paid but staying online (the ordinary rules save)", ON, paid(32), "lichess"],
+      ["frozen but staying online (the ordinary rules save)", ON, paid(32, false, true), "lichess"],
       ["paid row of a division that was not online", OFF, paid(32), "off"],
     ];
     for (const [label, config, pkg, play] of cases) {
@@ -476,6 +559,49 @@ describe("switching Online play off a PAID package: asked first, and the refund 
     }
     expect(confirmMock, "none of them asked").not.toHaveBeenCalled();
     expect(cases.length).toBe(4);
+  });
+
+  it("a FROZEN package (round 1 has opened) asks first too: the event is running and nothing comes back - paid or grandfathered - and a yes saves the switch-off (owner ruling 6)", async () => {
+    let checked = 0;
+    for (const [label, pkg] of [["paid then frozen", paid(32, false, true)], ["grandfathered (frozen, never paid)", unpaid({ stored: { size: 64, paid: null, frozen: true } })]] as const) {
+      confirmMock.mockClear();
+      apiV1Mock.mockClear();
+      const island = mount(ON, pkg);
+      pickOnlinePlay(island, "off");
+      save(island);
+      await vi.waitFor(() => expect(apiV1Mock, label).toHaveBeenCalledTimes(1));
+      expect(confirmMock, label).toHaveBeenCalledTimes(1);
+      expect(confirmMock.mock.invocationCallOrder[0], `${label}: asked BEFORE the request`).toBeLessThan(apiV1Mock.mock.invocationCallOrder[0]!);
+      expect(confirmOpts(), label).toMatchObject({
+        title: UI["onlineChess.switchOff.frozen.title"],
+        body: UI["onlineChess.switchOff.frozen.body"],
+        confirmLabel: UI["onlineChess.switchOff.frozen.confirm"],
+        cancelLabel: UI["confirm.cancel"],
+        tone: "danger",
+      });
+      expect(confirmOpts().body, `${label}: says the event is running`).toMatch(/this event is running/);
+      expect(confirmOpts().body, `${label}: and that no credits come back`).toMatch(/no credits come back/);
+      expect((lastPatch().config as Record<string, unknown>).onlinePlay, label).toBe("off");
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a frozen switch-off the organiser declines sends nothing; with no dialog mounted it is refused in the product's words", async () => {
+    confirmMock.mockResolvedValueOnce(false);
+    const island = mount(ON, paid(32, false, true));
+    pickOnlinePlay(island, "off");
+    save(island);
+    await vi.waitFor(() => expect(confirmMock).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    expect(apiV1Mock, "declined: no request").not.toHaveBeenCalled();
+    confirmState.mounted = false;
+    const bare = mount(ON, paid(32, false, true));
+    pickOnlinePlay(bare, "off");
+    save(bare);
+    await vi.waitFor(() => expect(byTestId(bare, "division-settings-error")).toBeDefined());
+    expect(textOf(byTestId(bare, "division-settings-error")!)).toBe(UI["divset.failed"]);
+    expect(apiV1Mock).not.toHaveBeenCalled();
   });
 
   it("with no dialog mounted a paid switch-off is NOT saved: the organiser is told, in the product's words, and no request leaves", async () => {

@@ -220,3 +220,59 @@ describe("BuyStreamCredits", () => {
     expect(quoted).toBe(4 * STREAM_CREDIT_PACKS.length);
   });
 });
+
+// Online Chess credits (spec 2026-11-23-online-chess-credits-design.md §8.4; plan Task 12): the chooser a receipt with a short balance opens.
+// The seam: the request names `returnTo: "division"` with the division and the receipt's size (so Stripe returns the buyer to that division with
+// the receipt reopened), and the covering pack is marked and focused - nothing is bought until a tile is tapped.
+describe("BuyStreamCredits from an Online Chess receipt", () => {
+  const openDivision = (over: { returnTo?: { divisionId: string; size?: 16 | 32 | 64 | 128 | 256 }; preselect?: 1 | 5 | 20 } = {}) =>
+    renderIsland(BuyStreamCredits, { orgId: "org-1", currency: "gbp" as const, ...over });
+
+  it("a tap asks the route for a DIVISION return: org, pack, returnTo, the division and the size, and no fixture", async () => {
+    const island = openDivision({ returnTo: { divisionId: "div-1", size: 64 }, preselect: 5 });
+    tap(island as never, 5);
+    await flush();
+    expect(checkout.fetch).toHaveBeenCalledTimes(1);
+    expect(checkout.fetch).toHaveBeenCalledWith({ orgId: "org-1", pack: 5, returnTo: "division", divisionId: "div-1", size: 64 });
+  });
+
+  it("a first payment sends no size (it is stored on the unpaid row)", async () => {
+    const island = openDivision({ returnTo: { divisionId: "div-1" } });
+    tap(island as never, 1);
+    await flush();
+    expect(checkout.fetch).toHaveBeenCalledWith({ orgId: "org-1", pack: 1, returnTo: "division", divisionId: "div-1" });
+    expect("size" in (checkout.fetch.mock.calls[0]![0] as object)).toBe(false);
+  });
+
+  it("the preselected tile is the one marked and focused; the others are not; none when no pack is named (sweep)", () => {
+    let checked = 0;
+    for (const pack of STREAM_CREDIT_PACKS) {
+      const island = openDivision({ returnTo: { divisionId: "d" }, preselect: pack.size });
+      for (const other of STREAM_CREDIT_PACKS) {
+        const props = propsOf(byTestId(island.tree(), `credits-stream-buy-pack-${other.size}`)!);
+        expect(props["data-preselected"], `${pack.size} preselected, tile ${other.size}`).toBe(other.size === pack.size ? "true" : undefined);
+        expect(props.autoFocus, `${pack.size} preselected, tile ${other.size}`).toBe(other.size === pack.size);
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(STREAM_CREDIT_PACKS.length * STREAM_CREDIT_PACKS.length);
+    const none = openDivision({ returnTo: { divisionId: "d" } });
+    for (const other of STREAM_CREDIT_PACKS) expect(propsOf(byTestId(none.tree(), `credits-stream-buy-pack-${other.size}`)!)["data-preselected"]).toBeUndefined();
+  });
+
+  it("a preselected tile says it covers the shortfall, in place of 'Most clubs'", () => {
+    const text = (island: ReturnType<typeof openDivision>, size: number) => JSON.stringify(propsOf(byTestId(island.tree(), `credits-stream-buy-pack-${size}`)!).children);
+    const island = openDivision({ returnTo: { divisionId: "d" }, preselect: 20 });
+    expect(text(island, 20)).toContain(EN["onlineChess.receipt.buy.covers"]!);
+    expect(text(island, 5)).toContain(EN["stream.credits.popular"]!); // the unchosen popular tile keeps its own badge
+    expect(text(openDivision({ returnTo: { divisionId: "d" }, preselect: 5 }), 5)).not.toContain(EN["stream.credits.popular"]!);
+  });
+
+  it("without a return target it is still the Settings chooser, byte for byte (the existing callers do not move)", async () => {
+    const island = openDivision();
+    tap(island as never, 20);
+    await flush();
+    expect(checkout.fetch).toHaveBeenCalledWith({ orgId: "org-1", pack: 20, returnTo: "settings" });
+  });
+});
+

@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { ONLINE_SIZES, includedRounds, packagePrice, sizeAllowedByPlan, type OnlineSize } from "@/lib/online-chess-package";
 import { formatStagesFor } from "@/lib/division-builder/format-choice";
 import { STAGE_TEMPLATES } from "@/lib/format-templates";
-import { capacityLoweredOf, onlineSizeChoice, onlineSizeDefault, onlineSizeOptions, refundedOf, swissRoundsOf, switchOffRefundOf, type OnlineSizeOption } from "@/lib/online-size-options";
+import { capacityLoweredOf, onlineSizeChoice, onlineSizeDefault, onlineSizeOptions, refundedOf, swissRoundsOf, switchOffFrozenOf, switchOffRefundOf, type OnlineSizeOption } from "@/lib/online-size-options";
 import { refusalFor } from "@/server/usecases/online-package/quote";
 
 const reasonOf = (o: readonly OnlineSizeOption[], size: OnlineSize) => o.find((x) => x.size === size)?.disabled;
@@ -281,6 +281,37 @@ describe("switchOffRefundOf: when switching Online play off refunds a paid packa
       checked += 1;
     }
     expect(checked).toBe(ONLINE_SIZES.length);
+  });
+});
+
+describe("switchOffFrozenOf: switching Online play off a package whose round 1 has opened says the event is running and nothing comes back (spec 8.7, owner ruling 6)", () => {
+  const frozenPaid = { size: 32 as const, paid: { size: 32 as const, camerasPaid: false }, frozen: true };
+  const frozenUnpaid = { size: 64 as const, paid: null, frozen: true }; // grandfathered: round 1 opened before the credits wave
+  it("is true for a frozen package, paid or not, on a division that plays online and is being switched off", () => {
+    expect(switchOffFrozenOf({ storedOnline: true, onlinePlay: "off", stored: frozenPaid })).toBe(true);
+    expect(switchOffFrozenOf({ storedOnline: true, onlinePlay: "off", stored: frozenUnpaid })).toBe(true);
+  });
+  it("is false for everything else (the empty cases): unfrozen paid or unpaid, no row, still online, never online", () => {
+    const cases: [string, Parameters<typeof switchOffFrozenOf>[0]][] = [
+      ["unpaid, unfrozen", { storedOnline: true, onlinePlay: "off", stored: { size: 16, paid: null, frozen: false } }],
+      ["paid, unfrozen (the refund's own question)", { storedOnline: true, onlinePlay: "off", stored: { size: 16, paid: { size: 16, camerasPaid: false }, frozen: false } }],
+      ["no live row", { storedOnline: true, onlinePlay: "off", stored: null }],
+      ["frozen but staying online (the ordinary rules save)", { storedOnline: true, onlinePlay: "lichess", stored: frozenPaid }],
+      ["frozen row of a division that was not online (a stale row)", { storedOnline: false, onlinePlay: "off", stored: frozenPaid }],
+    ];
+    for (const [label, a] of cases) expect(switchOffFrozenOf(a), label).toBe(false);
+    expect(cases.length, "anti-vacuity").toBe(5);
+  });
+  it("is never true together with the refund question: a package is asked about ONE of them (sweep over the paid x frozen table)", () => {
+    let checked = 0;
+    for (const paid of [null, { size: 32 as const, camerasPaid: false }]) {
+      for (const frozen of [false, true]) {
+        const a = { storedOnline: true, onlinePlay: "off" as const, stored: { size: 32 as const, paid: paid === null ? null : { size: paid.size, camerasPaid: paid.camerasPaid }, frozen } };
+        expect(switchOffFrozenOf(a) && switchOffRefundOf(a) !== null, `paid=${paid !== null} frozen=${frozen}`).toBe(false);
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(4);
   });
 });
 

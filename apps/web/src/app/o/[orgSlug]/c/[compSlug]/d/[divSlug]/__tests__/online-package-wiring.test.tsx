@@ -18,6 +18,8 @@ import { isValidElement, type ReactElement, type ReactNode } from "react";
 const pageAuth = vi.hoisted(() => ({ requireDivisionPage: vi.fn() }));
 const division = vi.hoisted(() => ({ sport_key: "boardgame", onlinePlay: "off" as "off" | "lichess" }));
 const fx = vi.hoisted(() => ({ rows: [] as Record<string, unknown>[] }));
+// The competition's BILLING freeze (an over-quota club is read-only), which turns an organiser's `canEdit` into a non-editable page.
+const billing = vi.hoisted(() => ({ frozen: false }));
 const flags = vi.hoisted(() => ({ isServerFeatureEnabled: vi.fn() }));
 // The division's resolved venue zone, as `getScheduleSettings` serves it (the division's own override, else the club's).
 const schedule = vi.hoisted(() => ({ tz: "UTC" }));
@@ -42,7 +44,7 @@ vi.mock("@/server/usecases/stages", () => ({
   getStageRosterDrift: vi.fn(async () => ({ ghosts: [], unplaced: [] })),
 }));
 vi.mock("@/server/usecases/competitions", () => ({
-  getCompetition: vi.fn(async () => ({ id: "comp-1", frozen: false, visibility: "public", slug: "comp-one" })),
+  getCompetition: vi.fn(async () => ({ id: "comp-1", frozen: billing.frozen, visibility: "public", slug: "comp-one" })),
 }));
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: vi.fn(async () => "en") }));
 vi.mock("@/lib/i18n", () => ({
@@ -126,6 +128,7 @@ vi.mock("@/server/usecases/stream-credits-checkout", () => ({ reconcileStreamCre
 
 import DivisionPage from "../page";
 import { StagesPanel } from "@/components/v2/stages-panel";
+import { EntrantsPanel } from "@/components/v2/entrants-panel";
 import { forgetOnlineChessFlagCache } from "@/server/usecases/external-play/online-chess-flag";
 import { routes } from "@/lib/routes";
 import { log } from "@/server/logger";
@@ -191,6 +194,7 @@ const offered = () => flagIs(FLAG_STATES[0]!);
 beforeEach(() => {
   division.sport_key = "boardgame";
   division.onlinePlay = "off";
+  billing.frozen = false;
   schedule.tz = "UTC";
   fx.rows = [];
   pkg.view.mockReset().mockResolvedValue(VIEW);
@@ -214,7 +218,7 @@ describe("division page: the Online Chess package facts reach the Division rules
     const strip = stripOf(await renderPage("fixtures"));
     expect(pkg.view).toHaveBeenCalledTimes(1);
     expect(pkg.view).toHaveBeenCalledWith({ orgId: "org-1", competitionId: "comp-1", divisionId: "div-1" });
-    expect(strip.onlinePackage).toEqual({ ...VIEW, buyMoreHref: routes.creditsStream("org"), receipt: null });
+    expect(strip.onlinePackage).toEqual({ ...VIEW, buyMoreHref: routes.creditsStream("org"), receipt: null, buy: { orgId: "org-1", currency: "gbp" } });
     expect(routes.creditsStream("org"), "premise: the Streaming side of the credits page").toBe("/o/org/settings/credits?kind=stream");
     expect(functionProps(strip.onlinePackage!), "the strip is a client island: no function crosses").toEqual([]);
   });
@@ -268,11 +272,13 @@ describe("division page: the Online Chess package facts reach the Division rules
   });
 });
 
+const SESSION = "cs_test_a1B2c3";
 describe("division page: the checkout return's receipt request (?oc=pay) - the route's own address, through the page", () => {
   /** The query of a URL built exactly as the relay-checkout route builds the division return (route.ts `returnTo: "division"`),
    *  the way Next hands it to a page: decoded, one string a key. */
   const tailOf = (size?: number) => {
-    const url = `http://x/o/org/c/comp/d/div?tab=fixtures&oc=pay&checkout=success&session_id={CHECKOUT_SESSION_ID}${size === undefined ? "" : `&size=${size}`}`;
+    // Stripe replaces the `{CHECKOUT_SESSION_ID}` template the route writes with the session's id: that id is the arrival's key.
+    const url = `http://x/o/org/c/comp/d/div?tab=fixtures&oc=pay&checkout=success&session_id={CHECKOUT_SESSION_ID}${size === undefined ? "" : `&size=${size}`}`.replace("{CHECKOUT_SESSION_ID}", SESSION);
     return Object.fromEntries(new URL(url).searchParams) as Record<string, string>;
   };
   const receiptFor = async (more: Record<string, string | string[]>) => {
@@ -283,10 +289,10 @@ describe("division page: the checkout return's receipt request (?oc=pay) - the r
 
   it("oc=pay opens it on the stored size; a ladder size names the upgrade's target; each ladder size once", async () => {
     offered();
-    expect(await receiptFor(tailOf())).toEqual({ size: null });
+    expect(await receiptFor(tailOf())).toEqual({ size: null, key: SESSION });
     let checked = 0;
     for (const size of [16, 32, 64, 128, 256]) {
-      expect(await receiptFor(tailOf(size)), `size ${size}`).toEqual({ size });
+      expect(await receiptFor(tailOf(size)), `size ${size}`).toEqual({ size, key: SESSION });
       checked++;
     }
     expect(checked, "anti-vacuity").toBe(5);
@@ -299,9 +305,9 @@ describe("division page: the checkout return's receipt request (?oc=pay) - the r
     expect(await receiptFor({ tab: "fixtures", oc: "paid" }), "another oc value").toBeNull();
     expect(await receiptFor({ tab: "fixtures", oc: ["pay", "pay"] }), "two oc values").toBeNull();
     for (const size of ["48", "0", "-16", "16.5", "0x10", "1e2", "16 ", "", "4096", "abc"]) {
-      expect(await receiptFor({ ...tailOf(), size }), `size ${JSON.stringify(size)}`).toEqual({ size: null });
+      expect(await receiptFor({ ...tailOf(), size }), `size ${JSON.stringify(size)}`).toEqual({ size: null, key: SESSION });
     }
-    expect(await receiptFor({ ...tailOf(), size: ["16", "32"] }), "two sizes").toEqual({ size: null });
+    expect(await receiptFor({ ...tailOf(), size: ["16", "32"] }), "two sizes").toEqual({ size: null, key: SESSION });
   });
 });
 
@@ -317,3 +323,30 @@ describe("division page: the Format dialog is told whether the division plays on
     expect(checked).toBe(2);
   });
 });
+
+// Online Chess credits (plan Task 12): the entrants tab's "size is full" refusal offers the way out, a link to the Fixtures tab where the size
+// select and the pay line are. The page is what knows the address, and who may follow it: an organiser (not a view-only member, not a club whose
+// billing is frozen, which is read-only there too).
+describe("division page: the entrants tab's Change size address", () => {
+  const entrantsPanelOf = async (): Promise<Record<string, unknown>> => {
+    const panels = findAll(await renderPage("entrants"), EntrantsPanel);
+    expect(panels, "the entrants tab mounts one EntrantsPanel").toHaveLength(1);
+    return panels[0]!.props as Record<string, unknown>;
+  };
+
+  it("an organiser is handed this division's Fixtures tab address", async () => {
+    offered();
+    expect((await entrantsPanelOf()).changeSizeHref).toBe(routes.division("org", "comp", "div", "fixtures"));
+    expect(routes.division("org", "comp", "div", "fixtures"), "premise: the tab that holds the size select").toBe("/o/org/c/comp/d/div?tab=fixtures");
+  });
+
+  it("a view-only member and a billing-frozen club are handed none (the pair: the organiser above is)", async () => {
+    offered();
+    pageAuth.requireDivisionPage.mockResolvedValue({ ...PAGE, canEdit: false });
+    expect((await entrantsPanelOf()).changeSizeHref, "view-only").toBeNull();
+    pageAuth.requireDivisionPage.mockResolvedValue(PAGE);
+    billing.frozen = true;
+    expect((await entrantsPanelOf()).changeSizeHref, "billing frozen").toBeNull();
+  });
+});
+

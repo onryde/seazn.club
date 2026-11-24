@@ -16,6 +16,7 @@ import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { loadCheckoutSheet } from "@/components/v2/stream-checkout-sheet-loader";
 import { fetchRelayCheckoutClientSecret } from "@/lib/billing-checkout-client";
 import { formatMinor, type Currency } from "@/lib/currency";
+import type { OnlineSize } from "@/lib/online-chess-package";
 import {
   STREAM_CREDIT_PACKS, streamPackAmountMinor, streamPackPerMatchMinor, type StreamPackSize,
 } from "@/lib/stream-credit-packs";
@@ -39,7 +40,22 @@ export class CheckoutSheetBoundary extends Component<{ onFail: () => void; child
 
 type BuyError = "owner" | "unknown";
 
-export function BuyStreamCredits({ orgId, currency }: { orgId: string; currency: Currency }) {
+/** Where Stripe sends the buyer back to. Absent: Settings → Credits (the default). An Online Chess division's receipt (spec 2026-11-23 §8.4): the division's
+ *  Fixtures tab with the receipt reopened - `size` is the size the receipt was on, riding in the return address. */
+export type BuyReturn = { divisionId: string; size?: OnlineSize };
+
+export function BuyStreamCredits({
+  orgId,
+  currency,
+  returnTo,
+  preselect,
+}: {
+  orgId: string;
+  currency: Currency;
+  returnTo?: BuyReturn;
+  /** The pack to highlight and focus: the smallest one that covers a shortfall. Nothing is bought until the organiser taps a tile. */
+  preselect?: StreamPackSize;
+}) {
   const msg = useMsg();
   const locale = useLocaleOrDefault();
   const [busy, setBusy] = useState(false);
@@ -72,7 +88,11 @@ export function BuyStreamCredits({ orgId, currency }: { orgId: string; currency:
       setError("unknown");
       return;
     }
-    const result = await fetchRelayCheckoutClientSecret({ orgId, pack, returnTo: "settings" });
+    const result = await fetchRelayCheckoutClientSecret(
+      returnTo === undefined
+        ? { orgId, pack, returnTo: "settings" }
+        : { orgId, pack, returnTo: "division", divisionId: returnTo.divisionId, ...(returnTo.size === undefined ? {} : { size: returnTo.size }) },
+    );
     setBusy(false);
     if (result.ok) {
       // `buying` stays held until the sheet is closed.
@@ -97,18 +117,21 @@ export function BuyStreamCredits({ orgId, currency }: { orgId: string; currency:
           // quotes NOTHING rather than a GBP number under the wrong sign (the checkout would refuse it).
           const total = streamPackAmountMinor(pack, currency);
           const perMatch = streamPackPerMatchMinor(pack, currency);
+          const chosen = preselect === pack.size;
           return (
             <button
               key={pack.size}
               type="button"
               disabled={busy || planGate}
               data-testid={`credits-stream-buy-pack-${pack.size}`}
+              data-preselected={chosen ? "true" : undefined}
+              autoFocus={chosen}
               onClick={() => void onBuy(pack.size)}
               onPointerEnter={onTileIntent}
               onFocus={onTileIntent}
               onTouchStart={onTileIntent}
               className={`flex min-h-11 w-full flex-col items-start justify-start rounded-lg border bg-white p-3 text-left hover:bg-purple-50 disabled:cursor-not-allowed disabled:opacity-50 ${
-                pack.popular ? "border-purple-500" : "border-purple-200"
+                chosen ? "border-purple-600 ring-2 ring-purple-300" : pack.popular ? "border-purple-500" : "border-purple-200"
               }`}
             >
               <span className="block text-lg font-semibold text-slate-800">{msg(pack.labelKey)}</span>
@@ -120,10 +143,12 @@ export function BuyStreamCredits({ orgId, currency }: { orgId: string; currency:
                   {msg("stream.credits.perMatch", { price: formatMinor(perMatch, currency, locale) })}
                 </span>
               )}
-              {pack.popular && (
-                <span className="mt-1 inline-block rounded-full bg-purple-100 px-2 text-xs text-purple-800">
-                  {msg("stream.credits.popular")}
-                </span>
+              {chosen ? (
+                <span className="mt-1 inline-block rounded-full bg-purple-600 px-2 text-xs text-white">{msg("onlineChess.receipt.buy.covers")}</span>
+              ) : (
+                pack.popular && (
+                  <span className="mt-1 inline-block rounded-full bg-purple-100 px-2 text-xs text-purple-800">{msg("stream.credits.popular")}</span>
+                )
               )}
             </button>
           );

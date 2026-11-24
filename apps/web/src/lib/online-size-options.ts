@@ -97,6 +97,18 @@ export function switchOffRefundOf(a: {
   return { size: a.stored.paid.size, price: packagePrice(a.stored.paid.size, a.stored.paid.camerasPaid) };
 }
 
+/** Whether switching Online play OFF on this division stops a running event (spec 8.7; owner ruling): the package is stored, online, FROZEN (round 1
+ *  has opened), and the pick is "off". The server leaves a frozen package as it is and refunds nothing (all-zero refund, P7), so the strip says so before
+ *  it saves. An unpaid, paid-and-unfrozen, never-online or stays-online division is not this: the first deletes, the second refunds
+ *  (`switchOffRefundOf`), the others change nothing. */
+export function switchOffFrozenOf(a: {
+  storedOnline: boolean;
+  onlinePlay: "off" | "lichess";
+  stored: { size: OnlineSize; paid: { size: OnlineSize; camerasPaid: boolean } | null; frozen: boolean } | null;
+}): boolean {
+  return a.storedOnline && a.onlinePlay === "off" && a.stored !== null && a.stored.frozen;
+}
+
 /** What a division save says its switch-off refund did (PATCH /divisions `online.refunded`, `{ pack, monthly, forfeited }`): the credits
  *  returned (bought plus this month's included) and the included credits of an earlier month that were not (P6). Null when the answer has
  *  no such field, a malformed one, or nothing moved (an unpaid or frozen switch-off answers all zeros). */

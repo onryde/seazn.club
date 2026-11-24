@@ -25,13 +25,13 @@ describe("onlineReceiptRequest: oc=pay reopens the receipt", () => {
   });
 
   it("oc=pay with no size: the receipt reopens on the stored size (a first payment keeps it on the unpaid row)", () => {
-    expect(onlineReceiptRequest({ oc: "pay" })).toEqual({ size: null });
+    expect(onlineReceiptRequest({ oc: "pay" })).toEqual({ size: null, key: "" });
   });
 
   it("every size on the ladder is carried through, and only those (sweep)", () => {
     let checked = 0;
     for (const s of LADDER) {
-      expect(onlineReceiptRequest({ oc: "pay", size: String(s) })).toEqual({ size: s });
+      expect(onlineReceiptRequest({ oc: "pay", size: String(s) })).toEqual({ size: s, key: "" });
       checked += 1;
     }
     expect(checked).toBe(5);
@@ -39,14 +39,29 @@ describe("onlineReceiptRequest: oc=pay reopens the receipt", () => {
 
   it("anything else in `size` is dropped, the receipt still reopens (sweep over the ways a number can be spelled wrong)", () => {
     const dropped = ["0", "8", "15", "17", "48", "100", "512", "-16", "16.0", "016", "1e1", "0x10", "", " 16", "16 ", "+16", "NaN", "Infinity", "sixteen", "16,32", "16abc", "９"];
-    for (const raw of dropped) expect(onlineReceiptRequest({ oc: "pay", size: raw }), JSON.stringify(raw)).toEqual({ size: null });
-    expect(onlineReceiptRequest({ oc: "pay", size: ["16", "32"] })).toEqual({ size: null });
-    expect(onlineReceiptRequest({ oc: "pay", size: 64 })).toEqual({ size: null }); // not a string: the route only ever writes strings
+    for (const raw of dropped) expect(onlineReceiptRequest({ oc: "pay", size: raw }), JSON.stringify(raw)).toEqual({ size: null, key: "" });
+    expect(onlineReceiptRequest({ oc: "pay", size: ["16", "32"] })).toEqual({ size: null, key: "" });
+    expect(onlineReceiptRequest({ oc: "pay", size: 64 })).toEqual({ size: null, key: "" }); // not a string: the route only ever writes strings
     expect(dropped.length).toBeGreaterThan(15);
   });
 
-  it("the other return params are not this parser's: checkout and session_id change nothing", () => {
-    expect(onlineReceiptRequest({ oc: "pay", checkout: "success", session_id: "cs_test_1", size: "128" })).toEqual({ size: 128 });
+  it("the other return params are not this parser's: checkout changes nothing, and the session id is only the arrival's key", () => {
+    expect(onlineReceiptRequest({ oc: "pay", checkout: "success", session_id: "cs_test_1", size: "128" })).toEqual({ size: 128, key: "cs_test_1" });
     expect(onlineReceiptRequest({ checkout: "success", session_id: "cs_test_1" })).toBeNull();
+  });
+
+  it("the key is the checkout session: two arrivals differ, a refresh of one does not, and anything that is not a session id is no key", () => {
+    const a = onlineReceiptRequest({ oc: "pay", checkout: "success", session_id: "cs_test_a1B2" });
+    const b = onlineReceiptRequest({ oc: "pay", checkout: "success", session_id: "cs_test_c3D4" });
+    expect(a?.key).toBe("cs_test_a1B2");
+    expect(b?.key).toBe("cs_test_c3D4");
+    expect(a?.key).not.toBe(b?.key);
+    expect(onlineReceiptRequest({ oc: "pay", session_id: "cs_test_a1B2" })?.key).toBe(a?.key); // same session, same key
+    let checked = 0;
+    for (const bad of ["", " cs", "cs test", "cs/..", "cs?x=1", "<b>", "x".repeat(256), ["cs_test_1"], 7, undefined, null]) {
+      expect(onlineReceiptRequest({ oc: "pay", session_id: bad })?.key, JSON.stringify(bad)).toBe("");
+      checked += 1;
+    }
+    expect(checked).toBe(11);
   });
 });

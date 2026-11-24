@@ -108,6 +108,7 @@ import {
 import { onlineBoardsOffered } from "@/server/online-boards-offered";
 import { onlinePackageView } from "@/server/usecases/online-package";
 import { onlineReceiptRequest } from "@/lib/online-package-return";
+import { preferredCurrency } from "@/lib/currency-server";
 import type { OnlinePackageStrip } from "@/components/v2/rules/division-rules-strip";
 import { ProgressionPanel } from "@/components/v2/progression-panel";
 import { LaunchActions } from "@/components/v2/launch-actions";
@@ -753,10 +754,16 @@ export default async function DivisionPage({
   let onlinePackage: OnlinePackageStrip | undefined;
   if (onlineChessOn && tab === "fixtures") {
     try {
+      // The currency the credits chooser inside the receipt charges in (the relay-checkout route's own `preferredCurrency`), read with the facts.
+      const [view, currency] = await Promise.all([
+        onlinePackageView({ orgId: auth.orgId, competitionId: competition.id, divisionId: id }),
+        preferredCurrency(auth.orgId),
+      ]);
       onlinePackage = {
-        ...(await onlinePackageView({ orgId: auth.orgId, competitionId: competition.id, divisionId: id })),
+        ...view,
         buyMoreHref: routes.creditsStream(orgSlug),
         receipt: onlineReceiptRequest(query),
+        buy: { orgId: auth.orgId, currency },
       };
     } catch (err) {
       log.error({ err, divisionId: id }, "online chess package: reading the size and price facts failed; the strip renders without the size select");
@@ -1053,6 +1060,7 @@ export default async function DivisionPage({
             )}
             <EntrantsPanel
               divisionId={id}
+              changeSizeHref={editable ? routes.division(orgSlug, compSlug, divSlug, "fixtures") : null}
               entrants={entrants}
               logoUrls={entrantLogos}
               canEdit={editable}

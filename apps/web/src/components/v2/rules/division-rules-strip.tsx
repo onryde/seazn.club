@@ -30,9 +30,11 @@ import { ONLINE_CHESS_DISABLED_CODE, onlinePlayShown } from "@/lib/online-chess"
 import { packagePrice, type OnlineSize } from "@/lib/online-chess-package";
 import { onlineRefusedKind } from "@/lib/online-format-refusal";
 import type { OnlineReceiptRequest } from "@/lib/online-package-return";
-import { capacityLoweredOf, onlineSizeChoice, refundedOf, switchOffRefundOf } from "@/lib/online-size-options";
+import { capacityLoweredOf, onlineSizeChoice, refundedOf, switchOffFrozenOf, switchOffRefundOf } from "@/lib/online-size-options";
+import type { Currency } from "@/lib/currency";
 import { onlineEntrantCapText } from "../online-entrant-cap-refusal";
 import { ONLINE_MAX_ROUNDS, isOnlineSizeRaceCode, onlineSizeRaceText } from "@/lib/online-package-refusal";
+import { OnlinePackageHost } from "../online-chess/package-host";
 import { OnlinePriceLine } from "../online-chess/price-line";
 import { OnlineSizeSelect } from "../online-chess/size-select";
 import type { MessageKey } from "@/lib/messages";
@@ -117,8 +119,11 @@ export interface OnlinePackageFacts {
 export interface OnlinePackageStrip extends OnlinePackageFacts {
   /** The live package row; null while the division has none (online play off). `paid`: the paid state at the row's own size. */
   stored: { size: OnlineSize; paid: { size: OnlineSize; camerasPaid: boolean } | null; frozen: boolean } | null;
-  /** The checkout return (`?oc=pay`): the receipt reopens for it (Task 12's seam); null on an ordinary visit. */
+  /** The checkout return (`?oc=pay`): the receipt reopens for it, once per arrival; null on an ordinary visit. */
   receipt: OnlineReceiptRequest | null;
+  /** Who pays and in which currency, for the credits chooser a short balance opens inside the receipt. Null: the chooser is a link to the
+   *  credits page (a reader without the organisation's id). */
+  buy: { orgId: string; currency: Currency } | null;
 }
 
 /** The builder's draft state, owned by the builder so it survives moving between its steps. */
@@ -201,9 +206,18 @@ export function DivisionRulesStrip({
   const [savedFormOrder, setOrderState] = useState<TiebreakerKey[] | null>(() => (divisionTiebreakers === null ? null : [...divisionTiebreakers]));
   // A saved change (or another tab's) arrives as new props after `router.refresh()`: the forms re-read them. Compared by
   // CONTENT, never by reference (every refresh hands back new objects; R3.5 review F6).
-  // Online Chess credits: the organiser's pick on the saved strip (the stored size until they touch it) and the receipt asked for.
+  // Online Chess credits: the organiser's pick on the saved strip (the stored size until they touch it) and the last pick on a PAID row's select,
+  // which the package host turns into a receipt (`n` counts picks, so the same size picked twice opens twice).
   const [savedPicked, setSavedPicked] = useState<OnlineSize | null>(onlinePackage?.stored?.size ?? null);
-  const [receipt, setReceipt] = useState<OnlineReceiptRequest | null>(onlinePackage?.receipt ?? null);
+  const [paidPick, setPaidPick] = useState<{ size: OnlineSize; n: number } | null>(null);
+  // "Change size" on the amber line: open the format panel (where the select lives) and put focus in the select once it is drawn.
+  const [focusSize, setFocusSize] = useState(0);
+  useEffect(() => {
+    if (focusSize === 0) return;
+    const select = document.querySelector<HTMLElement>('[data-testid="online-size-select"]');
+    select?.focus();
+    if (typeof select?.scrollIntoView === "function") select.scrollIntoView({ block: "center" });
+  }, [focusSize]);
   const signature = JSON.stringify([savedVariantKey, divisionConfig, divisionTiebreakers, onlinePackage?.stored ?? null]);
   const [synced, setSynced] = useState(signature);
   if (synced !== signature) {
@@ -419,7 +433,23 @@ export function DivisionRulesStrip({
    *  (P6), so the organiser is asked first, with what comes back and what may not. Anything else saves with no question. Without the
    *  dialog mounted a refund is never taken silently: the save is refused in the organiser's language. */
   async function confirmSwitchOff(): Promise<boolean> {
-    const refund = switchOffRefundOf({ storedOnline: divisionConfig.onlinePlay === "lichess", onlinePlay, stored });
+    const switching = { storedOnline: divisionConfig.onlinePlay === "lichess", onlinePlay, stored };
+    // A package whose round 1 has opened is not refunded (P7): the event is running, so the organiser is told that before it stops.
+    if (switchOffFrozenOf(switching)) {
+      if (confirm === null) {
+        setFeedback({ panel: "format", notice: null, error: msg("divset.failed"), refused: [], partial: false, keptPinned: [], paywall: null, capacityLowered: null, refunded: null });
+        return false;
+      }
+      return confirm({
+        title: msg("onlineChess.switchOff.frozen.title"),
+        body: msg("onlineChess.switchOff.frozen.body"),
+        confirmLabel: msg("onlineChess.switchOff.frozen.confirm"),
+        cancelLabel: msg("confirm.cancel"),
+        tone: "danger",
+        size: "touch",
+      });
+    }
+    const refund = switchOffRefundOf(switching);
     if (refund === null) return true;
     if (confirm === null) {
       setFeedback({ panel: "format", notice: null, error: msg("divset.failed"), refused: [], partial: false, keptPinned: [], paywall: null, capacityLowered: null, refunded: null });
@@ -678,7 +708,7 @@ export function DivisionRulesStrip({
             cameras={pkg.cameras}
             paid={stored?.paid ?? null}
             onChange={(size) => pickSize?.(size)}
-            onPaidPick={(size) => setReceipt({ size })}
+            onPaidPick={(size) => setPaidPick((prev) => ({ size, n: (prev?.n ?? 0) + 1 }))}
             frozen={stored?.frozen === true}
             disabled={busy}
           />
@@ -741,9 +771,29 @@ export function DivisionRulesStrip({
         </div>
       </div>
 
-      {/* Task 12's seam: the receipt a paid pick or the checkout return (`?oc=pay`) asks for. It carries no UI of its own yet; the
-          size it names is the target of an upgrade ("stored" when the address named none: a first payment keeps its size). */}
-      {receipt !== null && <div hidden data-testid="online-receipt-request" data-receipt-size={receipt.size === null ? "stored" : String(receipt.size)} />}
+      {/* The package's own line: the amber "not paid" line or the paid chip, and the receipt each opens (spec 8.3-8.7). A draft pays nothing. */}
+      {onlinePackage !== undefined && draft === undefined && onlinePackage.stored !== null && onlineShown && (
+        <div className="border-t border-slate-100 px-4 py-3" data-testid="division-online-package-line">
+          <OnlinePackageHost
+            divisionId={divisionId}
+            stored={onlinePackage.stored}
+            planCap={onlinePackage.planCap}
+            held={onlinePackage.held}
+            rounds={onlinePackage.rounds}
+            cameras={onlinePackage.cameras}
+            viewerPlan={viewerPlan}
+            canEdit={canEdit}
+            request={onlinePackage.receipt}
+            pick={paidPick}
+            onChangeSize={() => {
+              setOpen((prev) => new Set(prev).add("format"));
+              setFocusSize((n) => n + 1);
+            }}
+            buy={onlinePackage.buy}
+            buyMoreHref={onlinePackage.buyMoreHref}
+          />
+        </div>
+      )}
 
       {open.has("format") && (
         <div id={`${panelId}-format`} role="region" aria-label={msg("rulesStrip.format")} className="space-y-3 border-t border-slate-100 px-4 py-3" data-testid="division-rules-panel-format">

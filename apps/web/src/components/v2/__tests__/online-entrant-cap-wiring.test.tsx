@@ -160,6 +160,64 @@ describe("EntrantsPanel: an online chess division that is full says so in the or
     expect(island.tree().some((e) => e.type === UpgradeGate), "no paywall").toBe(false);
   });
 
+  // Online Chess credits (plan Task 12): the size sentence names the way out - a bigger size - and the panel offers it: a "Change size" link to the
+  // Fixtures tab, where the size select and the pay line are. The other full refusal (256, the most any size holds) is not lifted by a size, so it
+  // offers none.
+  const CHANGE_SIZE = "/o/riverside/c/summer-league/d/chess?tab=fixtures";
+  const changeSize = (tree: Tree) => tree.find((e) => propsOf(e)["data-testid"] === "entrants-change-size");
+  const addRefusedWithLink = async (failure: Refusal, changeSizeHref: string | null = CHANGE_SIZE) => {
+    const island = renderIsland(EntrantsPanel, { ...panelProps(), changeSizeHref });
+    await vi.waitFor(() => expect(net.personsLoaded, "premise: the persons directory was read").toBeGreaterThan(0));
+    await new Promise((r) => setTimeout(r, 0));
+    net.refuse.set("entrants", failure);
+    await findOnImport(island.tree())([{ name: "Ada Okonkwo" }]);
+    expect(net.calls.filter((c) => c === "POST /api/v1/divisions/div-1/entrants"), "premise: the add really went to the server").toHaveLength(1);
+    return island;
+  };
+
+  it("ONLINE_SIZE_FULL offers 'Change size', a link to the Fixtures tab, beside the sentence", async () => {
+    const island = await addRefusedWithLink(SIZE_FULL());
+    expect(textOf(banner(island.tree())!), "premise: the size sentence is up").toBe(SIZE_WORDS());
+    const link = changeSize(island.tree());
+    expect(link, "the link is offered").toBeDefined();
+    expect(propsOf(link!).href).toBe(CHANGE_SIZE);
+    expect(textOf(link!).trim()).toBe(tRuntime(EN_UI, "onlineChess.sizeFull.change"));
+  });
+
+  it("ONLINE_DIVISION_FULL (256) offers none: no size lifts it", async () => {
+    const island = await addRefusedWithLink(FULL());
+    expect(textOf(banner(island.tree())!), "premise: the 256 sentence is up").toBe(FULL_WORDS());
+    expect(changeSize(island.tree())).toBeUndefined();
+  });
+
+  it("no address to send the organiser to (a reader who may not pay, or no package page): the sentence stands alone", async () => {
+    const asked = [
+      async () => addRefusedWithLink(SIZE_FULL(), null),
+      async () => addRefusedWith(SIZE_FULL()), // the prop absent altogether
+    ];
+    for (const [i, ask] of asked.entries()) {
+      net.calls.length = 0;
+      const island = await ask();
+      expect(textOf(banner(island.tree())!), `premise (${i}): the size sentence is up`).toBe(SIZE_WORDS());
+      expect(changeSize(island.tree()), `case ${i}`).toBeUndefined();
+    }
+  });
+
+  it("a later, different refusal takes the link away; the next successful attempt clears the sentence and the link with it", async () => {
+    const island = await addRefusedWithLink(SIZE_FULL());
+    expect(changeSize(island.tree()), "premise: the link is up").toBeDefined();
+    net.refuse.set("entrants", FULL());
+    await findOnImport(island.tree())([{ name: "Ada Okonkwo" }]);
+    expect(textOf(banner(island.tree())!), "premise: the 256 sentence replaced it").toBe(FULL_WORDS());
+    expect(changeSize(island.tree())).toBeUndefined();
+    net.refuse.set("entrants", SIZE_FULL());
+    await findOnImport(island.tree())([{ name: "Ada Okonkwo" }]);
+    expect(changeSize(island.tree()), "the size refusal brings it back").toBeDefined();
+    await findOnImport(island.tree())([{ name: "Ada Okonkwo" }]); // answered: nothing refused this time
+    expect(banner(island.tree()), "premise: the sentence is gone").toBeUndefined();
+    expect(changeSize(island.tree())).toBeUndefined();
+  });
+
   it("the other direction: the plan's own refusal (402 PAYMENT_REQUIRED) still opens the upgrade gate, and a later full refusal replaces it", async () => {
     const island = await addRefusedWith({
       message: "Upgrade required",
