@@ -496,6 +496,57 @@ describe("FakeRunner", () => {
     expect(replacement.runnerId).not.toBe(first.runnerId);
   });
 
+  // Seazn Task 36b: the runner's create held the way the ingest's is (T36), so a test sees the Machine and the inputs in flight at
+  // once. Read back here so the provisioning tests can trust it: a held create makes nothing (no Machine, no listing, no recorded
+  // call) until answered, a failed one makes nothing, `whenHeld` wakes on the n-th ask and not before, the held spec is the one a
+  // test reads the job token from, a failure armed with `failNextCreate` is thrown when the held create is answered, and
+  // `holdCreates(false)` returns every LATER create to answering at once.
+  it("Seazn Task 36b: FakeRunner.holdCreates — a held create makes nothing until answered; a failed one makes nothing; whenHeld wakes on the n-th ask; the held spec is readable; an armed failure is thrown on answer", async () => {
+    const recorder = new FakeRecorder();
+    const runner = new FakeRunner({ recorder });
+    const spec = { sessionId: "s1", attempt: 1, environment: "local", jobToken: "tok-1", appUrl: "http://app", guest: { cpus: 4, memoryMb: 8192, cpuClass: "dedicated" as const }, region: "lhr", deadlineAt: new Date(0) };
+    const flush = () => new Promise<void>((res) => setImmediate(res));
+    const settled: string[] = [];
+    const track = <T,>(p: Promise<T>, name: string) => { p.then(() => settled.push(name), () => settled.push(`${name}:failed`)); return p; };
+    // The empty case: nothing asked, so a wait for one is still waiting after a flush.
+    runner.holdCreates();
+    let woke = false;
+    void runner.whenHeld(1).then(() => { woke = true; });
+    await flush();
+    expect([runner.heldCreates.length, woke], "nothing asked, the wait still waiting").toEqual([0, false]);
+    const first = track(runner.create(spec), "first");
+    await runner.whenHeld(1);
+    expect(woke).toBe(true);
+    expect(runner.heldCreates.map((h) => h.spec.jobToken), "the held spec is the one the create was asked with").toEqual(["tok-1"]);
+    await flush();
+    const creates = () => recorder.calls.filter((c) => c.operation === "createMachine");
+    expect([settled, runner.created, await runner.list(), creates()], "asked, not answered: nothing settled, no Machine, no create recorded").toEqual([[], [], [], []]);
+    runner.heldCreates[0]!.answer();
+    const made = await first;
+    expect(made.runnerId).toMatch(/^fake-machine-/);
+    expect([runner.created.length, creates().length, (await runner.list()).map((m) => m.runnerId)]).toEqual([1, 1, [made.runnerId]]);
+    // A failed one makes nothing, and what it rejects with is what the test gave.
+    const refusal = Object.assign(new Error("provider 500"), { status: 500 });
+    const second = track(runner.create({ ...spec, sessionId: "s2" }), "second");
+    await runner.whenHeld(2);
+    runner.heldCreates[1]!.fail(refusal);
+    await expect(second).rejects.toBe(refusal);
+    expect([runner.created.length, (await runner.list()).length], "the failed create made nothing").toEqual([1, 1]);
+    // An armed failure is thrown by the create's own body, so it is thrown when the held create is ANSWERED (not when asked).
+    runner.failNextCreate({ status: 422, retryable: false });
+    const third = track(runner.create({ ...spec, sessionId: "s3" }), "third");
+    await runner.whenHeld(3);
+    await flush();
+    expect(settled, "the armed failure waits for the answer").toEqual(["first", "second:failed"]);
+    runner.heldCreates[2]!.answer();
+    await expect(third).rejects.toBeInstanceOf(RunnerCreateError);
+    // holdCreates(false): every later create answers at once, and nothing more is held.
+    runner.holdCreates(false);
+    const fourth = await runner.create({ ...spec, sessionId: "s4" });
+    expect(fourth.runnerId).toMatch(/^fake-machine-/);
+    expect(runner.heldCreates, "the later create was never held").toHaveLength(3);
+  });
+
   it("the stop sequence on the fake: stop records SIGINT + grace, observe reads stopped with exit 0 / requestedStop, then auto-destroyed; a lost Machine reads its exit", async () => {
     const runner = new FakeRunner();
     const spec = { sessionId: "s1", attempt: 1, environment: "local", jobToken: "t", appUrl: "http://app", guest: { cpus: 4, memoryMb: 8192, cpuClass: "dedicated" as const }, region: "lhr", deadlineAt: new Date(0) };

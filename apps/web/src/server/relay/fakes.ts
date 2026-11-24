@@ -80,11 +80,12 @@ export type FakeVideoInput = Pick<IngestVideo, "videoId" | "inputId" | "createdA
 /** `access` (Task 12): the signing the input holds — what its create sent, then what each switch re-sent; null is unsigned. */
 interface FakeInput { createdAt: number; scripted: IngestState | null; outputs: IngestTarget[]; deleted: boolean; outputUids: string[]; enabled: boolean; access: InputAccess | null }
 
-/** Seazn Task 36: a create the provider has been asked for and has not answered (`FakeIngest.holdCreates`). `answer()` lets it
+/** Seazn Task 36 (Task 36b: generic over the spec, so `FakeRunner.holdCreates` holds a RunnerSpec the same way): a create the
+ *  provider has been asked for and has not answered (`FakeIngest.holdCreates`). `answer()` lets it
  *  run exactly as an unheld create does — the input is made then, not before; `fail(err)` is the provider's refusal, and nothing
  *  is made. Each settles once: a second answer or fail is ignored, as a promise's is. */
-export interface HeldCreate {
-  readonly spec: IngestCreateSpec;
+export interface HeldCreate<S = IngestCreateSpec> {
+  readonly spec: S;
   answer(): void;
   fail(err: unknown): void;
 }
@@ -509,7 +510,37 @@ export class FakeRunner implements RunnerProvider {
       .catch(() => undefined);
   }
 
+  /** Seazn Task 36b: while holding, every `create` waits for the test to answer or fail it (`heldCreates`, in the order they were
+   *  asked), exactly as `FakeIngest.holdCreates` does — how a test sees the Machine and the inputs in flight together and settles
+   *  them in the order it names, with no timer. A held create makes nothing until answered: no recorded spec (`created`), no
+   *  Machine, no provider call; `answer()` then runs the unheld body, so a failure armed with `failNextCreate` is thrown THEN.
+   *  Off by default; `holdCreates(false)` returns every LATER create to answering at once (one already held stays held). */
+  private holding = false;
+  readonly heldCreates: HeldCreate<RunnerSpec>[] = [];
+  private readonly heldWaiters: { n: number; wake: () => void }[] = [];
+
+  holdCreates(on = true): void {
+    this.holding = on;
+  }
+
+  /** Resolves once `n` creates have been held (at once if they already have). */
+  whenHeld(n: number): Promise<void> {
+    if (this.heldCreates.length >= n) return Promise.resolve();
+    return new Promise((wake) => this.heldWaiters.push({ n, wake }));
+  }
+
+  private hold(spec: RunnerSpec): Promise<void> {
+    return new Promise<void>((answer, fail) => {
+      this.heldCreates.push({ spec, answer: () => answer(), fail });
+      for (const w of this.heldWaiters.filter((x) => this.heldCreates.length >= x.n)) {
+        this.heldWaiters.splice(this.heldWaiters.indexOf(w), 1);
+        w.wake();
+      }
+    });
+  }
+
   async create(spec: RunnerSpec): Promise<RunnerHandle> {
+    if (this.holding) await this.hold(spec);
     this.created.push({ ...spec, guest: { ...spec.guest } });
     this.record("createMachine", "POST", "/machines", null, spec.sessionId, this.nextCreateFailure ? 500 : 200);
     if (this.nextCreateFailure) {
