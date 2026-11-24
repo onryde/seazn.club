@@ -155,6 +155,8 @@ type CfVideo = {
   status?: { state?: string; errorReasonCode?: string | null };
   duration?: number; size?: number; input?: { width?: number; height?: number } | null;
   requireSignedURLs?: boolean | null;
+  /** Task 39: whether the video can be played; absent while it is live or not yet playable. */
+  readyToStream?: boolean | null;
 };
 /** One mapping for both listings, so the per-input listing cannot drift from the account one (Dd). */
 function videoOf(v: CfVideo): IngestVideo {
@@ -172,6 +174,8 @@ function videoOf(v: CfVideo): IngestVideo {
     errorReasonCode: v.status?.errorReasonCode ?? null,
     // Seazn Task 13 (C3, C7): the video's own flag, read as given; an item that does not say is null, never a guess.
     signed: typeof v.requireSignedURLs === "boolean" ? v.requireSignedURLs : null,
+    // Seazn Task 39: the video's own `readyToStream`, read as given; an item that does not say is null, never a guess.
+    ready: typeof v.readyToStream === "boolean" ? v.readyToStream : null,
   };
 }
 

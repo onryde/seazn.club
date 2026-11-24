@@ -27,8 +27,9 @@ import { BASE, type Session, cookieHeader, newSession, check, signIn, smokeDb, t
  *    video) and for an id that names no match.
  *
  * Phase 2 (Task 28): one recording of this match, through the replay swap (G-B, Task 25), read by the REAL public route:
- * 5. INTERIM — its copy still `encoding` on the replay host: the route lists ONE `hls` part 1, the recording signed on the fake
- *    Cloudflare host, and nothing of the replay host's.
+ * 5. INTERIM — the recording is locked but Cloudflare cannot play it yet (`ready_at` null, Task 39): the route lists NO part. Once the
+ *    pass has seen it ready, with its copy still `encoding` on the replay host: the route lists ONE `hls` part 1, the recording
+ *    signed on the fake Cloudflare host, and nothing of the replay host's.
  * 6. PLAYABLE — the copy reaches `playable` (verified): the route lists ONE `embed` part 1, the copy signed by the server's fake
  *    replay host (`https://<fake embed host>/embed/<library>/<copy>?token=<64 hex>&expires=<s>`, expiring the declared
  *    REPLAY_EMBED_TOKEN_TTL_SECONDS from now) and no `hls` part: never two parts for one recording.
@@ -295,10 +296,11 @@ export async function seaznHostedSuite(): Promise<void> {
     );
     await db`update fixture_stream_sessions set state = 'live', started_at = now() where id = ${session.id}`;
     await db`update fixture_stream_sessions set state = 'completed', end_reason = 'stopped', ended_at = now() where id = ${session.id}`;
-    // The tick's Seazn pass locked the recording (Task 13), and discovery listed it as part 1; the move has its copy encoding.
+    // The tick's Seazn pass locked the recording (Task 13), and discovery listed it as part 1; the move has its copy encoding. The pass
+    // has NOT yet seen Cloudflare able to play it (`ready_at` null, Task 39): the interim step below turns that on.
     const lockedAt = must(
       (await db<{ locked_at: Date }[]>`
-        insert into seazn_locked_videos (cf_video_id, input_row_id, locked_at, recorded_at) values (${cfVideoId}, ${input.id}, now(), now())
+        insert into seazn_locked_videos (cf_video_id, input_row_id, locked_at, recorded_at, ready_at) values (${cfVideoId}, ${input.id}, now(), now(), null)
         returning locked_at`)[0],
       "the recording was locked",
     ).locked_at;
@@ -312,7 +314,16 @@ export async function seaznHostedSuite(): Promise<void> {
     // What a step prints of the parts: number and player only. A src carries a token, and goes nowhere.
     const partsOf = (r: Part[] | null) => (r === null ? "no replay list" : r.map((p) => `${String(p.partNo)}:${String(p.player)}`).join(",") || "none");
 
-    // 5. INTERIM: the copy is still encoding, so the recording plays from Cloudflare, under its stored number.
+    // 5. INTERIM. Locked, a replay row found and its copy encoding, but Cloudflare cannot play the recording yet: NO part (Task 39).
+    const notReady = await video(fx.fixtureId);
+    step(
+      `NOT READY: a locked recording the pass has not seen playable is offered as no part, though its row and copy exist (got ${notReady.status}, parts ${partsOf(notReady.replay)})`,
+      notReady.status === 200 && notReady.replay?.length === 0,
+    );
+    const readied = await db<{ cf_video_id: string }[]>`
+      update seazn_locked_videos set ready_at = now() where cf_video_id = ${cfVideoId} and ready_at is null returning cf_video_id`;
+    step(`the pass sees it ready (${readied.length} lock stamped)`, readied.length === 1);
+    // The copy is still encoding, so the recording plays from Cloudflare, under its stored number.
     const interim = await video(fx.fixtureId);
     const ip = interim.replay?.[0];
     step(

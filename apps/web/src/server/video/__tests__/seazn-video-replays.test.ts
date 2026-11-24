@@ -72,7 +72,7 @@ type World = Awaited<ReturnType<typeof world>>;
 
 /** A Seazn session that recorded `n` recordings on its programme input (one minute apart, the replay fake's own length unless
  *  `duration` says otherwise), then ended. */
-async function endedWith(w: World, fixtureId: string, recs: { duration?: number; state?: "ready" | "error" }[]) {
+async function endedWith(w: World, fixtureId: string, recs: { duration?: number; state?: string }[]) {
   const sid = await live(w, fixtureId, w.seazn);
   const [prog] = await sql<{ uid: string }[]>`select ingest_input_id as uid from fixture_stream_inputs where session_id = ${sid} and role = 'programme'`;
   expect(prog?.uid, "PREMISE: the programme input has a uid").toBeTruthy();
@@ -380,7 +380,7 @@ describe.skipIf(!HAS_DB)("Task 25 review I1 — part numbers are stable through 
     return out;
   }
 
-  it("A, E (Cloudflare errored it: locked, never discovered), B: Parts 1, 2, 3 before discovery; after it A and B keep 1 and 3 and E is gone; B on the host is still Part 3", async () => {
+  it("A, E (Cloudflare errored it: locked, never offered, never discovered), B: Parts 1 and 3 before discovery (2 held for E); after it A and B keep 1 and 3 and E is gone; B on the host is still Part 3", async () => {
     const w = await world();
     const f = w.fixtureIds[0];
     const s = await endedWith(w, f, [{}, { state: "error" }, {}]);
@@ -388,7 +388,8 @@ describe.skipIf(!HAS_DB)("Task 25 review I1 — part numbers are stable through 
     const t0 = s.endedAt + 15 * MIN;
     expect(await lockPass(w, s.endedAt + MIN)).toMatchObject({ locked: 3 });
     const before = await plays(w, await read(w, f, t0));
-    expect(before, "before discovery: Task 14's 1..3, E included").toEqual([[1, a], [2, e], [3, b]]);
+    expect(before, "before discovery: E errored, so it is offered as no part (T39) but its number 2 is held: A 1, B 3").toEqual([[1, a], [3, b]]);
+    expect((await sql`select 1 from seazn_locked_videos where cf_video_id = ${e}`).length, "PREMISE: E is locked all the same").toBe(1);
     await decide(f, s.endedAt);
     expect(await discover(w, t0)).toMatchObject({ discovered: 2, failed: 0 });
     const [{ marked }] = await sql<{ marked: boolean }[]>`
@@ -449,5 +450,118 @@ describe.skipIf(!HAS_DB)("Task 25 review I1 — part numbers are stable through 
     entriesFault.dropPending = false;
     expect(await discover(w, t0 + MIN)).toMatchObject({ discovered: 2, failed: 0 });
     expect([(await rowOf(s.ids[0]!))?.part_no, (await rowOf(s.ids[1]!))?.part_no]).toEqual([1, 2]);
+  });
+});
+
+// ─── Task 39: a Cloudflare part is offered only once Cloudflare can play it ──────────────────────────────────────────────────
+// Through the REAL producers: the fake's recordings in each Cloudflare state, the real lock pass (which stamps `ready_at`), real
+// discovery, and the public read. `ready` is a state of Cloudflare's, so the fake moves a recording on with `updateVideo`.
+describe.skipIf(!HAS_DB)("Task 39 — offered only when playable; a reconnect is one part", () => {
+  const TRIP = ["queued", "inprogress"] as const;
+
+  it("EMPTY CASE FIRST, then each state: queued and inprogress and error are LOCKED and offered as no part; ready is offered on the very next pass, inside the grace; a second pass changes nothing", async () => {
+    const w = await world();
+    const f = w.fixtureIds[0];
+    expect(await read(w, f, w.deps.now().getTime()), "no recording at all").toEqual(EMPTY);
+    const states = [...TRIP, "error", "ready"] as const;
+    const s = await endedWith(w, f, states.map((state) => ({ state })));
+    const [queued, inprogress, errored, ready] = s.ids as [string, string, string, string];
+    const t0 = s.endedAt + 15 * MIN;
+    expect(await lockPass(w, s.endedAt + MIN), "all four are locked at once: signing never waits").toMatchObject({ locked: 4 });
+    expect(shape(await read(w, f, t0)), "only the ready one is offered, under its OWN number (4)").toEqual([[4, "hls", ready]]);
+    expect(await seaznReplayPartNos(f, new Date(t0)), "the picker's plan agrees").toEqual([4]);
+    expect(await readOrg(w, f, t0), "so does the organiser's read").toEqual(await read(w, f, t0));
+
+    for (const id of [queued, inprogress]) w.ingest.updateVideo(id, { state: "ready" });
+    expect(await lockPass(w, s.endedAt + 2 * MIN), "no new lock").toMatchObject({ locked: 0 });
+    expect(shape(await read(w, f, t0)), "queued and inprogress now ready: offered at once, in recording order, errored one still a gap").toEqual([[1, "hls", queued], [2, "hls", inprogress], [4, "hls", ready]]);
+    const again = await lockPass(w, s.endedAt + 3 * MIN);
+    expect(again, "a second pass after ready").toMatchObject({ locked: 0, relocked: 0, failed: 0 });
+    expect(shape(await read(w, f, t0)), "unchanged: no duplicate part").toEqual([[1, "hls", queued], [2, "hls", inprogress], [4, "hls", ready]]);
+    expect(await sql`select 1 from seazn_locked_videos where cf_video_id in ${sql([queued, inprogress, errored, ready])}`, "four locks, none doubled").toHaveLength(4);
+    expect([states.length, shape(await read(w, f, t0)).length], "anti-vacuity: four recordings, three offered").toEqual([4, 3]);
+  });
+
+  it("a recording that goes ready and is offered, then ERRORS at Cloudflare, stops being offered and its number stays taken by a later part", async () => {
+    const w = await world();
+    const f = w.fixtureIds[0];
+    const s = await endedWith(w, f, [{}]);
+    const a = s.ids[0]!;
+    const t0 = s.endedAt + 15 * MIN;
+    await lockPass(w, s.endedAt + MIN);
+    expect(shape(await read(w, f, t0)), "ready: offered").toEqual([[1, "hls", a]]);
+    w.ingest.updateVideo(a, { state: "error" });
+    await lockPass(w, s.endedAt + 2 * MIN);
+    expect(await read(w, f, t0), "errored: no longer offered").toEqual(EMPTY);
+    const later = await endedWith(w, f, [{}]);
+    await lockPass(w, later.endedAt + MIN);
+    expect(shape(await read(w, f, later.endedAt + 15 * MIN)), "the next session's recording is Part 2: 1 is still A's").toEqual([[2, "hls", later.ids[0]!]]);
+  });
+
+  it("two sessions of one fixture: the second session's parts continue the numbering, and a queued one in the middle is a gap that fills when it is ready — no number moves", async () => {
+    const w = await world();
+    const f = w.fixtureIds[0];
+    const first = await endedWith(w, f, [{}]);
+    const second = await endedWith(w, f, [{ state: "queued" }, {}]);
+    const [a] = first.ids as [string];
+    const [q, c] = second.ids as [string, string];
+    await lockPass(w, second.endedAt + MIN);
+    const t0 = second.endedAt + 15 * MIN;
+    expect(shape(await read(w, f, t0)), "s2's queued recording is held as 2: A 1, C 3").toEqual([[1, "hls", a], [3, "hls", c]]);
+    w.ingest.updateVideo(q, { state: "ready" });
+    await lockPass(w, second.endedAt + 2 * MIN);
+    expect(shape(await read(w, f, t0)), "once ready it is Part 2 and A, C did not move").toEqual([[1, "hls", a], [2, "hls", q], [3, "hls", c]]);
+    await decide(f, second.endedAt);
+    expect(await discover(w, t0), "discovery stores exactly these numbers").toMatchObject({ discovered: 3, failed: 0 });
+    expect(await Promise.all([a, q, c].map(async (id) => (await rowOf(id))?.part_no))).toEqual([1, 2, 3]);
+    expect(shape(await read(w, f, t0)), "after discovery: the same three").toEqual([[1, "hls", a], [2, "hls", q], [3, "hls", c]]);
+  });
+
+  it("a replay the organiser DELETED stays unlisted, ready or not, and a later lock pass does not bring it back", async () => {
+    const w = await world();
+    const f = w.fixtureIds[0];
+    const s = await endedWith(w, f, [{}]);
+    const cf = s.ids[0]!;
+    const t0 = s.endedAt + 15 * MIN;
+    await lockPass(w, s.endedAt + MIN);
+    await decide(f, s.endedAt);
+    await discover(w, t0);
+    expect(shape(await read(w, f, t0)), "PREMISE: offered before the delete").toEqual([[1, "hls", cf]]);
+    await organiserDelete(cf, "deleted");
+    expect(await read(w, f, t0)).toEqual(EMPTY);
+    await lockPass(w, s.endedAt + 2 * MIN);
+    w.ingest.updateVideo(cf, { state: "ready", signed: false });
+    await lockPass(w, s.endedAt + 3 * MIN);   // the C7 relock
+    expect(await read(w, f, t0), "still deleted after a relock and a ready re-read").toEqual(EMPTY);
+    expect(await readOrg(w, f, t0)).toEqual(EMPTY);
+  });
+
+  it("RECONNECT: a recording that drops and returns inside the hold window is ONE uid, so one part; a recording after the window is another uid, so a second part, numbered in order", async () => {
+    const w = await world();
+    const f = w.fixtureIds[0];
+    const sid = await live(w, f, w.seazn);
+    const [prog] = await sql<{ uid: string }[]>`select ingest_input_id as uid from fixture_stream_inputs where session_id = ${sid} and role = 'programme'`;
+    const hold = w.ingest.capabilities.holdWindowSeconds.rtmps;
+    expect(hold, "PREMISE: the provider declares a hold window (rtmps)").toBeGreaterThan(0);
+    const began = w.deps.now().getTime();
+    const one = `v-one-${randomUUID()}`;
+    w.ingest.addVideo({ videoId: one, inputId: prog!.uid, createdAt: new Date(began).toISOString(), inProgress: true });
+    // The phone drops, and returns inside the window: Cloudflare keeps writing the SAME recording.
+    w.ingest.setState(prog!.uid, "disconnected");
+    expect(await lockPass(w, began + 30_000), "dropped, still the one in-progress recording: nothing locked").toMatchObject({ locked: 0 });
+    w.ingest.setState(prog!.uid, "connected");
+    expect(await lockPass(w, began + (hold - 5) * 1000), "back inside the window").toMatchObject({ locked: 0 });
+    expect(await sql`select 1 from seazn_locked_videos where cf_video_id = ${one}`, "no row for a recording still in progress").toHaveLength(0);
+    // It stops; Cloudflare finishes it (still ONE uid), then a second recording begins AFTER the window.
+    w.ingest.updateVideo(one, { inProgress: false, state: "ready" });
+    const two = `v-two-${randomUUID()}`;
+    w.ingest.addVideo({ videoId: two, inputId: prog!.uid, createdAt: new Date(began + (hold + 1) * 1000).toISOString(), inProgress: false });
+    await stopAndSettle(w, f, sid);
+    const [{ ended_at }] = await sql<{ ended_at: Date }[]>`select ended_at from fixture_stream_sessions where id = ${sid}`;
+    const end = new Date(ended_at).getTime();
+    expect(await lockPass(w, end + MIN), "two uids, two locks").toMatchObject({ locked: 2 });
+    expect(shape(await read(w, f, end + 15 * MIN)), "one part per uid, in recording order").toEqual([[1, "hls", one], [2, "hls", two]]);
+    expect(await lockPass(w, end + 2 * MIN), "a later pass adds nothing").toMatchObject({ locked: 0 });
+    expect(shape(await read(w, f, end + 15 * MIN))).toEqual([[1, "hls", one], [2, "hls", two]]);
   });
 });

@@ -19,6 +19,8 @@ import "server-only";
 //     one place), the organiser's read from the table. A row the organiser removed is no part at all, the interim included.
 //   * the interim (G-B, Task 14): a recording in `seazn_locked_videos` under the programme input of the session, not yet playable
 //     on the host (no row, a row on its way, or a failed one), is an `hls` part, its signed HLS (`signRecordingPlayback`).
+//     Task 39: only once Cloudflare can play it (`ready_at` set by the pass: state `ready`); a queued, in-progress or errored one is
+//     no part, though its number stays held (replay-parts.ts READY).
 //   ORDER: recording order. The session's (created_at, id), then, within one session, when the recording began (recorded_at,
 //     V542: the lock pass stores the listing's creation, the row stores discovery's; null sorts last), then the lock (locked_at,
 //     cf_video_id) (replay-entries.ts, the one read discovery numbers from too). NUMBER: a row's stored part_no; a locked recording

@@ -392,6 +392,100 @@ describe.skipIf(!HAS_DB)("lockSeaznRecordings — the stream tick's Seazn pass",
     expect((await inputOf(sid, "programme")).locked_at?.getTime(), "the absent one did not hold the mark back").toBe(markAt);
   });
 
+  // Task 39: a recording is LOCKED the pass it finishes (signing must not wait) but is OFFERED only once Cloudflare can play it. The
+  // pass records that as `seazn_locked_videos.ready_at`, which the replay read (replay-entries.ts) takes as `ready`.
+  const readyAts = async (inputRowId: string) => Object.fromEntries((await sql<{ cf_video_id: string; ready_at: Date | null }[]>`
+    select cf_video_id, ready_at from seazn_locked_videos where input_row_id = ${inputRowId}`).map((x) => [x.cf_video_id, x.ready_at?.getTime() ?? null]));
+
+  it("T39: every finished recording is locked, but ready_at is set only for one Cloudflare reads ready AND readyToStream not false — queued, in progress, errored and a contradicting ready:false are locked and not ready; a live recording is neither", async () => {
+    const r = await rig();
+    const sid = await live(r, r.fixtureIds[0], r.seazn);
+    const prog = await inputOf(sid, "programme");
+    const at = new Date(r.clock.now).toISOString();
+    const ids = { liveNow: vid("live"), queued: vid("queued"), inprogress: vid("inprogress"), errored: vid("error"), contra: vid("contra"), ready: vid("ready"), nullReady: vid("nullready") };
+    r.ingest.addVideo({ videoId: ids.liveNow, inputId: prog.uid, createdAt: at, inProgress: true });
+    for (const [k, state] of [["queued", "queued"], ["inprogress", "inprogress"], ["errored", "error"]] as const) {
+      r.ingest.addVideo({ videoId: ids[k], inputId: prog.uid, createdAt: at, inProgress: false, state });
+    }
+    r.ingest.addVideo({ videoId: ids.contra, inputId: prog.uid, createdAt: at, inProgress: false, state: "ready", ready: false });
+    r.ingest.addVideo({ videoId: ids.ready, inputId: prog.uid, createdAt: at, inProgress: false, state: "ready", ready: true });
+    r.ingest.addVideo({ videoId: ids.nullReady, inputId: prog.uid, createdAt: at, inProgress: false, state: "ready", ready: null });
+    const now = r.clock.now;
+    expect(await pass(r, [r.auth.orgId], { now })).toEqual({ ...ZERO, locked: 6 });
+    expect(await readyAts(prog.id), "the live one has no row; ready (true, and not said) is stamped with the pass's time; the rest are locked, null").toEqual({
+      [ids.queued]: null, [ids.inprogress]: null, [ids.errored]: null, [ids.contra]: null, [ids.ready]: now, [ids.nullReady]: now,
+    });
+    expect(Object.keys(await readyAts(prog.id)), "anti-vacuity: rows checked").toHaveLength(6);
+  });
+
+  it("T39 sequence: queued -> ready is stamped on the pass that sees it (no grace wait, the input still live); a SECOND pass changes nothing and calls nothing; ready -> error later clears it and never sets it again", async () => {
+    const r = await rig();
+    const sid = await live(r, r.fixtureIds[0], r.seazn);
+    const prog = await inputOf(sid, "programme");
+    const [a, b] = [vid("a"), vid("b")];
+    const at = new Date(r.clock.now).toISOString();
+    r.ingest.addVideo({ videoId: a, inputId: prog.uid, createdAt: at, inProgress: false, state: "queued" });
+    r.ingest.addVideo({ videoId: b, inputId: prog.uid, createdAt: at, inProgress: false, state: "queued" });
+    expect(await pass(r, [r.auth.orgId])).toEqual({ ...ZERO, locked: 2 });
+    expect(await readyAts(prog.id), "queued: locked, not ready").toEqual({ [a]: null, [b]: null });
+    const calls = r.ingest.signedVideoCalls.length;
+
+    r.clock.now += 60 * SEC;
+    const t1 = r.clock.now;
+    r.ingest.updateVideo(a, { state: "ready" });
+    r.ingest.updateVideo(b, { state: "ready" });
+    expect(await pass(r, [r.auth.orgId]), "no new lock: the lock was made when it finished").toEqual(ZERO);
+    expect(await readyAts(prog.id), "ready: stamped at the pass that saw it").toEqual({ [a]: t1, [b]: t1 });
+
+    r.clock.now += 60 * SEC;
+    expect(await pass(r, [r.auth.orgId])).toEqual(ZERO);
+    expect(await readyAts(prog.id), "the second pass after ready: the stamp is the FIRST sighting, not rewritten").toEqual({ [a]: t1, [b]: t1 });
+    expect(r.ingest.signedVideoCalls, "and no further lock call").toHaveLength(calls);
+
+    r.clock.now += 60 * SEC;
+    r.ingest.updateVideo(b, { state: "error" });
+    expect(await pass(r, [r.auth.orgId])).toEqual(ZERO);
+    expect(await readyAts(prog.id), "ready, then error: cleared; the other is untouched").toEqual({ [a]: t1, [b]: null });
+    r.clock.now += 60 * SEC;
+    await pass(r, [r.auth.orgId]);
+    expect((await readyAts(prog.id))[b], "and an errored one stays not ready").toBeNull();
+  });
+
+  it("T39: a locked recording that read unsigned again (the C7 relock) and has meanwhile become ready is stamped by the relock's own pass", async () => {
+    const r = await rig();
+    const sid = await live(r, r.fixtureIds[0], r.seazn);
+    const prog = await inputOf(sid, "programme");
+    const v = vid("relock");
+    r.ingest.addVideo({ videoId: v, inputId: prog.uid, createdAt: new Date(r.clock.now).toISOString(), inProgress: false, state: "inprogress" });
+    expect(await pass(r, [r.auth.orgId])).toEqual({ ...ZERO, locked: 1 });
+    expect(await readyAts(prog.id)).toEqual({ [v]: null });
+    r.clock.now += 60 * SEC;
+    const t = r.clock.now;
+    r.ingest.updateVideo(v, { state: "ready", signed: false });
+    expect(await pass(r, [r.auth.orgId])).toMatchObject({ relocked: 1 });
+    expect(await readyAts(prog.id)).toEqual({ [v]: t });
+  });
+
+  it("T39: the input is marked only once every recording is playable or errored — a queued one, and a ready one Cloudflare says is not readyToStream, hold the mark back; an errored one does not", async () => {
+    const r = await rig();
+    const sid = await live(r, r.fixtureIds[0], r.seazn);
+    const prog = await inputOf(sid, "programme");
+    const [good, bad, slow] = [vid("good"), vid("bad"), vid("slow")];
+    const at = new Date(r.clock.now).toISOString();
+    r.ingest.addVideo({ videoId: good, inputId: prog.uid, createdAt: at, inProgress: false, state: "ready" });
+    r.ingest.addVideo({ videoId: bad, inputId: prog.uid, createdAt: at, inProgress: false, state: "error" });
+    r.ingest.addVideo({ videoId: slow, inputId: prog.uid, createdAt: at, inProgress: false, state: "ready", ready: false });
+    const ended = await stopAndSettle(r, r.fixtureIds[0], sid);
+    const late = ended + FINALISATION_GRACE_SECONDS * SEC + SEC;
+    await pass(r, [r.auth.orgId], { now: late });
+    await pass(r, [r.auth.orgId], { now: late + 60 * SEC });
+    expect((await inputOf(sid, "programme")).locked_at, "one is ready but not playable: not marked").toBeNull();
+    r.ingest.updateVideo(slow, { ready: true });
+    await pass(r, [r.auth.orgId], { now: late + 120 * SEC });
+    expect((await inputOf(sid, "programme")).locked_at?.getTime(), "playable, ready and errored: marked").toBe(late + 120 * SEC);
+    expect(await readyAts(prog.id)).toEqual({ [good]: late, [bad]: null, [slow]: late + 120 * SEC });
+  });
+
   it("refuses an empty orgIds (an `in ()` read as no filter would list every org) and a budget that is not a finite number of ms, by name, before any call", async () => {
     const r = await rig();
     const listed = vi.spyOn(r.ingest, "listInputVideos");

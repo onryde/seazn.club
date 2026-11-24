@@ -334,12 +334,15 @@ export class FakeIngest implements IngestProvider {
     const signed = v.signed ?? false;
     this.videos.push(
       v.inProgress
-        ? { ...v, durationSeconds: null, sizeBytes: null, width: null, height: null, state: "live-inprogress", errorReasonCode: v.errorReasonCode ?? null, signed }
+        ? { ...v, durationSeconds: null, sizeBytes: null, width: null, height: null, state: "live-inprogress", errorReasonCode: v.errorReasonCode ?? null, signed, ready: v.ready ?? null }
         : {
             ...v,
             durationSeconds: v.durationSeconds ?? null, sizeBytes: v.sizeBytes ?? null,
             width: v.width ?? null, height: v.height ?? null,
             state: v.state ?? "ready", errorReasonCode: v.errorReasonCode ?? null, signed,
+            // Task 39: as Cloudflare answers, `readyToStream` is true on a `ready` video and ABSENT (null) on any other; a test that wants
+            // the contradiction (a `ready` state that is not readyToStream) says `ready: false`.
+            ready: v.ready ?? ((v.state ?? "ready") === "ready" ? true : null),
           },
     );
   }
@@ -362,6 +365,8 @@ export class FakeIngest implements IngestProvider {
     const v = this.videos.find((x) => x.videoId === videoId);
     if (!v) throw new Error(`FakeIngest.updateVideo: unknown video ${videoId}`);
     Object.assign(v, patch);
+    // Task 39: a recording moved on without a word about `ready` is playable once it is finished and `ready`, as Cloudflare reads.
+    if (patch.ready === undefined && ("state" in patch || "inProgress" in patch)) v.ready = !v.inProgress && v.state === "ready" ? true : null;
   }
 
   /** Seazn Task 13: whether a recording needs a signed token to play — what `requireSignedVideo` set, or what the test seeded. */

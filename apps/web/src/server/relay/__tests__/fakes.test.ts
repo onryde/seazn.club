@@ -410,8 +410,15 @@ describe("FakeIngest", () => {
       videoId: "v-live", inputId: "in-1", createdAt: new Date(0).toISOString(), inProgress: true,
       durationSeconds: null, sizeBytes: null, width: null, height: null, state: "live-inprogress", errorReasonCode: null,
       signed: false,   // Seazn Task 13: unless a test says otherwise, a recording reads unsigned (C3's measured default)
+      ready: null,     // T39: a live recording is not playable yet: Cloudflare leaves readyToStream out, so the fake says nothing
     });
-    expect(done).toMatchObject({ durationSeconds: 61, sizeBytes: 734_003_200, width: 1280, height: 720, state: "ready", errorReasonCode: null });
+    expect(done).toMatchObject({ durationSeconds: 61, sizeBytes: 734_003_200, width: 1280, height: 720, state: "ready", errorReasonCode: null, ready: true });
+    // T39: `ready` follows the state unless a test says otherwise — true on a `ready` recording, absent (null) on any other, as Cloudflare answers; an explicit value wins.
+    fake.addVideo({ videoId: "v-queued", inputId: "in-1", createdAt: new Date(0).toISOString(), inProgress: false, state: "queued" });
+    fake.addVideo({ videoId: "v-err", inputId: "in-1", createdAt: new Date(0).toISOString(), inProgress: false, state: "error" });
+    fake.addVideo({ videoId: "v-contra", inputId: "in-1", createdAt: new Date(0).toISOString(), inProgress: false, ready: false });
+    const rest = await fake.listVideos({ createdBefore: new Date(1) });
+    expect(rest.slice(2).map((v) => [v.videoId, v.state, v.ready])).toEqual([["v-queued", "queued", null], ["v-err", "error", null], ["v-contra", "ready", false]]);
     // `createdBefore` is STRICT (`<`, not `<=`) — a FAKE CONVENTION, pinned so both
     // sides of the port agree, and nothing more. Lane-A minors, Task 3 review m5:
     // this used to be justified as "not yet old enough for the retention sweep",

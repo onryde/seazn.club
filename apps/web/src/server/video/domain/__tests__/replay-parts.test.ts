@@ -6,7 +6,8 @@
 // number; a deleted row is no part; a recording discovery has not listed takes the running highest + 1, never a number a row holds,
 // and is dropped once its input is fully discovered (review I1: discovery stores exactly these numbers); the 30-day bound is
 // Cloudflare's and applies to `hls` parts only (carry 1); the entries' order is kept and numbers may gap (carry 2).
-// The bound is the relay's own declaration (DELETE_RECORDING_AFTER_DAYS), read from config, never from the module.
+// T39: an `hls` part is offered only when Cloudflare can play it (`ready`); a recording that is not yet, or errored, is no part but
+// still holds its number. The bound is the relay's own declaration (DELETE_RECORDING_AFTER_DAYS), read from config, never from the module.
 // No sport: the merge reads no sport rule.
 import { describe, expect, it } from "vitest";
 import { DELETE_RECORDING_AFTER_DAYS } from "@/server/relay/config";
@@ -18,7 +19,7 @@ const KEEP_MS = DELETE_RECORDING_AFTER_DAYS * 24 * 60 * 60 * 1000;
 const fresh = new Date(NOW.getTime() - 60 * 60_000);
 
 function entry(cf: string, over: Partial<ReplayEntry> = {}): ReplayEntry {
-  return { cfVideoId: cf, sessionId: "s1", sessionCreatedAt: fresh, locked: true, inputDiscovered: false, row: null, ...over };
+  return { cfVideoId: cf, sessionId: "s1", sessionCreatedAt: fresh, locked: true, ready: true, inputDiscovered: false, row: null, ...over };
 }
 const row = (partNo: number, state: string, over: Partial<NonNullable<ReplayEntry["row"]>> = {}): NonNullable<ReplayEntry["row"]> => ({
   partNo, state, removed: state === "deleted", listedVideo: state === "playable" ? `bunny-${partNo}` : null, ...over,
@@ -122,6 +123,30 @@ describe("replayParts — the interim and the replay host's parts, merged", () =
   it("carry 2: the parts keep the order they are given (recording order), with their stored numbers — never re-sorted or renumbered", () => {
     expect(shape([entry("a", { row: row(3, "playable") }), entry("b", { row: row(1, "encoding") }), entry("c", { row: row(7, "failed") })]))
       .toEqual([[3, "embed", "bunny-3"], [1, "hls", "b"], [7, "hls", "c"]]);
+  });
+
+  it("T39 EMPTY CASE FIRST: recordings none of which Cloudflare can play yet offer no part at all", () => {
+    expect(shape([entry("a", { ready: false }), entry("b", { ready: false })])).toEqual([]);
+  });
+
+  it("T39 SWEEP: an hls part (no row, or any on-the-way/failed row) is offered only when `ready`; the same entry ready is offered — and a playable embed never reads `ready`", () => {
+    const cases: [string, ReplayEntry["row"]][] = [["no row", null], ...REPLAY_ROW_STATES.filter((s) => PART_OF_STATE[s] === "hls").map((s): [string, ReplayEntry["row"]] => [s, row(1, s)])];
+    let checked = 0;
+    for (const [name, r] of cases) {
+      expect(shape([entry("x", { ready: false, row: r })]), `${name}, not ready`).toEqual([]);
+      expect(shape([entry("x", { ready: true, row: r })]), `${name}, ready`).toEqual([[1, "hls", "x"]]);
+      checked++;
+    }
+    expect(checked, "hls cases swept: no row + 5 states").toBe(6);
+    expect(shape([entry("x", { ready: false, row: row(1, "playable") })]), "a playable copy is the host's, not Cloudflare's").toEqual([[1, "embed", "bunny-1"]]);
+  });
+
+  it("T39 numbering: a recording not ready (queued, or errored) is no part but its number stays RESERVED — A, E, B gives Parts 1 and 3; once E is ready it is Part 2 and nothing moved", () => {
+    const notReady = [entry("A"), entry("E", { ready: false }), entry("B")];
+    expect(shape(notReady), "E not ready: a gap, B keeps 3").toEqual([[1, "hls", "A"], [3, "hls", "B"]]);
+    expect(shape([entry("A"), entry("E"), entry("B")]), "E ready: 1, 2, 3 and A, B unmoved").toEqual([[1, "hls", "A"], [2, "hls", "E"], [3, "hls", "B"]]);
+    // a stored row's number stands whatever its neighbour's readiness
+    expect(shape([entry("A", { row: row(1, "found") }), entry("E", { ready: false }), entry("B", { row: row(3, "found") })])).toEqual([[1, "hls", "A"], [3, "hls", "B"]]);
   });
 
   it("guards: a state the table does not know is refused by name; a recording neither locked nor listed is refused by name", () => {

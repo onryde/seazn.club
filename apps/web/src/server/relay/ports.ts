@@ -90,6 +90,9 @@ export interface IngestVideo {
    *  did not say. C3 measured a FINISHED recording of a signed input reading false (publicly playable), so the lock pass
    *  re-reads this on every recording it has already locked and locks it again unless it reads true. */
   signed: boolean | null;
+  /** Seazn Task 39: Cloudflare's own `readyToStream` — the recording can be PLAYED. Null when the listing did not say (the key is
+   *  absent while a recording is live or not yet playable, so absent is null, never false); false only when it says false. */
+  ready: boolean | null;
 }
 export type DeleteVideoResult = "deleted" | "in_progress" | "absent";
 export interface IngestCapabilities {
