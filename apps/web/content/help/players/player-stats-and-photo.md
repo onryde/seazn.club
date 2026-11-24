@@ -14,9 +14,11 @@ Your numbers come from the matches you play. There is nothing to enter. Play, ge
 - **Career** has one card for each sport you have been scored in. Each card adds up every division in that sport, for example **1 division · 1 variant · 1 match**, with the sport's own numbers such as **Goals** and **Points**. Before your first scored match it reads **No career stats yet — they'll appear here once you've played in a scored match.**
 - **My stats** has one block for each division you were scored in, with the same numbers for that division. It includes private competitions, because the numbers are yours.
 
-The labels come from the sport, so a footballer sees goals and another sport shows its own. Both sections are there on every plan.
+The labels come from the sport, so a footballer sees goals and another sport shows its own. Both sections are there on every plan, because they are your own numbers and no organisation's plan applies to them.
 
 The organiser's **Stats** tab on a division lists every player with the sport's numbers, sortable by each one. Members of the organisation see it, whatever their role, on every plan.
+
+Where [plans at a glance](/help/billing/plans) and the [Event Pass](/help/billing/event-pass) list **career stats** as something Pro or a pass adds, they mean the organisation's rollup of one player across its competitions, not your **Career** card. The organiser reads that rollup through the API. It needs Pro, or an Event Pass for the competition the matches were played in. Community does not get it. Your **Career** card does not depend on it.
 
 ## What is public about you
 

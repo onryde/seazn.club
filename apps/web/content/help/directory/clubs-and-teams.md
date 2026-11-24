@@ -38,7 +38,7 @@ After that the two are separate. A player you add to the squad later is not on t
 
 ## Limits
 
-Your plan sets how many clubs and teams you can have and how large a squad can be:
+Your plan sets how many clubs and teams your directory can hold and how large one squad can be. A team here is a row on the **Clubs & Teams** tab, not a competition entrant:
 
 | Plan | Clubs | Teams | Squad size |
 |---|---|---|---|
@@ -47,5 +47,7 @@ Your plan sets how many clubs and teams you can have and how large a squad can b
 | Enterprise | Unlimited | Unlimited | Unlimited |
 
 Clubs, teams and squads belong to the organisation, not to one competition, so an [Event Pass](/help/billing/event-pass) does not change them.
+
+How many sides a division can hold is a separate limit, **entrants per division**: {{plan:entrants.per_division.max:community}} on Community and {{plan:entrants.per_division.max:pro}} on Pro. It counts the entrants in that division, whether or not each came from a directory team, and an Event Pass raises it for one competition. Enrolling a team adds an entrant to the division and no new team to the directory. A team you keep in the directory and never enrol still counts against the team limit.
 
 At a limit the page says "You've reached your plan's club limit." or "You've reached your plan's team limit." with a link to plans. A squad over its size is refused with "This squad has reached your plan's size limit." See [plans at a glance](/help/billing/plans).
