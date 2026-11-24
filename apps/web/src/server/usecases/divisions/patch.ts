@@ -886,7 +886,9 @@ export async function patchDivision(
     // without them is refused 422 ONLINE_CAMERAS_NEED_UPGRADE, the write rolling back with it. Judged on the derived state after the
     // write (a stage's own policy counts), only on a transition off -> on (a save that leaves cameras on, or turns them off, is
     // never asked), and only while the package is unfrozen. The division lock was taken by the camera prelude.
-    if (camerasBefore === false) await assertCamerasPaidFor(tx, [id]);
+    // Not asked of a save that turns online play OFF (fix round 1, M-1): switching off is never refused, the package is refunded in
+    // the epilogue, and a camera policy stored alongside it has no package left to be priced against.
+    if (camerasBefore === false && !turnsOnlineOff) await assertCamerasPaidFor(tx, [id]);
     // batch-3 I1: under the format the division now plays, in this transaction (`award-rewrite.ts`).
     rewroteAwards = (await rewriteHeldAwards(tx, held)).length > 0;
     // W2c Task 15 fix round 1 (I-1): every unstarted match whose format this save moved gets a new version, so a pad open

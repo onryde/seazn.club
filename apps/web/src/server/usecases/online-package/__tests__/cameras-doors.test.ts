@@ -28,6 +28,8 @@
 //   C8 the helper lists a division whose derived cameras are off                     -> the paid division that keeps its own policy off
 //   C9 the helper takes no division locks                                            -> "one division lock per distinct id"
 //   C10 a repeated id judged twice (no dedupe)                                        -> the lock count and the list
+//   C11 the camera gate asked of a save that turns online play OFF (fix round 1, M-1)  -> "a save that turns online play OFF …"
+//   C12 the camera gate skipped on every save that names online play (not only off)    -> "online play re-sent ON is still asked"
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/posthog-server", async (importOriginal) => {
@@ -43,7 +45,7 @@ import { onlinePackageQuote, payOnlinePackage } from "@/server/usecases/online-p
 import { assertCamerasPaidFor, divisionsNeedingCameraUpgrade } from "@/server/usecases/online-package/format";
 import { CAMERA_POLICY_CHANGED } from "@/server/external-play/camera-policy";
 import {
-  balance, buy, freeze, gcPrice, liveOf, ocCompetition, ocDivision, ocOrg, pay, refusal, spendTheMonth, suffix, type Org,
+  balance, buy, CLOCK, freeze, gcPrice, liveOf, ocCompetition, ocDivision, ocOrg, packagesOf, pay, refusal, spendTheMonth, suffix, type Org,
 } from "./_oc-rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -146,6 +148,43 @@ describe.skipIf(!HAS_DB)("a PAID division without cameras", () => {
     const err = await refusal(patchDivision(o.auth, id, { camera_policy: "required" }));
     expect(err.code).toBe(ONLINE_PACKAGE_CODES.camerasNeedUpgrade);
     expect(await storedPolicy(id), "and still off").toBe("off");
+  });
+
+  it("a save that turns online play OFF is never asked about cameras: it is stored and the package is refunded in full (M-1)", async () => {
+    const { o, id } = await paidWithoutCameras(32);
+    const before = await liveOf(id);
+    const ledger = await balance(o.orgId);
+    // The premise: the camera save ALONE is refused on this division, so the gate is in play and the switch-off is what excuses it.
+    expect((await refusal(patchDivision(o.auth, id, { camera_policy: "required" }))).code, "premise: cameras alone are refused").toBe(
+      ONLINE_PACKAGE_CODES.camerasNeedUpgrade,
+    );
+    expect(await storedPolicy(id), "premise: the refused save wrote nothing").toBeNull();
+    const playMode = async () => (await sql<{ mode: string | null }[]>`select config->>'onlinePlay' as mode from divisions where id = ${id}`)[0]!.mode;
+    expect(await playMode(), "premise: the division plays online").toBe("lichess");
+
+    await patchDivision(o.auth, id, { config: { variant: "classical", onlinePlay: "off", clock: CLOCK }, camera_policy: "required" });
+
+    expect(await storedPolicy(id), "the policy was stored with the switch-off").toBe("required");
+    expect(await playMode(), "online play is off (the stored config no longer says lichess)").not.toBe("lichess");
+    const rows = await packagesOf(id);
+    expect(rows, "the one package row stands, refunded").toHaveLength(1);
+    expect(rows[0]!.refunded_at, "refunded").not.toBeNull();
+    expect(rows[0]!.credits_refunded + rows[0]!.credits_forfeited, "in full: what was paid comes back").toBe(before.credits_paid);
+    expect(before.credits_paid, "premise: what was paid is the table's price at 32").toBe(gcPrice(32));
+    expect((await balance(o.orgId)).total, "the credits are back in the org's balance").toBe(ledger.total + gcPrice(32));
+  });
+
+  it("online play re-sent ON is still asked: only a switch-off excuses the camera gate", async () => {
+    const { o, id } = await paidWithoutCameras(32);
+    const before = await liveOf(id);
+    const ledger = await balance(o.orgId);
+    const err = await refusal(
+      patchDivision(o.auth, id, { config: { variant: "classical", onlinePlay: "lichess", clock: CLOCK }, camera_policy: "required" }),
+    );
+    expect(err.code).toBe(ONLINE_PACKAGE_CODES.camerasNeedUpgrade);
+    expect(await storedPolicy(id), "the policy was not written").toBeNull();
+    expect(await liveOf(id), "the package row is as it was").toEqual(before);
+    expect(await balance(o.orgId), "no credits moved").toEqual(ledger);
   });
 
   it("an unrelated save of a paid division is never asked: a rename, a re-sent camera policy, a clear to inherit", async () => {
