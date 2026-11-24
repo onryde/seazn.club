@@ -112,8 +112,9 @@ export async function seaznHostedSuite(): Promise<void> {
   const startsOnFakes = live && !!process.env.RELAY_IMAGE;
   // LIVE on drops the two refusal steps (3) — the refusal exists only while LIVE is off. Phase 2 (5–7) adds five in both modes:
   // the read path reads no flag. Phase 3 (8–9) adds four in every mode: the two staff-table reads, the sweep's answer and its
-  // counters by COST's mode. Phase 4 (3b, the org switch) adds four in both modes, and step 10 two where a start can be admitted.
-  const EXPECTED_STEPS = (live ? 6 : 8) + 4 + 5 + 4 + (startsOnFakes ? 2 : 0);
+  // counters by COST's mode. Phase 4 (3b, the org switch) adds four in both modes, Task 39's step 5 two more in both modes (NOT READY,
+  // and the pass seeing it ready), and step 10 two where a start can be admitted.
+  const EXPECTED_STEPS = (live ? 6 : 8) + 4 + 5 + 4 + 2 + (startsOnFakes ? 2 : 0);
   let steps = 0;
   const step = (label: string, cond: boolean) => {
     check(`seazn-hosted smoke: ${label}`, cond);
