@@ -19,6 +19,7 @@ import { isEditorRole } from "@/lib/types";
 import { assertUuid, type AuthCtx } from "@/server/api-v1/auth";
 import { hasValidKek, openWith, sealWith } from "@/server/relay/crypto";
 import { log } from "@/server/logger";
+import { forgetMatchDayCompetition } from "./match-day-nudges";
 
 export const MATCH_DAY_CODE_PREFIX = "md_";
 
@@ -192,6 +193,7 @@ export async function mintMatchDayCode(
             ${input.canCall ?? false}, ${day}::date, ${tz},
             ${opensAt}, ${expiresAt}, ${hashToken(token)}, ${sealed}, ${auth.userId})
     returning ${cols()}`;
+  forgetMatchDayCompetition(competitionId); // the next write's nudges include this code (T2.3 memo, this instance)
   return { row: toRow(created!), url: urlOf(token) };
 }
 
@@ -253,8 +255,9 @@ export async function revokeMatchDayCode(auth: AuthCtx, codeId: string): Promise
   const [row] = await sql`
     update match_day_codes set revoked_at = coalesce(revoked_at, now())
      where id = ${codeId} and org_id = ${auth.orgId}
-     returning id`;
+     returning id, competition_id`;
   if (!row) throw new HttpError(404, "match day code not found");
+  forgetMatchDayCompetition(String(row.competition_id)); // a withdrawn code is not nudged again by this instance's next write
 }
 
 /**

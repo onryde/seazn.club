@@ -19,8 +19,9 @@ import { log } from "@/server/logger";
 import { fireNudge } from "./stream-sessions/nudge";
 
 /** How long a competition's open codes are remembered by one server instance. A code minted inside the window is not nudged until it
- *  lapses; a code WITHDRAWN inside it is nudged at most that long after: the nudge carries no data, and the screen's re-read is
- *  refused by the door that resolves its code. */
+ *  lapses (on the instance that minted it: `forgetMatchDayCompetition` ends the window there); a code WITHDRAWN inside it is nudged on
+ *  EVERY write of that competition until the window lapses (up to 15 s, on any instance but the one that revoked it): the nudge carries
+ *  no data, and the screen's re-read is refused by the door that resolves its code. */
 export const MATCH_DAY_MEMO_MS = 15_000;
 /** How long a write may wait for the read before it goes without the Match Day messages: the same bound as a schedule write's court
  *  read (`COURT_NUDGE_READ_BOUND_MS`, after-write.ts), half of PUSH_AFTER_DELETE_BOUND_MS, so the push is never later than the DEL. */
@@ -34,6 +35,12 @@ const errName = (err: unknown): string => (err instanceof Error ? err.name : "er
 type OpenCode = { id: string; expiresAt: number };
 type Memo = { at: number; codes: Promise<OpenCode[]> };
 const memo = new Map<string, Memo>();
+
+/** End one competition's memo window on THIS instance: a code of it was minted or withdrawn here, so the next write reads afresh.
+ *  Other instances keep their window (up to MATCH_DAY_MEMO_MS) — the staleness the memo's comment accepts. */
+export function forgetMatchDayCompetition(competitionId: string): void {
+  memo.delete(competitionId);
+}
 
 /** Forget every remembered competition. For tests. */
 export function resetMatchDayMemo(): void {
@@ -71,8 +78,9 @@ export async function readOpenCodes(competitionId: string, now: Date): Promise<O
  * The `nudge` for each Match Day code of `competitionId` that is open at `now` (not withdrawn, `opens_at <= now < expires_at`), one
  * message per code, with `reason`. No open code is `[]`. The competition's codes are read at most once per MATCH_DAY_MEMO_MS per
  * instance (a burst of scores is one read; concurrent calls share it), so inside that window:
- *   - a code minted or opened since is not nudged yet;
- *   - a code withdrawn since is nudged once more — a nudge carries no data and the door refuses the screen's next read;
+ *   - a code minted or opened since is not nudged yet (unless this instance minted it: mint calls `forgetMatchDayCompetition`);
+ *   - a code withdrawn since is nudged on every write until the window lapses — a nudge carries no data and the door refuses the
+ *     screen's next read (the instance that revoked it forgets at once);
  *   - a code that EXPIRES is dropped at once (its expiry is remembered with it).
  * A read that fails is not remembered: the next write reads again. Never throws.
  */

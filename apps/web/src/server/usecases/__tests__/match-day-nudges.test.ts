@@ -71,6 +71,7 @@ import { afterScheduleWrite, moveFixture, startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
 import { voidLineEvents } from "../void-lines";
 import { callFixtureToCourt, undoCall } from "../match-day-call";
+import { mintMatchDayCode, revokeMatchDayCode } from "../match-day-codes";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
@@ -116,7 +117,8 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 /** The DEL settles at once; then every push in flight (its Match Day and court reads included) is awaited. */
 const settled = async (): Promise<void> => {
   await sleep(30);
-  await nudgesSettled();
+  // Raced: a push whose bound regressed never settles, and must fail its own test in 2 s, not cascade 30 s timeouts into the rest.
+  await Promise.race([nudgesSettled(), sleep(2_000)]);
 };
 
 let warn: ReturnType<typeof vi.spyOn>;
@@ -513,8 +515,8 @@ describe.skipIf(!HAS_DB)("a schedule write nudges the open codes inside its ONE 
     probe.hang = true;
     const started = Date.now();
     afterScheduleWrite(day.comp.divisionId, day.comp.id, "schedule", [fx[0]!]);
-    await vi.waitFor(() => expect(posts().length).toBeGreaterThan(0), { timeout: 5_000 });
-    await nudgesSettled();
+    await vi.waitFor(() => expect(posts().length).toBeGreaterThan(0), { timeout: 2_000 });
+    await Promise.race([nudgesSettled(), sleep(2_000)]);
     expect(Date.now() - started, "not before the bound").toBeGreaterThanOrEqual(MATCH_DAY_NUDGE_READ_BOUND_MS - 50);
     expect(posts()).toHaveLength(1);
     expect(posts()[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `fixture:${fx[0]}`]);
@@ -536,6 +538,26 @@ describe.skipIf(!HAS_DB)("a schedule write nudges the open codes inside its ONE 
     const after = await write();
     expect(after).toHaveLength(1);
     expect(mdOf(after[0]!), "after the window: nothing").toEqual([]);
+  });
+
+  it("this instance's mint and revoke end the memo window: the next write nudges a code minted inside it, and not one just revoked", async () => {
+    vi.stubEnv("DEVICE_LINK_KEK", randomBytes(32).toString("hex"));
+    vi.stubEnv("OAUTH_BASE_URL", "https://md.test.seazn.club");
+    await quiesce();
+    const empty = await write();
+    expect(mdOf(empty[0]!), "premise: no code yet, and that emptiness is now memoised").toEqual([]);
+    expect(probe.reads).toBe(1);
+    const { row } = await mintMatchDayCode(day.auth, day.comp.id, { scope: { kind: "competition" }, canApprove: false });
+    fetchSpy.mockClear();
+    const minted = await write({}, [fx[1]!]);
+    expect(topicsOf(minted[0]!), "minted inside the 15 s window, nudged by the very next write").toEqual(topicsFor([row.id]));
+    expect(probe.reads, "the mint ended the window: a second read").toBe(2);
+    await revokeMatchDayCode(day.auth, row.id);
+    fetchSpy.mockClear();
+    const revoked = await write({}, [fx[2]!]);
+    expect(revoked, "ONE POST").toHaveLength(1);
+    expect(mdOf(revoked[0]!), "the revoke ended the window: the withdrawn code is not nudged").toEqual([]);
+    expect(probe.reads).toBe(3);
   });
 
   it("real writers: a move sends `schedule`, a match called to a court and its undo send `call` — one POST each", async () => {
