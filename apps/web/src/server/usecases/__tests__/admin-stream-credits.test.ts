@@ -9,6 +9,9 @@
 //   R7 package join   drop `and p.org_id = c.org_id` from the package join                → "an Online Chess package row names its package and division — a package of another org names none"
 //   R8 package field  drop `online_package_id` / `division_name` from the mapped row      → same test
 //   R10 size          `coalesce(c.package_size, p.size)` → `p.size`                         → same test (the upgrade row says 32)
+//   R13 live name     `coalesce(pd.name, p.division_name)` → `p.division_name`              → same test (the renamed division's rows read the new name)
+//   R14 snapshot first `coalesce(p.division_name, pd.name)` (snapshot over the live name)     → same test
+//   R15 live only     `pd.name` alone (a deleted division loses its name)                    → same test (the rows after the delete)
 //   R11 size fallback `coalesce(c.package_size, p.size)` → `c.package_size`                 → same test (the row with no size reads null)
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -134,7 +137,13 @@ describe.skipIf(!HAS_DB)("streamCreditsForOrg — the staff panel's read", () =>
     for (const r of paid) expect([r.reason, r.divisionName, r.sessionId]).toEqual(["consume", "Staff Look Open", null]);
     // I1: each row's own size (typed from the story), never the package's size now
     expect(paid.map((r) => r.packageSize).sort((x, y) => x! - y!), "the sizes the rows were written at: 16, then 32").toEqual([16, 32]);
-    // the division is deleted (the full return): the rows keep the name the package snapshotted
+    // M3: the division is renamed — the staff ledger reads it under its new name, like the org history (the snapshot is the fallback only)
+    await sql`update divisions set name = 'Staff Look Renamed' where id = ${d.id}`;
+    read = await streamCreditsForOrg(o.orgId);
+    const renamed = read.rows.filter((r) => r.onlinePackageId === pkg!.id);
+    expect(renamed.length, "anti-vacuity: the same two package rows").toBe(2);
+    for (const r of renamed) expect(r.divisionName, `${r.reason} after the rename`).toBe("Staff Look Renamed");
+    // the division is deleted (the full return): the rows keep the name the package snapshotted (when it was paid, before the rename)
     await deleteDivision(o.auth, d.id);
     read = await streamCreditsForOrg(o.orgId);
     const all = read.rows.filter((r) => r.onlinePackageId === pkg!.id);

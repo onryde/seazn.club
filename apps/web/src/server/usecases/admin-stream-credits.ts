@@ -35,8 +35,9 @@ export interface StreamCreditLedgerRow {
   /** The Online Chess package the row moved for (`online_package_id`, V550) — a package's debit or return; null on every other row. Printed
    *  even when the package is not this org's (a corrupt row), so staff see the id they must chase. */
   onlinePackageId: string | null;
-  /** That package's division name (the snapshot it keeps after a delete), only when the package belongs to THIS org — V549 does not make the
-   *  package's org the ledger row's, so the join checks it. Null for a row with no package, or one whose package is not this org's. */
+  /** That package's division's name NOW, else the snapshot the package keeps once the division is gone (the org history's rule: a renamed
+   *  division reads under its new name in every ledger), only when the package belongs to THIS org — V549 does not make the package's org
+   *  the ledger row's, so the join checks it. Null for a row with no package, or one whose package is not this org's. */
   divisionName: string | null;
   /** The package's size at the time of the row (V550 `package_size`; the package's own size now for a row written before the column),
    *  only when the package belongs to THIS org. Null for a row with no package, or one whose package is not this org's. */
@@ -52,10 +53,11 @@ export async function streamCreditsForOrg(orgId: string): Promise<{ balance: num
     online_package_id: string | null; division_name: string | null; package_size: number | null;
   }[]>`
     select c.id, c.reason, c.delta, c.balance_after, c.note, c.created_by, u.email, c.session_id, c.created_at,
-           c.online_package_id, p.division_name, coalesce(c.package_size, p.size) as package_size
+           c.online_package_id, coalesce(pd.name, p.division_name) as division_name, coalesce(c.package_size, p.size) as package_size
       from org_stream_credits c
       left join users u on u.id = c.created_by
       left join division_online_packages p on p.id = c.online_package_id and p.org_id = c.org_id
+      left join divisions pd on pd.id = p.division_id
      where c.org_id = ${orgId}
      order by c.created_at desc, c.id desc
      limit ${STREAM_CREDIT_LEDGER_LIMIT}`;
