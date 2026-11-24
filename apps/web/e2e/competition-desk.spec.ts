@@ -363,13 +363,16 @@ test.describe("competition desk", () => {
     const done = await apiJson(request, `/api/v1/stages/${stageId}/complete`, "POST", {});
     expect(done.status, JSON.stringify(done.error)).toBe(200);
     expect((await apiJson<{ status: string }>(request, `/api/v1/divisions/${div.data!.id}`)).data?.status).toBe("completed");
-    // Match Day B2: the settled division is finished, so the list hides it by default - asked for here.
+    // Finished-competition page (owner, Option 1): this is the competition's ONLY division and it is now settled, so the COMPETITION is
+    // finished - its division is listed outright, with no "Show finished" switch, no all-finished card, and no ?finished=1 to ask for.
+    // The masthead pill is asserted first so the rest cannot pass because the ledger change leaked into a competition that is still live.
     await page.goto(`/o/${org.slug}/c/${comp.data!.slug}`);
-    await expect(page.getByTestId("desk-ledger-row").filter({ hasText: "Cup" })).toHaveCount(0);
-    await page.goto(`/o/${org.slug}/c/${comp.data!.slug}?finished=1`);
+    await expect(page.getByTestId("desk-masthead-pill")).toHaveAttribute("data-phase", "finished");
     const settled = page.getByTestId("desk-ledger-row").filter({ hasText: "Cup" }).first();
     await expect(settled).toHaveAttribute("data-phase", "finished");
     await expect(settled).toContainText("4 of 4 played");
+    await expect(page.getByTestId("desk-ledger-finished-toggle")).toHaveCount(0);
+    await expect(page.getByTestId("desk-ledger-all-finished")).toHaveCount(0);
     await expect(page.getByTestId("desk-needs-you")).toHaveCount(0);
   });
 
