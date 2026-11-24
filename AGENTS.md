@@ -403,8 +403,7 @@ or `fixture-console.tsx` at a phone width. Not derivable from the code:
   rules, scoring or pairing logic, or to a screen label, route, testid or plan
   limit a user can see, ships with its `apps/web/content/help` and
   `apps/web/content/blog` update, or a line in the PR body saying why neither
-  is affected. Triggers: an engine bump, a logic change, UI copy, a label or
-  route rename, a limit change. The procedure (blog goldens, copy sweeps, plan
+  is affected. The procedure (blog goldens, copy sweeps, plan
   tokens, the PR body's "Found, not fixed" section) lives in
   `.claude/skills/docs-follow-product/SKILL.md`; load it before opening the PR.
 - UI work is verified by screenshot at desktop (1280), **320px**, and
