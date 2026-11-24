@@ -123,6 +123,9 @@ export interface MatchDayCourtStream {
   expires_at: string;
   /** The court phone: unpaired (no pairing), waiting, live (an open session), or offline (three missed beats). */
   phone: "unpaired" | "waiting" | "live" | "offline";
+  /** T35 review m1: ISO instant the court phone's current pairing was claimed — with `link_id`, the pairing's identity (a
+   *  replacement phone is a later claim; the same phone going offline and back is not). Null exactly when `phone` is unpaired. */
+  paired_at: string | null;
   /** The stored refusal of the court's latest refused automatic start (the focus match's `auto_start_refusal`), else null.
    *  `competition_frozen` is served while the competition is frozen, never stored. */
   refusal: "no_destination" | "no_credit" | "not_entitled" | "destination_in_use" | "unavailable" | "competition_frozen" | null;

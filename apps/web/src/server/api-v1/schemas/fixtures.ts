@@ -168,6 +168,9 @@ export const MatchDayCourtStream = z.object({
   target_label: z.string(),
   expires_at: z.iso.datetime({ offset: true }),
   phone: z.enum(["unpaired", "waiting", "live", "offline"]),
+  // T35 review m1: when the court phone's current pairing was claimed — with the link, the pairing's identity (a replacement phone
+  // is a later claim). Null exactly when `phone` is unpaired.
+  paired_at: z.iso.datetime({ offset: true }).nullable(),
   refusal: z.enum(["no_destination", "no_credit", "not_entitled", "destination_in_use", "unavailable", "competition_frozen"]).nullable(),
   // O16: when the court's video stops by itself, while that is still to come (the tail after its last match's result); else null.
   tail_ends_at: z.iso.datetime({ offset: true }).nullable(),

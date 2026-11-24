@@ -38,18 +38,29 @@ export function switchSpec(f: Pick<MatchDayFixture, "court_stream" | "own_stream
 
 /** Task 35 Part B (owner 2026-11-24): a court's phone as the close-on-pair rule reads it (`closeCodeOnPair`, lib/stream-pair.ts).
  *  No link, or a link whose phone is `unpaired` (the server's no-pairing answer, `courtPhoneStatus`): nothing paired. Any other status
- *  is a paired phone. The desk's read names no pairing, so the LINK is the identity it can tell: a phone read on another link is
- *  another pairing; the same link's phone moving between waiting, live and offline is the same one. */
+ *  is a paired phone, named by its link AND its pairing's claim (`paired_at`, T35 review m1): a phone on another link, or a
+ *  REPLACEMENT phone's later claim on the same link, is another pairing; the same phone moving between waiting, live and offline
+ *  is the same one. */
 export function courtPairSeen(link: MatchDayCourtStream | null): PairSeen {
   if (link === null || link.phone === "unpaired") return null;
-  return { id: link.link_id };
+  return { id: `${link.link_id} ${link.paired_at ?? ""}` };
 }
+
+/** Task 35 Part B: the sheet waits for a phone on a linked court whose phone is unpaired, or OFFLINE (T35 review m1: re-opened to
+ *  pair a replacement). A phone that answers (waiting, live) leaves nothing to wait for. */
+export const courtAwaitsPhone = (link: MatchDayCourtStream | null): boolean =>
+  link !== null && (link.phone === "unpaired" || link.phone === "offline");
 
 /** Task 35 Part B: while the court's QR sheet is open on a link whose phone has not paired, the focus reads the day this often — so
  *  the pairing that closes the sheet shows within one read. The Phone tab's own read cadence (`STREAM_POLL_MS`): the band's quiet
  *  cadence is 90 s (`QUIET_POLL_MS`, components/v2/desk/band-poll.ts), which would leave the credential on screen that long after
  *  the phone had it. It runs only while the sheet waits, so a desk with no sheet open reads exactly as before. */
 export const COURT_SHEET_PAIR_POLL_MS = STREAM_POLL_MS;
+
+/** T35 review m4: how long one open sheet reads at COURT_SHEET_PAIR_POLL_MS. Past it the focus stops its own reads and the band's
+ *  cadence (`QUIET_POLL_MS` / `LIVE_POLL_MS`) is all there is: a sheet left open on an unattended desk does not read every 5 s all
+ *  day. Closing and re-opening the sheet starts a fresh window. */
+export const COURT_SHEET_PAIR_POLL_MAX_MS = 10 * 60_000;
 
 /** The dictionary key a phone's status is said in. */
 export const phoneKey = (phone: MatchDayCourtStream["phone"]) => `matchDay.courtStream.phone.${phone}` as const;

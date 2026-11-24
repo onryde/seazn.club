@@ -69,14 +69,31 @@ describe.skipIf(!HAS_DB)("court streams (the desk's read)", () => {
   it("a linked court with no phone reads unpaired; after a beat waiting; with a live session live; 3 missed beats offline", async () => {
     const shown = await link();
     expect((await courtOf()).stream_link).toEqual({
-      link_id: shown.id, target_label: "Club channel", expires_at: shown.expiresAt.toISOString(), phone: "unpaired", refusal: null, tail_ends_at: null,
+      link_id: shown.id, target_label: "Club channel", expires_at: shown.expiresAt.toISOString(), phone: "unpaired", paired_at: null, refusal: null, tail_ends_at: null,
     });
     await pair(shown.id, 0);
+    expect((await courtOf()).stream_link!.paired_at, "T35 review m1: the pairing's claim").toBe(at(0).toISOString());
     expect((await courtOf("Court 2", new Date(at(0).getTime() + 25_000))).stream_link!.phone, "25 s: 2.5 cadences, still there").toBe("waiting");
     const sid = await apiSessionOnTarget(day.orgId, f0, targetId, "live");
     await sql`update fixture_stream_sessions set court_link_id = ${shown.id} where id = ${sid}`;
     expect((await courtOf("Court 2", new Date(at(0).getTime() + 5_000))).stream_link!.phone).toBe("live");
     expect((await courtOf("Court 2", new Date(at(0).getTime() + 30_000))).stream_link!.phone, "30 s: 3 cadences").toBe("offline");
+  });
+
+  it("T35 review m1: paired_at names the court phone's pairing — kept while it goes offline, moved by a REPLACEMENT phone's claim", async () => {
+    const shown = await link();
+    await pair(shown.id, 0);
+    // A later beat on the same pairing: its last beat moves, its claim does not.
+    await sql`update fixture_stream_pairings set last_beat_at = ${new Date(at(0).getTime() + 20_000)}
+               where code_id in (select id from fixture_stream_codes where court_link_id = ${shown.id}) and ended_at is null`;
+    const offline = (await courtOf("Court 2", new Date(at(0).getTime() + 60_000))).stream_link!;
+    expect([offline.phone, offline.paired_at], "offline after a later beat: the same pairing, named by its claim").toEqual(["offline", at(0).toISOString()]);
+    // The replacement: the old pairing ends replaced, another phone's claim is the court's current pairing.
+    await sql`update fixture_stream_pairings set ended_at = ${at(1)}, end_cause = 'replaced'
+               where code_id in (select id from fixture_stream_codes where court_link_id = ${shown.id}) and ended_at is null`;
+    await pair(shown.id, 1);
+    const replaced = (await courtOf("Court 2", new Date(at(1).getTime() + 5_000))).stream_link!;
+    expect([replaced.phone, replaced.paired_at], "the replacement's own claim").toEqual(["waiting", at(1).toISOString()]);
   });
 
   describe("O16: tail_ends_at (the court's video stops by itself COURT_AUTO_STOP_AFTER_RESULT_SECONDS after the result)", () => {

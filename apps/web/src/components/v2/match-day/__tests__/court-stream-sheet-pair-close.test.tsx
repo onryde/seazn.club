@@ -19,8 +19,8 @@ import en from "@/dictionaries/en/ui.json";
 import publicEn from "@/dictionaries/en/public.json";
 import type { Dict } from "@/lib/i18n-constants";
 import type { MatchDayCourt, MatchDayCourtStream } from "@/lib/match-day/types";
-import { COURT_SHEET_PAIR_POLL_MS, courtPairSeen } from "@/lib/match-day/court-stream";
-import { closeCodeOnPair, STREAM_POLL_MS, type PairSeen } from "@/lib/stream-pair";
+import { COURT_SHEET_PAIR_POLL_MAX_MS, COURT_SHEET_PAIR_POLL_MS, courtPairSeen } from "@/lib/match-day/court-stream";
+import { closeCodeOnPair, type PairSeen } from "@/lib/stream-pair";
 import { QUIET_POLL_MS } from "@/components/v2/desk/band-poll";
 import { MatchDayCourtStream as CourtStreamSchema } from "@/server/api-v1/schemas/fixtures";
 import { courtPhoneStatus } from "@/server/relay/domain/court-stream";
@@ -53,15 +53,24 @@ const NO_PAIRING = courtPhoneStatus({ pairing: null, openState: null }, new Date
 const STATUSES = CourtStreamSchema.shape.phone.options;
 const PAIRED_STATUSES = STATUSES.filter((s) => s !== NO_PAIRING);
 
-const link = (o: Partial<MatchDayCourtStream> = {}): MatchDayCourtStream => ({
-  link_id: "link-1",
-  target_label: "Riverside CC on YouTube",
-  expires_at: "2026-11-01T00:00:00.000Z",
-  phone: NO_PAIRING,
-  refusal: null,
-  tail_ends_at: null,
-  ...o,
-});
+/** The court phone's pairing, by its claim (T35 review m1: `paired_at`); a second phone's, later. */
+const PAIRED_AT = "2026-10-31T11:50:00.000Z";
+const REPLACED_AT = "2026-10-31T11:58:00.000Z";
+/** A court's link as the desk reads it: a paired status carries its pairing's claim, the no-pairing answer none (the server's rule:
+ *  both come from the same pairing row). */
+const link = (o: Partial<MatchDayCourtStream> = {}): MatchDayCourtStream => {
+  const phone = o.phone ?? NO_PAIRING;
+  return {
+    link_id: "link-1",
+    target_label: "Riverside CC on YouTube",
+    expires_at: "2026-11-01T00:00:00.000Z",
+    phone,
+    paired_at: phone === NO_PAIRING ? null : PAIRED_AT,
+    refusal: null,
+    tail_ends_at: null,
+    ...o,
+  };
+};
 
 const court = (stream_link: MatchDayCourtStream | null, o: Partial<MatchDayCourt> = {}): MatchDayCourt => ({
   court_id: "c-2",
@@ -99,12 +108,19 @@ const showQr = (island: { tree: () => ReactElement[] }) => (propsOf(of(island.tr
 const openToLink = (island: { tree: () => ReactElement[] }) => (propsOf(of(island.tree(), LinkCourtAction)!).onOpen as () => void)();
 
 describe("courtPairSeen — the desk's read of a court's phone, as the close-on-pair rule reads it", () => {
-  it("swept over the schema's statuses: the server's no-pairing answer → nothing paired; every other → paired, named by its link; no link → nothing", () => {
+  it("swept over the schema's statuses: the server's no-pairing answer → nothing paired; every other → the same pairing, whatever its status; another claim or another link → another; no link → nothing", () => {
     expect(STATUSES, "PREMISE: the no-pairing answer is one of the read's statuses").toContain(NO_PAIRING);
     expect(PAIRED_STATUSES.length, "PREMISE: there are paired statuses to sweep").toBeGreaterThan(0);
+    const one = courtPairSeen(link({ phone: PAIRED_STATUSES[0] }));
+    expect(one, "PREMISE: a paired phone is seen").not.toBeNull();
     let checked = 0;
     for (const phone of STATUSES) {
-      expect(courtPairSeen(link({ phone })), phone).toEqual(phone === NO_PAIRING ? null : { id: "link-1" });
+      if (phone === NO_PAIRING) expect(courtPairSeen(link({ phone })), phone).toBeNull();
+      else {
+        expect(courtPairSeen(link({ phone })), `${phone}: the same pairing`).toEqual(one);
+        expect(courtPairSeen(link({ phone, paired_at: REPLACED_AT })), `${phone}, a later claim: another pairing`).not.toEqual(one);
+        expect(courtPairSeen(link({ phone, link_id: "link-2" })), `${phone}, on another link: another pairing`).not.toEqual(one);
+      }
       checked++;
     }
     expect(checked).toBe(STATUSES.length);
@@ -137,6 +153,9 @@ describe("courtPairSeen — the desk's read of a court's phone, as the close-on-
     expect(closesAt(courtPairSeen(A(paired)), [B(paired)]), "another link's phone").toEqual([0]);
     // Stop streaming (the link withdrawn), linked again, re-polled, then the phone pairs on the new link: once.
     expect(closesAt(courtPairSeen(A(paired)), [null, B(NO_PAIRING), B(NO_PAIRING), B(paired), B(paired)])).toEqual([3]);
+    // T35 review m1: the court's phone goes offline, a REPLACEMENT phone claims the same link's code (a later claim), re-polled.
+    const replaced = (phone: MatchDayCourtStream["phone"]) => link({ link_id: "link-a", phone, paired_at: REPLACED_AT });
+    expect(closesAt(courtPairSeen(A("offline")), [A("offline"), replaced("waiting"), replaced("waiting"), replaced("live")]), "a replacement phone").toEqual([1]);
   });
 });
 
@@ -238,8 +257,7 @@ describe("CourtFocus — the court's QR sheet closes once the court's phone pair
       vi.useFakeTimers();
     });
 
-    it("the cadence is the Phone tab's own read cadence, well inside the band's quiet one", () => {
-      expect(COURT_SHEET_PAIR_POLL_MS).toBe(STREAM_POLL_MS);
+    it("the cadence is well inside the band's quiet one", () => {
       expect(COURT_SHEET_PAIR_POLL_MS * 6, "PREMISE: the band alone would leave it open six polls longer").toBeLessThanOrEqual(QUIET_POLL_MS);
     });
 
@@ -311,6 +329,83 @@ describe("CourtFocus — the court's QR sheet closes once the court's phone pair
       doc.visibilityState = "visible";
       await vi.advanceTimersByTimeAsync(COURT_SHEET_PAIR_POLL_MS * 2);
       expect(onRead, "visible").toHaveBeenCalledTimes(2);
+      island.unmount();
+    });
+
+    it("T35 review m1: re-opened on a court whose phone is OFFLINE, it reads while it waits; a REPLACEMENT phone's pairing closes it; re-polled, the re-opened sheet stays", async () => {
+      const onRead = vi.fn();
+      const offline = link({ phone: "offline" });
+      const island = renderIsland(CourtFocus, props(court(offline), onRead));
+      showQr(island);
+      await vi.advanceTimersByTimeAsync(COURT_SHEET_PAIR_POLL_MS * 3);
+      expect(onRead, "offline: waiting for a phone, so it reads").toHaveBeenCalledTimes(3);
+      island.rerender(props(court(link({ phone: "waiting", paired_at: REPLACED_AT })), onRead));
+      expect(sheetIn(island), "the replacement paired: closed").toBeUndefined();
+      showQr(island);
+      island.rerender(props(court(link({ phone: "live", paired_at: REPLACED_AT })), onRead));
+      expect(sheetIn(island), "that phone re-polled: the re-opened sheet stays").toBeDefined();
+      await vi.advanceTimersByTimeAsync(COURT_SHEET_PAIR_POLL_MS * 3);
+      expect(onRead, "a phone paired and answering: nothing to wait for").toHaveBeenCalledTimes(3);
+      island.unmount();
+    });
+
+    it("the SAME phone back from offline (its own claim) does not close it", () => {
+      const island = renderIsland(CourtFocus, props(court(link({ phone: "offline" }))));
+      showQr(island);
+      island.rerender(props(court(link({ phone: "waiting" }))));
+      expect(sheetIn(island), "the same pairing").toBeDefined();
+    });
+
+    it("T35 review m2: a desk that turns view-only or frozen with the sheet open draws no sheet and reads nothing", async () => {
+      let checked = 0;
+      for (const turned of [{ ...ctx, readOnly: true }, { ...ctx, frozen: true }]) {
+        const onRead = vi.fn();
+        const island = renderIsland(CourtFocus, props(court(link()), onRead));
+        showQr(island);
+        await vi.advanceTimersByTimeAsync(COURT_SHEET_PAIR_POLL_MS);
+        expect(onRead, "PREMISE: writable, open and waiting: it reads").toHaveBeenCalledTimes(1);
+        island.rerender(props(court(link()), onRead, { ctx: turned }));
+        expect(sheetIn(island), "not drawn").toBeUndefined();
+        await vi.advanceTimersByTimeAsync(COURT_SHEET_PAIR_POLL_MS * 3);
+        expect(onRead, "no more reads").toHaveBeenCalledTimes(1);
+        island.unmount();
+        checked++;
+      }
+      expect(checked).toBe(2);
+    });
+
+    it("T35 review m3: the sheet kept for Court 2 while ANOTHER linked court with no phone is focused — nothing read for it, and that court's phone pairing in focus does not close Court 2's sheet", async () => {
+      const onRead = vi.fn();
+      const island = renderIsland(CourtFocus, props(court(link()), onRead));
+      showQr(island);
+      const nine = (phone: MatchDayCourtStream["phone"]) => court(link({ link_id: "link-9", phone }), { court_id: "c-9", court_name: "Court 9" });
+      island.rerender(props(nine(NO_PAIRING), onRead));
+      expect(sheetIn(island), "PREMISE: Court 9 focused, Court 2's sheet not drawn").toBeUndefined();
+      await vi.advanceTimersByTimeAsync(COURT_SHEET_PAIR_POLL_MS * 3);
+      expect(onRead, "Court 9 waits for a phone, but the open sheet is Court 2's").toHaveBeenCalledTimes(0);
+      // Court 9's phone pairs while Court 9 is focused: a real close-on-pair step, on a court the sheet is not for.
+      island.rerender(props(nine(PAIRED_STATUSES[0]!), onRead));
+      island.rerender(props(court(link()), onRead));
+      expect(sheetIn(island), "back on Court 2: its sheet is still open").toBeDefined();
+      island.unmount();
+    });
+
+    it("T35 review m4: the reads stop after COURT_SHEET_PAIR_POLL_MAX_MS (the band's own cadence carries on); closed and re-opened, a fresh window", async () => {
+      const onRead = vi.fn();
+      const island = renderIsland(CourtFocus, props(court(link()), onRead));
+      showQr(island);
+      const reads = COURT_SHEET_PAIR_POLL_MAX_MS / COURT_SHEET_PAIR_POLL_MS;
+      expect(reads, "PREMISE: a whole number of reads, more than a few").toBeGreaterThan(10);
+      await vi.advanceTimersByTimeAsync(COURT_SHEET_PAIR_POLL_MAX_MS);
+      expect(onRead, "one read per interval up to the cap").toHaveBeenCalledTimes(reads);
+      await vi.advanceTimersByTimeAsync(COURT_SHEET_PAIR_POLL_MAX_MS / 2);
+      expect(onRead, "past the cap: no more").toHaveBeenCalledTimes(reads);
+      expect(vi.getTimerCount(), "and no timer left running").toBe(0);
+      expect(sheetIn(island), "the sheet itself stays open").toBeDefined();
+      (propsOf(sheetIn(island)!).onClose as () => void)();
+      showQr(island);
+      await vi.advanceTimersByTimeAsync(COURT_SHEET_PAIR_POLL_MS * 2);
+      expect(onRead, "re-opened: reads again").toHaveBeenCalledTimes(reads + 2);
       island.unmount();
     });
   });

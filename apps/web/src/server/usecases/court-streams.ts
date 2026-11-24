@@ -443,16 +443,16 @@ export async function courtStreamsForDay(
   if (courtIds.length > 0) {
     const linkRows = await sql<{
       id: string; court_id: string; label: string; expires_at: Date; opens_at: Date; competition_id: string; target_id: string; court_name: string;
-      last_beat_at: Date | null; answered_poll_seconds: number | null; open_state: SessionState | null;
+      last_beat_at: Date | null; answered_poll_seconds: number | null; claimed_at: Date | null; open_state: SessionState | null;
       result_at: Date | null; session_predates_result: boolean | null; session_mode: string | null;
     }[]>`
-      select l.id, l.court_id, t.label, l.expires_at, l.opens_at, l.competition_id, l.target_id, c.name as court_name, p.last_beat_at, p.answered_poll_seconds, s.state as open_state,
+      select l.id, l.court_id, t.label, l.expires_at, l.opens_at, l.competition_id, l.target_id, c.name as court_name, p.last_beat_at, p.answered_poll_seconds, p.claimed_at, s.state as open_state,
              s.result_at, s.session_predates_result, s.session_mode
         from court_stream_links l
         join org_stream_targets t on t.id = l.target_id
         join courts c on c.id = l.court_id
         left join lateral (
-          select p.last_beat_at, p.answered_poll_seconds
+          select p.last_beat_at, p.answered_poll_seconds, p.claimed_at
             from fixture_stream_pairings p join fixture_stream_codes k on k.id = p.code_id
            where k.court_link_id = l.id and k.ended_at is null and p.ended_at is null
            order by p.claimed_at desc, p.id desc limit 1) p on true
@@ -487,6 +487,8 @@ export async function courtStreamsForDay(
           pairing: r.last_beat_at === null ? null : { lastBeatAt: new Date(r.last_beat_at), answeredPoll: r.answered_poll_seconds! },
           openState: r.open_state,
         }, now),
+        // T35 review m1: the pairing's claim, under the same predicate as `phone` (no row → unpaired, and no claim).
+        paired_at: r.last_beat_at === null || r.claimed_at === null ? null : new Date(r.claimed_at).toISOString(),
         refusal: null,
         tail_ends_at: tailEnd === null ? null : tailEnd.toISOString(),
       });

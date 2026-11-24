@@ -77,15 +77,20 @@ const queued = (o: Partial<MatchDayFixture> = {}): MatchDayQueued => ({
   estimated_at: "2026-10-31T12:20:00.000Z",
 });
 
-const link = (o: Partial<MatchDayCourtStream> = {}): MatchDayCourtStream => ({
-  link_id: "link-1",
-  target_label: "Riverside CC on YouTube",
-  expires_at: "2026-11-01T00:00:00.000Z",
-  phone: "waiting",
-  refusal: null,
-  tail_ends_at: null,
-  ...o,
-});
+const link = (o: Partial<MatchDayCourtStream> = {}): MatchDayCourtStream => {
+  const phone = o.phone ?? "waiting";
+  // The pairing's claim comes from the same row as the status: none with no phone (T35 review m1).
+  return {
+    link_id: "link-1",
+    target_label: "Riverside CC on YouTube",
+    expires_at: "2026-11-01T00:00:00.000Z",
+    phone,
+    paired_at: phone === "unpaired" ? null : "2026-10-31T11:50:00.000Z",
+    refusal: null,
+    tail_ends_at: null,
+    ...o,
+  };
+};
 
 const court = (o: Partial<MatchDayCourt> = {}): MatchDayCourt => ({
   court_id: "c-2",

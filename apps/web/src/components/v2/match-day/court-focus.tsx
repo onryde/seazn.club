@@ -45,7 +45,9 @@ import type { ViewerPlan } from "@/lib/viewer-plan";
 import { ATTENTION_SEVERITY } from "@/lib/division-phase";
 import type { MatchDayCourt, MatchDayFixture } from "@/lib/match-day/types";
 import { closureText, courtScorerAttention, matchLabel, matchMeta, scorerMemoryKey, streamPreviewOf } from "@/lib/match-day/view";
-import { COURT_SHEET_PAIR_POLL_MS, canLinkCourt, canWriteCourtStream, courtPairSeen, switchSpec } from "@/lib/match-day/court-stream";
+import {
+  COURT_SHEET_PAIR_POLL_MAX_MS, COURT_SHEET_PAIR_POLL_MS, canLinkCourt, canWriteCourtStream, courtAwaitsPhone, courtPairSeen, switchSpec,
+} from "@/lib/match-day/court-stream";
 import { closeCodeOnPair, type PairSeen } from "@/lib/stream-pair";
 import { venueNoun } from "@/lib/venue";
 import { DeviceLinkPanel } from "@/components/v2/device-link-panel";
@@ -151,20 +153,26 @@ export function CourtFocus({
     setPairSeen({ courtId: court.court_id, pair });
     if (pairSeen.courtId === court.court_id && sheet?.courtId === court.court_id && closeCodeOnPair(pairSeen.pair, pair)) setSheet(null);
   }
-  // While the open sheet waits for the court's phone (linked, nothing paired yet), the day is read (`onRead`) every
-  // COURT_SHEET_PAIR_POLL_MS so the pairing that closes it shows within one read — the band's own poll is 90 s on a quiet day. Nothing
-  // else polls here: no sheet, a phone already paired, a court not linked yet, or no reader handed. A hidden tab reads nothing (the
-  // band's rule). The shell hands `onRead` as a fresh arrow each render, so the poll calls the latest one through a ref and a
-  // re-render does not restart its cadence.
+  // While the open sheet waits for the court's phone (linked, and its phone unpaired or offline: `courtAwaitsPhone`), the day is
+  // read (`onRead`) every COURT_SHEET_PAIR_POLL_MS so the pairing that closes it shows within one read — the band's own poll is 90 s
+  // on a quiet day — for at most COURT_SHEET_PAIR_POLL_MAX_MS, after which the band's cadence carries on alone (T35 review m4).
+  // Nothing else polls here: no sheet, a phone that answers, a court not linked yet, or no reader handed. A hidden tab reads
+  // nothing (the band's rule). The shell hands `onRead` as a fresh arrow each render, so the poll calls the latest one through a
+  // ref and a re-render does not restart its cadence.
   const waitingForPhone =
-    onRead !== undefined && sheet?.courtId === court.court_id && canWriteCourtStream(ctx) && court.stream_link !== null && pair === null;
+    onRead !== undefined && sheet?.courtId === court.court_id && canWriteCourtStream(ctx) && courtAwaitsPhone(court.stream_link);
   const latestRead = useRef(onRead);
   useEffect(() => {
     latestRead.current = onRead;
   });
   useEffect(() => {
     if (!waitingForPhone) return;
+    const opened = Date.now();
     const id = setInterval(() => {
+      if (Date.now() - opened > COURT_SHEET_PAIR_POLL_MAX_MS) {
+        clearInterval(id);
+        return;
+      }
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       latestRead.current?.();
     }, COURT_SHEET_PAIR_POLL_MS);
