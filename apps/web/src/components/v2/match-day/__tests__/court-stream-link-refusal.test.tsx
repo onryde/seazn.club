@@ -13,8 +13,9 @@ import type { Dict } from "@/lib/i18n-constants";
 import { ApiV1Error } from "@/lib/client-v1";
 import { linkFailureKey } from "@/lib/match-day/court-stream";
 import { t } from "@/lib/i18n-runtime";
+import { FROZEN_SEAT_FEATURE } from "@/lib/seat-frozen";
 import type { StreamTarget } from "@/server/api-v1/schemas";
-import { CourtStreamSheet } from "../court-stream-sheet";
+import { CourtStreamSheet, TargetPicker } from "../court-stream-sheet";
 import type { MatchDayCtx } from "../court-focus";
 
 const apiV1 = vi.fn<(url: string, options?: { method?: string; json?: unknown }) => Promise<unknown>>(async () => ({}));
@@ -25,6 +26,7 @@ vi.mock("@/lib/client-v1", async (importOriginal) => ({
 
 const DICTS = { en, es, fr, nl } as Record<string, Dict>;
 const youtube = { connectionId: "c1", channelId: "UC1", channelTitle: "Riverside Live", privacy: "public", madeForKids: false, status: "connected", liveState: "enabled", termsOutdated: false, openBroadcasts: 0 };
+const SEAZN = { id: "t-seazn", kind: "seazn", label: "Seazn", watchUrl: null, createdAt: "2026-09-01T00:00:00.000Z", keyHint: null, inUse: null, youtube: null } as unknown as StreamTarget;
 const TARGETS = [{ id: "t-1", kind: "youtube", label: "Riverside", watchUrl: null, createdAt: "2026-10-01T00:00:00.000Z", keyHint: null, inUse: null, youtube }] as unknown as StreamTarget[];
 
 beforeEach(() => {
@@ -38,9 +40,9 @@ function parts(tree: ReactElement[]): { body: ReactElement[]; footer: ReactEleme
 }
 const byTestId = (els: ReactElement[], id: string) => els.find((el) => propsOf(el)["data-testid"] === id);
 
-async function refuse(d: Dict, refusal: ApiV1Error): Promise<string> {
+async function refuse(d: Dict, refusal: ApiV1Error, targets: StreamTarget[] = TARGETS): Promise<string> {
   apiV1.mockImplementation(async (url, o) => {
-    if (url.includes("stream-targets")) return TARGETS;
+    if (url.includes("stream-targets")) return targets;
     if (o?.method === "POST") throw refusal;
     return {};
   });
@@ -89,5 +91,66 @@ describe("the link route's refusals, said in their own words", () => {
     const d = DICTS.nl!;
     expect(await refuse(d, new ApiV1Error("x", 402, "PAYMENT_REQUIRED"))).toBe(t(d, "matchDay.courtStream.noPlan"));
     expect(await refuse(d, new ApiV1Error("x", 503, "court_streaming_unconfigured"))).toBe(t(d, "matchDay.courtStream.notConfigured"));
+  });
+});
+
+describe("Task 37: a court may stream to Seazn", () => {
+  const ctx = (d: Dict = en as Dict) => ({ dict: d, orgId: "org-1", competitionId: "comp-1", locale: "en", tz: "Europe/London" } as MatchDayCtx);
+  const sheet = () => renderIsland(CourtStreamSheet, { ctx: ctx(), court: { court_id: "ct-1", court_name: "Court 2" }, linkId: null, onClose: () => {}, onChanged: () => {} });
+
+  it("the paused-seat 402 (members.max) is the seat line, not 'streaming is switched off'; any other feature's 402 stays the plan line (positive pair)", async () => {
+    const paused = new ApiV1Error("Plan upgrade required: members.max", 402, "PAYMENT_REQUIRED", { feature_key: FROZEN_SEAT_FEATURE });
+    const said = await refuse(en as Dict, paused);
+    expect(said).toBe(t(en as Dict, "matchDay.courtStream.seatPaused"));
+    expect(said).not.toBe(t(en as Dict, "matchDay.courtStream.noPlan"));
+    expect(linkFailureKey(paused.code, paused)).toBe("matchDay.courtStream.seatPaused");
+    const plan = new ApiV1Error("Plan upgrade required: streaming.relay", 402, "PAYMENT_REQUIRED", { feature_key: "streaming.relay" });
+    expect(linkFailureKey(plan.code, plan)).toBe("matchDay.courtStream.noPlan");
+    expect(await refuse(en as Dict, plan)).toBe(t(en as Dict, "matchDay.courtStream.noPlan"));
+  });
+
+  it("seazn_unavailable (Seazn switched off since the list was read) reads as its own sentence, in every language", async () => {
+    expect(linkFailureKey("seazn_unavailable")).toBe("matchDay.courtStream.seaznUnavailable");
+    let checked = 0;
+    for (const [lang, d] of Object.entries(DICTS)) {
+      const said = await refuse(d, new ApiV1Error("x", 422, "seazn_unavailable"), [SEAZN]);
+      expect(said, lang).toBe(t(d, "matchDay.courtStream.seaznUnavailable"));
+      expect(said, `${lang}: not the generic line`).not.toBe(t(d, "matchDay.refusal.other"));
+      if (lang !== "en") expect(said, `${lang}: not the English line`).not.toBe(t(en as Dict, "matchDay.courtStream.seaznUnavailable"));
+      checked++;
+    }
+    expect(checked).toBe(Object.keys(DICTS).length);
+  });
+
+  it("the three new lines are each language's own and differ from one another", () => {
+    let checked = 0;
+    for (const [lang, d] of Object.entries(DICTS)) {
+      const lines = ["seaznHint", "seaznUnavailable", "seatPaused"].map((k) => t(d, `matchDay.courtStream.${k}` as never));
+      expect(new Set(lines).size, lang).toBe(3);
+      if (lang !== "en") for (const [i, k] of ["seaznHint", "seaznUnavailable", "seatPaused"].entries()) expect(lines[i], `${lang} ${k}`).not.toBe(t(en as Dict, `matchDay.courtStream.${k}` as never));
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("with Seazn and a channel on offer nothing is preselected (Link stays shut, the picker lists Seazn first); a lone Seazn is preselected and Link posts its id", async () => {
+    const picker = (island: { tree: () => ReactElement[] }) => island.tree().find((el) => el.type === TargetPicker);
+    apiV1.mockImplementation(async (url) => (url.includes("stream-targets") ? [...TARGETS, SEAZN] : {}));
+    const island = sheet();
+    await vi.waitFor(() => expect((propsOf(picker(island)!).state as { status: string }).status).toBe("ok"));
+    expect(propsOf(picker(island)!).value, "two choices: none preselected").toBeNull();
+    expect(propsOf(byTestId(parts(island.tree()).footer, "md-cs-link-confirm")!).disabled).toBe(true);
+    // The picker is the one place that orders and filters (courtTargets): it is handed the list as the server gave it.
+    expect(((propsOf(picker(island)!).state as { list: { id: string }[] }).list).map((t) => t.id)).toEqual(["t-1", "t-seazn"]);
+
+    apiV1.mockReset().mockImplementation(async (url) => (url.includes("stream-targets") ? [SEAZN] : {}));
+    const lone = sheet();
+    await vi.waitFor(() => expect(propsOf(byTestId(parts(lone.tree()).footer, "md-cs-link-confirm")!).disabled).toBe(false));
+    expect(propsOf(picker(lone)!).value).toBe("t-seazn");
+    (propsOf(byTestId(parts(lone.tree()).footer, "md-cs-link-confirm")!).onClick as () => void)();
+    await vi.waitFor(() => expect(apiV1.mock.calls.some(([, o]) => o?.method === "POST")).toBe(true));
+    const post = apiV1.mock.calls.find(([, o]) => o?.method === "POST")!;
+    expect(post[0]).toBe("/api/v1/competitions/comp-1/court-streams");
+    expect(post[1]?.json).toEqual({ court_id: "ct-1", target_id: "t-seazn" });
   });
 });

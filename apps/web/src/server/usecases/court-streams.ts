@@ -28,6 +28,8 @@ import { stopSession } from "./stream-sessions/stop";
 import { finishOwedStop } from "./stream-sessions/apply";
 import { endCourtBroadcastSoon } from "./stream-sessions/court-end";
 import { fireNudge, nudgeCodesOver } from "./stream-sessions/nudge";
+import { seaznUnavailable } from "./stream-sessions/refusals";
+import { seaznClosed } from "./stream-targets";
 import { courtFactsOf, type CourtLinkRef } from "./court-stream-codes";
 import { frozenCompetitionIds } from "./entitlement-freeze";
 import { hasValidKek } from "@/server/relay/crypto";
@@ -135,12 +137,17 @@ export async function linkCourtStream(
   const [court] = await sql<{ id: string }[]>`
     select id from courts where id = ${input.courtId} and org_id = ${auth.orgId} and archived_at is null`;
   if (!court) throw new HttpError(404, "court not found");
-  const [target] = await sql<{ id: string; yt: string | null }[]>`
-    select id, youtube_connection_id as yt from org_stream_targets
+  const [target] = await sql<{ id: string; yt: string | null; kind: string; offered: boolean }[]>`
+    select id, youtube_connection_id as yt, kind, offered from org_stream_targets
      where id = ${input.targetId} and org_id = ${auth.orgId} and archived_at is null`;
   if (!target) throw new HttpError(404, "target not found");
-  if (target.yt === null) {
-    throw new HttpError(422, "A court streams to a connected YouTube channel, not a pasted stream key", "court_destination_not_youtube");
+  // Task 37: a court streams to a connected YouTube channel OR to the org's Seazn destination — each match its own session on the
+  // link's target (a pasted key is one match's, never a court's). Seazn is accepted exactly when the pick and the start accept it
+  // (`seaznClosed`: the deployment's flag AND the org's switch), and refused by the pick's own 422 when it is not.
+  if (target.kind === "seazn") {
+    if (seaznClosed({ seazn: true, offered: target.offered })) throw seaznUnavailable();
+  } else if (target.yt === null) {
+    throw new HttpError(422, "A court streams to a connected YouTube channel or to Seazn, not a pasted stream key", "court_destination_unsupported");
   }
   const day = input.day ?? dayKeyInTz(now.getTime(), tz);
   const { opensAt, expiresAt } = dayBounds(day, tz);

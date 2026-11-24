@@ -32,8 +32,8 @@ import { test, expect, type Browser, type BrowserContext, type Locator, type Pag
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
-  addEntrantsViaApi, apiJson, createStageAndGenerate, expectNoHorizontalScroll, invalidateOrgEntitlements, mintLoginPathBySql, setBoolEntitlementOverrideSql,
-  setEntitlementOverrideSql, withDb,
+  addEntrantsViaApi, apiJson, createStageAndGenerate, expectNoHorizontalScroll, invalidateOrgEntitlements, mintLoginPathBySql, seedVenueWithCourts,
+  setBoolEntitlementOverrideSql, setEntitlementOverrideSql, withDb,
 } from "../helpers";
 import { dismissCookieBanner } from "../scorepad-a11y-kit";
 import { offeredTargetIds, targetPicker } from "../helpers/stream-target-picker";
@@ -1067,3 +1067,32 @@ test("Task 33e: a paused admin's Stream panel says why in one line, and the page
     await finishSeaznMatch(m);
   }
 });
+
+test("Task 37: a court links to Seazn from the Match Day sheet's wire: 201 with the court's QR and the Seazn row stored, then a Seazn switched off in the org is refused as seazn_unavailable and adds no link", async ({ browser }) => {
+  test.skip(process.env.SEAZN_HOSTED_LIVE !== "true", "needs a server and runner with SEAZN_HOSTED_LIVE=true (e2e.yml's e2e-seazn job)");
+  test.setTimeout(NAV_MS * 3);
+  const rig = await seedRig(browser);
+  const request = rig.org.page.request;
+  const [{ competition_id: competitionId }] = await withDb((sql) => sql<{ competition_id: string }[]>`
+    select d.competition_id from fixtures f join divisions d on d.id = f.division_id where f.id = ${rig.fixtureId}`);
+  const { courts } = await seedVenueWithCourts(request, ["T37 Court 1", "T37 Court 2"], { orgId: rig.org.orgId });
+  const link = (courtId: string, targetId: string) =>
+    apiJson<{ id: string; qr: unknown; court_name: string }>(request, `/api/v1/competitions/${competitionId}/court-streams`, "POST", { court_id: courtId, target_id: targetId });
+
+  const ok = await link(courts[0]!.id, rig.seaznId);
+  expect(ok.status, `the desk links Court 1 to Seazn: ${JSON.stringify(ok.error)}`).toBe(201);
+  expect(ok.data!.qr, "the court's QR comes back with the link").not.toBeNull();
+  expect(ok.data!.court_name).toBe(courts[0]!.name);
+  const [row] = await withDb((sql) => sql<{ target_id: string }[]>`select target_id from court_stream_links where id = ${ok.data!.id}`);
+  expect(row?.target_id, "the link stores the Seazn destination").toBe(rig.seaznId);
+
+  // The org switches Seazn off: a NEW link is refused with the Seazn code, and the link already made is left alone.
+  await withDb((sql) => sql`update org_stream_targets set offered = false where id = ${rig.seaznId}`);
+  await invalidateOrgEntitlements(request, rig.org.orgId);
+  const closed = await link(courts[1]!.id, rig.seaznId);
+  expect(closed.status, "Seazn switched off in the org").toBe(422);
+  expect((closed.error as { code?: string } | null)?.code).toBe("seazn_unavailable");
+  const [{ n }] = await withDb((sql) => sql<{ n: number }[]>`select count(*)::int as n from court_stream_links where target_id = ${rig.seaznId}`);
+  expect(n, "exactly the first link exists").toBe(1);
+});
+

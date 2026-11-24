@@ -7,6 +7,7 @@ import { renderIsland, propsOf } from "@/components/__tests__/_hook-harness";
 import en from "@/dictionaries/en/ui.json";
 import type { Dict } from "@/lib/i18n-constants";
 import { ApiV1Error } from "@/lib/client-v1";
+import { FROZEN_SEAT_FEATURE } from "@/lib/seat-frozen";
 import type { SwitchSpec } from "@/lib/match-day/court-stream";
 import { CourtStreamSwitch } from "../court-stream-switch";
 import type { MatchDayCtx } from "../court-focus";
@@ -51,6 +52,26 @@ describe("a refused turn", () => {
     expect(propsOf(find(island.tree(), "md-cs-switch-failed")!).children).toBe("This match has its own stream code");
     expect(p.onRefused).toHaveBeenCalledWith("This match has its own stream code");
     expect(p.onChanged).not.toHaveBeenCalled();
+  });
+});
+
+describe("Task 37 (T33e): a paused admin's switch", () => {
+  it("the 402 members.max reads as the seat line in the row and to the court's notice, and the switch goes back; another feature's 402 stays the generic line", async () => {
+    apiV1.mockRejectedValue(new ApiV1Error("Plan upgrade required: members.max", 402, "PAYMENT_REQUIRED", { feature_key: FROZEN_SEAT_FEATURE }));
+    const p = props(off);
+    const island = renderIsland(CourtStreamSwitch, p);
+    await click(island);
+    const seat = (en as Dict)["matchDay.courtStream.seatPaused"];
+    expect(seat, "PREMISE: the line exists").toBeTypeOf("string");
+    expect(propsOf(find(island.tree(), "md-cs-switch-failed")!).children).toBe(seat);
+    expect(p.onRefused).toHaveBeenCalledWith(seat);
+    expect(checked(island.tree())).toBe(false);
+
+    apiV1.mockRejectedValue(new ApiV1Error("Plan upgrade required: streaming.relay", 402, "PAYMENT_REQUIRED", { feature_key: "streaming.relay" }));
+    const other = props(off);
+    const again = renderIsland(CourtStreamSwitch, other);
+    await click(again);
+    expect(propsOf(find(again.tree(), "md-cs-switch-failed")!).children).toBe((en as Dict)["matchDay.refusal.other"]);
   });
 });
 

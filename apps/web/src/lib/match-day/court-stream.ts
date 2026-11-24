@@ -1,6 +1,7 @@
 // Match Day's court stream, the desk's pure rules (court stream spec 2026-11-14 §5; web plan Task 12): which court may be linked,
 // what a match's Stream switch shows, which words a phone's status and a refusal take. No react, no fetch: the components
 // (components/v2/match-day/court-stream-*.tsx, court-phone-status.tsx) paint what these decide.
+import { isSeatFrozenError } from "@/lib/seat-frozen";
 import type { StreamTarget } from "@/server/api-v1/schemas";
 import { STREAM_POLL_MS, type PairSeen } from "@/lib/stream-pair";
 import type { MatchDayCourt, MatchDayCourtStream, MatchDayFixture } from "./types";
@@ -69,24 +70,48 @@ export const phoneKey = (phone: MatchDayCourtStream["phone"]) => `matchDay.court
  *  "00:00"; "Works until 00:00 today" would read as already over, so the line names the minute before it. */
 export const lastWorkingMinute = (expiresAt: string): string => new Date(Date.parse(expiresAt) - 60_000).toISOString();
 
-/** The destinations a court may stream to: the connected YouTube channels only (a pasted stream key is one match's, not a
- *  court's: `court_destination_not_youtube`). */
-export const youtubeTargets = (list: readonly StreamTarget[]): StreamTarget[] => list.filter((t) => t.youtube !== null);
+/** The destinations a court may stream to (Task 37): the organisation's Seazn destination FIRST (the list only carries it while the
+ *  deployment offers it and the club has not switched it off), then the connected YouTube channels in the list's own order. A pasted
+ *  stream key is one match's, never a court's (`court_destination_unsupported`). */
+export const courtTargets = (list: readonly StreamTarget[]): StreamTarget[] => [
+  ...list.filter((t) => t.kind === "seazn"),
+  ...list.filter((t) => t.kind !== "seazn" && t.youtube !== null),
+];
 
-/** The words for a refused Stream switch (409): by the server's own code, else the generic line. */
-export function switchFailureKey(code: string): "matchDay.courtStream.ownCode" | "matchDay.courtStream.notStreaming" | "matchDay.refusal.other" {
+/** A paused admin seat's refusal (T33e, `members.max`): the Match Day card says so, in one line, rather than the generic retry or, for a
+ *  link, "streaming is switched off for this organisation" (a 402 for another reason). `err` is the `ApiV1Error` read structurally. */
+const SEAT_PAUSED_KEY = "matchDay.courtStream.seatPaused" as const;
+
+/** The words for a refused Stream switch (409): by the server's own code, else the generic line. A paused seat (402 `members.max`)
+ *  reads as such (T37: a paused admin's court start maps to the seat line, as the fixture panel's does). */
+export function switchFailureKey(
+  code: string,
+  err?: unknown,
+): "matchDay.courtStream.ownCode" | "matchDay.courtStream.notStreaming" | typeof SEAT_PAUSED_KEY | "matchDay.refusal.other" {
+  if (isSeatFrozenError(err)) return SEAT_PAUSED_KEY;
   if (code === "has_own_stream_code") return "matchDay.courtStream.ownCode";
   if (code === "court_not_streaming") return "matchDay.courtStream.notStreaming";
   return "matchDay.refusal.other";
 }
 
-/** The words for a refused link: by the server's own code (a 402 reads `PAYMENT_REQUIRED`: no streaming plan for this organisation;
- *  `court_streaming_unconfigured`: this server has no minimum app version to hand out court codes for), else the generic line. */
+/** The words for a refused link: by the server's own code (a 402 reads `PAYMENT_REQUIRED`: no streaming plan for this organisation,
+ *  unless it names the paused seat, `members.max`, which reads as that; `court_streaming_unconfigured`: this server has no minimum
+ *  app version to hand out court codes for; `seazn_unavailable`: Seazn video was switched off since the list was read), else the
+ *  generic line. */
 export function linkFailureKey(
   code: string,
-): "matchDay.courtStream.alreadyStreaming" | "matchDay.courtStream.noPlan" | "matchDay.courtStream.notConfigured" | "matchDay.refusal.other" {
+  err?: unknown,
+):
+  | "matchDay.courtStream.alreadyStreaming"
+  | "matchDay.courtStream.noPlan"
+  | "matchDay.courtStream.notConfigured"
+  | "matchDay.courtStream.seaznUnavailable"
+  | typeof SEAT_PAUSED_KEY
+  | "matchDay.refusal.other" {
+  if (isSeatFrozenError(err)) return SEAT_PAUSED_KEY;
   if (code === "court_already_streaming") return "matchDay.courtStream.alreadyStreaming";
   if (code === "PAYMENT_REQUIRED") return "matchDay.courtStream.noPlan";
   if (code === "court_streaming_unconfigured") return "matchDay.courtStream.notConfigured";
+  if (code === "seazn_unavailable") return "matchDay.courtStream.seaznUnavailable";
   return "matchDay.refusal.other";
 }

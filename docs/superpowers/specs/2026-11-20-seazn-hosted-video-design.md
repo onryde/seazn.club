@@ -195,6 +195,14 @@ then two more recommendations:
 1. Only a closed or deleted org starts the 30-day replay deletion (§5.5).
 2. **Matches first; courts later.** `court_stream_links.target_id` cannot pick Seazn in this version: a court input
    carries many matches, so its replay must be split per fixture — a follow-up.
+   **Amended 2026-11-24 (Task 37, owner: build on code evidence F3):** the premise was wrong. A court is not one input carrying many
+   matches: each court match is its OWN session with its OWN camera and programme inputs (the court phone's start path is
+   `startBroadcast` per match; a handover creates the next session, then ends the previous one). So each match's replay is its own
+   session's programme recording and there is nothing to split. A court link may now name the org's Seazn destination (while
+   `SEAZN_HOSTED_LIVE` is on and the org has not switched Seazn off, else 422 `seazn_unavailable`); a pasted key is still refused, now
+   as 422 `court_destination_unsupported` (was `court_destination_not_youtube`). Two Seazn sessions of one org overlap during a handover
+   (Review Focus 1 already admits that). A court session still auto-stops 30 s after the result (the court rule), before the 15-minute
+   rule could fire.
 3. **Billing unchanged**: a Seazn match draws the same stream credit (£3) with the same admission and balance checks;
    replay storage and all delivery are absorbed by Seazn, uncapped, measured (§5.6).
 4. All Seazn playback signed (§5.2); an unmoved recording held past 3 days (§5.3).
