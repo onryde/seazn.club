@@ -14,6 +14,10 @@ import type { SessionDeps } from "./deps";
 import { destinationRowOf, readSessionDestination } from "./destination";
 import { reconcileSession } from "./expiry";
 
+/** Seazn Task 36b: how long a Machine that met `inputs_not_ready` is told to wait. A few seconds — an input create is ~1-3 s —
+ *  and the compositor retries on its own back-off whatever this says (1 s, doubling to 10 s, no attempt cap). */
+export const INPUTS_NOT_READY_RETRY_AFTER_SECONDS = 3;
+
 async function jobSession(sessionId: string, token: string, deps: SessionDeps): Promise<Session> {
   await verifyRelayToken(token, { sid: sessionId, scope: "relay-job" });
   const s = await reconcileSession(sessionId, deps);                        // B: the Machine's own reads tick the policy too
@@ -52,8 +56,16 @@ export async function sessionFactsForJob(sessionId: string, token: string, deps:
     playback: await readCameraPlayback(tx, sessionId),
     sportKey: (await tx<{ sport_key: string }[]>`select sport_key from fixture_stream_sessions where id = ${sessionId}`)[0]!.sport_key,
   }))) as { programme: Awaited<ReturnType<typeof readFirstInput>>; playback: Awaited<ReturnType<typeof readCameraPlayback>>; sportKey: string };
-  // Provisioning stores both before the Machine is asked for, so a composed session past `provisioned` always has them. A
-  // row without either is refused by name — never a session served with a guessed or empty credential.
+  // Seazn Task 36b: a composed session's Machine is asked for WHILE its inputs are made, so it can boot and read before the
+  // credentials are stored (they are written in one transaction, both or neither). That is not a fault: while the session is
+  // still `provisioning`, a missing credential is answered 503 `inputs_not_ready` with a Retry-After, never partial facts and
+  // never a 404/410/500 (the compositor's GET table treats 404/410 as fatal and retries a 5xx on its back-off).
+  if (s.state === "provisioning" && (!programme?.rtmps || !playback)) {
+    log.info({ sid: sessionId, orgId: s.orgId }, "stream session: the Machine asked for its facts before the inputs' credentials were stored — answered inputs_not_ready");
+    throw new HttpError(503, "the session's inputs are not ready yet; try again", "inputs_not_ready", undefined, { "Retry-After": String(INPUTS_NOT_READY_RETRY_AFTER_SECONDS) });
+  }
+  // Past `provisioning` a composed session always has them (storing them precedes `provisioned`). A row without either is
+  // refused by name — never a session served with a guessed or empty credential.
   if (!programme?.rtmps) throw new Error(`stream session ${sessionId}: a composed session has no programme input credential to publish to`);
   if (!playback) throw new Error(`stream session ${sessionId}: a composed session has no camera playback credential to read`);
   // R2004 decision 5 / 7: the overlay page the compositor renders. `sid` because verifyRelayToken needs the expected sid;

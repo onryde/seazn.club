@@ -901,6 +901,30 @@ describe.skipIf(!HAS_DB)("R2002: the relay-job.v1 contract through the internal 
     expect(checked).toBe(2);
   });
 
+  // Seazn Task 36b: a composed start asks for its Machine while the inputs are made, so the Machine's first GET can land before the
+  // credentials are stored. Through the ROUTE: a typed 503 the compositor retries (its GET table maps a 5xx to Transient, a 404/410
+  // to Refused) with a Retry-After, `private, no-store` like every answer of this route, and not one credential in the body.
+  it("Seazn Task 36b: GET facts on a `provisioning` composed session whose credentials are not stored is 503 inputs_not_ready + Retry-After, private no-store, no credential in the body — and 200 again once they are", async () => {
+    const x = await session("composed");
+    const ok = await getFacts(x.sessionId, { token: x.jobToken });
+    expect(ok.status, "premise: the stored session serves its facts").toBe(200);
+    const creds = ((await json(ok)) as { data: { target: { streamKey: string }; input: { passphrase: string } } }).data;
+    await sql`update fixture_stream_sessions set state = 'provisioning' where id = ${x.sessionId}`;
+    // The credentials of both inputs are written together: absent, both (the inputs rows exist from admission).
+    await sql`update fixture_stream_inputs set ingest_rtmps_url = null where role = 'programme' and session_id = ${x.sessionId}`;
+    await sql`update fixture_stream_inputs set playback_srt_url = null where role = 'camera' and session_id = ${x.sessionId}`;
+    const res = await getFacts(x.sessionId, { token: x.jobToken });
+    expect(res.status).toBe(503);
+    expect(Number(res.headers.get("retry-after")), "a few whole seconds").toBeGreaterThanOrEqual(1);
+    expect(Number(res.headers.get("retry-after"))).toBeLessThanOrEqual(10);
+    expectNoStore(res, "inputs_not_ready");
+    const body = await res.text();
+    expect(JSON.parse(body)).toMatchObject({ ok: false, code: "inputs_not_ready" });
+    expect(body, "no credential in the refusal").not.toContain(creds.target.streamKey);
+    expect(body).not.toContain(creds.input.passphrase);
+    expect(body).not.toMatch(/rtmps|srt:/);
+  });
+
   it("GET facts is a STRICT RelayJobSession: passthrough carries no composed-only key; composed carries EVERY one (R2004 turned that half around)", async () => {
     let checked = 0;
     for (const mode of ["passthrough", "composed"] as const) {

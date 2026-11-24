@@ -3516,7 +3516,11 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
   // ended session (InvalidTransition → a 500 on the organiser's own create). Driven through the REAL stopSession from
   // inside the ingest call, so the race is the production one, not a rewritten row. Both modes: passthrough's
   // `provisioned` guard was already there, and is the positive pair.
-  it.each(["composed", "passthrough"] as const)("m4 (%s): a STOP landing while the create's ingest call is out is the domain's answer — the create resolves (never a 500), the session ends `stopped`, no Machine is asked for and no credit moves", async (mode) => {
+  // Seazn Task 36b: a composed start asks for its Machine BESIDE the inputs, so by the time a Stop lands inside the ingest call
+  // the Machine has been (or is being) asked for. The domain's answer is the same — the session ends `stopped`, the create
+  // resolves, no credit moves — and the Machine it made is torn down, none left alive; only "no Machine is asked for" stopped
+  // being true of composed. Passthrough has no Machine and is the positive pair.
+  it.each(["composed", "passthrough"] as const)("m4 (%s): a STOP landing while the create's ingest call is out is the domain's answer — the create resolves (never a 500), the session ends `stopped`, no Machine is left alive and no credit moves", async (mode) => {
     const r = await rig({ credits: 1 });
     const real = r.ingest.createLiveInput.bind(r.ingest);
     const seen: string[] = [];
@@ -3527,8 +3531,15 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
     try {
       const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, mode), r.deps);
       expect(seen, "the stop really landed mid-create").toHaveLength(1);
-      expect(await r.row(sessionId)).toMatchObject({ state: "completed", end_reason: "stopped", runner_state: "none", machine_id: null });
-      expect(r.runner.created).toEqual([]);
+      if (mode === "composed") {
+        expect(r.runner.created, "PREMISE (Task 36b): the Machine was asked for beside the inputs, before the Stop").toHaveLength(1);
+        expect(await r.row(sessionId)).toMatchObject({ state: "completed", end_reason: "stopped", runner_state: "destroyed" });
+        expect(r.runner.destroyed, "the Machine the start made is torn down").toHaveLength(1);
+        expect(await r.runner.list(), "none left alive").toEqual([]);
+      } else {
+        expect(await r.row(sessionId)).toMatchObject({ state: "completed", end_reason: "stopped", runner_state: "none", machine_id: null });
+        expect(r.runner.created).toEqual([]);
+      }
       expect(await creditBalance(sql, r.auth.orgId)).toBe(1);
     } finally {
       spy.mockRestore();
@@ -4165,7 +4176,9 @@ describe.skipIf(!HAS_DB)("stream sessions — the destination guard (one live se
     const answer = (fixtureId: string) => refuseRaceLoss(pgRollback(code), orgId, fixtureId, targetId).then(() => null, (e: unknown) => e);
     sentry.captureError.mockClear();
     // Neither: the start, run again, would be admitted.
-    expect(await answer(b)).toMatchObject({ status: 503, code: "ingest_unavailable" });
+    // Task 36b m4: the message names no cause — the rollback is not always "another start" (a provisioning step can lose to a
+    // stop or a sweep), and the string is what an API caller reads under the code.
+    expect(await answer(b)).toMatchObject({ status: 503, code: "ingest_unavailable", message: "the start could not finish; try again" });
     // Another match holds the destination: the pre-check's own answer, with the holder named.
     const holder = await sessionOnTarget(orgId, a, targetId, "warming");
     const held = await answer(b) as HttpError;

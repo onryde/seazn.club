@@ -112,5 +112,5 @@ export async function refuseRaceLoss(err: unknown, orgId: string, fixtureId: str
   if (active !== null) refuse({ ok: false, refusal: "active_session", activeSessionId: active }, 0);
   const [holder] = await holderRows(sql, { orgId, targetId, notFixtureId: fixtureId });
   if (holder) throw targetInUse(holder);
-  throw new HttpError(503, "another start met this one at the same moment; try again", "ingest_unavailable");
+  throw new HttpError(503, "the start could not finish; try again", "ingest_unavailable");
 }
