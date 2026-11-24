@@ -1064,7 +1064,7 @@ const BODY: PhoneTabBodyProps = {
   onBuy: () => {}, onAgain: () => {}, onCopy: () => {}, onToggleCode: () => {}, onReissue: () => {}, onRetryCode: () => {},
   qrFailed: false, onRetryQr: () => {},
   onShowBuy: () => {}, onTileIntent: () => {}, score: SCORE_OFF,
-  replayActions: { deleting: null, failed: null, gone: new Set(), onDelete: () => {} },
+  replayActions: { deleting: null, failed: null, gone: new Set(), onDelete: () => {}, downloading: null, downloadFailed: null, onDownload: () => {} },
 };
 /** A loaded list — what most states render with. */
 const ok = (list: StreamTarget[]): TargetsState => ({ status: "ok", list });

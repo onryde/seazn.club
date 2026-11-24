@@ -9,8 +9,9 @@ import "server-only";
 //     (the server's clock when it was stored), both written by stream-sessions/heartbeat.ts — a superseded attempt's beat and
 //     a beat overtaken by the attempt's final never write them;
 //   - Cloudflare's live-input notifications: fixture_stream_events rows `type = 'ingest_status'`, `source = 'webhook'`, their
-//     payload `{event, reason, role, inputUid}`, written by stream-sessions/live-notification.ts. Events, not the samples
-//     beside them: a session over its sample cap stops writing samples, never events.
+//     payload `{event, reason, role, inputUid}`, written by stream-sessions/live-notification.ts, which also OWNS the read of
+//     them (`latestWebhookEvent`, a fragment this one composes: the capture tables are named only by their writers, enc-boundary
+//     claim 4). Events, not the samples beside them: a session over its sample cap stops writing samples, never events.
 // "The latest recorded webhook for that input" is the newest by the event's MOMENT (occurred_at, Cloudflare's own time when it
 // sent one) and then by the order it was recorded (seq): Cloudflare documents no delivery order, so a drop delivered after a
 // later reconnect never reads as now. "That input" is the session's input of the role, matched on its uid; a deleted input's uid
@@ -22,20 +23,15 @@ import "server-only";
 // session with no fact yet answers no `delivery` at all (relay/domain/delivery.ts omits every unknown member, and
 // wireBeatAnswer an empty object). Court sessions are read the same way.
 import { sql } from "@/lib/db";
+import { latestWebhookEvent } from "./stream-sessions/live-notification";
 import type { StoredDelivery } from "@/server/relay/domain/delivery";
 
 /** The stored facts for session `sid`, or null when it no longer exists. One statement. */
 export async function readDeliveryFacts(sid: string): Promise<StoredDelivery | null> {
   const [row] = await sql<{ last_heartbeat: unknown; heartbeat_at: Date | null; camera_event: string | null; programme_event: string | null }[]>`
     select s.last_heartbeat, s.heartbeat_at,
-           (select e.payload->>'event' from fixture_stream_events e
-              join fixture_stream_inputs i on i.session_id = s.id and i.role = 'camera' and i.ingest_input_id = e.payload->>'inputUid'
-             where e.session_id = s.id and e.type = 'ingest_status' and e.source = 'webhook'
-             order by e.occurred_at desc, e.seq desc limit 1) as camera_event,
-           (select e.payload->>'event' from fixture_stream_events e
-              join fixture_stream_inputs i on i.session_id = s.id and i.role = 'programme' and i.ingest_input_id = e.payload->>'inputUid'
-             where e.session_id = s.id and e.type = 'ingest_status' and e.source = 'webhook'
-             order by e.occurred_at desc, e.seq desc limit 1) as programme_event
+           ${latestWebhookEvent("camera")} as camera_event,
+           ${latestWebhookEvent("programme")} as programme_event
       from fixture_stream_sessions s
      where s.id = ${sid}`;
   if (row === undefined) return null;

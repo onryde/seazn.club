@@ -229,6 +229,12 @@ const REST = [
   // (listed=82 vs 80).
   "src/server/public-site/__tests__/hub-catch-up-flag-db.test.ts",
   "src/server/public-site/__tests__/public-docs-cache-size-db.test.ts",
+  // Seazn-hosted video (Phase 4, hub camera icon and its revalidation): the hub's stream flags (pure and DB) and the presence
+  // revalidation. None begins with "c", so all three belong here rather than in C_GLOBBED; this gate reddened on them in PR #1301's
+  // CI (listed=85 vs 82).
+  "src/server/public-site/__tests__/hub-stream-flags-db.test.ts",
+  "src/server/public-site/__tests__/hub-stream-flags.test.ts",
+  "src/server/public-site/__tests__/stream-presence-revalidate.test.ts",
 ];
 const EXCLUDE_C = "**/public-site/__tests__/c*";
 
