@@ -540,6 +540,19 @@ describe("requireTurnstile: the gate a route calls", () => {
     expect(await seenIp({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR, "x-forwarded-for": "198.51.100.99" })).toBe(VISITOR);
   });
 
+  // Task 25d m1 (Phase 3 review m7): only the LIMITERS group an IPv6 client by its /64. Siteverify's `remoteip` is evidence Cloudflare
+  // scores the token against, so it is the address the visitor came from — a "finish the job" edit sending the /64 would send a
+  // network Cloudflare cannot match. The addresses are hand-written (RFC 3849's documentation prefix).
+  it("Task 25d m1: an IPv6 visitor's remoteip is its FULL address, never its /64 — two visitors in one /64 send two addresses", async () => {
+    prod();
+    vi.stubEnv("CF_ORIGIN_SECRET", "");
+    const A = "2001:db8:1::7";
+    const B = "2001:db8:1:0:aaaa:bbbb:cccc:dddd";
+    expect(await seenIp({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": A })).toBe(A);
+    expect(await seenIp({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": B })).toBe(B);
+    expect(await seenIp({ "x-forwarded-for": `${A}, 10.0.0.1` }), "outside Fly too").toBe(A);
+  });
+
   it("reaching Fly directly: a forged CF-Connecting-IP or x-forwarded-for is not believed, Fly's own peer is sent", async () => {
     prod();
     vi.stubEnv("CF_ORIGIN_SECRET", "");
