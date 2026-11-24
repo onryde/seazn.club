@@ -24,9 +24,12 @@
 // fails. The checkers are also run on synthetic SQL, both ways, so a
 // checker that can never fire cannot pass here.
 //
-// The DB-level half runs only with DATABASE_URL set AND an `authenticated`
-// role present (a Supabase database). A plain Postgres — local labels, CI —
-// has no such role, so the half skips and says why.
+// The DB-level half runs only with DATABASE_URL set AND the `authenticated`
+// and `anon` roles present (a Supabase database). A plain Postgres — local
+// labels, CI — has neither, so the half skips and says why. It reads the
+// ACLs through has_*_privilege, which answers for the role whoever asks and
+// counts PUBLIC, inherited and column grants (information_schema views show
+// only grants the caller is party to).
 //
 // Applies to another sport: N/A (no sport rules).
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -358,7 +361,7 @@ describe("§4.5 role sweep — every migration (static)", () => {
 });
 
 describe("§4.5 role sweep — the live catalog (Supabase databases only)", () => {
-  it("(a) on pg_policies and (b) on information_schema.role_table_grants", async (ctx) => {
+  it("(a) on pg_policies and (b) on the ACLs themselves (has_*_privilege)", async (ctx) => {
     const url = process.env.DATABASE_URL;
     if (!url) {
       const why = "DB-level half skipped: DATABASE_URL is not set";
@@ -368,12 +371,12 @@ describe("§4.5 role sweep — the live catalog (Supabase databases only)", () =
     const { ssl } = connectionOptions(url);
     const client = postgres(url, { max: 1, ssl, onnotice: () => {} });
     try {
-      const [role] = await client<{ present: boolean }[]>`
-        select exists (select 1 from pg_roles where rolname = 'authenticated') as present`;
-      if (!role!.present) {
+      const [roles] = await client<{ present: number }[]>`
+        select count(*)::int as present from pg_roles where rolname in ('authenticated', 'anon')`;
+      if (roles!.present < 2) {
         const why =
-          "DB-level half skipped: no `authenticated` role in this database (plain Postgres, not Supabase — " +
-          "no minted token can act here)";
+          "DB-level half skipped: no `authenticated`/`anon` roles in this database (plain Postgres, not " +
+          "Supabase — no minted token can act here)";
         console.log(`[role-sweep] ${why}`);
         return ctx.skip(why);
       }
@@ -385,21 +388,28 @@ describe("§4.5 role sweep — the live catalog (Supabase databases only)", () =
         .filter((p) => p.roles.some((r) => TOKEN_ROLES.has(r)))
         .map((p) => `${p.schemaname}.${p.tablename}: policy ${p.policyname} to ${p.roles.join(", ")}`);
 
-      const grants = await client<{ table_schema: string; table_name: string; grantee: string }[]>`
-        select table_schema, table_name, grantee from information_schema.role_table_grants
-        where privilege_type = 'SELECT' and grantee in ('authenticated', 'anon')`;
-      const [scanned] = await client<{ n: number }[]>`
-        select count(*)::int as n from information_schema.role_table_grants`;
-      const anon = new Set(grants.filter((g) => g.grantee === "anon").map((g) => `${g.table_schema}.${g.table_name}`));
-      const authed = grants.filter((g) => g.grantee === "authenticated").map((g) => `${g.table_schema}.${g.table_name}`);
-      const widening = authed.filter((t) => !anon.has(t)).map((t) => `${t}: select to authenticated, not to anon`);
+      // The ACLs themselves, whoever is asking: has_*_privilege counts PUBLIC and inherited (member-of) grants,
+      // and column grants — none of which information_schema.role_table_grants shows to a non-member caller.
+      const relations = await client<{ rel: string; anon: boolean; authed: boolean }[]>`
+        select n.nspname || '.' || c.relname as rel,
+               has_any_column_privilege('anon', c.oid, 'SELECT') as anon,
+               has_any_column_privilege('authenticated', c.oid, 'SELECT') as authed
+        from pg_class c join pg_namespace n on n.oid = c.relnamespace
+        where c.relkind in ('r', 'v', 'm', 'f', 'p')
+          and n.nspname not in ('pg_catalog', 'information_schema')
+          and n.nspname !~ '^pg_(toast|temp)'`;
+      const anonSelect = relations.filter((r) => r.anon).length;
+      const widening = relations
+        .filter((r) => r.authed && !r.anon)
+        .map((r) => `${r.rel}: select to authenticated, not to anon`);
 
       console.log(
-        `[role-sweep live] policies: ${policies.length}, table grants: ${scanned!.n} ` +
-          `(SELECT to authenticated: ${authed.length})`,
+        `[role-sweep live] policies: ${policies.length}, relations: ${relations.length} ` +
+          `(SELECT to anon: ${anonSelect}, to authenticated: ${relations.filter((r) => r.authed).length})`,
       );
       expect(policies.length, "pg_policies rows scanned").toBeGreaterThan(0);
-      expect(scanned!.n, "role_table_grants rows scanned").toBeGreaterThan(0);
+      expect(relations.length, "relations scanned").toBeGreaterThan(0);
+      expect(anonSelect, "relations anon can SELECT (Supabase grants anon some)").toBeGreaterThan(0);
       expect(tokenRole, "(a) a token role on a policy outside realtime.messages").toEqual([]);
       expect(widening, "(b) an authenticated SELECT that anon does not have").toEqual([]);
     } finally {
