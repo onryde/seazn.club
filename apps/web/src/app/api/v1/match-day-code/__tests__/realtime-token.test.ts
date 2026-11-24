@@ -23,12 +23,18 @@ vi.mock("next/headers", () => ({
   cookies: async () => ({ get: () => undefined, set: () => {}, delete: () => {} }),
   headers: async () => new Headers(),
 }));
-vi.mock("@/lib/sentry", async (orig) => ({ ...(await orig<typeof import("@/lib/sentry")>()), captureError: vi.fn() }));
+// What reaches Sentry is counted at its own seam: v1()'s >=500 capture and the usecase's old `captureError` both end in
+// `Sentry.captureException`, so ONE spy sees a double capture whichever side makes it.
+vi.mock("@sentry/nextjs", async (orig) => ({
+  ...(await orig<typeof import("@sentry/nextjs")>()),
+  captureException: vi.fn(),
+  withScope: (cb: (scope: object) => void) => cb({ setUser() {}, setTag() {}, setExtras() {} }),
+}));
 
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { __setRateLimitCounterForTests, MD_DAY_LIMIT, MD_REALTIME_LIMIT } from "@/lib/rate-limit";
-import { captureError } from "@/lib/sentry";
+import * as Sentry from "@sentry/nextjs";
 import { CaptureMatchdayRealtime, CaptureMatchdayRefusal } from "@/server/api-v1/capture-schemas";
 import { matchDayCodeOf } from "@/server/api-v1/match-day-code-door";
 import { log } from "@/server/logger";
@@ -58,7 +64,7 @@ function baseEnv() {
   process.env.SUPABASE_JWT_SECRET = JWT_SECRET;
   process.env.SUPABASE_JWT_ALG = "HS256";
 }
-beforeEach(() => { baseEnv(); vi.mocked(captureError).mockClear(); });
+beforeEach(() => { baseEnv(); vi.mocked(Sentry.captureException).mockClear(); });
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); __setRateLimitCounterForTests(null); });
 afterAll(() => { for (const k of ENV_KEYS) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; } });
 afterAll(async () => {
@@ -256,6 +262,30 @@ describe.skipIf(!HAS_DB)("GET /api/v1/match-day-code/realtime-token", () => {
       }
     });
 
+    it("410 MD_ENDED with under a second of code life left: floor(expiry) <= floor(now) would be a dead token in a 200", async () => {
+      const { code, token } = await codeFor(day);
+      const baseS = Math.floor(NOW.getTime() / 1000);               // a whole second inside the day
+      await sql`update match_day_codes set expires_at = ${new Date(baseS * 1000 + 500)} where id = ${code.id}`;
+      // The door's own answer for an ended day is the oracle for the word and the message.
+      clockAt(new Date((await expiresAtS(code.id) + 7200) * 1000));
+      const doorEnded = await bodyOf(await door(token));
+      expect(doorEnded.error!.code).toBe("MD_ENDED");
+      vi.useRealTimers();
+      // 200 ms in, 300 ms left: the same whole second as the expiry -> exp == iat, a token dead on arrival.
+      for (const ms of [200, 0, 499]) {
+        clockAt(new Date(baseS * 1000 + ms));
+        await expectNoToken(await door(token), 410, "MD_ENDED");
+        expect((await bodyOf(await door(token))).error!.message, `${ms} ms in: the door's own message`).toBe(doorEnded.error!.message);
+        vi.useRealTimers();
+      }
+      // Positive pair: one tick earlier (a prior whole second) the token has a second to live, and exp == the code's floor.
+      clockAt(new Date(baseS * 1000 - 300));
+      const data = await dataOf(await door(token));
+      expect(data.expiresAt, "999 ms before the second: exp is the next second").toBe(baseS);
+      const { payload } = await jwtVerify(data.token, SECRET_KEY, { audience: "authenticated", currentDate: new Date(baseS * 1000 - 300) });
+      expect(payload.exp! - payload.iat!, "a token with a second to live").toBe(1);
+    });
+
     it("403 MD_NOT_OPEN with opens_at, before the day starts", async () => {
       const { code, token } = await codeFor(day);
       const [r] = await sql<{ s: string }[]>`select extract(epoch from opens_at)::text as s from match_day_codes where id = ${code.id}`;
@@ -409,15 +439,23 @@ describe.skipIf(!HAS_DB)("GET /api/v1/match-day-code/realtime-token", () => {
       expect((await dataOf(await door(token))).apikey).toHaveLength(512);
     });
 
-    it("a mint that throws: 503, logged {err, codeId} and captured, the signing key's material in neither", async () => {
+    it("a mint that throws: 503, logged {err, codeId} and captured EXACTLY ONCE (v1's own capture, the original error as `cause`), the signing key's material in neither", async () => {
       const { code, token } = await codeFor(day);
+      const error = vi.spyOn(log, "error");
       delete process.env.SUPABASE_JWT_SECRET;                       // the mint has no key
       await refused(token, "no signing key");
-      expect(vi.mocked(captureError).mock.calls.filter(([, c]) => (c as { route?: string }).route === "match_day_code.realtime_token")).toHaveLength(1);
+      const captured = vi.mocked(Sentry.captureException).mock.calls;
+      expect(captured, "one failed mint, one Sentry capture (v1's; the usecase adds none)").toHaveLength(1);
+      const err = captured[0]![0] as HttpError & { cause?: unknown };
+      expect(err, "v1 captures the 503 itself").toBeInstanceOf(HttpError);
+      expect(err.status).toBe(503);
+      expect(err.cause, "the original mint error rides along as `cause`").toBeInstanceOf(Error);
+      expect((err.cause as Error).message, "the cause is the mint's own failure, not a wrapper").not.toBe(err.message);
+      expect(error.mock.calls.some(([o]) => (o as { codeId?: string })?.codeId === code.id && typeof (o as { err?: unknown }).err === "string"), "the usecase's own log line names {err, codeId}").toBe(true);
       baseEnv();
       process.env.SUPABASE_JWT_PRIVATE_KEY = "{not json";
       await refused(token, "a malformed signing key");
-      void code;
+      expect(captured, "a second failed mint adds exactly one more").toHaveLength(2);
     });
 
     it("an answer that is not the contract's (a token past 4096 characters) is refused, naming the paths and never the token", async () => {
@@ -496,7 +534,7 @@ describe.skipIf(!HAS_DB)("GET /api/v1/match-day-code/realtime-token", () => {
     it("never in a log line, a console line, a Sentry capture, a stored row or a response header, across a served sequence and every refusal", async () => {
       const LEVELS = ["trace", "debug", "info", "warn", "error", "fatal"] as const;
       const CONSOLE = ["log", "info", "warn", "error", "debug"] as const;
-      const spies = [...LEVELS.map((l) => vi.spyOn(log, l)), ...CONSOLE.map((m) => vi.spyOn(console, m)), vi.mocked(captureError)];
+      const spies = [...LEVELS.map((l) => vi.spyOn(log, l)), ...CONSOLE.map((m) => vi.spyOn(console, m)), vi.mocked(Sentry.captureException)];
       const { code, token } = await codeFor(day);
       const secrets: string[] = [token];
       const headerSets: Headers[] = [];
@@ -549,7 +587,7 @@ describe.skipIf(!HAS_DB)("GET /api/v1/match-day-code/realtime-token", () => {
       expect(scanned, "log/console/Sentry calls scanned").toBeGreaterThan(0);
       expect(vi.mocked(log.warn).mock.calls.length, "PREMISE: the refused url was logged (and scanned)").toBeGreaterThan(0);
       expect(vi.mocked(log.error).mock.calls.length, "PREMISE: the failed mint was logged (and scanned)").toBeGreaterThan(0);
-      expect(vi.mocked(captureError).mock.calls.length, "PREMISE: the failed mint was captured (and scanned)").toBe(1);
+      expect(vi.mocked(Sentry.captureException).mock.calls.length, "PREMISE: the failed mint and the refused url were each captured once, by v1 (and scanned)").toBe(2);
       let headers = 0;
       for (const h of headerSets) for (const [name, value] of h) {
         for (const s of secrets) expect(value.includes(s), `header ${name} carries a secret`).toBe(false);

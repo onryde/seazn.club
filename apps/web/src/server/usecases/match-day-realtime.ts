@@ -12,7 +12,6 @@ import "server-only";
 // the issues only (an issue can quote its input, and one of these inputs is the token).
 import { HttpError } from "@/lib/errors";
 import { MATCH_DAY_TOKEN_TTL_SECONDS, matchDayTopic, mintMatchDayToken } from "@/lib/realtime";
-import { captureError } from "@/lib/sentry";
 import { CaptureMatchdayRealtime } from "@/server/api-v1/capture-schemas";
 import { log } from "@/server/logger";
 import { realtimeConfigRefusal, type RealtimeRefusal } from "./capture-realtime";
@@ -29,7 +28,11 @@ const processPort: MatchDayRealtimePort = { mint: mintMatchDayToken, config: pro
 
 /** The wire word of every way this door cannot serve a token (outside the md_ refusal words: the app reads it by status). */
 export const REALTIME_UNAVAILABLE = "REALTIME_UNAVAILABLE";
-const unavailable = (): HttpError => new HttpError(503, "realtime is not available on this server", REALTIME_UNAVAILABLE);
+const unavailable = (cause?: unknown): HttpError => {
+  const err = new HttpError(503, "realtime is not available on this server", REALTIME_UNAVAILABLE);
+  if (cause !== undefined) err.cause = cause;
+  return err;
+};
 
 /**
  * The realtime object for `code` at the door's clock `now`. 503 REALTIME_UNAVAILABLE when no Supabase is configured, the
@@ -52,16 +55,21 @@ export async function matchDayRealtimeFor(
     log.warn({ codeId: code.id, refusal: refused }, "match day realtime: the realtime project is refused — no token is served");
     throw unavailable();
   }
-  // `resolveMatchDayCode` refused a code at or past its expiry, so the remaining life is positive: at least one millisecond.
+  // `resolveMatchDayCode` refused a code at or past its expiry, so the remaining life is positive — but it can be under a
+  // second, and the token's `exp` is whole seconds: floor(expiry) <= floor(now) is a token dead on arrival (exp <= iat), which
+  // a 200 would hand out. That is the day being over, said the door's own way (410 MD_ENDED, final).
   const expiresAt = new Date(Math.min(now.getTime() + MATCH_DAY_TOKEN_TTL_SECONDS * 1000, code.expiresAt.getTime()));
+  if (Math.floor(expiresAt.getTime() / 1000) <= Math.floor(now.getTime() / 1000)) {
+    throw new HttpError(410, "this Match Day code's day is over", "MD_ENDED");
+  }
   let token: string;
   try {
     token = await port.mint(code.id, expiresAt);
   } catch (err) {
-    // No token exists to leak: reported, and no subscription — the app polls.
+    // No token exists to leak: logged here, and reported ONCE by v1() (it captures every >=500 HttpError), which finds the
+    // original error as `cause`. No subscription — the app polls.
     log.error({ err: String(err), codeId: code.id }, "match day realtime: the mint failed — no token is served");
-    captureError(err, { orgId: code.orgId, route: "match_day_code.realtime_token", extra: { codeId: code.id } });
-    throw unavailable();
+    throw unavailable(err);
   }
   const parsed = CaptureMatchdayRealtime.safeParse({
     url: cfg.url, apikey: cfg.apikey, topic: matchDayTopic(code.id), token, expiresAt: Math.floor(expiresAt.getTime() / 1000),

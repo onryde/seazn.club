@@ -206,7 +206,9 @@ export const SPONSOR_LINK_MISS_LIMIT: RateLimitConfig = { max: 30, windowSeconds
  * capture budgets do: the token (256 bits) is the real defence against guessing.
  *  - MD_DAY_LIMIT: the day read, per code — 1800 a minute carries 150 phones on one code at 12 reads a minute each (push
  *    nudges, spec 2026-11-24 §7 Q4: a 15 s poll is 4 a minute and a ping-driven read comes at most once per 4 s, so a
- *    phone's worst minute is 19 and 1800 holds 94 phones at that peak; the figure is a budget for the average, not the peak);
+ *    phone's worst minute is 19 and 1800 holds 94 phones at that peak; the figure is a budget for the average, not the peak.
+ *    Peak phones BEYOND it are answered 429 on the day read and simply fall back to their 15 s poll, which is harmless: the
+ *    poll is the floor every phone already stands on, and a 429 costs the phone only the nudge's head start);
  *  - MD_REALTIME_LIMIT: the realtime-token door, per code (a bucket of its OWN, so a token never spends the day read's) —
  *    a phone mints once and refreshes at 80% of its token's life or when its channel errors, so 120 a minute carries a
  *    venue-wide reconnect storm of 150 phones over a minute and a half;
