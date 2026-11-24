@@ -3,7 +3,7 @@
 // pairs while it is open: the desk's read goes from no phone to a phone, or to another link's phone. A re-poll of the same phone
 // closes nothing, so the organiser can open it again; re-opened, it still only READS the QR (GET), never makes a code.
 //
-// The rule is the Phone tab's (`closeCodeOnPair`, lib/stream-session-view.ts). What the court's read can tell is `courtPairSeen`'s:
+// The rule is the Phone tab's (`closeCodeOnPair`, lib/stream-pair.ts). What the court's read can tell is `courtPairSeen`'s:
 // the desk names no pairing, so a phone is paired exactly when its status is not the server's no-pairing answer, and the link is
 // the identity. Expected values come from the server's own declarations (the schema's enum, `courtPhoneStatus` with no pairing),
 // never from courtPairSeen. While the sheet waits for a phone the focus asks the page for the day (`onRead`, a plain read: never
@@ -20,7 +20,7 @@ import publicEn from "@/dictionaries/en/public.json";
 import type { Dict } from "@/lib/i18n-constants";
 import type { MatchDayCourt, MatchDayCourtStream } from "@/lib/match-day/types";
 import { COURT_SHEET_PAIR_POLL_MS, courtPairSeen } from "@/lib/match-day/court-stream";
-import { closeCodeOnPair, STREAM_POLL_MS, type PairSeen } from "@/lib/stream-session-view";
+import { closeCodeOnPair, STREAM_POLL_MS, type PairSeen } from "@/lib/stream-pair";
 import { QUIET_POLL_MS } from "@/components/v2/desk/band-poll";
 import { MatchDayCourtStream as CourtStreamSchema } from "@/server/api-v1/schemas/fixtures";
 import { courtPhoneStatus } from "@/server/relay/domain/court-stream";

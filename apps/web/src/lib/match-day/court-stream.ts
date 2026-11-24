@@ -2,7 +2,7 @@
 // what a match's Stream switch shows, which words a phone's status and a refusal take. No react, no fetch: the components
 // (components/v2/match-day/court-stream-*.tsx, court-phone-status.tsx) paint what these decide.
 import type { StreamTarget } from "@/server/api-v1/schemas";
-import { STREAM_POLL_MS, type PairSeen } from "@/lib/stream-session-view";
+import { STREAM_POLL_MS, type PairSeen } from "@/lib/stream-pair";
 import type { MatchDayCourt, MatchDayCourtStream, MatchDayFixture } from "./types";
 
 /** Who may write: an editor of a competition that is not billing-frozen. A frozen or view-only desk shows the status and nothing
@@ -36,7 +36,7 @@ export function switchSpec(f: Pick<MatchDayFixture, "court_stream" | "own_stream
   return { on: f.court_stream, lock: null };
 }
 
-/** Task 35 Part B (owner 2026-11-24): a court's phone as the close-on-pair rule reads it (`closeCodeOnPair`, lib/stream-session-view.ts).
+/** Task 35 Part B (owner 2026-11-24): a court's phone as the close-on-pair rule reads it (`closeCodeOnPair`, lib/stream-pair.ts).
  *  No link, or a link whose phone is `unpaired` (the server's no-pairing answer, `courtPhoneStatus`): nothing paired. Any other status
  *  is a paired phone. The desk's read names no pairing, so the LINK is the identity it can tell: a phone read on another link is
  *  another pairing; the same link's phone moving between waiting, live and offline is the same one. */

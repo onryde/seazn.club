@@ -46,7 +46,7 @@ import { ATTENTION_SEVERITY } from "@/lib/division-phase";
 import type { MatchDayCourt, MatchDayFixture } from "@/lib/match-day/types";
 import { closureText, courtScorerAttention, matchLabel, matchMeta, scorerMemoryKey, streamPreviewOf } from "@/lib/match-day/view";
 import { COURT_SHEET_PAIR_POLL_MS, canLinkCourt, canWriteCourtStream, courtPairSeen, switchSpec } from "@/lib/match-day/court-stream";
-import { closeCodeOnPair, type PairSeen } from "@/lib/stream-session-view";
+import { closeCodeOnPair, type PairSeen } from "@/lib/stream-pair";
 import { venueNoun } from "@/lib/venue";
 import { DeviceLinkPanel } from "@/components/v2/device-link-panel";
 import { FreeCourt } from "./candidate-list";
