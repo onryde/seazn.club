@@ -28,6 +28,9 @@ export interface LedgerRow {
   desk: DeskDivision | null;
   statusLine: string;
   menu?: ReactNode;
+  /** Online Chess credits (spec 2026-11-23 §8.8, Step 1b): this division plays online and has not paid for it yet (no round can open). Set by the
+   *  competition page for an organiser of a club offered Online Chess, and for no one else; absent is "nothing owed". */
+  onlineUnpaid?: boolean;
 }
 
 // D fix (review round 1, desktop addendum): phase-coloured, not always
@@ -38,6 +41,21 @@ export interface LedgerRow {
 const BAR: Record<DeskDivision["phase"], string> = {
   setting_up: "bg-purple-600", scheduled: "bg-purple-600", match_day: "bg-amber-600", finished: "bg-green-700",
 };
+
+/** Online Chess credits (spec 2026-11-23 §8.8, Step 1b): "Online Chess not paid", an amber link to the division's Fixtures tab, where the pay line and
+ *  its Pay button are. A SIBLING of the row's own link, never inside it (a nested <a> is invalid HTML). Organiser-only: the caller draws it only for
+ *  `canEdit` and an `onlineUnpaid` row. 44px tall below `md`. */
+function OnlineUnpaidFlag({ dict, href }: { dict: Dict; href: string }) {
+  return (
+    <Link
+      href={href}
+      data-testid="online-unpaid-flag"
+      className="inline-flex w-fit max-w-full items-center rounded-full border border-amber-300 bg-amber-50 px-3 py-0.5 text-xs font-medium text-amber-900 hover:bg-amber-100 max-md:min-h-11"
+    >
+      <span className="min-w-0 [overflow-wrap:anywhere]">{t(dict, "onlineChess.flag.text")}</span>
+    </Link>
+  );
+}
 
 function nextLine(dict: Dict, d: DeskDivision, locale: string, nowMs: number): string {
   // V4 fix (review round 1): nothing left to schedule is not itself
@@ -223,6 +241,8 @@ export function DivisionLedger({
           const pct = d && d.total > 0 ? Math.round((d.played / d.total) * 100) : 0;
           const href = routes.division(org, comp, r.slug);
           const next = nextByRow[i];
+          // The "Not paid" flag opens the division on the tab that holds the pay line.
+          const unpaidFlag = canEdit && r.onlineUnpaid === true ? <OnlineUnpaidFlag dict={dict} href={routes.division(org, comp, r.slug, "fixtures")} /> : null;
           // Gated on `canEdit` for the reason the prop's own note gives: a
           // viewer is shown the state, never a button for work the landing
           // page will not let them do.
@@ -312,6 +332,7 @@ export function DivisionLedger({
                       sits under. */}
                   {next !== "" && <p className="mt-1 text-xs font-medium text-slate-900">{next}</p>}
                 </Link>
+                {unpaidFlag !== null && <div className="mt-2">{unpaidFlag}</div>}
                 {action && (
                   <Link href={action.href} className="btn btn-primary mt-3 flex w-full items-center justify-center py-3 text-sm">
                     {action.label}
@@ -341,6 +362,7 @@ export function DivisionLedger({
                       cut off exactly where the meaning is — "28 of 28
                       played · Final…"). Wraps up to two lines instead. */}
                   <p className="line-clamp-2 text-xs text-slate-600">{r.statusLine}</p>
+                  {unpaidFlag !== null && <div className="mt-1">{unpaidFlag}</div>}
                 </div>
                 <div className="h-1.5 overflow-hidden rounded-full bg-purple-100">
                   <i className={`block h-full rounded-full ${d ? BAR[d.phase] : "bg-purple-300"}`} style={{ width: `${pct}%` }} />

@@ -18,6 +18,7 @@
 //   settle.ts  settleReversals — after a package returns credits, take what a reversed pack still owes (§7.5)
 //   refund.ts  refundOnlinePackageLocked / planPackageDelete / applyPackageDelete — the full refund, and the package half of the
 //              division delete, the competition delete and online play switched off (prelude plans, epilogue applies)
+//   unpaid.ts  listUnpaidOnlineDivisions - the divisions of a competition that still owe their package (the competition page's "Not paid" flag)
 //   view.ts    onlinePackageView — the facts the Division rules strip draws its size select, price line and format refusal from: the
 //              quote's own reads (places held, counted rounds, cameras, balance) plus the live row's stored and paid state
 //   size.ts    assertSizeFits / prepareOnlineSave / decideOnlineSize / applyOnlineSave / writeOnlineSize — the package half of the
@@ -32,4 +33,5 @@ export * from "./gate";
 export * from "./settle";
 export * from "./refund";
 export * from "./size";
+export * from "./unpaid";
 export * from "./view";

@@ -41,6 +41,8 @@ import {
 import { needsYouCount, needsYouTone } from "@/lib/match-day/view";
 import { DivisionLedger, type LedgerRow } from "@/components/v2/desk/division-ledger";
 import { log } from "@/server/logger";
+import { onlineChessOffered } from "@/server/usecases/external-play/online-chess-flag";
+import { listUnpaidOnlineDivisions } from "@/server/usecases/online-package";
 
 export default async function CompetitionPage({
   params,
@@ -120,8 +122,22 @@ export default async function CompetitionPage({
   // The line into Match Day carries the number Match Day's own header button opens with (`needsYouCount`), for the same rows.
   const needsInMatchDay = onMatchDay && needs.length > 0 && desk ? needsYouCount({ needs_you: needs, results_owed: resultsOwedOf(desk) }) : 0;
   const needsInMatchDayTone = needsYouTone(needs);
+  // Online Chess credits (spec 2026-11-23 §8.8, "Step 1b"): an online division whose package is still unpaid carries a "Not paid" flag on its row, for
+  // the organiser only (never a view-only member, never the public hub or a player page) and only while the club is offered Online Chess. Asked only
+  // where it can matter - an editor, a chess division on the page - and one read for the whole competition. A courtesy beside the ledger: a read that
+  // throws is logged and the ledger renders without flags, never a 500.
+  let unpaidOnline = new Set<string>();
+  if (canEdit && divisions.some((d) => d.sport_key === "boardgame")) {
+    try {
+      if (await onlineChessOffered(auth)) unpaidOnline = await listUnpaidOnlineDivisions({ orgId: auth.orgId, competitionId: id });
+    } catch (err) {
+      log.error({ err, competitionId: id }, "online chess: reading the unpaid divisions failed; the ledger renders without the Not paid flag");
+    }
+  }
   const ledgerRows: LedgerRow[] = divisions.map((d) => {
     const dd = desk?.divisions.get(d.id) ?? null;
+    // Chess only, twice over: the read already names none else, and the row never trusts a set to say so.
+    const onlineUnpaid = d.sport_key === "boardgame" && unpaidOnline.has(d.id);
     const s = stats.get(d.id);
     if (!dd) {
       return {
@@ -129,6 +145,7 @@ export default async function CompetitionPage({
         logoUrl: resolveLogoUrl(d.logo_storage_path, d.logo_url), desk: null,
         formatLabel: formatLabel(s?.stage_kinds ?? []),
         statusLine: t(dict, "card.progress.played", { played: s?.played ?? 0, total: s?.total ?? 0 }),
+        onlineUnpaid,
       };
     }
     return {
@@ -138,6 +155,7 @@ export default async function CompetitionPage({
       sportKey: d.sport_key,
       logoUrl: resolveLogoUrl(d.logo_storage_path, d.logo_url),
       formatLabel: formatLabel(s?.stage_kinds ?? []),
+      onlineUnpaid,
       desk: dd,
       statusLine: statusLine(dict, {
         phase: dd.phase, played: dd.played, total: dd.total, unscheduled: dd.unscheduled, inPlay: dd.in_play,
