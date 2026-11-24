@@ -56,8 +56,9 @@ const SHA256: Record<string, string> = {
   "capture-qr.v2.json": "0943072e30489dad04822cf266cc62d4e004e3a2ef46fe20e712a274ae272fbe",
   "capture-descriptor.v1.json": "308d58807d3b3754ccf5b400c18827d09ffb5dd0177aaed7d10b31b307c027f4",
   // Realtime push nudges (spec 2026-11-24 §2.1, plan Task 4): + the answer's optional `realtime`, additive.
-  // Task 46 (owner 2026-11-24): + the answer's optional `delivery`, additive (never replaced/taken). Re-pinned on the rebase.
-  "capture-beat.v1.json": "8b037827fc5922f4b6fb9e891ad58df3e6912582bb17722f5aab89b14670d7e9",
+  // Task 46 (owner 2026-11-24): + the answer's optional `delivery`, additive (waiting, go-live, live, over; never replaced/taken);
+  // review fix round: its prose says any session with a stored fact (widened from Seazn-hosted only). Re-pinned on the rebase.
+  "capture-beat.v1.json": "2355aa3a1c80877e7eff015dd3d8810f03d4d34a2f66f8751dacfc35141e1d13",
   "capture-start.v1.json": "46162c64e4b9e0da3f17a571103c3ba7e3e9e972997367c916bf7f6ea8e08778",
   "capture-scoring-link.v1.json": "daa81ed4f907545f0fb1a8265d11011fab3b90a52d880dda8e3839f7651b5032",
   "capture-record.v1.json": "213f766043b7682f198cc98da13e93995b6602e46533ecf60c78bf562aebd6f8",

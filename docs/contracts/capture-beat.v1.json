@@ -452,7 +452,7 @@
               "additionalProperties": false
             },
             "delivery": {
-              "description": "Delivery facts (Task 46, 2026-11-24), so the phone can tell \"my camera reaches Cloudflare but the programme is down\" from \"all fine\": what the relay and Cloudflare last said about the session's video. This server sends it on go-live and live only, to the slot's current phone, for a Seazn-hosted session (one with a relay and a programme); never on replaced or taken. Each member is omitted, never null, when it is not known; when none is known the object is omitted, never empty and never null. Plain values only: no URL, host, id, key or token. A phone reads an unknown word in any member as not known.",
+              "description": "Delivery facts (Task 46, 2026-11-24), so the phone can tell \"my camera reaches Cloudflare but the programme is down\" from \"all fine\": what the relay and Cloudflare last said about the session's video. This server sends it on go-live and live only, to the slot's current phone, for any session with a fact to tell: a composed session's relay and both its inputs, a passthrough session's camera input only (it has no relay and no programme); never on replaced or taken. Each member is omitted, never null, when it is not known; when none is known the object is omitted, never empty and never null. Plain values only: no URL, host, id, key or token. A phone reads an unknown word in any member as not known.",
               "type": "object",
               "properties": {
                 "relayOutput": {
@@ -497,7 +497,7 @@
                   ]
                 },
                 "programmeIngest": {
-                  "description": "The programme feed at Cloudflare (what viewers are served), from the latest live-input notification Cloudflare sent for it: connected, disconnected or errored. Omitted when Cloudflare has sent none.",
+                  "description": "The programme feed at Cloudflare (a composed session's only), from the latest live-input notification Cloudflare sent for it: connected, disconnected or errored. Omitted when Cloudflare has sent none.",
                   "type": "string",
                   "enum": [
                     "connected",
@@ -668,7 +668,7 @@
               "additionalProperties": false
             },
             "delivery": {
-              "description": "Delivery facts (Task 46, 2026-11-24), so the phone can tell \"my camera reaches Cloudflare but the programme is down\" from \"all fine\": what the relay and Cloudflare last said about the session's video. This server sends it on go-live and live only, to the slot's current phone, for a Seazn-hosted session (one with a relay and a programme); never on replaced or taken. Each member is omitted, never null, when it is not known; when none is known the object is omitted, never empty and never null. Plain values only: no URL, host, id, key or token. A phone reads an unknown word in any member as not known.",
+              "description": "Delivery facts (Task 46, 2026-11-24), so the phone can tell \"my camera reaches Cloudflare but the programme is down\" from \"all fine\": what the relay and Cloudflare last said about the session's video. This server sends it on go-live and live only, to the slot's current phone, for any session with a fact to tell: a composed session's relay and both its inputs, a passthrough session's camera input only (it has no relay and no programme); never on replaced or taken. Each member is omitted, never null, when it is not known; when none is known the object is omitted, never empty and never null. Plain values only: no URL, host, id, key or token. A phone reads an unknown word in any member as not known.",
               "type": "object",
               "properties": {
                 "relayOutput": {
@@ -713,7 +713,7 @@
                   ]
                 },
                 "programmeIngest": {
-                  "description": "The programme feed at Cloudflare (what viewers are served), from the latest live-input notification Cloudflare sent for it: connected, disconnected or errored. Omitted when Cloudflare has sent none.",
+                  "description": "The programme feed at Cloudflare (a composed session's only), from the latest live-input notification Cloudflare sent for it: connected, disconnected or errored. Omitted when Cloudflare has sent none.",
                   "type": "string",
                   "enum": [
                     "connected",
@@ -888,7 +888,7 @@
               "additionalProperties": false
             },
             "delivery": {
-              "description": "Delivery facts (Task 46, 2026-11-24), so the phone can tell \"my camera reaches Cloudflare but the programme is down\" from \"all fine\": what the relay and Cloudflare last said about the session's video. This server sends it on go-live and live only, to the slot's current phone, for a Seazn-hosted session (one with a relay and a programme); never on replaced or taken. Each member is omitted, never null, when it is not known; when none is known the object is omitted, never empty and never null. Plain values only: no URL, host, id, key or token. A phone reads an unknown word in any member as not known.",
+              "description": "Delivery facts (Task 46, 2026-11-24), so the phone can tell \"my camera reaches Cloudflare but the programme is down\" from \"all fine\": what the relay and Cloudflare last said about the session's video. This server sends it on go-live and live only, to the slot's current phone, for any session with a fact to tell: a composed session's relay and both its inputs, a passthrough session's camera input only (it has no relay and no programme); never on replaced or taken. Each member is omitted, never null, when it is not known; when none is known the object is omitted, never empty and never null. Plain values only: no URL, host, id, key or token. A phone reads an unknown word in any member as not known.",
               "type": "object",
               "properties": {
                 "relayOutput": {
@@ -933,7 +933,7 @@
                   ]
                 },
                 "programmeIngest": {
-                  "description": "The programme feed at Cloudflare (what viewers are served), from the latest live-input notification Cloudflare sent for it: connected, disconnected or errored. Omitted when Cloudflare has sent none.",
+                  "description": "The programme feed at Cloudflare (a composed session's only), from the latest live-input notification Cloudflare sent for it: connected, disconnected or errored. Omitted when Cloudflare has sent none.",
                   "type": "string",
                   "enum": [
                     "connected",
@@ -1098,7 +1098,7 @@
               "additionalProperties": false
             },
             "delivery": {
-              "description": "Delivery facts (Task 46, 2026-11-24), so the phone can tell \"my camera reaches Cloudflare but the programme is down\" from \"all fine\": what the relay and Cloudflare last said about the session's video. This server sends it on go-live and live only, to the slot's current phone, for a Seazn-hosted session (one with a relay and a programme); never on replaced or taken. Each member is omitted, never null, when it is not known; when none is known the object is omitted, never empty and never null. Plain values only: no URL, host, id, key or token. A phone reads an unknown word in any member as not known.",
+              "description": "Delivery facts (Task 46, 2026-11-24), so the phone can tell \"my camera reaches Cloudflare but the programme is down\" from \"all fine\": what the relay and Cloudflare last said about the session's video. This server sends it on go-live and live only, to the slot's current phone, for any session with a fact to tell: a composed session's relay and both its inputs, a passthrough session's camera input only (it has no relay and no programme); never on replaced or taken. Each member is omitted, never null, when it is not known; when none is known the object is omitted, never empty and never null. Plain values only: no URL, host, id, key or token. A phone reads an unknown word in any member as not known.",
               "type": "object",
               "properties": {
                 "relayOutput": {
@@ -1143,7 +1143,7 @@
                   ]
                 },
                 "programmeIngest": {
-                  "description": "The programme feed at Cloudflare (what viewers are served), from the latest live-input notification Cloudflare sent for it: connected, disconnected or errored. Omitted when Cloudflare has sent none.",
+                  "description": "The programme feed at Cloudflare (a composed session's only), from the latest live-input notification Cloudflare sent for it: connected, disconnected or errored. Omitted when Cloudflare has sent none.",
                   "type": "string",
                   "enum": [
                     "connected",

@@ -804,8 +804,9 @@ export async function runBeat(scope: BeatScope, body: Beat, deps: SessionDeps, n
     }
   }
   // Task 46: the delivery facts, for an answer that tells the phone to publish (go-live, live) — the slot's current phone, so
-  // never replaced or taken. One read on the pool, after the transaction; a Seazn-hosted session only (the read's own gate). A
-  // failed read is reported and the beat answered without it: wireBeatAnswer omits an absent or empty `delivery`.
+  // never replaced or taken. One read on the pool, after the transaction, for any kind of session: it tells what is stored for
+  // it (a passthrough has no relay, so at most its camera's notification). A failed read is reported and the beat answered
+  // without it: wireBeatAnswer omits an absent or empty `delivery`.
   let delivery: BeatAnswerCommon["delivery"] = null;
   if (core.state === "go-live" || core.state === "live") {
     try {

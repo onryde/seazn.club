@@ -4,8 +4,9 @@
 // relay and YouTube ports on the rig's tickable clock.
 //
 // The rules under test, typed from the brief (task-46-brief.md) and the contract (capture-beat.v1.json), never from the code:
-//   - present only on the answers that tell the slot's CURRENT phone to publish (go-live, live), for a Seazn-hosted session
-//     (one with a relay and a programme); absent on waiting, over, replaced and taken, and on every other session;
+//   - present only on the answers that tell the slot's CURRENT phone to publish (go-live, live), for ANY session that has a
+//     stored fact (review ruling 2026-11-24, widened from Seazn-hosted only): a composed session's relay and both its inputs, a
+//     passthrough's camera input only; absent on waiting, over, replaced and taken, and when nothing is stored yet;
 //   - relay members from the Machine's stored beat while it is at most 3 relay beats old (config's cadence × 3), CF members
 //     from the latest recorded live-input notification of that input; unknown → omitted, never null; none → no object;
 //   - at most one extra read per beat, on the pool after the beat's transaction; a failed read → no `delivery`, the beat is
@@ -273,7 +274,7 @@ describe.skipIf(!HAS_DB)("Task 46 — the beat answer's delivery, through the re
     const sid = await liveSeazn(r, phone);
     // A composed session's camera is never polled (the poll reads passthrough inputs only — stream-sessions/live-notification.ts
     // head), so it never records first_ingest_at: §5.4 reads its ENDING session as `starting` (waiting), never `live` — so no
-    // beat after a Stop can be a publishing answer on a Seazn session.
+    // beat after a Stop can be a publishing answer on a composed (Seazn or pasted-key) session.
     r.tick(3 * SEC);
     await tickSession(sid, r.deps, "beat");
     await machineBeats(r, sid, PLAYING);
@@ -337,19 +338,23 @@ describe.skipIf(!HAS_DB)("Task 46 — the beat answer's delivery, through the re
     expect(readDeliveryFacts).not.toHaveBeenCalled();
   });
 
-  it("other sessions read no delivery: a phone-only passthrough and a composed session on a pasted key, with notifications and a relay beat stored", async () => {
+  it("every kind of session tells what is stored: a passthrough at most its camera, a composed session on a pasted key its relay and inputs; nothing stored → no key", async () => {
     // Passthrough (phone → Cloudflare → YouTube, no relay): live once the camera connects.
     const p = await captureRig();
     const pPhone = phoneId("dlv-pass");
     const pSid = await p.start(pPhone);
     p.tick(3 * SEC);
     await tickSession(pSid, p.deps, "beat");
-    expect(await sessionRow(pSid), "PREMISE: a live passthrough on a pasted key").toMatchObject({ state: "live", mode: "passthrough", destination_kind: "youtube" });
+    expect(await sessionRow(pSid), "PREMISE: a live passthrough on a pasted key, no relay beat").toMatchObject({ state: "live", mode: "passthrough", destination_kind: "youtube", last_heartbeat: null });
+    // The empty case: nothing stored yet — the read answers a row, every member is unknown, so no key at all.
+    const nothing = await beat(p, pPhone, { sid: pSid, state: "publishing" });
+    expect(nothing.state).toBe("live");
+    expect(nothing, "nothing stored: no delivery key").not.toHaveProperty("delivery");
     await cfSays(p, pSid, "camera", "live_input.connected");
     const pass = await beat(p, pPhone, { sid: pSid, state: "publishing" });
     expect(pass.state).toBe("live");
-    expect(pass, "phone-only: no delivery").not.toHaveProperty("delivery");
-    // Composed on the pasted key: a relay and a programme, but not Seazn-hosted (the brief's scope).
+    expect(dlv(pass), "a passthrough has a camera input and nothing else").toEqual({ cameraIngest: "connected" });
+    // Composed on the pasted key: a relay and a programme, on YouTube.
     const c = await captureRig();
     const cPhone = phoneId("dlv-pasted-composed");
     const cSid = await goLive(c, cPhone, { mode: "composed", targetId: c.target.id });
@@ -358,13 +363,12 @@ describe.skipIf(!HAS_DB)("Task 46 — the beat answer's delivery, through the re
     expect(await sessionRow(cSid), "PREMISE: a live composed session on a pasted key").toMatchObject({ state: "live", mode: "composed", destination_kind: "youtube" });
     const composed = await beat(c, cPhone, { sid: cSid, state: "publishing" });
     expect(composed.state).toBe("live");
-    expect(composed, "not Seazn-hosted: no delivery").not.toHaveProperty("delivery");
-    // Each publishing beat made its one read, and the read answered nothing.
-    expect(readDeliveryFacts).toHaveBeenCalledTimes(2);
-    for (const result of vi.mocked(readDeliveryFacts).mock.results) expect(await result.value).toBeNull();
+    expect(dlv(composed), "its relay, and the one input Cloudflare has spoken of").toEqual({ ...PLAYING_TOLD, programmeIngest: "connected" });
+    // Each publishing beat made its one read, of its own session.
+    expect(vi.mocked(readDeliveryFacts).mock.calls.map((x) => x[0])).toEqual([pSid, pSid, cSid]);
   });
 
-  it("another surface: a court code's beat on its live session runs the same read and carries no delivery (courts cannot pick Seazn, spec §7 call 2)", async () => {
+  it("another surface: a court code's beat on its live (composed) session runs the same read and tells its relay", async () => {
     const day = await seedDay();
     const [A] = day.comp.fixtures.map((f) => f.id) as [string];
     await override(day.orgId, "streaming.relay", true);
@@ -401,11 +405,11 @@ describe.skipIf(!HAS_DB)("Task 46 — the beat answer's delivery, through the re
     vi.mocked(readDeliveryFacts).mockClear();
     const a = await courtBeat({ sid, state: "publishing" });
     expect(a).toMatchObject({ state: "live", sid });
-    expect(a).not.toHaveProperty("delivery");
-    // The court's beat is runBeat's: the same one read, which finds no Seazn session.
+    // The Machine's beat is stored; Cloudflare has sent no notification for either input.
+    expect(dlv(a)).toEqual(PLAYING_TOLD);
+    // The court's beat is runBeat's: the same one read, of the court's session.
     expect(readDeliveryFacts).toHaveBeenCalledTimes(1);
     expect(readDeliveryFacts).toHaveBeenCalledWith(sid);
-    expect(await vi.mocked(readDeliveryFacts).mock.results[0]!.value).toBeNull();
   });
 
   it("anti-vacuity: answers were checked", () => {
