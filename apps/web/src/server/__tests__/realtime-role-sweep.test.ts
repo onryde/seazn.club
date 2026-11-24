@@ -29,7 +29,7 @@
 //
 // Anti-vacuity: each half reports what it scanned (files, policies, grants);
 // zero files, zero policies or zero grants fails, and the realtime.messages
-// policy statements are pinned at an EXACT count (6 since V555), so one more
+// policy statements are pinned at an EXACT count (7 since V556), so one more
 // or one fewer fails until the pin moves on purpose. The checkers are also
 // run on synthetic SQL, both ways, so a checker that can never fire cannot
 // pass here.
@@ -424,6 +424,12 @@ describe("§4.5 role sweep — the checkers fire (synthetic SQL, both ways)", ()
     expect(claimsRead("((select auth.jwt()) -> 'division_ids') ? substr((select realtime.topic()), 10)")).toEqual([
       "division_ids",
     ]);
+    // …and V556 as written: the array claim read twice (jsonb_typeof, then `?`) is still ONE claim.
+    expect(
+      claimsRead(
+        "jsonb_typeof((select auth.jwt() -> 'division_ids')) = 'array' and (select auth.jwt() -> 'division_ids') ? nullif(substr((select realtime.topic()), 10), '')",
+      ),
+    ).toEqual(["division_ids"]);
   });
 });
 
@@ -432,7 +438,7 @@ describe("§4.5 role sweep — every migration (static)", () => {
   const policies = files.flatMap((f) => parsePolicies(relative(MIGRATIONS, f), readFileSync(f, "utf8")));
   const grants = files.flatMap((f) => parseGrants(relative(MIGRATIONS, f), readFileSync(f, "utf8")));
 
-  it("scans every migration: files, policies and grants non-zero; realtime.messages policies exactly 6", () => {
+  it("scans every migration: files, policies and grants non-zero; realtime.messages policies exactly 7", () => {
     const b = authenticatedWidening(grants);
     const c = realtimeClaimFailures(policies);
     const repeatable = files.filter((f) => /(^|\/)R__[^/]*$/.test(f)).length;
@@ -444,9 +450,9 @@ describe("§4.5 role sweep — every migration (static)", () => {
     expect(files.length, "migration files scanned").toBeGreaterThan(0);
     expect(policies.length, "create policy statements scanned").toBeGreaterThan(0);
     expect(grants.length, "grant statements scanned").toBeGreaterThan(0);
-    // V403 and V452, each re-created by V537, plus V554's capture pairing policy and V555's match day policy.
-    // Pinned: a new realtime policy (V556) moves this on purpose.
-    expect(c.realtime, "realtime.messages policy statements scanned").toBe(6);
+    // V403 and V452, each re-created by V537, plus V554's capture pairing policy, V555's match day policy and V556's
+    // division policy. Pinned: a new realtime policy moves this on purpose.
+    expect(c.realtime, "realtime.messages policy statements scanned").toBe(7);
   });
 
   it("(a) no policy outside realtime.messages names authenticated, anon or public", () => {
@@ -461,12 +467,12 @@ describe("§4.5 role sweep — every migration (static)", () => {
     expect(realtimeClaimFailures(policies).failures).toEqual([]);
   });
 
-  it("backstop: authenticated/anon appear only inside the six known realtime.messages policy statements", () => {
+  it("backstop: authenticated/anon appear only inside the seven known realtime.messages policy statements", () => {
     const all = files.map((f) => tokenRoleMentions(relative(MIGRATIONS, f), readFileSync(f, "utf8")));
     const hits = all.flatMap((m) => m.hits).map((h) => `${h.file} :: ${h.policy}`);
     console.log(`[role-sweep static] authenticated/anon mentions: ${hits.length} (all inside realtime.messages policies)`);
     expect(all.flatMap((m) => m.failures)).toEqual([]);
-    // Pinned by file and policy: a new realtime policy (V556) adds its line here on purpose.
+    // Pinned by file and policy: a new realtime policy adds its line here on purpose.
     expect(hits.sort()).toEqual([
       "deltas/V403__realtime_fixture_broadcast_policy.sql :: fixture broadcast read by claim",
       "deltas/V452__online_chess_realtime_policy.sql :: external play lobby read by claim",
@@ -474,6 +480,7 @@ describe("§4.5 role sweep — every migration (static)", () => {
       "deltas/V537__org_has_feature_plpgsql.sql :: fixture broadcast read by claim",
       "deltas/V554__pairing_realtime_policy.sql :: capture pairing read by claim",
       "deltas/V555__match_day_realtime_policy.sql :: match day code read by claim",
+      "deltas/V556__division_realtime_policy.sql :: division read by claim",
     ]);
   });
 });
