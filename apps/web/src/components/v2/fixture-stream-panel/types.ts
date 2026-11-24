@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import type { TemplateId } from "@/components/overlay/template-registry";
 import type { OverlaySideInput } from "@/lib/overlay-model";
 import type { Currency } from "@/lib/currency";
-import type { StreamPrefsRead } from "@/lib/stream-settings";
+import type { ClubStreamPrefs, StreamPrefsRead } from "@/lib/stream-settings";
 import type { SeaznQr } from "@/lib/seazn-qr";
 import type { CreateFailureCode, CreateErrorHolder } from "@/lib/stream-session-view";
 // TYPES only: `@/server/**` is server code, and a runtime import from a client island breaks the build.
@@ -64,6 +64,9 @@ export interface StreamPanelContext {
   /** Court stream device check 3 (D1): config.ts `COURT_PHONE_OVERLAY_DELAY_MS` — the delay a COURT session serves when the
    *  fixture sets none. Score timing's default while the read model names the match's court. */
   courtOverlayDelayDefaultMs: number;
+  /** Task 38: the club's default Score style and timing (`org_stream_defaults`; null = none set), for the panel's "Club style: …" row
+   *  and the style the picker opens on. A match's own stored choice wins over it; a COURT stream takes the style and never the timing. */
+  clubStyle: ClubStreamPrefs;
   /** I3 (PR #987 review): each listed fixture's sides as the overlay AIRS them — names masked and codes disambiguated by
    *  the overlay page's own loader (server/stream-panel-context.ts `overlayPreviewSides`). The style grid's thumbnails
    *  render these, so a person pair previews the codes it airs. A fixture absent here previews the row's own names. */
@@ -126,7 +129,9 @@ export type CreateError = { code: CreateFailureCode; holder: CreateErrorHolder |
  *    the camera only, with a one-line reason — never blocked, never an option the API would refuse.
  *  - `stored`: the fixture's stored mode (null: never chosen — the score). The effective mode is
  *    `effectiveStreamMode(stored, available)`, the SAME rule the phone's start and the automatic start resolve.
- *  - `template`: the style the picker shows (resolved), sent as Go live's `themeId` for a score stream.
+ *  - `template`: the match's OWN stored style, resolved (null: it has none), sent as Go live's `themeId` for a score stream. Null sends
+ *    NO themeId, so the server's chain (the match's, else the club's, else the sport's default) decides — Task 38: the style the
+ *    picker merely SHOWS (the club's) is never sent as if the organiser had chosen it.
  *  - `delayMs`: the score timing Score timing shows (null: the server's default), sent as Go live's `overlayDelayMs` for
  *    a score stream — so a delay typed just before Go live streams even while its own save is still in flight (m2).
  *  - `editor`: Ready's score card body — the picker and Score timing (pre-live only).
@@ -134,7 +139,7 @@ export type CreateError = { code: CreateFailureCode; holder: CreateErrorHolder |
 export interface PhoneScore {
   available: boolean;
   stored: StreamMode | null;
-  template: TemplateId;
+  template: TemplateId | null;
   delayMs: number | null;
   sportKey: string;
   editor: ReactNode;

@@ -23,9 +23,10 @@ import { overlayKeyFor } from "@/server/overlay/overlay-key";
 import { relayOverlayPageFacts } from "@/server/overlay/page-facts";
 import type { OverlaySideInput } from "@/lib/overlay-model";
 import { overlayDictOf } from "@/lib/overlay-dict";
-import { NO_STREAM_PREFS_READ, type StreamPrefsRead } from "@/lib/stream-settings";
+import { NO_CLUB_STREAM_PREFS_READ, NO_STREAM_PREFS_READ, type StreamPrefsRead } from "@/lib/stream-settings";
 import { AUTO_STOP_AFTER_RESULT_SECONDS, PHONE_LOST_LIVE_MINUTES, overlayDelayDefaultMs, streamPasteCodeShown, tunable } from "@/server/relay/config";
 import { composedUnavailable, relayUnavailable } from "@/server/relay/drivers";
+import { orgStreamDefaultsOf } from "@/server/usecases/org-stream-defaults";
 import { streamPrefsOf } from "@/server/usecases/stream-codes";
 import { hasLiveConnection } from "@/server/youtube/connections";
 import { reconcileStreamCreditsCheckout } from "@/server/usecases/stream-credits-checkout";
@@ -173,12 +174,15 @@ export async function loadStreamPanelContext(args: {
   const relayOn = relayEntitled && !relayDisabled;
   // R2006: the listed fixtures' stored score preferences — one read, only with the panel (`entitled`).
   // I3: the aired sides for the preview — only with the panel.
-  const [credits, currency, phoneCapture, storedPrefs, previewSides] = await Promise.all([
+  // Task 38: the club's default style and timing — one read, only with the panel; the row "Club style: …" and the picker's effective
+  // style read it, and Go live leaves the style to the server's chain.
+  const [credits, currency, phoneCapture, storedPrefs, previewSides, clubDefaults] = await Promise.all([
     relayOn ? relayCredits(auth, auth.orgId) : null,
     relayOn ? preferredCurrency(auth.orgId) : ("gbp" as const),
     entitled ? phoneCaptureOffered(auth) : false,
     entitled ? streamPrefsOf(auth.orgId, args.fixtureIds) : NO_STORED_PREFS,
     entitled ? overlayPreviewSides(auth.orgId, args.fixtureIds) : NO_PREVIEW_SIDES,
+    entitled ? orgStreamDefaultsOf(auth.orgId) : NO_CLUB_STREAM_PREFS_READ,
   ]);
   return {
     entitled,
@@ -193,6 +197,8 @@ export async function loadStreamPanelContext(args: {
     overlayDelayDefaultMs: overlayDelayDefaultMs(false),
     // Court stream device check 3 (D1): a court session's own default, from the same rule the create reads.
     courtOverlayDelayDefaultMs: overlayDelayDefaultMs(true),
+    // Task 38: the club's own default (style and timing; null = none set). Never another org's: read for the authorised org.
+    clubStyle: { overlayTemplate: clubDefaults.overlayTemplate, overlayDelayMs: clubDefaults.overlayDelayMs },
     // I3: each listed fixture's sides as the overlay airs them (`overlayPreviewSides`).
     overlaySides: previewSides,
     // Streaming R1 lane D: the Phone tab's routes address the org, and its idle state needs the balance before any

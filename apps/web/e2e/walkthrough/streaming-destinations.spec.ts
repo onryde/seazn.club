@@ -37,6 +37,7 @@ import { TAG, addEntrantsViaApi, apiJson, createStageAndGenerate, expectNoHorizo
 import { setRigPlan, signInAs } from "../overlay-kit";
 import { storeCameraOnly } from "../helpers/stream-mode";
 import { expectSelectedTarget, offeredTargetIds, offeredTargetNames, selectTarget, targetPicker } from "../helpers/stream-target-picker";
+import { defaultTemplateFor, resolveTemplate, templatesForSport } from "../../src/components/overlay/template-registry";
 import { ADDABLE_STREAM_PLATFORMS, STREAM_PLATFORMS, type AddableStreamPlatform, type StreamPlatform } from "../../src/lib/stream-destinations";
 import { STREAM_KIND_BRAND } from "../../src/components/v2/stream-platform-mark";
 import {
@@ -1333,5 +1334,114 @@ for (const width of [320, 768, 1280] as const) {
     await expect(page.getByTestId("stream-own-divider"), "…without the editor's instruction (step 2: the owner's has it)").not.toContainText(en("streaming.own.sub"));
     await expectNoHorizontalScroll(page);
     await shot(seaznCard(page), `12-${width}-card-viewer.png`);
+  });
+}
+
+// ===========================================================================
+// 13 — Seazn-hosted video (Task 38): the club's Score style and timing, on the Streaming page, reach the match's own panel
+// ===========================================================================
+// Runs in EVERY job that runs this file (the club section needs no Seazn switch; the match's score card needs the compositor image, which the
+// walkthrough leg's server and the e2e-seazn server both have). The organiser's round trip: the Streaming page's "Score on stream" (a
+// style that is NOT the sport's default, and a timing), each read back from the API and kept across a reload; then the match's Stream panel
+// — "Club style: X · 4.5 s — Change for this match", the controls closed; opened, they stand on the club's values; the match's own pick is
+// an override (read back from the match's settings), and "Use club style" puts BOTH of the match's fields back to none in one tap while the
+// club's own stay. Nothing starts. Then a member who cannot edit reads the same facts in words, with no control.
+const CLUB_SPORT = "generic"; // the seed's one division (seedRig)
+for (const width of [320, 768, 1280] as const) {
+  test(`13 @${width}: the club's Score style and timing — set on the Streaming page, read back, the match's row names them, Change for this match is an override, Use club style clears it; a viewer reads them in words`, async ({ page }) => {
+    const NAVS = 6; // the Streaming page, its reload, the match page (phone tab), the viewer's sign-in and Streaming page
+    const SAVES = 8; // the style, the timing, their API reads, the match's two saves and reads, the viewer's read
+    test.setTimeout(SEED_MS + NAVS * NAV_MS + SAVES * SAVE_MS);
+    await page.setViewportSize({ width, height: 900 });
+    const rig = await seedRig(page, { entrants: 2 });
+    const f = rig.fixtures[0]!;
+    // Two styles of the sport, the club's and the match's own — derived from the registry, never typed (the club's is not the sport's default,
+    // so it cannot be taken for the fallback the match would show with no club style at all).
+    const sportDefault = defaultTemplateFor(CLUB_SPORT);
+    const clubStyle = templatesForSport(CLUB_SPORT).find((t) => t.id !== sportDefault)!.id;
+    const ownStyle = sportDefault;
+    const label = (id: string): string => en(resolveTemplate(id, CLUB_SPORT).labelKey);
+    const defaultsApi = async () => (await apiJson<{ overlayTemplate: string | null; overlayDelayMs: number | null }>(page.request, `/api/v1/orgs/${rig.orgId}/stream-defaults`)).data;
+    // The match's own stored choice, read from its row (the route has no GET): no row is the same as two nulls.
+    const settingsApi = async () => withDb(async (sql) => {
+      const [r] = await sql<{ overlay_template: string | null; overlay_delay_ms: number | null }[]>`
+        select overlay_template, overlay_delay_ms from fixture_stream_settings where fixture_id = ${f.id}`;
+      return { overlayTemplate: r?.overlay_template ?? null, overlayDelayMs: r?.overlay_delay_ms ?? null };
+    });
+
+    // 1. The Streaming page: the section, nothing set; the style, then the timing.
+    await page.goto(`/o/${rig.orgSlug}/streaming`);
+    const club = page.getByTestId("club-score");
+    await expect(club).toBeVisible({ timeout: NAV_MS });
+    await expect(club.locator("h2")).toHaveText(en("streaming.club.heading"));
+    await expect(club.getByTestId("club-score-style-none"), "nothing set: each sport uses its own").toHaveText(en("streaming.club.style.none"));
+    await expect(club.getByTestId("club-score-scope")).toContainText(en("streaming.club.scope.new"));
+    expect(await defaultsApi(), "premise: the club sets nothing").toEqual({ overlayTemplate: null, overlayDelayMs: null, revision: null });
+    await club.locator(`[role="radio"][data-template="${clubStyle}"]`).click();
+    await expect.poll(async () => (await defaultsApi())?.overlayTemplate, { message: "the style saved", timeout: SAVE_MS }).toBe(clubStyle);
+    await expect(club.locator(`[role="radio"][data-template="${clubStyle}"]`)).toHaveAttribute("aria-checked", "true");
+    await expect(club.getByTestId("club-score-style-none")).toHaveCount(0);
+    await club.getByTestId("stream-timing").locator("summary").click();
+    const input = club.getByTestId("stream-timing-input");
+    await input.fill("4.5");
+    await input.press("Enter");
+    await expect.poll(async () => (await defaultsApi())?.overlayDelayMs, { message: "the timing saved", timeout: SAVE_MS }).toBe(4500);
+    await expectNoHorizontalScroll(page);
+    await shot(club, `13-${width}-club-section.png`);
+
+    // 2. Kept across a reload: the page reads the club's own row back.
+    await page.reload();
+    await expect(club.locator(`[role="radio"][data-template="${clubStyle}"]`), "after a reload: the style is still selected").toHaveAttribute("aria-checked", "true", { timeout: NAV_MS });
+    await expect(club.getByTestId("stream-timing-value")).toHaveText(en("stream.timing.value", { seconds: "4.5" }));
+
+    // 3. The match: the row names both, the controls are closed; Change for this match opens them on the club's values.
+    const body = await openPhoneTab(page, rig, f.no);
+    const row = body.getByTestId("stream-club-text");
+    await expect(row).toHaveText(en("stream.club.row", { style: label(clubStyle), seconds: "4.5" }), { timeout: NAV_MS });
+    await expect(body.getByTestId("stream-club-override"), "closed").toHaveCount(0);
+    await expect(body.getByTestId("stream-template-picker"), "no picker while closed").toHaveCount(0);
+    await body.getByTestId("stream-club-change").click();
+    const override = body.getByTestId("stream-club-override");
+    await expect(override).toBeVisible();
+    await expect(override.locator(`[role="radio"][data-template="${clubStyle}"]`), "opens on the club's style").toHaveAttribute("aria-checked", "true");
+    await expect(override.getByTestId("stream-timing-value")).toHaveText(en("stream.timing.value", { seconds: "4.5" }));
+    await expect(override.getByTestId("stream-timing-default"), "the timing is marked as the CLUB's default").toHaveText(en("stream.timing.clubDefault"));
+    await expectNoHorizontalScroll(page);
+    await shot(override, `13-${width}-match-override-open.png`);
+
+    // 4. The match's own pick is an override: its own settings carry it, the club's row stays, and the tag appears.
+    await override.locator(`[role="radio"][data-template="${ownStyle}"]`).click();
+    await expect.poll(async () => (await settingsApi())?.overlayTemplate, { message: "the match saved its own style", timeout: SAVE_MS }).toBe(ownStyle);
+    await expect(body.getByTestId("stream-club-override-tag")).toHaveText(en("stream.club.overrideTag"));
+    expect((await defaultsApi())?.overlayTemplate, "the club's own style is untouched").toBe(clubStyle);
+
+    // 5. Use club style: BOTH of the match's fields go back to none in one tap; the club's stay.
+    await override.getByTestId("stream-timing").locator("summary").click();
+    await override.getByTestId("stream-timing-input").fill("1.5");
+    await override.getByTestId("stream-timing-input").press("Enter");
+    await expect.poll(async () => (await settingsApi())?.overlayDelayMs, { message: "the match saved its own timing", timeout: SAVE_MS }).toBe(1500);
+    await body.getByTestId("stream-club-use").click();
+    await expect.poll(async () => await settingsApi(), { message: "both fields cleared", timeout: SAVE_MS }).toMatchObject({ overlayTemplate: null, overlayDelayMs: null });
+    await expect(body.getByTestId("stream-club-override"), "the row stands alone again").toHaveCount(0, { timeout: SAVE_MS });
+    await expect(row).toHaveText(en("stream.club.row", { style: label(clubStyle), seconds: "4.5" }));
+    expect(await defaultsApi(), "the club's own defaults are untouched").toMatchObject({ overlayTemplate: clubStyle, overlayDelayMs: 4500 });
+    expect(await sessionsOf(rig.orgId), "nothing started").toEqual([]);
+    await expectNoHorizontalScroll(page);
+
+    // 6. A member who cannot edit: the same facts in words, nothing to press.
+    const viewerEmail = `delivered+dsd-club-viewer-${rig.tag}@resend.dev`;
+    await withDb(async (sql) => {
+      const [{ id }] = await sql<{ id: string }[]>`
+        insert into users (email, display_name, email_verified) values (${viewerEmail}, ${"Club Viewer " + rig.tag}, true) returning id`;
+      await sql`insert into org_members (org_id, user_id, role) values (${rig.orgId}, ${id}, 'viewer')`;
+    });
+    await signInAs(page, viewerEmail);
+    await page.goto(`/o/${rig.orgSlug}/streaming`);
+    await expect(club).toBeVisible({ timeout: NAV_MS });
+    await expect(club.getByTestId("club-score-readonly-style")).toHaveText(label(clubStyle));
+    await expect(club.getByTestId("club-score-readonly-timing")).toContainText(en("stream.timing.value", { seconds: "4.5" }));
+    await expect(club.locator("button, input"), "read-only: nothing to press or type in").toHaveCount(0);
+    await expectNoHorizontalScroll(page);
+    await shot(club, `13-${width}-club-viewer.png`);
   });
 }

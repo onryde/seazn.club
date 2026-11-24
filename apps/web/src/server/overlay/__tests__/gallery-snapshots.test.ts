@@ -295,3 +295,18 @@ describe("walkToDecision — a match-ending sanction is redrawn like the forfeit
     },
   );
 });
+
+// Task 38: the Streaming page's club preview draws only the sports a club has — `gallerySnapshots(now, sportKeys)` walks just those.
+describe("gallerySnapshots(now, sportKeys): the walk narrows to the named sports", () => {
+  it("named sports only, each identical to its entry in the full walk; the default walks every overlay sport; a key the overlay does not render is refused by name", () => {
+    const NOW = 1_800_000_000_000;
+    const all = gallerySnapshots(NOW);
+    expect(Object.keys(all).sort(), "the default is every overlay sport").toEqual([...OVERLAY_SPORT_KEYS].sort());
+    const some = gallerySnapshots(NOW, ["football", "generic"]);
+    expect(Object.keys(some).sort()).toEqual(["football", "generic"]);
+    expect(some.football, "the same snapshot the full walk holds").toEqual(all.football);
+    expect(some.generic).toEqual(all.generic);
+    expect(() => gallerySnapshots(NOW, ["chess"])).toThrow(/chess is not an overlay sport/);
+    expect(Object.keys(gallerySnapshots(NOW, [])), "an empty list is an empty walk, not 'all'").toEqual([]);
+  });
+});

@@ -151,7 +151,9 @@ function TemplateOption(p: {
 export function StreamTemplatePicker(p: {
   /** `templatesForSport(sport)`, in registry order — the panel's, never a list typed here. */
   templates: readonly OverlayTemplateDef[];
-  selected: TemplateId;
+  /** The selected option; null while nothing is chosen (the club's Score style sets none until it is picked: each sport then uses its own,
+   *  and every option, the sport's default among them, is a change). */
+  selected: TemplateId | null;
   onPick: (id: TemplateId) => void;
   preview: TemplatePreviewData;
   /** Scopes the DOM ids (two panels on one page never share one). */

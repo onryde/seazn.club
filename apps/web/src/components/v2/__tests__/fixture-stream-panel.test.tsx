@@ -239,6 +239,7 @@ function ctx(o: Partial<StreamPanelContext> = {}): StreamPanelContext {
     streamPrefs: {},
     overlayDelayDefaultMs: RELAY_OVERLAY_DELAY_DEFAULT_MS,
     courtOverlayDelayDefaultMs: 0,
+    clubStyle: { overlayTemplate: null, overlayDelayMs: null },
     overlaySides: {},
     ...o,
   };
@@ -3408,6 +3409,33 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(checked).toBe(rows.length);
   });
 
+  // Task 38: a match with no style of its own sends NO themeId — the club's is the server's to apply, and a body that named the style the
+  // picker merely showed would turn the club's default into this match's own choice and beat it.
+  it("Task 38: Go live with no stored style sends no themeId (key absent, not null); with one, exactly that one — and the timing as before", async () => {
+    const own = templatesForSport("football").find((t) => t.id !== defaultTemplateFor("football"))!.id;
+    const rows: [string, PhoneScore["template"], unknown][] = [
+      ["no style of its own", null, { mode: "composed", targetId: "t1", overlayDelayMs: 2500 }],
+      ["its own style", own, { mode: "composed", targetId: "t1", themeId: own, overlayDelayMs: 2500 }],
+    ];
+    let checked = 0;
+    for (const [name, template, want] of rows) {
+      apiV1.mockClear();
+      const s = serve({ current: null, targets: TARGETS });
+      s.create = () => { s.current = session(); return { sessionId: "s1" }; };
+      const island = track(renderIsland(PhoneTab, { ...TAB, score: { ...SCORE_OFF, available: true, stored: null, delayMs: 2500, template } }));
+      await settle();
+      bodyOf(island).onSelectTarget("t1");
+      bodyOf(island).onGoLive();
+      await settle();
+      const post = apiV1.mock.calls.find(([url, o]) => url === "/api/v1/fixtures/f-1/stream-sessions" && o?.method === "POST");
+      const json = post?.[1]?.json as Record<string, unknown>;
+      expect(json, name).toEqual(want);
+      expect("themeId" in json, `${name}: the key itself`).toBe(template !== null);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
   it("§6.12 polling: the read model is read at mount and every STREAM_POLL_MS while the tab is open — at idle too, where `current` rests — and never after it closes", async () => {
     const island = track(await mount({ current: null, targets: TARGETS }));
     expect(phoneReads(), "the mount's read").toBe(1);
@@ -5977,9 +6005,10 @@ describe("R2006: the panel hands the Phone tab the score — availability, the s
       }
     }
     expect(checked).toBe(6);
-    // A fixture with nothing stored: never chosen, the sport's default style.
+    // A fixture with nothing stored: never chosen — no style of its own (Task 38: null sends no themeId, so the server's chain, the
+    // club's then the sport's default, decides; the style the picker SHOWS is not the match's choice).
     const none = scoreOf(openPanel({ relayEntitled: true, composedAvailable: true }));
-    expect([none.stored, none.template]).toEqual([null, defaultTemplateFor("football")]);
+    expect([none.stored, none.template]).toEqual([null, null]);
   });
 
   it("the sequence: Camera only → PUT { streamMode: passthrough }, shown at once; Add the score back → PUT { streamMode: composed }; a failed save puts the stored mode back and says so", async () => {
@@ -7330,5 +7359,134 @@ describe("the preview's fetch is the read-only door", () => {
     openPanel();
     expect(fetchOverlayFixture).toHaveBeenCalledTimes(1);
     expect(fetchOverlayFixture).toHaveBeenCalledWith(FIXTURE.id, undefined, { preview: true });
+  });
+});
+
+// Task 38 (Seazn-hosted video, Phase 4): the club's default style and timing on the match's panel. A compact row — "Club style: X · N s —
+// Change for this match" — opens today's controls as a per-match override; "Use club style" writes null for BOTH fields in one save. The
+// expected words come from the dictionary (`m`) and the registry, never typed here (TEST-STRATEGY rule 3).
+describe("Task 38: the match panel's club row, the override box and Use club style", () => {
+  const OTHER = templatesForSport("football").find((t) => t.id !== defaultTemplateFor("football"))!;
+  const OTHER_LABEL = m(resolveTemplate(OTHER.id, "football").labelKey as MessageKey);
+  const CLUB = { overlayTemplate: OTHER.id, overlayDelayMs: 4500 };
+  const NONE = { overlayTemplate: null, overlayDelayMs: null };
+  const scoreOf = (island: ReturnType<typeof openPanel>) => propsOf(island.tree().find((el) => el.type === PhoneTab)!).score as PhoneScore;
+  const editor = (island: ReturnType<typeof openPanel>, court = false): ReactElement[] => {
+    const sc = scoreOf(island);
+    return walk((court ? sc.courtEditor : sc.editor) as ReactElement);
+  };
+  const withClub = (club: StreamPanelContext["clubStyle"], stored: { overlayTemplate: string | null; overlayDelayMs: number | null } = NONE) =>
+    openPanel({ relayEntitled: true, composedAvailable: true, clubStyle: club, streamPrefs: { [FIXTURE.id]: { streamMode: null, ...stored, revision: 1 } } });
+  const timingProps = (tree: ReactElement[]) => propsOf(tree.find((el) => el.type === ScoreTiming)!) as unknown as Parameters<typeof ScoreTiming>[0];
+
+  it("a club style and timing, nothing of the match's own: ONE closed row naming both, with Change for this match — no picker, no timing field yet", () => {
+    const island = withClub(CLUB);
+    const t = editor(island);
+    expect(textAt(t, "stream-club-text")).toBe(m("stream.club.row", { style: OTHER_LABEL, seconds: "4.5" }));
+    expect(textAt(t, "stream-club-change")).toBe(m("stream.club.change"));
+    expect(attr(byTestId(t, "stream-club-change")!, "aria-expanded")).toBe(false);
+    expect(byTestId(t, "stream-club-override"), "closed").toBeUndefined();
+    expect(t.find((el) => el.type === StreamTemplatePicker), "no picker while closed").toBeUndefined();
+    expect(t.find((el) => el.type === ScoreTiming), "no timing while closed").toBeUndefined();
+    expect(scoreOf(island).template, "the match has no style of its own to send").toBeNull();
+  });
+
+  it("Change for this match opens today's controls on the CLUB's values (the picker selected on the club style, the timing's default the club's, marked so); Keep the club style closes it with nothing saved", () => {
+    const island = withClub(CLUB);
+    apiV1.mockClear();
+    click(byTestId(editor(island), "stream-club-change"));
+    const t = editor(island);
+    expect(byTestId(t, "stream-club-override")).toBeDefined();
+    expect(byTestId(t, "stream-club-override-tag"), "no override yet: no tag").toBeUndefined();
+    expect(byTestId(t, "stream-club-use"), "nothing to go back to").toBeUndefined();
+    expect(propsOf(t.find((el) => el.type === StreamTemplatePicker)!).selected, "the effective style: the club's").toBe(OTHER.id);
+    expect(timingProps(t).defaultMs).toBe(4500);
+    expect(timingProps(t).clubDefault).toBe(true);
+    expect(timingProps(t).storedMs).toBeNull();
+    expect(textAt(t, "stream-club-change")).toBe(m("stream.club.keep"));
+    click(byTestId(t, "stream-club-change"));
+    expect(byTestId(editor(island), "stream-club-override"), "closed again").toBeUndefined();
+    expect(apiV1, "opening and closing saves nothing").not.toHaveBeenCalled();
+  });
+
+  it("a COURT-streamed match: the row names the club's STYLE alone and its timing default is the court's own 0 s, never the club's; a club with timing only shows a court the plain controls", () => {
+    const island = withClub(CLUB);
+    expect(textAt(editor(island, true), "stream-club-text")).toBe(m("stream.club.rowStyle", { style: OTHER_LABEL }));
+    click(byTestId(editor(island, true), "stream-club-change"));
+    const t = editor(island, true);
+    expect(timingProps(t).defaultMs, "a court keeps 0 s").toBe(0);
+    expect(timingProps(t).clubDefault, "and says nothing of the club").toBeFalsy();
+    // Timing only: it names the club's timing on a match of its own, and nothing at all applies to a court.
+    const timingOnly = withClub({ overlayTemplate: null, overlayDelayMs: 4500 });
+    expect(textAt(editor(timingOnly), "stream-club-text")).toBe(m("stream.club.rowTiming", { seconds: "4.5" }));
+    const courtTiming = editor(timingOnly, true);
+    expect(byTestId(courtTiming, "stream-club"), "nothing of the club's reaches a court").toBeUndefined();
+    expect(courtTiming.find((el) => el.type === StreamTemplatePicker), "the plain controls").toBeDefined();
+    expect(timingProps(courtTiming).defaultMs).toBe(0);
+  });
+
+  it("no club default: today's controls, no row (the empty case)", () => {
+    const island = withClub(NONE);
+    for (const court of [false, true]) {
+      const t = editor(island, court);
+      expect(byTestId(t, "stream-club"), `court ${court}`).toBeUndefined();
+      expect(t.find((el) => el.type === StreamTemplatePicker), `court ${court}`).toBeDefined();
+      expect(timingProps(t).clubDefault, `court ${court}`).toBeFalsy();
+    }
+  });
+
+  it("the picker's pick is the MATCH's own: PUT { overlayTemplate } alone, the box opens as an override, and Go live now carries that style", () => {
+    answerSettingsLikeTheRoute({ streamMode: null, overlayTemplate: null, overlayDelayMs: null }, [2]);
+    const island = withClub(CLUB);
+    click(byTestId(editor(island), "stream-club-change"));
+    const bar = templatesForSport("football").find((t) => t.id !== OTHER.id)!;
+    (propsOf(editor(island).find((el) => el.type === StreamTemplatePicker)!).onPick as (id: string) => void)(bar.id);
+    expect(apiV1).toHaveBeenLastCalledWith(`/api/v1/fixtures/${FIXTURE.id}/stream-settings`, { method: "PUT", json: { overlayTemplate: bar.id } });
+    expect(scoreOf(island).template).toBe(bar.id);
+    expect(byTestId(editor(island), "stream-club-override-tag"), "an override now").toBeDefined();
+  });
+
+  it("an override already stored: the box is open with its Override tag; Use club style writes null for BOTH fields in ONE save and the row stands alone again", async () => {
+    const mine = templatesForSport("football").find((t) => t.id !== OTHER.id)!;
+    answerSettingsLikeTheRoute({ streamMode: null, overlayTemplate: mine.id, overlayDelayMs: 2500 }, [2]);
+    const island = withClub(CLUB, { overlayTemplate: mine.id, overlayDelayMs: 2500 });
+    const t = editor(island);
+    expect(byTestId(t, "stream-club-override-tag")).toBeDefined();
+    expect(byTestId(t, "stream-club-change"), "an override cannot be closed away").toBeUndefined();
+    expect(textAt(t, "stream-club-use")).toBe(m("stream.club.use"));
+    expect(timingProps(t).storedMs).toBe(2500);
+    apiV1.mockClear();
+    click(byTestId(t, "stream-club-use"));
+    const puts = apiV1.mock.calls.filter(([url, o]) => url.endsWith("/stream-settings") && o?.method === "PUT");
+    expect(puts, "one request").toHaveLength(1);
+    expect(puts[0]![1]!.json, "both fields, null").toEqual({ overlayTemplate: null, overlayDelayMs: null });
+    expect(byTestId(editor(island), "stream-club-override"), "shown at once: the row alone").toBeUndefined();
+    expect(scoreOf(island).template).toBeNull();
+    expect(scoreOf(island).delayMs).toBeNull();
+    await vi.waitFor(() => expect(apiV1).toHaveBeenCalledTimes(1));
+    expect(byTestId(editor(island), "stream-club-override"), "the save landed: still the row alone").toBeUndefined();
+  });
+
+  it("a failed Use club style puts the match's own choice back, with the way to retry — never a half-cleared override", async () => {
+    const own = templatesForSport("football").find((t) => t.id !== OTHER.id)!.id;
+    const island = withClub(CLUB, { overlayTemplate: own, overlayDelayMs: 2500 });
+    apiV1.mockReset();
+    apiV1.mockRejectedValueOnce(new Error("offline"));
+    click(byTestId(editor(island), "stream-club-use"));
+    expect(scoreOf(island).template, "shown cleared at once").toBeNull();
+    await vi.waitFor(() => expect(scoreOf(island).template).toBe(own));
+    expect(scoreOf(island).delayMs, "both fields come back together").toBe(2500);
+    expect(byTestId(editor(island), "stream-club-use"), "retry is there").toBeDefined();
+  });
+
+  it("the OBS tab's link follows the chain: the club's style while the match has none, the match's own once it does, the sport's default with neither", () => {
+    const own = templatesForSport("football").find((t) => t.id !== OTHER.id)!.id;
+    const urlOf = (club: StreamPanelContext["clubStyle"], stored: { overlayTemplate: string | null; overlayDelayMs: number | null }) => {
+      const island = open({ relayEntitled: true, composedAvailable: true, clubStyle: club, streamPrefs: { [FIXTURE.id]: { streamMode: null, ...stored, revision: 1 } } });
+      return String(attr(byTestId(island.tree(), "stream-link")!, "value"));
+    };
+    expect(urlOf(CLUB, NONE)).toContain(`template=${OTHER.id}`);
+    expect(urlOf(CLUB, { overlayTemplate: own, overlayDelayMs: null })).toContain(`template=${own}`);
+    expect(urlOf(NONE, NONE)).toContain(`template=${defaultTemplateFor("football")}`);
   });
 });

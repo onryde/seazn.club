@@ -11,6 +11,7 @@ export const dynamic = "force-dynamic";
 import { notFound } from "next/navigation";
 import { BackLink } from "@/components/back-link";
 import { DictProvider } from "@/components/i18n/dict-provider";
+import { StreamClubScore } from "@/components/v2/stream-club-score";
 import { StreamDestinationsPanel } from "@/components/v2/stream-destinations-panel";
 import { YoutubeDisconnectOnlyPanel } from "@/components/v2/youtube-disconnect-only-panel";
 import { resolveLocale } from "@/lib/resolve-locale";
@@ -23,7 +24,10 @@ import { searchOf } from "@/lib/routes";
 import { requireOrgPage } from "@/server/page-auth";
 import { streamingPageAccess } from "@/server/stream-panel-context";
 import { listStreamTargets, seaznOfferOf } from "@/server/usecases/stream-targets";
-import { seaznHostedLive } from "@/server/relay/config";
+import { overlayDictOf } from "@/lib/overlay-dict";
+import { overlayDelayDefaultMs, seaznHostedLive } from "@/server/relay/config";
+import { clubScorePreview } from "@/server/stream-club-score";
+import { orgStreamDefaultsOf } from "@/server/usecases/org-stream-defaults";
 import { defaultDeps, expireTargetHolders } from "@/server/usecases/stream-sessions";
 
 /** Task 33b: the org's Seazn switch for the Seazn Hosted card, read ONLY with SEAZN_HOSTED_LIVE on (off, nothing offers Seazn and the
@@ -96,7 +100,15 @@ export default async function StreamingPage({
   } catch (err) {
     captureError(err, { orgId: auth.orgId, route: "streaming.expire_holders" });
   }
-  const [targets, seazn] = await Promise.all([listStreamTargets(auth, auth.orgId), seaznSwitchOf(auth.orgId)]);
+  // Task 38: the club's Score style and timing sit under the destinations — what its streams look like, set once. Every member reads
+  // them; the controls are the owner's and the admin's (the route's own gate).
+  const [targets, seazn, clubDefaults, clubPreview, publicDict] = await Promise.all([
+    listStreamTargets(auth, auth.orgId),
+    seaznSwitchOf(auth.orgId),
+    orgStreamDefaultsOf(auth.orgId),
+    clubScorePreview(auth.orgId),
+    getDictionary(locale, "public"),
+  ]);
   // Where the YouTube connect round trip landed (`?youtube=<code>[&pending=<id>]`): read once, here, into the one shape the panel takes.
   const landing = youtubeLandingFrom(query);
 
@@ -111,6 +123,16 @@ export default async function StreamingPage({
           <p className="mt-1 max-w-xl text-sm text-slate-500">{t(ui, "streaming.desc")}</p>
         </div>
         <StreamDestinationsPanel orgId={auth.orgId} canEdit={canEdit} targets={targets} locale={locale} landing={landing} seazn={seazn} />
+        <StreamClubScore
+          orgId={auth.orgId}
+          canEdit={canEdit}
+          stored={clubDefaults}
+          defaultMs={overlayDelayDefaultMs(false)}
+          sports={clubPreview.sports}
+          snapshots={clubPreview.snapshots}
+          sides={clubPreview.sides}
+          overlayDict={overlayDictOf(publicDict as Record<string, string>)}
+        />
       </main>
     </DictProvider>
   );

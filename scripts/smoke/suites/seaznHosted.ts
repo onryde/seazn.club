@@ -23,6 +23,9 @@ import { BASE, type Session, cookieHeader, newSession, check, signIn, smokeDb, t
  *    off, and a Go live on the Seazn destination is then 422 seazn_unavailable with no session row; PUT on answers on, and the
  *    same Go live is past the switch: told LIVE is on, a LATER door answers it (never seazn_unavailable — no phone is paired here,
  *    so nothing is admitted or written); told LIVE is off, it is still 422 seazn_unavailable (the flag is the master). Both modes.
+ * 3c. THE CLUB DEFAULTS (Phase 4, Task 38, V558) — GET /orgs/{id}/stream-defaults reads nothing set; PUT writes field by field (a
+ *    body naming only the timing leaves the style) at a rising revision; an empty body, an unknown template and a delay outside
+ *    0–30 s are each 400 and write nothing. Both modes. Left at { bar, 4500 }: step 10's Seazn session copies exactly that.
  * 4. NO-STORE — the public video route answers `private, no-store` with `{ live: null, replay: [] }`, for this match (no
  *    video) and for an id that names no match.
  *
@@ -113,8 +116,8 @@ export async function seaznHostedSuite(): Promise<void> {
   // LIVE on drops the two refusal steps (3) — the refusal exists only while LIVE is off. Phase 2 (5–7) adds five in both modes:
   // the read path reads no flag. Phase 3 (8–9) adds four in every mode: the two staff-table reads, the sweep's answer and its
   // counters by COST's mode. Phase 4 (3b, the org switch) adds four in both modes, Task 39's step 5 two more in both modes (NOT READY,
-  // and the pass seeing it ready), and step 10 two where a start can be admitted.
-  const EXPECTED_STEPS = (live ? 6 : 8) + 4 + 5 + 4 + 2 + (startsOnFakes ? 2 : 0);
+  // and the pass seeing it ready), Task 38's step 3c (the club defaults) three more in both modes, and step 10 two where a start can be admitted.
+  const EXPECTED_STEPS = (live ? 6 : 8) + 4 + 5 + 4 + 2 + 3 + (startsOnFakes ? 2 : 0);
   let steps = 0;
   const step = (label: string, cond: boolean) => {
     check(`seazn-hosted smoke: ${label}`, cond);
@@ -238,6 +241,44 @@ export async function seaznHostedSuite(): Promise<void> {
         ? `SWITCH on, LIVE on: the same Go live is past the switch — a later door answers, never seazn_unavailable (got ${reopened.status} ${reopened.code})`
         : `SWITCH on, LIVE off: the same Go live is still 422 seazn_unavailable — the flag is the master (got ${reopened.status} ${reopened.code}, ${reopened.rows} rows)`,
       live ? reopened.code !== "seazn_unavailable" : reopened.status === 422 && reopened.code === "seazn_unavailable" && reopened.rows === 0,
+    );
+
+    // 3c. THE CLUB DEFAULTS (Task 38, V558): the org's Score style and timing, set once on the Streaming page. Both modes: the route reads
+    //     no flag. Read, written field by field, refused when malformed; what stays is what step 10's session copies at its start.
+    const defaultsPath = `/api/v1/orgs/${orgId}/stream-defaults`;
+    type Defaults = { overlayTemplate?: unknown; overlayDelayMs?: unknown; revision?: unknown };
+    const none = await v1(owner, defaultsPath);
+    step(
+      `CLUB DEFAULTS: GET stream-defaults reads nothing set — { overlayTemplate: null, overlayDelayMs: null, revision: null } (got ${none.status} ${JSON.stringify(v1data(none))})`,
+      none.status === 200 && JSON.stringify(v1data<Defaults>(none)) === JSON.stringify({ overlayTemplate: null, overlayDelayMs: null, revision: null }),
+    );
+    const both = await v1(owner, defaultsPath, "PUT", { overlayTemplate: "bar", overlayDelayMs: 4500 });
+    const timingCleared = await v1(owner, defaultsPath, "PUT", { overlayDelayMs: null });
+    const timingBack = await v1(owner, defaultsPath, "PUT", { overlayDelayMs: 4500 });
+    const readBack = await v1(owner, defaultsPath);
+    const d = (r: { status: number; json: { data?: unknown } }) => v1data<Defaults>(r as never);
+    step(
+      `CLUB DEFAULTS: PUT both → 200 at revision 1; PUT only the timing null clears THAT field and leaves the style (revision 2); PUT the timing again, and GET reads { bar, 4500 } at revision 3 (got ${[both, timingCleared, timingBack, readBack].map((r) => JSON.stringify(d(r))).join(" | ")})`,
+      [both, timingCleared, timingBack, readBack].every((r) => r.status === 200) &&
+        d(both)?.overlayTemplate === "bar" && d(both)?.overlayDelayMs === 4500 && d(both)?.revision === 1 &&
+        d(timingCleared)?.overlayTemplate === "bar" && d(timingCleared)?.overlayDelayMs === null && d(timingCleared)?.revision === 2 &&
+        d(readBack)?.overlayTemplate === "bar" && d(readBack)?.overlayDelayMs === 4500 && d(readBack)?.revision === 3,
+    );
+    const refusals = [
+      ["an empty body", {}],
+      ["an unknown template", { overlayTemplate: "no-such-template" }],
+      ["a delay past 30 s", { overlayDelayMs: 30001 }],
+      ["a negative delay", { overlayDelayMs: -1 }],
+    ] as const;
+    const refused3c: string[] = [];
+    for (const [what, body] of refusals) {
+      const r = await v1(owner, defaultsPath, "PUT", body);
+      if (r.status !== 400) refused3c.push(`${what}: ${r.status}`);
+    }
+    const afterRefusals = await v1(owner, defaultsPath);
+    step(
+      `CLUB DEFAULTS: an empty body, an unknown template and a delay past 30 s or below 0 are each 400, and write nothing — the row still reads { bar, 4500 } at revision 3 (bad: ${refused3c.join(", ") || "none"}; got ${JSON.stringify(d(afterRefusals))})`,
+      refused3c.length === 0 && d(afterRefusals)?.overlayTemplate === "bar" && d(afterRefusals)?.overlayDelayMs === 4500 && d(afterRefusals)?.revision === 3,
     );
 
     // 4. NO-STORE: the public video route, anonymous (no cookie), for this match and for an id that names none.
@@ -453,15 +494,17 @@ export async function seaznHostedSuite(): Promise<void> {
       const rows = sid ? await db<{ role: string; made: boolean; signed: boolean }[]>`
         select role, ingest_input_id is not null as made, access is not null as signed
           from fixture_stream_inputs where session_id = ${sid} order by role` : [];
-      const [srow] = sid ? await db<{ mode: string; destination_kind: string | null; output_uid: string | null }[]>`
-        select mode, destination_kind, output_uid from fixture_stream_sessions where id = ${sid}` : [];
+      const [srow] = sid ? await db<{ mode: string; destination_kind: string | null; output_uid: string | null; theme_id: string | null; overlay_delay_ms: number | null }[]>`
+        select mode, destination_kind, output_uid, theme_id, overlay_delay_ms from fixture_stream_sessions where id = ${sid}` : [];
       step(
         `SEAZN START ON THE FAKES: a paired phone, then Go live on Seazn → 201, composed, BOTH inputs made (2 create_live_input) and ONE Machine asked for (1 create_machine), the programme signed and the camera not, no output (got claim ${claim.status} ${String(claim.state)}, start ${started.status} ${String(started.json.error?.code ?? "")}, ${made("create_live_input")} inputs, ${made("create_machine")} Machine, rows ${rows.map((r) => `${r.role}${r.made ? "" : "-unmade"}${r.signed ? "+signed" : ""}`).join(",")}, ${String(srow?.mode)}/${String(srow?.destination_kind)}, output ${srow?.output_uid == null ? "none" : "set"})`,
         claim.status === 200 && claim.state === "waiting" && started.status === 201 && sid !== null &&
           made("create_live_input") === 2 && made("create_machine") === 1 &&
           rows.length === 2 && rows[0]?.role === "camera" && rows[0].made && !rows[0].signed &&
           rows[1]?.role === "programme" && rows[1].made && rows[1].signed &&
-          srow?.mode === "composed" && srow.destination_kind === "seazn" && srow.output_uid == null,
+          srow?.mode === "composed" && srow.destination_kind === "seazn" && srow.output_uid == null &&
+          // Task 38: the club's defaults (step 3c: bar, 4500) are what this session copied at its start — the body named neither.
+          srow.theme_id === "bar" && srow.overlay_delay_ms === 4500,
       );
       // Its Stop, and the next reads of the fake Machine complete it, so nothing of this suite is left running.
       const stopped = sid ? await v1(owner, `/api/v1/fixtures/${fx.fixtureId}/stream-sessions/${sid}/stop`, "POST") : null;

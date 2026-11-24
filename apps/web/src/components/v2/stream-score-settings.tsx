@@ -111,26 +111,35 @@ export function useStreamPrefs(fixtureId: string, initial: StreamPrefsRead) {
   if (initial.revision !== state.seen.revision || PREF_KEYS.some((k) => initial[k] !== state.seen[k])) {
     dispatch({ type: "read", read: initial });
   }
-  const save = <K extends PrefKey>(key: K, value: StreamPrefs[K]) => {
+  // ONE write of one or more fields (a body naming only those): each field is its own save for the fold — its own sequence number,
+  // its own in-flight count, its own settle — while the request is one, so "Use club style" clears style AND timing in a single PUT
+  // and never leaves one cleared and the other not.
+  const saveMany = (patch: Partial<StreamPrefs>) => {
     // No "same value" guard here (m4): every caller offers only a change — the picker skips the selected option, Score
     // timing the delay already in force, and the mode controls exist only for the mode not in force.
-    const n = ++seq.current[key];
-    dispatch({ type: "start", key, value });
+    const keys = (Object.keys(patch) as PrefKey[]).filter((k) => PREF_KEYS.includes(k));
+    const ns = keys.map((k) => ++seq.current[k]);
+    for (const k of keys) dispatch({ type: "start", key: k, value: patch[k] as StreamPrefs[PrefKey] });
     setFailed(null);
-    void apiV1<StreamPrefsRead>(`/api/v1/fixtures/${fixtureId}/stream-settings`, { method: "PUT", json: { [key]: value } }).then(
+    void apiV1<StreamPrefsRead>(`/api/v1/fixtures/${fixtureId}/stream-settings`, { method: "PUT", json: patch }).then(
       (answer) => {
-        const read = answer && key in answer && "revision" in answer ? answer : null;
-        dispatch({ type: "settled", key, newest: seq.current[key] === n, ok: true, answer: read });
+        keys.forEach((k, i) => {
+          const read = answer && k in answer && "revision" in answer ? answer : null;
+          dispatch({ type: "settled", key: k, newest: seq.current[k] === ns[i], ok: true, answer: read });
+        });
       },
       () => {
-        const newest = seq.current[key] === n;
-        dispatch({ type: "settled", key, newest, ok: false, answer: null });
-        // An overtaken save that fails says nothing: the newer choice is the one on screen and in flight.
-        if (newest) setFailed(key);
+        keys.forEach((k, i) => {
+          const newest = seq.current[k] === ns[i];
+          dispatch({ type: "settled", key: k, newest, ok: false, answer: null });
+          // An overtaken save that fails says nothing: the newer choice is the one on screen and in flight.
+          if (newest) setFailed(k);
+        });
       },
     );
   };
-  return { prefs: state.shown, failed, save };
+  const save = <K extends PrefKey>(key: K, value: StreamPrefs[K]) => saveMany({ [key]: value } as Partial<StreamPrefs>);
+  return { prefs: state.shown, failed, save, saveMany };
 }
 
 /** Seconds as the organiser reads them: one decimal, in the page's locale. */
@@ -160,6 +169,8 @@ export function ScoreTiming(p: {
   defaultMs: number;
   onSave: (ms: number | null) => void;
   saveFailed: boolean;
+  /** Task 38: `defaultMs` is the CLUB's timing, not the server's — the tag and the help say so ("Club default"). */
+  clubDefault?: boolean;
 }) {
   const msg = useMsg();
   const locale = useLocaleOrDefault();
@@ -201,7 +212,7 @@ export function ScoreTiming(p: {
         </span>
         {p.storedMs === null && (
           <span data-testid="stream-timing-default" className="text-xs text-slate-600">
-            {msg("stream.timing.default")}
+            {msg(p.clubDefault ? "stream.timing.clubDefault" : "stream.timing.default")}
           </span>
         )}
         <ChevronRight
@@ -212,7 +223,7 @@ export function ScoreTiming(p: {
       </summary>
       <div className="pb-1">
         <p id={helpId} data-testid="stream-timing-help" className="text-xs text-slate-600">
-          {msg("stream.timing.help", { seconds: fmtDelaySeconds(locale, p.defaultMs) })}
+          {msg(p.clubDefault ? "stream.timing.helpClub" : "stream.timing.help", { seconds: fmtDelaySeconds(locale, p.defaultMs) })}
         </p>
         <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">
           <span className="flex items-center gap-2">

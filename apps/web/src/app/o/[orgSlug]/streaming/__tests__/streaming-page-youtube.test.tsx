@@ -21,6 +21,10 @@ vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
 vi.mock("@/lib/base-url", () => ({ baseUrlFromHeaders: async () => "http://app.test" }));
 vi.mock("@/server/usecases/stream-targets", () => ({ listStreamTargets: m.listStreamTargets }));
 vi.mock("@/server/usecases/stream-sessions", () => ({ expireTargetHolders: async () => undefined, defaultDeps: () => ({}) }));
+// Task 38: the club's Score style section is streaming-page-club.test.tsx's; here its two server reads and the island are doubled.
+vi.mock("@/server/usecases/org-stream-defaults", () => ({ orgStreamDefaultsOf: async () => ({ overlayTemplate: null, overlayDelayMs: null, revision: null }) }));
+vi.mock("@/server/stream-club-score", () => ({ clubScorePreview: async () => ({ sports: [], fallback: true, snapshots: {}, sides: [] }) }));
+vi.mock("@/components/v2/stream-club-score", () => ({ StreamClubScore: () => null }));
 vi.mock("@/components/nav", () => ({ Nav: () => <nav data-testid="nav" /> }));
 // The panel's own client dependencies, doubled; the panel itself is REAL.
 vi.mock("next/navigation", () => ({

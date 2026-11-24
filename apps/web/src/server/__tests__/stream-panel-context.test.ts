@@ -52,6 +52,16 @@ vi.mock("@/server/usecases/stream-codes", () => ({
   streamPrefsOf: (orgId: string, fixtureIds: readonly string[]) => prefs.streamPrefsOf(orgId, fixtureIds),
 }));
 
+// Task 38: the club's default style and timing — ONE read for the org, doubled at the usecase so a test reads which org it asked for.
+const club = vi.hoisted(() => ({
+  orgStreamDefaultsOf: vi.fn<(orgId: string) => Promise<{ overlayTemplate: string | null; overlayDelayMs: number | null; revision: number | null }>>(
+    async () => ({ overlayTemplate: null, overlayDelayMs: null, revision: null }),
+  ),
+}));
+vi.mock("@/server/usecases/org-stream-defaults", () => ({
+  orgStreamDefaultsOf: (orgId: string) => club.orgStreamDefaultsOf(orgId),
+}));
+
 // I3 (PR #987 review): the preview's sides come from the overlay page's OWN loader — doubled at that module, so a test
 // reads which fixtures it asked for and decides what the page would air.
 const pageFacts = vi.hoisted(() => ({
@@ -91,6 +101,7 @@ beforeEach(() => {
   vi.mocked(getDictionary).mockClear();
   flags.isServerFeatureEnabled.mockReset().mockResolvedValue(false);
   prefs.streamPrefsOf.mockReset().mockResolvedValue({});
+  club.orgStreamDefaultsOf.mockReset().mockResolvedValue({ overlayTemplate: null, overlayDelayMs: null, revision: null });
   pageFacts.relayOverlayPageFacts.mockReset().mockResolvedValue(null);
   vi.stubEnv("CAPTURE_QR_V2_ALWAYS", undefined);
   vi.stubEnv("RELAY_IMAGE", undefined);
@@ -104,13 +115,13 @@ describe("the gate: offered:false reads NOTHING (review #11 — the scorer's and
   it("offered:false reads NOTHING — no entitlement query, no reconcile, no credits, no currency, no dictionary (a read-only viewer or a frozen page)", async () => {
     const got = await load({ status: "success", sessionId: "cs_1" }, { offered: false });
     expect(got).toBeUndefined();
-    const deps = [hasFeature, relay.reconcile, relay.balance, money.preferredCurrency, getDictionary, flags.isServerFeatureEnabled, prefs.streamPrefsOf, pageFacts.relayOverlayPageFacts] as const;
+    const deps = [hasFeature, relay.reconcile, relay.balance, money.preferredCurrency, getDictionary, flags.isServerFeatureEnabled, prefs.streamPrefsOf, pageFacts.relayOverlayPageFacts, club.orgStreamDefaultsOf] as const;
     let checked = 0;
     for (const dep of deps) {
       expect(dep).not.toHaveBeenCalled();
       checked++;
     }
-    expect(checked).toBe(8);
+    expect(checked).toBe(9);
   });
 
   it("the loader's reads: offered:true calls each dependency AT MOST once per render (hasFeature exactly twice, both competition-scoped) — the count cannot grow unnoticed", async () => {
@@ -124,13 +135,13 @@ describe("the gate: offered:false reads NOTHING (review #11 — the scorer's and
       ["streaming.relay", "comp-1"],
     ]);
     // The overlay page's loader runs once per LISTED fixture (one here, the fixture page's).
-    const once = [relay.reconcile, relay.balance, money.preferredCurrency, getDictionary, flags.isServerFeatureEnabled, prefs.streamPrefsOf, pageFacts.relayOverlayPageFacts] as const;
+    const once = [relay.reconcile, relay.balance, money.preferredCurrency, getDictionary, flags.isServerFeatureEnabled, prefs.streamPrefsOf, pageFacts.relayOverlayPageFacts, club.orgStreamDefaultsOf] as const;
     let checked = 0;
     for (const dep of once) {
       expect(dep).toHaveBeenCalledTimes(1);
       checked++;
     }
-    expect(checked).toBe(7);
+    expect(checked).toBe(8);
   });
 });
 
@@ -622,6 +633,22 @@ describe("R2006: the score preferences and whether the score can stream", () => 
     expect(got?.overlayDelayDefaultMs).toBe(RELAY_OVERLAY_DELAY_DEFAULT_MS);
     // Court stream device check 3 (D1): a court session's default (the owner's "Ok", 2026-11-17) is 0 ms.
     expect(got?.courtOverlayDelayDefaultMs).toBe(0);
+  });
+
+  // Task 38: the club's default rides the context for THIS org, once; none set reads as two nulls (the row stays closed away); no panel reads none.
+  it("the club's default style and timing: read once for THIS org and handed over without its revision; none stored is two nulls; an org with no panel reads none", async () => {
+    club.orgStreamDefaultsOf.mockResolvedValue({ overlayTemplate: "bug", overlayDelayMs: 4500, revision: 3 });
+    const got = await load();
+    expect(club.orgStreamDefaultsOf).toHaveBeenCalledTimes(1);
+    expect(club.orgStreamDefaultsOf.mock.calls[0]).toEqual([AUTH.orgId]);
+    expect(got?.clubStyle).toEqual({ overlayTemplate: "bug", overlayDelayMs: 4500 });
+    club.orgStreamDefaultsOf.mockReset().mockResolvedValue({ overlayTemplate: null, overlayDelayMs: null, revision: null });
+    expect((await load())?.clubStyle).toEqual({ overlayTemplate: null, overlayDelayMs: null });
+    club.orgStreamDefaultsOf.mockClear();
+    vi.mocked(hasFeature).mockImplementation(async () => false);
+    const off = await load();
+    expect(club.orgStreamDefaultsOf, "no panel, no read").not.toHaveBeenCalled();
+    expect(off?.clubStyle).toEqual({ overlayTemplate: null, overlayDelayMs: null });
   });
 
   it("no panel (overlay switched off) reads no preferences — the switched-off org still costs one entitlement query", async () => {

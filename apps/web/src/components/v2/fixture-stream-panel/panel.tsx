@@ -23,12 +23,13 @@ import { fetchOverlayFixture, type OverlayLiveData } from "@/components/public-s
 import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { apiV1 } from "@/lib/client-v1";
 import { useProvidedPhoneSession } from "../stream-session-provider";
-import { ScoreTiming, useStreamPrefs } from "../stream-score-settings";
+import { fmtDelaySeconds, ScoreTiming, useStreamPrefs } from "../stream-score-settings";
 import { StreamTemplatePicker, type TemplatePreviewData } from "../stream-template-picker";
 import { overlayStartLabel, type OverlaySideInput } from "@/lib/overlay-model";
 import { OVERLAY_KEY_PARAM } from "@/lib/realtime-purpose";
 import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
-import { NO_STREAM_PREFS_READ } from "@/lib/stream-settings";
+import { effectiveTemplateId, NO_STREAM_PREFS_READ } from "@/lib/stream-settings";
+import type { MessageKey } from "@/lib/messages";
 import { composedSessionOpen } from "@/lib/stream-session-view";
 import { streamUrlSchema } from "@/lib/stream-url";
 import type { StreamPanelFixture, StreamPanelContext } from "./types";
@@ -109,7 +110,13 @@ export function FixtureStreamPanel({
   const prefs = useStreamPrefs(fixture.id, stream.streamPrefs[fixture.id] ?? NO_STREAM_PREFS_READ);
   // OPENS ON the stored style resolved through the registry (the sport's own default when none is stored, a retired
   // one's replacement) — never a second rule here.
-  const style: TemplateId = resolveTemplate(prefs.prefs.overlayTemplate, stream.sportKey).id;
+  // Task 38: the chain the server copies at a stream's start — the match's own choice, else the CLUB's, else the sport's default.
+  const club = stream.clubStyle;
+  const style: TemplateId = effectiveTemplateId({ match: prefs.prefs.overlayTemplate, club: club.overlayTemplate, sportKey: stream.sportKey });
+  // The match has its OWN style or timing (an override of the club's): its box stays open, with the way back. Otherwise the club's
+  // row is a closed line the organiser may open ("Change for this match").
+  const overridden = prefs.prefs.overlayTemplate !== null || prefs.prefs.overlayDelayMs !== null;
+  const [changing, setChanging] = useState(false);
   // PR #989 review m1: the page's ONE session (the console's provider — read, never a poll of its own). While a composed
   // one is up, the OBS tab's grid says a pick applies to the next stream: the running session copied its style.
   const pageSession = useProvidedPhoneSession(fixture.id);
@@ -202,20 +209,83 @@ export function FixtureStreamPanel({
     />
   );
   // R2006: Ready's score card body, the Phone tab's picker and Score timing, with the default the next session would serve.
-  const scoreEditor = (defaultMs: number) => (
-    <>
-      {picker("phone")}
-      <div className="mt-3 border-t border-purple-100 pt-1">
-        <ScoreTiming
-          idPrefix={`stream-timing-${fixture.id}`}
-          storedMs={prefs.prefs.overlayDelayMs}
-          defaultMs={defaultMs}
-          onSave={(ms) => prefs.save("overlayDelayMs", ms)}
-          saveFailed={prefs.failed === "overlayDelayMs"}
-        />
+  // Task 38: with a CLUB default set, the body opens as one compact row — "Club style: X · N s — Change for this match" — and the
+  // controls are the match's own override: open once the organiser asks (or the match already has its own), with "Use club style"
+  // writing null for both fields in ONE save. A court session takes the club's STYLE and never its timing (its default stays 0 s), so
+  // its row names the style alone and its timing default is the court's own.
+  const scoreEditor = (defaultMs: number, court: boolean) => {
+    const clubTiming = !court && club.overlayDelayMs !== null;
+    const controls = (
+      <>
+        {picker("phone")}
+        <div className="mt-3 border-t border-purple-100 pt-1">
+          <ScoreTiming
+            idPrefix={`stream-timing-${fixture.id}`}
+            storedMs={prefs.prefs.overlayDelayMs}
+            defaultMs={clubTiming ? club.overlayDelayMs! : defaultMs}
+            clubDefault={clubTiming}
+            onSave={(ms) => prefs.save("overlayDelayMs", ms)}
+            saveFailed={prefs.failed === "overlayDelayMs"}
+          />
+        </div>
+      </>
+    );
+    const styleSet = club.overlayTemplate !== null;
+    if (!styleSet && !clubTiming) return controls;
+    const seconds = clubTiming ? fmtDelaySeconds(locale, club.overlayDelayMs!) : "";
+    const styleLabel = styleSet ? msg(resolveTemplate(club.overlayTemplate, stream.sportKey).labelKey as MessageKey) : msg("stream.club.styleAny");
+    const rowText = styleSet && clubTiming
+      ? msg("stream.club.row", { style: styleLabel, seconds })
+      : styleSet
+        ? msg("stream.club.rowStyle", { style: styleLabel })
+        : msg("stream.club.rowTiming", { seconds });
+    const open = overridden || changing;
+    return (
+      <div data-testid="stream-club">
+        <div data-testid="stream-club-row" className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+          <span data-testid="stream-club-text" className="min-w-0 break-words text-sm font-medium text-slate-800">{rowText}</span>
+          {!overridden && (
+            <button
+              type="button"
+              data-testid="stream-club-change"
+              aria-expanded={open}
+              onClick={() => setChanging(!changing)}
+              className="inline-flex min-h-11 items-center text-sm font-medium text-purple-700 underline decoration-purple-300 underline-offset-2 hover:decoration-purple-700 md:ml-auto md:min-h-9"
+            >
+              {changing ? msg("stream.club.keep") : msg("stream.club.change")}
+            </button>
+          )}
+        </div>
+        {open && (
+          <div data-testid="stream-club-override" className="mt-2 min-w-0 rounded-lg border border-purple-200 bg-purple-50/40 p-3">
+            <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="text-sm font-medium text-slate-800">{msg("stream.club.overrideTitle")}</span>
+              {overridden && (
+                <span data-testid="stream-club-override-tag" className="rounded-full bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-800">
+                  {msg("stream.club.overrideTag")}
+                </span>
+              )}
+            </div>
+            {controls}
+            <p className="mt-2 text-xs text-slate-600">{msg("stream.club.overrideNote")}</p>
+            {overridden && (
+              <button
+                type="button"
+                data-testid="stream-club-use"
+                onClick={() => {
+                  prefs.saveMany({ overlayTemplate: null, overlayDelayMs: null });
+                  setChanging(false);
+                }}
+                className="mt-1 inline-flex min-h-11 items-center text-sm font-medium text-purple-700 underline decoration-purple-300 underline-offset-2 hover:decoration-purple-700 md:min-h-9"
+              >
+                {msg("stream.club.use")}
+              </button>
+            )}
+          </div>
+        )}
       </div>
-    </>
-  );
+    );
+  };
 
   async function copy() {
     try {
@@ -423,12 +493,13 @@ export function FixtureStreamPanel({
               score={{
                 available: stream.composedAvailable,
                 stored: prefs.prefs.streamMode,
-                template: style,
+                // The match's OWN style only (null sends none): the club's is the server's to apply (Task 38).
+                template: prefs.prefs.overlayTemplate === null ? null : resolveTemplate(prefs.prefs.overlayTemplate, stream.sportKey).id,
                 delayMs: prefs.prefs.overlayDelayMs,
                 sportKey: stream.sportKey,
-                editor: scoreEditor(stream.overlayDelayDefaultMs),
+                editor: scoreEditor(stream.overlayDelayDefaultMs, false),
                 // Court stream device check 3 (D1): a court-streamed match's session is a court session, whose default is its own.
-                courtEditor: scoreEditor(stream.courtOverlayDelayDefaultMs),
+                courtEditor: scoreEditor(stream.courtOverlayDelayDefaultMs, true),
                 modeFailed: prefs.failed === "streamMode",
                 onMode: (m) => prefs.save("streamMode", m),
               }}

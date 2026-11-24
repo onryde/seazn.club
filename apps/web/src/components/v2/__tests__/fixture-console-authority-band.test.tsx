@@ -210,6 +210,7 @@ const PANEL_MOUNT: FixtureStreamMount = {
     streamPrefs: {},
     overlayDelayDefaultMs: 3_100,
     courtOverlayDelayDefaultMs: 0,
+    clubStyle: { overlayTemplate: null, overlayDelayMs: null },
     overlaySides: {},
   } satisfies StreamPanelContext,
   fixture: { id: "f1", status: "finalized", outcome: null, scheduled_at: null, home_entrant_id: "e-home", away_entrant_id: "e-away" },

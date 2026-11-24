@@ -542,7 +542,7 @@ export function PhoneTab({
         method: "POST",
         json:
           mode === "composed"
-            ? { mode, targetId: chosen, themeId: score.template, overlayDelayMs: score.delayMs }
+            ? { mode, targetId: chosen, ...(score.template !== null ? { themeId: score.template } : {}), overlayDelayMs: score.delayMs }
             : { mode, targetId: chosen },
       });
       // n-6: the start saved its destination — a pick that did not save is no longer news, at Ready after it either.
