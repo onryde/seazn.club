@@ -33,6 +33,7 @@ import "server-only";
 //   refusals      start refusals: admit's verdict to HttpError, unreadable-key refusals, the early probe
 //   provision     provisioning a new session: ingest inputs, their credentials, the first runner edge
 //   start         Go live: createSession and the ONE start path every start comes through
+//   nudge         the capture push nudges: a session move's reason, the pairing it goes to, the claim's and the code end's pings
 //   panel-reads   the organiser panels' readers: the credits card, the run sheet's open-stream states
 //   phone-lost    the phone-lost ends: the facts they judge on, the camera evidence, endIfPhoneLost
 //   auto-stop     the automatic stop after the result (7.3): its facts, verdict and endIfAutoStopDue
@@ -51,6 +52,7 @@ export { readSessionDestination, fillReplayUrl } from "./destination";
 export { estimateCostMinor } from "./persist";
 export { releaseOutput, disablePhoneInput, destroyListedMachine } from "./port-effects";
 export { apply, retryRunner } from "./apply";
+export { fireNudge, nudgeCodesOver, nudgePairings } from "./nudge";
 export type { Actor } from "./apply";
 export { applyExpiry, reconcileSession } from "./expiry";
 export {

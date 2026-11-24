@@ -53,7 +53,7 @@ import { matchLabelOf } from "./court-stream-codes";
 import { provideDeviceLinkForPhone, type HolderVerifiedCode, type PhoneScoringLink } from "./device-links";
 import { fixtureStreamTarget, resolveAnyStreamCode, startModeFor, type ResolvedCode } from "./stream-codes";
 import { maybeAutoStart } from "./stream-auto";
-import { apply, lastConnectedSampleAt, startBroadcast, tickSession, type SessionDeps } from "./stream-sessions";
+import { apply, fireNudge, lastConnectedSampleAt, nudgePairings, startBroadcast, tickSession, type SessionDeps } from "./stream-sessions";
 import { captureRealtimeFor, realtimePairingOf } from "./capture-realtime";
 
 export type Descriptor = z.infer<typeof CaptureDescriptor>;
@@ -436,6 +436,8 @@ type Decided = {
   /** A court session left on an older pairing by this claim, ended phone_lost after the commit (`endReplacedCourtSession`). */
   replaced: { sid: string; pairingId: string; replacedPairingId: string } | null;
   tickSid: string | null;            // the open session this beat ticks (§6.11): its phone's beat naming it
+  /** Pairings this claim ended `replaced` (a takeover; the holder's own rescan): each is nudged `replaced` after the commit. */
+  replacedPairingIds: string[];
 };
 
 /**
@@ -577,6 +579,7 @@ export async function runBeat(scope: BeatScope, body: Beat, deps: SessionDeps, n
   }
 
   const decided = (await sql.begin(async (tx) => {
+    const replacedPairingIds: string[] = [];
     if (body.claim !== null || body.stopped !== null) {
       await tx`select id from fixture_stream_codes where id = ${scope.codeId} for update`;
     }
@@ -620,6 +623,7 @@ export async function runBeat(scope: BeatScope, body: Beat, deps: SessionDeps, n
           from fixture_stream_pairings where id = ${holder.id}
         returning id, code_id, phone, last_beat_at, answered_poll_seconds`;
       await tx`update fixture_stream_pairings set ended_at = ${now}, end_cause = 'replaced', replaced_by = ${moved!.id} where id = ${holder.id}`;
+      replacedPairingIds.push(holder.id);
       if (open && open.pairing_id === holder.id) {
         await lockOpen();
         await tx`update fixture_stream_sessions set pairing_id = ${moved!.id} where id = ${open.id}`;
@@ -629,6 +633,7 @@ export async function runBeat(scope: BeatScope, body: Beat, deps: SessionDeps, n
     }
     if (claim.result === "takeover") {
       await tx`update fixture_stream_pairings set ended_at = ${now}, end_cause = 'replaced' where id = ${holder!.id}`;
+      replacedPairingIds.push(holder!.id);
       mine = await insertMine();
       await tx`update fixture_stream_pairings set replaced_by = ${mine.id} where id = ${holder!.id}`;
       if (open && open.pairing_id === holder!.id) {
@@ -718,8 +723,12 @@ export async function runBeat(scope: BeatScope, body: Beat, deps: SessionDeps, n
     }
     // 5's subject: §6.11 "every beat from the session's phone" — the phone HOLDING the broadcast, naming its sid.
     const tickSid = held && body.sid === open!.id ? open!.id : null;
-    return { claim, callerCurrent, mine, stop, replaced, tickSid } satisfies Decided;
+    return { claim, callerCurrent, mine, stop, replaced, tickSid, replacedPairingIds } satisfies Decided;
   })) as Decided;
+
+  // Push nudges (plan T1.4): the claim has committed, so each pairing it ended is told `replaced` (its phone beats now, hears
+  // `replaced` and stops). Fire-and-forget, after the commit; it never fails or slows the beat, and the NEW pairing hears nothing.
+  if (decided.replacedPairingIds.length > 0) fireNudge(nudgePairings(decided.replacedPairingIds, "replaced", deps));
 
   if (decided.stop !== null) {
     await apply(decided.stop, (s) => (isActive(s.state) ? { type: "stop", reason: "operator_stopped" } : null), deps,

@@ -381,6 +381,13 @@ test.describe("capture QR v2 — the organiser panel's phone states", () => {
       await expect(stop).toBeVisible();
       await stop.getByRole("button", { name: EN["stream.phone.stop"], exact: true }).click();
       await expect(scope.getByTestId("stream-ended")).toBeVisible({ timeout: 30_000 });
+      // Push nudges (plan Task 6): the desk's Stop is the session's move to `ending` — the server nudges the current pairing, and
+      // the phone's next beat is answered `over`, still carrying the channel (a desk Stop leaves the pairing current) when the
+      // server configures a Supabase project. This proves the phone-visible half within the near cadence plus a beat interval;
+      // that the nudge itself went out is the unit suite's (capture-nudges.test.ts), which counts the requests on the wire.
+      await expect.poll(() => phone!.answers.some((a) => a.state === "over"), { timeout: (POLL_NEAR_SECONDS + 5 + 5) * 1000 }).toBe(true);
+      const over = phone!.answers.find((a) => a.state === "over")!;
+      if (REALTIME_CONFIGURED) expect(Object.keys(over.realtime ?? {}).sort(), "over after a desk Stop still carries the channel").toEqual(REALTIME_KEYS);
       await shoot(page, scope, "12-ended");
       await scope.getByTestId("stream-again").click();
       await expect(scope.getByTestId("stream-go-live")).toBeVisible({ timeout: POLL_WAIT_MS });
