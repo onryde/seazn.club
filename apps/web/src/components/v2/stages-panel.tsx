@@ -67,6 +67,7 @@ import { seedingErrorMessage } from "@/lib/seeding-error";
 import { scoringErrorText } from "@/lib/scoring-vocab";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
+import { onlinePackageRefusalText } from "@/lib/online-package-refusal";
 import { DEFAULT_MATCH_MINUTES, isUnscheduledFixture } from "@/lib/division-phase";
 import { feedLabels, type FeedRow } from "@/lib/schedule-board";
 import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
@@ -3208,6 +3209,10 @@ export function classifyActError(
   // reader of copy that was already written and already tested.
   const rule = ruleRefusalOf(err, msg);
   if (rule !== null) return { tone: "error", text: rule, refresh: false };
+  // Online Chess credits: a Generate that meets the division's size (ONLINE_ROUNDS_NEED_SIZE / ONLINE_ROUNDS_ABOVE_MAX, swiss-gen.ts)
+  // says so in the reader's language, with the size to move to.
+  const online = onlinePackageRefusalOf(err, msg);
+  if (online !== null) return { tone: "error", text: online, refresh: false };
   if (err instanceof ApiV1Error) {
     return { tone: "error", text: seedingErrorMessage(locale, err.code, err.message), refresh: false };
   }
@@ -3230,6 +3235,13 @@ export function undoRefusalMessage(err: unknown, msg: Msg, locale: Locale): stri
   // B4 re-review N-1: the reader's locale, so a round-robin sentence's numbers group their way (`roundRobinRefusalText`).
   if (err instanceof ApiV1Error && isUndoRefusalCode(err.code)) return undoRefusalText(err.code, err.extra, msg, locale);
   return ruleRefusalOf(err, msg) ?? (err instanceof Error ? err.message : msg("schedule.error.undoFailed"));
+}
+
+/** Online Chess credits (spec 2026-11-23 §7.6, §8.1): the package doors' refusals (a format Online Chess does not run, rounds the size
+ *  does not include, a camera not paid for) in the reader's language off their CODE - never the server's English. Null for any other
+ *  error: the caller keeps its own copy. */
+function onlinePackageRefusalOf(err: unknown, msg: Msg): string | null {
+  return err instanceof ApiV1Error ? onlinePackageRefusalText(err, (key, vars) => msg(key as MessageKey, vars)) : null;
 }
 
 /** W3 T12 Fix round 1 (review m1): a refused Swiss stage write — the rounds dialog's Save, Add a round — in the reader's
@@ -3270,7 +3282,7 @@ export function rebuildErrorText(err: unknown, msg: Msg, msgPlural: MsgPlural, l
   // W5 B4 review I-1: and for the format's max entrants or the line budget (FORMAT_TOO_MANY_ENTRANTS, DRAW_TOO_LARGE) - or any other
   // round-robin refusal a redraw meets - in the reader's language, its numbers grouped their way.
   if (err instanceof ApiV1Error && isRoundRobinRefusalCode(err.code)) return undoRefusalText(err.code, err.extra, msg, locale);
-  return ruleRefusalOf(err, msg) ?? (err instanceof Error ? err.message : msg("schedule.error.failed"));
+  return ruleRefusalOf(err, msg) ?? onlinePackageRefusalOf(err, msg) ?? (err instanceof Error ? err.message : msg("schedule.error.failed"));
 }
 
 /** Add stage's red line, exported pure for the reason `rebuildErrorText` is. A Top N from a knockout that is no whole round (W4 T15,
@@ -3282,6 +3294,10 @@ export function addStageErrorText(err: unknown, msg: Msg, locale: Locale): strin
   if (err instanceof ApiV1Error && isRoundRobinRefusalCode(err.code)) return undoRefusalText(err.code, err.extra, msg, locale);
   // W5 follow-ups A2: a Top N take after a stage of several groups is refused at the create (SEEDING_TOP_N_ACROSS_GROUPS), in the
   // reader's language - never the "Stage added" notice for a stage that would never fill. Any other SEEDING_* code reads its copy too.
+  // Online Chess credits: Add stage on an online division refuses a kind Online Chess does not run (ONLINE_FORMAT_NOT_SUPPORTED), and the
+  // Generate that follows can meet the size's rounds - in the reader's language, with the size to move to.
+  const online = onlinePackageRefusalOf(err, msg);
+  if (online !== null) return online;
   if (err instanceof ApiV1Error) return seedingErrorMessage(locale, err.code, err.message, err.extra as Record<string, string | number>);
   return err instanceof Error ? err.message : msg("schedule.error.failed");
 }

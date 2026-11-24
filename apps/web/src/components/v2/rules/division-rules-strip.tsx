@@ -31,7 +31,7 @@ import { onlineRefusedKind } from "@/lib/online-format-refusal";
 import type { OnlineReceiptRequest } from "@/lib/online-package-return";
 import { capacityLoweredOf, onlineSizeChoice } from "@/lib/online-size-options";
 import { onlineEntrantCapText } from "../online-entrant-cap-refusal";
-import { ONLINE_MAX_ROUNDS, onlinePackageRefusalText } from "../online-package-refusal";
+import { ONLINE_MAX_ROUNDS } from "@/lib/online-package-refusal";
 import { OnlinePriceLine } from "../online-chess/price-line";
 import { OnlineSizeSelect } from "../online-chess/size-select";
 import type { MessageKey } from "@/lib/messages";
@@ -395,14 +395,12 @@ export function DivisionRulesStrip({
     // Turning online play on for a division that already holds more than an online chess division may (owner ruling 2026-11-21).
     const tooMany = err instanceof ApiV1Error ? onlineEntrantCapText(err, (key, vars) => msg(key as MessageKey, vars)) : null;
     if (tooMany !== null) return tooMany;
-    // The package doors' four refusals (a format Online Chess does not run, rounds the size does not include, a camera not paid for).
-    const packageText = err instanceof ApiV1Error ? onlinePackageRefusalText(err, (key, vars) => msg(key as MessageKey, vars)) : null;
-    if (packageText !== null) return packageText;
     // A chess division stored with a legacy entrants override that names teams: the format save re-sends the config, and the
     // server refuses it (owner ruling 2026-10-26). Server English otherwise: localise the code.
     if (err instanceof ApiV1Error && err.code === CHESS_INDIVIDUAL_ONLY) return msg("divset.err.chessIndividualOnly");
     if (err instanceof Error && err.name === "FormProblem") return err.message;
-    // A refused rules save names its problem (CONFIG_INVALID `issues`) in the reader's language (W2c P-5).
+    // A refused rules save names its problem (CONFIG_INVALID `issues`) in the reader's language (W2c P-5), and the package doors' four
+    // (a format Online Chess does not run, rounds the size does not include, a camera not paid for) off their codes.
     return settingsSaveErrorText(err, msg, msg("divset.failed"));
   }
 

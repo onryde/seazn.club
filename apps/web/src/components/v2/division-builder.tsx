@@ -56,7 +56,7 @@ import { onlinePlayShown } from "@/lib/online-chess";
 import { packagePrice, type OnlineSize } from "@/lib/online-chess-package";
 import { onlineRefusedKind } from "@/lib/online-format-refusal";
 import { onlineSizeChoice, swissRoundsOf } from "@/lib/online-size-options";
-import { ONLINE_MAX_ROUNDS, onlinePackageRefusalText } from "./online-package-refusal";
+import { ONLINE_MAX_ROUNDS } from "@/lib/online-package-refusal";
 // RS007/V380: the builder and the registration hub config panel edit the SAME first-class `category` column; the value
 // union is imported rather than redeclared so the two screens can never drift onto two different "valid category" lists.
 import type { DivisionCategoryValue } from "@/components/registration-hub-row-derive";
@@ -806,11 +806,9 @@ export function DivisionBuilder({
         } else if (err instanceof ApiV1Error && err.code === SWISS_ROUNDS_REQUIRED_CODE) {
           text = msg("stage.err.swissRoundsRequired");
         } else {
-          // Every other refusal says itself in the reader's language off its code and issues; the Online Chess package doors' four
-          // (format, rounds need a size, rounds above the most, camera not paid for) off their codes, never the server's English.
-          text =
-            (err instanceof ApiV1Error ? onlinePackageRefusalText(err, (key, vars) => msg(key as MessageKey, vars)) : null) ??
-            settingsSaveErrorText(err, msg, msg("wizard.failed"));
+          // Every other refusal says itself in the reader's language off its code and issues - the Online Chess package doors' four
+          // (format, rounds need a size, rounds above the most, camera not paid for) included: `settingsSaveErrorText` is their one reader.
+          text = settingsSaveErrorText(err, msg, msg("wizard.failed"));
         }
         setStep(at);
         setError({ step: at, text });

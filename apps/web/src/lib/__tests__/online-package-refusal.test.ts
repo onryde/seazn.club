@@ -1,6 +1,6 @@
 // The package doors' four refusals, said in the organiser's own language (spec 2026-11-23-online-chess-credits-design.md §8.1; plan
 // Task 11 carry): ONLINE_FORMAT_NOT_SUPPORTED, ONLINE_ROUNDS_NEED_SIZE, ONLINE_ROUNDS_ABOVE_MAX and ONLINE_CAMERAS_NEED_UPGRADE. The
-// server's words are English by design, so a screen maps the CODE to dictionary copy (`online-package-refusal.ts`, beside
+// server's words are English by design, so a screen maps the CODE to dictionary copy (`lib/online-package-refusal.ts`, beside
 // `online-entrant-cap-refusal.ts`, the sibling for the entrant cap's three).
 //
 // The refusals under test are the REAL ones the server's gates build (`formatNotSupported`, `roundsNeedSize`, `roundsAboveMax`,

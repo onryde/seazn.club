@@ -35,7 +35,7 @@ import { FORMAT_CHANGE_REFUSALS, previewOf, type FormatChangePreview } from "@/l
 import { formatChangeRefusalText } from "@/lib/format-change-copy";
 import { detectTemplate } from "@/lib/format-templates";
 import { templateRefusedOnline } from "@/lib/online-format-refusal";
-import { onlinePackageRefusalText } from "../online-package-refusal";
+import { onlinePackageRefusalText } from "@/lib/online-package-refusal";
 import type { MessageKey } from "@/lib/messages";
 import { swissRoundsDefault } from "@/lib/swiss-rounds";
 import { venueNoun } from "@/lib/venue";
