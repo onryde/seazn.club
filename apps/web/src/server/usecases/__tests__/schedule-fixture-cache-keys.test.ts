@@ -37,16 +37,25 @@ vi.mock("@/lib/cache", async (importOriginal) => {
     },
   };
 });
+// Realtime push-nudges T0.2: a schedule write hands its division push and every fixture push to ONE `broadcast()`
+// call. The recorder reads each message it is handed back into the same `[id, reason]` lists, and the per-message
+// publishers record through it too, so a push sent either way is seen, once.
 vi.mock("@/lib/realtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/realtime")>();
+  const record = async (messages: Parameters<typeof actual.broadcast>[0]) => {
+    for (const { topic, payload } of messages) {
+      const { reason } = payload as { reason: string };
+      if (topic.startsWith("fixture:")) probe.fixturePushes.push([topic.slice("fixture:".length), reason]);
+      else if (topic.startsWith("division:")) probe.divisionPushes.push([topic.slice("division:".length), reason]);
+    }
+  };
   return {
     ...actual,
-    publishFixtureUpdate: async (fixtureId: string, reason: Parameters<typeof actual.publishFixtureUpdate>[1]) => {
-      probe.fixturePushes.push([fixtureId, reason]);
-    },
-    publishDivisionUpdate: async (divisionId: string, reason: Parameters<typeof actual.publishDivisionUpdate>[1]) => {
-      probe.divisionPushes.push([divisionId, reason]);
-    },
+    broadcast: record,
+    publishFixtureUpdate: (fixtureId: string, reason: Parameters<typeof actual.publishFixtureUpdate>[1]) =>
+      record([actual.fixtureMessage(fixtureId, reason)]),
+    publishDivisionUpdate: (divisionId: string, reason: Parameters<typeof actual.publishDivisionUpdate>[1]) =>
+      record(actual.divisionMessages(divisionId, reason)),
   };
 });
 

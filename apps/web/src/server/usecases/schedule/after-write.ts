@@ -4,7 +4,7 @@ import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { publicFixtureCacheKey } from "@/server/public-site/fixture-doc-cache-key";
 import { publicDivisionCacheKeys } from "@/server/public-site/division-doc-cache-keys";
 import { publicHubCacheKey } from "@/server/public-site/hub-doc-cache-keys";
-import { publishDivisionUpdate, publishFixtureUpdate } from "@/lib/realtime";
+import { broadcast, divisionMessages, fixtureMessage } from "@/lib/realtime";
 import { log } from "@/server/logger";
 
 // Every schedule write invalidates both public cache layers (the same pattern
@@ -63,9 +63,13 @@ export function afterScheduleWrite(
     log.error({ err, keys }, "schedule: a public Redis delete failed (the write stands)");
   });
   const pushFixtures = (opts.fixturePushes ?? true) && fixtureIds.length <= SCHEDULE_FIXTURE_PUSH_CAP;
+  // Realtime push-nudges T0.2: the division message and every fixture message go out in ONE broadcast (one POST under
+  // the cap), where they used to be one POST each.
   sendAfterDeleteOrBound(deleted, () => {
-    void publishDivisionUpdate(divisionId, reason);
-    if (pushFixtures) for (const id of fixtureIds) void publishFixtureUpdate(id, "schedule");
+    void broadcast(
+      [...divisionMessages(divisionId, reason), ...(pushFixtures ? fixtureIds.map((id) => fixtureMessage(id, "schedule")) : [])],
+      "schedule",
+    );
   });
 }
 

@@ -25,7 +25,7 @@ import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "@/serve
 import { log } from "@/server/logger";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
-import { publishDivisionUpdate, publishFixtureUpdate } from "@/lib/realtime";
+import { broadcast, divisionMessages, fixtureMessage, publishFixtureUpdate } from "@/lib/realtime";
 import { playerMatchesGenKey } from "@/server/public-site/player-matches-cache-keys";
 import { publicFixtureCacheKey } from "@/server/public-site/fixture-doc-cache-key";
 import { publicDivisionCacheKeys } from "@/server/public-site/division-doc-cache-keys";
@@ -517,10 +517,17 @@ async function invalidateAndPush(
   // expired and the next poll landed. The reason is "schedule", the same one
   // every other slot-fill sends (`afterScheduleWrite`): what changed is who
   // is playing, not this fixture's score.
+  //
+  // Realtime push-nudges T0.2: all of them go out in ONE broadcast (one POST), in this order.
   await invalidatePublicCache(auth.orgId, fixtureId, movesDiscovery, (scope) => {
-    void publishFixtureUpdate(fixtureId, "event");
-    if (scope) void publishDivisionUpdate(scope.divisionId, "score");
-    for (const id of advanced) void publishFixtureUpdate(id, "schedule");
+    void broadcast(
+      [
+        fixtureMessage(fixtureId, "event"),
+        ...(scope ? divisionMessages(scope.divisionId, "score") : []),
+        ...advanced.map((id) => fixtureMessage(id, "schedule")),
+      ],
+      "score",
+    );
   }, advanced).catch((err: unknown) => {
     log.error({ err, fixture: fixtureId }, "scoring: public cache invalidation failed (the score stands)");
     // It failed before the delete started (the lookup, or the tag call), so

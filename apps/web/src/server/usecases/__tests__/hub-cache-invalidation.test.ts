@@ -56,11 +56,13 @@ const cacheDel = vi.hoisted(() =>
 );
 const fireDivisionRevalidate = vi.hoisted(() => vi.fn());
 const fireScoreRevalidate = vi.hoisted(() => vi.fn());
-const publishDivisionUpdate = vi.hoisted(() => vi.fn(async () => {}));
-const publishFixtureUpdate = vi.hoisted(() =>
-  vi.fn(async (fixtureId: string, reason: string) => {
-    void fixtureId;
-    void reason;
+// Realtime push-nudges T0.2: both write paths hand every push to ONE `broadcast()` call. The spy records what it was
+// handed; `divisionPushes()` / `fixturePushes()` below read it back as the `[id, reason]` pairs the per-message
+// publishers' spies used to record, so every assertion keeps its topic, reason, moment and count.
+const broadcast = vi.hoisted(() =>
+  vi.fn(async (messages: ReadonlyArray<{ topic: string; payload: unknown }>, label: string) => {
+    void messages;
+    void label;
   }),
 );
 const withTenant = vi.hoisted(() => vi.fn());
@@ -119,11 +121,18 @@ vi.mock("@/server/public-site/revalidate", async (importOriginal) => ({
   fireDivisionRevalidate,
   fireScoreRevalidate,
 }));
-vi.mock("@/lib/realtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/realtime")>()),
-  publishDivisionUpdate,
-  publishFixtureUpdate,
-}));
+vi.mock("@/lib/realtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/realtime")>();
+  return {
+    ...actual,
+    broadcast,
+    // The per-message publishers send through the same spy, so a push sent either way is seen, and counted once.
+    publishDivisionUpdate: (divisionId: string, reason: Parameters<typeof actual.publishDivisionUpdate>[1]) =>
+      broadcast(actual.divisionMessages(divisionId, reason), `division ${divisionId}`),
+    publishFixtureUpdate: (fixtureId: string, reason: Parameters<typeof actual.publishFixtureUpdate>[1]) =>
+      broadcast([actual.fixtureMessage(fixtureId, reason)], `fixture ${fixtureId}`),
+  };
+});
 
 import { PUSH_AFTER_DELETE_BOUND_MS } from "@/lib/cache";
 import { invalidatePublicCache } from "../scoring";
@@ -152,6 +161,14 @@ const SCHEDULE_DELETE_FAILED = "schedule: a public Redis delete failed (the writ
 
 const patterns = () => cacheDelPattern.mock.calls.map(([pattern]) => pattern);
 const deletedKeys = () => cacheDel.mock.calls.flat();
+/** Every push on one topic family that `broadcast` was handed, in send order, as `[id, reason]`. */
+const pushesOn = (prefix: "division:" | "fixture:") =>
+  broadcast.mock.calls
+    .flatMap(([messages]) => messages)
+    .filter((message) => message.topic.startsWith(prefix))
+    .map((message) => [message.topic.slice(prefix.length), (message.payload as { reason: string }).reason]);
+const divisionPushes = () => pushesOn("division:");
+const fixturePushes = () => pushesOn("fixture:");
 
 const macrotask = () => new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -461,7 +478,7 @@ describe("afterScheduleWrite — a schedule write", () => {
       afterScheduleWrite(DIVISION, COMPETITION, reason, [FIXTURE]);
       await macrotask();
       expect(deletedKeys()).toContain(HUB_KEY);
-      expect(publishDivisionUpdate).toHaveBeenCalledWith(DIVISION, reason);
+      expect(divisionPushes()).toContainEqual([DIVISION, reason]);
     },
   );
 
@@ -498,11 +515,11 @@ describe("afterScheduleWrite — every key by name in one DEL, no SCAN (R10c m1,
     expect(redis.held.map((gate) => gate.kind)).toEqual(["del"]);
 
     await macrotask();
-    expect(publishDivisionUpdate, "pushed before the DEL settled").not.toHaveBeenCalled();
+    expect(divisionPushes(), "pushed before the DEL settled").toEqual([]);
 
     await release("del", { resolve: true });
-    expect(publishDivisionUpdate).toHaveBeenCalledTimes(1);
-    expect(publishDivisionUpdate).toHaveBeenCalledWith(DIVISION, "schedule");
+    expect(divisionPushes()).toHaveLength(1);
+    expect(divisionPushes()).toContainEqual([DIVISION, "schedule"]);
   });
 });
 
@@ -527,9 +544,9 @@ describe("afterScheduleWrite — a Redis call that REJECTS", () => {
       expect(logMock.error).toHaveBeenCalledTimes(1);
       // The write's other effects still happened.
       expect(fireDivisionRevalidate).toHaveBeenCalledWith(DIVISION, COMPETITION);
-      expect(publishDivisionUpdate, "a failed DEL swallowed the push").toHaveBeenCalledTimes(1);
-      expect(publishDivisionUpdate).toHaveBeenCalledWith(DIVISION, "schedule");
-      expect(publishFixtureUpdate.mock.calls, "a failed DEL swallowed the fixture push").toEqual([[FIXTURE, "schedule"]]);
+      expect(divisionPushes(), "a failed DEL swallowed the push").toHaveLength(1);
+      expect(divisionPushes()).toContainEqual([DIVISION, "schedule"]);
+      expect(fixturePushes(), "a failed DEL swallowed the fixture push").toEqual([[FIXTURE, "schedule"]]);
     });
   });
 
@@ -538,7 +555,7 @@ describe("afterScheduleWrite — a Redis call that REJECTS", () => {
     await macrotask();
     expect(cacheDel.mock.calls).toEqual([[HUB_KEY, FIXTURE_KEY, ...DIVISION_KEYS]]);
     expect(patterns()).toEqual([]);
-    expect(publishDivisionUpdate).toHaveBeenCalledTimes(1);
+    expect(divisionPushes()).toHaveLength(1);
     expect(logMock.error).not.toHaveBeenCalled();
   });
 });
@@ -556,16 +573,16 @@ describe("afterScheduleWrite — the push waits for the DEL, never longer than t
     afterScheduleWrite(DIVISION, COMPETITION, "publish", [FIXTURE]);
 
     await vi.advanceTimersByTimeAsync(200);
-    expect(publishDivisionUpdate, "pushed before the DEL settled").not.toHaveBeenCalled();
+    expect(divisionPushes(), "pushed before the DEL settled").toEqual([]);
     expect(vi.getTimerCount(), "the bound is armed while the DEL is in flight").toBe(1);
 
     await settleHeld("del", { resolve: true });
-    expect(publishDivisionUpdate, "waited for the bound instead of the DEL").toHaveBeenCalledTimes(1);
-    expect(publishDivisionUpdate).toHaveBeenCalledWith(DIVISION, "publish");
+    expect(divisionPushes(), "waited for the bound instead of the DEL").toHaveLength(1);
+    expect(divisionPushes()).toContainEqual([DIVISION, "publish"]);
     expect(vi.getTimerCount(), "the bound's timer outlived the DEL").toBe(0);
 
     await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS * 2);
-    expect(publishDivisionUpdate, "the bound pushed a second time").toHaveBeenCalledTimes(1);
+    expect(divisionPushes(), "the bound pushed a second time").toHaveLength(1);
   });
 
   it("a DEL that NEVER settles: the push goes out at the bound, once, and a late settle sends nothing more", async () => {
@@ -573,15 +590,15 @@ describe("afterScheduleWrite — the push waits for the DEL, never longer than t
     afterScheduleWrite(DIVISION, COMPETITION, "start", [FIXTURE]);
 
     await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS - 1);
-    expect(publishDivisionUpdate, "pushed before the DEL settled and before the bound").not.toHaveBeenCalled();
+    expect(divisionPushes(), "pushed before the DEL settled and before the bound").toEqual([]);
     await vi.advanceTimersByTimeAsync(1);
-    expect(publishDivisionUpdate, "a DEL that never answers held the push past the bound").toHaveBeenCalledTimes(1);
-    expect(publishDivisionUpdate).toHaveBeenCalledWith(DIVISION, "start");
+    expect(divisionPushes(), "a DEL that never answers held the push past the bound").toHaveLength(1);
+    expect(divisionPushes()).toContainEqual([DIVISION, "start"]);
 
     await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS * 4);
-    expect(publishDivisionUpdate, "the bound fired more than once").toHaveBeenCalledTimes(1);
+    expect(divisionPushes(), "the bound fired more than once").toHaveLength(1);
     await settleHeld("del", { resolve: true });
-    expect(publishDivisionUpdate, "the late DEL pushed a second time").toHaveBeenCalledTimes(1);
+    expect(divisionPushes(), "the late DEL pushed a second time").toHaveLength(1);
   });
 
   it("a DEL that REJECTS: the push goes out once, and the bound sends nothing more", async () => {
@@ -594,10 +611,10 @@ describe("afterScheduleWrite — the push waits for the DEL, never longer than t
       { err: failure, keys: [HUB_KEY, FIXTURE_KEY, ...DIVISION_KEYS] },
       SCHEDULE_DELETE_FAILED,
     );
-    expect(publishDivisionUpdate, "a failed DEL swallowed the push").toHaveBeenCalledTimes(1);
+    expect(divisionPushes(), "a failed DEL swallowed the push").toHaveLength(1);
 
     await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS * 2);
-    expect(publishDivisionUpdate, "the bound pushed a second time").toHaveBeenCalledTimes(1);
+    expect(divisionPushes(), "the bound pushed a second time").toHaveLength(1);
   });
 
   // The same two-order race as scoring's (R10c m6), on this path.
@@ -609,7 +626,7 @@ describe("afterScheduleWrite — the push waits for the DEL, never longer than t
     let seenAtResolve: number | undefined;
     const resolveAtBound = () =>
       setTimeout(() => {
-        seenAtResolve = publishDivisionUpdate.mock.calls.length;
+        seenAtResolve = divisionPushes().length;
         settle("del", { resolve: true });
       }, PUSH_AFTER_DELETE_BOUND_MS);
 
@@ -621,7 +638,7 @@ describe("afterScheduleWrite — the push waits for the DEL, never longer than t
     await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS);
     await vi.advanceTimersByTimeAsync(0);
     expect(seenAtResolve, "the race ran in the other order").toBe(sentAtResolve);
-    expect(publishDivisionUpdate, "pushed by both the bound and the DEL").toHaveBeenCalledTimes(1);
+    expect(divisionPushes(), "pushed by both the bound and the DEL").toHaveLength(1);
     expect(vi.getTimerCount()).toBe(0);
   });
 });
@@ -651,11 +668,11 @@ describe("afterScheduleWrite — the documents of the fixtures the write changed
     expect(patterns(), "a key sent through a SCAN").toEqual([]);
 
     await macrotask();
-    expect(publishFixtureUpdate, "fixture push before the DEL settled").not.toHaveBeenCalled();
+    expect(fixturePushes(), "fixture push before the DEL settled").toEqual([]);
 
     await release("del", { resolve: true });
-    expect(publishFixtureUpdate.mock.calls).toEqual([[FIXTURE, "schedule"]]);
-    expect(publishDivisionUpdate.mock.calls).toEqual([[DIVISION, "schedule"]]);
+    expect(fixturePushes()).toEqual([[FIXTURE, "schedule"]]);
+    expect(divisionPushes()).toEqual([[DIVISION, "schedule"]]);
   });
 
   it("every fixture the write changed: every key in that one DEL, and one push each, all after it", async () => {
@@ -665,16 +682,16 @@ describe("afterScheduleWrite — the documents of the fixtures the write changed
     expect(cacheDel.mock.calls).toEqual([[HUB_KEY, ...moved.map(keyOf), ...DIVISION_KEYS]]);
 
     await macrotask();
-    expect(publishFixtureUpdate, "fixture push before the DEL settled").not.toHaveBeenCalled();
+    expect(fixturePushes(), "fixture push before the DEL settled").toEqual([]);
     await release("del", { resolve: true });
-    expect(publishFixtureUpdate.mock.calls).toEqual(moved.map((id) => [id, "schedule"]));
+    expect(fixturePushes()).toEqual(moved.map((id) => [id, "schedule"]));
   });
 
   it("EXACTLY 50 fixtures still pushes every one of them", async () => {
     const moved = ids(SCHEDULE_FIXTURE_PUSH_CAP);
     afterScheduleWrite(DIVISION, COMPETITION, "schedule", moved);
     await macrotask();
-    expect(publishFixtureUpdate.mock.calls).toEqual(moved.map((id) => [id, "schedule"]));
+    expect(fixturePushes()).toEqual(moved.map((id) => [id, "schedule"]));
   });
 
   it("MORE than 50 fixtures: every key still goes in the one DEL and the division push goes out, but no fixture push", async () => {
@@ -684,16 +701,16 @@ describe("afterScheduleWrite — the documents of the fixtures the write changed
     expect(cacheDel.mock.calls, "the cap must not skip the DEL").toEqual([[HUB_KEY, ...moved.map(keyOf), ...DIVISION_KEYS]]);
 
     await release("del", { resolve: true });
-    expect(publishDivisionUpdate.mock.calls).toEqual([[DIVISION, "start"]]);
-    expect(publishFixtureUpdate, "a 51-fixture write fanned out per-fixture pushes").not.toHaveBeenCalled();
+    expect(divisionPushes()).toEqual([[DIVISION, "start"]]);
+    expect(fixturePushes(), "a 51-fixture write fanned out per-fixture pushes").toEqual([]);
   });
 
   it("a write that changed no fixture: the hub key and the division's documents only, and no fixture push", async () => {
     afterScheduleWrite(DIVISION, COMPETITION, "publish", []);
     await macrotask();
     expect(cacheDel.mock.calls).toEqual([[HUB_KEY, ...DIVISION_KEYS]]);
-    expect(publishDivisionUpdate).toHaveBeenCalledTimes(1);
-    expect(publishFixtureUpdate).not.toHaveBeenCalled();
+    expect(divisionPushes()).toHaveLength(1);
+    expect(fixturePushes()).toEqual([]);
   });
 });
 
@@ -710,14 +727,14 @@ describe("afterScheduleWrite — the fixture pushes wait for the DEL, never long
     afterScheduleWrite(DIVISION, COMPETITION, "schedule", [FIXTURE]);
 
     await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS - 1);
-    expect(publishFixtureUpdate, "fixture push before the DEL settled and before the bound").not.toHaveBeenCalled();
+    expect(fixturePushes(), "fixture push before the DEL settled and before the bound").toEqual([]);
     await vi.advanceTimersByTimeAsync(1);
-    expect(publishFixtureUpdate.mock.calls, "a DEL that never answers held the fixture push past the bound").toEqual([
+    expect(fixturePushes(), "a DEL that never answers held the fixture push past the bound").toEqual([
       [FIXTURE, "schedule"],
     ]);
 
     await settleHeld("del", { resolve: true });
     await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS * 2);
-    expect(publishFixtureUpdate, "the late DEL pushed the fixture a second time").toHaveBeenCalledTimes(1);
+    expect(fixturePushes(), "the late DEL pushed the fixture a second time").toHaveLength(1);
   });
 });

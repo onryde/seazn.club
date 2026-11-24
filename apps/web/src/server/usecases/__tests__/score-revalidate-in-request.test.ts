@@ -99,22 +99,37 @@ vi.mock("@/lib/cache", async (importOriginal) => {
         : actual.cacheDel(...keys),
   };
 });
+// Realtime push-nudges T0.2: a score hands its fixture push, its division push and every advanced-into fixture's push
+// to ONE `broadcast()` call. The passthrough records each message it is handed into the same lists, in send order, and
+// the per-message publishers (the `.catch` fallback still uses `publishFixtureUpdate`) record too, so a push sent either
+// way is seen, once.
 vi.mock("@/lib/realtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/realtime")>();
+  const record = (messages: Parameters<typeof actual.broadcast>[0]) => {
+    for (const { topic, payload } of messages) {
+      const { reason } = payload as { reason: string };
+      if (topic.startsWith("fixture:")) probe.fixturePushes.push({ fixtureId: topic.slice("fixture:".length), reason });
+      else if (topic.startsWith("division:")) probe.divisionPushes.push({ divisionId: topic.slice("division:".length), reason });
+    }
+  };
   return {
     ...actual,
+    broadcast: (messages: Parameters<typeof actual.broadcast>[0], label: string) => {
+      record(messages);
+      return actual.broadcast(messages, label);
+    },
     publishFixtureUpdate: (
       fixtureId: string,
       reason: Parameters<typeof actual.publishFixtureUpdate>[1],
     ) => {
-      probe.fixturePushes.push({ fixtureId, reason });
+      record([actual.fixtureMessage(fixtureId, reason)]);
       return actual.publishFixtureUpdate(fixtureId, reason);
     },
     publishDivisionUpdate: (
       divisionId: string,
       reason: Parameters<typeof actual.publishDivisionUpdate>[1],
     ) => {
-      probe.divisionPushes.push({ divisionId, reason });
+      record(actual.divisionMessages(divisionId, reason));
       return actual.publishDivisionUpdate(divisionId, reason);
     },
   };
