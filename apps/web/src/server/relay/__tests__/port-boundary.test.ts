@@ -106,8 +106,8 @@ describe("Task 21: replay-ports.ts names no Bunny vocabulary and imports nothing
 
 // Task 24 carry (Task 23 review): server/video/** reaches its providers through the ports only. Its production files import no
 // ingest or runner adapter (runner-fly, fly-client, ingest-cf — they speak IngestProvider through relay/drivers), and the Bunny
-// adapter is built in ONE place, replay-driver.ts. The pure decisions under video/domain/ import only the replay port and the
-// relay config: no database, no logger, no driver. Tests are outside the rule (an adapter's own test imports its adapter).
+// adapter is built in ONE place, replay-driver.ts. The pure decisions under video/domain/ import only the replay port, the
+// relay config and each other: no database, no logger, no driver. Tests are outside the rule (an adapter's own test imports its adapter).
 describe("Task 24: server/video/** imports a provider only through its ports", () => {
   const VIDEO = join(SERVER, "video");
   const production = walk(VIDEO).filter((f) => !f.split("/").includes("__tests__"));
@@ -143,10 +143,16 @@ describe("Task 24: server/video/** imports a provider only through its ports", (
 
   it("video/domain/** imports only the replay port and the relay config", () => {
     const domain = production.filter((f) => relative(VIDEO, f).startsWith(`domain${"/"}`));
+    const domainNames = new Set(domain.map((f) => relative(join(VIDEO, "domain"), f).replace(/\.[cm]?[jt]s$/, "")));
+    expect(domainNames.has("delivery-window"), "the sibling the rule admits is a domain file").toBe(true);
     let checked = 0;
     const offenders: string[] = [];
     for (const f of domain) {
-      for (const s of specifiers(readFileSync(f, "utf8"))) if (!DOMAIN_ALLOWED.has(s)) offenders.push(`${relative(VIDEO, f)} → ${s}`);
+      for (const s of specifiers(readFileSync(f, "utf8"))) {
+        // A sibling under domain/ is allowed: it is itself one of the files this loop checks, so the rule holds transitively.
+        const sibling = s.startsWith("./") && !s.slice(2).includes("/") && domainNames.has(s.slice(2).replace(/\.[cm]?[jt]s$/, ""));
+        if (!DOMAIN_ALLOWED.has(s) && !sibling) offenders.push(`${relative(VIDEO, f)} → ${s}`);
+      }
       checked++;
     }
     expect(checked, "domain files read").toBeGreaterThan(0);
