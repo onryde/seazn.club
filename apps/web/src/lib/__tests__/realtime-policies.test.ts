@@ -14,8 +14,9 @@
 //
 // Sequence cases:
 //   - a second call: the delta run twice is one row and the "already present" notice;
-//   - an empty input: a token with no claims reads nothing; a blank capture id reads only the bare `capture:` topic,
-//     which captureTopic and mintCaptureToken refuse to make; no realtime schema / no realtime.messages skip;
+//   - an empty input: a token with no claims reads nothing; a blank capture id reads nothing either, not even the bare
+//     `capture:` topic (V554's nullif), and captureTopic and mintCaptureToken refuse one; no realtime schema / no
+//     realtime.messages skip;
 //   - after a withdrawal: the policy dropped by hand reads nothing, and a re-run restores the identical row;
 //   - another surface: fixture, lobby, match-day and division tokens read no capture topic, and a capture token reads
 //     none of theirs (V555 and V556 add their own pairs to this one matrix);
@@ -49,8 +50,9 @@ const POLICY = "capture pairing read by claim";
 /** The policies V403 and V452 create (V537 re-creates both). */
 const EARLIER = ["external play lobby read by claim", "fixture broadcast read by claim"];
 const WRAPPED = "( SELECT realtime.topic() AS topic)";
-/** The claim read, wrapped in its own scalar sub-select (one evaluation per statement), as pg_policies prints it. */
-const wrappedJwt = (claim: string) => `( SELECT (auth.jwt() ->> '${claim}'::text))`;
+/** The claim read, wrapped in its own scalar sub-select (one evaluation per statement) and with a blank claim turned
+ *  into null (it binds nothing), as pg_policies prints it. */
+const claimRead = (claim: string) => `NULLIF(( SELECT (auth.jwt() ->> '${claim}'::text)), ''::text)`;
 
 type Delta = { file: string; version: number; text: string };
 const DELTA_FILES = readdirSync(DELTAS).filter((f) => /^V\d+__.+\.sql$/.test(f));
@@ -218,15 +220,13 @@ describe("capture pairing read by claim", () => {
       const { pairs, tokens: n, reads } = await afterAllFour();
       expect(n, "tokens in the matrix").toBe(10);
       expect(pairs, "pairs checked").toBe(TOPICS.length * n);
-      // One row each — the broadcast row, never the presence one. The last is the blank-id token on the bare
-      // `capture:` topic: V554 binds by string equality, so `'capture:' || ''` matches it (see the blank-id case).
+      // One row each — the broadcast row, never the presence one. No blank-id token reads anything (V554's nullif).
       // The match-day and division tokens read nothing yet: V555 and V556 add their own pairs to THIS list.
       expect(reads).toEqual([
         ["capture:A <- capture A", 1],
         ["capture:B <- capture B", 1],
         ["fixture:A <- fixture A", 1],
         ["external-play:A <- lobby A", 1],
-        ["capture: <- capture blank id", 1],
       ]);
     });
 
@@ -275,14 +275,16 @@ describe("capture pairing read by claim", () => {
       expect(reads.filter(([k]) => k.endsWith("<- no claims"))).toEqual([]);
     });
 
-    // Review m2. At the database the blank id is NOT refused: `'capture:' || ''` is the bare `capture:`, which that
-    // token reads. It reads no topic a builder can make, and the app refuses both halves — captureTopic and
-    // mintCaptureToken throw on a blank id — so neither the topic nor the token can exist. Pinned both ways, so
-    // dropping either app guard, or a predicate change that refuses '' at the database, shows up here.
-    it("empty input: a blank capture id reads only the bare capture: topic, which no builder or mint can produce", async ({ skip }) => {
+    // Review m2 (controller ruling): refused at BOTH layers. At the database, V554's nullif turns a blank claim into
+    // null, so `'capture:' || null` matches no topic — not even the bare `capture:`, which `'capture:' || ''` would.
+    // In the app, captureTopic and mintCaptureToken throw on a blank id.
+    it("empty input: a blank capture id reads nothing, not even the bare capture: topic, and no builder or mint makes one", async ({
+      skip,
+    }) => {
       if (await hasRealtime()) return skip();
       const { reads } = await afterAllFour();
-      expect(reads.filter(([k]) => k.endsWith("<- capture blank id"))).toEqual([["capture: <- capture blank id", 1]]);
+      expect(TOPICS.map((t) => t.topic), "the bare topic is in the matrix").toContain("capture:");
+      expect(reads.filter(([k]) => k.endsWith("<- capture blank id"))).toEqual([]);
       expect(() => captureTopic("")).toThrow(/^Realtime capture: /);
       await expect(mintCaptureToken(" ", new Date(Date.now() + 60_000))).rejects.toThrow(/^Realtime capture: /);
     });
@@ -305,7 +307,7 @@ describe("capture pairing read by claim", () => {
       const { qual, ...rest } = value.mine[0]!;
       expect(rest).toEqual({ policyname: POLICY, cmd: "SELECT", roles: ["authenticated"], permissive: "PERMISSIVE", with_check: null });
       expect(qual).toContain(WRAPPED);
-      expect(qual).toContain(wrappedJwt(claim));
+      expect(qual).toContain(claimRead(claim));
       expect(qual).toContain("extension = 'broadcast'");
     });
 
@@ -399,7 +401,7 @@ describe("capture pairing read by claim", () => {
       expect(live).toHaveLength(1);
       expect(live[0]!.roles).toEqual(["authenticated"]);
       expect(live[0]!.qual).toContain(WRAPPED);
-      expect(live[0]!.qual).toContain(wrappedJwt(claim));
+      expect(live[0]!.qual).toContain(claimRead(claim));
     });
   });
 });

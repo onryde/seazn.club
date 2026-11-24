@@ -18,6 +18,11 @@
 -- `(select realtime.topic())`, evaluated once per statement rather than per
 -- row (Supabase lint 0003).
 --
+-- A blank claim binds nothing: `nullif(…, '')` turns `''` into null, so a
+-- token with `capture_pairing_id: ""` cannot read the bare `capture:` topic
+-- (`'capture:' || null` is null, and null = topic is never true). The app's
+-- mint and topic builder refuse a blank id too; this is the database half.
+--
 -- Guard: a non-Supabase Postgres (local labels, CI) has no `realtime` schema;
 -- skip cleanly there. Idempotent if the policy is already present (applied by
 -- hand first, or a re-run). Flyway may not own realtime.messages on Supabase:
@@ -59,7 +64,7 @@ begin
       to authenticated
       using (
         extension = 'broadcast'
-        and (select realtime.topic()) = ('capture:' || (select auth.jwt() ->> 'capture_pairing_id'))
+        and (select realtime.topic()) = ('capture:' || nullif((select auth.jwt() ->> 'capture_pairing_id'), ''))
       )
     $sql$;
   exception
