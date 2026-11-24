@@ -460,6 +460,16 @@ async function enterViaStepper(
   for (const [i, fullName] of names.entries()) {
     const field = page.locator(`[data-testid="reg-roster-name"][data-player-row="${i}"]`);
     await field.waitFor({ state: "visible" });
+    // The registrant's OWN row (B2 T9, `roster-table.tsx` `isContactRow`) is a READ-ONLY input the wizard pre-fills from
+    // the Who step; `fill()` waits 30s for an editable element and times out. Verify it shows the name the pack expects
+    // instead of typing over it, so a pre-fill that drifted from the pack still fails loudly.
+    if ((await field.getAttribute("readonly")) !== null) {
+      const shown = await field.inputValue();
+      if (shown !== fullName) {
+        throw new Error(`registration roster row ${i} is read-only and shows "${shown}", but the pack declares "${fullName}"`);
+      }
+      continue;
+    }
     await field.fill(fullName);
   }
   await clickStepperNext(page);
