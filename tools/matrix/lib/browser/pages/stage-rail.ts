@@ -147,6 +147,7 @@ export async function generateUi(c: PageCtx, where: DivisionWhere, stageId: stri
     generateOffered: (await sheet.getByTestId(TESTID.stageGenerate.id).count()) > 0,
     completeOffered: (await sheet.getByTestId(TESTID.stageComplete.id).count()) > 0,
     fixtureRows: await page.locator(DATA.fixtureRow.selector).count(),
+    roundSections: await page.locator(DATA.runSheetRound.selector).count(),
   });
   if (path === "generated-by-start") {
     hooks.onGenerate?.(path);
