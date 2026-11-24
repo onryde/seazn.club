@@ -19,6 +19,10 @@ import { BASE, type Session, cookieHeader, newSession, check, signIn, smokeDb, t
  * 3. REFUSED WHILE OFF — naming the Seazn destination as the fixture's pick (PUT stream-settings) and starting on it (POST
  *    stream-sessions) are both refused `422 seazn_unavailable`, and the refused start writes no session row. Skipped when
  *    told LIVE is on: that refusal does not exist there.
+ * 3b. THE ORG SWITCH (Phase 4, Task 33, V553) — GET /orgs/{id}/seazn-hosted reads the default ON; PUT off answers and reads back
+ *    off, and a Go live on the Seazn destination is then 422 seazn_unavailable with no session row; PUT on answers on, and the
+ *    same Go live is past the switch: told LIVE is on, a LATER door answers it (never seazn_unavailable — no phone is paired here,
+ *    so nothing is admitted or written); told LIVE is off, it is still 422 seazn_unavailable (the flag is the master). Both modes.
  * 4. NO-STORE — the public video route answers `private, no-store` with `{ live: null, replay: [] }`, for this match (no
  *    video) and for an id that names no match.
  *
@@ -96,8 +100,8 @@ export async function seaznHostedSuite(): Promise<void> {
   })();
   // LIVE on drops the two refusal steps (3) — the refusal exists only while LIVE is off. Phase 2 (5–7) adds five in both modes:
   // the read path reads no flag. Phase 3 (8–9) adds four in every mode: the two staff-table reads, the sweep's answer and its
-  // counters by COST's mode.
-  const EXPECTED_STEPS = (live ? 6 : 8) + 5 + 4;
+  // counters by COST's mode. Phase 4 (3b, the org switch) adds four in both modes.
+  const EXPECTED_STEPS = (live ? 6 : 8) + 4 + 5 + 4;
   let steps = 0;
   const step = (label: string, cond: boolean) => {
     check(`seazn-hosted smoke: ${label}`, cond);
@@ -188,6 +192,40 @@ export async function seaznHostedSuite(): Promise<void> {
         start.status === 422 && start.json.error?.code === "seazn_unavailable" && n === 0,
       );
     }
+
+    // 3b. THE ORG SWITCH (Task 33): default ON; off refuses a Seazn start by the pick's own 422 with no row; on lets the same
+    // start past the switch (LIVE on: a later door answers; LIVE off: the flag still refuses it). Left ON for the steps below.
+    const switchPath = `/api/v1/orgs/${orgId}/seazn-hosted`;
+    const startOnSeazn = async () => {
+      const res = await v1(owner, `/api/v1/fixtures/${fx.fixtureId}/stream-sessions`, "POST", { mode: "passthrough", targetId: seaznId });
+      const [{ n }] = await db<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where fixture_id = ${fx.fixtureId}`;
+      return { status: res.status, code: String(res.json.error?.code), rows: n };
+    };
+    const first = await v1(owner, switchPath);
+    step(
+      `SWITCH: GET seazn-hosted reads the default ON (got ${first.status} ${JSON.stringify(v1data(first))})`,
+      first.status === 200 && v1data<{ offered?: unknown }>(first)?.offered === true,
+    );
+    const turnedOff = await v1(owner, switchPath, "PUT", { offered: false });
+    const readOff = await v1(owner, switchPath);
+    const refused = await startOnSeazn();
+    step(
+      `SWITCH off: PUT answers and GET reads { offered: false }; Go live on Seazn → 422 seazn_unavailable, no session row (got PUT ${turnedOff.status}, GET ${JSON.stringify(v1data(readOff))}, start ${refused.status} ${refused.code}, ${refused.rows} rows)`,
+      turnedOff.status === 200 && v1data<{ offered?: unknown }>(turnedOff)?.offered === false && v1data<{ offered?: unknown }>(readOff)?.offered === false &&
+        refused.status === 422 && refused.code === "seazn_unavailable" && refused.rows === 0,
+    );
+    const turnedOn = await v1(owner, switchPath, "PUT", { offered: true });
+    step(
+      `SWITCH on: PUT answers { offered: true } (got ${turnedOn.status} ${JSON.stringify(v1data(turnedOn))})`,
+      turnedOn.status === 200 && v1data<{ offered?: unknown }>(turnedOn)?.offered === true,
+    );
+    const reopened = await startOnSeazn();
+    step(
+      live
+        ? `SWITCH on, LIVE on: the same Go live is past the switch — a later door answers, never seazn_unavailable (got ${reopened.status} ${reopened.code})`
+        : `SWITCH on, LIVE off: the same Go live is still 422 seazn_unavailable — the flag is the master (got ${reopened.status} ${reopened.code}, ${reopened.rows} rows)`,
+      live ? reopened.code !== "seazn_unavailable" : reopened.status === 422 && reopened.code === "seazn_unavailable" && reopened.rows === 0,
+    );
 
     // 4. NO-STORE: the public video route, anonymous (no cookie), for this match and for an id that names none.
     type Part = { partNo?: unknown; player?: unknown; src?: unknown; expiresAt?: unknown };
