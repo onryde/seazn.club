@@ -390,10 +390,10 @@ describe.skipIf(!HAS_DB)("V549 + V550 online chess packages: schema", () => {
         returning id`;
       return { org, div, pkgId: pkg!.id, sessionId: session!.id };
     }
-    type LedgerRow = { session?: string | null; pkg?: string | null; reason?: string; delta?: number; createdBy?: string | null };
+    type LedgerRow = { session?: string | null; pkg?: string | null; reason?: string; delta?: number; createdBy?: string | null; size?: number | null };
     const ledgerRow = (tx: typeof sql, org: string, o: LedgerRow) => tx`
-      insert into org_stream_credits (org_id, delta, reason, balance_after, bucket, session_id, online_package_id, created_by)
-      values (${org}, ${o.delta ?? -1}, ${o.reason ?? "consume"}, 0, 'pack', ${o.session ?? null}, ${o.pkg ?? null}, ${o.createdBy ?? null})`;
+      insert into org_stream_credits (org_id, delta, reason, balance_after, bucket, session_id, online_package_id, created_by, package_size)
+      values (${org}, ${o.delta ?? -1}, ${o.reason ?? "consume"}, 0, 'pack', ${o.session ?? null}, ${o.pkg ?? null}, ${o.createdBy ?? null}, ${o.size ?? null})`;
 
     it("refuses a ledger row naming both a session and a package", async () => {
       const r = await ledgerRig();
@@ -436,6 +436,31 @@ describe.skipIf(!HAS_DB)("V549 + V550 online chess packages: schema", () => {
         .toEqual({ accepted: true });
       expect(await rolledBack((tx) => ledgerRow(tx, r.org, { reason: "grant", delta: 5, createdBy: randomUUID() })), "a staff grant")
         .toEqual({ accepted: true });
+    });
+
+    it("a ledger row's package_size is on the ladder and only on a package row (V550: org_stream_credits_package_size_check)", async () => {
+      const r = await ledgerRig();
+      const SIZE = { accepted: false, code: CHECK_VIOLATION, constraint: "org_stream_credits_package_size_check" };
+      // Refused: a size that is not on the ladder (the ladder is typed in LADDER, never read from the migration), on a package row…
+      const OFF_LADDER = [0, 1, 8, 15, 17, 24, 31, 48, 100, 255, 257, 512, -32];
+      for (const size of OFF_LADDER) {
+        expect(await rolledBack((tx) => ledgerRow(tx, r.org, { pkg: r.pkgId, size })), `package row, size ${size}`).toEqual(SIZE);
+      }
+      // …and a ladder size on a row that names no package (a stream consume, a grant, a purchase): the size is a package row's alone.
+      for (const o of [
+        { session: r.sessionId }, { reason: "grant", delta: 5 }, { reason: "purchase", delta: 5 }, {},
+      ] as LedgerRow[]) {
+        expect(await rolledBack((tx) => ledgerRow(tx, r.org, { ...o, size: 32 })), `no package (${o.reason ?? (o.session ? "session" : "plain consume")}), size 32`).toEqual(SIZE);
+      }
+      // Accepted: every rung on a package consume and a package refund, and null on a package row (a row written before the column
+      // existed) and on a row that names none.
+      for (const size of LADDER) {
+        expect(await rolledBack((tx) => ledgerRow(tx, r.org, { pkg: r.pkgId, size })), `consume at ${size}`).toEqual({ accepted: true });
+        expect(await rolledBack((tx) => ledgerRow(tx, r.org, { pkg: r.pkgId, reason: "refund", delta: 1, size })), `refund at ${size}`).toEqual({ accepted: true });
+      }
+      expect(await rolledBack((tx) => ledgerRow(tx, r.org, { pkg: r.pkgId })), "a package row with no size").toEqual({ accepted: true });
+      expect(await rolledBack((tx) => ledgerRow(tx, r.org, { reason: "grant", delta: 5 })), "a grant with no size").toEqual({ accepted: true });
+      expect(OFF_LADDER.length + LADDER.length, "anti-vacuity: 13 off-ladder sizes, 5 rungs").toBe(18);
     });
 
     it("a ledger row cannot name a package that does not exist, and a package the ledger names cannot be deleted", async () => {

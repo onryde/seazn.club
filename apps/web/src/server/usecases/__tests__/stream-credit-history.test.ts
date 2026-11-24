@@ -27,6 +27,9 @@
 //   H20 full refund     drop `and c.created_at = p.refunded_at` / the refunded_at null test → same test (a move down reads as a refund)
 //   H21 name snapshot   `coalesce(pd.name, p.division_name)` → `pd.name`                    → "a deleted division's package rows keep the name the package snapshotted"
 //   H22 settle row      drop the `idempotencyKey === null && hasPaymentIntent` branch       → "every package writer's row lands on its own kind" (the settle row is `other`)
+//   H27 stored size     `coalesce(c.package_size, p.size)` → `p.size`                       → "every package writer's row lands on its own kind…" (an upgrade row shows the size now) and the legacy test
+//   H28 size fallback   → `c.package_size`                                              → "a package row written before the size column reads the package's own size"
+//   H29 size order      → `coalesce(p.size, c.package_size)`                           → same tests
 //   H23 package block   drop the `onlinePackage` mapping / the package fields               → same test + "no staff identity, note or key leaves the reader"
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -342,14 +345,16 @@ describe.skipIf(!HAS_DB)("listStreamCreditHistory — every writer's row, throug
     const kindsSeen = new Set<StreamHistoryKind>();
     let judged = 0;
     let packageRows = 0;
+    let sizesChecked = 0;
 
     /** One org's story, told step by step: after each real door, the rows it wrote are exactly the ones the step lists (reason,
      *  bucket, signed change, the kind an organiser reads, and — for a package row — the writer site). The expected kinds are the
      *  spec's §8.8 words, the sizes and prices its decision-5 table (16 → 1, 32 → 2, 64 → 4, 256 → 16), typed here. */
     async function story(orgId: string, auth: AuthCtx) {
       const seen = new Set<string>();
-      const expected = new Map<string, { kind: StreamHistoryKind; site: string | null; reason: string }>();
-      type Want = [reason: string, bucket: string, delta: number, kind: StreamHistoryKind, site?: string];
+      const expected = new Map<string, { kind: StreamHistoryKind; site: string | null; reason: string; size: number | null }>();
+      /** `size` is the package's size AT THE TIME of the row (V550 package_size), typed from the story, never read back. */
+      type Want = [reason: string, bucket: string, delta: number, kind: StreamHistoryKind, site?: string, size?: number];
       const step = async (name: string, want: Want[]) => {
         const rows = await sql<{ id: string; reason: string; bucket: string; delta: number }[]>`
           select id, reason, bucket, delta from org_stream_credits where org_id = ${orgId}`;
@@ -359,17 +364,17 @@ describe.skipIf(!HAS_DB)("listStreamCreditHistory — every writer's row, throug
         for (const f of fresh) {
           const w = want.find((x) => `${x[0]}/${x[1]}/${x[2]}` === label(f))!;
           seen.add(f.id);
-          expected.set(f.id, { kind: w[3], site: w[4] ?? null, reason: f.reason });
+          expected.set(f.id, { kind: w[3], site: w[4] ?? null, reason: f.reason, size: w[5] ?? null });
         }
       };
       const read = async () => listStreamCreditHistory(auth, orgId, { limit: 100 });
       /** The page, judged: every row came back, wearing the kind and the shape its step said. */
-      const judge = async (label: string) => {
+      const judge = async (label: string, pkg: { name: string; competition: string | null }) => {
         const page = await read();
         expect(page.rows, `${label}: every ledger row came back`).toHaveLength(expected.size);
         expect(page.nextCursor).toBeNull();
-        const shapes = await sql<{ id: string; reason: string; bucket: string; by_staff: boolean; session_id: string | null; idempotency_key: string | null; online_package_id: string | null; intent: string | null }[]>`
-          select id, reason, bucket, (created_by is not null) as by_staff, session_id, idempotency_key, online_package_id, stripe_payment_intent_id as intent
+        const shapes = await sql<{ id: string; reason: string; bucket: string; by_staff: boolean; session_id: string | null; idempotency_key: string | null; online_package_id: string | null; intent: string | null; package_size: number | null }[]>`
+          select id, reason, bucket, (created_by is not null) as by_staff, session_id, idempotency_key, online_package_id, stripe_payment_intent_id as intent, package_size
             from org_stream_credits where org_id = ${orgId}`;
         for (const row of page.rows) {
           const want = expected.get(row.id);
@@ -389,6 +394,16 @@ describe.skipIf(!HAS_DB)("listStreamCreditHistory — every writer's row, throug
             if (declared.key_shape) expect(shape.idempotency_key).toMatch(declared.key_shape);
             else expect(shape.idempotency_key, `${want!.site}: key`).toBeNull();
             if (want!.site === "package-settle") expect(shape.intent, "the settle row carries the reversed payment").not.toBeNull();
+            // I1: the size is the one the row was written at — on the row itself (the writer's own column), and on the reader's block
+            // — whatever the package's size is now. The settle row names no package: no size, no block.
+            expect(shape.package_size, `${want!.site}: the stored size`).toBe(want!.size);
+            if (want!.size !== null) {
+              expect(row.onlinePackage, `${label}: ${row.kind} row ${row.id}: the division, ITS size, its competition`)
+                .toEqual({ divisionName: pkg.name, size: want!.size, competitionName: pkg.competition });
+              sizesChecked += 1;
+            } else {
+              expect(row.onlinePackage, `${label}: ${want!.site} names no package`).toBeNull();
+            }
             drove.add(want!.site);
             packageRows += declared.package === "always" ? 1 : 0;
           }
@@ -407,24 +422,27 @@ describe.skipIf(!HAS_DB)("listStreamCreditHistory — every writer's row, throug
     expect(rate, "premise: the plan's month covers a 64-player package (4) and a 32 (2) one after the other, with credits to spare").toBeGreaterThanOrEqual(4);
     const sa = await story(a.orgId, a.auth);
     await pay(a, aDiv.id, 32);   // 32 players: 2 credits, drawn from the month's (the rollover grants the month in the same transaction)
-    await sa.step("A first payment", [["grant", "monthly", rate, "monthlyGrant"], ["consume", "monthly", -2, "onlinePackagePaid", "package-debit"]]);
+    await sa.step("A first payment", [["grant", "monthly", rate, "monthlyGrant"], ["consume", "monthly", -2, "onlinePackagePaid", "package-debit", 32]]);
     await pay(a, aDiv.id, 64);   // up to 64: the difference, 2 credits
-    await sa.step("A upgrade", [["consume", "monthly", -2, "onlinePackageResized", "package-debit"]]);
+    await sa.step("A upgrade", [["consume", "monthly", -2, "onlinePackageResized", "package-debit", 64]]);
     await pay(a, aDiv.id, 32);   // back down: the 2 come back, in the month they were spent
-    await sa.step("A move down", [["refund", "monthly", 2, "onlinePackageResized", "package-return"]]);
-    const livePage = await sa.judge("A, live");
-    const packageBlock = { divisionName: "Matrix Open A", size: 32, competitionName: await compName(aComp) };
+    await sa.step("A move down", [["refund", "monthly", 2, "onlinePackageResized", "package-return", 32]]);
+    // I1: the package is at 32 now, and the upgrade row still says 64 — each row reads its own size, never the package's current one.
+    expect((await sql<{ size: number }[]>`select size from division_online_packages where division_id = ${aDiv.id}`)[0]!.size, "premise: the package is back at 32").toBe(32);
+    const livePage = await sa.judge("A, live", { name: "Matrix Open A", competition: await compName(aComp) });
     const livePkgRows = livePage.rows.filter((r) => r.kind.startsWith("onlinePackage"));
     expect(livePkgRows, "anti-vacuity: A's package rows were read").toHaveLength(3);
-    for (const r of livePkgRows) expect(r.onlinePackage, `${r.kind}: the division, its size now and its competition`).toEqual(packageBlock);
+    expect(livePkgRows.map((r) => [r.kind, r.onlinePackage!.size]).sort(), "the sizes at the time: 32, 64, then 32 again").toEqual([
+      ["onlinePackagePaid", 32], ["onlinePackageResized", 32], ["onlinePackageResized", 64],
+    ]);
     expect(livePage.rows.filter((r) => !r.kind.startsWith("onlinePackage")).every((r) => r.onlinePackage === null), "a row that is no package's carries no package block").toBe(true);
     await deleteDivision(a.auth, aDiv.id);   // the whole package goes back: 2 credits
-    await sa.step("A delete", [["refund", "monthly", 2, "onlinePackageRefunded", "package-return"]]);
-    const gonePage = await sa.judge("A, after the delete");
+    await sa.step("A delete", [["refund", "monthly", 2, "onlinePackageRefunded", "package-return", 32]]);
+    // H21: the division is gone, its competition link with it; the rows keep the name the package snapshotted, and their own sizes
+    const gonePage = await sa.judge("A, after the delete", { name: "Matrix Open A", competition: null });
     const gonePkg = gonePage.rows.filter((r) => r.kind.startsWith("onlinePackage"));
     expect(gonePkg, "the three earlier package rows and the refund").toHaveLength(4);
-    // H21: the division is gone, its competition link with it; the rows keep the name the package snapshotted
-    for (const r of gonePkg) expect(r.onlinePackage, `${r.kind} after the delete`).toEqual({ divisionName: "Matrix Open A", size: 32, competitionName: null });
+    expect(gonePkg.map((r) => r.onlinePackage!.size).sort((x, y) => x - y), "32, 32, 32 and the upgrade's 64").toEqual([32, 32, 32, 64]);
 
     // ---- P: the bought credits (the pack bucket), a card refund, and the settle step
     const p = await ocOrg();
@@ -436,16 +454,17 @@ describe.skipIf(!HAS_DB)("listStreamCreditHistory — every writer's row, throug
     const intent = await buy(p.orgId, 20);
     await sp.step("P a bought pack", [["purchase", "pack", 20, "packPurchase"]]);
     await pay(p, pDiv.id, 256);   // 256 players: 16 credits, all from the pack (the month is spent)
-    await sp.step("P first payment", [["consume", "pack", -16, "onlinePackagePaid", "package-debit"]]);
+    await sp.step("P first payment", [["consume", "pack", -16, "onlinePackagePaid", "package-debit", 256]]);
     expect(await cardRefund(intent)).toMatchObject({ matched: true, clawedBack: 4, applied: true });
     await sp.step("P card refund", [["revoke", "pack", -4, "packRefund"]]);
     await deleteDivision(p.auth, pDiv.id);
-    await sp.step("P delete", [["refund", "pack", 16, "onlinePackageRefunded", "package-return"], ["revoke", "pack", -16, "packRefund", "package-settle"]]);
-    const pPage = await sp.judge("P, after the delete");
+    await sp.step("P delete", [["refund", "pack", 16, "onlinePackageRefunded", "package-return", 256], ["revoke", "pack", -16, "packRefund", "package-settle"]]);
+    const pPage = await sp.judge("P, after the delete", { name: "Matrix Open P", competition: null });
     const settle = pPage.rows.find((r) => r.kind === "packRefund" && r.delta === -16)!;
     expect(settle, "the settle row is shown as a pack refunded").toBeDefined();
     expect(settle.onlinePackage, "…and names no package: it is the card's claw-back finishing, not a division's row").toBeNull();
     expect(pPage.rows.find((r) => r.kind === "onlinePackageRefunded")!.onlinePackage).toEqual({ divisionName: "Matrix Open P", size: 256, competitionName: null });
+    expect(sizesChecked, "anti-vacuity: every package row's size was judged (3 of A live, 4 of A after the delete, 2 of P)").toBe(9);
 
     // The three package sites were all driven, every kind they can wear was seen, nothing was left unmapped, and the wire holds no
     // payer, package id or payment: the organiser reads words and numbers.
@@ -458,6 +477,21 @@ describe.skipIf(!HAS_DB)("listStreamCreditHistory — every writer's row, throug
     const [pkgA] = await sql<{ id: string }[]>`select id from division_online_packages where org_id = ${a.orgId}`;
     const wire = JSON.stringify([...gonePage.rows, ...pPage.rows]);
     for (const leaked of [a.auth.userId!, p.auth.userId!, pkgA!.id, intent]) expect(wire, "no payer, package id or payment intent leaves the reader").not.toContain(leaked);
+  });
+
+  it("a package row written before the size column (package_size null) reads the package's own size; a row that has one never does (H27-H29)", async () => {
+    const o = await ocOrg();
+    const div = await ocDivision(o, await ocCompetition(o), { name: "Legacy Open" });
+    await pay(o, div.id, 64);
+    const [pkg] = await sql<{ id: string }[]>`select id from division_online_packages where division_id = ${div.id}`;
+    // the same package at 64 now; a row written at 16 (the size it had when it was written) and one with no size at all
+    await sql`
+      insert into org_stream_credits (org_id, delta, reason, bucket, online_package_id, package_size, balance_after)
+      values (${o.orgId}, -1, 'consume', 'monthly', ${pkg!.id}, 16, 0), (${o.orgId}, -1, 'consume', 'monthly', ${pkg!.id}, null, 0)`;
+    const rows = (await listStreamCreditHistory(o.auth, o.orgId, { limit: 100 })).rows.filter((r) => r.kind.startsWith("onlinePackage"));
+    const bySize = rows.map((r) => r.onlinePackage!.size).sort((x, y) => x - y);
+    expect(bySize, "the real payment (64), the row written at 16, and the row with no size reading the package's 64").toEqual([16, 64, 64]);
+    expect(captureErrorMock).not.toHaveBeenCalled();
   });
 
   it("a ledger row naming ANOTHER org's package is reported, never shown as a division's — and that org's own history still shows it (H18)", async () => {

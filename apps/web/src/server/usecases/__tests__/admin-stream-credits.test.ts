@@ -8,6 +8,8 @@
 //   R6 limit          drop `limit ${STREAM_CREDIT_LEDGER_LIMIT}`                        → "the newest … rows"
 //   R7 package join   drop `and p.org_id = c.org_id` from the package join                → "an Online Chess package row names its package and division — a package of another org names none"
 //   R8 package field  drop `online_package_id` / `division_name` from the mapped row      → same test
+//   R10 size          `coalesce(c.package_size, p.size)` → `p.size`                         → same test (the upgrade row says 32)
+//   R11 size fallback `coalesce(c.package_size, p.size)` → `c.package_size`                 → same test (the row with no size reads null)
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
@@ -63,11 +65,11 @@ describe.skipIf(!HAS_DB)("streamCreditsForOrg — the staff panel's read", () =>
     const read = await streamCreditsForOrg(orgId);
     expect(read.balance).toBe(6);
     expect(read.rows).toEqual([
-      { id: expect.any(String), reason: "revoke", delta: -1, balanceAfter: 6, note: "one too many", createdBy: a.id, createdByEmail: a.email, sessionId: null, onlinePackageId: null, divisionName: null,
+      { id: expect.any(String), reason: "revoke", delta: -1, balanceAfter: 6, note: "one too many", createdBy: a.id, createdByEmail: a.email, sessionId: null, onlinePackageId: null, divisionName: null, packageSize: null,
         createdAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/) },
-      { id: expect.any(String), reason: "grant", delta: 3, balanceAfter: 7, note: "pilot league", createdBy: a.id, createdByEmail: a.email, sessionId: null, onlinePackageId: null, divisionName: null, createdAt: expect.any(String) },
-      { id: expect.any(String), reason: "consume", delta: -1, balanceAfter: 4, note: null, createdBy: null, createdByEmail: null, sessionId, onlinePackageId: null, divisionName: null, createdAt: expect.any(String) },
-      { id: expect.any(String), reason: "purchase", delta: 5, balanceAfter: 5, note: null, createdBy: null, createdByEmail: null, sessionId: null, onlinePackageId: null, divisionName: null, createdAt: expect.any(String) },
+      { id: expect.any(String), reason: "grant", delta: 3, balanceAfter: 7, note: "pilot league", createdBy: a.id, createdByEmail: a.email, sessionId: null, onlinePackageId: null, divisionName: null, packageSize: null, createdAt: expect.any(String) },
+      { id: expect.any(String), reason: "consume", delta: -1, balanceAfter: 4, note: null, createdBy: null, createdByEmail: null, sessionId, onlinePackageId: null, divisionName: null, packageSize: null, createdAt: expect.any(String) },
+      { id: expect.any(String), reason: "purchase", delta: 5, balanceAfter: 5, note: null, createdBy: null, createdByEmail: null, sessionId: null, onlinePackageId: null, divisionName: null, packageSize: null, createdAt: expect.any(String) },
     ]);
   });
 
@@ -124,17 +126,21 @@ describe.skipIf(!HAS_DB)("streamCreditsForOrg — the staff panel's read", () =>
     const compId = await ocCompetition(o);
     const d = await ocDivision(o, compId, { name: "Staff Look Open" });
     await pay(o, d.id, 16);
+    await pay(o, d.id, 32);   // an upgrade: the package is at 32 now, and the first row was written at 16
     const [pkg] = await sql<{ id: string }[]>`select id from division_online_packages where division_id = ${d.id}`;
     let read = await streamCreditsForOrg(o.orgId);
     const paid = read.rows.filter((r) => r.onlinePackageId === pkg!.id);
-    expect(paid.length, "anti-vacuity: the payment wrote package rows").toBeGreaterThan(0);
+    expect(paid.length, "anti-vacuity: the payments wrote package rows").toBe(2);
     for (const r of paid) expect([r.reason, r.divisionName, r.sessionId]).toEqual(["consume", "Staff Look Open", null]);
+    // I1: each row's own size (typed from the story), never the package's size now
+    expect(paid.map((r) => r.packageSize).sort((x, y) => x! - y!), "the sizes the rows were written at: 16, then 32").toEqual([16, 32]);
     // the division is deleted (the full return): the rows keep the name the package snapshotted
     await deleteDivision(o.auth, d.id);
     read = await streamCreditsForOrg(o.orgId);
     const all = read.rows.filter((r) => r.onlinePackageId === pkg!.id);
-    expect(all.map((r) => r.reason).sort(), "the debit and its return").toEqual(["consume", "refund"].sort());
+    expect(all.map((r) => r.reason).sort(), "two debits and the return").toEqual(["consume", "consume", "refund"]);
     for (const r of all) expect(r.divisionName, `${r.reason} after the delete`).toBe("Staff Look Open");
+    expect(all.find((r) => r.reason === "refund")!.packageSize, "the refund gives back the package as it stood: 32").toBe(32);
 
     // a ledger row of org A that names org B's package (V549 does not forbid it): staff see the id to chase, never B's division name
     const other = await ocOrg();
@@ -142,6 +148,13 @@ describe.skipIf(!HAS_DB)("streamCreditsForOrg — the staff panel's read", () =>
     const od = await ocDivision(other, otherComp, { name: "Somebody Else Open" });
     await pay(other, od.id, 16);
     const [foreign] = await sql<{ id: string }[]>`select id from division_online_packages where division_id = ${od.id}`;
+    // a package row written before the size column (package_size null) reads the package's own size, and one that has a size never does
+    await pay(other, od.id, 64);   // the other org's package is at 64 now
+    await sql`
+      insert into org_stream_credits (org_id, delta, reason, bucket, online_package_id, package_size, balance_after)
+      values (${other.orgId}, -1, 'consume', 'monthly', ${foreign!.id}, null, 0)`;
+    const legacy = (await streamCreditsForOrg(other.orgId)).rows.filter((r) => r.onlinePackageId === foreign!.id).map((r) => r.packageSize).sort((x, y) => x! - y!);
+    expect(legacy, "the 16 and the 64 it was paid at, and the row with no size reading the package's 64").toEqual([16, 64, 64]);
     await sql`
       insert into org_stream_credits (org_id, delta, reason, bucket, online_package_id, balance_after)
       values (${o.orgId}, -1, 'consume', 'monthly', ${foreign!.id}, 0)`;
@@ -149,5 +162,6 @@ describe.skipIf(!HAS_DB)("streamCreditsForOrg — the staff panel's read", () =>
     const crossed = read.rows.find((r) => r.onlinePackageId === foreign!.id);
     expect(crossed, "the crossed row is listed").toBeDefined();
     expect(crossed!.divisionName, "another org's division name is never read").toBeNull();
+    expect(crossed!.packageSize, "…nor its size").toBeNull();
   });
 });

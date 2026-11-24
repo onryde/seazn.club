@@ -123,7 +123,7 @@ export async function refundOnlinePackageLocked(tx: Tx, row: PackageRow): Promis
   const value = now.creditsPaid - now.creditsRefunded - now.creditsForfeited;
   const back = value > 0 ? await backFor(tx, now, value) : { pack: 0, monthly: 0, forfeited: 0 };
   // The return first: it refuses a refunded or frozen row and a return its ledger cannot account for, before any row is written.
-  await refundForPackage(tx, { orgId: now.orgId, packageId: now.id, pack: back.pack, monthly: back.monthly });
+  await refundForPackage(tx, { orgId: now.orgId, packageId: now.id, pack: back.pack, monthly: back.monthly, size: now.size });
   const returned = back.pack + back.monthly;
   const written = await tx`
     update division_online_packages

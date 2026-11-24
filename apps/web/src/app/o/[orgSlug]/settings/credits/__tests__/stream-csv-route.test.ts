@@ -78,25 +78,30 @@ describe.skipIf(!HAS_DB)("GET settings/credits/stream.csv", () => {
 
   // Online Chess (spec 2026-11-23 §8.8): the file an organiser opens in a spreadsheet carries a package's rows — the division and its
   // size — written by the real package writer, read through the real reader, and still there after the division is deleted.
-  it("a package's rows are in the file with their division and size — and the name outlives the deleted division", async () => {
+  it("a package's rows are in the file with their division and the size AT THE TIME of each row — and the name outlives the deleted division", async () => {
     const o = await ocOrg();
     const [{ slug }] = await sql<{ slug: string }[]>`select slug from organizations where id = ${o.orgId}`;
     const div = await ocDivision(o, await ocCompetition(o), { name: "Export Open" });
-    await pay(o, div.id, 32);
-    await deleteDivision(o.auth, div.id);
+    await pay(o, div.id, 16);   // 16 players: 1 credit
+    await pay(o, div.id, 32);   // an upgrade to 32: the second credit
+    await deleteDivision(o.auth, div.id);   // the whole package, 2 credits, back
     authState.userId = o.auth.userId!;
     const res = await get(slug!);
     expect(res.status).toBe(200);
     const rows = (await res.text()).split("\r\n").slice(1).map((l) => l.split(","));
     const byKind = (k: string) => rows.filter((r) => r[1] === k);
     expect(byKind("onlinePackagePaid"), "the payment").toHaveLength(1);
+    expect(byKind("onlinePackageResized"), "the upgrade").toHaveLength(1);
     expect(byKind("onlinePackageRefunded"), "the refund").toHaveLength(1);
-    // the same division and size on both rows, the competition gone with the division (the snapshot is the name's only source now)
-    for (const r of [...byKind("onlinePackagePaid"), ...byKind("onlinePackageRefunded")]) expect(r.slice(7), `${r[1]}: division, size`).toEqual(["Export Open", "32"]);
-    expect(byKind("onlinePackagePaid")[0]![2], "a payment is a spend").toBe("-2");
-    expect(byKind("onlinePackageRefunded")[0]![2], "the refund gives it back").toBe("2");
+    // division and size: each row says the size it was written at (16 for the payment, 32 for the upgrade and the refund), the name the
+    // division had; the deleted division's rows name no competition (the snapshot is the name's only source now)
+    expect(byKind("onlinePackagePaid")[0]!.slice(7), "the payment").toEqual(["Export Open", "16"]);
+    expect(byKind("onlinePackageResized")[0]!.slice(7), "the upgrade").toEqual(["Export Open", "32"]);
+    expect(byKind("onlinePackageRefunded")[0]!.slice(7), "the refund").toEqual(["Export Open", "32"]);
+    expect(byKind("onlinePackagePaid")[0]![2], "a payment is a spend").toBe("-1");
+    expect(byKind("onlinePackageRefunded")[0]![2], "the refund gives both credits back").toBe("2");
     expect(byKind("onlinePackageRefunded")[0]![6], "the refund names no competition: the division is gone").toBe("");
-    expect(rows.filter((r) => r[1].startsWith("onlinePackage")).length, "anti-vacuity: package rows were exported").toBeGreaterThan(0);
+    expect(rows.filter((r) => r[1].startsWith("onlinePackage")).length, "anti-vacuity: package rows were exported").toBe(3);
   });
 
   it("an org with an empty ledger exports the header alone", async () => {

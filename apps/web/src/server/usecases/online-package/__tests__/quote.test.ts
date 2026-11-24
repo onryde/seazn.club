@@ -242,7 +242,7 @@ const settlePackage = (id: string, s: { size: number; cameras: boolean; paid: nu
    where id = ${id}`;
 
 const pay = (r: Rig, credits: number, rate = r.rate) =>
-  inTx((tx) => debitForPackage(tx, { orgId: r.orgId, packageId: r.packageId, credits, rate }));
+  inTx((tx) => debitForPackage(tx, { orgId: r.orgId, packageId: r.packageId, credits, rate, size: 16 }));
 
 /** A paid package: the debit as Task 5 writes it (the real writer), then the row. */
 async function paidRig(o: { size: OnlineSize; cameras: boolean; monthly?: number; pack?: number; lastMonth?: boolean }): Promise<Rig & { credits: number }> {
@@ -596,7 +596,7 @@ describe.skipIf(!HAS_DB)("quoteLocked: an unrolled month", () => {
   async function expectTakeIsWhatTheDebitTakes(r: Rig, q: PackageQuote, rate: number): Promise<void> {
     expect(q.take, "premise: the quote has a take to compare").not.toBeNull();
     const real = await rolledBack(async (tx) => {
-      const took = await debitForPackage(tx, { orgId: r.orgId, packageId: r.packageId, credits: q.owed, rate });
+      const took = await debitForPackage(tx, { orgId: r.orgId, packageId: r.packageId, credits: q.owed, rate, size: 16 });
       return { took, left: (await creditBreakdown(tx, r.orgId)).total };
     });
     expect(real.took, "the real debit takes what the quote said").toEqual(q.take);
@@ -662,7 +662,7 @@ describe.skipIf(!HAS_DB)("quoteLocked: an unrolled month", () => {
     const r = await rig({ monthly: 3, pack: 0, size: 16 });
     const otherDivision = await seedDivision(r.orgId);
     const otherPackage = await seedPackage(r.orgId, otherDivision, 16);
-    await inTx((tx) => debitForPackage(tx, { orgId: r.orgId, packageId: otherPackage, credits: 3, rate: 3 }));
+    await inTx((tx) => debitForPackage(tx, { orgId: r.orgId, packageId: otherPackage, credits: 3, rate: 3, size: 16 }));
     expect(await creditBreakdown(sql, r.orgId), "premise: this month's credits are spent").toMatchObject({ monthly: 0, pack: 0, total: 0 });
     const real = await quote(r, 16, { rate: 3 });
     expect(real, "the database's month: nothing to grant, nothing to take, 1 short").toMatchObject({ owed: 1, take: null, shortBy: 1, balance: 0 });
@@ -847,10 +847,10 @@ describe.skipIf(!HAS_DB)("quoteLocked: the return (P21) and the sequence", () =>
     const down = await quote(r, 32);
     expect(down).toMatchObject({ owed: -2, take: null, back: { pack: 2, monthly: 0, forfeited: 0 }, balance: 6 });
     // The quote's `back` is what the REAL refund accepts.
-    await rolledBack((tx) => refundForPackage(tx, { orgId: r.orgId, packageId: r.packageId, pack: down.back!.pack, monthly: down.back!.monthly }));
+    await rolledBack((tx) => refundForPackage(tx, { orgId: r.orgId, packageId: r.packageId, pack: down.back!.pack, monthly: down.back!.monthly, size: 16 }));
     // 5. Move down for real (Task 5's shape: the refund rows and the row, together).
     await inTx(async (tx) => {
-      await refundForPackage(tx, { orgId: r.orgId, packageId: r.packageId, pack: 2, monthly: 0 });
+      await refundForPackage(tx, { orgId: r.orgId, packageId: r.packageId, pack: 2, monthly: 0, size: 16 });
       await tx`update division_online_packages set size = 32, credits_refunded = 2 where id = ${r.packageId}`;
     });
     expect(await creditBalance(sql, r.orgId), "8 held after the 2 came back").toBe(8);
@@ -862,7 +862,7 @@ describe.skipIf(!HAS_DB)("quoteLocked: the return (P21) and the sequence", () =>
     // 7. Move down again, to 16: the second return reads what the first already returned (pack 4 consumed − 2 refunded = 2 left).
     const again = await quote(r, 16);
     await inTx(async (tx) => {
-      await refundForPackage(tx, { orgId: r.orgId, packageId: r.packageId, pack: again.back!.pack, monthly: again.back!.monthly });
+      await refundForPackage(tx, { orgId: r.orgId, packageId: r.packageId, pack: again.back!.pack, monthly: again.back!.monthly, size: 16 });
       await tx`update division_online_packages set size = 16, credits_refunded = 3 where id = ${r.packageId}`;
     });
     expect(await quote(r, 16)).toMatchObject({ owed: 0, balance: 9 });
@@ -896,16 +896,16 @@ describe.skipIf(!HAS_DB)("quoteLocked: the return (P21) and the sequence", () =>
       const q = await quote(rg, size, { rate: 3 });
       expect(q, `to ${size}`).toMatchObject({ owed, back });
       // The quote's `back` is what the real refund writes: it accepts the returned parts (the forfeited part is never written).
-      await rolledBack((tx) => refundForPackage(tx, { orgId, packageId, pack: q.back!.pack, monthly: q.back!.monthly }));
+      await rolledBack((tx) => refundForPackage(tx, { orgId, packageId, pack: q.back!.pack, monthly: q.back!.monthly, size: 16 }));
       // ...and refuses one included credit more than the quote returned (an earlier month's credit cannot come back through it).
       await expect(
-        rolledBack((tx) => refundForPackage(tx, { orgId, packageId, pack: q.back!.pack, monthly: q.back!.monthly + 1 })),
+        rolledBack((tx) => refundForPackage(tx, { orgId, packageId, pack: q.back!.pack, monthly: q.back!.monthly + 1, size: 16 })),
         `to ${size}: one included credit more`,
       ).rejects.toMatchObject({ status: 500, code: "online_package_return_exceeds_debit" });
     }
     // Applying the move down to 32 records its forfeit on the row; the NEXT move down does not forfeit it again.
     await inTx(async (tx) => {
-      await refundForPackage(tx, { orgId, packageId, pack: 5, monthly: 0 });
+      await refundForPackage(tx, { orgId, packageId, pack: 5, monthly: 0, size: 16 });
       await tx`update division_online_packages set size = 32, credits_refunded = 5, credits_forfeited = 1 where id = ${packageId}`;
     });
     expect(await quote(rg, 16, { rate: 3 })).toMatchObject({ owed: -1, back: { pack: 0, monthly: 0, forfeited: 1 } });
@@ -961,7 +961,7 @@ describe.skipIf(!HAS_DB)("quoteLocked: the return (P21) and the sequence", () =>
     expect(await quote(r, 64), "premise: paid, nothing owed").toMatchObject({ owed: 0, refusal: null });
     // Task 6's full refund: the rows come back and the row records it, together.
     await inTx(async (tx) => {
-      await refundForPackage(tx, { orgId: r.orgId, packageId: r.packageId, pack: 4, monthly: 0 });
+      await refundForPackage(tx, { orgId: r.orgId, packageId: r.packageId, pack: 4, monthly: 0, size: 16 });
       await tx`update division_online_packages set credits_refunded = 4, refunded_at = now() where id = ${r.packageId}`;
     });
     expect(await creditBalance(sql, r.orgId)).toBe(10);
@@ -1055,7 +1055,7 @@ describe.skipIf(!HAS_DB)("quoteLocked: covers — the paid package covers the di
     // A full refund leaves history, not a package.
     const refunded = await paidRig({ size: 64, cameras: false, pack: 10 });
     await inTx(async (tx) => {
-      await refundForPackage(tx, { orgId: refunded.orgId, packageId: refunded.packageId, pack: 4, monthly: 0 });
+      await refundForPackage(tx, { orgId: refunded.orgId, packageId: refunded.packageId, pack: 4, monthly: 0, size: 16 });
       await tx`update division_online_packages set credits_refunded = 4, refunded_at = now() where id = ${refunded.packageId}`;
     });
     expect(await quote(refunded, 64)).toMatchObject({ covers: false });

@@ -38,6 +38,9 @@ export interface StreamCreditLedgerRow {
   /** That package's division name (the snapshot it keeps after a delete), only when the package belongs to THIS org — V549 does not make the
    *  package's org the ledger row's, so the join checks it. Null for a row with no package, or one whose package is not this org's. */
   divisionName: string | null;
+  /** The package's size at the time of the row (V550 `package_size`; the package's own size now for a row written before the column),
+   *  only when the package belongs to THIS org. Null for a row with no package, or one whose package is not this org's. */
+  packageSize: number | null;
   /** ISO-8601, UTC. */
   createdAt: string;
 }
@@ -46,10 +49,10 @@ export async function streamCreditsForOrg(orgId: string): Promise<{ balance: num
   const rows = await sql<{
     id: string; reason: string; delta: number; balance_after: number; note: string | null;
     created_by: string | null; email: string | null; session_id: string | null; created_at: Date | string;
-    online_package_id: string | null; division_name: string | null;
+    online_package_id: string | null; division_name: string | null; package_size: number | null;
   }[]>`
     select c.id, c.reason, c.delta, c.balance_after, c.note, c.created_by, u.email, c.session_id, c.created_at,
-           c.online_package_id, p.division_name
+           c.online_package_id, p.division_name, coalesce(c.package_size, p.size) as package_size
       from org_stream_credits c
       left join users u on u.id = c.created_by
       left join division_online_packages p on p.id = c.online_package_id and p.org_id = c.org_id
@@ -61,7 +64,7 @@ export async function streamCreditsForOrg(orgId: string): Promise<{ balance: num
     rows: rows.map((r) => ({
       id: r.id, reason: r.reason, delta: r.delta, balanceAfter: r.balance_after, note: r.note,
       createdBy: r.created_by, createdByEmail: r.email, sessionId: r.session_id,
-      onlinePackageId: r.online_package_id, divisionName: r.division_name,
+      onlinePackageId: r.online_package_id, divisionName: r.division_name, packageSize: r.package_size,
       createdAt: new Date(r.created_at).toISOString(),
     })),
   };

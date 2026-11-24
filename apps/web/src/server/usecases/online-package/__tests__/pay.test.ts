@@ -175,7 +175,7 @@ async function setIncluded(orgId: string, competitionId: string, plan: Plan, n: 
   }
   const warm = await seedDivision(orgId, competitionId);
   const warmPackage = await seedPackage(orgId, warm, 16);
-  await inTx((tx) => debitForPackage(tx, { orgId, packageId: warmPackage, credits: rate - n, rate }));
+  await inTx((tx) => debitForPackage(tx, { orgId, packageId: warmPackage, credits: rate - n, rate, size: 16 }));
 }
 
 /** An org on `plan` with its owner, one competition, one online chess division and its UNPAID package at `size`. Credits: when
@@ -915,7 +915,7 @@ describe.skipIf(!HAS_DB)("payOnlinePackage: the books guards", () => {
   it("a package whose counters disagree with its price is refused by name after the write, which rolls back", async () => {
     const r = await rig({ size: 32, pack: 10, monthly: 0 });
     // A real debit of 3 for a row that says 32 without cameras (price 2): the ledger agrees with the counters, the price does not.
-    await inTx((tx) => debitForPackage(tx, { orgId: r.orgId, packageId: r.packageId, credits: 3, rate: RATE.pro }));
+    await inTx((tx) => debitForPackage(tx, { orgId: r.orgId, packageId: r.packageId, credits: 3, rate: RATE.pro, size: 16 }));
     await sql`update division_online_packages set cameras_paid = false, credits_paid = 3, paid_at = now(), paid_by = ${r.userId} where id = ${r.packageId}`;
     const before = { ledger: await orgLedgerCount(r.orgId), row: await packageRow(r.packageId) };
     const err = await refusal(payOnlinePackage(r.auth, r.divisionId, { size: 64, expectedOwed: (await quote(r, 64)).owed }));

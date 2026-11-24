@@ -154,7 +154,7 @@ export async function payOnlinePackageInTx(
   let paid = 0;
   let returned = 0;
   if (quote.owed > 0) {
-    await debitForPackage(tx, { orgId: a.orgId, packageId: row.id, credits: quote.owed, rate: money.rate });
+    await debitForPackage(tx, { orgId: a.orgId, packageId: row.id, credits: quote.owed, rate: money.rate, size: a.size });
     paid = quote.owed;
   } else if (quote.owed < 0) {
     const back = quote.back;
@@ -163,7 +163,7 @@ export async function payOnlinePackageInTx(
     if (back === null) {
       throw new HttpError(500, `Online Chess package ${row.id}: the quote returns ${-quote.owed} credits without a split`, "online_package_return_unplanned");
     }
-    await refundForPackage(tx, { orgId: a.orgId, packageId: row.id, pack: back.pack, monthly: back.monthly });
+    await refundForPackage(tx, { orgId: a.orgId, packageId: row.id, pack: back.pack, monthly: back.monthly, size: a.size });
     returned = back.pack + back.monthly;
   }
   // The row in ONE statement (V549's CHECKs hold per statement). `cameras_paid` is the quote's camera figure, which already

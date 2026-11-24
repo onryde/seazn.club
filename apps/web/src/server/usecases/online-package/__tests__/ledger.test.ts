@@ -48,6 +48,7 @@
 //   F10 the count checks run after the lock and the package read -> same test (a foreign package answers the count)
 import { randomUUID } from "node:crypto";
 import fc from "fast-check";
+import type { OnlineSize } from "@/lib/online-chess-package";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { sql, withTenant, type Tx } from "@/lib/db";
 import {
@@ -307,11 +308,15 @@ const buy = (orgId: string, n: number) => {
 interface LedgerRow {
   id: string; reason: string; bucket: string; delta: number; balance_after: number;
   online_package_id: string | null; session_id: string | null; created_by: string | null; idempotency_key: string | null;
+  package_size: number | null;
 }
 const orgRows = (orgId: string) => sql<LedgerRow[]>`
-  select id, reason, bucket, delta, balance_after, online_package_id, session_id, created_by, idempotency_key
+  select id, reason, bucket, delta, balance_after, online_package_id, session_id, created_by, idempotency_key, package_size
     from org_stream_credits where org_id = ${orgId}`;
 const rowIds = async (orgId: string) => new Set((await orgRows(orgId)).map((r) => r.id));
+/** The full rows a step wrote, in bucket order (monthly before pack). */
+const rowsSinceFull = async (orgId: string, before: Set<string>) =>
+  (await orgRows(orgId)).filter((r) => !before.has(r.id)).sort((a, b) => (a.bucket === b.bucket ? 0 : a.bucket === "monthly" ? -1 : 1));
 /** The rows a step wrote, as [reason, bucket, delta, balance_after], in bucket order (monthly before pack), then reason. */
 const rowsSince = async (orgId: string, before: Set<string>) =>
   (await orgRows(orgId))
@@ -358,10 +363,10 @@ async function rig(o: { monthly: number; pack: number; lastMonth?: boolean; size
 }
 
 /** The writers as Tasks 5 and 6 will call them, each in its own transaction. */
-const pay = (r: Rig, credits: number, o: { packageId?: string; rate?: number; orgId?: string } = {}) =>
-  inTx((tx) => debitForPackage(tx, { orgId: o.orgId ?? r.orgId, packageId: o.packageId ?? r.packageId, credits, rate: o.rate ?? r.rate }));
-const giveBack = (r: Rig, parts: { pack: number; monthly: number }, packageId = r.packageId) =>
-  inTx((tx) => refundForPackage(tx, { orgId: r.orgId, packageId, ...parts }));
+const pay = (r: Rig, credits: number, o: { packageId?: string; rate?: number; orgId?: string; size?: OnlineSize } = {}) =>
+  inTx((tx) => debitForPackage(tx, { orgId: o.orgId ?? r.orgId, packageId: o.packageId ?? r.packageId, credits, rate: o.rate ?? r.rate, size: o.size ?? 16 }));
+const giveBack = (r: Rig, parts: { pack: number; monthly: number }, packageId = r.packageId, size: OnlineSize = 16) =>
+  inTx((tx) => refundForPackage(tx, { orgId: r.orgId, packageId, ...parts, size }));
 const returnable = (r: Rig, packageId = r.packageId) => inTx((tx) => returnableFor(tx, { orgId: r.orgId, packageId }));
 
 /** The money read the spec owns (§7.1): the total is one figure however it is read, and the newest snapshot agrees. */
@@ -601,6 +606,29 @@ describe.skipIf(!HAS_DB)("returnableFor and refundForPackage", () => {
     expect(await rowsSince(r.orgId, before)).toEqual([["refund", "pack", 1, 2]]);
   });
 
+  // I1 (Task 10 review): the size a row was written at is on the row (V550 package_size), the size the caller passed — never the
+  // package's size read later — and only on the package's own rows. A rollover grant or expire the debit runs first is no package row.
+  it("every package row carries the size its writer was given (a debit's target, a return's), and the rollover's rows carry none", async () => {
+    const r = await rig({ monthly: 3, pack: 5, lastMonth: true });
+    const before = await rowIds(r.orgId);
+    await pay(r, 6, { size: 64 });   // a new month: the rollover expires last month's leftover and grants this month's, then 3 + 3 draw
+    const debits = (await rowsSinceFull(r.orgId, before)).filter((x) => x.reason === "consume");
+    expect(debits.map((x) => [x.bucket, x.delta, x.package_size]), "a debit across both buckets: one size on both rows").toEqual([
+      ["monthly", -3, 64], ["pack", -3, 64],
+    ]);
+    const rollover = (await rowsSinceFull(r.orgId, before)).filter((x) => x.reason !== "consume");
+    expect(rollover.length, "anti-vacuity: the rollover wrote its rows").toBeGreaterThan(0);
+    for (const x of rollover) expect(x, `a ${x.reason} row names no package`).toMatchObject({ online_package_id: null, package_size: null });
+
+    const mid = await rowIds(r.orgId);
+    await giveBack(r, { pack: 2, monthly: 1 }, r.packageId, 32);   // a move down to 32 returns 3 credits, each to its own bucket
+    expect((await rowsSinceFull(r.orgId, mid)).map((x) => [x.reason, x.bucket, x.delta, x.package_size]), "a return's rows").toEqual([
+      ["refund", "monthly", 1, 32], ["refund", "pack", 2, 32],
+    ]);
+    // Rows are never rewritten: the debit's rows still say 64 after the return said 32.
+    expect((await orgRows(r.orgId)).filter((x) => x.reason === "consume").map((x) => x.package_size), "the earlier rows are unchanged").toEqual([64, 64]);
+  });
+
   it("refundForPackage returns each credit to its own bucket", async () => {
     const r = await rig({ monthly: 2, pack: 3 });
     await pay(r, 4); // {2, 2} → total 1
@@ -659,7 +687,7 @@ describe.skipIf(!HAS_DB)("returnableFor and refundForPackage", () => {
       let caught: unknown;
       await inTx(async (tx) => {
         try {
-          await refundForPackage(tx, { orgId: r.orgId, packageId: r.packageId, ...parts });
+          await refundForPackage(tx, { orgId: r.orgId, packageId: r.packageId, ...parts, size: 16 });
         } catch (e) {
           caught = e;
         }
@@ -772,8 +800,8 @@ describe.skipIf(!HAS_DB)("sequences", () => {
 describe.skipIf(!HAS_DB)("locks and the rollover", () => {
   it("each writer queues behind the org's money lock held by another transaction: debit and refund take it themselves", async () => {
     const writers: [string, (tx: Tx, r: Rig) => Promise<unknown>][] = [
-      ["debitForPackage", (tx, r) => debitForPackage(tx, { orgId: r.orgId, packageId: r.packageId, credits: 1, rate: r.rate })],
-      ["refundForPackage", (tx, r) => refundForPackage(tx, { orgId: r.orgId, packageId: r.packageId, pack: 1, monthly: 0 })],
+      ["debitForPackage", (tx, r) => debitForPackage(tx, { orgId: r.orgId, packageId: r.packageId, credits: 1, rate: r.rate, size: 16 })],
+      ["refundForPackage", (tx, r) => refundForPackage(tx, { orgId: r.orgId, packageId: r.packageId, pack: 1, monthly: 0, size: 16 })],
     ];
     let checked = 0;
     for (const [name, write] of writers) {

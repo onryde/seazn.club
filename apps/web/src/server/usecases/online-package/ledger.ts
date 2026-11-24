@@ -10,6 +10,11 @@ import "server-only";
 //    reason CHECK is unchanged (V550 pins this shape: org_stream_credits_package_row_check). One row per bucket the credits
 //    move in, never a zero row (V410: delta <> 0). `balance_after` is the running ORG total, row by row. Readers net a
 //    package's rows by `online_package_id`, never `session_id` (it is null on every one of them).
+//  * Each package row carries `package_size` (V550): the package's size AT THE TIME of the row, written at insert and never
+//    updated (the ledger is append-only). The callers pass the TARGET size — the size a payment or a move down leaves the package
+//    at, the size a full refund gives back — because the package row itself is only rewritten after the credits move. The credit
+//    history reads it, so "up to 32" stays true of an earlier row when the package is resized later. A size is not derivable from
+//    a debit (2 credits is 32 players without cameras and 16 with).
 //  * Two buckets (V426): a debit draws `monthly` (this month's included credits, which expire) first, then `pack` (P4); a
 //    return gives back bought credits first, then included credits debited in the current UTC month, and forfeits included
 //    credits from an earlier month (P6, P21). Each returned credit goes to the bucket it came from.
@@ -27,7 +32,7 @@ import "server-only";
 //    refusing anything the package's own ledger or its state cannot account for.
 import type { Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { ONLINE_PACKAGE_CODES } from "@/lib/online-chess-package";
+import { ONLINE_PACKAGE_CODES, type OnlineSize } from "@/lib/online-chess-package";
 import { InsufficientCredits, credit, debit } from "@/server/relay/domain/credits";
 import {
   creditBreakdown, lockOrg, rollMonthlyUnderLock, streamMonthlyPeriod, type StreamCreditBreakdown,
@@ -102,9 +107,10 @@ async function assertPackageWritable(tx: Tx, a: { orgId: string; packageId: stri
  *  expired and this month's granted before anything is drawn; then `planDebit`'s split, written as one `consume` row per
  *  bucket that moves (monthly, then pack), each `balance_after` the running org total. Answers the split. 402 when the
  *  balance is short, before any consume row (the rollover's rows roll back with the caller's transaction). REFUSED,
- *  before the rollover and any row, on a refunded or frozen package. */
+ *  before the rollover and any row, on a refunded or frozen package. `size` is the package's size the payment leaves it at (the
+ *  target size), written on each row. */
 export async function debitForPackage(
-  tx: Tx, a: { orgId: string; packageId: string; credits: number; rate: number },
+  tx: Tx, a: { orgId: string; packageId: string; credits: number; rate: number; size: OnlineSize },
 ): Promise<BucketSplit> {
   await lockOrg(tx, a.orgId);
   await assertPackageWritable(tx, a, "debit");
@@ -116,8 +122,8 @@ export async function debitForPackage(
     if (n === 0) continue;
     ({ balanceAfter: balance } = debit(balance, n));
     await tx`
-      insert into org_stream_credits (org_id, delta, reason, bucket, online_package_id, balance_after)
-      values (${a.orgId}, ${-n}, 'consume', ${bucket}, ${a.packageId}, ${balance})`;
+      insert into org_stream_credits (org_id, delta, reason, bucket, online_package_id, package_size, balance_after)
+      values (${a.orgId}, ${-n}, 'consume', ${bucket}, ${a.packageId}, ${a.size}, ${balance})`;
   }
   return plan;
 }
@@ -175,8 +181,11 @@ export function planReturn(r: Returnable, credits: number): ReturnPlan {
  *  or frozen package, and when either part is more than the package can give back from that bucket: bought credits net
  *  of what returned already, and included credits debited in the UTC month of the transaction's own `now()` net of what
  *  returned in it — so an included credit from an earlier month cannot come back through here (P6), and no caller can
- *  move the month. */
-export async function refundForPackage(tx: Tx, a: { orgId: string; packageId: string; pack: number; monthly: number }): Promise<void> {
+ *  move the month. `size` is the package's size once the return is done (a move down's target size; a full refund's own size),
+ *  written on each row. */
+export async function refundForPackage(
+  tx: Tx, a: { orgId: string; packageId: string; pack: number; monthly: number; size: OnlineSize },
+): Promise<void> {
   assertCount(a.pack, "the bought credits to return", 0);
   assertCount(a.monthly, "the included credits to return", 0);
   await lockOrg(tx, a.orgId);
@@ -197,8 +206,8 @@ export async function refundForPackage(tx: Tx, a: { orgId: string; packageId: st
     if (n === 0) continue;
     ({ balanceAfter: balance } = credit(balance, n));
     await tx`
-      insert into org_stream_credits (org_id, delta, reason, bucket, online_package_id, balance_after)
-      values (${a.orgId}, ${n}, 'refund', ${bucket}, ${a.packageId}, ${balance})`;
+      insert into org_stream_credits (org_id, delta, reason, bucket, online_package_id, package_size, balance_after)
+      values (${a.orgId}, ${n}, 'refund', ${bucket}, ${a.packageId}, ${a.size}, ${balance})`;
   }
 }
 

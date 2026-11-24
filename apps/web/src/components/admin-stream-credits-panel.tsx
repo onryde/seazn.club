@@ -256,7 +256,7 @@ export function AdminStreamCreditsPanel({
                     <td className="px-3 py-2 text-xs text-slate-300">{r.note ?? "—"}</td>
                     <td className="px-3 py-2 text-xs text-slate-300">{r.createdByEmail ?? r.createdBy ?? "—"}</td>
                     <td className="px-3 py-2 font-mono text-xs text-slate-400" data-testid="stream-credits-subject">
-                      {r.sessionId ?? (r.onlinePackageId ? `package ${r.onlinePackageId}${r.divisionName ? ` · ${r.divisionName}` : ""}` : "—")}
+                      {r.sessionId ?? (r.onlinePackageId ? `package ${r.onlinePackageId}${r.divisionName ? ` · ${r.divisionName}` : ""}${r.packageSize !== null ? ` · size ${r.packageSize}` : ""}` : "—")}
                     </td>
                   </tr>
                 ))}
