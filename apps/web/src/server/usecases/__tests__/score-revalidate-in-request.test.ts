@@ -45,6 +45,8 @@ const probe = vi.hoisted(() => ({
   }>,
   fixturePushes: [] as Array<{ fixtureId: string; reason: string }>,
   divisionPushes: [] as Array<{ divisionId: string; reason: string }>,
+  /** Division messages that arrived WITHOUT their pair (Task 14 review m1): checked empty after every test. */
+  loneDivision: [] as string[],
   failScoreTag: false,
   failOnDecided: null as Error | null,
   // R10 M3: `scoreEvent` calls scoring.ts's own `onDecided` binding, which no
@@ -106,17 +108,22 @@ vi.mock("@/lib/cache", async (importOriginal) => {
 vi.mock("@/lib/realtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/realtime")>();
   type Message = Parameters<typeof actual.broadcast>[0][number];
-  const isTwin = (publicMessage: Message, next: Message | undefined) =>
-    next !== undefined && JSON.stringify(next) === JSON.stringify({ ...publicMessage, private: true });
+  const isTwin = (publicMessage: Message | undefined, next: Message | undefined) =>
+    publicMessage !== undefined && publicMessage.private !== true && next !== undefined &&
+    JSON.stringify(next) === JSON.stringify({ ...publicMessage, private: true });
   const record = (messages: Parameters<typeof actual.broadcast>[0]) => {
     for (const [index, message] of messages.entries()) {
       const { topic, payload } = message;
       const { reason } = payload as { reason: string };
       if (topic.startsWith("fixture:")) probe.fixturePushes.push({ fixtureId: topic.slice("fixture:".length), reason });
       // A division push is TWO messages (Task 14, D-a): the public one, then its private twin. It is recorded ONCE, at its
-      // public message, and only when the very next message is exactly its twin — a lost twin or a lost public message
-      // records no push at all.
-      else if (topic.startsWith("division:") && message.private !== true && isTwin(message, messages[index + 1])) probe.divisionPushes.push({ divisionId: topic.slice("division:".length), reason });
+      // public message. A message without its pair (a public one with no twin after it, a twin with no public one before
+      // it) records no push and is logged to `loneDivision`, which fails the test in afterEach (review m1).
+      else if (topic.startsWith("division:")) {
+        const paired = message.private === true ? isTwin(messages[index - 1], message) : isTwin(message, messages[index + 1]);
+        if (!paired) probe.loneDivision.push(`${message.private === true ? "twin" : "public"} ${topic} ${reason} without its pair`);
+        else if (message.private !== true) probe.divisionPushes.push({ divisionId: topic.slice("division:".length), reason });
+      }
     }
   };
   return {
@@ -337,7 +344,14 @@ const targetsOf = (kind: "del" | "scan") =>
 /** Every `log.error` message so far — for the quiet-twin checks. */
 const errorMessages = () => logMock.error.mock.calls.map((call) => call[1]);
 
+/** Every division message the recorder saw travelled with its pair (Task 14, D-a; review m1). Cleared as it is read. */
+function expectEveryDivisionMessagePaired(): void {
+  const lone = probe.loneDivision.splice(0);
+  expect(lone, "a division message went out without its public/private pair").toEqual([]);
+}
+
 afterEach(() => {
+  expectEveryDivisionMessagePaired();
   for (const gate of probe.gates.splice(0)) gate.resolve();
   probe.store = null;
   probe.failScoreTag = false;
