@@ -13,8 +13,8 @@
 //     errorReasonCode (string) }, duration (number, -1 = unknown), size (number), input { width, height } (integer,
 //     -1 = unknown), requireSignedURLs (boolean, default false: "When set to `true`, a signed token must be generated … to
 //     view the video" — Seazn Task 13, re-read 2026-11-21 from the same document's list item schema), readyToStream (boolean,
-//     "whether the video is playable"; Seazn Task 39 — the key is ABSENT while a recording is still live or not yet playable, so
-//     the adapter reads absent as null, never false; the document was not re-read for T39, the NAME and TYPE are as recalled).
+//     an OPTIONAL boolean, "empty" when the video is not ready for viewing or the live stream is still in progress; Seazn Task 39,
+//     re-read from the Cloudflare Stream documentation: so the adapter reads an absent key as null, never false).
 // Not from the document: the uids and values below are made up; only their NAMES and TYPES are the document's.
 
 /** The two query parameters, as the OpenAPI document names them. */

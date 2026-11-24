@@ -165,6 +165,23 @@ describe.skipIf(!HAS_DB)("the hub's camera flags: each source, the one-statement
     expect(statementCount() - b2 - 1, "no Seazn match among them: the facts alone").toBe(1);
   });
 
+  it("T39: a Seazn recording locked but not yet playable (ready_at null) gives NO camera; once the pass has seen it ready, the same match is `replay`", async () => {
+    const w = await world(2);
+    const [pending, playable] = w.ids as [string, string];
+    const pendingSid = await live(w.r, pending, w.r.seazn);
+    await stopAndSettle(w.r, pending, pendingSid);
+    const cf = await seedLockedRecording(pendingSid, 5, { ready: false });
+    const playableSid = await live(w.r, playable, w.r.seazn);
+    await stopAndSettle(w.r, playable, playableSid);
+    await seedLockedRecording(playableSid, 5);
+    const got = await flags([pending, playable]);
+    expect(got.get(pending) ?? null, "locked, not ready: Cloudflare cannot play it, so no camera icon").toBeNull();
+    expect(got.get(playable), "the ready twin of the same shape is offered").toBe("replay");
+    expect(got.size, "anti-vacuity: exactly one of the two carries a camera").toBe(1);
+    await sql`update seazn_locked_videos set ready_at = now() where cf_video_id = ${cf}`;
+    expect((await flags([pending])).get(pending), "the pass sees it ready: the camera appears").toBe("replay");
+  });
+
   it("the answer is the enum alone: nothing the batch returns carries an address, a uid or a token", async () => {
     const w = await world(3);
     const [a, b, c] = w.ids as [string, string, string];
