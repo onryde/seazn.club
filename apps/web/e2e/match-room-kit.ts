@@ -189,7 +189,7 @@ async function fundOnlinePayment(divisionId: string, credits: number): Promise<v
  *  the camera price: the receipt's quote read first (`GET`), then confirmed. Used where an open cannot carry the payment: before a
  *  legacy league is staged (the pay door refuses to CHARGE a league - P16 - so it pays while the division has no stage), and on a
  *  division whose round is opened later by the spec itself (the UI's Open round, or its own POST). */
-async function payThroughPayDoor(request: APIRequestContext, divisionId: string): Promise<void> {
+export async function payThroughPayDoor(request: APIRequestContext, divisionId: string): Promise<void> {
   const size = await withDb(async (sql) => {
     const [p] = await sql<{ size: number }[]>`
       select size from division_online_packages where division_id = ${divisionId} and refunded_at is null`;
