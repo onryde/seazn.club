@@ -62,10 +62,35 @@ jobs:
   # -------------------------------------------------------------------------
 
   # -------------------------------------------------------------------------
-  # Docs-only, or code? One answer, `outputs.code`, that every heavy job reads:
-  # `test`, `container`, the four DB jobs, `smoke-e2e` and `matrix-rows` (and
-  # matrix-sample through it) run only when it is 'true'. ci-gate, at the end of
-  # this file, is the one check that reports for all of them either way.
+  # Docs-only, content-only, or code? Two answers that the heavy jobs read:
+  #
+  #   outputs.code     'false' only for a docs-only PR. `test`, `container`, the four DB
+  #                    jobs, `smoke-e2e` and `matrix-rows` (and matrix-sample through it)
+  #                    run only when it is 'true'.
+  #   outputs.content  'true' only for a CONTENT-ONLY PR: every changed path is a help or
+  #                    blog article or a picture they show (apps/web/content/help/**,
+  #                    apps/web/content/blog/**, apps/web/public/help/**), and no tracked
+  #                    code names a changed file. It always comes with code='true'.
+  #
+  #   lane          code  content  runs
+  #   docs-only     false false    gates, security, placement-pin, scheduler-live
+  #   content-only  true  true     those four + test (every shard), container, smoke-db,
+  #                                smoke-e2e: everything that READS content
+  #   code          true  false    everything
+  #
+  # On a content-only PR these four skip, on a `&& content != 'true'` clause: smoke-db-app,
+  # smoke-db-outliers, smoke-db-usecases and matrix-rows (matrix-sample with it). Nothing
+  # they run reads help or blog content, and the proof is a test, not this comment:
+  # scripts/__tests__/ci-content-lane.test.ts derives every test file that reads content,
+  # by behaviour, and fails if any of them is run only by a job that skips. What stays, and
+  # why: `test` runs every apps/web unit test, which holds the help-copy sweeps, the blog
+  # goldens and the leak, picture and link guards; `smoke-db` holds the DB-gated halves of
+  # help-copy-truth, pricing-cards, retired-plan-copy, dictionary-copy-truth and
+  # help-token-cells, which compare the help articles with the plan_entitlements rows;
+  # `smoke-e2e` builds and serves the site and runs the Lighthouse and blog SEO steps over
+  # real help and blog pages; `container` runs the same `next build` that prerenders them.
+  # ci-gate, at the end of this file, is the one check that reports for all of them either
+  # way; on a content-only PR it also refuses a skip outside the list above.
   #
   # NOT gated, on purpose, although the first brief for this job listed it:
   # `gates`. Its "Matrix harness unit tests" step READS the docs —
@@ -78,12 +103,12 @@ jobs:
   # exactly by placement-image-wiring.test.ts) are not gated either.
   #
   # scripts/ci-docs-only.sh decides, from dorny's changed-file list, and answers
-  # 'false' (docs-only) only when BOTH hold:
+  # code='false' (docs-only) only when BOTH hold:
   #   * every changed path is docs/**, mockups/**, .claude/**, or a ROOT-level
   #     *.md / *.txt. NOT `**/*.md`: an .md inside apps/, scripts/ or tools/ is
   #     read by content scans in the unit and DB jobs (forfeit-vocabulary-scan,
   #     table-writers-source; content/help/** by the help-copy sweeps), so it
-  #     is code here.
+  #     is code here, or content (below).
   #   * no tracked code file names a changed file's basename or any folder it
   #     sits in (except the structural docs/superpowers/specs/plans/mockups/
   #     .claude/agents). ~40 unit and DB tests read a doc by name
@@ -91,8 +116,13 @@ jobs:
   #     design, relay-internal-routes a docs/runbooks SQL file). Conservative
   #     on purpose: a false "code" costs one full run; a false "docs-only"
   #     merges a red.
+  # It answers content='true' only when every changed path is a content path (or a docs
+  # path that passes the docs rule on its own), at least one is a content path, and no
+  # tracked code names a changed content file's BASENAME. Folders are not searched for a
+  # content path: a section name such as `billing` names half the repo.
   # Anything else — another event, an empty diff, a list at the API's
-  # 3000-file cap, an unparsable list — answers 'true' and everything runs.
+  # 3000-file cap, an unparsable list — answers code='true' content='false' and
+  # everything runs.
   #
   # ci.yml triggers on pull_request only (the header says why), so there is no
   # push to main here to keep ungated; the script still answers 'true' for any
@@ -100,7 +130,7 @@ jobs:
   # everything.
   # -------------------------------------------------------------------------
   changes:
-    name: Classify the change (docs-only or code)
+    name: Classify the change (docs-only, content-only or code)
     runs-on: ubuntu-latest
     # dorny/paths-filter lists a pull request's files through the API. A
     # job-level block REPLACES the workflow's; this job installs nothing, so it
@@ -110,6 +140,7 @@ jobs:
       pull-requests: read
     outputs:
       code: ${{ steps.verdict.outputs.code }}
+      content: ${{ steps.verdict.outputs.content }}
     steps:
       - uses: actions/checkout@v5
       # One filter matching every path: its only job is the file LIST. dorny
@@ -123,7 +154,7 @@ jobs:
           filters: |
             changed:
               - '**'
-      - name: Docs-only, or code?
+      - name: Docs-only, content-only, or code?
         id: verdict
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -760,7 +791,9 @@ jobs:
   # change which legs run without a line of test code changing.
   #
   # All four skip on a docs-only pull request (see `changes`); ci-gate is the
-  # one check that reports for them either way.
+  # one check that reports for them either way. On a CONTENT-ONLY pull request
+  # smoke-db still runs (it holds the DB-gated halves of the help-copy tests) and the
+  # other three skip.
   # -------------------------------------------------------------------------
   smoke-db:
     name: Smoke — DB + Redis suites, usecases [a-d] (Postgres container)
@@ -1197,7 +1230,7 @@ jobs:
   smoke-db-app:
     name: Smoke — usecases [e-h] + src/app (Postgres container)
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.content != 'true'
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     services:
       postgres:
@@ -1380,7 +1413,7 @@ jobs:
   smoke-db-outliers:
     name: Smoke — usecases [i-r] + DB-gated outliers (Postgres container)
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.content != 'true'
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     services:
       postgres:
@@ -1590,7 +1623,7 @@ jobs:
   smoke-db-usecases:
     name: Smoke — usecases [s-z] (Postgres container)
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.content != 'true'
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     services:
       postgres:
@@ -2785,7 +2818,7 @@ jobs:
   matrix-rows:
     name: Matrix rows (R27) + truth-run staleness
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.content != 'true'
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     permissions:
       contents: read
@@ -2881,12 +2914,18 @@ jobs:
   # run's red is on an old SHA, which no merge looks at.
   #
   # The rules, strictest first:
-  #   * `changes` SUCCEEDED and answered exactly 'true' or 'false' — otherwise
+  #   * `changes` SUCCEEDED and answered exactly 'true' or 'false' for BOTH `code`
+  #     and `content`, and never content='true' beside code='false' — otherwise
   #     nothing says which jobs were allowed to skip;
   #   * no job failed or was cancelled;
   #   * on a CODE change, no job was skipped either, except matrix-sample,
   #     which has its own path condition (R27). A skip on a code PR is a job
-  #     that did not run, which a bare "success or skipped" rule would pass.
+  #     that did not run, which a bare "success or skipped" rule would pass;
+  #   * on a CONTENT-ONLY change (code and content both 'true') the same rule holds
+  #     with a longer exception list: matrix-rows, matrix-sample, smoke-db-app,
+  #     smoke-db-outliers and smoke-db-usecases may skip, and nothing else. A
+  #     content PR that skipped `test`, `smoke-db`, `smoke-e2e` or `container`
+  #     would be a green check that never read the content.
   #
   # scripts/__tests__/ci-gate-wiring.test.ts pins that `needs` lists every
   # other job in this file, so a job added later cannot fall outside the gate.
@@ -2911,7 +2950,7 @@ jobs:
       - matrix-sample
     runs-on: ubuntu-latest
     steps:
-      - name: Every job passed, or was skipped by a docs-only classification
+      - name: Every job passed, or was skipped by a docs-only or content-only classification
         env:
           NEEDS: ${{ toJSON(needs) }}
         run: |
@@ -2924,6 +2963,7 @@ jobs:
           fi
           changes="$(printf '%s' "$NEEDS" | jq -r '.changes.result // "missing"')"
           code="$(printf '%s' "$NEEDS" | jq -r '.changes.outputs.code // ""')"
+          content="$(printf '%s' "$NEEDS" | jq -r '.changes.outputs.content // ""')"
           if [ "$changes" != success ]; then
             echo "::error::the changes job did not succeed ($changes), so nothing says which jobs were allowed to skip"
             exit 1
@@ -2932,16 +2972,32 @@ jobs:
             true|false) ;;
             *) echo "::error::changes answered code='$code', not 'true' or 'false'"; exit 1 ;;
           esac
+          case "$content" in
+            true|false) ;;
+            *) echo "::error::changes answered content='$content', not 'true' or 'false'"; exit 1 ;;
+          esac
+          if [ "$content" = true ] && [ "$code" != true ]; then
+            echo "::error::changes answered content='true' with code='$code': a content-only change is a kind of code change, so this answer contradicts itself"
+            exit 1
+          fi
           bad="$(printf '%s' "$NEEDS" | jq -r 'to_entries[] | select(.value.result != "success" and .value.result != "skipped") | "\(.key)=\(.value.result)"')"
           if [ -n "$bad" ]; then
             echo "::error::failed or cancelled: $(echo $bad)"
             exit 1
           fi
           if [ "$code" = true ]; then
-            skipped="$(printf '%s' "$NEEDS" | jq -r 'to_entries[] | select(.key != "matrix-sample" and .value.result == "skipped") | .key')"
+            # The jobs a change of this kind may skip. scripts/__tests__/ci-content-lane.test.ts derives the content
+            # list from the jobs' own `if:` lines and runs this script against every job, so it fails when the list is not
+            # this one. Membership is `IN`, never jq's `inside`/`contains`: on strings those match a SUBSTRING, so
+            # `smoke-db` would count as inside ["smoke-db-app", ...] and a skipped smoke-db would pass.
+            allowed='["matrix-sample"]'
+            if [ "$content" = true ]; then
+              allowed='["matrix-rows","matrix-sample","smoke-db-app","smoke-db-outliers","smoke-db-usecases"]'
+            fi
+            skipped="$(printf '%s' "$NEEDS" | jq -r --argjson ok "$allowed" 'to_entries[] | select(.value.result == "skipped" and (.key | IN($ok[]) | not)) | .key')"
             if [ -n "$skipped" ]; then
-              echo "::error::a code change SKIPPED $(echo $skipped). A skip here is a job that did not run, not a pass."
+              echo "::error::a change with code=$code content=$content SKIPPED $(echo $skipped). A skip here is a job that did not run, not a pass."
               exit 1
             fi
           fi
-          echo "ci-gate: $n jobs checked, code=$code, none failed or cancelled"
+          echo "ci-gate: $n jobs checked, code=$code, content=$content, none failed or cancelled"
