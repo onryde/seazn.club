@@ -902,6 +902,54 @@ describe.skipIf(!HAS_DB)("a court code's descriptor, beat, start and record", ()
     });
   });
 
+  // Seazn-hosted Task 43 (stg d908c90c): the court phone's held stop, then its own start. The fixture path, a composed session and
+  // the race are pinned in capture-start-own-stop.test.ts; here the COURT start (T37's per-match sessions) answers the same way.
+  // The rig's court sessions are passthrough on an API-backed channel, whose stop completes at once — so a session still draining
+  // (a composed one's relay, d908c90c's 15 s) is stood in by the row, moved to `ending` by hand: only the start's READ is judged.
+  describe("Task 43: the court phone's held stop, then its own start", () => {
+    const inPlay = async (phone: string) => {
+      await streamed(A, AT_14);
+      await setStatus(A, "in_play");
+      await claimed(phone);
+      return operatorStart(phone);
+    };
+    const toEnding = (sid: string) =>
+      sql`update fixture_stream_sessions set state = 'ending', desired_state = 'ending', end_reason = 'operator_stopped', ending_at = ${clock()} where id = ${sid}`;
+
+    it("the held stop ends S at once; the hold then restarts the court's match — 200, a NEW sid, never already_live naming S", async () => {
+      const phone = phoneId("t43-court");
+      const S = await inPlay(phone);
+      now += 260_000;                                                // the outage: the phone is silent, then its held stop arrives
+      expect(await beat(phone, { stopped: S })).toMatchObject({ state: "over", sid: S });
+      expect((await sessionRow(S)).state, "the stop is the authority: S is no longer live").toMatch(/^(ending|completed)$/);
+      now += 3_000;
+      const again = await operatorStart(phone);
+      expect(again, "a new session").not.toBe(S);
+      expect(await sessionRow(again)).toMatchObject({ fixture_id: A, start_cause: "operator", court_link_id: linkId });
+    });
+
+    it("S still ending (its relay draining) and held by this phone: 503 unavailable, never already_live; once it is over, the start goes ahead", async () => {
+      const phone = phoneId("t43-drain");
+      const S = await inPlay(phone);
+      // This phone's stop, standing for a composed S's ~15 s drain (a passthrough S's own stop completes at once — test above).
+      await toEnding(S);
+      expect(await refusal(operatorStart(phone))).toBe("503:unavailable");
+      expect((await sessionRow(S)).state, "nothing completed it behind the phone's back").toBe("ending");
+      await sql`update fixture_stream_sessions set state = 'completed', ended_at = ${clock()} where id = ${S}`;
+      const next = await operatorStart(phone);
+      expect(next).not.toBe(S);
+    });
+
+    it("S ending but held by NO pairing (not this phone's): already_live naming S — the guard is not widened on a court either", async () => {
+      const phone = phoneId("t43-other");
+      const S = await inPlay(phone);
+      await sql`update fixture_stream_sessions set pairing_id = null where id = ${S}`;
+      await toEnding(S);
+      const got = await postStart(qr.code, qr.tok, { phone }, deps, clock()).catch((e: unknown) => e);
+      expect(got).toMatchObject({ status: 409, code: "already_live", extras: { sid: S } });
+    });
+  });
+
   describe("the scoring link on a court code (§5.6)", () => {
     const savedLinkEnv = { base: process.env.OAUTH_BASE_URL, kek: process.env.DEVICE_LINK_KEK };
     let minted: string[];

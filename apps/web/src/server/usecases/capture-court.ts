@@ -21,7 +21,7 @@ import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { DEVICE_LINK_MINT_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { CaptureRefusalError, codeEnded } from "@/server/api-v1/capture-http";
-import { CAPTURE_COURT_NAME_MAX, CaptureScoringLinkOk, type CaptureAutoRefusal, type CaptureCourt, type CaptureNext, type CaptureStartBody, type CaptureStartedBy, type CaptureStartOk } from "@/server/api-v1/capture-schemas";
+import { CAPTURE_COURT_NAME_MAX, CaptureScoringLinkOk, type CaptureAutoRefusal, type CaptureCourt, type CaptureNext, type CaptureStartBody, type CaptureStartOk } from "@/server/api-v1/capture-schemas";
 import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
 import { courtMinAppVersion, POLL_FAR_SECONDS, POLL_NEAR_SECONDS } from "@/server/relay/config";
@@ -29,9 +29,9 @@ import { deferred } from "@/lib/deferred";
 import { courtLatchedStart, startingOfCurrent, type CourtFocus, type CourtMatchFacts } from "@/server/relay/domain/court-stream";
 import { ACTIVE_STATES, isActive, type SessionState } from "@/server/relay/domain/session";
 import {
-  alreadyLive, captureCommon, captureOrigin, DEST_MAX, fitText, holderOf, HTTPS_ORIGIN, isForeignKeyViolation, LABEL_MAX, latestSession,
-  phoneStartRefusal, runBeat, sessionDescriptor, waitingFieldsOf,
-  type Beat, type BeatAnswer, type BeatScope, type CaptureCommon, type Descriptor, type Exec, type LatestSession, type NamedRow,
+  captureCommon, captureOrigin, DEST_MAX, fitText, holderOf, HTTPS_ORIGIN, isForeignKeyViolation, judgeOpenSession, LABEL_MAX, latestSession,
+  phoneStartRefusal, runBeat, sessionDescriptor, startOverSession, waitingFieldsOf,
+  type Beat, type BeatAnswer, type BeatScope, type CaptureCommon, type Descriptor, type Exec, type LatestSession, type MetSession, type NamedRow,
   type OpenRow,
 } from "./capture-phone";
 import { provideDeviceLinkForPhone, type HolderVerifiedCode, type PhoneScoringLink } from "./device-links";
@@ -282,7 +282,9 @@ export async function postCourtStart(court: ResolvedCourtCode, body: CaptureStar
   const open = await courtOpenSession(sql, court.link.id);
   const current = await holderOf(sql, court.codeId, open);
   if (!current || current.phone !== body.phone) throw new CaptureRefusalError(409, "replaced", "this phone is not the slot's current phone");
-  if (open) throw alreadyLive(open);
+  // Task 43: the court phone's own ending session is its "try again" (observed first: a drained relay completes it and the start
+  // goes ahead); any other open session is already_live naming it, as before.
+  if (open) await judgeOpenSession(open, current.id, court.orgId, deps);
   // Final review m-1: a code for a later day (or one past its day) has no match to stream today — the existing `no_match`, the
   // contract being pinned. Read before the focus, so a closed window costs no match read.
   if (!linkOpenAt(court.link, deps.now())) throw new CaptureRefusalError(409, "no_match", "this court's day is not open");
@@ -307,10 +309,10 @@ export async function postCourtStart(court: ResolvedCourtCode, body: CaptureStar
     const mapped = phoneStartRefusal(err);
     if (mapped === null) throw err;
     if (mapped instanceof CaptureRefusalError) throw mapped;
-    const [named] = mapped.alreadyLive === null ? [] : await sql<{ id: string; start_cause: CaptureStartedBy }[]>`
-      select id, start_cause from fixture_stream_sessions where id = ${mapped.alreadyLive}`;
-    const running = named ?? await courtOpenSession(sql, court.link.id);
-    if (running) throw alreadyLive(running);
+    const [named] = mapped.alreadyLive === null ? [] : await sql<MetSession[]>`
+      select id, state, start_cause, pairing_id from fixture_stream_sessions where id = ${mapped.alreadyLive}`;
+    const verdict = startOverSession(named ?? await courtOpenSession(sql, court.link.id), current.id);
+    if (verdict !== "proceed") throw verdict;
     throw new CaptureRefusalError(503, "unavailable", "a session was running and has just ended; try again");
   }
   if (latched !== null) await clearLatchAfterStart(court.orgId, latched, court.issuedBy, sessionId);
