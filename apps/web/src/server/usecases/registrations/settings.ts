@@ -203,9 +203,11 @@ export async function putRegistrationSettings(
     // (a capacity limit - no plan lifts it, so no "raise the plan").
     const online = regDiv ? divisionPlaysOnline(regDiv) : false;
     capacityOnline = online;
-    const cap = effectiveEntrantCap(online, limit);
+    // The size is null on purpose in both calls: this is the pre-transaction check (the plan limit is an entitlement read), judged on the
+    // plan and 256 only. The size is read below, inside the transaction under the division lock, and refused there (`assertSizeRoom`).
+    const cap = effectiveEntrantCap(online, limit, null);
     if (cap !== null && input.capacity > cap) {
-      if (onlineCapBinds(online, limit)) throw onlineDivisionFullError();
+      if (onlineCapBinds(online, limit, null)) throw onlineDivisionFullError();
       throw new HttpError(
         422,
         `Capacity exceeds your plan's entrant limit (${limit}) — raise the plan or lower the capacity`,

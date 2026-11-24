@@ -75,13 +75,25 @@ import { log } from "@/server/logger";
 import { livePackage } from "@/server/usecases/online-package/read";
 import { divisionPlaysOnline, supportsOnlinePlay } from "./online-play";
 
+/** The message a door fails with when it judges an ONLINE division and never read its package size (mirrors `PLAN_LIMIT_NOT_READ`). An
+ *  omitted size is not "no size term": `null` is (an online division with no live row, or a door whose size is judged elsewhere, named
+ *  in the sweep of online-entrant-cap.test.ts). Reading an unread size as null would put the flat 256 back where a lower size binds. */
+export const ONLINE_SIZE_NOT_READ = "online entrant cap: package size not read";
+
+/** The size term of a judgement: the size the door read, null for no size term; `undefined` (never read) on an online division is a
+ *  defect in the door, failed closed. Not asked of a division that does not play online - it has no size. */
+function sizeTerm(size: number | null | undefined): number | null {
+  if (size === undefined) throw new Error(ONLINE_SIZE_NOT_READ);
+  return size;
+}
+
 /** The line of the cap that is lowest, so the one whose refusal answers (see the header): the plan's, the size's or the online cap's.
- *  null for a division that does not play online (the plan's cap alone, no package read). `size` null/undefined is no size term: an
- *  online division with no live row, or a caller that predates the size. */
+ *  null for a division that does not play online (the plan's cap alone, no package read). `size` is REQUIRED for an online division:
+ *  the number a door read (`sizeForDoor`), or null for no size term; undefined throws `ONLINE_SIZE_NOT_READ`. */
 export type CapBinder = "plan" | "size" | "online";
-export function capBinder(online: boolean, planCap: number | null, size?: number | null): CapBinder | null {
+export function capBinder(online: boolean, planCap: number | null, size: number | null | undefined): CapBinder | null {
   if (!online) return null;
-  const line = size ?? null;
+  const line = sizeTerm(size);
   // The plan is lowest when it is below the online cap and no higher than the size: a TIE goes to the plan, because the next size up
   // may not be one the plan allows (`sizeAllowedByPlan`), so raising the plan is the move that has to come first.
   if (planCap !== null && planCap < ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION && (line === null || planCap <= line)) return "plan";
@@ -93,16 +105,17 @@ export function capBinder(online: boolean, planCap: number | null, size?: number
 
 /** Does the ONLINE cap, rather than the plan or the size, decide how many entrants this division holds? True for a division that plays
  *  online when the plan cap is absent (unlimited) or no lower than the online cap, and the size (when one is read) is the online cap's own. */
-export function onlineCapBinds(online: boolean, planCap: number | null, size?: number | null): boolean {
+export function onlineCapBinds(online: boolean, planCap: number | null, size: number | null | undefined): boolean {
   return capBinder(online, planCap, size) === "online";
 }
 
 /** The most entrants the division may hold: the plan's cap, and for an online chess division min(plan cap, size, 256). `size` is the
- *  live package's (`sizeForDoor`); null or left out is no size term (an online division with no live row, or a caller that predates it).
+ *  live package's (`sizeForDoor`), REQUIRED for an online division: null is no size term (an online division with no live row, or a door
+ *  whose size is judged elsewhere), undefined (never read) throws `ONLINE_SIZE_NOT_READ`.
  *  null = no cap at all (unlimited plan, division not online). */
-export function effectiveEntrantCap(online: boolean, planCap: number | null, size?: number | null): number | null {
+export function effectiveEntrantCap(online: boolean, planCap: number | null, size: number | null | undefined): number | null {
   if (!online) return planCap;
-  return Math.min(planCap ?? ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION, size ?? ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION, ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION);
+  return Math.min(planCap ?? ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION, sizeTerm(size) ?? ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION, ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION);
 }
 
 /** The refusal of a door that would put an online chess division past its cap: 422 ONLINE_DIVISION_FULL, carrying `limit`. */
@@ -208,7 +221,7 @@ export function assertOnlineRoom(wouldBe: number): void {
  *  Where the online cap binds (a plan at or above it, or none) ONLINE_DIVISION_FULL answers; where a lower plan cap does, the plan's
  *  own 402, as the add door's; where the SIZE does, ONLINE_SIZE_FULL. `planCap` is read before the caller's transaction
  *  (`openOnlineCapGuard`), `size` inside it (`sizeForDoor`). */
-export function assertOnlineHeldRoom(planCap: number | null, wouldHold: number, size?: OnlineSize | null): void {
+export function assertOnlineHeldRoom(planCap: number | null, wouldHold: number, size: OnlineSize | null | undefined): void {
   const binder = capBinder(true, planCap, size);
   if (binder === "online") assertOnlineRoom(wouldHold);
   else if (binder === "size") assertSizeRoom(size!, wouldHold); // "size" is only answered for a size that was read
@@ -226,7 +239,7 @@ export function assertEntrantRoom(
   planCap: number | null,
   counts: { rows: number; held: number },
   adding: number,
-  size?: OnlineSize | null,
+  size: OnlineSize | null | undefined,
 ): void {
   const online = divisionPlaysOnline(division);
   const binder = capBinder(online, planCap, size);
@@ -245,7 +258,7 @@ export async function assertEntrantRoomIn(
   division: { sport_key: string; config: unknown },
   planCap: number | null,
   adding: number,
-  size?: OnlineSize | null,
+  size: OnlineSize | null | undefined,
 ): Promise<void> {
   const held = divisionPlaysOnline(division) ? await countOnlineHeld(tx, divisionId) : 0;
   const [{ n: rows }] = await tx<{ n: number }[]>`select count(*)::int as n from entrants where division_id = ${divisionId}`;
@@ -338,7 +351,8 @@ export async function onlineCapHoldsPromotion(
  *  it is the plan's own 402 - over the board the plan counts rows, online it counts the places held, and the switch is where that
  *  count starts to apply. `planCap` is read before the caller's transaction (`openOnlineCapGuard`). */
 export function assertOnlinePlayFits(entrants: number, planCap: number | null): void {
-  if (!onlineCapBinds(true, planCap)) {
+  // The size is null here on purpose: the switch's own size is the request's and is judged by `assertSizeFits` (online-package/size.ts).
+  if (!onlineCapBinds(true, planCap, null)) {
     assertWithinLimit(planCap, "entrants.per_division.max", entrants);
     return;
   }

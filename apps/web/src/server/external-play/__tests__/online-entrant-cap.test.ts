@@ -29,6 +29,7 @@ import {
   onlineCapBinds,
   onlineDivisionFullError,
   onlineRoomLeft,
+  ONLINE_SIZE_NOT_READ,
   onlineSizeFullError,
   PLAN_LIMIT_NOT_READ,
   readPlanLimit,
@@ -48,7 +49,7 @@ const verdictForCounts = (
   adding: number,
 ): Verdict => {
   try {
-    assertEntrantRoom(division, planCap, counts, adding);
+    assertEntrantRoom(division, planCap, counts, adding, null); // null: no size term (the size's own table is below)
     return "ok";
   } catch (err) {
     if (err instanceof PaymentRequiredError) return "plan";
@@ -83,7 +84,7 @@ describe("effectiveEntrantCap: min(plan cap, 256) for an online division, the pl
     ];
     let checked = 0;
     for (const [online, plan, want] of table) {
-      expect(effectiveEntrantCap(online, plan), `online ${online}, plan ${plan}`).toBe(want);
+      expect(effectiveEntrantCap(online, plan, null), `online ${online}, plan ${plan}`).toBe(want);
       checked += 1;
     }
     expect(checked, "rows checked").toBe(table.length);
@@ -91,14 +92,14 @@ describe("effectiveEntrantCap: min(plan cap, 256) for an online division, the pl
   });
 
   it("onlineCapBinds: only for an online division whose plan cap is absent or no lower than 256 (the tie goes to the online cap)", () => {
-    expect(onlineCapBinds(true, 64), "a lower plan cap binds first - an upgrade lifts it").toBe(false);
-    expect(onlineCapBinds(true, 128), "an Event Pass's 128 is below the cap now: an upgrade does lift it").toBe(false);
-    expect(onlineCapBinds(true, MAX - 1)).toBe(false);
-    expect(onlineCapBinds(true, MAX), "equal (Pro's 256): no upgrade changes anything").toBe(true);
-    expect(onlineCapBinds(true, 512)).toBe(true);
-    expect(onlineCapBinds(true, null)).toBe(true);
-    expect(onlineCapBinds(false, 512), "not online: never").toBe(false);
-    expect(onlineCapBinds(false, null)).toBe(false);
+    expect(onlineCapBinds(true, 64, null), "a lower plan cap binds first - an upgrade lifts it").toBe(false);
+    expect(onlineCapBinds(true, 128, null), "an Event Pass's 128 is below the cap now: an upgrade does lift it").toBe(false);
+    expect(onlineCapBinds(true, MAX - 1, null)).toBe(false);
+    expect(onlineCapBinds(true, MAX, null), "equal (Pro's 256): no upgrade changes anything").toBe(true);
+    expect(onlineCapBinds(true, 512, null)).toBe(true);
+    expect(onlineCapBinds(true, null, null)).toBe(true);
+    expect(onlineCapBinds(false, 512, null), "not online: never").toBe(false);
+    expect(onlineCapBinds(false, null, null)).toBe(false);
   });
 });
 
@@ -294,7 +295,7 @@ describe("assertOnlineHeldRoom: a door that adds a place but no row (Reinstate) 
     for (const [plan, wouldHold, want] of table) {
       let got: "ok" | "plan" | "online" = "ok";
       try {
-        assertOnlineHeldRoom(plan, wouldHold);
+        assertOnlineHeldRoom(plan, wouldHold, null);
       } catch (e) {
         if (e instanceof PaymentRequiredError) got = "plan";
         else if ((e as { code?: string }).code === ONLINE_DIVISION_FULL) got = "online";
@@ -380,12 +381,35 @@ describe("Task 7: effectiveEntrantCap and capBinder with the size", () => {
     expect(new Set(table.map((r) => r[4])), "every answer is exercised").toEqual(new Set(["plan", "size", "online", null]));
   });
 
-  it("a size left out reads as no size, exactly as the two-argument call always did (the callers that predate the size)", () => {
-    expect(effectiveEntrantCap(true, 512)).toBe(256);
-    expect(effectiveEntrantCap(true, null)).toBe(256);
-    expect(effectiveEntrantCap(true, 64)).toBe(64);
-    expect(onlineCapBinds(true, 512)).toBe(true);
-    expect(onlineCapBinds(true, 64)).toBe(false);
+  it("null is no size term: exactly the cap that held before the size existed (an online division with no live row, or a door whose size is judged elsewhere)", () => {
+    expect(effectiveEntrantCap(true, 512, null)).toBe(256);
+    expect(effectiveEntrantCap(true, null, null)).toBe(256);
+    expect(effectiveEntrantCap(true, 64, null)).toBe(64);
+    expect(onlineCapBinds(true, 512, null)).toBe(true);
+    expect(onlineCapBinds(true, 64, null)).toBe(false);
+  });
+
+  it("a size never read (undefined) on an online division fails closed with ONLINE_SIZE_NOT_READ at every judgement, and is not asked of one that is not online", () => {
+    const COUNTS = { rows: 1, held: 1 };
+    const unread = (n: string, run: () => unknown) => expect(run, n).toThrow(ONLINE_SIZE_NOT_READ);
+    let checked = 0;
+    // Every plan shape: a lower plan, the tie, above it, unlimited - the omission is a defect whichever line would have bound.
+    for (const plan of [64, 96, 256, 512, null]) {
+      unread(`effectiveEntrantCap plan ${plan}`, () => effectiveEntrantCap(true, plan, undefined));
+      unread(`capBinder plan ${plan}`, () => capBinder(true, plan, undefined));
+      unread(`onlineCapBinds plan ${plan}`, () => onlineCapBinds(true, plan, undefined));
+      unread(`assertOnlineHeldRoom plan ${plan}`, () => assertOnlineHeldRoom(plan, 1, undefined));
+      unread(`assertEntrantRoom plan ${plan}`, () => assertEntrantRoom(ONLINE, plan, COUNTS, 1, undefined));
+      checked += 5;
+      // Not online: no size to read, whatever is passed - the plan's own cap, untouched.
+      expect(effectiveEntrantCap(false, plan, undefined), `not online, plan ${plan}`).toBe(plan);
+      expect(capBinder(false, plan, undefined)).toBeNull();
+      expect(onlineCapBinds(false, plan, undefined)).toBe(false);
+      expect(() => assertEntrantRoom(OVER_THE_BOARD, plan, COUNTS, 1, undefined)).not.toThrow();
+      checked += 4;
+    }
+    expect(checked, "anti-vacuity: judgements checked").toBe(45);
+    expect(ONLINE_SIZE_NOT_READ, "its own message, not the plan's").not.toBe(PLAN_LIMIT_NOT_READ);
   });
 
   it("onlineCapBinds is the 'online' answer of capBinder: a size below 256 means the online cap is not what stops the division", () => {
@@ -577,5 +601,150 @@ describe("Task 7: the door list is data in the leaf, and it names every place th
     // every door the sites name is in the leaf's list, and every listed door except the switch is named by a site
     const named = Object.values(SITES).flat();
     expect([...named, "online_switch"].sort()).toEqual([...ONLINE_SIZE_DOORS].sort());
+  });
+});
+
+// I3 (Task 7 fix round 1). The size is a REQUIRED argument of every judgement of an online division (an omitted one throws
+// ONLINE_SIZE_NOT_READ, above), so a door that forgets it is a runtime failure - but a door that passes the literal `null` would be
+// silent, and "the door list scans `sizeForDoor(` lines" cannot see a CALLER of the cap functions at all. This scan reads every caller
+// of the six judgements in the application's source: each must hand over a size (an expression, not the literal `null` / `undefined`),
+// or be one of the NAMED exemptions below - sites whose size is judged somewhere else, which hand over an explicit `null`.
+describe("I3: every caller of a cap judgement passes the size, or is a named exemption", () => {
+  const SRC = join(import.meta.dirname, "..", "..", "..");
+  /** Where the size sits in each function's parameter list, typed from the signatures in online-entrant-cap.ts. */
+  const SIZE_AT = {
+    effectiveEntrantCap: 2, // (online, planCap, size)
+    capBinder: 2, // (online, planCap, size)
+    onlineCapBinds: 2, // (online, planCap, size)
+    assertOnlineHeldRoom: 2, // (planCap, wouldHold, size)
+    assertEntrantRoom: 4, // (division, planCap, counts, adding, size)
+    assertEntrantRoomIn: 5, // (tx, divisionId, division, planCap, adding, size)
+  } as const;
+  type Fn = keyof typeof SIZE_AT;
+  /** The call sites a size-less judgement is allowed at, each handing over an explicit `null`, each with the reason. */
+  const EXEMPT: { file: string; fn: Fn; sites: number; reason: string }[] = [
+    {
+      file: "server/usecases/registrations/settings.ts",
+      fn: "effectiveEntrantCap",
+      sites: 1,
+      reason: "the capacity save's pre-transaction check: the plan limit is an entitlement read (cannot run in a tx), so it judges plan and 256; the size is read in-tx under the division lock and refused there (assertSizeRoom)",
+    },
+    {
+      file: "server/usecases/registrations/settings.ts",
+      fn: "onlineCapBinds",
+      sites: 1,
+      reason: "the same pre-transaction check, choosing which of the plan's and the platform's refusals answers",
+    },
+    {
+      file: "server/external-play/online-entrant-cap.ts",
+      fn: "onlineCapBinds",
+      sites: 1,
+      reason: "assertOnlinePlayFits (the online switch): the switch's own size is the request's, judged by assertSizeFits (online-package/size.ts)",
+    },
+  ];
+  /** What the scan must find, typed here from the doors (spec 7.6), so a deleted caller or a new one fails until named. */
+  const EXPECTED_CALLS: Record<Fn, number> = {
+    effectiveEntrantCap: 4, // the automatic-promotion guard, the sign-up, the capacity pre-check (exempt), places-left
+    capBinder: 4, // inside the module: onlineCapBinds, assertOnlineHeldRoom, assertEntrantRoom; and the organiser promote room check
+    onlineCapBinds: 2, // both exempt
+    assertOnlineHeldRoom: 1, // Reinstate
+    assertEntrantRoom: 1, // inside assertEntrantRoomIn
+    assertEntrantRoomIn: 1, // createEntrants
+  };
+
+  const walk = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const full = join(dir, e.name);
+      if (e.isDirectory()) return e.name === "__tests__" || e.name === "__fixtures__" || e.name === "node_modules" ? [] : walk(full);
+      return /\.tsx?$/.test(e.name) && !/\.test\./.test(e.name) ? [full] : [];
+    });
+  /** Comments blanked (newlines kept), so a call named in prose is not a call. */
+  const strip = (code: string): string =>
+    code.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " ")).replace(/(^|[^:"'`\\])\/\/.*$/gm, "$1");
+  /** The top-level arguments of the call whose "(" is at `open`. */
+  function argsOf(code: string, open: number): string[] {
+    const out: string[] = [];
+    let depth = 0;
+    let cur = "";
+    let quote: string | null = null;
+    for (let i = open; i < code.length; i++) {
+      const c = code[i]!;
+      if (quote) {
+        cur += c;
+        if (c === "\\") cur += code[++i] ?? "";
+        else if (c === quote) quote = null;
+        continue;
+      }
+      if (c === '"' || c === "'" || c === "`") {
+        quote = c;
+        cur += c;
+        continue;
+      }
+      if (c === "(" || c === "[" || c === "{") {
+        depth++;
+        if (depth === 1) continue;
+      } else if (c === ")" || c === "]" || c === "}") {
+        depth--;
+        if (depth === 0) {
+          if (cur.trim()) out.push(cur.trim());
+          return out;
+        }
+      } else if (c === "," && depth === 1) {
+        out.push(cur.trim());
+        cur = "";
+        continue;
+      }
+      cur += c;
+    }
+    throw new Error("unbalanced call");
+  }
+  function callsIn(code: string, fn: Fn): { args: string[] }[] {
+    const found: { args: string[] }[] = [];
+    for (const m of code.matchAll(new RegExp(`\\b${fn}\\(`, "g"))) {
+      if (/function\s+$/.test(code.slice(Math.max(0, m.index! - 24), m.index!))) continue; // the definition
+      found.push({ args: argsOf(code, m.index! + fn.length) });
+    }
+    return found;
+  }
+
+  it("the scanner reads a call across lines and a trailing comment, and tells a size from a literal null", () => {
+    const code = strip("x = assertOnlineHeldRoom(\n  readPlanLimit(g),\n  (await count(tx, id)) + 1,\n  await sizeForDoor(tx, id), // the size\n);\ny = capBinder(true, 5, null);");
+    expect(callsIn(code, "assertOnlineHeldRoom")[0]!.args).toEqual(["readPlanLimit(g)", "(await count(tx, id)) + 1", "await sizeForDoor(tx, id)"]);
+    expect(callsIn(code, "capBinder")[0]!.args).toEqual(["true", "5", "null"]);
+    expect(callsIn("export function capBinder(a, b) {}", "capBinder"), "a definition is not a call").toEqual([]);
+  });
+
+  it("each caller hands over a size, or is a named exemption that hands over an explicit null", () => {
+    const files = walk(SRC);
+    expect(files.length, "anti-vacuity: source files scanned").toBeGreaterThan(500);
+    const counts: Record<string, number> = Object.fromEntries(Object.keys(SIZE_AT).map((k) => [k, 0]));
+    const exempted: Record<string, number> = {};
+    const defects: string[] = [];
+    let calls = 0;
+    for (const file of files) {
+      const rel = file.slice(SRC.length + 1);
+      const code = strip(readFileSync(file, "utf8"));
+      for (const fn of Object.keys(SIZE_AT) as Fn[]) {
+        for (const { args } of callsIn(code, fn)) {
+          calls++;
+          counts[fn]!++;
+          const size = args[SIZE_AT[fn]];
+          // A size the call really reads is always fine. The literal null is the exemption's own form: allowed only where the file and
+          // the function are named, and counted, so a second null at the same file is not waved through unseen.
+          if (size === undefined) defects.push(`${rel}: ${fn} passes no size`);
+          else if (size === "undefined") defects.push(`${rel}: ${fn} passes a literal undefined`);
+          else if (size === "null") {
+            const exempt = EXEMPT.find((e) => e.file === rel && e.fn === fn);
+            if (!exempt) defects.push(`${rel}: ${fn} passes a literal null and is not a named exemption`);
+            else exempted[`${rel} ${fn}`] = (exempted[`${rel} ${fn}`] ?? 0) + 1;
+          }
+        }
+      }
+    }
+    expect(defects.join("\n"), "every caller passes a size or is a named exemption").toBe("");
+    expect(counts, "the callers found, per function").toEqual(EXPECTED_CALLS);
+    expect(calls, "anti-vacuity: call sites checked").toBe(13);
+    for (const e of EXEMPT) expect(exempted[`${e.file} ${e.fn}`], `exemption still used: ${e.file} ${e.fn}`).toBe(e.sites);
+    expect(Object.values(exempted).reduce((a, b) => a + b, 0), "exempt sites").toBe(3);
   });
 });
