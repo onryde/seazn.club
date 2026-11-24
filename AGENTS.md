@@ -399,6 +399,14 @@ or `fixture-console.tsx` at a phone width. Not derivable from the code:
   i18n work owed: `content/help/**` (one English tree) and
   `apps/web/src/games/**` (Seazn Games — declared 2026-08-26, spec
   `docs/superpowers/specs/2026-08-26-games-board-redesign-and-new-games-design.md`).
+- **Help and blog follow the product, in the same PR.** A change to engine
+  rules, scoring or pairing logic, or to a screen label, route, testid or plan
+  limit a user can see, ships with its `apps/web/content/help` and
+  `apps/web/content/blog` update, or a line in the PR body saying why neither
+  is affected. Triggers: an engine bump, a logic change, UI copy, a label or
+  route rename, a limit change. The procedure (blog goldens, copy sweeps, plan
+  tokens, the PR body's "Found, not fixed" section) lives in
+  `.claude/skills/docs-follow-product/SKILL.md`; load it before opening the PR.
 - UI work is verified by screenshot at desktop (1280), **320px**, and
   **768px**, with no horizontal page scroll at any of them; the
   seven-width e2e matrix (320/360/375/390/430/768/834, the
