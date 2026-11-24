@@ -306,10 +306,10 @@ describe("the error codes (plan Global Constraints, exactly)", () => {
 });
 
 describe("ONLINE_SIZE_DOORS", () => {
-  it("is declared as a list of strings (Task 7 fills it and owns the sweep that counts against it)", () => {
-    // Deliberately NOT a sweep: it is empty until Task 7, and a loop over nothing would report zero checked. Task 7's door sweep asserts
-    // `checked === ONLINE_SIZE_DOORS.length` and `> 0`.
+  it("is a non-empty list of distinct door ids (Task 7 filled it; its door sweep counts against it: external-play/__tests__/online-entrant-cap.test.ts)", () => {
     expect(Array.isArray(ONLINE_SIZE_DOORS)).toBe(true);
-    expect(ONLINE_SIZE_DOORS.every((d) => typeof d === "string")).toBe(true);
+    expect(ONLINE_SIZE_DOORS.length, "anti-vacuity: a sweep over nothing reports zero checked").toBeGreaterThan(0);
+    expect(ONLINE_SIZE_DOORS.every((d) => typeof d === "string" && /^[a-z_]+$/.test(d))).toBe(true);
+    expect(new Set(ONLINE_SIZE_DOORS).size).toBe(ONLINE_SIZE_DOORS.length);
   });
 });

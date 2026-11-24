@@ -123,7 +123,18 @@ async function divisionOf(auth: AuthCtx, kind: Kind, visibility: "private" | "pu
     variant_key: "classical",
     config: { variant: "classical", ...(kind === "online" ? { onlinePlay: "lichess" } : {}), clock: CLOCK },
   });
+  if (kind === "online") await sizeAt256(division.id);
   return { competition, division };
+}
+
+/** This file judges the PLAN's lines and the online cap's 256 (Online Chess credits Task 7 added a third line, the purchased size, which
+ *  is swept in online-entrant-size-doors.test.ts). A division made online opens at the smallest size (16), so every door here would meet
+ *  the size first: the unpaid package is moved to 256 - the line that IS the online cap - leaving the plan and 256 as the only lines in
+ *  play. Done on the privileged pool because a plan below 256 (Community's 64) could not buy a 256 through the door, and the cases that
+ *  need that plan are about its own cap. */
+async function sizeAt256(divisionId: string): Promise<void> {
+  const moved = await sql`update division_online_packages set size = ${MAX} where division_id = ${divisionId} and refunded_at is null returning id`;
+  expect(moved.length, "premise: the division has its one live package, now at 256").toBe(1);
 }
 
 /** `n` spot-holding entrants, inserted directly (the cap's subject is the ONE entrant added on top, not 256 round trips). */

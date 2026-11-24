@@ -44,6 +44,7 @@ import {
   lockDivisionForCap,
   openOnlineCapGuard,
   readPlanLimit,
+  sizeForDoor,
 } from "@/server/external-play/online-entrant-cap";
 import { assertChessKindIndividual } from "@/lib/chess-individual-only";
 import { onlineChessOffered } from "./external-play/online-chess-flag";
@@ -471,7 +472,10 @@ export async function createEntrants(
     // answers with the plan's 402 where the plan binds, the online cap's own 422 where it does.
     // The online cap counts what the division HOLDS (live entrants + sign-ups let in, `countOnlineHeld`), the plan's cap every row,
     // as ever; the `division:` lock is taken first so two adds cannot both pass on the last place (review C1 / I2).
-    await assertEntrantRoomIn(tx, divisionId, division, entrantCap, inputs.length);
+    // The size the organiser bought is a third line (spec §7.6): read here, inside the transaction and after the `division:` lock taken
+    // above, so a payment that moves it cannot interleave with this count. Only a division that plays online has one.
+    const packageSize = divisionPlaysOnline(division) ? await sizeForDoor(tx, divisionId) : null;
+    await assertEntrantRoomIn(tx, divisionId, division, entrantCap, inputs.length, packageSize);
 
     // Entrant-shape gate (spec 2026-07-18): every input in the batch must match
     // the division's effective model BEFORE any insert — the whole batch fails
@@ -1199,7 +1203,11 @@ export async function writeEntrantPatch(
         select sport_key, config from divisions where id = ${prior!.division_id}`;
       if (division && divisionPlaysOnline(division)) {
         // Fails closed when the plan was never read (re-review n2): an unread plan is not an unlimited one.
-        assertOnlineHeldRoom(readPlanLimit(capGuard), (await countOnlineHeld(tx, prior!.division_id)) + 1);
+        assertOnlineHeldRoom(
+          readPlanLimit(capGuard),
+          (await countOnlineHeld(tx, prior!.division_id)) + 1,
+          await sizeForDoor(tx, prior!.division_id), // the size is a third line (spec §7.6), read under the lock taken above
+        );
       }
     }
     let row: EntrantRow | undefined;

@@ -90,6 +90,29 @@ export const ONLINE_PACKAGE_CODES = {
   camerasNeedUpgrade: "ONLINE_CAMERAS_NEED_UPGRADE",
 } as const;
 
-/** The doors that read the size as the entrant limit (spec 7.6), as data, so the door sweep (Task 7) has a list to count against.
- *  Empty until Task 7 names them: a door is added here in the same change that makes it read the size. */
-export const ONLINE_SIZE_DOORS: readonly string[] = [];
+/** The doors that read the size as the entrant limit (spec 5.2, 7.6), as data, so the door sweep (Task 7) has a list to count against:
+ *  it drives each one through its real usecase at the size and at size + 1, and a source scan fails when a call to `sizeForDoor`
+ *  (the one read of the live row) appears in a place no door here names. A door is added here in the same change that makes it
+ *  read the size.
+ *   add_entrants     the organiser adds entrants (createEntrants: one, a batch, the entrants route, a CSV through it)
+ *   reinstate        a withdrawn or disqualified entrant brought back (patchEntrant)
+ *   sign_up          the public sign-up (a full size waits on the ordinary waitlist: no size code reaches the registrant)
+ *   promote          the organiser's Promote, oldest-first or one named
+ *   confirm          the organiser's Confirm of a waitlisted or expired entry
+ *   waive            the organiser's Waive (confirm without payment)
+ *   auto_promotion   the promotions a freed place triggers: a withdrawal, an expiry, a lapsed pay window, a rejection
+ *   online_switch    turning online play on / choosing a size: the size must hold the places held (assertSizeFits)
+ *   capacity_save    the registration capacity an organiser may promise
+ *   places_left      the public register panel's places left */
+export const ONLINE_SIZE_DOORS: readonly string[] = [
+  "add_entrants",
+  "reinstate",
+  "sign_up",
+  "promote",
+  "confirm",
+  "waive",
+  "auto_promotion",
+  "online_switch",
+  "capacity_save",
+  "places_left",
+];
