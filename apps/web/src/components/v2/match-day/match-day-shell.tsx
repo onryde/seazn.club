@@ -594,6 +594,7 @@ export function MatchDayShell({
                 setNotice(null);
                 void refresh();
               }}
+              onRead={() => void refresh()}
               onRefused={(message) => {
                 setNotice({ courtId: focused.court_id, message });
                 void refresh();

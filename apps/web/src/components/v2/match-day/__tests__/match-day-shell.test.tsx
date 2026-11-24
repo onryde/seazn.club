@@ -135,6 +135,32 @@ describe("M5b — a refusal is held through the refresh it triggers", () => {
   });
 });
 
+describe("Task 35 Part B — the court QR sheet's wait for its phone reads the day through the shell, and keeps the court's notice", () => {
+  it("the focus's onRead is a real read of the day (the view moves on) that leaves a refusal on screen; onChanged, by contrast, clears it", async () => {
+    const island = renderIsland(MatchDayShell, props(view([C1, C2], "2026-10-31T11:00:00.000Z")));
+    (parts(island.tree()).list.onSelect as (id: string) => void)("c-1");
+    net.next = view([C1, C2], "2026-10-31T11:00:30.000Z");
+    (parts(island.tree()).focus!.onRefused as (m: string) => void)("Zara Khan is on Court 2.");
+    await settle();
+    expect(net.calls, "PREMISE: the refusal's own refresh").toHaveLength(1);
+    const read = parts(island.tree()).focus!.onRead as (() => void) | undefined;
+    expect(read, "the shell hands the focus a reader (else the sheet's wait would poll nothing)").toBeTypeOf("function");
+
+    net.next = view([C1, C2], "2026-10-31T11:01:00.000Z");
+    read!();
+    await settle();
+    expect(net.calls).toEqual(["/api/v1/competitions/comp-1/match-day", "/api/v1/competitions/comp-1/match-day"]);
+    const after = parts(island.tree()).focus!;
+    expect(after.refreshKey, "the read landed").toBe("2026-10-31T11:01:00.000Z");
+    expect(after.notice, "the waiting sheet's read keeps the refusal on screen").toBe("Zara Khan is on Court 2.");
+
+    // The differential: the change callback clears it, so a poll wired to it would have wiped the notice.
+    (after.onChanged as () => void)();
+    await settle();
+    expect(parts(island.tree()).focus!.notice).toBeNull();
+  });
+});
+
 describe("M6b — a phone that lost its court goes back to the list, and stays there", () => {
   it("opened on a phone, the court leaves the list (back to the list, saying so); when it comes back the phone stays on the list", async () => {
     const island = renderIsland(MatchDayShell, props(view([C1, C2], "2026-10-31T11:00:00.000Z")));
