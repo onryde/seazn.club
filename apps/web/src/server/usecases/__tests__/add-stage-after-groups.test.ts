@@ -2,7 +2,7 @@
 // ONE table). The engine reads that take from the sole pool or the pool keyed "" (`rankRangeSource`), and a group of two or more
 // pools has neither, so the stage was created, its Generate answered 422 STAGE_NOT_READY `no pool "overall"`, and the page said
 // "Stage added - fixtures will generate when the previous stage completes" - which never happens. The save is now refused by name
-// (SEEDING_TOP_N_ACROSS_GROUPS) and writes nothing. A group-aware Add stage is W6.
+// (SEEDING_TOP_N_ACROSS_GROUPS) and writes nothing. A group-aware Add stage (a per-group count, owner Option C 2026-11-24) is `add-stage-group-take.test.ts`.
 //
 // Every scene runs the REAL door (`createStages`, the usecase behind POST /divisions/{id}/stages), a real snake draw, real results
 // through `scoreEvent` and the real completion. The positive pairs prove the guard is about the TAKE across several tables: a

@@ -26,6 +26,7 @@ import { getCompetitionDesk, competitionPhase } from "@/server/usecases/competit
 import { finalDecidedStageName, statusLine, nextDateLabel } from "@/lib/division-status-line";
 import { ledgerRank, leadingAttention } from "@/lib/division-phase";
 import { ledgerQueryOf } from "@/lib/ledger-page";
+import { deskChrome } from "@/lib/competition-desk-chrome";
 import { PhasePill, AttentionChip } from "@/components/v2/desk/phase-pill";
 import { DeskToolsMore } from "@/components/v2/desk/desk-tools-more";
 import { DeskOpenMenu, type DeskOpenItem } from "@/components/v2/desk/desk-open-menu";
@@ -92,6 +93,15 @@ export default async function CompetitionPage({
       })
     : [];
   const compPhase = desk ? competitionPhase(desk) : null;
+  // Owner, Option 1: a FINISHED competition (the derived phase, whose empty set is `setting_up`) drops the tools that run a live
+  // event and demotes "Add division"; a completed / archived one offers no "Add division" at all, in any phase - the write
+  // refuses it (409 COMPETITION_ENDED), so the button must not be there. One rule, `deskChrome`; this page only reads it.
+  const chrome = deskChrome({
+    phaseKind: compPhase?.kind ?? null,
+    status: competition.status,
+    canEdit,
+    frozen: !!competition.frozen,
+  });
   // F5 fix: DivisionLedger's own "is this kick-off past?" check (its
   // nextLine) needs a fixed instant, never `Date.now()` read inside its own
   // render (react-hooks/purity). `desk.now` already IS that instant — every
@@ -392,6 +402,7 @@ export default async function CompetitionPage({
                 is THE action: first, full width, filled, and labelled — except
                 on a match day (B1), when Open Match Day above is, and this
                 keeps its place as a plain full-width row: one primary. */}
+            {chrome.showScheduleBoard && (
             <Link
               href={routes.competitionSchedule(orgSlug, compSlug)}
               aria-label={t(dict, "aria.scheduleBoard")}
@@ -417,7 +428,8 @@ export default async function CompetitionPage({
               <CalendarRange className="h-4 w-4" strokeWidth={1.75} />
               <span className="md:inline">{t(dict, "action.scheduleBoard")}</span>
             </Link>
-            {(
+            )}
+            {chrome.showRegistration && (
               // NOT gated on canEdit. RS004 shipped this as owner/admin-only
               // to match the hub page's own `if (!canEdit) notFound()`; the
               // owner reversed that on 2026-08-25 (viewers get the hub
@@ -497,7 +509,7 @@ export default async function CompetitionPage({
           {/* Match Day B1 (spec §9): the live strip that sat here (W3's InPlayBand) is gone — live state is Match Day's — and
               the Needs-you list lives in one place at a time: here before the day, in Match Day on a match day, where this
               page keeps one line pointing at it. */}
-          <NeedsYou dict={dict} items={needsHere} />
+          {chrome.showNeedsYou && <NeedsYou dict={dict} items={needsHere} />}
           {needsInMatchDay > 0 && needsInMatchDayTone !== null && (
             <NeedsYouInMatchDay
               href={routes.competitionMatchDay(orgSlug, compSlug)}
@@ -540,19 +552,29 @@ export default async function CompetitionPage({
                   "Divisions" heading on the page now, and carries the
                   count DivisionLedger used to print itself. */}
               <h2 className="text-sm font-semibold text-slate-700">{t(dict, "comp.detail.divisions")} · {divisions.length}</h2>
-              {canEdit && !competition.frozen && (
+              {/* Finished competition: a quiet link, not the primary button - adding a division reopens the competition (the
+                  phase recomputes), so it stays possible, but it is no longer what the page is for. Completed / archived: not
+                  offered at all (`chrome.addDivision` is "none"; the write answers 409 COMPETITION_ENDED). */}
+              {chrome.addDivision === "primary" && (
+                <Link href={routes.divisionNew(orgSlug, compSlug)} data-testid="desk-add-division" data-variant="primary" className="btn btn-primary">
+                  + {t(dict, "action.addDivision")}
+                </Link>
+              )}
+              {chrome.addDivision === "quiet" && (
                 <Link
                   href={routes.divisionNew(orgSlug, compSlug)}
-                  className="btn btn-primary"
+                  data-testid="desk-add-division"
+                  data-variant="quiet"
+                  className="inline-flex items-center text-sm font-medium text-purple-700 underline-offset-2 hover:underline max-md:min-h-11"
                 >
-                  + {t(dict, "action.addDivision")}
+                  {t(dict, "action.addAnotherDivision")}
                 </Link>
               )}
             </div>
             {divisions.length === 0 ? (
               <div className="card p-6 text-center text-sm text-slate-500">
                 <p>{t(dict, "card.empty.divisions")}</p>
-                {canEdit && !competition.frozen && (
+                {chrome.addDivision !== "none" && (
                   <Link href={routes.divisionNew(orgSlug, compSlug)} className="btn btn-primary mt-4">
                     {t(dict, "card.empty.divisions.cta")}
                   </Link>
@@ -563,6 +585,7 @@ export default async function CompetitionPage({
                 dict={dict} rows={ledgerRows} org={orgSlug} comp={compSlug} locale={locale} now={now}
                 canEdit={canEdit}
                 page={ledgerQuery.page} showFinished={ledgerQuery.showFinished} query={ledgerQuery.rest}
+                competitionFinished={chrome.ledgerListsFinished}
               />
             )}
           </section>

@@ -46,6 +46,7 @@ import { knockoutRefusal } from "./knockout-refusal";
 import { LUCKY_LOSER_SOURCE_KINDS, luckyLoserPool, qualifiersOfCut, rankCutOf } from "./lucky-loser";
 import { plateFieldOf } from "./plate-field";
 import { bestNthSourceOf, withPoolResults } from "./pool-results";
+import { refuseGroupTakeShape } from "./stages/group-take-gate";
 import { poolCount, POOL_KEYS, BRACKET_KINDS, REAL_TABLE_KINDS, loadBracketFixtures, americanoPlacementTables, departedEntrantIds } from "./stages";
 
 type Tx = postgres.TransactionSql;
@@ -333,17 +334,19 @@ function refuseTopNAcrossGroups(progression: Pick<ProgressionSpec, "sources">, s
 export async function validateStageProgression(
   tx: Tx,
   target: { division_id: string; seq: number; kind?: string },
-  progression: Pick<ProgressionSpec, "sources" | "placement" | "map">,
+  progression: Pick<ProgressionSpec, "sources" | "placement" | "map"> & { timing?: string },
   presetSources?: readonly ({ kind: string; config: Record<string, unknown> } | undefined)[],
 ): Promise<void> {
   const shapes: SourceShape[] = [];
   const sourceKinds: string[] = [];
+  const sourceRows: { id?: string; kind: string; status?: string }[] = [];
   const thirdPlaceMatches: boolean[] = [];
   for (let i = 0; i < progression.sources.length; i++) {
     const preset = presetSources?.[i];
     const source = preset ?? (await resolveProgressionSource(tx, target, progression.sources[i]!.stage));
     shapes.push(await sourceShapeOf(tx, source));
     sourceKinds.push(source.kind);
+    sourceRows.push(preset ? { kind: preset.kind } : (source as { id: string; kind: string; status: string }));
     // Only a knockout source's cut is judged by bands, so only its setting is read (a preset already carries its config).
     thirdPlaceMatches.push(
       source.kind === "knockout" && ((preset?.config ?? (await sourceConfigOf(tx, source as { id: string }))).thirdPlace === true),
@@ -353,6 +356,8 @@ export async function validateStageProgression(
   // "first loss" round, and the plate card and the propose path would only meet it later.
   refuseFirstLossesFromDoubleElim(progression as ProgressionSpec, sourceKinds);
   refuseTopNAcrossGroups(progression, shapes);
+  // Add stage after groups (owner Option C): a per-group take the stage could never be drawn from is refused at save, by the draw's codes.
+  await refuseGroupTakeShape(tx, target, progression, sourceRows, shapes.map((s) => s.poolKeys.length));
   try {
     validateProgressionAgainstShapes(shapes, progression, target.kind);
   } catch (err) {

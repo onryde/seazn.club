@@ -203,6 +203,21 @@ export function passLockReason(
 }
 
 /**
+ * Is this competition OVER - completed or archived? The single predicate behind
+ * "no new divisions": `assertCompetitionNotEnded` (usecases/divisions.ts, the
+ * 409 COMPETITION_ENDED write refusal) and every surface that would otherwise
+ * offer a button that write refuses (the competition page's "Add division", the
+ * /d/new wizard) read THIS, so the offer and the refusal cannot drift apart.
+ *
+ * STATUS only - the pass lock's `past_ends_on` arm is a pass lapse, routinely a
+ * stale end date on a competition still being played, and must never block a
+ * write or hide a button.
+ */
+export function competitionIsEnded(status: string): boolean {
+  return passLockReason(status, null) === "terminal";
+}
+
+/**
  * Is an Event Pass no longer eligible to apply because its competition is
  * over? Thin wrapper over `passLockReason` — see it for the arms. Exported so
  * the OFFER side can reuse it; `billing-manage.ts` (the pass list's `ended`

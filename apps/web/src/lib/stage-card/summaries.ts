@@ -127,6 +127,17 @@ export function unitLabelKey(rule: string, sportKey: string): MessageKey {
   return `${shared}.${sportKey}` as MessageKey;
 }
 
+/**
+ * The dictionary key of a tie-break rung's one-line explainer ("Buchholz" -> "Total score of the opponents you played").
+ *
+ * Derived from `unitLabelKey`, so the explainer always follows the label's own path: where the label is sport-specific
+ * ("game ratio" in badminton) the explainer is too (`...explain.set_ratio.badminton`), and every other rung shares one.
+ * One authority for "which sport words a rung differently", never a second list.
+ */
+export function unitExplainKey(rule: string, sportKey: string): MessageKey {
+  return unitLabelKey(rule, sportKey).replace("div.detail.tiebreak.rule.", "div.detail.tiebreak.explain.") as MessageKey;
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 // Stage counts: the one reading of fixtures.status the card's buttons and summary line share.
 // ---------------------------------------------------------------------------------------------------------------------

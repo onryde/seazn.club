@@ -10,7 +10,7 @@ import {
   entrantsOverrideWidensBeyondIndividual,
   isChessSport,
 } from "@/lib/chess-individual-only";
-import { assertWithinLimit, getLimit, requireFeature, passLockReason } from "@/lib/entitlements";
+import { assertWithinLimit, getLimit, requireFeature, competitionIsEnded } from "@/lib/entitlements";
 import { EngineError, type StageKind } from "@seazn/engine/core";
 import { effectiveEntrantModel, fixtureKeysFor, type TiebreakerKey } from "@seazn/engine/sport";
 import { divisionTakesKind } from "@/lib/division-entrant-kinds";
@@ -228,9 +228,9 @@ export async function listDivisions(
  * different snapshot.
  */
 async function assertCompetitionNotEnded(tx: postgres.TransactionSql, competitionId: string) {
-  const [comp] = await tx<{ status: string; ends_on: Date | string | null }[]>`
-    select status, ends_on from competitions where id = ${competitionId}`;
-  if (comp && passLockReason(comp.status, comp.ends_on) === "terminal") {
+  const [comp] = await tx<{ status: string }[]>`
+    select status from competitions where id = ${competitionId}`;
+  if (comp && competitionIsEnded(comp.status)) {
     throw new HttpError(
       409,
       "This competition is finished, so no new divisions can be added to it",

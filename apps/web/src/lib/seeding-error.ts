@@ -102,7 +102,8 @@ const BY_LOCALE: Record<Locale, Dict> = { en, es, fr, nl };
  *
  *  SEEDING_TOP_N_ACROSS_GROUPS (W5 follow-ups A2): a Top N take (`rankRange`, the Add stage form's take) saved against a source of
  *  {pools} groups - the engine reads that take from one table only, so the stage would never fill. Refused at save
- *  (`refuseTopNAcrossGroups`, server/usecases/stage-seeding.ts); a group-aware Add stage is W6. */
+ *  (`refuseTopNAcrossGroups`, server/usecases/stage-seeding.ts); SEEDING_QUALIFY_TOO_FEW: the Add stage form's count under a knockout's minimum,
+ *  refused at save (`groupTakeRefusal`); the group-aware Add stage form (owner Option C, 2026-11-24) posts a per-group take instead. */
 export const SEEDING_ERROR_CODES = [
   "SEEDING_MAP_SLOT_INVALID",
   "SEEDING_MAP_SOURCE_INVALID",
@@ -130,6 +131,7 @@ export const SEEDING_ERROR_CODES = [
   "SEEDING_CROSS_POOL_DRAW_INVALID",
   "SEEDING_CROSS_POOL_DRAW_TOO_LARGE",
   "SEEDING_TOP_N_ACROSS_GROUPS",
+  "SEEDING_QUALIFY_TOO_FEW",
 ] as const;
 export type SeedingErrorCode = (typeof SEEDING_ERROR_CODES)[number];
 
@@ -185,5 +187,15 @@ export function seedingErrorMessage(
   const dict = BY_LOCALE[locale] ?? BY_LOCALE[DEFAULT_LOCALE];
   if (code === "SEEDING_PROPOSAL_STALE" && vars?.reason === PROPOSAL_STALE_SUPERSEDED) return t(dict, "seeding.proposalSuperseded", vars);
   if (code === "SEEDING_PROPOSAL_STALE" && vars?.reason === PROPOSAL_STALE_REDRAWN) return t(dict, "seeding.proposalRedrawn", vars);
+  // Add stage after groups (owner Option C): a refusal raised AT SAVE by `groupTakeRefusal` carries `phase`, which picks the save copy
+  // (`seeding.<CODE>.<phase>`, "Pick one of ...") over the draw-time copy ("Results are in, delete the stage ...") that is not true yet.
+  if (typeof vars?.phase === "string" && CODES_WITH_SAVE_COPY.has(code)) return t(dict, `seeding.${code}.${vars.phase}`, vars);
   return t(dict, `seeding.${code}`, vars);
 }
+
+/** The cross-pool refusals that read differently at save (`lib/group-take-refusal.ts` sets `vars.phase` to the copy's suffix). */
+const CODES_WITH_SAVE_COPY: ReadonlySet<string> = new Set([
+  "SEEDING_POOL_SEPARATION_IMPOSSIBLE",
+  "SEEDING_PAGE_PLAYOFF_NEEDS_FOUR",
+  "SEEDING_CROSS_POOL_DRAW_TOO_LARGE",
+]);

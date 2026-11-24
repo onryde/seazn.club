@@ -13,7 +13,7 @@ import { requireCompetitionPage } from "@/server/page-auth";
 import { routes } from "@/lib/routes";
 import { getCompetition } from "@/server/usecases/competitions";
 import { withTenant } from "@/lib/db";
-import { hasFeature, orgPlanKey } from "@/lib/entitlements";
+import { competitionIsEnded, hasFeature, orgPlanKey } from "@/lib/entitlements";
 import { viewerPlanFrom } from "@/lib/viewer-plan";
 import { archivedSlotsExplainRefusal } from "@/server/usecases/division-slots";
 import { DivisionBuilder } from "@/components/v2/division-builder";
@@ -33,8 +33,11 @@ export default async function NewDivisionPage({
   const { auth, canEdit } = page;
   const id = page.competition.id;
   if (!canEdit) redirect(routes.competition(orgSlug, compSlug));
-  const [competition, constraintsAllowed, explainArchivedSlots, venues, planKey, templateLocks, carryAllowed, onlineChess] = await Promise.all([
-    getCompetition(auth, id),
+  // A completed or archived competition takes no new division: the create answers 409 COMPETITION_ENDED. Refuse here, before the
+  // wizard is built, rather than render a form that can only fail on submit - by the SAME predicate the write uses.
+  const competition = await getCompetition(auth, id);
+  if (competitionIsEnded(competition.status)) redirect(routes.competition(orgSlug, compSlug));
+  const [constraintsAllowed, explainArchivedSlots, venues, planKey, templateLocks, carryAllowed, onlineChess] = await Promise.all([
     // A multi-venue schedule seed is Pro (doc 12 §5) — gate the list in the
     // wizard rather than letting the settings PUT 402 after create.
     hasFeature(auth.orgId, "scheduling.constraints"),

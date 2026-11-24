@@ -20,6 +20,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { routes } from "@/lib/routes";
 import { FORMAT_BOUNDS } from "@/lib/format-bounds";
+import { groupsKoTake } from "@/lib/format-templates";
+import { defaultGroupCount, groupCountsFor, GroupTakeField, type GroupSource } from "@/components/v2/add-stage-group-take";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { ruleRefusalText } from "@/lib/rule-errors";
 import { SWISS_ABANDONED_BOARDS_REASON, abandonedBoardsOf } from "@/lib/swiss-abandoned-refusal";
@@ -2542,6 +2544,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         <AddStageForm
           divisionId={divisionId}
           nextSeq={Math.max(0, ...stages.map((s) => s.seq)) + 1}
+          groupSource={addStageGroupSource(stages, activeEntrantIds)}
           onDone={(noticeMsg) => {
             setNotice(noticeMsg);
             router.refresh();
@@ -2617,6 +2620,33 @@ export function addStageWaitsForPrevious(err: unknown): boolean {
   return err instanceof ApiV1Error && err.code === "STAGE_NOT_READY" && err.extra.reason === "previous_stage_incomplete";
 }
 
+/** The follow-up stage's progression after a source of SEVERAL groups (owner Option C, 2026-11-24): one count, "Qualify to the
+ *  knockout: N", split into a per-group take by the division builder's own function (`groupsKoTake`: top n of every group, then the
+ *  best (n+1)th-placed for the remainder). `on_complete` for the same reason as `addStageProgression` below. */
+export function addStageGroupProgression(count: number, pools: number) {
+  return {
+    sources: [{ stage: "previous" as const, take: groupsKoTake(count, pools) }],
+    placement: "rank_order" as const,
+    timing: "on_complete" as const,
+  };
+}
+
+/** The group source the Add stage form follows, or null: the LAST stage (the one a new stage's `previous` resolves to) when it is a
+ *  group stage of two or more pools (`config.pools.count`, the draw's own count) - Top N of one table cannot read it. `entrants` is
+ *  the active field when the page knows it. Pure, for the no-DOM tests. */
+export function addStageGroupSource(
+  stages: readonly { seq: number; kind: string; config: Record<string, unknown>; progression: Record<string, unknown> | null }[],
+  activeEntrantIds: readonly string[] | undefined,
+): GroupSource | null {
+  let last: (typeof stages)[number] | null = null;
+  for (const s of stages) if (last === null || s.seq > last.seq) last = s;
+  if (last === null || last.kind !== "group") return null;
+  const count = (last.config.pools as { count?: unknown } | undefined)?.count;
+  if (typeof count !== "number" || !Number.isInteger(count) || count < 2) return null;
+  // A fed group stage's field is whatever it was fed, not the roster: the page cannot tell, so the draw's bounds alone apply.
+  return { pools: count, entrants: last.progression === null && activeEntrantIds !== undefined ? activeEntrantIds.length : null };
+}
+
 export function addStageProgression(topN: number) {
   return {
     sources: [{ stage: "previous" as const, take: [{ kind: "rankRange" as const, from: 1, to: topN }] }],
@@ -2661,6 +2691,7 @@ const ADD_STAGE_TOP_N: readonly number[] = Array.from(
 export function AddStageForm({
   divisionId,
   nextSeq,
+  groupSource = null,
   onDone,
   onError,
   onPaywall,
@@ -2668,6 +2699,9 @@ export function AddStageForm({
 }: {
   divisionId: string;
   nextSeq: number;
+  /** Owner Option C (2026-11-24): the stage this one follows, when it is a group stage of two or more pools - the form then asks ONE
+   *  count ("Qualify to the knockout") in place of Top N, and posts the per-group take it splits into. Null: Top N, as before. */
+  groupSource?: GroupSource | null;
   onDone: (msg: string) => void;
   onError: (msg: string) => void;
   onPaywall: (featureKey: string) => void;
@@ -2680,6 +2714,11 @@ export function AddStageForm({
   const [name, setName] = useState("Finals");
   const [kind, setKind] = useState<string>("knockout");
   const [topN, setTopN] = useState(4);
+  // The count a group source takes through (owner Option C): one of the counts the save door accepts for the chosen kind, else the
+  // default. The chosen kind changes the offered counts (a stepladder is drawn differently), so an old pick may no longer be one.
+  const [groupCount, setGroupCount] = useState<number | null>(null);
+  const groupCounts = groupSource === null ? [] : groupCountsFor(groupSource, kind);
+  const qualifyCount = groupSource === null ? null : groupCount !== null && groupCounts.includes(groupCount) ? groupCount : defaultGroupCount(groupCounts, groupSource.pools);
   const [busy, setBusy] = useState(false);
   // I2: a stage saved whose Generate was then refused by name - shown with the refusal, and Delete offered.
   const [refused, setRefused] = useState<{ id: string; text: string } | null>(null);
@@ -2696,7 +2735,7 @@ export function AddStageForm({
           kind,
           name: name.trim() || "Finals",
           config: {},
-          progression: addStageProgression(topN),
+          progression: groupSource !== null && qualifyCount !== null ? addStageGroupProgression(qualifyCount, groupSource.pools) : addStageProgression(topN),
         },
       });
       try {
@@ -2704,7 +2743,11 @@ export function AddStageForm({
           method: "POST",
           json: {},
         });
-        onDone(msg("schedule.notice.stageAdded", { n: gen.created, topN }));
+        onDone(
+          groupSource !== null && qualifyCount !== null
+            ? msg("schedule.notice.stageAddedGroups", { n: gen.created, count: qualifyCount })
+            : msg("schedule.notice.stageAdded", { n: gen.created, topN }),
+        );
       } catch (err) {
         // Previous stage not complete yet — the stage exists; completion will
         // seed + generate it.
@@ -2803,19 +2846,23 @@ export function AddStageForm({
           ))}
         </select>
       </label>
-      <label className="block">
-        <span className="label">{msg("schedule.field.qualifyFrom")}</span>
-        {/* Match Day D1 fix round 1 (M4): every Top N the builder and Settings take (FORMAT_BOUNDS.qualify, 2-32), was a
-            fixed [2, 3, 4, 6, 8]. A select, not a number box: it cannot hold a value outside its options. */}
-        <select data-format-bound="qualify" value={topN} onChange={(e) => setTopN(Number(e.target.value))} className="select">
-          {ADD_STAGE_TOP_N.map((n) => (
-            <option key={n} value={n}>
-              {msg("schedule.topN", { n })}
-            </option>
-          ))}
-        </select>
-      </label>
-      <button type="button" disabled={busy} onClick={add} className="btn btn-primary text-xs">
+      {groupSource !== null ? (
+        <GroupTakeField msg={msg} locale={locale} source={groupSource} destKind={kind} counts={groupCounts} value={qualifyCount} onChange={setGroupCount} />
+      ) : (
+        <label className="block">
+          <span className="label">{msg("schedule.field.qualifyFrom")}</span>
+          {/* Match Day D1 fix round 1 (M4): every Top N the builder and Settings take (FORMAT_BOUNDS.qualify, 2-32), was a
+              fixed [2, 3, 4, 6, 8]. A select, not a number box: it cannot hold a value outside its options. */}
+          <select data-format-bound="qualify" value={topN} onChange={(e) => setTopN(Number(e.target.value))} className="select">
+            {ADD_STAGE_TOP_N.map((n) => (
+              <option key={n} value={n}>
+                {msg("schedule.topN", { n })}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      <button type="button" disabled={busy || (groupSource !== null && qualifyCount === null)} onClick={add} className="btn btn-primary text-xs">
         {busy ? msg("schedule.adding") : msg("schedule.addStageBtn")}
       </button>
       <button type="button" onClick={() => setOpen(false)} className="btn btn-ghost text-xs">

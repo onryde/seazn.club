@@ -197,10 +197,23 @@ async function decideAll(auth: AuthCtx, stageId: string): Promise<void> {
 describe.skipIf(!HAS_DB)("X-BD-8 on_complete path: refused by name where the engine's refusal was swallowed", () => {
   // differential: today the engine's STAGE_NOT_READY ("pool B takes rank 4, but only 3 entrants are available") is caught best-effort
   // by completeStage, so the stage completed, nothing was seeded, and nobody was told.
-  it("X-BD-8 on_complete path: refused by name on the desk, never swallowed; the completion stands", async () => {
-    // 7 into 3 pools (3, 2, 2); the next stage asks on completion for every winner and the two best 3rds: one pool has a 3rd.
+  it("X-BD-8 on_complete path: the SAVE door now refuses the unsuppliable cut by name first (7 into 3 pools: every winner + two best 3rds), writing nothing", async () => {
     const take: TakeRule[] = [{ kind: "topNPerGroup", n: 1 }, { kind: "bestNth", nth: 3, count: 2, normaliseUnequalPools: true }];
-    const r = await rig(7, GROUPS_KO(3, take, "on_complete"), GENERIC);
+    const err = await refusal(rig(7, GROUPS_KO(3, take, "on_complete"), GENERIC));
+    expect(err.status).toBe(422);
+    expect(err.code).toBe("RR_CUT_EXCEEDS_FIELD");
+    // The save door names what the Add stage form's own split can fill, not the cut's raw supply (3): 7 into 3 + 2 + 2 hold three
+    // winners and three runners-up, so four through (every winner + the best runner-up) is the nearest count below 5 the form offers.
+    expect(err.extra).toMatchObject({ qualified: 5, max: 4, reason: "bestnth_unsuppliable" });
+  });
+
+  it("X-BD-8 on_complete path: refused by name on the desk, never swallowed; the completion stands", async () => {
+    // 7 into 3 pools (3, 2, 2); the next stage asks on completion for every winner and the two best 3rds: one pool has a 3rd. The save
+    // door refuses that cut (the test above), so the stage is saved with a cut the field supplies and its progression is then written
+    // past the door - a row stored before the door existed, the shape the resolve backstop is for.
+    const take: TakeRule[] = [{ kind: "topNPerGroup", n: 1 }, { kind: "bestNth", nth: 3, count: 2, normaliseUnequalPools: true }];
+    const r = await rig(7, GROUPS_KO(3, [{ kind: "topNPerGroup", n: 1 }], "on_complete"), GENERIC);
+    await sql`update stages set progression = ${sql.json(cut(take, "on_complete") as never)} where id = ${r.stageIds[1]!}`;
     await generateStageFixtures(r.auth, r.stageIds[0]!);
     await decideAll(r.auth, r.stageIds[0]!);
     const err = await refusal(completeStage(r.auth, r.stageIds[0]!));

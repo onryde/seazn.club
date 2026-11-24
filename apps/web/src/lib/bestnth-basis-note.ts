@@ -32,12 +32,16 @@ export interface BasisNoteText {
 
 type T = (key: string, vars?: Record<string, string | number>) => string;
 
-const ORDINAL_KEYS = new Set(["one", "two", "few", "other"]);
+/** The four ordinal patterns of a message set, by the locale's ordinal plural category. */
+export type OrdinalKeys = Readonly<Record<"one" | "two" | "few" | "other", string>>;
+const TABLE_ORDINAL_KEYS: OrdinalKeys = { one: "table.ordinal.one", two: "table.ordinal.two", few: "table.ordinal.few", other: "table.ordinal.other" };
 
-/** "5th" in the reader's language: the locale's ordinal plural category picks the pattern (`table.ordinal.*`). */
-export function ordinalText(n: number, locale: string, t: T): string {
+/** "5th" in the reader's language: the locale's ordinal plural category picks the pattern. `keys` is the message set that holds the four
+ *  patterns - the public pages' `table.ordinal.*` by default, or another (the console's `templates.detail.take.ordinal.*`) as whole
+ *  keys, so a scan for the keys a file references finds them. */
+export function ordinalText(n: number, locale: string, t: T, keys: OrdinalKeys = TABLE_ORDINAL_KEYS): string {
   const cat = new Intl.PluralRules(locale, { type: "ordinal" }).select(n);
-  return t(`table.ordinal.${ORDINAL_KEYS.has(cat) ? cat : "other"}`, { n });
+  return t(cat === "one" || cat === "two" || cat === "few" ? keys[cat] : keys.other, { n });
 }
 
 /** A pool's rows in its own order, its expunged leavers out (they hold no place, RB5-U5). */
