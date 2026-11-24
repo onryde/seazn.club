@@ -70,6 +70,7 @@ import type { ConfigFieldKey } from "@/components/registration-hub-save-error";
 import { CHESS_INDIVIDUAL_ONLY } from "@/lib/chess-individual-only";
 import { ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION } from "@/lib/online-chess";
 import { isOnlineEntrantCapCode } from "@/components/v2/online-entrant-cap-refusal";
+import { ONLINE_PACKAGE_CODES } from "@/lib/online-chess-package";
 import { ENTRANT_KIND_NOT_ALLOWED, divisionTakesKind } from "@/lib/division-entrant-kinds";
 import {
   useRegistrationConfigPanelState,
@@ -296,9 +297,9 @@ export function RegistrationHubConfigPanel({
         ? msg("divset.err.chessIndividualOnly")
         : code === ENTRANT_KIND_NOT_ALLOWED
           ? msg("reg.settings.entrant.notAllowedError")
-          : isOnlineEntrantCapCode(code)
+          : isOnlineEntrantCapCode(code) && code !== ONLINE_PACKAGE_CODES.sizeFull
             ? msg("onlineChess.entrantCap", { limit: ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION })
-            : null,
+            : null, // the size's own code carries numbers this callback is not given: the server's sentence stays (it names the size)
     );
   // From md up: every section open, with the index beside them (spec §9.3). Null until the browser has been asked; the
   // sections only render once the GET has answered, by which time it has.

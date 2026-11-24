@@ -3679,6 +3679,7 @@
   "entrants.lichess.reconnectRequired.other": "{players} hebben Lichess elk gekoppeld, maar Seazn kan er nog geen zetten mee doen. Vraag om het opnieuw te verbinden en voeg de spelers daarna opnieuw toe.",
   "entrants.lichess.reconnectRequired.unnamed": "Sommige spelers hebben Lichess gekoppeld, maar Seazn kan er nog geen zetten mee doen. Vraag om het opnieuw te verbinden en voeg de spelers daarna opnieuw toe.",
   "onlineChess.entrantCap": "Online schaakdivisies bieden plaats aan maximaal {limit} deelnemers.",
+  "onlineChess.sizeFull": "Online Schaken-formaat {size} heeft geen ruimte meer. Kies formaat {nextSize} of groter om ruimte te maken.",
   "onlineChess.turnOnTooMany": "Deze divisie heeft {entrants} deelnemers en inschrijvingen, en online schaakdivisies bieden plaats aan maximaal {limit}. Verwijder er een aantal voordat je online spelen inschakelt.",
   "entrants.row.delete": "Verwijderen",
   "entrants.row.deleteHint": "Alleen beschikbaar voordat de divisie is gestart",

@@ -4910,6 +4910,7 @@ export type DictionaryKey =
   | "onboarding.welcome"
   | "onlineChess.camera.playerNotice"
   | "onlineChess.entrantCap"
+  | "onlineChess.sizeFull"
   | "onlineChess.turnOnTooMany"
   | "org.competitionsBy"
   | "org.home.allFinished"
