@@ -26,7 +26,14 @@ import type { TableStageKind, TiebreakerKey } from "@seazn/engine/sport";
 import type { Dict } from "@/lib/i18n-constants";
 import { configIssueText, settingsSaveErrorText } from "@/lib/config-issue-copy";
 import { ONLINE_CHESS_DISABLED_CODE, onlinePlayShown } from "@/lib/online-chess";
+import { packagePrice, type OnlineSize } from "@/lib/online-chess-package";
+import { onlineRefusedKind } from "@/lib/online-format-refusal";
+import type { OnlineReceiptRequest } from "@/lib/online-package-return";
+import { capacityLoweredOf, onlineSizeChoice } from "@/lib/online-size-options";
 import { onlineEntrantCapText } from "../online-entrant-cap-refusal";
+import { ONLINE_MAX_ROUNDS, onlinePackageRefusalText } from "../online-package-refusal";
+import { OnlinePriceLine } from "../online-chess/price-line";
+import { OnlineSizeSelect } from "../online-chess/size-select";
 import type { MessageKey } from "@/lib/messages";
 import { CHESS_INDIVIDUAL_ONLY, isChessSport } from "@/lib/chess-individual-only";
 import { LICHESS_CLOCK_FIELD_KEYS, selectedTimeControlKey, timeControlOptions, timeControlRuleValues } from "@/lib/online-time-control";
@@ -82,6 +89,35 @@ export interface DivisionRulesStripProps {
   /** The plan the viewer's org holds, for the upgrade gate a plan refusal opens (cap-256 re-review I-F1: turning online play on
    *  over a plan limit below the online cap is the plan's 402). Required, as `UpgradeGate`'s own prop is. */
   viewerPlan: ViewerPlan;
+  /** Online Chess credits (spec 2026-11-23 §8.1): what the "Players, up to" select, its price line and the format refusal are drawn
+   *  from, read by the page (`onlinePackageView`). Absent where the club is not offered Online Chess: no select, no refusal. */
+  onlinePackage?: OnlinePackageStrip;
+}
+
+/** What the strip knows about the division's Online Chess package, shared by the saved strip and the builder's draft. Every number
+ *  here is the server's read (places held, the Swiss rounds counted, the plan's cap, the balance), never computed by the strip. */
+export interface OnlinePackageFacts {
+  /** The plan's `entrants.per_division.max` (null: no cap). */
+  planCap: number | null;
+  held: number;
+  /** The Swiss rounds the division's stages declare (the drafted format's, in the builder). */
+  rounds: number;
+  /** Priced with the Fair-play camera (P9). */
+  cameras: boolean;
+  /** What the org holds (the quote's balance; the builder page's projected one). */
+  balance: number;
+  /** Where credits are bought (opens in a new tab). */
+  buyMoreHref: string;
+  /** The division's stage kinds: Online Chess runs Swiss and knockout only, so the Lichess option reads them. */
+  stageKinds: readonly string[];
+}
+
+/** The saved strip's package: the facts and the live package row. */
+export interface OnlinePackageStrip extends OnlinePackageFacts {
+  /** The live package row; null while the division has none (online play off). `paid`: the paid state at the row's own size. */
+  stored: { size: OnlineSize; paid: { size: OnlineSize; camerasPaid: boolean } | null; frozen: boolean } | null;
+  /** The checkout return (`?oc=pay`): the receipt reopens for it (Task 12's seam); null on an ordinary visit. */
+  receipt: OnlineReceiptRequest | null;
 }
 
 /** The builder's draft state, owned by the builder so it survives moving between its steps. */
@@ -101,6 +137,9 @@ export interface DivisionRulesDraft {
   /** Match Day C9 fix round 1 (m6, mock A5): the builder's "Camera during online play" control, drawn right under online
    *  play while it is Lichess. Saved divisions edit the camera in Settings (division-settings.tsx), not here. */
   cameraControl?: ReactNode;
+  /** Online Chess credits: the builder's size choice. `size` is the organiser's pick (null untouched: the select follows the places
+   *  and rounds); nothing is spent in the builder, the price line only tells what the package will cost at the first round. */
+  onlinePackage?: OnlinePackageFacts & { size: OnlineSize | null; setSize: (size: OnlineSize | null) => void };
 }
 
 interface Feedback {
@@ -112,6 +151,8 @@ interface Feedback {
   keptPinned: KeptPinnedStage[];
   /** A plan refusal (402 PAYMENT_REQUIRED): the feature it names opens the upgrade gate, in place of a red sentence. */
   paywall: string | null;
+  /** The registration capacity the save lowered to the Online Chess size (the save's `online.capacityLoweredTo`), or null. */
+  capacityLowered: number | null;
 }
 
 export const TOGGLE_ON = "border-purple-200 bg-purple-50 text-purple-800";
@@ -135,6 +176,7 @@ export function DivisionRulesStrip({
   draft,
   format,
   viewerPlan,
+  onlinePackage,
 }: DivisionRulesStripProps) {
   const msg = useMsg();
   const plural = useMsgPlural();
@@ -154,10 +196,14 @@ export function DivisionRulesStrip({
   const [savedFormOrder, setOrderState] = useState<TiebreakerKey[] | null>(() => (divisionTiebreakers === null ? null : [...divisionTiebreakers]));
   // A saved change (or another tab's) arrives as new props after `router.refresh()`: the forms re-read them. Compared by
   // CONTENT, never by reference (every refresh hands back new objects; R3.5 review F6).
-  const signature = JSON.stringify([savedVariantKey, divisionConfig, divisionTiebreakers]);
+  // Online Chess credits: the organiser's pick on the saved strip (the stored size until they touch it) and the receipt asked for.
+  const [savedPicked, setSavedPicked] = useState<OnlineSize | null>(onlinePackage?.stored?.size ?? null);
+  const [receipt, setReceipt] = useState<OnlineReceiptRequest | null>(onlinePackage?.receipt ?? null);
+  const signature = JSON.stringify([savedVariantKey, divisionConfig, divisionTiebreakers, onlinePackage?.stored ?? null]);
   const [synced, setSynced] = useState(signature);
   if (synced !== signature) {
     setSynced(signature);
+    setSavedPicked(onlinePackage?.stored?.size ?? null);
     setVariantKeyState(savedVariantKey ?? "");
     setRuleValuesState(hydrateRuleValues(sportKey, divisionConfig));
     setOnlinePlayState(divisionConfig.onlinePlay === "lichess" ? "lichess" : "off");
@@ -233,6 +279,25 @@ export function DivisionRulesStrip({
   const offersTable = tableKinds.length > 0;
   const pointsKeys = divisionPointsKeys(sportKey, points);
 
+  // --- Online Chess credits (spec 2026-11-23 §8.1, §8.2). ---
+  // The facts come from the page (saved) or the builder (draft); the size shown is the locked package's own, else the pick while it
+  // still fits the places, plan and rounds, else the default for them - so what the select shows is what a Save would write.
+  const pkg: OnlinePackageFacts | undefined = draft ? draft.onlinePackage : onlinePackage;
+  const stored = draft ? null : (onlinePackage?.stored ?? null);
+  const lockedSize = stored !== null && (stored.paid !== null || stored.frozen) ? stored.size : null;
+  const picked = draft ? (draft.onlinePackage?.size ?? null) : savedPicked;
+  const pickSize = draft ? draft.onlinePackage?.setSize : setSavedPicked;
+  const sizeChoice =
+    pkg === undefined
+      ? null
+      : onlineSizeChoice({ planCap: pkg.planCap, held: pkg.held, rounds: pkg.rounds, cameras: pkg.cameras, paid: stored?.paid ?? null, picked, locked: lockedSize });
+  // A format with a league, group or ladder cannot be switched to Lichess (the server's 422 at the stage door); a division that is
+  // ALREADY online with one stays readable and keeps saving, so its option stays open.
+  const refusedKind = pkg === undefined ? null : onlineRefusedKind(pkg.stageKinds);
+  const lichessRefused = refusedKind !== null && (draft !== undefined || divisionConfig.onlinePlay !== "lichess");
+  const sizeShown = onlineShown && onlinePlay === "lichess" && pkg !== undefined;
+  const roundsAboveMaxText = () => msg("onlineChess.roundsAboveMax", { max: ONLINE_MAX_ROUNDS });
+
   const toggle = (panel: RulesPanel) =>
     setOpen((prev) => {
       const next = new Set(prev);
@@ -299,6 +364,7 @@ export function DivisionRulesStrip({
         partial: refused.length > 0,
         keptPinned: keptPinnedOf(saved),
         paywall: null,
+        capacityLowered: capacityLoweredOf(saved),
       });
       router.refresh();
     } catch (err) {
@@ -311,10 +377,10 @@ export function DivisionRulesStrip({
       // upgrade gate, as the entrants panel's add does - the server's sentence is English and names a feature key.
       const feature = err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED" ? err.extra.feature_key : undefined;
       if (typeof feature === "string" && feature !== "") {
-        setFeedback({ panel, notice: null, error: null, refused, partial: false, keptPinned: [], paywall: feature });
+        setFeedback({ panel, notice: null, error: null, refused, partial: false, keptPinned: [], paywall: feature, capacityLowered: null });
         return;
       }
-      setFeedback({ panel, notice: null, error: saveErrorText(err), refused, partial: false, keptPinned: [], paywall: null });
+      setFeedback({ panel, notice: null, error: saveErrorText(err), refused, partial: false, keptPinned: [], paywall: null, capacityLowered: null });
     } finally {
       setBusy(false);
     }
@@ -329,6 +395,9 @@ export function DivisionRulesStrip({
     // Turning online play on for a division that already holds more than an online chess division may (owner ruling 2026-11-21).
     const tooMany = err instanceof ApiV1Error ? onlineEntrantCapText(err, (key, vars) => msg(key as MessageKey, vars)) : null;
     if (tooMany !== null) return tooMany;
+    // The package doors' four refusals (a format Online Chess does not run, rounds the size does not include, a camera not paid for).
+    const packageText = err instanceof ApiV1Error ? onlinePackageRefusalText(err, (key, vars) => msg(key as MessageKey, vars)) : null;
+    if (packageText !== null) return packageText;
     // A chess division stored with a legacy entrants override that names teams: the format save re-sends the config, and the
     // server refuses it (owner ruling 2026-10-26). Server English otherwise: localise the code.
     if (err instanceof ApiV1Error && err.code === CHESS_INDIVIDUAL_ONLY) return msg("divset.err.chessIndividualOnly");
@@ -364,7 +433,20 @@ export function DivisionRulesStrip({
         if (onlinePlay === "lichess") config.onlinePlay = "lichess";
         else delete config.onlinePlay;
       }
-      return savedVariantKey === null ? { config } : { variant_key: variantKey, config };
+      // Online Chess credits: the size the select shows rides the save only when it is not already the stored one. A paid package
+      // changes only through its payment and a frozen one never: the select shows THEIR size (`onlineSizeChoice`: a locked package
+      // is its own size, whatever the plan or places say now), so it equals the stored one and nothing is sent for them.
+      let online: { online_size?: OnlineSize } = {};
+      if (onlinePlay === "lichess" && pkg !== undefined) {
+        if (sizeChoice === null) {
+          // No size holds the rounds: the server would refuse every one, so the sentence is said here, beside the select.
+          const e = new Error(roundsAboveMaxText());
+          e.name = "FormProblem";
+          throw e;
+        }
+        if (sizeChoice !== stored?.size) online = { online_size: sizeChoice };
+      }
+      return savedVariantKey === null ? { config, ...online } : { variant_key: variantKey, config, ...online };
     });
 
   const savePoints = () => void save("points", () => ({ config: { ...divisionConfig, points: divisionPointsPatch(sportKey, points, pointsValues) } }));
@@ -392,6 +474,11 @@ export function DivisionRulesStrip({
         {feedback.notice !== null && (
           <p role="status" className="rounded-md bg-emerald-50 px-3 py-2 text-xs text-emerald-700" data-testid="division-rules-saved">
             {feedback.notice}
+          </p>
+        )}
+        {feedback.capacityLowered !== null && (
+          <p role="status" className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-700" data-testid="division-capacity-lowered">
+            {msg("onlineChess.capacityLowered", { size: feedback.capacityLowered })}
           </p>
         )}
         {feedback.keptPinned.length > 0 && (
@@ -492,10 +579,18 @@ export function DivisionRulesStrip({
           data-testid="division-online-play"
         >
           <option value="off">{msg("divset.onlinePlay.off")}</option>
-          <option value="lichess">{msg("divset.onlinePlay.lichess")}</option>
+          <option value="lichess" disabled={lichessRefused}>
+            {msg("divset.onlinePlay.lichess")}
+          </option>
         </select>
       </label>
       <p className="mt-1 text-[11px] text-slate-600">{msg("divset.onlinePlay.help")}</p>
+      {/* Online Chess runs Swiss and knockout events: the reason the Lichess option is greyed, and what to do about it. */}
+      {lichessRefused && (
+        <p role="note" data-testid="division-online-format-refused" className="mt-1 min-w-0 text-[11px] text-amber-800 [overflow-wrap:anywhere]">
+          {msg("onlineChess.format.stripLine")}
+        </p>
+      )}
       {/* WARN, never block: the select and Save stay live. */}
       {onlinePlay === "lichess" && lichessGaps !== undefined && hasLinkGaps(lichessGaps) && (
         <div
@@ -517,6 +612,32 @@ export function DivisionRulesStrip({
             <p data-testid="division-online-empty" className="min-w-0 [overflow-wrap:anywhere]">
               {linkGapSentence("empty", lichessGaps.empty, locale, plural)}
             </p>
+          )}
+        </div>
+      )}
+      {sizeShown && (
+        <div className="mt-3 grid min-w-0 gap-2" data-testid="division-online-package">
+          <OnlineSizeSelect
+            value={sizeChoice}
+            planCap={pkg.planCap}
+            viewerPlan={viewerPlan}
+            held={pkg.held}
+            rounds={pkg.rounds}
+            cameras={pkg.cameras}
+            paid={stored?.paid ?? null}
+            onChange={(size) => pickSize?.(size)}
+            onPaidPick={(size) => setReceipt({ size })}
+            frozen={stored?.frozen === true}
+            disabled={busy}
+          />
+          {sizeChoice === null && pkg.rounds > ONLINE_MAX_ROUNDS && (
+            <p role="note" data-testid="division-online-rounds-above-max" className="min-w-0 text-[11px] text-amber-800 [overflow-wrap:anywhere]">
+              {roundsAboveMaxText()}
+            </p>
+          )}
+          {/* The money line is for a package still to be bought; a paid one has its receipt. Nothing here spends. */}
+          {sizeChoice !== null && stored?.paid == null && (
+            <OnlinePriceLine quote={{ price: packagePrice(sizeChoice, pkg.cameras), balance: pkg.balance }} buyMoreHref={pkg.buyMoreHref} />
           )}
         </div>
       )}
@@ -568,6 +689,10 @@ export function DivisionRulesStrip({
           })}
         </div>
       </div>
+
+      {/* Task 12's seam: the receipt a paid pick or the checkout return (`?oc=pay`) asks for. It carries no UI of its own yet; the
+          size it names is the target of an upgrade ("stored" when the address named none: a first payment keeps its size). */}
+      {receipt !== null && <div hidden data-testid="online-receipt-request" data-receipt-size={receipt.size === null ? "stored" : String(receipt.size)} />}
 
       {open.has("format") && (
         <div id={`${panelId}-format`} role="region" aria-label={msg("rulesStrip.format")} className="space-y-3 border-t border-slate-100 px-4 py-3" data-testid="division-rules-panel-format">

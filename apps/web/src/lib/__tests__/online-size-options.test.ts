@@ -8,7 +8,9 @@
 // Anti-vacuity: every sweep reports how many cells it checked, and zero is a failure.
 import { describe, expect, it } from "vitest";
 import { ONLINE_SIZES, includedRounds, packagePrice, sizeAllowedByPlan, type OnlineSize } from "@/lib/online-chess-package";
-import { onlineSizeDefault, onlineSizeOptions, swissRoundsOf, type OnlineSizeOption } from "@/lib/online-size-options";
+import { formatStagesFor } from "@/lib/division-builder/format-choice";
+import { STAGE_TEMPLATES } from "@/lib/format-templates";
+import { capacityLoweredOf, onlineSizeChoice, onlineSizeDefault, onlineSizeOptions, swissRoundsOf, type OnlineSizeOption } from "@/lib/online-size-options";
 import { refusalFor } from "@/server/usecases/online-package/quote";
 
 const reasonOf = (o: readonly OnlineSizeOption[], size: OnlineSize) => o.find((x) => x.size === size)?.disabled;
@@ -157,5 +159,94 @@ describe("swissRoundsOf: the rounds a draft's stages declare (P15)", () => {
     expect(swissRoundsOf([{ kind: "swiss", config: { rounds: 2.5 } }])).toBe(0);
     expect(swissRoundsOf([{ kind: "swiss", config: { rounds: "4" } }])).toBe(0);
     expect(swissRoundsOf([{ kind: "swiss", config: null }])).toBe(0);
+  });
+});
+
+describe("swissRoundsOf over the stages the builder REALLY sends (the producer seam)", () => {
+  // The builder counts what `formatStagesFor` produces, the very drafts Create posts: a fixture of `{kind, config.rounds}` would prove the
+  // fixture. (`template.build` alone is NOT the producer: it leaves a Swiss at its own default; the rounds knob is stamped after.)
+  // Each template is built at a rounds knob no default shares (7), so a reader that took a default or read the wrong field fails.
+  it("counts the rounds knob for every template that holds a Swiss stage, and none for the rest (sweep)", () => {
+    let withSwiss = 0;
+    let without = 0;
+    for (const t of STAGE_TEMPLATES) {
+      const stages = formatStagesFor(t.key, { qualified: 4, swissRounds: 7, poolCount: 2, legs: 1, standingsCarry: "none", thirdPlace: "shared" });
+      const swissStages = stages.filter((s) => s.kind === "swiss").length;
+      expect(swissRoundsOf(stages), t.key).toBe(swissStages * 7);
+      if (swissStages > 0) withSwiss += 1;
+      else without += 1;
+    }
+    expect(withSwiss).toBeGreaterThan(0); // anti-vacuity: some template is Swiss...
+    expect(without).toBeGreaterThan(0); // ...and some is not
+    expect(withSwiss + without).toBe(STAGE_TEMPLATES.length);
+  });
+});
+
+describe("onlineSizeChoice: the size the select shows", () => {
+  const facts = { ...base, locked: null } as const;
+
+  it("untouched, it follows the places and rounds: the smallest size that holds both", () => {
+    expect(onlineSizeChoice({ ...facts, picked: null, held: 0, rounds: 5 })).toBe(16);
+    expect(onlineSizeChoice({ ...facts, picked: null, held: 0, rounds: 7 })).toBe(32);
+    expect(onlineSizeChoice({ ...facts, picked: null, held: 33, rounds: 0 })).toBe(64);
+    expect(onlineSizeChoice({ ...facts, picked: null, held: 17, rounds: 9 })).toBe(128);
+  });
+
+  it("a pick that still fits stands, however far over the default it is", () => {
+    expect(onlineSizeChoice({ ...facts, picked: 128, held: 0, rounds: 5 })).toBe(128);
+    expect(onlineSizeChoice({ ...facts, picked: 16, held: 0, rounds: 6 })).toBe(16);
+  });
+
+  it("a pick the rounds, the held places or the plan have since closed is dropped for the default", () => {
+    expect(onlineSizeChoice({ ...facts, picked: 16, held: 0, rounds: 8 })).toBe(64); // 16 includes 6 rounds
+    expect(onlineSizeChoice({ ...facts, picked: 32, held: 40, rounds: 0 })).toBe(64); // 32 is under the 40 held
+    expect(onlineSizeChoice({ ...facts, picked: 256, planCap: 64, held: 0, rounds: 5 })).toBe(16); // over the plan
+  });
+
+  it("no size holds the places and the rounds: nothing is chosen for the organiser", () => {
+    expect(onlineSizeChoice({ ...facts, picked: null, held: 0, rounds: 11 })).toBeNull();
+    expect(onlineSizeChoice({ ...facts, picked: 64, held: 0, rounds: 11 })).toBeNull();
+    expect(onlineSizeChoice({ ...facts, picked: null, held: 257, rounds: 0 })).toBeNull();
+  });
+
+  it("a locked package (paid or frozen) is its own size, whatever the facts say now", () => {
+    expect(onlineSizeChoice({ ...facts, locked: 32, picked: 128, held: 0, rounds: 5 })).toBe(32);
+    expect(onlineSizeChoice({ ...facts, locked: 32, picked: null, held: 100, rounds: 11 })).toBe(32);
+  });
+
+  it("the choice is never a greyed size, or null (sweep over held x rounds x plan cap x pick)", () => {
+    let checked = 0;
+    for (const held of [0, 17, 64, 129]) {
+      for (const rounds of [0, 6, 8, 10, 11]) {
+        for (const planCap of [null, 32, 100, 256]) {
+          for (const picked of [null, ...ONLINE_SIZES]) {
+            const size = onlineSizeChoice({ ...facts, held, rounds, planCap, picked });
+            checked += 1;
+            if (size === null) continue;
+            const disabled = reasonOf(onlineSizeOptions({ ...base, held, rounds, planCap }), size);
+            // The default ignores the plan (an over-plan default is the save's own 402), so only held and rounds are held to it.
+            expect(disabled === null || disabled === "plan", `held ${held} rounds ${rounds} cap ${planCap} picked ${picked}`).toBe(true);
+          }
+        }
+      }
+    }
+    expect(checked).toBe(4 * 5 * 4 * 6);
+  });
+});
+
+describe("capacityLoweredOf: what a save says it did to the registration capacity (plan Task 11 item 3)", () => {
+  it("reads PATCH /divisions' `online.capacityLoweredTo`", () => {
+    expect(capacityLoweredOf({ id: "d", online: { capacityLoweredTo: 32, refunded: null } })).toBe(32);
+    expect(capacityLoweredOf({ online: { capacityLoweredTo: 16 } })).toBe(16);
+  });
+
+  it("is null for every answer that lowered nothing, or that is not the shape (the empty cases)", () => {
+    const none: unknown[] = [
+      null, undefined, "x", 7, [], {}, { online: null }, { online: {} }, { online: { capacityLoweredTo: null } },
+      { online: { capacityLoweredTo: 0 } }, { online: { capacityLoweredTo: -16 } }, { online: { capacityLoweredTo: 2.5 } },
+      { online: { capacityLoweredTo: "32" } }, { online: "32" },
+    ];
+    for (const r of none) expect(capacityLoweredOf(r), JSON.stringify(r)).toBeNull();
+    expect(none.length).toBeGreaterThan(10);
   });
 });

@@ -66,3 +66,20 @@ export function swissRoundsOf(stages: readonly { kind: string; config?: Record<s
   }
   return total;
 }
+
+/** The size the select SHOWS: the locked package's own (a paid or frozen one never moves from here), else the organiser's pick while
+ *  it is still open (not below the places held, not over the plan, not short of the rounds), else the default for the places and
+ *  rounds (`onlineSizeDefault`: the size follows them until a pick is made, and a pick they have since closed is dropped). Null when
+ *  no size holds the places and rounds - nothing is chosen for the organiser. */
+export function onlineSizeChoice(a: OnlineSizeFacts & { picked: OnlineSize | null; locked: OnlineSize | null }): OnlineSize | null {
+  if (a.locked !== null) return a.locked;
+  const open = onlineSizeOptions(a).find((o) => o.size === a.picked && o.disabled === null);
+  return open?.size ?? onlineSizeDefault({ held: a.held, rounds: a.rounds });
+}
+
+/** What a division save says it did to the registration capacity (PATCH /divisions `online.capacityLoweredTo`, spec §7.4 item 2): the
+ *  size the capacity was lowered to, or null when it lowered none or the answer has no such field. */
+export function capacityLoweredOf(saved: unknown): number | null {
+  const lowered = (saved as { online?: { capacityLoweredTo?: unknown } | null } | null | undefined)?.online?.capacityLoweredTo;
+  return typeof lowered === "number" && Number.isInteger(lowered) && lowered > 0 ? lowered : null;
+}
