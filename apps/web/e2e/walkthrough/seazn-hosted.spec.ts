@@ -351,11 +351,18 @@ test("Seazn pre-selected → a spectator opens the page before kick-off → Go l
   await expectNoHorizontalScroll(viewer.page);
 
   // 3. GO LIVE, by tapping it. Go live needs a paired phone (W5); a composed Go live takes the whole pool first.
-  await pairPhoneOnFixture(page, rig.fixturePath);
+  const phone = await pairPhoneOnFixture(page, rig.fixturePath);
   body = await openPhoneTab(page, rig.fixturePath);
   await expect(targetPicker(body), "still Seazn after the reload").toHaveAttribute("data-value", rig.seaznId);
   const pool = await takeWholePool(POOL_HOLD, { creditsKeyWaitMs: CREDITS_KEY_WAIT_MS });
   const first = await goLiveSeazn(page, body, rig, open);
+  // Task 46: the phone's own beat answer, through the real beats route and the contract twin, tells what the relay last said —
+  // the compositor stand-in beats `programmePhase: "live"`.
+  await expect.poll(async () => {
+    const a = (await phone.beat()).ok;
+    if (a === null) return "refused";
+    return a.state === "go-live" || a.state === "live" ? (a.delivery?.programmePhase ?? "no delivery") : a.state;
+  }, { message: "the phone's live answer carries the relay's programme phase", timeout: CALL_MS, intervals: [1_000] }).toBe("live");
 
   // 4. THE OPEN PAGE TURNS LIVE on its next read, without a reload: the server's own signed address for the programme input, in the
   //    player and reaching it, on a player that has not failed. The page has shown nothing since it opened, but it is within the hour
