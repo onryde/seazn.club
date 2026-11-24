@@ -25,16 +25,22 @@ import { getCode, postBeat, postStart } from "../capture-phone";
 import { reissueStreamCode, saveStreamSettings } from "../stream-codes";
 import { stopSession } from "../stream-sessions";
 import { captureRig, phoneId, type CaptureRig } from "./_capture-rig";
+import { RIG_SUPABASE_URL, contractTokenSeconds, stubRealtime, type StubRealtime } from "./_capture-realtime";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
-const ENV_KEYS = ["RELAY_KEK", "AUTH_SECRET", "OAUTH_BASE_URL", "NEXT_PUBLIC_BASE_URL", "STREAM_PLAYBACK_HOST", "STREAM_SRT_ENABLED", "RELAY_DRIVERS"] as const;
+const ENV_KEYS = [
+  "RELAY_KEK", "AUTH_SECRET", "OAUTH_BASE_URL", "NEXT_PUBLIC_BASE_URL", "STREAM_PLAYBACK_HOST", "STREAM_SRT_ENABLED", "RELAY_DRIVERS",
+  "NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+] as const;
 const saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
 const KEK = randomBytes(32).toString("hex");
 function baseEnv() {
   for (const k of ENV_KEYS) delete process.env[k];
   process.env.RELAY_KEK = KEK;
   process.env.AUTH_SECRET = "capture-beat-test-secret";
+  // The project every rig's stub realtime port names (push nudges): the guard compares the served url's host with it.
+  process.env.NEXT_PUBLIC_SUPABASE_URL = RIG_SUPABASE_URL;
 }
 beforeAll(baseEnv);
 beforeEach(baseEnv);
@@ -68,8 +74,9 @@ function body(r: CaptureRig, phone: string, over: Partial<Beat> = {}): Beat {
  *  1), replaced and taken included, and never `device` (PR-1) — so the keys sent are exactly the branch's, less `device`. Court stream's `next` (spec
  *  2026-11-14 §5.3) is optional on every branch and sent only for a COURT code (capture-court.test.ts asserts it there); every code here is a
  *  fixture's, so `next` is never sent — `checked` asserts its absence on every answer, rather than merely excluding it.
- *  Push nudges' `realtime` (spec 2026-11-24 §2.1) is in the contract from plan Task 4 and is minted and wired by Task 5
- *  (T1.3); until then no answer carries it, and `checked` asserts that absence too. */
+ *  Push nudges' `realtime` (spec 2026-11-24 §2.1, plan Task 5 / T1.3) is optional on the four current-pairing branches: `checked`
+ *  asserts it is never on replaced or taken, and `answered` that the other four carry it exactly when the caller holds a
+ *  current pairing — for THAT pairing (every rig here serves it through a recording stub port, `rig`). */
 const BRANCHES = CaptureBeatAnswer.options;
 const keysOf = (state: Answer["state"]): string[] => {
   const branch = BRANCHES.find((o) => o.shape.state.value === state);
@@ -81,18 +88,55 @@ const statesSeen = new Set<string>();
 /** Every answer in this file goes through here: parsed with its own branch, exactly the branch's keys, no `device`. */
 function checked(a: Answer): Answer {
   expect(CaptureBeatAnswer.parse(a)).toEqual(a);
-  expect(Object.keys(a).sort(), a.state).toEqual(keysOf(a.state));
+  // `realtime` is optional on four branches and owned by `answered` (push nudges): the rest are exactly the branch's.
+  expect(Object.keys(a).filter((k) => k !== "realtime").sort(), a.state).toEqual(keysOf(a.state));
   expect(a).not.toHaveProperty("device");
   expect(a, "a fixture code's answer never carries the court's next").not.toHaveProperty("next");
   expect(a, "nor the court's autoRefusal (E2)").not.toHaveProperty("autoRefusal");
-  expect(a, "nor realtime, until Task 5 (T1.3) mints it").not.toHaveProperty("realtime");
+  if (a.state === "replaced" || a.state === "taken") expect(a, "replaced and taken never carry realtime (§2.1)").not.toHaveProperty("realtime");
   for (const v of Object.values(a)) expect(v, "an absent field is omitted, never undefined").not.toBeUndefined();
   answersChecked++;
   statesSeen.add(a.state);
   return a;
 }
+/** The token's life the published contract's prose states ("Each token lives N minutes"), in seconds. */
+const TOKEN_S = contractTokenSeconds();
+let realtimeServed = 0;
+let realtimeWithheld = 0;
+let realtimeDropped = 0;
+/** `checked`, then push nudges' rule (§2.1) on the rows as they stand after the beat: on waiting, go-live, live and over the
+ *  answer carries `realtime` exactly when the caller holds a current pairing, and then for THAT pairing — its topic, the
+ *  token the rig's port last minted for it, at this beat's clock plus the contract's token life. A caller that holds none
+ *  (its own `ended` closed it, T21) is served nothing. Sequential beats only: two in flight race the re-read. */
+async function answered(r: CaptureRig, phone: string, a: Answer): Promise<Answer> {
+  checked(a);
+  if (a.state === "replaced" || a.state === "taken") {
+    realtimeDropped++;
+    return a;
+  }
+  const mine = current(await pairings(r)).filter((p) => p.phone === phone);
+  const rt = a.realtime;
+  if (rt === undefined) {
+    expect(mine, `${a.state}: realtime is withheld only from a caller holding no current pairing`).toEqual([]);
+    realtimeWithheld++;
+    return a;
+  }
+  expect(mine.map((p) => `capture:${p.id}`), `${a.state}: realtime names the caller's own current pairing`).toContain(rt.topic);
+  const last = (r.deps.realtime as StubRealtime).mints.at(-1)!;
+  expect({ topic: `capture:${last.pairingId}`, token: last.token, expiresAtMs: last.expiresAt.getTime() }, "the port's last mint made it")
+    .toEqual({ topic: rt.topic, token: rt.token, expiresAtMs: r.now().getTime() + TOKEN_S * SEC });
+  expect(rt).toMatchObject({ url: RIG_SUPABASE_URL, expiresAt: Math.floor(r.now().getTime() / SEC) + TOKEN_S });
+  realtimeServed++;
+  return a;
+}
 async function beat(r: CaptureRig, phone: string, over: Partial<Beat> = {}, via: { code: string; tok: string } = r): Promise<Answer> {
-  return checked(await postBeat(via.code, via.tok, body(r, phone, over), r.deps, r.now()));
+  return answered(r, phone, await postBeat(via.code, via.tok, body(r, phone, over), r.deps, r.now()));
+}
+/** Every rig here serves `realtime` through a recording stub port on the rig's project (push nudges, plan Task 5). */
+async function rig(o: Parameters<typeof captureRig>[0] = {}): Promise<CaptureRig> {
+  const r = await captureRig(o);
+  r.deps.realtime = stubRealtime();
+  return r;
 }
 const claimNew = (r: CaptureRig, phone: string, over: Partial<Beat> = {}) => beat(r, phone, { claim: "new", ...over });
 
@@ -145,7 +189,7 @@ async function goLive(r: CaptureRig, phone: string, sid: string): Promise<void> 
 
 describe.skipIf(!HAS_DB)("postBeat — the claims (§5.5 T1–T8)", () => {
   it("T1 → T8: a `new` claim on an EMPTY slot makes the caller current — one row, the SERVER's clock, its device; later beats keep that ONE row; the same phone re-claiming `new` (process death) is still that row", async () => {
-    const r = await captureRig();
+    const r = await rig();
     const A = phoneId("a");
     const first = await claimNew(r, A, { device: { model: "Pixel 9" }, state: "paired", mode: "automatic" });
     expect(first.state).toBe("waiting");
@@ -164,7 +208,7 @@ describe.skipIf(!HAS_DB)("postBeat — the claims (§5.5 T1–T8)", () => {
   });
 
   it("T2 (paired): B's `new` claim takes the slot — A ENDED(replaced) naming B, B current; A's next beat (no claim) is `replaced` and writes nothing (T7)", async () => {
-    const r = await captureRig();
+    const r = await rig();
     const [A, B] = [phoneId("a"), phoneId("b")];
     await claimNew(r, A);
     r.tick(5 * SEC);
@@ -182,7 +226,7 @@ describe.skipIf(!HAS_DB)("postBeat — the claims (§5.5 T1–T8)", () => {
   });
 
   it("T2 (armed): B's `new` claim takes the slot AND the session — the session's pairing moves to B, event phone_takeover {dead: false}; B hears go-live S (startedBy organiser), A's next beat naming S hears `replaced`", async () => {
-    const r = await captureRig({ connectAfterMs: NEVER });
+    const r = await rig({ connectAfterMs: NEVER });
     const [A, B] = [phoneId("a"), phoneId("b")];
     await claimNew(r, A);
     const S = await r.start(A);
@@ -201,7 +245,7 @@ describe.skipIf(!HAS_DB)("postBeat — the claims (§5.5 T1–T8)", () => {
   // Court follow-up (controller ruling, 2026-11-18): only a COURT code's claim ends a session an older pairing left behind
   // (stream-auto-court.test.ts). A fixture code's does not: its session runs on to W19, as before.
   it("a fixture code: a new pairing claiming while the live session still names an ended pairing ends nothing", async () => {
-    const r = await captureRig({ credits: 1, connectAfterMs: CONNECT_MS });
+    const r = await rig({ credits: 1, connectAfterMs: CONNECT_MS });
     const A = phoneId("a");
     await claimNew(r, A);
     const S = await r.start(A);
@@ -215,7 +259,7 @@ describe.skipIf(!HAS_DB)("postBeat — the claims (§5.5 T1–T8)", () => {
   });
 
   it("T3: a LIVE slot whose phone is beating refuses B's `new` claim — `taken`, NO row written, A still current; event claim_refused", async () => {
-    const r = await captureRig({ credits: 1, connectAfterMs: CONNECT_MS });
+    const r = await rig({ credits: 1, connectAfterMs: CONNECT_MS });
     const [A, B] = [phoneId("a"), phoneId("b")];
     await claimNew(r, A);
     const S = await r.start(A);
@@ -231,7 +275,7 @@ describe.skipIf(!HAS_DB)("postBeat — the claims (§5.5 T1–T8)", () => {
 
   /** A live session held by A, which last beat at `liveAt`; the fake input disconnected unless `connected`. */
   async function liveHeldBy(o: { connected?: boolean } = {}) {
-    const r = await captureRig({ credits: 1, connectAfterMs: CONNECT_MS });
+    const r = await rig({ credits: 1, connectAfterMs: CONNECT_MS });
     const [A, B] = [phoneId("a"), phoneId("b")];
     await claimNew(r, A);
     const S = await r.start(A);
@@ -287,7 +331,7 @@ describe.skipIf(!HAS_DB)("postBeat — the claims (§5.5 T1–T8)", () => {
   });
 
   it("T5 / T6 / T7: `resume` from the current phone keeps it; `resume` on a slot with NO current pairing is T1 (a row, claim_kind resume); another phone's `resume` is `replaced` and changes nothing; no claim from a non-current phone is `replaced`", async () => {
-    const r = await captureRig();
+    const r = await rig();
     const [A, B, C] = [phoneId("a"), phoneId("b"), phoneId("c")];
     expect((await beat(r, A, { claim: "resume" })).state, "T5: resume on an empty slot").toBe("waiting");
     expect(await pairingOf(r, A)).toMatchObject({ claim_kind: "resume", ended_at: null });
@@ -304,22 +348,34 @@ describe.skipIf(!HAS_DB)("postBeat — the claims (§5.5 T1–T8)", () => {
   it("two `new` claims AT ONCE on an empty slot: exactly ONE current pairing — the code row's lock decides them one after the other (the second is T2 over the first)", async () => {
     let runs = 0;
     for (let i = 0; i < 3; i++) {
-      const r = await captureRig();
+      const r = await rig();
       const [A, B] = [phoneId("a"), phoneId("b")];
-      const answers = await Promise.all([claimNew(r, A), claimNew(r, B)]);
+      // Raw (not `beat`): two beats in flight race `answered`'s re-read, so realtime gets this case's own rule below.
+      const claimRaw = async (phone: string) => checked(await postBeat(r.code, r.tok, body(r, phone, { claim: "new" }), r.deps, r.now()));
+      const answers = await Promise.all([claimRaw(A), claimRaw(B)]);
       expect(answers.map((a) => a.state)).toEqual(["waiting", "waiting"]);
       const rows = await pairings(r);
       expect(rows).toHaveLength(2);
       expect(current(rows)).toHaveLength(1);
       const ended = rows.find((p) => p.ended_at !== null)!;
       expect(ended).toMatchObject({ end_cause: "replaced", replaced_by: current(rows)[0]!.id });
+      // Push nudges (§2.1): the winner (it locked second, so its re-read sees itself current) is served its own pairing; the
+      // loser, re-read either side of the winner's commit, is served nothing or its OWN pairing — never the winner's.
+      const own = (phone: string) => rows.filter((p) => p.phone === phone).map((p) => `capture:${p.id}`);
+      const winner = current(rows)[0]!.phone;
+      for (const [i, phone] of [A, B].entries()) {
+        const a = answers[i]!;
+        const topic = a.state === "replaced" || a.state === "taken" ? undefined : a.realtime?.topic;
+        if (phone === winner) expect(topic, "the winner is served its pairing").toBe(`capture:${current(rows)[0]!.id}`);
+        else if (topic !== undefined) expect(own(phone), "the loser is served only its own pairing").toContain(topic);
+      }
       runs++;
     }
     expect(runs).toBe(3);
   });
 
   it("C1b / C3 / T30 through the REAL reissue: the ENDED code still serves its open session's phone a beat; a `new` claim on it is 401 (from any phone, the session's own included); B's claim on the NEW code takes the armed session, after which the old code refuses A", async () => {
-    const r = await captureRig({ connectAfterMs: NEVER });
+    const r = await rig({ connectAfterMs: NEVER });
     const [A, B] = [phoneId("a"), phoneId("b")];
     await claimNew(r, A);
     const S = await r.start(A);
@@ -327,7 +383,7 @@ describe.skipIf(!HAS_DB)("postBeat — the claims (§5.5 T1–T8)", () => {
     const fresh = await reissueStreamCode(r.auth, r.fixtureId);
     r.tick(SEC);
     const oldBody = (phone: string, over: Partial<Beat> = {}) => body(r, phone, { code: old.code, ...over });
-    expect(checked(await postBeat(old.code, old.tok, oldBody(A, { sid: S, state: "armed" }), r.deps, r.now())))
+    expect(await answered(r, A, await postBeat(old.code, old.tok, oldBody(A, { sid: S, state: "armed" }), r.deps, r.now())))
       .toMatchObject({ state: "go-live", sid: S });
     let refusals = 0;
     for (const phone of [B, A]) {
@@ -339,7 +395,7 @@ describe.skipIf(!HAS_DB)("postBeat — the claims (§5.5 T1–T8)", () => {
     expect(refusals).toBe(2);
     // B scans the NEW QR: the slot is armed and A holds S (its pairing is on the OLD code — the code's state is not read).
     const viaNew = { code: fresh.qr.code, tok: fresh.qr.tok };
-    expect(checked(await postBeat(viaNew.code, viaNew.tok, body(r, B, { code: viaNew.code, claim: "new" }), r.deps, r.now())))
+    expect(await answered(r, B, await postBeat(viaNew.code, viaNew.tok, body(r, B, { code: viaNew.code, claim: "new" }), r.deps, r.now())))
       .toMatchObject({ state: "go-live", sid: S });
     const b = await pairingOf(r, B);
     const [{ id: newCodeId }] = await sql<{ id: string }[]>`select id from fixture_stream_codes where code = ${viaNew.code}`;
@@ -354,7 +410,7 @@ describe.skipIf(!HAS_DB)("postBeat — the claims (§5.5 T1–T8)", () => {
   // the organiser's Stop (T20: the pairing stays) it hears `over S stopped`, then `waiting` — never `replaced` — and its
   // start follows the normal rules.
   it("I-2: the session's phone RESCANS the new QR after a reissue — its pairing and the session move onto the new code; after the organiser's Stop it hears `over S stopped` then `waiting`, never `replaced`; its start then opens a fresh session", async () => {
-    const r = await captureRig({ connectAfterMs: NEVER });
+    const r = await rig({ connectAfterMs: NEVER });
     const A = phoneId("a");
     await claimNew(r, A);
     const S = await r.start(A);
@@ -392,7 +448,7 @@ describe.skipIf(!HAS_DB)("postBeat — the claims (§5.5 T1–T8)", () => {
   // open session's, the session created before the code ended) is not refused by C1 — C3 only narrows its calls — so a
   // refused claim or start from it ends nothing, and its beats keep being served.
   it("M-6: a pairing on an ENDED code that C1 refuses is ENDED(code_ended) lazily, once; a wrong tok ends nothing; the open session's phone is never ended by its refused claim or start on the old code", async () => {
-    const r = await captureRig({ connectAfterMs: NEVER });
+    const r = await rig({ connectAfterMs: NEVER });
     const [A, B] = [phoneId("a"), phoneId("b")];
     await claimNew(r, A);
     const old = { code: r.code, tok: r.tok };
@@ -408,7 +464,7 @@ describe.skipIf(!HAS_DB)("postBeat — the claims (§5.5 T1–T8)", () => {
     expect((await pairingOf(r, A)).ended_at?.getTime(), "a second refusal writes nothing").toBe(ended.ended_at!.getTime());
 
     // The C1b phone: B holds an open session created BEFORE its code ended.
-    const r2 = await captureRig({ connectAfterMs: NEVER });
+    const r2 = await rig({ connectAfterMs: NEVER });
     await claimNew(r2, B);
     const S = await r2.start(B);
     const old2 = { code: r2.code, tok: r2.tok };
@@ -417,13 +473,13 @@ describe.skipIf(!HAS_DB)("postBeat — the claims (§5.5 T1–T8)", () => {
     await expect(postBeat(old2.code, old2.tok, body(r2, B, { claim: "new" }), r2.deps, r2.now())).rejects.toMatchObject({ status: 401 });
     await expect(postStart(old2.code, old2.tok, { phone: B }, r2.deps, r2.now())).rejects.toMatchObject({ status: 401 });
     expect((await pairingOf(r2, B)).ended_at, "C3 narrows the C1b phone's calls; C1 does not refuse it — nothing ends").toBeNull();
-    expect(checked(await postBeat(old2.code, old2.tok, body(r2, B, { sid: S, state: "armed" }), r2.deps, r2.now())), "its beats are still served")
+    expect(await answered(r2, B, await postBeat(old2.code, old2.tok, body(r2, B, { sid: S, state: "armed" }), r2.deps, r2.now())), "its beats are still served")
       .toMatchObject({ state: "go-live", sid: S });
 
     // The open session's phone is exempt only for a code that ended AFTER its session was created (C1b's second
     // conjunct): C paired on a code, the code was reissued, C paired on the NEW code and started there — its call through
     // the OLD code is refused by C1, and that old pairing ends `code_ended`.
-    const r3 = await captureRig({ connectAfterMs: NEVER });
+    const r3 = await rig({ connectAfterMs: NEVER });
     const C = phoneId("c");
     await claimNew(r3, C);
     const old3 = { code: r3.code, tok: r3.tok };
@@ -446,7 +502,7 @@ describe.skipIf(!HAS_DB)("postBeat — the claims (§5.5 T1–T8)", () => {
   // §10.2's row "After a takeover, only the new one does" (B6 review M-3): the descriptor's `cred` follows the session's
   // pairing, so a T2 takeover in warming moves it from A to B at once.
   it("M-3: after a T2 takeover in warming, only the NEW phone gets cred; the old one gets the same session shape without it", async () => {
-    const r = await captureRig({ connectAfterMs: NEVER });
+    const r = await rig({ connectAfterMs: NEVER });
     const [A, B] = [phoneId("a"), phoneId("b")];
     await claimNew(r, A);
     const S = await r.start(A);
@@ -458,7 +514,7 @@ describe.skipIf(!HAS_DB)("postBeat — the claims (§5.5 T1–T8)", () => {
   });
 
   it("the beat's own refusals: a wrong tok 401, a slot other than 0 422 invalid, a body naming another code 422 invalid", async () => {
-    const r = await captureRig();
+    const r = await rig();
     const A = phoneId("a");
     await expect(postBeat(r.code, "not-the-tok", body(r, A, { claim: "new" }), r.deps, r.now())).rejects.toMatchObject({ status: 401, code: "code_ended" });
     await expect(postBeat(r.code, r.tok, body(r, A, { claim: "new", slot: 1 }), r.deps, r.now())).rejects.toMatchObject({ status: 422, code: "invalid" });
@@ -472,7 +528,7 @@ describe.skipIf(!HAS_DB)("postBeat — the stops (§6.8.2, T21–T24a, G0-g)", (
   // `ending` by hand after the REAL T21. Then only the descriptor's ended-pairing filter withholds `cred`; the pair proves
   // the inputs are still readable, so the absence is the filter's.
   it("M-1: after T21 ended its pairing, the stopping phone gets NO cred while its session is still ending; the same pairing un-ended gets it again", async () => {
-    const r = await captureRig({ connectAfterMs: NEVER });
+    const r = await rig({ connectAfterMs: NEVER });
     const A = phoneId("a");
     await claimNew(r, A);
     const S = await r.start(A);
@@ -491,7 +547,7 @@ describe.skipIf(!HAS_DB)("postBeat — the stops (§6.8.2, T21–T24a, G0-g)", (
   });
 
   it("T21: the session's phone's `ended` beat is the operator's Stop — stop(operator_stopped), its pairing ENDED(operator_stopped), event phone_stop; it hears `over S stopped`; its next beat is `replaced` (a rescan is owed)", async () => {
-    const r = await captureRig({ connectAfterMs: NEVER });
+    const r = await rig({ connectAfterMs: NEVER });
     const A = phoneId("a");
     await claimNew(r, A);
     const S = await r.start(A);
@@ -507,7 +563,7 @@ describe.skipIf(!HAS_DB)("postBeat — the stops (§6.8.2, T21–T24a, G0-g)", (
   });
 
   it("T22: an `ended` beat from a phone that is NOT current → `replaced`, and the session runs on", async () => {
-    const r = await captureRig({ connectAfterMs: NEVER });
+    const r = await rig({ connectAfterMs: NEVER });
     const [A, B] = [phoneId("a"), phoneId("b")];
     await claimNew(r, A);
     const S = await r.start(A);
@@ -517,7 +573,7 @@ describe.skipIf(!HAS_DB)("postBeat — the stops (§6.8.2, T21–T24a, G0-g)", (
   });
 
   it("T23: `stopped: X` on the current phone's paired beat closes X (operator_stopped) and answers `over X stopped`; the pairing STAYS (only `ended` ends it)", async () => {
-    const r = await captureRig({ connectAfterMs: NEVER });
+    const r = await rig({ connectAfterMs: NEVER });
     const A = phoneId("a");
     await claimNew(r, A);
     const X = await r.start(A);
@@ -529,7 +585,7 @@ describe.skipIf(!HAS_DB)("postBeat — the stops (§6.8.2, T21–T24a, G0-g)", (
   });
 
   it("T24: `stopped: X` for an X that has ENDED → `over X` with X's own endReason; the newer Y stays open (it never touches another sid)", async () => {
-    const r = await captureRig({ connectAfterMs: NEVER });
+    const r = await rig({ connectAfterMs: NEVER });
     const A = phoneId("a");
     await claimNew(r, A);
     const X = await r.start(A);
@@ -541,7 +597,7 @@ describe.skipIf(!HAS_DB)("postBeat — the stops (§6.8.2, T21–T24a, G0-g)", (
   });
 
   it("T24a: a NON-current phone's late `stopped: X` while the current phone holds X is IGNORED — `replaced` (no claim) or `taken` (a refused claim); X stays open; event stop_ignored {held: true}", async () => {
-    const r = await captureRig({ credits: 1, connectAfterMs: CONNECT_MS });
+    const r = await rig({ credits: 1, connectAfterMs: CONNECT_MS });
     const [A, B] = [phoneId("a"), phoneId("b")];
     await claimNew(r, A);
     const X = await r.start(A);
@@ -564,7 +620,7 @@ describe.skipIf(!HAS_DB)("postBeat — the stops (§6.8.2, T21–T24a, G0-g)", (
    *  takes is not connected, and (3) no connected sample inside the window (the go-live's are exactly a window old) — the
    *  scene the T4 test above builds. One sport on purpose: a stop reads no sport (the header's cricket case owns that). */
   async function deadOnLiveX() {
-    const r = await captureRig({ credits: 1, connectAfterMs: CONNECT_MS });
+    const r = await rig({ credits: 1, connectAfterMs: CONNECT_MS });
     const [A, B] = [phoneId("a"), phoneId("b")];
     await claimNew(r, A);
     const X = await r.start(A);
@@ -640,7 +696,7 @@ describe.skipIf(!HAS_DB)("postBeat — the stops (§6.8.2, T21–T24a, G0-g)", (
   });
 
   it("T24a's POSITIVE branch, built directly: no current pairing holds X (its phone's pairing has ended and nobody replaced it) — the late stop APPLIES, though the caller is not current (`replaced`)", async () => {
-    const r = await captureRig({ connectAfterMs: NEVER });
+    const r = await rig({ connectAfterMs: NEVER });
     const A = phoneId("a");
     await claimNew(r, A);
     const X = await r.start(A);
@@ -652,7 +708,7 @@ describe.skipIf(!HAS_DB)("postBeat — the stops (§6.8.2, T21–T24a, G0-g)", (
   });
 
   it("G0-g: a refused `new` claim carrying `stopped: X` for an ENDED X is `taken` — never `over X`", async () => {
-    const r = await captureRig({ credits: 1, connectAfterMs: CONNECT_MS });
+    const r = await rig({ credits: 1, connectAfterMs: CONNECT_MS });
     const [A, B] = [phoneId("a"), phoneId("b")];
     await claimNew(r, A);
     const X = await r.start(A);
@@ -669,7 +725,7 @@ describe.skipIf(!HAS_DB)("postBeat — the stops (§6.8.2, T21–T24a, G0-g)", (
 
 describe.skipIf(!HAS_DB)("postBeat — the answer (§6.3.3, R5)", () => {
   it("a STARTING slot answers `waiting` at POLL_STARTING_SECONDS, an open session's other states at POLL_NEAR_SECONDS — and the cadence answered is the one stored on the pairing", async () => {
-    const r = await captureRig({ connectAfterMs: NEVER });
+    const r = await rig({ connectAfterMs: NEVER });
     const A = phoneId("a");
     await claimNew(r, A);
     const S = await r.start(A);
@@ -712,7 +768,7 @@ describe.skipIf(!HAS_DB)("postBeat — the answer (§6.3.3, R5)", () => {
       ["off after on", async (r: CaptureRig) => { await saveStreamSettings(r.auth, r.fixtureId, { autoStream: true }); await saveStreamSettings(r.auth, r.fixtureId, { autoStream: false }); }, false],
       ["no settings row", async () => {}, false],
     ] as const) {
-      const r = await captureRig({ credits: 1, connectAfterMs: CONNECT_MS });
+      const r = await rig({ credits: 1, connectAfterMs: CONNECT_MS });
       await setup(r);
       const answers = await everyAnswerState(r);
       expect(answers.map((a) => a.state), `${label}: the script reached every state`).toEqual(ALL_STATES);
@@ -725,7 +781,7 @@ describe.skipIf(!HAS_DB)("postBeat — the answer (§6.3.3, R5)", () => {
   });
 
   it("autoAllowed follows the switch ACROSS beats: an organiser flip is seen on the very next beat's answer, in both directions", async () => {
-    const r = await captureRig({ connectAfterMs: NEVER });
+    const r = await rig({ connectAfterMs: NEVER });
     const A = phoneId("a");
     expect((await claimNew(r, A)).autoAllowed).toBe(false);
     r.tick(SEC);
@@ -739,7 +795,7 @@ describe.skipIf(!HAS_DB)("postBeat — the answer (§6.3.3, R5)", () => {
   it("another sport (cricket) — and the generic one: the beat's common fields are the DESCRIPTOR's own waiting fields (one builder, R7)", async () => {
     let compared = 0;
     for (const sport of ["generic", "cricket"] as const) {
-      const r = await captureRig({ sport });
+      const r = await rig({ sport });
       const A = phoneId("a");
       const a = await claimNew(r, A);
       const d = await getCode(r.code, r.tok, { slot: 0, phone: null }, r.deps, r.now());
@@ -756,7 +812,7 @@ describe.skipIf(!HAS_DB)("postBeat — the answer (§6.3.3, R5)", () => {
 
 describe.skipIf(!HAS_DB)("postBeat — storage (§6.10)", () => {
   it("the minute throttle runs on the SERVER clock: no row at 59 s, a `minute` row at 60 s — and an `at` five hours ahead moves neither the throttle nor last_beat_at", async () => {
-    const r = await captureRig();
+    const r = await rig();
     const A = phoneId("a");
     await claimNew(r, A);
     const p = await pairingOf(r, A);
@@ -789,7 +845,7 @@ describe.skipIf(!HAS_DB)("postBeat — storage (§6.10)", () => {
   });
 
   it("a `change` row per flag (battery_low, hot, stalled, not_ready, not_responding) and per state — each flag's own threshold from config.ts, each with its positive pair", async () => {
-    const r = await captureRig({ connectAfterMs: NEVER });
+    const r = await rig({ connectAfterMs: NEVER });
     const A = phoneId("a");
     await claimNew(r, A);
     const p = await pairingOf(r, A);
@@ -831,7 +887,7 @@ describe.skipIf(!HAS_DB)("postBeat — storage (§6.10)", () => {
   });
 
   it("`at` with an offset is stored as UTC: \"2026-10-01T15:30:00+05:30\" → \"2026-10-01T10:00:00.000Z\" in the pairing's last beat, the history row and the session's phone_beat", async () => {
-    const r = await captureRig({ connectAfterMs: NEVER });
+    const r = await rig({ connectAfterMs: NEVER });
     const A = phoneId("a");
     await claimNew(r, A);
     const S = await r.start(A);
@@ -846,7 +902,7 @@ describe.skipIf(!HAS_DB)("postBeat — storage (§6.10)", () => {
   });
 
   it("the session's phone_beat moves only for a beat from its phone NAMING its sid — not for that phone's sid-less beat, not for another phone's", async () => {
-    const r = await captureRig({ connectAfterMs: NEVER });
+    const r = await rig({ connectAfterMs: NEVER });
     const [A, B] = [phoneId("a"), phoneId("b")];
     await claimNew(r, A);
     const S = await r.start(A);
@@ -860,13 +916,13 @@ describe.skipIf(!HAS_DB)("postBeat — storage (§6.10)", () => {
   });
 
   it("raw is an ALLOWLIST: a field the contract does not declare never reaches storage, and `device` is read only on a claim beat", async () => {
-    const r = await captureRig();
+    const r = await rig();
     const A = phoneId("a");
     await claimNew(r, A, { device: { model: "Pixel 9" } });
     r.tick(SEC);
     // A state change, so this beat writes its own history row too.
     const sneaky = { ...body(r, A, { state: "arming", device: { model: "Not On A Claim" } }), injected: "x", tok: "secret" } as unknown as Beat;
-    checked(await postBeat(r.code, r.tok, sneaky, r.deps, r.now()));
+    await answered(r, A, await postBeat(r.code, r.tok, sneaky, r.deps, r.now()));
     const p = await pairingOf(r, A);
     expect(p.device_model, "device on a non-claim beat is ignored").toBe("Pixel 9");
     const declared = Object.keys(CaptureBeat.shape).filter((k) => k !== "device" && k !== "endReason").sort();
@@ -878,7 +934,7 @@ describe.skipIf(!HAS_DB)("postBeat — storage (§6.10)", () => {
   });
 
   it("the purge on a minute insert deletes the pairing's history older than PHONE_BEAT_RETENTION_HOURS, keeps the newer, and never touches the pairing's or the session's latest beat", async () => {
-    const r = await captureRig({ connectAfterMs: NEVER });
+    const r = await rig({ connectAfterMs: NEVER });
     const A = phoneId("a");
     await claimNew(r, A);
     const S = await r.start(A);
@@ -899,7 +955,7 @@ describe.skipIf(!HAS_DB)("postBeat — storage (§6.10)", () => {
   });
 
   it("a FAILED history write never fails the beat (the sampleBeat isolation rule): the answer goes out, the pairing's latest beat is stored, no history row", async () => {
-    const r = await captureRig();
+    const r = await rig();
     const A = phoneId("a");
     // A constraint scoped to THIS org's rows, so no other suite running in parallel is touched.
     const name = `capture_beat_test_${r.auth.orgId.replace(/-/g, "")}`;
@@ -923,7 +979,7 @@ describe.skipIf(!HAS_DB)("postBeat — the not-ready clock (FP16, R-2)", () => {
   const sinceMs = async (r: CaptureRig, phone: string) => (await pairingOf(r, phone)).not_ready_since?.getTime() ?? null;
 
   it("EMPTY: a claim with nothing wrong stamps no clock; null → reason stamps the SERVER's now (not the phone's `at`); the same reason later and a CHANGE of reason keep the stamp; null clears it; the next reason is a FRESH stamp", async () => {
-    const r = await captureRig();
+    const r = await rig();
     const A = phoneId("a");
     await claimNew(r, A);
     expect(await sinceMs(r, A), "PREMISE/empty: nothing wrong, nothing stamped").toBeNull();
@@ -956,7 +1012,7 @@ describe.skipIf(!HAS_DB)("postBeat — the not-ready clock (FP16, R-2)", () => {
   });
 
   it("only the CURRENT phone's beat moves the clock: a non-current phone's beat changes nothing; a takeover's new pairing starts its OWN clock and the replaced pairing keeps the one it had", async () => {
-    const r = await captureRig();
+    const r = await rig();
     const A = phoneId("a");
     const B = phoneId("b");
     await claimNew(r, A);
@@ -981,7 +1037,7 @@ describe.skipIf(!HAS_DB)("postBeat — the not-ready clock (FP16, R-2)", () => {
   });
 
   it("the HOLDER's rescan after a reissue is the same phone moving: its moved pairing carries the stretch's clock over (it does not restart it), and a null beat on the new code still clears it", async () => {
-    const r = await captureRig({ connectAfterMs: NEVER });
+    const r = await rig({ connectAfterMs: NEVER });
     const A = phoneId("a");
     await claimNew(r, A);
     const S = await r.start(A);   // the rig's start beats once with nothing wrong, so the stretch begins AFTER it
@@ -1005,7 +1061,7 @@ describe.skipIf(!HAS_DB)("postBeat — the not-ready clock (FP16, R-2)", () => {
   });
 
   it("another sport (cricket): the clock is the pairing's, the sport is not read", async () => {
-    const r = await captureRig({ sport: "cricket" });
+    const r = await rig({ sport: "cricket" });
     const A = phoneId("a");
     await claimNew(r, A);
     r.tick(SEC);
@@ -1020,6 +1076,12 @@ describe.skipIf(!HAS_DB)("postBeat — the not-ready clock (FP16, R-2)", () => {
 describe.skipIf(!HAS_DB)("anti-vacuity", () => {
   it("every answer above was checked against its contract branch — and every branch was seen", () => {
     expect(answersChecked).toBeGreaterThan(60);
+    // Push nudges (§2.1): every branch of the rule was exercised — served, withheld from a caller holding no current pairing
+    // (T21's own `over`), and dropped on replaced and taken. Floors under the first green run's 134 / 5 / 25.
+    console.log(`capture-beat realtime: served ${realtimeServed}, withheld ${realtimeWithheld}, dropped ${realtimeDropped}`);
+    expect(realtimeServed).toBeGreaterThan(100);
+    expect(realtimeWithheld).toBeGreaterThan(0);
+    expect(realtimeDropped).toBeGreaterThan(20);
     expect([...statesSeen].sort()).toEqual(BRANCHES.map((o) => o.shape.state.value).sort());
   });
 });

@@ -60,6 +60,20 @@ const CONNECTING_PREFIX = /export const FAKE_CONNECTING_KEY_PREFIX = "([^"]+)";/
 )![1]!;
 /** D3's hold (stream-session-view.ts OUTPUT_WARNING_AFTER_MS, 30 s) plus a poll, plus slack. */
 const D3_WAIT_MS = 75_000;
+/** The cadence an open, no-longer-starting session is answered at (§6.6), read from the relay's config, never typed here. */
+const POLL_NEAR_SECONDS = Number(/export const POLL_NEAR_SECONDS = (\d+);/.exec(
+  readFileSync(join(import.meta.dirname, "../src/server/relay/config.ts"), "utf8"),
+)![1]);
+/** Push nudges (plan Task 5): the beat answer's `realtime` keys, as the published contract declares them. */
+const REALTIME_KEYS = Object.keys(
+  (JSON.parse(readFileSync(join(import.meta.dirname, "../../../docs/contracts/capture-beat.v1.json"), "utf8")) as {
+    $defs: { answer: { oneOf: { properties: { realtime?: { properties: Record<string, unknown> } } }[] } };
+  }).$defs.answer.oneOf[0]!.properties.realtime!.properties,
+).sort();
+/** The server under test serves `realtime` when it configures a Supabase project; run the harness with the SAME env as the
+ *  server (NEXT_PUBLIC_SUPABASE_URL https and NEXT_PUBLIC_SUPABASE_ANON_KEY set, a signing key on the server), or with
+ *  neither, so the expectation matches. */
+const REALTIME_CONFIGURED = /^https:\/\//.test(process.env.NEXT_PUBLIC_SUPABASE_URL ?? "") && !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
 test.use({ storageState: { cookies: [], origins: [] } });
 
@@ -189,8 +203,10 @@ async function stage(page: Page, url: string, edit: (real: Record<string, unknow
   return () => page.unroute(url, handler);
 }
 
-/** The phone: a real claim, then a beat every 5 s, through the capture route (Bearer tok, no cookie). */
-async function pairPhone(baseURL: string, qrText: string): Promise<{ stop: () => Promise<void> }> {
+type PhoneAnswer = { state?: string; pollSeconds?: number; realtime?: Record<string, unknown> };
+/** The phone: a real claim, then a beat every 5 s, through the capture route (Bearer tok, no cookie). Every 200 answer is kept
+ *  (`answers`), in order. */
+async function pairPhone(baseURL: string, qrText: string): Promise<{ stop: () => Promise<void>; answers: PhoneAnswer[] }> {
   const q = JSON.parse(qrText) as { v: number; code: string; slot: number; tok: string };
   expect(Object.keys(q), "the paste code is the QR's four keys").toEqual(["v", "code", "slot", "tok"]);
   const phone: APIRequestContext = await pwRequest.newContext({ baseURL });
@@ -201,12 +217,16 @@ async function pairPhone(baseURL: string, qrText: string): Promise<{ stop: () =>
     stopped: null, mode: "operator", transport: null, bitrateKbps: null, delivery: "unknown", deliveredLagS: null, audioOk: null,
     battery: { percent: 87, charging: false, drainPctPerHour: null }, thermal: 0, dataUsedMB: 0, appVersion: "1.4.0",
   });
-  const send = (claim: "new" | null) =>
-    phone.post(`/api/v1/capture/codes/${q.code}/beats`, { headers: { Authorization: `Bearer ${q.tok}` }, data: beat(claim) });
+  const answers: PhoneAnswer[] = [];
+  const send = async (claim: "new" | null) => {
+    const res = await phone.post(`/api/v1/capture/codes/${q.code}/beats`, { headers: { Authorization: `Bearer ${q.tok}` }, data: beat(claim) });
+    if (res.status() === 200) answers.push((await res.json()) as PhoneAnswer);
+    return res;
+  };
   const first = await send("new");
   expect(first.status(), `the claim beat: ${await first.text()}`).toBe(200);
   const timer = setInterval(() => void send(null).catch(() => null), 5_000);
-  return { stop: async () => { clearInterval(timer); await phone.dispose(); } };
+  return { stop: async () => { clearInterval(timer); await phone.dispose(); }, answers };
 }
 
 test.describe("capture QR v2 — the organiser panel's phone states", () => {
@@ -252,7 +272,7 @@ test.describe("capture QR v2 — the organiser panel's phone states", () => {
     expect([200, 201]).toContain(silentDest.status);
     const PHONE = `**/api/v1/fixtures/${rig.fixtureId}/stream-phone`;
     const CURRENT = `**/api/v1/fixtures/${rig.fixtureId}/stream-sessions/current`;
-    let phone: { stop: () => Promise<void> } | null = null;
+    let phone: { stop: () => Promise<void>; answers: PhoneAnswer[] } | null = null;
     try {
       const scope = await openPanel(page, rig);
       await expect(scope.getByTestId("stream-tab-phone"), "the override shows the option").toBeVisible();
@@ -321,6 +341,18 @@ test.describe("capture QR v2 — the organiser panel's phone states", () => {
       // 6. Go live (REAL) → waiting for the phone's video.
       await scope.getByTestId("stream-go-live").click();
       await expect(scope.getByTestId("stream-waiting")).toBeVisible({ timeout: POLL_WAIT_MS });
+      // Push nudges (plan Task 5): the phone's beat now answers go-live at the open session's cadence — the realtime object
+      // moves no cadence — and carries the current pairing's channel, exactly its five keys, when the server configures a
+      // Supabase project (none at all, otherwise).
+      const answers = phone!.answers;
+      await expect.poll(() => answers.some((a) => a.state === "go-live"), { timeout: POLL_WAIT_MS }).toBe(true);
+      const goLive = answers.find((a) => a.state === "go-live")!;
+      expect(goLive.pollSeconds, "go-live answers the open session's cadence").toBe(POLL_NEAR_SECONDS);
+      if (REALTIME_CONFIGURED) {
+        expect(Object.keys(goLive.realtime ?? {}).sort(), "go-live carries the channel").toEqual(REALTIME_KEYS);
+      } else {
+        expect(goLive, "no Supabase configured: no channel").not.toHaveProperty("realtime");
+      }
       await shoot(page, scope, "06-waiting");
 
       // 7. Warming with the server's countdown (STAGED fields: the countdown, as T9 serves it).
@@ -446,7 +478,7 @@ test.describe("capture QR v2 — the organiser panel's phone states", () => {
     });
     expect([200, 201]).toContain(target.status);
     const CURRENT_URL = `/api/v1/fixtures/${rig.fixtureId}/stream-sessions/current`;
-    let phone: { stop: () => Promise<void> } | null = null;
+    let phone: { stop: () => Promise<void>; answers: PhoneAnswer[] } | null = null;
     try {
       const scope = await openPanel(page, rig);
       await expect(scope.getByTestId("stream-qr")).toBeVisible({ timeout: POLL_WAIT_MS });

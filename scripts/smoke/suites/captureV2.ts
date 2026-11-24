@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 import postgres from "postgres";
 // captureV2's automatic stop advances time past the SAME default delay the server runs (the relay's one authority for
 // its numbers). The module is import-free, so it loads under `--experimental-strip-types` (proven before relying on it).
@@ -37,8 +38,9 @@ export async function captureV2Suite(): Promise<void> {
     return;
   }
   // R2004: an environment naming a compositor image runs the composed Go live AND its Stop (two steps) where the
-  // imageless one runs the single 503 refusal. R2006 adds 12c (the stored stream mode) to both.
-  const EXPECTED_STEPS = process.env.RELAY_IMAGE ? 28 : 27;
+  // imageless one runs the single 503 refusal. R2006 adds 12c (the stored stream mode) to both; push nudges 2a (the claim's
+  // realtime) one more to both.
+  const EXPECTED_STEPS = process.env.RELAY_IMAGE ? 29 : 28;
   let steps = 0;
   const step = (label: string, cond: boolean) => {
     check(`capture-v2 smoke: ${label}`, cond);
@@ -89,7 +91,7 @@ export async function captureV2Suite(): Promise<void> {
     heartbeatUrl?: string; stage?: { code: string; role: { kind: string; n?: number; entrants?: number }; pool?: string; label?: string }; url?: string;
     message?: string;
   };
-  const phoneCallOn = async (q: Qr, path: string, method: "GET" | "POST", body?: unknown): Promise<{ status: number; json: Answer | null }> => {
+  const phoneCallOn = async (q: Qr, path: string, method: "GET" | "POST", body?: unknown): Promise<{ status: number; json: Answer | null; headers: Headers; url: string }> => {
     const res = await fetch(`${BASE}/api/v1/capture/codes/${q.code}${path}`, {
       method,
       headers: { Authorization: `Bearer ${q.tok}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
@@ -98,7 +100,7 @@ export async function captureV2Suite(): Promise<void> {
     phoneAnswers++;
     const cache = res.headers.get("cache-control");
     if (cache !== "private, no-store") notPrivate.push(`${method} ${path.split("?")[0] || "/"} → ${res.status} ${String(cache)}`);
-    return { status: res.status, json: (await res.json().catch(() => null)) as Answer | null };
+    return { status: res.status, json: (await res.json().catch(() => null)) as Answer | null, headers: res.headers, url: res.url };
   };
   const phoneCall = (path: string, method: "GET" | "POST", body?: unknown) => phoneCallOn(qr, path, method, body);
   /** The organiser panel's read model (§9, `GET …/stream-phone`), as the panel polls it: the owner's session. */
@@ -136,6 +138,31 @@ export async function captureV2Suite(): Promise<void> {
   // 2. CLAIM — phone A scans and claims the free slot: waiting (paired, nothing started).
   const claimed = await beat(phoneA, { claim: "new", device: { model: "Smoke phone" } });
   step(`a NEW claim on a free slot → 200 waiting (got ${claimed.status} ${claimed.json?.state})`, claimed.status === 200 && claimed.json?.state === "waiting");
+
+  // 2a. Push nudges (spec 2026-11-24 §2.1, plan Task 5): the current pairing's answer carries `realtime` — exactly the keys
+  // the published contract declares — when the server configures a Supabase project, and no key at all when it configures
+  // none. Judged on THIS process's env, which must agree with the server's (as RELAY_IMAGE above: CI's smoke job sets
+  // NEXT_PUBLIC_SUPABASE_URL to "" for both). Either way the token never rides a response header or the URL.
+  {
+    const contract = JSON.parse(readFileSync(new URL("../../../docs/contracts/capture-beat.v1.json", import.meta.url), "utf8")) as {
+      $defs: { answer: { oneOf: { properties: { realtime?: { properties: Record<string, unknown> } } }[] } };
+    };
+    const want = Object.keys(contract.$defs.answer.oneOf[0].properties.realtime?.properties ?? {}).sort();
+    const configured = /^https:\/\//.test(process.env.NEXT_PUBLIC_SUPABASE_URL ?? "") && !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    const rt = (claimed.json as { realtime?: Record<string, unknown> } | null)?.realtime;
+    const keys = rt ? Object.keys(rt).sort() : [];
+    const token = typeof rt?.token === "string" ? rt.token : null;
+    const inHeaders = token !== null && [...claimed.headers.values()].some((v) => v.includes(token));
+    const inUrl = token !== null && claimed.url.includes(token);
+    step(
+      configured
+        ? `the claim's answer carries realtime with exactly the contract's ${want.length} keys, its token in no header and no URL (got ${keys.join(",") || "none"}, header ${inHeaders}, url ${inUrl})`
+        : `no Supabase configured: the claim's answer carries no realtime key (got ${rt === undefined ? "none" : keys.join(",")})`,
+      want.length === 5 && (configured
+        ? keys.join(",") === want.join(",") && token !== null && token.length > 0 && !inHeaders && !inUrl
+        : claimed.json !== null && !Object.hasOwn(claimed.json, "realtime")),
+    );
+  }
 
   // The organiser's destination (step 3 goes live on it; 2b is refused on it).
   const target = await v1(owner, `/api/v1/orgs/${orgId}/stream-targets`, "POST", {

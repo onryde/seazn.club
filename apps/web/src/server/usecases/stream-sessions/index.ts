@@ -19,7 +19,7 @@ import "server-only";
 // siblings never import it.
 //
 //   session-row   the fixture_stream_sessions row: shape, columns, Row <-> Session, loaders by id, the state sets
-//   deps          the ports the application layer works through: SessionDeps and the process defaults
+//   deps          the ports the application layer works through: SessionDeps and the process defaults (the realtime port too)
 //   lookups       shared lookups: a fixture's org and competition, and its active session
 //   destination   where a session streams: destination row, decrypted key, target connection, replay link; is the target
 //                 Seazn (isSeaznTarget), and the signing a Seazn programme input is created with (seaznAccess, programmeAccess)
@@ -45,8 +45,8 @@ import "server-only";
 //   live-notification  a Cloudflare live-input notification, RECORDED (an ingest_status event and a sample; never a decision)
 
 export { ACTIVE_STATES, TERMINAL_STATES } from "./session-row";
-export { defaultDeps, liveMinutesOf } from "./deps";
-export type { SessionDeps } from "./deps";
+export { defaultDeps, liveMinutesOf, realtimeOf } from "./deps";
+export type { CaptureRealtimePort, SessionDeps } from "./deps";
 export { readSessionDestination, fillReplayUrl } from "./destination";
 export { estimateCostMinor } from "./persist";
 export { releaseOutput, disablePhoneInput, destroyListedMachine } from "./port-effects";

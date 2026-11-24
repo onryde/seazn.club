@@ -434,8 +434,9 @@ const CAPTURE_SCHEMAS_EXPORTS = [
   "CaptureBeatAnswer", "CaptureCause", "CaptureCourt", "CaptureCred", "CaptureDescriptor", "CaptureEndReason", "CaptureNotReady",
   "CapturePhoneState", "CaptureNext", "CaptureRefusal", "CaptureRefusalCode", "CaptureScoringLinkOk", "CaptureSession", "CaptureStage",
   "CaptureStageRole", "CaptureStartBody", "CaptureStartFailed", "CaptureStartOk", "CaptureStartedBy", "CaptureWaiting",
-  // Realtime push nudges (spec 2026-11-24 §2.1): the beat answer's realtime object.
-  "CaptureRealtime",
+  // Realtime push nudges (spec 2026-11-24 §2.1): the beat answer's realtime object, and its url pattern (the server's
+  // guard tests the RAW configured url with it; capture-beat-realtime.test.ts pins it to the file's).
+  "CaptureRealtime", "CAPTURE_REALTIME_URL_RE",
   // capture-record.v1 (2026-10-12).
   "CAPTURE_RECORD_MAX_BYTES", "CAPTURE_RECORD_MAX_LINES", "CAPTURE_RECORD_REF_RE", "CaptureRecordLine", "CaptureRecordOk",
   "CaptureRecordRefusal", "CaptureRecordRefusalCode", "CaptureRecordSecretS2", "CaptureRecordSecretS3",
@@ -1399,9 +1400,12 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     expect(rt.topic, "premise: the fixture's topic is the builder's").toBe(captureTopic(pairing));
     const ids = [pairing, "00000000-0000-4000-8000-000000000000", "ffffffff-ffff-4fff-bfff-ffffffffffff", "01936f3e-8b2a-7c4d-9e5f-0a1b2c3d4e5f"];
     // 36 characters that are not the lowercase 8-4-4-4-12 shape: 36 hex with no dashes, the first dash one place early,
-    // and 36 dashes. Premise: each is 36 long, so only the shape can refuse it.
+    // a dash INSIDE each of the five groups (so a group widened to [0-9a-f-] is refused), and 36 dashes. Premise: each is
+    // 36 long, so only the shape can refuse it.
+    const DASH_INSIDE_GROUP = [4, 10, 15, 20, 30];   // one index inside each group: 0-7, 9-12, 14-17, 19-22, 24-35
     const impostors = [
       ...ids.flatMap((id) => [id.replaceAll("-", "").padEnd(36, "0"), `${id.slice(0, 7)}-${id.slice(7, 8)}${id.slice(9)}`]),
+      ...ids.flatMap((id) => DASH_INSIDE_GROUP.map((i) => `${id.slice(0, i)}-${id.slice(i + 1)}`)),
       "-".repeat(36),
     ];
     for (const s of impostors) expect(s, `premise: ${s} is 36 characters`).toHaveLength(36);
@@ -1425,7 +1429,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       if (ok) admitted++; else refused++;
     }
     expect(admitted).toBe(ids.length);
-    expect(refused).toBe(ids.length * 9 + 3);
+    expect(refused).toBe(ids.length * (9 + DASH_INSIDE_GROUP.length) + 3);
   });
 
   it("realtime reuses no read name: neither the answer's new key nor any key inside it is a name the phone already reads (plan Global Constraints; phone constraint 1)", () => {
@@ -1886,7 +1890,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     expect(names.length, "premise: capture-schemas.ts exports").toBeGreaterThan(0);
     // The full list, not a name pattern (review fix 8): a twin named, say, CaptureLogLine trips it too.
     expect([...names].sort()).toEqual([...CAPTURE_SCHEMAS_EXPORTS].sort());
-    expect(CAPTURE_SCHEMAS_EXPORTS).toHaveLength(26 + 1 + 3 + 11 + 6 + 1 + 3 + 9);
+    expect(CAPTURE_SCHEMAS_EXPORTS).toHaveLength(26 + 2 + 3 + 11 + 6 + 1 + 3 + 9);
     // Every record-named export that is a SHAPE (a zod object or string) is a twin the parity test compares, by
     // identity — an enum is checked by its options instead, a constant by the contract's prose.
     const twins = new Map(RECORD_TWINS.map(([pointer, twin, name]) => [name, { pointer, twin }]));
