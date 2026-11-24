@@ -1,18 +1,20 @@
 // Push nudges, CS-4 (plan 2026-11-24 realtime push nudges, Task 5): an STG-LOCAL probe of the capture phone's realtime
-// channel against a REAL Supabase socket — which CI's e2e (a stub project) does not have. It SKIPS itself unless both env
-// values below are set, so the parallel project that matches every `*.spec.ts` selects it and skips it.
+// channel against a REAL Supabase socket — which CI's e2e (a stub project) does not have. It runs ONLY on the opt-in `probes`
+// project (playwright.config.ts: every other project ignores e2e/probes/, and CI always names its --project), and it FAILS
+// when REALTIME_PROBE_QR is missing: a probe that skipped would report a green it never measured.
 //
 //   REALTIME_PROBE_QR     the paste text of a stream code minted ON THAT DEPLOYMENT for the purpose ({"v":2,"code",…,"tok"});
 //                         the probe claims its slot with a fresh phone id, so never point it at a code a real phone holds
 //   PLAYWRIGHT_BASE       the deployment (stg), as for every spec
 //
 //   cd apps/web && PLAYWRIGHT_BASE=https://stg.seazn.club REALTIME_PROBE_QR='{"v":2,…}' \
-//     npx playwright test --project=parallel --no-deps e2e/probes/realtime-nudge-capture.spec.ts
+//     npx playwright test --project=probes e2e/probes/realtime-nudge-capture.spec.ts
 //
 // What it proves and measures (Task 5 serves the token; the nudge-arrival timing joins with the task that publishes):
 //   1. the claim beat's answer carries `realtime`, exactly the published contract's keys, an https url with no query;
 //   2. the token joins `realtime:{topic}` PRIVATE and reaches SUBSCRIBED — the join time is logged;
-//   3. the same token is REFUSED on another pairing's topic (V554's policy keys on capture_pairing_id).
+//   3. the same token is REFUSED on another pairing's topic (V554's policy keys on capture_pairing_id): CHANNEL_ERROR, the
+//      server's refusal — not a timeout or a close, which would also be "not SUBSCRIBED" and prove nothing.
 import { test, expect, request as pwRequest } from "@playwright/test";
 import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -49,10 +51,10 @@ function joinChannel(rt: Realtime, topic: string): Promise<{ status: string; ms:
 }
 
 test.describe("CS-4 probe: the capture phone's realtime channel on a real socket", () => {
-  test.skip(!QR, "STG-local probe: set REALTIME_PROBE_QR (and PLAYWRIGHT_BASE) to run it");
   test.use({ storageState: { cookies: [], origins: [] } });
 
   test("the claim's answer carries the channel; its token joins its own topic and is refused on another", async ({ baseURL }) => {
+    expect(QR, "STG-local probe: set REALTIME_PROBE_QR (a code minted on PLAYWRIGHT_BASE for the purpose) — it never skips").toBeTruthy();
     const q = JSON.parse(QR!) as { v: number; code: string; slot: number; tok: string };
     const phone = await pwRequest.newContext({ baseURL });
     try {
@@ -82,7 +84,7 @@ test.describe("CS-4 probe: the capture phone's realtime channel on a real socket
       const other = await joinChannel(rt!, `capture:${randomUUID()}`);
       console.log(`CS-4 capture foreign join: ${other.status} in ${Math.round(other.ms)} ms`);
       await other.close();
-      expect(other.status, "the token is refused on another pairing's topic").not.toBe("SUBSCRIBED");
+      expect(other.status, "the token is refused on another pairing's topic — by the server, not a timeout").toBe("CHANNEL_ERROR");
     } finally {
       await phone.dispose();
     }

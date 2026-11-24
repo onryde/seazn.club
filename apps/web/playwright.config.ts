@@ -215,6 +215,13 @@ const PARALLEL_SLICE = process.env.E2E_PARALLEL_SLICE;
 // `test file "ai-architect.spec.ts" should not import test file "helpers.ts"`.
 const WALKTHROUGH = /[\\/]e2e[\\/]walkthrough[\\/]/;
 
+// STG-local probes (push nudges CS-4, 2026-11-24): `*.spec.ts` under e2e/probes/ that measure a REAL deployment (a real
+// Supabase socket, a code minted there for the purpose). Their own opt-in `probes` project and nothing else: `parallel`
+// ignores them, and no CI job selects the project (every CI invocation names its --project). A probe FAILS without its
+// env rather than skipping. ANCHORED ON `e2e/` and the `.spec.ts` suffix for the reasons MOBILE_SPECS is, so the plain
+// node scripts beside them (`*.probe.ts`, e.g. register-submit-timing) are never selected by any project.
+const PROBES = /[\\/]e2e[\\/]probes[\\/][^\\/]+\.spec\.ts$/;
+
 // The seven width projects below (mobile-se/14/320/360/430, tablet-768/834) run EVERY spec in e2e/mobile/ and nothing else;
 // no other project selects them. It used to be ONE file (89 tests per project in one serial group, so a red skipped every later
 // test in that project), split by area 2026-11-13. ANCHORED ON `e2e/` for the reason WALKTHROUGH is (the match is on the
@@ -280,6 +287,8 @@ export default defineConfig({
         MOBILE_SPECS,
         // The walkthrough leg runs these; without this they would run TWICE.
         WALKTHROUGH,
+        // STG-local probes: their own opt-in project only (see PROBES).
+        PROBES,
         ...(PARALLEL_SLICE === "rest" ? [PARALLEL_HEAVY, PARALLEL_MID] : []),
       ],
       use: { ...devices["Desktop Chrome"], storageState: AUTH_STATE },
@@ -415,6 +424,13 @@ export default defineConfig({
       // tests never run concurrently (they'd otherwise land across separate
       // worker processes, each with its own afterAll firing independently).
       fullyParallel: false,
+      use: { ...devices["Desktop Chrome"] },
+    },
+    // STG-local probes, opt-in by name only (see PROBES): `npx playwright test --project=probes <file>` with the probe's env and
+    // PLAYWRIGHT_BASE pointed at the deployment. No `setup` dependency: a probe signs nothing in, it uses its own credentials.
+    {
+      name: "probes",
+      testMatch: PROBES,
       use: { ...devices["Desktop Chrome"] },
     },
   ],

@@ -682,9 +682,24 @@ describe("e2e CI wiring", () => {
     for (const sl of WALKTHROUGH_SLICES) walkthroughLegs.push(projectNamed(await configFor(undefined, sl), "walkthrough"));
     expect(walkthroughLegs, "premise: one project per walkthrough slice").toHaveLength(WALKTHROUGH_SLICES.length);
     const mobile = unset.projects.filter((p) => p.name?.startsWith("mobile-") || p.name?.startsWith("tablet-"));
+    // The ONE deliberate exception: e2e/probes/ holds STG-local probes that measure a real deployment, run by hand on their own
+    // opt-in `probes` project and by no CI leg (push nudges CS-4, 2026-11-24). Excused by that project's selection, and only
+    // under e2e/probes/ — a spec elsewhere that only `probes` selected would still be an orphan.
+    const probes = projectNamed(unset, "probes");
+    const probeSpecs = specFiles().filter((file) => selects(probes, file));
+    expect(probeSpecs.length, "premise: the probes project selects the probe specs (zero would excuse nothing and prove nothing)").toBeGreaterThan(0);
+    expect(probeSpecs.filter((file) => !file.startsWith("probes/")), "the probes project selects only e2e/probes/").toEqual([]);
+    // And the converse: no CI leg selects a probe. A probe FAILS without its env by design, so a leg that picked one up would red.
+    let legsChecked = 0;
+    for (const leg of [heavy, mid, rest, serial, ...walkthroughLegs, ...mobile]) {
+      expect(probeSpecs.filter((file) => selects(leg, file)), `${leg.name} must not select a STG-local probe`).toEqual([]);
+      legsChecked++;
+    }
+    expect(legsChecked, "CI legs checked for probes").toBe(4 + WALKTHROUGH_SLICES.length + mobile.length);
 
     const orphans = specFiles().filter(
       (file) =>
+        !probeSpecs.includes(file) &&
         !selects(heavy, file) &&
         !selects(mid, file) &&
         !selects(rest, file) &&
@@ -783,6 +798,8 @@ describe("e2e CI wiring", () => {
     expect(otherNames, "premise: the non-width projects (a new project must be decided here, not slip past)").toEqual([
       "gallery",
       "parallel",
+      // STG-local probes (push nudges CS-4): selects e2e/probes/*.spec.ts only — decided here: never a width spec.
+      "probes",
       "serial",
       "setup",
       "walkthrough",
