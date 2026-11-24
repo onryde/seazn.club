@@ -186,7 +186,7 @@ function OrderEditor({
               <li key={`${r.key}-${i}`} data-testid={`stage-tiebreaks-row-${i}`} data-key={r.key} data-pinned={r.pinned ?? undefined} className="pl-3 pr-1">
                 <div className="grid grid-cols-[1.25rem_minmax(0,1fr)_auto] items-center gap-x-1">
                   <span className="col-start-1 row-start-1 w-5 text-right text-xs tabular-nums text-slate-500 md:row-span-2">{i + 1}</span>
-                  <span className="col-start-2 row-start-1 block min-w-0 break-words pt-1 text-sm leading-snug text-slate-800 max-md:py-1">
+                  <span className="col-start-2 row-start-1 block min-w-0 break-words py-1 text-sm leading-snug text-slate-800">
                     {stepName}
                     {r.pinned !== null && (
                       <span className="ml-2 text-[11px] text-slate-500" data-testid={`stage-tiebreaks-pinned-${i}`}>
@@ -196,7 +196,7 @@ function OrderEditor({
                   </span>
                   <StepExplain index={i} text={explain(r.key)} />
                   {r.pinned === null && (
-                    <div className="col-start-3 row-start-1 flex items-center md:row-span-2">
+                    <div className="col-start-3 row-start-1 flex items-center gap-1 md:row-span-2">
                       <button
                         type="button"
                         className={BUTTON}

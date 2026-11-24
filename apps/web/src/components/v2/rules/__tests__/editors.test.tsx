@@ -238,6 +238,12 @@ describe("Tie-breaks — every scope × mode, every sport", () => {
         expect(explainTag, `${m.key} row ${i}: the explainer spans the whole row below md`).toMatch(/(^|\s)max-md:col-span-full(\s|$)/);
         expect(explainTag, `${m.key} row ${i}: and sits in the label column from md`).toMatch(/(^|\s)md:col-start-2(\s|$)/);
         expect(li.match(/data-testid="stage-tiebreaks-explain-/g)?.length, `${m.key} row ${i}: ONE explainer in the DOM (no phone twin)`).toBe(1);
+        // Desktop parity with origin/main: the label keeps its vertical padding at EVERY width (`py-1`, not `max-md:py-1` only) and the
+        // controls wrapper keeps the main row's `gap-1` between the three buttons.
+        const labelClass = /<span class="([^"]*col-start-2 row-start-1[^"]*)"/.exec(li)?.[1] ?? "";
+        expect(labelClass, `${m.key} row ${i}: label padding at every width`).toMatch(/(^|\s)py-1(\s|$)/);
+        const wrapClass = /<div class="([^"]*col-start-3 row-start-1[^"]*)"/.exec(li)?.[1] ?? "";
+        if (li.includes("<button ")) expect(wrapClass, `${m.key} row ${i}: the controls keep gap-1`).toMatch(/(^|\s)gap-1(\s|$)/);
         // Every button in the row is at least 44px square (the shared BUTTON class: min-h-11 min-w-11).
         const buttons = [...li.matchAll(/<button [^>]*class="([^"]*)"/g)].map((b) => b[1]!);
         for (const c of buttons) {
