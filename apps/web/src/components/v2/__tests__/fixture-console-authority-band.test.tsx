@@ -205,6 +205,7 @@ const PANEL_MOUNT: FixtureStreamMount = {
     phoneCapture: true,
     phoneLostMinutes: 15,
     autoStopMinutes: 3,
+    pasteCodeShown: true,
     composedAvailable: false,
     streamPrefs: {},
     overlayDelayDefaultMs: 3_100,

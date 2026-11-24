@@ -495,6 +495,46 @@ describe("W19: the panel is handed the phone-lost window the tick judges by", ()
   });
 });
 
+// Task 34: the stream code's paste field and Copy follow the server's STREAM_PASTE_CODE (config.ts `streamPasteCodeShown`), read
+// here once per render and handed down; the panel never reads env. Each case names a value the other cases cannot produce.
+describe("Task 34: the panel is handed the server's paste-code flag (STREAM_PASTE_CODE)", () => {
+  it("explicit false and true are carried as set; unset is shown under vitest (not production) and hidden on a production server with the live driver; with the relay off too", async () => {
+    let checked = 0;
+    vi.stubEnv("STREAM_PASTE_CODE", undefined);
+    expect((await load())?.pasteCodeShown, "unset, NODE_ENV test: shown").toBe(true);
+    checked++;
+    vi.stubEnv("STREAM_PASTE_CODE", "false");
+    expect((await load())?.pasteCodeShown, "explicit false: hidden").toBe(false);
+    checked++;
+    vi.stubEnv("STREAM_PASTE_CODE", "true");
+    expect((await load())?.pasteCodeShown, "explicit true: shown").toBe(true);
+    checked++;
+    // stg/prod's shape: production, the live driver, the variable unset.
+    vi.stubEnv("STREAM_PASTE_CODE", undefined);
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("RELAY_DRIVERS", "live");
+    vi.stubEnv("ENV_NAME", "prod");
+    try {
+      setRelayDriversForTest(null);
+      expect((await load())?.pasteCodeShown, "unset on prod: hidden").toBe(false);
+      checked++;
+    } finally {
+      vi.stubEnv("NODE_ENV", "test");
+      vi.stubEnv("RELAY_DRIVERS", undefined);
+      vi.stubEnv("ENV_NAME", undefined);
+      setRelayDriversForTest(null);
+    }
+    // The relay off (a switched-off org) changes nothing: the flag is the deployment's, not the org's.
+    vi.stubEnv("STREAM_PASTE_CODE", "false");
+    vi.mocked(hasFeature).mockImplementation(async (_org, key) => key !== "streaming.relay");
+    const off = await load();
+    expect(off?.relayEntitled, "premise: the relay is off").toBe(false);
+    expect(off?.pasteCodeShown).toBe(false);
+    checked++;
+    expect(checked).toBe(5);
+  });
+});
+
 // PR-2 T10 (§7.1): the switch's caption and Live's read-only line say "stops about 3 minutes after the result". The figure is
 // the auto stop's own delay — config.ts's AUTO_STOP_AFTER_RESULT_SECONDS through `tunable`, the expression the tick judges
 // with — in whole minutes, never a `3` typed into the panel. An override the tick honours (the walkthrough's seconds) is the

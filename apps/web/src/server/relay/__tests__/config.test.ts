@@ -545,6 +545,98 @@ describe("Seazn-hosted flags and settings (Task 8)", () => {
   });
 });
 
+// Task 34: the stream code's paste field and its Copy are for developers and the harnesses (fake-capture-phone.ts reads the
+// field to drive the phone routes), never for a club. The rule is the brief's: unset = shown where the relay driver is fake
+// (every e2e, CI and smoke server) or outside production (next dev, vitest); hidden on stg and prod.
+describe("streamPasteCodeShown — STREAM_PASTE_CODE, the stream code's paste field and Copy (Task 34)", () => {
+  const shown = (env: Record<string, string | undefined>) => config.streamPasteCodeShown(env);
+  it("unset or blank, under the fake relay driver: shown, production build or not (the e2e, CI and smoke servers run server.js as production)", () => {
+    const rows: Record<string, string | undefined>[] = [
+      { RELAY_DRIVERS: "fake", ENV_NAME: "ci", NODE_ENV: "production" },
+      { RELAY_DRIVERS: "fake", ENV_NAME: "local", NODE_ENV: "production" },
+      { RELAY_DRIVERS: "fake", ENV_NAME: "ci", NODE_ENV: "production", STREAM_PASTE_CODE: "" },
+      { RELAY_DRIVERS: "fake", ENV_NAME: "ci", NODE_ENV: "production", STREAM_PASTE_CODE: "  " },
+      { RELAY_DRIVERS: "fake", ENV_NAME: "local", NODE_ENV: "development" },
+    ];
+    for (const env of rows) expect(shown(env), JSON.stringify(env)).toBe(true);
+    expect(rows).toHaveLength(5);
+  });
+  it("unset or blank, outside production: shown whatever the relay driver (next dev, vitest)", () => {
+    const rows: Record<string, string | undefined>[] = [
+      {},
+      { NODE_ENV: "development" },
+      { NODE_ENV: "test" },
+      { NODE_ENV: "development", RELAY_DRIVERS: "live", ENV_NAME: "local" },
+      { NODE_ENV: "test", STREAM_PASTE_CODE: "" },
+    ];
+    for (const env of rows) expect(shown(env), JSON.stringify(env)).toBe(true);
+    expect(rows).toHaveLength(5);
+  });
+  it("unset or blank, a production server not on the fake driver: hidden — stg and prod (the live Cloudflare driver), and a server with no relay", () => {
+    const rows: Record<string, string | undefined>[] = [
+      { RELAY_DRIVERS: "live", ENV_NAME: "stg", NODE_ENV: "production" },
+      { RELAY_DRIVERS: "live", ENV_NAME: "prod", NODE_ENV: "production" },
+      { RELAY_DRIVERS: "live", ENV_NAME: "prod", NODE_ENV: "production", STREAM_PASTE_CODE: " " },
+      { NODE_ENV: "production" },
+      { NODE_ENV: "production", RELAY_DRIVERS: "" },
+    ];
+    for (const env of rows) expect(shown(env), JSON.stringify(env)).toBe(false);
+    expect(rows).toHaveLength(5);
+  });
+  it("an explicit value wins over the default either way, trimmed and case-insensitive: false on a fake server hides it, true on prod shows it", () => {
+    const rows: [Record<string, string | undefined>, boolean][] = [
+      [{ STREAM_PASTE_CODE: "false", RELAY_DRIVERS: "fake", ENV_NAME: "ci", NODE_ENV: "production" }, false],
+      [{ STREAM_PASTE_CODE: " False ", NODE_ENV: "development" }, false],
+      [{ STREAM_PASTE_CODE: "FALSE" }, false],
+      [{ STREAM_PASTE_CODE: "true", RELAY_DRIVERS: "live", ENV_NAME: "prod", NODE_ENV: "production" }, true],
+      [{ STREAM_PASTE_CODE: " TRUE ", NODE_ENV: "production" }, true],
+    ];
+    for (const [env, want] of rows) expect(shown(env), JSON.stringify(env)).toBe(want);
+    expect(rows).toHaveLength(5);
+  });
+  it("anything but true/false throws naming the variable — on a fake server and on prod alike, so a typo is never read as the default", () => {
+    let checked = 0;
+    for (const bad of ["yes", "no", "1", "0", "on", "ture", "flase"]) {
+      for (const base of [{ RELAY_DRIVERS: "fake", ENV_NAME: "ci", NODE_ENV: "production" }, { RELAY_DRIVERS: "live", ENV_NAME: "prod", NODE_ENV: "production" }]) {
+        expect(() => shown({ ...base, STREAM_PASTE_CODE: bad }), `${bad} on ${base.RELAY_DRIVERS}`).toThrow(/STREAM_PASTE_CODE/);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: 7 values x 2 servers").toBe(14);
+  });
+  // The invariant behind the default, read off the RELAY's own declaration (relayDriverMode), not this function: every server
+  // whose relay runs the fake driver shows the paste code, and every production server whose relay does not hides it.
+  it("SWEEP RELAY_DRIVERS x ENV_NAME x NODE_ENV, unset: a server relayDriverMode resolves to fake shows it; a production one it resolves to live or disabled hides it", () => {
+    const counts = { fakeShown: 0, prodHidden: 0, devShown: 0, refused: 0 };
+    for (const RELAY_DRIVERS of [undefined, "", "fake", "live"]) {
+      for (const ENV_NAME of [undefined, "local", "ci", "stg", "prod"]) {
+        for (const NODE_ENV of [undefined, "production", "development", "test"]) {
+          const env = { RELAY_DRIVERS, ENV_NAME, NODE_ENV };
+          let mode: config.RelayDriverMode;
+          try {
+            mode = config.relayDriverMode(env);
+          } catch {
+            counts.refused++; // a server that refuses to boot serves no page
+            continue;
+          }
+          if (mode === "fake") {
+            expect(shown(env), JSON.stringify(env)).toBe(true);
+            counts.fakeShown++;
+          } else if (NODE_ENV === "production") {
+            expect(shown(env), JSON.stringify(env)).toBe(false);
+            counts.prodHidden++;
+          } else {
+            expect(shown(env), JSON.stringify(env)).toBe(true);
+            counts.devShown++;
+          }
+        }
+      }
+    }
+    expect(Object.values(counts).reduce((a, b) => a + b, 0), "anti-vacuity: 4 x 5 x 4 settings").toBe(80);
+    for (const [k, n] of Object.entries(counts)) expect(n, `the sweep reaches ${k}`).toBeGreaterThan(0);
+  });
+});
+
 describe("replayDriverMode — REPLAY_DRIVER, which replay host this process talks to (Task 21)", () => {
   it("fake and bunny are taken as set, trimmed, whatever the relay driver is", () => {
     const rows: [Record<string, string>, "fake" | "bunny"][] = [

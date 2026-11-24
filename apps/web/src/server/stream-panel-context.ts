@@ -24,7 +24,7 @@ import { relayOverlayPageFacts } from "@/server/overlay/page-facts";
 import type { OverlaySideInput } from "@/lib/overlay-model";
 import { overlayDictOf } from "@/lib/overlay-dict";
 import { NO_STREAM_PREFS_READ, type StreamPrefsRead } from "@/lib/stream-settings";
-import { AUTO_STOP_AFTER_RESULT_SECONDS, PHONE_LOST_LIVE_MINUTES, overlayDelayDefaultMs, tunable } from "@/server/relay/config";
+import { AUTO_STOP_AFTER_RESULT_SECONDS, PHONE_LOST_LIVE_MINUTES, overlayDelayDefaultMs, streamPasteCodeShown, tunable } from "@/server/relay/config";
 import { composedUnavailable, relayUnavailable } from "@/server/relay/drivers";
 import { streamPrefsOf } from "@/server/usecases/stream-codes";
 import { hasLiveConnection } from "@/server/youtube/connections";
@@ -217,6 +217,9 @@ export async function loadStreamPanelContext(args: {
     // PR-2 T10 (§7.1): "stops about {n} minutes after the result" — the auto stop's delay as the tick reads it
     // (usecases/stream-sessions/), in whole minutes and never below 1 ("about 0 minutes" is not a sentence). No read.
     autoStopMinutes: Math.max(1, Math.round(tunable("AUTO_STOP_AFTER_RESULT_SECONDS", AUTO_STOP_AFTER_RESULT_SECONDS) / 60)),
+    // Task 34: the stream code's paste field and Copy — the deployment's STREAM_PASTE_CODE (dev, e2e and smoke servers show
+    // them; stg and prod show the QR alone). No read: env.
+    pasteCodeShown: streamPasteCodeShown(),
     // RT (lane-close fix, ruled 2026-09-29): each listed fixture's signed overlay key, for the OBS URL its panel copies —
     // the grant a community org's overlay presents to the realtime-token route. Only with the panel (`entitled`); a
     // fixture the server cannot sign for (no AUTH_SECRET) is left out and its URL goes keyless.

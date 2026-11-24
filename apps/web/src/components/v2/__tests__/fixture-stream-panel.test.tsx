@@ -223,6 +223,7 @@ function ctx(o: Partial<StreamPanelContext> = {}): StreamPanelContext {
     phoneCapture: true,
     phoneLostMinutes: 20,
     autoStopMinutes: 3,
+    pasteCodeShown: true,
     composedAvailable: false,
     streamPrefs: {},
     overlayDelayDefaultMs: RELAY_OVERLAY_DELAY_DEFAULT_MS,
@@ -766,6 +767,13 @@ describe("the Phone tab reads the §5.3 gate, then hands the container the conte
     expect(propsOf(tab!)).toMatchObject({ autoStopMinutes: 9, tz: TZ });
   });
 
+  it("Task 34: the container is handed the page's paste-code flag (StreamPanelContext.pasteCodeShown, the server's STREAM_PASTE_CODE) — off and on", () => {
+    const tabOf = (pasteCodeShown: boolean) => phone({ relayEntitled: true, pasteCodeShown }).tree().find((el) => el.type === PhoneTab);
+    expect(ctx().pasteCodeShown, "premise: the default is on, so off is a value the default cannot produce").toBe(true);
+    expect(propsOf(tabOf(false)!).pasteCodeShown).toBe(false);
+    expect(propsOf(tabOf(true)!).pasteCodeShown).toBe(true);
+  });
+
   it("buying is the EMBEDDED checkout in the repo's Modal, never a navigation (owner ruling 8) — the source half", () => {
     // The behaviour is driven below (PhoneTab — checkout). This pins the negative the node harness cannot drive: no
     // hosted-checkout hop anywhere in the module — nor in the lazily loaded checkout sheet (I2).
@@ -1036,7 +1044,7 @@ const BODY: PhoneTabBodyProps = {
   fixtureId: "f-1", view: null, balance: 0, targets: { status: "ok", list: [] }, busy: false, createError: null, checkoutError: null,
   selectedTargetId: null, phone: readModel(), code: { status: "loading" }, codeOpen: false, now: NOW, copied: false, showBuy: false,
   planGate: false, stopFailed: false, checkoutOpen: false, currency: "gbp", split: null, monthlyAllowance: 0, restart: null, youtube: null, pickFailed: false,
-  phoneLostMinutes: 20, autoStopMinutes: 3, autoPending: null, autoFailed: false, takeoverDismissedAt: null, tz: "Europe/London",
+  phoneLostMinutes: 20, autoStopMinutes: 3, pasteCodeShown: true, autoPending: null, autoFailed: false, takeoverDismissedAt: null, tz: "Europe/London",
   onToggleAuto: () => {}, onDismissTakeover: () => {},
   onSelectTarget: () => {}, onPickAnother: () => {}, pickerOpenSignal: 0, onRetryTargets: () => {}, onGoLive: () => {}, safetyNotice: false, onDismissSafety: () => {}, onStop: () => {}, onCancel: () => {},
   onBuy: () => {}, onAgain: () => {}, onCopy: () => {}, onToggleCode: () => {}, onReissue: () => {}, onRetryCode: () => {},
@@ -1425,6 +1433,38 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(attr(byTestId(opened, "stream-qr-text")!, "value")).toBe(CODE_TEXT);
     expect(byTestId(opened, "stream-code-reissue")).toBeDefined();
     expect(qrImageOf(opened, "stream-qr")).toBeDefined();
+  });
+
+  // Task 34: the paste field and Copy exist for developers and the harnesses (dev, e2e, smoke); stg and prod show the QR alone.
+  it("Task 34: paste code OFF — the code card is the QR alone (no paste field, no Copy), before and after the encoder answers, and so is 'Show the code again'; ON, both are there", () => {
+    const PASTE = ["stream-qr-field", "stream-qr-text", "stream-qr-copy"] as const;
+    const ready = { view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", phone: readModel({ phone: null }) } as const;
+    const states = {
+      card: { ...ready, code: { status: "ok", text: CODE_TEXT, image: SYMBOL } },
+      // The QR's placeholder sized for THIS text: the brief keeps it, and without the paste code it is all the card shows.
+      encoding: { ...ready, code: { status: "ok", text: CODE_TEXT, image: null } },
+      // Ready, paired: "Show the code again", opened.
+      reshown: { view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", codeOpen: true, code: { status: "ok", text: CODE_TEXT, image: SYMBOL } },
+    } satisfies Record<string, BodyArgs>;
+    const modules = QRCode.create(CODE_TEXT, { errorCorrectionLevel: "H" }).modules.size + 2 * 4;
+    let checked = 0;
+    for (const [name, state] of Object.entries(states)) {
+      const off = body({ ...state, pasteCodeShown: false });
+      for (const id of PASTE) {
+        expect(byTestId(off, id), `${name}, off: no ${id}`).toBeUndefined();
+        checked++;
+      }
+      // The QR is unchanged: the symbol once encoded, the placeholder for this text before — and Revoke & reissue stays.
+      if (state.code.image) expect(propsOf(qrImageOf(off, "stream-qr")!).qr, `${name}, off: the QR`).toBe(SYMBOL);
+      else expect(propsOf(off.find((el) => el.type === SeaznQrPlaceholder)!).modules, `${name}, off: the placeholder`).toBe(modules);
+      expect(byTestId(off, "stream-code-reissue"), `${name}, off: reissue`).toBeDefined();
+      // The positive pair, same state: on, the field holds the QR's text and Copy is beneath it.
+      const on = body({ ...state, pasteCodeShown: true });
+      expect(attr(byTestId(on, "stream-qr-text")!, "value"), `${name}, on: the paste code`).toBe(CODE_TEXT);
+      expect(byTestId(on, "stream-qr-copy"), `${name}, on: Copy`).toBeDefined();
+      if (state.code.image) expect(propsOf(qrImageOf(on, "stream-qr")!).qr).toBe(SYMBOL);
+    }
+    expect(checked, "anti-vacuity: 3 states x 3 testids").toBe(9);
   });
 
   // Court stream (plan Task 13, spec 2026-11-14 §5.2): a match the court's phone streams names it, in place of the code.
@@ -3032,7 +3072,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     code?: () => unknown;
     reissue?: () => unknown;
   };
-  const TAB = { fixtureId: "f-1", orgId: "o-1", streamBalance: 3, streamSplit: null, monthlyAllowance: 0, currency: "eur" as const, phoneLostMinutes: 20, autoStopMinutes: 3, tz: "Europe/London", score: SCORE_OFF };
+  const TAB = { fixtureId: "f-1", orgId: "o-1", streamBalance: 3, streamSplit: null, monthlyAllowance: 0, currency: "eur" as const, phoneLostMinutes: 20, autoStopMinutes: 3, pasteCodeShown: true, tz: "Europe/London", score: SCORE_OFF };
   const CURRENT = "GET /api/v1/fixtures/f-1/stream-sessions/current";
   const PHONE = "GET /api/v1/fixtures/f-1/stream-phone";
   const ENSURE = "POST /api/v1/fixtures/f-1/stream-code";
@@ -3163,6 +3203,17 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     await settle();
     expect(TAB.phoneLostMinutes, "premise: the default differs").not.toBe(7);
     expect(bodyOf(island).phoneLostMinutes).toBe(7);
+  });
+
+  it("Task 34: the container hands the body the page's paste-code flag, untouched — off and on", async () => {
+    serve({ current: null, targets: TARGETS });
+    expect(TAB.pasteCodeShown, "premise: the default is on").toBe(true);
+    const off = track(renderIsland(PhoneTab, { ...TAB, pasteCodeShown: false }));
+    await settle();
+    expect(bodyOf(off).pasteCodeShown).toBe(false);
+    const on = track(renderIsland(PhoneTab, TAB));
+    await settle();
+    expect(bodyOf(on).pasteCodeShown).toBe(true);
   });
 
   it("C1: no session → the SERVER-resolved balance; a session → its projection's fresher number, which Start another keeps", async () => {

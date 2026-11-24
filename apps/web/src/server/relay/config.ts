@@ -350,6 +350,19 @@ export function srtEnabled(env: Record<string, string | undefined> = process.env
   if (v === "false") return false;
   throw new Error(`STREAM_SRT_ENABLED must be "true" or "false" (unset = true), got ${JSON.stringify(env.STREAM_SRT_ENABLED)}`);
 }
+/** Task 34: whether the stream code's paste field and its Copy show under the QR (the QR itself always does). They are for
+ *  developers and the harnesses — e2e/helpers/fake-capture-phone.ts reads the field to drive the phone routes — never for a
+ *  club. Unset or blank: shown where the relay driver is fake (every e2e, CI and smoke server sets `RELAY_DRIVERS=fake`) or
+ *  outside production (next dev, vitest); hidden on stg and prod. The raw `RELAY_DRIVERS`, not `relayDriverMode`: a page
+ *  must not throw on a setting this flag does not own. Parsed like STREAM_SRT_ENABLED; anything but true/false throws,
+ *  naming the variable. A server setting only, never `NEXT_PUBLIC_` (stg and prod run one image). Read per call. */
+export function streamPasteCodeShown(env: Record<string, string | undefined> = process.env): boolean {
+  const v = env.STREAM_PASTE_CODE?.trim().toLowerCase();
+  if (!v) return env.RELAY_DRIVERS === "fake" || env.NODE_ENV !== "production";
+  if (v === "true") return true;
+  if (v === "false") return false;
+  throw new Error(`STREAM_PASTE_CODE must be "true" or "false" (unset = true on a fake relay or outside production), got ${JSON.stringify(env.STREAM_PASTE_CODE)}`);
+}
 /** Seazn-hosted video (Phase 1-3 flags). Off by default, read at the request and never cached, like STREAM_SRT_ENABLED,
  *  but unset = false and the value is matched case-insensitively. Anything but true/false throws, naming the variable.
  *  LIVE gates new picks and starts only, never playback of what already exists. */

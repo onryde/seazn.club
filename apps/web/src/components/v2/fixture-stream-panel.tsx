@@ -240,6 +240,9 @@ export interface StreamPanelContext {
   /** PR-2 T10 (§7.1): the auto stop's delay in whole minutes (≥ 1) — config.ts `AUTO_STOP_AFTER_RESULT_SECONDS` through
    *  `tunable`, as the SERVER's tick reads it. The switch's caption and Live's read-only line name it; never a typed 3. */
   autoStopMinutes: number;
+  /** Task 34: the stream code's paste field and its Copy show under the QR — config.ts `streamPasteCodeShown`
+   *  (STREAM_PASTE_CODE), as the SERVER reads it: dev, e2e and smoke servers show them, stg and prod show the QR alone. */
+  pasteCodeShown: boolean;
 }
 
 /** G5: what the checkout return put on the URL, and nothing else — every other param is kept. (Spec 2026-09-30 §2: the
@@ -623,6 +626,7 @@ export function FixtureStreamPanel({
               currency={stream.currency}
               phoneLostMinutes={stream.phoneLostMinutes}
               autoStopMinutes={stream.autoStopMinutes}
+              pasteCodeShown={stream.pasteCodeShown}
               tz={tz}
               score={{
                 available: stream.composedAvailable,
@@ -776,6 +780,7 @@ export function PhoneTab({
   currency,
   phoneLostMinutes,
   autoStopMinutes,
+  pasteCodeShown,
   tz,
   score,
 }: {
@@ -789,6 +794,8 @@ export function PhoneTab({
   phoneLostMinutes: number;
   /** PR-2 T10: the auto stop's delay (StreamPanelContext.autoStopMinutes), handed to the body untouched. */
   autoStopMinutes: number;
+  /** Task 34: the paste field and Copy show (StreamPanelContext.pasteCodeShown), handed to the body untouched. */
+  pasteCodeShown: boolean;
   /** PR-2 T12: the venue zone — the takeover notice's clock, as the row's. */
   tz: string;
   /** R2006: the score's availability, the stored mode and Ready's score card (the panel's). */
@@ -1122,7 +1129,7 @@ export function PhoneTab({
         if (!cancelled) setCodeImage({ text: codeText, qr });
       })
       .catch(() => {
-        // the paste code under the QR is always rendered, so a failed encode still leaves a way in
+        // the placeholder stays; where the paste code shows (dev, e2e, smoke: `pasteCodeShown`) it is still a way in
       });
     return () => {
       cancelled = true;
@@ -1289,6 +1296,7 @@ export function PhoneTab({
         monthlyAllowance={monthlyAllowance}
         phoneLostMinutes={phoneLostMinutes}
         autoStopMinutes={autoStopMinutes}
+        pasteCodeShown={pasteCodeShown}
         autoPending={autoPending}
         autoFailed={autoFailed}
         onToggleAuto={(on) => void onToggleAuto(on)}
@@ -1722,6 +1730,8 @@ export interface PhoneTabBodyProps {
   /** PR-2 T10 (§7.1): the auto stop's delay in whole minutes (StreamPanelContext.autoStopMinutes) — the switch's caption
    *  and Live's read-only line name it. */
   autoStopMinutes: number;
+  /** Task 34: the code's paste field and Copy show under the QR (StreamPanelContext.pasteCodeShown). Off, the QR is the card. */
+  pasteCodeShown: boolean;
   /** PR-2 T10: the switch's flip while its save is in flight (what was asked), else null — the read model answers. */
   autoPending: boolean | null;
   /** PR-2 T10: the last flip did not save — the switch shows the server's answer again, and a line says so. */
@@ -2040,7 +2050,8 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   // §6.12 (Option B rev 2): the code's QR, its paste code with Copy beneath it at every width, and Revoke & reissue —
   // the card's own content at Ready with no phone, and the body of "Show the code again" otherwise. The QR and the paste
   // code both carry a live tok: `ph-no-capture` on each (the QR's is `sensitive`). A finished match has no reissue (the
-  // route refuses it, 422).
+  // route refuses it, 422). Task 34: the paste code and Copy only where the server shows them (`pasteCodeShown`: dev, e2e
+  // and smoke); stg and prod show the QR alone.
   const codeInner = (
     <>
       <div className="mt-2">
@@ -2062,7 +2073,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
           <SeaznQrPlaceholder maxSize={PHONE_HANDOVER_QR_MAX_PX} modules={null} />
         )}
       </div>
-      {p.code.status === "ok" && (
+      {p.code.status === "ok" && p.pasteCodeShown && (
         <div data-testid="stream-qr-field" className="relative mt-2 w-full">
           <input
             data-testid="stream-qr-text"
