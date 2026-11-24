@@ -619,6 +619,8 @@ jobs:
       pull-requests: read
     steps:
       - uses: actions/checkout@v5
+        # Full history: gitleaks-action scans <first PR commit>^..<last PR commit> (its own --log-opts), which a depth-1
+        # checkout of the merge commit does not hold, and the step is advisory, so too shallow would degrade it silently.
         with:
           fetch-depth: 0
       - name: Secret scan (gitleaks)
@@ -2830,6 +2832,8 @@ jobs:
       rows: ${{ steps.rows.outputs.rows }}
     steps:
       - uses: actions/checkout@v5
+        # Full history: the three-dot diff below (BASE...HEAD) is taken from the MERGE BASE, wherever the branch forked,
+        # so no fixed depth is enough.
         with:
           fetch-depth: 0
       - uses: dorny/paths-filter@v3
