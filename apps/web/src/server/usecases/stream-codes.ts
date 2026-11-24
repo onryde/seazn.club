@@ -226,6 +226,7 @@ export async function ensureStreamCode(auth: AuthCtx, fixtureId: string): Promis
     return mintLocked(tx, auth, fixtureId, fresh);
   });
   // Push nudges (plan T1.4): the ended code's phones are told `over`, after the commit. An EXPIRED code (above) is not: expiry is lazy.
+  // An `over` also reaches a phone whose open session still rides the ended code (C1b): harmless, the beat is the truth and answers it.
   fireNudge(nudgeCodesOver(reissued));
   if (outcome === "finished") throw new HttpError(422, FIXTURE_FINISHED, "fixture_finished");
   return outcome;
@@ -255,6 +256,7 @@ export async function reissueStreamCode(auth: AuthCtx, fixtureId: string): Promi
     return mintLocked(tx, auth, fixtureId, fresh);
   });
   // Push nudges (plan T1.4): the ended code's phones are told `over`, after the commit; fire-and-forget (it cannot reject).
+  // An `over` also reaches a phone whose open session still rides the ended code (C1b): harmless, the beat is the truth and answers it.
   fireNudge(nudgeCodesOver(reissued));
   return shown;
 }

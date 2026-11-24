@@ -174,6 +174,7 @@ export async function linkCourtStream(
     return shownOf(tx, row!);
   });
   // Push nudges (plan T1.4): an envelope that would not open was ended `reissued`; its phones are told `over`, after the commit.
+  // An `over` also reaches a phone whose open session still rides the ended code (C1b): harmless, the beat is the truth and answers it.
   fireNudge(nudgeCodesOver(reissued));
   return shown;
 }
@@ -255,6 +256,7 @@ export async function withdrawCourtStream(auth: AuthCtx, linkId: string): Promis
     }
   });
   // Push nudges (plan T1.4): the court's phone is told `over`, after the commit. A second withdraw ended nothing and sends nothing.
+  // An `over` also reaches a phone whose open session still rides the withdrawn code (C1b): harmless, the beat is the truth and answers it.
   fireNudge(nudgeCodesOver(withdrawn));
 }
 

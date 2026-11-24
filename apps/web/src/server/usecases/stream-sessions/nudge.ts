@@ -28,6 +28,8 @@ const errName = (err: unknown): string => (err instanceof Error ? err.name : "er
  * The reason a session's move sends, or null. Entry into `provisioning` or `warming` is `go-live` (plan pin 12: the session row is
  * inserted `requested` outside `apply`, so the first move `apply` sees is out of it); into `ending` is `stop`, whatever ended it
  * (the organiser's Stop, the automatic stop, the phone-lost ends); into `completed` or `failed` is `over`. No move is no nudge.
+ * The ENTRY into `warming` is the one the phone acts on (it is told to go live); the entry into `provisioning` (the first move `apply`
+ * sees) is kept per plan pin 12, so a phone nudged twice in a start just beats twice.
  */
 export function nudgeReasonFor(from: SessionState, to: SessionState): CaptureNudgeReason | null {
   if (from === to) return null;

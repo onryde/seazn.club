@@ -17,7 +17,7 @@
 //
 // Applies to another sport: N/A (no sport rules) — a nudge reads no sport; the court link is the other surface.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 
 vi.mock("@/lib/sentry", async (orig) => ({ ...(await orig<typeof import("@/lib/sentry")>()), captureError: vi.fn() }));
 
@@ -32,9 +32,10 @@ import { FakeYouTube } from "@/server/youtube/fake";
 import { postBeat } from "../capture-phone";
 import { linkCourtStream, setCourtStream, withdrawCourtStream } from "../court-streams";
 import { ensureStreamCode, reissueStreamCode } from "../stream-codes";
-import { apply, stopSession, type SessionDeps } from "../stream-sessions";
+import { apply, startBroadcast, stopSession, type SessionDeps } from "../stream-sessions";
+import { grantCredits } from "../stream-credits";
 import { nudgePairings, nudgeReasonFor, nudgesSettled } from "../stream-sessions/nudge";
-import { pairPresentPhone, rigApiTarget, sessionOnTarget } from "@/server/relay/__tests__/_session-rig";
+import { pairPresentPhone, rigApiTarget, rigUser, sessionOnTarget } from "@/server/relay/__tests__/_session-rig";
 import { captureRig, override, phoneId, type CaptureRig } from "./_capture-rig";
 import { at, place, seedDay } from "./_match-day-seed";
 
@@ -328,6 +329,87 @@ describe.skipIf(!HAS_DB)("the apply hook — a session's state change nudges its
   });
 });
 
+describe.skipIf(!HAS_DB)("the apply hook — another surface (a court session) and a rolled-back apply", () => {
+  it("a COURT session: its go-live and its Stop nudge the court code's slot-0 pairing", async () => {
+    const day = await seedDay();
+    const fx = day.comp.fixtures[0]!.id;
+    await override(day.orgId, "streaming.relay", true);
+    await override(day.orgId, "streaming.overlay", true);
+    await grantCredits({ orgId: day.orgId, delta: 5, createdBy: await rigUser(), note: "court nudges", idempotencyKey: randomUUID() });
+    const c = await connect({ auth: day.auth, orgId: day.orgId, userId: day.auth.userId! });
+    const now = at(0).getTime();
+    const ingest = new FakeIngest({ clock: () => now, connectAfterMs: NEVER });
+    ingest.storage = { totalStorageMinutes: 0, totalStorageMinutesLimit: 100_000_000, videoCount: 0 };
+    const rec = recorder();
+    const deps: SessionDeps = {
+      drivers: { ingest, runner: new FakeRunner() }, now: () => new Date(now), appUrl: "http://app.test",
+      youtube: new FakeYouTube({ now: () => new Date(now) }), publish: rec.publish,
+    };
+    await place(day, fx, 180, day.courts.c2);
+    const link = await linkCourtStream(day.auth, day.comp.id, { courtId: day.courts.c2, targetId: c.targetId, day: "2026-11-07" }, at(0));
+    await setCourtStream(day.auth, fx, true, at(0));
+    const qr = { code: link.qr!.code, tok: link.qr!.tok };
+    const phone = phoneId("court");
+    const a = await postBeat(qr.code, qr.tok, CaptureBeat.parse({
+      code: qr.code, slot: 0, phone, claim: "new", device: null, sid: null, at: new Date(now).toISOString(), state: "paired",
+      cause: null, notReady: null, startFailed: null, stopped: null, mode: "operator", transport: null, bitrateKbps: null,
+      delivery: "unknown", deliveredLagS: null, audioOk: null, battery: null, thermal: null, dataUsedMB: null, appVersion: COURT_BUILD,
+    }), deps, new Date(now));
+    expect(a.state, "PREMISE: the court phone is paired").toBe("waiting");
+    const [court] = await sql<{ id: string; code_id: string }[]>`
+      select p.id, p.code_id from fixture_stream_pairings p join fixture_stream_codes k on k.id = p.code_id
+       where k.court_link_id = ${link.id} and p.slot = 0 and p.ended_at is null`;
+    expect(court, "PREMISE: a slot-0 pairing on the court's code").toBeDefined();
+    await settle();
+    rec.reset();
+    const { sessionId } = await startBroadcast(
+      { userId: day.auth.userId!, orgId: day.orgId, source: "phone", pairingId: court!.id }, fx,
+      { targetId: c.targetId, startCause: "operator", phone: "present", mode: "passthrough", courtLinkId: link.id }, deps,
+    );
+    await settle();
+    const [row] = await sql<{ court_link_id: string | null; code_id: string | null }[]>`select court_link_id, code_id from fixture_stream_sessions where id = ${sessionId}`;
+    expect(row, "PREMISE: a court session on the court's code").toMatchObject({ court_link_id: link.id, code_id: court!.code_id });
+    const goLive = rec.messages();
+    expect(goLive.map(reasonOf), "PREMISE: the start entered provisioning or warming").toContain("go-live");
+    expect(goLive.every((m) => reasonOf(m) === "go-live")).toBe(true);
+    expect(topicsOf(goLive), "the court's slot-0 pairing").toEqual(goLive.map(() => `capture:${court!.id}`));
+    rec.reset();
+    await stopSession(day.auth, fx, sessionId, deps);
+    await settle();
+    expect(rec.messages().map(reasonOf), "exactly one stop").toContain("stop");
+    expect(rec.messages().filter((m) => reasonOf(m) === "stop")).toHaveLength(1);
+    expect(topicsOf(rec.messages()), "to the court pairing only").toEqual(rec.messages().map(() => `capture:${court!.id}`));
+  });
+
+  it("a ROLLED-BACK apply sends nothing: the transaction fails after the move was decided, the session keeps its state, and the next apply nudges as usual", async () => {
+    const { r, rec } = await rig({ credits: 1, connectAfterMs: NEVER });
+    const A = phoneId("a");
+    await r.pair(A);
+    const S = await r.start(A);
+    await settle();
+    rec.reset();
+    const before = await stateOf(S);
+    const fn = `nudge_test_boom_${randomBytes(4).toString("hex")}`;
+    // The history row of THIS session fails inside the apply's transaction, after `decide`: the move rolls back. Scoped to the one
+    // session, so no other suite's write is touched.
+    await sql.unsafe(`create function ${fn}() returns trigger language plpgsql as $$ begin
+      if new.session_id = '${S}'::uuid then raise exception 'nudge test: rolled back'; end if; return new; end $$`);
+    await sql.unsafe(`create trigger ${fn} before insert on fixture_stream_events for each row execute function ${fn}()`);
+    try {
+      await expect(stopSession(r.auth, r.fixtureId, S, r.deps)).rejects.toThrow(/rolled back/);
+    } finally {
+      await sql.unsafe(`drop trigger ${fn} on fixture_stream_events`);
+      await sql.unsafe(`drop function ${fn}()`);
+    }
+    await settle();
+    expect(await stateOf(S), "PREMISE: the move rolled back").toBe(before);
+    expect(rec.calls, "a rolled-back apply sent nothing").toEqual([]);
+    await stopSession(r.auth, r.fixtureId, S, r.deps);
+    await settle();
+    expect(rec.messages().map(reasonOf), "the same Stop, committed, nudges").toContain("stop");
+  });
+});
+
 describe.skipIf(!HAS_DB)("the claim — `replaced` goes to the OLD pairing, once, after the commit", () => {
   it("a takeover of an ARMED session: the old pairing hears `replaced`, the new one nothing; the loser's next beats and the winner's beats send nothing more", async () => {
     const { r, rec } = await rig({ credits: 1, connectAfterMs: NEVER });
@@ -381,22 +463,29 @@ describe.skipIf(!HAS_DB)("the claim — `replaced` goes to the OLD pairing, once
 });
 
 describe.skipIf(!HAS_DB)("a code ended by the organiser — `over` to every open pairing, in one request", () => {
-  it("reissue with TWO open pairings sends two `over` in ONE request; a reissue of the next code (no pairing) sends nothing", async () => {
+  it("reissue pings only the OPEN pairings of the code: a pairing a takeover ended `replaced` is never pinged, two open ones are, in ONE request; the next code (no pairing) sends nothing", async () => {
     const { r } = await rig({ credits: 1, connectAfterMs: NEVER });
-    const A = phoneId("a");
+    const [A, B] = [phoneId("a"), phoneId("b")];
     await post(r, A, { claim: "new" });
     const aPid = await openPairingOf(r, A);
+    r.tick(5 * SEC);
+    await post(r, B, { claim: "new" });   // takes the paired slot: A's pairing is ENDED (replaced), B's is open
+    const bPid = await openPairingOf(r, B);
+    const [{ ended_at, end_cause }] = await sql<{ ended_at: Date | null; end_cause: string | null }[]>`select ended_at, end_cause from fixture_stream_pairings where id = ${aPid}`;
+    expect([ended_at !== null, end_cause], "PREMISE: A's pairing is ended `replaced`").toEqual([true, "replaced"]);
     const [{ id: codeId }] = await sql<{ id: string }[]>`select id from fixture_stream_codes where fixture_id = ${r.fixtureId} and ended_at is null`;
     const [{ id: second }] = await sql<{ id: string }[]>`
       insert into fixture_stream_pairings (org_id, code_id, slot, phone, claim_kind, claimed_at, last_beat_at, answered_poll_seconds)
       values (${r.auth.orgId}, ${codeId}, 1, ${phoneId("slot1")}, 'new', now(), now(), 30) returning id`;
+    expect(await sql`select 1 from fixture_stream_pairings where code_id = ${codeId}`, "PREMISE: one ended and two open pairings on the code").toHaveLength(3);
     await settle();
     const { fetchMock, requests } = wire();
     await reissueStreamCode(r.auth, r.fixtureId);
     await settle();
     expect(fetchMock, "one request").toHaveBeenCalledTimes(1);
     expect(requests()[0]!.map(reasonOf)).toEqual(["over", "over"]);
-    expect(topicsOf(requests()[0]!)).toEqual([`capture:${aPid}`, `capture:${second}`].sort());
+    expect(topicsOf(requests()[0]!), "the two OPEN pairings; never the replaced one").toEqual([`capture:${bPid}`, `capture:${second}`].sort());
+    expect(JSON.stringify(requests()), "the ended pairing is nowhere in the request").not.toContain(aPid);
     fetchMock.mockClear();
     await reissueStreamCode(r.auth, r.fixtureId);   // the new code has no pairing yet
     await settle();
