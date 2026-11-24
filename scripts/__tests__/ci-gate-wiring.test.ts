@@ -101,7 +101,7 @@ describe("ci.yml: the docs-only gate and ci-gate", () => {
   it("every job with a Postgres service runs scripts/ci-pg-fast.sh before db:apply", () => {
     // Stated here, not read back: the five database-bound jobs.
     const DB_JOBS = ["smoke-db", "smoke-db-app", "smoke-db-outliers", "smoke-db-usecases", "smoke-e2e"];
-    const withPg = jobs().filter((j) => j.text.includes("image: postgres:16"));
+    const withPg = jobs().filter((j) => j.text.includes("image: postgres:17"));
     expect(withPg.map((j) => j.id).sort()).toEqual([...DB_JOBS].sort());
     for (const j of withPg) {
       const tune = j.text.indexOf("run: bash scripts/ci-pg-fast.sh\n");

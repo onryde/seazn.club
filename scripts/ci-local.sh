@@ -13,7 +13,7 @@
 #
 # Deliberate deviations from CI, all of them printed at runtime:
 #   * Postgres and the placement service are native (seazn-env), not the
-#     `postgres:16` container / the pinned placement image CI pulls. The image
+#     `postgres:17` container / the pinned placement image CI pulls. The image
 #     therefore stays gated only by CI. --placement-image pulls and runs the
 #     pinned GHCR image (`packages/scheduler/VENDORED.json`); the default runs a
 #     native placement checkout (seazn-env).

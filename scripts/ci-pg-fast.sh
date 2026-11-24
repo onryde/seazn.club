@@ -14,9 +14,9 @@
 # silently not apply. CI only: never run this against a database you keep.
 set -euo pipefail
 
-cid="$(docker ps -q --filter ancestor=postgres:16 | head -n1)"
+cid="$(docker ps -q --filter ancestor=postgres:17 | head -n1)"
 if [ -z "$cid" ]; then
-  echo "ci-pg-fast: no postgres:16 service container found" >&2
+  echo "ci-pg-fast: no postgres:17 service container found" >&2
   exit 1
 fi
 psql_in() { docker exec "$cid" psql -U postgres -tA -v ON_ERROR_STOP=1 -c "$1"; }
