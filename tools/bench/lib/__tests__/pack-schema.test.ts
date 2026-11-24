@@ -2441,11 +2441,11 @@ describe("packs/_tiny.json", () => {
     // still a d-tiny stream.
     expect(
       p.streams.filter((s) => s.divisionRef === "d-tiny").map((s) => s.fixtureExtKey),
-    ).toEqual(["rr-r1-c1", "rr-r2-c1", "rr-r3-c1", "se-r0-i0"]);
+    ).toEqual(["rr-r1-c1-L1", "rr-r2-c1-L2", "rr-r3-c1-L3", "se-r0-i0"]);
     expect(tinyDivision?.stages[0]?.config).toEqual({ legs: 3 });
     expect(
       p.streams.filter((s) => s.divisionRef === "d-badminton").map((s) => s.fixtureExtKey),
-    ).toEqual(["rr-r1-c1"]);
+    ).toEqual(["rr-r1-c1-L1"]);
     expect(badmintonDivision?.stages[0]?.config).toEqual({ legs: 1 });
   });
 });

@@ -15,6 +15,8 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { foldMatchWithStoppage } from "@seazn/engine/core";
 import { badminton } from "@seazn/engine/sports/setbased";
+import { generateRoundRobin } from "@seazn/engine/scheduling";
+import { rrExtKey } from "../../../../../apps/web/src/lib/roundrobin-reconcile.ts";
 import { buildTinyPack, buildTinyPackJson } from "../_tiny.ts";
 import { PackSchema, type PackStream } from "../../../lib/pack-schema.ts";
 import { buildSeedPlan } from "../../../lib/seed-plan.ts";
@@ -99,7 +101,7 @@ describe("packs/_tiny.json — two divisions, stage 0, no new errors", () => {
       "finalRanks.not_derived",
       "leaderboards.not_derived",
       // B05 T5b-3 — the FIFTH: `expected.suspensions` now carries p-hotel's
-      // ban from d-tiebreak's `rr-r3-c1`, and a discipline carry-over spans
+      // ban from d-tiebreak's `rr-r3-c1-L1`, and a discipline carry-over spans
       // fixtures while stage 0 folds each one on its own. (`.sort()` above
       // is why this reads alphabetically rather than in emission order.)
       "suspensions.not_derived",
@@ -115,7 +117,7 @@ describe("packs/_tiny.json — two divisions, stage 0, no new errors", () => {
     const division = pack.divisions.find((d) => d.ref === "d-badminton");
     if (division === undefined) throw new Error("test fixture: d-badminton division missing");
     const stream = pack.streams.find(
-      (s): s is PackStream => s.divisionRef === "d-badminton" && s.fixtureExtKey === "rr-r1-c1",
+      (s): s is PackStream => s.divisionRef === "d-badminton" && s.fixtureExtKey === "rr-r1-c1-L1",
     );
     if (stream === undefined) throw new Error("test fixture: badminton stream missing");
 
@@ -274,7 +276,7 @@ describe("buildSeedPlan — the T4 generalisation, exercised on a REAL two-divis
     expect(dee.role_keys).toEqual(["referee"]);
     expect(dee.unavailable).toEqual([{ date: "2099-01-02", note: "family commitment" }]);
     expect(dee.assignments).toEqual([
-      { divisionRef: "d-tiny", fixtureExtKey: "rr-r1-c1", roleKey: "referee" },
+      { divisionRef: "d-tiny", fixtureExtKey: "rr-r1-c1-L1", roleKey: "referee" },
     ]);
 
     const eli = plan.officials.find((o) => o.ref === "off-eli")!;
@@ -341,5 +343,29 @@ describe("packs/_tiny.json — venues and scheduleConfig (B04 T6)", () => {
     const division = pack.divisions.find((d) => d.ref === "d-registration");
     if (division === undefined) throw new Error("test fixture: d-registration missing");
     expect(division.scheduleConfig).toBeUndefined();
+  });
+});
+
+describe("packs/_tiny.json — league streams name the ext_keys the real round-robin generator mints", () => {
+  // Bench run 45380890843: `seedSuite: 7 stream(s) matched no generated fixture`.
+  // W5 T2 made the product append the engine's leg (`-L{leg}`) to every round-robin
+  // ext_key; the pack kept the bare `rr-r{n}-c{m}`. The expected keys come from the
+  // engine's own schedule run through the product's own key builder, never typed here.
+  it("every league stream's ext_key is one the engine + rrExtKey produce for that division", () => {
+    const pack = PackSchema.parse(JSON.parse(readFileSync(TINY_JSON_PATH, "utf8")));
+    let checked = 0;
+    for (const stream of pack.streams) {
+      const division = pack.divisions.find((d) => d.ref === stream.divisionRef);
+      const stage = division?.stages.find((s) => s.ref === stream.stageRef);
+      if (stage?.kind !== "league") continue;
+      const legs = (stage.config as { legs?: number } | undefined)?.legs ?? 1;
+      const entrants = pack.entrants.filter((e) => e.divisionRef === stream.divisionRef).map((e) => e.ref);
+      const schedule = generateRoundRobin({ entrants, seeds: new Map(), config: { legs } });
+      const minted = schedule.fixtures.map((f) => rrExtKey("", f.roundNo, f.court, f.leg));
+      expect(minted, `${stream.divisionRef}/${stream.fixtureExtKey}`).toContain(stream.fixtureExtKey);
+      checked += 1;
+    }
+    // anti-vacuity: d-tiny 3 + d-badminton 1 + d-tiebreak 3
+    expect(checked).toBe(7);
   });
 });

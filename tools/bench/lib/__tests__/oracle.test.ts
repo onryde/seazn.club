@@ -742,8 +742,8 @@ describe("D6 — a mis-transcribed scorer stays invisible to stage 0, but reds t
     const mutated = structuredClone(raw) as {
       streams: { fixtureExtKey: string; events: { type: string; payload?: Record<string, string | number> }[] }[];
     };
-    const stream = mutated.streams.find((s) => s.fixtureExtKey === "rr-r2-c1");
-    if (stream === undefined) throw new Error("test fixture assumption broken: rr-r2-c1 stream not found");
+    const stream = mutated.streams.find((s) => s.fixtureExtKey === "rr-r2-c1-L2");
+    if (stream === undefined) throw new Error("test fixture assumption broken: rr-r2-c1-L2 stream not found");
     const scoreEvents = stream.events.filter((e) => e.type === "generic.score");
     expect(scoreEvents).toHaveLength(3);
     const boEvent = scoreEvents.find((e) => e.payload?.person === "@p-bo");

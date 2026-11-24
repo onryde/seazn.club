@@ -71,7 +71,7 @@ import {
   TINY_SPECIAL_STATE,
   echoSpecialSubjects,
 } from "./_oracle-routes.ts";
-import { roundRobinRoundCount } from "./_roundrobin-rounds.ts";
+import { roundRobinExtKey, roundRobinRoundCount } from "./_roundrobin-rounds.ts";
 import { OracleResult } from "../report.ts";
 
 // B07a T7 fix round 2 (I1(b)/(c)), narrowed in fix round 3 (R34) — mocks
@@ -591,7 +591,8 @@ function fakeServer(
                       legsByStageId.get(stageId) ?? 1,
                     ),
                   },
-                  (_v, i) => `rr-r${i + 1}-c1`,
+                  (_v, i) =>
+                    roundRobinExtKey(i, divisionId === undefined ? 0 : schedule.entrantsOfDivision(divisionId).length),
                 )
               ).map((extKey) => {
                 const id = `fx-${++fixtureCounter}`;
@@ -1290,8 +1291,8 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     const raw = JSON.parse(await readFile(TINY_PACK_PATH, "utf8")) as {
       streams: { fixtureExtKey: string; events: { type: string; payload?: Record<string, string | number> }[] }[];
     };
-    const stream = raw.streams.find((st) => st.fixtureExtKey === "rr-r2-c1");
-    if (stream === undefined) throw new Error("test fixture assumption broken: rr-r2-c1 stream not found");
+    const stream = raw.streams.find((st) => st.fixtureExtKey === "rr-r2-c1-L2");
+    if (stream === undefined) throw new Error("test fixture assumption broken: rr-r2-c1-L2 stream not found");
     const boEvent = stream.events.find((e) => e.type === "generic.score" && e.payload?.person === "@p-bo");
     if (boEvent?.payload === undefined) throw new Error("test fixture assumption broken: no @p-bo scoring event");
     boEvent.payload.person = "@p-ana"; // the mis-transcription
@@ -2687,7 +2688,7 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
 
   it("a deliberate SEQ_CONFLICT reaches report.errors and reds the gate — never silently retried", async () => {
     // `rr-r2-c1` is the 5-event stream; conflict its THIRD event (index 2).
-    const { transport, sql, calls } = fakeServer({ conflictAt: { extKey: "rr-r2-c1", expectedSeq: 2 } });
+    const { transport, sql, calls } = fakeServer({ conflictAt: { extKey: "rr-r2-c1-L2", expectedSeq: 2 } });
 
     const report = await runTinySuite({
       base: "http://bench.example",
@@ -2879,13 +2880,13 @@ async function twoAdvancingDivisionsPack(): Promise<string> {
     // `e-cho`, and re-deriving one by hand would be inventing a badminton
     // scoreline this test has no way to check.
     const leagueStream = raw.streams.find(
-      (st) => st.divisionRef === "d-badminton" && st.fixtureExtKey === "rr-r1-c1",
+      (st) => st.divisionRef === "d-badminton" && st.fixtureExtKey === "rr-r1-c1-L1",
     );
     const leagueMatch = raw.expected.matches.find(
-      (m) => m.divisionRef === "d-badminton" && m.fixtureExtKey === "rr-r1-c1",
+      (m) => m.divisionRef === "d-badminton" && m.fixtureExtKey === "rr-r1-c1-L1",
     );
     if (leagueStream === undefined || leagueMatch === undefined) {
-      throw new Error("test fixture assumption broken: d-badminton has no rr-r1-c1 stream/expected match");
+      throw new Error("test fixture assumption broken: d-badminton has no rr-r1-c1-L1 stream/expected match");
     }
     raw.streams.push({ ...leagueStream, fixtureExtKey: "se-r0-i0", stageRef: "s-badminton-ko" });
     raw.expected.matches.push({ ...leagueMatch, fixtureExtKey: "se-r0-i0" });
@@ -3071,13 +3072,13 @@ describe("runTinySuite — B07a T6 advancement runs for EVERY division", () => {
         progression,
       });
       const leagueStream = raw.streams.find(
-        (st) => st.divisionRef === "d-badminton" && st.fixtureExtKey === "rr-r1-c1",
+        (st) => st.divisionRef === "d-badminton" && st.fixtureExtKey === "rr-r1-c1-L1",
       );
       const leagueMatch = raw.expected.matches.find(
-        (m) => m.divisionRef === "d-badminton" && m.fixtureExtKey === "rr-r1-c1",
+        (m) => m.divisionRef === "d-badminton" && m.fixtureExtKey === "rr-r1-c1-L1",
       );
       if (leagueStream === undefined || leagueMatch === undefined) {
-        throw new Error("test fixture assumption broken: d-badminton has no rr-r1-c1 stream/expected match");
+        throw new Error("test fixture assumption broken: d-badminton has no rr-r1-c1-L1 stream/expected match");
       }
       raw.streams.push({ ...leagueStream, fixtureExtKey: "se-r0-i0", stageRef: "s-badminton-ko" });
       raw.expected.matches.push({ ...leagueMatch, fixtureExtKey: "se-r0-i0" });
@@ -3157,13 +3158,13 @@ async function collidingStageRefPack(): Promise<string> {
       throw new Error('test fixture assumption broken: d-tiny no longer declares a stage ref "s-playoff"');
     }
     const leagueStream = raw.streams.find(
-      (st) => st.divisionRef === "d-badminton" && st.fixtureExtKey === "rr-r1-c1",
+      (st) => st.divisionRef === "d-badminton" && st.fixtureExtKey === "rr-r1-c1-L1",
     );
     const leagueMatch = raw.expected.matches.find(
-      (m) => m.divisionRef === "d-badminton" && m.fixtureExtKey === "rr-r1-c1",
+      (m) => m.divisionRef === "d-badminton" && m.fixtureExtKey === "rr-r1-c1-L1",
     );
     if (leagueStream === undefined || leagueMatch === undefined) {
-      throw new Error("test fixture assumption broken: d-badminton has no rr-r1-c1 stream/expected match");
+      throw new Error("test fixture assumption broken: d-badminton has no rr-r1-c1-L1 stream/expected match");
     }
     raw.streams.push({ ...leagueStream, fixtureExtKey: "se-r0-i0", stageRef: "s-playoff" });
     raw.expected.matches.push({ ...leagueMatch, fixtureExtKey: "se-r0-i0" });
@@ -3300,13 +3301,13 @@ async function twoBoundaryDivisionPack(): Promise<string> {
     );
 
     const leagueStream = raw.streams.find(
-      (st) => st.divisionRef === "d-badminton" && st.fixtureExtKey === "rr-r1-c1",
+      (st) => st.divisionRef === "d-badminton" && st.fixtureExtKey === "rr-r1-c1-L1",
     );
     const leagueMatch = raw.expected.matches.find(
-      (m) => m.divisionRef === "d-badminton" && m.fixtureExtKey === "rr-r1-c1",
+      (m) => m.divisionRef === "d-badminton" && m.fixtureExtKey === "rr-r1-c1-L1",
     );
     if (leagueStream === undefined || leagueMatch === undefined) {
-      throw new Error("test fixture assumption broken: d-badminton has no rr-r1-c1 stream/expected match");
+      throw new Error("test fixture assumption broken: d-badminton has no rr-r1-c1-L1 stream/expected match");
     }
     // The mid stage's own fixture/stream/expected rows — copied from the
     // league's, same reasoning `twoAdvancingDivisionsPack` gives (a
@@ -3769,10 +3770,10 @@ describe("runPackSuite — B07a T7 play-mode dispatch", () => {
     // build-packs/_tiny.ts), so attribution no longer separates them.
     const packPath = await writeMutatedTinyPack((raw) => {
       const stream = raw.streams.find(
-        (st) => st.divisionRef === "d-tiny" && st.fixtureExtKey === "rr-r2-c1",
+        (st) => st.divisionRef === "d-tiny" && st.fixtureExtKey === "rr-r2-c1-L2",
       );
       if (stream === undefined) {
-        throw new Error("test fixture assumption broken: no d-tiny/rr-r2-c1 stream");
+        throw new Error("test fixture assumption broken: no d-tiny/rr-r2-c1-L2 stream");
       }
       delete stream.stageRef;
     });
@@ -3792,7 +3793,7 @@ describe("runPackSuite — B07a T7 play-mode dispatch", () => {
     // mutant) drops this text while leaving the exclusion below unchanged —
     // exactly the silent-refusal shape the finding is about.
     expect((report.errors ?? []).join("\n")).toContain(
-      'stream "rr-r2-c1" names division "d-tiny" with no stage, but that division declares 2 stages',
+      'stream "rr-r2-c1-L2" names division "d-tiny" with no stage, but that division declares 2 stages',
     );
 
     // `d-tiny` is index 0 (positional "api"), and this pack declares no

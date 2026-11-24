@@ -51,7 +51,7 @@ import {
   TINY_SPECIAL_STATE,
   echoSpecialSubjects,
 } from "./_oracle-routes.ts";
-import { roundRobinRoundCount } from "./_roundrobin-rounds.ts";
+import { roundRobinExtKey, roundRobinRoundCount } from "./_roundrobin-rounds.ts";
 import { resolvePayloadRefs } from "../simulate.ts";
 
 const silent = pino({ level: "silent" });
@@ -275,7 +275,11 @@ function fakeServer(opts: TapWorldOptions): {
                     legsByStageId.get(stageId) ?? 1,
                   ),
                 },
-                (_v, i) => mintFixture(divisionId, `rr-r${i + 1}-c1`),
+                (_v, i) =>
+                  mintFixture(
+                    divisionId,
+                    roundRobinExtKey(i, divisionId === undefined ? 0 : schedule.entrantsOfDivision(divisionId).length),
+                  ),
               );
         schedule.addFixtures(stageId, fixtures);
         return { fixtures } as unknown as T;
@@ -642,20 +646,20 @@ describe("tap mode — what gates, and what is only reported (B07a T10)", () => 
   it("a driver finding reds the gate, named with its division and fixture", async () => {
     const world = fakeServer({ deviceLinksSold: true });
     const finding = "tap: event 1 (generic.score) failed — the half never mounted";
-    const player = fakeTapPlayer(world, { findingsFor: { "rr-r2-c1": [finding] } });
+    const player = fakeTapPlayer(world, { findingsFor: { "rr-r2-c1-L2": [finding] } });
     const report = await runPackSuite(tapInput(world, player.factory), {
       suiteKey: "fixture",
       packPath: FIXTURE_PACK_PATH,
       play: TAP_D_TINY,
     });
     expect(report.gate).toBe("red");
-    expect(report.errors).toContain(`tap: d-tiny/rr-r2-c1: ${finding}`);
+    expect(report.errors).toContain(`tap: d-tiny/rr-r2-c1-L2: ${finding}`);
   });
 
   it("observations are counted in tapPlay and never red the gate", async () => {
     const world = fakeServer({ deviceLinksSold: true });
     const player = fakeTapPlayer(world, {
-      observationsFor: { "rr-r1-c1": ["a burst made a status unjudgeable", "a tolerated person key"], "se-r0-i0": ["a hold released itself"] },
+      observationsFor: { "rr-r1-c1-L1": ["a burst made a status unjudgeable", "a tolerated person key"], "se-r0-i0": ["a hold released itself"] },
     });
     const report = await runPackSuite(tapInput(world, player.factory), {
       suiteKey: "fixture",
@@ -680,7 +684,7 @@ describe("tap mode — what gates, and what is only reported (B07a T10)", () => 
   it("counts rows left unread after finalize, summed across every tapped fixture, without gating on them", async () => {
     const world = fakeServer({ deviceLinksSold: true });
     const player = fakeTapPlayer(world, {
-      unreadRowsAfterFinalizeFor: { "rr-r1-c1": 2, "se-r0-i0": 1 },
+      unreadRowsAfterFinalizeFor: { "rr-r1-c1-L1": 2, "se-r0-i0": 1 },
     });
     const report = await runPackSuite(tapInput(world, player.factory), {
       suiteKey: "fixture",
@@ -794,7 +798,7 @@ describe("tap mode — a special's state claim describes the STREAM, never the s
     expect(specials.map((o) => [o.verdict, o.passed, o.detail])).toEqual([["pass", true, expect.stringContaining("claim(s) checked")]]);
     expect((report.errors ?? []).join("\n")).toBe("");
 
-    const rr3 = player.jobs.find((j) => j.fixtureExtKey === "rr-r3-c1");
+    const rr3 = player.jobs.find((j) => j.fixtureExtKey === "rr-r3-c1-L3");
     expect(rr3).toBeDefined();
     // The run never read the signed-off state for the tapped special…
     expect(world.calls.some((c) => c.path === `/api/v1/fixtures/${rr3!.fixtureId}/state`)).toBe(false);
@@ -822,11 +826,11 @@ describe("tap mode — a special's state claim describes the STREAM, never the s
     const player = fakeTapPlayer(world);
     const input = { ...tapInput(world, player.factory), specialSubjects: undefined };
     const report = await runPackSuite(input, { suiteKey: "fixture", packPath: FIXTURE_PACK_PATH, play: TAP_D_TINY });
-    const rr3 = player.jobs.find((j) => j.fixtureExtKey === "rr-r3-c1");
+    const rr3 = player.jobs.find((j) => j.fixtureExtKey === "rr-r3-c1-L3");
     expect(rr3).toBeDefined();
     expect(report.gate).toBe("red");
     expect(report.errors).toContain(
-      "oracle: specials: d-tiny/rr-r3-c1 was tapped, and its state through the pack's own events could not be folded — " +
+      "oracle: specials: d-tiny/rr-r3-c1-L3 was tapped, and its state through the pack's own events could not be folded — " +
         `special state: the ledger read /api/v1/fixtures/${rr3!.fixtureId}/events?since_seq=0 answered HTTP 500 ` +
         "(never judged off the signed-off /state)",
     );
@@ -933,7 +937,7 @@ describe("tap mode — a refused team sheet is a finding that reds (fix round 2,
     const dTiny = (await tinyStreams()).filter((s) => s.divisionRef === "d-tiny");
     expect(lineupErrors).toHaveLength(dTiny.length * 2);
     expect(errors).toContain(
-      'tap: d-tiny/rr-r1-c1: lineup: saving the home sheet for "e-alpha" answered HTTP 422 SUSPENDED_PLAYER ' +
+      'tap: d-tiny/rr-r1-c1-L1: lineup: saving the home sheet for "e-alpha" answered HTTP 422 SUSPENDED_PLAYER ' +
         "— its players cannot be named on the pad",
     );
   });

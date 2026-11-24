@@ -550,13 +550,13 @@ describe("validatePack — corrupted streams die naming the stream and the diver
     // rr-r2-c1 is the drawn fixture: 2 to bravo, 1+1 to alpha. Credit bravo's
     // two points to alpha instead and the draw becomes an alpha win.
     const stream = pack.streams[1] as TinyStream;
-    expect(stream.fixtureExtKey).toBe("rr-r2-c1");
+    expect(stream.fixtureExtKey).toBe("rr-r2-c1-L2");
     (stream.events[1] as { payload: Record<string, unknown> }).payload["by"] =
       "@e-alpha";
 
     const finding = onlyError(validatePack(pack, TINY).findings);
     expect(finding.code).toBe("match.outcome_kind");
-    expect(finding.where).toBe("streams[1] (d-tiny/rr-r2-c1)");
+    expect(finding.where).toBe("streams[1] (d-tiny/rr-r2-c1-L2)");
     expect(finding.message).toBe(
       'outcome kind: pack expects "draw", the fold produced "win"',
     );
@@ -574,14 +574,14 @@ describe("validatePack — corrupted streams die naming the stream and the diver
 
     const finding = onlyError(validatePack(pack, TINY).findings);
     expect(finding.code).toBe("match.outcome_kind");
-    expect(finding.where).toBe("streams[1] (d-tiny/rr-r2-c1)");
+    expect(finding.where).toBe("streams[1] (d-tiny/rr-r2-c1-L2)");
     expect(finding.message).toContain('pack expects "draw"');
   });
 
   it("a MIS-TRANSCRIBED SCORE LINE that leaves the winner intact still reds", () => {
     const pack = tiny();
     const stream = pack.streams[0] as TinyStream;
-    expect(stream.fixtureExtKey).toBe("rr-r1-c1");
+    expect(stream.fixtureExtKey).toBe("rr-r1-c1-L1");
     // 3–1 becomes 4–1: same winner, same points, different score line. Only
     // the perSide comparison can see it.
     (stream.events[1] as { payload: Record<string, unknown> }).payload[
@@ -591,7 +591,7 @@ describe("validatePack — corrupted streams die naming the stream and the diver
     const result = validatePack(pack, TINY);
     const finding = onlyError(result.findings);
     expect(finding.code).toBe("match.side_line");
-    expect(finding.where).toBe("streams[0] (d-tiny/rr-r1-c1)");
+    expect(finding.where).toBe("streams[0] (d-tiny/rr-r1-c1-L1)");
     expect(finding.message).toBe(
       'score line for "e-alpha": pack expects "3", the fold produced "4"',
     );
@@ -1003,8 +1003,8 @@ describe("validatePack — an EngineError is a finding, never a crash", () => {
     const result = validatePack(pack, TINY);
     const codes = errors(result.findings).map((f) => `${f.code} @ ${f.where}`);
     expect(codes).toEqual([
-      "fold.rejected @ streams[0] (d-tiny/rr-r1-c1)",
-      "match.outcome_kind @ streams[1] (d-tiny/rr-r2-c1)",
+      "fold.rejected @ streams[0] (d-tiny/rr-r1-c1-L1)",
+      "match.outcome_kind @ streams[1] (d-tiny/rr-r2-c1-L2)",
     ]);
     expect(warnings(result.findings).map((f) => f.code)).toEqual([
       "standings.upstream_fold_failed",
@@ -1049,7 +1049,7 @@ describe("validatePack — specials", () => {
     const finding = onlyError(validatePack(pack, TINY).findings);
     expect(finding.code).toBe("special.state");
     expect(finding.where).toBe(
-      "expected.specials[0] (retirement d-tiny/rr-r3-c1) claims[0]",
+      "expected.specials[0] (retirement d-tiny/rr-r3-c1-L3) claims[0]",
     );
     expect(finding.message).toContain('state path "mtbTo" does not exist');
   });
@@ -1081,7 +1081,7 @@ describe("validatePack — specials", () => {
    */
   const onWin = (claim: Record<string, unknown>): TinyShape => {
     const pack = tiny();
-    pack.expected.specials[0]!.fixtureExtKey = "rr-r1-c1";
+    pack.expected.specials[0]!.fixtureExtKey = "rr-r1-c1-L1";
     pack.expected.specials[0]!.claims = [claim];
     return pack;
   };
@@ -1141,7 +1141,7 @@ describe("validatePack — specials", () => {
     // posed on the award fixture; W2b's award names its loser, so that claim
     // now HOLDS — see the positive pair below.)
     const pack = tiny();
-    pack.expected.specials[0]!.fixtureExtKey = "rr-r2-c1";
+    pack.expected.specials[0]!.fixtureExtKey = "rr-r2-c1-L2";
     pack.expected.specials[0]!.claims = [{ on: "outcome", loser: "e-bravo" }];
     expect(onlyError(validatePack(pack, TINY).findings).message).toBe(
       'outcome loser: claim expects "e-bravo", the fold produced undefined',
@@ -1252,7 +1252,7 @@ describe("validatePack — specials", () => {
     const claim = (equals: number): Record<string, unknown> => ({
       kind: "concussion_sub",
       divisionRef: "d-tiny",
-      fixtureExtKey: "rr-r3-c1",
+      fixtureExtKey: "rr-r3-c1-L3",
       claims: [
         {
           on: "squads",
@@ -2513,7 +2513,7 @@ describe("validatePack — the oracles it does NOT derive say so", () => {
       {
         divisionRef: "d-tiny",
         person: "p-bo",
-        missesFixtureExtKeys: ["rr-r3-c1"],
+        missesFixtureExtKeys: ["rr-r3-c1-L3"],
       },
     ] as TinyShape["expected"]["suspensions"];
     const result = validatePack(pack, TINY);
@@ -2601,7 +2601,7 @@ describe("validatePack — the oracles it does NOT derive say so", () => {
     // the special always folded and the skip was never exercised.
     const pack = tiny();
     const stream = pack.streams[2] as TinyStream;
-    expect(stream.fixtureExtKey).toBe("rr-r3-c1");
+    expect(stream.fixtureExtKey).toBe("rr-r3-c1-L3");
     stream.events.splice(1, 0, { type: "core.start" });
 
     const result = validatePack(pack, TINY);
@@ -2612,10 +2612,10 @@ describe("validatePack — the oracles it does NOT derive say so", () => {
     // The MESSAGE, not just the code: a skip that says "not checked" without
     // naming WHICH fixture is the decoration this warning exists to replace.
     expect(skipped?.where).toBe(
-      "expected.specials[0] (retirement d-tiny/rr-r3-c1)",
+      "expected.specials[0] (retirement d-tiny/rr-r3-c1-L3)",
     );
     expect(skipped?.message).toBe(
-      'not checked: fixture "rr-r3-c1" did not fold to a verified outcome',
+      'not checked: fixture "rr-r3-c1-L3" did not fold to a verified outcome',
     );
     // And no special ERROR: an unfolded stream must not also be reported as a
     // failed claim, which would bury the fold failure under a derived one.
@@ -2946,7 +2946,7 @@ describe("stageScopedFoldCfg — the stage's format reaches the fold (preset, ru
 describe("validatePack — stage 1 is the pipeline's shape gate", () => {
   it("refuses a duplicate ext_key within one division", () => {
     const pack = tiny();
-    (pack.streams[1] as TinyStream).fixtureExtKey = "rr-r1-c1";
+    (pack.streams[1] as TinyStream).fixtureExtKey = "rr-r1-c1-L1";
     const result = validatePack(pack, TINY);
     expect(result.ok).toBe(false);
     // The rule and its reason live in PackSchema's `checkStreams`, not here —

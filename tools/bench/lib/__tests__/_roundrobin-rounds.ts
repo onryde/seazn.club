@@ -22,3 +22,12 @@ export function roundRobinRoundCount(entrantCount: number, legs: number): number
   const roundsPerLeg = entrantCount % 2 === 0 ? entrantCount - 1 : entrantCount;
   return legs * roundsPerLeg;
 }
+
+/** The `ext_key` the real `/generate` mints for the i-th (0-based) round-robin fixture of an `entrantCount`-entrant,
+ *  `legs`-leg division with one game per round (true for every n<=3 this pack uses): `rr-r{round}-c1-L{leg}` — W5 T2's
+ *  `rrExtKey`. The engine's round numbers run on across legs, so the leg is `floor(i / roundsPerLeg) + 1`. A fake that mints
+ *  the bare `rr-r{n}-c1` seeds nothing the pack's streams name. */
+export function roundRobinExtKey(i: number, entrantCount: number): string {
+  const roundsPerLeg = entrantCount % 2 === 0 ? entrantCount - 1 : entrantCount;
+  return `rr-r${i + 1}-c1-L${Math.floor(i / roundsPerLeg) + 1}`;
+}

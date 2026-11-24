@@ -13,9 +13,11 @@ async function tinyPack(): Promise<Pack> {
   return PackSchema.parse(JSON.parse(await readFile(TINY_PACK_PATH, "utf8")));
 }
 
-function streamOf(pack: Pack, extKey: string): PackStream {
-  const found = pack.streams.find((s) => s.divisionRef === "d-tiny" && s.fixtureExtKey === extKey);
-  if (found === undefined) throw new Error(`test: _tiny has no d-tiny stream ${extKey}`);
+/** The d-tiny stream for round-robin slot `slot` (`rr-r{n}-c{m}`). The product's `rrExtKey` appends the leg
+ *  (`-L{leg}`), and d-tiny's legs differ per round, so the full key is read off the pack's own stream list. */
+function streamOf(pack: Pack, slot: string): PackStream {
+  const found = pack.streams.find((s) => s.divisionRef === "d-tiny" && new RegExp(`^${slot}-L\\d+$`).test(s.fixtureExtKey));
+  if (found === undefined) throw new Error(`test: _tiny has no d-tiny stream ${slot}-L<leg>`);
   return found;
 }
 
