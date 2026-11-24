@@ -27,6 +27,13 @@ import { POST as SCORING_LINK } from "@/app/api/v1/capture/codes/[code]/scoring-
 import { GET as MD_REALTIME_TOKEN } from "@/app/api/v1/match-day-code/realtime-token/route";
 import { mintMatchDayCode, revokeMatchDayCode } from "@/server/usecases/match-day-codes";
 import { seedDay } from "@/server/usecases/__tests__/_match-day-seed";
+import { GET as COMPETITION_REALTIME_TOKEN } from "@/app/api/v1/public/competitions/[id]/realtime-token/route";
+
+// The competition realtime door (push nudges Task 12) reads the cookie session first: anonymous here (no request scope).
+vi.mock("@/lib/auth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/auth")>()),
+  getCurrentUser: async () => null,
+}));
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -303,5 +310,62 @@ describe.skipIf(!HAS_DB)("the phone routes never log a secret (§10.2): each rou
     expect(lines.length, "anti-vacuity: the door logged").toBeGreaterThan(0);
     expect(lines.some((l) => l.includes("the mint failed")), "the failed mint was logged").toBe(true);
     for (const line of lines) for (const s of secrets) expect(line).not.toContain(s);
+  });
+
+  it("push nudges Task 12: the competition realtime-token door — 200 twice, 403 not entitled, 404 private, 503 refused url, 503 failed mint — no captured line carries a minted token; lines were captured", async () => {
+    lines.length = 0;
+    const s = randomBytes(4).toString("hex");
+    const [{ id: orgId }] = await sql<{ id: string }[]>`insert into organizations (name, slug) values (${"LR " + s}, ${"lr-" + s}) returning id`;
+    const comp = async (visibility: string, realtime: boolean): Promise<string> => {
+      const [{ id }] = await sql<{ id: string }[]>`
+        insert into competitions (org_id, name, slug, visibility, status)
+        values (${orgId}, ${"LR " + visibility + realtime}, ${`lr-${visibility}-${realtime}-${s}`}, ${visibility}, 'live') returning id`;
+      await sql`insert into divisions (org_id, competition_id, name, slug, sport_key, variant_key, status, config, module_version)
+                values (${orgId}, ${id}, 'Open', ${"open-" + id.slice(0, 8)}, 'generic', 'score', 'setup',
+                        ${sql.json({ resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false })}, '1.0.0')`;
+      return id;
+    };
+    await sql`insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason) values (${orgId}, 'realtime', true, 'logger redact')`;
+    const entitled = await comp("public", true);
+    const hidden = await comp("private", true);
+    const [{ id: plainOrg }] = await sql<{ id: string }[]>`insert into organizations (name, slug) values (${"LR2 " + s}, ${"lr2-" + s}) returning id`;
+    await sql`insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason) values (${plainOrg}, 'realtime', false, 'logger redact')`;
+    const [{ id: refusedComp }] = await sql<{ id: string }[]>`
+      insert into competitions (org_id, name, slug, visibility, status) values (${plainOrg}, 'LR2', ${"lr2-c-" + s}, 'public', 'live') returning id`;
+    await sql`insert into divisions (org_id, competition_id, name, slug, sport_key, variant_key, status, config, module_version)
+              values (${plainOrg}, ${refusedComp}, 'Open', ${"open-lr2-" + s}, 'generic', 'score', 'setup',
+                      ${sql.json({ resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false })}, '1.0.0')`;
+    const statuses: number[] = [];
+    const tokens: string[] = [];
+    const door = async (id: string) => {
+      const res = await COMPETITION_REALTIME_TOKEN(new Request(`https://test.local/api/v1/public/competitions/${id}/realtime-token`), { params: Promise.resolve({ id }) });
+      statuses.push(res.status);
+      const b = (await res.json()) as { data?: { token: string } };
+      if (b.data) tokens.push(b.data.token);
+    };
+    await door(entitled);                                                       // 200
+    await door(entitled);                                                       // 200
+    await door(refusedComp);                                                    // 403 not entitled
+    await door(hidden);                                                         // 404 private
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "http://logger-redact.supabase.co";
+    await door(entitled);                                                       // 503 refused url (logged)
+    process.env.NEXT_PUBLIC_SUPABASE_URL = url;
+    const secretKey = process.env.SUPABASE_JWT_SECRET;
+    delete process.env.SUPABASE_JWT_SECRET;
+    await door(entitled);                                                       // 503 the mint has no key (logged)
+    process.env.SUPABASE_JWT_SECRET = secretKey;
+    expect(tokens, "two minted tokens, through the REAL route and the process's port").toHaveLength(2);
+    expect(statuses).toEqual([200, 200, 403, 404, 503, 503]);
+    expect(lines.length, "anti-vacuity: the door logged").toBeGreaterThan(0);
+    expect(lines.some((l) => l.includes("the mint failed")), "the failed mint was logged").toBe(true);
+    expect(lines.some((l) => l.includes("is refused")), "the refused project was logged").toBe(true);
+    let checked = 0;
+    for (const line of lines) {
+      for (const t of tokens) expect(line).not.toContain(t);
+      expect(line).not.toMatch(/eyJ[\w-]+\.eyJ/);
+      checked++;
+    }
+    expect(checked).toBe(lines.length);
   });
 });

@@ -1,4 +1,5 @@
-// /api/v1 contracts — public fixture summary (GET /public/fixtures/{id}), PublicOrgLive and PublicFixtureVideo.
+// /api/v1 contracts — public fixture summary (GET /public/fixtures/{id}), PublicOrgLive, PublicFixtureVideo and
+// CompetitionRealtimeToken.
 // One module of the schemas/ folder; ./index.ts is the map and the public surface. Pure zod (loads bare under
 // `node --experimental-strip-types`): relative imports carry an explicit `.ts`, types come in through `import type`.
 import { z } from "zod";
@@ -13,6 +14,8 @@ import { AWARD_REASONS } from "@seazn/engine/core";
 import { MatchCentreDoc } from "../../public-site/match-centre-schema.ts";
 import { Uuid, CompetitionStatus } from "./common.ts";
 import { SlotLabelRef, Fixture } from "./scoring.ts";
+// The Supabase url pattern the capture and Match Day realtime objects already hold (pure zod, loads bare under strip-types).
+import { CAPTURE_REALTIME_URL_RE } from "../capture-schemas.ts";
 
 // ---------------------------------------------------------------------------
 // Public — GET /public/fixtures/{id}
@@ -120,3 +123,20 @@ export const PublicFixtureVideo = z.object({
   replay: z.array(SignedPlayback.extend({ partNo: z.number().int().min(1), player: z.enum(["hls", "embed"]) })),
 });
 export type PublicFixtureVideo = z.infer<typeof PublicFixtureVideo>;
+
+// ---------------------------------------------------------------------------
+// Public — GET /public/competitions/{id}/realtime-token (realtime push nudges, spec 2026-11-24 §4.1, plan Task 12)
+// ---------------------------------------------------------------------------
+
+/** The competition realtime door's answer: the subscriber JWT for the competition's private `division:{id}` topics (V556
+ *  reads its `division_ids` array), the ids it reads (each a lowercase uuid, as the division rows hold them: 1 to 100 of
+ *  them), its expiry in epoch SECONDS (the token's own `exp`), and the Supabase project's https `url` and public anon
+ *  `apikey` (the same guarded pair the Match Day door serves). Strict: a later field is a contract change. */
+export const CompetitionRealtimeToken = z.strictObject({
+  token: z.string().min(1).max(8192),
+  divisionIds: z.array(z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)).min(1).max(100),
+  expiresAt: z.number().int().min(1),
+  url: z.url().regex(CAPTURE_REALTIME_URL_RE),
+  apikey: z.string().min(1).max(512),
+});
+export type CompetitionRealtimeToken = z.infer<typeof CompetitionRealtimeToken>;

@@ -28,7 +28,7 @@
 //   ai-planning.ts           scheduling constraints v2 and AI: ScheduleShift, plan/repair, officials plan, joint multi-division (#350), parse preview (W5), OverrideStandings
 //   seeding-discipline.ts    seed proposals (D4a), ladder challenge, discipline and suspensions, official marks, match reports
 //   org-admin.ts             org news posts, duplicate review and merge (#404), venues and courts (D5)
-//   public.ts                public fixture summary (GET /public/fixtures/{id}), PublicOrgLive, and a fixture's Seazn video (PublicFixtureVideo)
+//   public.ts                public fixture summary (GET /public/fixtures/{id}), PublicOrgLive, and a fixture's Seazn video (PublicFixtureVideo), the competition realtime door's answer (CompetitionRealtimeToken)
 //   quick-match.ts           quick match: the guest's one create (CreateQuickMatch)
 //
 // Dependency order is strictly downward (a module imports only from the ones listed above it;
@@ -199,7 +199,7 @@ export {
   CreateCourt, PatchCourt, PutCourtCalendar, CourtCalendar,
 } from "./org-admin.ts";
 export {
-  PublicFixtureOutcome, PublicFixtureSummarySchema, PublicFixtureSummary, PublicOrgLive, PublicFixtureVideo,
+  PublicFixtureOutcome, PublicFixtureSummarySchema, PublicFixtureSummary, PublicOrgLive, PublicFixtureVideo, CompetitionRealtimeToken,
 } from "./public.ts";
 export type {
   PublicOrgLiveT,

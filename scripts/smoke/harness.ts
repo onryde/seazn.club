@@ -1589,6 +1589,10 @@ export async function cleanup(tag: string): Promise<void> {
     `delivered+caprecord_${tag}@resend.dev`,
     // matchDayRealtimeSuite's own Pro org (realtime push nudges, Task 9) — its competition and Match Day code cascade with it.
     `delivered+mdrealtime_${tag}@resend.dev`,
+    // divisionRealtimeDoorSuite's two orgs (realtime push nudges, Task 12) — a Pro org's public and private competitions, and a
+    // Community org's PUBLIC competition, cascade with them.
+    `delivered+divrt_${tag}@resend.dev`,
+    `delivered+divrtcommunity_${tag}@resend.dev`,
     // bracketFinishSuite's own Pro org (W2a T17) — its PUBLIC competition and its settled bracket cascade with it.
     `delivered+bracketfinish_${tag}@resend.dev`,
     // walkoverCreditSuite's own org (W2b T18) — its two competitions, one PUBLIC with walked-over and archived divisions.

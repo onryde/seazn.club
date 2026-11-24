@@ -102,6 +102,7 @@ import { captureV2Suite } from "./suites/captureV2.ts";
 import { deviceLinkFootballSuite } from "./suites/deviceLinkFootball.ts";
 import { captureRecordSuite } from "./suites/captureRecord.ts";
 import { matchDayRealtimeSuite } from "./suites/matchDayRealtime.ts";
+import { divisionRealtimeDoorSuite } from "./suites/divisionRealtimeDoor.ts";
 import { streamOverlaySuite } from "./suites/streamOverlay.ts";
 import { v3ContentApiSuite } from "./suites/v3ContentApi.ts";
 import { disciplineSuite } from "./suites/discipline.ts";
@@ -908,6 +909,10 @@ export async function main() {
   //     credential outside the header earns, the token (or the honest 503 where no Supabase is configured), the day read beside
   //     it, a withdrawal, and no header carrying a secret.
   await suite("matchDayRealtime", () => matchDayRealtimeSuite());
+  // --- realtime push nudges (spec 2026-11-24 §4.1, Task 12): the competition realtime-token door over real HTTP — a spectator
+  //     on a Pro org's public competition (the token, or the honest 503 where no Supabase is configured), 404 private and slug,
+  //     the organiser on a private one, 403 no_divisions, 403 for a Community org, and no header carrying a token.
+  await suite("divisionRealtimeDoor", () => divisionRealtimeDoorSuite());
   // --- S2-5 football Remote Scoring (plan W, design §10): the device-link bootstrap's lineup rows carry the team sheet
   //     (slot, position, order, role(s), shirt number), and the events door answers the Date header the pad's clock samples.
   await suite("deviceLinkFootball", () => deviceLinkFootballSuite());

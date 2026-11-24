@@ -1,6 +1,7 @@
 import "server-only";
 // Fixture scoring authority: requireScorable gate and accepted-official
 // coverage. Org-member scorers and assignment-table auth were retired (#707).
+import type postgres from "postgres";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -32,11 +33,28 @@ export async function fixtureScope(fixtureId: string): Promise<FixtureScope | nu
  *  never opens for them). Only 'accepted' passes — a pending or declined
  *  assignment grants no scoring rights (design v2 §A5). */
 export async function acceptedOfficialCovers(userId: string, fixtureId: string): Promise<boolean> {
+  return acceptedOfficialOn(userId, sql`fo.fixture_id = ${fixtureId}`);
+}
+
+/** The same question over every fixture of a competition: does the user hold an ACCEPTED assignment on ANY of them? The
+ *  competition realtime door's official path (realtime push nudges, plan Task 12, pin 17). One predicate with
+ *  `acceptedOfficialCovers` (`acceptedOfficialOn`), so a pending or declined assignment, or a withdrawn one (its row gone),
+ *  grants nothing here either. */
+export async function acceptedOfficialInCompetition(userId: string, competitionId: string): Promise<boolean> {
+  return acceptedOfficialOn(
+    userId,
+    sql`fo.fixture_id in (select f.id from fixtures f join divisions d on d.id = f.division_id where d.competition_id = ${competitionId})`,
+  );
+}
+
+/** The accepted-official predicate, spelt ONCE: an assignment row in `fixtures` whose official is the user's person and
+ *  whose response is 'accepted'. */
+async function acceptedOfficialOn(userId: string, fixtures: postgres.Fragment): Promise<boolean> {
   const rows = await sql`
     select 1 from fixture_officials fo
     join officials o on o.id = fo.official_id
     join persons p on p.id = o.person_id
-    where fo.fixture_id = ${fixtureId} and p.user_id = ${userId}
+    where ${fixtures} and p.user_id = ${userId}
       and fo.response = 'accepted'
     limit 1`;
   return rows.length > 0;
