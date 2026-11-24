@@ -330,7 +330,7 @@ describe("invalidatePublicCache — every key by name in one DEL, no SCAN (R10 H
 
     await release("del", { resolve: true });
     expect(after).toHaveBeenCalledTimes(1);
-    expect(after).toHaveBeenCalledWith({ divisionId: DIVISION, competitionId: COMPETITION });
+    expect(after).toHaveBeenCalledWith({ divisionId: DIVISION, competitionId: COMPETITION, matchDay: expect.any(Promise) });
   });
 
   it("a DEL that REJECTS is logged, never left unhandled, and still runs the callback", async () => {
@@ -379,7 +379,8 @@ describe("invalidatePublicCache — the pushes wait for the DEL, never longer th
     vi.useRealTimers();
   });
 
-  const SCOPE = { divisionId: DIVISION, competitionId: COMPETITION };
+  // T2.3: the scope also hands the caller the Match Day read it started beside the DEL (always a promise; match-day-nudges.test.ts judges it).
+  const SCOPE = { divisionId: DIVISION, competitionId: COMPETITION, matchDay: expect.any(Promise) };
 
   it("the bound is the ruling's: 1500ms", () => {
     expect(PUSH_AFTER_DELETE_BOUND_MS).toBe(1_500);

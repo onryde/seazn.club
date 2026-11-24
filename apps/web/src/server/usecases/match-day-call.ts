@@ -560,7 +560,7 @@ export async function callFixtureAs(
     return { divisionId: f.division_id, competitionId: f.competition_id };
   });
   // The called match's court and time changed: drop its public cache keys and refresh open boards, as every schedule write does.
-  afterScheduleWrite(out.divisionId, out.competitionId, "schedule", [fixtureId]);
+  afterScheduleWrite(out.divisionId, out.competitionId, "schedule", [fixtureId], { reason: "call" });
   return { fixture_id: fixtureId, court_id: courtId, called_at: now.toISOString() };
 }
 
@@ -602,7 +602,7 @@ export async function undoCallAs(
       at: call.prev_scheduled_at === null ? null : new Date(call.prev_scheduled_at).toISOString(),
     };
   });
-  afterScheduleWrite(out.divisionId, out.competitionId, "schedule", [fixtureId]);
+  afterScheduleWrite(out.divisionId, out.competitionId, "schedule", [fixtureId], { reason: "call" });
   return { fixture_id: fixtureId, court_id: out.court, scheduled_at: out.at };
 }
 

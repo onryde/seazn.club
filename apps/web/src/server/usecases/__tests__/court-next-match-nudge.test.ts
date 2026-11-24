@@ -382,7 +382,8 @@ describe.skipIf(!HAS_DB)("a schedule write nudges the court's phone `next-match`
       const armedBefore = vi.getTimerCount();
       await write(["fx-not-a-uuid"]);
       expect(courtPairingNudges).not.toHaveBeenCalled();
-      expect(vi.getTimerCount() - armedBefore, "only the DEL's push bound, never the court read's").toBeLessThanOrEqual(1);
+      // The DEL's push bound and (T2.3) the Match Day read's bound: this competition is real and publishing is on. Never the court read's.
+      expect(vi.getTimerCount() - armedBefore, "only the DEL's push bound and the Match Day read's, never the court read's").toBeLessThanOrEqual(2);
       await vi.advanceTimersByTimeAsync(10);
       await vi.waitFor(() => expect(posts()).toHaveLength(1));
       expect(posts()[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, "fixture:fx-not-a-uuid"]);

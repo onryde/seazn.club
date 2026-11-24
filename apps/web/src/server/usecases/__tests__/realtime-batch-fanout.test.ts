@@ -16,7 +16,7 @@
 //
 // Sequence (TEST-STRATEGY): the empty case (a write that moved no fixture), a second write (a second POST, never merged
 // into the first), after a void (the seats the void emptied ride the void's one POST), and another surface:
-// `voidLineEvents` is NOT batched by this task (Task 10 batches it) and still sends one POST per publisher.
+// `voidLineEvents` (batched by Task 10) is one POST for its lines and its division.
 //
 // The schedule half needs no database and always runs; the score, real-writer and void-lines halves need Postgres and
 // skip without DATABASE_URL.
@@ -332,12 +332,12 @@ describe.skipIf(!HAS_DB)("a real schedule writer reaches the one broadcast", () 
   }, 120_000);
 });
 
-// Another surface. `voidLineEvents` (a Reinstate's batch of voids) still publishes through the per-message publishers:
-// one POST per line and one for the division. Task 10 batches it; until then this pins that T0.2 left it alone.
-describe.skipIf(!HAS_DB)("voidLineEvents is untouched by T0.2: still one POST per publisher", () => {
+// Another surface. `voidLineEvents` (a Reinstate's batch of voids) sent one POST per line and one for the division (1 + N);
+// Task 10 (T2.3) batches it: its lines and its division go in ONE POST.
+describe.skipIf(!HAS_DB)("voidLineEvents (batched by Task 10): ONE POST for its lines and its division", () => {
   const moduleOf = (key: string): AnySportModule => builtinModules.find((m) => m.key === key) as AnySportModule;
 
-  it("two voided lines: three POSTs, one message each — each line's fixture, and the division", async () => {
+  it("two voided lines: ONE POST of three messages — each line's fixture, and the division", async () => {
     const { auth } = await seedOrg("pro");
     const comp = await createCompetition(auth, {
       ends_on: "2030-12-31", name: "T02 " + randomUUID().slice(0, 6), visibility: "private", branding: {},
@@ -367,8 +367,8 @@ describe.skipIf(!HAS_DB)("voidLineEvents is untouched by T0.2: still one POST pe
     expect(written.sort(), "anti-vacuity: both voids were written").toEqual(two.map((a) => a.fixture_id).sort());
     await settled();
     const sent = posts();
-    expect(sent, "one POST per publisher: two lines and the division").toHaveLength(3);
-    for (const post of sent) expect(post, "each POST carries one message").toHaveLength(1);
+    expect(sent, "one POST for two lines and the division (before Task 10: 3)").toHaveLength(1);
+    expect(sent[0], "anti-vacuity: the POST carries all three messages").toHaveLength(3);
     const byTopic = (a: Shape, b: Shape) => a.topic.localeCompare(b.topic);
     expect(sent.flat().sort(byTopic)).toEqual(
       [divisionScore(d.id), ...two.map((a) => fixtureMsg(a.fixture_id, "event"))].sort(byTopic),

@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP helpers, tag): see the header of that file.
-import { BASE, newSession, call, check, signIn, tag, v1, v1data, setPlan } from "../harness.ts";
+import { BASE, newSession, call, check, signIn, tag, v1, v1data, setPlan, timedFixture, ledger } from "../harness.ts";
 
 /**
  * Match Day's realtime-token door over real HTTP (realtime push nudges, spec 2026-11-24 §3, plan Task 9, case `matchDayRealtime`):
@@ -12,13 +12,15 @@ import { BASE, newSession, call, check, signIn, tag, v1, v1data, setPlan } from 
  *   - no bearer, a credential in the QUERY string alone, and an `md_` that does not exist are each 401 MD_UNKNOWN, and carry no data;
  *   - the code's bearer is 200 with exactly the contract's five keys, the bare topic `match-day:{codeId}`, an integer expiry in
  *     epoch SECONDS within the hour, and `cache-control: private, no-store` — or 503 REALTIME_UNAVAILABLE with no token in it;
- *   - the day read still answers the same code 200 (the door spent its own bucket, not the day read's);
+ *   - a score on the competition's fixture is accepted (201) — its write appends the code's Match Day nudge to the score's one
+ *     broadcast (Task 10, T2.3; a server with no Supabase project sends nothing) — and the day read still answers the same code 200
+ *     after it (the door spent its own bucket, not the day read's, and a nudge never costs the write);
  *   - after a withdrawal the door is 410 MD_WITHDRAWN and mints nothing;
  *   - NO response header of any answer carries the md_ credential or a minted token (counted: zero scanned is a failure).
  * Its own Pro org, purged by cleanup(). SMOKE_ONLY=matchDayRealtime runs it alone (SELECTABLE_SUITES).
  */
 export async function matchDayRealtimeSuite(): Promise<void> {
-  const EXPECTED_STEPS = 10;
+  const EXPECTED_STEPS = 11;
   let steps = 0;
   const step = (label: string, cond: boolean) => {
     check(`match-day-realtime smoke: ${label}`, cond);
@@ -92,18 +94,29 @@ export async function matchDayRealtimeSuite(): Promise<void> {
     );
   }
 
-  // 6. THE DAY READ is untouched: the same code is still admitted there.
+  // 6. A SCORE with the code open: the write is accepted, whatever the nudge it carries does (T2.3: no project here ⇒ none sent).
+  const fx = await timedFixture(owner, comp.id, {
+    name: "Nudge",
+    sport_key: "generic",
+    variant_key: "score",
+    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    entrants: [1, 2].map((n) => ({ kind: "individual", display_name: `Nudge ${n}`, seed: n })),
+  });
+  const scored = await ledger(owner, fx.fixtureId).send("core.start", {});
+  step(`a score on the competition's fixture is accepted while the code is open (got ${scored.status})`, scored.status === 201);
+
+  // 7. THE DAY READ is untouched: the same code is still admitted there.
   const dayRead = await fetch(`${BASE}/api/v1/match-day-code`, { headers: { authorization: `Bearer ${credential}` } });
   scan(dayRead, "day read");
   step(`the day read still answers the same code 200 (got ${dayRead.status})`, dayRead.status === 200);
 
-  // 7. WITHDRAW: the door is 410 and mints nothing.
+  // 8. WITHDRAW: the door is 410 and mints nothing.
   const revoked = await v1(owner, `/api/v1/match-day-codes/${code.id}/revoke`, "POST");
   step(`POST revoke → 204 (got ${revoked.status})`, revoked.status === 204);
   const after = await door(credential);
   step(`after a withdrawal the door is 410 MD_WITHDRAWN and carries no data (got ${after.status} ${after.json.error?.code})`, after.status === 410 && after.json.error?.code === "MD_WITHDRAWN" && after.json.data === undefined);
 
-  // 8-9. THE WIRE: one of the two answers was seen, and no header carried a secret.
+  // 9-10. THE WIRE: one of the two answers was seen, and no header carried a secret.
   step(`the door answered a token or an honest 503 (served ${served}, unavailable ${unavailable})`, served + unavailable === 1);
   step(`no response header of ${headerSets} carried the credential or a token (leaks: ${leaks.join("; ") || "none"})`, headerSets >= 6 && leaks.length === 0);
   done();

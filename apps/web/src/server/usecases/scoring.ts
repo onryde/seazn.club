@@ -25,7 +25,8 @@ import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "@/serve
 import { log } from "@/server/logger";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
-import { broadcast, divisionMessages, fixtureMessage, publishFixtureUpdate } from "@/lib/realtime";
+import { divisionMessages, fixtureMessage, publishFixtureUpdate, type RealtimeMessage } from "@/lib/realtime";
+import { broadcastWithMatchDay, matchDayNudgesFor } from "./match-day-nudges";
 import { playerMatchesGenKey } from "@/server/public-site/player-matches-cache-keys";
 import { publicFixtureCacheKey } from "@/server/public-site/fixture-doc-cache-key";
 import { publicDivisionCacheKeys } from "@/server/public-site/division-doc-cache-keys";
@@ -520,7 +521,8 @@ async function invalidateAndPush(
   //
   // Realtime push-nudges T0.2: all of them go out in ONE broadcast (one POST), in this order.
   await invalidatePublicCache(auth.orgId, fixtureId, movesDiscovery, (scope) => {
-    void broadcast(
+    broadcastWithMatchDay(
+      scope?.matchDay,
       [
         fixtureMessage(fixtureId, "event"),
         ...(scope ? divisionMessages(scope.divisionId, "score") : []),
@@ -1467,7 +1469,7 @@ export async function invalidatePublicCache(
    *  the fixture's division and competition, or null when the fixture no
    *  longer exists. `scoreEvent` sends its realtime pushes here (P1 round 2,
    *  F2). Must not throw. */
-  afterDeletes?: (scope: { divisionId: string; competitionId: string } | null) => void,
+  afterDeletes?: (scope: { divisionId: string; competitionId: string; matchDay: Promise<RealtimeMessage[]> } | null) => void,
   /** R10h: other fixtures this same write changed — the ones a bracket advance
    *  named a winner or loser INTO. Their public documents are stale for the
    *  same reason the decided fixture's is, so their keys join the ONE DEL
@@ -1551,7 +1553,8 @@ export async function invalidatePublicCache(
   // PUSH_AFTER_DELETE_BOUND_MS, and exactly once.
   // `sendAfterDeleteOrBound` (cache.ts) owns that, and the schedule path sends
   // through the same helper (R10c m1).
-  const scope = row ? { divisionId: row.division_id, competitionId: row.competition_id } : null;
+  // Push nudges T2.3: the competition's open Match Day codes are read HERE, beside the DEL, never after it; the caller's push awaits it.
+  const scope = row ? { divisionId: row.division_id, competitionId: row.competition_id, matchDay: afterDeletes ? matchDayNudgesFor(row.competition_id, "score") : Promise.resolve<RealtimeMessage[]>([]) } : null;
   if (afterDeletes) sendAfterDeleteOrBound(deleted, () => afterDeletes(scope));
   if (!row) return;
   // Cheap by design (doc 15 §2 / PROMPT-19 item 4): the `discovery` tag

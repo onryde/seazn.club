@@ -7,6 +7,7 @@ import { publicHubCacheKey } from "@/server/public-site/hub-doc-cache-keys";
 import { broadcast, divisionMessages, fixtureMessage, realtimePublishEnabled, type RealtimeMessage } from "@/lib/realtime";
 import { log } from "@/server/logger";
 import { courtPairingNudges, fireNudge, hasCourtReadableId } from "@/server/usecases/stream-sessions/nudge";
+import { matchDayNudgesFor } from "@/server/usecases/match-day-nudges";
 
 // Every schedule write invalidates both public cache layers (the same pattern
 // as scoring, doc 09 §3 / doc 12 §2) and refreshes any open boards.
@@ -23,8 +24,9 @@ export function afterScheduleWrite(
   fixtureIds: readonly string[],
   /** `fixturePushes: false` sends no per-fixture push (the DEL still drops every key, and the division push still goes).
    *  For a write whose fixtures nobody can be watching yet: a quick match's create, which starts a division its guest has
-   *  not seen (owner 2026-11-13: 30 broadcasts for six sides playing twice, measured). Every other caller leaves it. */
-  opts: { fixturePushes?: boolean } = {},
+   *  not seen (owner 2026-11-13: 30 broadcasts for six sides playing twice, measured). Every other caller leaves it.
+   *  `reason: "call"` (match-day-call.ts only) names the Match Day nudge a call sends; every other write sends `schedule`. */
+  opts: { fixturePushes?: boolean; reason?: "call" } = {},
 ): void {
   fireDivisionRevalidate(divisionId, competitionId);
   // W2 — the competition HUB document (`pub:v1:hub:{competitionId}`) carries
@@ -78,12 +80,18 @@ export function afterScheduleWrite(
   // own poll. And a link live now nudges its court's phone whichever day the fixture is on: a nudge only makes the phone beat,
   // and the beat decides, so a spare nudge is harmless.
   const court = pushFixtures && realtimePublishEnabled() ? courtNudges(fixtureIds) : Promise.resolve<RealtimeMessage[]>([]);
+  // T2.3: the competition's open Match Day codes hear of the write in the same POST. That read starts now too, under the same rules
+  // (publishing on, a bound, never a second POST), and is skipped for `fixturePushes: false` — the quick match's create, whose
+  // competition has no Match Day code. Unlike the court read it is NOT held back by SCHEDULE_FIXTURE_PUSH_CAP: a whole-division
+  // apply, publish or start changes the day a Match Day screen shows, and costs one message per open code, not per fixture.
+  const matchDay = opts.fixturePushes === false ? Promise.resolve<RealtimeMessage[]>([]) : matchDayNudgesFor(competitionId, opts.reason ?? "schedule");
   sendAfterDeleteOrBound(deleted, () => {
     fireNudge(
       (async () => {
         const nudges = await court;
+        const dayNudges = await matchDay;
         await broadcast(
-          [...divisionMessages(divisionId, reason), ...(pushFixtures ? fixtureIds.map((id) => fixtureMessage(id, "schedule")) : []), ...nudges],
+          [...divisionMessages(divisionId, reason), ...(pushFixtures ? fixtureIds.map((id) => fixtureMessage(id, "schedule")) : []), ...nudges, ...dayNudges],
           "schedule",
         );
       })().catch((err: unknown) => {
