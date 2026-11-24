@@ -19,13 +19,11 @@ import { History, LockOpen, Play, type LucideIcon } from "lucide-react";
 import { apiV1 } from "@/lib/client-v1";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
+import { FROZEN_SEAT_FEATURE } from "@/lib/seat-frozen";
 import { wireOf } from "./youtube-connect-panel";
 import { STREAM_KIND_BRAND } from "./stream-platform-mark";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
-
-/** The admin seat an over-quota org has frozen (auth.ts `requireOrgAuth`): a 402 PAYMENT_REQUIRED whose `feature_key` is this. */
-const FROZEN_SEAT_FEATURE = "members.max";
 
 /** A refused switch as the page's own sentence, by the route's machine code. Anything else is the retry line. */
 export function seaznSwitchErrorText(msg: Msg, err: unknown): string {

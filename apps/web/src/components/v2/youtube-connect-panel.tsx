@@ -20,6 +20,7 @@ import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { apiV1 } from "@/lib/client-v1";
 import type { MessageKey } from "@/lib/messages";
+import { FROZEN_SEAT_FEATURE } from "@/lib/seat-frozen";
 import {
   GOOGLE_THIRD_PARTY_ACCESS_URL, YOUTUBE_DEAD_GRANT_PURGE_DAYS, YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_GUIDELINES_URL, YOUTUBE_PRIVACIES, YOUTUBE_TOS_URL, youtubeLanding,
   type YoutubeLandingCode, type YoutubePrivacy,
@@ -39,9 +40,6 @@ export function wireOf(err: unknown): { status: number; code: string; extra: Rec
   if (typeof status !== "number" || typeof code !== "string") return null;
   return { status, code, extra: typeof extra === "object" && extra !== null ? (extra as Record<string, unknown>) : {} };
 }
-
-/** The admin seat an over-quota org has frozen (auth.ts `requireOrgAuth`): a 402 PAYMENT_REQUIRED whose `feature_key` is this. */
-const FROZEN_SEAT_FEATURE = "members.max";
 
 /** A refusal of a connection call as this page's own sentence, by the route's machine code (openapi.ts documents each one).
  *  Anything unmapped is the generic retry line — never the server's English. */

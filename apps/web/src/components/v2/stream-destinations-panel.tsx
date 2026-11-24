@@ -22,6 +22,7 @@ import { useMsg } from "@/components/i18n/dict-provider";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { UTC, fmtPublicDate } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
+import { FROZEN_SEAT_FEATURE } from "@/lib/seat-frozen";
 import {
   ADDABLE_STREAM_PLATFORMS, DESTINATION_LABEL_EMPTY, DESTINATION_NOT_ALLOWED, STREAM_KEY_EMPTY, TARGET_UNREADABLE, isStreamPlatform,
   type StreamPlatform, SEAZN_TARGET_FIXED,
@@ -53,10 +54,6 @@ export function destinationMutationOutcome(status: number, _op: RowOp): "refresh
 export function rowLock(t: Pick<StreamTarget, "inUse">): { locked: boolean; matchNo: number | null } {
   return t.inUse ? { locked: true, matchNo: t.inUse.matchNo } : { locked: false, matchNo: null };
 }
-
-/** The admin seat an over-quota org has frozen (auth.ts `requireOrgAuth` → entitlement-freeze.ts
- *  `assertMemberNotFrozen`): a 402 PAYMENT_REQUIRED whose `feature_key` is the member limit. */
-const FROZEN_SEAT_FEATURE = "members.max";
 
 /**
  * A refusal as this page's own sentence, by the route's machine code (openapi.ts documents each one). `kind` is the
