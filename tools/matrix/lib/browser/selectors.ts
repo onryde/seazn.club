@@ -208,6 +208,8 @@ export const DATA = data({
   scorebugHalf: { selector: '[data-role="v3-scorebug-half"]', file: `${V2}/scorepad/v3/scorebug.tsx`, needle: 'data-role="v3-scorebug-half"' },
   tile: { selector: "[data-tile-id]", file: `${V2}/scorepad/v3/tile-grid.tsx`, needle: "data-tile-id={" },
   choiceOption: { selector: "[data-choice-option-id]", file: `${V2}/scorepad/v3/guided-sheet.tsx`, needle: "data-choice-option-id={" },
+  // A round section of the run sheet, drawn folded or open (a folded round mounts no rows, so rows alone cannot say a stage has fixtures).
+  runSheetRound: { selector: "[data-run-sheet-round]", file: `${V2}/desk/run-sheet.tsx`, needle: "data-run-sheet-round={withBars" },
   rowAction: { selector: "[data-row-action]", file: `${V2}/desk/run-sheet-row.tsx`, needle: "data-row-action={action.kind}" },
   fixtureRow: { selector: "li[data-fixture-no]", file: `${V2}/desk/run-sheet-row.tsx`, needle: "<li data-fixture-no={" },
   // Task 5.

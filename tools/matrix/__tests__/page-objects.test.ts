@@ -2083,7 +2083,7 @@ describe("completeStageUi: the completion shot names the stage's place in its di
   /** A fixtures tab with one rail per stage id: a click on a stage's Complete answers that stage's /complete.
    *  `width`: the viewport; `folded`: the rails' triggers are visible (below md, where the rail folds behind them);
    *  `defaultFilter`: the filter the run sheet opens pressed on, with the rows it draws. */
-  function railPage(stageIds: readonly string[], o: { width?: number; folded?: boolean; defaultFilter?: { filter: string; rows: number[] }; rail?: { generate: boolean; complete: boolean; rows: number } } = {}) {
+  function railPage(stageIds: readonly string[], o: { width?: number; folded?: boolean; defaultFilter?: { filter: string; rows: number[] }; rail?: { generate: boolean; complete: boolean; rows: number; rounds?: number } } = {}) {
     const rail = o.rail ?? { generate: true, complete: true, rows: 1 };
     const log: string[] = [];
     let screen = 0;
@@ -2104,6 +2104,7 @@ describe("completeStageUi: the completion shot names the stage's place in its di
         if (d.endsWith(`>> testid:${TESTID.stageGenerate.id}`)) return rail.generate ? 1 : 0;
         if (d.endsWith(`>> testid:${TESTID.stageComplete.id}`)) return rail.complete ? 1 : 0;
         if (d === DATA.fixtureRow.selector) return rail.rows;
+        if (d === DATA.runSheetRound.selector) return rail.rounds ?? 0;
         return o.defaultFilter !== undefined && d === `${RUN_SHEET_FILTER_OPTIONS}[aria-pressed="true"]` ? 1 : 0;
       },
       getAttribute: async (a: string) => (a === "data-filter" && o.defaultFilter !== undefined ? o.defaultFilter.filter : null),
@@ -2212,6 +2213,14 @@ describe("completeStageUi: the completion shot names the stage's place in its di
     expect(paths).toEqual(["generated-by-start"]);
     // The screen did not change, and the picture must not be judged as if it had.
     expect(g.evidence.checks().find((c) => c.id === "visual-evidence")).toMatchObject({ verdict: "pass", checked: 2 });
+  });
+
+  it("generateUi: no Generate, Complete offered, every round folded (0 rows mounted, 3 round sections) is still generated-by-start", async () => {
+    const g = railPage(["st-1"], { rail: { generate: false, complete: true, rows: 0, rounds: 3 } });
+    const paths: string[] = [];
+    await generateUi(g.ctx, WHERE, "st-1", { onGenerate: (p) => { paths.push(p); } });
+    expect(paths).toEqual(["generated-by-start"]);
+    expect(g.log.some((l) => l.startsWith("click "))).toBe(false);
   });
 
   it("generateUi: no Generate and not an active stage with fixtures is a fault, never a pass (pending stage; Complete but no rows)", async () => {

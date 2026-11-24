@@ -4,7 +4,7 @@
 // names which path the step took instead of clicking a control that is not there.
 //
 //   live-click          the rail offered Generate and the driver clicked it;
-//   generated-by-start  no Generate, the stage offers Complete (active with fixtures) and the sheet lists fixtures;
+//   generated-by-start  no Generate, the stage offers Complete (active with fixtures) and the sheet lists fixtures (rows, or round sections whose rows are folded away);
 //   anything else       a StageNotGeneratable fault, never a pass (a pending stage with no Generate is a defect).
 import type { CaseResultV2 } from "./results.ts";
 
@@ -18,11 +18,14 @@ export interface GenerateRailSeen {
   /** Complete is offered only on a started stage that has fixtures (stageActions). */
   readonly completeOffered: boolean;
   readonly fixtureRows: number;
+  /** Round sections the sheet draws (`[data-run-sheet-round]`), folded or open. A finished round starts folded and mounts no
+   *  rows (run-sheet.tsx `open && section.rows.map`), so after the last round fixtureRows is 0 while the sections still show. */
+  readonly roundSections: number;
 }
 
 export class StageNotGeneratable extends Error {
   constructor(seen: GenerateRailSeen) {
-    super(`browser: stage ${seen.stageId} offers no Generate and is not an active stage with fixtures (Generate offered: ${seen.generateOffered}, Complete offered: ${seen.completeOffered}, run-sheet rows: ${seen.fixtureRows}) — neither a click to make nor a stage Start already generated`);
+    super(`browser: stage ${seen.stageId} offers no Generate and is not an active stage with fixtures (Generate offered: ${seen.generateOffered}, Complete offered: ${seen.completeOffered}, run-sheet rows: ${seen.fixtureRows}, round sections: ${seen.roundSections}) — neither a click to make nor a stage Start already generated`);
     this.name = "StageNotGeneratable";
   }
 }
@@ -30,7 +33,7 @@ export class StageNotGeneratable extends Error {
 /** The path a generate step takes, from what the rail showed. Throws StageNotGeneratable for any other state. */
 export function classifyGenerateRail(seen: GenerateRailSeen): GeneratePath {
   if (seen.generateOffered) return "live-click";
-  if (seen.completeOffered && seen.fixtureRows > 0) return "generated-by-start";
+  if (seen.completeOffered && (seen.fixtureRows > 0 || seen.roundSections > 0)) return "generated-by-start";
   throw new StageNotGeneratable(seen);
 }
 
