@@ -19,6 +19,9 @@
 //   O6 size              `size` accepted as any number, or appended without the ladder                  -> "size comes only from the ladder"
 //   O7 one return        the schema accepts divisionId beside fixtureId / returnTo settings             -> "exactly one return is named"
 //   O8 competition scope read the gates for the org instead of the division's competition               -> "…and the gates read the division's competition"
+//   O12 division flag    delete the division arm's own flag gate (streaming admitting is enough)         -> "the division return is behind the Online Chess flag, whatever streaming says"
+//   O13 flag asked twice drop `chessOffered = true` (the streaming gates ask the flag again)             -> same test (asked once per request)
+//   O14 flag only on refusal  the division arm's gate runs only when streaming refuses (the pre-fix shape) -> same test (flag off + streaming admits is 403)
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
@@ -183,6 +186,39 @@ describe.skipIf(!HAS_DB)("the checkout gate: phone streaming OR Online Chess (§
 });
 
 describe.skipIf(!HAS_DB)("returnTo: \"division\" — the division's own page, organisers only (§7.6, §8.4)", () => {
+  // The division return is behind the Online Chess flag (the first test below proves it); every other case here is about the
+  // return itself, so the flag is on.
+  beforeEach(() => { chess.on = true; });
+
+  it("the division return is behind the Online Chess flag, whatever streaming says: flag off is a 403 ONLINE_CHESS_DISABLED before any lookup, streaming on or off; flag on sells; it is asked once", async () => {
+    const s = await scene();
+    signIn(s.o.orgId, s.o.auth.userId!);
+    const body = { orgId: s.o.orgId, pack: 5, returnTo: "division", divisionId: s.divisionId };
+    // a club that streams (the pro org's streaming gates all admit) but is not offered Online Chess
+    chess.on = false;
+    chess.asked.length = 0;
+    let res = await post(body);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ ok: false, code: "ONLINE_CHESS_DISABLED" });
+    expect(createRelayCheckoutMock, "Stripe is never reached").not.toHaveBeenCalled();
+    expect(chess.asked, "asked once, for the org and the buyer").toEqual([{ orgId: s.o.orgId, userId: s.o.auth.userId }]);
+    // the same refusal before the division is looked up: an unknown division id is the flag's 403, not a 404
+    res = await post({ ...body, divisionId: randomUUID() });
+    expect(res.status, "the flag is asked before the division is looked up").toBe(403);
+    // …and with streaming switched off too, the answer is the flag's (the new door is Online Chess's), not the streaming refusal
+    await override(s.o.orgId, "streaming.relay", false);
+    res = await post(body);
+    expect([res.status, (await res.json()).code]).toEqual([403, "ONLINE_CHESS_DISABLED"]);
+    expect(createRelayCheckoutMock).not.toHaveBeenCalled();
+    // the positive pair: flag on, same body, streaming still off — sells, and the flag was asked once
+    chess.on = true;
+    chess.asked.length = 0;
+    res = await post(body);
+    expect(res.status).toBe(200);
+    expect(createRelayCheckoutMock).toHaveBeenCalledTimes(1);
+    expect(chess.asked, "asked once per request even when streaming refused (the gate remembers its answer)").toEqual([{ orgId: s.o.orgId, userId: s.o.auth.userId }]);
+  });
+
   it("builds the division's own URL — Fixtures tab, receipt open, Stripe's session placeholder — and appends `size` only from the ladder", async () => {
     const s = await scene();
     signIn(s.o.orgId, s.o.auth.userId!);
@@ -307,16 +343,11 @@ describe.skipIf(!HAS_DB)("returnTo: \"division\" — the division's own page, or
     expect(createRelayCheckoutMock).not.toHaveBeenCalled();
   });
 
-  it("the division return meets the same gates: with Online Chess off and streaming off it is the streaming refusal; with Online Chess offered it sells — and the gates read the division's competition", async () => {
+  it("the division return meets the streaming gates only to lift them: streaming off and Online Chess offered sells — and the gates read the division's competition", async () => {
     const s = await scene();
     await override(s.o.orgId, "streaming.relay", false);
     signIn(s.o.orgId, s.o.auth.userId!);
     const body = { orgId: s.o.orgId, pack: 5, returnTo: "division", divisionId: s.divisionId };
-    const refused = await post(body);
-    expect(refused.status).toBe(402);
-    expect(await refused.json()).toMatchObject({ ok: false, code: "plan_lacks_relay" });
-    expect(createRelayCheckoutMock).not.toHaveBeenCalled();
-    chess.on = true;
     expect((await post(body)).status).toBe(200);
     expect(createRelayCheckoutMock).toHaveBeenCalledTimes(1);
 

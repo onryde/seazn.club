@@ -11,7 +11,7 @@ import { requireBillingOwner } from "@/server/usecases/billing-manage";
 import { routes } from "@/lib/routes";
 import { isEditorRole } from "@/lib/types";
 import { OnlineSizeS } from "@/server/api-v1/schemas/online-package";
-import { onlineChessOffered } from "@/server/usecases/external-play/online-chess-flag";
+import { onlineChessDisabled, onlineChessOffered } from "@/server/usecases/external-play/online-chess-flag";
 import { NextResponse } from "next/server";
 import { captureError } from "@/lib/sentry";
 import { relayUnavailable } from "@/server/relay/drivers";
@@ -84,9 +84,9 @@ async function refuseStreaming(orgId: string, competitionId: string | undefined)
  * `orgId` must EQUAL the resolved org (400): the resolver reads a cookie, and
  * a stale one must not buy credits for a different organisation. Then, for a
  * fixture purchase, the fixture must be that org's (404, never "forbidden");
- * a Settings purchase has no fixture and its entitlements resolve for the org; a division purchase is for an ORGANISER
- * of the division's org only (403 — owner or admin, the people who may pay a package) and the division must be that
- * org's (404). Then — BEFORE any
+ * a Settings purchase has no fixture and its entitlements resolve for the org; a division purchase is behind the Online Chess
+ * flag (403 ONLINE_CHESS_DISABLED, asked first, whatever streaming says), then for an ORGANISER of the division's org only (403 —
+ * owner or admin, the people who may pay a package), and the division must be that org's (404). Then — BEFORE any
  * Stripe call — the deployment must have a relay at all (503
  * `ingest_unavailable`, Task 14b review I2), and the org's resolved
  * `streaming.overlay` and `streaming.relay` must both be true — the two keys
@@ -116,6 +116,9 @@ export async function POST(req: Request) {
     let competitionId: string | undefined;
     let fixtureId: string | undefined;
     let landing: string;
+    // Set once the Online Chess flag has been asked and answered yes on this request (the division arm's own gate), so the streaming
+    // gates below do not ask the same remote question twice.
+    let chessOffered = false;
     if ("fixtureId" in body) {
       const [fx] = await sql<{ competition_id: string; org_slug: string; comp_slug: string; div_slug: string; fixture_no: number }[]>`
         select c.id as competition_id, o.slug as org_slug, c.slug as comp_slug, d.slug as div_slug, f.fixture_no
@@ -131,6 +134,11 @@ export async function POST(req: Request) {
       // opens the Stream panel on its Phone tab; the fixture page reconciles `session_id` before reading the balance.
       landing = `${routes.fixture(fx.org_slug, fx.comp_slug, fx.div_slug, fx.fixture_no)}?stream=open&checkout=success&session_id={CHECKOUT_SESSION_ID}`;
     } else if (body.returnTo === "division") {
+      // The division return is a NEW door and belongs to Online Chess (§7.6): behind the same flag as every other start gate (403
+      // ONLINE_CHESS_DISABLED), asked FIRST and whatever streaming says — a club that streams but is not offered Online Chess has
+      // no package to pay for from a division, and the return page it names would not offer one.
+      if (!(await onlineChessOffered({ orgId, userId: user.id }))) throw onlineChessDisabled();
+      chessOffered = true;
       // An organiser pays for a division's package (§7.6): the same role the pay door asks (`isEditorRole`, usecases/online-package/
       // pay.ts), read for the RESOLVED org. A member who only views, and a billing payer who is no member of the org, are refused
       // before the division is even looked up.
@@ -162,7 +170,7 @@ export async function POST(req: Request) {
     // The streaming gates, in order. Each is a refusal the buyer's Phone tab already reads; none is final while Online Chess is
     // offered to the org (spec 2026-11-23 §7.6 — "Also allowed when Online Chess is offered to the org").
     const streamingRefusal = await refuseStreaming(orgId, competitionId);
-    if (streamingRefusal && !(await onlineChessOffered({ orgId, userId: user.id }))) throw streamingRefusal;
+    if (streamingRefusal && !(chessOffered || (await onlineChessOffered({ orgId, userId: user.id })))) throw streamingRefusal;
 
     const [sub] = await sql<{ stripe_customer_id: string | null }[]>`
       select stripe_customer_id from subscriptions where id = ${subscriptionId}`;
