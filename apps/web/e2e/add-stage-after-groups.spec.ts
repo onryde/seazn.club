@@ -93,7 +93,8 @@ test.describe("Add stage after groups: one count, a live line, a draw that works
         count: QUALIFIED,
         take: fill("templates.detail.take.and", {
           a: fill("templates.detail.take.topNPerGroup", { n: 2 }),
-          b: fill("templates.detail.take.bestNth", { count: 2, nth: 3 }),
+          // The third place is an ordinal ("3rd"): English picks it by the ordinal rule - 3 is the "few" category (1 one, 2 two, 3 few).
+          b: fill("templates.detail.take.bestNth", { count: 2, nth: fill("templates.detail.take.ordinal.few", { n: 3 }) }),
         }),
       }),
     );

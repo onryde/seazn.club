@@ -46,8 +46,8 @@ export function bracketOf(count: number): { size: number; byes: number; whole: b
 }
 
 /** The line under the count: "{count} go through: Top 2 per group and 2 best 3rd-placed." and, for a knockout, its round. */
-export function groupTakeSummary(msg: Msg, o: { count: number; pools: number; destKind: string }): { take: string; round: string | null } {
-  const rules = groupsKoTake(o.count, o.pools).map((rule) => takeRuleText(msg as never, rule as Parameters<typeof takeRuleText>[1]));
+export function groupTakeSummary(msg: Msg, o: { count: number; pools: number; destKind: string; locale: Locale }): { take: string; round: string | null } {
+  const rules = groupsKoTake(o.count, o.pools).map((rule) => takeRuleText(msg as never, rule as Parameters<typeof takeRuleText>[1], o.locale));
   const joined = rules.reduce((acc, text) => msg("templates.detail.take.and", { a: acc, b: text }));
   const take = msg("schedule.groupTake.derived", { count: o.count, take: joined });
   if (o.destKind !== "knockout") return { take, round: null };
@@ -84,7 +84,7 @@ export function GroupTakeField({
       </p>
     );
   }
-  const summary = groupTakeSummary(msg, { count: value, pools: source.pools, destKind });
+  const summary = groupTakeSummary(msg, { count: value, pools: source.pools, destKind, locale });
   const lo = counts[0]!;
   const hi = counts[counts.length - 1]!;
   const omitted = hi - lo + 1 > counts.length;

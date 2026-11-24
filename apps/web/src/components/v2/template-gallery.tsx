@@ -35,7 +35,8 @@ import {
 import { doubleElimFormatReason } from "@/lib/feature-copy";
 import { DateTimeField } from "@/components/v2/shared/datetime-field";
 import { routes } from "@/lib/routes";
-import { useT } from "@/components/i18n/dict-provider";
+import { useLocaleOrDefault, useT } from "@/components/i18n/dict-provider";
+import { ordinalText, type OrdinalKeys } from "@/lib/bestnth-basis-note";
 import type { CompetitionTemplate, TemplateStage } from "@/server/templates/schema";
 import { templateEntrantTotal } from "@/server/templates/summary";
 import { isAnyDivision, resolveTemplate, stageShapes } from "@/server/templates/resolve";
@@ -117,6 +118,14 @@ export function templateStructureChain(msg: Msg, division: CompetitionTemplate["
 
 type TakeRule = NonNullable<TemplateStage["progression"]>["sources"][number]["take"][number];
 
+/** The four ordinal patterns the "best Nth-placed" phrase reads its place from (`ordinalText` picks by the locale's ordinal rule). */
+const TAKE_ORDINAL_KEYS: OrdinalKeys = {
+  one: "templates.detail.take.ordinal.one",
+  two: "templates.detail.take.ordinal.two",
+  few: "templates.detail.take.ordinal.few",
+  other: "templates.detail.take.ordinal.other",
+};
+
 /** One take rule -> its own translated phrase. Each rule kind is ONE
  *  dictionary key with parameters, never fragments concatenated at the call
  *  site — see ProgressionSchema/TakeRuleSchema (api-v1/schemas/stages.ts) for the
@@ -124,12 +133,13 @@ type TakeRule = NonNullable<TemplateStage["progression"]>["sources"][number]["ta
  *  fails tsc at the `never` below until it has a phrase. Only 3 kinds are reachable from catalog data today (no catalog
  *  entry emits picks/roundLosers/firstLosses; those are picker-only, format-templates.ts) but the rest render a translated
  *  phrase, never the raw kind and never a throw. */
-export function takeRuleText(msg: Msg, rule: TakeRule): string {
+export function takeRuleText(msg: Msg, rule: TakeRule, locale: string): string {
   switch (rule.kind) {
     case "topNPerGroup":
       return msg("templates.detail.take.topNPerGroup", { n: rule.n });
     case "bestNth":
-      return msg("templates.detail.take.bestNth", { count: rule.count, nth: rule.nth });
+      // The place is an ordinal in the reader's language ("3rd-placed"), by the locale's own rule - the public tables' (`ordinalText`).
+      return msg("templates.detail.take.bestNth", { count: rule.count, nth: ordinalText(rule.nth, locale, (key, vars) => msg(key as never, vars), TAKE_ORDINAL_KEYS) });
     case "rankRange":
       return msg("templates.detail.take.rankRange", { from: rule.from, to: rule.to });
     case "roundLosers":
@@ -161,7 +171,7 @@ export type ProgressionLine = { key: string; text: string };
  *  Knockout both reading "Top 2 per group -> ...", were otherwise
  *  indistinguishable). The empty array (no stage carries `.seeding`) is the
  *  pre-P7 catalog shape, and the caller renders nothing for it. */
-export function templateProgressionLines(msg: Msg, template: CompetitionTemplate): ProgressionLine[] {
+export function templateProgressionLines(msg: Msg, template: CompetitionTemplate, locale: string): ProgressionLine[] {
   const lines: ProgressionLine[] = [];
   for (const division of template.divisions) {
     for (let i = 0; i < division.stages.length; i++) {
@@ -179,7 +189,7 @@ export function templateProgressionLines(msg: Msg, template: CompetitionTemplate
       if (!sourceStage) continue;
       const take = joinTakeTexts(
         msg,
-        stage.progression.sources.flatMap((s) => s.take).map((rule) => takeRuleText(msg, rule)),
+        stage.progression.sources.flatMap((s) => s.take).map((rule) => takeRuleText(msg, rule, locale)),
       );
       const target = msg(stage.i18nNameKey);
       lines.push({
@@ -414,6 +424,7 @@ export function TemplateDetailSheet({
   viewerPlan: ViewerPlan;
 }) {
   const msg = useT();
+  const locale = useLocaleOrDefault();
   const router = useRouter();
   const [name, setName] = useState(msg(template.i18n.nameKey));
   const [startsOn, setStartsOn] = useState("");
@@ -435,7 +446,7 @@ export function TemplateDetailSheet({
   // What the sheet describes is what the create builds: the same resolveTemplate the server runs.
   const resolved = choice ? resolveTemplate(template, toChoice(choice)) : null;
   const shown = resolved?.ok ? resolved.template : template;
-  const progressionLines = templateProgressionLines(msg, shown);
+  const progressionLines = templateProgressionLines(msg, shown, locale);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();

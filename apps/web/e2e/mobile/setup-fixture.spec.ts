@@ -1057,7 +1057,7 @@ test("portfolio panels (P1/P2/P4) hold at this width", async ({ page, request })
   // would still pass a bare visibility check.
   const progression = page.getByTestId("template-detail-progression");
   await expect(progression).toBeVisible();
-  await expect(progression).toContainText("Group Stage: Top 2 per group and 4 best 3-placed → Knockout");
+  await expect(progression).toContainText("Group Stage: Top 2 per group and 4 best 3rd-placed → Knockout");
 
   // Regression guard for T4's reorder: form fields (Name/Starts on/Ends on)
   // must render ABOVE the Structure/Progression prose, not below it — pre-T4

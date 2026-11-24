@@ -177,27 +177,32 @@ describe("addStageGroupSource: which stage the form follows", () => {
 describe("the line under the count: split and round", () => {
   const msgEn = en as never;
   it("a whole wave in a whole round: 8 of 4 groups = Top 2 per group, quarter-finals", () => {
-    const s = groupTakeSummary(msgEn, { count: 8, pools: 4, destKind: "knockout" });
+    const s = groupTakeSummary(msgEn, { count: 8, pools: 4, destKind: "knockout", locale: "en" });
     expect(s.take).toBe(en("schedule.groupTake.derived", { count: 8, take: en("templates.detail.take.topNPerGroup", { n: 2 }) }));
     expect(s.round).toBe(en("schedule.groupTake.whole", { round: en("bracket.round.quarter") }));
   });
   it("a remainder and byes: 10 of 4 groups = Top 2 per group and 2 best 3rd-placed, a bracket of 16 with 6 byes", () => {
-    const s = groupTakeSummary(msgEn, { count: 10, pools: 4, destKind: "knockout" });
-    const take = en("templates.detail.take.and", { a: en("templates.detail.take.topNPerGroup", { n: 2 }), b: en("templates.detail.take.bestNth", { count: 2, nth: 3 }) });
+    const s = groupTakeSummary(msgEn, { count: 10, pools: 4, destKind: "knockout", locale: "en" });
+    // Rule: the third place is "3rd" in English, and the line says so - "2 best 3rd-placed", never "2 best 3-placed".
+    const take = en("templates.detail.take.and", { a: en("templates.detail.take.topNPerGroup", { n: 2 }), b: en("templates.detail.take.bestNth", { count: 2, nth: "3rd" }) });
+    expect(take).toBe("Top 2 per group and 2 best 3rd-placed");
     expect(s.take).toBe(en("schedule.groupTake.derived", { count: 10, take }));
     expect(s.round).toBe(en("schedule.groupTake.byes", { size: 16, byes: 6 }));
+  });
+  it("the line reads its ordinal in the locale it is handed (the English words, the French rule: 3 is 'other' -> '3th')", () => {
+    expect(groupTakeSummary(msgEn, { count: 10, pools: 4, destKind: "knockout", locale: "fr" }).take).toContain("2 best 3th-placed");
   });
   it("every whole round has its own name, derived from the count: 2 final, 4 semi, 8 quarter, 16 round of 16; a stepladder names no round", () => {
     const names = new Map<number, string>([[2, "bracket.round.final"], [4, "bracket.round.semi"], [8, "bracket.round.quarter"]]);
     let checked = 0;
     for (const count of [2, 4, 8, 16, 32]) {
-      const s = groupTakeSummary(msgEn, { count, pools: 2, destKind: "knockout" });
+      const s = groupTakeSummary(msgEn, { count, pools: 2, destKind: "knockout", locale: "en" });
       const name = names.has(count) ? en(names.get(count) as never) : en("bracket.round.roundOf", { n: count });
       expect(s.round, `count ${count}`).toBe(en("schedule.groupTake.whole", { round: name }));
       checked += 1;
     }
     expect(checked).toBe(5);
-    expect(groupTakeSummary(msgEn, { count: 8, pools: 4, destKind: "stepladder" }).round).toBeNull();
+    expect(groupTakeSummary(msgEn, { count: 8, pools: 4, destKind: "stepladder", locale: "en" }).round).toBeNull();
   });
   it("sweep: whole exactly when the count is a power of two, byes = bracket - count, 2..32", () => {
     let checked = 0;
@@ -218,15 +223,24 @@ describe("the line under the count: split and round", () => {
   });
   it("every locale reads the line with no placeholder left", () => {
     let checked = 0;
-    for (const dict of [enUi, esUi, frUi, nlUi]) {
+    let ordinals = 0;
+    for (const [locale, dict] of [["en", enUi], ["es", esUi], ["fr", frUi], ["nl", nlUi]] as const) {
       const msg = ((key: string, vars?: Record<string, string | number>) => t(dict as never, key, vars)) as never;
       for (const [count, kind] of [[8, "knockout"], [10, "knockout"], [3, "stepladder"]] as const) {
-        const s = groupTakeSummary(msg, { count, pools: count === 3 ? 4 : 4, destKind: kind });
+        const s = groupTakeSummary(msg, { count, pools: count === 3 ? 4 : 4, destKind: kind, locale });
         expect(s.take).not.toMatch(/\{\w+\}/);
         if (s.round !== null) expect(s.round).not.toMatch(/\{\w+\}/);
+        // Ten through is top 2 per group + the 2 best third-placed: the third is an ordinal in the reader's language (the written
+        // rule of each: 3rd, 3.º, 3e, 3e), and the bare "3" is not left where it belongs.
+        if (count === 10) {
+          expect(s.take, `${locale}: the third place is an ordinal`).toContain({ en: "3rd", es: "3.º", fr: "3e", nl: "3e" }[locale]);
+          expect(s.take, `${locale}: not the bare number`).not.toMatch(/\b3(?![.\wº])(?!e)/);
+          ordinals += 1;
+        }
         checked += 1;
       }
     }
     expect(checked).toBe(12);
+    expect(ordinals, "anti-vacuity: the ordinal was checked in all four locales").toBe(4);
   });
 });

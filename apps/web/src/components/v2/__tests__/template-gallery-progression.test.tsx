@@ -102,13 +102,38 @@ function templateWith(stages: Stage[], sportKey = "football"): CompetitionTempla
 
 describe("takeRuleText — one take rule -> one translated phrase", () => {
   it("topNPerGroup", () => {
-    expect(takeRuleText(enMsg, { kind: "topNPerGroup", n: 2 })).toBe("Top 2 per group");
+    expect(takeRuleText(enMsg, { kind: "topNPerGroup", n: 2 }, "en")).toBe("Top 2 per group");
   });
-  it("bestNth", () => {
-    expect(takeRuleText(enMsg, { kind: "bestNth", nth: 3, count: 4 })).toBe("4 best 3-placed");
+  it("bestNth reads a proper ordinal: '4 best 3rd-placed', never '4 best 3-placed'", () => {
+    expect(takeRuleText(enMsg, { kind: "bestNth", nth: 3, count: 4 }, "en")).toBe("4 best 3rd-placed");
+  });
+  // The ordinal is each language's own, from the written rules of those languages (never read back from the code under test): English
+  // 1st 2nd 3rd 4th, 11th 12th 13th (the teens take -th), 21st 22nd 23rd; Spanish 3.º; French 1er then 2e 3e; Dutch 1e 2e 3e.
+  it("bestNth: every nth in every locale takes its own ordinal (the English teens and 21st/22nd/23rd included)", () => {
+    const EXPECT: Record<Locale, Record<number, string>> = {
+      en: { 1: "1st", 2: "2nd", 3: "3rd", 4: "4th", 10: "10th", 11: "11th", 12: "12th", 13: "13th", 21: "21st", 22: "22nd", 23: "23rd", 24: "24th" },
+      es: { 1: "1.º", 2: "2.º", 3: "3.º", 4: "4.º", 10: "10.º", 11: "11.º", 12: "12.º", 13: "13.º", 21: "21.º", 22: "22.º", 23: "23.º", 24: "24.º" },
+      fr: { 1: "1er", 2: "2e", 3: "3e", 4: "4e", 10: "10e", 11: "11e", 12: "12e", 13: "13e", 21: "21e", 22: "22e", 23: "23e", 24: "24e" },
+      nl: { 1: "1e", 2: "2e", 3: "3e", 4: "4e", 10: "10e", 11: "11e", 12: "12e", 13: "13e", 21: "21e", 22: "22e", 23: "23e", 24: "24e" },
+    };
+    let checked = 0;
+    for (const [locale, dict] of ALL_DICTS) {
+      const msg: Msg = (key, vars) => tRuntime(dict, key, vars);
+      for (const [nth, ordinal] of Object.entries(EXPECT[locale])) {
+        const out = takeRuleText(msg, { kind: "bestNth", nth: Number(nth), count: 2 }, locale);
+        // The whole ordinal, not a prefix of a longer one: "21e" is not found inside "21er".
+        expect(out, `${locale} ${nth}`).toMatch(new RegExp(`(^|\\s)${ordinal.replace(/\./g, "\\.")}(?=[\\s-]|$)`));
+        // The bare number is not left where the ordinal belongs ("3-placed", "3èmes"), and nothing is unfilled.
+        expect(out, `${locale} ${nth}: no unfilled slot`).not.toMatch(/\{\w+\}|templates\.detail/);
+        expect(out, `${locale} ${nth}: the count is there`).toContain("2");
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: 4 locales x 12 places").toBe(48);
+    expect(takeRuleText({ en: enMsg }.en, { kind: "bestNth", nth: 3, count: 2 }, "en"), "the form's own example").toBe("2 best 3rd-placed");
   });
   it("rankRange", () => {
-    expect(takeRuleText(enMsg, { kind: "rankRange", from: 1, to: 4 })).toBe("Ranked 1–4");
+    expect(takeRuleText(enMsg, { kind: "rankRange", from: 1, to: 4 }, "en")).toBe("Ranked 1–4");
   });
   // X-PL-6 (the take-reader sweep): every engine take kind has a TRANSLATED phrase, never the raw kind and never a throw.
   it("every take kind the wire declares reads a translated phrase in all 4 locales — firstLosses 'Every first-match loser'", () => {
@@ -124,32 +149,42 @@ describe("takeRuleText — one take rule -> one translated phrase", () => {
     for (const [locale, dict] of ALL_DICTS) {
       const msg: Msg = (key, vars) => tRuntime(dict, key, vars);
       for (const rule of rules) {
-        const out = takeRuleText(msg, rule);
+        const out = takeRuleText(msg, rule, locale);
         expect(out, `${locale} ${rule.kind}`).not.toBe(rule.kind);
         expect(out, `${locale} ${rule.kind}`).not.toMatch(/\{[a-zA-Z]+\}|templates\.detail/);
         checked++;
       }
     }
     expect(checked).toBe(rules.length * ALL_DICTS.length);
-    expect(takeRuleText(enMsg, { kind: "firstLosses" })).toBe("Every first-match loser");
+    expect(takeRuleText(enMsg, { kind: "firstLosses" }, "en")).toBe("Every first-match loser");
+  });
+});
+
+describe("the ordinal is read by the locale it is handed, whatever dictionary the words come from", () => {
+  // The English words with the French ordinal rule (only 1 is "one"): 3 is "other" -> "3th", where the English rule would say "3rd". The
+  // argument that reaches the rule is the one that decides, at every call site that threads it.
+  it("takeRuleText, and the progression lines the sheet builds from it", () => {
+    expect(takeRuleText(enMsg, { kind: "bestNth", nth: 3, count: 4 }, "fr")).toBe("4 best 3th-placed");
+    const lines = templateProgressionLines(enMsg, templateWith([GROUP_NO_SEEDING, EURO24_KNOCKOUT]), "fr");
+    expect(lines[0].text).toBe("Group Stage: Top 2 per group and 4 best 3th-placed → Knockout");
   });
 });
 
 describe("templateProgressionLines", () => {
   it("renders NO lines when no stage carries seeding — the pre-P7 catalog shape", () => {
-    expect(templateProgressionLines(enMsg, templateWith([GROUP_NO_SEEDING]))).toHaveLength(0);
+    expect(templateProgressionLines(enMsg, templateWith([GROUP_NO_SEEDING]), "en")).toHaveLength(0);
   });
 
   it("renders ALL take rules for a stage with more than one, not just the first, prefixed by its source stage", () => {
-    const lines = templateProgressionLines(enMsg, templateWith([GROUP_NO_SEEDING, EURO24_KNOCKOUT]));
+    const lines = templateProgressionLines(enMsg, templateWith([GROUP_NO_SEEDING, EURO24_KNOCKOUT]), "en");
     expect(lines).toHaveLength(1);
     expect(lines[0].text).toContain("Top 2 per group");
-    expect(lines[0].text).toContain("4 best 3-placed");
+    expect(lines[0].text).toContain("4 best 3rd-placed");
     expect(lines[0].text).toContain("Knockout");
     // P7/D1b T6: the line must NAME the stage entrants come FROM (the
     // previous stage's own i18nNameKey, "Group Stage" — GROUP_NO_SEEDING
     // here), not just describe the take rule and target.
-    expect(lines[0].text).toBe("Group Stage: Top 2 per group and 4 best 3-placed → Knockout");
+    expect(lines[0].text).toBe("Group Stage: Top 2 per group and 4 best 3rd-placed → Knockout");
   });
 
   // Reviewer gap 1: a DIFFERENT multiplicity than the euro24 case above —
@@ -170,7 +205,7 @@ describe("templateProgressionLines", () => {
     const t20 = getTemplate("t20-super8");
     if (!t20) throw new Error("t20-super8 missing from the catalog — catalog.test.ts should already fail this");
 
-    const lines = templateProgressionLines(enMsg, t20);
+    const lines = templateProgressionLines(enMsg, t20, "en");
     expect(lines).toHaveLength(2);
     expect(lines[0].text).toBe("Group Stage: Top 2 per group → Super 8");
     expect(lines[1].text).toBe("Super 8: Top 2 per group → Knockout");
@@ -266,8 +301,14 @@ describe("TemplateDetailSheet — progression section", () => {
     const html = renderSheet(templateWith([GROUP_NO_SEEDING, EURO24_KNOCKOUT]));
     expect(html).toContain('data-testid="template-detail-progression"');
     expect(html).toContain("Top 2 per group");
-    expect(html).toContain("4 best 3-placed");
+    expect(html).toContain("4 best 3rd-placed");
     expect(html).toContain("Group Stage: Top 2 per group");
+  });
+
+  it("reads the ordinal in the locale the sheet is shown in (English words, French rule: '3th'), not a fixed one", () => {
+    const html = renderSheet(templateWith([GROUP_NO_SEEDING, EURO24_KNOCKOUT]), enUi as Dict, "fr");
+    expect(html).toContain("4 best 3th-placed");
+    expect(html).not.toContain("4 best 3rd-placed");
   });
 
   it("renders BOTH t20-super8 progression lines (two seeded stages), each prefixed by its OWN source stage, not just one", () => {
