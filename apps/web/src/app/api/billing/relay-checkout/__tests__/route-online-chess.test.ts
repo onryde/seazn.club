@@ -27,6 +27,7 @@ import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { disabledRelayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
+import { onlineReceiptRequest } from "@/lib/online-package-return";
 import { ocCompetition, ocDivision, ocOrg, type Org } from "@/server/usecases/online-package/__tests__/_oc-rig";
 import { streamRig } from "@/server/relay/__tests__/_session-rig";
 
@@ -189,6 +190,32 @@ describe.skipIf(!HAS_DB)("returnTo: \"division\" — the division's own page, or
   // The division return is behind the Online Chess flag (the first test below proves it); every other case here is about the
   // return itself, so the flag is on.
   beforeEach(() => { chess.on = true; });
+
+  it("the success URL the route builds is what the division page reads: oc=pay reopens the receipt, size is the ladder's, the session is Stripe's (the producer through the page's own parser)", async () => {
+    const s = await scene();
+    signIn(s.o.orgId, s.o.auth.userId!);
+    // What Next hands the page as `searchParams`: the query of the URL, decoded, one string a key.
+    const queryOf = (returnUrl: string) => Object.fromEntries(new URL(returnUrl).searchParams);
+    const sizeless = await post({ orgId: s.o.orgId, pack: 5, returnTo: "division", divisionId: s.divisionId });
+    expect(sizeless.status).toBe(200);
+    const q0 = queryOf(lastArgs().returnUrl);
+    expect(q0, "the address the page receives").toEqual({ tab: "fixtures", oc: "pay", checkout: "success", session_id: "{CHECKOUT_SESSION_ID}" });
+    expect(onlineReceiptRequest(q0), "no size in the address: the receipt reopens on the stored size").toEqual({ size: null });
+    let parsed = 0;
+    for (const size of LADDER) {
+      createRelayCheckoutMock.mockClear();
+      expect((await post({ orgId: s.o.orgId, pack: 20, returnTo: "division", divisionId: s.divisionId, size })).status).toBe(200);
+      const q = queryOf(lastArgs().returnUrl);
+      expect(q.size, "premise: the route wrote the size").toBe(String(size));
+      expect(onlineReceiptRequest(q), `size ${size}`).toEqual({ size });
+      parsed += 1;
+    }
+    expect(parsed, "anti-vacuity: every ladder size went through the parser").toBe(LADDER.length);
+    // The other returns do NOT ask for the receipt: the settings return and a fixture return carry no `oc`.
+    createRelayCheckoutMock.mockClear();
+    expect((await post({ orgId: s.o.orgId, pack: 5, returnTo: "settings" })).status).toBe(200);
+    expect(onlineReceiptRequest(queryOf(lastArgs().returnUrl)), "the settings return opens no receipt").toBeNull();
+  });
 
   it("the division return is behind the Online Chess flag, whatever streaming says: flag off is a 403 ONLINE_CHESS_DISABLED before any lookup, streaming on or off; flag on sells; it is asked once", async () => {
     const s = await scene();
