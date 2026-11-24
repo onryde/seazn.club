@@ -26,6 +26,9 @@ const IAT = 1795514400;
 /** 2026-11-24T10:20:00.999Z — floors to 1795515600 (rounding would give …601). */
 const EXPIRES_AT = new Date(1795515600999);
 const EXP = 1795515600;
+/** Division ids as Postgres prints a uuid (lowercase, hyphenated): the only shape mintDivisionToken takes. */
+const DV1 = "d1000000-0000-4000-8000-0000000000d1";
+const DV2 = "d2000000-0000-4000-8000-0000000000d2";
 
 type Family = {
   family: string;
@@ -74,10 +77,10 @@ const FAMILIES: Family[] = [
   {
     family: "division",
     claim: "division_ids",
-    value: ["dv-1", "dv-2"],
+    value: [DV1, DV2],
     sub: "public-competition:cp-1",
     exp: EXP,
-    mint: () => realtime.mintDivisionToken("cp-1", ["dv-1", "dv-2"], EXPIRES_AT),
+    mint: () => realtime.mintDivisionToken("cp-1", [DV1, DV2], EXPIRES_AT),
   },
 ];
 
@@ -144,13 +147,13 @@ describe("realtime token families", () => {
   });
 
   it("division_ids is a JSON array on the wire — also for one division", async () => {
-    const two = await realtime.mintDivisionToken("cp-1", ["dv-1", "dv-2"], EXPIRES_AT);
-    expect(rawPayload(two)).toContain('"division_ids":["dv-1","dv-2"]');
-    const one = await realtime.mintDivisionToken("cp-1", ["dv-1"], EXPIRES_AT);
+    const two = await realtime.mintDivisionToken("cp-1", [DV1, DV2], EXPIRES_AT);
+    expect(rawPayload(two)).toContain(`"division_ids":["${DV1}","${DV2}"]`);
+    const one = await realtime.mintDivisionToken("cp-1", [DV1], EXPIRES_AT);
     const { payload } = await verify(one);
-    // V556's `?` operator matches only inside a jsonb ARRAY; a scalar would read nothing.
+    // V556 reads only a jsonb ARRAY claim (its jsonb_typeof check; `?` alone would also match a scalar string).
     expect(Array.isArray(payload.division_ids)).toBe(true);
-    expect(payload.division_ids).toEqual(["dv-1"]);
+    expect(payload.division_ids).toEqual([DV1]);
   });
 
   it("empty input: a division token for no divisions is an empty array (it authorises no topic)", async () => {
@@ -190,13 +193,25 @@ describe("realtime token families", () => {
   // bare `capture:` topic. Each family refuses one — in its topic builder AND its mint — with a plain Error that names
   // the family, never a token.
   const BLANK = ["", " ", "\t\n"];
-  const GUARDED: { family: string; topic: (id: string) => string; mint: (id: string) => Promise<string> }[] = [
-    { family: "capture", topic: (id) => realtime.captureTopic(id), mint: (id) => realtime.mintCaptureToken(id, EXPIRES_AT) },
-    { family: "match day", topic: (id) => realtime.matchDayTopic(id), mint: (id) => realtime.mintMatchDayToken(id, EXPIRES_AT) },
+  /** `real`: an id the family accepts (the positive pair). */
+  const GUARDED: { family: string; real: string; topic: (id: string) => string; mint: (id: string) => Promise<string> }[] = [
+    {
+      family: "capture",
+      real: "x-1",
+      topic: (id) => realtime.captureTopic(id),
+      mint: (id) => realtime.mintCaptureToken(id, EXPIRES_AT),
+    },
+    {
+      family: "match day",
+      real: "x-1",
+      topic: (id) => realtime.matchDayTopic(id),
+      mint: (id) => realtime.mintMatchDayToken(id, EXPIRES_AT),
+    },
     {
       family: "division",
+      real: DV2,
       topic: (id) => realtime.divisionTopic(id),
-      mint: (id) => realtime.mintDivisionToken("cp-1", ["dv-1", id], EXPIRES_AT),
+      mint: (id) => realtime.mintDivisionToken("cp-1", [DV1, id], EXPIRES_AT),
     },
   ];
 
@@ -216,8 +231,41 @@ describe("realtime token families", () => {
     }
     expect(checked, "anti-vacuity: every blank shape").toBe(BLANK.length);
     // The positive pair: a real id still builds and mints.
-    expect(g.topic("x-1")).toMatch(/:x-1$/);
-    await expect(g.mint("x-1")).resolves.toMatch(/^eyJ/);
+    expect(g.topic(g.real).endsWith(`:${g.real}`)).toBe(true);
+    await expect(g.mint(g.real)).resolves.toMatch(/^eyJ/);
+  });
+
+  // Review m2 (T3.1): V556 matches a topic's id against the list by exact string, and divisionTopic is built from the
+  // uuid as Postgres prints it — lowercase. Any other spelling would name no topic the server broadcasts on.
+  it("division: the mint takes only a lowercase uuid; an uppercase, non-uuid or padded id is refused, naming the family", async () => {
+    const NOT_IDS = [
+      DV1.toUpperCase(),
+      `${DV1.slice(0, 8)}${DV1.slice(8).toUpperCase()}`,
+      "dv-1",
+      `{${DV1}}`,
+      `${DV1} `,
+      ` ${DV1}`,
+      DV1.replaceAll("-", ""),
+      `${DV1}0`,
+      DV1.slice(0, -1),
+      `${DV1.slice(0, -1)}g`,
+    ];
+    let checked = 0;
+    for (const id of NOT_IDS) {
+      expect(id, "premise: a near miss, not the id itself").not.toBe(DV1);
+      const err = await realtime.mintDivisionToken("cp-1", [DV2, id], EXPIRES_AT).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err, `${JSON.stringify(id)} minted a token`).toBeInstanceOf(Error);
+      expect((err as Error).message, JSON.stringify(id)).toBe("Realtime division: a division id is not a lowercase uuid");
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: every near miss").toBe(NOT_IDS.length);
+    expect(DV1.toUpperCase(), "premise: the uppercase spelling differs").not.toBe(DV1);
+    // The positive pair: lowercase uuids, one or several, mint.
+    const { payload } = await verify(await realtime.mintDivisionToken("cp-1", [DV1, DV2], EXPIRES_AT));
+    expect(payload.division_ids).toEqual([DV1, DV2]);
   });
 
   it("a family claim may never set a claim the mint owns (role, sub, aud, the times, iss, jti)", async () => {

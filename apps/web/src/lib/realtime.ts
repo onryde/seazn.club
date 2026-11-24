@@ -392,17 +392,27 @@ export async function mintMatchDayToken(codeId: string, expiresAt: Date): Promis
   return mintRealtimeToken({ sub: `md:${codeId}`, claims: { md_code_id: codeId }, expiresAt });
 }
 
+/** A division id as Postgres prints a uuid: lowercase and hyphenated. V556 matches a topic's id against the
+ *  token's list by exact string, so an uppercase or otherwise re-spelt id would name no topic the server
+ *  broadcasts on. */
+const DIVISION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 /** Subscriber JWT for the private `division:{id}` topics of one competition.
- *  `division_ids` is a JSON array even for one division (V556 matches with
- *  jsonb `?`, which reads nothing from a scalar); an empty list mints a token
- *  that authorises no topic. */
+ *  `division_ids` is a JSON array even for one division. jsonb `?` alone
+ *  would also match a scalar string or an object key; it is V556's array
+ *  check (`jsonb_typeof(…) = 'array'`) that makes a non-array claim read
+ *  nothing. An empty list mints a token that authorises no topic. */
 export async function mintDivisionToken(
   competitionId: string,
   divisionIds: readonly string[],
   expiresAt: Date,
 ): Promise<string> {
-  // Each id is refused when blank; an empty LIST still mints (it authorises no topic — T0.1's ruling).
-  for (const id of divisionIds) familyId("division", "division id", id);
+  // Each id is refused when blank or not a lowercase uuid; an empty LIST still mints (it authorises no topic — T0.1's
+  // ruling). The Error names the family only, never the id.
+  for (const id of divisionIds) {
+    familyId("division", "division id", id);
+    if (!DIVISION_ID.test(id)) throw new Error("Realtime division: a division id is not a lowercase uuid");
+  }
   return mintRealtimeToken({
     sub: `public-competition:${competitionId}`,
     claims: { division_ids: [...divisionIds] },

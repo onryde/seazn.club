@@ -51,7 +51,8 @@ The existing publishers delegate to it with byte-identical message bodies. That 
 | Division | `division:{divisionId}` | `division_ids` (jsonb array) | `public-competition:{competitionId}` | V556 |
 
 Each migration copies V403's shape: guarded on the `realtime` schema and `realtime.messages`, idempotent, catches `insufficient_privilege`, `for select to authenticated`, `extension = 'broadcast'`. The V556 predicate:
-`realtime.topic() like 'division:%' and (auth.jwt() -> 'division_ids') ? substr(realtime.topic(), 10)`.
+`realtime.topic() like 'division:%' and jsonb_typeof(auth.jwt() -> 'division_ids') = 'array' and (auth.jwt() -> 'division_ids') ? nullif(substr(realtime.topic(), 10), '')`
+(each `realtime.topic()` and claim read wrapped in `(select …)` in the delta). Two guards beyond the first draft, both found in T3.1: jsonb `?` also answers yes for a scalar string equal to the id and for an object key, so the claim must be an array; and `substr('division:', 10)` is `''`, which `[""] ? ''` matches, so a blank id is nulled and binds nothing. The mint takes only lowercase-uuid ids, the spelling the topic builder uses.
 
 **Fan-out cost** (HTTP POSTs per event, today → after):
 

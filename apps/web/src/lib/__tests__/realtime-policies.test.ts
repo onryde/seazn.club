@@ -69,6 +69,21 @@ const WRAPPED = "( SELECT realtime.topic() AS topic)";
 /** The claim read, wrapped in its own scalar sub-select (one evaluation per statement) and with a blank claim turned
  *  into null (it binds nothing), as pg_policies prints it. */
 const claimRead = (claim: string) => `NULLIF(( SELECT (auth.jwt() ->> '${claim}'::text)), ''::text)`;
+/** V556's claim read: the jsonb array itself (`->`), wrapped. */
+const DIV_CLAIM = "( SELECT (auth.jwt() -> 'division_ids'::text))";
+/** Each policy's whole expression as Postgres prints it, written from the design (never read back from a delta). Pinned
+ *  on the stub AND on a live Supabase database, so a predicate applied there by hand cannot pass unseen (review m3). */
+const QUAL = {
+  // V554: the topic is `capture:` and the claim, a blank claim nulled.
+  [POLICY]: `((extension = 'broadcast'::text) AND (${WRAPPED} = ('capture:'::text || ${claimRead("capture_pairing_id")})))`,
+  // V555: the same, for `match-day:` and md_code_id.
+  [MD_POLICY]: `((extension = 'broadcast'::text) AND (${WRAPPED} = ('match-day:'::text || ${claimRead("md_code_id")})))`,
+  // V556: the broadcast extension; the `division:` prefix; an ARRAY claim (jsonb_typeof); exact element membership (`?`)
+  // of the id after the prefix, with a blank id nulled.
+  [DIV_POLICY]: `((extension = 'broadcast'::text) AND (${WRAPPED} ~~ 'division:%'::text) AND (jsonb_typeof(${DIV_CLAIM}) = 'array'::text) AND (${DIV_CLAIM} ? NULLIF(substr(${WRAPPED}, 10), ''::text)))`,
+} as const;
+/** Every column of a policy row but `qual`, as each delta writes it. */
+const rowOf = (policyname: string) => ({ policyname, cmd: "SELECT", roles: ["authenticated"], permissive: "PERMISSIVE", with_check: null });
 
 type Delta = { file: string; version: number; text: string };
 const DELTA_FILES = readdirSync(DELTAS).filter((f) => /^V\d+__.+\.sql$/.test(f));
@@ -129,6 +144,14 @@ const notice = (v: number) => ({
 
 // ── Tokens: the real mints, decoded ──────────────────────────────────────────
 
+/** Division ids: mintDivisionToken takes only a lowercase uuid (as Postgres prints one), so the matrix's "A", "B" and
+ *  "C" are these. Each holds letters, so its uppercase spelling is a different string (the case near-miss). */
+const DIV = {
+  A: "a0000000-0000-4000-8000-00000000000a",
+  B: "b0000000-0000-4000-8000-00000000000b",
+  C: "c0000000-0000-4000-8000-00000000000c",
+} as const;
+
 /** Claims every family carries; anything else in a payload is the family's own claim. */
 const COMMON = ["aud", "exp", "iat", "role", "sub"];
 type Token = { name: string; claims: Record<string, unknown> };
@@ -143,7 +166,7 @@ async function tokens(): Promise<Token[]> {
   const decoded = async (t: Promise<string>) => ({ ...decodeJwt(await t) }) as Record<string, unknown>;
   const captureA = await decoded(mintCaptureToken("A", until));
   const matchDayA = await decoded(mintMatchDayToken("A", until));
-  const divisionA = await decoded(mintDivisionToken("C", ["A"], until));
+  const divisionA = await decoded(mintDivisionToken("C", [DIV.A], until));
   return [
     { name: "capture A", claims: captureA },
     { name: "capture B", claims: await decoded(mintCaptureToken("B", until)) },
@@ -152,9 +175,10 @@ async function tokens(): Promise<Token[]> {
     { name: "match day A", claims: matchDayA },
     { name: "match day B", claims: await decoded(mintMatchDayToken("B", until)) },
     { name: "division A", claims: divisionA },
-    { name: "division B", claims: await decoded(mintDivisionToken("C", ["B"], until)) },
-    { name: "division A+B", claims: await decoded(mintDivisionToken("C", ["A", "B"], until)) },
-    { name: "division AB", claims: await decoded(mintDivisionToken("C", ["AB"], until)) },
+    { name: "division B", claims: await decoded(mintDivisionToken("C", [DIV.B], until)) },
+    { name: "division A+B", claims: await decoded(mintDivisionToken("C", [DIV.A, DIV.B], until)) },
+    // Typed: the mint refuses a non-uuid. The id that is A's prefix-extension (topic division:AB).
+    { name: "division AB", claims: { ...divisionA, division_ids: [DIV.A + DIV.B] } },
     // The mint accepts an empty list (T0.1's ruling): a token that authorises no topic.
     { name: "division empty list", claims: await decoded(mintDivisionToken("C", [], until)) },
     { name: "capture blank id", claims: blanked(captureA) },
@@ -166,9 +190,12 @@ async function tokens(): Promise<Token[]> {
     { name: "division whitespace id", claims: { ...divisionA, division_ids: ["  "] } },
     // Typed: the mint only takes a list. jsonb `?` answers yes for a scalar string equal to the id ('"A"' ? 'A') and
     // for an object KEY ('{"A":true}' ? 'A'), so these read division:A unless the policy requires an array.
-    { name: "division scalar", claims: { ...divisionA, division_ids: "A" } },
-    { name: "division object", claims: { ...divisionA, division_ids: { A: true } } },
+    { name: "division scalar", claims: { ...divisionA, division_ids: DIV.A } },
+    { name: "division object", claims: { ...divisionA, division_ids: { [DIV.A]: true } } },
     { name: "division null", claims: { ...divisionA, division_ids: null } },
+    // Typed: an array whose element is not a top-level string. `?` matches only top-level string elements.
+    { name: "division [[A]]", claims: { ...divisionA, division_ids: [[DIV.A]] } },
+    { name: "division [1]", claims: { ...divisionA, division_ids: [1] } },
     { name: "no claims", claims: {} },
   ];
 }
@@ -193,14 +220,23 @@ const TOPICS: { name: string; topic: string }[] = [
   { name: "external-play:A", topic: externalPlayLobbyTopic("A") },
   { name: "match-day:A", topic: matchDayTopic("A") },
   { name: "match-day:B", topic: matchDayTopic("B") },
-  { name: "division:A", topic: divisionTopic("A") },
-  { name: "division:B", topic: divisionTopic("B") },
-  { name: "division:C", topic: divisionTopic("C") },
+  { name: "division:A", topic: divisionTopic(DIV.A) },
+  { name: "division:B", topic: divisionTopic(DIV.B) },
+  { name: "division:C", topic: divisionTopic(DIV.C) },
   { name: "capture:AB", topic: captureTopic("AB") },
   { name: "match-day:AB", topic: matchDayTopic("AB") },
-  { name: "division:AB", topic: divisionTopic("AB") },
+  { name: "division:AB", topic: divisionTopic(DIV.A + DIV.B) },
   // A prefix-extension of division:A past a separator: a token for A must not read it.
-  { name: "division:A:x", topic: divisionTopic("A:x") },
+  { name: "division:A:x", topic: divisionTopic(`${DIV.A}:x`) },
+  // Near misses of division:A (review m5): another case, a trailing space, a trailing slash.
+  { name: "division:A-upper", topic: divisionTopic(DIV.A.toUpperCase()) },
+  { name: "division:A+space", topic: `${divisionTopic(DIV.A)} ` },
+  { name: "division:A/", topic: `${divisionTopic(DIV.A)}/` },
+  // The topic `[1]` would name if `?` compared numbers (it compares top-level strings only).
+  { name: "division:1", topic: divisionTopic("1") },
+  // Another 9-character prefix with A after it: `substr(topic, 10)` is A's id, so only V556's `like 'division:%'` keeps
+  // a token for A off it (typed: no builder makes it).
+  { name: "division-A", topic: `division-${DIV.A}` },
   { name: "capture:", topic: "capture:" },
   { name: "match-day:", topic: "match-day:" },
   // Typed: matchDayTopic refuses a whitespace id. The one topic a whitespace claim can bind (nullif only nulls '').
@@ -287,8 +323,8 @@ describe("capture pairing read by claim", () => {
     it("anti-vacuity: every (topic, token) pair was read, and exactly the own-family pairs read anything", async ({ skip }) => {
       if (await hasRealtime()) return skip();
       const { pairs, tokens: n, reads } = await afterAllDeltas();
-      expect(n, "tokens in the matrix").toBe(20);
-      expect(TOPICS.length, "topics in the matrix").toBe(19);
+      expect(n, "tokens in the matrix").toBe(22);
+      expect(TOPICS.length, "topics in the matrix").toBe(24);
       expect(pairs, "pairs checked").toBe(TOPICS.length * n);
       // One row each — the broadcast row, never the presence one. No blank-id token reads anything (V554's, V555's and
       // V556's nullif), and no non-array division_ids reads anything (V556's jsonb_typeof).
@@ -345,8 +381,8 @@ describe("capture pairing read by claim", () => {
       expect(captureOnTheirs).toEqual([]);
       expect(theirsOnCapture).toEqual([]);
       // Non-vacuous: both sides of the check are in the matrix.
-      expect(TOPICS.filter((t) => /^(match-day|division):/.test(t.topic))).toHaveLength(12);
-      expect((await tokens()).filter((t) => /^(match day|division) /.test(t.name))).toHaveLength(14);
+      expect(TOPICS.filter((t) => /^(match-day|division):/.test(t.topic))).toHaveLength(16);
+      expect((await tokens()).filter((t) => /^(match day|division) /.test(t.name))).toHaveLength(16);
     });
 
     it("empty input: a token with no claims reads nothing, on any topic", async ({ skip }) => {
@@ -389,6 +425,8 @@ describe("capture pairing read by claim", () => {
       expect(qual).toContain(WRAPPED);
       expect(qual).toContain(claimRead(claim));
       expect(qual).toContain("extension = 'broadcast'");
+      // The whole expression, so the `=` operator and the 'capture:' literal are pinned too.
+      expect(qual).toBe(QUAL[POLICY]);
     });
 
     it("a second run is a no-op: one row, unchanged, and the 'already present' notice", async ({ skip }) => {
@@ -530,7 +568,7 @@ describe("capture pairing read by claim", () => {
       expect(qual).toContain(claimRead(own[0]!));
       expect(qual).toContain("extension = 'broadcast'");
       // The whole expression as Postgres prints it, so the `=` operator and the 'match-day:' literal are pinned too.
-      expect(qual).toBe(`((extension = 'broadcast'::text) AND (${WRAPPED} = ('match-day:'::text || ${claimRead("md_code_id")})))`);
+      expect(qual).toBe(QUAL[MD_POLICY]);
     });
 
     it("match day: a second run is a no-op: one row, unchanged, and the 'already present' notice", async ({ skip }) => {
@@ -667,7 +705,7 @@ describe("capture pairing read by claim", () => {
       expect(() => divisionTopic("  ")).toThrow(/^Realtime division: /);
       const until = new Date(Date.now() + 60_000);
       await expect(mintDivisionToken("C", [""], until)).rejects.toThrow(/^Realtime division: /);
-      await expect(mintDivisionToken("C", ["A", "  "], until)).rejects.toThrow(/^Realtime division: /);
+      await expect(mintDivisionToken("C", [DIV.A, "  "], until)).rejects.toThrow(/^Realtime division: /);
     });
 
     it("division: a scalar, an object and a null division_ids read nothing (jsonb ? would match the first two)", async ({ skip }) => {
@@ -686,6 +724,39 @@ describe("capture pairing read by claim", () => {
         expect(ofToken(reads, name), `${name} reads nothing`).toEqual([]);
       }
       expect(cases).toHaveLength(3);
+      // Non-vacuous: each names division:A's id, so `?` alone would let it read division:A.
+      expect(ts.find((t) => t.name === "division scalar")!.claims.division_ids).toBe(DIV.A);
+      expect(Object.keys(ts.find((t) => t.name === "division object")!.claims.division_ids as object)).toEqual([DIV.A]);
+    });
+
+    // Review m5: near misses of an id the token lists, and arrays whose elements are not top-level strings.
+    it("division, near misses: A's uppercase, trailing-space and trailing-slash topics, and division:1, are read by nobody; [[A]] and [1] read nothing", async ({
+      skip,
+    }) => {
+      if (await hasRealtime()) return skip();
+      const { reads } = await afterAllDeltas();
+      const ts = await tokens();
+      const near = ["division:A-upper", "division:A+space", "division:A/", "division:1"];
+      const topicOf = (name: string) => TOPICS.find((t) => t.name === name)!.topic;
+      let checked = 0;
+      for (const name of near) {
+        expect(topicNames(), `${name} is in the matrix`).toContain(name);
+        expect(topicOf(name), `premise: ${name} is not division:A itself`).not.toBe(topicOf("division:A"));
+        expect(reads.filter(([k]) => k.startsWith(`${name} <-`)), `${name} is read by nobody`).toEqual([]);
+        checked += 1;
+      }
+      expect(checked, "anti-vacuity: every near miss").toBe(4);
+      // Each near miss differs from division:A by exactly what its name says.
+      expect(topicOf("division:A-upper").toLowerCase()).toBe(topicOf("division:A"));
+      expect(topicOf("division:A+space")).toBe(`${topicOf("division:A")} `);
+      expect(topicOf("division:A/")).toBe(`${topicOf("division:A")}/`);
+      // …while the tokens that list A do read division:A (the positive pair).
+      expect(reads.map(([k]) => k)).toContain("division:A <- division A");
+      const claimOf = (name: string) => ts.find((t) => t.name === name)!.claims.division_ids;
+      expect(claimOf("division [[A]]"), "premise: A nested one level down").toEqual([[DIV.A]]);
+      expect(claimOf("division [1]"), "premise: a number, not a string").toEqual([1]);
+      expect(ofToken(reads, "division [[A]]")).toEqual([]);
+      expect(ofToken(reads, "division [1]")).toEqual([]);
     });
 
     it("division, another surface: no other family's token reads any division: topic, and a division token reads nothing else", async ({
@@ -709,17 +780,19 @@ describe("capture pairing read by claim", () => {
         "match day whitespace id",
         "no claims",
       ]);
-      expect(ours, "division tokens checked").toHaveLength(10);
+      expect(ours, "division tokens checked").toHaveLength(12);
       const divisionTopics = TOPICS.filter((t) => t.topic.startsWith("division:"));
       const otherTopics = TOPICS.filter((t) => !t.topic.startsWith("division:"));
-      expect(divisionTopics, "division topics checked").toHaveLength(7);
-      expect(otherTopics, "other topics checked").toHaveLength(12);
+      expect(divisionTopics, "division topics checked").toHaveLength(11);
+      expect(otherTopics, "other topics checked").toHaveLength(13);
+      // Non-vacuous for the prefix guard: one other topic carries A's id at substr position 10 (1-based).
+      expect(otherTopics.filter((t) => t.topic.slice(9) === DIV.A).map((t) => t.name)).toEqual(["division-A"]);
       const keys = reads.map(([k]) => k);
       const byTheirs = (k: string) => theirs.some((t) => k.endsWith(`<- ${t.name}`));
       const byOurs = (k: string) => ours.some((t) => k.endsWith(`<- ${t.name}`));
       expect(keys.filter((k) => k.startsWith("division:") && byTheirs(k)), "another family on division:*").toEqual([]);
       expect(keys.filter((k) => !k.startsWith("division:") && byOurs(k)), "a division token off division:*").toEqual([]);
-      // The fixture_id token named "A" in particular (the brief's case): not division:A.
+      // The fixture_id token in particular (the brief's case): not division:A.
       expect(keys).not.toContain("division:A <- fixture A");
     });
 
@@ -743,13 +816,9 @@ describe("capture pairing read by claim", () => {
       expect(value.mine).toHaveLength(1);
       const { qual, ...rest } = value.mine[0]!;
       expect(rest).toEqual({ policyname: DIV_POLICY, cmd: "SELECT", roles: ["authenticated"], permissive: "PERMISSIVE", with_check: null });
-      // The whole expression as Postgres prints it: the broadcast extension; the `division:` prefix; an ARRAY claim
-      // (jsonb_typeof); exact element membership (`?`) of the id after the prefix, with a blank id nulled. topic() and
-      // the claim each wrapped in their own scalar sub-select (one evaluation per statement).
-      const claim = "( SELECT (auth.jwt() -> 'division_ids'::text))";
-      expect(qual).toBe(
-        `((extension = 'broadcast'::text) AND (${WRAPPED} ~~ 'division:%'::text) AND (jsonb_typeof(${claim}) = 'array'::text) AND (${claim} ? NULLIF(substr(${WRAPPED}, 10), ''::text)))`,
-      );
+      // The whole expression as Postgres prints it (QUAL's comment); topic() and the claim each wrapped in their own
+      // scalar sub-select (one evaluation per statement).
+      expect(qual).toBe(QUAL[DIV_POLICY]);
     });
 
     it("division: a second run is a no-op: one row, unchanged, and the 'already present' notice", async ({ skip }) => {
@@ -872,32 +941,25 @@ describe("capture pairing read by claim", () => {
   });
 
   describe.skipIf(!HAS_DB)("against a database WITH Supabase Realtime", () => {
-    it("the live policy exists, to authenticated, topic() and the claim each wrapped, keyed on the capture claim", async ({ skip }) => {
+    // Review m3: the whole row and the whole expression, pinned on the live catalog, so a predicate applied by hand on
+    // stg (or anywhere the delta did not write it) reds here rather than passing on a substring.
+    it("the live policy exists, its whole row and expression as V554 writes them, keyed on the capture claim", async ({ skip }) => {
       if (!(await hasRealtime())) return skip();
-      const claim = await captureClaim();
+      expect(await captureClaim()).toBe("capture_pairing_id");
       const live = await readPolicies(sql, [POLICY]);
-      expect(live).toHaveLength(1);
-      expect(live[0]!.roles).toEqual(["authenticated"]);
-      expect(live[0]!.qual).toContain(WRAPPED);
-      expect(live[0]!.qual).toContain(claimRead(claim));
+      expect(live).toEqual([{ ...rowOf(POLICY), qual: QUAL[POLICY] }]);
     });
 
-    it("the live match day policy exists, to authenticated, topic() and the claim each wrapped, keyed on md_code_id", async ({ skip }) => {
+    it("the live match day policy exists, its whole row and expression as V555 writes them", async ({ skip }) => {
       if (!(await hasRealtime())) return skip();
       const live = await readPolicies(sql, [MD_POLICY]);
-      expect(live).toHaveLength(1);
-      expect(live[0]!.roles).toEqual(["authenticated"]);
-      expect(live[0]!.qual).toContain(WRAPPED);
-      expect(live[0]!.qual).toContain(claimRead("md_code_id"));
+      expect(live).toEqual([{ ...rowOf(MD_POLICY), qual: QUAL[MD_POLICY] }]);
     });
 
-    it("the live division policy exists, to authenticated, topic() and the division_ids claim each wrapped", async ({ skip }) => {
+    it("the live division policy exists, its whole row and expression as V556 writes them", async ({ skip }) => {
       if (!(await hasRealtime())) return skip();
       const live = await readPolicies(sql, [DIV_POLICY]);
-      expect(live).toHaveLength(1);
-      expect(live[0]!.roles).toEqual(["authenticated"]);
-      expect(live[0]!.qual).toContain(WRAPPED);
-      expect(live[0]!.qual).toContain("( SELECT (auth.jwt() -> 'division_ids'::text))");
+      expect(live).toEqual([{ ...rowOf(DIV_POLICY), qual: QUAL[DIV_POLICY] }]);
     });
   });
 });
