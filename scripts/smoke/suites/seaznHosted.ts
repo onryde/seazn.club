@@ -38,8 +38,11 @@ import { BASE, type Session, cookieHeader, newSession, check, signIn, smokeDb, t
  *    organiser (step 7). The owner is made staff only for each read (`setStaff`), and never left so.
  * 9. THE SWEEP — the daily relay sweep (POST /api/cron/relay-sweep, the server's and the smoke's one CRON_SECRET) answers 200 with
  *    every Seazn counter of its step 7e a number — `seaznMeasured` first. Told COST is off (the runner's SEAZN_HOSTED_COST, read as
- *    the server reads it: every smoke job leaves it unset), every one of them is 0, because 7e did not run. Told it is on, each is a
- *    whole number: this match's session ended today, so it owes no day yet, and what other sessions owe is not this suite's to say.
+ *    the server reads it: every smoke job leaves it unset), every one of them is 0. That cannot tell a 7e that was skipped from one
+ *    that ran over nothing — this match's session ended today, so it owes no day yet, and the smoke database holds no deleted org
+ *    or fixtureless replay (Phase 3 review m4) — so it is stated as the counts, never as "7e did not run": the witness that the
+ *    flag keeps 7e from running is vitest's (relay-sweep.test.ts, "SEAZN_HOSTED_COST off, or malformed"). Told it is on, each is a
+ *    whole number; what other sessions owe is not this suite's to say.
  *    The sweep is server-wide, as the YouTube suite's later one is; its passes act only on what is past a retention, a grace or an
  *    expiry, and the earlier suites retire what they start (sponsors.ts's note).
  * HOW THE ROW GETS THERE, AND WHY NOT BY THE MOVE. The session, its programme input, the locked recording and the replay row are
@@ -342,7 +345,7 @@ export async function seaznHostedSuite(): Promise<void> {
     step(
       cost
         ? `THE SWEEP, COST on: every Seazn counter is a whole number (${shown})`
-        : `THE SWEEP, COST off: step 7e did not run — every Seazn counter is 0 (${shown})`,
+        : `THE SWEEP, COST off: every Seazn counter is 0 (${shown})`,
       counters.every(([, v]) => typeof v === "number" && Number.isInteger(v) && v >= 0 && (cost || v === 0)),
     );
 
