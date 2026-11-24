@@ -7,8 +7,10 @@
 //   (a) no policy outside `realtime.messages` lists `authenticated`, `anon`
 //       or `public` in its roles — `create policy` or `alter policy … to`
 //       (a create with no TO clause applies to PUBLIC, so it counts);
-//   (b) every SELECT granted to `authenticated` is also granted to `anon`
-//       (a token never widens anon), column lists included;
+//   (b) every privilege granted to `authenticated` is also granted to `anon`
+//       (a token never widens anon): compared privilege by privilege —
+//       table privileges column by column, EXECUTE, USAGE, and `all`
+//       expanded by object kind;
 //   (c) every `realtime.messages` policy keys on exactly one JWT claim
 //       (`auth.jwt() ->> '<claim>'`, or `-> '<claim>'` for a jsonb array),
 //       and no two policies share one (the V452 rule).
@@ -119,12 +121,12 @@ function parseGrants(file: string, raw: string): Grant[] {
         text.trim(),
       );
     if (!m) return []; // `grant <role> to <role>`: membership, not a privilege on an object (the backstop sees it)
-    const objects = m[2]!.trim().toLowerCase().replace(/\s+/g, " ").replace(/^table /, "");
     return [
       {
         file,
         privileges: splitTopLevel(m[1]!).map((p) => p.toLowerCase().replace(/\s+/g, " ")),
-        objects: objects.startsWith("all ") ? [objects] : objects.split(",").map(unquoteIdent),
+        // The whole object list; `objectsOf` splits it (outside parentheses, by kind).
+        objects: [m[2]!.trim().toLowerCase().replace(/\s+/g, " ")],
         grantees: m[3]!.split(",").map(unquote),
       },
     ];
@@ -155,8 +157,6 @@ const claimsRead = (text: string) => [
   ...new Set([...text.matchAll(/auth\.jwt\(\)\s*\)?\s*->>?\s*'([^']+)'/gi)].map((m) => m[1]!.toLowerCase())),
 ];
 
-const grantsSelect = (g: Grant) => g.privileges.some((p) => /^select\b/.test(p) || p === "all" || p === "all privileges");
-
 /** (a) Policies outside realtime.messages that name a token role. */
 function tokenRolePolicies(policies: Policy[]): string[] {
   return policies
@@ -164,15 +164,87 @@ function tokenRolePolicies(policies: Policy[]): string[] {
     .map((p) => `${p.file}: policy ${p.name} on ${p.table} to ${p.roles.join(", ")}`);
 }
 
-/** (b) Objects whose SELECT goes to `authenticated` with no SELECT to `anon`. */
-function authenticatedOnlySelects(grants: Grant[]): { checked: number; failures: string[] } {
-  const anon = new Set(
-    grants.filter((g) => grantsSelect(g) && g.grantees.includes("anon")).flatMap((g) => g.objects),
-  );
-  const authed = grants.filter((g) => grantsSelect(g) && g.grantees.includes("authenticated"));
-  const failures = authed.flatMap((g) =>
-    g.objects.filter((o) => !anon.has(o)).map((o) => `${g.file}: select on ${o} to authenticated, not to anon`),
-  );
+/** The privileges `grant all` means on a table (PostgreSQL 17, GRANT; MAINTAIN is new in 17). */
+const TABLE_PRIVILEGES = ["select", "insert", "update", "delete", "truncate", "references", "trigger", "maintain"];
+/** …and on every other kind of object. */
+const ALL_PRIVILEGES: Record<string, string[]> = {
+  table: TABLE_PRIVILEGES,
+  sequence: ["usage", "select", "update"],
+  function: ["execute"],
+  schema: ["usage", "create"],
+  database: ["create", "connect", "temporary"],
+  usage: ["usage"],
+  "large object": ["select", "update"],
+  tablespace: ["create"],
+};
+/** `grant all (cols)`: the privileges a column can carry. */
+const COLUMN_PRIVILEGES = ["select", "insert", "update", "references"];
+const KIND: Record<string, string> = {
+  table: "table",
+  tables: "table",
+  sequence: "sequence",
+  sequences: "sequence",
+  function: "function",
+  functions: "function",
+  procedure: "function",
+  procedures: "function",
+  routine: "function",
+  routines: "function",
+  schema: "schema",
+  schemas: "schema",
+  database: "database",
+  type: "usage",
+  types: "usage",
+  domain: "usage",
+  language: "usage",
+  "foreign data wrapper": "usage",
+  "foreign server": "usage",
+  "large object": "large object",
+  tablespace: "tablespace",
+};
+
+/** An object list's kind and one key per object: `function f(int, text), g()` → `function f(int, text)`,
+ *  `function g()`; a bare name is a table; `all tables in schema s` and default privileges' `tables` stay whole. */
+function objectsOf(objects: string): { kind: string; keys: string[] } {
+  const o = objects.trim().toLowerCase().replace(/\s+/g, " ");
+  const inSchema = /^all (tables|sequences|functions|procedures|routines) in schema /.exec(o);
+  if (inSchema) return { kind: KIND[inSchema[1]!]!, keys: [o] };
+  if (/^(tables|sequences|functions|procedures|routines|types|schemas)$/.test(o)) return { kind: KIND[o]!, keys: [`default ${o}`] };
+  const prefixed =
+    /^(table|sequence|function|procedure|routine|schema|database|type|domain|language|foreign data wrapper|foreign server|large object|tablespace) (.+)$/.exec(
+      o,
+    );
+  const word = prefixed?.[1] ?? "table";
+  const names = splitTopLevel(prefixed?.[2] ?? o).map(unquoteIdent);
+  return { kind: KIND[word]!, keys: names.map((n) => (word === "table" ? n : `${word} ${n}`)) };
+}
+
+/** One grant's (object, privilege, column) triples for one grantee; `*` is the whole object. */
+function grantedTriples(g: Grant, grantee: string): { key: string; priv: string; col: string }[] {
+  if (!g.grantees.includes(grantee)) return [];
+  const out: { key: string; priv: string; col: string }[] = [];
+  for (const objects of g.objects) {
+    const { kind, keys } = objectsOf(objects);
+    for (const entry of g.privileges) {
+      const m = /^([a-z ]+?)\s*(?:\((.*)\))?$/.exec(entry);
+      if (!m) throw new Error(`${g.file}: unparsed privilege ${entry}`);
+      const name = m[1] === "all privileges" ? "all" : m[1] === "temp" ? "temporary" : m[1]!;
+      const cols = m[2] === undefined ? ["*"] : splitTopLevel(m[2]).map(unquote);
+      const privs = name === "all" ? (m[2] === undefined ? ALL_PRIVILEGES[kind]! : COLUMN_PRIVILEGES) : [name];
+      for (const key of keys) for (const priv of privs) for (const col of cols) out.push({ key, priv, col });
+    }
+  }
+  return out;
+}
+
+/** (b) Every privilege granted to `authenticated` that `anon` lacks, one privilege (and column) at a time. A
+ *  whole-object grant to anon covers every column; a column grant to anon covers only that column. */
+function authenticatedWidening(grants: Grant[]): { checked: number; failures: string[] } {
+  const anon = new Set(grants.flatMap((g) => grantedTriples(g, "anon")).map((t) => `${t.key}|${t.priv}|${t.col}`));
+  const authed = grants.flatMap((g) => grantedTriples(g, "authenticated").map((t) => ({ ...t, file: g.file })));
+  const failures = authed
+    .filter((t) => !anon.has(`${t.key}|${t.priv}|*`) && !(t.col !== "*" && anon.has(`${t.key}|${t.priv}|${t.col}`)))
+    .map((t) => `${t.file}: ${t.priv}${t.col === "*" ? "" : ` (${t.col})`} on ${t.key} to authenticated, not to anon`);
   return { checked: authed.length, failures };
 }
 
@@ -238,12 +310,12 @@ describe("§4.5 role sweep — the checkers fire (synthetic SQL, both ways)", ()
   });
 
   it("(b) flags an authenticated-only SELECT; passes one shared with anon in the same or another statement", () => {
-    expect(authenticatedOnlySelects(grt("grant select on public_x_v to authenticated;")).failures).toHaveLength(1);
-    expect(authenticatedOnlySelects(grt("grant all on table t to authenticated;")).failures).toHaveLength(1);
-    expect(authenticatedOnlySelects(grt("grant select on public_x_v to anon, authenticated;")).failures).toEqual([]);
-    const split = authenticatedOnlySelects(grt("grant select on v to authenticated;\ngrant select on v to anon;"));
+    expect(authenticatedWidening(grt("grant select on public_x_v to authenticated;")).failures).toHaveLength(1);
+    expect(authenticatedWidening(grt("grant all on table t to authenticated;")).failures).toHaveLength(TABLE_PRIVILEGES.length);
+    expect(authenticatedWidening(grt("grant select on public_x_v to anon, authenticated;")).failures).toEqual([]);
+    const split = authenticatedWidening(grt("grant select on v to authenticated;\ngrant select on v to anon;"));
     expect(split).toEqual({ checked: 1, failures: [] });
-    expect(authenticatedOnlySelects(grt("grant select on a, b to authenticated; grant select on a to anon;")).failures).toEqual([
+    expect(authenticatedWidening(grt("grant select on a, b to authenticated; grant select on a to anon;")).failures).toEqual([
       "synthetic.sql: select on b to authenticated, not to anon",
     ]);
     // Role membership and `with grant option` are not new statements.
@@ -258,10 +330,43 @@ describe("§4.5 role sweep — the checkers fire (synthetic SQL, both ways)", ()
     expect(tokenRolePolicies(pol("alter policy p on fixtures using (org_id = x);"))).toEqual([]);
   });
 
+  it("(b) every privilege, one by one: ALL expands by object kind, a column grant covers only its columns", () => {
+    const w = (sql: string) => authenticatedWidening(grt(sql)).failures;
+    // Tables: ALL is the eight table privileges (PostgreSQL 17, GRANT).
+    expect(TABLE_PRIVILEGES).toEqual(["select", "insert", "update", "delete", "truncate", "references", "trigger", "maintain"]);
+    expect(w("grant all on t to authenticated; grant select, insert, update, delete, truncate, references, trigger, maintain on t to anon;")).toEqual([]);
+    expect(w("grant all privileges on t to authenticated; grant select on t to anon;")).toHaveLength(7);
+    expect(w("grant insert on t to authenticated; grant select on t to anon;")).toEqual([
+      "synthetic.sql: insert on t to authenticated, not to anon",
+    ]);
+    expect(w("grant delete on t to authenticated; grant all on t to anon;")).toEqual([]);
+    // Columns: anon's table-wide grant covers every column; a column grant covers only its own.
+    expect(w("grant select (a) on t to authenticated; grant select on t to anon;")).toEqual([]);
+    expect(w("grant select (a, b) on t to authenticated; grant select (a) on t to anon;")).toEqual([
+      "synthetic.sql: select (b) on t to authenticated, not to anon",
+    ]);
+    expect(w("grant select on t to authenticated; grant select (a) on t to anon;")).toHaveLength(1);
+    expect(w("grant update (a) on t to authenticated;")).toHaveLength(1);
+    // Functions, sequences, schemas.
+    expect(w("grant execute on function f(int, text) to authenticated;")).toEqual([
+      "synthetic.sql: execute on function f(int, text) to authenticated, not to anon",
+    ]);
+    expect(w("grant execute on function f(int, text) to anon, authenticated;")).toEqual([]);
+    expect(w("grant all on function f() to authenticated; grant execute on function f() to anon;")).toEqual([]);
+    expect(w("grant usage on schema s to authenticated;")).toHaveLength(1);
+    expect(w("grant all on schema s to authenticated; grant usage, create on schema s to anon;")).toEqual([]);
+    expect(w("grant all on sequence q to authenticated; grant usage, select, update on sequence q to anon;")).toEqual([]);
+    expect(w("grant usage on sequence q to authenticated;")).toHaveLength(1);
+    expect(w("alter default privileges grant execute on functions to authenticated;")).toHaveLength(1);
+  });
+
   it("(b) reads a column-list SELECT and strips `granted by`", () => {
-    expect(authenticatedOnlySelects(grt("grant select (id, name) on x to authenticated;")).failures).toHaveLength(1);
+    expect(authenticatedWidening(grt("grant select (id, name) on x to authenticated;")).failures).toEqual([
+      "synthetic.sql: select (id) on x to authenticated, not to anon",
+      "synthetic.sql: select (name) on x to authenticated, not to anon",
+    ]);
     expect(grt("grant select (id, name), insert on x to app_user;")[0]!.privileges).toEqual(["select (id, name)", "insert"]);
-    expect(authenticatedOnlySelects(grt("grant select on x to authenticated granted by postgres;")).failures).toHaveLength(1);
+    expect(authenticatedWidening(grt("grant select on x to authenticated granted by postgres;")).failures).toHaveLength(1);
   });
 
   it("backstop: authenticated/anon anywhere outside a realtime.messages policy fails — every shape a parser could miss", () => {
@@ -318,13 +423,13 @@ describe("§4.5 role sweep — every migration (static)", () => {
   const grants = files.flatMap((f) => parseGrants(relative(MIGRATIONS, f), readFileSync(f, "utf8")));
 
   it("scans every migration: files, policies and grants non-zero; realtime.messages policies exactly 4", () => {
-    const b = authenticatedOnlySelects(grants);
+    const b = authenticatedWidening(grants);
     const c = realtimeClaimFailures(policies);
     const repeatable = files.filter((f) => /(^|\/)R__[^/]*$/.test(f)).length;
     console.log(
       `[role-sweep static] files: ${files.length} (repeatable R__: ${repeatable}), ` +
         `policies: ${policies.length} (realtime.messages: ${c.realtime}), ` +
-        `grants: ${grants.length} (SELECT to authenticated: ${b.checked})`,
+        `grants: ${grants.length} (privileges to authenticated: ${b.checked})`,
     );
     expect(files.length, "migration files scanned").toBeGreaterThan(0);
     expect(policies.length, "create policy statements scanned").toBeGreaterThan(0);
@@ -337,8 +442,8 @@ describe("§4.5 role sweep — every migration (static)", () => {
     expect(tokenRolePolicies(policies)).toEqual([]);
   });
 
-  it("(b) every SELECT granted to authenticated is also granted to anon", () => {
-    expect(authenticatedOnlySelects(grants).failures).toEqual([]);
+  it("(b) every privilege granted to authenticated is also granted to anon", () => {
+    expect(authenticatedWidening(grants).failures).toEqual([]);
   });
 
   it("(c) every realtime.messages policy keys on exactly one claim, and no two share one", () => {
@@ -361,7 +466,7 @@ describe("§4.5 role sweep — every migration (static)", () => {
 });
 
 describe("§4.5 role sweep — the live catalog (Supabase databases only)", () => {
-  it("(a) on pg_policies and (b) on the ACLs themselves (has_*_privilege)", async (ctx) => {
+  it("(a) on pg_policies and (b), every privilege, on the ACLs themselves (has_*_privilege)", async (ctx) => {
     const url = process.env.DATABASE_URL;
     if (!url) {
       const why = "DB-level half skipped: DATABASE_URL is not set";
@@ -390,28 +495,67 @@ describe("§4.5 role sweep — the live catalog (Supabase databases only)", () =
 
       // The ACLs themselves, whoever is asking: has_*_privilege counts PUBLIC and inherited (member-of) grants,
       // and column grants — none of which information_schema.role_table_grants shows to a non-member caller.
-      const relations = await client<{ rel: string; anon: boolean; authed: boolean }[]>`
-        select n.nspname || '.' || c.relname as rel,
-               has_any_column_privilege('anon', c.oid, 'SELECT') as anon,
-               has_any_column_privilege('authenticated', c.oid, 'SELECT') as authed
-        from pg_class c join pg_namespace n on n.oid = c.relnamespace
-        where c.relkind in ('r', 'v', 'm', 'f', 'p')
-          and n.nspname not in ('pg_catalog', 'information_schema')
-          and n.nspname !~ '^pg_(toast|temp)'`;
-      const anonSelect = relations.filter((r) => r.anon).length;
-      const widening = relations
-        .filter((r) => r.authed && !r.anon)
-        .map((r) => `${r.rel}: select to authenticated, not to anon`);
+      // Every privilege, one at a time: table privileges (MAINTAIN from PostgreSQL 17) and, per column, the four a
+      // column carries; EXECUTE on functions; sequence and schema privileges.
+      const [version] = await client<{ n: number }[]>`select current_setting('server_version_num')::int as n`;
+      const tablePrivs = TABLE_PRIVILEGES.filter((p) => p !== "maintain" || version!.n >= 170000).map((p) =>
+        p.toUpperCase(),
+      );
+      const kinds = await client<{ kind: string; checked: number; anon_select: number; widening: string[] }[]>`
+        with ns as (
+          select oid, nspname from pg_namespace
+          where nspname not in ('pg_catalog', 'information_schema') and nspname !~ '^pg_(toast|temp)'
+        ), rel as (
+          select c.oid, c.relkind, quote_ident(ns.nspname) || '.' || quote_ident(c.relname) as obj
+          from pg_class c join ns on ns.oid = c.relnamespace
+        ), checks as (
+          select 'table' as kind, rel.obj as object, p as privilege,
+                 has_table_privilege('anon', rel.oid, p) as anon,
+                 has_table_privilege('authenticated', rel.oid, p) as authed
+          from rel cross join unnest(${client.array(tablePrivs)}::text[]) p
+          where rel.relkind in ('r', 'v', 'm', 'f', 'p')
+          union all
+          select 'column', rel.obj || '.' || quote_ident(a.attname), p,
+                 has_column_privilege('anon', rel.oid, a.attnum, p),
+                 has_column_privilege('authenticated', rel.oid, a.attnum, p)
+          from rel join pg_attribute a on a.attrelid = rel.oid and a.attnum > 0 and not a.attisdropped
+          cross join unnest(array['SELECT', 'INSERT', 'UPDATE', 'REFERENCES']) p
+          where rel.relkind in ('r', 'v', 'm', 'f', 'p')
+          union all
+          select 'sequence', rel.obj, p,
+                 has_sequence_privilege('anon', rel.oid, p), has_sequence_privilege('authenticated', rel.oid, p)
+          from rel cross join unnest(array['USAGE', 'SELECT', 'UPDATE']) p
+          where rel.relkind = 'S'
+          union all
+          select 'function', pr.oid::regprocedure::text, 'EXECUTE',
+                 has_function_privilege('anon', pr.oid, 'EXECUTE'),
+                 has_function_privilege('authenticated', pr.oid, 'EXECUTE')
+          from pg_proc pr join ns on ns.oid = pr.pronamespace
+          union all
+          select 'schema', quote_ident(ns.nspname), p,
+                 has_schema_privilege('anon', ns.oid, p), has_schema_privilege('authenticated', ns.oid, p)
+          from ns cross join unnest(array['USAGE', 'CREATE']) p
+        )
+        select kind, count(*)::int as checked,
+               (count(*) filter (where anon and privilege = 'SELECT'))::int as anon_select,
+               coalesce(array_agg(kind || ' ' || object || ' ' || privilege order by object, privilege)
+                 filter (where authed and not anon), '{}') as widening
+        from checks group by kind order by kind`;
+      const checked = Object.fromEntries(kinds.map((k) => [k.kind, k.checked]));
+      const anonSelect = kinds.reduce((n, k) => n + k.anon_select, 0);
+      const widening = kinds.flatMap((k) => k.widening);
 
       console.log(
-        `[role-sweep live] policies: ${policies.length}, relations: ${relations.length} ` +
-          `(SELECT to anon: ${anonSelect}, to authenticated: ${relations.filter((r) => r.authed).length})`,
+        `[role-sweep live] policies: ${policies.length}, privileges checked ${JSON.stringify(checked)}, ` +
+          `SELECT anon has (table or column): ${anonSelect}`,
       );
       expect(policies.length, "pg_policies rows scanned").toBeGreaterThan(0);
-      expect(relations.length, "relations scanned").toBeGreaterThan(0);
-      expect(anonSelect, "relations anon can SELECT (Supabase grants anon some)").toBeGreaterThan(0);
+      for (const kind of ["table", "column", "function", "schema"]) {
+        expect(checked[kind] ?? 0, `${kind} privileges checked`).toBeGreaterThan(0);
+      }
+      expect(anonSelect, "SELECT anon has (Supabase grants anon some)").toBeGreaterThan(0);
       expect(tokenRole, "(a) a token role on a policy outside realtime.messages").toEqual([]);
-      expect(widening, "(b) an authenticated SELECT that anon does not have").toEqual([]);
+      expect(widening, "(b) a privilege authenticated has and anon does not").toEqual([]);
     } finally {
       await client.end({ timeout: 2 });
     }
