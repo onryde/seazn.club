@@ -16,6 +16,7 @@
 // `@/lib/cache` and `@/lib/realtime` are recording passthroughs: every public
 // literal-key DEL is recorded and, when `probe.hold` is set, held open until
 // the test releases it. Real Postgres required; skipped without DATABASE_URL.
+import { nudgesSettled } from "../stream-sessions/nudge";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const probe = vi.hoisted(() => ({
@@ -98,6 +99,7 @@ async function quiesce(): Promise<void> {
   probe.hold = false;
   for (const release of probe.gates.splice(0)) release();
   await sleep(20);
+  await nudgesSettled();   // T1.5: a write's push also awaits its court read
   probe.dels.length = 0;
   probe.fixturePushes.length = 0;
   probe.divisionPushes.length = 0;
@@ -108,6 +110,7 @@ async function quiesce(): Promise<void> {
 async function releaseDel(): Promise<void> {
   for (const release of probe.gates.splice(0)) release();
   await sleep(20);
+  await nudgesSettled();   // T1.5: a write's push also awaits its court read
 }
 
 async function competitionOf(divisionId: string): Promise<string> {

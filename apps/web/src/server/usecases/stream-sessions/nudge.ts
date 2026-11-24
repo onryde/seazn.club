@@ -127,6 +127,12 @@ export async function nudgeCodesOver(codeIds: readonly string[], deps?: NudgeDep
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** Whether any of a write's fixture ids can be read for a court (is a uuid). A caller checks this BEFORE it starts the read, so a
+ *  write with nothing to read arms no bound timer and starts no promise. */
+export function hasCourtReadableId(fixtureIds: readonly string[]): boolean {
+  return fixtureIds.some((id) => UUID.test(id));
+}
+
 /**
  * The `next-match` messages for a schedule write that moved `fixtureIds`: one per COURT PHONE, however many of the fixtures sit on
  * its court. The phone is the slot-0 pairing OPEN on the court's code, found through ONE pooled read: fixture -> its court ->
@@ -142,6 +148,8 @@ export async function courtPairingNudges(fixtureIds: readonly string[]): Promise
   try {
     const ids = fixtureIds.filter((id) => UUID.test(id));
     if (ids.length === 0) return [];
+    // Some ids dropped, some kept: say so once, by COUNT. An id is never logged (this is a write's fixture set).
+    if (ids.length < fixtureIds.length) log.warn({ dropped: fixtureIds.length - ids.length }, "capture nudge: fixture ids that are not a uuid were dropped from the court read");
     const rows = await sql<{ id: string }[]>`
       select distinct p.id
         from fixtures f

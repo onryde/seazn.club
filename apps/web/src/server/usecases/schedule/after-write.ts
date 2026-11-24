@@ -4,9 +4,9 @@ import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { publicFixtureCacheKey } from "@/server/public-site/fixture-doc-cache-key";
 import { publicDivisionCacheKeys } from "@/server/public-site/division-doc-cache-keys";
 import { publicHubCacheKey } from "@/server/public-site/hub-doc-cache-keys";
-import { BROADCAST_TIMEOUT_MS, broadcast, divisionMessages, fixtureMessage, type RealtimeMessage } from "@/lib/realtime";
+import { broadcast, divisionMessages, fixtureMessage, realtimePublishEnabled, type RealtimeMessage } from "@/lib/realtime";
 import { log } from "@/server/logger";
-import { courtPairingNudges, fireNudge } from "@/server/usecases/stream-sessions/nudge";
+import { courtPairingNudges, fireNudge, hasCourtReadableId } from "@/server/usecases/stream-sessions/nudge";
 
 // Every schedule write invalidates both public cache layers (the same pattern
 // as scoring, doc 09 §3 / doc 12 §2) and refreshes any open boards.
@@ -67,16 +67,23 @@ export function afterScheduleWrite(
   // Realtime push-nudges T0.2: the division message and every fixture message go out in ONE broadcast (one POST under
   // the cap), where they used to be one POST each.
   //
-  // T1.5: the `next-match` nudges to the courts' camera phones ride in that SAME broadcast, so a write is still one POST. They
-  // are read first (`courtNudges`, below) and only under the cap (`pushFixtures`): past it nobody is told per fixture, and the
-  // read is not made. The read is best-effort and BOUNDED: it can neither reject nor hold the division message past
-  // BROADCAST_TIMEOUT_MS, so a slow pool costs the write its court nudges and nothing else.
+  // T1.5: the `next-match` nudges to the courts' camera phones ride in that SAME broadcast, so a write is still one POST. Their
+  // read starts NOW — the write has committed, and the read needs nothing the DEL does — and the push only AWAITS it, so the
+  // push time is the later of the DEL and the read, never DEL + read: R10c's "never longer than PUSH_AFTER_DELETE_BOUND_MS"
+  // (1500 ms) holds because the read has its own, tighter bound (COURT_NUDGE_READ_BOUND_MS). A slow or dead pool costs the
+  // write its court nudges and nothing else. The read is made only under the cap (`pushFixtures`: past it nobody is told per
+  // fixture) and only when publishing is on (`realtimePublishEnabled`: a kill switch sends nothing, so it reads nothing).
+  //
+  // Not nudged, by design: the OLD court of a moved fixture, and a fixture cleared off its court. That phone catches up on its
+  // own poll. And a link live now nudges its court's phone whichever day the fixture is on: a nudge only makes the phone beat,
+  // and the beat decides, so a spare nudge is harmless.
+  const court = pushFixtures && realtimePublishEnabled() ? courtNudges(fixtureIds) : Promise.resolve<RealtimeMessage[]>([]);
   sendAfterDeleteOrBound(deleted, () => {
     fireNudge(
       (async () => {
-        const court = pushFixtures ? await courtNudges(fixtureIds) : [];
+        const nudges = await court;
         await broadcast(
-          [...divisionMessages(divisionId, reason), ...(pushFixtures ? fixtureIds.map((id) => fixtureMessage(id, "schedule")) : []), ...court],
+          [...divisionMessages(divisionId, reason), ...(pushFixtures ? fixtureIds.map((id) => fixtureMessage(id, "schedule")) : []), ...nudges],
           "schedule",
         );
       })().catch((err: unknown) => {
@@ -86,14 +93,23 @@ export function afterScheduleWrite(
   });
 }
 
-/** The court nudges of a write, or [] — never rejects, and never takes longer than BROADCAST_TIMEOUT_MS (the read is abandoned, not
- *  cancelled: a pooled statement cannot be). A fixed set of nothing reads nothing. */
+/**
+ * How long a schedule write's court read may take before the push goes without the court nudges. Tighter than
+ * PUSH_AFTER_DELETE_BOUND_MS (1500 ms, cache.ts) on purpose: the read runs beside the DEL, so the push is never later than the
+ * larger of the two, and 750 ms is half the DEL's bound — a healthy pool answers one indexed read in single-digit ms, so this only
+ * ever trips on a stalled pool, and then losing one nudge (the phone beats on its poll anyway) is the cheap side of the trade.
+ */
+export const COURT_NUDGE_READ_BOUND_MS = 750;
+
+/** The court nudges of a write, or [] — never rejects, and never takes longer than COURT_NUDGE_READ_BOUND_MS (the read is
+ *  abandoned, not cancelled: a pooled statement cannot be). A fixture set with nothing to read (empty, or no uuid) reads nothing
+ *  and arms no timer. */
 async function courtNudges(fixtureIds: readonly string[]): Promise<RealtimeMessage[]> {
-  if (fixtureIds.length === 0) return [];
+  if (!hasCourtReadableId(fixtureIds)) return [];
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const bound = new Promise<RealtimeMessage[]>((resolve) => {
-      timer = setTimeout(() => { resolve([]); }, BROADCAST_TIMEOUT_MS);
+      timer = setTimeout(() => { resolve([]); }, COURT_NUDGE_READ_BOUND_MS);
     });
     return await Promise.race([courtPairingNudges(fixtureIds), bound]);
   } catch (err) {

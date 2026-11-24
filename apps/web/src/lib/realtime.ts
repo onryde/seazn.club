@@ -49,6 +49,12 @@ function publishTarget(): { url: string; key: string } | null {
   return url && key ? { url, key } : null;
 }
 
+/** Whether `broadcast` would send anything at all: false under the kill switch or without the project's URL and key. A caller that
+ *  would read from the database only to build messages (the court nudges of a schedule write) skips that read when this is false. */
+export function realtimePublishEnabled(): boolean {
+  return publishTarget() !== null;
+}
+
 /** One message of a broadcast request, exactly as it goes on the wire. A
  *  message without `private` is joinable on a public channel by anyone holding
  *  the anon key; every new topic sends `private: true`. */

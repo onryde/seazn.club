@@ -136,6 +136,7 @@ vi.mock("@/lib/realtime", async (importOriginal) => {
 
 import { PUSH_AFTER_DELETE_BOUND_MS } from "@/lib/cache";
 import { invalidatePublicCache } from "../scoring";
+import { nudgesSettled } from "../stream-sessions/nudge";
 import { SCHEDULE_FIXTURE_PUSH_CAP, afterScheduleWrite } from "../schedule";
 
 const ORG = "org-1";
@@ -170,7 +171,11 @@ const pushesOn = (prefix: "division:" | "fixture:") =>
 const divisionPushes = () => pushesOn("division:");
 const fixturePushes = () => pushesOn("fixture:");
 
-const macrotask = () => new Promise((resolve) => setTimeout(resolve, 20));
+/** A macrotask, then every push in flight: a schedule write's push also awaits its court read (T1.5), which a slow pool may stretch. */
+const macrotask = async () => {
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  await nudgesSettled();
+};
 
 type Outcome = { resolve: true } | { reject: Error };
 

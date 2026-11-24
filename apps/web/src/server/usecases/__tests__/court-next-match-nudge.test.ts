@@ -15,19 +15,30 @@
 //   - past SCHEDULE_FIXTURE_PUSH_CAP (50), `fixturePushes: false` or an empty fixture set: no nudge and NO read;
 //   - best-effort: a read that rejects, or never answers, never costs the write its division and fixture messages;
 //   - a fixture's OWN code (not a court's) never receives a `next-match`;
-//   - REALTIME_PUBLISH=off sends nothing.
+//   - REALTIME_PUBLISH=off sends nothing, and the court read is not even made (`realtimePublishEnabled`);
+//   - the read starts when the write is called (it has committed) and is bounded by COURT_NUDGE_READ_BOUND_MS (750 ms), so the
+//     push time is the later of the DEL (itself bounded by PUSH_AFTER_DELETE_BOUND_MS, 1500 ms) and the read: a slow pool never
+//     pushes the division messages past R10c's bound.
+//
+// Not covered, by design (review m1, m4): the fixture's OLD court, or a fixture cleared off its court, is not nudged — that phone
+// catches up on its own poll. A link for another DAY than the fixture's is not looked at: a link live now whose court the fixture
+// sits on nudges its phone, and a nudge only makes the phone beat, the beat decides — harmless, never a wrong state.
 //
 // Applies to another sport: N/A (no sport rules) — the court link is the other surface; the fixtures here are generic.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomBytes, randomUUID } from "node:crypto";
 
 // Every public literal-key DEL settles at once, so the push chained on it goes out on the next tick. No real Redis.
+const delProbe = vi.hoisted(() => ({ hang: false }));
 vi.mock("@/lib/cache", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/cache")>();
   return {
     ...actual,
+    // `delProbe.hang`: a DEL that never settles, so the push waits out PUSH_AFTER_DELETE_BOUND_MS (a slow or dead Redis).
     cacheDel: (...keys: string[]) =>
-      keys.length > 0 && keys.every((key) => key.startsWith("pub:v1:")) ? Promise.resolve() : actual.cacheDel(...keys),
+      keys.length > 0 && keys.every((key) => key.startsWith("pub:v1:"))
+        ? (delProbe.hang ? new Promise<void>(() => {}) : Promise.resolve())
+        : actual.cacheDel(...keys),
   };
 });
 // The court-nudge read, wrapped: a call-through spy by default.
@@ -54,8 +65,11 @@ vi.mock("@/lib/posthog-server", async (orig) => ({
 }));
 
 import { sql } from "@/lib/db";
+import { PUSH_AFTER_DELETE_BOUND_MS } from "@/lib/cache";
+import { captureTopic, nudgeMessage, realtimePublishEnabled } from "@/lib/realtime";
 import { log } from "@/server/logger";
-import { SCHEDULE_FIXTURE_PUSH_CAP, afterScheduleWrite } from "../schedule";
+import { SCHEDULE_FIXTURE_PUSH_CAP, afterScheduleWrite, moveFixture } from "../schedule";
+import { COURT_NUDGE_READ_BOUND_MS } from "../schedule/after-write";
 import { linkCourtStream } from "../court-streams";
 import { ensureStreamCode } from "../stream-codes";
 import { courtPairingNudges, nudgesSettled } from "../stream-sessions/nudge";
@@ -106,10 +120,13 @@ beforeEach(() => {
   vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", SUPABASE);
   vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "service-role");
   vi.stubEnv("REALTIME_PUBLISH", undefined);
+  delProbe.hang = false;
 });
 afterEach(async () => {
-  await nudgesSettled();
+  // A test on fake timers may end with a push or a read still waiting on one: let them run out before the real clock returns.
+  if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(5_000);
   vi.useRealTimers();
+  await nudgesSettled();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
@@ -202,6 +219,24 @@ describe.skipIf(!HAS_DB)("a schedule write nudges the court's phone `next-match`
     expect(all).toHaveLength(1);
     expect(c2.pairingId).not.toBe(c3.pairingId);
     expect(topicsOf(all[0]!)).toEqual([`capture:${c2.pairingId}`, `capture:${c3.pairingId}`].sort());
+  });
+
+  it("the REAL producer: `moveFixture` onto a linked court puts the court's slot-0 pairing in the write's ONE POST", async () => {
+    await place(day, fx[0]!, 0, day.courts.c3);
+    const c2 = await courtWithPhone(day.courts.c2);
+    await quiesce();
+    await moveFixture(day.auth, fx[0]!, { scheduled_at: new Date(Date.UTC(2026, 10, 7, 11, 0)).toISOString(), court_id: day.courts.c2 });
+    const all = await sent();
+    expect(all, "one POST for the whole move").toHaveLength(1);
+    expect(all[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `fixture:${fx[0]}`, `capture:${c2.pairingId}`]);
+    expect(nudgesOf(all[0]!)[0]!.payload.reason).toBe("next-match");
+
+    // The other direction of the same producer: a move onto a court with no link nudges no one.
+    await quiesce();
+    await moveFixture(day.auth, fx[0]!, { scheduled_at: new Date(Date.UTC(2026, 10, 7, 12, 0)).toISOString(), court_id: day.courts.c3 });
+    const second = await sent();
+    expect(second, "the second move's own POST").toHaveLength(1);
+    expect(second[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `fixture:${fx[0]}`]);
   });
 
   it("only the courts the write touched are nudged: a linked court whose fixtures did not move hears nothing", async () => {
@@ -340,6 +375,18 @@ describe.skipIf(!HAS_DB)("a schedule write nudges the court's phone `next-match`
       expect(courtPairingNudges).not.toHaveBeenCalled();
     });
 
+    it("fixture ids that are not uuids: no read and no timer armed (nothing a court could be found for)", async () => {
+      await quiesce();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const armedBefore = vi.getTimerCount();
+      await write(["fx-not-a-uuid"]);
+      expect(courtPairingNudges).not.toHaveBeenCalled();
+      expect(vi.getTimerCount() - armedBefore, "only the DEL's push bound, never the court read's").toBeLessThanOrEqual(1);
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => expect(posts()).toHaveLength(1));
+      expect(posts()[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, "fixture:fx-not-a-uuid"]);
+    });
+
     it("an empty fixture set: the division message only, and no read", async () => {
       await write([]);
       const all = await sent();
@@ -377,16 +424,80 @@ describe.skipIf(!HAS_DB)("a schedule write nudges the court's phone `next-match`
       expect(all[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `fixture:${fx[0]}`]);
     });
 
-    it("a read that never answers: the POST goes out at the bound, with no nudge", async () => {
+    it("a read that never answers: the POST goes out at the READ bound (750 ms), with no nudge", async () => {
+      expect(COURT_NUDGE_READ_BOUND_MS, "the owner-facing bound, written here").toBe(750);
       await quiesce();
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       vi.mocked(courtPairingNudges).mockImplementationOnce(() => new Promise<never>(() => {}));
       await write([fx[0]!]);
-      await vi.advanceTimersByTimeAsync(10);
+      await vi.advanceTimersByTimeAsync(COURT_NUDGE_READ_BOUND_MS - 50);
       expect(posts(), "nothing sent while the read is pending, inside the bound").toHaveLength(0);
-      await vi.advanceTimersByTimeAsync(3_100);
-      await vi.waitFor(() => expect(posts()).toHaveLength(1));
+      await vi.advanceTimersByTimeAsync(100);
+      expect(posts(), "out at the read's bound (750 ms), not later").toHaveLength(1);
       expect(posts()[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `fixture:${fx[0]}`]);
+    });
+
+    describe("R10c: the read never pushes the division messages past PUSH_AFTER_DELETE_BOUND_MS", () => {
+      const nudge = () => nudgeMessage(captureTopic("pairing-slow-read"), "next-match");
+
+      it("a DEL that never settles and a read that takes 700 ms: the ONE POST goes out at the DEL bound (1500 ms), WITH the nudge", async () => {
+        expect(PUSH_AFTER_DELETE_BOUND_MS, "the bound this file is judged against").toBe(1_500);
+        await quiesce();
+        delProbe.hang = true;
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        vi.mocked(courtPairingNudges).mockImplementationOnce(() => new Promise((resolve) => setTimeout(() => resolve([nudge()]), 700)));
+        await write([fx[0]!]);
+        await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS - 50);
+        expect(posts(), "the DEL bound has not passed").toHaveLength(0);
+        await vi.advanceTimersByTimeAsync(100);
+        // Read AFTER the DEL (the first build) would put the POST at 1500 + 700 = 2200 ms. No `vi.waitFor` here: under fake timers
+        // it advances the clock itself and would hide exactly that.
+        expect(posts(), "the POST is out at the DEL bound, 1550 ms in").toHaveLength(1);
+        expect(posts()[0]!.map((m) => m.topic)).toEqual([
+          `division:${day.comp.divisionId}`, `fixture:${fx[0]}`, "capture:pairing-slow-read",
+        ]);
+      });
+
+      it("a DEL that never settles and a read that never answers: the POST still goes out at the DEL bound, with no nudge", async () => {
+        await quiesce();
+        delProbe.hang = true;
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        vi.mocked(courtPairingNudges).mockImplementationOnce(() => new Promise<never>(() => {}));
+        await write([fx[0]!]);
+        await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS + 50);
+        expect(posts(), "out at the DEL bound, not at the DEL bound plus the read's own bound").toHaveLength(1);
+        expect(posts()[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `fixture:${fx[0]}`]);
+      });
+
+      it("a DEL that settles at once and a read that takes 700 ms: the POST waits for the read (later of the two), not for 1500", async () => {
+        await quiesce();
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        vi.mocked(courtPairingNudges).mockImplementationOnce(() => new Promise((resolve) => setTimeout(() => resolve([nudge()]), 700)));
+        await write([fx[0]!]);
+        await vi.advanceTimersByTimeAsync(650);
+        expect(posts(), "the read is still pending").toHaveLength(0);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(posts(), "out once the read has answered (750 ms in), not at the DEL bound").toHaveLength(1);
+        expect(nudgesOf(posts()[0]!)).toHaveLength(1);
+      });
+    });
+
+    it("REALTIME_PUBLISH=off: the court read is not made, and nothing is sent; with it on the same write reads once", async () => {
+      await quiesce();
+      probe.courtReads = 0;
+      vi.stubEnv("REALTIME_PUBLISH", " OFF ");
+      await write([fx[0]!]);
+      await sleep(300);
+      await nudgesSettled();
+      expect(courtPairingNudges, "no read while publishing is off").not.toHaveBeenCalled();
+      expect(probe.courtReads).toBe(0);
+      expect(posts()).toEqual([]);
+
+      vi.stubEnv("REALTIME_PUBLISH", undefined);
+      await write([fx[0]!]);
+      const all = await sent();
+      expect(courtPairingNudges, "PREMISE: with publishing on the same write reads").toHaveBeenCalledTimes(1);
+      expect(nudgesOf(all[0]!), "and sends the court's nudge").toHaveLength(1);
     });
 
     it("a push that cannot even be built (a blank division id: its topic builder throws) is warned and swallowed, never unhandled", async () => {
@@ -435,5 +546,37 @@ describe.skipIf(!HAS_DB)("courtPairingNudges itself", () => {
   it("an unknown fixture id answers []", async () => {
     const actual = await vi.importActual<typeof import("../stream-sessions/nudge")>("../stream-sessions/nudge");
     expect(await actual.courtPairingNudges([randomUUID()])).toEqual([]);
+  });
+});
+
+describe.skipIf(!HAS_DB)("courtPairingNudges: dropped ids are counted, never named", () => {
+  it("some ids dropped and some kept: ONE warn with the dropped COUNT and no id", async () => {
+    const actual = await vi.importActual<typeof import("../stream-sessions/nudge")>("../stream-sessions/nudge");
+    const warn = vi.spyOn(log, "warn");
+    try {
+      const real = randomUUID();
+      expect(await actual.courtPairingNudges(["fx-secret-0", real, "fx-secret-1"])).toEqual([]);
+      const dropped = warn.mock.calls.filter(([, msg]) => String(msg).includes("not a uuid"));
+      expect(dropped, "exactly one warn for the drop").toHaveLength(1);
+      expect(dropped[0]![0]).toEqual({ dropped: 2 });
+      const wire = JSON.stringify(warn.mock.calls);
+      expect(wire, "no id, dropped or kept, in any log line").not.toContain("fx-secret");
+      expect(wire).not.toContain(real);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+describe("realtimePublishEnabled", () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+  it.each([
+    ["URL and key set, switch unset", { REALTIME_PUBLISH: undefined, NEXT_PUBLIC_SUPABASE_URL: SUPABASE, SUPABASE_SERVICE_ROLE_KEY: "k" }, true],
+    ["the switch is off (case and space blind, as `broadcast` reads it)", { REALTIME_PUBLISH: " Off ", NEXT_PUBLIC_SUPABASE_URL: SUPABASE, SUPABASE_SERVICE_ROLE_KEY: "k" }, false],
+    ["no URL", { REALTIME_PUBLISH: undefined, NEXT_PUBLIC_SUPABASE_URL: "", SUPABASE_SERVICE_ROLE_KEY: "k" }, false],
+    ["no key", { REALTIME_PUBLISH: undefined, NEXT_PUBLIC_SUPABASE_URL: SUPABASE, SUPABASE_SERVICE_ROLE_KEY: "" }, false],
+  ] as const)("%s", (_name, env, expected) => {
+    for (const [k, v] of Object.entries(env)) vi.stubEnv(k, v);
+    expect(realtimePublishEnabled()).toBe(expected);
   });
 });

@@ -35,6 +35,7 @@
 // set, held open until the test releases it. `@/lib/db` is a passthrough whose
 // `withTenant` runs each callback inside an AsyncLocalStorage mark. Real
 // Postgres required; skipped without DATABASE_URL.
+import { nudgesSettled } from "../stream-sessions/nudge";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const probe = vi.hoisted(() => ({
@@ -233,6 +234,7 @@ async function quiesce(): Promise<void> {
   probe.locks = 0;
   for (const release of probe.gates.splice(0)) release();
   await sleep(20);
+  await nudgesSettled();   // T1.5: a write's push also awaits its court read
   probe.dels.length = 0;
   probe.inTxAtDel.length = 0;
   probe.fixturePushes.length = 0;
@@ -244,6 +246,7 @@ async function quiesce(): Promise<void> {
 async function releaseDel(): Promise<void> {
   for (const release of probe.gates.splice(0)) release();
   await sleep(20);
+  await nudgesSettled();   // T1.5: a write's push also awaits its court read
 }
 
 async function competitionOf(divisionId: string): Promise<string> {
@@ -307,6 +310,7 @@ async function expectDelThenPushes(
 /** A write that changed nothing sent nothing, not even later. */
 async function expectNothingSent(): Promise<void> {
   await sleep(40);
+  await nudgesSettled();
   expect(probe.dels, "no DEL").toEqual([]);
   expect(probe.fixturePushes, "no fixture push").toEqual([]);
   expect(probe.divisionPushes, "no division push").toEqual([]);
