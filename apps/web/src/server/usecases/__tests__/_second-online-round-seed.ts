@@ -1,6 +1,7 @@
 // A SECOND competition of an existing seed's organisation (test seed). The billing freeze is per COMPETITION of an org, so a test that
 // shows the freeze takes one competition and spares another needs two of them under one org: `seedOnlineChessRound` always makes a new org,
-// this adds a competition to the org it made. The competition holds one online (Lichess) division, STARTED, with one paired, unopened round 1.
+// this adds a competition to the org it made. The competition holds one online (Lichess) division, STARTED and PAID (Online Chess
+// credits), with one paired, unopened round 1.
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import type { CameraPolicy } from "@/lib/camera-policy";
@@ -8,7 +9,7 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { startDivision } from "../schedule";
 import { createStagesOnLegacyOnline } from "./_legacy-online-stage";
-import { seedLinkedPair, type SeedOnlineChessRoundResult, type SeedRoundBoard } from "./_external-play-seed";
+import { paySeededPackage, seedLinkedPair, type SeedOnlineChessRoundResult, type SeedRoundBoard } from "./_external-play-seed";
 
 export type SecondOnlineRound = {
   competitionId: string;
@@ -44,6 +45,8 @@ export async function seedSecondOnlineRound(
     values (${stage!.id}, ${division.id}, ${a.orgId}, 1, 1, ${"o4-" + randomUUID().slice(0, 8)}, 'scheduled', ${pair.home.entrantId}, ${pair.away.entrantId}, ${opts.scheduledAt})
     returning id`;
   await startDivision(a.owner, division.id);
+  // Online Chess credits: paid, as every shared online seed is (`paySeededPackage`), so its round 1 opens.
+  await paySeededPackage(a.owner, division.id);
   return {
     competitionId: competition.id,
     divisionId: division.id,

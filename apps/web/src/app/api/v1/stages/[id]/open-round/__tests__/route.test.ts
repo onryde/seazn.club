@@ -51,7 +51,8 @@ import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { createApiKey } from "@/server/usecases/api-keys";
 import { POST as openRoute } from "@/app/api/v1/stages/[id]/open-round/route";
 import { POST as resendRoute } from "@/app/api/v1/fixtures/[id]/external-play/resend/route";
-import { seedOnlineChessRound, seedOwner } from "@/server/usecases/__tests__/_external-play-seed";
+import { seedOnlineChessRound, seedOnlineSwiss, seedOwner } from "@/server/usecases/__tests__/_external-play-seed";
+import { onlinePackageQuote } from "@/server/usecases/online-package";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -185,6 +186,51 @@ describe.skipIf(!HAS_DB)("POST /stages/{id}/open-round", () => {
     }
     expect(checked).toBe(5);
     expect(await stamps(r.stageId)).toHaveLength(0);
+  });
+});
+
+// Online Chess credits Task 9 (spec 2026-11-23-online-chess-credits-design.md §7.6): the route carries the 402 ONLINE_CHESS_UNPAID body
+// (the quote) to the receipt, and the receipt's confirmed `pay` back to the usecase - the seam itself, driven over HTTP. The gate's own
+// behaviour is open-round-package-gate.test.ts's.
+describe.skipIf(!HAS_DB)("POST /stages/{id}/open-round - the first open needs a paid package, and `pay` rides the body", () => {
+  const packageOf = async (divisionId: string) =>
+    (await sql<{ paid: boolean; frozen: boolean; credits: number }[]>`
+      select paid_at is not null as paid, frozen_at is not null as frozen, credits_paid as credits
+        from division_online_packages where division_id = ${divisionId} and refunded_at is null`)[0]!;
+
+  it("unpaid: 402 with the quote in the body; the same press with the quote's `pay` opens it, paid and frozen", async () => {
+    const s = await seedOnlineSwiss({ players: 4, onlinePackage: "unpaid" });
+    authState.userId = s.ownerUserId;
+    const refused = await read(await openRoute(post(`/stages/${s.stageId}/open-round`, { roundNo: 1 }), ctx(s.stageId)));
+    expect(refused.status).toBe(402);
+    const error = refused.body.error as unknown as { code: string; quote: { size: number; owed: number; covers: boolean }; next: unknown };
+    expect([error.code, error.quote.size, error.quote.covers, error.next]).toEqual(["ONLINE_CHESS_UNPAID", 16, false, null]);
+    // The receipt's own read agrees with what the 402 carried (one quote, one answer).
+    expect(error.quote.owed).toBe((await onlinePackageQuote(s.owner, s.divisionId, 16)).owed);
+    expect(await stamps(s.stageId), "no stamp").toHaveLength(0);
+    expect(mail.sent, "nobody mailed").toHaveLength(0);
+    expect(await packageOf(s.divisionId)).toEqual({ paid: false, frozen: false, credits: 0 });
+
+    const paid = await read(await openRoute(
+      post(`/stages/${s.stageId}/open-round`, { roundNo: 1, pay: { size: 16, expectedOwed: error.quote.owed } }), ctx(s.stageId),
+    ));
+    expect([paid.status, (paid.body.data as { opened: boolean }).opened]).toEqual([200, true]);
+    expect(await packageOf(s.divisionId)).toEqual({ paid: true, frozen: true, credits: error.quote.owed });
+    expect(await stamps(s.stageId)).toHaveLength(1);
+  });
+
+  it("a malformed `pay` is refused before anything is written (the pay door's strict body)", async () => {
+    const s = await seedOnlineSwiss({ players: 4, onlinePackage: "unpaid" });
+    authState.userId = s.ownerUserId;
+    let checked = 0;
+    for (const pay of [{ size: 48, expectedOwed: 1 }, { size: 16 }, { size: 16, expectedOwed: 1.5 }, { size: 16, expectedOwed: 1, cameras: true }]) {
+      const res = await openRoute(post(`/stages/${s.stageId}/open-round`, { roundNo: 1, pay }), ctx(s.stageId));
+      expect(res.status, JSON.stringify(pay)).toBe(400);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    expect(await stamps(s.stageId)).toHaveLength(0);
+    expect(await packageOf(s.divisionId)).toEqual({ paid: false, frozen: false, credits: 0 });
   });
 });
 

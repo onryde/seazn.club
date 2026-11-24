@@ -72,6 +72,9 @@ import { loadOnlinePlayFixture, resetStaleBridge, type OnlinePlayFixture } from 
 import { attachToOpen, boardSeats, dispatchAndClassify, queueFixtureInvite, type InviteSeat } from "./invite";
 import { assertCompetitionNotFrozen } from "../entitlement-freeze";
 import { assertOnlineChessOffered } from "./online-chess-flag";
+import { getLimit } from "@/lib/entitlements";
+import { streamMonthlyRate } from "../stream-credits";
+import { gateFirstOpen, promoteWaitlistAfterMoveUp, type PayInput } from "../online-package";
 import { isPlayableFixtureStatus } from "./preflight";
 import {
   bridgeTakesInvites,
@@ -248,6 +251,8 @@ type Decision =
       retireBoards: string[];
       /** A re-open's boards whose own batch window had already closed (spec §3.2.1): not invited, reported. */
       closedSkips: OpenRoundSkip[];
+      /** Online Chess credits P18: a payment on this open moved the package's size UP; the waitlist is promoted after the commit. */
+      movedUp: boolean;
     };
 
 type LinkHold = LinkHoldReason;
@@ -301,8 +306,11 @@ function roundChanged(): HttpError {
   return new HttpError(409, "The round changed while it was being opened — try again", "ROUND_CHANGED");
 }
 
+/** `pay` (Online Chess credits §7.6 "Pay and open"): the receipt the organiser confirmed when the first open answered 402
+ *  ONLINE_CHESS_UNPAID. It is taken only when this press opens something and the package is not frozen yet, and then on the open's
+ *  own transaction: the debit, the stamp and the freeze commit together or not at all. */
 export async function openRound(
-  a: { stageId: string; roundNo: number; actorUserId: string },
+  a: { stageId: string; roundNo: number; actorUserId: string; pay?: PayInput },
   deps: OpenRoundDeps = {},
 ): Promise<OpenRoundResult> {
   const now = deps.now ?? new Date();
@@ -371,6 +379,12 @@ export async function openRound(
   // A board whose player has no Lichess link that PLAYS cannot make its challenge: held, not invited (neither seat), and the other boards open
   // as usual. Read outside the transaction (the links are read through the pool, as `loadSide` reads them).
   const heldBoards = await lichessHeldBoards(boards);
+  // Online Chess credits §7.6: the money facts the package gate needs and the transaction cannot read (lib/db.ts forbids a pooled
+  // read inside one) - the plan's entrant cap and the plan's monthly rate. `quiet` unless this press pays: a quote-only gate is a read.
+  const money = {
+    planCap: await getLimit(st.orgId, "entrants.per_division.max", st.competitionId),
+    rate: await streamMonthlyRate(st.orgId, { quiet: a.pay === undefined }),
+  };
 
   const decision = await sql.begin(async (tx): Promise<Decision> => {
     // The lock every pairing write takes (generate, unpair, addFixture,
@@ -619,6 +633,12 @@ export async function openRound(
       if (pending.length === 0) return { kind: "nothing", skipped: [...closedSkips, ...heldReport()] };
     }
 
+    // Online Chess credits §7.6: this press WILL open something (the 'nothing' answer is above, and pays nothing), so the package is
+    // asked now - after the decision, before a single invite is attached or queued. Frozen: nothing asked (a round opened before, or the
+    // grandfathered row). Otherwise a paid package that covers the division, paid here first when the organiser confirmed `pay`, or 402
+    // ONLINE_CHESS_UNPAID with the quote; then the freeze (P8). Every refusal after this line rolls the payment back with the round.
+    const gate = await gateFirstOpen(tx, { orgId: st.orgId, divisionId: st.divisionId, userId: a.actorUserId, pay: a.pay }, money);
+
     // D17: the re-arm, only now that the board WILL be invited (a reset answered `window_closed` would hand it to the
     // sweep's no-show). As a re-pair resets a board (stages/swiss-boards.ts clearSwissFixtureSeats, M-10): its row goes, and with
     // it the closed pairing's stamps, so the attach below mints it afresh for this open. Its video meeting goes too —
@@ -693,12 +713,18 @@ export async function openRound(
       // (as releaseSeat does for a seat it clears) - or "every send failed" would leave the round reading "someone was invited".
       if (queueFailed.has(fixtureId)) await unbindIfUnstamped(tx, fixtureId, open.id);
     }
-    return { kind, open, claims, queueFailed: [...queueFailed], retireBoards: [...new Set(retireBoards)], closedSkips: [...closedSkips, ...heldReport()] };
+    return {
+      kind, open, claims, queueFailed: [...queueFailed], retireBoards: [...new Set(retireBoards)], closedSkips: [...closedSkips, ...heldReport()],
+      movedUp: gate.movedUp,
+    };
   });
 
   if (decision.kind === "nothing") {
     return { opened: false, reason: "already_open", skipped: decision.skipped };
   }
+  // P18: a payment on this open moved the size up, so whoever is waiting for the room it made is promoted - after the commit (the
+  // payment and the open stand whatever happens here; the promotion reports its own failure and never throws).
+  if (decision.movedUp) await promoteWaitlistAfterMoveUp(st.divisionId, a.actorUserId);
 
   // N-2: each marked board's old rooms are ended at the vendor, stopping the old pairing's cameras, and each row is deleted only
   // after its end succeeded (retireStaleMeeting, the claim's own retire). Never blocking: a refusal keeps the row, which names

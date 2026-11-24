@@ -7,6 +7,7 @@ import { SWISS_REQUESTED_BYES_DEFERRED_MESSAGE } from "../../../lib/swiss-refusa
 import { OPEN_ROUND_REFUSALS, OPEN_ROUND_SKIP_REASONS } from "../../../lib/open-round.ts";
 import { Uuid } from "./common.ts";
 import { Fixture } from "./scoring.ts";
+import { OnlinePackagePayInput } from "./online-package.ts";
 
 // ---------------------------------------------------------------------------
 // Generate (fixtures) response
@@ -195,8 +196,10 @@ export const SwissCutDriftResult = z.object({
 });
 
 /** POST /stages/{id}/open-round (T19, D12) — the organiser opens one round
- *  of an online-play stage: stamps it and invites its players. */
-export const OpenRoundInput = z.object({ roundNo: z.number().int().positive() }).strict();
+ *  of an online-play stage: stamps it and invites its players. `pay` (Online Chess credits §7.6 "Pay and open"): the receipt the
+ *  organiser confirmed when the first open answered 402 ONLINE_CHESS_UNPAID - the pay door's own body, paid on the open's
+ *  transaction. */
+export const OpenRoundInput = z.object({ roundNo: z.number().int().positive(), pay: OnlinePackagePayInput.optional() }).strict();
 export type OpenRoundInput = z.infer<typeof OpenRoundInput>;
 
 export const OpenRoundSkip = z.object({ fixtureId: Uuid, reason: z.enum(OPEN_ROUND_SKIP_REASONS) });

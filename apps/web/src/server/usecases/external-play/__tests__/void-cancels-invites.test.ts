@@ -26,6 +26,7 @@ import type { EndedRow } from "@/server/email-outbox/hooks";
 import type { DeliverMessage } from "@/server/email-outbox/transport";
 import { stubOutboxEnv, type InviteMail } from "../../__tests__/_invite-mail";
 import {
+  paySeededPackage,
   seedOnlineChessRound,
   seedOnlineSwiss,
   seedOwner,
@@ -205,6 +206,7 @@ async function openedGeneratedLeague(players = 4) {
     returning id`;
   await sql`update fixtures set scheduled_at = ${new Date("2026-10-01T12:10:00.000Z")} where stage_id = ${stage!.id}`;
   await startDivision(owner, division.id);
+  await paySeededPackage(owner, division.id); // Online Chess credits: round 1 opens on a paid package
   const out = await openRound({ stageId: stage!.id, roundNo: 1, actorUserId: ownerUserId });
   expect(out, "premise: the real open invited the round").toMatchObject({ opened: true });
   return { orgId: owner.orgId, owner, divisionId: division.id, stageId: stage!.id, generated, spared: spared!.id };
@@ -273,6 +275,7 @@ async function openedKnockout(players: number): Promise<{ owner: SeedOnlineSwiss
   await generateStageFixtures(owner, stage!.id);
   await sql`update fixtures set scheduled_at = ${new Date("2026-10-01T12:10:00.000Z")} where stage_id = ${stage!.id}`;
   await startDivision(owner, division.id);
+  await paySeededPackage(owner, division.id); // Online Chess credits: round 1 opens on a paid package
   const out = await openRound({ stageId: stage!.id, roundNo: 1, actorUserId: owner.userId! });
   expect(out, "premise: the real open invited the bracket's first round").toMatchObject({ opened: true });
   return { owner, orgId: owner.orgId, stageId: stage!.id, entrants };

@@ -194,8 +194,9 @@ export async function payOnlinePackageInTx(
   return { applied: true, quote, package: after, capacityLoweredTo };
 }
 
-/** The first stage kind of the division that online play does not allow (P16), or null. */
-async function refusedStageKind(tx: Tx, divisionId: string): Promise<string | null> {
+/** The first stage kind of the division that online play does not allow (P16), or null. The pay door's format gate on a charge, and
+ *  the open-round gate's on a pay-and-open (gate.ts). */
+export async function refusedStageKind(tx: Tx, divisionId: string): Promise<string | null> {
   const [s] = await tx<{ kind: string }[]>`
     select kind from stages where division_id = ${divisionId} and kind not in ${tx([...ONLINE_ALLOWED_STAGE_KINDS])} order by seq limit 1`;
   return s?.kind ?? null;
