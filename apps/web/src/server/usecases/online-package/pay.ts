@@ -40,6 +40,7 @@ import { assertNotFrozen, frozenCompetitionIds } from "@/server/usecases/entitle
 import { onlineChessDisabled, onlineChessOffered } from "@/server/usecases/external-play/online-chess-flag";
 import { log } from "@/server/logger";
 import { lockOrg, streamMonthlyRate } from "@/server/usecases/stream-credits";
+import { formatNotSupported } from "./format";
 import { debitForPackage, refundForPackage } from "./ledger";
 import { quoteLocked, readPackageFacts, type PackageQuote } from "./quote";
 import { livePackage } from "./read";
@@ -76,17 +77,6 @@ function quoteChanged(quote: PackageQuote): HttpError {
       : "The Online Chess total changed since it was shown; check the new total and confirm again",
     ONLINE_PACKAGE_CODES.quoteChanged,
     { quote },
-  );
-}
-
-/** 422 ONLINE_FORMAT_NOT_SUPPORTED (plan Global Constraints, carrying `kind`): the division does not play online at all
- *  (`kind` null), or it holds a stage kind online play does not allow (P16). */
-export function formatNotSupported(kind: string | null): HttpError {
-  return new HttpError(
-    422,
-    kind === null ? "This division does not play online" : `Online Chess does not run a ${kind} stage`,
-    ONLINE_PACKAGE_CODES.formatNotSupported,
-    { kind },
   );
 }
 

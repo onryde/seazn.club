@@ -5,6 +5,8 @@
 //   read.ts    + derivedCameras (P9) and countedRounds (P15): what a division's stages say about its price
 //   ledger.ts  planDebit / debitForPackage, returnableFor / planReturn / refundForPackage, OnlineChessNoCreditsError —
 //              the package's consume and refund rows on org_stream_credits, monthly first and P21's return order
+//   format.ts  assertOnlineFormat / assertRoundsFit / assertDivisionRoundsFit / divisionsNeedingCameraUpgrade / assertCamerasPaidFor —
+//              the format, rounds and camera gates, asked before round 1 (the refusals' builders live here too)
 //   quote.ts   quoteLocked / onlinePackageQuote / readPackageFacts — what a size costs, what is owed or returned, and whether it
 //              is refused; one answer for the price line, the pay line and the receipt. Writes and locks nothing.
 //   pay.ts     payOnlinePackage / payOnlinePackageInTx — pay, upgrade, add cameras and move down: the quote turned into ledger
@@ -20,6 +22,7 @@ export * from "./types";
 export * from "./ledger";
 export * from "./read";
 export * from "./quote";
+export * from "./format";
 export * from "./pay";
 export * from "./settle";
 export * from "./refund";

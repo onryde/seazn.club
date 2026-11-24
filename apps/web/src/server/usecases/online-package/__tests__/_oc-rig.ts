@@ -155,6 +155,22 @@ export async function seedSwiss(orgId: string, divisionId: string, rounds: numbe
     values (${divisionId}, ${orgId}, ${seq!}, 'swiss', ${`Swiss ${seq}`}, ${sql.json({ rounds } as never)})`;
 }
 
+/** A stage of any `kind` (the nine the schema's stages_kind_check allows), written by SQL as a division that predates a gate holds
+ *  it (the Task 8 suites: a legacy online division with a league, an off division about to turn online with a group). Answers its id. */
+export async function seedStageKind(orgId: string, divisionId: string, kind: string, config: Record<string, unknown> = {}): Promise<string> {
+  const [{ seq }] = await sql<{ seq: number }[]>`select coalesce(max(seq), 0)::int + 1 as seq from stages where division_id = ${divisionId}`;
+  const [row] = await sql<{ id: string }[]>`
+    insert into stages (division_id, org_id, seq, kind, name, config)
+    values (${divisionId}, ${orgId}, ${seq!}, ${kind}, ${`${kind} ${seq}`}, ${sql.json(config as never)})
+    returning id`;
+  return row!.id;
+}
+
+/** The division's stage kinds in seq order (what is stored, never what a door answered). */
+export async function stageKindsOf(divisionId: string): Promise<string[]> {
+  return (await sql<{ kind: string }[]>`select kind from stages where division_id = ${divisionId} order by seq`).map((r) => r.kind);
+}
+
 /** `n` bought credits spent on streams (raw pack consumes with no session: the claw-back suite's own precondition). */
 export async function streamSpend(orgId: string, n: number): Promise<void> {
   for (let i = 0; i < n; i += 1) {
@@ -256,4 +272,10 @@ export async function refusal(p: Promise<unknown>): Promise<HttpError> {
 export async function divisionExists(id: string): Promise<boolean> {
   const [d] = await sql`select 1 from divisions where id = ${id}`;
   return d !== undefined;
+}
+
+/** The grandfathered row of the V549 backfill: FROZEN and UNPAID (frozen_at = created_at, the one unpaid shape the schema allows
+ *  frozen). A division that was already running when Online Chess shipped reads like this: nothing asks it for credits. */
+export async function freezeGrandfathered(packageId: string): Promise<void> {
+  await sql`update division_online_packages set frozen_at = created_at where id = ${packageId}`;
 }

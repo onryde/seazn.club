@@ -29,6 +29,7 @@ import { type SwissPairingMode, storedSwissPairing, effectiveSwissPairing, SWISS
 import { byeAward, isOneSidedAwardBye } from "@/lib/fixture-bye";
 import { BYE_SLOT_LABEL } from "@/lib/bye-line";
 import type { Tx, ActiveEntrant, SwissExistingFixture, SwissGenResult } from "./types";
+import { assertDivisionRoundsFit } from "../online-package/format";
 import { refuseCutBeyondField } from "./cut-gate";
 import { divisionHasStarted } from "./helpers";
 import { NO_SWISS_RESHAPE, addSwissReshape, reconcileSwissRoundShells } from "./swiss-reconcile";
@@ -488,6 +489,10 @@ export async function swissGen(
     if (override !== undefined) {
       throw new HttpError(422, SWISS_PAIRING_ROUND_ONE_ONLY_MESSAGE, SWISS_PAIRING_ROUND_ONE_ONLY_CODE);
     }
+    // Online Chess (spec 2026-11-23 §7.6, P1, P15): Generate mints every round the stage declares, so the division's declared
+    // rounds must fit its package's size, until a round opens (a frozen package is never asked). A stage stored over its size
+    // before this gate stops here, with the size that covers it, instead of minting boards the first round could not open.
+    await assertDivisionRoundsFit(tx, divisionId);
     // Minted at round 1's field; every later round is resized to its own field when its Pair reaches it.
     const mintField = swissFieldForRound(entrants, 1);
     refuseSwissFieldUnderTwo(stageId, mintField.length);

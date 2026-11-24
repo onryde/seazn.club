@@ -61,6 +61,7 @@ import { fixtureHasResultSql } from "./fixture-results-sql";
 import { fixtureStartedSql, stageHasStarted } from "./fixture-started-sql";
 import { insertFixtureRows } from "./fixture-insert";
 import { afterScheduleWrite, divisionLockState } from "./schedule";
+import { assertDivisionRoundsFit } from "./online-package/format";
 import { swissRefusal } from "./swiss-refusal";
 import { roundRobinRefusal } from "./roundrobin-refusal";
 import { START_LINE_BUDGET } from "@/lib/format-max-entrants";
@@ -475,6 +476,10 @@ export async function patchSwissStage(auth: AuthCtx, stageId: string, body: Patc
       if (seatedRound !== null && to < seatedRound) {
         throw swissRefusal("SWISS_ROUNDS_BELOW_SEATED", { rounds: to, seatedRound });
       }
+      // Online Chess (spec 2026-11-23 §7.6, P1, P15): the rounds a division declares must fit its package's size until a round
+      // opens. A CHANGE of this stage's count only (a re-send writes nothing and is never asked, so a legacy division over its size
+      // can still save its colours), judged on the sum over the division's Swiss stages with this one's new count.
+      if (to !== from) await assertDivisionRoundsFit(tx, stage.division_id, { stageId, rounds: to });
     }
 
     let added = 0;
@@ -570,6 +575,9 @@ export async function addSwissRound(auth: AuthCtx, stageId: string): Promise<{ r
         { resolvable: finish.canFinish },
       );
     }
+    // Online Chess (spec 2026-11-23 §7.6, P1, P11, P15): one more round must fit the package's size while it is unfrozen; once a
+    // round has opened the package is frozen and a round added mid-event is free.
+    await assertDivisionRoundsFit(tx, stage.division_id, { stageId, rounds: to });
 
     let added = 0;
     if (rows.length > 0 && !rows.some((f) => f.round_no === to)) {

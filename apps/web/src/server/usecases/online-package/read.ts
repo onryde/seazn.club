@@ -107,10 +107,12 @@ export async function derivedCameras(db: Tx | typeof sql, divisionId: string): P
  *  counts 0: it plays no round — the stage door refuses to write one (STAGE_SWISS_ROUNDS_REQUIRED) and Generate and Start
  *  refuse to play one (CONFIG_INVALID) — so it costs nothing until a round count is declared, and every door that declares one
  *  re-asks the size (spec §7.6). It is never read as 1, and never as a product default: the round budget is declared up
- *  front, "never derived from field size" (the stage API). */
-export async function countedRounds(db: Tx | typeof sql, divisionId: string): Promise<number> {
+ *  front, "never derived from field size" (the stage API). `exceptStageId` leaves one stage out: a rounds edit that is not stored yet
+ *  adds its new count to the others' (format.ts `assertDivisionRoundsFit`). */
+export async function countedRounds(db: Tx | typeof sql, divisionId: string, exceptStageId?: string): Promise<number> {
   const stages = await db<{ rounds: unknown }[]>`
-    select config -> 'rounds' as rounds from stages where division_id = ${divisionId} and kind = 'swiss'`;
+    select config -> 'rounds' as rounds from stages
+     where division_id = ${divisionId} and kind = 'swiss' ${exceptStageId === undefined ? db`` : db`and id <> ${exceptStageId}`}`;
   let total = 0;
   for (const s of stages) {
     if (typeof s.rounds === "number" && Number.isInteger(s.rounds) && s.rounds >= 1) total += s.rounds;

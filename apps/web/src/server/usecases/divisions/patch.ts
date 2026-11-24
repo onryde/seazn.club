@@ -70,7 +70,10 @@ import { assertOnlinePlayFits, countOnlineHeld, openOnlineCapGuard, readPlanLimi
 import { onlineChessDisabled, onlineChessOffered } from "../external-play/online-chess-flag";
 import {
   applyOnlineSave,
+  assertCamerasPaidFor,
+  assertOnlineFormat,
   decideOnlineSize,
+  derivedCameras,
   prepareOnlineSave,
   promoteWaitlistAfterMoveUp,
   type OnlineSavePrelude,
@@ -278,6 +281,9 @@ export async function patchDivision(
     roundOpened = await anyRoundOpened(ptx, id, new Date());
   };
   const row = await withTenant(auth.orgId, async (tx) => {
+    // Online Chess camera gate (P9, P19): set where a camera policy CHANGES (null = this save changes none): whether the division had
+    // cameras before the write. Read again after the UPDATE, where a turn-on of a paid package that did not pay for them is refused.
+    let camerasBefore: boolean | null = null;
     // W2c batch-3 I1: the walkovers no event records, read before a format write (`award-rewrite.ts`); none otherwise.
     let held: HeldAward[] = [];
     // W2c Task 15 fix round 1 (I-1): what every unstarted match resolves to before a format write (`rules-version.ts`);
@@ -344,6 +350,9 @@ export async function patchDivision(
         const effectiveFrom = effectivePolicy({ stage: null, division: storedCamera, competition: floor });
         const effectiveTo = effectivePolicy({ stage: null, division: incomingCamera, competition: floor });
         assertPolicyChange({ from: effectiveFrom, to: effectiveTo, windowOpened: roundOpened });
+        // Online Chess (P9, P19): what the division's stages and policies said BEFORE this write, so that after it a save that turns
+        // cameras ON is asked whether the package paid for them (below, after the UPDATE).
+        camerasBefore = await derivedCameras(tx, id);
         // Same transaction as the write it describes (ruling Q2: one row in
         // competition_events per change), so a refused or rolled-back change
         // can never leave a row saying it happened.
@@ -687,6 +696,13 @@ export async function patchDivision(
         ) {
           throw onlineChessDisabled();
         }
+        // Online Chess runs Swiss and knockout only (spec 2026-11-23 §7.6, P16): a division holding a league, a group, a ladder or an
+        // americano cannot turn online play on, 422 ONLINE_FORMAT_NOT_SUPPORTED naming the first such stage by seq. The same off ->
+        // lichess transition as the two gates around it, so a legacy online division holding a league stays readable and saves.
+        if (readOnlinePlay(nextConfig) === "lichess" && readOnlinePlay(currentConfig) !== "lichess") {
+          const stored = await tx<{ kind: string }[]>`select kind from stages where division_id = ${id} order by seq`;
+          assertOnlineFormat(stored.map((s) => s.kind));
+        }
         // Owner ruling 2026-11-21 (256 since 2026-11-23): an online chess division holds at most min(plan cap, 256) entrants (the plan
         // asked since cap-256 review m1), so a division already holding more cannot be turned online. Only the same off -> lichess transition (a re-send of a stored 'lichess' or turning it off is never gated, for a division
         // saved before the cap must still save), counted as every online-cap door counts: the places the division HOLDS - live entrants
@@ -866,6 +882,11 @@ export async function patchDivision(
         return update(slug === before!.slug ? effective : { ...effective, slug }, sp);
       },
     );
+    // Online Chess (spec 2026-11-23 §7.6, P9, P19): a camera policy that TURNS cameras ON for a division whose package is paid
+    // without them is refused 422 ONLINE_CAMERAS_NEED_UPGRADE, the write rolling back with it. Judged on the derived state after the
+    // write (a stage's own policy counts), only on a transition off -> on (a save that leaves cameras on, or turns them off, is
+    // never asked), and only while the package is unfrozen. The division lock was taken by the camera prelude.
+    if (camerasBefore === false) await assertCamerasPaidFor(tx, [id]);
     // batch-3 I1: under the format the division now plays, in this transaction (`award-rewrite.ts`).
     rewroteAwards = (await rewriteHeldAwards(tx, held)).length > 0;
     // W2c Task 15 fix round 1 (I-1): every unstarted match whose format this save moved gets a new version, so a pad open

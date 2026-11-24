@@ -22,10 +22,11 @@ import "server-only";
 //    Switching it on again writes a fresh unpaid row at the default; the earlier choice is not remembered (§7.1).
 import type { Tx } from "@/lib/db";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
-import { ONLINE_PACKAGE_CODES, sizeFor, sizeForRounds, type OnlineSize } from "@/lib/online-chess-package";
+import { ONLINE_PACKAGE_CODES, sizeFor, type OnlineSize } from "@/lib/online-chess-package";
 import { countOnlineHeld, lockDivisionForCap } from "@/server/external-play/online-entrant-cap";
 import { divisionPlaysOnline } from "@/server/external-play/online-play";
-import { clampCapacity, formatNotSupported } from "./pay";
+import { formatNotSupported, roundsAboveMax, roundsNeedSize } from "./format";
+import { clampCapacity } from "./pay";
 import { refusalFor, readPackageFacts } from "./quote";
 import { livePackage } from "./read";
 import { applyPackageDelete, planPackageDelete, type PackageDeletePlan, type RefundResult } from "./refund";
@@ -48,17 +49,8 @@ export function assertSizeFits(size: OnlineSize, facts: PackageFacts): void {
     );
   }
   if (refusal === "plan") throw new PaymentRequiredError("entrants.per_division.max", { size, planCap: facts.planCap });
-  if (refusal === "rounds_above_max") {
-    throw new HttpError(422, `${facts.rounds} Swiss rounds is more than any Online Chess size includes`, ONLINE_PACKAGE_CODES.roundsAboveMax, { rounds: facts.rounds });
-  }
-  if (refusal === "rounds") {
-    throw new HttpError(
-      422,
-      `${facts.rounds} Swiss rounds need a larger Online Chess size than ${size}`,
-      ONLINE_PACKAGE_CODES.roundsNeedSize,
-      { nextSize: sizeForRounds(facts.rounds) },
-    );
-  }
+  if (refusal === "rounds_above_max") throw roundsAboveMax(facts.rounds);
+  if (refusal === "rounds") throw roundsNeedSize(size, facts.rounds);
   // `frozen` is judged by the door from the row, never here (`refusalFor` is asked with frozen = false).
   throw new HttpError(500, `Online Chess size ${size}: unexpected refusal ${refusal}`, "online_size_refusal_unknown");
 }
