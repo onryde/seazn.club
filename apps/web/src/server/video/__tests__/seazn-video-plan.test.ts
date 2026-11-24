@@ -386,7 +386,8 @@ describe.skipIf(!HAS_DB)("seaznVideoPlan: which player the match page mounts", (
 // path, from `ending_at`), or COMPLETED a moment ago (the recording's path from its `ended_at`: Cloudflare's finish, the stream tick that
 // locks it, one read). Every one is counted from the SESSION's own time, never from the render (review m1), so a page drawn late does not
 // promise a video for longer than the session itself could take. A live session has none (its answer is the player), a failed one has
-// none (it never recorded), and a later session of another kind ends it.
+// none (it never recorded), and a later session of another kind ends it. Nor does an ending or completed one that NEVER went live
+// (`started_at` null: a Go live stopped on its way up; T33f fix round 1, review I2): the domain fills no replay for it.
 describe.skipIf(!HAS_DB)("seaznVideoPlan: the wait the island holds its box through (re-capture R2)", () => {
   const seazn = async (fixtureId: string, now: Date) => {
     const plan = await seaznVideoPlan(fixtureId, now);
@@ -429,29 +430,38 @@ describe.skipIf(!HAS_DB)("seaznVideoPlan: the wait the island holds its box thro
     expect(await holdOf(f, N), "created past the ladder ago: no wait (nothing legal is still warming)").toBeNull();
   });
 
-  it("every state of the latest Seazn session, from the session domain's own lists, each counted from ITS OWN time: not-yet-live from creation, ending from ending_at, completed from ended_at; live and failed hold none", async () => {
+  it("every state of the latest Seazn session, from the session domain's own lists, each counted from ITS OWN time: not-yet-live from creation, ending from ending_at, completed from ended_at; live and failed hold none — nor ending or completed when it NEVER went live", async () => {
     const r = await rig();
     const f = r.fixtureIds[0];
     const sid = await goLive(r, f, r.seazn);
     const N = new Date();
-    // Three distinct instants, so a state that read the wrong one gives the wrong answer.
-    const created = ago(N, 10 * 60), ending = ago(N, 90), ended = ago(N, 60);
+    // Three distinct instants, so a state that read the wrong one gives the wrong answer (and a fourth, the live's start, between them).
+    const created = ago(N, 10 * 60), started = ago(N, 8 * 60), ending = ago(N, 90), ended = ago(N, 60);
     await stamp(sid, { created, ending });
+    const liveAt = ACTIVE_STATES.indexOf("live");
+    // A state past the ladder's live is swept both ways: after a live (the domain's `started_at`) and never live (fix round 1, I2).
+    const cases = ([...ACTIVE_STATES, ...TERMINAL_STATES] as SessionState[]).flatMap((state) => {
+      const beforeLive = ACTIVE_STATES.indexOf(state) !== -1 && ACTIVE_STATES.indexOf(state) < liveAt;
+      return beforeLive ? [{ state, wentLive: false }] : state === "live" ? [{ state, wentLive: true }] : [{ state, wentLive: true }, { state, wentLive: false }];
+    });
     let checked = 0;
-    for (const state of [...ACTIVE_STATES, ...TERMINAL_STATES] as SessionState[]) {
-      await sql`update fixture_stream_sessions set state = ${state}, ended_at = ${TERMINAL_STATES.includes(state) ? ended : null} where id = ${sid}`.catch((e: unknown) => {
+    for (const { state, wentLive } of cases) {
+      await sql`update fixture_stream_sessions set state = ${state}, started_at = ${wentLive ? started : null}, ended_at = ${TERMINAL_STATES.includes(state) ? ended : null} where id = ${sid}`.catch((e: unknown) => {
         throw new Error(`PREMISE: could not set state ${state}: ${(e as Error).message}`);
       });
       const expected =
         state === "live" || state === "failed" ? null
+        : (state === "completed" || state === "ending") && !wentLive ? null
         : state === "completed" ? at(ended, SHOWN_BY_S)
         : state === "ending" ? at(ending, ENDING_TIMEOUT_SECONDS + SHOWN_BY_S)
         : at(created, MAX_ANCHOR_DRIFT_SECONDS);
-      expect(await holdOf(f, N), `state ${state}`).toBe(expected);
+      expect(await holdOf(f, N), `state ${state}, ${wentLive ? "went live" : "never live"}`).toBe(expected);
       checked++;
     }
-    expect(checked, "anti-vacuity: every state was checked").toBe(ACTIVE_STATES.length + TERMINAL_STATES.length);
-    expect(checked).toBeGreaterThanOrEqual(7);
+    // 3 on the way up, live once, then ending, completed and failed each both ways: 3 + 1 + 3 × 2.
+    expect(checked, "anti-vacuity: every case was checked").toBe(cases.length);
+    expect(checked).toBe(10);
+    expect(cases.filter((c) => (c.state === "ending" || c.state === "completed") && !c.wentLive), "the never-live stops are in the sweep").toHaveLength(2);
   });
 
   it("just stopped: the wait is the recording's path from the END — to the ms: a ms before it closes held, at it gone; a session with no end stamp counts from its creation", async () => {
@@ -597,8 +607,11 @@ describe.skipIf(!HAS_DB)("seaznVideoPlan: the box is reserved only where a playe
       checked++;
     }
     expect(checked, "anti-vacuity: every in-flight state").toBe(ACTIVE_STATES.length);
-    await sql`update fixture_stream_sessions set state = 'completed', ended_at = ${ago(N, 30)} where id = ${sid}`;
-    expect((await planAt(f, N)).reserve, "completed 30 s ago: its wait is on").toBe(true);
+    // T33f fix round 1 (review I2): completed 30 s ago having NEVER gone live (stopped on its way up): no recording is coming, no box.
+    await sql`update fixture_stream_sessions set state = 'completed', started_at = null, ended_at = ${ago(N, 30)} where id = ${sid}`;
+    expect((await planAt(f, N)).reserve, "completed 30 s ago, never live: nothing is coming").toBe(false);
+    await sql`update fixture_stream_sessions set started_at = ${ago(N, 45)} where id = ${sid}`;
+    expect((await planAt(f, N)).reserve, "completed 30 s ago after a live: its wait is on").toBe(true);
     await sql`update fixture_stream_sessions set ended_at = ${ago(N, PAST_WINDOW_S)}, created_at = ${ago(N, PAST_WINDOW_S + 3600)}, ending_at = ${ago(N, PAST_WINDOW_S + 20)} where id = ${sid}`;
     expect((await planAt(f, N)).reserve, "completed past its wait, nothing recorded: no box").toBe(false);
     await seedLockedRecording(sid, 90);

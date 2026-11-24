@@ -36,7 +36,10 @@ import "server-only";
 // recording's path), or COMPLETED a moment ago (the recording's path from its `ended_at`: `SEAZN_RECORDING_SHOWN_BY_MS`, which is
 // Cloudflare's finish, the stream tick that locks it, and one read). Every one is counted from the SESSION's own time, never from the
 // render (review m1), so a page drawn late does not promise a video for longer than the session could take. Never while it is live (its
-// answer is the player), nor for a failed session (it never recorded), nor once a session of another kind follows.
+// answer is the player), nor for a failed session (it never recorded), nor once a session of another kind follows. Nor for an ending or
+// completed session that NEVER went live (`started_at` null: a Go live stopped on its way up; T33f fix round 1, review I2): the session
+// domain fills no replay for a session that never broadcast (session.ts `replayFill`), so no recording is coming and the held box's
+// "the replay will be ready" would be a false promise.
 //
 // And the replay's part numbers (`replayParts`, re-capture R1): the numbers the video route will offer as parts, as of this render
 // (`seaznReplayPartNos`, the route's own numbering), so the island holds the picker's row before its first read when there are two or
@@ -45,7 +48,8 @@ import "server-only";
 // And whether a LIVE is what the page expects next (`liveExpected`, Task 33c): the fixture's LATEST session is a Seazn session on its
 // way up or live (every active state up to `live`: the route answers a live only in `live`, seazn-live.ts). The live player carries one
 // more row, its delay line, so the box the island holds keeps that row, invisible, and the live arrives with no shift. Never while it is
-// being stopped or after (a recording comes next, which has no line), nor for an unstarted fixture (arm 3: no box is held there).
+// being stopped or after (a recording comes next, which has no line), nor for an unstarted fixture (arm 3: no box is held there). The
+// same flag picks the held box's line (Task 33f): the live video is coming while it is set, else the replay.
 //
 // And the island's poll hints (Phase 1 re-review N1): an empty answer holds the 30 s floor while the match is hot, else backs off to
 // 60 s. `kickoffAt` is the fixture's `scheduled_at` (the island checks the hour either side of it on the viewer's clock, so a page
@@ -79,8 +83,10 @@ interface FixtureFacts {
   org_id: string; status: string; finished_at: Date | null; scheduled_at: Date | null;
   has_seazn_session: boolean; has_seazn_replay: boolean; has_session: boolean; has_active_seazn_session: boolean;
   /** The fixture's LATEST session (by creation, the video route's own reading): its kind and state and the three times the wait is counted
-   *  from (its creation, the instant it began ending, its end); all null with no session. */
+   *  from (its creation, the instant it began ending, its end); all null with no session. `latest_started`: when it went live, null if it
+   *  never did (T33f fix round 1). */
   latest_kind: string | null; latest_state: string | null; latest_created: Date | null; latest_ending: Date | null; latest_ended: Date | null;
+  latest_started: Date | null;
 }
 
 /** N1: the island's hints, as of `now`. */
@@ -103,9 +109,11 @@ function holdOf(facts: FixtureFacts, now: Date): Date | null {
       closes = created + MAX_ANCHOR_DRIFT_SECONDS * 1000;
       break;
     case "ending":
+      if (facts.latest_started === null) return null;   // T33f fix round 1 (review I2): never went live, recorded nothing: no wait
       closes = (facts.latest_ending === null ? created : ms(facts.latest_ending)) + ENDING_TIMEOUT_SECONDS * 1000 + SEAZN_RECORDING_SHOWN_BY_MS;
       break;
     case "completed":
+      if (facts.latest_started === null) return null;   // the same: a Go live stopped before it went live (session.ts `replayFill`)
       closes = (facts.latest_ended === null ? created : ms(facts.latest_ended)) + SEAZN_RECORDING_SHOWN_BY_MS;
       break;
     default:
@@ -144,9 +152,10 @@ export async function seaznVideoPlan(fixtureId: string, now: Date = new Date()):
            exists (select 1 from fixture_stream_sessions s where s.fixture_id = f.id) as has_session,
            exists (select 1 from fixture_stream_sessions s
                     where s.fixture_id = f.id and s.destination_kind = 'seazn' and s.state not in ${sql([...TERMINAL_STATES])}) as has_active_seazn_session,
-           l.destination_kind as latest_kind, l.state as latest_state, l.created_at as latest_created, l.ending_at as latest_ending, l.ended_at as latest_ended
+           l.destination_kind as latest_kind, l.state as latest_state, l.created_at as latest_created, l.ending_at as latest_ending, l.ended_at as latest_ended,
+           l.started_at as latest_started
       from fixtures f
-      left join lateral (select s.destination_kind, s.state, s.ending_at, s.ended_at, s.created_at from fixture_stream_sessions s
+      left join lateral (select s.destination_kind, s.state, s.ending_at, s.ended_at, s.created_at, s.started_at from fixture_stream_sessions s
                           where s.fixture_id = f.id order by s.created_at desc, s.id desc limit 1) l on true
      where f.id = ${fixtureId}`;
   if (facts === undefined) return EXTERNAL;

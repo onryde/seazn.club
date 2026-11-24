@@ -489,7 +489,8 @@ export default async function FixturePage({ params }: Props) {
               // `activeUntil` (review N1): near kick-off, or while the match was active at this render, the island keeps its 30 s floor.
               // `holdUntil` (re-capture R2): a session warming or just stopped keeps the box, with its line, through empty answers until
               // then. `replayParts` (re-capture R1): two or more recordings keep the picker's row from this render, so no tab row arrives late.
-              // `liveExpected` (Task 33c): a live comes next, so the held box keeps the live player's delay line row too.
+              // `liveExpected` (Task 33c): a live comes next, so the held box keeps the live player's delay line row too, and (Task 33f)
+              // its line says the live video is coming rather than the replay.
               <SeaznVideoIsland
                 fixtureId={fixture.id}
                 labels={seaznVideoLabels(dict)}

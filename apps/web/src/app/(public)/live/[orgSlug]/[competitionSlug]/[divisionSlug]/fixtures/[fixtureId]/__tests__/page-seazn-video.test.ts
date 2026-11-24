@@ -30,7 +30,6 @@ import { sql } from "@/lib/db";
 import { ReplayEmbed } from "@/components/public-site/match-centre/replay-embed";
 import { SeaznVideoIsland } from "@/components/public-site/match-centre/seazn-video-island";
 import { fixtureStreamTarget } from "@/server/usecases/stream-codes";
-import publicEn from "@/dictionaries/en/public.json";
 import { SEAZN_VIDEO_POLL_CEILING_MS } from "@/components/public-site/match-centre/seazn-video-schedule";
 import { FINALISATION_GRACE_SECONDS, MAX_DURATION_MINUTES, STREAM_TICK_PERIOD_SECONDS } from "@/server/relay/config";
 import { seaznVideoPlan } from "@/server/video/seazn-video-plan";
@@ -167,7 +166,7 @@ describe.skipIf(!HAS_DB)("the public match page's replay slot, through the real 
     const r = await seaznRig();
     orgs.push(r.auth.orgId);
     const [warming, stopped] = r.fixtureIds;
-    await goLive(r, warming, r.seazn);
+    const warmingSid = await goLive(r, warming, r.seazn);
     const sid = await live(r, stopped, r.seazn);
     await stopAndSettle(r, stopped, sid);
     let checked = 0;
@@ -184,6 +183,18 @@ describe.skipIf(!HAS_DB)("the public match page's replay slot, through the real 
       checked++;
     }
     expect(checked).toBe(2);
+    // T33f fix round 1 (review I2): the warming Go live is STOPPED before it ever went live, through the REAL Stop. The session domain
+    // fills no replay for a session that never broadcast (session.ts `replayFill`: `startedAt !== null`), so nothing is coming: the
+    // page holds no box and says neither line (it promised the replay for ~11 minutes before this round).
+    await stopAndSettle(r, warming, warmingSid);
+    const [never] = await sql<{ started_at: Date | null }[]>`select started_at from fixture_stream_sessions where id = ${warmingSid}`;
+    expect(never!.started_at, "PREMISE: stopped before the playing beat, it never went live").toBeNull();
+    const backedOut = await pageTree(warming);
+    expect(slots(backedOut).island, "the island is still mounted (a later Go live is caught by its loop)").toHaveLength(1);
+    expect(slots(backedOut).island[0]!.props.holdUntil, "no wait: nothing is coming").toBeNull();
+    const backedOutMarkup = renderToStaticMarkup(backedOut);
+    expect(backedOutMarkup, "no held box").not.toContain('data-testid="seazn-video-starting"');
+    expect([OWNER_LIVE_LINE, OWNER_REPLAY_LINE].filter((l) => backedOutMarkup.includes(l)), "neither line anywhere on the page").toEqual([]);
     // The window closes: ended past the recording's whole path to a viewer, the same fixture settles to no box at all (terminal nothing,
     // review m2): the wait is gone and no player is expected, so the page holds nothing.
     await sql`update fixture_stream_sessions set ended_at = now() - ${(FINALISATION_GRACE_SECONDS + STREAM_TICK_PERIOD_SECONDS + SEAZN_VIDEO_POLL_CEILING_MS / 1000 + 60) * 1000} * interval '1 millisecond' where id = ${sid}`;
@@ -198,44 +209,63 @@ describe.skipIf(!HAS_DB)("the public match page's replay slot, through the real 
   // prove: that the plan hands it the right `liveExpected` for the right wait). Expected per state from the rulings, never from the plan:
   //   - on its way up (requested, provisioning, warming): a live is coming (Task 33c's ladder), and R2 holds the box: the LIVE line;
   //   - live: its answer IS the player, so no wait is held (R2): no line (D1's reserved box, wordless);
-  //   - ending, completed a moment ago: the recording is on its way (R2): the REPLAY line;
+  //   - ending, completed a moment ago, AFTER it went live: the recording is on its way (R2): the REPLAY line;
+  //   - ending, completed, NEVER live (a Go live stopped while it was on its way up; fix round 1, review I2): the session domain fills
+  //     no replay for a session that never broadcast (session.ts `replayFill`: `startedAt !== null`), so nothing is coming: no line;
   //   - failed: it never recorded, so nothing is coming (R2, review m2): no box and no line.
-  const LINE_BY_STATE: Record<SessionState, "live" | "replay" | null> = {
-    requested: "live", provisioning: "live", warming: "live", live: null, ending: "replay", completed: "replay", failed: null,
-  };
-  it("T33f: SWEEP every state of the latest Seazn session through the real plan and page — where the box holds, exactly ONE line, the live one only on the way up; elsewhere neither", async () => {
+  // Whether it went live is the row's `started_at` (the domain stamps it on entering `live`), set here per case: the rig's `goLive` stops
+  // at warming. One sport: neither `seaznVideoPlan` nor the island reads a sport rule (this file's header, rule 6).
+  const LINE_BY_CASE: readonly { state: SessionState; wentLive: boolean; line: "live" | "replay" | null }[] = [
+    { state: "requested", wentLive: false, line: "live" },
+    { state: "provisioning", wentLive: false, line: "live" },
+    { state: "warming", wentLive: false, line: "live" },
+    { state: "live", wentLive: true, line: null },
+    { state: "ending", wentLive: true, line: "replay" },
+    { state: "ending", wentLive: false, line: null },
+    { state: "completed", wentLive: true, line: "replay" },
+    { state: "completed", wentLive: false, line: null },
+    { state: "failed", wentLive: false, line: null },
+  ];
+  it("T33f: SWEEP every state of the latest Seazn session (and, once it can be past live, whether it ever went live) through the real plan and page — where the box holds, exactly ONE line, the live one only on the way up, the replay only after a live; elsewhere neither", async () => {
     const all = [...ACTIVE_STATES, ...TERMINAL_STATES];
-    expect(Object.keys(LINE_BY_STATE).sort(), "PREMISE: the table names every state of the session domain, and no other").toEqual([...all].sort());
+    expect([...new Set(LINE_BY_CASE.map((c) => c.state))].sort(), "PREMISE: the table names every state of the session domain, and no other").toEqual([...all].sort());
     const liveAt = ACTIVE_STATES.indexOf("live");
-    for (const [state, line] of Object.entries(LINE_BY_STATE)) {
-      if (line === "live") expect(ACTIVE_STATES.indexOf(state as SessionState), `PREMISE: ${state} is on the ladder BEFORE live`).toBeLessThan(liveAt);
+    for (const c of LINE_BY_CASE) {
+      const onTheWayUp = ACTIVE_STATES.indexOf(c.state) !== -1 && ACTIVE_STATES.indexOf(c.state) < liveAt;
+      if (onTheWayUp) expect(c.wentLive, `PREMISE: ${c.state} is BEFORE live, so it cannot have gone live`).toBe(false);
+      if (c.state === "live") expect(c.wentLive, "PREMISE: a live session went live").toBe(true);
+      if (c.line === "live") expect(onTheWayUp, `PREMISE: ${c.state} is on the ladder BEFORE live`).toBe(true);
+    }
+    for (const s of ["ending", "completed"] as const) {
+      expect(LINE_BY_CASE.filter((c) => c.state === s).map((c) => c.wentLive).sort(), `PREMISE: ${s} is swept both after a live and never live`).toEqual([false, true]);
     }
     const r = await seaznRig();
     orgs.push(r.auth.orgId);
     const f = r.fixtureIds[0];
     const sid = await goLive(r, f, r.seazn);
     const counts = { live: 0, replay: 0, none: 0 };
-    for (const state of all) {
-      await sql`update fixture_stream_sessions set state = ${state}, ended_at = ${TERMINAL_STATES.includes(state) ? new Date() : null} where id = ${sid}`;
+    for (const { state, wentLive, line: want } of LINE_BY_CASE) {
+      const label = `${state} (${wentLive ? "went live" : "never live"})`;
+      const terminal = (TERMINAL_STATES as readonly string[]).includes(state);
+      await sql`update fixture_stream_sessions set state = ${state}, started_at = ${wentLive ? new Date() : null}, ended_at = ${terminal ? new Date() : null} where id = ${sid}`;
       const tree = await pageTree(f);
-      expect(slots(tree).island, `${state}: premise, the island is mounted`).toHaveLength(1);
+      expect(slots(tree).island, `${label}: premise, the island is mounted`).toHaveLength(1);
       const markup = renderToStaticMarkup(tree);
-      const want = LINE_BY_STATE[state];
       const both = [OWNER_LIVE_LINE, OWNER_REPLAY_LINE].filter((l) => markup.includes(l));
       if (want === null) {
-        expect(markup, `${state}: no held box`).not.toContain('data-testid="seazn-video-starting"');
-        expect(both, `${state}: neither line anywhere on the page`).toEqual([]);
+        expect(markup, `${label}: no held box`).not.toContain('data-testid="seazn-video-starting"');
+        expect(both, `${label}: neither line anywhere on the page`).toEqual([]);
         counts.none++;
       } else {
         const line = want === "live" ? OWNER_LIVE_LINE : OWNER_REPLAY_LINE;
-        expect(statusLinesOf(markup), `${state}: the held box's one line`).toEqual([line]);
-        expect(both, `${state}: and only that one, once, on the whole page`).toEqual([line]);
-        expect(markup.split(line).length - 1, `${state}: drawn once`).toBe(1);
+        expect(statusLinesOf(markup), `${label}: the held box's one line`).toEqual([line]);
+        expect(both, `${label}: and only that one, once, on the whole page`).toEqual([line]);
+        expect(markup.split(line).length - 1, `${label}: drawn once`).toBe(1);
         counts[want]++;
       }
     }
-    expect(counts.live + counts.replay + counts.none, "anti-vacuity: every state was looked at").toBe(all.length);
-    expect(Math.min(counts.live, counts.replay, counts.none), "and each outcome was reached at least once").toBeGreaterThan(0);
+    expect(counts.live + counts.replay + counts.none, "anti-vacuity: every case was looked at").toBe(LINE_BY_CASE.length);
+    expect(counts, "the per-outcome counts over the 9 cases").toEqual({ live: 3, replay: 2, none: 4 });
   });
 
   // Visual re-capture R1: a replay of two or more parts, and the Summary panel moved 56 px when its picker row mounted.
