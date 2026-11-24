@@ -74,6 +74,7 @@ import { linkCourtStream } from "../court-streams";
 import { ensureStreamCode } from "../stream-codes";
 import { courtPairingNudges, nudgesSettled } from "../stream-sessions/nudge";
 import { pairPresentPhone, rigApiTarget } from "@/server/relay/__tests__/_session-rig";
+import { wipeStreamCodeTok } from "@/server/relay/secret-columns";
 import { place, seedCompetition, seedDay, type Day } from "./_match-day-seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -299,7 +300,7 @@ describe.skipIf(!HAS_DB)("a schedule write nudges the court's phone `next-match`
 
     it("the court's code has ended (the link left live, so only the code's own flag can refuse)", async () => {
       const c2 = await courtWithPhone(day.courts.c2);
-      await sql`update fixture_stream_codes set ended_at = now(), end_cause = 'expired', tok_enc = null where id = ${c2.codeId}`;
+      await sql.begin((tx) => wipeStreamCodeTok(tx, c2.codeId, "expired", null));
       await expectNone();
     });
 

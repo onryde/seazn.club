@@ -35,6 +35,7 @@ import { ensureStreamCode, reissueStreamCode } from "../stream-codes";
 import { apply, startBroadcast, stopSession, type SessionDeps } from "../stream-sessions";
 import { grantCredits } from "../stream-credits";
 import { nudgePairings, nudgeReasonFor, nudgesSettled } from "../stream-sessions/nudge";
+import { corruptActiveCodeEnvelope } from "@/server/relay/__tests__/_corrupt-code-envelope";
 import { pairPresentPhone, rigApiTarget, rigUser, sessionOnTarget } from "@/server/relay/__tests__/_session-rig";
 import { captureRig, override, phoneId, type CaptureRig } from "./_capture-rig";
 import { at, place, seedDay } from "./_match-day-seed";
@@ -503,7 +504,7 @@ describe.skipIf(!HAS_DB)("a code ended by the organiser — `over` to every open
     await settle();
     expect(fetchMock, "a re-show ends nothing").not.toHaveBeenCalled();
     // Break the envelope: the ensure ends this code and mints a fresh one.
-    await sql`update fixture_stream_codes set tok_enc = decode('00', 'hex') where fixture_id = ${r.fixtureId} and ended_at is null`;
+    await corruptActiveCodeEnvelope({ fixtureId: r.fixtureId });
     const shown = await ensureStreamCode(r.auth, r.fixtureId);
     expect(shown.qr.code, "PREMISE: a NEW code was minted").not.toBe(r.code);
     const [{ end_cause }] = await sql<{ end_cause: string }[]>`select end_cause from fixture_stream_codes where code = ${r.code}`;
@@ -624,7 +625,7 @@ describe.skipIf(!HAS_DB)("the default publish — the wire, and the kill switch"
     expect((await linkCourtStream(day.auth, day.comp.id, input, at(0))).qr?.code, "a plain re-link shows the same code").toBe(shown.qr!.code);
     await settle();
     expect(fetchMock, "a re-show ends nothing").not.toHaveBeenCalled();
-    await sql`update fixture_stream_codes set tok_enc = decode('00', 'hex') where court_link_id = ${shown.id} and ended_at is null`;
+    await corruptActiveCodeEnvelope({ courtLinkId: shown.id });
     const again = await linkCourtStream(day.auth, day.comp.id, input, at(0));
     expect(again.qr!.code, "PREMISE: a NEW code was minted").not.toBe(shown.qr!.code);
     const [{ end_cause }] = await sql<{ end_cause: string }[]>`select end_cause from fixture_stream_codes where code = ${shown.qr!.code}`;
