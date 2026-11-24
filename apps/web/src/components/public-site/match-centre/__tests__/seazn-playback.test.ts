@@ -11,19 +11,33 @@
 //   - hls.js is a worker-less instance (`enableWorker: false`) that fetches no media until the viewer presses play;
 //   - a browser that plays HLS itself (`canPlayType`) never loads hls.js at all and swaps through `video.src`;
 //   - a fatal error, an unsupported browser, or a bundle that will not load reaches `onFatal`, once, and nothing throws.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+interface Rung {
+  width: number;
+  height: number;
+  bitrate: number;
+}
 type XhrSetup = (xhr: { open: (method: string, url: string, async: boolean) => void }, url: string) => void;
 interface FakeHlsInstance {
   config: { enableWorker?: boolean; autoStartLoad?: boolean; capLevelToPlayerSize?: boolean; startPosition: number; xhrSetup?: XhrSetup };
   startLevel: number;
+  levels: Rung[];
+  autoLevelCapping: number;
   calls: string[];
   loadedAt: { src: string; autoStartLoad: boolean | undefined }[];
   handlers: Map<string, (event: string, data: unknown) => void>;
   loadSource: (src: string) => void;
 }
-const hls = vi.hoisted(() => ({ instances: [] as FakeHlsInstance[], supported: true, isSupportedCalls: 0 }));
-vi.mock("hls.js", () => {
+const hls = vi.hoisted(() => ({
+  instances: [] as FakeHlsInstance[],
+  supported: true,
+  isSupportedCalls: 0,
+  /** hls.js's own cap rule (`CapLevelController.getMaxLevelByMediaSize`), the REAL library's, filled in by the mock factory. */
+  capRule: null as unknown as (levels: unknown[], width: number, height: number) => number,
+}));
+vi.mock("hls.js", async () => {
+  hls.capRule = (await vi.importActual<typeof import("hls.js")>("hls.js")).CapLevelController.getMaxLevelByMediaSize as never;
   class FakeHls implements FakeHlsInstance {
     static Events = { ERROR: "hlsError", MANIFEST_PARSED: "hlsManifestParsed" };
     static isSupported() {
@@ -36,6 +50,9 @@ vi.mock("hls.js", () => {
     handlers = new Map<string, (event: string, data: unknown) => void>();
     loadedSrc: string | null = null;
     // hls.js: -1 until set (config.startLevel unset); a set is recorded in `calls` so its order against `startLoad` is visible.
+    levels: Rung[] = [];
+    // hls.js: -1 until its cap-level-controller computes a cap from the box.
+    autoLevelCapping = -1;
     private _startLevel = -1;
     get startLevel() {
       return this._startLevel;
@@ -122,6 +139,18 @@ const flush = async () => {
   for (let i = 0; i < 5; i++) await Promise.resolve();
   await new Promise((r) => setTimeout(r, 0));
 };
+/** The manifest is parsed: the rungs are known (hls.js's MANIFEST_PARSED), and its cap-level-controller has computed a cap for the box. */
+function parseManifest(h: FakeHlsInstance, levels: Rung[] = LEVELS, box?: { width: number; height: number; dpr: number }): void {
+  h.levels = levels;
+  if (box) resizeBox(h, box);
+  h.handlers.get("hlsManifestParsed")!("hlsManifestParsed", { levels });
+}
+/** The box changes size: hls.js re-computes its cap by its own rule (the real `getMaxLevelByMediaSize`). */
+function resizeBox(h: FakeHlsInstance, box: { width: number; height: number; dpr: number }): void {
+  h.autoLevelCapping = hls.capRule(h.levels, box.width * box.dpr, box.height * box.dpr);
+}
+/** A Cloudflare live ladder, 16:9, ascending bandwidth. */
+const LEVELS: Rung[] = [240, 360, 480, 720, 1080].map((height, i) => ({ height, width: Math.round((height * 16) / 9 / 2) * 2, bitrate: (i + 1) * 500_000 }));
 function make(opts: { native?: boolean } = {}) {
   currentVideo = new FakeVideo();
   currentVideo.native = opts.native ?? false;
@@ -130,6 +159,10 @@ function make(opts: { native?: boolean } = {}) {
   return { video: currentVideo, onFatal, playback };
 }
 
+// The mock factory loads the real library for its cap rule; load it once up front so no test's `flush` waits on that first import.
+beforeAll(async () => {
+  await import("hls.js");
+});
 beforeEach(() => {
   hls.instances.length = 0;
   hls.supported = true;
@@ -301,7 +334,8 @@ describe("createPlayback: hls.js (a browser that does not play HLS itself)", () 
     playback.setSource(A);
     await flush();
     const h = hls.instances[0]!;
-    expect(h.calls.some((c) => c.startsWith("startLoad")), "premise: nothing fetched before play").toBe(false);
+    parseManifest(h);
+    expect(h.calls.some((c) => c.startsWith("startLoad")), "premise: nothing fetched before play, even with the manifest parsed").toBe(false);
     video.fire("play");
     expect(h.calls.filter((c) => c.startsWith("startLoad")), "the first play starts the fetch").toHaveLength(1);
     expect(h.config.autoStartLoad).toBe(true);
@@ -314,14 +348,16 @@ describe("createPlayback: hls.js (a browser that does not play HLS itself)", () 
     playback.dispose();
   });
 
-  it("a play pressed before the bundle arrived still starts the fetch once it has", async () => {
+  it("a play pressed before the bundle arrived still starts the fetch, once the manifest has parsed", async () => {
     const { playback, video } = make();
     playback.setSource(A);
     video.fire("play");
     await flush();
     const h = hls.instances[0]!;
-    expect(h.config.autoStartLoad, "built already started").toBe(true);
-    expect(h.calls).toEqual(["attachMedia:video", `loadSource:${A}`]);
+    expect(h.calls, "built, attached and loading the manifest; no media before the rungs are known").toEqual(["attachMedia:video", `loadSource:${A}`]);
+    parseManifest(h);
+    expect(h.calls.filter((c) => c.startsWith("startLoad")), "the parse starts the fetch, once").toHaveLength(1);
+    expect(h.config.autoStartLoad).toBe(true);
     playback.dispose();
   });
 
@@ -372,21 +408,24 @@ describe("createPlayback: hls.js (a browser that does not play HLS itself)", () 
   });
 });
 
-// Task 42: the player is told its own size. The rung table, the box and the pixel ratio below are the test's own; the expected rung is
-// read off the table (the tallest rung that fits the box in device pixels), never off the helper (seazn-player-config.test.ts sweeps it).
+// Task 42: the player is told its own size. hls.js's cap-level-controller owns the rule (the first rung whose width OR height reaches
+// max(box w, h) x dpr), so the fake computes its cap with the REAL library's `getMaxLevelByMediaSize` (hls.capRule) and the expectation
+// is that rule's answer for the box, never this controller's own arithmetic.
 describe("createPlayback: the rung the player starts on (hls.js)", () => {
-  const LEVELS = [240, 360, 480, 720, 1080].map((height, i) => ({ height, bitrate: (i + 1) * 500_000 }));
-  const parsed = (h: FakeHlsInstance, levels = LEVELS) => h.handlers.get("hlsManifestParsed")!("hlsManifestParsed", { levels });
-  const fit = (deviceHeight: number) => LEVELS.map((l, i) => ({ l, i })).filter(({ l }) => l.height <= deviceHeight).at(-1)?.i ?? -1;
+  const startLevels = (h: FakeHlsInstance) => h.calls.filter((c) => c.startsWith("startLevel:"));
 
-  it("EMPTY CASE FIRST: a manifest with no rungs leaves hls.js to choose (nothing is written to startLevel)", async () => {
+  it("EMPTY CASE FIRST: before play nothing is chosen, and with no cap computed yet (-1) hls.js keeps the choice", async () => {
     const { playback, video } = make();
-    video.clientHeight = 360;
     playback.setSource(A);
     await flush();
-    parsed(hls.instances[0]!, []);
-    expect(hls.instances[0]!.calls.filter((c) => c.startsWith("startLevel:"))).toEqual([]);
-    expect(hls.instances[0]!.startLevel, "still hls.js's own -1").toBe(-1);
+    const h = hls.instances[0]!;
+    parseManifest(h);
+    expect(startLevels(h), "a parse alone chooses nothing").toEqual([]);
+    expect(h.autoLevelCapping, "premise: no cap was computed").toBe(-1);
+    video.fire("play");
+    expect(startLevels(h), "a first play with no cap writes no start level").toEqual([]);
+    expect(h.startLevel).toBe(-1);
+    expect(h.calls.filter((c) => c.startsWith("startLoad")), "and the fetch still starts").toHaveLength(1);
     playback.dispose();
   });
 
@@ -398,23 +437,21 @@ describe("createPlayback: the rung the player starts on (hls.js)", () => {
     playback.dispose();
   });
 
-  it("the start rung follows the box x pixel ratio, and is set BEFORE the first play starts loading", async () => {
+  it("the first load starts ON hls.js's cap for the box, for every box x pixel ratio, set BEFORE the fetch", async () => {
     let checked = 0;
     const seen = new Set<number>();
-    for (const [height, dpr] of [[200, 1], [200, 3], [394, 1], [394, 2], [450, 3]] as const) {
+    for (const [w, h, dpr] of [[288, 200, 1], [288, 200, 3], [704, 396, 1], [704, 396, 2], [800, 450, 3]] as const) {
       hls.instances.length = 0;
-      vi.stubGlobal("devicePixelRatio", dpr);
       const { playback, video } = make();
-      video.clientHeight = height;
       playback.setSource(A);
       await flush();
-      const h = hls.instances[0]!;
-      parsed(h);
+      const inst = hls.instances[0]!;
+      parseManifest(inst, LEVELS, { width: w, height: h, dpr });
       video.fire("play");
-      expect(h.startLevel, `box ${height}px at dpr ${dpr}`).toBe(Math.max(0, fit(height * dpr)));
-      const order = h.calls.filter((c) => c.startsWith("startLevel:") || c.startsWith("startLoad:"));
-      expect(order, "the rung is chosen, then loading starts").toEqual([`startLevel:${h.startLevel}`, "startLoad:"]);
-      seen.add(h.startLevel);
+      const expected = hls.capRule(LEVELS, w * dpr, h * dpr);
+      expect(inst.startLevel, `box ${w}x${h} at dpr ${dpr}`).toBe(expected);
+      expect(inst.calls.filter((c) => c.startsWith("startLevel:") || c.startsWith("startLoad:")), "the rung is chosen, then loading starts").toEqual([`startLevel:${expected}`, "startLoad:"]);
+      seen.add(inst.startLevel);
       checked++;
       playback.dispose();
     }
@@ -422,23 +459,27 @@ describe("createPlayback: the rung the player starts on (hls.js)", () => {
     expect(seen.size, "the start rung moves with the box (a constant 0 cannot pass)").toBeGreaterThan(2);
   });
 
-  it("a box that is not laid out yet (height 0) does not pin a rung", async () => {
+  it("the box is read at the FIRST PLAY, not at the parse: a box that grew in between starts on the new cap", async () => {
     const { playback, video } = make();
-    video.clientHeight = 0;
     playback.setSource(A);
     await flush();
-    parsed(hls.instances[0]!);
-    expect(hls.instances[0]!.calls.some((c) => c.startsWith("startLevel:"))).toBe(false);
+    const h = hls.instances[0]!;
+    parseManifest(h, LEVELS, { width: 288, height: 200, dpr: 1 });
+    const atParse = h.autoLevelCapping;
+    resizeBox(h, { width: 1200, height: 675, dpr: 2 });
+    expect(h.autoLevelCapping, "premise: the cap moved after the parse").toBeGreaterThan(atParse);
+    video.fire("play");
+    expect(h.startLevel).toBe(h.autoLevelCapping);
+    expect(h.startLevel).toBeGreaterThan(atParse);
     playback.dispose();
   });
 
   it("the T15 seam survives a level switch: after the rung is chosen and a rendition playlist is asked for, a refresh still swaps the token of every later request, and nothing is reloaded", async () => {
     const { playback, video } = make();
-    video.clientHeight = 394;
     playback.setSource(A);
     await flush();
     const h = hls.instances[0]!;
-    parsed(h);
+    parseManifest(h, LEVELS, { width: 704, height: 396, dpr: 1 });
     video.fire("play");
     const setup = h.config.xhrSetup!;
     const open = (token: string, path: string) => {
