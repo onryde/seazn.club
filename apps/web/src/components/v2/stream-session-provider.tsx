@@ -15,6 +15,8 @@ import { createContext, useCallback, useContext, useEffect, useState, type React
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { apiV1 } from "@/lib/client-v1";
+import { isSeatFrozenError } from "@/lib/seat-frozen";
+import { useTabReturn } from "./use-tab-return";
 import { STREAM_POLL_MS, phoneTabState, type StreamSessionView } from "@/lib/stream-session-view";
 
 export interface PhoneSessionOptions {
@@ -59,16 +61,27 @@ export function usePhoneSession(fixtureId: string, opts: PhoneSessionOptions = {
   // the idle it shows is a guess and is polled like any other unsettled state — a stream on air behind one dropped
   // request would otherwise leave the stop probe drawing nothing, and the tab offering Go live, until a reload.
   const [readFailed, setReadFailed] = useState(false);
+  // Task 33e: the seat is paused (402 members.max — an admin past the plan's member limit). Asking again can never succeed, so the
+  // poll below stops; the answer already on screen stays. Cleared by any read that lands — a return to the tab is the one
+  // re-check (`useTabReturn` below), and an unpaused seat resumes the poll from there.
+  const [seatFrozen, setSeatFrozen] = useState(false);
   const [now, setNow] = useState(() => new Date());
 
   // One read of `current`. Capture QR v2 (W4) removed the session QR and its disclosure read: `current` carries no
   // credential, and the route refuses any query parameter of that name (400).
   const read = useCallback(
     async () => {
-      const cur = await apiV1<StreamSessionView | null>(`/api/v1/fixtures/${fixtureId}/stream-sessions/current`);
+      let cur: StreamSessionView | null;
+      try {
+        cur = await apiV1<StreamSessionView | null>(`/api/v1/fixtures/${fixtureId}/stream-sessions/current`);
+      } catch (err) {
+        if (isSeatFrozenError(err)) setSeatFrozen(true);
+        throw err;
+      }
       setView(cur);
       setLoaded(true);
       setReadFailed(false);
+      setSeatFrozen(false);
       setNow(new Date());
       return cur;
     },
@@ -91,12 +104,17 @@ export function usePhoneSession(fixtureId: string, opts: PhoneSessionOptions = {
   const state = phoneTabState(shown);
   const terminal = state === "idle" || state === "ended" || state === "failed";
   useEffect(() => {
-    if (!enabled || (terminal && !readFailed)) return;
+    if (!enabled || seatFrozen || (terminal && !readFailed)) return;
     const id = setInterval(() => {
       void read().catch(() => {});
     }, STREAM_POLL_MS);
     return () => clearInterval(id);
-  }, [enabled, terminal, readFailed, read]);
+  }, [enabled, terminal, readFailed, seatFrozen, read]);
+
+  // Task 33e: the ONE re-check a paused seat is owed — the organiser coming back to the tab (the seat may have been freed since).
+  // Never an interval; the listeners exist only while paused, so an unpaused page adds none.
+  const recheck = useCallback(() => void read().catch(() => {}), [read]);
+  useTabReturn(recheck, enabled && seatFrozen);
 
   // The elapsed clock ticks every second while live, rather than jumping by the poll interval.
   useEffect(() => {
@@ -173,7 +191,7 @@ export function usePhoneSession(fixtureId: string, opts: PhoneSessionOptions = {
     setStopFailed(false);
   };
 
-  return { view, shown, state, loaded, busy, setBusy, now, read, stop, cancel, stopFailed, dismiss };
+  return { view, shown, state, loaded, busy, setBusy, now, read, stop, cancel, stopFailed, dismiss, seatFrozen };
 }
 
 export type PhoneSession = ReturnType<typeof usePhoneSession>;

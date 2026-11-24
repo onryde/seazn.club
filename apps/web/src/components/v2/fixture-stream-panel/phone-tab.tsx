@@ -5,6 +5,7 @@ import { useMsg } from "@/components/i18n/dict-provider";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { captureQrV2Text, type CaptureQrV2 } from "@/lib/capture-qr";
 import { apiV1 } from "@/lib/client-v1";
+import { isSeatFrozenError } from "@/lib/seat-frozen";
 import { fetchChannelSafety, needsChannelCheck } from "@/components/v2/stream-channel-safety";
 import { useSeaznReplayActions } from "../seazn-replays-card";
 import { channelStatus } from "../youtube-connect-panel";
@@ -64,6 +65,9 @@ export function codeIsNewer(a: string, b: string): boolean {
 export function youtubeRefusalIsStale(refusal: YoutubeRefusalCode, y: NonNullable<StreamTarget["youtube"]>): boolean {
   return refusal === "youtube_reconnect_needed" ? y.status === "connected" : channelStatus(y).tone === "ok";
 }
+
+/** One ask of the read model: its sequence number, the answer (null on any failure), and whether the failure was a paused seat. */
+type PhoneAnswer = { seq: number; got: StreamPhone | null; frozen: boolean };
 
 /**
  * The Phone tab's container: fetch + poll + actions. Everything visible is `PhoneTabBody`, so the node harness renders
@@ -241,6 +245,10 @@ export function PhoneTab({
   // after a newer read (the reissue's, a tab return's) never puts stale facts back on screen.
   const [phone, setPhone] = useState<StreamPhone | null>(null);
   const [phoneLoaded, setPhoneLoaded] = useState(false);
+  // Task 33e: the read model's last ask was refused 402 members.max (the seat is paused). The session's own pause is `session.seatFrozen`.
+  const [phoneFrozen, setPhoneFrozen] = useState(false);
+  // Either read refused: the panel says why (the body's line) and keeps what it already shows.
+  const seatPaused = session.seatFrozen || phoneFrozen;
   const phoneSeq = useRef(0);
   // "Show the code again" is open (the stream code, below). Task 35 (owner 2026-11-24): a phone pairing closes it ONCE, from
   // the landed read (`closeCodeOnPair` over `streamPairSeen`): a phone where there was none, or another phone taking the slot.
@@ -254,18 +262,19 @@ export function PhoneTab({
   // Ask and land are two halves (as for the destination list): `askPhone` takes the sequence number and asks, and sets
   // nothing; `landPhone` is what sets state, from the answer's own callback — so the mount effect starts a read
   // without calling a state setter, and the poll and the actions read through `readPhone`.
-  const askPhone = useCallback(async (): Promise<{ seq: number; got: StreamPhone | null }> => {
+  const askPhone = useCallback(async (): Promise<PhoneAnswer> => {
     const seq = ++phoneSeq.current;
     try {
-      return { seq, got: await apiV1<StreamPhone>(`/api/v1/fixtures/${fixtureId}/stream-phone`) };
-    } catch {
-      // transient — the poll asks again
-      return { seq, got: null };
+      return { seq, got: await apiV1<StreamPhone>(`/api/v1/fixtures/${fixtureId}/stream-phone`), frozen: false };
+    } catch (err) {
+      // transient — the poll asks again; except a paused seat (Task 33e: 402 members.max), which no ask can mend — it stops the poll
+      return { seq, got: null, frozen: isSeatFrozenError(err) };
     }
   }, [fixtureId]);
   const landPhone = useCallback(
-    ({ seq, got }: { seq: number; got: StreamPhone | null }) => {
+    ({ seq, got, frozen }: PhoneAnswer) => {
       try {
+        if (seq === phoneSeq.current && (frozen || got !== null)) setPhoneFrozen(frozen);
         if (got === null || seq !== phoneSeq.current) return;
         setPhone(got);
         const seen = streamPairSeen(got);
@@ -289,9 +298,14 @@ export function PhoneTab({
   const readPhone = useCallback(async () => landPhone(await askPhone()), [askPhone, landPhone]);
   useEffect(() => {
     void askPhone().then(landPhone);
+  }, [askPhone, landPhone]);
+  // Task 33e: a paused seat is refused every ask, so the poll stops (the answer on screen stays); the tab return below is its
+  // one re-check, and a read that lands clears the pause and starts the poll again.
+  useEffect(() => {
+    if (phoneFrozen) return;
     const id = setInterval(() => void readPhone(), STREAM_POLL_MS);
     return () => clearInterval(id);
-  }, [askPhone, landPhone, readPhone]);
+  }, [readPhone, phoneFrozen]);
 
   // PR-2 T10 (§7.1): the switch writes `PUT …/stream-settings { autoStream }` — the switch ALONE (the route writes only the
   // fields a PUT names, so the pick is untouched) — then reads the read model again: its `auto.enabled` is the answer the
@@ -341,7 +355,8 @@ export function PhoneTab({
     void readTargets(false);
     void readPhone();
   }, [readTargets, readPhone]);
-  useTabReturn(onTabReturn, state === "idle");
+  // Task 33e: also while paused with a session on screen — the one re-check the pause is owed (the seat may have been freed).
+  useTabReturn(onTabReturn, state === "idle" || seatPaused);
 
   // B8 review I-2: the PHONE starts sessions too (T8's start), and `current` rests at Ready — so the read model names the
   // fixture's open session, and one the shared session does not hold is read from `current`, ONCE per id. Otherwise the
@@ -625,6 +640,7 @@ export function PhoneTab({
         // Owner 2026-10-30: off the RAW view as well — the match's video stays linked at Ready after Start another.
         youtube={youtubeLinkOf(view)}
         pickFailed={pickFailed}
+        seatPaused={seatPaused}
         // n1: a pick is the organiser's own answer — the refusal that was about the previous choice (removed, held by
         // another match, or refused by YouTube — T12) goes with it. Any other refusal stays until the next attempt. (The hold needs no reset: a picked
         // selection only empties again through another removal, which holds it again.)

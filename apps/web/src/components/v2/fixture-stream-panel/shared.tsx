@@ -1,5 +1,6 @@
 "use client";
 
+import { CirclePause } from "lucide-react";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { STATE_PILL_KEYS, type PhoneTabState } from "@/lib/stream-session-view";
@@ -32,6 +33,21 @@ export function switchedOff(msg: Msg) {
       <a href={`mailto:${SUPPORT_EMAIL}`} className="font-medium text-purple-700 underline">
         {SUPPORT_EMAIL}
       </a>
+    </p>
+  );
+}
+
+/**
+ * Task 33e: a paused seat (402 members.max, an admin past the plan's member limit) stopped the panel's polls, so what is on screen
+ * is the last answer. The same slate line and pause mark as the replays card's (`stream.replay.seazn.seatPaused`), in a quiet box
+ * at the top of the body — the first thing read, before the chain it explains. `role="status"`: announced once, never an alert (no
+ * action fixes it here; the owner does). `min-w-0` so a long translation wraps inside a 320 px panel.
+ */
+export function seatPausedNote(msg: (key: MessageKey) => string) {
+  return (
+    <p data-testid="stream-seat-paused" role="status" className="mb-3 flex min-w-0 items-start gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+      <CirclePause aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
+      <span className="min-w-0">{msg("stream.phone.seatPaused")}</span>
     </p>
   );
 }

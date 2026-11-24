@@ -46,6 +46,7 @@ import {
   stubFakeEmbedHost, stubFakePlaybackHost,
 } from "../helpers/seazn-video-seed";
 import { routes } from "../../src/lib/routes";
+import { STREAM_POLL_MS } from "../../src/lib/stream-pair";
 
 // ===========================================================================
 // Clocks — DERIVED from the constants that set the pace (AGENTS.md class 20): helpers/seazn-hosted-clock.ts, one term per wait in
@@ -960,6 +961,91 @@ test("Task 33d: an admin whose seat is paused sees the replays with no Download 
     await expect(ownerSection.getByTestId("stream-seazn-replay-download"), "the owner: Download").toHaveCount(1);
     await expect(ownerSection.getByTestId("stream-seazn-replay-delete"), "the owner: Delete").toHaveCount(1);
     await expect(ownerSection.getByTestId("stream-seazn-replays-paused"), "the owner: no line").toHaveCount(0);
+  } finally {
+    await adminCtx?.close().catch(() => {});
+    if (adminId !== null) {
+      const id = adminId;
+      await withDb((sql) => sql`delete from org_members where org_id = ${org.orgId} and user_id = ${id}`).catch(() => {});
+    }
+    await finishSeaznMatch(m);
+  }
+});
+
+// ===========================================================================
+// Task 33e (T33d review m3): a paused admin's Stream panel stops polling on 402 and says why
+// ===========================================================================
+// The same paused seat as Task 33d (members.max 1 on this test's OWN fresh org: the owner holds the one seat, so the admin added below is
+// past it), but the org keeps its panel. The panel's two polls — `stream-sessions/current` and `stream-phone`, one every STREAM_POLL_MS
+// — are write-scoped, so the paused admin is answered 402 by both. Before: that answer was silent and repeated every 5 s for as long as
+// the page stayed open. Now: each is asked, refused, and not asked again; the panel is drawn (not blanked) with one line saying why.
+// The wire is the witness: every request the page makes to either route is recorded with its status, and a wait of two poll periods
+// adds none. At 1280, then 320 for the fit.
+test("Task 33e: a paused admin's Stream panel says why in one line, and the page asks neither poll route again after the 402", async ({ browser }) => {
+  test.setTimeout(NAV_MS * 3 + 2 * 30_000 + 3 * STREAM_POLL_MS + CALL_MS);
+  const org = await seedStandInOrg(browser, "szp", { orgName: "Seazn Paused Panel" });
+  rigs.push(org);
+  const page = org.page;
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const m = await seedSeaznMatch(page, { name: `Seazn Paused Panel ${Date.now().toString(36)}`, live: true });
+  let adminCtx: BrowserContext | null = null;
+  let adminId: string | null = null;
+  try {
+    expect(m.orgId, "premise: the match is this test's own org's (the override below is org-wide)").toBe(org.orgId);
+    const email = `delivered+${org.orgSlug}-panel-admin@resend.dev`;
+    adminId = await withDb(async (sql) => {
+      const [{ id }] = await sql<{ id: string }[]>`
+        insert into users (email, display_name, email_verified) values (${email}, ${"Paused Panel Admin"}, true) returning id`;
+      await sql`insert into org_members (org_id, user_id, role) values (${org.orgId}, ${id}, 'admin')`;
+      return id;
+    });
+    await setEntitlementOverrideSql(org.orgId, "members.max", 1);
+    await invalidateOrgEntitlements(page.request, org.orgId);
+
+    adminCtx = await browser.newContext({ storageState: EMPTY_JAR, viewport: { width: 1280, height: 900 } });
+    const admin = await adminCtx.newPage();
+    await admin.goto(await mintLoginPathBySql(email));
+    await admin.waitForURL((u) => !u.pathname.startsWith("/magic-link") && !u.pathname.startsWith("/login"), { timeout: 30_000 });
+    await dismissCookieBanner(admin);
+
+    // Every answer either poll route gives this page, from the page's first request on.
+    const POLLS = [`/api/v1/fixtures/${m.fixtureId}/stream-sessions/current`, `/api/v1/fixtures/${m.fixtureId}/stream-phone`];
+    const answers: { route: string; status: number }[] = [];
+    admin.on("response", (res) => {
+      const path = new URL(res.url()).pathname;
+      if (res.request().method() === "GET" && POLLS.includes(path)) answers.push({ route: path, status: res.status() });
+    });
+
+    const body = await openPhoneTab(admin, m.fixturePath);
+    const note = body.getByTestId("stream-seat-paused");
+    await expect(note, "the panel says why, once").toHaveCount(1, { timeout: NAV_MS });
+    await expect(note).toHaveText(ui("stream.phone.seatPaused"));
+    await expect(body, "the panel is drawn, not blanked: its state pill and destination row are still there").toBeAttached();
+    await expect(body.getByTestId("stream-state-pill")).toBeAttached();
+
+    // The premise the silence test needs: BOTH routes were asked, and both refused it.
+    for (const route of POLLS) {
+      const mine = answers.filter((a) => a.route === route);
+      expect(mine.length, `premise: ${route} was asked`).toBeGreaterThan(0);
+      expect(mine.every((a) => a.status === 402), `${route}: every answer is the paused seat's 402`).toBe(true);
+    }
+    const asked = answers.length;
+    await admin.waitForTimeout(2 * STREAM_POLL_MS + 1_000);
+    expect(answers.length, "two poll periods later neither route has been asked again").toBe(asked);
+    await expect(note, "and the line is still there").toHaveCount(1);
+
+    for (const width of [1280, 320]) {
+      await admin.setViewportSize({ width, height: 900 });
+      await expectNoHorizontalScroll(admin);
+      const box = await note.boundingBox();
+      expect(box, `${width}: the line is laid out`).not.toBeNull();
+      expect(box!.x, `${width}: inside the left edge`).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width, `${width}: inside the right edge`).toBeLessThanOrEqual(width);
+    }
+
+    // The owner of the same org is never paused: no line.
+    const ownerBody = await openPhoneTab(page, m.fixturePath);
+    await expect(ownerBody.getByTestId("stream-state-pill"), "the owner's panel is drawn").toBeAttached();
+    await expect(ownerBody.getByTestId("stream-seat-paused"), "the owner: no line").toHaveCount(0);
   } finally {
     await adminCtx?.close().catch(() => {});
     if (adminId !== null) {

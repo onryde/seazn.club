@@ -7343,6 +7343,7 @@
   "stream.phone.loading": "Chargement de la diffusion depuis le téléphone…",
   "stream.phone.unavailable": "La diffusion depuis le téléphone est indisponible pour le moment. L'habillage pour OBS fonctionne toujours.",
   "stream.phone.switchedOff": "La diffusion est désactivée pour cette organisation. Contactez-nous pour la réactiver.",
+  "stream.phone.seatPaused": "Votre accès est en lecture seule tant que le club dépasse sa limite de membres, donc ce panneau a cessé de se mettre à jour. Adressez-vous au propriétaire.",
   "stream.dest.label": "Destination",
   "stream.dest.manage": "Gérer les destinations",
   "stream.dest.pick": "Choisissez une destination",

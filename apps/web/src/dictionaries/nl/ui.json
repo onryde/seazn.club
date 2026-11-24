@@ -7343,6 +7343,7 @@
   "stream.phone.loading": "Telefoonstream laden…",
   "stream.phone.unavailable": "Streamen vanaf telefoon is nu niet beschikbaar. De overlay voor OBS werkt nog wel.",
   "stream.phone.switchedOff": "Streamen is uitgeschakeld voor deze organisatie. Neem contact met ons op om het weer aan te zetten.",
+  "stream.phone.seatPaused": "Je toegang is alleen-lezen zolang de club over de ledenlimiet zit, dus dit paneel wordt niet meer bijgewerkt. Vraag het de eigenaar.",
   "stream.dest.label": "Bestemming",
   "stream.dest.manage": "Bestemmingen beheren",
   "stream.dest.pick": "Kies een bestemming",

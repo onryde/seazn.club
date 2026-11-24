@@ -55,7 +55,7 @@ import { isYoutubeUrl, linkIsOneOfParts, replayRows } from "@/lib/youtube";
 // TYPES only: `@/server/**` is server code, and a runtime import from a client island breaks the build.
 import type { StreamPhone, StreamSessionCurrent } from "@/server/api-v1/schemas";
 import type { StreamCreditSplit, CodeCard, TargetsState, CreateError, PhoneScore, CheckoutError } from "./types";
-import { switchedOff, statePill, stopError } from "./shared";
+import { switchedOff, statePill, stopError, seatPausedNote } from "./shared";
 import { creditsCard, shownSplit, balancePart, buyMorePart } from "./credits";
 
 const LINK = "font-medium text-purple-700 underline decoration-purple-300 underline-offset-2 hover:decoration-purple-700";
@@ -129,6 +129,9 @@ export interface PhoneTabBodyProps {
   pickerOpenSignal: number;
   /** B8 re-review n-5: the last pick did not save — the picker shows the server's answer again, and a line says why. */
   pickFailed: boolean;
+  /** Task 33e: the seat is paused (a 402 members.max stopped the panel's polls) — the one line saying why, above everything else.
+   *  Optional: unset is "not paused", as every body built before this task. */
+  seatPaused?: boolean;
   /** Re-read the destination list after a failed read. */
   onRetryTargets: () => void;
   onGoLive: () => void;
@@ -630,6 +633,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   return (
     // P5: the root marker the chooser's Close looks Buy more up from.
     <div data-phone-body>
+      {p.seatPaused && seatPausedNote(msg)}
       {/* T9b (spec §3.1): no heading and no visible pill — the Signal path below says the state, and the ended and failed
           cards carry the pill themselves. Here it stays for assistive tech (aria-live announces each change). Credits only
           (B3) has no state to announce. */}

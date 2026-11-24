@@ -11124,6 +11124,7 @@ export type DictionaryKey =
   | "stream.phone.rec"
   | "stream.phone.replay"
   | "stream.phone.retry"
+  | "stream.phone.seatPaused"
   | "stream.phone.silent"
   | "stream.phone.startFailed"
   | "stream.phone.state.ended"
