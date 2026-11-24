@@ -20,6 +20,7 @@ vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
 
 import { sql } from "@/lib/db";
 import { log } from "@/server/logger";
+import type { FakeIngest } from "@/server/relay/fakes";
 import {
   SEAZN_CLAIM_LEASE_SECONDS, SEAZN_LIVE_MEASURE_BREAKER_FAILURES, SEAZN_LIVE_MEASURE_DAYS, SEAZN_ORG_DELETED_REPLAY_GRACE_DAYS,
 } from "@/server/relay/config";
@@ -329,6 +330,39 @@ describe.skipIf(!HAS_DB)("measureSeaznDelivery — live minutes (Cloudflare)", (
     expect(res).toEqual({ measured: 1, failed: 1, gone: 0, skipped: 0 });
     expect(await deliveryOf(a), "a: nothing stored").toBeNull();
     expect((await deliveryOf(b))!.live_minutes).toBe("6.0");
+  });
+});
+
+// Phase 3 review I1 (controller ruling 2026-11-24): Cloudflare counts a match's live minutes against its RECORDING uid, and whether
+// its analytics still answer for a deleted video is unmeasured. So with SEAZN_HOSTED_COST on the mover keeps the recording's
+// Cloudflare copy until THIS pass has measured the session through its end day; and once the copy is gone, Cloudflare answering
+// nothing for its uid adds 0 — the stored minutes are never written over with 0. The whole sequence on the real producers: the
+// real mover (`w.move`) and the real measure, only the vendor reads faked.
+describe.skipIf(!HAS_DB)("I1: the real mover keeps the Cloudflare copy until the real measure has read its session through the end day", () => {
+  const MIN = 60_000;
+  it("COST on: at verified + 60 min the copy is kept; the pass the day after the match measures the end day; the next mover run deletes the copy; the day after, the gone uid reads 0 and the stored minutes stay — 0 is added, never written over them", async () => {
+    vi.stubEnv("SEAZN_HOSTED_COST", "true");
+    const w = await world(1);
+    const ingest = w.deps.drivers.ingest as FakeIngest;
+    const video = w.videoUids[0]!;
+    expect(ymd(w.createdAt), "PREMISE: the session started and ended on one UTC day").toBe(ymd(new Date(w.endedAt)));
+    // movedReplays verified the copy at t0 + 15 min, so G-D's 60 min are over at t0 + 75 min.
+    await w.move(w.t0 + 75 * MIN);
+    expect(ingest.deletedVideos, "verified + 60 min, nothing measured yet: the Cloudflare copy is kept").toEqual([]);
+
+    const cf = fakeLive({ [video]: 13 });
+    const deps = { liveMinutes: cf.read, replay: w.host };
+    expect(await measureSeaznDelivery(deps, slot(w.createdAt, 1), scope(w.auth.orgId))).toMatchObject({ measured: 1, failed: 0 });
+    expect(await deliveryOf(w.sid), "the end day measured, while the copy is still there").toMatchObject({ live_minutes: "13.0", live_through: ymd(w.createdAt) });
+
+    await w.move(slot(w.createdAt, 1).getTime() + MIN);
+    expect(ingest.deletedVideos, "measured through the end day: the mover deletes the recording, by its own id").toEqual([video]);
+
+    // The next day Cloudflare answers nothing for the deleted video (its reader reads that as 0): the day is added, the minutes kept.
+    cf.minutes[video] = 0;
+    expect(await measureSeaznDelivery(deps, slot(w.createdAt, 2), scope(w.auth.orgId))).toMatchObject({ measured: 1, failed: 0 });
+    expect(cf.calls.at(-1)!.uids, "PREMISE: the gone uid was asked, and answered 0").toContain(video);
+    expect(await deliveryOf(w.sid), "13.0 + 0: never written over with 0").toMatchObject({ live_minutes: "13.0", live_through: ymd(daysAfter(w.createdAt, 1)) });
   });
 });
 

@@ -407,6 +407,11 @@ export const SEAZN_REPLAY_DELAY_MINUTES = 15;
 /** Recommendation 2026-11-21 (G-D; the owner's ruling is "1–2 h after the swap"): the Cloudflare copy is deleted no sooner than
  *  this long after the replay host's copy passed the check (`verified_at`), so open players on the interim recording finish. */
 export const SEAZN_CF_DELETE_DELAY_MINUTES = 60;
+/** Phase 3 review I1 (controller ruling 2026-11-24): with SEAZN_HOSTED_COST on, a recording's Cloudflare copy is also kept until its
+ *  session's Cloudflare minutes are measured through the session's end day (video/domain/replay-move.ts `liveMeasureGate`). A row
+ *  waiting on that measure is asked again this often once the end day has closed — the daily pass runs once a day, so an hour
+ *  costs ~24 database claims a day per waiting row and no provider call. */
+export const SEAZN_CF_DELETE_MEASURE_RECHECK_MINUTES = 60;
 /** Recommendation 2026-11-21 (G-F): a fixture never decided still has its recordings moved this long after its session ended. */
 export const SEAZN_REPLAY_UNDECIDED_FALLBACK_HOURS = 6;
 /** Plan decision: a `fetching` row with no host id this old lost the fetch's answer (a crash or a timeout after the host

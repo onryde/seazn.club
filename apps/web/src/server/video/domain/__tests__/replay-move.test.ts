@@ -7,14 +7,17 @@
 // backoff, a 30-day retry window, ±2 s, the 240/360/480/720 rungs. No DB and no network: this file needs neither.
 import { describe, expect, it } from "vitest";
 import {
-  REPLAY_PARKED_AT, REPLAY_ROW_STATES, type ReplayRow, type ReplayStep, cfDeleteGate, nextReplayStep, parseReplayCopyTitle, pollOutcome,
-  replayCopyTitle, replayFailure, replayFailureOutcome, requiredRung, verifyReplayCopy,
+  type LiveMeasure, REPLAY_PARKED_AT, REPLAY_ROW_STATES, type ReplayRow, type ReplayStep, cfDeleteGate, liveMeasureGate, nextReplayStep,
+  parseReplayCopyTitle, pollOutcome, replayCopyTitle, replayFailure, replayFailureOutcome, requiredRung, verifyReplayCopy,
 } from "../replay-move";
 
 const MIN = 60_000;
 const NOW = new Date("2026-11-22T12:00:00.000Z");
 const ago = (ms: number) => new Date(NOW.getTime() - ms);
 const later = (ms: number) => new Date(NOW.getTime() + ms);
+/** SEAZN_HOSTED_COST off: the daily pass measures nothing, so the Cloudflare delete never waits for a measure (I1). Every case before
+ *  the I1 block runs with it, so G-D's 60 min is the only gate they meet. */
+const OFF: LiveMeasure = { measured: false };
 
 function row(over: Partial<ReplayRow> = {}): ReplayRow {
   return {
@@ -50,7 +53,7 @@ describe("nextReplayStep — the transition table, swept over every state", () =
     let checked = 0;
     const reached = new Set<string>();
     for (const [name, r, expected] of CASES) {
-      expect(nextReplayStep(r, NOW), name).toEqual(expected);
+      expect(nextReplayStep(r, NOW, OFF), name).toEqual(expected);
       reached.add(r.state);
       checked++;
     }
@@ -61,7 +64,7 @@ describe("nextReplayStep — the transition table, swept over every state", () =
   });
 
   it("an unknown state (a row read from a database that grew a state) is refused by name, never guessed", () => {
-    expect(nextReplayStep(row({ state: "verifying" as ReplayRow["state"] }), NOW)).toEqual({ kind: "refuse", reason: "unknown_state" });
+    expect(nextReplayStep(row({ state: "verifying" as ReplayRow["state"] }), NOW, OFF)).toEqual({ kind: "refuse", reason: "unknown_state" });
   });
 });
 
@@ -101,8 +104,8 @@ describe("replayFailure — every state × a provider that throws gives the same
     expect(checked, "states × {inside, past}").toBe(14);
     expect(Object.keys(PARKED_AS).sort(), "PREMISE: the table names every state").toEqual([...REPLAY_ROW_STATES].sort());
     // The window is the one `failed`'s step reads: the same instant gives up in both.
-    expect(nextReplayStep(row({ state: "failed", recordedAt: ago(30 * DAY) }), NOW).kind).toBe("give_up");
-    expect(nextReplayStep(row({ state: "failed", recordedAt: ago(30 * DAY - 1) }), NOW).kind).toBe("retry");
+    expect(nextReplayStep(row({ state: "failed", recordedAt: ago(30 * DAY) }), NOW, OFF).kind).toBe("give_up");
+    expect(nextReplayStep(row({ state: "failed", recordedAt: ago(30 * DAY - 1) }), NOW, OFF).kind).toBe("retry");
     expect(REPLAY_PARKED_AT).toEqual(PARKED);
   });
 
@@ -160,10 +163,79 @@ describe("replayFailure — every state × a provider that throws gives the same
 
 describe("cfDeleteGate — the Cloudflare copy is deleted only at or after verified_at + 60 min, and never without a verification", () => {
   it("59 min: not due (wait until 60); 60 min: due; no verified_at: never", () => {
-    expect(cfDeleteGate({ verifiedAt: ago(59 * MIN) }, NOW)).toEqual({ due: false, until: later(1 * MIN) });
-    expect(cfDeleteGate({ verifiedAt: ago(60 * MIN) }, NOW)).toEqual({ due: true });
-    expect(cfDeleteGate({ verifiedAt: ago(61 * MIN) }, NOW)).toEqual({ due: true });
-    expect(cfDeleteGate({ verifiedAt: null }, NOW)).toEqual({ due: false, until: null });
+    expect(cfDeleteGate({ verifiedAt: ago(59 * MIN) }, NOW, OFF)).toEqual({ due: false, until: later(1 * MIN) });
+    expect(cfDeleteGate({ verifiedAt: ago(60 * MIN) }, NOW, OFF)).toEqual({ due: true });
+    expect(cfDeleteGate({ verifiedAt: ago(61 * MIN) }, NOW, OFF)).toEqual({ due: true });
+    expect(cfDeleteGate({ verifiedAt: null }, NOW, OFF)).toEqual({ due: false, until: null });
+  });
+});
+
+// Phase 3 review I1 and the controller's ruling (2026-11-24): Cloudflare keys a match's live minutes by its RECORDING uid, and
+// whether its analytics still answer for a deleted video is unmeasured — so with SEAZN_HOSTED_COST on (the daily pass measures
+// Cloudflare minutes) the copy is kept until its session's Cloudflare minutes are measured through the session's END DAY
+// (`live_measured_through` >= the end's UTC date). The gate never waits for a measure that cannot come: with COST off nothing
+// measures; the live read selects only ENDED sessions, and only those that ended within 31 days. Until it opens, the row is asked
+// again at the later of the end day's close (no daily read can have covered it before) and 60 minutes on. Every number is the
+// ruling's or the plan's, typed here: the end DAY, 31 days, 60 minutes.
+describe("I1: with SEAZN_HOSTED_COST on, the Cloudflare delete also waits until the session's Cloudflare minutes are measured through its end day", () => {
+  const DAY = 24 * 60 * MIN;
+  /** The session ended at 10:00 UTC on 2026-11-22 (NOW's day): its end day closes at 2026-11-23T00:00Z. */
+  const ENDED = new Date("2026-11-22T10:00:00.000Z");
+  const DAY_CLOSES = new Date("2026-11-23T00:00:00.000Z");
+  const at = (iso: string) => new Date(iso);
+  const on = (over: Partial<{ sessionEndedAt: Date | null; measuredThrough: Date | null }> = {}): LiveMeasure =>
+    ({ measured: true, sessionEndedAt: ENDED, measuredThrough: null, ...over });
+
+  it("liveMeasureGate, swept: COST off never waits; COST on waits until measured through the end day, never for a session with no end or one the live read has stopped selecting", () => {
+    const CASES: [string, LiveMeasure, Date, ReturnType<typeof liveMeasureGate>][] = [
+      ["SEAZN_HOSTED_COST off: nothing measures, so the delete never waits for a measure", OFF, NOW, { due: true }],
+      ["COST on, never measured, the end day still open at 12:00: waits for its close (00:00), later than 60 min on", on(), NOW, { due: false, until: DAY_CLOSES }],
+      ["COST on, never measured, 23:30 on the end day: its close is under 60 min away, so 60 min on", on(), at("2026-11-22T23:30:00.000Z"), { due: false, until: at("2026-11-23T00:30:00.000Z") }],
+      ["COST on, never measured, 04:00 the next day (the end day closed): asked again 60 min on", on(), at("2026-11-23T04:00:00.000Z"), { due: false, until: at("2026-11-23T05:00:00.000Z") }],
+      ["measured through the day BEFORE the end day: waits", on({ measuredThrough: at("2026-11-21T00:00:00.000Z") }), at("2026-11-23T04:00:00.000Z"), { due: false, until: at("2026-11-23T05:00:00.000Z") }],
+      ["measured through the END DAY exactly: due", on({ measuredThrough: at("2026-11-22T00:00:00.000Z") }), at("2026-11-23T04:20:00.000Z"), { due: true }],
+      ["measured through a later day: due", on({ measuredThrough: at("2026-11-23T00:00:00.000Z") }), at("2026-11-24T04:20:00.000Z"), { due: true }],
+      ["a session with no end: the live read selects only ended sessions, so nothing will measure it — due", on({ sessionEndedAt: null }), NOW, { due: true }],
+      ["ended exactly 31 days ago, never measured: the live read still selects it — waits", on(), new Date(ENDED.getTime() + 31 * DAY), { due: false, until: new Date(ENDED.getTime() + 31 * DAY + 60 * MIN) }],
+      ["ended 31 days and 1 ms ago, never measured: the live read never selects it again — due", on(), new Date(ENDED.getTime() + 31 * DAY + 1), { due: true }],
+    ];
+    let checked = 0;
+    for (const [name, live, now, expected] of CASES) {
+      expect(liveMeasureGate(live, now), name).toEqual(expected);
+      checked++;
+    }
+    expect(checked, "cases").toBe(10);
+  });
+
+  it("through the transition table: a playable or deleted row past verified + 60 min waits for the measure, then deletes; the 60 min still comes first, and a row never verified still never earns a delete", () => {
+    const T = at("2026-11-22T12:00:00.000Z");   // = NOW
+    const notYet = on();
+    const done = on({ measuredThrough: at("2026-11-22T00:00:00.000Z") });
+    const CASES: [string, ReplayRow, LiveMeasure, ReplayStep][] = [
+      ["playable, verified 60 min ago, COST on, not measured → wait for the end day's close, never delete_cf",
+        row({ state: "playable", bunnyVideoId: "g1", verifiedAt: ago(60 * MIN) }), notYet, { kind: "wait", until: DAY_CLOSES }],
+      ["playable, verified 60 min ago, measured through the end day → delete_cf",
+        row({ state: "playable", bunnyVideoId: "g1", verifiedAt: ago(60 * MIN) }), done, { kind: "delete_cf" }],
+      ["playable, verified 60 min ago, COST off → delete_cf (G-D alone)",
+        row({ state: "playable", bunnyVideoId: "g1", verifiedAt: ago(60 * MIN) }), OFF, { kind: "delete_cf" }],
+      ["playable, verified 59 min ago, already measured → the 60 min first: wait for verified + 60",
+        row({ state: "playable", bunnyVideoId: "g1", verifiedAt: ago(59 * MIN) }), done, { kind: "wait", until: later(1 * MIN) }],
+      ["deleted, verified 70 min ago, COST on, not measured → cleanup now; the Cloudflare delete waits for the end day's close",
+        row({ state: "deleted", bunnyVideoId: "g1", verifiedAt: ago(70 * MIN) }), notYet, { kind: "cleanup", cf: "wait", until: DAY_CLOSES }],
+      ["deleted, verified 70 min ago, measured through the end day → cleanup, deleting the Cloudflare copy",
+        row({ state: "deleted", bunnyVideoId: "g1", verifiedAt: ago(70 * MIN) }), done, { kind: "cleanup", cf: "delete" }],
+      ["deleted, never verified, COST on → cleanup the host side only; the Cloudflare copy is never deleted from here",
+        row({ state: "deleted", bunnyVideoId: "g1" }), notYet, { kind: "cleanup", cf: "skip" }],
+      ["deleted, Cloudflare copy already gone, COST on, not measured → nothing to wait for",
+        row({ state: "deleted", verifiedAt: ago(90 * MIN), cfDeletedAt: ago(5 * MIN) }), notYet, { kind: "cleanup", cf: "skip" }],
+    ];
+    let checked = 0;
+    for (const [name, r, live, expected] of CASES) {
+      expect(nextReplayStep(r, T, live), name).toEqual(expected);
+      expect(T.getTime(), "PREMISE: the table's clock is NOW").toBe(NOW.getTime());
+      checked++;
+    }
+    expect(checked, "rows").toBe(8);
   });
 });
 

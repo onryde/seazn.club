@@ -417,6 +417,108 @@ describe.skipIf(!HAS_DB)("Task 24 — discovery and the move, on the fakes", () 
     expect([ms(row.cf_deleted_at), ms(row.bunny_cleaned_at)]).toEqual([v + 60 * MIN, v + 60 * MIN]);
   });
 
+  // Phase 3 review I1 (controller ruling 2026-11-24): Cloudflare counts a match's live minutes against its RECORDING uid, and whether
+  // its analytics still answer for a deleted video is unmeasured. So with SEAZN_HOSTED_COST on, the mover keeps the Cloudflare copy
+  // until the session's Cloudflare minutes are measured through the session's END DAY (`live_measured_through` >= the end's UTC
+  // date) — read by the REAL claim, beside G-D's 60 min. Waiting, the row is due again at the later of the end day's close and
+  // 60 min on (the ruling's numbers, typed). The delivery row is written by SQL here: its writer is seazn-cost.test.ts's, where
+  // the same sequence runs through the real measure.
+  const ONE_DAY = 24 * 60 * MIN;
+  const endDayOf = (endedAt: number) => Date.parse(`${new Date(endedAt).toISOString().slice(0, 10)}T00:00:00.000Z`);
+  const ymdOf = (at: number) => new Date(at).toISOString().slice(0, 10);
+  const dueAgain = (endedAt: number, now: number) => Math.max(endDayOf(endedAt) + ONE_DAY, now + 60 * MIN);
+  const claimAt = (cf: string, at: number) => sql`update fixture_video_replays set next_attempt_at = ${new Date(at)} where cf_video_id = ${cf}`;
+
+  it("I1: with SEAZN_HOSTED_COST on, the Cloudflare copy is kept past verified + 60 min until the session's Cloudflare minutes are measured through its end day — not with no delivery row, not with only the REPLAY half measured, not through the day before; then deleted by its own id", async () => {
+    const w = await world();
+    const f = w.fixtureIds[0];
+    const e = await toEncoding(w, f, [{}]);
+    const cf = e.ids[0]!;
+    vi.stubEnv("SEAZN_HOSTED_COST", "true");
+    w.host.advance(e.rows[0]!.bunny_video_id!);
+    const v = e.t0 + 15 * MIN;
+    expect(await move(w, v)).toMatchObject({ playable: 1, failed: 0 });
+    const del = vi.spyOn(w.ingest, "deleteVideo");
+    const endDay = endDayOf(e.endedAt);
+    const held: string[] = [];
+    const heldAt = async (what: string, at: number) => {
+      await claimAt(cf, at);
+      await move(w, at);
+      const row = await rowOf(cf);
+      expect(del, `${what}: no Cloudflare delete`).not.toHaveBeenCalled();
+      expect([row.state, row.cf_deleted_at, ms(row.next_attempt_at)], `${what}: kept, due again at the later of the end day's close and 60 min on`)
+        .toEqual(["playable", null, dueAgain(e.endedAt, at)]);
+      held.push(what);
+    };
+    await heldAt("verified + 60 min, no delivery row", v + 60 * MIN);
+    // The REPLAY half measured through the end day says nothing about Cloudflare's: the gate reads the LIVE day (mutant: read the
+    // replay column → deleted here).
+    await sql`insert into fixture_video_delivery (session_id, org_id, replay_minutes, replay_measured_through) values (${e.sid}, ${w.auth.orgId}, 4, ${ymdOf(endDay)}::date)`;
+    await heldAt("only the replay half measured", v + 61 * MIN);
+    await sql`update fixture_video_delivery set live_minutes = 13, live_measured_through = ${ymdOf(endDay - ONE_DAY)}::date where session_id = ${e.sid}`;
+    await heldAt("live measured through the day BEFORE the end day", v + 62 * MIN);
+    expect(held, "anti-vacuity: every holding case ran").toHaveLength(3);
+
+    await sql`update fixture_video_delivery set live_measured_through = ${ymdOf(endDay)}::date where session_id = ${e.sid}`;
+    const at = v + 63 * MIN;
+    await claimAt(cf, at);
+    await move(w, at);
+    expect(del.mock.calls.map(([id]) => id), "measured through the end day: deleted, by the row's own id").toEqual([cf]);
+    expect(ms((await rowOf(cf)).cf_deleted_at)).toBe(at);
+  });
+
+  it("I1: with SEAZN_HOSTED_COST off — unset, false, or malformed (read as off, warned) — nothing measures, so the delete never waits for a measure: deleted at verified + 60 min with no delivery row", async () => {
+    let checked = 0;
+    for (const flag of [undefined, "false", "yes"]) {
+      vi.stubEnv("SEAZN_HOSTED_COST", "");   // read as unset until the case's own value
+      const w = await world();
+      const e = await toEncoding(w, w.fixtureIds[0], [{}]);
+      const cf = e.ids[0]!;
+      w.host.advance(e.rows[0]!.bunny_video_id!);
+      const v = e.t0 + 15 * MIN;
+      await move(w, v);
+      vi.stubEnv("SEAZN_HOSTED_COST", flag ?? "");
+      const warn = vi.spyOn(log, "warn");
+      const del = vi.spyOn(w.ingest, "deleteVideo");
+      await move(w, v + 60 * MIN);
+      expect(del.mock.calls.map(([id]) => id), `SEAZN_HOSTED_COST=${String(flag)}`).toEqual([cf]);
+      expect(await sql`select 1 from fixture_video_delivery where session_id = ${e.sid}`, "PREMISE: nothing was measured").toHaveLength(0);
+      const flagWarnings = warn.mock.calls.filter(([, m]) => typeof m === "string" && m.includes("SEAZN_HOSTED_COST is not true/false"));
+      expect(flagWarnings.length > 0, `${String(flag)}: warned only when malformed`).toBe(flag === "yes");
+      warn.mockRestore();
+      del.mockRestore();
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("I1: an organiser-deleted row with SEAZN_HOSTED_COST on — its host copy is removed at once, its Cloudflare copy waits for the measure through the end day, then goes and the row is cleaned", async () => {
+    const w = await world();
+    const e = await toEncoding(w, w.fixtureIds[0], [{}]);
+    const cf = e.ids[0]!;
+    const guid = e.rows[0]!.bunny_video_id!;
+    vi.stubEnv("SEAZN_HOSTED_COST", "true");
+    w.host.advance(guid);
+    const v = e.t0 + 15 * MIN;
+    await move(w, v);
+    await sql`update fixture_video_replays set state = 'deleted', deleted_reason = 'organiser', deleted_at = ${new Date(v + 5 * MIN)}, next_attempt_at = ${new Date(v + 5 * MIN)} where cf_video_id = ${cf}`;
+    const del = vi.spyOn(w.ingest, "deleteVideo");
+    const at = v + 70 * MIN;
+    await claimAt(cf, at);
+    await move(w, at);
+    let row = await rowOf(cf);
+    expect(w.host.videoIds(), "the host copy is removed at once").not.toContain(guid);
+    expect(del, "past verified + 60 min, not measured: the Cloudflare copy waits").not.toHaveBeenCalled();
+    expect([row.bunny_video_id, row.bunny_cleaned_at, row.cf_deleted_at, ms(row.next_attempt_at)]).toEqual([null, null, null, dueAgain(e.endedAt, at)]);
+    await sql`insert into fixture_video_delivery (session_id, org_id, live_minutes, live_measured_through) values (${e.sid}, ${w.auth.orgId}, 13, ${ymdOf(endDayOf(e.endedAt))}::date)`;
+    const later = at + MIN;
+    await claimAt(cf, later);
+    await move(w, later);
+    row = await rowOf(cf);
+    expect(del.mock.calls.map(([id]) => id)).toEqual([cf]);
+    expect([ms(row.cf_deleted_at), ms(row.bunny_cleaned_at)]).toEqual([later, later]);
+  });
+
   it("an organiser-deleted row that was never verified: its copy is removed and it is cleaned, and its Cloudflare copy is NEVER deleted from here", async () => {
     const w = await world();
     const e = await toEncoding(w, w.fixtureIds[0], [{}]);

@@ -7,13 +7,15 @@
 // (usecases/seazn-replays.ts) runs the step and writes what it learns; the webhook (Task 27) runs `verifyReplayCopy` too.
 //
 // The Cloudflare delete is decided in ONE place, `cfDeleteGate`: only once the host's copy passed the check (`verified_at`) and
-// SEAZN_CF_DELETE_DELAY_MINUTES have gone by since (owner ruling 2026-11-21, G-D; the 60 is a recommendation). A row with no
-// `verified_at` never earns a delete from here, whatever its state.
+// SEAZN_CF_DELETE_DELAY_MINUTES have gone by since (owner ruling 2026-11-21, G-D; the 60 is a recommendation) — and, with
+// SEAZN_HOSTED_COST on, only once the session's Cloudflare minutes are measured through its end day (`liveMeasureGate`, Phase 3
+// review I1, controller ruling 2026-11-24). A row with no `verified_at` never earns a delete from here, whatever its state.
 import {
-  SEAZN_CF_DELETE_DELAY_MINUTES, SEAZN_FETCH_STALE_MINUTES, SEAZN_POLL_BACKSTOP_MINUTES, SEAZN_REPLAY_BACKOFF_MAX_MINUTES,
-  SEAZN_REPLAY_RETRY_DAYS,
+  SEAZN_CF_DELETE_DELAY_MINUTES, SEAZN_CF_DELETE_MEASURE_RECHECK_MINUTES, SEAZN_FETCH_STALE_MINUTES, SEAZN_LIVE_MEASURE_DAYS,
+  SEAZN_POLL_BACKSTOP_MINUTES, SEAZN_REPLAY_BACKOFF_MAX_MINUTES, SEAZN_REPLAY_RETRY_DAYS,
 } from "@/server/relay/config";
 import type { ReplayState } from "../replay-ports";
+import { utcDay } from "./delivery-window";
 
 const MIN = 60_000;
 const DAY = 24 * 60 * MIN;
@@ -60,16 +62,40 @@ export type ReplayStep =
   | { kind: "give_up" }
   | { kind: "refuse"; reason: "fetching_holds_video" | "playable_unverified" | "unknown_state" };
 
-/** The Cloudflare delete gate: due only at or after `verified_at + SEAZN_CF_DELETE_DELAY_MINUTES`. Not due before then (`until`
- *  is when it will be), and never without a verification (`until: null`). */
-export function cfDeleteGate(row: Pick<ReplayRow, "verifiedAt">, now: Date): { due: true } | { due: false; until: Date | null } {
+/** What the delete gate reads beside the row (Phase 3 review I1): whether the daily pass measures Cloudflare minutes
+ *  (SEAZN_HOSTED_COST), and, when it does, the session's end and the last UTC day its Cloudflare minutes were measured through
+ *  (`fixture_video_delivery.live_measured_through`, V552) — both read by the mover's claim. */
+export type LiveMeasure =
+  | { measured: false }
+  | { measured: true; sessionEndedAt: Date | null; measuredThrough: Date | null };
+
+/** Phase 3 review I1 (controller ruling 2026-11-24). Cloudflare counts a match's live minutes against its RECORDING uid, and whether
+ *  its analytics still answer for a DELETED video is unmeasured — so while the daily pass measures (SEAZN_HOSTED_COST on), a
+ *  recording's Cloudflare copy is kept until its session's Cloudflare minutes are measured through the session's end day
+ *  (`measuredThrough` on or after the end's UTC date). It never waits for a measure that cannot come: with COST off nothing measures,
+ *  and the live read (usecases/seazn-cost.ts) selects only sessions that ENDED, within SEAZN_LIVE_MEASURE_DAYS — so a session with
+ *  no end, or one that ended longer ago than that, is due. Not due: asked again at the later of the end day's close (no daily read
+ *  can have covered the day before it closed) and SEAZN_CF_DELETE_MEASURE_RECHECK_MINUTES from now. */
+export function liveMeasureGate(live: LiveMeasure, now: Date): { due: true } | { due: false; until: Date } {
+  if (!live.measured || live.sessionEndedAt === null) return { due: true };
+  const endDay = utcDay(live.sessionEndedAt);
+  if (live.measuredThrough !== null && utcDay(live.measuredThrough).getTime() >= endDay.getTime()) return { due: true };
+  if (now.getTime() - live.sessionEndedAt.getTime() > SEAZN_LIVE_MEASURE_DAYS * DAY) return { due: true };
+  return { due: false, until: new Date(Math.max(endDay.getTime() + DAY, now.getTime() + SEAZN_CF_DELETE_MEASURE_RECHECK_MINUTES * MIN)) };
+}
+
+/** The Cloudflare delete gate: due only at or after `verified_at + SEAZN_CF_DELETE_DELAY_MINUTES`, and then only once
+ *  `liveMeasureGate` allows it. Not due before then (`until` is when to ask again), and never without a verification
+ *  (`until: null`). */
+export function cfDeleteGate(row: Pick<ReplayRow, "verifiedAt">, now: Date, live: LiveMeasure): { due: true } | { due: false; until: Date | null } {
   if (row.verifiedAt === null) return { due: false, until: null };
   const at = row.verifiedAt.getTime() + SEAZN_CF_DELETE_DELAY_MINUTES * MIN;
-  return now.getTime() >= at ? { due: true } : { due: false, until: new Date(at) };
+  if (now.getTime() < at) return { due: false, until: new Date(at) };
+  return liveMeasureGate(live, now);
 }
 
 /** The transition table: one entry per state. */
-const STEP_OF: { readonly [S in ReplayRowState]: (row: ReplayRow, now: Date) => ReplayStep } = {
+const STEP_OF: { readonly [S in ReplayRowState]: (row: ReplayRow, now: Date, live: LiveMeasure) => ReplayStep } = {
   found: () => ({ kind: "create_download" }),
   downloading: () => ({ kind: "create_download" }),
   fetching: (row, now) => {
@@ -80,27 +106,28 @@ const STEP_OF: { readonly [S in ReplayRowState]: (row: ReplayRow, now: Date) => 
     return now.getTime() >= staleAt ? { kind: "refetch" } : { kind: "wait", until: new Date(staleAt) };
   },
   encoding: () => ({ kind: "poll_state" }),
-  playable: (row, now) => {
+  playable: (row, now, live) => {
     if (row.cfDeletedAt !== null) return { kind: "settled" };
-    const gate = cfDeleteGate(row, now);
+    const gate = cfDeleteGate(row, now, live);
     if (gate.due) return { kind: "delete_cf" };
     // V542's CHECK makes `playable` imply `verified_at`; a row without one never earns a delete.
     return gate.until === null ? { kind: "refuse", reason: "playable_unverified" } : { kind: "wait", until: gate.until };
   },
   failed: (row, now) => (pastRetryWindow(row, now) ? { kind: "give_up" } : { kind: "retry" }),
-  deleted: (row, now) => {
+  deleted: (row, now, live) => {
     if (row.bunnyCleanedAt !== null) return { kind: "settled" };
     if (row.cfDeletedAt !== null) return { kind: "cleanup", cf: "skip" };
-    const gate = cfDeleteGate(row, now);
+    const gate = cfDeleteGate(row, now, live);
     if (gate.due) return { kind: "cleanup", cf: "delete" };
     // Never verified: the Cloudflare copy is left to Cloudflare's own scheduled deletion (Task 13), never deleted from here.
     return gate.until === null ? { kind: "cleanup", cf: "skip" } : { kind: "cleanup", cf: "wait", until: gate.until };
   },
 };
 
-export function nextReplayStep(row: ReplayRow, now: Date): ReplayStep {
-  const of = (STEP_OF as Partial<Record<string, (r: ReplayRow, n: Date) => ReplayStep>>)[row.state];
-  return of ? of(row, now) : { kind: "refuse", reason: "unknown_state" };
+/** `live` is required, never defaulted: a caller that forgot it would delete ahead of the measure (Phase 3 review I1). */
+export function nextReplayStep(row: ReplayRow, now: Date, live: LiveMeasure): ReplayStep {
+  const of = (STEP_OF as Partial<Record<string, (r: ReplayRow, n: Date, l: LiveMeasure) => ReplayStep>>)[row.state];
+  return of ? of(row, now, live) : { kind: "refuse", reason: "unknown_state" };
 }
 
 /** A failed attempt (a provider that threw, or a copy that failed): one more attempt, and the next one waits
