@@ -729,6 +729,23 @@ describe.skipIf(!HAS_DB)("purgeFixturelessReplays — a deleted fixture's replay
     expect(removed).toHaveLength(2);
   });
 
+  // Phase 3 review m6 (T31b m5): every other 7e selection is bounded by the pass's own clock (`created_at <= now`, relay-sweep.ts m3):
+  // a row made after `now` is not this pass's business. The fixtureless one was not — a pass handed an earlier `now` (the sweep's
+  // START, minutes before it reaches 7e) would delete a row that, by its clock, does not exist yet.
+  it("m6: a fixtureless part CREATED after the pass's `now` is not this pass's — it survives, unread; the next pass, its clock past the row, deletes it", async () => {
+    const w = await world(1);
+    await orphan(w);
+    const [{ created_at }] = await sql<{ created_at: Date }[]>`select created_at from fixture_video_replays where id = ${w.rows[0]!.id}`;
+    const made = new Date(created_at).getTime();
+    const remove = vi.spyOn(w.host, "remove");
+    expect(await purgeFixturelessReplays({ replay: w.host }, new Date(made - 1), scope(w.auth.orgId)), "a ms before the row was made").toEqual({ purged: 0, failed: 0 });
+    expect((await sql<{ state: string }[]>`select state from fixture_video_replays where id = ${w.rows[0]!.id}`)[0]!.state).toBe("playable");
+    expect(remove).not.toHaveBeenCalled();
+    // `made` is the creation cut to the millisecond (Postgres keeps microseconds), so the next millisecond is the first one past it.
+    expect(await purgeFixturelessReplays({ replay: w.host }, new Date(made + 1), scope(w.auth.orgId)), "a ms after the row was made").toEqual({ purged: 1, failed: 0 });
+    expect(remove.mock.calls).toEqual([[w.copies[0]]]);
+  });
+
   it("a part already deleted (the organiser's) keeps its reason and author and is not counted; a part holding no copy is deleted without asking the host", async () => {
     vi.stubEnv("SEAZN_HOSTED_COST", "true");
     const w = await world(2);

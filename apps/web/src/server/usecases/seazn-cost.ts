@@ -463,10 +463,12 @@ export async function purgeDeletedOrgReplays(deps: Pick<SeaznCostDeps, "replay">
  *  a fixture does not come back, and nothing shows the row meanwhile. */
 export async function purgeFixturelessReplays(deps: Pick<SeaznCostDeps, "replay">, now: Date, scope: SeaznCostScope = {}): Promise<SeaznPurgeResult> {
   const orgIds = orgIdsOf(scope);
+  // Review m6 (T31b m5): bounded by the pass's own clock, as every 7e selection — a row made after `now` is not this pass's.
   const due = await sql<{ id: string; org_id: string; session_id: string }[]>`
     select r.id, r.org_id, r.session_id
       from fixture_video_replays r
      where r.fixture_id is null and r.state <> 'deleted'
+       and r.created_at <= ${now}
        ${orgIds ? sql`and r.org_id in ${sql(orgIds)}` : sql``}
      order by r.org_id, r.session_id, r.part_no, r.id`;
   return deleteAndRemove(deps, now, due, "fixture_deleted");
