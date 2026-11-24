@@ -30,12 +30,14 @@ export function realtimePairingOf(i: { mineId: string | null; holderId: string |
   return SERVED_STATES.has(i.state) ? i.mineId : null;
 }
 
-type Refusal = "url_not_contract" | "host_not_project" | "apikey_not_contract" | "answer_not_contract";
+export type RealtimeRefusal = "url_not_contract" | "host_not_project" | "apikey_not_contract" | "answer_not_contract";
+type Refusal = RealtimeRefusal;
 
 /** The configured project, or why it is not served. The url is tested RAW against the published file's pattern
  *  (`z.url()` trims, so the twin alone would pass a padded value or let a query through to the phone) and its host must be
- *  the project this deployment's NEXT_PUBLIC_SUPABASE_URL names, so a token is never handed out for another host. */
-function configRefusal(cfg: { url: string; apikey: string }): Refusal | null {
+ *  the project this deployment's NEXT_PUBLIC_SUPABASE_URL names, so a token is never handed out for another host. Shared with the
+ *  Match Day door (match-day-realtime.ts): one guard, two doors. */
+export function realtimeConfigRefusal(cfg: { url: string; apikey: string }): Refusal | null {
   if (!CAPTURE_REALTIME_URL_RE.test(cfg.url)) return "url_not_contract";
   const host = hostOf(cfg.url);
   const projectHost = hostOf(process.env.NEXT_PUBLIC_SUPABASE_URL);
@@ -64,7 +66,7 @@ export async function captureRealtimeFor(pairingId: string, now: Date, deps: Ses
   const port = realtimeOf(deps);
   const cfg = port.config();
   if (cfg === null) return null;
-  const refused = configRefusal(cfg);
+  const refused = realtimeConfigRefusal(cfg);
   if (refused !== null) {
     log.warn({ pairingId, refusal: refused }, "capture beat: the realtime project is refused — the beat is answered without realtime");
     return null;

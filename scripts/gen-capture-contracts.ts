@@ -18,7 +18,7 @@ import {
   CaptureMatchdayDay, CaptureMatchdayRefusal, CaptureMatchdayOpen,
   CaptureMatchdayApprovalReview, CaptureMatchdayApprovalRequest, CaptureMatchdayApprovalOk,
   CaptureMatchdayCandidates, CaptureMatchdayCallRequest, CaptureMatchdayCallPreview, CaptureMatchdayCallOk, CaptureMatchdayUndoOk,
-  CaptureMatchdayCallRefusal,
+  CaptureMatchdayCallRefusal, CaptureMatchdayRealtime,
 } from "../apps/web/src/server/api-v1/capture-schemas.ts";
 import { CaptureQrV2 } from "../apps/web/src/lib/capture-qr.ts";
 
@@ -473,6 +473,32 @@ const contracts: Contract[] = [
           reason: "MD_CALL_REFUSED only: not_candidate_court (the court is not one the match's division plays on), player_busy (a player is playing, or called, on another court), court_busy (the court has a match playing or called, from any competition), started (the match has started or is over; for an Undo, it has started), not_ready (a side is still to be decided), not_called (Undo: the match is not called, or the web board has moved it since), frozen (the competition is read-only on its organisation's plan), not_code_call (Undo: the match was called on the web desk, not by a Match Day code; undo it there).",
           person_name: "player_busy only: the busy player's name (or the side's, for a side with no roster).",
           court_name: "player_busy: the court the busy player is on (null when that match has no court); court_busy and not_candidate_court: the court asked for. Absent otherwise.",
+        },
+      },
+    },
+  },
+  {
+    file: "capture-matchday-realtime.v1.json",
+    title: "Seazn Match Day code realtime token, v1: GET /api/v1/match-day-code/realtime-token",
+    root: {
+      twin: CaptureMatchdayRealtime,
+      description: `The subscriber token a phone holding a Match Day code joins its push channel with (realtime push nudges, spec 2026-11-24 §3; plan Task 9), authenticated by Authorization: Bearer md_… only (never a query string), with no body. The answer is \`data\` in the v1 envelope {ok: true, data, requestId}, sent \`cache-control: private, no-store\`; $defs.refusal is \`error\` in {ok: false, error, requestId}. Join \`realtime:{topic}\` with private: true and listen for the broadcast event \`nudge\`, payload {v, reason, at}: v epoch milliseconds, at ISO-8601, reason score, schedule or call; an unknown reason is still a ping. A nudge carries no state: the day read stays the only truth and its 15 s poll the liveness, and the server shortens no timeout because of a nudge. Each token lives up to 60 minutes: min(60 minutes, the code's own expiry), so a code whose day ends within the hour gets a token that ends with it. Ask again at 80% of the token's life (from expiresAt, never from a guess of the phone's own clock), or when the channel errors or refuses it, and swap the new token in (setAuth). Every call mints a new token and stores nothing; a withdrawn code is refused (410 MD_WITHDRAWN) and cannot mint again, though a token already minted lives until its own expiresAt. A 429 (RATE_LIMITED, with Retry-After), a 503 (REALTIME_UNAVAILABLE: this server cannot serve a token) or any other failure means no subscription: poll the day read as before, never fall back to a public channel. ${PINNED_BY}`,
+      props: {
+        url: "The Supabase project URL: https, with no userinfo, query or fragment. Derive the websocket (wss) URL from it. Public; the app bakes in no Supabase config.",
+        apikey: "The Supabase project's public anon key, sent as the socket's apikey; 1 to 512 characters. Public.",
+        topic: "The bare topic match-day:{codeId}, the code's id a lowercase 8-4-4-4-12 uuid; the phone joins realtime:{topic}. It is the code's own: no other code's token reads it.",
+        token: "The subscriber JWT for this topic only, 1 to 4096 characters. A secret: never in a record, snapshot, log line or URL.",
+        expiresAt: "When the token expires, as epoch seconds: the lesser of an hour from this call and the code's own expiry. The phone times its refresh from this.",
+      },
+    },
+    defs: {
+      refusal: {
+        twin: CaptureMatchdayRefusal,
+        description: "Every refusal the code itself earns, the envelope's error: 401 MD_UNKNOWN (no such code, no md_ bearer, or a credential sent anywhere but the Authorization header), 410 MD_WITHDRAWN, 410 MD_ENDED, 403 MD_NOT_OPEN (with opens_at). A 429 RATE_LIMITED (with Retry-After) and a 503 REALTIME_UNAVAILABLE are the v1 envelope's own answers, outside this shape: the phone reads them by status and polls. 410 is final: the phone stops and never retries.",
+        props: {
+          code: "The machine word the phone keys its copy on: one of the plan's MD_ words, a closed list. The v1 envelope's own answers (429 RATE_LIMITED, 503 REALTIME_UNAVAILABLE, 500 INTERNAL) are not md_ refusals and are outside this shape; the phone reads them by status.",
+          message: "A plain English developer string; the phone never shows it.",
+          opens_at: "MD_NOT_OPEN only: when the code's day starts, as a UTC instant.",
         },
       },
     },

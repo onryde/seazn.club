@@ -120,6 +120,9 @@ export type CaptureNudgeReason = (typeof CAPTURE_NUDGE_REASONS)[number];
 /** Why a Match Day screen is told to re-read its day (design §3). */
 export const MATCH_DAY_NUDGE_REASONS = ["score", "schedule", "call"] as const;
 export type MatchDayNudgeReason = (typeof MATCH_DAY_NUDGE_REASONS)[number];
+/** The longest a Match Day code's subscriber token lives (spec 2026-11-24 §3): the contract's "up to 60 minutes"
+ *  (capture-matchday-realtime.v1.json, pinned by capture-contract.test.ts); a code that ends sooner caps it at its own expiry. */
+export const MATCH_DAY_TOKEN_TTL_SECONDS = 3600;
 export type NudgeReason = CaptureNudgeReason | MatchDayNudgeReason;
 
 export type CaptureTopic = `capture:${string}`;

@@ -46,7 +46,7 @@ import "server-only";
 //   live-notification  a Cloudflare live-input notification, RECORDED (an ingest_status event and a sample; never a decision)
 
 export { ACTIVE_STATES, TERMINAL_STATES } from "./session-row";
-export { defaultDeps, liveMinutesOf, realtimeOf } from "./deps";
+export { defaultDeps, liveMinutesOf, processRealtimeConfig, realtimeOf } from "./deps";
 export type { CaptureRealtimePort, SessionDeps } from "./deps";
 export { readSessionDestination, fillReplayUrl } from "./destination";
 export { estimateCostMinor } from "./persist";

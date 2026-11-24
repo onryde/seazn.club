@@ -593,3 +593,22 @@ export const CaptureMatchdayUndoOk = z.strictObject({
   scheduled_at: MdInstant.nullable(),
 });
 export type CaptureMatchdayUndoOk = z.infer<typeof CaptureMatchdayUndoOk>;
+
+// ---------------------------------------------------------------------------------------------------------------
+// capture-matchday-realtime.v1 (realtime push nudges, spec 2026-11-24 §3; plan Task 9): a Match Day code's realtime-token
+// door, `GET /match-day-code/realtime-token`. The answer is `data` in the v1 envelope `{ok: true, data, requestId}`; a
+// refusal is `error` in `{ok: false, error, requestId}` (CaptureMatchdayRefusal, the same four words the day read answers).
+// ---------------------------------------------------------------------------------------------------------------
+
+/** The door's 200: the Supabase project's https URL and public anon key (the app bakes in no Supabase config), the bare topic
+ *  `match-day:{codeId}` (the app joins `realtime:{topic}`; the id a lowercase 8-4-4-4-12 uuid), the subscriber JWT and its expiry in
+ *  epoch seconds. The url is the beat answer's own (`CAPTURE_REALTIME_URL_RE`): no userinfo, query or fragment, a token never
+ *  rides a URL. Strict: a later field is a contract bump. */
+export const CaptureMatchdayRealtime = z.strictObject({
+  url: z.url().regex(CAPTURE_REALTIME_URL_RE),
+  apikey: z.string().min(1).max(512),
+  topic: z.string().regex(/^match-day:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
+  token: z.string().min(1).max(4096),
+  expiresAt: EpochS,
+});
+export type CaptureMatchdayRealtime = z.infer<typeof CaptureMatchdayRealtime>;

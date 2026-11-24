@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://seazn.club/contracts/capture-matchday-realtime.v1.json",
+  "title": "Seazn Match Day code realtime token, v1: GET /api/v1/match-day-code/realtime-token",
+  "description": "The subscriber token a phone holding a Match Day code joins its push channel with (realtime push nudges, spec 2026-11-24 §3; plan Task 9), authenticated by Authorization: Bearer md_… only (never a query string), with no body. The answer is `data` in the v1 envelope {ok: true, data, requestId}, sent `cache-control: private, no-store`; $defs.refusal is `error` in {ok: false, error, requestId}. Join `realtime:{topic}` with private: true and listen for the broadcast event `nudge`, payload {v, reason, at}: v epoch milliseconds, at ISO-8601, reason score, schedule or call; an unknown reason is still a ping. A nudge carries no state: the day read stays the only truth and its 15 s poll the liveness, and the server shortens no timeout because of a nudge. Each token lives up to 60 minutes: min(60 minutes, the code's own expiry), so a code whose day ends within the hour gets a token that ends with it. Ask again at 80% of the token's life (from expiresAt, never from a guess of the phone's own clock), or when the channel errors or refuses it, and swap the new token in (setAuth). Every call mints a new token and stores nothing; a withdrawn code is refused (410 MD_WITHDRAWN) and cannot mint again, though a token already minted lives until its own expiresAt. A 429 (RATE_LIMITED, with Retry-After), a 503 (REALTIME_UNAVAILABLE: this server cannot serve a token) or any other failure means no subscription: poll the day read as before, never fall back to a public channel. Vendored into the capture repo; its sha256, parity with its zod twin and its fixtures are pinned by apps/web/src/server/api-v1/__tests__/capture-contract.test.ts.",
+  "type": "object",
+  "properties": {
+    "url": {
+      "description": "The Supabase project URL: https, with no userinfo, query or fragment. Derive the websocket (wss) URL from it. Public; the app bakes in no Supabase config.",
+      "type": "string",
+      "pattern": "^https:\\/\\/[^\\s/?#@]+(\\/[^\\s?#]*)?$"
+    },
+    "apikey": {
+      "description": "The Supabase project's public anon key, sent as the socket's apikey; 1 to 512 characters. Public.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "topic": {
+      "description": "The bare topic match-day:{codeId}, the code's id a lowercase 8-4-4-4-12 uuid; the phone joins realtime:{topic}. It is the code's own: no other code's token reads it.",
+      "type": "string",
+      "pattern": "^match-day:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "token": {
+      "description": "The subscriber JWT for this topic only, 1 to 4096 characters. A secret: never in a record, snapshot, log line or URL.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "expiresAt": {
+      "description": "When the token expires, as epoch seconds: the lesser of an hour from this call and the code's own expiry. The phone times its refresh from this.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    }
+  },
+  "required": [
+    "url",
+    "apikey",
+    "topic",
+    "token",
+    "expiresAt"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "refusal": {
+      "description": "Every refusal the code itself earns, the envelope's error: 401 MD_UNKNOWN (no such code, no md_ bearer, or a credential sent anywhere but the Authorization header), 410 MD_WITHDRAWN, 410 MD_ENDED, 403 MD_NOT_OPEN (with opens_at). A 429 RATE_LIMITED (with Retry-After) and a 503 REALTIME_UNAVAILABLE are the v1 envelope's own answers, outside this shape: the phone reads them by status and polls. 410 is final: the phone stops and never retries.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "description": "The machine word the phone keys its copy on: one of the plan's MD_ words, a closed list. The v1 envelope's own answers (429 RATE_LIMITED, 503 REALTIME_UNAVAILABLE, 500 INTERNAL) are not md_ refusals and are outside this shape; the phone reads them by status.",
+          "type": "string",
+          "enum": [
+            "MD_UNKNOWN",
+            "MD_WITHDRAWN",
+            "MD_ENDED",
+            "MD_NOT_OPEN",
+            "MD_OUT_OF_SCOPE",
+            "MD_NO_APPROVE",
+            "MD_STALE",
+            "MD_ALREADY",
+            "MD_TIES"
+          ]
+        },
+        "message": {
+          "description": "A plain English developer string; the phone never shows it.",
+          "type": "string"
+        },
+        "opens_at": {
+          "description": "MD_NOT_OPEN only: when the code's day starts, as a UTC instant.",
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

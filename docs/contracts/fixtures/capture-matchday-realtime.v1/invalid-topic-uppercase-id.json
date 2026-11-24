@@ -1,0 +1,7 @@
+{
+  "url": "https://mdproject.supabase.co",
+  "apikey": "md-anon-key-public",
+  "topic": "match-day:2C9D4E7A-6B1F-4A38-9E52-7D0B3A8C1F64",
+  "token": "md-realtime-token-not-a-jwt",
+  "expiresAt": 1794078000
+}

@@ -32,7 +32,8 @@ import addFormats from "ajv-formats";
 import * as CS from "../capture-schemas";
 import * as S from "../schemas";
 import { CaptureQrV2, captureQrV2Text, parseCaptureQrV2 } from "@/lib/capture-qr";
-import { CAPTURE_NUDGE_REASONS, captureTopic, divisionTopic, matchDayTopic } from "@/lib/realtime";
+import { CAPTURE_NUDGE_REASONS, MATCH_DAY_NUDGE_REASONS, MATCH_DAY_TOKEN_TTL_SECONDS, captureTopic, divisionTopic, matchDayTopic } from "@/lib/realtime";
+import { contractUrlPatterns } from "@/server/usecases/__tests__/_capture-realtime";
 import type { RoundRole } from "@seazn/engine/competition";
 
 type Json = Record<string, unknown>;
@@ -68,6 +69,8 @@ const SHA256: Record<string, string> = {
   // Task 8e (owner 2026-11-13): a Match Day code calls a match to a court — the candidates, the preview, the call, the Undo.
   // Task 17: its candidates are rows too, so each reads live_seazn null.
   "capture-matchday-call.v1.json": "0f195d93e2f8cda7cdbaf2c0b84e3f1f3e132e9371c5821201ff86d4f07af796",
+  // Realtime push nudges (spec 2026-11-24 §3, plan Task 9): a Match Day code's realtime-token door. New file, no earlier version.
+  "capture-matchday-realtime.v1.json": "69cf50b5d21af717c91423c3a9d941eb53c8e63f9097af54a31a9b5370cc130a",
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -287,6 +290,8 @@ const MD_APPROVAL = "capture-matchday-approval.v1.json", MD_APPROVAL_DIR = "capt
 // capture-matchday-call.v1 (Task 8e): the root is the candidates (the envelope's `data`); $defs.request the call's body,
 // $defs.preview / call / undo its 200s' `data`, $defs.refusal the `error`.
 const MD_CALL = "capture-matchday-call.v1.json", MD_CALL_DIR = "capture-matchday-call.v1";
+// capture-matchday-realtime.v1 (push nudges, Task 9): the root is the token door's answer (the envelope's `data`), $defs.refusal its `error`.
+const MD_RT = "capture-matchday-realtime.v1.json", MD_RT_DIR = "capture-matchday-realtime.v1";
 /** The record file's `$defs`, exactly: the two answers and the secret-shaped rules S2–S5 the server runs. */
 const RECORD_DEFS = ["ok", "refusal", "secretS2", "secretS3", "secretS4", "secretS5", "secretShaped"];
 /** Each file's `$defs`, exactly. */
@@ -296,6 +301,7 @@ const DEFS: Record<string, string[]> = {
   [MD_OPEN]: ["refusal"],
   [MD_APPROVAL]: ["ok", "refusal", "request"],
   [MD_CALL]: ["call", "preview", "refusal", "request", "undo"],
+  [MD_RT]: ["refusal"],
 };
 /** The record's twins, by the shape they mirror: the parity test compares each, and the tripwire holds every
  *  record-named zod export of capture-schemas.ts to exactly this list. `secretShaped` is the union of S2–S5 by `$ref`,
@@ -348,6 +354,7 @@ const DIRS: Record<string, { file: string; routes: Route[]; count: number }> = {
     ],
     count: 26,
   },
+  [MD_RT_DIR]: { file: MD_RT, routes: [["refusal-", S.CaptureMatchdayRefusal, "#/$defs/refusal"], ["", S.CaptureMatchdayRealtime, ""]], count: 18 },
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -452,6 +459,8 @@ const CAPTURE_SCHEMAS_EXPORTS = [
   "CaptureMatchdayCallRefusalCode", "CaptureMatchdayCallReason", "CaptureMatchdayCallRefusal", "CaptureMatchdayCandidate",
   "CaptureMatchdayCandidates", "CaptureMatchdayCallRequest", "CaptureMatchdayCallPreview", "CaptureMatchdayCallOk",
   "CaptureMatchdayUndoOk",
+  // capture-matchday-realtime.v1 (push nudges, Task 9): the realtime-token door's answer.
+  "CaptureMatchdayRealtime",
 ];
 
 /** The published bytes as a validator sees them: ajv 2020-12, strict, formats ASSERTED (uuid, uri, date-time) — the
@@ -468,13 +477,13 @@ function fileValidator(): (file: string, pointer: string, value: unknown) => boo
 }
 
 describe("capture contracts (docs/contracts/capture-*.json)", () => {
-  it("each of the ten contracts is checksummed (the cross-repo drift gate)", () => {
+  it("each of the eleven contracts is checksummed (the cross-repo drift gate)", () => {
     let checked = 0;
     for (const [file, sha] of Object.entries(SHA256)) {
       expect(createHash("sha256").update(contractText(file)).digest("hex"), file).toBe(sha);
       checked++;
     }
-    expect(checked).toBe(10);
+    expect(checked).toBe(11);
   });
 
   it("v1 is gone, and every published capture contract is twinned — the record included since its route landed (W4, §6.13; W27; 2026-10-12)", () => {
@@ -487,7 +496,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     // Every contract has its fixture directory in DIRS, the record's among them: no contract is left without a twin.
     expect(Object.values(DIRS).map((d) => d.file)).toContain(RECORD);
     expect(Object.keys(SHA256).filter((f) => !Object.values(DIRS).some((d) => d.file === f))).toEqual([]);
-    expect(Object.keys(DIRS)).toHaveLength(10);
+    expect(Object.keys(DIRS)).toHaveLength(11);
   });
 
   it("schemas.ts re-exports every twin by identity, never a re-typed copy", () => {
@@ -515,15 +524,15 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
   it("parity: each file (and each $def) equals z.toJSONSchema of its twin, as output AND as input, unions compared branch by branch on `state`", () => {
     const qr = contract(QR), desc = contract(DESCRIPTOR), beat = contract(BEAT), start = contract(START), scoring = contract(SCORING);
     const record = contract(RECORD), mdDay = contract(MD_DAY), mdOpen = contract(MD_OPEN), mdApproval = contract(MD_APPROVAL);
-    const mdCall = contract(MD_CALL);
+    const mdCall = contract(MD_CALL), mdRealtime = contract(MD_RT);
     let defsChecked = 0;
-    for (const [file, json] of [[QR, qr], [DESCRIPTOR, desc], [BEAT, beat], [START, start], [SCORING, scoring], [RECORD, record], [MD_DAY, mdDay], [MD_OPEN, mdOpen], [MD_APPROVAL, mdApproval], [MD_CALL, mdCall]] as const) {
+    for (const [file, json] of [[QR, qr], [DESCRIPTOR, desc], [BEAT, beat], [START, start], [SCORING, scoring], [RECORD, record], [MD_DAY, mdDay], [MD_OPEN, mdOpen], [MD_APPROVAL, mdApproval], [MD_CALL, mdCall], [MD_RT, mdRealtime]] as const) {
       expect(Object.keys((json.$defs as Json | undefined) ?? {}).sort(), `${file} $defs`).toEqual([...DEFS[file]!].sort());
       expect(json.$id, `${file} $id`).toBe(`https://seazn.club/contracts/${file}`);
       expect(json.$schema).toBe("https://json-schema.org/draft/2020-12/schema");
       defsChecked++;
     }
-    expect(defsChecked).toBe(10);
+    expect(defsChecked).toBe(11);
 
     const whole: [string, Json, Twin][] = [
       [QR, rootOf(qr), CaptureQrV2],
@@ -558,6 +567,9 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       [`${MD_CALL}#/$defs/call`, defOf(mdCall, "call"), S.CaptureMatchdayCallOk],
       [`${MD_CALL}#/$defs/undo`, defOf(mdCall, "undo"), S.CaptureMatchdayUndoOk],
       [`${MD_CALL}#/$defs/refusal`, defOf(mdCall, "refusal"), S.CaptureMatchdayCallRefusal],
+      // capture-matchday-realtime.v1 (push nudges, Task 9): the token door's answer and its refusal.
+      [MD_RT, rootOf(mdRealtime), S.CaptureMatchdayRealtime],
+      [`${MD_RT}#/$defs/refusal`, defOf(mdRealtime, "refusal"), S.CaptureMatchdayRefusal],
     ];
     let wholeChecked = 0;
     for (const io of IO) {
@@ -567,7 +579,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       }
     }
     expect(RECORD_TWINS).toHaveLength(7);
-    expect(wholeChecked).toBe((10 + 7 + 2 + 2 + 4 + 6) * 2);
+    expect(wholeChecked).toBe((10 + 7 + 2 + 2 + 4 + 6 + 2) * 2);
     // secretShaped is the union of S2–S5 by $ref, each once, in order — so "secret-shaped" is exactly the four twins.
     const shaped = defOf(record, "secretShaped");
     expect(shaped.type).toBe("string");
@@ -643,7 +655,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       expect(checked, `${dir}: fixtures checked`).toBe(count);
       total += checked;
     }
-    expect(total).toBe(12 + 58 + 57 + 18 + 20 + 63 + 15 + 10 + 17 + 26);
+    expect(total).toBe(12 + 58 + 57 + 18 + 20 + 63 + 15 + 10 + 17 + 26 + 18);
     expect(byFile, "fixtures checked against the published bytes").toBe(total);
     // Every ZOD_ONLY entry names a fixture that exists and was swept (a stale entry would excuse nothing, silently).
     expect(zodOnlySeen, "ZOD_ONLY fixtures swept").toBe(Object.keys(ZOD_ONLY).length);
@@ -936,7 +948,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       expect(contractText(file), `${file}: a retired custom ingest host`).not.toMatch(RETIRED);
       contracts++;
     }
-    expect(contracts).toBe(10);
+    expect(contracts).toBe(11);
   });
 
   it("QR v2 `exp` (capture's A1, §1.2): optional, an integer ≥ 0 of epoch SECONDS; admitted when present, sent only on a court code", () => {
@@ -1890,7 +1902,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     expect(names.length, "premise: capture-schemas.ts exports").toBeGreaterThan(0);
     // The full list, not a name pattern (review fix 8): a twin named, say, CaptureLogLine trips it too.
     expect([...names].sort()).toEqual([...CAPTURE_SCHEMAS_EXPORTS].sort());
-    expect(CAPTURE_SCHEMAS_EXPORTS).toHaveLength(26 + 2 + 3 + 11 + 6 + 1 + 3 + 9);
+    expect(CAPTURE_SCHEMAS_EXPORTS).toHaveLength(26 + 2 + 3 + 11 + 6 + 1 + 3 + 9 + 1);
     // Every record-named export that is a SHAPE (a zod object or string) is a twin the parity test compares, by
     // identity — an enum is checked by its options instead, a constant by the contract's prose.
     const twins = new Map(RECORD_TWINS.map(([pointer, twin, name]) => [name, { pointer, twin }]));
@@ -2050,6 +2062,65 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       expect(parses(S.CaptureMatchdayOpen, fixture(MD_OPEN_DIR, name)), name).toBe(false);
     }
     expect(fileAdmits(MD_OPEN, "#/$defs/refusal", fixture(MD_OPEN_DIR, "refusal-valid-out-of-scope"))).toBe(true);
+  });
+
+  it("the realtime token validates against capture-matchday-realtime.v1.json: five keys, the bare match-day:{codeId} topic the real builder makes, the beat's url pattern, and a refusal that is an md_ word (push nudges, Task 9)", () => {
+    const fileAdmits = fileValidator();
+    const rt = fixture(MD_RT_DIR, "valid");
+    // The five keys, the same names and bounds as the beat answer's realtime object (the phone reuses one reader), and no more.
+    expect(Object.keys(rt).sort()).toEqual([...REALTIME_KEYS].sort());
+    expect(Object.keys(CS.CaptureMatchdayRealtime.shape).sort()).toEqual([...REALTIME_KEYS].sort());
+    expect(fileAdmits(MD_RT, "", rt)).toBe(true);
+    expect(parses(S.CaptureMatchdayRealtime, rt)).toBe(true);
+    // The url's pattern is the beat's: the file's own text, and the twin's regex (the server's guard tests the RAW configured url with it).
+    const filePattern = (rootOf(contract(MD_RT)).properties as Record<string, Json>).url!.pattern;
+    const beatPattern = contractUrlPatterns()[0];
+    expect(filePattern, "one url pattern across the two realtime contracts").toBe(beatPattern);
+    expect(new RegExp(filePattern as string).source).toBe(CS.CAPTURE_REALTIME_URL_RE.source);
+    // The topic: exactly what the real builder makes, the code id a lowercase uuid; never another family's, the joined form or a URL.
+    const codeId = "2c9d4e7a-6b1f-4a38-9e52-7d0b3a8c1f64";
+    expect(rt.topic, "premise: the fixture's topic is the builder's").toBe(matchDayTopic(codeId));
+    const topics: [topic: string, admitted: boolean][] = [
+      [matchDayTopic(codeId), true], [matchDayTopic("00000000-0000-4000-8000-000000000000"), true],
+      [`realtime:${matchDayTopic(codeId)}`, false], [captureTopic(codeId), false], [divisionTopic(codeId), false], [`fixture:${codeId}`, false],
+      [matchDayTopic(codeId.toUpperCase()), false], [matchDayTopic(codeId.slice(1)), false], [matchDayTopic(`${codeId}0`), false],
+      [matchDayTopic(codeId.replaceAll("-", "").padEnd(36, "0")), false], [matchDayTopic(`https://mdproject.supabase.co/${codeId}`), false],
+      ["match-day:", false], ["match-day", false],
+    ];
+    let admitted = 0;
+    for (const [topic, ok] of topics) {
+      const v = { ...rt, topic };
+      expect(parses(S.CaptureMatchdayRealtime, v), `${topic}: twin`).toBe(ok);
+      expect(fileAdmits(MD_RT, "", v), `${topic}: file`).toBe(ok);
+      if (ok) admitted++;
+    }
+    expect(admitted).toBe(2);
+    expect(topics).toHaveLength(13);
+    // Bounds, both ways, twin and file (as the beat's: the same five keys).
+    const cases: [field: string, value: unknown, admitted: boolean][] = [
+      ["apikey", "", false], ["apikey", "k".repeat(512), true], ["apikey", "k".repeat(513), false],
+      ["token", "", false], ["token", "t".repeat(4096), true], ["token", "t".repeat(4097), false],
+      ["expiresAt", 0, false], ["expiresAt", 1, true], ["expiresAt", 1_794_078_000.5, false], ["expiresAt", "1794078000", false],
+      ["expiresAt", 1_794_078_000_000, true],   // schema admits any integer; epoch SECONDS is pinned by the route test's exp equality
+    ];
+    for (const [field, value, ok] of cases) {
+      const v = { ...rt, [field]: value };
+      expect(parses(S.CaptureMatchdayRealtime, v), `${field} ${JSON.stringify(value).slice(0, 30)}: twin`).toBe(ok);
+      expect(fileAdmits(MD_RT, "", v), `${field} ${JSON.stringify(value).slice(0, 30)}: file`).toBe(ok);
+    }
+    // The prose carries what the phone is promised: the nudge reasons are exactly the engine's, and the token life is the route's.
+    const prose = String(contract(MD_RT).description);
+    expect(MATCH_DAY_NUDGE_REASONS.length, "PREMISE: reasons read").toBeGreaterThan(0);
+    expect(prose).toContain(`reason ${MATCH_DAY_NUDGE_REASONS.slice(0, -1).join(", ")} or ${MATCH_DAY_NUDGE_REASONS.at(-1)}`);
+    expect(prose).toContain(`up to ${MATCH_DAY_TOKEN_TTL_SECONDS / 60} minutes`);
+    expect(prose).toContain("broadcast event `nudge`");
+    // Fixtures: the refusals are the four md_ words the day read answers; the realtime word is the envelope's, never `error.code` here.
+    for (const [name, ok] of [["refusal-valid-unknown", true], ["refusal-valid-withdrawn", true], ["refusal-valid-ended", true], ["refusal-valid-not-open", true], ["refusal-invalid-realtime-word", false]] as const) {
+      expect(fileAdmits(MD_RT, "#/$defs/refusal", fixture(MD_RT_DIR, name)), name).toBe(ok);
+      expect(parses(S.CaptureMatchdayRefusal, fixture(MD_RT_DIR, name)), name).toBe(ok);
+    }
+    // A credential never rides the url: no valid fixture carries a query, userinfo or fragment, and no key is a URL's.
+    expect(String(rt.url)).not.toMatch(/[?#@]/);
   });
 
   it("the approval validates against capture-matchday-approval.v1.json: the review carries no credential, the approve sends no tie picks, and a refusal is an md_ word (MD-1 Task 6)", () => {

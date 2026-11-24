@@ -60,6 +60,8 @@ export {
   // capture-matchday-call.v1 (Task 8e).
   CaptureMatchdayCallRefusalCode, CaptureMatchdayCallReason, CaptureMatchdayCallRefusal, CaptureMatchdayCandidate,
   CaptureMatchdayCandidates, CaptureMatchdayCallRequest, CaptureMatchdayCallPreview, CaptureMatchdayCallOk, CaptureMatchdayUndoOk,
+  // capture-matchday-realtime.v1 (realtime push nudges, plan Task 9).
+  CaptureMatchdayRealtime,
 } from "../capture-schemas.ts";
 export {
   Uuid, CourtId, RequiredCourtTags, VenueId, Slug, Visibility, CompetitionStatus, DivisionStatus, StageKind,

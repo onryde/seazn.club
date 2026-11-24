@@ -31,6 +31,7 @@ import { v1Suite } from "./suites/v1.ts";
 import { streamTargetsSuite } from "./suites/streamTargets.ts";
 import { captureV2Suite } from "./suites/captureV2.ts";
 import { captureRecordSuite } from "./suites/captureRecord.ts";
+import { matchDayRealtimeSuite } from "./suites/matchDayRealtime.ts";
 import { deviceLinkFootballSuite } from "./suites/deviceLinkFootball.ts";
 import { streamOverlaySuite } from "./suites/streamOverlay.ts";
 import { matchRoomSuite } from "./suites/matchRoom.ts";
@@ -56,6 +57,7 @@ const SELECTABLE_SUITES: Record<string, (c: SubsetCtx) => Promise<void>> = {
   v1: (c) => v1Suite(c.admin, c.org2Id, c.org2Slug),
   captureV2: () => captureV2Suite(),
   captureRecord: () => captureRecordSuite(),
+  matchDayRealtime: () => matchDayRealtimeSuite(),
   bracketFinish: () => bracketFinishSuite(),
   walkoverCredit: () => walkoverCreditSuite(),
   streamOverlay: () => streamOverlaySuite(),

@@ -431,6 +431,8 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   // MD-1 (capture S4 Match Day design §9): the Match Day code's own routes. Their Bearer is an md_ code the route resolves
   // itself — a credential that lists a day and opens scoring links; never a key.
   "GET /match-day-code",
+  // Realtime push nudges (spec 2026-11-24 §3): the code's subscriber token, its Bearer the md_ code alone — never a key.
+  "GET /match-day-code/realtime-token",
   "POST /match-day-code/fixtures/:id/scoring-link",
   "GET /match-day-code/approvals/:kind/:stageId",
   "POST /match-day-code/approvals/:kind/:stageId",

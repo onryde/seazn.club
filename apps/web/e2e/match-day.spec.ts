@@ -2330,3 +2330,66 @@ test.describe("Match Day — court stream (desk)", () => {
     });
   });
 });
+
+// Realtime push nudges (spec 2026-11-24 §3, plan Task 9 / T2.2): the Match Day realtime-token door, asked by a phone that holds
+// ONLY a real `md_` code (a cookie-less client, as the app is), against the server this suite runs on. CI's e2e server carries a
+// stub Supabase project and the HS256 test secret (e2e.yml: NEXT_PUBLIC_SUPABASE_URL, _ANON_KEY, SUPABASE_JWT_SECRET), so the
+// door must answer 200; a server without them answers 503 REALTIME_UNAVAILABLE and this test says so. The real socket join is the
+// STG-local probe's (e2e/probes/realtime-nudge-match-day.spec.ts), which CI cannot run.
+test.describe("Match Day — the realtime token door (push nudges, T2.2)", () => {
+  test("a real md_ code is served its token, the day read still answers the same code, and a withdrawal refuses the next ask", async ({
+    request,
+    baseURL,
+  }) => {
+    const seed = await seedMatchDay(request, "Realtime");
+    const minted = await apiJson<{ id: string; url: string }>(request, `/api/v1/competitions/${seed.competitionId}/match-day-codes`, "POST", {
+      scope: { kind: "competition" },
+    });
+    expect(minted.status, `mint a Match Day code: ${JSON.stringify(minted.error)}`).toBe(201);
+    const { id, url } = minted.data!;
+    const credential = url.slice(url.lastIndexOf("/") + 1);
+    expect(credential).toMatch(/^md_/);
+
+    const phone = await newPhoneRequest(baseURL!);
+    try {
+      const bearer = { authorization: `Bearer ${credential}` };
+      const before = Math.floor(Date.now() / 1000);
+      const door = await phone.get("/api/v1/match-day-code/realtime-token", { headers: bearer });
+      expect(
+        door.status(),
+        "the e2e server configures a Supabase project (e2e.yml): a 503 here means NEXT_PUBLIC_SUPABASE_URL, _ANON_KEY or SUPABASE_JWT_SECRET is missing from the server under test",
+      ).toBe(200);
+      expect(door.headers()["cache-control"]).toBe("private, no-store");
+      for (const [name, value] of Object.entries(door.headers())) {
+        expect(value.includes(credential), `header ${name} carries the credential`).toBe(false);
+      }
+      const body = (await door.json()) as { ok: boolean; data: { token: string; topic: string; expiresAt: number; url: string; apikey: string } };
+      expect(body.ok).toBe(true);
+      expect(Object.keys(body.data).sort()).toEqual(["apikey", "expiresAt", "token", "topic", "url"]);
+      expect(body.data.topic).toBe(`match-day:${id}`);
+      expect(body.data.url).toMatch(/^https:\/\/[^\s/?#@]+/);
+      expect(body.data.expiresAt, "epoch SECONDS, within the hour").toBeGreaterThan(before);
+      expect(body.data.expiresAt).toBeLessThanOrEqual(before + 3600 + 60);
+      // The token is a JWT for THIS code's topic: its own claim names the code (V555's policy keys on it), and nothing from the URL.
+      const claims = JSON.parse(Buffer.from(body.data.token.split(".")[1]!, "base64url").toString("utf8")) as Record<string, unknown>;
+      expect(claims.md_code_id).toBe(id);
+      expect(claims.exp).toBe(body.data.expiresAt);
+      expect(JSON.stringify(body.data).includes(credential), "the credential never comes back").toBe(false);
+
+      // The door spent its OWN bucket: the same code's day read is still admitted.
+      expect((await phone.get("/api/v1/match-day-code", { headers: bearer })).status()).toBe(200);
+      // The credential in the query alone is never read.
+      expect((await phone.get(`/api/v1/match-day-code/realtime-token?token=${credential}`)).status()).toBe(401);
+
+      // A withdrawal: the next ask is 410 and mints nothing.
+      expect((await apiJson(request, `/api/v1/match-day-codes/${id}/revoke`, "POST")).status).toBe(204);
+      const gone = await phone.get("/api/v1/match-day-code/realtime-token", { headers: bearer });
+      expect(gone.status()).toBe(410);
+      const refusal = (await gone.json()) as { ok: boolean; data?: unknown; error?: { code?: string } };
+      expect(refusal.error?.code).toBe("MD_WITHDRAWN");
+      expect(refusal.data).toBeUndefined();
+    } finally {
+      await phone.dispose();
+    }
+  });
+});

@@ -44,15 +44,14 @@ export const liveMinutesOf = (deps: SessionDeps): LiveMinutesReader =>
   deps.liveMinutes ?? ((uids, from, to) => liveMinutesViewed(uids, from, to, { recorder: dbRecorder }));
 /** The process's realtime port: the real mint, and the project NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY name,
  *  read at the call and passed on RAW (the guard in usecases/capture-realtime.ts refuses a padded or query-bearing url; this
- *  trims nothing). Either one unset or empty is no Supabase at all. */
-const processRealtime: CaptureRealtimePort = {
-  mint: mintCaptureToken,
-  config() {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const apikey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-    return url && apikey ? { url, apikey } : null;
-  },
-};
+ *  trims nothing). Either one unset or empty is no Supabase at all. `processRealtimeConfig` is shared with the Match Day door
+ *  (match-day-realtime.ts), which serves the same project. */
+export function processRealtimeConfig(): { url: string; apikey: string } | null {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const apikey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  return url && apikey ? { url, apikey } : null;
+}
+const processRealtime: CaptureRealtimePort = { mint: mintCaptureToken, config: processRealtimeConfig };
 /** The capture beat's realtime port: the deps' own, else the process's. */
 export const realtimeOf = (deps: SessionDeps): CaptureRealtimePort => deps.realtime ?? processRealtime;
 /** The capture nudges' transport: the deps' own, else the process's `broadcast` (never throws; a kill switch and a missing project send nothing). */

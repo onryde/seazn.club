@@ -24,6 +24,9 @@ import { GET } from "@/app/api/v1/capture/codes/[code]/route";
 import { POST as BEATS } from "@/app/api/v1/capture/codes/[code]/beats/route";
 import { POST as START } from "@/app/api/v1/capture/codes/[code]/start/route";
 import { POST as SCORING_LINK } from "@/app/api/v1/capture/codes/[code]/scoring-link/route";
+import { GET as MD_REALTIME_TOKEN } from "@/app/api/v1/match-day-code/realtime-token/route";
+import { mintMatchDayCode, revokeMatchDayCode } from "@/server/usecases/match-day-codes";
+import { seedDay } from "@/server/usecases/__tests__/_match-day-seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -96,6 +99,8 @@ describe("the logger's redaction, path by path (§10.2)", () => {
     ["token (top level)", { token: SECRET }],
     ["realtime.token (top level)", { realtime: { topic: "capture:x", token: SECRET } }],
     ["*.realtime.token", { answer: { state: "live", realtime: { topic: "capture:x", token: SECRET } } }],
+    // Push nudges (Task 9): the Match Day door's whole answer, `{token, topic, expiresAt, url, apikey}`, logged one level down.
+    ["*.token (the Match Day door's data)", { data: { token: SECRET, topic: "match-day:x", expiresAt: 1794078000, url: "https://p.supabase.co", apikey: "anon" } }],
   ];
   it.each(cases)("%s → [Redacted]", (_path, obj) => {
     log.warn(obj, "redaction probe");
@@ -108,6 +113,14 @@ describe("the logger's redaction, path by path (§10.2)", () => {
   it("the positive pair: a field that is not a secret is written as it is", () => {
     log.warn({ fixtureId: SECRET }, "not a secret");
     expect(lines[0]).toContain(SECRET);
+  });
+
+  it("the positive pair for the Match Day door's answer: only the token goes — the topic, expiry, url and anon key are written", () => {
+    const data = { token: SECRET, topic: "match-day:00000000-0000-4000-8000-000000000001", expiresAt: 1794078000, url: "https://p.supabase.co", apikey: "sb_publishable_anon" };
+    log.warn({ data }, "answer");
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).not.toContain(SECRET);
+    for (const kept of [data.topic, String(data.expiresAt), data.url, data.apikey]) expect(lines[0]).toContain(kept);
   });
 
   it("the positive pair for the realtime paths: only the token goes — the object's topic is written, at both levels", () => {
@@ -251,5 +264,44 @@ describe.skipIf(!HAS_DB)("the phone routes never log a secret (§10.2): each rou
       checked++;
     }
     expect(checked).toBe(lines.length);
+  });
+
+  it("push nudges Task 9: the Match Day realtime-token door — 200 twice, 401, 503 (no signing key), 410 withdrawn — no captured line carries the md_ credential or a minted token; lines were captured", async () => {
+    lines.length = 0;
+    process.env.DEVICE_LINK_KEK = randomBytes(32).toString("hex");
+    process.env.OAUTH_BASE_URL = "https://logger-redact.test";
+    const day = await seedDay();
+    const { row, url } = await mintMatchDayCode(day.auth, day.comp.id, { scope: { kind: "competition" }, day: new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Amsterdam" }).format(new Date()), canApprove: false });
+    const credential = url.slice(url.lastIndexOf("/") + 1);
+    expect(credential, "PREMISE: the code's credential").toMatch(/^md_/);
+    const statuses: number[] = [];
+    const door = async (bearer: string | null) => {
+      const res = await MD_REALTIME_TOKEN(new Request("https://test.local/api/v1/match-day-code/realtime-token", { headers: bearer === null ? {} : { authorization: `Bearer ${bearer}` } }));
+      statuses.push(res.status);
+      return res;
+    };
+    const tokens: string[] = [];
+    const served = async (res: Response) => {
+      const b = (await res.json()) as { data?: { token: string; topic: string } };
+      if (b.data) tokens.push(b.data.token);
+      return b;
+    };
+    const first = await served(await door(credential));                        // 200 (the code's day is today, in the org's zone, or the door says why)
+    expect(first.data?.topic, "PREMISE: served through the REAL route and the process's port").toBe(`match-day:${row.id}`);
+    await served(await door(credential));                                       // 200
+    await door("md_" + randomBytes(32).toString("base64url"));                  // 401
+    await door(null);                                                           // 401
+    const secretKey = process.env.SUPABASE_JWT_SECRET;
+    delete process.env.SUPABASE_JWT_SECRET;
+    await door(credential);                                                     // 503 (the mint has no key: logged)
+    process.env.SUPABASE_JWT_SECRET = secretKey;
+    await revokeMatchDayCode(day.auth, row.id);
+    await door(credential);                                                     // 410 withdrawn
+    expect(tokens, "two minted tokens").toHaveLength(2);
+    expect(new Set(statuses)).toEqual(new Set([200, 401, 503, 410]));
+    const secrets = [credential, ...tokens];
+    expect(lines.length, "anti-vacuity: the door logged").toBeGreaterThan(0);
+    expect(lines.some((l) => l.includes("the mint failed")), "the failed mint was logged").toBe(true);
+    for (const line of lines) for (const s of secrets) expect(line).not.toContain(s);
   });
 });
