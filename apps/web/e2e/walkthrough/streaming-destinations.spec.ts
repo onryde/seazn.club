@@ -805,15 +805,22 @@ test("8+9: three rows (one HELD, one Twitch seeded through the API, one legacy w
   const row = rowOf(page, held.id);
   const menu = row.getByTestId("stream-dest-menu");
   await expect(menu).toBeVisible();
+  // The Seazn card (Task 33b) sits above the rows, so at 320×568 this ⋯ starts below the fold, and elementFromPoint answers null for a
+  // point outside the viewport (CI run 45318017138; measured locally: top 817 of 568, hit null; scrolled in, top 479, hit the ⋯).
+  // Bring it in as a thumb would, then prove the probe ran inside the viewport, so an off-screen null can never read as a miss again.
+  await menu.scrollIntoViewIfNeeded();
   const box = (await menu.boundingBox())!;
   expect(box.width, "⋯ is 44 wide").toBeGreaterThanOrEqual(44);
   expect(box.height, "⋯ is 44 tall").toBeGreaterThanOrEqual(44);
-  const hit = await menu.evaluate((el) => {
+  const probe = await menu.evaluate((el) => {
     const r = el.getBoundingClientRect();
-    const h = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-    return !!h && (h === el || el.contains(h));
+    const x = r.left + r.width / 2;
+    const y = r.top + r.height / 2;
+    const h = document.elementFromPoint(x, y);
+    return { inView: x >= 0 && x <= innerWidth && y >= 0 && y <= innerHeight, hit: !!h && (h === el || el.contains(h)) };
   });
-  expect(hit, "a tap at ⋯'s centre lands on ⋯").toBe(true);
+  expect(probe.inView, "premise: ⋯'s centre is inside the viewport when it is probed").toBe(true);
+  expect(probe.hit, "a tap at ⋯'s centre lands on ⋯").toBe(true);
   expect(await tapTargets(panel), "the panel's controls were hit-tested").toBeGreaterThan(3);
   await menu.click();
   await expect(row.getByRole("menuitem")).toHaveCount(3);
