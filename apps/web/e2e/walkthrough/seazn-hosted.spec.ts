@@ -1022,6 +1022,15 @@ test("Task 33e: a paused admin's Stream panel says why in one line, and the page
     await expect(body, "the panel is drawn, not blanked: its state pill and destination row are still there").toBeAttached();
     await expect(body.getByTestId("stream-state-pill")).toBeAttached();
 
+    // Go live and the purchase controls are DRAWN and off (never hidden, never tappable): whichever of Go live, Buy more and the credit
+    // tiles this org's balance puts on Ready, at least one is there, and each is disabled and aria-disabled.
+    const spend = body.locator('[data-testid="stream-go-live"], [data-testid="stream-buy-more"], [data-testid^="stream-buy-pack-"]');
+    await expect(spend, "premise: Ready draws Go live, Buy more or the credit tiles").not.toHaveCount(0, { timeout: NAV_MS });
+    for (const control of await spend.all()) {
+      await expect(control, "a paused seat cannot tap it").toBeDisabled();
+      await expect(control).toHaveAttribute("aria-disabled", "true");
+    }
+
     // The premise the silence test needs: BOTH routes were asked, and both refused it.
     for (const route of POLLS) {
       const mine = answers.filter((a) => a.route === route);
@@ -1042,8 +1051,11 @@ test("Task 33e: a paused admin's Stream panel says why in one line, and the page
       expect(box!.x + box!.width, `${width}: inside the right edge`).toBeLessThanOrEqual(width);
     }
 
-    // The owner of the same org is never paused: no line.
+    // The owner of the same org is never paused: no line, and none of those controls is disabled by a pause.
     const ownerBody = await openPhoneTab(page, m.fixturePath);
+    for (const control of await ownerBody.locator('[data-testid="stream-buy-more"], [data-testid^="stream-buy-pack-"]').all()) {
+      await expect(control, "the owner's purchase controls carry no pause").not.toHaveAttribute("aria-disabled", "true");
+    }
     await expect(ownerBody.getByTestId("stream-state-pill"), "the owner's panel is drawn").toBeAttached();
     await expect(ownerBody.getByTestId("stream-seat-paused"), "the owner: no line").toHaveCount(0);
   } finally {

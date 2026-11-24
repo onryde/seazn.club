@@ -244,6 +244,8 @@ export function creditsCard(
     currency: Currency;
     monthlyAllowance: number;
     tilesDisabled: boolean;
+    /** Task 33e follow-up: the seat is paused — the tiles are disabled (`tilesDisabled` says so too) and say so to assistive tech. */
+    paused?: boolean;
     checkoutError: CheckoutError | null;
     /** An OPENED chooser closes; a forced one has nothing behind it. */
     closable: boolean;
@@ -278,6 +280,7 @@ export function creditsCard(
                 key={pack.size}
                 type="button"
                 disabled={o.tilesDisabled}
+                aria-disabled={o.paused ? true : undefined}
                 data-testid={`stream-buy-pack-${pack.size}`}
                 onClick={() => o.onBuy(pack.size)}
                 onPointerEnter={o.onTileIntent}
@@ -364,7 +367,7 @@ export function balancePart(msg: Msg, balance: number, split: StreamCreditSplit 
 
 /** "Buy more": opens the CHOOSER, never a pack — a mid-match top-up that picked the 5-pack sent the organiser to a Stripe
  *  sheet for a pack they never chose. */
-export function buyMorePart(msg: Msg, o: { expanded: boolean; disabled: boolean; onClick: () => void }): ReactNode {
+export function buyMorePart(msg: Msg, o: { expanded: boolean; disabled: boolean; onClick: () => void; paused?: boolean }): ReactNode {
   return (
     <button
       key="buy"
@@ -372,6 +375,7 @@ export function buyMorePart(msg: Msg, o: { expanded: boolean; disabled: boolean;
       data-testid="stream-buy-more"
       aria-expanded={o.expanded}
       disabled={o.disabled}
+      aria-disabled={o.paused ? true : undefined}
       onClick={o.onClick}
       className="inline-flex min-h-11 items-center font-medium text-purple-700 underline decoration-purple-300 underline-offset-2 hover:decoration-purple-700 disabled:cursor-not-allowed disabled:opacity-50 md:min-h-0"
     >

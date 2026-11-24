@@ -22,6 +22,7 @@ import { STREAM_POLL_MS, type StreamSessionView } from "@/lib/stream-session-vie
 import type { StreamPhone } from "@/server/api-v1/schemas";
 import { PhoneTab, PhoneTabBody, type PhoneScore, type PhoneTabBodyProps } from "@/components/v2/fixture-stream-panel";
 import { seatPausedNote } from "@/components/v2/fixture-stream-panel/shared";
+import { PhoneStripView } from "@/components/v2/stream-signal-chain";
 
 const apiV1 = vi.fn<(url: string, options?: { method?: string; json?: unknown }) => Promise<unknown>>(async () => ({}));
 vi.mock("@/lib/client-v1", async (importOriginal) => ({
@@ -53,6 +54,7 @@ const TAB = { fixtureId: "f-1", orgId: "o-1", streamBalance: 3, streamSplit: nul
 const CURRENT = "GET /api/v1/fixtures/f-1/stream-sessions/current";
 const PHONE = "GET /api/v1/fixtures/f-1/stream-phone";
 const TARGETS_URL = "GET /api/v1/orgs/o-1/stream-targets";
+const START = "POST /api/v1/fixtures/f-1/stream-sessions";
 
 /** The server's own refusal of a paused seat, as `apiV1` rethrows it (http.ts: 402 PAYMENT_REQUIRED, feature_key = the feature). */
 const frozen = () => new ApiV1Error("Plan upgrade required: members.max", 402, "PAYMENT_REQUIRED", { feature: "members.max", feature_key: "members.max", reason: "x" });
@@ -61,11 +63,19 @@ const serverError = () => new ApiV1Error("boom", 500, "INTERNAL");
 
 type Mode = "ok" | "frozen" | "500" | "otherFeature";
 const refusal = (m: Mode): Error | null => (m === "frozen" ? frozen() : m === "500" ? serverError() : m === "otherFeature" ? otherFeature() : null);
-const server = { current: "ok" as Mode, phone: "ok" as Mode, targets: "ok" as Mode, live: null as StreamSessionView | null };
+const server = { current: "ok" as Mode, phone: "ok" as Mode, targets: "ok" as Mode, start: "ok" as Mode, live: null as StreamSessionView | null };
 
+// A paired, present phone and a loaded destination: Ready's Go live is ENABLED for an unpaused seat, so a disabled one is the pause's.
+const FACTS = {
+  present: true, silent: false, notResponding: false, model: "Pixel 8", appVersion: "capture/2", mode: "operator",
+  state: "paired", notReady: null, notReadyShown: false, health: null, startFailed: null, pairedAt: "2026-09-14T11:05:00.000Z",
+  lastBeatAt: "2026-09-14T11:59:55.000Z", elapsedMs: 5_000,
+  beat: { battery: null, bitrateKbps: null, delivery: null, thermal: null, dataUsedMB: null }, farPoll: false,
+};
+const DESTINATIONS = [{ id: "t1", kind: "youtube", label: "Club", watchUrl: null, createdAt: "2026-09-01T10:00:00.000Z", keyHint: "abc", inUse: null, youtube: null }];
 const phoneRead = (): StreamPhone => ({
   code: { issuedAt: "2026-09-14T11:00:00.000Z", state: "active", endCause: null },
-  phone: null, destination: null, lastTakeover: null, auto: null, legacy: false, finished: false, session: null, court: null,
+  phone: FACTS, destination: { id: "t1", label: "Club", source: "saved" }, lastTakeover: null, auto: null, legacy: false, finished: false, session: null, court: null,
 } as unknown as StreamPhone);
 const LIVE = {
   id: "s1", fixtureId: "f-1", mode: "passthrough", overlay: null, state: "live", desiredState: "live", failReason: null, health: null,
@@ -92,7 +102,12 @@ function serve() {
     if (key === TARGETS_URL) {
       const e = refusal(server.targets);
       if (e) throw e;
-      return [];
+      return structuredClone(DESTINATIONS);
+    }
+    if (key === START) {
+      const e = refusal(server.start);
+      if (e) throw e;
+      return { sessionId: "s9" };
     }
     throw new Error(`unrouted ${key}`);
   });
@@ -113,8 +128,8 @@ const byTestId = (tree: ReactElement[], id: string): ReactElement | undefined =>
 const NOTE = "stream-seat-paused";
 
 let islands: { unmount: () => void }[] = [];
-async function mount(modes: Partial<Pick<typeof server, "current" | "phone" | "targets" | "live">> = {}) {
-  Object.assign(server, { current: "ok", phone: "ok", targets: "ok", live: null }, modes);
+async function mount(modes: Partial<Pick<typeof server, "current" | "phone" | "targets" | "start" | "live">> = {}) {
+  Object.assign(server, { current: "ok", phone: "ok", targets: "ok", start: "ok", live: null }, modes);
   serve();
   const island = renderIsland(PhoneTab, TAB);
   islands.push(island);
@@ -270,6 +285,86 @@ describe("Task 33e: a paused admin's panel stops polling and says why", () => {
       expect(count(CURRENT)).toBe(1);
       expect(count(PHONE)).toBe(1);
     });
+  });
+});
+
+describe("Task 33e follow-up: a paused seat cannot tap Go live or Buy more", () => {
+  const attr = (el: ReactElement | undefined, name: string): unknown => (el?.props as Record<string, unknown> | undefined)?.[name];
+  const buyMore = (tree: ReactElement[]) => byTestId(tree, "stream-buy-more");
+  const goLive = (tree: ReactElement[]) => byTestId(tree, "stream-go-live");
+  /** The body the container drew, redrawn with the pause set as the container hands it. */
+  const drawn = (island: { tree: () => ReactElement[] }, over: Partial<PhoneTabBodyProps>) =>
+    walk(expandWithHooks(PhoneTabBody, { ...bodyOf(island), ...over }));
+
+  it("the unpaused control: Go live and Buy more are ENABLED (so a disabled one below is the pause's doing)", async () => {
+    const island = await mount();
+    const tree = bodyTree(island);
+    expect(goLive(tree), "PREMISE: Go live is drawn").toBeDefined();
+    expect(attr(goLive(tree), "disabled")).toBeFalsy();
+    expect(attr(goLive(tree), "aria-disabled")).toBeUndefined();
+    expect(buyMore(tree), "PREMISE: Buy more is drawn").toBeDefined();
+    expect(attr(buyMore(tree), "disabled")).toBeFalsy();
+    expect(attr(buyMore(tree), "aria-disabled")).toBeUndefined();
+  });
+
+  it("paused through the container (a 402 on the polls): Go live and Buy more are drawn, visibly disabled, aria-disabled, not hidden", async () => {
+    const island = await mount({ current: "frozen", phone: "frozen", targets: "ok" });
+    // The read model was refused, so what the body shows of the phone is the container's own answer: no phone read, Go live
+    // would be disabled anyway — so redraw with the SAME props the unpaused control had (a paired phone) and only the pause on.
+    const control = await mount();
+    const props = { ...bodyOf(control), seatPaused: true } as PhoneTabBodyProps;
+    const tree = walk(expandWithHooks(PhoneTabBody, props));
+    expect(bodyOf(island).seatPaused, "PREMISE: the container hands the pause down").toBe(true);
+    for (const [name, el] of [["Go live", goLive(tree)], ["Buy more", buyMore(tree)]] as const) {
+      expect(el, `${name} is drawn, not hidden`).toBeDefined();
+      expect(attr(el, "disabled"), `${name}: disabled`).toBe(true);
+      expect(attr(el, "aria-disabled"), `${name}: aria-disabled`).toBe(true);
+    }
+  });
+
+  it("the credit tiles of a no-credit panel and the strip's Buy are off too — no purchase is reachable from a paused seat", async () => {
+    const island = await mount();
+    const empty = drawn(island, { balance: 0 });
+    const paused = drawn(island, { balance: 0, seatPaused: true });
+    const tiles = (t: ReactElement[]) => t.filter((e) => /^stream-buy-pack-/.test(String(attr(e, "data-testid"))));
+    expect(tiles(empty).length, "PREMISE: the tiles are drawn").toBeGreaterThan(0);
+    expect(tiles(empty).every((e) => !attr(e, "disabled")), "unpaused: enabled").toBe(true);
+    expect(tiles(paused).length).toBe(tiles(empty).length);
+    expect(tiles(paused).every((e) => attr(e, "disabled") === true && attr(e, "aria-disabled") === true), "paused: every tile disabled").toBe(true);
+  });
+
+  it("the phone strip's Buy credits remedy (an automatic start refused for want of credit) is handed the pause too", async () => {
+    const island = await mount();
+    const noCredit = { ...phoneRead(), auto: { enabled: true, refusal: "no_credit", wontStart: null, stopApplies: null } } as unknown as StreamPhone;
+    const strip = (over: Partial<PhoneTabBodyProps>) => drawn(island, { phone: noCredit, ...over }).find((e) => e.type === PhoneStripView);
+    expect(strip({}), "PREMISE: the strip is drawn").toBeDefined();
+    expect(attr(strip({}), "buyDisabled") ?? false, "unpaused: not disabled").toBe(false);
+    expect(attr(strip({ seatPaused: true }), "buyDisabled"), "paused: disabled").toBe(true);
+  });
+
+  it("a Go live answered 402 members.max (a start that raced the pause) is the pause: the line, Go live off, the polls stopped, no generic failure line, no re-read", async () => {
+    const island = await mount({ start: "frozen" });
+    expect(bodyOf(island).seatPaused ?? false, "PREMISE: not paused before the start").toBe(false);
+    bodyOf(island).onGoLive();
+    await settle();
+    expect(count(START), "the start was sent").toBe(1);
+    expect(bodyOf(island).seatPaused, "now paused").toBe(true);
+    expect(bodyOf(island).createError, "the line is the message: no second sentence").toBeNull();
+    const tree = bodyTree(island);
+    expect(byTestId(tree, NOTE)).toBeDefined();
+    expect(byTestId(tree, "stream-create-error")).toBeUndefined();
+    expect(attr(goLive(tree), "disabled")).toBe(true);
+    const before = calls().length;
+    await intervals(4);
+    expect(calls().length, "and nothing is asked again").toBe(before);
+  });
+
+  it("a start that fails any OTHER way keeps today's behaviour: the generic failure line, and the seat is not paused", async () => {
+    const island = await mount({ start: "500" });
+    bodyOf(island).onGoLive();
+    await settle();
+    expect(bodyOf(island).seatPaused ?? false).toBe(false);
+    expect(bodyOf(island).createError?.code).toBe("unknown");
   });
 });
 

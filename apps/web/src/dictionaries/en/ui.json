@@ -7343,7 +7343,7 @@
   "stream.phone.loading": "Loading the phone stream…",
   "stream.phone.unavailable": "Phone streaming is unavailable right now. The OBS overlay still works.",
   "stream.phone.switchedOff": "Streaming is switched off for this organisation. Contact us to turn it back on.",
-  "stream.phone.seatPaused": "Your seat is read-only while the club is over its member limit, so this panel has stopped updating. Ask the owner.",
+  "stream.phone.seatPaused": "Your seat is read-only while the club is over its member limit, so this panel can't update or go live. Ask the owner.",
   "stream.dest.label": "Destination",
   "stream.dest.manage": "Manage destinations",
   "stream.dest.pick": "Pick a destination",

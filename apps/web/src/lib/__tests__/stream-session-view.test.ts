@@ -117,7 +117,9 @@ describe("stream-session-view — the copy maps", () => {
     expect(Object.keys(CREATE_ERROR_KEYS).sort()).toEqual([...CREATE_ERROR_CODES].sort());
     // T3: `target_in_use` is named by `inUseText` (stream.inUse.*); its map entry is the ONE holder-less "elsewhere"
     // sentence, and the retired `stream.error.target_in_use` (a court, never a match) is named by nothing.
-    for (const c of CREATE_ERROR_CODES) expect(CREATE_ERROR_KEYS[c], c).toBe(c === "target_in_use" ? "stream.error.target_in_use.unknown" : `stream.error.${c}`);
+    // Task 33e follow-up: `seat_paused` is the panel's own seat line (`stream.phone.seatPaused`), never a second sentence for the same state.
+    const OWN_KEY: Partial<Record<CreateErrorCode, string>> = { target_in_use: "stream.error.target_in_use.unknown", seat_paused: "stream.phone.seatPaused" };
+    for (const c of CREATE_ERROR_CODES) expect(CREATE_ERROR_KEYS[c], c).toBe(OWN_KEY[c] ?? `stream.error.${c}`);
     expect(inEveryLocale([...Object.values(CREATE_ERROR_KEYS), "stream.error.target_in_use.unknown"])).toBe(
       LOCALES.length * (CREATE_ERROR_CODES.length + 1),
     );
@@ -225,6 +227,8 @@ describe("stream-session-view — create refusals off the real wire (D1)", () =>
     ["PAYMENT_REQUIRED streaming.overlay", new PaymentRequiredError(RELAY_PLAN_GATES.overlay), "plan_lacks_relay"],
     // Match Day PB2 fix round 1 (m5): the billing freeze at the one start seam — a tab opened before the competition froze.
     ["PAYMENT_REQUIRED competitions.max_active (the freeze)", new PaymentRequiredError("competitions.max_active"), "competition_frozen"],
+    // Task 33e follow-up: an admin whose seat the member limit paused (requireOrgAuth) — a start that raced the pause.
+    ["PAYMENT_REQUIRED members.max (a paused seat)", new PaymentRequiredError("members.max"), "seat_paused"],
     ["PAYMENT_REQUIRED, an unrelated feature", new PaymentRequiredError("formats.double_elim"), "unknown"],
     // YouTube Connect T12 (spec §6.2): the six refusals the prepare step throws, each with the status the route's own documentation
     // gives it (openapi.ts POST /fixtures/{id}/stream-sessions) and the connection in the extras.

@@ -7343,7 +7343,7 @@
   "stream.phone.loading": "Cargando la transmisión desde el móvil…",
   "stream.phone.unavailable": "La transmisión desde el móvil no está disponible ahora mismo. El rótulo para OBS sigue funcionando.",
   "stream.phone.switchedOff": "La emisión está desactivada para esta organización. Contáctanos para volver a activarla.",
-  "stream.phone.seatPaused": "Tu acceso es de solo lectura mientras el club supere su límite de miembros, así que este panel ha dejado de actualizarse. Pide ayuda al propietario.",
+  "stream.phone.seatPaused": "Tu acceso es de solo lectura mientras el club supere su límite de miembros, así que este panel no puede actualizarse ni emitir. Pide ayuda al propietario.",
   "stream.dest.label": "Destino",
   "stream.dest.manage": "Gestionar destinos",
   "stream.dest.pick": "Elige un destino",

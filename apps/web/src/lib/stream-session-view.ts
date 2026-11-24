@@ -27,6 +27,7 @@ import { fmtNumber } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
 import { DESTINATION_NOT_ALLOWED, TARGET_UNREADABLE } from "@/lib/stream-destinations";
 import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
+import { FROZEN_SEAT_FEATURE } from "@/lib/seat-frozen";
 import {
   NOT_LIVE_WARN_MS, YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, YOUTUBE_REFUSAL_CODES, isYoutubeRefusalCode, type YoutubeRefusalCode, type YoutubeStatusView,
 } from "@/lib/youtube";
@@ -209,7 +210,7 @@ export const END_REASON_KEYS: Record<StreamEndReason, MessageKey> = {
  *  seventh YouTube code does not compile here until it has copy (`CREATE_ERROR_KEYS`) and a fix (`YOUTUBE_REFUSAL_FIX`). */
 export const CREATE_ERROR_CODES = [
   "no_credits", "overlay_required", "active_session", "phone_not_paired", "phone_not_responding", "storage_exhausted", "ingest_unavailable",
-  "composed_unavailable", "target_in_use", "destination_not_allowed", "target_unreadable", "plan_lacks_relay", "competition_frozen",
+  "composed_unavailable", "target_in_use", "destination_not_allowed", "target_unreadable", "plan_lacks_relay", "competition_frozen", "seat_paused",
   "seazn_unavailable", "seazn_video_unconfigured", "seazn_composed_unavailable",
   ...YOUTUBE_REFUSAL_CODES, "unknown",
 ] as const;
@@ -234,6 +235,9 @@ export const CREATE_ERROR_KEYS: Record<CreateErrorCode, MessageKey> = {
   plan_lacks_relay: "stream.error.plan_lacks_relay",
   // Match Day PB2 fix round 1 (m5): a stale tab's Go live after the competition froze — the freeze's own 402 says why.
   competition_frozen: "stream.error.competition_frozen",
+  // Task 33e follow-up: the admin's seat is paused by the member limit (402 members.max) — a start that raced the pause. The panel's own
+  // seat line says it (one sentence, one key); the Phone tab turns this code into that line rather than a second error sentence.
+  seat_paused: "stream.phone.seatPaused",
   // Seazn-hosted video (Tasks 11, 16): LIVE off for the deployment (422), no signing hosts configured (503), and — client-side only, never
   // on the wire — `composed_unavailable` when the destination was Seazn, whose "go live with the camera only" advice cannot be followed
   // (a Seazn start is always composed).
@@ -315,6 +319,7 @@ export function createErrorCode(err: unknown): CreateErrorCode {
   if (w.code === "PAYMENT_REQUIRED" && w.extra.feature_key === "competitions.max_active") return "competition_frozen";
   // A YouTube refusal rides the wire as its own lower-case code (prepare.ts `youtubeRefusal`). Only the six this list names: a
   // `youtube_*` code a newer server adds reads as `unknown` (the generic retry line) — never as its raw code on screen.
+  if (w.code === "PAYMENT_REQUIRED" && w.extra.feature_key === FROZEN_SEAT_FEATURE) return "seat_paused";
   if (isYoutubeRefusalCode(w.code)) return w.code;
   return "unknown";
 }

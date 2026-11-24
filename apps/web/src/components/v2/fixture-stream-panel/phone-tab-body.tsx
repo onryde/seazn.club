@@ -269,7 +269,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   const creditParts: ReactNode[] = [];
   if (usesShown) creditParts.push(<span key="uses">{msg("stream.credits.uses")}</span>);
   if (p.balance >= 1) creditParts.push(balancePart(msg, p.balance, split));
-  if (p.balance >= 1 && !p.planGate) creditParts.push(buyMorePart(msg, { expanded: p.showBuy, disabled: frozen, onClick: p.onShowBuy }));
+  if (p.balance >= 1 && !p.planGate) creditParts.push(buyMorePart(msg, { expanded: p.showBuy, disabled: frozen || p.seatPaused === true, paused: p.seatPaused, onClick: p.onShowBuy }));
   const creditsLine =
     !creditsOnly && creditParts.length > 0 ? (
       <p data-testid="stream-credits-line" className="mt-2 text-center text-xs text-slate-600">
@@ -570,7 +570,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   // match holds cannot start until it is picked again or freed. §6.12 (W5): and only with a phone paired and answering.
   // Court device check (finding B): a court match has no picker and streams to its court's channel, so no pick is owed there —
   // a match whose court phone is paired (Automatic or Operator, latched or not) can always be started by hand.
-  const goLiveDisabled = p.busy || (!p.selectedTargetId && !court) || targetList.length === 0 || inUseBox || !canGoLive(ready);
+  const goLiveDisabled = p.seatPaused === true || p.busy || (!p.selectedTargetId && !court) || targetList.length === 0 || inUseBox || !canGoLive(ready);
   const refusalFix = ytRefusal ? YOUTUBE_REFUSAL_FIX[ytRefusal] : null;
   const refusalBlock =
     ytRefusal && p.createError ? (
@@ -615,7 +615,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
           </a>
         )}
         {refusalFix === "retry" && (
-          <button type="button" data-testid="stream-youtube-retry" disabled={goLiveDisabled} onClick={p.onGoLive} className="btn btn-primary mt-3 min-h-12 w-full text-base">
+          <button type="button" data-testid="stream-youtube-retry" disabled={goLiveDisabled} aria-disabled={p.seatPaused ? true : undefined} onClick={p.onGoLive} className="btn btn-primary mt-3 min-h-12 w-full text-base">
             {msg("stream.youtube.refused.retry")}
           </button>
         )}
@@ -643,11 +643,11 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
           moves (under its node at ≥ 768, its own line below). None at all while credits-only (B3). */}
       {drawn?.chain && (
         <SignalChain chain={drawn.chain} destination={{ kind: drawn.to.kind, label: youtubeTargetLabel(msg, drawn.to.label) }}>
-          {strip && <PhoneStripView id={stripId} strip={strip} caret onBuy={stripBuy} />}
+          {strip && <PhoneStripView id={stripId} strip={strip} caret onBuy={stripBuy} buyDisabled={p.seatPaused} />}
         </SignalChain>
       )}
       {/* No chain to point at (no destination yet): the strip still says what the phone needs, without its caret. */}
-      {!drawn?.chain && strip && <PhoneStripView id={stripId} strip={strip} caret={false} onBuy={stripBuy} />}
+      {!drawn?.chain && strip && <PhoneStripView id={stripId} strip={strip} caret={false} onBuy={stripBuy} buyDisabled={p.seatPaused} />}
       {warned && p.view && <D3Warning cause={warned} kind={p.view.target.kind} />}
       {takeover && (
         // §7.5 (Option A 9a/9b): an inline amber strip with its own X — the time on the venue's clock.
@@ -816,6 +816,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
                   data-mode={scoreMode}
                   // `goLiveDisabled` (above): only a loaded, non-empty list, a free destination and a phone answering can start.
                   disabled={goLiveDisabled}
+                  aria-disabled={p.seatPaused ? true : undefined}
                   aria-describedby={strip ? stripId : undefined}
                   onClick={p.onGoLive}
                   className="btn btn-primary min-h-12 w-full text-base"
@@ -1112,7 +1113,8 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
         creditsCard(msg, locale, {
           currency: p.currency,
           monthlyAllowance: p.monthlyAllowance,
-          tilesDisabled: p.busy || frozen || p.checkoutOpen,
+          tilesDisabled: p.busy || frozen || p.checkoutOpen || p.seatPaused === true,
+          paused: p.seatPaused,
           checkoutError: p.checkoutError,
           closable: p.showBuy && !forced,
           closeDisabled: frozen,

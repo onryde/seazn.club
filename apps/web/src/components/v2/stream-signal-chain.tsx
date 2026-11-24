@@ -346,7 +346,7 @@ const REMEDY_LINK =
  *  `id` is what Go live's `aria-describedby` names. Decides nothing: `strip` is `phoneStrip`'s answer.
  *  PR-2 (Option A): the line under the lead (or the strip's only text), and an auto-start refusal's remedy — Buy credits
  *  only when the panel hands a handler (`onBuy`), Manage destinations a new-tab link to the Streaming page. */
-export function PhoneStripView({ id, strip, caret, onBuy }: { id: string; strip: PhoneStrip; caret: boolean; onBuy?: () => void }) {
+export function PhoneStripView({ id, strip, caret, onBuy, buyDisabled }: { id: string; strip: PhoneStrip; caret: boolean; onBuy?: () => void; buyDisabled?: boolean }) {
   const msg = useMsg();
   const streamingHref = useStreamingHref();
   const locale = useLocaleOrDefault();
@@ -368,7 +368,7 @@ export function PhoneStripView({ id, strip, caret, onBuy }: { id: string; strip:
   );
   const remedy =
     strip.remedy === "buy" && onBuy ? (
-      <button type="button" data-testid="stream-auto-remedy-buy" className={REMEDY_LINK} onClick={onBuy}>
+      <button type="button" data-testid="stream-auto-remedy-buy" className={REMEDY_LINK} onClick={onBuy} disabled={buyDisabled} aria-disabled={buyDisabled ? true : undefined}>
         {msg("stream.auto.buyCredits")}
       </button>
     ) : strip.remedy === "manage" ? (

@@ -454,10 +454,10 @@ describe("PhoneStripView — PR-2's line, lead values and remedies (Option A)", 
     auto: null, legacy: false, finished: false, session: null, court: null, ...over,
   });
   const live = { state: "live", ingest: { state: "connected", protocol: "srt" }, output: null, countdown: null } as unknown as StreamSessionCurrent;
-  const html = (s: PhoneStrip, locale: Locale = "en", onBuy?: () => void) =>
+  const html = (s: PhoneStrip, locale: Locale = "en", onBuy?: () => void, buyDisabled?: boolean) =>
     renderToStaticMarkup(
       <DictProvider dict={dict(locale)} locale={locale}>
-        <PhoneStripView id="w" strip={s} caret onBuy={onBuy} />
+        <PhoneStripView id="w" strip={s} caret onBuy={onBuy} buyDisabled={buyDisabled} />
       </DictProvider>,
     );
   /** The strip as a customer reads it: each tag a boundary, entities decoded, whitespace folded. */
@@ -559,5 +559,19 @@ describe("PhoneStripView — PR-2's line, lead values and remedies (Option A)", 
     expect(text(html(noCredit, "es", () => {}))).toBe("No se pudo iniciar automáticamente: necesitas un crédito Seazn para emitir. Comprar créditos");
     expect(text(html(noCredit, "fr", () => {}))).toBe("Impossible de démarrer automatiquement : il vous faut un crédit Seazn pour passer en direct. Acheter des crédits");
     expect(text(html(noCredit, "nl", () => {}))).toBe("Automatisch starten lukte niet: je hebt een Seazn-credit nodig om live te gaan. Credits kopen");
+  });
+
+  // Task 33e follow-up: a paused seat's Buy credits stays drawn (not hidden) and goes off — disabled and aria-disabled.
+  it("buyDisabled: the Buy credits remedy is drawn disabled and aria-disabled; without it, enabled and with neither attribute", () => {
+    const noCredit = phoneStrip(readModel(facts({ state: "paired" }), { auto: { enabled: true, refusal: "no_credit", wontStart: null, stopApplies: null } }), null)!;
+    const button = (h: string) => /<button[^>]*data-testid="stream-auto-remedy-buy"[^>]*>/.exec(h)?.[0] ?? "";
+    const off = button(html(noCredit, "en", () => {}, true));
+    expect(off, "PREMISE: drawn").not.toBe("");
+    expect(off).toMatch(/\sdisabled(=""|\s|>)/);
+    expect(off).toContain('aria-disabled="true"');
+    const on = button(html(noCredit, "en", () => {}, false));
+    expect(on, "PREMISE: drawn unpaused").not.toBe("");
+    expect(on).not.toMatch(/\sdisabled(=""|\s|>)/);
+    expect(on).not.toContain("aria-disabled");
   });
 });

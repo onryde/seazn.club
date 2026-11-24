@@ -555,6 +555,13 @@ export function PhoneTab({
         setBusy(false);
         return;
       }
+      // Task 33e follow-up: the seat was paused after this tab loaded (the polls had not been refused yet). The panel's seat line is the
+      // whole answer (no second sentence), Go live and Buy more go off, and the read model's poll stops; nothing is re-read.
+      if (code === "seat_paused") {
+        setPhoneFrozen(true);
+        setBusy(false);
+        return;
+      }
       // m2: "no credits" is answered where it is asked — the chooser opens, at the balance the server just reported.
       if (code === "no_credits") {
         setNoCredits(true);
