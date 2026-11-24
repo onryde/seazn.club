@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { ONLINE_SIZES, includedRounds, packagePrice, sizeAllowedByPlan, type OnlineSize } from "@/lib/online-chess-package";
 import { formatStagesFor } from "@/lib/division-builder/format-choice";
 import { STAGE_TEMPLATES } from "@/lib/format-templates";
-import { capacityLoweredOf, onlineSizeChoice, onlineSizeDefault, onlineSizeOptions, swissRoundsOf, type OnlineSizeOption } from "@/lib/online-size-options";
+import { capacityLoweredOf, onlineSizeChoice, onlineSizeDefault, onlineSizeOptions, refundedOf, swissRoundsOf, switchOffRefundOf, type OnlineSizeOption } from "@/lib/online-size-options";
 import { refusalFor } from "@/server/usecases/online-package/quote";
 
 const reasonOf = (o: readonly OnlineSizeOption[], size: OnlineSize) => o.find((x) => x.size === size)?.disabled;
@@ -248,5 +248,60 @@ describe("capacityLoweredOf: what a save says it did to the registration capacit
     ];
     for (const r of none) expect(capacityLoweredOf(r), JSON.stringify(r)).toBeNull();
     expect(none.length).toBeGreaterThan(10);
+  });
+});
+
+describe("switchOffRefundOf: when switching Online play off refunds a paid package (T11 fix round 1, the review's gap)", () => {
+  const paid = (size: OnlineSize, camerasPaid = false) => ({ size, paid: { size, camerasPaid }, frozen: false });
+  const unpaid = (size: OnlineSize) => ({ size, paid: null, frozen: false });
+  const frozen = (size: OnlineSize) => ({ size, paid: { size, camerasPaid: false }, frozen: true });
+
+  it("a division that plays online, switched off, holding a PAID unfrozen package: the refund, naming the size and what was paid (the leaf's price, camera included)", () => {
+    expect(switchOffRefundOf({ storedOnline: true, onlinePlay: "off", stored: paid(64) })).toEqual({ size: 64, price: packagePrice(64, false) });
+    expect(switchOffRefundOf({ storedOnline: true, onlinePlay: "off", stored: paid(64, true) })).toEqual({ size: 64, price: packagePrice(64, true) });
+    expect(packagePrice(64, true), "premise: the camera changes what was paid").not.toBe(packagePrice(64, false));
+  });
+
+  it("every other case asks nothing (the empty cases first): unpaid, frozen, no package, still online, was never online", () => {
+    const cases: [string, Parameters<typeof switchOffRefundOf>[0]][] = [
+      ["unpaid", { storedOnline: true, onlinePlay: "off", stored: unpaid(32) }],
+      ["frozen: the server's call, nothing is refunded", { storedOnline: true, onlinePlay: "off", stored: frozen(32) }],
+      ["no live package row", { storedOnline: true, onlinePlay: "off", stored: null }],
+      ["still online", { storedOnline: true, onlinePlay: "lichess", stored: paid(32) }],
+      ["was not online (a stale row)", { storedOnline: false, onlinePlay: "off", stored: paid(32) }],
+    ];
+    for (const [label, a] of cases) expect(switchOffRefundOf(a), label).toBeNull();
+    expect(cases.length, "anti-vacuity").toBe(5);
+  });
+
+  it("every size on the ladder, paid, names its own size and price", () => {
+    let checked = 0;
+    for (const size of ONLINE_SIZES) {
+      expect(switchOffRefundOf({ storedOnline: true, onlinePlay: "off", stored: paid(size) })).toEqual({ size, price: packagePrice(size, false) });
+      checked += 1;
+    }
+    expect(checked).toBe(ONLINE_SIZES.length);
+  });
+});
+
+describe("refundedOf: what a save says its switch-off refund gave back and gave up (PATCH /divisions `online.refunded`)", () => {
+  it("returned is the bought credits plus this month's included ones; forfeited is the earlier months' (never added into returned)", () => {
+    expect(refundedOf({ online: { capacityLoweredTo: null, refunded: { pack: 3, monthly: 1, forfeited: 2 } } })).toEqual({ returned: 4, forfeited: 2 });
+    expect(refundedOf({ online: { refunded: { pack: 0, monthly: 5, forfeited: 0 } } })).toEqual({ returned: 5, forfeited: 0 });
+    expect(refundedOf({ online: { refunded: { pack: 2, monthly: 0, forfeited: 0 } } })).toEqual({ returned: 2, forfeited: 0 });
+    expect(refundedOf({ online: { refunded: { pack: 0, monthly: 0, forfeited: 3 } } }), "only forfeited: still worth saying").toEqual({ returned: 0, forfeited: 3 });
+  });
+
+  it("nothing to say: no field, null, all zeros (an unpaid or frozen switch-off), or a malformed answer", () => {
+    const quiet: unknown[] = [
+      undefined, null, {}, { online: null }, { online: {} }, { online: { refunded: null } },
+      { online: { refunded: { pack: 0, monthly: 0, forfeited: 0 } } },
+      { online: { refunded: { pack: -1, monthly: 0, forfeited: 0 } } },
+      { online: { refunded: { pack: 1.5, monthly: 0, forfeited: 0 } } },
+      { online: { refunded: { pack: "3", monthly: 0, forfeited: 0 } } },
+      { online: { refunded: { pack: 1 } } },
+    ];
+    for (const saved of quiet) expect(refundedOf(saved), JSON.stringify(saved)).toBeNull();
+    expect(quiet.length, "anti-vacuity").toBe(11);
   });
 });

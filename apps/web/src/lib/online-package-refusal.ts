@@ -54,3 +54,23 @@ export function onlinePackageRefusalText(
     }
   }
 }
+
+// A size write that RACES another one meets one of two 409s from `PATCH /divisions/{id}` (server/usecases/online-package/size.ts): the
+// package was paid for since this page loaded (the size now changes through its payment), or a round has opened (it never changes
+// again). Neither is in `ONLINE_PACKAGE_CODES` (the plan's Global Constraints list, pinned exactly) and neither carries numbers, so each is
+// a sentence of its own. They say the page is refreshed: the screen re-reads, as the stale size on screen is what raced.
+export const ONLINE_SIZE_PAID_CODE = "online_size_paid";
+export const ONLINE_SIZE_FROZEN_CODE = "online_size_frozen";
+export const ONLINE_SIZE_RACE_KEYS = {
+  [ONLINE_SIZE_PAID_CODE]: "onlineChess.err.sizePaid",
+  [ONLINE_SIZE_FROZEN_CODE]: "onlineChess.err.sizeFrozen",
+} as const;
+
+export function isOnlineSizeRaceCode(code: unknown): code is keyof typeof ONLINE_SIZE_RACE_KEYS {
+  return typeof code === "string" && Object.hasOwn(ONLINE_SIZE_RACE_KEYS, code);
+}
+
+/** The race refusal's text, or null when `err` is neither (the caller keeps its own handling). */
+export function onlineSizeRaceText(err: { code?: string }, text: (key: string, vars: Record<string, string | number>) => string): string | null {
+  return isOnlineSizeRaceCode(err.code) ? text(ONLINE_SIZE_RACE_KEYS[err.code], {}) : null;
+}

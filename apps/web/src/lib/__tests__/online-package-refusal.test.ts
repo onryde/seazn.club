@@ -7,11 +7,22 @@
 // `camerasNeedUpgrade`), and each is checked in all four locales against the dictionary's own sentence: a screen that printed the
 // server's English `err.message` would fail the comparison in es/fr/nl, and in English too because the expected text is the
 // dictionary's, which is deliberately not the server's wording.
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ONLINE_PACKAGE_CODES, ONLINE_SIZES, includedRounds } from "@/lib/online-chess-package";
 import { LOCALES, type Dict } from "@/lib/i18n-constants";
 import { t as tRuntime } from "@/lib/i18n-runtime";
-import { isOnlinePackageRefusalCode, onlinePackageRefusalText, ONLINE_PACKAGE_REFUSAL_KEYS } from "../online-package-refusal";
+import {
+  isOnlinePackageRefusalCode,
+  isOnlineSizeRaceCode,
+  onlinePackageRefusalText,
+  onlineSizeRaceText,
+  ONLINE_PACKAGE_REFUSAL_KEYS,
+  ONLINE_SIZE_FROZEN_CODE,
+  ONLINE_SIZE_PAID_CODE,
+  ONLINE_SIZE_RACE_KEYS,
+} from "../online-package-refusal";
 import { camerasNeedUpgrade, formatNotSupported, roundsAboveMax, roundsNeedSize } from "@/server/usecases/online-package/format";
 import en from "@/dictionaries/en/ui.json";
 import es from "@/dictionaries/es/ui.json";
@@ -105,5 +116,44 @@ describe("onlinePackageRefusalText: the code, in the organiser's language", () =
     for (const code of codes) expect(isOnlinePackageRefusalCode(code)).toBe(true);
     expect(isOnlinePackageRefusalCode("ONLINE_SIZE_FULL")).toBe(false);
     expect(isOnlinePackageRefusalCode(undefined)).toBe(false);
+  });
+});
+
+describe("the two size-write races (T11 fix round 1, review M3): said in the organiser's language, off the code", () => {
+  const SERVER_SRC = readFileSync(resolve(__dirname, "../../server/usecases/online-package/size.ts"), "utf8");
+  const RACES = [
+    { code: ONLINE_SIZE_PAID_CODE, key: "onlineChess.err.sizePaid" },
+    { code: ONLINE_SIZE_FROZEN_CODE, key: "onlineChess.err.sizeFrozen" },
+  ] as const;
+
+  it("the codes are the ones the server throws (read from its source, so a rename there breaks this), and each maps to its own key", () => {
+    for (const r of RACES) {
+      expect(SERVER_SRC, `${r.code} is thrown by size.ts`).toContain(`"${r.code}"`);
+      expect(ONLINE_SIZE_RACE_KEYS[r.code]).toBe(r.key);
+      expect(isOnlineSizeRaceCode(r.code)).toBe(true);
+    }
+    expect(RACES.length).toBe(2);
+  });
+
+  it("every locale: the dictionary's sentence, no open slot, a different sentence per locale, and the two races differ", () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      for (const r of RACES) {
+        const shown = onlineSizeRaceText({ code: r.code }, say(DICTS[locale]));
+        expect(shown, `${locale} ${r.code}`).toBe(DICTS[locale][r.key]);
+        expect(shown).not.toMatch(/\{\w+\}/);
+        if (locale !== "en") expect(shown, `${locale} ${r.code}: not English`).not.toBe(DICTS.en[r.key]);
+        checked += 1;
+      }
+      expect(onlineSizeRaceText({ code: ONLINE_SIZE_PAID_CODE }, say(DICTS[locale]))).not.toBe(onlineSizeRaceText({ code: ONLINE_SIZE_FROZEN_CODE }, say(DICTS[locale])));
+    }
+    expect(checked).toBe(LOCALES.length * RACES.length);
+  });
+
+  it("any other code, or none, is not a race (the caller keeps its own handling)", () => {
+    for (const code of ["ONLINE_ROUNDS_NEED_SIZE", "SOME_OTHER", "ONLINE_SIZE_PAID", "", undefined]) {
+      expect(onlineSizeRaceText({ code }, say(DICTS.en)), String(code)).toBeNull();
+      expect(isOnlineSizeRaceCode(code)).toBe(false);
+    }
   });
 });

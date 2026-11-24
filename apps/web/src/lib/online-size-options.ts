@@ -83,3 +83,32 @@ export function capacityLoweredOf(saved: unknown): number | null {
   const lowered = (saved as { online?: { capacityLoweredTo?: unknown } | null } | null | undefined)?.online?.capacityLoweredTo;
   return typeof lowered === "number" && Number.isInteger(lowered) && lowered > 0 ? lowered : null;
 }
+
+/** A paid, unfrozen package that switching Online play off REFUNDS (spec §7.3, §7.4 item 4; the review's gap): the size it was bought at and
+ *  what was paid for it (the leaf's price: its camera price too when the camera was paid). Null for every other case - an unpaid package
+ *  is deleted without money moving, a frozen one is left as it is (the server's call, P7), and a division that was not online or stays
+ *  online has nothing to refund. The refund can forfeit included credits of an earlier month (P6), so the strip asks first. */
+export function switchOffRefundOf(a: {
+  storedOnline: boolean;
+  onlinePlay: "off" | "lichess";
+  stored: { size: OnlineSize; paid: { size: OnlineSize; camerasPaid: boolean } | null; frozen: boolean } | null;
+}): { size: OnlineSize; price: number } | null {
+  if (!a.storedOnline || a.onlinePlay !== "off" || a.stored === null || a.stored.paid === null || a.stored.frozen) return null;
+  return { size: a.stored.paid.size, price: packagePrice(a.stored.paid.size, a.stored.paid.camerasPaid) };
+}
+
+/** What a division save says its switch-off refund did (PATCH /divisions `online.refunded`, `{ pack, monthly, forfeited }`): the credits
+ *  returned (bought plus this month's included) and the included credits of an earlier month that were not (P6). Null when the answer has
+ *  no such field, a malformed one, or nothing moved (an unpaid or frozen switch-off answers all zeros). */
+export function refundedOf(saved: unknown): { returned: number; forfeited: number } | null {
+  const refunded = (saved as { online?: { refunded?: unknown } | null } | null | undefined)?.online?.refunded as
+    | { pack?: unknown; monthly?: unknown; forfeited?: unknown }
+    | null
+    | undefined;
+  if (refunded === null || typeof refunded !== "object") return null;
+  const { pack, monthly, forfeited } = refunded;
+  const whole = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n >= 0;
+  if (!whole(pack) || !whole(monthly) || !whole(forfeited)) return null;
+  const returned = pack + monthly;
+  return returned === 0 && forfeited === 0 ? null : { returned, forfeited };
+}

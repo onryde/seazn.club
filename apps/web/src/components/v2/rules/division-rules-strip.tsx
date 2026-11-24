@@ -18,6 +18,7 @@
 // division's order" reads (`loadTableRules`: own ?? division ?? sport).
 import { useEffect, useId, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { useRouter } from "next/navigation";
+import { useConfirm } from "@/components/ui/confirm-provider";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
@@ -29,9 +30,9 @@ import { ONLINE_CHESS_DISABLED_CODE, onlinePlayShown } from "@/lib/online-chess"
 import { packagePrice, type OnlineSize } from "@/lib/online-chess-package";
 import { onlineRefusedKind } from "@/lib/online-format-refusal";
 import type { OnlineReceiptRequest } from "@/lib/online-package-return";
-import { capacityLoweredOf, onlineSizeChoice } from "@/lib/online-size-options";
+import { capacityLoweredOf, onlineSizeChoice, refundedOf, switchOffRefundOf } from "@/lib/online-size-options";
 import { onlineEntrantCapText } from "../online-entrant-cap-refusal";
-import { ONLINE_MAX_ROUNDS } from "@/lib/online-package-refusal";
+import { ONLINE_MAX_ROUNDS, isOnlineSizeRaceCode, onlineSizeRaceText } from "@/lib/online-package-refusal";
 import { OnlinePriceLine } from "../online-chess/price-line";
 import { OnlineSizeSelect } from "../online-chess/size-select";
 import type { MessageKey } from "@/lib/messages";
@@ -153,6 +154,8 @@ interface Feedback {
   paywall: string | null;
   /** The registration capacity the save lowered to the Online Chess size (the save's `online.capacityLoweredTo`), or null. */
   capacityLowered: number | null;
+  /** What the save's switch-off refund gave back and gave up (the save's `online.refunded`), or null when nothing moved. */
+  refunded: { returned: number; forfeited: number } | null;
 }
 
 export const TOGGLE_ON = "border-purple-200 bg-purple-50 text-purple-800";
@@ -182,6 +185,8 @@ export function DivisionRulesStrip({
   const plural = useMsgPlural();
   const locale = useLocaleOrDefault();
   const router = useRouter();
+  // Optional: only a PAID package switched off asks, and it refuses to save without the dialog (`confirmSwitchOff`).
+  const confirm = useConfirm({ optional: true });
   const panelId = useId();
   const sportModule = moduleFor(sportKey);
   const [open, setOpen] = useState<ReadonlySet<RulesPanel>>(() => new Set(initialOpen));
@@ -365,6 +370,7 @@ export function DivisionRulesStrip({
         keptPinned: keptPinnedOf(saved),
         paywall: null,
         capacityLowered: capacityLoweredOf(saved),
+        refunded: refundedOf(saved),
       });
       router.refresh();
     } catch (err) {
@@ -377,10 +383,12 @@ export function DivisionRulesStrip({
       // upgrade gate, as the entrants panel's add does - the server's sentence is English and names a feature key.
       const feature = err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED" ? err.extra.feature_key : undefined;
       if (typeof feature === "string" && feature !== "") {
-        setFeedback({ panel, notice: null, error: null, refused, partial: false, keptPinned: [], paywall: feature, capacityLowered: null });
+        setFeedback({ panel, notice: null, error: null, refused, partial: false, keptPinned: [], paywall: feature, capacityLowered: null, refunded: null });
         return;
       }
-      setFeedback({ panel, notice: null, error: saveErrorText(err), refused, partial: false, keptPinned: [], paywall: null, capacityLowered: null });
+      // A size write that raced a payment or a round opening (409): the screen's size is stale, so it re-reads what is stored.
+      if (err instanceof ApiV1Error && isOnlineSizeRaceCode(err.code)) router.refresh();
+      setFeedback({ panel, notice: null, error: saveErrorText(err), refused, partial: false, keptPinned: [], paywall: null, capacityLowered: null, refunded: null });
     } finally {
       setBusy(false);
     }
@@ -392,6 +400,9 @@ export function DivisionRulesStrip({
       return msg("divset.err.timeControlUnsupported", { controls });
     }
     if (err instanceof ApiV1Error && err.code === ONLINE_CHESS_DISABLED_CODE) return msg("divset.err.onlineChessDisabled");
+    // The size write's two races (paid for since this page loaded, or a round opened): their own sentences, off the code.
+    const raced = err instanceof ApiV1Error ? onlineSizeRaceText(err, (key, vars) => msg(key as MessageKey, vars)) : null;
+    if (raced !== null) return raced;
     // Turning online play on for a division that already holds more than an online chess division may (owner ruling 2026-11-21).
     const tooMany = err instanceof ApiV1Error ? onlineEntrantCapText(err, (key, vars) => msg(key as MessageKey, vars)) : null;
     if (tooMany !== null) return tooMany;
@@ -404,7 +415,28 @@ export function DivisionRulesStrip({
     return settingsSaveErrorText(err, msg, msg("divset.failed"));
   }
 
-  const saveFormat = () =>
+  /** Switching Online play OFF on a PAID, unfrozen package refunds it, and the refund can forfeit included credits of an earlier month
+   *  (P6), so the organiser is asked first, with what comes back and what may not. Anything else saves with no question. Without the
+   *  dialog mounted a refund is never taken silently: the save is refused in the organiser's language. */
+  async function confirmSwitchOff(): Promise<boolean> {
+    const refund = switchOffRefundOf({ storedOnline: divisionConfig.onlinePlay === "lichess", onlinePlay, stored });
+    if (refund === null) return true;
+    if (confirm === null) {
+      setFeedback({ panel: "format", notice: null, error: msg("divset.failed"), refused: [], partial: false, keptPinned: [], paywall: null, capacityLowered: null, refunded: null });
+      return false;
+    }
+    return confirm({
+      title: msg("onlineChess.switchOff.title"),
+      body: plural("onlineChess.switchOff.body", refund.price, { count: refund.price, size: refund.size }),
+      confirmLabel: msg("onlineChess.switchOff.confirm"),
+      cancelLabel: msg("confirm.cancel"),
+      tone: "danger",
+      size: "touch",
+    });
+  }
+
+  const saveFormat = async () => {
+    if (!(await confirmSwitchOff())) return;
     void save("format", () => {
       // A format the write door would refuse is stopped here, beside the field it is about.
       const problem = ruleState.problems[0];
@@ -446,6 +478,7 @@ export function DivisionRulesStrip({
       }
       return savedVariantKey === null ? { config, ...online } : { variant_key: variantKey, config, ...online };
     });
+  };
 
   const savePoints = () => void save("points", () => ({ config: { ...divisionConfig, points: divisionPointsPatch(sportKey, points, pointsValues) } }));
   const saveOrder = (next: TiebreakerKey[] | null) => void save("tiebreaks", () => ({ tiebreakers: next }));
@@ -464,6 +497,15 @@ export function DivisionRulesStrip({
       ))}
     </ul>
   );
+  /** The switch-off refund as one line: that Online Chess is off, what came back, and what (an earlier month's included credits) did not. */
+  const refundedLine = (r: { returned: number; forfeited: number }): string =>
+    [
+      msg("onlineChess.refund.off"),
+      r.returned > 0 ? plural("onlineChess.refund.returned", r.returned, { count: r.returned }) : null,
+      r.forfeited > 0 ? plural("onlineChess.refund.forfeited", r.forfeited, { count: r.forfeited }) : null,
+    ]
+      .filter((x): x is string => x !== null)
+      .join(" ");
   const feedbackFor = (panel: RulesPanel): ReactNode => {
     if (feedback === null || feedback.panel !== panel) return null;
     const lines = keptLines(feedback.refused);
@@ -472,6 +514,11 @@ export function DivisionRulesStrip({
         {feedback.notice !== null && (
           <p role="status" className="rounded-md bg-emerald-50 px-3 py-2 text-xs text-emerald-700" data-testid="division-rules-saved">
             {feedback.notice}
+          </p>
+        )}
+        {feedback.refunded !== null && (
+          <p role="status" className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-700" data-testid="division-online-refunded">
+            {refundedLine(feedback.refunded)}
           </p>
         )}
         {feedback.capacityLowered !== null && (
@@ -765,7 +812,7 @@ export function DivisionRulesStrip({
               />
               {!draft && (
                 <div className="flex flex-wrap items-center gap-3">
-                  <button type="button" disabled={busy} onClick={saveFormat} className="btn btn-primary min-h-11 px-3 text-xs" data-testid="division-rules-format-save">
+                  <button type="button" disabled={busy} onClick={() => void saveFormat()} className="btn btn-primary min-h-11 px-3 text-xs" data-testid="division-rules-format-save">
                     {busy ? msg("schedule.working") : msg("rulesStrip.format.save")}
                   </button>
                 </div>

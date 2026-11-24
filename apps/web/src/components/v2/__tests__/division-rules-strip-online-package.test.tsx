@@ -14,15 +14,18 @@ import { expandWithHooks, propsOf, renderIsland, textOf, walk } from "@/componen
 import { OnlinePriceLine } from "@/components/v2/online-chess/price-line";
 import { OnlineSizeSelect } from "@/components/v2/online-chess/size-select";
 import type { DivisionRulesDraft, OnlinePackageStrip } from "@/components/v2/rules/division-rules-strip";
-import { ONLINE_PACKAGE_CODES } from "@/lib/online-chess-package";
+import { ONLINE_PACKAGE_CODES, packagePrice } from "@/lib/online-chess-package";
 import { ApiV1Error as RealApiV1Error } from "@/lib/client-v1";
 import { camerasNeedUpgrade, formatNotSupported, roundsAboveMax, roundsNeedSize } from "@/server/usecases/online-package/format";
 import uiEn from "@/dictionaries/en/ui.json";
 import { ALL_PANELS, DivisionRulesStrip, expandRules, stripPropsOf } from "./_rules-strip";
 
+const { refreshMock, confirmMock, confirmState } = vi.hoisted(() => ({ refreshMock: vi.fn(), confirmMock: vi.fn(), confirmState: { mounted: true } }));
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
+  useRouter: () => ({ refresh: refreshMock, push: vi.fn(), replace: vi.fn() }),
 }));
+// The house confirm dialog (a provider the root layout mounts): the answer each test hands back, or no dialog mounted at all.
+vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => (confirmState.mounted ? confirmMock : null) }));
 vi.mock("@/components/i18n/dict-provider", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/components/i18n/dict-provider")>()),
   useLocale: () => "en" as const,
@@ -83,6 +86,9 @@ const pickOnlinePlay = (island: Strip, value: "off" | "lichess") =>
 
 beforeEach(() => {
   apiV1Mock.mockReset().mockResolvedValue({});
+  refreshMock.mockReset();
+  confirmMock.mockReset().mockResolvedValue(true);
+  confirmState.mounted = true;
 });
 
 describe("the size select appears under a Lichess division, and only there", () => {
@@ -376,3 +382,174 @@ describe("the builder's draft: the same select, owned by the builder", () => {
 
 /** A draft draws no Save button anywhere (the builder sends it at Create). */
 const lastNoSave = (island: Strip) => island.tree().every((e) => !(e.type === "button" && /Save/.test(textOf(e))));
+
+describe("switching Online play off a PAID package: asked first, and the refund said after (T11 fix round 1, the review's gap)", () => {
+  const paid = (size: 16 | 32 | 64 | 128 | 256, camerasPaid = false, frozen = false) => unpaid({ stored: { size, paid: { size, camerasPaid }, frozen } });
+  const save = (island: Strip) => (propsOf(saveButton(island)!).onClick as () => void)();
+  const confirmOpts = () => confirmMock.mock.calls[0]![0] as { title: string; body: string; confirmLabel: string; cancelLabel: string; tone: string };
+
+  it("asks once, before any request, with what was paid, what comes back and what may not - and a yes saves the switch-off", async () => {
+    const island = mount(ON, paid(64));
+    pickOnlinePlay(island, "off");
+    save(island);
+    await vi.waitFor(() => expect(apiV1Mock).toHaveBeenCalledTimes(1));
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    expect(confirmMock.mock.invocationCallOrder[0], "asked BEFORE the request").toBeLessThan(apiV1Mock.mock.invocationCallOrder[0]!);
+    const price = packagePrice(64, false); // 4 credits, from the leaf
+    expect(price, "premise: a plural price, so the sentence is the .other one").toBeGreaterThan(1);
+    expect(confirmOpts()).toMatchObject({
+      title: UI["onlineChess.switchOff.title"],
+      body: fill(UI["onlineChess.switchOff.body.other"]!, { count: price, size: 64 }),
+      confirmLabel: UI["onlineChess.switchOff.confirm"],
+      cancelLabel: UI["confirm.cancel"],
+      tone: "danger",
+    });
+    expect(confirmOpts().body, "what may not come back is said").toMatch(/earlier month may not come back/);
+    expect(confirmOpts().body, "the amount and the size are in the sentence").toContain("4 credits for up to 64 players");
+    expect((lastPatch().config as Record<string, unknown>).onlinePlay, "the switch-off is what was saved").toBeUndefined();
+  });
+
+  it("the Fair-play camera's price is part of what was paid: 64 with cameras says 8, and a single credit says 'credit'", async () => {
+    const island = mount(ON, paid(64, true));
+    pickOnlinePlay(island, "off");
+    save(island);
+    await vi.waitFor(() => expect(confirmMock).toHaveBeenCalledTimes(1));
+    expect(packagePrice(64, true)).not.toBe(packagePrice(64, false));
+    expect(confirmOpts().body).toContain(`${packagePrice(64, true)} credits for up to 64 players`);
+    confirmMock.mockClear();
+    const one = mount(ON, paid(16));
+    pickOnlinePlay(one, "off");
+    save(one);
+    await vi.waitFor(() => expect(confirmMock).toHaveBeenCalledTimes(1));
+    expect(packagePrice(16, false), "premise").toBe(1);
+    expect(confirmOpts().body).toContain("1 credit for up to 16 players");
+  });
+
+  it("a no sends nothing and says nothing; asking again later asks again (the sequence)", async () => {
+    confirmMock.mockResolvedValueOnce(false).mockResolvedValue(true);
+    const island = mount(ON, paid(32));
+    pickOnlinePlay(island, "off");
+    save(island);
+    await vi.waitFor(() => expect(confirmMock).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    expect(apiV1Mock, "refused: no request").not.toHaveBeenCalled();
+    expect(byTestId(island, "division-rules-feedback")).toBeUndefined();
+    save(island);
+    await vi.waitFor(() => expect(apiV1Mock).toHaveBeenCalledTimes(1));
+    expect(confirmMock, "the second Save asked again").toHaveBeenCalledTimes(2);
+  });
+
+  it("asks nothing when nothing is refunded: an unpaid package, a frozen one, a division that stays online, and one that was never online", async () => {
+    const cases: [string, Record<string, unknown>, OnlinePackageStrip, "off" | "lichess"][] = [
+      ["unpaid", ON, unpaid(), "off"],
+      ["frozen: the server leaves it alone", ON, paid(32, false, true), "off"],
+      ["paid but staying online (the ordinary rules save)", ON, paid(32), "lichess"],
+      ["paid row of a division that was not online", OFF, paid(32), "off"],
+    ];
+    for (const [label, config, pkg, play] of cases) {
+      apiV1Mock.mockClear();
+      const island = mount(config, pkg);
+      pickOnlinePlay(island, play);
+      save(island);
+      await vi.waitFor(() => expect(apiV1Mock, label).toHaveBeenCalledTimes(1));
+    }
+    expect(confirmMock, "none of them asked").not.toHaveBeenCalled();
+    expect(cases.length).toBe(4);
+  });
+
+  it("with no dialog mounted a paid switch-off is NOT saved: the organiser is told, in the product's words, and no request leaves", async () => {
+    confirmState.mounted = false;
+    const island = mount(ON, paid(32));
+    pickOnlinePlay(island, "off");
+    save(island);
+    await vi.waitFor(() => expect(byTestId(island, "division-settings-error")).toBeDefined());
+    expect(textOf(byTestId(island, "division-settings-error")!)).toBe(UI["divset.failed"]);
+    expect(apiV1Mock).not.toHaveBeenCalled();
+    // ... and an unpaid switch-off needs no dialog, so it still saves.
+    const unpaidIsland = mount(ON, unpaid());
+    pickOnlinePlay(unpaidIsland, "off");
+    save(unpaidIsland);
+    await vi.waitFor(() => expect(apiV1Mock).toHaveBeenCalledTimes(1));
+  });
+
+  it("the save's refund is one line: switched off, what came back, what did not (singular and plural)", async () => {
+    apiV1Mock.mockResolvedValue({ id: "d1", online: { capacityLoweredTo: null, refunded: { pack: 3, monthly: 1, forfeited: 2 } } });
+    const island = mount(ON, paid(64));
+    pickOnlinePlay(island, "off");
+    save(island);
+    await vi.waitFor(() => expect(byTestId(island, "division-online-refunded")).toBeDefined());
+    expect(textOf(byTestId(island, "division-online-refunded")!)).toBe(
+      "Online Chess switched off. 4 credits returned to your balance. 2 included credits from an earlier month were not returned.",
+    );
+    expect(byTestId(island, "division-capacity-lowered"), "no capacity line beside it").toBeUndefined();
+
+    apiV1Mock.mockResolvedValue({ online: { refunded: { pack: 1, monthly: 0, forfeited: 1 } } });
+    const one = mount(ON, paid(16));
+    pickOnlinePlay(one, "off");
+    save(one);
+    await vi.waitFor(() => expect(byTestId(one, "division-online-refunded")).toBeDefined());
+    expect(textOf(byTestId(one, "division-online-refunded")!)).toBe(
+      "Online Chess switched off. 1 credit returned to your balance. 1 included credit from an earlier month was not returned.",
+    );
+  });
+
+  it("nothing forfeited says nothing about it; nothing returned says nothing about that; nothing moved (unpaid, frozen) draws no line", async () => {
+    apiV1Mock.mockResolvedValue({ online: { refunded: { pack: 0, monthly: 2, forfeited: 0 } } });
+    const island = mount(ON, paid(32));
+    pickOnlinePlay(island, "off");
+    save(island);
+    await vi.waitFor(() => expect(byTestId(island, "division-online-refunded")).toBeDefined());
+    expect(textOf(byTestId(island, "division-online-refunded")!)).toBe("Online Chess switched off. 2 credits returned to your balance.");
+
+    apiV1Mock.mockResolvedValue({ online: { refunded: { pack: 0, monthly: 0, forfeited: 3 } } });
+    const lost = mount(ON, paid(32));
+    pickOnlinePlay(lost, "off");
+    save(lost);
+    await vi.waitFor(() => expect(byTestId(lost, "division-online-refunded")).toBeDefined());
+    expect(textOf(byTestId(lost, "division-online-refunded")!)).toBe("Online Chess switched off. 3 included credits from an earlier month were not returned.");
+
+    for (const refunded of [null, { pack: 0, monthly: 0, forfeited: 0 }]) {
+      apiV1Mock.mockClear().mockResolvedValue({ online: { refunded } });
+      const quiet = mount(ON, unpaid());
+      pickOnlinePlay(quiet, "off");
+      save(quiet);
+      await vi.waitFor(() => expect(byTestId(quiet, "division-rules-saved")).toBeDefined());
+      expect(byTestId(quiet, "division-online-refunded"), JSON.stringify(refunded)).toBeUndefined();
+    }
+  });
+
+  it("the refund line goes with the next save that refunds nothing (the sequence)", async () => {
+    apiV1Mock.mockResolvedValueOnce({ online: { refunded: { pack: 2, monthly: 0, forfeited: 0 } } }).mockResolvedValue({ online: { refunded: null } });
+    const island = mount(ON, paid(32));
+    pickOnlinePlay(island, "off");
+    save(island);
+    await vi.waitFor(() => expect(byTestId(island, "division-online-refunded")).toBeDefined());
+    save(island);
+    await vi.waitFor(() => expect(apiV1Mock).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(byTestId(island, "division-online-refunded")).toBeUndefined());
+  });
+});
+
+describe("a size write that races a payment or a round opening (T11 fix round 1, review M3)", () => {
+  const SERVER_WORDING = "server wording - English only";
+  const raced = async (code: string, status = 409) => {
+    apiV1Mock.mockRejectedValueOnce(new RealApiV1Error(SERVER_WORDING, status, code, {}));
+    const island = mount(ON, unpaid());
+    (propsOf(saveButton(island)!).onClick as () => void)();
+    await vi.waitFor(() => expect(byTestId(island, "division-settings-error")).toBeDefined());
+    return textOf(byTestId(island, "division-settings-error")!);
+  };
+
+  it("online_size_paid and online_size_frozen: a one-line sentence of their own, and the page re-reads what is stored", async () => {
+    expect(await raced("online_size_paid")).toBe(UI["onlineChess.err.sizePaid"]);
+    expect(refreshMock, "re-read after the paid race").toHaveBeenCalledTimes(1);
+    expect(await raced("online_size_frozen")).toBe(UI["onlineChess.err.sizeFrozen"]);
+    expect(refreshMock, "re-read after the frozen race").toHaveBeenCalledTimes(2);
+  });
+
+  it("any other refusal keeps the server's words or its own mapping and does not refresh (the pair)", async () => {
+    expect(await raced("SOMETHING_ELSE", 409)).not.toBe(UI["onlineChess.err.sizePaid"]);
+    expect(await raced("online_size_unknown", 409)).not.toBe(UI["onlineChess.err.sizeFrozen"]);
+    expect(refreshMock).not.toHaveBeenCalled();
+  });
+});
