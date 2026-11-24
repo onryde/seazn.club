@@ -223,6 +223,33 @@ describe("Tie-breaks — every scope × mode, every sport", () => {
     expect(options, "anti-vacuity: titled add options checked").toBeGreaterThan(0);
   });
 
+  // Owner 2026-11-24 (fix round): at a phone width the explainer is squeezed into the label column between the number and three
+  // 44px buttons. It sits on its OWN full-width line under the label + controls row below md, and stays in the label column from md.
+  // One DOM, branched by `max-md:*` classes (no twin tree): the row is a grid, the explainer spans every column below md.
+  it("an editable step: the explainer takes its own full-width line below md (one DOM), and every control keeps a 44px tap target", () => {
+    let rows = 0;
+    for (const m of SPORTS) {
+      const kind: TableStageKind = "league";
+      const stage = { id: ID, kind, pooled: false, bestNth: false, tableRules: tableRulesOf(m, kind) };
+      const h = html(<TiebreaksEditor scope="stage" mode="edit" started={false} stage={stage} module={m} divisionConfig={divisionCfg(m)} stageConfig={{}} onSaved={() => undefined} />);
+      for (const [, i] of h.matchAll(/data-testid="stage-tiebreaks-row-(\d+)"/g)) {
+        const li = new RegExp(`<li[^>]*data-testid="stage-tiebreaks-row-${i}"[^>]*>(.*?)</li>`).exec(h)?.[1] ?? "";
+        const explainTag = new RegExp(`<[a-z]+ [^>]*class="([^"]*)"[^>]*data-testid="stage-tiebreaks-explain-${i}"`).exec(li)?.[1] ?? "";
+        expect(explainTag, `${m.key} row ${i}: the explainer spans the whole row below md`).toMatch(/(^|\s)max-md:col-span-full(\s|$)/);
+        expect(explainTag, `${m.key} row ${i}: and sits in the label column from md`).toMatch(/(^|\s)md:col-start-2(\s|$)/);
+        expect(li.match(/data-testid="stage-tiebreaks-explain-/g)?.length, `${m.key} row ${i}: ONE explainer in the DOM (no phone twin)`).toBe(1);
+        // Every button in the row is at least 44px square (the shared BUTTON class: min-h-11 min-w-11).
+        const buttons = [...li.matchAll(/<button [^>]*class="([^"]*)"/g)].map((b) => b[1]!);
+        for (const c of buttons) {
+          expect(c, `${m.key} row ${i}: tap target`).toMatch(/min-h-11/);
+          expect(c, `${m.key} row ${i}: tap target`).toMatch(/min-w-11/);
+        }
+        rows++;
+      }
+    }
+    expect(rows, "anti-vacuity: editable rows checked").toBeGreaterThan(SPORTS.length);
+  });
+
   it("the owner's case: badminton Swiss shows Buchholz and Buchholz Cut-1 with their one-liners, and game ratio in games", () => {
     const m = SPORTS.find((s) => s.key === "badminton")!; // single-sport: the screenshot the owner sent
     const rules = tableRulesOf(m, "swiss");

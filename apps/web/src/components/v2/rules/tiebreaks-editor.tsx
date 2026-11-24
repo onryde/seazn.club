@@ -83,11 +83,15 @@ const stepNameOf = (msg: Msg, sportKey: string) => (key: string): string => msg(
 /** A step's one-line explainer in the sport's own unit ("Buchholz" -> "Total score of the opponents you played."). */
 const stepExplainOf = (msg: Msg, sportKey: string) => (key: string): string => msg(unitExplainKey(key, sportKey));
 
-/** The explainer line under a step's label: muted, wraps, and sits in the label's own column so the row's controls keep
- *  their place at 320px. Plain text, no control, no second DOM. */
+/** The explainer line under a step's label: muted, wraps, plain text, no control, no second DOM. The editable row is a grid: from
+ *  md it sits in the label's own column (col 2, row 2); below md it spans the WHOLE row on its own line under the label + controls,
+ *  so a phone's 44px buttons never squeeze it into a sliver. */
 function StepExplain({ index, text }: { index: number; text: string }) {
   return (
-    <span className="block break-words pb-1 text-xs leading-snug text-slate-600" data-testid={`stage-tiebreaks-explain-${index}`}>
+    <span
+      className="block break-words pb-1 text-xs leading-snug text-slate-600 max-md:col-span-full max-md:row-start-2 max-md:pl-6 md:col-start-2 md:row-start-2"
+      data-testid={`stage-tiebreaks-explain-${index}`}
+    >
       {text}
     </span>
   );
@@ -180,21 +184,19 @@ function OrderEditor({
             const why = refusal === undefined ? null : ruleRefusalText("TIEBREAK_KEY_INVALID", { refusals: [refusal] }, msg);
             return (
               <li key={`${r.key}-${i}`} data-testid={`stage-tiebreaks-row-${i}`} data-key={r.key} data-pinned={r.pinned ?? undefined} className="pl-3 pr-1">
-                <div className="flex items-center gap-1">
-                  <span className="w-5 shrink-0 text-right text-xs tabular-nums text-slate-500">{i + 1}</span>
-                  <span className="min-w-0 flex-1 py-1">
-                    <span className="block break-words pt-1 text-sm leading-snug text-slate-800">
-                      {stepName}
-                      {r.pinned !== null && (
-                        <span className="ml-2 text-[11px] text-slate-500" data-testid={`stage-tiebreaks-pinned-${i}`}>
-                          {msg(r.pinned === "first" ? "stageTiebreaks.alwaysFirst" : "stageTiebreaks.alwaysLast")}
-                        </span>
-                      )}
-                    </span>
-                    <StepExplain index={i} text={explain(r.key)} />
+                <div className="grid grid-cols-[1.25rem_minmax(0,1fr)_auto] items-center gap-x-1">
+                  <span className="col-start-1 row-start-1 w-5 text-right text-xs tabular-nums text-slate-500 md:row-span-2">{i + 1}</span>
+                  <span className="col-start-2 row-start-1 block min-w-0 break-words pt-1 text-sm leading-snug text-slate-800 max-md:py-1">
+                    {stepName}
+                    {r.pinned !== null && (
+                      <span className="ml-2 text-[11px] text-slate-500" data-testid={`stage-tiebreaks-pinned-${i}`}>
+                        {msg(r.pinned === "first" ? "stageTiebreaks.alwaysFirst" : "stageTiebreaks.alwaysLast")}
+                      </span>
+                    )}
                   </span>
+                  <StepExplain index={i} text={explain(r.key)} />
                   {r.pinned === null && (
-                    <>
+                    <div className="col-start-3 row-start-1 flex items-center md:row-span-2">
                       <button
                         type="button"
                         className={BUTTON}
@@ -231,7 +233,7 @@ function OrderEditor({
                           <path d="m4 4 8 8M12 4l-8 8" />
                         </svg>
                       </button>
-                    </>
+                    </div>
                   )}
                 </div>
                 {why !== null && (
