@@ -17,12 +17,16 @@
 //   * The skip list is read from the jobs' `if:` lines, and ci-gate's own script is RUN against
 //     every job in turn, so the list ci-gate allows to skip is proven equal to the list that
 //     does skip.
+//   * smoke-db is the one DB job that stays, and on a content-only change it runs only the readers
+//     only it covers (scripts/content-db-readers.json, run by scripts/ci-content-db-readers.sh).
+//     That manifest is derived here from the same sweep and compared; each smoke-db step is then
+//     read for the lane it runs in (the full suite on a code change, the subset on a content one).
 //
 // Anti-vacuity: each sweep reports how many files it judged, and zero is a failure. The
 // expected sets (which jobs skip, which test is exempt and why) are stated here, never read
 // back from the workflow they judge.
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -115,7 +119,11 @@ interface Reader {
   /** Why it counts: it names a content root itself, or imports a module that does. */
   via: string;
 }
-const readers = (): { found: Reader[]; modules: string[]; scanned: number } => {
+type Sweep = { found: Reader[]; modules: string[]; scanned: number };
+/** Read once per file: every test below judges the same tree, and the sweep reads ~7500 files, which a loaded runner does slowly. */
+let sweep: Sweep | undefined;
+const readers = (): Sweep => (sweep ??= computeReaders());
+const computeReaders = (): Sweep => {
   const files = tracked();
   const text = new Map(files.map((f) => [f, code(readFileSync(join(REPO, f), "utf8"))]));
   const resolve = (from: string, spec: string): string | null => {
@@ -186,6 +194,57 @@ const GATED_HALF_READS_NO_CONTENT: Record<string, string> = {
   "apps/web/src/app/(public)/live/__tests__/english-sweep.test.tsx":
     "Names DATABASE_URL only inside a thrown message, and mocks `@/server/help-content` out; nothing in the file is database-gated and it reads no help or blog content. " +
     "It is a reader to this sweep only through that `vi.mock` import edge.",
+};
+
+// ---- smoke-db on a content-only change: the subset it runs ------------------------------------
+
+const MANIFEST = join(REPO, "scripts/content-db-readers.json");
+
+/**
+ * The readers that, on a content-only change, only smoke-db covers: a gated apps/web unit test (its gated half runs only in a DB job,
+ * the rest of it in `test`) and every reader outside apps/web/src (repo-root tests run by smoke-db's `scripts/__tests__` step). An
+ * ungated apps/web unit test runs in `test`; an e2e spec runs in e2e.yml and is judged separately.
+ */
+const coveredOnlyByAJob = (r: Reader): boolean => !r.file.startsWith("apps/web/e2e/") && (!r.file.startsWith("apps/web/src/") || r.gated);
+const smokeDbSubset = (found: Reader[], all: Job[]): string[] =>
+  found.filter((r) => coveredOnlyByAJob(r) && selectedBy(r.file, all).includes("smoke-db")).map((r) => r.file).sort();
+
+interface Step {
+  name: string;
+  cond: string | undefined;
+  text: string;
+}
+/** The steps of a job, from its text (comment lines already dropped). A step is a `      - ` item; its `if:` sits at 8 spaces. */
+const stepsOf = (job: Job): Step[] => {
+  const lines = job.text.split("\n");
+  const at = lines.findIndex((l) => /^ {4}steps:\s*$/.test(l));
+  expect(at, `${job.id} has a steps list`).toBeGreaterThan(-1);
+  const items: string[][] = [];
+  for (const l of lines.slice(at + 1)) {
+    if (/^ {6}- /.test(l)) items.push([l]);
+    else if (items.length) items[items.length - 1]!.push(l);
+  }
+  return items.map((item) => {
+    const text = item.join("\n");
+    const name = /^ {6}- name:\s*(.+)$/m.exec(text)?.[1] ?? /^ {8}name:\s*(.+)$/m.exec(text)?.[1] ?? item[0]!.replace(/^ {6}- /, "");
+    return { name: name.trim(), cond: /^ {8}if:\s*(.+)$/m.exec(text)?.[1]?.trim(), text };
+  });
+};
+/**
+ * Does a step run, for this value of the `content` output? Only the conditions this job uses are modelled, and an unknown one THROWS:
+ * a guard that guesses at a condition it cannot read would pass on the day someone writes a new one.
+ */
+const stepRuns = (cond: string | undefined, content: boolean): boolean => {
+  if (cond === undefined) return true;
+  return cond.split(" && ").every((raw) => {
+    const atom = raw.trim();
+    if (atom === "always()") return true;
+    if (atom === "needs.changes.outputs.content == 'true'") return content;
+    if (atom === "needs.changes.outputs.content != 'true'") return !content;
+    // The Stripe key is present on this repo's branch pull requests and absent on forks, whatever the lane: not a lane condition.
+    if (atom === "env.STRIPE_SECRET_KEY != ''") return true;
+    throw new Error(`step condition not modelled by ci-content-lane.test.ts: ${atom}`);
+  });
 };
 
 describe("ci.yml: the content lane", () => {
@@ -277,6 +336,113 @@ describe("ci.yml: the content lane", () => {
       expect(by.filter((id) => !skipped.includes(id)), `${file} is selected by no job that stays`).toEqual([]);
       expect(by.filter((id) => skipped.includes(id)).length, `${file} is selected by a job that skips`).toBeGreaterThan(0);
     }
+  });
+
+  it("smoke-db's content-only subset is exactly the readers only a DB job covers: a committed manifest, checked against the sweep", () => {
+    const all = jobs();
+    const { found } = readers();
+    const want = smokeDbSubset(found, all);
+    // Anti-vacuity: the sweep found the DB halves of the help-copy tests and the repo-root readers, from both kinds of place.
+    expect(want.length, "readers smoke-db alone covers").toBeGreaterThan(8);
+    expect(want.filter((f) => f.startsWith("apps/web/src/")).length, "apps/web readers in the subset").toBeGreaterThan(4);
+    expect(want.filter((f) => f.startsWith("scripts/")).length, "repo-root readers in the subset").toBeGreaterThan(2);
+    // The ones this work was done for must be in it, named here (the sweep above is what keeps the rest honest).
+    expect(want).toEqual(
+      expect.arrayContaining([
+        "apps/web/src/lib/__tests__/help-copy-truth.test.ts",
+        "apps/web/src/lib/__tests__/pricing-cards.test.ts",
+        "apps/web/src/server/__tests__/help-token-cells.test.ts",
+      ]),
+    );
+    // And nothing a skipped job alone runs, nor the one gated reader smoke-e2e runs: those are not smoke-db's to run.
+    expect(want, "blog-seo.live runs in smoke-e2e").not.toContain("apps/web/src/blog/__tests__/blog-seo.live.test.ts");
+    for (const file of Object.keys(GATED_HALF_READS_NO_CONTENT)) expect(want, `${file} runs in test`).not.toContain(file);
+
+    // Regenerate the manifest, as UPDATE_BLOG_EXAMPLES does for the blog goldens; review the diff.
+    if (process.env.UPDATE_CONTENT_DB_MANIFEST === "1") {
+      writeFileSync(
+        MANIFEST,
+        `${JSON.stringify({ comment: "Generated by UPDATE_CONTENT_DB_MANIFEST=1 vitest run scripts/__tests__/ci-content-lane.test.ts. Do not edit by hand: that test derives it.", files: want }, null, 2)}\n`,
+      );
+    }
+    const manifest = JSON.parse(readFileSync(MANIFEST, "utf8")) as { files: string[] };
+    expect(manifest.files, "scripts/content-db-readers.json says what the sweep finds (UPDATE_CONTENT_DB_MANIFEST=1 regenerates it)").toEqual(want);
+    expect(manifest.files.length, "files the content-only smoke-db run will test").toBeGreaterThan(8);
+    for (const f of manifest.files) {
+      expect(IS_TEST.test(f), `${f} is a test file`).toBe(true);
+      expect(existsSync(join(REPO, f)), `${f} exists`).toBe(true);
+    }
+  });
+
+  it("smoke-db runs its whole suite on a code pull request, and on a content-only one only the manifest's readers", () => {
+    const smokeDb = jobs().find((j) => j.id === "smoke-db")!;
+    // The job itself is unchanged: same name, same `if`, so ci-gate sees the same check in both lanes.
+    expect(smokeDb.header).toContain(`    ${CODE_IF}`);
+    expect(smokeDb.header.join("\n")).not.toContain("outputs.content");
+    expect(smokeDb.header.some((h) => h.startsWith("    name: Smoke — DB + Redis suites"))).toBe(true);
+
+    const steps = stepsOf(smokeDb);
+    expect(steps.length, "steps in smoke-db").toBeGreaterThan(15);
+    const named = (re: RegExp): Step => {
+      const hits = steps.filter((st) => re.test(st.name));
+      expect(hits.map((st) => st.name), `exactly one step matches ${re}`).toHaveLength(1);
+      return hits[0]!;
+    };
+    // What each lane runs, stated here and not read back from ci.yml: the full-suite steps, the setup both lanes need, the subset step.
+    const FULL_ONLY = [
+      /^Repo-root scripts tests/,
+      /^Engine-db \+ service-layer \+ lib integration tests/,
+      /^Vitest collection reconciliation/,
+      /^Redis-gated integration tests/,
+      /^Live-Stripe integration tests/,
+    ];
+    const BOTH = [
+      /^Cache Flyway CLI/,
+      // The placement steps stay on both lanes: placement-image-wiring.test.ts forbids an `if:` on the pull step (a skippable
+      // pull lets a reused runner start a stale image), so the pull, the start and the teardown that follows are not lane-specific.
+      /^Pull the pinned placement image/,
+      /^Start the placement service/,
+      /^Placement service logs and teardown/,
+      /^Postgres speed tuning/,
+      /^Bootstrap database \(Flyway migrate\)/,
+      /^Sync sport catalog from the engine registry/,
+      /^Upload vitest results/,
+      /^Slowest test files/,
+    ];
+    const SUBSET = /^Content readers \(DB halves/;
+    for (const re of FULL_ONLY) {
+      const st = named(re);
+      expect(stepRuns(st.cond, false), `${st.name} runs on a code pull request`).toBe(true);
+      expect(stepRuns(st.cond, true), `${st.name} does not run on a content-only one`).toBe(false);
+    }
+    for (const re of BOTH) {
+      const st = named(re);
+      expect(stepRuns(st.cond, false), `${st.name} runs on a code pull request`).toBe(true);
+      expect(stepRuns(st.cond, true), `${st.name} runs on a content-only one`).toBe(true);
+    }
+    const subset = named(SUBSET);
+    expect(stepRuns(subset.cond, false), "the subset step does not run on a code pull request").toBe(false);
+    expect(stepRuns(subset.cond, true), "the subset step runs on a content-only one").toBe(true);
+
+    // Nothing else differs between the lanes: every step is one of the three kinds above, or unconditional.
+    const code = steps.filter((st) => stepRuns(st.cond, false)).map((st) => st.name);
+    const content = steps.filter((st) => stepRuns(st.cond, true)).map((st) => st.name);
+    const lanesDiffer = steps.filter((st) => stepRuns(st.cond, false) !== stepRuns(st.cond, true)).map((st) => st.name);
+    expect(lanesDiffer.sort(), "the steps that depend on the lane").toEqual([...FULL_ONLY, SUBSET].map((re) => named(re).name).sort());
+    expect(code.length - FULL_ONLY.length, "steps both lanes run").toBe(content.length - 1);
+
+    // The full steps still ARE the full suite: the commands that made them so are untouched.
+    expect(named(/^Repo-root scripts tests/).text).toContain("scripts/__tests__");
+    expect(named(/^Engine-db \+ service-layer \+ lib integration tests/).text).toContain('--exclude "$USECASES_EXCLUDE" src/server src/lib');
+    expect(named(/^Redis-gated integration tests/).text).toContain("rate-limit.redis.test.ts");
+    expect(named(/^Vitest collection reconciliation/).text).toContain("scripts/check-vitest-collection.ts");
+    // The subset is the manifest, run by the script that checks it ran: no test path typed into the workflow.
+    expect(subset.text).toContain("bash scripts/ci-content-db-readers.sh");
+    expect(subset.text, "a hand-typed list in the workflow").not.toMatch(/\.test\.|__tests__/);
+    // It runs after the schema and the sport catalog exist, which the readers' DB halves read.
+    const order = steps.map((st) => st.name);
+    expect(order.indexOf(subset.name)).toBeGreaterThan(order.indexOf(named(/^Sync sport catalog/).name));
+    expect(order.indexOf(named(/^Bootstrap database/).name)).toBeLessThan(order.indexOf(named(/^Sync sport catalog/).name));
   });
 
   it("`test` runs every apps/web unit test, so every ungated reader runs in the lane", () => {

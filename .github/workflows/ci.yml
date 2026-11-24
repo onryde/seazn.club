@@ -74,8 +74,9 @@ jobs:
   #
   #   lane          code  content  runs
   #   docs-only     false false    gates, security, placement-pin, scheduler-live
-  #   content-only  true  true     those four + test (every shard), container, smoke-db,
-  #                                smoke-e2e: everything that READS content
+  #   content-only  true  true     those four + test (every shard), container, smoke-e2e,
+  #                                and smoke-db with ONLY its content readers: everything
+  #                                that READS content
   #   code          true  false    everything
   #
   # On a content-only PR these four skip, on a `&& content != 'true'` clause: smoke-db-app,
@@ -86,7 +87,12 @@ jobs:
   # why: `test` runs every apps/web unit test, which holds the help-copy sweeps, the blog
   # goldens and the leak, picture and link guards; `smoke-db` holds the DB-gated halves of
   # help-copy-truth, pricing-cards, retired-plan-copy, dictionary-copy-truth and
-  # help-token-cells, which compare the help articles with the plan_entitlements rows;
+  # help-token-cells, which compare the help articles with the plan_entitlements rows, and
+  # on this lane it runs ONLY those readers (scripts/content-db-readers.json, run by
+  # scripts/ci-content-db-readers.sh, which fails if it ran none or any other), never its
+  # suite: its Redis and live-Stripe steps, the repo-root scripts directory and the lib +
+  # server suite are `content != 'true'` steps. Same job, same name, so ci-gate sees
+  # the same check.
   # `smoke-e2e` builds and serves the site and runs the Lighthouse and blog SEO steps over
   # real help and blog pages; `container` runs the same `next build` that prerenders them.
   # ci-gate, at the end of this file, is the one check that reports for all of them either
@@ -794,8 +800,21 @@ jobs:
   #
   # All four skip on a docs-only pull request (see `changes`); ci-gate is the
   # one check that reports for them either way. On a CONTENT-ONLY pull request
-  # smoke-db still runs (it holds the DB-gated halves of the help-copy tests) and the
-  # other three skip.
+  # the other three skip, and smoke-db runs, but NOT its suite: it holds the DB-gated
+  # halves of the help-copy tests, and nothing else a content change can move. So
+  # there it runs only the readers in scripts/content-db-readers.json (the same
+  # job, the same name, so ci-gate sees the same check): the database is migrated and
+  # the sport catalog synced, then scripts/ci-content-db-readers.sh runs the manifest's
+  # files and fails if it ran none, or any other than the manifest's. What it skips on
+  # that lane is the lib + server suite and its collection reconciliation, the
+  # repo-root scripts directory, the Redis-gated suites and the live-Stripe suites;
+  # the readers need none of them (checked: no reader names PLACEMENT_SERVICE_*,
+  # REDIS_URL or a Stripe key). The placement pull and start stay on both lanes, on
+  # purpose: placement-image-wiring.test.ts forbids an `if:` on the pull step (a
+  # skippable pull lets a reused runner start a stale image), and the seconds are
+  # not on the critical path. The manifest is derived, not typed:
+  # ci-content-lane.test.ts finds the readers by behaviour and fails when the
+  # manifest disagrees, and when a step's lane condition changes.
   # -------------------------------------------------------------------------
   smoke-db:
     name: Smoke — DB + Redis suites, usecases [a-d] (Postgres container)
@@ -951,6 +970,13 @@ jobs:
       - name: Sync sport catalog from the engine registry
         run: npm run sync:sports
 
+      # CONTENT-ONLY pull request (see `changes`): the readers of help and blog content whose
+      # DB halves only this job runs, and nothing else of its suite. The steps below that carry
+      # `content != 'true'` are the full suite and run on every code pull request, unchanged.
+      - name: Content readers (DB halves, content-only change)
+        if: needs.changes.outputs.content == 'true'
+        run: bash scripts/ci-content-db-readers.sh
+
       # scripts/__tests__/sync-sports.test.ts is the only test proving the
       # prune step's `is_system = true` scope — the guarantee #431 ruling 3
       # needed PROVED, not asserted (dropping a variant is not additive: a
@@ -990,6 +1016,7 @@ jobs:
       # scripts/__tests__/rules-reference.test.ts has a step of its own in the gates job (own report, own judge), so it is excluded from
       # this whole-directory run instead of running twice per pull request (pinned by that file's CI-wiring describe).
       - name: Repo-root scripts tests (real Postgres)
+        if: needs.changes.outputs.content != 'true'
         run: ./node_modules/.bin/vitest run --reporter=default --reporter=json --outputFile=vitest-results-scripts.json --testTimeout=30000 --exclude '**/scripts/__tests__/rules-reference.test.ts' scripts/__tests__
 
       # src/lib is in scope alongside src/server. It used to be excluded, which
@@ -1071,6 +1098,7 @@ jobs:
       # while bash passes the literal through — so it would work by accident on
       # the runner and break the day the pattern happens to match a path.
       - name: Engine-db + service-layer + lib integration tests (real Postgres)
+        if: needs.changes.outputs.content != 'true'
         run: npm test --workspace apps/web -- --reporter=default --reporter=json --outputFile=vitest-results-lib-server.json --exclude "$USECASES_EXCLUDE" src/server src/lib
         env:
           # `localhost`, not 127.0.0.1 — consistent with the rest of this repo's
@@ -1121,6 +1149,7 @@ jobs:
       #
       # The `src/app` reconciliation moved with its suite (smoke-db-app).
       - name: Vitest collection reconciliation
+        if: needs.changes.outputs.content != 'true'
         run: |
           node --experimental-strip-types scripts/check-vitest-collection.ts \
             --results apps/web/vitest-results-lib-server.json \
@@ -1163,6 +1192,7 @@ jobs:
       # dragged 30 unrelated files into this step (35 files collected against
       # the 5 named; measured 2026-09-27).
       - name: Redis-gated integration tests (rate limiter, entitlement cache, platform fee cache, hub leases, public lookups, cold start)
+        if: needs.changes.outputs.content != 'true'
         run: npm test --workspace apps/web -- src/lib/__tests__/rate-limit.redis.test.ts src/lib/__tests__/entitlements-cache-invalidation.redis.test.ts src/lib/__tests__/platform-fee-cache-isolation.redis.test.ts src/lib/__tests__/cache-lease.redis.test.ts src/server/usecases/__tests__/public-competition-ref.redis.test.ts src/lib/__tests__/cache-cold-start.redis.test.ts
         env:
           REDIS_URL: redis://localhost:6379
@@ -1178,7 +1208,7 @@ jobs:
       # step above (no BILLING_LIVE); here they run live. Skips cleanly on fork PRs,
       # where STRIPE_SECRET_KEY is withheld.
       - name: Live-Stripe integration tests (sk_test, real Postgres)
-        if: env.STRIPE_SECRET_KEY != ''
+        if: env.STRIPE_SECRET_KEY != '' && needs.changes.outputs.content != 'true'
         run: |
           npm run stripe:sync
           BILLING_LIVE=1 npm test --workspace apps/web -- src/lib/__tests__/billing-tiers.live.test.ts src/lib/__tests__/billing-proration.live.test.ts src/lib/__tests__/stream-pack-checkout.live.test.ts

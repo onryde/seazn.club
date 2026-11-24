@@ -6,7 +6,9 @@
 #   code=false content=false   docs-only: nothing heavy runs
 #   code=true  content=true    content-only: the jobs that READ help/blog content run,
 #                              the rest skip (the list is in ci.yml's `changes` header,
-#                              and scripts/__tests__/ci-content-lane.test.ts pins it)
+#                              and scripts/__tests__/ci-content-lane.test.ts pins it);
+#                              smoke-db runs too, but only the readers in
+#                              scripts/content-db-readers.json, not its suite
 #   code=true  content=false   code: everything runs
 #
 # Inputs (env):
@@ -59,8 +61,12 @@
 # Why a content PR cannot simply skip every DB job: the DB-gated halves of
 # help-copy-truth, pricing-cards, retired-plan-copy, dictionary-copy-truth and
 # help-token-cells compare the help articles with the plan_entitlements rows, and
-# those run only in smoke-db. So smoke-db stays in the content lane. Which jobs
-# skip, and the proof that none of them runs a test that reads content, is
+# those run only in smoke-db. So smoke-db stays in the content lane, but it runs
+# ONLY the content readers it owns (scripts/content-db-readers.json, run by
+# scripts/ci-content-db-readers.sh, which fails if it ran none or any other), not the
+# ~300 DB, Redis, Stripe and placement tests a content change cannot move. Which jobs
+# skip, the proof that none of them runs a test that reads content, and the proof that
+# the manifest is exactly the readers only smoke-db covers, is
 # scripts/__tests__/ci-content-lane.test.ts; this script decides only the lane.
 #
 # Everything else answers `code=true content=false` — another event, an empty or
