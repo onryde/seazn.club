@@ -6,6 +6,9 @@ import {
 // The cap and its refusal code from their import-free leaf (lib/online-chess.ts imports `@/`, which this runner cannot resolve): the
 // probe below follows the constant the server enforces.
 import { ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION as CAP, ONLINE_DIVISION_FULL } from "../../../apps/web/src/lib/online-chess-cap.ts";
+// The size ladder and the size's refusal code from the price leaf (also import-free): the size is the third line of that cap
+// (Online Chess credits, spec §7.6), so the probe below chooses sizes off the ladder the server enforces.
+import { ONLINE_PACKAGE_CODES, ONLINE_SIZES } from "../../../apps/web/src/lib/online-chess-package.ts";
 
 /**
  * Chess in-page board T16 — keyless (no Lichess, no RealtimeKit), against a
@@ -128,8 +131,11 @@ export async function onlineChessDeskSuite(): Promise<void> {
  * route. The organiser's plan is lifted to 1,000 entrants a division (and 50 active competitions: the suite's owner has built three by
  * here) so the PLAN is not what refuses: an online division takes CAP (256) in one bulk POST (the route takes up to 500), the next is
  * a 422 ONLINE_DIVISION_FULL carrying the limit, and an over-the-board division on the same plan takes CAP + 1 - so the refusal is the
- * online cap's own. (The sign-up, promote, Reinstate and online-switch doors, the lock and the race are
- * usecases/__tests__/online-entrant-cap-doors.test.ts.)
+ * online cap's own. That division is CHOSEN at size 256 (a new online division opens at the smallest size, 16, and the size is a third
+ * line below the cap: Online Chess credits, spec §7.6); a second one, chosen at 16 through the API, takes 16 entrants and answers the
+ * 17th with 422 ONLINE_SIZE_FULL (`size`, `nextSize`) - and takes it once the size is moved to 32 (the SEQUENCE: full, refused, moved up,
+ * admitted). (The sign-up, promote, Reinstate and online-switch doors, the lock and the race are
+ * usecases/__tests__/online-entrant-cap-doors.test.ts and online-entrant-size-doors.test.ts.)
  */
 async function onlineEntrantCap(owner: Session): Promise<void> {
   const orgs = (await call(owner, "/api/orgs")) as { id: string }[] | { orgs?: { id: string }[] };
@@ -145,16 +151,21 @@ async function onlineEntrantCap(owner: Session): Promise<void> {
   const comp = v1data<{ id: string }>(compMade);
   check(`online entrant cap: a competition to build in (got ${compMade.status} ${compMade.json.error?.code ?? ""})`, !!comp?.id);
   if (!comp?.id) return;
-  const divisionIn = (name: string, online: boolean) =>
+  const divisionIn = (name: string, online: boolean, size?: number) =>
     v1(owner, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
       name,
       sport_key: "boardgame",
       variant_key: "classical",
       config: { variant: "classical", clock: { base: 600, increment: 5 }, ...(online ? { onlinePlay: "lichess" } : {}) },
+      ...(online && size !== undefined ? { online_size: size } : {}),
     });
   const entrants = (from: number, n: number) =>
     Array.from({ length: n }, (_, i) => ({ kind: "individual", display_name: `Cap ${from + i} ${tag}` }));
-  const made = { online: await divisionIn(`Cap online ${tag}`, true), otb: await divisionIn(`Cap otb ${tag}`, false) };
+  // The premise: the ladder the probe picks from is the server's (the leaf), and 256 and 16 are its ends.
+  const smallest = ONLINE_SIZES[0]!;
+  const nextUp = ONLINE_SIZES[1]!;
+  check(`online entrant cap: the size ladder runs ${smallest} .. ${CAP} (got ${ONLINE_SIZES.join(", ")})`, smallest === 16 && nextUp === 32 && ONLINE_SIZES[ONLINE_SIZES.length - 1] === CAP);
+  const made = { online: await divisionIn(`Cap online ${tag}`, true, CAP), otb: await divisionIn(`Cap otb ${tag}`, false) };
   const online = v1data<{ id: string }>(made.online);
   const otb = v1data<{ id: string }>(made.otb);
   check(`online entrant cap: both divisions made (got ${made.online.status} and ${made.otb.status})`, made.online.status === 201 && made.otb.status === 201 && !!online?.id && !!otb?.id);
@@ -175,6 +186,30 @@ async function onlineEntrantCap(owner: Session): Promise<void> {
   check(`online entrant cap: the refusal wrote nothing, ${CAP} entrants stand (got ${Array.isArray(listed) ? listed.length : "?"})`, Array.isArray(listed) && listed.length === CAP);
   const sameSizeOtb = await v1(owner, `/api/v1/divisions/${otb.id}/entrants`, "POST", entrants(1, CAP + 1));
   check(`online entrant cap: ${CAP + 1} fit an over-the-board division on the same plan, 201 (got ${sameSizeOtb.status} ${sameSizeOtb.json.error?.code ?? ""})`, sameSizeOtb.status === 201);
+
+  // The size as the cap (spec §5.2, §7.6): chosen at the smallest size through the API, it takes that many and no more.
+  const sizedMade = await divisionIn(`Cap sized ${tag}`, true, smallest);
+  const sized = v1data<{ id: string }>(sizedMade);
+  check(`online entrant cap: a division chosen at size ${smallest}, 201 (got ${sizedMade.status} ${sizedMade.json.error?.code ?? ""})`, sizedMade.status === 201 && !!sized?.id);
+  if (!sized?.id) return;
+  let sizeChecks = 0;
+  const atSize = await v1(owner, `/api/v1/divisions/${sized.id}/entrants`, "POST", entrants(1, smallest));
+  check(`online entrant cap: ${smallest} entrants fit a size-${smallest} division, 201 (got ${atSize.status} ${atSize.json.error?.code ?? ""})`, atSize.status === 201);
+  const pastSize = await v1(owner, `/api/v1/divisions/${sized.id}/entrants`, "POST", entrants(smallest + 1, 1));
+  const refusal = pastSize.json.error as { code?: string; size?: unknown; nextSize?: unknown } | undefined;
+  check(
+    `online entrant cap: the ${smallest + 1}th is a 422 ${ONLINE_PACKAGE_CODES.sizeFull} with size ${smallest} and nextSize ${nextUp} (got ${pastSize.status} ${refusal?.code ?? ""} size ${String(refusal?.size)} nextSize ${String(refusal?.nextSize)})`,
+    pastSize.status === 422 && refusal?.code === ONLINE_PACKAGE_CODES.sizeFull && refusal.size === smallest && refusal.nextSize === nextUp,
+  );
+  const heldAtSize = v1data<unknown[]>(await v1(owner, `/api/v1/divisions/${sized.id}/entrants`));
+  check(`online entrant cap: the size refusal wrote nothing, ${smallest} entrants stand (got ${Array.isArray(heldAtSize) ? heldAtSize.length : "?"})`, Array.isArray(heldAtSize) && heldAtSize.length === smallest);
+  // Moved up (an unpaid size changes through the division save), the same add is admitted: the refusal was the size's, not a stuck state.
+  const movedUp = await v1(owner, `/api/v1/divisions/${sized.id}`, "PATCH", { online_size: nextUp });
+  check(`online entrant cap: the size moved to ${nextUp}, 200 (got ${movedUp.status} ${movedUp.json.error?.code ?? ""})`, movedUp.status === 200);
+  const admitted = await v1(owner, `/api/v1/divisions/${sized.id}/entrants`, "POST", entrants(smallest + 1, 1));
+  check(`online entrant cap: after the move up the ${smallest + 1}th is admitted, 201 (got ${admitted.status} ${admitted.json.error?.code ?? ""})`, admitted.status === 201);
+  sizeChecks += 6;
+  check(`online entrant cap: anti-vacuity, ${sizeChecks} size checks made`, sizeChecks === 6);
 }
 
 /**

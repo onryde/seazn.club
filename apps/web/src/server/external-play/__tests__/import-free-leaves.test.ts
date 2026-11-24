@@ -11,13 +11,13 @@ const WEB = join(import.meta.dirname, "..", "..", "..", "..");
 const REPO = join(WEB, "..", "..");
 
 /** [the leaf, under apps/web/src; the runner that imports it, from the repo root; the specifier that runner names]. A leaf whose runner
- *  has not landed yet carries `null` for both: it is still scanned for imports, and the runner half is owed by the task that adds the runner
- *  (online-chess-package.ts: scripts/smoke/suites/onlineChessDesk.ts, extended by Task 7 Step 5 of the Online Chess credits plan, which must replace the nulls with its path and specifier). */
+ *  has not landed yet carries `null` for both: it is still scanned for imports, and the runner half is owed by the task that adds the runner.
+ *  None does now: the price leaf's runner landed with Task 7 of the Online Chess credits plan (the smoke suite chooses sizes off its ladder). */
 const LEAVES: [leaf: string, runner: string | null, specifier: string | null][] = [
   ["server/usecases/external-play/sweep/pass-limits.ts", "apps/web/e2e/load/chess-30-boards.load.ts", "../../src/server/usecases/external-play/sweep/pass-limits"],
   ["server/external-play/video/budget-limits.ts", "apps/web/e2e/load/load-stats.ts", "../../src/server/external-play/video/budget-limits"],
   ["lib/online-chess-cap.ts", "scripts/smoke/suites/onlineChessDesk.ts", "../../../apps/web/src/lib/online-chess-cap.ts"],
-  ["lib/online-chess-package.ts", null, null], // the price leaf; onlineChessDesk.ts starts importing it in Task 7 Step 5
+  ["lib/online-chess-package.ts", "scripts/smoke/suites/onlineChessDesk.ts", "../../../apps/web/src/lib/online-chess-package.ts"], // the price leaf: the smoke suite picks sizes off its ladder
 ];
 
 /** Every module a source depends on: a static import (bare, with bindings, or type-only), a re-export from, a dynamic import, a require.
@@ -85,7 +85,7 @@ describe("the import-free leaves import nothing (cap-256 review m2)", () => {
       checked += 1;
     }
     expect(checked, "leaves scanned").toBe(4);
-    expect(withRunner, "leaves whose runner was checked").toBe(3);
+    expect(withRunner, "leaves whose runner was checked").toBe(4);
   });
 
   it("the tripwire's own detector: it fires on a relative import, with or without .ts, and on an aliased one; it is silent otherwise", () => {
@@ -111,19 +111,27 @@ describe("the import-free leaves import nothing (cap-256 review m2)", () => {
     expect(suiteImportsLeaf(desk, readFileSync(desk, "utf8"), join(WEB, "src", "lib", "online-chess-cap.ts"), "lib/online-chess-cap.ts")).toBe(true);
   });
 
-  it("a leaf with a null runner is imported by NO smoke suite: null means 'no runner imports it yet', so the first import forces the tuple to be filled in", () => {
+  it("the tuple is the truth both ways: a leaf with a null runner is imported by NO smoke suite, and a leaf whose runner is a smoke suite IS imported by it", () => {
     const suites = readdirSync(SMOKE_SUITES).filter((f) => f.endsWith(".ts"));
     expect(suites.length, "smoke suite files scanned (zero is a failure)").toBeGreaterThan(0);
     const sources = suites.map((f) => [join(SMOKE_SUITES, f), readFileSync(join(SMOKE_SUITES, f), "utf8")] as const);
+    const importersOf = (leaf: string): string[] =>
+      sources.filter(([file, source]) => suiteImportsLeaf(file, source, join(WEB, "src", leaf), leaf)).map(([file]) => file.slice(SMOKE_SUITES.length + 1));
     let nullLeaves = 0;
+    let smokeRunners = 0;
     for (const [leaf, runner] of LEAVES) {
-      if (runner !== null) continue;
-      nullLeaves += 1;
-      const importers = sources
-        .filter(([file, source]) => suiteImportsLeaf(file, source, join(WEB, "src", leaf), leaf))
-        .map(([file]) => file.slice(SMOKE_SUITES.length + 1));
-      expect(importers, `${leaf} has a null runner but ${importers.join(", ")} imports it: put that suite's path and specifier in LEAVES`).toEqual([]);
+      const importers = importersOf(leaf);
+      if (runner === null) {
+        // null means "no runner imports it yet": the first import forces the tuple to be filled in.
+        nullLeaves += 1;
+        expect(importers, `${leaf} has a null runner but ${importers.join(", ")} imports it: put that suite's path and specifier in LEAVES`).toEqual([]);
+      } else if (runner.startsWith("scripts/smoke/suites/")) {
+        // the other direction: the runner the tuple names really imports the leaf (the guard above would be a dead tripwire for it)
+        smokeRunners += 1;
+        expect(importers, `${runner} is named as ${leaf}'s runner, so the smoke scan must find it importing it`).toContain(runner.slice("scripts/smoke/suites/".length));
+      }
     }
-    expect(nullLeaves, "leaves with a null runner (the tripwire's subjects)").toBe(1);
+    expect(nullLeaves, "leaves with a null runner (the tripwire's subjects: none since Task 7 of the Online Chess credits plan)").toBe(0);
+    expect(smokeRunners, "leaves whose runner is a smoke suite (the cap leaf and the price leaf)").toBe(2);
   });
 });
