@@ -18,7 +18,11 @@
 //
 // The delivery test WRITES: it re-saves the fixture's own `scheduled_at` through `PATCH /api/v1/fixtures/{id}`. Nothing
 // moves (no court or time changes, so no official is emailed), but the write appends a `schedule_edited` step to the
-// division's ledger (an Undo entry, from = to) and bumps its seq. Point it at a competition made for the purpose.
+// division's ledger (an Undo entry, from = to) and bumps its seq. Point it at a competition made for the purpose. It
+// REFUSES any base that is not stg or local (`target-guard.ts`) unless REALTIME_PROBE_ALLOW_PROD=1 is set.
+//
+// No trace, video or screenshot (review m3): the project's `retain-on-failure` trace would keep the `sc_` Bearer header,
+// and the door's token, in a local trace.zip after a failed run.
 //
 // What it proves and measures (Task 12 serves the token; Task 13's browser code joins with it; Task 14 publishes):
 //   1. the door answers an anonymous spectator `private, no-store`, with exactly the reply's keys, an https url with no
@@ -38,6 +42,7 @@
 import { test, expect, request as pwRequest } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { createClient, type RealtimeChannel } from "@supabase/supabase-js";
+import { probeWriteRefusal } from "./target-guard";
 
 const COMPETITION = process.env.REALTIME_PROBE_COMPETITION;
 const FIXTURE = process.env.REALTIME_PROBE_FIXTURE;
@@ -112,6 +117,11 @@ async function within(budgetMs: number, done: () => boolean): Promise<boolean> {
   return done();
 }
 
+// No trace, video or screenshot (Task 14 review m3): the project's `retain-on-failure` trace would keep this probe's
+// Bearer credential and realtime token in a local trace.zip after a failed run. Top level: these options force a new
+// worker, which Playwright refuses inside a describe.
+test.use({ trace: "off", video: "off", screenshot: "off" });
+
 test.describe("CS-4 probe: the competition's division door and private division topics on a real socket", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
 
@@ -141,6 +151,9 @@ test.describe("CS-4 probe: the competition's division door and private division 
     expect(COMPETITION, "STG-local probe: set REALTIME_PROBE_COMPETITION — it never skips").toBeTruthy();
     expect(FIXTURE, "STG-local probe: set REALTIME_PROBE_FIXTURE (an unplayed fixture of that competition) — it never skips").toBeTruthy();
     expect(API_KEY, "STG-local probe: set REALTIME_PROBE_API_KEY (an sc_ key of that org, manage scope) — it never skips").toBeTruthy();
+    // This test writes. It refuses prod and every other non-stg, non-local base, before it reads or writes anything.
+    const refusal = probeWriteRefusal(baseURL, process.env.REALTIME_PROBE_ALLOW_PROD);
+    if (refusal !== null) throw new Error(`CS-4 probe refused: ${refusal}`);
     const door = await openDoor(baseURL);
     const organiser = await pwRequest.newContext({ baseURL, extraHTTPHeaders: { Authorization: `Bearer ${API_KEY}` } });
     const closers: Array<() => Promise<void>> = [];

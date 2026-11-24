@@ -50,6 +50,11 @@ function joinChannel(rt: Realtime, topic: string): Promise<{ status: string; ms:
   });
 }
 
+// No trace, video or screenshot (Task 14 review m3): the project's `retain-on-failure` trace would keep this probe's
+// Bearer credential and realtime token in a local trace.zip after a failed run. Top level: these options force a new
+// worker, which Playwright refuses inside a describe.
+test.use({ trace: "off", video: "off", screenshot: "off" });
+
 test.describe("CS-4 probe: the capture phone's realtime channel on a real socket", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
 
