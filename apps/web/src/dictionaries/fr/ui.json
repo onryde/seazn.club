@@ -3744,7 +3744,7 @@
   "onlineChess.size.note.pay.other": "payer {count} crédits de plus",
   "onlineChess.size.note.back.one": "{count} crédit rendu",
   "onlineChess.size.note.back.other": "{count} crédits rendus",
-  "onlineChess.size.plan.community": "Communauté",
+  "onlineChess.size.plan.community": "Community",
   "onlineChess.size.plan.pro": "Pro",
   "onlineChess.size.plan.enterprise": "Enterprise",
   "onlineChess.size.plan.unknown": "actuelle",
