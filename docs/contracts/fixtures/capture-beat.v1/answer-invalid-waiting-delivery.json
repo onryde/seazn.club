@@ -1,0 +1,17 @@
+{
+  "state": "waiting",
+  "label": "Match 3",
+  "scheduledStart": null,
+  "autoAllowed": false,
+  "destinationName": null,
+  "overlayUrl": null,
+  "pollSeconds": 5,
+  "delivery": {
+    "relayOutput": "connected",
+    "programmePhase": "live",
+    "fps": 30,
+    "kbps": 4500,
+    "cameraIngest": "connected",
+    "programmeIngest": "connected"
+  }
+}

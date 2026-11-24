@@ -451,63 +451,6 @@
               ],
               "additionalProperties": false
             },
-            "delivery": {
-              "description": "Delivery facts (Task 46, 2026-11-24), so the phone can tell \"my camera reaches Cloudflare but the programme is down\" from \"all fine\": what the relay and Cloudflare last said about the session's video. This server sends it on go-live and live only, to the slot's current phone, for any session with a fact to tell: a composed session's relay and both its inputs, a passthrough session's camera input only (it has no relay and no programme); never on replaced or taken. Each member is omitted, never null, when it is not known; when none is known the object is omitted, never empty and never null. Plain values only: no URL, host, id, key or token. A phone reads an unknown word in any member as not known.",
-              "type": "object",
-              "properties": {
-                "relayOutput": {
-                  "description": "The relay's output to the programme, as the relay's last beat reported it: connecting, connected or backoff (waiting to retry). Omitted when that beat is older than three of the relay's beats, when it was the relay's final beat, or when it reported none.",
-                  "type": "string",
-                  "enum": [
-                    "connecting",
-                    "connected",
-                    "backoff"
-                  ]
-                },
-                "programmePhase": {
-                  "description": "What the programme shows, as the relay's last beat reported it: waiting, live, frozen (the camera's picture stalled), reconnecting or final. Omitted on the same terms as relayOutput.",
-                  "type": "string",
-                  "enum": [
-                    "waiting",
-                    "live",
-                    "frozen",
-                    "reconnecting",
-                    "final"
-                  ]
-                },
-                "fps": {
-                  "description": "The programme's frames per second, as the relay's last beat reported it, rounded to a whole number. Omitted on the same terms as relayOutput.",
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 9007199254740991
-                },
-                "kbps": {
-                  "description": "The programme's bitrate in kbit/s, as the relay's last beat reported it, rounded to a whole number. Omitted on the same terms as relayOutput.",
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 9007199254740991
-                },
-                "cameraIngest": {
-                  "description": "The phone's camera feed at Cloudflare, from the latest live-input notification Cloudflare sent for it: connected, disconnected or errored. Omitted when Cloudflare has sent none.",
-                  "type": "string",
-                  "enum": [
-                    "connected",
-                    "disconnected",
-                    "errored"
-                  ]
-                },
-                "programmeIngest": {
-                  "description": "The programme feed at Cloudflare (a composed session's only), from the latest live-input notification Cloudflare sent for it: connected, disconnected or errored. Omitted when Cloudflare has sent none.",
-                  "type": "string",
-                  "enum": [
-                    "connected",
-                    "disconnected",
-                    "errored"
-                  ]
-                }
-              },
-              "additionalProperties": false
-            },
             "state": {
               "type": "string",
               "const": "waiting"
@@ -667,8 +610,27 @@
               ],
               "additionalProperties": false
             },
+            "state": {
+              "type": "string",
+              "const": "go-live"
+            },
+            "sid": {
+              "description": "The broadcast session (§6.3.3).",
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "startedBy": {
+              "description": "go-live only: who asked for the broadcast (§6.3.3, §17.5).",
+              "type": "string",
+              "enum": [
+                "organiser",
+                "automatic",
+                "operator"
+              ]
+            },
             "delivery": {
-              "description": "Delivery facts (Task 46, 2026-11-24), so the phone can tell \"my camera reaches Cloudflare but the programme is down\" from \"all fine\": what the relay and Cloudflare last said about the session's video. This server sends it on go-live and live only, to the slot's current phone, for any session with a fact to tell: a composed session's relay and both its inputs, a passthrough session's camera input only (it has no relay and no programme); never on replaced or taken. Each member is omitted, never null, when it is not known; when none is known the object is omitted, never empty and never null. Plain values only: no URL, host, id, key or token. A phone reads an unknown word in any member as not known.",
+              "description": "Delivery facts (Task 46, 2026-11-24), so the phone can tell \"my camera reaches Cloudflare but the programme is down\" from \"all fine\": what the relay and Cloudflare last said about the session's video. On go-live and live only (the two answers that tell the phone to publish; no other answer admits it), to the slot's current phone, for any session with a fact to tell: a composed session's relay and both its inputs, a passthrough session's camera input only (it has no relay and no programme). Each member is omitted, never null, when it is not known; when none is known the object is omitted, never empty and never null. Plain values only: no URL, host, id, key or token. A phone reads an unknown word in any member as not known.",
               "type": "object",
               "properties": {
                 "relayOutput": {
@@ -723,25 +685,6 @@
                 }
               },
               "additionalProperties": false
-            },
-            "state": {
-              "type": "string",
-              "const": "go-live"
-            },
-            "sid": {
-              "description": "The broadcast session (§6.3.3).",
-              "type": "string",
-              "format": "uuid",
-              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-            },
-            "startedBy": {
-              "description": "go-live only: who asked for the broadcast (§6.3.3, §17.5).",
-              "type": "string",
-              "enum": [
-                "organiser",
-                "automatic",
-                "operator"
-              ]
             }
           },
           "required": [
@@ -887,8 +830,18 @@
               ],
               "additionalProperties": false
             },
+            "state": {
+              "type": "string",
+              "const": "live"
+            },
+            "sid": {
+              "description": "The broadcast session (§6.3.3).",
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
             "delivery": {
-              "description": "Delivery facts (Task 46, 2026-11-24), so the phone can tell \"my camera reaches Cloudflare but the programme is down\" from \"all fine\": what the relay and Cloudflare last said about the session's video. This server sends it on go-live and live only, to the slot's current phone, for any session with a fact to tell: a composed session's relay and both its inputs, a passthrough session's camera input only (it has no relay and no programme); never on replaced or taken. Each member is omitted, never null, when it is not known; when none is known the object is omitted, never empty and never null. Plain values only: no URL, host, id, key or token. A phone reads an unknown word in any member as not known.",
+              "description": "Delivery facts (Task 46, 2026-11-24), so the phone can tell \"my camera reaches Cloudflare but the programme is down\" from \"all fine\": what the relay and Cloudflare last said about the session's video. On go-live and live only (the two answers that tell the phone to publish; no other answer admits it), to the slot's current phone, for any session with a fact to tell: a composed session's relay and both its inputs, a passthrough session's camera input only (it has no relay and no programme). Each member is omitted, never null, when it is not known; when none is known the object is omitted, never empty and never null. Plain values only: no URL, host, id, key or token. A phone reads an unknown word in any member as not known.",
               "type": "object",
               "properties": {
                 "relayOutput": {
@@ -943,16 +896,6 @@
                 }
               },
               "additionalProperties": false
-            },
-            "state": {
-              "type": "string",
-              "const": "live"
-            },
-            "sid": {
-              "description": "The broadcast session (§6.3.3).",
-              "type": "string",
-              "format": "uuid",
-              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
             }
           },
           "required": [
@@ -1095,63 +1038,6 @@
                 "token",
                 "expiresAt"
               ],
-              "additionalProperties": false
-            },
-            "delivery": {
-              "description": "Delivery facts (Task 46, 2026-11-24), so the phone can tell \"my camera reaches Cloudflare but the programme is down\" from \"all fine\": what the relay and Cloudflare last said about the session's video. This server sends it on go-live and live only, to the slot's current phone, for any session with a fact to tell: a composed session's relay and both its inputs, a passthrough session's camera input only (it has no relay and no programme); never on replaced or taken. Each member is omitted, never null, when it is not known; when none is known the object is omitted, never empty and never null. Plain values only: no URL, host, id, key or token. A phone reads an unknown word in any member as not known.",
-              "type": "object",
-              "properties": {
-                "relayOutput": {
-                  "description": "The relay's output to the programme, as the relay's last beat reported it: connecting, connected or backoff (waiting to retry). Omitted when that beat is older than three of the relay's beats, when it was the relay's final beat, or when it reported none.",
-                  "type": "string",
-                  "enum": [
-                    "connecting",
-                    "connected",
-                    "backoff"
-                  ]
-                },
-                "programmePhase": {
-                  "description": "What the programme shows, as the relay's last beat reported it: waiting, live, frozen (the camera's picture stalled), reconnecting or final. Omitted on the same terms as relayOutput.",
-                  "type": "string",
-                  "enum": [
-                    "waiting",
-                    "live",
-                    "frozen",
-                    "reconnecting",
-                    "final"
-                  ]
-                },
-                "fps": {
-                  "description": "The programme's frames per second, as the relay's last beat reported it, rounded to a whole number. Omitted on the same terms as relayOutput.",
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 9007199254740991
-                },
-                "kbps": {
-                  "description": "The programme's bitrate in kbit/s, as the relay's last beat reported it, rounded to a whole number. Omitted on the same terms as relayOutput.",
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 9007199254740991
-                },
-                "cameraIngest": {
-                  "description": "The phone's camera feed at Cloudflare, from the latest live-input notification Cloudflare sent for it: connected, disconnected or errored. Omitted when Cloudflare has sent none.",
-                  "type": "string",
-                  "enum": [
-                    "connected",
-                    "disconnected",
-                    "errored"
-                  ]
-                },
-                "programmeIngest": {
-                  "description": "The programme feed at Cloudflare (a composed session's only), from the latest live-input notification Cloudflare sent for it: connected, disconnected or errored. Omitted when Cloudflare has sent none.",
-                  "type": "string",
-                  "enum": [
-                    "connected",
-                    "disconnected",
-                    "errored"
-                  ]
-                }
-              },
               "additionalProperties": false
             },
             "state": {

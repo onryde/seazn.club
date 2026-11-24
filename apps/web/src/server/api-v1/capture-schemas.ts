@@ -234,8 +234,6 @@ const AnswerCommon = z.strictObject({
   /** Push nudges (§2.1): the code's CURRENT pairing only, so waiting, go-live, live and over; omitted, never null, when
    *  there is none. replaced and taken drop it (the caller no longer holds the pairing). */
   realtime: CaptureRealtime.optional(),
-  /** Task 46: never on replaced or taken (omitted from those branches below); omitted, never null, when nothing is known. */
-  delivery: CaptureDelivery.optional(),
 });
 const AnswerDevice = z.strictObject({ model: z.string().min(1).max(80) });
 
@@ -245,12 +243,16 @@ export const CaptureBeatAnswer = z.discriminatedUnion("state", [
     /** E2: court codes only, waiting only; omitted, never null, when there is no refusal. */
     autoRefusal: CaptureAutoRefusal.optional(),
   }),
-  AnswerCommon.extend({ state: z.literal("go-live"), sid: z.uuid(), startedBy: CaptureStartedBy }),
-  AnswerCommon.extend({ state: z.literal("live"), sid: z.uuid() }),
+  AnswerCommon.extend({
+    state: z.literal("go-live"), sid: z.uuid(), startedBy: CaptureStartedBy,
+    /** Task 46: go-live and live only (the two answers that tell the phone to publish); omitted, never null, when nothing is known. */
+    delivery: CaptureDelivery.optional(),
+  }),
+  AnswerCommon.extend({ state: z.literal("live"), sid: z.uuid(), delivery: CaptureDelivery.optional() }),
   AnswerCommon.extend({ state: z.literal("over"), sid: z.uuid(), endReason: CaptureEndReason }),
   // `.partial()` would admit `realtime` here too; `answer-invalid-replaced-realtime.json` is the guard.
-  AnswerCommon.omit({ realtime: true, delivery: true }).partial().extend({ state: z.literal("replaced"), device: AnswerDevice.optional() }),
-  AnswerCommon.omit({ realtime: true, delivery: true }).partial().extend({ state: z.literal("taken"), device: AnswerDevice.optional() }),
+  AnswerCommon.omit({ realtime: true }).partial().extend({ state: z.literal("replaced"), device: AnswerDevice.optional() }),
+  AnswerCommon.omit({ realtime: true }).partial().extend({ state: z.literal("taken"), device: AnswerDevice.optional() }),
 ]);
 export type CaptureBeatAnswer = z.infer<typeof CaptureBeatAnswer>;
 // Every branch must stay strict after .extend()/.partial(): each branch's `answer-tampered-<state>.json` (one extra

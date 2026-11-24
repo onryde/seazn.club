@@ -65413,56 +65413,6 @@
                           ],
                           "additionalProperties": false
                         },
-                        "delivery": {
-                          "type": "object",
-                          "properties": {
-                            "relayOutput": {
-                              "type": "string",
-                              "enum": [
-                                "connecting",
-                                "connected",
-                                "backoff"
-                              ]
-                            },
-                            "programmePhase": {
-                              "type": "string",
-                              "enum": [
-                                "waiting",
-                                "live",
-                                "frozen",
-                                "reconnecting",
-                                "final"
-                              ]
-                            },
-                            "fps": {
-                              "type": "integer",
-                              "minimum": 0,
-                              "maximum": 9007199254740991
-                            },
-                            "kbps": {
-                              "type": "integer",
-                              "minimum": 0,
-                              "maximum": 9007199254740991
-                            },
-                            "cameraIngest": {
-                              "type": "string",
-                              "enum": [
-                                "connected",
-                                "disconnected",
-                                "errored"
-                              ]
-                            },
-                            "programmeIngest": {
-                              "type": "string",
-                              "enum": [
-                                "connected",
-                                "disconnected",
-                                "errored"
-                              ]
-                            }
-                          },
-                          "additionalProperties": false
-                        },
                         "state": {
                           "type": "string",
                           "const": "waiting"
@@ -65605,6 +65555,23 @@
                           ],
                           "additionalProperties": false
                         },
+                        "state": {
+                          "type": "string",
+                          "const": "go-live"
+                        },
+                        "sid": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "startedBy": {
+                          "type": "string",
+                          "enum": [
+                            "organiser",
+                            "automatic",
+                            "operator"
+                          ]
+                        },
                         "delivery": {
                           "type": "object",
                           "properties": {
@@ -65654,23 +65621,6 @@
                             }
                           },
                           "additionalProperties": false
-                        },
-                        "state": {
-                          "type": "string",
-                          "const": "go-live"
-                        },
-                        "sid": {
-                          "type": "string",
-                          "format": "uuid",
-                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                        },
-                        "startedBy": {
-                          "type": "string",
-                          "enum": [
-                            "organiser",
-                            "automatic",
-                            "operator"
-                          ]
                         }
                       },
                       "required": [
@@ -65800,6 +65750,15 @@
                           ],
                           "additionalProperties": false
                         },
+                        "state": {
+                          "type": "string",
+                          "const": "live"
+                        },
+                        "sid": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
                         "delivery": {
                           "type": "object",
                           "properties": {
@@ -65849,15 +65808,6 @@
                             }
                           },
                           "additionalProperties": false
-                        },
-                        "state": {
-                          "type": "string",
-                          "const": "live"
-                        },
-                        "sid": {
-                          "type": "string",
-                          "format": "uuid",
-                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                         }
                       },
                       "required": [
@@ -65984,56 +65934,6 @@
                             "token",
                             "expiresAt"
                           ],
-                          "additionalProperties": false
-                        },
-                        "delivery": {
-                          "type": "object",
-                          "properties": {
-                            "relayOutput": {
-                              "type": "string",
-                              "enum": [
-                                "connecting",
-                                "connected",
-                                "backoff"
-                              ]
-                            },
-                            "programmePhase": {
-                              "type": "string",
-                              "enum": [
-                                "waiting",
-                                "live",
-                                "frozen",
-                                "reconnecting",
-                                "final"
-                              ]
-                            },
-                            "fps": {
-                              "type": "integer",
-                              "minimum": 0,
-                              "maximum": 9007199254740991
-                            },
-                            "kbps": {
-                              "type": "integer",
-                              "minimum": 0,
-                              "maximum": 9007199254740991
-                            },
-                            "cameraIngest": {
-                              "type": "string",
-                              "enum": [
-                                "connected",
-                                "disconnected",
-                                "errored"
-                              ]
-                            },
-                            "programmeIngest": {
-                              "type": "string",
-                              "enum": [
-                                "connected",
-                                "disconnected",
-                                "errored"
-                              ]
-                            }
-                          },
                           "additionalProperties": false
                         },
                         "state": {
