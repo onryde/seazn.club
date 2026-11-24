@@ -25,6 +25,8 @@ import {
 import { HIT_TARGET_FLOOR_PX, dismissCookieBanner } from "../scorepad-a11y-kit";
 import { openConsolePanel } from "../helpers/console-panels";
 import { projectViewport, projectTag, auditRoute } from "./_shared";
+import { fundOnlinePayment, seedOnlineRound } from "../match-room-kit";
+import { ONLINE_SIZES, packagePrice } from "../../src/lib/online-chess-package";
 
 // Not serial: no test here reads state another test writes (no module-level `let` is shared), so one red does not skip the rest (AGENTS.md class 21).
 
@@ -1538,4 +1540,67 @@ test("B5 G2 the waiting strip's Rebuild: its outcome comes into view on a phone;
   await expectNoHorizontalScroll(page);
   // Anti-vacuity: all three in-view proofs ran, at every width (fix round 1; the after-refresh one, e2e fix round 1).
   expect(inView, `in-view proofs at ${width}`).toBe(3);
+});
+
+// Online Chess credits (spec 2026-11-23-online-chess-credits-design.md §8.3-§8.7; plan Task 12): the amber pay line, the receipt and the paid chip at every
+// width project. The receipt is a modal: its confirm must be the TOP element at its own centre (a hit-test with `elementFromPoint`, not a bounding box: a
+// box measures paint, a banner or a clipped dialog can sit over it), at the 44px tap floor and inside the viewport, with no horizontal scroll on the page
+// before, during and after. The line and the chip are checked for wrapping inside the viewport the same way. Not serial: this test reads no state another
+// test writes.
+test("Online Chess credits: the pay line, the receipt and the paid chip hold at this width, and the receipt's confirm is the top element at its centre", async ({ page, request }) => {
+  const vp = projectViewport();
+  expect(vp, "a width project declares its viewport").not.toBeNull();
+  const width = vp!.width;
+  // From the taps (open the page, press Pay, press confirm, read the chip) and the seed (a division of four linked players), never a flat number.
+  const TAPS = 4;
+  test.setTimeout(120_000 + TAPS * 20_000);
+  const names = [`Riverside Rovers Community Football Club ${TAG}`, "Ana Petrova", "Bo Lindqvist", "Chen Wei"];
+  const r = await seedOnlineRound(request, names, { open: false, unpaid: true, stage: "swiss" });
+  const size = ONLINE_SIZES[0]!;
+  await fundOnlinePayment(r.divisionId, packagePrice(size, false));
+
+  await page.goto(r.fixturesTab, { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const line = page.getByTestId("online-pay-line");
+  await expect(line, "the amber line").toBeVisible({ timeout: 30_000 });
+  const inside = async (loc: Locator, what: string): Promise<void> => {
+    const box = await loc.boundingBox();
+    expect(box, `${what}: has a box`).toBeTruthy();
+    expect(box!.x, `${what} at ${width}: starts inside the viewport`).toBeGreaterThanOrEqual(-0.5);
+    expect(box!.x + box!.width, `${what} at ${width}: ends inside the viewport`).toBeLessThanOrEqual(width + 0.5);
+  };
+  await inside(line, "the pay line");
+  const pay = page.getByTestId("online-pay-line-pay");
+  const change = page.getByTestId("online-pay-line-change");
+  for (const [c, what] of [[pay, "Pay"], [change, "Change size"]] as const) {
+    await inside(c, what);
+    expect((await c.boundingBox())!.height, `${what} at ${width}: at the tap floor`).toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
+  }
+  await expectNoHorizontalScroll(page);
+
+  await pay.click();
+  const receipt = page.getByTestId("online-receipt");
+  await expect(receipt).toBeVisible({ timeout: 20_000 });
+  const confirm = page.getByTestId("online-receipt-confirm");
+  await expect(confirm, "the quote is read: the confirm is a payment").toBeEnabled({ timeout: 30_000 });
+  await inside(receipt, "the receipt");
+  await inside(confirm, "the confirm");
+  expect((await confirm.boundingBox())!.height, `the confirm at ${width}: at the tap floor`).toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
+  // The hit test: whatever is on top at the confirm's centre is the confirm (or a child of it).
+  const top = await confirm.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return hit !== null && (hit === el || el.contains(hit));
+  });
+  expect(top, `the confirm at ${width} is the top element at its centre`).toBe(true);
+  await expectNoHorizontalScroll(page);
+  expect(await confirm.textContent(), "premise: it is the payment's own confirm").toContain(String(packagePrice(size, false)));
+
+  await confirm.click();
+  const chip = page.getByTestId("online-paid-chip");
+  await expect(chip, "paid: the chip").toBeVisible({ timeout: 30_000 });
+  await inside(chip, "the paid chip");
+  await inside(page.getByTestId("online-paid-chip-change"), "the chip's Change size");
+  await expect(line, "paid: the amber line is gone").toHaveCount(0);
+  await expectNoHorizontalScroll(page);
 });

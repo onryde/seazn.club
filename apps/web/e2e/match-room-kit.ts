@@ -171,7 +171,7 @@ async function createLegacyLeague(request: APIRequestContext, divisionId: string
  *  lock (the key `lockOrg` takes: stream-credits.ts `orgMoneyLockKey`), with `balance_after` the org total after the row as every
  *  ledger writer keeps it. A worker never spends another's grant, so concurrent payers cannot leave each other short. The one
  *  staff-shaped write here (V426's grant row: no API grants credits but Stripe); the PAYMENT itself is the real route's. */
-async function fundOnlinePayment(divisionId: string, credits: number): Promise<void> {
+export async function fundOnlinePayment(divisionId: string, credits: number): Promise<void> {
   if (credits <= 0) return;
   await withDb((sql) =>
     sql.begin(async (tx) => {
@@ -242,11 +242,13 @@ async function openRoundOne(request: APIRequestContext, stageId: string, divisio
 export async function setUpOnlineDivision(
   request: APIRequestContext,
   divisionId: string,
-  opts: { stage?: OnlineStage | undefined; open?: boolean | undefined } = {},
+  opts: { stage?: OnlineStage | undefined; open?: boolean | undefined; unpaid?: boolean | undefined } = {},
 ): Promise<{ stageId: string; fixtureIds: string[] }> {
   const kind = opts.stage ?? "league";
   const payOnOpen = kind !== "league" && opts.open !== false;
-  if (!payOnOpen) await payThroughPayDoor(request, divisionId);
+  // `unpaid` (Online Chess credits, Task 12): a division left unopened is NORMALLY paid at the pay door so the round the spec opens itself is a
+  // paid one; the spec that proves the PAYMENT (the pay line, the receipt, the 402 at Open round) asks for it left owing.
+  if (!payOnOpen && opts.unpaid !== true) await payThroughPayDoor(request, divisionId);
   let stageId: string;
   let fixtureIds: string[];
   if (kind === "swiss") {
@@ -529,6 +531,8 @@ export async function seedOnlineRound(
   names: string[],
   opts: {
     open?: boolean;
+    /** Leave the package UNPAID (only with `open: false`): the spec proves the payment itself - the pay line, the receipt, the 402 at Open round. */
+    unpaid?: boolean;
     /** The division's camera policy, written before Start. Unset/"off" leaves
      *  the competition's floor (`off`, no tile); "optional" shows the tile
      *  with no duty; "required" gates every seat on the meeting. */
@@ -604,7 +608,7 @@ export async function seedOnlineRound(
   expect(ents.status, `entrants: ${JSON.stringify(ents.error)}`).toBeLessThan(300);
   const byEntrant = new Map(ents.data!.map((e, i) => [e.id, { ...people[i]!, entrantId: e.id }]));
 
-  const { stageId } = await setUpOnlineDivision(request, divisionId, { stage: opts.stage, open: opts.open });
+  const { stageId } = await setUpOnlineDivision(request, divisionId, { stage: opts.stage, open: opts.open, unpaid: opts.unpaid });
 
   return withDb(async (sql) => {
     const rows = await sql<{ id: string; home: string; away: string }[]>`
