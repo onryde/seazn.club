@@ -57,6 +57,10 @@ const stripComments = (sql: string) => sql.replace(/\/\*[\s\S]*?\*\//g, " ").rep
 
 const unquote = (s: string) => s.trim().replace(/^"|"$/g, "").toLowerCase();
 
+/** A possibly schema-qualified identifier with each dotted part unquoted: `"realtime"."messages"` → `realtime.messages`. */
+const unquoteIdent = (s: string) =>
+  (s.trim().match(/"(?:[^"]|"")*"|[^."]+/g) ?? []).map((part) => unquote(part).replace(/""/g, '"')).join(".");
+
 /** Each statement starting at `start`, with where it starts: up to the next `;` or `$sql$` (a statement run by `execute`). */
 function statements(sql: string, start: RegExp): { index: number; text: string }[] {
   const out: { index: number; text: string }[] = [];
@@ -96,7 +100,7 @@ function policyStatements(file: string, sql: string): (Policy & { start: number;
     const head = rest.split(/\busing\b|\bwith\s+check\b/i)[0]!;
     const to = /^\s*rename\s+to\b/i.test(rest) ? null : /\bto\s+([\s\S]+)$/i.exec(head);
     const roles = to ? to[1]!.split(",").map(unquote).filter(Boolean) : create ? ["public"] : [];
-    return { file, name: unquote(m[2]!), table: unquote(m[3]!), roles, text, start: index, end: index + text.length };
+    return { file, name: unquote(m[2]!), table: unquoteIdent(m[3]!), roles, text, start: index, end: index + text.length };
   });
 }
 
@@ -116,7 +120,7 @@ function parseGrants(file: string, raw: string): Grant[] {
       {
         file,
         privileges: splitTopLevel(m[1]!).map((p) => p.toLowerCase().replace(/\s+/g, " ")),
-        objects: objects.startsWith("all ") ? [objects] : objects.split(",").map(unquote),
+        objects: objects.startsWith("all ") ? [objects] : objects.split(",").map(unquoteIdent),
         grantees: m[3]!.split(",").map(unquote),
       },
     ];
@@ -197,6 +201,14 @@ describe("§4.5 role sweep — the checkers fire (synthetic SQL, both ways)", ()
     expect(
       tokenRolePolicies(pol("execute $sql$ create policy \"r\" on realtime.messages for select to authenticated using (true) $sql$;")),
     ).toEqual([]);
+    // A quoted, dotted name is the same table: each part unquoted.
+    expect(pol('create policy p on "realtime"."messages" for select to authenticated using (true);')[0]!.table).toBe(
+      "realtime.messages",
+    );
+    expect(tokenRolePolicies(pol('create policy p on "realtime".messages to anon using (true);'))).toEqual([]);
+    expect(tokenRolePolicies(pol('create policy p on "public"."fixtures" to anon using (true);'))).toEqual([
+      "synthetic.sql: policy p on public.fixtures to anon",
+    ]);
     // A policy named in a comment is not a policy.
     expect(pol("-- create policy p on fixtures to anon\nselect 1;")).toEqual([]);
   });
@@ -281,7 +293,7 @@ describe("§4.5 role sweep — every migration (static)", () => {
   const policies = files.flatMap((f) => parsePolicies(relative(MIGRATIONS, f), readFileSync(f, "utf8")));
   const grants = files.flatMap((f) => parseGrants(relative(MIGRATIONS, f), readFileSync(f, "utf8")));
 
-  it("scans every migration: files, policies and grants all non-zero", () => {
+  it("scans every migration: files, policies and grants non-zero; realtime.messages policies exactly 4", () => {
     const b = authenticatedOnlySelects(grants);
     const c = realtimeClaimFailures(policies);
     console.log(
@@ -291,8 +303,8 @@ describe("§4.5 role sweep — every migration (static)", () => {
     expect(files.length, "migration files scanned").toBeGreaterThan(0);
     expect(policies.length, "create policy statements scanned").toBeGreaterThan(0);
     expect(grants.length, "grant statements scanned").toBeGreaterThan(0);
-    // V403 and V452 (each re-created by V537): fewer than two means the parser lost them.
-    expect(c.realtime, "realtime.messages policies scanned").toBeGreaterThanOrEqual(2);
+    // V403 and V452, each re-created by V537. Pinned: a new realtime policy (V554–V556) moves this on purpose.
+    expect(c.realtime, "realtime.messages policy statements scanned").toBe(4);
   });
 
   it("(a) no policy outside realtime.messages names authenticated, anon or public", () => {
