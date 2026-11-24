@@ -509,7 +509,7 @@ export default async function CompetitionPage({
           {/* Match Day B1 (spec §9): the live strip that sat here (W3's InPlayBand) is gone — live state is Match Day's — and
               the Needs-you list lives in one place at a time: here before the day, in Match Day on a match day, where this
               page keeps one line pointing at it. */}
-          <NeedsYou dict={dict} items={needsHere} />
+          {chrome.showNeedsYou && <NeedsYou dict={dict} items={needsHere} />}
           {needsInMatchDay > 0 && needsInMatchDayTone !== null && (
             <NeedsYouInMatchDay
               href={routes.competitionMatchDay(orgSlug, compSlug)}

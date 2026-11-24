@@ -21,7 +21,7 @@ describe("deskChrome - empty / unknown first", () => {
   // `setting_up` because it has ZERO divisions is NOT finished - it keeps every tool and a primary "Add division".
   it("no phase (desk failed to load) is not finished: nothing is hidden", () => {
     expect(deskChrome({ ...LIVE, phaseKind: null })).toEqual({
-      finished: false, showRegistration: true, showScheduleBoard: true, addDivision: "primary", ledgerListsFinished: false,
+      finished: false, showRegistration: true, showScheduleBoard: true, addDivision: "primary", ledgerListsFinished: false, showNeedsYou: true,
     });
   });
   it("a competition with no divisions reads setting_up: not finished, primary add", () => {
@@ -35,7 +35,7 @@ describe("deskChrome - finished competition", () => {
   const c = deskChrome({ ...LIVE, phaseKind: "finished" });
   it("hides Registration and the schedule board, lists finished divisions, demotes Add division", () => {
     expect(c).toEqual({
-      finished: true, showRegistration: false, showScheduleBoard: false, addDivision: "quiet", ledgerListsFinished: true,
+      finished: true, showRegistration: false, showScheduleBoard: false, addDivision: "quiet", ledgerListsFinished: true, showNeedsYou: true,
     });
   });
   it("only the finished phase changes the shape: every other competition phase keeps the full header", () => {
@@ -43,7 +43,7 @@ describe("deskChrome - finished competition", () => {
     expect(others.length).toBeGreaterThan(0); // anti-vacuity
     for (const k of others) {
       expect(deskChrome({ ...LIVE, phaseKind: k }), k).toEqual({
-        finished: false, showRegistration: true, showScheduleBoard: true, addDivision: "primary", ledgerListsFinished: false,
+        finished: false, showRegistration: true, showScheduleBoard: true, addDivision: "primary", ledgerListsFinished: false, showNeedsYou: true,
       });
     }
   });
@@ -58,7 +58,7 @@ describe("deskChrome - finished competition", () => {
   });
 });
 
-describe("deskChrome - an ended (completed/archived) competition: no Add division, no Registration, no schedule board, in every phase", () => {
+describe("deskChrome - an ended (completed/archived) competition: no Add division, no Registration, no schedule board, no Needs-you card, in every phase", () => {
   it("every terminal status x every phase kind (and no phase) hides all three; `finished` and the ledger stay the phase's own", () => {
     let judged = 0;
     for (const status of ["completed", "archived"]) {
@@ -67,6 +67,7 @@ describe("deskChrome - an ended (completed/archived) competition: no Add divisio
         expect(c.addDivision, `${status}/${phaseKind}`).toBe("none");
         expect(c.showRegistration, `${status}/${phaseKind}`).toBe(false);
         expect(c.showScheduleBoard, `${status}/${phaseKind}`).toBe(false);
+        expect(c.showNeedsYou, `${status}/${phaseKind}: an over competition has nothing left to ask of you`).toBe(false);
         expect(c.finished, `${status}/${phaseKind}: the phase's own`).toBe(phaseKind === "finished");
         expect(c.ledgerListsFinished, `${status}/${phaseKind}: the phase's own`).toBe(phaseKind === "finished");
         judged++;
@@ -82,6 +83,7 @@ describe("deskChrome - an ended (completed/archived) competition: no Add divisio
         expect(c.addDivision, `${status}/${phaseKind}`).toBe("primary");
         expect(c.showRegistration, `${status}/${phaseKind}`).toBe(true);
         expect(c.showScheduleBoard, `${status}/${phaseKind}`).toBe(true);
+        expect(c.showNeedsYou, `${status}/${phaseKind}`).toBe(true);
         judged++;
       }
       expect(deskChrome({ status, canEdit: true, frozen: false, phaseKind: "finished" }).addDivision, `${status} finished`).toBe("quiet");
@@ -90,6 +92,6 @@ describe("deskChrome - an ended (completed/archived) competition: no Add divisio
   });
   it("a view-only member of an ended competition sees none of them either (Registration and the board are the competition's, not the role's)", () => {
     const c = deskChrome({ status: "completed", canEdit: false, frozen: false, phaseKind: "scheduled" });
-    expect([c.addDivision, c.showRegistration, c.showScheduleBoard]).toEqual(["none", false, false]);
+    expect([c.addDivision, c.showRegistration, c.showScheduleBoard, c.showNeedsYou]).toEqual(["none", false, false, false]);
   });
 });

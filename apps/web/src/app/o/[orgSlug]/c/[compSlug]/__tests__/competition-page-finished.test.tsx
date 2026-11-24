@@ -5,7 +5,8 @@
 //     no Multi Schedule Board, Open menu + Settings kept, "Add another division" a quiet link (not the primary button);
 //   - a LIVE competition keeps the switch, Registration, the board and the primary button;
 //   - completed / archived, in BOTH phases: no Add division anywhere (the write answers 409 COMPETITION_ENDED), and - being over - no
-//     Registration entry and no Multi Schedule Board either, whatever the derived phase (owner, 2026-11-24).
+//     Registration entry and no Multi Schedule Board either, whatever the derived phase (owner, 2026-11-24), and no "Needs you"
+//     attention card (its rows - "Open schedule board" and the rest - ask for work an over competition cannot take).
 // Empty case first: a competition with no divisions is not finished.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -17,6 +18,7 @@ const h = vi.hoisted(() => ({
   status: "live",
   canEdit: true,
   frozen: false,
+  attention: [] as { kind: string; count: number }[],
 }));
 
 vi.mock("@/server/page-auth", () => ({
@@ -50,7 +52,7 @@ vi.mock("@/server/usecases/competition-desk", async (importOriginal) => ({
         d.id,
         {
           phase: h.phases[d.id] as "scheduled" | "finished",
-          attention: [],
+          attention: h.attention as never,
           played: 1, total: 1, unscheduled: 0, in_play: 0, entrants: 4, next: null, needs_draw_stage: null,
           fixture_names: {}, display_tz: "UTC",
         },
@@ -109,6 +111,7 @@ beforeEach(() => {
   h.status = "live";
   h.canEdit = true;
   h.frozen = false;
+  h.attention = [];
   seed(0, 0);
 });
 
@@ -246,5 +249,43 @@ describe("a completed or archived competition offers no Add division, in both ph
     expect(addLinks(await render())).toBe(0);
     seed(0, 2);
     expect(addLinks(await render())).toBe(0);
+  });
+});
+
+// The "Needs you" card (desk-needs-you) is for a competition that can still be acted on. Completed / archived: gone, at every width (one DOM -
+// there is no phone twin to check separately), whatever the phase. The positive pair is the same desk on a live status.
+describe("the Needs-you card on an ended competition", () => {
+  const UNSCHEDULED = [{ kind: "unscheduled", count: 2 }];
+  const card = (html: string) => has(html, "desk-needs-you");
+
+  it("the positive pair first: a desk with unscheduled fixtures on a draft / published / live competition shows the card, with its rows", async () => {
+    let judged = 0;
+    for (const status of ["draft", "published", "live"]) {
+      h.status = status;
+      h.attention = UNSCHEDULED;
+      seed(0, 2);
+      const html = await render();
+      expect(card(html), `${status}: the card shows`).toBe(true);
+      expect(html.match(/data-attention="unscheduled"/g)?.length, `${status}: one row per division with the gap`).toBe(2);
+      expect(html).toContain(t(en, "desk.needsYou.unscheduled.action"));
+      judged++;
+    }
+    expect(judged).toBe(3);
+  });
+
+  it.each(["completed", "archived"])("%s: the card and its rows are gone in the live phase, the finished phase, and with no divisions", async (status) => {
+    h.status = status;
+    h.attention = UNSCHEDULED;
+    let judged = 0;
+    for (const [fin, live] of [[0, 2], [2, 0], [1, 2], [0, 0]] as const) {
+      seed(fin, live);
+      const html = await render();
+      expect(has(html, "desk-open-menu"), `${status} ${fin}/${live}: the page rendered, not an error shell`).toBe(true);
+      expect(card(html), `${status} ${fin}/${live}`).toBe(false);
+      expect(html, `${status} ${fin}/${live}: no row`).not.toContain('data-attention="unscheduled"');
+      expect(html, `${status} ${fin}/${live}: no action`).not.toContain(t(en, "desk.needsYou.unscheduled.action"));
+      judged++;
+    }
+    expect(judged).toBe(4);
   });
 });

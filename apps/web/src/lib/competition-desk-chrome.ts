@@ -3,7 +3,7 @@
 // divisions are listed, the tools that run a live event (Registration, the Multi Schedule Board) go, and "Add division" steps
 // back from the primary button to a quiet link. Independently of phase, a COMPLETED or ARCHIVED competition is over (owner,
 // 2026-11-24): it cannot take a new division (the write answers 409 COMPETITION_ENDED), and Registration and the Multi Schedule Board
-// go as they do for the finished phase - one `ended` reading of the status, whatever the derived phase says.
+// go as they do for the finished phase, and so does the "Needs you" card - one `ended` reading of the status, whatever the derived phase says.
 
 import { competitionIsEnded } from "@/lib/entitlements";
 
@@ -25,6 +25,9 @@ export interface DeskChrome {
   addDivision: "primary" | "quiet" | "none";
   /** The ledger lists finished divisions with no "Show finished" switch. */
   ledgerListsFinished: boolean;
+  /** The "Needs you" attention card. An ended (completed / archived) competition has nothing left to ask of its organiser - whatever the
+   *  phase says, and at every width (one DOM) - so the card is gone there; every other status keeps it. */
+  showNeedsYou: boolean;
 }
 
 export function deskChrome({ phaseKind, status, canEdit, frozen }: DeskChromeInput): DeskChrome {
@@ -37,5 +40,6 @@ export function deskChrome({ phaseKind, status, canEdit, frozen }: DeskChromeInp
     showScheduleBoard: !finished && !ended,
     addDivision: !mayAdd ? "none" : finished ? "quiet" : "primary",
     ledgerListsFinished: finished,
+    showNeedsYou: !ended,
   };
 }
