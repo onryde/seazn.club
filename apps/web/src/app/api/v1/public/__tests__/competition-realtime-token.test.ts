@@ -5,7 +5,8 @@
 //
 // What is pinned, each against the plan's decisions, never the code under test:
 //   - the spectator path: a public (or unlisted) competition whose org holds `realtime` answers 200 with EVERY division of it
-//     (a division not yet live included), read back from the base table as the oracle; `private, no-store`; `expiresAt` in
+//     (a division not yet live included), read back from `public_divisions_v` as the oracle; an ARCHIVED division (the
+//     product's withdrawal) is absent on both paths and never counts toward a cap; `private, no-store`; `expiresAt` in
 //     epoch SECONDS = the token's own `exp` = now + 3600; the token's `division_ids` = the reply's `divisionIds`;
 //   - refusals: not entitled 403; a private competition 404 (anonymous, and a signed-in stranger); an unknown or slug id 404;
 //     0 divisions 403 `no_divisions`; 101 divisions 403 `too_many_divisions` (100 is served); none of them mints;
@@ -155,10 +156,20 @@ async function seed(opts: { realtime: boolean; visibility: "public" | "unlisted"
   return { orgId, orgSlug, compId, compSlug, fixtureId };
 }
 
-/** The oracle: every division of the competition, as the base table holds it. */
+/** The officials' oracle: every division of the competition the product still holds (an archived one is withdrawn:
+ *  `archiveDivision` sets `archived_at`). */
 async function divisionsOf(compId: string): Promise<string[]> {
-  const rows = await sql<{ id: string }[]>`select id from divisions where competition_id = ${compId}`;
+  const rows = await sql<{ id: string }[]>`select id from divisions where competition_id = ${compId} and archived_at is null`;
   return rows.map((r) => r.id).sort();
+}
+/** The spectators' oracle: the competition's divisions as the PUBLIC view lists them. */
+async function publicDivisionsOf(compId: string): Promise<string[]> {
+  const rows = await sql<{ id: string }[]>`select id from public_divisions_v where competition_id = ${compId}`;
+  return rows.map((r) => r.id).sort();
+}
+/** Withdraw a division the way the product does (`archiveDivision`: archived_at, the row kept). */
+async function archive(divisionId: string): Promise<void> {
+  await sql`update divisions set archived_at = now() where id = ${divisionId}`;
 }
 
 /** A signed-in user holding `role` in the org. */
@@ -213,7 +224,7 @@ async function claimsOf(token: string) {
 describe.skipIf(!HAS_DB)("GET /api/v1/public/competitions/{id}/realtime-token â€” spectators", () => {
   it("anonymous, entitled, public: 200 with EVERY division (one not yet live among them), no-store, exp = expiresAt = now + 3600", async () => {
     const c = await seed({ realtime: true, visibility: "public", divisions: 3 });
-    const expected = await divisionsOf(c.compId);
+    const expected = await publicDivisionsOf(c.compId);
     expect(expected, "PREMISE: three divisions").toHaveLength(3);
     const [{ n: notLive }] = await sql<{ n: number }[]>`select count(*)::int as n from divisions where competition_id = ${c.compId} and status = 'setup'`;
     expect(notLive, "PREMISE: two of them are not live yet").toBe(2);
@@ -235,7 +246,7 @@ describe.skipIf(!HAS_DB)("GET /api/v1/public/competitions/{id}/realtime-token â€
 
   it("an unlisted competition is readable by anyone with the link: 200 too", async () => {
     const c = await seed({ realtime: true, visibility: "unlisted", divisions: 2 });
-    expect([...(await served(await door(c.compId))).divisionIds].sort()).toEqual(await divisionsOf(c.compId));
+    expect([...(await served(await door(c.compId))).divisionIds].sort()).toEqual(await publicDivisionsOf(c.compId));
   });
 
   it("anonymous, NOT entitled: 403, and nothing is minted", async () => {
@@ -265,7 +276,7 @@ describe.skipIf(!HAS_DB)("GET /api/v1/public/competitions/{id}/realtime-token â€
   it("an UPPERCASE id resolves through the competition's own row: lowercase division ids, the row's id in sub", async () => {
     const c = await seed({ realtime: true, visibility: "public", divisions: 2 });
     const data = await served(await door(c.compId.toUpperCase()));
-    expect([...data.divisionIds].sort()).toEqual(await divisionsOf(c.compId));
+    expect([...data.divisionIds].sort()).toEqual(await publicDivisionsOf(c.compId));
     for (const id of data.divisionIds) expect(id).toMatch(/^[0-9a-f-]{36}$/);
     expect((await claimsOf(data.token)).sub).toBe(`public-competition:${c.compId}`);
   });
@@ -283,7 +294,7 @@ describe.skipIf(!HAS_DB)("GET /api/v1/public/competitions/{id}/realtime-token â€
     const full = await seed({ realtime: true, visibility: "public", divisions: CAP });
     const data = await served(await door(full.compId));
     expect(data.divisionIds).toHaveLength(CAP);
-    expect([...data.divisionIds].sort()).toEqual(await divisionsOf(full.compId));
+    expect([...data.divisionIds].sort()).toEqual(await publicDivisionsOf(full.compId));
   });
 
   it("a second call mints a FRESH token for the same divisions", async () => {
@@ -308,8 +319,54 @@ describe.skipIf(!HAS_DB)("GET /api/v1/public/competitions/{id}/realtime-token â€
     expect(first.divisionIds).toContain(gone!.id);
     expect(second.divisionIds).not.toContain(gone!.id);
     expect((await claimsOf(second.token)).division_ids).not.toContain(gone!.id);
-    expect([...second.divisionIds].sort()).toEqual(await divisionsOf(c.compId));
+    expect([...second.divisionIds].sort()).toEqual(await publicDivisionsOf(c.compId));
     expect(second.divisionIds).toHaveLength(2);
+  });
+});
+
+describe.skipIf(!HAS_DB)("GET /api/v1/public/competitions/{id}/realtime-token â€” an ARCHIVED division (the product's withdrawal)", () => {
+  it("a spectator: an archived division's id is gone from the next answer, the others stay", async () => {
+    const c = await seed({ realtime: true, visibility: "public", divisions: 3 });
+    const first = await served(await door(c.compId));
+    const [gone] = await sql<{ id: string }[]>`select id from divisions where competition_id = ${c.compId} and status = 'setup' limit 1`;
+    await archive(gone!.id);
+    const [{ n: kept }] = await sql<{ n: number }[]>`select count(*)::int as n from divisions where competition_id = ${c.compId}`;
+    expect(kept, "PREMISE: the archived row is still in the base table").toBe(3);
+    const second = await served(await door(c.compId));
+    expect(first.divisionIds).toContain(gone!.id);
+    expect(second.divisionIds).not.toContain(gone!.id);
+    expect((await claimsOf(second.token)).division_ids).not.toContain(gone!.id);
+    expect([...second.divisionIds].sort()).toEqual(await publicDivisionsOf(c.compId));
+    expect(second.divisionIds).toHaveLength(2);
+  });
+
+  it("a spectator: archived rows never count toward the cap (101 with one archived is served 100) nor make a token of [] (all archived: no_divisions)", async () => {
+    const c = await seed({ realtime: true, visibility: "public", divisions: CAP + 1 });
+    const [gone] = await sql<{ id: string }[]>`select id from divisions where competition_id = ${c.compId} and status = 'setup' limit 1`;
+    await archive(gone!.id);
+    const data = await served(await door(c.compId));
+    expect(data.divisionIds).toHaveLength(CAP);
+    expect(data.divisionIds).not.toContain(gone!.id);
+    const one = await seed({ realtime: true, visibility: "public", divisions: 1 });
+    await sql`update divisions set archived_at = now() where competition_id = ${one.compId}`;
+    await refused(await door(one.compId), 403, "no_divisions");
+  });
+
+  it("an official: an archived division is absent, and archived rows neither trip too_many_divisions nor hide no_divisions", async () => {
+    const c = await seed({ realtime: false, visibility: "private", divisions: CAP + 1 });
+    who.userId = await member(c.orgId, "owner");
+    await refused(await door(c.compId), 403, "too_many_divisions");
+    const [gone] = await sql<{ id: string }[]>`select id from divisions where competition_id = ${c.compId} and status = 'setup' limit 1`;
+    await archive(gone!.id);
+    const data = await served(await door(c.compId));
+    expect(data.divisionIds, "100 live divisions: served, not 403'd for the archived row").toHaveLength(CAP);
+    expect(data.divisionIds).not.toContain(gone!.id);
+    expect((await claimsOf(data.token)).division_ids).not.toContain(gone!.id);
+    expect([...data.divisionIds].sort()).toEqual(await divisionsOf(c.compId));
+    const one = await seed({ realtime: false, visibility: "private", divisions: 1 });
+    await sql`update divisions set archived_at = now() where competition_id = ${one.compId}`;
+    who.userId = await member(one.orgId, "owner");
+    await refused(await door(one.compId), 403, "no_divisions");
   });
 });
 
@@ -473,7 +530,7 @@ describe.skipIf(!HAS_DB)("the usecase through an injected port: the project guar
     expect(minted).toHaveLength(1);
     const [competitionId, divisionIds] = minted[0] as [string, string[]];
     expect(competitionId, "the row's own lowercase id, never the URL's spelling").toBe(c.compId);
-    expect([...divisionIds].sort()).toEqual(await divisionsOf(c.compId));
+    expect([...divisionIds].sort()).toEqual(await publicDivisionsOf(c.compId));
     expect(answer.divisionIds).toEqual(divisionIds);
   });
 });

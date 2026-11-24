@@ -6,7 +6,8 @@ import "server-only";
 // Two ways in:
 //   - an OFFICIAL (pin 17): a signed-in user with any role in the competition's org, or an ACCEPTED official on a fixture of
 //     the competition (`acceptedOfficialInCompetition`, the scoring door's own predicate). No entitlement (officials produce
-//     the data), and the divisions come from the base tables, so a private or unpublished competition works;
+//     the data), and the divisions come from the base tables, so a private or unpublished competition works; an ARCHIVED
+//     division (the product's withdrawal: `archiveDivision` sets `archived_at`) is left out, as the public view leaves it out;
 //   - a SPECTATOR: the competition as `public_competitions_v` admits it (public or unlisted), its org holding `realtime`
 //     (`org_has_feature`, competition-scoped, as the fixture door asks), and every division `public_divisions_v` lists —
 //     live or not yet, so a division going live later needs no re-mint.
@@ -68,10 +69,11 @@ const READ_LIMIT = MAX_REALTIME_DIVISIONS + 1;
 async function officialAdmits(urlId: string, userId: string): Promise<Admitted | null> {
   const [comp] = await sql<{ id: string; org_id: string }[]>`select id, org_id from competitions where id = ${urlId}`;
   if (!comp) return null;
+  // ANY org role admits, viewer included (plan Task 12 pin 17: "a cookie user with any org role"; controller ruling).
   const admitted = (await getOrgRole(comp.org_id, userId)) !== null || (await acceptedOfficialInCompetition(userId, comp.id));
   if (!admitted) return null;
   const rows = await sql<{ id: string }[]>`
-    select id from divisions where competition_id = ${comp.id} order by created_at, id limit ${READ_LIMIT}`;
+    select id from divisions where competition_id = ${comp.id} and archived_at is null order by created_at, id limit ${READ_LIMIT}`;
   return { competitionId: comp.id, divisionIds: rows.map((r) => r.id) };
 }
 
