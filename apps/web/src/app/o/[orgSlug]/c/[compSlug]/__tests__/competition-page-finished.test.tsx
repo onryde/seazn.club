@@ -85,7 +85,7 @@ function seed(finished: number, live: number) {
     ...Array.from({ length: live }, (_, i) => mk("scheduled", i + 1)),
     ...Array.from({ length: finished }, (_, i) => mk("finished", i + 1)),
   ];
-  h.divisions = all.map(({ phase: _p, ...d }) => d);
+  h.divisions = all.map((d) => ({ id: d.id, name: d.name, slug: d.slug, sport_key: d.sport_key, logo_storage_path: null, logo_url: null }));
   h.phases = Object.fromEntries(all.map((d) => [d.id, d.phase]));
 }
 

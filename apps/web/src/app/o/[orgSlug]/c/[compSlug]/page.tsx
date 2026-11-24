@@ -100,7 +100,7 @@ export default async function CompetitionPage({
     phaseKind: compPhase?.kind ?? null,
     status: competition.status,
     canEdit,
-    frozen: competition.frozen,
+    frozen: !!competition.frozen,
   });
   // F5 fix: DivisionLedger's own "is this kick-off past?" check (its
   // nextLine) needs a fixed instant, never `Date.now()` read inside its own
