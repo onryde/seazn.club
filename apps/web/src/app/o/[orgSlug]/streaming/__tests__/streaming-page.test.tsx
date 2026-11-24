@@ -15,6 +15,7 @@ const m = vi.hoisted(() => ({
   hasFeature: vi.fn<(orgId: string, key: string, competitionId?: string) => Promise<boolean>>(),
   requirePageAuth: vi.fn(),
   listStreamTargets: vi.fn<() => Promise<{ id: string; label: string }[]>>(async () => []),
+  seaznOfferOf: vi.fn<(orgId: string) => Promise<{ offered: boolean }>>(async () => ({ offered: true })),
   hasLiveConnection: vi.fn<(orgId: string) => Promise<boolean>>(async () => false),
   expireTargetHolders: vi.fn(async () => undefined),
   defaultDeps: vi.fn((appUrl: string) => ({ appUrl, marker: "deps" })),
@@ -26,7 +27,7 @@ vi.mock("@/server/page-auth", () => ({ requireOrgPage: m.requirePageAuth }));
 vi.mock("@/lib/sentry", () => ({ captureError: m.captureError }));
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
 vi.mock("@/lib/base-url", () => ({ baseUrlFromHeaders: async () => "http://app.test" }));
-vi.mock("@/server/usecases/stream-targets", () => ({ listStreamTargets: m.listStreamTargets }));
+vi.mock("@/server/usecases/stream-targets", () => ({ listStreamTargets: m.listStreamTargets, seaznOfferOf: m.seaznOfferOf }));
 // The one read the disconnect-only page adds; the real query is DB-tested in youtube-connections-routes.test.ts.
 vi.mock("@/server/youtube/connections", () => ({ hasLiveConnection: m.hasLiveConnection }));
 vi.mock("@/server/usecases/stream-sessions", () => ({
@@ -36,10 +37,11 @@ vi.mock("@/server/usecases/stream-sessions", () => ({
 vi.mock("@/components/nav", () => ({ Nav: () => <nav data-testid="nav" /> }));
 // The panel renders the labels it is handed, so a test can see the LIST arrive, not only the panel.
 vi.mock("@/components/v2/stream-destinations-panel", () => ({
-  StreamDestinationsPanel: ({ targets, canEdit, landing }: { targets: { id: string; label: string }[]; canEdit: boolean; landing?: { code: string; pendingId: string | null } | null }) => (
+  StreamDestinationsPanel: ({ targets, canEdit, landing, seazn }: { targets: { id: string; label: string }[]; canEdit: boolean; landing?: { code: string; pendingId: string | null } | null; seazn?: { offered: boolean } | null }) => (
     <div
       data-testid="stream-destinations-panel"
       data-can-edit={String(canEdit)}
+      data-seazn={seazn ? String(seazn.offered) : "none"}
       data-landing-code={landing ? landing.code : "none"}
       data-landing-pending={landing?.pendingId ?? "none"}
     >
@@ -58,6 +60,7 @@ vi.mock("@/components/v2/youtube-disconnect-only-panel", () => ({
 }));
 
 import StreamingPage from "../page";
+import { HttpError } from "@/lib/errors";
 import { disabledRelayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 
@@ -77,6 +80,7 @@ beforeEach(() => {
   m.requirePageAuth.mockReset().mockResolvedValue({ auth: { orgId: ORG, userId: "u-1", role: "owner", via: "session", keyId: null }, org: { id: "org-1", name: "Riverside CC", slug: "riverside", role: "owner" }, canEdit: true });
   m.hasFeature.mockReset().mockResolvedValue(true);
   m.listStreamTargets.mockReset().mockResolvedValue([]);
+  m.seaznOfferOf.mockReset().mockResolvedValue({ offered: true });
   m.hasLiveConnection.mockReset().mockResolvedValue(false);
   m.expireTargetHolders.mockReset().mockResolvedValue(undefined);
   m.defaultDeps.mockClear();
@@ -342,5 +346,82 @@ describe("Streaming page — the disconnect-only page for an org that is not off
     await expect(render()).rejects.toMatchObject(NOT_FOUND);
     expect(m.listStreamTargets).not.toHaveBeenCalled();
     expect(m.expireTargetHolders).not.toHaveBeenCalled();
+  });
+});
+
+// Task 33b: the Seazn Hosted card reads the org's switch through the page — never the list, which leaves Seazn out while the switch is
+// off (T33's `seaznWhere`): the card would otherwise vanish with the one control that turns it back on.
+describe("Streaming page — the org's Seazn switch reaches the panel (Task 33b)", () => {
+  afterEach(() => vi.unstubAllEnvs());
+  const live = (v: string) => vi.stubEnv("SEAZN_HOSTED_LIVE", v);
+
+  it("LIVE on: the switch is read for THIS org, once, and handed to the panel — on and off (2 checked)", async () => {
+    live("true");
+    let checked = 0;
+    for (const offered of [true, false]) {
+      m.seaznOfferOf.mockClear().mockResolvedValue({ offered });
+      const html = await render();
+      expect(m.seaznOfferOf, String(offered)).toHaveBeenCalledTimes(1);
+      expect(m.seaznOfferOf, String(offered)).toHaveBeenCalledWith(ORG);
+      expect(html, String(offered)).toContain(`data-seazn="${offered}"`);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("OFF with nothing of the org's own: the list is empty (as the server sends it while off) and the switch still reaches the panel, off", async () => {
+    live("true");
+    m.listStreamTargets.mockResolvedValue([]);
+    m.seaznOfferOf.mockResolvedValue({ offered: false });
+    expect(await render()).toContain('data-seazn="false"');
+  });
+
+  it("LIVE off (the default, and every deployment until the owner turns it on): the switch is not read and the panel draws no card", async () => {
+    let checked = 0;
+    for (const v of ["", "false"]) {
+      live(v);
+      m.seaznOfferOf.mockClear();
+      const html = await render();
+      expect(m.seaznOfferOf, JSON.stringify(v)).not.toHaveBeenCalled();
+      expect(html, JSON.stringify(v)).toContain('data-seazn="none"');
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a viewer gets the switch too (the card shows it read-only) — canEdit stays false", async () => {
+    live("true");
+    m.requirePageAuth.mockResolvedValue({ auth: { orgId: ORG, userId: "u-2", role: "viewer", via: "session", keyId: null }, org: { id: "org-1", name: "Riverside CC", slug: "riverside", role: "owner" }, canEdit: false });
+    const html = await render();
+    expect(html).toContain('data-seazn="true"');
+    expect(html).toContain('data-can-edit="false"');
+  });
+
+  it("an org with no Seazn row (no product path makes one, so it is reported): the page still renders, without the card", async () => {
+    live("true");
+    const missing = new HttpError(404, "the Seazn destination was not found");
+    m.seaznOfferOf.mockRejectedValue(missing);
+    const html = await render();
+    expect(html).toContain(PANEL);
+    expect(html).toContain('data-seazn="none"');
+    expect(m.captureError).toHaveBeenCalledTimes(1);
+    expect(m.captureError).toHaveBeenCalledWith(missing, expect.objectContaining({ orgId: ORG, route: "streaming.seazn_offer" }));
+  });
+
+  it("any OTHER failure reading the switch is not swallowed: the page fails as it does when the list fails", async () => {
+    live("true");
+    const boom = new Error("connection terminated");
+    m.seaznOfferOf.mockRejectedValue(boom);
+    await expect(page()).rejects.toBe(boom);
+    expect(m.captureError, "not reported as the missing row").not.toHaveBeenCalled();
+  });
+
+  it("the restricted page (an org that cannot go live) draws no card and never reads the switch", async () => {
+    live("true");
+    m.hasFeature.mockImplementation(async (_o, key) => key !== "streaming.relay");
+    m.hasLiveConnection.mockResolvedValue(true);
+    const html = await render();
+    expect(html, "premise: the restricted page").toContain(DISCONNECT_ONLY);
+    expect(m.seaznOfferOf).not.toHaveBeenCalled();
   });
 });

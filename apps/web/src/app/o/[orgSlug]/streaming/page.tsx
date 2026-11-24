@@ -17,12 +17,29 @@ import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
 import { baseUrlFromHeaders } from "@/lib/base-url";
 import { captureError } from "@/lib/sentry";
+import { HttpError } from "@/lib/errors";
 import { youtubeLandingFrom } from "@/lib/youtube";
 import { searchOf } from "@/lib/routes";
 import { requireOrgPage } from "@/server/page-auth";
 import { streamingPageAccess } from "@/server/stream-panel-context";
-import { listStreamTargets } from "@/server/usecases/stream-targets";
+import { listStreamTargets, seaznOfferOf } from "@/server/usecases/stream-targets";
+import { seaznHostedLive } from "@/server/relay/config";
 import { defaultDeps, expireTargetHolders } from "@/server/usecases/stream-sessions";
+
+/** Task 33b: the org's Seazn switch for the Seazn Hosted card, read ONLY with SEAZN_HOSTED_LIVE on (off, nothing offers Seazn and the
+ *  page draws no card). Read from the switch itself, never from the list: the list leaves Seazn out while the switch is off, and the card
+ *  is the one control that turns it back on. An org with no active Seazn row (no product path makes one: V541's trigger makes it, and
+ *  removing it is refused) is reported and gets the page without the card — never an error page in place of its own channels. */
+async function seaznSwitchOf(orgId: string): Promise<{ offered: boolean } | null> {
+  if (!seaznHostedLive()) return null;
+  try {
+    return await seaznOfferOf(orgId);
+  } catch (err) {
+    if (!(err instanceof HttpError) || err.status !== 404) throw err;
+    captureError(err, { orgId, route: "streaming.seazn_offer" });
+    return null;
+  }
+}
 
 // Spec 2026-09-30 §4 (D1) — the ONE place streaming destinations are managed. Every member sees the list; Add / Rename /
 // Replace key / Remove render only for canEdit (owner or admin), matching the API's write gate. Read server-side
@@ -79,7 +96,7 @@ export default async function StreamingPage({
   } catch (err) {
     captureError(err, { orgId: auth.orgId, route: "streaming.expire_holders" });
   }
-  const targets = await listStreamTargets(auth, auth.orgId);
+  const [targets, seazn] = await Promise.all([listStreamTargets(auth, auth.orgId), seaznSwitchOf(auth.orgId)]);
   // Where the YouTube connect round trip landed (`?youtube=<code>[&pending=<id>]`): read once, here, into the one shape the panel takes.
   const landing = youtubeLandingFrom(query);
 
@@ -93,7 +110,7 @@ export default async function StreamingPage({
           <p data-testid="streaming-org" className="mt-1 text-sm font-medium text-slate-700">{org.name}</p>
           <p className="mt-1 max-w-xl text-sm text-slate-500">{t(ui, "streaming.desc")}</p>
         </div>
-        <StreamDestinationsPanel orgId={auth.orgId} canEdit={canEdit} targets={targets} locale={locale} landing={landing} />
+        <StreamDestinationsPanel orgId={auth.orgId} canEdit={canEdit} targets={targets} locale={locale} landing={landing} seazn={seazn} />
       </main>
     </DictProvider>
   );
