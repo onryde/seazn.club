@@ -36,6 +36,7 @@ import { fileURLToPath } from "node:url";
 import { TAG, addEntrantsViaApi, apiJson, createStageAndGenerate, expectNoHorizontalScroll } from "../helpers";
 import { setRigPlan, signInAs } from "../overlay-kit";
 import { storeCameraOnly } from "../helpers/stream-mode";
+import { CLUB_STYLE_WIDTHS, clubStyleCaseMs } from "../helpers/seazn-hosted-clock";
 import { expectSelectedTarget, offeredTargetIds, offeredTargetNames, selectTarget, targetPicker } from "../helpers/stream-target-picker";
 import { defaultTemplateFor, resolveTemplate, templatesForSport } from "../../src/components/overlay/template-registry";
 import { ADDABLE_STREAM_PLATFORMS, STREAM_PLATFORMS, type AddableStreamPlatform, type StreamPlatform } from "../../src/lib/stream-destinations";
@@ -1347,11 +1348,10 @@ for (const width of [320, 768, 1280] as const) {
 // an override (read back from the match's settings), and "Use club style" puts BOTH of the match's fields back to none in one tap while the
 // club's own stay. Nothing starts. Then a member who cannot edit reads the same facts in words, with no control.
 const CLUB_SPORT = "generic"; // the seed's one division (seedRig)
-for (const width of [320, 768, 1280] as const) {
+for (const width of CLUB_STYLE_WIDTHS) {
   test(`13 @${width}: the club's Score style and timing — set on the Streaming page, read back, the match's row names them, Change for this match is an override, Use club style clears it; a viewer reads them in words`, async ({ page }) => {
-    const NAVS = 6; // the Streaming page, its reload, the match page (phone tab), the viewer's sign-in and Streaming page
-    const SAVES = 8; // the style, the timing, their API reads, the match's two saves and reads, the viewer's read
-    test.setTimeout(SEED_MS + NAVS * NAV_MS + SAVES * SAVE_MS);
+    // The clock is helpers/seazn-hosted-clock.ts's (the job's timeout in e2e.yml is held to the same sum by e2e-ci-wiring.test.ts).
+    test.setTimeout(clubStyleCaseMs());
     await page.setViewportSize({ width, height: 900 });
     const rig = await seedRig(page, { entrants: 2 });
     const f = rig.fixtures[0]!;

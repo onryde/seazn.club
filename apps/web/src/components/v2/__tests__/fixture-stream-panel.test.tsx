@@ -7398,6 +7398,7 @@ describe("Task 38: the match panel's club row, the override box and Use club sty
     const t = editor(island);
     expect(byTestId(t, "stream-club-override")).toBeDefined();
     expect(byTestId(t, "stream-club-override-tag"), "no override yet: no tag").toBeUndefined();
+    expect(byTestId(t, "stream-club-override-title"), "no override yet: the title 'has its own' is not said").toBeUndefined();
     expect(byTestId(t, "stream-club-use"), "nothing to go back to").toBeUndefined();
     expect(propsOf(t.find((el) => el.type === StreamTemplatePicker)!).selected, "the effective style: the club's").toBe(OTHER.id);
     expect(timingProps(t).defaultMs).toBe(4500);
@@ -7444,6 +7445,7 @@ describe("Task 38: the match panel's club row, the override box and Use club sty
     expect(apiV1).toHaveBeenLastCalledWith(`/api/v1/fixtures/${FIXTURE.id}/stream-settings`, { method: "PUT", json: { overlayTemplate: bar.id } });
     expect(scoreOf(island).template).toBe(bar.id);
     expect(byTestId(editor(island), "stream-club-override-tag"), "an override now").toBeDefined();
+    expect(byTestId(editor(island), "stream-club-override-title"), "an override now: the title is said").toBeDefined();
   });
 
   it("an override already stored: the box is open with its Override tag; Use club style writes null for BOTH fields in ONE save and the row stands alone again", async () => {

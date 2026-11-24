@@ -128,6 +128,7 @@ export default async function StreamingPage({
           canEdit={canEdit}
           stored={clubDefaults}
           defaultMs={overlayDelayDefaultMs(false)}
+          courtDefaultMs={overlayDelayDefaultMs(true)}
           sports={clubPreview.sports}
           snapshots={clubPreview.snapshots}
           sides={clubPreview.sides}

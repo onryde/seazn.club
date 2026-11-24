@@ -260,3 +260,20 @@ describe.skipIf(!HAS_DB)("the phone's descriptor overlayUrl (the page the phone'
     expect(await styleOf(mine), "a running session's own copy wins over the club's").toBe("bar");
   });
 });
+
+describe.skipIf(!HAS_DB)("the phone's descriptor reads the CLUB's style of its own org only (the descriptor's join on org_stream_defaults)", () => {
+  it("org A sets 'bug'; org B (no defaults, same sport) is described with the sport's own default, not A's; B's own style then reaches B alone", async () => {
+    const a = await captureRig({ sport: "cricket" });
+    const b = await captureRig({ sport: "cricket" });
+    expect(a.auth.orgId, "premise: two orgs").not.toBe(b.auth.orgId);
+    const styleOf = async (r: typeof a) => new URL((await getCode(r.code, r.tok, { slot: 0, phone: null }, r.deps, r.now())).overlayUrl!).searchParams.get("style");
+    const own = defaultTemplateFor("cricket");
+    expect("bug", "premise: A's style differs from the sport's default, so a leak is visible").not.toBe(own);
+    await saveOrgStreamDefaults(a.auth, a.auth.orgId, { overlayTemplate: "bug" });
+    expect(await styleOf(a), "A reads its own").toBe("bug");
+    expect(await styleOf(b), "B reads nothing of A's").toBe(own);
+    await saveOrgStreamDefaults(b.auth, b.auth.orgId, { overlayTemplate: own === "bar" ? "bug" : "bar" });
+    expect(await styleOf(a), "and B's save did not move A's descriptor").toBe("bug");
+  });
+});
+

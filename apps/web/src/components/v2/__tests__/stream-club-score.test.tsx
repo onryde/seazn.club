@@ -16,11 +16,11 @@ import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harn
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { defaultTemplateFor, resolveTemplate, templatesForSport } from "@/components/overlay/template-registry";
 import { ApiV1Error } from "@/lib/client-v1";
-import { AuthError, PaymentRequiredError } from "@/lib/errors";
+import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
 import { messages, type MessageKey } from "@/lib/messages";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { v1 } from "@/server/api-v1/http";
-import { RELAY_OVERLAY_DELAY_DEFAULT_MS } from "@/server/relay/config";
+import { COURT_PHONE_OVERLAY_DELAY_MS, RELAY_OVERLAY_DELAY_DEFAULT_MS } from "@/server/relay/config";
 import { StreamClubScore } from "../stream-club-score";
 import { ScoreTiming } from "../stream-score-settings";
 import { StreamTemplatePicker } from "../stream-template-picker";
@@ -71,7 +71,7 @@ const LIVE = { status: "in_play", summary: null, outcome: null, lastSeq: null, v
 const SIDES: [{ id: string; name: string }, { id: string; name: string }] = [{ id: "home", name: "Home" }, { id: "away", name: "Away" }];
 type Props = Parameters<typeof StreamClubScore>[0];
 const props = (over: Partial<Props> = {}): Props => ({
-  orgId: ORG, canEdit: true, stored: NONE, defaultMs: RELAY_OVERLAY_DELAY_DEFAULT_MS,
+  orgId: ORG, canEdit: true, stored: NONE, defaultMs: RELAY_OVERLAY_DELAY_DEFAULT_MS, courtDefaultMs: COURT_PHONE_OVERLAY_DELAY_MS,
   sports: [{ key: SPORT_A, name: "Football" }], snapshots: { [SPORT_A]: { ...LIVE }, [SPORT_B]: { ...LIVE, lastSeq: 7 } },
   sides: SIDES, overlayDict: {}, ...over,
 });
@@ -140,6 +140,24 @@ describe("what a member who cannot edit sees: the facts in words, no controls", 
     expect(h).not.toContain(esc(m("streaming.club.style.none.short")));
   });
 
+  it("the scope line names the court default from the prop (never a typed 0 s): 0 reads 0.0, another value moves it; the 403 line is not the destinations one", () => {
+    const zero = html({ canEdit: false, courtDefaultMs: 0 });
+    expect(zero).toContain(esc(m("streaming.club.scope.rest", { seconds: "0.0" })));
+    const other = html({ canEdit: false, courtDefaultMs: 2500 });
+    expect(other, "the prop is what the line says").toContain(esc(m("streaming.club.scope.rest", { seconds: "2.5" })));
+    expect(other).not.toContain("{seconds}");
+    expect(m("streaming.club.error.forbidden"), "a club-specific 403").not.toBe(m("streamDest.error.forbidden"));
+  });
+
+  it("a stored style this sport cannot show: said in words, naming the stored id and the sport; a style it can show says nothing (and a retired id that has a replacement is not 'unavailable')", () => {
+    const h = html({ stored: { overlayTemplate: "legacy-gone", overlayDelayMs: null, revision: 2 } });
+    expect(h).toContain('data-testid="club-score-style-unavailable"');
+    expect(h).toContain(esc(m("streaming.club.style.unavailable", { style: "legacy-gone", sport: "Football" })));
+    const known = html({ stored: { overlayTemplate: OTHER(SPORT_A).id, overlayDelayMs: null, revision: 2 } });
+    expect(known, "a style the sport offers").not.toContain("club-score-style-unavailable");
+    expect(html(), "nothing stored").not.toContain("club-score-style-unavailable");
+  });
+
   it("every locale: its own copy for every new key of the section, the same placeholders as English, and no raw key leaks", () => {
     const KEYS = ["streaming.club.heading", "streaming.club.sub", "streaming.club.scope.new", "streaming.club.scope.rest"] as const;
     const en = dictOf("en");
@@ -149,7 +167,8 @@ describe("what a member who cannot edit sees: the facts in words, no controls", 
     for (const locale of LOCALES) {
       const dict = dictOf(locale);
       const h = html({ canEdit: false, stored: { overlayTemplate: OTHER(SPORT_A).id, overlayDelayMs: 4500, revision: 1 } }, dict, locale);
-      for (const k of KEYS) expect(h, `${locale}: ${k}`).toContain(esc(dict[k] as string));
+      // scope.rest carries the court default ({seconds}); the render has the prop's 0 s as the timing field shows it.
+      for (const k of KEYS) expect(h, `${locale}: ${k}`).toContain(esc((dict[k] as string).replace("{seconds}", new Intl.NumberFormat(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(0))));
       expect(h, `${locale}: no raw key`).not.toMatch(/streaming\.club\./);
       for (const k of newKeys) {
         expect(typeof dict[k] === "string" && dict[k] !== "", `${locale}: ${k}`).toBe(true);
@@ -240,6 +259,8 @@ describe("the section, driven", () => {
       ["402 a frozen admin seat", () => wire(new PaymentRequiredError("members.max")), "streamDest.error.seatFrozen"],
       ["402 any other feature", () => wire(new PaymentRequiredError("formats.double_elim")), "streamDest.error.generic"],
       ["401 signed out", () => wire(new AuthError()), "streamDest.error.signedOut"],
+      // The shared reader's 403 line says "change streaming destinations": wrong for a style save, so this section words its own.
+      ["403 not an owner or admin", () => wire(new HttpError(403, "forbidden")), "streaming.club.error.forbidden"],
     ];
     let checked = 0;
     for (const [name, mk, key] of rows) {

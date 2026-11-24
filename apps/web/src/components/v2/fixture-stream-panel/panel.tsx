@@ -258,14 +258,15 @@ export function FixtureStreamPanel({
         </div>
         {open && (
           <div data-testid="stream-club-override" className="mt-2 min-w-0 rounded-lg border border-purple-200 bg-purple-50/40 p-3">
-            <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1">
-              <span className="text-sm font-medium text-slate-800">{msg("stream.club.overrideTitle")}</span>
-              {overridden && (
+            {/* The title says the match HAS its own; it shows only once it does (a stored value), not while the organiser has only opened Change. */}
+            {overridden && (
+              <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span data-testid="stream-club-override-title" className="text-sm font-medium text-slate-800">{msg("stream.club.overrideTitle")}</span>
                 <span data-testid="stream-club-override-tag" className="rounded-full bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-800">
                   {msg("stream.club.overrideTag")}
                 </span>
-              )}
-            </div>
+              </div>
+            )}
             {controls}
             <p className="mt-2 text-xs text-slate-600">{msg("stream.club.overrideNote")}</p>
             {overridden && (

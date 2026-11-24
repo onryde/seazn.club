@@ -72,3 +72,11 @@ export function seaznWalkClock(fakeConnectMs: number): SeaznWalkClock {
     SEED_MS + NAV_MS + NAV_MS + NAV_MS + PAIR_MS + NAV_MS + budget.slotWaitMs + HOLD_1_MS + ONE_RE_READ_MS + CALL_MS + budget.slotWaitMs + HOLD_2_MS;
   return { LIVE_WAIT_MS, ONE_RE_READ_MS, END_MS, CALL_MS, FRESH_PAGE_MS, CREDITS_KEY_WAIT_MS, HOLD_1_MS, HOLD_2_MS, WALK_MS };
 }
+
+/** streaming-destinations.spec.ts case 13 (Task 38, the club's Score style and timing), one width: the seed; the Streaming page, its reload,
+ *  the match page, the viewer's sign-in and Streaming page (6 loads); the style, the timing, their API reads, the match's two saves and
+ *  reads, the viewer's read (8 round trips). Kept here so the spec's own test timeout and e2e-seazn's job timeout are ONE derivation. */
+export const CLUB_STYLE_CASE_NAVS = 6;
+export const CLUB_STYLE_CASE_SAVES = 8;
+export const CLUB_STYLE_WIDTHS = [320, 768, 1280] as const;
+export const clubStyleCaseMs = (): number => SEED_MS + CLUB_STYLE_CASE_NAVS * NAV_MS + CLUB_STYLE_CASE_SAVES * POLL_WAIT_MS;

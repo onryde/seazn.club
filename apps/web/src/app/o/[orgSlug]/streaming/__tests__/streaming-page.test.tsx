@@ -42,8 +42,8 @@ vi.mock("@/server/usecases/stream-sessions", () => ({
 vi.mock("@/server/usecases/org-stream-defaults", () => ({ orgStreamDefaultsOf: m.orgStreamDefaultsOf }));
 vi.mock("@/server/stream-club-score", () => ({ clubScorePreview: m.clubScorePreview }));
 vi.mock("@/components/v2/stream-club-score", () => ({
-  StreamClubScore: (p: { orgId: string; canEdit: boolean; stored: { overlayTemplate: string | null; overlayDelayMs: number | null }; defaultMs: number; sports: { key: string }[] }) => (
-    <div data-testid="club-score-stub" data-org={p.orgId} data-can-edit={String(p.canEdit)} data-template={p.stored.overlayTemplate ?? "none"} data-delay={String(p.stored.overlayDelayMs)} data-default-ms={String(p.defaultMs)} data-sports={p.sports.map((x) => x.key).join(",")} />
+  StreamClubScore: (p: { orgId: string; canEdit: boolean; stored: { overlayTemplate: string | null; overlayDelayMs: number | null }; defaultMs: number; courtDefaultMs: number; sports: { key: string }[] }) => (
+    <div data-testid="club-score-stub" data-org={p.orgId} data-can-edit={String(p.canEdit)} data-template={p.stored.overlayTemplate ?? "none"} data-delay={String(p.stored.overlayDelayMs)} data-default-ms={String(p.defaultMs)} data-court-ms={String(p.courtDefaultMs)} data-sports={p.sports.map((x) => x.key).join(",")} />
   ),
 }));
 // Client islands → identifiable markers.
@@ -75,7 +75,7 @@ vi.mock("@/components/v2/youtube-disconnect-only-panel", () => ({
 import StreamingPage from "../page";
 import { HttpError } from "@/lib/errors";
 import { disabledRelayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
-import { RELAY_OVERLAY_DELAY_DEFAULT_MS } from "@/server/relay/config";
+import { COURT_PHONE_OVERLAY_DELAY_MS, RELAY_OVERLAY_DELAY_DEFAULT_MS } from "@/server/relay/config";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 
 const ORG = "org-1";
@@ -130,10 +130,11 @@ describe("Streaming page — offered exactly when the fixture panel offers Go li
     expect(html).toContain('data-template="bug"');
     expect(html).toContain('data-delay="4500"');
     expect(html).toContain(`data-default-ms="${RELAY_OVERLAY_DELAY_DEFAULT_MS}"`);
+    expect(html, "the court's own default, from config").toContain(`data-court-ms="${COURT_PHONE_OVERLAY_DELAY_MS}"`);
     expect(html).toContain('data-sports="football,cricket"');
     expect(html, "the section's own stub, not the destinations panel's").toMatch(/data-testid="club-score-stub"[^>]*data-can-edit="true"/);
     expect(m.orgStreamDefaultsOf.mock.calls).toEqual([[ORG]]);
-    expect(m.clubScorePreview.mock.calls.map((c) => c[0])).toEqual([ORG]);
+    expect(m.clubScorePreview.mock.calls.map((c) => (c as unknown[])[0])).toEqual([ORG]);
     expect(html.indexOf(PANEL), "under the destinations").toBeLessThan(html.indexOf('data-testid="club-score-stub"'));
   });
 

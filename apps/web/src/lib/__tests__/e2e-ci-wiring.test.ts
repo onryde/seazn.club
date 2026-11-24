@@ -2447,16 +2447,20 @@ describe("e2e-seazn: the one LIVE-on job runs its two files, and proves they RAN
       vi.unstubAllEnvs();
     }
     expect(retries, "premise: CI retries a failed test").toBeGreaterThan(0);
-    const { seaznWalkClock } = await import("../../../e2e/helpers/seazn-hosted-clock");
+    const { seaznWalkClock, clubStyleCaseMs, CLUB_STYLE_WIDTHS } = await import("../../../e2e/helpers/seazn-hosted-clock");
     const { WALK_MS } = seaznWalkClock(connect);
     expect(WALK_MS, "premise: the walk's own timeout is more than the old 30-minute job's half").toBeGreaterThan(15 * 60_000);
     // The setup before the first test: ~106 s measured for the migrate, sport sync, build, placement image and server start
     // (e2e.yml's e2e-parallel leg note), allowed six minutes.
     const SETUP_ALLOWANCE_MS = 6 * 60_000;
-    const needMs = (retries! + 1) * WALK_MS + SETUP_ALLOWANCE_MS;
+    // Task 38's case 13 (the club's Score style and timing) runs once per width in streaming-destinations.spec.ts, beside the walk on the
+    // second worker; its worst case is added in full (a conservative serial sum — never assumed to hide inside the walk), per attempt.
+    expect(CLUB_STYLE_WIDTHS.length, "anti-vacuity: case 13 declares its widths").toBeGreaterThan(0);
+    const CASE_13_MS = CLUB_STYLE_WIDTHS.length * clubStyleCaseMs();
+    const needMs = (retries! + 1) * (WALK_MS + CASE_13_MS) + SETUP_ALLOWANCE_MS;
     expect(
       timeouts[0]! * 60_000,
-      `${retries! + 1} attempts × ${WALK_MS} ms + ${SETUP_ALLOWANCE_MS} ms setup = ${needMs} ms must fit the ${timeouts[0]}-minute job, or it cancels the retry and loses its trace`,
+      `${retries! + 1} attempts × (${WALK_MS} ms walk + ${CASE_13_MS} ms case 13) + ${SETUP_ALLOWANCE_MS} ms setup = ${needMs} ms must fit the ${timeouts[0]}-minute job, or it cancels the retry and loses its trace`,
     ).toBeGreaterThanOrEqual(needMs);
   });
 });

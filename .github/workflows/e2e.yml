@@ -2060,13 +2060,17 @@ jobs:
     # once, so a first attempt that runs to its timeout is followed by a
     # second: 2 x 25.8 = 51.5 min. Plus the setup — about 106 s measured for
     # the migrate, sport sync, build, placement image and server start
-    # (e2e-parallel's leg note), allowed 6 min here — 57.5 min, so 60. Too
-    # short, and the job cancels the retry: a cancel skips the `if: failure()`
-    # report upload and loses the trace. The streaming-destinations cases run
-    # on the second worker, beside the walk. e2e-ci-wiring.test.ts recomputes
-    # this sum from the clock and the config's retries and reds if 60 falls
-    # under it.
-    timeout-minutes: 60
+    # (e2e-parallel's leg note), allowed 6 min here — 57.5 min. Task 38 adds
+    # streaming-destinations.spec.ts case 13 (the club's Score style and
+    # timing) at three widths, each its own test timeout
+    # (e2e/helpers/seazn-hosted-clock.ts `clubStyleCaseMs`, 320 s): 960 s,
+    # 16 min per attempt, added in full — the cases run on the second worker
+    # beside the walk, but that overlap is not assumed — so 2 x (25.8 + 16) +
+    # 6 = 90.5 min, so 91. Too short, and the job cancels the retry: a cancel
+    # skips the `if: failure()` report upload and loses the trace.
+    # e2e-ci-wiring.test.ts recomputes this sum from the clock and the
+    # config's retries and reds if 91 falls under it.
+    timeout-minutes: 91
 
     services:
       postgres:

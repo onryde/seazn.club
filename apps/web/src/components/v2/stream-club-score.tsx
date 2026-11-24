@@ -13,7 +13,7 @@
 // save of a field decides what it shows. A member who cannot edit sees the same facts in words with no controls.
 import { useRef, useState } from "react";
 import { Info } from "lucide-react";
-import { resolveTemplate, templatesForSport, type TemplateId } from "@/components/overlay/template-registry";
+import { OVERLAY_TEMPLATES, resolveTemplate, templatesForSport, type TemplateId } from "@/components/overlay/template-registry";
 import type { OverlayLiveData } from "@/components/public-site/live-score-data";
 import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { apiV1 } from "@/lib/client-v1";
@@ -22,10 +22,17 @@ import type { OverlaySideInput } from "@/lib/overlay-model";
 import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
 import type { ClubStreamPrefs, ClubStreamPrefsRead } from "@/lib/stream-settings";
 import { seaznSwitchErrorText } from "./seazn-destination-card";
+import { wireOf } from "./youtube-connect-panel";
 import { fmtDelaySeconds, ScoreTiming } from "./stream-score-settings";
 import { StreamTemplatePicker, type TemplatePreviewData } from "./stream-template-picker";
 
 type ClubKey = keyof ClubStreamPrefs;
+
+/** A refused save as this section's own sentence: the shared reader's 403 says "change streaming destinations", which is not what a style
+ *  save is; every other refusal (signed out, a paused seat, the retry line) is the shared one's. */
+function clubErrorText(msg: (key: MessageKey) => string, err: unknown): string {
+  return wireOf(err)?.code === "FORBIDDEN" ? msg("streaming.club.error.forbidden") : seaznSwitchErrorText(msg, err);
+}
 
 /** The club's stored defaults as the page shows them: the last server answer, and the organiser's own newer choice per field while its
  *  save is out. A field takes a server answer only when its revision is NOT older than the one it holds (an older answer arriving late
@@ -67,6 +74,8 @@ export function StreamClubScore(p: {
   stored: ClubStreamPrefsRead;
   /** config.ts `overlayDelayDefaultMs(false)` — the delay a match stream serves when nothing sets one; never typed here. */
   defaultMs: number;
+  /** config.ts `overlayDelayDefaultMs(true)` — the delay a court stream serves (it never takes the club's timing); named in the scope line. */
+  courtDefaultMs: number;
   /** The club's own sports to preview, by name; one entry draws no switch (server/stream-club-score.ts). */
   sports: { key: string; name: string }[];
   /** Each sport's live-play snapshot, keyed by sport key. */
@@ -93,6 +102,11 @@ export function StreamClubScore(p: {
     dict: p.overlayDict,
     decidedTemplates: decidedOutcomeTemplates(msg, previewSport),
   };
+  // A stored id this sport cannot show: not in its picker, and not a retired id that resolves to a replacement. The picker then stands on the
+  // sport's own style (resolveTemplate's fallback), so the screen says so rather than disagree with what is stored.
+  const stored = shown.overlayTemplate;
+  const storedDef = stored !== null && Object.hasOwn(OVERLAY_TEMPLATES, stored) ? OVERLAY_TEMPLATES[stored as TemplateId] : undefined;
+  const unavailableHere = stored !== null && storedDef?.retired === undefined && !themes.some((t) => t.id === stored);
   const headingId = "club-score-heading";
   const effectiveDelay = shown.overlayDelayMs ?? p.defaultMs;
   return (
@@ -137,6 +151,11 @@ export function StreamClubScore(p: {
               saveFailed={false}
               note={msg("streaming.club.style.sub")}
             />
+            {unavailableHere && (
+              <p data-testid="club-score-style-unavailable" className="text-xs text-amber-800">
+                {msg("streaming.club.style.unavailable", { style: stored, sport: p.sports.find((x) => x.key === previewSport)!.name })}
+              </p>
+            )}
             {shown.overlayTemplate === null ? (
               <p data-testid="club-score-style-none" className="text-xs text-slate-600">{msg("streaming.club.style.none")}</p>
             ) : (
@@ -160,7 +179,7 @@ export function StreamClubScore(p: {
             </div>
             {error !== null && (
               <p data-testid="club-score-error" role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
-                {seaznSwitchErrorText(msg, error)}
+                {clubErrorText(msg, error)}
               </p>
             )}
           </>
@@ -181,7 +200,7 @@ export function StreamClubScore(p: {
         <p data-testid="club-score-scope" className="flex items-start gap-2.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-[12.5px] text-slate-600">
           <Info aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-slate-500" strokeWidth={1.8} />
           <span>
-            <b className="font-semibold text-slate-700">{msg("streaming.club.scope.new")}</b> {msg("streaming.club.scope.rest")}
+            <b className="font-semibold text-slate-700">{msg("streaming.club.scope.new")}</b> {msg("streaming.club.scope.rest", { seconds: fmtDelaySeconds(locale, p.courtDefaultMs) })}
           </span>
         </p>
       </div>
