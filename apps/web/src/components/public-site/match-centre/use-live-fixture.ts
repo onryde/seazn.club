@@ -286,7 +286,7 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
   // Private channel + setAuth (scorepad shape). Mint is ES256 via
   // SUPABASE_JWT_PRIVATE_KEY; Realtime Authorization SELECT on
   // realtime.messages binds topic to JWT fixture_id claim (proved 2026-09-13).
-  // Polling stays as safety net; publishFixtureUpdate still fans a public twin.
+  // Polling stays as safety net; publishFixtureUpdate sends the private message only.
   const [subscribed, setSubscribed] = useState(false);
   const realtimePurpose = options.realtimePurpose;
   const overlayKey = options.overlayKey;

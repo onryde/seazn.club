@@ -1,3 +1,17 @@
+// Server-side Supabase Realtime: the one broadcast transport (`broadcast()`)
+// and the subscriber-JWT mint for private topics.
+//
+// Supabase quotas: UNVERIFIED (CS-2). Nothing in the repo states them; each
+// line below is a placeholder until it is read from the project's plan and
+// written here as a docs commit (realtime push-nudges plan, CS-2):
+//   - concurrent connections:            UNVERIFIED
+//   - channels per connection:           UNVERIFIED
+//   - channel joins per second:          UNVERIFIED
+//   - messages per month (billed):       UNVERIFIED
+//   - messages per broadcast request:    UNVERIFIED (`BROADCAST_CHUNK` assumes 100;
+//                                        lower it if the plan's maximum is below that)
+// A refused connection or join behaves like "Realtime down": every subscriber
+// falls back to its poll, and a publish only ever logs a warning.
 import "server-only";
 import {
   SignJWT,
@@ -31,6 +45,53 @@ function publishTarget(): { url: string; key: string } | null {
   return url && key ? { url, key } : null;
 }
 
+/** One message of a broadcast request, exactly as it goes on the wire. A
+ *  message without `private` is joinable on a public channel by anyone holding
+ *  the anon key; every new topic sends `private: true`. */
+export type RealtimeMessage = { topic: string; event: string; payload: unknown; private?: true };
+
+/** Messages per broadcast request. The API's per-request maximum is UNVERIFIED
+ *  (CS-2 in the header); 100 is the design's assumption. */
+export const BROADCAST_CHUNK = 100;
+
+/**
+ * The one server-side broadcast transport. Sends `messages` as POSTs of at most
+ * `BROADCAST_CHUNK` each, one after another, each with the same headers and
+ * `BROADCAST_TIMEOUT_MS` abort as every publisher before it. An empty list or
+ * a null `publishTarget()` (kill switch, missing env) sends nothing.
+ *
+ * Fire-and-forget: never throws. A failed chunk warns
+ * `[realtime] <label> broadcast failed (<status>)` — the HTTP status, or the
+ * error's class name when the request itself failed — and the next chunk is
+ * still sent. The warn line never carries a message body, an error message or
+ * the service key: a body may hold a room's state, and a key in a log is a
+ * leaked credential.
+ */
+export async function broadcast(messages: readonly RealtimeMessage[], label: string): Promise<void> {
+  if (messages.length === 0) return;
+  const target = publishTarget();
+  if (!target) return;
+  const { url, key } = target;
+  for (let start = 0; start < messages.length; start += BROADCAST_CHUNK) {
+    try {
+      const body = JSON.stringify({ messages: messages.slice(start, start + BROADCAST_CHUNK) });
+      const res = await fetch(`${url}/realtime/v1/api/broadcast`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${key}`,
+          apikey: key,
+        },
+        body,
+        signal: AbortSignal.timeout(BROADCAST_TIMEOUT_MS),
+      });
+      if (!res.ok) console.warn(`[realtime] ${label} broadcast failed (${res.status})`);
+    } catch (err) {
+      console.warn(`[realtime] ${label} broadcast failed (${err instanceof Error ? err.name : "error"})`);
+    }
+  }
+}
+
 /**
  * Broadcast a state_changed event on `fixture:{id}` after a v2 scoring write
  * (doc 08 §4 — publish after commit). Same transport as tournaments; fire-and-
@@ -51,30 +112,9 @@ export async function publishFixtureUpdate(
   fixtureId: string,
   reason: "event" | "finalize" | "schedule",
 ): Promise<void> {
-  const target = publishTarget();
-  if (!target) return;
-  const { url, key } = target;
-  try {
-    const payload = { v: Date.now(), reason, at: new Date().toISOString() };
-    const topic = `fixture:${fixtureId}`;
-    const res = await fetch(`${url}/realtime/v1/api/broadcast`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${key}`,
-        apikey: key,
-      },
-      body: JSON.stringify({
-        messages: [{ topic, event: "state_changed", payload, private: true }],
-      }),
-      signal: AbortSignal.timeout(BROADCAST_TIMEOUT_MS),
-    });
-    if (!res.ok) {
-      console.warn(`[realtime] fixture broadcast failed (${res.status}) for ${fixtureId}`);
-    }
-  } catch (err) {
-    console.warn("[realtime] fixture broadcast error:", err);
-  }
+  const payload = { v: Date.now(), reason, at: new Date().toISOString() };
+  const topic = `fixture:${fixtureId}`;
+  await broadcast([{ topic, event: "state_changed", payload, private: true }], `fixture ${fixtureId}`);
 }
 
 /**
@@ -88,34 +128,16 @@ export async function publishDivisionUpdate(
   divisionId: string,
   reason: "schedule" | "publish" | "start" | "score",
 ): Promise<void> {
-  const target = publishTarget();
-  if (!target) return;
-  const { url, key } = target;
-  try {
-    const res = await fetch(`${url}/realtime/v1/api/broadcast`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${key}`,
-        apikey: key,
+  await broadcast(
+    [
+      {
+        topic: `division:${divisionId}`,
+        event: reason === "score" ? "state_changed" : "schedule_changed",
+        payload: { v: Date.now(), reason, at: new Date().toISOString() },
       },
-      body: JSON.stringify({
-        messages: [
-          {
-            topic: `division:${divisionId}`,
-            event: reason === "score" ? "state_changed" : "schedule_changed",
-            payload: { v: Date.now(), reason, at: new Date().toISOString() },
-          },
-        ],
-      }),
-      signal: AbortSignal.timeout(BROADCAST_TIMEOUT_MS),
-    });
-    if (!res.ok) {
-      console.warn(`[realtime] division broadcast failed (${res.status}) for ${divisionId}`);
-    }
-  } catch (err) {
-    console.warn("[realtime] division broadcast error:", err);
-  }
+    ],
+    `division ${divisionId}`,
+  );
 }
 
 type MintKey = {
@@ -336,9 +358,9 @@ export type RoomBroadcast = {
  *  admits a seated player, so no new policy — plus the timeout that
  *  `publishFixtureUpdate` carries. Fire-and-forget: never throws. */
 export async function publishRoomBroadcast(fixtureId: string, body: RoomBroadcast): Promise<void> {
-  const target = publishTarget();
-  if (!target) return;
-  const { url, key } = target;
+  // Publishing off or unconfigured: skip the spectators' projection too, so a
+  // board nobody would be sent never warns.
+  if (!publishTarget()) return;
   // A board the spectators' copy cannot read (not a FEN, a status nobody
   // declared) costs the spectators one push — never the players theirs.
   let spectator: PublicBoardPush | null = null;
@@ -347,39 +369,24 @@ export async function publishRoomBroadcast(fixtureId: string, body: RoomBroadcas
   } catch (err) {
     console.warn(`[realtime] spectator board skipped for ${fixtureId}:`, err);
   }
-  try {
-    const res = await fetch(`${url}/realtime/v1/api/broadcast`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${key}`,
-        apikey: key,
+  await broadcast(
+    [
+      {
+        topic: externalPlayLobbyTopic(fixtureId),
+        event: "room_state",
+        payload: body,
+        private: true,
       },
-      body: JSON.stringify({
-        messages: [
-          {
-            topic: externalPlayLobbyTopic(fixtureId),
-            event: "room_state",
-            payload: body,
-            private: true,
-          },
-          // T16 — the spectators' copy, on the public fixture topic the public
-          // realtime token is minted for (V403): the board alone, never the
-          // draw offer. The watch island reads it through the match centre's
-          // one subscription (use-live-fixture → live-board-channel).
-          ...(spectator === null
-            ? []
-            : [{ topic: `fixture:${fixtureId}`, event: "board_state", payload: spectator, private: true }]),
-        ],
-      }),
-      signal: AbortSignal.timeout(BROADCAST_TIMEOUT_MS),
-    });
-    if (!res.ok) {
-      console.warn(`[realtime] room broadcast failed (${res.status}) for ${fixtureId}`);
-    }
-  } catch (err) {
-    console.warn("[realtime] room broadcast error:", err);
-  }
+      // T16 — the spectators' copy, on the public fixture topic the public
+      // realtime token is minted for (V403): the board alone, never the
+      // draw offer. The watch island reads it through the match centre's
+      // one subscription (use-live-fixture → live-board-channel).
+      ...(spectator === null
+        ? []
+        : [{ topic: `fixture:${fixtureId}`, event: "board_state", payload: spectator, private: true as const }]),
+    ],
+    `room ${fixtureId}`,
+  );
 }
 
 export async function mintPublicFixtureToken(
