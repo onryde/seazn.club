@@ -64,8 +64,10 @@ export function assertSizeFits(size: OnlineSize, facts: PackageFacts): void {
 }
 
 /** What the prelude read and decided, handed to the callback and the epilogue. `storedOnline`: the division plays online as
- *  stored, before this save. `plan`: the package plan, made only when the save turns online play off. */
-export type OnlineSavePrelude = { storedOnline: boolean; plan: PackageDeletePlan | null };
+ *  stored, before this save. `plan`: the package plan, made only when the save turns online play off. `liveSize`: the size of the
+ *  live package as it stood before this save (null: none, or the division did not play online), so the caller, after the commit,
+ *  can tell a size that moved UP and promote the waitlist into the new room (P18, registrations/promote-into-room.ts). */
+export type OnlineSavePrelude = { storedOnline: boolean; plan: PackageDeletePlan | null; liveSize: OnlineSize | null };
 
 /** PRELUDE of a save that names online play or a size: the `division:` lock first (the lock every money writer and format writer
  *  of the division takes; re-entrant, so the camera gate taking it too never waits), then the stored state, read under it and
@@ -77,7 +79,8 @@ export async function prepareOnlineSave(ptx: Tx, a: { orgId: string; divisionId:
     select sport_key, config from divisions where id = ${a.divisionId} and org_id = ${a.orgId}`;
   const storedOnline = d !== undefined && divisionPlaysOnline(d);
   const plan = storedOnline && a.turnsOff ? await planPackageDelete(ptx, { orgId: a.orgId, divisionIds: [a.divisionId] }) : null;
-  return { storedOnline, plan };
+  const liveSize = storedOnline ? ((await livePackage(ptx, a.divisionId))?.size ?? null) : null;
+  return { storedOnline, plan, liveSize };
 }
 
 /** TENANT CALLBACK: the size this save writes, or null for none. `onlineBefore` is the prelude's stored state (false for a new

@@ -217,6 +217,10 @@ export async function promoteOldestWaitlisted(
    *  solo sign-up is the caller's to wave through (it takes no team place). The automatic promotions pass nothing: the place they fill
    *  was just freed. A refusal throws, so nothing is promoted and the transaction rolls back. */
   beforePromote?: (picked: { id: string; free_agent: boolean }) => Promise<void>,
+  /** The registrants the seat gate has already passed over, shared by a caller that promotes MANY places in a row (a size that grew:
+   *  registrations/promote-into-room.ts): they are left out of this pick, and each one passed over now is added to it. Without it every
+   *  place would pass the same unseatable registrant over again - a second ledger row and a second "skipped" mail for one skip. */
+  passedOver?: string[],
 ): Promise<RegistrationWithGroupRow | null> {
   // FU1: where a promotion SEATS the next in line (free, auto approval), it seats them as the settings' kind - and a kind
   // the division no longer takes (Entrant kinds narrowed since they joined) would be refused by `materialise`, failing the
@@ -231,7 +235,7 @@ export async function promoteOldestWaitlisted(
   }
   // `skipped`: the candidates this call has passed over - `excludeId`, and (with a seat gate) every registrant whose seat the gate
   // refused. A passed-over entry is left exactly as it was: still waitlisted, in its place, picked again by the NEXT freed spot.
-  const skipped: string[] = excludeId ? [excludeId] : [];
+  const skipped: string[] = [...(excludeId ? [excludeId] : []), ...(passedOver ?? [])];
   for (;;) {
     const [picked] = await tx<{ id: string; group_id: string; free_agent: boolean }[]>`
       select r.id, r.group_id, r.free_agent from registrations r
@@ -259,6 +263,7 @@ export async function promoteOldestWaitlisted(
     if (early) {
       await recordSkippedPromotion(tx, divisionId, picked.id, early);
       skipped.push(picked.id);
+      passedOver?.push(picked.id);
       continue;
     }
     await beforePromote?.(picked);
@@ -268,6 +273,7 @@ export async function promoteOldestWaitlisted(
       if (!isLichessRosterRefusal(err)) throw err;
       await recordSkippedPromotion(tx, divisionId, picked.id, err);
       skipped.push(picked.id);
+      passedOver?.push(picked.id);
     }
   }
 }

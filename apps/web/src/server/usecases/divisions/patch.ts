@@ -72,6 +72,7 @@ import {
   applyOnlineSave,
   decideOnlineSize,
   prepareOnlineSave,
+  promoteWaitlistAfterMoveUp,
   type OnlineSavePrelude,
   type OnlineSaveResult,
 } from "../online-package";
@@ -914,6 +915,13 @@ export async function patchDivision(
     if (isAgeCutoffCheckViolation(err)) throw new HttpError(422, AGE_CUTOFF_BOTH_OR_NEITHER);
     throw err;
   });
+  // P18 (Online Chess credits): an unpaid size moved UP by this save made room, so the waitlist is promoted into it - after the
+  // commit, best-effort, and only for a division that already had a live size (turning online play on with a default size is not a
+  // move). `onlinePrelude.liveSize` is the size read under the division lock before the write.
+  // (Both are assigned inside the write's closures, which control-flow analysis cannot see: read back through their declared types.)
+  const priorSize = (onlinePrelude as OnlineSavePrelude | null)?.liveSize ?? null;
+  const decidedSize = onlineSize as OnlineSize | null;
+  if (decidedSize !== null && priorSize !== null && decidedSize > priorSize) await promoteWaitlistAfterMoveUp(row.id, auth.userId);
   // W2c Task 11 (carry (b) of the batch-3 re-review): a format save that re-wrote a walkover's stored score must reach
   // the public pages now, not after their cache expires (15-300 s) - the same tags `putStageRules` fires after its own
   // re-write. Synchronous and after the commit, like that one (Next flushes a request's revalidations once).
