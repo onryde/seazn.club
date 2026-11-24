@@ -135,6 +135,53 @@ describe("broadcast()", () => {
     expect(warn.mock.calls).toEqual([["[realtime] test broadcast failed (TimeoutError)"]]);
   });
 
+  // Review m4: an endpoint that let one chunk time out will not answer the next
+  // one either; waiting 3 s per remaining chunk would hold an awaiting caller
+  // for 3 s × chunks. The rest are dropped and counted in ONE warn line.
+  const hangingChunks = async (answering: number) => {
+    vi.useFakeTimers();
+    const { broadcast } = await import("../realtime");
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms: number) => {
+      const c = new AbortController();
+      setTimeout(() => c.abort(new DOMException("The operation timed out.", "TimeoutError")), ms);
+      return c.signal;
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let calls = 0;
+    fetchMock.mockImplementation((_url: string, init: RequestInit) => {
+      calls += 1;
+      if (calls <= answering) return Promise.resolve({ ok: true, status: 202 });
+      return new Promise((_, reject) => {
+        init.signal?.addEventListener("abort", () => reject(init.signal!.reason));
+      });
+    });
+    let settled = false;
+    const sent = broadcast(msgs(250), "test").then(() => {
+      settled = true;
+    });
+    return { sent, warn, settled: () => settled };
+  };
+
+  it("three chunks, the first hangs: ONE fetch, resolved at 3 s, the two left skipped and counted once", async () => {
+    const { sent, warn, settled } = await hangingChunks(0);
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(settled(), "still waiting at 2.999 s").toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled(), "resolved at 3 s, not 9 s").toBe(true);
+    await sent;
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls).toEqual([["[realtime] test broadcast failed (TimeoutError), 2 later chunks skipped"]]);
+  });
+
+  it("three chunks, the second hangs: two fetches, and the one left is skipped", async () => {
+    const { sent, warn, settled } = await hangingChunks(1);
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(settled(), "resolved at 3 s, not 6 s").toBe(true);
+    await sent;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls).toEqual([["[realtime] test broadcast failed (TimeoutError), 1 later chunk skipped"]]);
+  });
+
   it("a 500 resolves, and the warn line is the label and the status — no body, no key", async () => {
     const { broadcast } = await import("../realtime");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});

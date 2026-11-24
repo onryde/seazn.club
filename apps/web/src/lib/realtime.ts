@@ -87,7 +87,16 @@ export async function broadcast(messages: readonly RealtimeMessage[], label: str
       });
       if (!res.ok) console.warn(`[realtime] ${label} broadcast failed (${res.status})`);
     } catch (err) {
-      console.warn(`[realtime] ${label} broadcast failed (${err instanceof Error ? err.name : "error"})`);
+      const name = err instanceof Error ? err.name : "error";
+      if (name === "TimeoutError") {
+        // An endpoint that let one chunk time out will not answer the next one either: waiting 3 s for each
+        // remaining chunk would hold an awaiting caller for 3 s × chunks. Drop the rest and count them once.
+        const left = Math.ceil((messages.length - start - BROADCAST_CHUNK) / BROADCAST_CHUNK);
+        const skipped = left > 0 ? `, ${left} later chunk${left === 1 ? "" : "s"} skipped` : "";
+        console.warn(`[realtime] ${label} broadcast failed (TimeoutError)${skipped}`);
+        break;
+      }
+      console.warn(`[realtime] ${label} broadcast failed (${name})`);
     }
   }
 }
