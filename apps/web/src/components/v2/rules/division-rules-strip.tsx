@@ -615,6 +615,9 @@ export function DivisionRulesStrip({
           )}
         </div>
       )}
+      {/* Spec §8.1 order: Online play, Camera, Players up to, the price line. The Camera is the builder's (the saved strip has none: a saved
+          division's camera lives in its Settings), and it sits before the size because it changes the price the size is read at. */}
+      {draft?.cameraControl !== undefined && onlinePlay === "lichess" && <div className="mt-3">{draft.cameraControl}</div>}
       {sizeShown && (
         <div className="mt-3 grid min-w-0 gap-2" data-testid="division-online-package">
           <OnlineSizeSelect
@@ -641,7 +644,6 @@ export function DivisionRulesStrip({
           )}
         </div>
       )}
-      {draft?.cameraControl !== undefined && onlinePlay === "lichess" && <div className="mt-3">{draft.cameraControl}</div>}
     </div>
   );
 

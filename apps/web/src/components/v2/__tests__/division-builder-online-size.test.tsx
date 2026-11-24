@@ -15,6 +15,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
 import { effectiveEntrantModel } from "@seazn/engine/sport";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
+import { OnlinePriceLine } from "@/components/v2/online-chess/price-line";
 import { DivisionBuilder, type SportOption } from "@/components/v2/division-builder";
 import { ApiV1Error } from "@/lib/client-v1";
 import { sportOptionsFrom } from "@/lib/sport-options";
@@ -121,6 +122,29 @@ describe("the strip's draft carries the facts the select is drawn from", () => {
     pressCreate(h);
     await flush();
     expect(divisionBody().online_size).toBe(32);
+  });
+
+  it("the controls read in the spec's order: Online play, Camera, Players up to, then the price line (spec 8.1)", () => {
+    const h = mount();
+    swiss(h, 7);
+    lichessOn(h);
+    const tree = builderStrip(h).tree();
+    const at = (pred: (e: (typeof tree)[number]) => boolean) => tree.findIndex(pred);
+    const order = {
+      onlinePlay: at((e) => propsOf(e)["data-testid"] === "division-online-play"),
+      camera: at((e) => propsOf(e)["data-testid"] === "division-builder-camera"),
+      sizeBlock: at((e) => propsOf(e)["data-testid"] === "division-online-package"),
+      priceLine: at((e) => e.type === OnlinePriceLine),
+    };
+    for (const [name, i] of Object.entries(order)) expect(i, `${name} is drawn`).toBeGreaterThanOrEqual(0);
+    expect(order.onlinePlay, "Online play first").toBeLessThan(order.camera);
+    expect(order.camera, "the Camera before the size (it changes the price)").toBeLessThan(order.sizeBlock);
+    expect(order.sizeBlock, "the size select before its price line").toBeLessThan(order.priceLine);
+    // the sequence: Lichess off again drops the camera and the package together
+    rulesDraft(h).setOnlinePlay("off");
+    const off = builderStrip(h).tree();
+    expect(off.some((e) => propsOf(e)["data-testid"] === "division-builder-camera"), "no camera with online off").toBe(false);
+    expect(off.some((e) => propsOf(e)["data-testid"] === "division-online-package"), "no package with online off").toBe(false);
   });
 
   it("the Fair-play camera follows the division's effective policy: its own pick, else the competition's", () => {
