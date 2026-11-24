@@ -90,6 +90,23 @@ describe("AdminSeaznVideoPanel", () => {
     expect(render([row()], 50)).toContain("Last 50 Seazn sessions");
   });
 
+  // Phase 3 review I2 (controller ruling 2026-11-24): the live column counts what Cloudflare SERVED from the match's recordings —
+  // live viewing, the replay before the replay host's copy took over, and the one-off copy to the replay host — so it is named
+  // "Cloudflare minutes delivered", never "live". Review m5: a day is read once, at about 04:17 UTC the next day; a vendor that reports
+  // later is under-counted for good, an accepted estimate error the caveat names.
+  it("I2/m5: the Cloudflare column is named for what it counts; the caveat says what it holds, the one-off copy included, and that a day is never read again", () => {
+    const html = render([row()]);
+    expect(html).toContain(">Cloudflare min delivered<");
+    expect(html).not.toMatch(/>Live min</);
+    const caveat = html.match(/data-testid="seazn-video-caveat"[^>]*>([^<]*)</)?.[1] ?? "";
+    expect(caveat.length, "PREMISE: the caveat rendered").toBeGreaterThan(0);
+    expect(caveat).toContain("Cloudflare minutes delivered");
+    expect(caveat).toMatch(/live viewing, the replay before the replay host&#x27;s copy took over, and the\s+one-off copy to the replay host/);
+    expect(caveat).toMatch(/a day is\s+never read again/);
+    expect(caveat, "the old wording claimed the match feed").not.toMatch(/match feed/);
+    expect(caveat).toMatch(/estimates/);
+  });
+
   it("the admin org page mounts it with the staff read and the usecase's own limit (the seam, read from the page's source)", () => {
     const page = readFileSync(join(fileURLToPath(new URL(".", import.meta.url)), "../../app/admin/orgs/[id]/page.tsx"), "utf8");
     expect(page).toMatch(/const seaznVideo = await seaznVideoForOrg\(id\);/);

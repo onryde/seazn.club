@@ -2119,7 +2119,7 @@ describe.skipIf(!HAS_DB)("Seazn-hosted video Task 31: step 7e measures Seazn del
     expect(checked).toBe(3);
   });
 
-  it("SEAZN_HOSTED_COST on: the session's live minutes are the input's plus its recording's plus its replay's source (12.5 + 3 + 3), its copy is measured through yesterday, and the deleted org's replay is purged — its copy read first, from TODAY only, then removed", async () => {
+  it("SEAZN_HOSTED_COST on: the session's live minutes are the sum over every uid asked — the input's plus its recording's plus its replay's source (12.5 + 3 + 3; a real input answers 0, the fake's 12.5 makes a dropped uid read), its copy is measured through yesterday, and the deleted org's replay is purged — its copy read first, from TODAY only, then removed", async () => {
     const w = await endedSeazn();
     await sql`update organizations set deleted_at = now() - interval '31 days' where id = ${w.r.orgId}`;
     vi.stubEnv("SEAZN_HOSTED_COST", "true");

@@ -1,18 +1,23 @@
 import "server-only";
-// server/video/cf-analytics.ts — delivered minutes of Seazn LIVE: how many minutes viewers watched each Cloudflare uid (Task 30,
-// Phase 3, SEAZN_HOSTED_COST). The replay side's minutes are the replay host's (`ReplayHost.watchMinutes`); this is the live side.
+// server/video/cf-analytics.ts — the Cloudflare minutes delivered of a Seazn match: how many minutes Cloudflare served of each uid
+// (Task 30, Phase 3, SEAZN_HOSTED_COST). The replay host's minutes are `ReplayHost.watchMinutes`; this is the Cloudflare side.
 //
 // One GraphQL query to Cloudflare's Analytics API (developers.cloudflare.com/stream/getting-analytics/fetching-bulk-analytics,
 // read 2026-11-23): the `streamMinutesViewedAdaptiveGroups` dataset, filtered by `uid_in` and the UTC dates `date_geq`/`date_leq`,
 // grouped by `uid`, reading `sum { minutesViewed }`. The answer is summed per uid, and every uid asked for has a number (0 when
 // Cloudflare has no group for it). Cloudflare's own limits: a query spans at most 32 days (768 hours), and its data is kept 92.
 //
-// Which uid a LIVE view lands under is unmeasured: the docs key `uid` as "Video ID (for HLS/DASH) or Input ID (for WebRTC/WHEP)",
-// and Seazn's viewers play the programme INPUT's uid (C1). The caller always asks for the input uid AND each of its video uids
-// (Task 30 review I1): the interim replay plays by VIDEO uid (cf-playback.ts `signRecordingPlayback`) from the session's end until
-// the replay host's copy is verified, so a video uid carries real minutes whatever the live answer is. The Task 7 probe
-// (cf-signed-live.live.test.ts, step 8) answers only whether one live view is reported under BOTH keys — a double count the
-// caller must not sum (the report's decision table: then the larger of the input's and its videos' minutes, per input and day).
+// Which uid Cloudflare counts against was MEASURED (stg, read-only GraphQL, 2026-11-23): the RECORDING (video) uid, never the input
+// uid. The inputs answered no rows; the programme recording answered 13 min — its live viewing and its interim replay (cf-playback.ts
+// `signRecordingPlayback`) together. So a session's minutes are its programme recordings' (seazn-cost.ts); an input uid in the set
+// answers 0, harmless. A CAMERA input's recording carries the relay's own pull of the phone (~1 min per min of match, never a
+// viewer) and must never be asked: relay-sweep.test.ts pins that through the real producer (step 5's video facts).
+//
+// "Cloudflare minutes delivered" (Phase 3 review I2, controller ruling 2026-11-24): every minute Cloudflare served from those
+// recordings — live viewing, the interim replay before the replay host's copy took over, AND the one-off MP4 download the replay
+// host fetches to make its copy (cf-playback.ts `signDownload`). That fetch is kept in: Cloudflare bills it as delivery, so a cost
+// ledger counts it; if it does not, the over-count is about one recording's length per session. Not filtered by `mediaType`:
+// live viewing and the interim replay both read `playback` (probe 2026-11-24), so the dimension cannot separate them.
 //
 // One call gives up after SEAZN_LIVE_MINUTES_TIMEOUT_MS, the request and the body read alike, recorded `timeout` (fix round 1).
 //

@@ -1,8 +1,10 @@
 // Seazn-hosted video Task 31 (Phase 3, SEAZN_HOSTED_COST): the daily measurement of delivered minutes, and the deleted-org purge.
 //
 // The rules (the brief, and the controller's rulings of 2026-11-23), typed here — never read back from the module:
-//   * LIVE minutes of a Seazn session that ended within SEAZN_LIVE_MEASURE_DAYS are the SUM of what Cloudflare reports for its
-//     programme input uid AND each of its recordings' video uids (ruling 1: the brief's 12.5 + 3 = 15.5);
+//   * LIVE minutes ("Cloudflare minutes delivered") of a Seazn session that ended within SEAZN_LIVE_MEASURE_DAYS are the SUM of what
+//     Cloudflare reports for each of its programme recordings' video uids, its programme input uid riding along (ruling 1). Since
+//     2026-11-23 we know Cloudflare keys minutes by the recording and answers 0 for an input; the cases below still give the input a
+//     number so a dropped uid reads in the sum (the brief's 12.5 + 3 = 15.5 is that world, not production's);
 //   * REPLAY minutes are the replay host's watch time of every copy whose row is not deleted, summed per session;
 //   * each half is read from the day after its `*_measured_through` (or the session's first day) through yesterday, UTC, and stores
 //     yesterday as measured: a second run the same day reads nothing, the next day's run reads one new day (ruling 3);
@@ -92,7 +94,7 @@ describe.skipIf(!HAS_DB)("measureSeaznDelivery — live minutes (Cloudflare)", (
     expect(await deliveryOf(open)).toBeNull();
   });
 
-  it("the brief's case: {input: 12.5, video: 3} stores live_minutes 15.5 through yesterday; a second run the same day asks nothing and does not double it; the next day's run reads only the new day and ADDS it", async () => {
+  it("the brief's case (every uid asked is summed — the input's 12.5 is the fake's, a real input answers 0): {input: 12.5, video: 3} stores live_minutes 15.5 through yesterday; a second run the same day asks nothing and does not double it; the next day's run reads only the new day and ADDS it", async () => {
     sentry.captureError.mockClear();
     const w = await world(1);
     const cf = fakeLive({ [w.inputUid]: 12.5, [w.videoUids[0]!]: 3 });

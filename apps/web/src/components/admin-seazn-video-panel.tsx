@@ -1,5 +1,5 @@
-// The staff "Seazn video" table on /admin/orgs/[id] (Seazn-hosted video Task 31): the org's last Seazn sessions, the delivered
-// minutes the daily sweep measured for each (usecases/seazn-cost.ts), and each replay part's state. A server component: no state,
+// The staff "Seazn video" table on /admin/orgs/[id] (Seazn-hosted video Task 31): the org's last Seazn sessions, the minutes the daily
+// sweep measured for each (usecases/seazn-cost.ts: Cloudflare minutes delivered, and the replay host's), and each replay part's state. A server component: no state,
 // no handlers. /admin is staff-only and desktop-only (AGENTS.md), so English only and no phone layout.
 import type { SeaznVideoPart, SeaznVideoSession } from "@/server/usecases/seazn-cost";
 
@@ -33,10 +33,11 @@ export function AdminSeaznVideoPanel({ rows, limit }: { rows: SeaznVideoSession[
   return (
     <section data-testid="seazn-video-panel">
       <h2 className="mb-1 text-sm font-semibold text-slate-300">Seazn video</h2>
-      <p className="mb-2 text-xs text-slate-400">
-        Last {limit} Seazn sessions, newest first. Minutes are estimates, measured once a day through yesterday (UTC): Cloudflare
-        samples its viewing counts, live minutes add the match feed and its recordings, and the replay host reads about a third
-        below the time actually played.
+      <p data-testid="seazn-video-caveat" className="mb-2 text-xs text-slate-400">
+        Last {limit} Seazn sessions, newest first. Minutes are estimates, measured once a day through yesterday (UTC), and a day is
+        never read again: viewing a vendor reports later than that is not counted. Cloudflare minutes delivered are what Cloudflare
+        served from the match&apos;s recordings, sampled: live viewing, the replay before the replay host&apos;s copy took over, and the
+        one-off copy to the replay host. The replay host reads about a third below the time actually played.
       </p>
       {rows.length === 0 ? (
         <p data-testid="seazn-video-empty" className="text-xs text-slate-400">No Seazn-hosted sessions for this org.</p>
@@ -47,7 +48,7 @@ export function AdminSeaznVideoPanel({ rows, limit }: { rows: SeaznVideoSession[
               <tr>
                 <th className="px-3 py-2 text-left">Fixture</th>
                 <th className="px-3 py-2 text-left">Ended</th>
-                <th className="px-3 py-2 text-right">Live min</th>
+                <th className="px-3 py-2 text-right">Cloudflare min delivered</th>
                 <th className="px-3 py-2 text-right">Replay min</th>
                 <th className="px-3 py-2 text-left">Replay</th>
               </tr>

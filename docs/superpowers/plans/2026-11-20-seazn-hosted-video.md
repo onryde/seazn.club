@@ -1074,11 +1074,11 @@ Bunny calls a library's webhook on every status change (B6). It is the primary "
 
 - Create: `apps/web/src/server/video/cf-analytics.ts`: `liveMinutesViewed(uids: string[], from: Date, to: Date): Promise<Record<string, number>>`. It POSTs to `https://api.cloudflare.com/client/v4/graphql` with `streamMinutesViewedAdaptiveGroups(filter: { uid_in, date_geq, date_leq }, limit)` and sums `sum.minutesViewed` per uid. Windows longer than 32 days are refused.
 - Modify: `replay-bunny.ts` and `replay-fake.ts`. `watchMinutes(videoId, from, to)` reads `GET /library/{lib}/statistics?videoGuid=&dateFrom=&dateTo=` and sums `watchTimeChart` values. The probe settles the unit; the docs do not state it.
-- Modify: `apps/web/src/server/relay/config.ts`: `CLOUDFLARE_ANALYTICS_TOKEN` and the account id reuse the relay's account env.
+- Modify: `apps/web/src/server/relay/config.ts`: the analytics read reuses the relay's own account env (`CLOUDFLARE_ACCOUNT_ID` and the Stream token, granted Account Analytics read) — no `CLOUDFLARE_ANALYTICS_TOKEN` (T30 review m8).
 - Modify: the Task 20 probe file and the Task 7 probe file, adding one assertion each: Task 7, whether a live HLS view of a programme input is keyed by the **input uid** or by its live video uid; Task 20, the `watchTimeChart` unit.
 - Test: `video/__tests__/cf-analytics.test.ts` (mocked fetch), `replay-bunny.test.ts`
 
-**Plan decision:** query the programme input uid **and** each of its video uids, and sum them. The Cloudflare docs key `uid` as "Video ID (for HLS/DASH)", and whether a live input's live HLS minutes sit under the input uid is unmeasured. Summing both counts the minutes wherever they land; the probe then drops the key that never carries any.
+**Plan decision:** query the programme input uid **and** each of its video uids, and sum them. The Cloudflare docs key `uid` as "Video ID (for HLS/DASH)", and whether a live input's live HLS minutes sit under the input uid is unmeasured. Summing both counts the minutes wherever they land; the probe then drops the key that never carries any. **Settled 2026-11-23:** Cloudflare keys minutes by the RECORDING uid only (the input uid answers 0, so the sum is harmless). Ruled 2026-11-24 (Phase 3 review I2): the figure is "Cloudflare minutes delivered" and keeps the replay host's one-off MP4 fetch in it; no `mediaType` filter.
 
 - [ ] **Step 1: Write the failing tests.**
   - The GraphQL body carries `uid_in` with the given uids, and the date filters are ISO dates.

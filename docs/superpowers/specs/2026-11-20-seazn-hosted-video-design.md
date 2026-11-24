@@ -136,8 +136,15 @@ Seazn-owned YouTube channel (free, but upload quota ~1,600 units each, API-uploa
 - An organiser can delete a match's replay themselves.
 
 ### 5.6 Measuring cost
-- Minutes delivered per match: live from Cloudflare's analytics (`streamMinutesViewedAdaptiveGroups`, by input uid),
-  replay from Bunny's statistics. Recorded per session and visible to Seazn staff. No organiser-facing number yet.
+- Minutes delivered per match: **Cloudflare minutes delivered** from Cloudflare's analytics (`streamMinutesViewedAdaptiveGroups`,
+  by the match's programme RECORDING uids — measured 2026-11-23: Cloudflare keys minutes by the recording, never the input), and
+  replay from Bunny's statistics. The Cloudflare figure is everything Cloudflare served from those recordings: live viewing, the
+  interim replay before the Bunny copy took over, and the one-off MP4 fetch Bunny makes to copy it (controller ruling
+  2026-11-24: Cloudflare bills that fetch as delivery). A camera input's recording (the relay's own pull) is never counted.
+  Recorded per session and visible to Seazn staff. No organiser-facing number yet.
+- With measuring on (`SEAZN_HOSTED_COST`), a recording's Cloudflare copy is deleted (§5.4, G-D) only once its session's
+  Cloudflare minutes are measured through the session's end day (controller ruling 2026-11-24: whether Cloudflare's analytics
+  survive a deleted video is unmeasured). That keeps a copy about a day longer than G-D's 60 min.
 
 ### 5.7 Replay lifecycle (owner ruling 2026-11-21, with recommendations)
 

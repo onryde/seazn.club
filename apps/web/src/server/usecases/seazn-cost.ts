@@ -4,11 +4,16 @@ import "server-only";
 //
 //   measureSeaznDelivery(deps, now, scope)
 //       Per Seazn session, two halves, each written to `fixture_video_delivery` (V552) on its own:
-//       LIVE   — a session that ENDED within SEAZN_LIVE_MEASURE_DAYS: the minutes Cloudflare reports viewed for its programme input
-//                uid AND every recording (video uid) of it, SUMMED (controller ruling 1, 2026-11-23). The input's minutes are the
-//                live audience; a recording's are the interim replay's, played before the replay host's copy took over. If the two
-//                ever prove to count the same viewing twice, the T30 report's fallback is max(input, sum of videos) per day
-//                (task-30-report.md, "live minutes" note) — not done here: unmeasured, and only the sum is stored.
+//       LIVE   — "Cloudflare minutes delivered" of a session that ENDED within SEAZN_LIVE_MEASURE_DAYS: the minutes Cloudflare
+//                reports for every programme recording (video uid) of it, SUMMED (controller ruling 1, 2026-11-23). Cloudflare keys
+//                them by the RECORDING, never the input (measured on stg 2026-11-23), so a recording's minutes are its live viewing
+//                AND its interim replay, played before the replay host's copy took over — and the replay host's one-off MP4 fetch of
+//                it (Phase 3 review I2, controller ruling 2026-11-24: kept in, as Cloudflare bills it as delivery). The programme
+//                input's uid is still asked and answers 0: harmless, so the old max(input, videos) fallback is moot. A CAMERA
+//                input's recording (the relay's own pull) is never in the set: relay-sweep.test.ts pins that through step 5.
+//                The mover keeps a recording's Cloudflare copy until this half has measured its session through its end day
+//                (video/domain/replay-move.ts `liveMeasureGate`, review I1), and the write ADDS: a deleted uid that answers 0
+//                afterwards never writes 0 over what is stored.
 //       REPLAY — every replay row not deleted that names a copy on the replay host: the host's watch time of each copy, summed per
 //                session. A copy the host no longer holds answers null — gone: counted, adds nothing, and NEVER writes 0 over what
 //                is stored (ruling 2c: the host forgets a removed video's statistics with it).
@@ -168,9 +173,10 @@ export async function measureSeaznDelivery(deps: SeaznCostDeps, now: Date, scope
   let gone = 0;
   const goneSessions: string[] = [];
 
-  // LIVE. The uids: the session's own input uid, its programme input's (the same, on a composed session: kept for a session whose
-  // row was never stamped), every recording the video-facts step stamped on it, every one the Seazn lock pass locked, and every one
-  // a replay row was made from — de-duplicated.
+  // LIVE. The uids: every programme recording of the session — the ones the video-facts step stamped on it (relay-sweep.ts step 5,
+  // keyed by the session's own input, the programme one), every one the Seazn lock pass locked, and every one a replay row was made
+  // from — de-duplicated. Its input uids ride along (the session's own, and its programme input's: the same on a composed session)
+  // and answer 0: Cloudflare counts recordings, not inputs. Never a camera recording: the relay's pull, not delivery.
   const live = await sql<{ id: string; org_id: string; created_at: Date; through: string | null; uids: string[] }[]>`
     select s.id, s.org_id, s.created_at, d.live_measured_through::text as through,
            array(
