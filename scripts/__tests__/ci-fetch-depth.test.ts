@@ -62,9 +62,12 @@ const gitleaksStep = (s: Site): string => {
 const FULL_HISTORY: Record<string, { evidence: (s: Site) => string[] }> = {
   "ci.yml gates": {
     evidence: (s) => [
-      s.jobText.includes("--against HEAD^1") ? "" : "gates no longer reads HEAD^1",
+      // Read from the steps' run text, not from the package scripts they call: ruling 56 forbids scripts/ from naming a script that
+      // reaches tools/ (tools-import-guard.test.ts). Two steps compare the tree with the base tip, `--against HEAD^1`: the ratchet and
+      // the lock check. One surviving would still need the history, so the floor is one; two is what is there today, and said so.
+      (s.jobText.match(/--against HEAD\^1/g) ?? []).length >= 1 ? "" : "gates no longer reads HEAD^1",
+      (s.jobText.match(/--against HEAD\^1/g) ?? []).length === 2 ? "" : "the number of gates steps that compare against HEAD^1 changed from two: re-read why gates is full-depth",
       readFileSync(join(REPO, "tools/matrix/__tests__/rebase-map.test.ts"), "utf8").includes("this clone is shallow") ? "" : "rebase-map.test.ts no longer refuses a shallow clone",
-      s.jobText.includes("matrix:single-sport") ? "" : "gates no longer runs the single-sport ratchet",
     ],
   },
   "ci.yml security": {
