@@ -857,6 +857,7 @@
   "seaznVideo.unavailable": "De video kan nu niet worden afgespeeld",
   "seaznVideo.part": "Deel {n}",
   "seaznVideo.starting": "De video verschijnt hier zo meteen",
+  "seaznVideo.delay": "De video loopt ongeveer {min}–{max} seconden achter op het veld.",
   "paging.search.label": "Zoek een team",
   "paging.search.clear": "Wissen",
   "paging.search.none": "Geen team met de naam ‘{query}’",

@@ -102,11 +102,12 @@ export function buildCrumbs(args: {
     return crumbs;
   }
 
-  // The Sponsors hub (R4 sponsors-on-stream S11) is a TOP-NAV page, so it carries no breadcrumb bar at all (owner, 2026-11-12:
-  // "like Streaming and Directory"): [] makes <Breadcrumbs> render nothing. The Nav already names the club and holds the switcher,
-  // and the page has its own "<- Dashboard" BackLink as its one return. Every tab (`?tab=`, `?deal=`) is this one pathname. Any
-  // OTHER /o/<club>/... page keeps its trail - a new top-nav page that should match owes the same line, in the change that creates it.
-  if (rest[0] === "sponsors") return [];
+  // The club's TOP-NAV pages carry no breadcrumb bar at all: Sponsors (R4 sponsors-on-stream S11, owner 2026-11-12), and Streaming and
+  // Directory (owner 2026-11-23; the 11-12 line here said they already had none, and they had not until then). [] makes <Breadcrumbs>
+  // render nothing. The Nav already names the club and holds the switcher, and each page has its own "<- Dashboard" BackLink as its one
+  // return. Every tab (`?tab=`, `?deal=`) is one pathname. Any OTHER /o/<club>/... page keeps its trail - a new top-nav page that
+  // should match joins this line (and the test's list, swept from the route tree) in the change that creates it.
+  if (rest[0] === "sponsors" || rest[0] === "streaming" || rest[0] === "directory") return [];
 
   if (rest[0] !== "c" || rest.length < 2) return crumbs;
   if (rest[1] === "new") {

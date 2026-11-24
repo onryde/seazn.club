@@ -7353,7 +7353,6 @@
   "stream.dest.retry": "Réessayer",
   "stream.dest.kind.channel": "Chaîne {platform}",
   "stream.dest.kind.key": "Clé de stream {platform}",
-  "stream.dest.kind.seazn": "Seazn",
   "stream.dest.seazn.sub": "Diffusé sur la page de ce match",
   "stream.dest.kind.keyOther": "Clé de stream personnalisée",
   "stream.phone.credits.one": "1 crédit",

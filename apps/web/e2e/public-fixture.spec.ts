@@ -205,6 +205,8 @@ const seaznPlayer = (page: Page) => page.locator('[data-testid="seazn-player"] v
 interface Box { top: number; height: number }
 interface SeaznGeometry {
   summary: Box | null; frame: Box | null; ghostRow: Box | null; tablist: Box | null; player: Box | null; line: string | null;
+  /** Task 33c: the live player's delay line, or the held box's invisible row for it (whichever is on the page). */
+  delay: Box | null;
 }
 const seaznGeometry = (page: Page): Promise<SeaznGeometry> =>
   page.evaluate(() => {
@@ -221,6 +223,7 @@ const seaznGeometry = (page: Page): Promise<SeaznGeometry> =>
       tablist: box('[data-testid="seazn-video"] [role="tablist"]'),
       player: box('[data-testid="seazn-player"]'),
       line: document.querySelector('[data-testid="seazn-video-starting"] [role="status"]')?.textContent?.trim() ?? null,
+      delay: box('[data-testid="seazn-video-delay"], [data-testid="seazn-video-delay-reserved"]'),
     };
   });
 /** Layout shifts from navigation start that moved the island's box or the Summary panel (install BEFORE the first goto). */
@@ -434,6 +437,9 @@ test.describe("the Seazn player over time (1280)", () => {
       // Re-capture R2: the live player is in the very box the page held, and the Summary below it did not move.
       const arrived = await seaznGeometry(page);
       samePlace("the live player takes the held box's place", held.frame, arrived.player);
+      // Task 33c: the live player carries its delay line under it; the warming box held that row (invisible), so the line lands in it.
+      await expect(page.getByTestId("seazn-video-delay"), "the live player's delay line").toBeVisible();
+      samePlace("the delay line takes the row the box held for it", held.delay, arrived.delay);
       samePlace("the Summary after the player arrives", held.summary, arrived.summary, { height: false });
       await expect(page.getByTestId("seazn-video-starting"), "the line is gone with the box's arrival").toHaveCount(0);
       expect(await seaznShift(page), "warming to live moved nothing: no layout shift reached the box or the Summary").toBe(0);

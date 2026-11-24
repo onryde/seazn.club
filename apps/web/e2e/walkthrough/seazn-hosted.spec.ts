@@ -45,6 +45,8 @@ import {
   stubFakeEmbedHost, stubFakePlaybackHost,
 } from "../helpers/seazn-video-seed";
 import { routes } from "../../src/lib/routes";
+import { STREAM_KIND_BRAND } from "../../src/components/v2/stream-platform-mark";
+import { SEAZN_LIVE_DELAY_SECONDS } from "../../src/server/relay/config";
 
 // ===========================================================================
 // Clocks — DERIVED from the constants that set the pace (AGENTS.md class 20): helpers/seazn-hosted-clock.ts, one term per wait in
@@ -76,6 +78,8 @@ const copy = (d: Dict, key: string): string => {
 };
 const ui = (key: string) => copy(EN_UI, key);
 const pub = (key: string) => copy(EN_PUBLIC, key);
+/** Task 33c (owner 2026-11-23): the line under the LIVE player, from the dictionary's template and the one constant. */
+const DELAY_LINE = pub("seaznVideo.delay").replace("{min}", String(SEAZN_LIVE_DELAY_SECONDS.min)).replace("{max}", String(SEAZN_LIVE_DELAY_SECONDS.max));
 
 // ===========================================================================
 // Kit
@@ -318,7 +322,7 @@ test("Seazn pre-selected → a spectator opens the page before kick-off → Go l
   await expect(body.locator(`[data-testid="stream-target-option"][data-target-id="${rig.seaznId}"]`)).toHaveAttribute("aria-selected", "true");
   await body.getByTestId("stream-target").press("Escape");
   await expect(targetPicker(body), "picked with no choice of the organiser's own").toHaveAttribute("data-value", rig.seaznId);
-  await expect(targetPicker(body).getByTestId("stream-target-name")).toHaveText(ui("stream.dest.kind.seazn"));
+  await expect(targetPicker(body).getByTestId("stream-target-name"), "the brand, \"Seazn Hosted\" (owner 11-23)").toHaveText(STREAM_KIND_BRAND.seazn);
 
   // 2. BEFORE KICK-OFF (the plan's arm 3: LIVE on, no session yet, the match resolving to Seazn): a signed-out spectator opens the public
   //    match page at 1280. The island is mounted and reading the route, and draws nothing yet.
@@ -342,6 +346,15 @@ test("Seazn pre-selected → a spectator opens the page before kick-off → Go l
   //    of its kick-off, so its reads stayed on the floor (re-review N1): a viewer who keeps watching sees Go live within ONE read.
   await expect.poll(addressIs(player, first.programme.uid), { message: "the open page's player holds the signed address for the programme input", timeout: ONE_RE_READ_MS }).toBe(true);
   await expect(region, "the region is the LIVE one").toHaveAttribute("aria-label", pub("seaznVideo.live"));
+  // Task 33c (owner 2026-11-23): while the VIDEO is live, one line under the player says how far it runs behind the court, inside the live
+  // region and below the picture (never over it). Before kick-off (step 2) there was no region at all, so no line either.
+  const delay = viewer.page.getByTestId("seazn-video-delay");
+  await expect(delay, "the delay line, while live").toBeVisible();
+  await expect(delay).toHaveText(DELAY_LINE);
+  await expect(region.getByTestId("seazn-video-delay"), "inside the live region").toHaveCount(1);
+  const [pictureBox, delayBox] = await Promise.all([viewer.page.locator('[data-testid="seazn-player"]').boundingBox(), delay.boundingBox()]);
+  expect(pictureBox && delayBox, "both are laid out").toBeTruthy();
+  expect(delayBox!.y, "under the picture, not over it").toBeGreaterThanOrEqual(pictureBox!.y + pictureBox!.height - 1);
   // Re-capture R2: where the live player sits, so the box that holds after the Stop (step 6) is held against it.
   const placeOf = (selector: string) => viewer.page.evaluate((sel) => {
     const r = document.querySelector(sel)!.getBoundingClientRect();
@@ -379,6 +392,10 @@ test("Seazn pre-selected → a spectator opens the page before kick-off → Go l
   const starting = viewer.page.getByTestId("seazn-video-starting");
   await expect(starting, "the Stop leaves the player's box with its line, not a collapsed page").toBeVisible();
   await expect(starting.getByRole("status")).toHaveText(pub("seaznVideo.starting"));
+  // Task 33c: the stream has ended, so the delay line is gone with the live player: no visible line, and the held box keeps no hidden row
+  // for one either (a recording comes next, and its player has no line).
+  await expect(viewer.page.getByTestId("seazn-video-delay"), "the delay line is gone after the Stop").toHaveCount(0);
+  await expect(viewer.page.getByTestId("seazn-video-delay-reserved"), "and no row is held for it").toHaveCount(0);
   const heldPlace = await placeOf('[data-testid="seazn-video-frame"]');
   expect(Math.abs(heldPlace.top - livePlace.top), `the held box starts where the live player did (${heldPlace.top} vs ${livePlace.top})`).toBeLessThanOrEqual(1);
   expect(Math.abs(heldPlace.height - livePlace.height), `and is as tall (${heldPlace.height} vs ${livePlace.height})`).toBeLessThanOrEqual(1);
@@ -416,6 +433,7 @@ test("Seazn pre-selected → a spectator opens the page before kick-off → Go l
   await expect.poll(addressIs(player, videoId), { message: "the replay player holds the server's signed address for the recording", timeout: ONE_RE_READ_MS }).toBe(true);
   await expect(region, "the region is now the REPLAY one").toHaveAttribute("aria-label", pub("overlay.replay"));
   await expect(starting, "the recording took the held box's place: the line is gone").toHaveCount(0);
+  await expect(viewer.page.getByTestId("seazn-video-delay"), "Task 33c: a replay carries no delay line").toHaveCount(0);
   await expect.poll(viewer.reached(videoId), { message: "the recording's address reached the browser's player", timeout: CALL_MS }).toBe(true);
   await expect(viewer.page.locator('[data-testid="seazn-player"]'), "one Seazn player on the page").toHaveCount(1);
   await expect(region.locator("iframe"), "the interim replay is the Seazn player, not an embed").toHaveCount(0);
@@ -433,6 +451,7 @@ test("Seazn pre-selected → a spectator opens the page before kick-off → Go l
   expect(second.programme.uid, "premise: a new session publishes to a new programme input").not.toBe(first.programme.uid);
   await expect.poll(addressIs(player, second.programme.uid), { message: "the open page's player holds the NEW programme input's signed address", timeout: ONE_RE_READ_MS }).toBe(true);
   await expect(region, "the region is the LIVE one again").toHaveAttribute("aria-label", pub("seaznVideo.live"));
+  await expect(region.getByTestId("seazn-video-delay"), "Task 33c: live again, so the delay line is back").toHaveText(DELAY_LINE);
   await expect.poll(viewer.reached(second.programme.uid), { message: "the second live address reached the browser's player", timeout: CALL_MS }).toBe(true);
   expect(await viewer.neverFailed(), "the page turned live on a scheduled read, never by a failing player").toBe(true);
   expect(await viewer.sameDocument(), "no reload between the replay and the second live").toBe(true);

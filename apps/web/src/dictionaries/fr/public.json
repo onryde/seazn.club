@@ -857,6 +857,7 @@
   "seaznVideo.unavailable": "La vidéo ne peut pas être lue pour le moment",
   "seaznVideo.part": "Partie {n}",
   "seaznVideo.starting": "La vidéo apparaîtra ici dans un instant",
+  "seaznVideo.delay": "La vidéo a environ {min} à {max} secondes de retard sur le terrain.",
   "paging.search.label": "Trouver une équipe",
   "paging.search.clear": "Effacer",
   "paging.search.none": "Aucune équipe ne s’appelle « {query} »",

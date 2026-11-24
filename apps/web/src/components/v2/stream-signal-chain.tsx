@@ -167,6 +167,9 @@ export function SignalChain({
 }) {
   const msg = useMsg();
   const platform = platformName(msg, destination.kind);
+  // Owner 2026-11-23: Seazn's own destination is named by its brand alone ("Seazn Hosted"), at every width. Its stored label (V541
+  // writes 'Seazn') said the same thing again: "Seazn · Seazn" here, and "To Seazn" under the chain on a phone.
+  const seazn = destination.kind === "seazn";
   const word = (n: ChainNode) => msg(WORD_KEYS[n.word]);
   return (
     <div
@@ -193,16 +196,22 @@ export function SignalChain({
             icon={<PlayIcon />}
             wide
             name={
-              <>
-                <span className="md:hidden">{platform}</span>
-                <span className="max-md:hidden">{`${platform} · ${destination.label}`}</span>
-              </>
+              seazn ? (
+                platform
+              ) : (
+                <>
+                  <span className="md:hidden">{platform}</span>
+                  <span className="max-md:hidden">{`${platform} · ${destination.label}`}</span>
+                </>
+              )
             }
           />
         </div>
-        <p data-testid="stream-chain-dest-label" className="mt-2 text-center text-xs text-slate-500 [overflow-wrap:anywhere] md:hidden">
-          {toLabel(msg, destination.label)}
-        </p>
+        {seazn ? null : (
+          <p data-testid="stream-chain-dest-label" className="mt-2 text-center text-xs text-slate-500 [overflow-wrap:anywhere] md:hidden">
+            {toLabel(msg, destination.label)}
+          </p>
+        )}
       </div>
       {children}
     </div>

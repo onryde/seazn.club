@@ -7353,7 +7353,6 @@
   "stream.dest.retry": "Reintentar",
   "stream.dest.kind.channel": "Canal de {platform}",
   "stream.dest.kind.key": "Clave de transmisión de {platform}",
-  "stream.dest.kind.seazn": "Seazn",
   "stream.dest.seazn.sub": "Se reproduce en la página de este partido",
   "stream.dest.kind.keyOther": "Clave de transmisión personalizada",
   "stream.phone.credits.one": "1 crédito",

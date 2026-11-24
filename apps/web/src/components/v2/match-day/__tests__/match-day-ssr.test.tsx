@@ -1723,6 +1723,9 @@ describe("Task 17 — a playing court on air to Seazn plays it in the preview (t
     expect(props.initial, "no server-side answer: the island reads the route itself").toBeUndefined();
     // Phase 1 visual D1: the court is on air to Seazn, so the player's box is held until the first read (no shift when it arrives).
     expect(props.reserve, "the box is reserved").toBe(true);
+    // Task 33c: the preview is mounted only for a match on air to Seazn, so a LIVE is what its box expects: the box holds the delay
+    // line's row too, and the live player with its line arrives with no shift.
+    expect(props.liveExpected, "a live comes next: the box holds the delay line's row").toBe(true);
     expect(props.labels).toEqual(seaznVideoLabels(publicEn as Dict));
     expect(islands[0]!.key, "keyed by the match").toBe(f.id);
     const other = islandsOf(previewTree({ ...f, id: "f-2" }))[0]!;
@@ -1779,7 +1782,9 @@ describe("Task 17 — a playing court on air to Seazn plays it in the preview (t
         part: pubFull["seaznVideo.part"],
         replay: pubFull["overlay.replay"],
         starting: pubFull["seaznVideo.starting"],
+        delay: pubFull["seaznVideo.delay"],
       });
+      expect(labels.delay, `${locale}: premise, the delay line's key reaches the slice`).toEqual(expect.any(String));
       for (const [field, value] of Object.entries(labels)) {
         expect(value, `${locale} ${field}`).not.toMatch(/^(seaznVideo|overlay)\./);
         expect(value.trim(), `${locale} ${field}`).not.toBe("");

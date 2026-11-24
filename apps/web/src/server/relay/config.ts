@@ -398,6 +398,10 @@ export const SEAZN_TOKEN_FAILURE_CACHE_SECONDS = 60;
 /** Phase 1 review I1: a token mint not answered in this long is abandoned (ingest-cf.ts, `AbortSignal.timeout`) and counts as a
  *  failed mint. Every viewer of a uid waits on the one mint in flight, so a hung one held them all. */
 export const SEAZN_TOKEN_MINT_TIMEOUT_MS = 10_000;
+/** Owner 2026-11-23 (Task 33c): how far a Seazn LIVE picture runs behind the court, said under the live player ("Video runs about
+ *  {min}–{max} seconds behind the court."). The owner's figure from the stg live test of 2026-11-23 (court clock against the
+ *  picture), NOT a measurement this code makes; HLS latency moves with the phone's keyframe interval and the viewer's buffer. */
+export const SEAZN_LIVE_DELAY_SECONDS = { min: 15, max: 20 } as const;
 
 // ---- Seazn-hosted replays (Phase 2, Task 24): moving a recording to the replay host ---------------------------------
 /** Owner ruling 2026-11-21 (G-A): a decided fixture's recordings are moved this long after its result (`fixtures.finished_at`).

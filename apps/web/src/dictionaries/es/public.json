@@ -857,6 +857,7 @@
   "seaznVideo.unavailable": "El vídeo no se puede reproducir ahora",
   "seaznVideo.part": "Parte {n}",
   "seaznVideo.starting": "El vídeo aparecerá aquí en breve",
+  "seaznVideo.delay": "El vídeo va unos {min}–{max} segundos por detrás de la pista.",
   "paging.search.label": "Buscar un equipo",
   "paging.search.clear": "Borrar",
   "paging.search.none": "Ningún equipo se llama «{query}»",

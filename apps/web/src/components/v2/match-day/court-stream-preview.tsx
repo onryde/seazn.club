@@ -79,8 +79,9 @@ export function CourtStreamPreview({
       </div>
       <div className="min-w-0 px-4 sm:px-5">
         {preview.kind === "seazn" ? (
-          // On air to Seazn: the player's box is held until the first read (Phase 1 visual D1), so its arrival moves nothing.
-          <SeaznVideoIsland key={fixture.id} fixtureId={fixture.id} endpoint="org" labels={seaznVideoLabels(scoreDict)} reserve />
+          // On air to Seazn: the player's box is held until the first read (Phase 1 visual D1), so its arrival moves nothing; a live is
+          // what it expects, so it holds the live player's delay line row too (Task 33c).
+          <SeaznVideoIsland key={fixture.id} fixtureId={fixture.id} endpoint="org" labels={seaznVideoLabels(scoreDict)} reserve liveExpected />
         ) : (
           <ReplayEmbed parts={[preview.part]} labels={{ region: label, playerTitle: label, className: "mt-2" }} />
         )}

@@ -15,6 +15,8 @@ export interface SeaznVideoLabels {
   replay: string;
   /** The one quiet line in the player's held box while a session is starting, or has just stopped and its recording is not ready. */
   starting: string;
+  /** The line under the LIVE player only (Task 33c), a template: `{min}` and `{max}` are `SEAZN_LIVE_DELAY_SECONDS`'s. */
+  delay: string;
 }
 
 export function seaznVideoLabels(dict: Dict): SeaznVideoLabels {
@@ -24,5 +26,6 @@ export function seaznVideoLabels(dict: Dict): SeaznVideoLabels {
     part: t(dict, "seaznVideo.part"),
     replay: t(dict, "overlay.replay"),
     starting: t(dict, "seaznVideo.starting"),
+    delay: t(dict, "seaznVideo.delay"),
   };
 }

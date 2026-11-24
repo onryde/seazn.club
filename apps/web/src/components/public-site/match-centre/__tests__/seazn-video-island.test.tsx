@@ -35,7 +35,7 @@ import { SeaznPlayer } from "../seazn-player";
 import { SeaznReplayFrame } from "../seazn-replay-frame";
 import { seaznVideoLabels } from "../seazn-video-labels";
 import { SEAZN_VIDEO_HOLD_MS } from "../seazn-video-hold";
-import { FINALISATION_GRACE_SECONDS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS, RUNNER_STOP_GRACE_SECONDS, STREAM_TICK_PERIOD_SECONDS } from "@/server/relay/config";
+import { FINALISATION_GRACE_SECONDS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS, RUNNER_STOP_GRACE_SECONDS, SEAZN_LIVE_DELAY_SECONDS, STREAM_TICK_PERIOD_SECONDS } from "@/server/relay/config";
 import { SEAZN_VIDEO_POLL_FLOOR_MS } from "../seazn-video-schedule";
 import { renderIsland, type walk } from "@/components/__tests__/_hook-harness";
 import type { PlayerFatal } from "../seazn-video-report";
@@ -154,6 +154,175 @@ describe("the island: live", () => {
     expect(out).toContain(`data-src="${live.src}"`);
     expect(out).not.toContain(part(1).src);
     expect(out).not.toContain('role="tab"');
+  });
+});
+
+// Owner 2026-11-23 (stg live test): a viewer at the court sees the score move before the picture does. Under the LIVE Seazn player only,
+// one quiet line says by how much: "Video runs about 15–20 seconds behind the court." It is keyed on the VIDEO being live (the answer's
+// `live`), never on the match's status: no line for a replay, for the held box before the start, or after the stream ends.
+const OWNER_DELAY_LINE = "Video runs about 15–20 seconds behind the court."; // the owner's words, verbatim
+/** The VISIBLE delay line's text, one entry per line drawn (the held row, `seazn-video-delay-reserved`, is not one). */
+const delayLines = (out: string): string[] => [...out.matchAll(/<p data-testid="seazn-video-delay"[^>]*>(.*?)<\/p>/g)].map((m) => m[1]!);
+const delayFor = (template: string): string =>
+  template.replace("{min}", String(SEAZN_LIVE_DELAY_SECONDS.min)).replace("{max}", String(SEAZN_LIVE_DELAY_SECONDS.max));
+
+describe("owner 11-23: the delay line, under the LIVE player only", () => {
+  it("EMPTY CASE FIRST: no answer, an empty answer, and the reserved box carry no line", () => {
+    expect(html(null)).toBe("");
+    expect(html(answer({}))).toBe("");
+    const reserved = renderToStaticMarkup(<SeaznVideoIsland fixtureId="f1" labels={labels} reserve />);
+    expect(reserved, "premise: the reserved box is drawn").toContain("seazn-video-reserved");
+    expect(reserved).not.toContain("seazn-video-delay");
+  });
+
+  it("live: ONE line, under the player and inside the live region, in the owner's words, its numbers from the one constant", () => {
+    expect(SEAZN_LIVE_DELAY_SECONDS, "the owner's numbers").toEqual({ min: 15, max: 20 });
+    const out = html(answer({ live: signed("live") }));
+    expect(delayLines(out)).toEqual([OWNER_DELAY_LINE]);
+    const region = /<section data-testid="seazn-video"[^>]*>(.*)<\/section>/.exec(out)![1]!;
+    expect(region.indexOf('data-testid="seazn-player"'), "premise: the player is in the region").toBeGreaterThanOrEqual(0);
+    expect(region.indexOf('data-testid="seazn-video-delay"'), "under the player, in the same region").toBeGreaterThan(region.indexOf('data-testid="seazn-player"'));
+    const line = /<p data-testid="seazn-video-delay"([^>]*)>/.exec(out)![1]!;
+    expect(line, "readable: never hidden from assistive tech").not.toContain("aria-hidden");
+    expect(line.split(/[\s"]/), "and never invisible").not.toContain("invisible");
+    const player = /<div data-testid="seazn-player"[^>]*>(.*?)<\/div>/.exec(out);
+    expect(player?.[1], "premise: the player's box, with its <video>").toMatch(/<video\b/);
+    expect(player![1], "the line is not drawn over the picture").not.toContain("seazn-video-delay");
+  });
+
+  it("live with recordings listed beside it: still the live player, so still the line", () => {
+    expect(delayLines(html(answer({ live: signed("live"), replay: [part(1), part(2)] })))).toEqual([OWNER_DELAY_LINE]);
+  });
+
+  it("a REPLAY never has it: one hls part, two parts, an embed part, and embed with hls", () => {
+    const replays = [[part(1)], [part(1), part(2)], [part(1, "embed")], [part(1, "embed"), part(2)]];
+    let checked = 0;
+    for (const replay of replays) {
+      const out = html(answer({ replay }));
+      expect(out, `premise ${checked}: a player is drawn`).toMatch(/seazn-player|<iframe\b/);
+      expect(out, `replay ${checked}`).not.toContain("seazn-video-delay");
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every replay shape").toBe(replays.length);
+  });
+
+  it("the held box (a wait: warming, or just stopped) never shows it, whatever the plan expects next", () => {
+    const until = new Date(NOW + 10 * 60_000).toISOString();
+    let checked = 0;
+    for (const liveExpected of [false, true]) {
+      const out = renderToStaticMarkup(<SeaznVideoIsland fixtureId="f1" labels={labels} reserve holdUntil={until} liveExpected={liveExpected} />);
+      expect(out, `liveExpected ${liveExpected}: premise, the starting box`).toContain('data-testid="seazn-video-starting"');
+      expect(delayLines(out), `liveExpected ${liveExpected}: no visible line`).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("every locale says its own line, with the numbers filled in (never the English, never a key, never a bare {min})", () => {
+    const dicts = { en: publicEn, es: publicEs, fr: publicFr, nl: publicNl } as const;
+    let checked = 0;
+    for (const [loc, dict] of Object.entries(dicts)) {
+      const template = (dict as Record<string, string>)["seaznVideo.delay"];
+      expect(template, `${loc}: premise, the key exists`).toEqual(expect.any(String));
+      expect(template, `${loc}: the template keeps both numbers`).toMatch(/\{min\}[^]*\{max\}/);
+      const lines = delayLines(html(answer({ live: signed("live") }), seaznVideoLabels(dict as Record<string, unknown>)));
+      expect(lines, loc).toEqual([delayFor(template!)]);
+      expect(lines[0], loc).not.toMatch(/\{|seaznVideo\./);
+      if (loc !== "en") expect(lines[0], `${loc} is not the English`).not.toBe(OWNER_DELAY_LINE);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: the four locales").toBe(4);
+  });
+});
+
+// The CLS half (Phase 1 D1/R1/R2: a player's arrival moves nothing; e2e/public-fixture.spec.ts "warming turns live" pins a zero shift):
+// the line adds a row under the live player. So where the page expects a LIVE to come next (`liveExpected`: the fixture's Seazn session
+// warming or live as the page was drawn), the box it holds keeps that row's place, invisible and silent, holding the very sentence so it
+// wraps exactly as the line will at every width and in every locale. Where a RECORDING comes next (a stop) it does not, so the
+// recording still lands with no shift (R1/R2 unchanged); and once a player has been on screen the box no longer holds it, so the line
+// is gone the moment the stream ends.
+describe("the delay line's place is held where a live comes next", () => {
+  const until = new Date(NOW + 10 * 60_000).toISOString();
+  const draw = (props: Record<string, unknown>) => renderToStaticMarkup(<SeaznVideoIsland fixtureId="f1" labels={labels} {...props} />);
+  const slotOf = (out: string): { attrs: string; text: string } | null => {
+    const m = /<p data-testid="seazn-video-delay-reserved"([^>]*)>(.*?)<\/p>/.exec(out);
+    return m ? { attrs: m[1]!, text: m[2]! } : null;
+  };
+  const classesOf = (attrs: string): string[] => (/class="([^"]*)"/.exec(attrs)?.[1] ?? "").split(/\s+/).filter(Boolean).sort();
+
+  it("EMPTY CASE FIRST: without liveExpected neither box holds it — D1's reserved box stays wordless, R2's starting box keeps its one line", () => {
+    const reserved = draw({ reserve: true });
+    expect(reserved).toContain("seazn-video-reserved");
+    expect(slotOf(reserved)).toBeNull();
+    expect(reserved.replace(/<[^>]*>/g, ""), "no words").toBe("");
+    const starting = draw({ reserve: true, holdUntil: until });
+    expect(slotOf(starting)).toBeNull();
+    expect(starting.replace(/<[^>]*>/g, "")).toBe(labels.starting);
+  });
+
+  it("liveExpected: the reserved box and the starting box each hold the row — invisible, aria-hidden, the live line's own text and classes", () => {
+    const live = html(answer({ live: signed("live") }));
+    const lineAttrs = /<p data-testid="seazn-video-delay"([^>]*)>/.exec(live)![1]!;
+    let checked = 0;
+    for (const [name, props] of [["reserved", { reserve: true }], ["starting", { reserve: true, holdUntil: until }], ["starting, no reserve", { holdUntil: until }]] as const) {
+      const out = draw({ ...props, liveExpected: true });
+      const slot = slotOf(out);
+      expect(slot, `${name}: the row is held`).not.toBeNull();
+      expect(slot!.attrs, name).toContain('aria-hidden="true"');
+      expect(slot!.text, `${name}: the very sentence, so it wraps as the line will`).toBe(OWNER_DELAY_LINE);
+      expect(classesOf(slot!.attrs), `${name}: the line's classes, plus invisible`).toEqual([...classesOf(lineAttrs), "invisible"].sort());
+      expect(out.indexOf("seazn-video-delay-reserved"), `${name}: under the frame`).toBeGreaterThan(out.indexOf('data-testid="seazn-video-frame"'));
+      expect(delayLines(out), `${name}: and nothing visible`).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(3);
+    expect(draw({ liveExpected: true }), "no box (no reserve, no wait): no row either").toBe("");
+  });
+
+  it("an answer in hand wins: liveExpected with a live answer draws the line (no held row); with a replay answer, neither", () => {
+    const live = draw({ reserve: true, liveExpected: true, initial: answer({ live: signed("live") }) });
+    expect(delayLines(live)).toEqual([OWNER_DELAY_LINE]);
+    expect(live).not.toContain("seazn-video-delay-reserved");
+    const replay = draw({ reserve: true, liveExpected: true, initial: answer({ replay: [part(1)] }) });
+    expect(replay).not.toContain("seazn-video-delay");
+  });
+
+  it("mounted, warming → live → stop → recording: the held row becomes the line, the line is gone at the stop, and the recording lands with neither", async () => {
+    const MIN = 60_000;
+    const EMPTY = { live: null, replay: [] };
+    const answers: object[] = [EMPTY, { live: signed("live"), replay: [] }, EMPTY, { live: null, replay: [part(1)] }];
+    let i = 0;
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    try {
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ ok: true, data: answers[Math.min(i++, answers.length - 1)] }), { status: 200, headers: { "content-type": "application/json" } })));
+      const island = renderIsland(SeaznVideoIsland, {
+        fixtureId: "f1", labels, reserve: true, liveExpected: true, holdUntil: new Date(NOW + 10 * MIN).toISOString(), activeUntil: new Date(NOW + 60 * MIN).toISOString(),
+      });
+      const now = () => renderToStaticMarkup(island.tree()[0]!);
+      const seen: string[] = [];
+      const look = (step: string, want: { row: boolean; line: boolean; box: string }) => {
+        const out = now();
+        expect(out, `${step}: premise, ${want.box}`).toContain(`data-testid="${want.box}"`);
+        expect(slotOf(out) !== null, `${step}: the held row`).toBe(want.row);
+        expect(delayLines(out).length, `${step}: the visible line`).toBe(want.line ? 1 : 0);
+        seen.push(step);
+      };
+      look("server markup (warming)", { row: true, line: false, box: "seazn-video-starting" });
+      await vi.advanceTimersByTimeAsync(0);
+      look("read 1: still warming", { row: true, line: false, box: "seazn-video-starting" });
+      await vi.advanceTimersByTimeAsync(SEAZN_VIDEO_POLL_FLOOR_MS);
+      look("read 2: live", { row: false, line: true, box: "seazn-player" });
+      await vi.advanceTimersByTimeAsync(SEAZN_VIDEO_POLL_FLOOR_MS);
+      look("read 3: stopped, the box holds", { row: false, line: false, box: "seazn-video-starting" });
+      await vi.advanceTimersByTimeAsync(SEAZN_VIDEO_POLL_FLOOR_MS);
+      look("read 4: the recording", { row: false, line: false, box: "seazn-player" });
+      expect(seen, "anti-vacuity: every step was looked at").toHaveLength(5);
+      expect(i, "premise: the route was read four times").toBeGreaterThanOrEqual(4);
+      island.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -291,6 +460,8 @@ describe("seaznVideoLabels: the page's own strings, in every locale", () => {
     expect(l.starting, "premise: the key exists in this locale (undefined === undefined would pass the line above)").toEqual(expect.any(String));
     expect(l.starting.length).toBeGreaterThan(0);
     expect(l.replay).toBe(dict["overlay.replay"]);
+    expect(l.delay).toBe(dict["seaznVideo.delay"]);
+    expect(l.delay, "premise: the key exists in this locale").toEqual(expect.any(String));
     for (const v of Object.values(l)) expect(v, "never a bare dictionary key").not.toMatch(/^seaznVideo\.|^overlay\./);
     expect(l.part, "the part template keeps its {n}").toContain("{n}");
   });

@@ -40,6 +40,13 @@ function chainHtml(chain: Chain, destination: { kind: (typeof StreamTargetKind.o
   return renderToStaticMarkup(<SignalChain chain={chain} destination={destination} />);
 }
 
+/** The destination node's name, as text (its width spans flattened; "" when absent, so a probe on it cannot pass vacuously). */
+function destName(html: string): string {
+  const m = /<span data-testid="stream-chain-dest-name" class="[^"]*">(.*?)<\/span><span class="mt-0\.5/.exec(html);
+  if (!m) throw new Error("no stream-chain-dest-name in the markup");
+  return m[1]!.replace(/<[^>]*>/g, "");
+}
+
 function dict(locale: Locale): Dict {
   return JSON.parse(readFileSync(resolve(import.meta.dirname, `../../../dictionaries/${locale}/ui.json`), "utf8")) as Dict;
 }
@@ -123,10 +130,41 @@ describe("SignalChain (spec §3.2)", () => {
     let checked = 0;
     for (const kind of StreamTargetKind.options) {
       const name = platformName((k) => messages[k], kind);
-      expect(chainHtml(chainFor(null)!, { kind, label: "L" }), kind).toContain(`<span class="md:hidden">${name}</span>`);
+      expect(destName(chainHtml(chainFor(null)!, { kind, label: "L" })), kind).toContain(name);
       checked++;
     }
     expect(checked).toBe(StreamTargetKind.options.length);
+  });
+
+  // Owner 2026-11-23 (stg screenshot): the Seazn destination's node read "Seazn · Seazn", the platform joined to the org's stored
+  // label (V541 stores 'Seazn'). It reads "Seazn Hosted" ONCE: the brand, at every width, never the stored label, and no "To {label}"
+  // line under the chain. The stored label is varied, so a join of the two cannot pass by coincidence.
+  it("owner 11-23: the Seazn destination reads 'Seazn Hosted' once at every width, with no label line; every other kind keeps 'platform · label'", () => {
+    const BRAND = "Seazn Hosted"; // the owner's words: a brand, the same in every locale
+    let seazn = 0;
+    for (const label of ["Seazn", "Club stored label"]) {
+      const html = chainHtml(chainFor(null)!, { kind: "seazn", label });
+      expect(destName(html), `stored label ${label}: the brand alone, once, with no width split`).toBe(BRAND);
+      const text = html.replace(/<[^>]*>/g, "|");
+      expect(text.split(BRAND).length - 1, `stored label ${label}: one "Seazn Hosted" in the chain's visible text`).toBe(1);
+      expect(html, `stored label ${label}: the group's accessible name says it too, once`).toMatch(/role="group" aria-label="[^"]*Seazn Hosted[^"]*"/);
+      expect(html, `stored label ${label}: never joined to a label`).not.toContain(" · ");
+      if (label !== "Seazn") expect(html, "never the stored label").not.toContain(label);
+      expect(html, `stored label ${label}: no "To {label}" line under the chain`).not.toContain('data-testid="stream-chain-dest-label"');
+      seazn++;
+    }
+    expect(seazn).toBe(2);
+    // The positive pair: every OTHER kind still joins its platform and its label at ≥768 and keeps the label line below it.
+    let checked = 0;
+    for (const kind of StreamTargetKind.options.filter((k) => k !== "seazn")) {
+      const html = chainHtml(chainFor(null)!, { kind, label: "Club stored label" });
+      const name = platformName((k) => messages[k], kind);
+      expect(html, kind).toContain(`<span class="md:hidden">${name}</span>`);
+      expect(html, kind).toContain(`<span class="max-md:hidden">${name} · Club stored label</span>`);
+      expect(html, kind).toContain('data-testid="stream-chain-dest-label"');
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every non-Seazn kind").toBe(StreamTargetKind.options.length - 1);
   });
 
   // A11 (stream-relay.spec.ts): browser zoom at 125% on a 320-px phone is a 256-CSS-px layout. Three 64-px nodes that

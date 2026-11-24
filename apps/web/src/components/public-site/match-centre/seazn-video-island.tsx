@@ -2,7 +2,10 @@
 // Seazn-hosted video (Phase 1 Task 15; spec §5.1; recommendation 2026-11-21, G-B): the match page's Seazn player, in the `replay` slot of
 // the court card where a YouTube replay would sit. The page is ISR (`revalidate = 30`), so a signed address minted in its server render
 // would be served past its token's life; the island asks the video route itself, after hydration, and keeps asking:
-//   - `live`: the live player, and no picker (recordings listed beside a live source do not play);
+//   - `live`: the live player, and no picker (recordings listed beside a live source do not play); under it, ONE quiet line saying
+//     how far the picture runs behind the court (owner 2026-11-23, Task 33c: the live VIDEO only, never a replay, the held box, or after
+//     the stream ends). Where the page expects a live next (`liveExpected`) the held box keeps that line's row, invisible, so the live
+//     player's arrival still moves nothing (below);
 //   - no live, one or more parts: the parts in `partNo` order, ONE player at a time, with a picker ("Part {n}") only when there are two
 //     or more. A part plays in its own kind: an `hls` part (the interim Cloudflare recording, signed from the moment the session's
 //     recording is locked) in the <video> player, an `embed` part (the replay host's copy, Task 25) in the host's frame
@@ -28,6 +31,7 @@ import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } f
 import { api } from "@/lib/client";
 import { interpolate } from "@/lib/i18n-runtime";
 import type { PublicFixtureVideo } from "@/server/api-v1/schemas";
+import { SEAZN_LIVE_DELAY_SECONDS } from "@/server/relay/config";
 import { SEAZN_PLAYER_FRAME, SeaznPlayer } from "./seazn-player";
 import { SeaznReplayFrame } from "./seazn-replay-frame";
 import { holdAfterAnswer, holdWait, parseHold, showsPlayer } from "./seazn-video-hold";
@@ -76,6 +80,12 @@ export function nextPartIndex(key: string, from: number, count: number): number 
 }
 
 const REGION = "ph-no-capture mt-4 border-t border-white/10 pt-4";
+/** The delay line under the live player (Task 33c), and the held box's invisible copy of it: one authority for its geometry, and the
+ *  copy holds the very sentence, so it wraps exactly as the line will at every width and in every locale. `text-court-muted` is the
+ *  court card's quiet-line ink (the "Updated {seconds}s ago" line under this slot), measured above WCAG AA on `bg-court`. */
+const DELAY_LINE = "mt-2 text-xs text-court-muted";
+const delayText = (labels: SeaznVideoLabels): string =>
+  interpolate(labels.delay, { min: SEAZN_LIVE_DELAY_SECONDS.min, max: SEAZN_LIVE_DELAY_SECONDS.max });
 /** The picker's row, and a part's pill by whether it is the selected one: one authority for their geometry, so the row the box holds
  *  (re-capture R1) is the real one's size, to the pixel, however many parts wrap. */
 const PICKER_ROW = "mb-3 flex flex-wrap gap-2";
@@ -101,13 +111,16 @@ interface StageProps {
   onFatal: (fatal: PlayerFatal) => void;
   /** The replay host's frame holds an address whose token has passed: ask the route for a fresh one (no rebuild). */
   onStale: () => void;
+  /** A live is what the held box expects next (Task 33c): it keeps the delay line's row, invisible. Absent: no row. */
+  liveNext?: boolean;
 }
 
 /** The player's box with no player in it (D1, re-capture R2 and R1): the same region and the same frame the player has, so the
  *  player's arrival moves nothing. With a wait on it carries the one quiet line, and is not hidden from assistive tech (the line is a
  *  status); without one it is empty and hidden, as D1 drew it. `picker` is the part numbers the page expects the picker to list (two
- *  or more draw its row, invisible). */
-function HeldBox({ starting, labels, picker }: { starting: boolean; labels: SeaznVideoLabels; picker: readonly number[] }) {
+ *  or more draw its row, invisible). `liveNext` (Task 33c): a LIVE comes next, so the box keeps the delay line's row under the frame,
+ *  invisible and silent; a recording does not get one (its player has no line), so it is drawn only where the live is expected. */
+function HeldBox({ starting, labels, picker, liveNext }: { starting: boolean; labels: SeaznVideoLabels; picker: readonly number[]; liveNext: boolean }) {
   const row =
     picker.length >= 2 ? (
       <div data-testid="seazn-video-picker-reserved" aria-hidden="true" className={`invisible ${PICKER_ROW}`}>
@@ -118,6 +131,11 @@ function HeldBox({ starting, labels, picker }: { starting: boolean; labels: Seaz
         ))}
       </div>
     ) : null;
+  const delayRow = liveNext ? (
+    <p data-testid="seazn-video-delay-reserved" aria-hidden="true" className={`invisible ${DELAY_LINE}`}>
+      {delayText(labels)}
+    </p>
+  ) : null;
   return starting ? (
     <section data-testid="seazn-video-starting" className={REGION}>
       {row}
@@ -126,17 +144,19 @@ function HeldBox({ starting, labels, picker }: { starting: boolean; labels: Seaz
           {labels.starting}
         </p>
       </div>
+      {delayRow}
     </section>
   ) : (
     <section data-testid="seazn-video-reserved" aria-hidden="true" className={REGION}>
       {row}
       <div data-testid="seazn-video-frame" className={SEAZN_PLAYER_FRAME} />
+      {delayRow}
     </section>
   );
 }
 
 /** Everything the island draws for one answer. Exported for its test (the wiring of its callbacks). */
-export function SeaznVideoStage({ video, epoch, labels, onFatal, onStale, reserve, held, picker }: StageProps & { reserve: boolean; held: boolean; picker: readonly number[] }) {
+export function SeaznVideoStage({ video, epoch, labels, onFatal, onStale, reserve, held, picker, liveNext = false }: StageProps & { reserve: boolean; held: boolean; picker: readonly number[] }) {
   if (video !== null && showsPlayer(video)) {
     if (video.live !== null) {
       return (
@@ -149,6 +169,9 @@ export function SeaznVideoStage({ video, epoch, labels, onFatal, onStale, reserv
             unavailable={labels.unavailable}
             onFatal={(failure, address) => onFatal({ address, source: "live", partNo: null, player: "hls", failure })}
           />
+          <p data-testid="seazn-video-delay" className={DELAY_LINE}>
+            {delayText(labels)}
+          </p>
         </section>
       );
     }
@@ -158,7 +181,7 @@ export function SeaznVideoStage({ video, epoch, labels, onFatal, onStale, reserv
   // Nothing to play. A wait on (warming, or just stopped): the box holds. Before the first answer, where a player is expected (D1):
   // the box, empty. Otherwise it is nothing, and the island keeps looking. The picker's row is held only before the answer: an answer
   // with no player has told us the page's hint is stale.
-  if (held || (video === null && reserve)) return <HeldBox starting={held} labels={labels} picker={video === null ? picker : []} />;
+  if (held || (video === null && reserve)) return <HeldBox starting={held} labels={labels} picker={video === null ? picker : []} liveNext={liveNext} />;
   return null;
 }
 
@@ -254,12 +277,21 @@ export interface SeaznVideoIslandProps {
   /** The part numbers the page expects the route to list as replay parts (re-capture R1; the plan's, empty while a live is on air, which
    *  has no picker). Two or more: the box holds the picker's row, invisible, until the first answer. Absent, or fewer: no row. */
   replayParts?: readonly number[];
+  /** Task 33c, from the page's plan: a LIVE is what the box expects next (the fixture's Seazn session on its way up, or live, as the
+   *  page was drawn; Match Day's preview, which is mounted only on air). The held box keeps the delay line's row, invisible, until an
+   *  answer shows a player: the live then brings its line into that row, and once a player has been on screen the box no longer
+   *  holds it (a stop is followed by a recording, which has no line). Absent: no row. */
+  liveExpected?: boolean;
 }
 
 export function SeaznVideoIsland({
   fixtureId, endpoint = "public", labels, initial, settledAt = null, kickoffAt = null, activeUntil = null, reserve = false, holdUntil: holdFromPlan = null, replayParts = [],
+  liveExpected = false,
 }: SeaznVideoIslandProps) {
   const [video, setVideo] = useState<PublicFixtureVideo | null>(initial ?? null);
+  // Task 33c: whether the held box keeps the delay line's row. From the PROPS for the first render (the server markup and the hydrated
+  // one agree); the first answer that shows a player clears it for good.
+  const [liveNext, setLiveNext] = useState(liveExpected);
   // The wait, as an instant (ms), or null: from the page's plan at first, then from the answers (`holdAfterAnswer`). Taken from the PROPS
   // alone for the first render, never from the clock, so the server markup and the hydrated one agree.
   const [holdUntil, setHoldUntil] = useState<number | null>(() => parseHold(holdFromPlan));
@@ -280,6 +312,7 @@ export function SeaznVideoIsland({
       fetchVideo: (signal) => fetchSeaznVideo(fixtureId, endpoint, signal),
       onVideo: (next, { rebuild }) => {
         setVideo(next);
+        if (showsPlayer(next)) setLiveNext(false);
         setHoldUntil((until) => holdAfterAnswer(until, next, Date.now()));
         if (rebuild) setEpoch((e) => e + 1);
       },
@@ -308,5 +341,5 @@ export function SeaznVideoIsland({
     pollRef.current?.refreshSoon();
   }, [reporter, fixtureId]);
   const readSoon = useCallback(() => pollRef.current?.readSoon(), []);
-  return <SeaznVideoStage video={video} epoch={epoch} labels={labels} onFatal={refresh} onStale={readSoon} reserve={reserve} held={holdUntil !== null} picker={replayParts} />;
+  return <SeaznVideoStage video={video} epoch={epoch} labels={labels} onFatal={refresh} onStale={readSoon} reserve={reserve} held={holdUntil !== null} picker={replayParts} liveNext={liveNext} />;
 }

@@ -144,7 +144,7 @@ const matchName = (no: number): string => en("breadcrumb.match", { no });
 /** Seazn-hosted video (Task 19): the mode this run is in — the runner's flag, which e2e.yml sets beside the server's. */
 const SEAZN_LIVE = process.env.SEAZN_HOSTED_LIVE === "true";
 /** What the match's picker offers AHEAD of the org's own destinations: Seazn's name with LIVE on, nothing with it off. */
-const SEAZN_OFFERED: string[] = SEAZN_LIVE ? [en("stream.dest.kind.seazn")] : [];
+const SEAZN_OFFERED: string[] = SEAZN_LIVE ? [STREAM_KIND_BRAND.seazn] : [];
 /** The platforms' names from the product's own table (m11), never typed here. */
 const BRAND: Record<StreamPlatform, string> = STREAM_KIND_BRAND;
 /** The subline's key-hint words ("key ends …" in en), cut from the dictionary's own template around `{hint}` (m11) — so a
@@ -1180,7 +1180,7 @@ for (const width of [320, 768, 1280] as const) {
     await expect(body.locator(`[data-testid="stream-target-option"][data-target-id="${seazn!.id}"]`)).toHaveAttribute("aria-selected", "true");
     await body.getByTestId("stream-target").press("Escape");
     await expect(targetPicker(body)).toHaveAttribute("data-value", seazn!.id);
-    await expect(targetPicker(body).getByTestId("stream-target-name")).toHaveText(en("stream.dest.kind.seazn"));
+    await expect(targetPicker(body).getByTestId("stream-target-name"), "the brand, \"Seazn Hosted\" (owner 11-23)").toHaveText(STREAM_KIND_BRAND.seazn);
     await expect(targetPicker(body).getByTestId("stream-target-kind")).toHaveText(en("stream.dest.seazn.sub"));
     await expect(body.getByTestId("stream-safety-notice"), "no YouTube safety notice for Seazn").toHaveCount(0);
     await expectNoHorizontalScroll(page);

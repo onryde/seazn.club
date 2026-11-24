@@ -22,6 +22,7 @@ import { messages, type MessageKey } from "@/lib/messages";
 import { YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_PRIVACIES } from "@/lib/youtube";
 import { StreamTargetKind, type StreamTarget } from "@/server/api-v1/schemas";
 import { FixtureDestinationPicker, TYPEAHEAD_RESET_MS, destinationRow, type FixtureDestinationPickerProps } from "../fixture-destination-picker";
+import { platformName } from "../stream-platform-mark";
 import { compileClasses } from "./_compiled-css";
 
 const m = (k: MessageKey, vars: Record<string, string | number> = {}): string =>
@@ -647,19 +648,38 @@ describe("the Seazn destination (Task 16)", () => {
     vi.stubGlobal("Node", class {});
   });
   afterEach(() => vi.unstubAllGlobals());
-  it("reads as 'Seazn' / \"Plays on this match's page\" — never as a pasted key — and in Dutch as the Dutch strings", () => {
+  // Owner 2026-11-23: the destination is "Seazn Hosted", a brand, the same in every locale (it read "Seazn" here, and "Seazn · Seazn"
+  // on the panel's chain). Its helper line stays the locale's own copy.
+  it("reads as 'Seazn Hosted' / \"Plays on this match's page\" — never as a pasted key — and in Dutch as the brand with the Dutch helper", () => {
     const en = destinationRow(msg, seazn());
-    expect(en.name).toBe("Seazn");
+    expect(en.name).toBe("Seazn Hosted");
     expect(en.kind).toBe("Plays on this match's page");
     expect(en.kind).not.toMatch(/stream key/i);
     expect(en.health).toBeNull();
     const nl = destinationRow(msgNl, seazn());
-    expect(nl.name).toBe("Seazn");
+    expect(nl.name, "a brand: the same words in Dutch").toBe("Seazn Hosted");
     expect(nl.kind).toBe("Wordt afgespeeld op de pagina van deze wedstrijd");
   });
 
-  it("the stored label never shows: a localised name is the dictionary's", () => {
-    expect(destinationRow(msg, { ...seazn(), label: "stored-label" }).name).toBe("Seazn");
+  it("the stored label never shows: the name is the brand, whatever the row stores", () => {
+    expect(destinationRow(msg, { ...seazn(), label: "stored-label" }).name).toBe("Seazn Hosted");
+  });
+
+  // One destination, one name, on every surface that names it: the Streaming page's card heading (T33b, `streaming.seazn.name`), this
+  // picker's row, and the panel's chain (platformName). Read from each locale's dictionary, so a locale that drifts reds here.
+  it("one name on every surface, in every locale: the Streaming card's heading is the picker's row name and the chain's platform", () => {
+    let checked = 0;
+    for (const loc of ["en", "es", "fr", "nl"] as const) {
+      const d = JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "dictionaries", loc, "ui.json"), "utf8")) as Record<string, string>;
+      const msgLoc = (k: MessageKey, vars: Record<string, string | number> = {}): string =>
+        Object.entries(vars).reduce((s, [n, v]) => s.replaceAll(`{${n}}`, String(v)), d[k] ?? `MISSING:${k}`);
+      const card = d["streaming.seazn.name"];
+      expect(card, `${loc}: premise, the card's heading exists`).toEqual(expect.any(String));
+      expect(destinationRow(msgLoc, seazn()).name, loc).toBe(card);
+      expect(platformName(msgLoc, "seazn"), loc).toBe(card);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: the four locales").toBe(4);
   });
 
   it("listed first and checked for a fixture with no pick of its own: the server's answer is the Seazn id, so exactly the first option is selected", () => {

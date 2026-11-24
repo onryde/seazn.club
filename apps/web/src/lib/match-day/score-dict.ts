@@ -3,7 +3,8 @@
 //
 //   matchCentre.        the score line's words (serving, the live level's marks, the status words)
 //   forfeit.            the forfeit sentence
-//   seaznVideo.         the Seazn player's live chip, its "can't play" sentence and the part picker's tab (Seazn-hosted video, Task 17)
+//   seaznVideo.         the Seazn player's live chip, its "can't play" sentence, the part picker's tab (Seazn-hosted video, Task 17)
+//                       and the line under the live player (Task 33c)
 //   overlay.replay      the replay region's name, the one word the Seazn island takes from the overlay group (an exact key: the rest of
 //                       `overlay.` is the stream overlay's and stays on the server)
 //

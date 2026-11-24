@@ -11,13 +11,14 @@ import type { StreamTargetKind } from "@/server/api-v1/schemas";
 
 type Msg = (key: "stream.target.kind.other", vars?: Record<string, string | number>) => string;
 
-/** Brand names are not copy — the same proper noun in every locale. `custom_rtmp` has no brand; its label is copy. */
+/** Brand names are not copy — the same proper noun in every locale. `custom_rtmp` has no brand; its label is copy. Seazn's own
+ *  destination is "Seazn Hosted" (owner, 2026-11-23: a brand, identical in all four locales; it is the Streaming page card's heading). */
 export const STREAM_KIND_BRAND: Record<Exclude<StreamTargetKind, "custom_rtmp">, string> = {
   youtube: "YouTube",
   facebook: "Facebook",
   twitch: "Twitch",
   kick: "Kick",
-  seazn: "Seazn",
+  seazn: "Seazn Hosted",
 };
 
 export function platformName(msg: Msg, kind: StreamTargetKind): string {

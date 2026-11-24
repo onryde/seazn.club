@@ -857,6 +857,7 @@
   "seaznVideo.unavailable": "The video can't play right now",
   "seaznVideo.part": "Part {n}",
   "seaznVideo.starting": "The video will appear here shortly",
+  "seaznVideo.delay": "Video runs about {min}–{max} seconds behind the court.",
   "paging.search.label": "Find a team",
   "paging.search.clear": "Clear",
   "paging.search.none": "No team called “{query}”",

@@ -7353,7 +7353,6 @@
   "stream.dest.retry": "Opnieuw proberen",
   "stream.dest.kind.channel": "{platform}-kanaal",
   "stream.dest.kind.key": "{platform}-streamsleutel",
-  "stream.dest.kind.seazn": "Seazn",
   "stream.dest.seazn.sub": "Wordt afgespeeld op de pagina van deze wedstrijd",
   "stream.dest.kind.keyOther": "Eigen streamsleutel",
   "stream.phone.credits.one": "1 credit",

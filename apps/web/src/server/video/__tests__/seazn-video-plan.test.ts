@@ -723,3 +723,59 @@ describe.skipIf(!HAS_DB)("seaznVideoPlan: the replay's part numbers the island h
     expect(await planParts(g)).toEqual([]);
   });
 });
+
+// Task 33c (owner 2026-11-23): the live player carries one more row, the delay line. Where a LIVE is what the page expects next — the
+// fixture's LATEST session is a Seazn one on its way up or live — the box the page holds keeps that row's place, so the live player's
+// arrival still moves nothing (`liveExpected`). Where a RECORDING comes next (ending, completed) or nothing (failed), it must not: the
+// recording would then land a row short. The video route answers `live` only for a session in state `live` (seazn-live.ts), and the
+// domain's ACTIVE_STATES is the session's ladder in order, so "on its way up or live" is every active state up to and including `live`.
+describe.skipIf(!HAS_DB)("seaznVideoPlan: whether a live is what the page expects next (Task 33c, the delay line's row)", () => {
+  const liveExpectedOf = async (fixtureId: string) => {
+    const plan = await seaznVideoPlan(fixtureId);
+    if (plan.player !== "seazn") throw new Error(`PREMISE: the plan is seazn, not ${plan.player}`);
+    return plan.liveExpected;
+  };
+
+  it("EMPTY CASE FIRST: an unstarted Seazn fixture (arm 3: no session yet) expects no live — the island draws no box there to hold a row in", async () => {
+    const r = await rig();
+    const f = r.fixtureIds[0];
+    expect(await playerOf(f), "PREMISE: arm 3 answers seazn").toBe("seazn");
+    expect(await liveExpectedOf(f)).toBe(false);
+  });
+
+  it("every state of the latest Seazn session, from the session domain's own ladder: requested through live expect a live; ending, completed and failed do not", async () => {
+    const liveAt = ACTIVE_STATES.indexOf("live");
+    expect(liveAt, "PREMISE: live is on the ladder, before ending").toBeGreaterThan(0);
+    expect(ACTIVE_STATES.indexOf("ending"), "PREMISE: ending follows live").toBeGreaterThan(liveAt);
+    const r = await rig();
+    const f = r.fixtureIds[0];
+    const sid = await goLive(r, f, r.seazn);
+    let yes = 0;
+    let no = 0;
+    for (const state of [...ACTIVE_STATES, ...TERMINAL_STATES] as SessionState[]) {
+      await sql`update fixture_stream_sessions set state = ${state}, ended_at = ${TERMINAL_STATES.includes(state) ? new Date() : null} where id = ${sid}`;
+      const expected = ACTIVE_STATES.includes(state) && ACTIVE_STATES.indexOf(state) <= liveAt;
+      expect(await liveExpectedOf(f), `state ${state}`).toBe(expected);
+      if (expected) yes++;
+      else no++;
+    }
+    expect(yes, "anti-vacuity: the states on the way up, and live").toBe(liveAt + 1);
+    expect(no, "anti-vacuity: ending and the terminal states").toBe(ACTIVE_STATES.length - liveAt - 1 + TERMINAL_STATES.length);
+  });
+
+  it("only the LATEST session counts: a live Seazn session followed by a YouTube one expects none; a second Seazn Go live after it expects one again", async () => {
+    const r = await rig();
+    const f = r.fixtureIds[0];
+    const first = await live(r, f, r.seazn);
+    expect(await liveExpectedOf(f), "PREMISE: the Seazn session is live").toBe(true);
+    await stopAndSettle(r, f, first);
+    expect(await liveExpectedOf(f), "stopped: a recording comes next, not a live").toBe(false);
+    const second = await live(r, f, r.pasted);
+    expect(await kindOf(second), "PREMISE: a YouTube session follows").not.toBe("seazn");
+    expect(await liveExpectedOf(f), "the latest is YouTube's: the Seazn player expects no live").toBe(false);
+    await stopAndSettle(r, f, second);
+    const third = await goLive(r, f, r.seazn);
+    expect(await stateOf(third), "PREMISE: the second Seazn Go live is warming").toBe("warming");
+    expect(await liveExpectedOf(f), "warming again: a live comes next").toBe(true);
+  });
+});
