@@ -85,8 +85,11 @@ describe("tie-break explainers", () => {
   it("the sport-specific explainer follows the same path as the label (badminton counts games, tennis sets)", () => {
     for (const rung of ["set_ratio", "set_diff", "h2h_set_ratio"]) {
       const shared = `${EXPLAIN}${rung}`;
+      // single-sport: the badminton/tennis pair witnesses the sport-specific label path ("game" vs "set" wording); the full-sport sweep is the forEachSport tests above.
       expect(unitExplainKey(rung, "badminton"), `badminton ${rung}`).toBe(`${shared}.badminton`);
+      // single-sport: same pair - badminton is the "game" wording side; the full-sport sweep is the forEachSport tests above.
       expect(dictOf("en")[`${shared}.badminton`], `badminton ${rung} says games`).toMatch(/game/i);
+      // single-sport: same pair - tennis is the "set" wording side; the full-sport sweep is the forEachSport tests above.
       expect(unitExplainKey(rung, "tennis"), `tennis ${rung}`).toBe(shared);
       expect(dictOf("en")[shared], `${rung} shared says sets`).toMatch(/set/i);
     }
