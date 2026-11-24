@@ -11,7 +11,7 @@
 //    check the price, rather than print figures that disagree with the button;
 //  * the confirm button reads the quote that is ON SCREEN (`confirmOf`), and a quote read for another size or camera choice is not it.
 import { OnlinePackageQuote } from "@/server/api-v1/schemas/online-package";
-import { ONLINE_PACKAGE_CODES, ONLINE_SIZES, isOnlineSize, type OnlineSize } from "@/lib/online-chess-package";
+import { ONLINE_PACKAGE_CODES, ONLINE_SIZES, includedRounds, isOnlineSize, type OnlineSize } from "@/lib/online-chess-package";
 import { onlineSizeOptions, type OnlineSizeDisabled } from "@/lib/online-size-options";
 import { intlLocaleFor } from "@/lib/public-date-locale";
 import { STREAM_CREDIT_PACKS, type StreamPackSize } from "@/lib/stream-credit-packs";
@@ -215,6 +215,29 @@ export function initialReceiptSize(a: {
   if (a.mode === "change") return a.requested;
   if (a.mode === "payAndOpen") return a.quote !== null && a.quote.refusal !== null ? (a.next?.size ?? null) : a.stored;
   return a.requested ?? a.stored;
+}
+
+// ---- why a size is refused ------------------------------------------------------------------------------------------------------------
+
+/** The sentence a refused quote says, as a dictionary key and its variables: the SERVER's reason (`quote.refusal`), in the organiser's words.
+ *  A key per reason, so a new reason is a compile error here and a missing sentence in the dictionary test, never a blank line. */
+export const RECEIPT_REFUSAL_KEYS = {
+  below_held: "onlineChess.receipt.refused.held",
+  plan: "onlineChess.receipt.refused.plan",
+  rounds: "onlineChess.receipt.refused.rounds",
+  rounds_above_max: "onlineChess.roundsAboveMax",
+  frozen: "onlineChess.receipt.refused.frozen",
+} as const satisfies Record<NonNullable<ReceiptQuote["refusal"]>, string>;
+
+export function refusalCopyOf(quote: ReceiptQuote & { refusal: NonNullable<ReceiptQuote["refusal"]> }): { key: (typeof RECEIPT_REFUSAL_KEYS)[keyof typeof RECEIPT_REFUSAL_KEYS]; vars: Record<string, number> } {
+  const key = RECEIPT_REFUSAL_KEYS[quote.refusal];
+  switch (quote.refusal) {
+    case "below_held": return { key, vars: { held: quote.held } };
+    case "rounds": return { key, vars: { rounds: quote.rounds } };
+    case "rounds_above_max": return { key, vars: { max: includedRounds(ONLINE_SIZES[ONLINE_SIZES.length - 1]!) } };
+    case "plan":
+    case "frozen": return { key, vars: {} };
+  }
 }
 
 // ---- words and dates ----------------------------------------------------------------------------------------------------------------
