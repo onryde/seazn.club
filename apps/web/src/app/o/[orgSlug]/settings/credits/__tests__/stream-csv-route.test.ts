@@ -37,6 +37,8 @@ import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { recordPurchase } from "@/server/usecases/stream-credits";
 import { STREAM_HISTORY_MAX_LIMIT } from "@/server/usecases/stream-credit-history";
 import { STREAM_HISTORY_CSV_HEADER } from "@/server/usecases/stream-credit-history-csv";
+import { deleteDivision } from "@/server/usecases/divisions";
+import { ocCompetition, ocDivision, ocOrg, pay } from "@/server/usecases/online-package/__tests__/_oc-rig";
 import { GET } from "../stream.csv/route";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -70,7 +72,31 @@ describe.skipIf(!HAS_DB)("GET settings/credits/stream.csv", () => {
     expect(res.headers.get("content-disposition")).toBe('attachment; filename="stream-credits.csv"');
     const lines = (await res.text()).split("\r\n");
     expect(lines[0]).toBe([...STREAM_HISTORY_CSV_HEADER].join(","));
-    expect(lines.slice(1).map((l) => l.split(",").slice(1))).toEqual([["packPurchase", "5", "5", "", "", ""]]);
+    // eight cells after the date: activity, change, balance, then the five a row may fill (fixture no., match, competition, division, size)
+    expect(lines.slice(1).map((l) => l.split(",").slice(1))).toEqual([["packPurchase", "5", "5", "", "", "", "", ""]]);
+  });
+
+  // Online Chess (spec 2026-11-23 §8.8): the file an organiser opens in a spreadsheet carries a package's rows — the division and its
+  // size — written by the real package writer, read through the real reader, and still there after the division is deleted.
+  it("a package's rows are in the file with their division and size — and the name outlives the deleted division", async () => {
+    const o = await ocOrg();
+    const [{ slug }] = await sql<{ slug: string }[]>`select slug from organizations where id = ${o.orgId}`;
+    const div = await ocDivision(o, await ocCompetition(o), { name: "Export Open" });
+    await pay(o, div.id, 32);
+    await deleteDivision(o.auth, div.id);
+    authState.userId = o.auth.userId!;
+    const res = await get(slug!);
+    expect(res.status).toBe(200);
+    const rows = (await res.text()).split("\r\n").slice(1).map((l) => l.split(","));
+    const byKind = (k: string) => rows.filter((r) => r[1] === k);
+    expect(byKind("onlinePackagePaid"), "the payment").toHaveLength(1);
+    expect(byKind("onlinePackageRefunded"), "the refund").toHaveLength(1);
+    // the same division and size on both rows, the competition gone with the division (the snapshot is the name's only source now)
+    for (const r of [...byKind("onlinePackagePaid"), ...byKind("onlinePackageRefunded")]) expect(r.slice(7), `${r[1]}: division, size`).toEqual(["Export Open", "32"]);
+    expect(byKind("onlinePackagePaid")[0]![2], "a payment is a spend").toBe("-2");
+    expect(byKind("onlinePackageRefunded")[0]![2], "the refund gives it back").toBe("2");
+    expect(byKind("onlinePackageRefunded")[0]![6], "the refund names no competition: the division is gone").toBe("");
+    expect(rows.filter((r) => r[1].startsWith("onlinePackage")).length, "anti-vacuity: package rows were exported").toBeGreaterThan(0);
   });
 
   it("an org with an empty ledger exports the header alone", async () => {

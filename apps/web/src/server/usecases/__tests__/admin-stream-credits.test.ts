@@ -6,12 +6,16 @@
 //   R3 org scope      drop `where c.org_id = ${orgId}`                                 → "only THIS org"
 //   R4 order          `c.created_at desc` → `c.created_at asc`                         → "the newest … rows"
 //   R6 limit          drop `limit ${STREAM_CREDIT_LEDGER_LIMIT}`                        → "the newest … rows"
+//   R7 package join   drop `and p.org_id = c.org_id` from the package join                → "an Online Chess package row names its package and division — a package of another org names none"
+//   R8 package field  drop `online_package_id` / `division_name` from the mapped row      → same test
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
 import { streamRig } from "@/server/relay/__tests__/_session-rig";
 import { STAFF_CREDIT_MAX } from "@/server/usecases/stream-credits";
+import { deleteDivision } from "@/server/usecases/divisions";
+import { ocCompetition, ocDivision, ocOrg, pay } from "@/server/usecases/online-package/__tests__/_oc-rig";
 import { STREAM_CREDIT_ADJUST_MAX, STREAM_CREDIT_LEDGER_LIMIT, streamCreditsForOrg } from "../admin-stream-credits";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -59,11 +63,11 @@ describe.skipIf(!HAS_DB)("streamCreditsForOrg — the staff panel's read", () =>
     const read = await streamCreditsForOrg(orgId);
     expect(read.balance).toBe(6);
     expect(read.rows).toEqual([
-      { id: expect.any(String), reason: "revoke", delta: -1, balanceAfter: 6, note: "one too many", createdBy: a.id, createdByEmail: a.email, sessionId: null,
+      { id: expect.any(String), reason: "revoke", delta: -1, balanceAfter: 6, note: "one too many", createdBy: a.id, createdByEmail: a.email, sessionId: null, onlinePackageId: null, divisionName: null,
         createdAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/) },
-      { id: expect.any(String), reason: "grant", delta: 3, balanceAfter: 7, note: "pilot league", createdBy: a.id, createdByEmail: a.email, sessionId: null, createdAt: expect.any(String) },
-      { id: expect.any(String), reason: "consume", delta: -1, balanceAfter: 4, note: null, createdBy: null, createdByEmail: null, sessionId, createdAt: expect.any(String) },
-      { id: expect.any(String), reason: "purchase", delta: 5, balanceAfter: 5, note: null, createdBy: null, createdByEmail: null, sessionId: null, createdAt: expect.any(String) },
+      { id: expect.any(String), reason: "grant", delta: 3, balanceAfter: 7, note: "pilot league", createdBy: a.id, createdByEmail: a.email, sessionId: null, onlinePackageId: null, divisionName: null, createdAt: expect.any(String) },
+      { id: expect.any(String), reason: "consume", delta: -1, balanceAfter: 4, note: null, createdBy: null, createdByEmail: null, sessionId, onlinePackageId: null, divisionName: null, createdAt: expect.any(String) },
+      { id: expect.any(String), reason: "purchase", delta: 5, balanceAfter: 5, note: null, createdBy: null, createdByEmail: null, sessionId: null, onlinePackageId: null, divisionName: null, createdAt: expect.any(String) },
     ]);
   });
 
@@ -114,5 +118,36 @@ describe.skipIf(!HAS_DB)("streamCreditsForOrg — the staff panel's read", () =>
     const src = await readFile(new URL("../admin-stream-credits.ts", import.meta.url), "utf8");
     expect(src).toMatch(/export\s*\{\s*STAFF_CREDIT_MAX as STREAM_CREDIT_ADJUST_MAX\s*\}\s*from\s*"@\/server\/usecases\/stream-credits"/);
     expect(src, "the ceiling must be re-exported, never redeclared").not.toMatch(/const\s+STREAM_CREDIT_ADJUST_MAX/);
+  });
+  it("an Online Chess package row names its package and division — the name snapshot outlives the division, and a package of ANOTHER org names none (R7, R8)", async () => {
+    const o = await ocOrg();
+    const compId = await ocCompetition(o);
+    const d = await ocDivision(o, compId, { name: "Staff Look Open" });
+    await pay(o, d.id, 16);
+    const [pkg] = await sql<{ id: string }[]>`select id from division_online_packages where division_id = ${d.id}`;
+    let read = await streamCreditsForOrg(o.orgId);
+    const paid = read.rows.filter((r) => r.onlinePackageId === pkg!.id);
+    expect(paid.length, "anti-vacuity: the payment wrote package rows").toBeGreaterThan(0);
+    for (const r of paid) expect([r.reason, r.divisionName, r.sessionId]).toEqual(["consume", "Staff Look Open", null]);
+    // the division is deleted (the full return): the rows keep the name the package snapshotted
+    await deleteDivision(o.auth, d.id);
+    read = await streamCreditsForOrg(o.orgId);
+    const all = read.rows.filter((r) => r.onlinePackageId === pkg!.id);
+    expect(all.map((r) => r.reason).sort(), "the debit and its return").toEqual(["consume", "refund"].sort());
+    for (const r of all) expect(r.divisionName, `${r.reason} after the delete`).toBe("Staff Look Open");
+
+    // a ledger row of org A that names org B's package (V549 does not forbid it): staff see the id to chase, never B's division name
+    const other = await ocOrg();
+    const otherComp = await ocCompetition(other);
+    const od = await ocDivision(other, otherComp, { name: "Somebody Else Open" });
+    await pay(other, od.id, 16);
+    const [foreign] = await sql<{ id: string }[]>`select id from division_online_packages where division_id = ${od.id}`;
+    await sql`
+      insert into org_stream_credits (org_id, delta, reason, bucket, online_package_id, balance_after)
+      values (${o.orgId}, -1, 'consume', 'monthly', ${foreign!.id}, 0)`;
+    read = await streamCreditsForOrg(o.orgId);
+    const crossed = read.rows.find((r) => r.onlinePackageId === foreign!.id);
+    expect(crossed, "the crossed row is listed").toBeDefined();
+    expect(crossed!.divisionName, "another org's division name is never read").toBeNull();
   });
 });

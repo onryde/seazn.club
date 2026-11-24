@@ -32,6 +32,12 @@ export interface StreamCreditLedgerRow {
   createdBy: string | null;
   createdByEmail: string | null;
   sessionId: string | null;
+  /** The Online Chess package the row moved for (`online_package_id`, V550) — a package's debit or return; null on every other row. Printed
+   *  even when the package is not this org's (a corrupt row), so staff see the id they must chase. */
+  onlinePackageId: string | null;
+  /** That package's division name (the snapshot it keeps after a delete), only when the package belongs to THIS org — V549 does not make the
+   *  package's org the ledger row's, so the join checks it. Null for a row with no package, or one whose package is not this org's. */
+  divisionName: string | null;
   /** ISO-8601, UTC. */
   createdAt: string;
 }
@@ -40,10 +46,13 @@ export async function streamCreditsForOrg(orgId: string): Promise<{ balance: num
   const rows = await sql<{
     id: string; reason: string; delta: number; balance_after: number; note: string | null;
     created_by: string | null; email: string | null; session_id: string | null; created_at: Date | string;
+    online_package_id: string | null; division_name: string | null;
   }[]>`
-    select c.id, c.reason, c.delta, c.balance_after, c.note, c.created_by, u.email, c.session_id, c.created_at
+    select c.id, c.reason, c.delta, c.balance_after, c.note, c.created_by, u.email, c.session_id, c.created_at,
+           c.online_package_id, p.division_name
       from org_stream_credits c
       left join users u on u.id = c.created_by
+      left join division_online_packages p on p.id = c.online_package_id and p.org_id = c.org_id
      where c.org_id = ${orgId}
      order by c.created_at desc, c.id desc
      limit ${STREAM_CREDIT_LEDGER_LIMIT}`;
@@ -52,6 +61,7 @@ export async function streamCreditsForOrg(orgId: string): Promise<{ balance: num
     rows: rows.map((r) => ({
       id: r.id, reason: r.reason, delta: r.delta, balanceAfter: r.balance_after, note: r.note,
       createdBy: r.created_by, createdByEmail: r.email, sessionId: r.session_id,
+      onlinePackageId: r.online_package_id, divisionName: r.division_name,
       createdAt: new Date(r.created_at).toISOString(),
     })),
   };

@@ -47,9 +47,18 @@ function fixtureLabel(dict: Dict, f: StreamHistoryFixture): string {
   return t(dict, "settings.credits.stream.fixture", { home: f.homeName ?? tbd, away: f.awayName ?? tbd });
 }
 
-/** The row's activity in plain words. A pack names how many credits it brought; every other kind is one fixed sentence. */
+/** The row's activity in plain words. A pack names how many credits it brought; an Online Chess package names its division and
+ *  size (the three `onlinePackage*` kinds, spec 2026-11-23 §8.8); every other kind is one fixed sentence. A package kind with no
+ *  package block cannot be (the reader sets both together), and says the neutral `other` rather than print `{division}`. */
 function activityLabel(dict: Dict, locale: Locale, row: StreamHistoryRow): string {
   if (row.kind === "packPurchase") return plural(dict, "settings.credits.stream.kind.packPurchase", Math.abs(row.delta), locale);
+  if (row.kind === "onlinePackagePaid" || row.kind === "onlinePackageResized" || row.kind === "onlinePackageRefunded") {
+    if (!row.onlinePackage) return t(dict, "settings.credits.stream.kind.other");
+    const params = { division: row.onlinePackage.divisionName, size: row.onlinePackage.size };
+    if (row.kind === "onlinePackagePaid") return t(dict, "settings.credits.stream.kind.onlinePackagePaid", params);
+    if (row.kind === "onlinePackageResized") return t(dict, "settings.credits.stream.kind.onlinePackageResized", params);
+    return t(dict, "settings.credits.stream.kind.onlinePackageRefunded", params);
+  }
   return t(dict, `settings.credits.stream.kind.${row.kind}` as TKey);
 }
 
@@ -85,7 +94,7 @@ function HistoryRow({ row, dict, locale }: { row: StreamHistoryRow; dict: Dict; 
       <div role="cell" className="text-xs text-slate-500 max-lg:order-4 lg:text-sm">
         <time dateTime={row.dateIso}>{fmtDay(row.dateIso, locale)}</time>
       </div>
-      <div role="cell" className="min-w-0 text-sm font-medium text-slate-800 max-lg:order-1">
+      <div role="cell" className="min-w-0 break-words text-sm font-medium text-slate-800 max-lg:order-1">
         {activityLabel(dict, locale, row)}
       </div>
       {row.fixture ? (
@@ -95,6 +104,12 @@ function HistoryRow({ row, dict, locale }: { row: StreamHistoryRow; dict: Dict; 
             {fixtureLabel(dict, row.fixture)}
           </Link>
           <span className="block truncate text-xs text-slate-500">{row.fixture.competitionName}</span>
+        </div>
+      ) : row.onlinePackage?.competitionName ? (
+        // An Online Chess package row has no match: its competition is the context, as a fixture row's is. Not a link — the activity
+        // already names the division, and a deleted division has nowhere to go.
+        <div role="cell" className="min-w-0 max-lg:order-3 max-lg:col-span-2">
+          <span className="block truncate text-xs text-slate-500 lg:text-sm">{row.onlinePackage.competitionName}</span>
         </div>
       ) : (
         <div role="cell" className="text-sm text-slate-500 max-lg:hidden">

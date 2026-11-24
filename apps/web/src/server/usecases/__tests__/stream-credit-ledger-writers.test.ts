@@ -2,12 +2,11 @@
 // Pure: no database, no network — the TypeScript parser over the source tree. Two things are pinned here and neither is
 // visible from the history reader's own tests:
 //
-//   1. THE NINE INSERT SITES. `org_stream_credits` is written from nine statements in stream-credits.ts. The history names a
-//      row by its shape, so a tenth writer (or a renamed one) must fail HERE, by name, before it can ship a row the
-//      classifier labels wrongly. The sites are held to `LEDGER_WRITER_SITES` (_ledger-writer-sites.ts — an oracle typed from
-//      the writers' contract) in both directions, and no other production file may write the table at all — save the Online
-//      Chess package writer (online-package/ledger.ts), whose inserts are held to its own three sites the same way
-//      (`PACKAGE_LEDGER_WRITER_SITES`), until Online Chess Task 10 folds them into the registry with their history kinds.
+//   1. THE TWELVE INSERT SITES. `org_stream_credits` is written from twelve statements: nine in stream-credits.ts and three in the
+//      Online Chess package writer (online-package/ledger.ts). The history names a row by its shape, so a thirteenth writer (or a
+//      renamed one) must fail HERE, by name, before it can ship a row the classifier labels wrongly. The sites are held to
+//      `LEDGER_WRITER_SITES` (_ledger-writer-sites.ts — an oracle typed from the writers' contract), each file to ITS sites, in
+//      both directions, and no other production file may write the table at all.
 //   2. WHAT "Refund: camera never connected" MEANS. The label is read off a refund row with no author and a session — a shape
 //      the classifier cannot tell from any other author-less refund. It is honest because exactly ONE thing in production
 //      writes such a row: `refundConsumeForSession`, called from exactly one place (the use-case's `refund_credit` effect
@@ -16,10 +15,10 @@
 //      access cannot walk past it.
 //
 // Mutant table (each run once by hand against a copy; see the PR):
-//   W1 tenth site     add an `insert into org_stream_credits` to any function                  -> "the insert sites ARE the nine"
+//   W1 tenth site     add an `insert into org_stream_credits` to any function                  -> "the insert sites ARE the nine" / "…exactly its three"
 //   W2 renamed site   move a site's insert into a differently named function                   -> same test
 //   W3 other file     write the table (insert / update / delete) from any other production file -> "no other production file writes"
-//   W3b package file  add, rename or turn into an update a write in online-package/ledger.ts  -> same test
+//   W3b package file  add, rename or turn into an update a write in online-package/ledger.ts  -> "the package writer inserts at exactly its three sites"
 //   W4 second caller  call refundConsumeForSession a second time, under any alias               -> "one caller, under any alias"
 //   W5 re-export      re-export or namespace-access refundConsumeForSession                      -> same test
 //   W6 caller guard   call it outside the `refund_credit` branch                                 -> same test
@@ -29,12 +28,12 @@
 //   W10 wrapped       drop the as/satisfies/cast/non-null/paren unwrapping, or the computed-key reading -> "an emission is found however the literal is wrapped"
 import { describe, expect, it } from "vitest";
 import {
-  LEDGER_WRITER_SITES, PACKAGE_LEDGER_WRITER_SITES, PACKAGE_WRITER_FILE, ledgerWrites, nameUses, parseSource, productionSourceFiles,
+  LEDGER_WRITER_SITES, PACKAGE_WRITER_FILE, STREAM_WRITER_FILE, ledgerWrites, nameUses, parseSource, productionSourceFiles,
   readSource, refundEmissions,
 } from "./_ledger-writer-sites";
 import { STREAM_HISTORY_KINDS } from "../stream-credit-history";
 
-const WRITER_FILE = "server/usecases/stream-credits.ts";
+const WRITER_FILE = STREAM_WRITER_FILE;
 const SESSIONS_FILE = "server/usecases/stream-sessions/apply.ts";   // the use-case's refund_credit effect handler lives in the apply module
 const DOMAIN_FILE = "server/relay/domain/session.ts";
 
@@ -155,61 +154,80 @@ describe("the scanners see the evasions (W9) — each run on a synthetic source"
   });
 });
 
-describe("the nine ledger writers", () => {
+describe("the twelve ledger writers", () => {
   const writerSource = readSource(WRITER_FILE);
   const found = ledgerWrites(parseSource(WRITER_FILE, writerSource));
+  /** The registry's sites of one file: each file is held to its own, in both directions. */
+  const sitesOf = (file: string) => LEDGER_WRITER_SITES.filter((s) => s.file === file);
+  /** Every write `file` holds, judged against its registry sites: `insert into = fn() needle` per write, or "no site". */
+  const judge = (file: string, writes: ReturnType<typeof ledgerWrites>) =>
+    writes.map((w) => `${w.verb} = ${sitesOf(file).filter((s) => s.fn === w.fn && w.raw.includes(s.needle)).map((s) => `${s.fn}() ${s.needle}`).join(" & ") || `no site (${w.fn}())`}`);
+
+  it("the registry is the twelve — nine in the match-credit writer, three in the package writer, and no site names a file that does not hold it", () => {
+    expect(LEDGER_WRITER_SITES).toHaveLength(12);
+    expect(sitesOf(WRITER_FILE)).toHaveLength(9);
+    expect(sitesOf(PACKAGE_WRITER_FILE)).toHaveLength(3);
+    expect(sitesOf(WRITER_FILE).length + sitesOf(PACKAGE_WRITER_FILE).length, "every site names one of the two files").toBe(LEDGER_WRITER_SITES.length);
+  });
 
   it("the insert sites ARE the nine in the registry — each named, each found once, nothing else (W1, W2)", () => {
+    const nine = sitesOf(WRITER_FILE);
     expect(found.length, "anti-vacuity: the scan found the writers at all").toBeGreaterThan(0);
     expect(found.every((w) => w.verb === "insert into"), "stream-credits.ts only INSERTS: the ledger is append-only").toBe(true);
     const claimed = new Map<string, number>();
     const unaccounted: string[] = [];
     for (const w of found) {
-      const hits = LEDGER_WRITER_SITES.filter((s) => s.fn === w.fn && w.raw.includes(s.needle));
+      const hits = nine.filter((s) => s.fn === w.fn && w.raw.includes(s.needle));
       if (hits.length !== 1) unaccounted.push(`${WRITER_FILE}:${w.line} in ${w.fn}() matches ${hits.length} registry sites`);
       for (const h of hits) claimed.set(h.key, (claimed.get(h.key) ?? 0) + 1);
     }
     expect(unaccounted, "an insert site the registry does not name exactly once").toEqual([]);
     expect([...claimed.entries()].filter(([, n]) => n !== 1), "a registry site found more than once").toEqual([]);
-    expect([...claimed.keys()].sort(), "a registry site no insert matches").toEqual(LEDGER_WRITER_SITES.map((s) => s.key).sort());
-    expect(found, "nine statements write the ledger").toHaveLength(9);
-    expect(LEDGER_WRITER_SITES).toHaveLength(9);
+    expect([...claimed.keys()].sort(), "a registry site no insert matches").toEqual(nine.map((s) => s.key).sort());
+    expect(found, "nine statements write the ledger here").toHaveLength(9);
   });
 
   it("the registry's own keys, functions and needles are distinct — a site cannot hide behind another's name", () => {
     expect(new Set(LEDGER_WRITER_SITES.map((s) => s.key)).size).toBe(LEDGER_WRITER_SITES.length);
-    const pairs = LEDGER_WRITER_SITES.map((s) => `${s.fn}|${s.needle}`);
+    const pairs = LEDGER_WRITER_SITES.map((s) => `${s.file}|${s.fn}|${s.needle}`);
     expect(new Set(pairs).size).toBe(pairs.length);
-    // within one function, no needle contains another's (the sites of rollMonthlyLocked tell apart)
+    // within one function of one file, no needle contains another's (the sites of rollMonthlyLocked tell apart)
+    let compared = 0;
     for (const a of LEDGER_WRITER_SITES) {
       for (const b of LEDGER_WRITER_SITES) {
-        if (a !== b && a.fn === b.fn) expect(a.needle.includes(b.needle) || b.needle.includes(a.needle), `${a.key} / ${b.key}`).toBe(false);
+        if (a !== b && a.file === b.file && a.fn === b.fn) {
+          expect(a.needle.includes(b.needle) || b.needle.includes(a.needle), `${a.key} / ${b.key}`).toBe(false);
+          compared += 1;
+        }
       }
     }
+    expect(compared, "anti-vacuity: rollMonthlyLocked's three sites were compared with one another").toBeGreaterThan(0);
   });
 
-  it("no other production file writes the table — insert, update, delete, truncate, merge or copy (W3); the Online Chess package writer inserts at exactly its three sites (W3b)", () => {
+  it("no other production file writes the table — insert, update, delete, truncate, merge or copy (W3)", () => {
     const files = productionSourceFiles();
     expect(files.length, "the scan walked the source tree").toBeGreaterThan(200);
     expect(files, "…and it included the writer").toContain(WRITER_FILE);
     expect(files, "…and the package writer").toContain(PACKAGE_WRITER_FILE);
+    const writerFiles = new Set(LEDGER_WRITER_SITES.map((s) => s.file));
+    expect([...writerFiles].sort(), "the registry names exactly two writer files").toEqual([PACKAGE_WRITER_FILE, WRITER_FILE].sort());
     const strangers: string[] = [];
     let scanned = 0;
     for (const f of files) {
-      if (f === WRITER_FILE || f === PACKAGE_WRITER_FILE) continue;
+      if (writerFiles.has(f)) continue;
       scanned += 1;
       for (const w of ledgerWrites(parseSource(f, readSource(f)))) strangers.push(`${f}:${w.line} ${w.verb} in ${w.fn}()`);
     }
-    expect(scanned).toBe(files.length - 2);
+    expect(scanned).toBe(files.length - writerFiles.size);
     expect(strangers).toEqual([]);
-    // The package writer, both directions: every write it holds is an INSERT matching exactly one of its sites, and every
-    // site is matched by exactly one write (one line per write, so a second statement for a site shows as a duplicate).
+  });
+
+  it("the package writer inserts at exactly its three sites — both directions, one line per write, so a second statement for a site shows as a duplicate (W3b)", () => {
     const pkg = ledgerWrites(parseSource(PACKAGE_WRITER_FILE, readSource(PACKAGE_WRITER_FILE)));
     expect(pkg.length, "anti-vacuity: the package writer's inserts were found").toBeGreaterThan(0);
-    const site = (s: { fn: string; needle: string }) => `${s.fn}() ${s.needle}`;
-    const judged = pkg.map((w) => `${w.verb} = ${PACKAGE_LEDGER_WRITER_SITES.filter((s) => s.fn === w.fn && w.raw.includes(s.needle)).map(site).join(" & ") || `no site (${w.fn}())`}`);
-    expect(judged.sort()).toEqual(PACKAGE_LEDGER_WRITER_SITES.map((s) => `insert into = ${site(s)}`).sort());
-    expect(PACKAGE_LEDGER_WRITER_SITES).toHaveLength(3);
+    const three = sitesOf(PACKAGE_WRITER_FILE);
+    expect(judge(PACKAGE_WRITER_FILE, pkg).sort()).toEqual(three.map((s) => `insert into = ${s.fn}() ${s.needle}`).sort());
+    expect(pkg, "three statements write the ledger here").toHaveLength(3);
   });
 
   it("every history kind but `other` is some writer's, and every writer's kinds are real — no kind is orphaned, none invented", () => {
@@ -218,6 +236,12 @@ describe("the nine ledger writers", () => {
     for (const k of written) expect(declared.has(k), `registry names kind ${k}`).toBe(true);
     expect([...declared].filter((k) => k !== "other" && !written.has(k)), "a kind no writer produces").toEqual([]);
     expect(written.has("other"), "no writer is expected to land on the unmapped door").toBe(false);
+    // the three Online Chess kinds are the package writer's, and only it writes them
+    for (const kind of ["onlinePackagePaid", "onlinePackageResized", "onlinePackageRefunded"] as const) {
+      const writers = LEDGER_WRITER_SITES.filter((s) => (s.kinds as readonly string[]).includes(kind)).map((s) => s.file);
+      expect(writers.length, `${kind} has a writer`).toBeGreaterThan(0);
+      expect(new Set(writers), `${kind} is the package writer's alone`).toEqual(new Set([PACKAGE_WRITER_FILE]));
+    }
   });
 });
 

@@ -50,7 +50,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: 
 
 const row = (over: Partial<StreamCreditLedgerRow>): StreamCreditLedgerRow => ({
   id: "row-1", reason: "grant", delta: 1, balanceAfter: 1, note: "note", createdBy: "user-1",
-  createdByEmail: "staff@example.test", sessionId: null, createdAt: "2026-09-16T10:20:30.000Z", ...over,
+  createdByEmail: "staff@example.test", sessionId: null, onlinePackageId: null, divisionName: null, createdAt: "2026-09-16T10:20:30.000Z", ...over,
 });
 
 // Every numeric ceiling here is DELIBERATELY not the route's (50 / 20 / 500): a panel that retyped
@@ -132,6 +132,26 @@ describe("AdminStreamCreditsPanel — the closed panel", () => {
     for (const text of [">-1<", ">+5<", ">one too many<", ">pilot league<", ">staff@example.test<", ">user-1<", ">5e5510e1-0000-4000-8000-000000000001<", ">2026-09-16 11:00 UTC<", ">—<"]) {
       expect(html, text).toContain(text);
     }
+  });
+
+  it("an Online Chess package row names its package and division in the last column, where a stream row names its session — and a row with neither reads — (T10)", () => {
+    const pkgId = "7a0c1d2e-0000-4000-8000-0000000000aa";
+    const html = render({
+      rows: [
+        row({ id: "p1", reason: "consume", delta: -2, balanceAfter: 3, note: null, createdBy: null, createdByEmail: null, onlinePackageId: pkgId, divisionName: "Staff Look Open" }),
+        row({ id: "p2", reason: "refund", delta: 2, balanceAfter: 5, note: null, createdBy: null, createdByEmail: null, onlinePackageId: pkgId, divisionName: null }),
+        row({ id: "s1", reason: "consume", delta: -1, balanceAfter: 4, note: null, createdBy: null, createdByEmail: null, sessionId: "5e5510e1-0000-4000-8000-000000000001" }),
+        row({ id: "n1", reason: "grant", delta: 1, balanceAfter: 1, note: "x" }),
+      ],
+    });
+    const cells = [...html.matchAll(/data-testid="stream-credits-subject"[^>]*>([^<]*)</g)].map((m) => m[1]);
+    expect(cells).toEqual([
+      `package ${pkgId} · Staff Look Open`,
+      `package ${pkgId}`,   // the package is another org's, so no division name is read: the id alone, to chase
+      "5e5510e1-0000-4000-8000-000000000001",
+      "—",
+    ]);
+    expect(html).toContain(">Session / package<");
   });
 
   it("the ledger is a keyboard-reachable scroll rail: overflow-x-auto with tabindex 0, role region and an accessible name (R5; axe scrollable-region-focusable; page.tsx:284-289's idiom)", () => {
