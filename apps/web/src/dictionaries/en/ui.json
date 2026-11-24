@@ -1106,6 +1106,7 @@
   "action.qr": "QR",
   "action.settings": "Settings",
   "action.addDivision": "Add division",
+  "action.addAnotherDivision": "Add another division",
   "aria.slideshowNewTab": "Slideshow (opens in a new tab)",
   "aria.viewPublic": "View this division's public page (opens in a new tab)",
   "aria.scheduleBoard": "Multi Schedule Board",

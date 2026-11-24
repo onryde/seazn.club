@@ -158,14 +158,17 @@ describe("the competition page's divisions list reads its page and filter from t
     expect(hrefOf(html, "desk-ledger-finished-toggle")).toBe(`${BASE}?upgraded=1`);
   });
 
-  it("every division finished: hidden by default with the way out, shown on ?finished=1", async () => {
+  // Finished-competition page (owner, Option 1): when EVERY division is finished the COMPETITION is finished, and the list shows
+  // them outright - no hidden-by-default, no "Show finished" switch, no all-finished card. (The hidden-by-default switch for a
+  // live competition is the first tests above; the all-finished card's own rendering is pinned on the ledger in desk-ssr.test.tsx.)
+  it("every division finished: the competition is finished, so they are listed with no switch and no all-finished card, on any URL", async () => {
     seed(0, 3);
-    const hidden = await render();
-    expect(rows(hidden)).toBe(0);
-    expect(hidden).toContain('data-testid="desk-ledger-all-finished"');
-    expect(hrefOf(hidden, "desk-ledger-finished-toggle")).toBe(`${BASE}?finished=1`);
-    const shown = await render({ finished: "1" });
-    expect(rows(shown)).toBe(3);
-    expect(finishedRows(shown)).toBe(3);
+    for (const sp of [{}, { finished: "1" }, { finished: "0" }]) {
+      const html = await render(sp);
+      expect(rows(html), JSON.stringify(sp)).toBe(3);
+      expect(finishedRows(html), JSON.stringify(sp)).toBe(3);
+      expect(html).not.toContain('data-testid="desk-ledger-all-finished"');
+      expect(html).not.toContain('data-testid="desk-ledger-finished-toggle"');
+    }
   });
 });

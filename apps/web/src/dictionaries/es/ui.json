@@ -1106,6 +1106,7 @@
   "action.qr": "QR",
   "action.settings": "Configuración",
   "action.addDivision": "Añadir división",
+  "action.addAnotherDivision": "Añadir otra división",
   "aria.slideshowNewTab": "Presentación (se abre en una pestaña nueva)",
   "aria.viewPublic": "Ver la página pública de esta división (nueva pestaña)",
   "aria.scheduleBoard": "Tablero de calendario múltiple",

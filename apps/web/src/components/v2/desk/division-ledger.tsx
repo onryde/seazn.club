@@ -5,7 +5,7 @@ import type { Dict, Locale } from "@/lib/i18n-constants";
 import { routes } from "@/lib/routes";
 import { sportEmoji } from "@/components/discovery-cards";
 import { whenLabel } from "@/lib/division-status-line";
-import { ledgerHref, pageLedger } from "@/lib/ledger-page";
+import { ledgerFilter, ledgerHref, pageLedger } from "@/lib/ledger-page";
 import type { Attention } from "@/lib/division-phase";
 import type { DeskDivision } from "@/server/usecases/competition-desk";
 import { BansToReviewPill, PhasePill } from "./phase-pill";
@@ -118,7 +118,7 @@ function redAction(dict: Dict, d: DeskDivision, org: string, comp: string, slug:
 }
 
 export function DivisionLedger({
-  dict, rows: allRows, org, comp, locale, now, canEdit, page, showFinished, query = [],
+  dict, rows: allRows, org, comp, locale, now, canEdit, page, showFinished, query = [], competitionFinished = false,
 }: {
   dict: Dict; rows: LedgerRow[]; org: string; comp: string; locale: string; now: string;
   /** Match Day B2 (spec 2026-10-31 §9, owner request): the list shows five at a time and hides finished divisions until asked.
@@ -126,6 +126,10 @@ export function DivisionLedger({
    *  which is the seam this prop exists to keep from going inert (the page reads them from `?dpage=` / `?finished=1`). */
   page: number;
   showFinished: boolean;
+  /** The COMPETITION's derived phase is `finished` (`deskChrome`): its finished divisions are listed outright and the "Show
+   *  finished" switch is not offered - see `ledgerFilter`. Absent = a live competition, the URL decides. `showFinished` stays the
+   *  URL's own state, which is what the pager keeps in its links. */
+  competitionFinished?: boolean;
   /** The page's other query params, which the pager and the toggle keep (`ledgerQueryOf(...).rest`). */
   query?: readonly (readonly [string, string])[];
   /** IMPORTANT (review 7): the phone card's red action was NOT gated, while
@@ -154,9 +158,10 @@ export function DivisionLedger({
   // the rest of the render used.
   // B2: the page of rows to draw. A row whose desk failed to load has no phase to be finished in, and no attention to
   // exempt - it is never hidden (`pageLedger` reads "unknown" as a phase that is not finished).
+  const filter = ledgerFilter({ competitionFinished, showFinished });
   const view = pageLedger(
     allRows.map((row) => ({ row, phase: row.desk?.phase ?? "unknown", attention: row.desk?.attention ?? [] })),
-    { page, showFinished },
+    { page, showFinished: filter.showFinished },
   );
   const rows = view.rows.map((v) => v.row);
   const base = routes.competition(org, comp);
@@ -179,7 +184,7 @@ export function DivisionLedger({
           track and a thumb in house tokens (slate off, purple on) - and still that link, so the click still navigates. The label does not
           change with the state ("Show finished (N)" on and off): a switch names what it controls, `aria-checked` says where it is.
           44px tall at every width, the tap floor. Space toggles it as Enter does (`SwitchLink`, E1 fix round 1 m5). */}
-      {view.finishedCount > 0 && (
+      {filter.toggle && view.finishedCount > 0 && (
         <div className="mb-2 flex justify-end">
           <SwitchLink
             href={ledgerHref(base, query, { page: 1, showFinished: !showFinished })}

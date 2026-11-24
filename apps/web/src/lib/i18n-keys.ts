@@ -8,6 +8,7 @@ export type DictionaryKey =
   | "accountDeletion.subject"
   | "accountDeletion.text"
   | "accountDeletion.title"
+  | "action.addAnotherDivision"
   | "action.addDivision"
   | "action.qr"
   | "action.registration"
