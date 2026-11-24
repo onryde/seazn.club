@@ -116,13 +116,6 @@ async function knockoutField(g: Groups, koId: string): Promise<{ seated: number;
   return { seated: seated.size, realPairs: pairs.length, sameGroupPairs: pairs.filter((l) => poolOf.get(l.home_entrant_id!) === poolOf.get(l.away_entrant_id!)).length };
 }
 
-/** The knockout stage row the form's save made, once the source completed (its Generate seeds it). */
-async function koOf(divId: string): Promise<string> {
-  const [row] = await sql<{ id: string }[]>`select id from stages where division_id = ${divId} and seq = 2`;
-  expect(row, "the premise: the knockout was added").toBeDefined();
-  return row!.id;
-}
-
 describe.skipIf(!HAS_DB)("Add stage after groups: the per-group take saves, and Complete then seeds the knockout it names", () => {
   for (const sport of ["generic", "boardgame"] as const) {
     it(`${sport}: 4 groups of 4, "qualify 8" (top 2 per group) saves before the groups finish; Complete seeds 8 and no round-one line pairs a group against itself`, async () => {

@@ -4,7 +4,7 @@
 // winners tier and a best-2nd tier of one: two supplies, A2 or B2). The real rule's answers are pinned in cross-pool-draw-risk.test.ts.
 import { describe, expect, it, vi } from "vitest";
 
-const engine = vi.hoisted(() => ({ answer: (_poolOfLastSeed: string): boolean | null => true }));
+const engine = vi.hoisted(() => ({ answer: (() => true) as (poolOfLastSeed: string) => boolean | null }));
 vi.mock("@/lib/cross-pool-separable", () => ({
   crossPoolSeparable: (seeds: readonly { pool: string }[]) => ({ separable: engine.answer(seeds[seeds.length - 1]!.pool) }),
 }));
