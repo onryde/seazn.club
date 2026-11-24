@@ -29,13 +29,15 @@ const V541_TABLES = ["seazn_held_alerts", "seazn_locked_videos"];
 const V542_TABLES = ["org_video_collections", "fixture_video_replays", "bunny_webhook_events"];
 /** V552's delivered-minutes table (Seazn-hosted video, Task 29), by name — the V430 pattern. */
 const V552_TABLES = ["fixture_video_delivery"];
+/** V558's club-defaults table (Seazn-hosted video, Task 38), by name — the V430 pattern. */
+const V558_TABLES = ["org_stream_defaults"];
 
 describe("the stream deltas — RLS is static text, not a runtime hope", () => {
   it("every created table has `enable row level security` AND `force row level security`", () => {
     // V410's eight, plus V430's four (R1), plus V525's court table, plus V541's two Seazn marks, plus V542's three replay tables,
-    // plus V552's delivered-minutes table.
+    // plus V552's delivered-minutes table, plus V558's club defaults.
     expect(STREAM_TABLES.length).toBeGreaterThanOrEqual(
-      8 + V430_TABLES.length + V525_TABLES.length + V541_TABLES.length + V542_TABLES.length + V552_TABLES.length,
+      8 + V430_TABLES.length + V525_TABLES.length + V541_TABLES.length + V542_TABLES.length + V552_TABLES.length + V558_TABLES.length,
     );
     let checked = 0;
     for (const t of STREAM_TABLES) {
@@ -108,6 +110,21 @@ describe("the stream deltas — RLS is static text, not a runtime hope", () => {
       expect(STREAM_TABLES, t).toContain(t);
       expect(SQL_ONLY, t).toMatch(new RegExp(`alter table ${t}\\s+enable\\s+row level security;`));
       expect(SQL_ONLY, t).toMatch(new RegExp(`alter table ${t}\\s+force\\s+row level security;`));
+      checked++;
+    }
+    expect(checked).toBe(1);
+  });
+
+  // Pinned by NAME, never by number (a rebase renumbers it): the club-defaults delta joins the fold through its `stream` name, and a
+  // rename that drops the word would take its table out of every scan here.
+  it("the club-defaults delta (V558) is in the fold, its table enabled AND forced, and no policy or grant is made on it", () => {
+    expect(STREAM_DELTA_FILES.filter((f) => /^V\d+__org_stream_defaults\.sql$/.test(f)), "the fold reads exactly one club-defaults delta").toHaveLength(1);
+    let checked = 0;
+    for (const t of V558_TABLES) {
+      expect(STREAM_TABLES, t).toContain(t);
+      expect(SQL_ONLY, t).toMatch(new RegExp(`alter table ${t}\\s+enable\\s+row level security;`));
+      expect(SQL_ONLY, t).toMatch(new RegExp(`alter table ${t}\\s+force\\s+row level security;`));
+      expect(SQL_ONLY, t).not.toMatch(new RegExp(`(create policy [^;]* on ${t}\\b|grant [^;]* on ${t}\\b)`, "i"));
       checked++;
     }
     expect(checked).toBe(1);

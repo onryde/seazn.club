@@ -8,7 +8,7 @@
 //  - The TEMPLATE: a stored id is written only if the fixture's sport is offered it now (`isPickableTemplate`); a stored
 //    id that is later retired still READS and resolves (template-registry.ts `resolveTemplate`).
 //  - The DELAY: null is the server's default, 0 a real override; the bound is V462's column check.
-import { OVERLAY_TEMPLATES, templatesForSportFrom, type TemplateRegistry } from "@/components/overlay/template-registry";
+import { OVERLAY_TEMPLATES, resolveTemplate, templatesForSportFrom, type TemplateId, type TemplateRegistry } from "@/components/overlay/template-registry";
 // TYPES only: `@/server/**` is server code, and a runtime import from a client island breaks the build.
 import type { StreamMode } from "@/server/api-v1/schemas";
 
@@ -54,3 +54,45 @@ export interface StreamPrefsRead extends StreamPrefs {
 
 /** A fixture with no settings row, as a read: the defaults, before any write. */
 export const NO_STREAM_PREFS_READ: StreamPrefsRead = { ...DEFAULT_STREAM_PREFS, revision: null };
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Task 38 (V558): the club's default Score style and Score timing. A match's own choice wins, then the club's, then the
+// default — for the style the sport's own, for the timing the server's (config.ts `overlayDelayDefaultMs`).
+//
+// The ONE COURT RULE (owner, 2026-11-24): the club's STYLE applies to a court's streams like any other; the club's TIMING
+// applies to MATCH streams only — a court keeps its own default (0 s) however the club set its timing, because the court's
+// default exists for a reason the club's number does not know about (device check 3).
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** The club's two defaults as stored (`org_stream_defaults`): each null is "the club sets none", and falls to the default. */
+export interface ClubStreamPrefs {
+  overlayTemplate: string | null;
+  overlayDelayMs: number | null;
+}
+
+/** The club defaults as one READ, with the row's `revision` (a counter every write bumps; null: no row yet, older than any write). */
+export interface ClubStreamPrefsRead extends ClubStreamPrefs {
+  revision: number | null;
+}
+
+/** An org with no row: the club sets nothing. */
+export const NO_CLUB_STREAM_PREFS_READ: ClubStreamPrefsRead = { overlayTemplate: null, overlayDelayMs: null, revision: null };
+
+/** Whether `id` is a template the registry serves NOW (it exists and is not retired) — the club write's refusal rule. The club
+ *  holds no sport, so the sport suitability is NOT asked here: a template a sport does not suit is simply not what that sport
+ *  resolves to (`resolveTemplate` falls back to the sport's own default). Injectable for the same reason `isPickableTemplate` is. */
+export function isKnownTemplate<Id extends string>(id: string, registry: TemplateRegistry<Id> = OVERLAY_TEMPLATES as unknown as TemplateRegistry<Id>): boolean {
+  return Object.hasOwn(registry, id) && registry[id as Id].retired === undefined;
+}
+
+/** The style a session started now would serve: the match's own stored choice, else the club's, else the sport's default —
+ *  resolved, so a retired or sport-unsuitable id reads as what every reader of the session's copy shows. Never throws. */
+export function effectiveTemplateId(a: { match: string | null; club: string | null; sportKey: string }): TemplateId {
+  return resolveTemplate(a.match ?? a.club, a.sportKey).id;
+}
+
+/** The delay a session started now would serve: the match's own, else the club's (a MATCH stream only), else the default —
+ *  a court's `courtDefaultMs`, every other session's `matchDefaultMs`. `0` is a real value at every link. */
+export function effectiveDelayMs(a: { match: number | null; club: number | null; court: boolean; matchDefaultMs: number; courtDefaultMs: number }): number {
+  return a.match ?? (a.court ? null : a.club) ?? (a.court ? a.courtDefaultMs : a.matchDefaultMs);
+}

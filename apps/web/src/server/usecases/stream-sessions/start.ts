@@ -446,6 +446,8 @@ export async function startBroadcast(
   const usage = await deps.drivers.ingest.storageUsage().then(storageUsageForColumns).catch(abandonThenRethrow);   // outside the transaction; G7: fitted to the integer columns
   const viaOverride = relayOverride?.bool_value === true;
   const defaultDelayMs = overlayDelayDefaultMs(opts.courtLinkId !== undefined);
+  // Task 38: the club's timing is a MATCH stream's link of the chain alone; a court's is a typed null, so its coalesce skips it.
+  const clubDelayMs = opts.courtLinkId !== undefined ? sql`null::int` : sql`od.overlay_delay_ms`;
 
   const sessionId = await (sql.begin(async (tx) => {
     // Web G review (finding 1): a start on the match's OWN code takes the fixture's code lock — the lock the Stream switch's
@@ -530,7 +532,7 @@ export async function startBroadcast(
       select ${fixtureId}, ${orgId}, ${body.mode}, 'requested', ${body.targetId},
              -- R2004 decision 7: the organiser's template CHOICE is copied, never resolved here (a retired id still reads,
              -- then resolves at every reader); a themeId the create names wins. The running session never moves with it.
-             coalesce(${body.themeId ?? null}::text, st.overlay_template),
+             coalesce(${body.themeId ?? null}::text, st.overlay_template, od.overlay_template),
              ${MAX_DURATION_MINUTES}, ${actorUserId},
              ${usage.totalStorageMinutes}, ${reservationMinutes(body.mode, MAX_DURATION_MINUTES)}, (select kind from org_stream_targets where id = ${body.targetId}),
              d.sport_key, d.competition_id, f.division_id, f.scheduled_at,
@@ -538,14 +540,17 @@ export async function startBroadcast(
              ${opts.startCause}, ${pairing?.code_id ?? null}, ${actor.pairingId}, ${opts.courtLinkId ?? null},
              -- R2004 decision 4: the EFFECTIVE delay (the fixture's override, else the default) for composed; passthrough
              -- keeps the column's 0 (the field is unused in that mode). Copied, so a running session never changes.
-             -- PR #989 review m2: a delay the create names wins over the stored one (null: the default), so the
+             -- PR #989 review m2: a delay the create names wins over the stored one (null: the club's, else the default), so the
              -- organiser's Go live streams the timing its panel showed even while that timing's own save is in flight.
              -- Court stream device check 3 (D1): the default is a court session's own (0 ms), every other session's 3.1 s.
+             -- Task 38 (V558): between the match's own and the default sits the CLUB's timing (org_stream_defaults) - for a MATCH
+             -- stream only: a court session ignores it and keeps its own default (owner, 2026-11-24). The style above takes the club's
+             -- for courts too.
              ${body.mode !== "composed"
                ? sql`0`
                : body.overlayDelayMs === undefined
-                 ? sql`coalesce(st.overlay_delay_ms, ${defaultDelayMs}::int)`
-                 : sql`${body.overlayDelayMs ?? defaultDelayMs}::int`},
+                 ? sql`coalesce(st.overlay_delay_ms, ${clubDelayMs}, ${defaultDelayMs}::int)`
+                 : sql`coalesce(${body.overlayDelayMs}::int, ${clubDelayMs}, ${defaultDelayMs}::int)`},
              -- T11 (post-T1 amendment): written ONCE, here, and never updated — V479's broadcast_implies_api_backed holds them
              -- together, and the per-target index exempts an api_backed session from the moment it exists.
              ${connectionId !== null}, ${prepared?.broadcastId ?? null}
@@ -555,6 +560,7 @@ export async function startBroadcast(
         left join courts c on c.id = f.court_id          -- a fixture with no court leaves venue_* null
         left join venues v on v.id = c.venue_id
         left join fixture_stream_settings st on st.fixture_id = f.id   -- R2004: the fixture's stored overlay choices
+        left join org_stream_defaults od on od.org_id = ${orgId}       -- Task 38: the club's (a club with no row sets nothing)
        where f.id = ${fixtureId}
       returning id`;
     // #981 follow-up: the insert copies its facts FROM the fixture row, so a fixture deleted after the entry's check

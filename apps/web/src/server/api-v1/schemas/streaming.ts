@@ -260,6 +260,28 @@ export type CourtStreamSwitch = z.infer<typeof CourtStreamSwitch>;
  *  pick or start Seazn (422 seazn_unavailable); a live Seazn stream, its recordings and its replays are untouched. */
 export const PutSeaznHosted = z.object({ offered: z.boolean() }).strict();
 export type PutSeaznHosted = z.infer<typeof PutSeaznHosted>;
+/** Task 38 (V558): PUT /orgs/{id}/stream-defaults — the club's default Score style and Score timing, each written only when the body
+ *  names it. `overlayTemplate` — a template id the registry serves now (a retired or unknown one is a 400 and writes nothing); null
+ *  clears it (the sport's own default). `overlayDelayMs` — whole ms, 0-30000 (V462's check; the same bound as the match's own); null
+ *  clears it (the server's default), 0 is a real value. A new stream copies the chain match ?? club ?? default at its start; a stream
+ *  already running never moves, and a COURT stream takes the club's style but never its timing. */
+export const PutOrgStreamDefaults = z
+  .object({
+    overlayTemplate: z.string().min(1).max(40).nullable().optional(),
+    overlayDelayMs: OverlayDelayOverrideMs.nullable().optional(),
+  })
+  .strict()
+  .refine((b) => b.overlayTemplate !== undefined || b.overlayDelayMs !== undefined, { message: "overlayTemplate or overlayDelayMs is required" });
+export type PutOrgStreamDefaults = z.infer<typeof PutOrgStreamDefaults>;
+/** The answer: the two defaults as stored (`null` = the club sets none, never the resolved value) and the row's `revision` (null with no row). */
+export const OrgStreamDefaults = z
+  .object({
+    overlayTemplate: z.string().nullable(),
+    overlayDelayMs: z.number().int().nullable(),
+    revision: z.number().int().nullable(),
+  })
+  .strict();
+export type OrgStreamDefaults = z.infer<typeof OrgStreamDefaults>;
 export const SeaznHosted = z.object({ offered: z.boolean() }).strict();
 export type SeaznHosted = z.infer<typeof SeaznHosted>;
 /** §6.7.3 / §8.1 (plan T3): the fixture's stream settings. `targetId` is the destination pre-pick (PR-1; `null` clears it) and

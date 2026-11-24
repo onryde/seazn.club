@@ -141,6 +141,8 @@ type FixtureCtx = {
   auto_stream: boolean;
   /** R2004 change 7: the organiser's stored template choice (V462), null = the sport default. */
   overlay_template: string | null;
+  /** Task 38 (V558): the club's default style — what a match with none of its own streams with. */
+  club_overlay_template: string | null;
 };
 
 /**
@@ -160,12 +162,13 @@ export async function captureCommon(
   const [ctx] = await sql<FixtureCtx[]>`
     select f.status, f.scheduled_at, f.finished_at, d.competition_id, d.sport_key,
            coalesce(ss.tz, o.timezone, 'UTC') as tz,
-           coalesce(st.auto_stream, false) as auto_stream, st.overlay_template
+           coalesce(st.auto_stream, false) as auto_stream, st.overlay_template, od.overlay_template as club_overlay_template
       from fixtures f
       join divisions d on d.id = f.division_id
       join organizations o on o.id = d.org_id
       left join schedule_settings ss on ss.division_id = d.id
       left join fixture_stream_settings st on st.fixture_id = f.id
+      left join org_stream_defaults od on od.org_id = d.org_id
      where f.id = ${c.fixtureId} and d.org_id = ${c.orgId}`;
   // The code cascades with its fixture (T35), so a resolved code's fixture is there; one deleted in between reads as an
   // ended code, never a 500.
@@ -182,7 +185,8 @@ export async function captureCommon(
     keyed = key !== null;
     // R2004 change 7 (review m10): the session's own copy wins (a running stream's choice), else the fixture's STORED
     // choice — RESOLVED, so a retired or removed id opens on the sport default and never reaches the page raw.
-    const theme = resolveTemplate(s.themeId ?? ctx.overlay_template, ctx.sport_key).id;
+    // Task 38: …else the match's own, else the CLUB's (the order a session started now copies).
+    const theme = resolveTemplate(s.themeId ?? ctx.overlay_template ?? ctx.club_overlay_template, ctx.sport_key).id;
     overlayUrl = `${origin}/overlay/fixtures/${c.fixtureId}?style=${encodeURIComponent(theme)}${key !== null ? `&${OVERLAY_KEY_PARAM}=${encodeURIComponent(key)}` : ""}`;
   }
 
