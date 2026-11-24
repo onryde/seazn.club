@@ -106,6 +106,9 @@ import {
   onlineChessOffered,
 } from "@/server/usecases/external-play";
 import { onlineBoardsOffered } from "@/server/online-boards-offered";
+import { onlinePackageView } from "@/server/usecases/online-package";
+import { onlineReceiptRequest } from "@/lib/online-package-return";
+import type { OnlinePackageStrip } from "@/components/v2/rules/division-rules-strip";
 import { ProgressionPanel } from "@/components/v2/progression-panel";
 import { LaunchActions } from "@/components/v2/launch-actions";
 import { StandingsTable } from "@/components/public-site/standings-table";
@@ -742,6 +745,24 @@ export default async function DivisionPage({
     }
   }
 
+  // Online Chess credits (spec 2026-11-23 §8.1, §8.6): what the strip's "Players, up to" select, its price line and the Lichess
+  // option's format refusal are drawn from - ONE server read (the quote's own facts and balance, the live package row, the stage
+  // kinds), asked only where the strip's online play control renders (the SAME gate as `onlineChessOn`), plus the checkout return's
+  // receipt request (`?oc=pay`, with the ladder-only `size` an upgrade named; Task 12 draws the receipt). A courtesy beside the form:
+  // a read that throws is logged and the strip renders without the select (the server still defaults the size), never a 500.
+  let onlinePackage: OnlinePackageStrip | undefined;
+  if (onlineChessOn && tab === "fixtures") {
+    try {
+      onlinePackage = {
+        ...(await onlinePackageView({ orgId: auth.orgId, competitionId: competition.id, divisionId: id })),
+        buyMoreHref: routes.creditsStream(orgSlug),
+        receipt: onlineReceiptRequest(query),
+      };
+    } catch (err) {
+      log.error({ err, divisionId: id }, "online chess package: reading the size and price facts failed; the strip renders without the size select");
+    }
+  }
+
   // FMT5: the Division rules card's Format button and the chip naming the format, an editor's on the fixtures tab only. The
   // offer is the new-division builder's own (the sport's templates over its engine kinds, less what this division's kinds
   // cannot play), keeping the stored format in it even where it is retired. Locked is "a result exists", the one predicate
@@ -782,6 +803,8 @@ export default async function DivisionPage({
       locked,
       canEdit: editable,
       initialOpen: formatDialogAsked(query),
+      // Online Chess runs Swiss and knockout events: the picker greys the formats it does not run while the division plays online.
+      onlinePlay: (division.config as { onlinePlay?: unknown } | null)?.onlinePlay === "lichess",
     };
   }
 
@@ -1228,6 +1251,8 @@ export default async function DivisionPage({
                 format: formatCard,
                 // A plan refusal on a save opens the upgrade gate (cap-256 re-review I-F1).
                 viewerPlan,
+                // Online Chess credits: the size select, price line and format refusal (above).
+                onlinePackage,
               }}
             />
           </>

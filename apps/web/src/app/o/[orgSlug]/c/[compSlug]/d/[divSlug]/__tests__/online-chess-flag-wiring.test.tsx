@@ -86,6 +86,11 @@ vi.mock("@/lib/entitlements", () => ({
   hasFeature: vi.fn(async () => true),
   orgPlanKey: vi.fn(async () => "community"),
 }));
+// The page's size-and-price read (Online Chess credits, Task 11) is proved by `online-package-wiring.test.tsx`; this file's subject is the
+// online-switch warning, so the read is doubled at its boundary (it answers, logs nothing) instead of failing on the entitlements mock.
+vi.mock("@/server/usecases/online-package", () => ({
+  onlinePackageView: vi.fn(async () => ({ planCap: 16, held: 0, rounds: 0, cameras: false, balance: 0, stored: null, stageKinds: [] })),
+}));
 vi.mock("@/lib/currency-server", () => ({ preferredCurrency: vi.fn(async () => "gbp") }));
 vi.mock("@/server/usecases/teams", () => ({ listEntrantLogoUrls: vi.fn(async () => ({})) }));
 vi.mock("@/server/engine-db", () => ({
