@@ -256,6 +256,12 @@ export const PutCourtStream = z.object({ on: z.boolean() }).strict();
 export type PutCourtStream = z.infer<typeof PutCourtStream>;
 export const CourtStreamSwitch = z.object({ on: z.boolean() }).strict();
 export type CourtStreamSwitch = z.infer<typeof CourtStreamSwitch>;
+/** Seazn-hosted video, Task 33 (V553): GET/PUT /orgs/{id}/seazn-hosted — the org's Seazn switch. `offered` false: no match may
+ *  pick or start Seazn (422 seazn_unavailable); a live Seazn stream, its recordings and its replays are untouched. */
+export const PutSeaznHosted = z.object({ offered: z.boolean() }).strict();
+export type PutSeaznHosted = z.infer<typeof PutSeaznHosted>;
+export const SeaznHosted = z.object({ offered: z.boolean() }).strict();
+export type SeaznHosted = z.infer<typeof SeaznHosted>;
 /** §6.7.3 / §8.1 (plan T3): the fixture's stream settings. `targetId` is the destination pre-pick (PR-1; `null` clears it) and
  *  `autoStream` is the automatic-streaming switch (PR-2, W7). Either or both, at least one: a PUT writes only the fields it
  *  names, so the panel's PR-1 body `{ targetId }` still leaves the switch alone and `{ autoStream }` leaves the pick alone. */

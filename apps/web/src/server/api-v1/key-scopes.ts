@@ -477,6 +477,10 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "POST /orgs/:id/stream-targets",
   "PATCH /orgs/:id/stream-targets/:targetId",
   "DELETE /orgs/:id/stream-targets/:targetId",
+  // Seazn-hosted video (Task 33): the org's Seazn switch decides whether any match may pick or start Seazn - the stream targets'
+  // family above, so never key-reachable; the read sits with the write, as the targets' GET does.
+  "GET /orgs/:id/seazn-hosted",
+  "PUT /orgs/:id/seazn-hosted",
   // YouTube Connect (T8): a connected channel acts AS the channel (its refresh token can create and end broadcasts there), the
   // pick spends a grant that belongs to the signed-in person, and a consent names the person who gave it — a key has none.
   // Same family as the stream targets above: never key-reachable.
