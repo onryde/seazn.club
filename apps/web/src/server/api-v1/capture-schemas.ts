@@ -183,6 +183,20 @@ export const CaptureBeat = z.strictObject({
   .refine((b) => b.claim === null || b.cause !== "rejoin", { path: ["cause"], message: "a claim never rides with cause \"rejoin\"" });
 export type CaptureBeat = z.infer<typeof CaptureBeat>;
 
+/** Realtime push nudges (spec 2026-11-24 §2.1): the current pairing's private push channel on the beat answer — the
+ *  Supabase project's https URL and public anon key (the phone bakes in no Supabase config), the bare topic
+ *  `capture:{pairingId}` (lib/realtime.ts captureTopic; the phone joins `realtime:{topic}`), the subscriber JWT and its
+ *  expiry in epoch seconds. The url carries no userinfo, query or fragment: a token never rides a URL. Strict: a later
+ *  field is a contract bump. */
+export const CaptureRealtime = z.strictObject({
+  url: z.url().regex(new RegExp("^https://[^\\s/?#@]+(/[^\\s?#]*)?$")),
+  apikey: z.string().min(1).max(512),
+  topic: z.string().regex(/^capture:[0-9a-f-]{36}$/),
+  token: z.string().min(1).max(4096),
+  expiresAt: EpochS,
+});
+export type CaptureRealtime = z.infer<typeof CaptureRealtime>;
+
 /** R5 (final, capture agreed 2026-10-01): the beat answer is a discriminated union on `state`.
  *  Common fields: required on waiting, go-live, live and over; optional on replaced and taken.
  *  go-live: sid + startedBy. live: sid, NO startedBy. over: sid + endReason. replaced/taken: no sid, no startedBy,
@@ -196,6 +210,9 @@ const AnswerCommon = z.strictObject({
   pollSeconds: PollSeconds,
   /** Court stream (§5.3): on every branch; omitted, never null, when there is no next streamed match or on a fixture's code. */
   next: CaptureNext.optional(),
+  /** Push nudges (§2.1): the code's CURRENT pairing only, so waiting, go-live, live and over; omitted, never null, when
+   *  there is none. replaced and taken drop it (the caller no longer holds the pairing). */
+  realtime: CaptureRealtime.optional(),
 });
 const AnswerDevice = z.strictObject({ model: z.string().min(1).max(80) });
 
@@ -208,8 +225,9 @@ export const CaptureBeatAnswer = z.discriminatedUnion("state", [
   AnswerCommon.extend({ state: z.literal("go-live"), sid: z.uuid(), startedBy: CaptureStartedBy }),
   AnswerCommon.extend({ state: z.literal("live"), sid: z.uuid() }),
   AnswerCommon.extend({ state: z.literal("over"), sid: z.uuid(), endReason: CaptureEndReason }),
-  AnswerCommon.partial().extend({ state: z.literal("replaced"), device: AnswerDevice.optional() }),
-  AnswerCommon.partial().extend({ state: z.literal("taken"), device: AnswerDevice.optional() }),
+  // `.partial()` would admit `realtime` here too; `answer-invalid-replaced-realtime.json` is the guard.
+  AnswerCommon.omit({ realtime: true }).partial().extend({ state: z.literal("replaced"), device: AnswerDevice.optional() }),
+  AnswerCommon.omit({ realtime: true }).partial().extend({ state: z.literal("taken"), device: AnswerDevice.optional() }),
 ]);
 export type CaptureBeatAnswer = z.infer<typeof CaptureBeatAnswer>;
 // Every branch must stay strict after .extend()/.partial(): each branch's `answer-tampered-<state>.json` (one extra

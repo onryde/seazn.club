@@ -97,6 +97,15 @@ const NEXT_PROSE: Record<string, string> = {
 const AUTO_REFUSAL_PROSE: Record<string, string> = {
   autoRefusal: "waiting only, court codes only (E2, 2026-11-17): why the server's automatic start of the court's match was refused, the word the Match Day court card shows for the court: no_destination (the destination needs the organiser: reconnect, live not enabled, none picked), no_credit, not_entitled, destination_in_use (another match holds the destination), unavailable (a transient failure; the server retries every 60 s), competition_frozen, or match_stopped (court device check, 2026-11-19: the court's only match in play was stopped by hand — the desk's Stop, this court phone's Stop hold, or a handover — so nothing starts it by itself; the desk's Go live or the phone's own Go live hold starts it again). Omitted, never null, when there is no refusal, once a start succeeds or is in flight, on a session shape, and on a fixture's code. The phone reads an unknown word as no refusal.",
 };
+/** Realtime push nudges (spec 2026-11-24 §2.1): the beat answer's `realtime`, on the current pairing's four branches. */
+const REALTIME_PROSE: Record<string, string> = {
+  realtime: "Realtime push nudges (spec 2026-11-24 §2.1): the current pairing's push channel, so the phone beats at once instead of waiting out pollSeconds. Sent for the code's current pairing only, on waiting, go-live, live and over; never on replaced or taken (the caller no longer holds the pairing). Omitted, never null, when there is none, a failed mint included (a failed mint never fails the beat). Join `realtime:{topic}` with private: true and listen for the broadcast event `nudge`, payload {v, reason, at}: v epoch milliseconds, at ISO-8601, reason go-live, stop, replaced, over or next-match; an unknown reason is still a ping. A nudge carries no state: the beat answer stays the only truth and pollSeconds the cadence, and the server shortens no timeout because of a nudge. A new token rides on every current-pairing beat, so a new token is not a refresh signal: keep the joined token and swap it (setAuth) only when it has under 10 minutes left, or on a channel error or refusal.",
+  "realtime.url": "The Supabase project URL: https, with no userinfo, query or fragment. Derive the websocket (wss) URL from it. Public; the phone bakes in no Supabase config.",
+  "realtime.apikey": "The Supabase project's public anon key, sent as the socket's apikey; 1 to 512 characters. Public.",
+  "realtime.topic": "The bare topic capture:{pairingId}, the pairing id a lowercase uuid; the phone joins realtime:{topic}. A court pairing outlives its matches, so its topic stays the same across them.",
+  "realtime.token": "The subscriber JWT for this topic only, 1 to 4096 characters. A secret: never in a record, snapshot, log line or URL.",
+  "realtime.expiresAt": "When the token expires, as epoch seconds. The phone times its swap from this, never from a guess of its own clock.",
+};
 const STAGE_PROSE: Record<string, string> = {
   stage: "Where the match sits in its stage (W28, added 2026-10-06): the scheduler board's chip, the round's role, the pool and (2026-10-07) the label the phone shows. On the waiting shape and every session state; omitted, never null, when no code can be produced. Recomputed on every read.",
   "stage.code": "Exactly the scheduler board's chip for this match, 1 to 8 characters: a bracket round's short code (QF, SF, F, 3rd, R16, WB2, LB3, GF, Q1, E, E2, …) or R{round} where the board codes no round (a league, a group, a Swiss round). In the language the label uses (the org's locale, W25): a Spanish org reads CF for a quarter-final.",
@@ -210,6 +219,7 @@ const contracts: Contract[] = [
           endReason: END_REASON,
           ...NEXT_PROSE,
           ...AUTO_REFUSAL_PROSE,
+          ...REALTIME_PROSE,
           device: "replaced and taken only: the current phone's model, for the organiser panel's takeover notice. The phone ignores it, and PR-1 never sends it (G0-e, §7.5, §17.5).",
           ...COMMON_PROSE("fixtures.scheduled_at as epoch seconds, or null when the fixture has none (§6.4, §4)."),
         },

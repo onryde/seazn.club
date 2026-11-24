@@ -32,6 +32,7 @@ import addFormats from "ajv-formats";
 import * as CS from "../capture-schemas";
 import * as S from "../schemas";
 import { CaptureQrV2, captureQrV2Text, parseCaptureQrV2 } from "@/lib/capture-qr";
+import { CAPTURE_NUDGE_REASONS, captureTopic, divisionTopic, matchDayTopic } from "@/lib/realtime";
 import type { RoundRole } from "@seazn/engine/competition";
 
 type Json = Record<string, unknown>;
@@ -51,7 +52,8 @@ const without = (o: Json, key: string): Json => Object.fromEntries(Object.entrie
 const SHA256: Record<string, string> = {
   "capture-qr.v2.json": "0943072e30489dad04822cf266cc62d4e004e3a2ef46fe20e712a274ae272fbe",
   "capture-descriptor.v1.json": "308d58807d3b3754ccf5b400c18827d09ffb5dd0177aaed7d10b31b307c027f4",
-  "capture-beat.v1.json": "2909429a2dba925d18fdddc357c9a8e393d7c5ef25156fb7f13f375e8daa7e87",
+  // Realtime push nudges (spec 2026-11-24 §2.1, plan Task 4): + the answer's optional `realtime`, additive.
+  "capture-beat.v1.json": "a98113fd7eb340e9bb898a4a419d2a09e220da11af19efb518d7778ad054abf2",
   "capture-start.v1.json": "46162c64e4b9e0da3f17a571103c3ba7e3e9e972997367c916bf7f6ea8e08778",
   "capture-scoring-link.v1.json": "daa81ed4f907545f0fb1a8265d11011fab3b90a52d880dda8e3839f7651b5032",
   "capture-record.v1.json": "213f766043b7682f198cc98da13e93995b6602e46533ecf60c78bf562aebd6f8",
@@ -80,20 +82,30 @@ const COMMON = ["label", "scheduledStart", "autoAllowed", "destinationName", "ov
 const COMMON_NULLABLE = new Set<string>(["scheduledStart", "destinationName", "overlayUrl"]);
 // Court stream (spec 2026-11-14 §5.3): `next` is optional on EVERY answer branch, so it is a column of no state.
 // E2 (2026-11-17): `autoRefusal` is optional on the waiting branch only.
-const ANSWER_FIELDS = ["sid", "startedBy", "endReason", "device", "next", "autoRefusal", ...COMMON] as const;
+// Realtime push nudges (spec 2026-11-24 §2.1): `realtime` is "sent on every 2xx where the caller is the code's current
+// pairing (waiting, go-live, live, over-with-current-pairing); never on replaced or taken".
+const ANSWER_FIELDS = ["sid", "startedBy", "endReason", "device", "next", "autoRefusal", "realtime", ...COMMON] as const;
 type AnswerField = (typeof ANSWER_FIELDS)[number];
-const answerRow = (sid: Cell, startedBy: Cell, endReason: Cell, device: Cell, common: Cell, autoRefusal: Cell = NO): Record<AnswerField, Cell> => ({
-  sid, startedBy, endReason, device, next: OPT, autoRefusal, ...(Object.fromEntries(COMMON.map((f) => [f, common])) as Record<(typeof COMMON)[number], Cell>),
+const answerRow = (sid: Cell, startedBy: Cell, endReason: Cell, device: Cell, common: Cell, realtime: Cell, autoRefusal: Cell = NO): Record<AnswerField, Cell> => ({
+  sid, startedBy, endReason, device, next: OPT, autoRefusal, realtime, ...(Object.fromEntries(COMMON.map((f) => [f, common])) as Record<(typeof COMMON)[number], Cell>),
 });
-/** §17.5's table, row for row (absent = forbidden). */
+/** §17.5's table, row for row (absent = forbidden), with the push-nudge spec's `realtime` column. */
 const ANSWER_MATRIX: Record<string, Record<AnswerField, Cell>> = {
-  waiting: answerRow(NO, NO, NO, NO, REQ, OPT),
-  "go-live": answerRow(REQ, REQ, NO, NO, REQ),
-  live: answerRow(REQ, NO, NO, NO, REQ),
-  over: answerRow(REQ, NO, REQ, NO, REQ),
-  replaced: answerRow(NO, NO, NO, OPT, OPT),
-  taken: answerRow(NO, NO, NO, OPT, OPT),
+  waiting: answerRow(NO, NO, NO, NO, REQ, OPT, OPT),
+  "go-live": answerRow(REQ, REQ, NO, NO, REQ, OPT),
+  live: answerRow(REQ, NO, NO, NO, REQ, OPT),
+  over: answerRow(REQ, NO, REQ, NO, REQ, OPT),
+  replaced: answerRow(NO, NO, NO, OPT, OPT, NO),
+  taken: answerRow(NO, NO, NO, OPT, OPT, NO),
 };
+/** Push-nudge spec §2.1 and the plan's beat-reply constraint: the realtime object is exactly these five keys. */
+const REALTIME_KEYS = ["url", "apikey", "topic", "token", "expiresAt"] as const;
+/** The plan's Global Constraints (2026-11-24) and the phone's constraint 1: the names the phone already reads, which
+ *  the beat reply's realtime object must never reuse. */
+const PHONE_READ_NAMES = [
+  "state", "label", "autoAllowed", "pollSeconds", "venueTimezone", "scheduledStart", "destinationName", "next", "autoRefusal",
+  "stage", "role", "delivery",
+];
 
 /** §6.3.1's session shape, the fields the waiting shape lacks; §17.5: "endReason is required on ending, completed and
  *  failed, and absent on warming and live; cred is optional on warming, live and ending, and absent on completed and
@@ -308,7 +320,7 @@ type Route = [
 const DIRS: Record<string, { file: string; routes: Route[]; count: number }> = {
   "capture-qr.v2": { file: QR, routes: [["", CaptureQrV2, ""]], count: 12 },
   "capture-descriptor.v1": { file: DESCRIPTOR, routes: [["refusal-", S.CaptureRefusal, "#/$defs/refusal"], ["", S.CaptureDescriptor, ""]], count: 58 },
-  "capture-beat.v1": { file: BEAT, routes: [["beat-", S.CaptureBeat, ""], ["answer-", S.CaptureBeatAnswer, "#/$defs/answer"], ["refusal-", S.CaptureRefusal, "#/$defs/refusal"]], count: 50 },
+  "capture-beat.v1": { file: BEAT, routes: [["beat-", S.CaptureBeat, ""], ["answer-", S.CaptureBeatAnswer, "#/$defs/answer"], ["refusal-", S.CaptureRefusal, "#/$defs/refusal"]], count: 57 },
   "capture-start.v1": { file: START, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureStartOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 18 },
   "capture-scoring-link.v1": { file: SCORING, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureScoringLinkOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 20 },
   [RECORD_DIR]: { file: RECORD, routes: [["line-", S.CaptureRecordLine, ""], ["ok-", S.CaptureRecordOk, "#/$defs/ok"], ["", S.CaptureRecordRefusal, "#/$defs/refusal"]], count: 63 },
@@ -422,6 +434,8 @@ const CAPTURE_SCHEMAS_EXPORTS = [
   "CaptureBeatAnswer", "CaptureCause", "CaptureCourt", "CaptureCred", "CaptureDescriptor", "CaptureEndReason", "CaptureNotReady",
   "CapturePhoneState", "CaptureNext", "CaptureRefusal", "CaptureRefusalCode", "CaptureScoringLinkOk", "CaptureSession", "CaptureStage",
   "CaptureStageRole", "CaptureStartBody", "CaptureStartFailed", "CaptureStartOk", "CaptureStartedBy", "CaptureWaiting",
+  // Realtime push nudges (spec 2026-11-24 §2.1): the beat answer's realtime object.
+  "CaptureRealtime",
   // capture-record.v1 (2026-10-12).
   "CAPTURE_RECORD_MAX_BYTES", "CAPTURE_RECORD_MAX_LINES", "CAPTURE_RECORD_REF_RE", "CaptureRecordLine", "CaptureRecordOk",
   "CaptureRecordRefusal", "CaptureRecordRefusalCode", "CaptureRecordSecretS2", "CaptureRecordSecretS3",
@@ -628,7 +642,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       expect(checked, `${dir}: fixtures checked`).toBe(count);
       total += checked;
     }
-    expect(total).toBe(12 + 58 + 50 + 18 + 20 + 63 + 15 + 10 + 17 + 26);
+    expect(total).toBe(12 + 58 + 57 + 18 + 20 + 63 + 15 + 10 + 17 + 26);
     expect(byFile, "fixtures checked against the published bytes").toBe(total);
     // Every ZOD_ONLY entry names a fixture that exists and was swept (a stale entry would excuse nothing, silently).
     expect(zodOnlySeen, "ZOD_ONLY fixtures swept").toBe(Object.keys(ZOD_ONLY).length);
@@ -735,14 +749,17 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     expect(all.some((b) => b.claim === "resume"), "a valid resume claim").toBe(true);
   });
 
-  it("R5/A21 beat answer: each state admits only its own fields — 6 states × 12 fields (court stream's `next` included) against the twin AND the file", () => {
+  it("R5/A21 beat answer: each state admits only its own fields — 6 states × 13 fields (court stream's `next` and the push nudges' `realtime` included) against the twin AND the file", () => {
     const states = Object.keys(ANSWER_MATRIX);
     const valid = Object.fromEntries(states.map((s) => [s, fixture("capture-beat.v1", `answer-valid-${s}`)]));
-    const donors = [...Object.values(valid), fixture("capture-beat.v1", "answer-valid-replaced-device"), fixture("capture-beat.v1", "answer-valid-waiting-next"), fixture("capture-beat.v1", "answer-valid-waiting-autoRefusal")];
+    const donors = [
+      ...Object.values(valid), fixture("capture-beat.v1", "answer-valid-replaced-device"), fixture("capture-beat.v1", "answer-valid-waiting-next"),
+      fixture("capture-beat.v1", "answer-valid-waiting-autoRefusal"), fixture("capture-beat.v1", "answer-valid-live-realtime"),
+    ];
     const twinCells = sweepTwin(ANSWER_MATRIX, ANSWER_FIELDS, valid, donors, S.CaptureBeatAnswer);
-    expect(twinCells).toBe(72);
+    expect(twinCells).toBe(78);
     const fileCells = sweepFile(ANSWER_MATRIX, ANSWER_FIELDS, branchesByState(defOf(contract(BEAT), "answer")));
-    expect(fileCells).toBe(72);
+    expect(fileCells).toBe(78);
   });
 
   it("R5/A21 descriptor: each state admits only its own fields — 6 states × 12 fields (W28's stage and the court stream's court included) against the twin AND the file", () => {
@@ -765,7 +782,8 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     }
     for (const [state, row] of Object.entries(ANSWER_MATRIX)) {
       for (const [field, cell] of Object.entries(row)) {
-        if (cell === OPT && field !== "next" && field !== "autoRefusal" && !COMMON_NULLABLE.has(field)) owed.push(["capture-beat.v1", `answer-invalid-null-${state}-${field}`, field, S.CaptureBeatAnswer]);
+        // `next`, `autoRefusal` and `realtime` have their own null tests below, on every state that admits them.
+        if (cell === OPT && field !== "next" && field !== "autoRefusal" && field !== "realtime" && !COMMON_NULLABLE.has(field)) owed.push(["capture-beat.v1", `answer-invalid-null-${state}-${field}`, field, S.CaptureBeatAnswer]);
       }
     }
     let checked = 0;
@@ -1310,6 +1328,137 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     expect(nulls + branches).toBe(12);
   });
 
+  // Realtime push nudges (spec 2026-11-24 §2.1, plan Task 4): the beat answer's one optional `realtime` object.
+  it("realtime (push nudges §2.1): optional on waiting, go-live, live and over, refused on replaced and taken, never null, exactly five keys, strict and bounded — in the twin AND the file", () => {
+    const fileAdmits = fileValidator();
+    const B = "capture-beat.v1";
+    let judged = 0;
+    const judge = (v: unknown, admitted: boolean, what: string): void => {
+      expect(parses(S.CaptureBeatAnswer, v), `${what}: twin`).toBe(admitted);
+      expect(fileAdmits(BEAT, "#/$defs/answer", v), `${what}: file`).toBe(admitted);
+      judged++;
+    };
+    const live = fixture(B, "answer-valid-live");
+    const rt = fixture(B, "answer-valid-live-realtime").realtime as Json;
+    expect(Object.keys(rt).sort(), "premise: the fixture's object is the five keys").toEqual([...REALTIME_KEYS].sort());
+    expect(Object.keys(CS.CaptureRealtime.shape).sort(), "the twin's object is the five keys").toEqual([...REALTIME_KEYS].sort());
+    // Each named fixture differs from its plain sibling in `realtime` alone, so `realtime` is what it is judged on.
+    const named: [name: string, sibling: string, admitted: boolean][] = [
+      ["answer-valid-live-realtime", "answer-valid-live", true],
+      ["answer-valid-go-live-realtime", "answer-valid-go-live", true],
+      ["answer-invalid-null-realtime", "answer-valid-live", false],
+      ["answer-invalid-realtime-extra-key", "answer-valid-live", false],
+      ["answer-invalid-realtime-url-in-topic", "answer-valid-live", false],
+      ["answer-invalid-realtime-http-url", "answer-valid-live", false],
+      ["answer-invalid-replaced-realtime", "answer-valid-replaced", false],
+    ];
+    for (const [name, sibling, admitted] of named) {
+      const f = fixture(B, name);
+      expect(f.realtime, `${name}: premise — carries realtime`).not.toBeUndefined();
+      expect(without(f, "realtime"), `${name}: premise — differs from ${sibling} in realtime alone`).toEqual(fixture(B, sibling));
+      judge(f, admitted, name);
+    }
+    expect(fixture(B, "answer-invalid-null-realtime").realtime).toBeNull();
+    expect(Object.keys(fixture(B, "answer-invalid-realtime-extra-key").realtime as Json).filter((k) => !(REALTIME_KEYS as readonly string[]).includes(k))).toHaveLength(1);
+    // The rulebook's column, state by state: admitted on the current pairing's four, refused on replaced and taken (the
+    // caller no longer holds the pairing). Null is refused everywhere: omitted, never null.
+    const CURRENT_PAIRING_STATES = ["waiting", "go-live", "live", "over"];
+    let states = 0;
+    for (const state of Object.keys(ANSWER_MATRIX)) {
+      const base = fixture(B, `answer-valid-${state}`);
+      judge({ ...base, realtime: rt }, CURRENT_PAIRING_STATES.includes(state), `${state}: realtime`);
+      judge({ ...base, realtime: null }, false, `${state}: realtime null`);
+      states++;
+    }
+    expect(states).toBe(6);
+    // Every key is required; each bound admits itself and refuses one past it. The url is https, never in a secret's
+    // way: no userinfo, query or fragment (a token never rides a URL).
+    for (const key of REALTIME_KEYS) judge({ ...live, realtime: without(rt, key) }, false, `without ${key}`);
+    const cases: [field: (typeof REALTIME_KEYS)[number], value: unknown, admitted: boolean][] = [
+      ["apikey", "", false], ["apikey", "k", true], ["apikey", "k".repeat(512), true], ["apikey", "k".repeat(513), false],
+      ["token", "", false], ["token", "t", true], ["token", "t".repeat(4096), true], ["token", "t".repeat(4097), false],
+      ["expiresAt", 0, false], ["expiresAt", 1, true], ["expiresAt", 1_790_865_000.5, false], ["expiresAt", "1790865000", false],
+      ["url", "https://fixtureproject.supabase.co", true], ["url", "https://fixtureproject.supabase.co/", true],
+      ["url", "http://fixtureproject.supabase.co", false], ["url", "wss://fixtureproject.supabase.co", false],
+      ["url", "https://", false], ["url", "fixtureproject.supabase.co", false],
+      ["url", "https://fixtureproject.supabase.co?apikey=k", false], ["url", "https://fixtureproject.supabase.co#k", false],
+      ["url", "https://user:k@fixtureproject.supabase.co", false],
+    ];
+    for (const [field, value, admitted] of cases) judge({ ...live, realtime: { ...rt, [field]: value } }, admitted, `${field} ${JSON.stringify(value).slice(0, 40)}`);
+    expect(judged).toBe(named.length + 2 * 6 + REALTIME_KEYS.length + cases.length);
+  });
+
+  it("realtime.topic is the bare capture:{pairingId} the real builder makes (lib/realtime.ts captureTopic) — never the joined realtime:{topic}, another family's topic, or a URL", () => {
+    const fileAdmits = fileValidator();
+    const B = "capture-beat.v1";
+    const live = fixture(B, "answer-valid-live");
+    const rt = fixture(B, "answer-valid-live-realtime").realtime as Json;
+    const pairing = "7b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e";
+    expect(rt.topic, "premise: the fixture's topic is the builder's").toBe(captureTopic(pairing));
+    const ids = [pairing, "00000000-0000-4000-8000-000000000000", "ffffffff-ffff-4fff-bfff-ffffffffffff", "01936f3e-8b2a-7c4d-9e5f-0a1b2c3d4e5f"];
+    const topics: [topic: string, admitted: boolean][] = [
+      ...ids.map((id): [string, boolean] => [captureTopic(id), true]),
+      ...ids.flatMap((id): [string, boolean][] => [
+        [`realtime:${captureTopic(id)}`, false],     // the joined form: the phone adds the prefix itself
+        [captureTopic(id.slice(1)), false], [captureTopic(`${id}0`), false],
+        [captureTopic(`https://fixtureproject.supabase.co/${id}`), false],
+        [matchDayTopic(id), false], [divisionTopic(id), false], [`fixture:${id}`, false],
+      ]),
+      [captureTopic(pairing.toUpperCase()), false],  // a pairing id is a lowercase uuid (Postgres writes uuids lowercase)
+      ["capture:", false],
+    ];
+    let admitted = 0, refused = 0;
+    for (const [topic, ok] of topics) {
+      const v = { ...live, realtime: { ...rt, topic } };
+      expect(parses(S.CaptureBeatAnswer, v), `${topic}: twin`).toBe(ok);
+      expect(fileAdmits(BEAT, "#/$defs/answer", v), `${topic}: file`).toBe(ok);
+      if (ok) admitted++; else refused++;
+    }
+    expect(admitted).toBe(ids.length);
+    expect(refused).toBe(ids.length * 7 + 2);
+  });
+
+  it("realtime reuses no read name: neither the answer's new key nor any key inside it is a name the phone already reads (plan Global Constraints; phone constraint 1)", () => {
+    expect(PHONE_READ_NAMES, "the new key").not.toContain("realtime");
+    let checked = 0;
+    for (const key of Object.keys(CS.CaptureRealtime.shape)) {
+      expect(PHONE_READ_NAMES, `realtime.${key}`).not.toContain(key);
+      checked++;
+    }
+    expect(checked).toBe(REALTIME_KEYS.length);
+    // The name checked is the one both shapes carry: the twin's four current-pairing branches and the file's.
+    const twinBranches = S.CaptureBeatAnswer.options.filter((o) => "realtime" in o.shape).map((o) => o.shape.state.value).sort();
+    expect(twinBranches).toEqual(["go-live", "live", "over", "waiting"]);
+    const fileNodes = nodesAt(defOf(contract(BEAT), "answer"), ["realtime"]);
+    expect(fileNodes).toHaveLength(4);
+    for (const node of fileNodes) expect(Object.keys(node.properties as Json).sort()).toEqual([...REALTIME_KEYS].sort());
+  });
+
+  it("the published realtime prose carries the phone team's decisions: the private join, the `nudge` event and payload, every nudge reason, the swap rule, epoch seconds and the https url", () => {
+    const answer = defOf(contract(BEAT), "answer");
+    // CAPTURE_NUDGE_REASONS is the server's own declaration of what it sends (lib/realtime.ts), written as prose lists it.
+    const reasons = `${CAPTURE_NUDGE_REASONS.slice(0, -1).join(", ")} or ${CAPTURE_NUDGE_REASONS.at(-1)}`;
+    const PINS: [path: string, text: string][] = [
+      ["realtime", "`realtime:{topic}` with private: true"], ["realtime", "broadcast event `nudge`"], ["realtime", "payload {v, reason, at}"],
+      ["realtime", "v epoch milliseconds"], ["realtime", "at ISO-8601"], ["realtime", `reason ${reasons}`],
+      ["realtime", "an unknown reason is still a ping"], ["realtime", "not a refresh signal"], ["realtime", "under 10 minutes left"],
+      ["realtime", "channel error or refusal"], ["realtime", "never on replaced or taken"], ["realtime", "Omitted, never null"],
+      ["realtime.url", "https"], ["realtime.url", "wss"], ["realtime.topic", "capture:{pairingId}"], ["realtime.topic", "realtime:{topic}"],
+      ["realtime.token", "never in a record, snapshot, log line or URL"], ["realtime.expiresAt", "epoch seconds"],
+    ];
+    let pinned = 0;
+    for (const [path, text] of PINS) {
+      const nodes = nodesAt(answer, path.split("."));
+      expect(nodes, path).toHaveLength(4);
+      for (const node of nodes) {
+        expect(node.description, `${path} states "${text}"`).toContain(text);
+        pinned++;
+      }
+    }
+    expect(pinned).toBe(PINS.length * 4);
+    expect(CAPTURE_NUDGE_REASONS.length, "premise: the server declares reasons").toBeGreaterThan(0);
+  });
+
   it("finding A (2026-11-19): the beat publishes its refusals, `app_outdated` (426, court codes only) among them — a word every refusal-bearing contract admits, with no extras, distinct from the unknown code's", () => {
     const fileAdmits = fileValidator();
     const dir = "capture-beat.v1";
@@ -1724,7 +1873,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     expect(names.length, "premise: capture-schemas.ts exports").toBeGreaterThan(0);
     // The full list, not a name pattern (review fix 8): a twin named, say, CaptureLogLine trips it too.
     expect([...names].sort()).toEqual([...CAPTURE_SCHEMAS_EXPORTS].sort());
-    expect(CAPTURE_SCHEMAS_EXPORTS).toHaveLength(26 + 3 + 11 + 6 + 1 + 3 + 9);
+    expect(CAPTURE_SCHEMAS_EXPORTS).toHaveLength(26 + 1 + 3 + 11 + 6 + 1 + 3 + 9);
     // Every record-named export that is a SHAPE (a zod object or string) is a twin the parity test compares, by
     // identity — an enum is checked by its options instead, a constant by the contract's prose.
     const twins = new Map(RECORD_TWINS.map(([pointer, twin, name]) => [name, { pointer, twin }]));

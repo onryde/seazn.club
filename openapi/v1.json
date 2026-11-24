@@ -64964,6 +64964,42 @@
                           ],
                           "additionalProperties": false
                         },
+                        "realtime": {
+                          "type": "object",
+                          "properties": {
+                            "url": {
+                              "type": "string",
+                              "pattern": "^https:\\/\\/[^\\s/?#@]+(\\/[^\\s?#]*)?$"
+                            },
+                            "apikey": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 512
+                            },
+                            "topic": {
+                              "type": "string",
+                              "pattern": "^capture:[0-9a-f-]{36}$"
+                            },
+                            "token": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 4096
+                            },
+                            "expiresAt": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "url",
+                            "apikey",
+                            "topic",
+                            "token",
+                            "expiresAt"
+                          ],
+                          "additionalProperties": false
+                        },
                         "state": {
                           "type": "string",
                           "const": "waiting"
@@ -65067,6 +65103,42 @@
                           "required": [
                             "label",
                             "scheduledStart"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "realtime": {
+                          "type": "object",
+                          "properties": {
+                            "url": {
+                              "type": "string",
+                              "pattern": "^https:\\/\\/[^\\s/?#@]+(\\/[^\\s?#]*)?$"
+                            },
+                            "apikey": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 512
+                            },
+                            "topic": {
+                              "type": "string",
+                              "pattern": "^capture:[0-9a-f-]{36}$"
+                            },
+                            "token": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 4096
+                            },
+                            "expiresAt": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "url",
+                            "apikey",
+                            "topic",
+                            "token",
+                            "expiresAt"
                           ],
                           "additionalProperties": false
                         },
@@ -65179,6 +65251,42 @@
                           ],
                           "additionalProperties": false
                         },
+                        "realtime": {
+                          "type": "object",
+                          "properties": {
+                            "url": {
+                              "type": "string",
+                              "pattern": "^https:\\/\\/[^\\s/?#@]+(\\/[^\\s?#]*)?$"
+                            },
+                            "apikey": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 512
+                            },
+                            "topic": {
+                              "type": "string",
+                              "pattern": "^capture:[0-9a-f-]{36}$"
+                            },
+                            "token": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 4096
+                            },
+                            "expiresAt": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "url",
+                            "apikey",
+                            "topic",
+                            "token",
+                            "expiresAt"
+                          ],
+                          "additionalProperties": false
+                        },
                         "state": {
                           "type": "string",
                           "const": "live"
@@ -65276,6 +65384,42 @@
                           "required": [
                             "label",
                             "scheduledStart"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "realtime": {
+                          "type": "object",
+                          "properties": {
+                            "url": {
+                              "type": "string",
+                              "pattern": "^https:\\/\\/[^\\s/?#@]+(\\/[^\\s?#]*)?$"
+                            },
+                            "apikey": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 512
+                            },
+                            "topic": {
+                              "type": "string",
+                              "pattern": "^capture:[0-9a-f-]{36}$"
+                            },
+                            "token": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 4096
+                            },
+                            "expiresAt": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "url",
+                            "apikey",
+                            "topic",
+                            "token",
+                            "expiresAt"
                           ],
                           "additionalProperties": false
                         },
