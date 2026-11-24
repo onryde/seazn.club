@@ -30,7 +30,7 @@
 // One sport, on purpose: the Phone tab reads no sport (the relay is
 // sport-agnostic); the W1 style-strip describes above sweep three.
 import { describe, expect, it, vi, beforeAll, beforeEach, afterEach } from "vitest";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -98,6 +98,17 @@ import {
   type StreamPanelContext,
   type StreamPanelFixture,
 } from "@/components/v2/fixture-stream-panel";
+
+/** The panel's WHOLE source. Task 34s split fixture-stream-panel.tsx into a folder of modules (MODULARIZATION.md rule 9):
+ *  a source scan reads every one of them, joined in name order, never the barrel alone. Below the module count taken at
+ *  the split it throws, so a scan that silently reads fewer modules cannot pass. */
+const PANEL_DIR = join(__dirname, "..", "fixture-stream-panel");
+const PANEL_MODULE_FLOOR = 8;
+function panelSource(): string {
+  const names = readdirSync(PANEL_DIR).filter((n) => /\.tsx?$/.test(n)).sort();
+  if (names.length < PANEL_MODULE_FLOOR) throw new Error(`fixture-stream-panel/ holds ${names.length} modules, below the floor of ${PANEL_MODULE_FLOOR}`);
+  return names.map((n) => readFileSync(join(PANEL_DIR, n), "utf8")).join("\n");
+}
 
 const apiV1 = vi.fn<(url: string, options?: { method?: string; json?: unknown }) => Promise<unknown>>(
   async () => ({}),
@@ -777,13 +788,13 @@ describe("the Phone tab reads the §5.3 gate, then hands the container the conte
   it("buying is the EMBEDDED checkout in the repo's Modal, never a navigation (owner ruling 8) — the source half", () => {
     // The behaviour is driven below (PhoneTab — checkout). This pins the negative the node harness cannot drive: no
     // hosted-checkout hop anywhere in the module — nor in the lazily loaded checkout sheet (I2).
-    const src = readFileSync(join(__dirname, "..", "fixture-stream-panel.tsx"), "utf8");
+    const src = panelSource();
     const sheet = readFileSync(join(__dirname, "..", "stream-checkout-modal.tsx"), "utf8");
     // I2: the sheet is its OWN chunk, fetched on first render — never a static import of the panel. M2: its one loader
     // is its own module (so the warm-up is countable), and the panel hands that loader to dynamic().
     const loaderSrc = readFileSync(join(__dirname, "..", "stream-checkout-sheet-loader.ts"), "utf8");
     expect(loaderSrc).toMatch(/export const loadCheckoutSheet = makeSheetLoader\(\(\) => import\("\.\/stream-checkout-modal"\)\);/);
-    expect(src).toMatch(/import \{ loadCheckoutSheet \} from "\.\/stream-checkout-sheet-loader";/);
+    expect(src).toMatch(/import \{ loadCheckoutSheet \} from "\.\.\/stream-checkout-sheet-loader";/);
     expect(src).toMatch(/dynamic\(loadCheckoutSheet, \{ ssr: false \}\)/);
     expect(sheet).toMatch(/EmbeddedCheckoutProvider/);
     expect(sheet).toMatch(/data-testid="stream-checkout-modal"/);
@@ -838,7 +849,7 @@ describe("the Phone tab reads the §5.3 gate, then hands the container the conte
       }
       return { files: seen, bare };
     };
-    const panel = graph(join(__dirname, "..", "fixture-stream-panel.tsx"));
+    const panel = graph(join(__dirname, "..", "fixture-stream-panel", "index.tsx"));
     const stripeish = (g: ReturnType<typeof graph>) => [
       ...[...g.bare].filter((b) => b.startsWith("@stripe/")),
       ...[...g.files].filter((f) => f.endsWith("stripe-browser.ts")),
@@ -846,6 +857,9 @@ describe("the Phone tab reads the §5.3 gate, then hands the container the conte
     expect(stripeish(panel), "a static path from the panel reaches Stripe.js").toEqual([]);
     // Anti-vacuity: the walk really followed the panel's imports (it reaches the view model and the upgrade gate)…
     expect(panel.files.size, "the walk read no modules").toBeGreaterThan(10);
+    // Task 34s: the entry is the barrel, so the walk must have followed it into every module that carries code (types.ts is
+    // imported for types only, an erased edge).
+    expect([...panel.files].filter((f) => f.includes(join("v2", "fixture-stream-panel", ""))).length, "the walk entered the panel's modules").toBeGreaterThanOrEqual(PANEL_MODULE_FLOOR - 1);
     expect([...panel.files].some((f) => f.endsWith("stream-session-view.ts"))).toBe(true);
     // …and the positive pair: the SAME walk finds Stripe from the lazily loaded sheet, so it can see one when it is there.
     const sheet = graph(join(__dirname, "..", "stream-checkout-modal.tsx"));
@@ -1762,7 +1776,7 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(html).not.toContain("passphrase");
     // The source half: no session read names `qr` (the code's QR comes from the stream-code route), and nothing asks
     // `current` for a reveal (W4: the route answers 400 to one).
-    const src = readFileSync(join(__dirname, "..", "fixture-stream-panel.tsx"), "utf8");
+    const src = panelSource();
     expect(src.match(/\b(view|shown|session|v)\??\.qr\b/g) ?? [], "a session's `qr` is read").toEqual([]);
     expect(src.match(/reveal/gi) ?? [], "a reveal is asked for").toEqual([]);
     expect(src, "PREMISE: the scan reads the panel (it names the code route)").toContain("/stream-code");
@@ -4420,9 +4434,9 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
   });
 
   it("M2: the ONE loader module — the only specifier of the sheet anywhere in the panel, and no warm-up on the chooser", () => {
-    const src = readFileSync(join(__dirname, "..", "fixture-stream-panel.tsx"), "utf8");
+    const src = panelSource();
     const loaderSrc = readFileSync(join(__dirname, "..", "stream-checkout-sheet-loader.ts"), "utf8");
-    expect(src.match(/import\("\.\/stream-checkout-modal"\)/g) ?? [], "the panel imports the sheet itself").toHaveLength(0);
+    expect(src.match(/import\("\.\.?\/stream-checkout-modal"\)/g) ?? [], "the panel imports the sheet itself").toHaveLength(0);
     expect(loaderSrc.match(/import\("\.\/stream-checkout-modal"\)/g) ?? []).toHaveLength(1);
     // The loader module is in the panel's STATIC graph, so it must carry nothing but the dynamic import.
     expect(loaderSrc).not.toMatch(/^\s*import\s/m);
@@ -6584,7 +6598,7 @@ describe("T12: after a match — the replay row, and the destination's name read
   // T33c review m4: the ending line names the destination as every other surface does (`targetName`: Seazn's own destination is its
   // brand, any other its localised label), so it is handed the whole TARGET (its kind decides), never the bare stored label.
   it("EVERY place that prints the 'ending' destination passes the whole target through targetName — the card AND the stop probe (swept, beside the behaviour tests)", () => {
-    const src = readFileSync(join(__dirname, "..", "fixture-stream-panel.tsx"), "utf8");
+    const src = panelSource();
     const sites = [...src.matchAll(/msg\("stream\.phone\.ending",\s*\{([^}]*)\}\)/g)].map((m) => m[1]!);
     expect(sites.length, "anti-vacuity: the card's and the probe's call sites were both found").toBeGreaterThanOrEqual(2);
     for (const [i, args] of sites.entries()) {

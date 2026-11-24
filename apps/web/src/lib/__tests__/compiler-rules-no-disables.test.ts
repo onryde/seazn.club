@@ -111,7 +111,7 @@ describe("no comment silences the React-Compiler rules", () => {
   it("scans a real tree — the premise every assertion below rests on", () => {
     const all = files();
     expect(all.length, "a walk that finds nothing reports clean forever").toBeGreaterThan(1500);
-    expect(all).toContain("src/components/v2/fixture-stream-panel.tsx");
+    expect(all).toContain("src/components/v2/fixture-stream-panel/panel.tsx");
     expect(all).toContain("src/components/public-site/register/register-stepper.tsx");
     expect(all.some((f) => f.startsWith("e2e/"))).toBe(true);
   });
@@ -214,7 +214,7 @@ describe("no config silences the React-Compiler rules", () => {
 
   it("each of the three is a warning or an error in the effective config, in src, in e2e and in a test file", () => {
     let checked = 0;
-    for (const file of ["src/lib/db.ts", "src/components/v2/fixture-stream-panel.tsx", "e2e/helpers.ts", "src/lib/__tests__/compiler-rules-no-disables.test.ts"]) {
+    for (const file of ["src/lib/db.ts", "src/components/v2/fixture-stream-panel/panel.tsx", "e2e/helpers.ts", "src/lib/__tests__/compiler-rules-no-disables.test.ts"]) {
       const rules = effectiveRules(file);
       for (const x of RULES) {
         checked++;

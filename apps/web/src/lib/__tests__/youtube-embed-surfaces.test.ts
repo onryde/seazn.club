@@ -79,9 +79,10 @@ describe("the YouTube player and thumbnail are built in one place, and that plac
     ]);
     const preview = all.find((f) => f.rel === "lib/match-day/view.ts");
     expect(preview?.text, "Match Day decides with the same rule before it mounts the player").toMatch(/\bmayEmbedReplay\(/);
-    const panel = all.find((f) => f.rel === "components/v2/fixture-stream-panel.tsx");
-    expect(panel, "premise: the organiser's panel was found").toBeDefined();
-    expect(panel!.text).not.toMatch(/replay-embed|youtubeEmbedUrl|youtubeThumbnailUrl|<iframe/);
+    // Task 34s: the panel is a folder of modules — every one is read, joined in name order (MODULARIZATION.md rule 9).
+    const panelModules = all.filter((f) => f.rel.startsWith("components/v2/fixture-stream-panel/")).sort((a, b) => a.rel.localeCompare(b.rel));
+    expect(panelModules.length, "premise: every module of the organiser's panel was found").toBeGreaterThanOrEqual(8);
+    expect(panelModules.map((f) => f.text).join("\n")).not.toMatch(/replay-embed|youtubeEmbedUrl|youtubeThumbnailUrl|<iframe/);
     // The positive pair: the probe does see a mount and an import where there is one.
     expect(all.find((f) => f.rel === mounts[0])!.text).toMatch(/replay-embed/);
   });
