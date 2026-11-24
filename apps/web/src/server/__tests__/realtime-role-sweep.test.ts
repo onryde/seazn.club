@@ -29,7 +29,8 @@
 // has no such role, so the half skips and says why.
 //
 // Applies to another sport: N/A (no sport rules).
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import postgres from "postgres";
 import { describe, expect, it } from "vitest";
@@ -43,12 +44,12 @@ const REALTIME_TABLE = "realtime.messages";
 type Policy = { file: string; name: string; table: string; roles: string[]; text: string };
 type Grant = { file: string; privileges: string[]; objects: string[]; grantees: string[] };
 
-/** Every `V*.sql` under `dir`, recursively. */
+/** Every Flyway migration under `dir`, recursively: versioned `V<n>…sql` and repeatable `R__…sql`. */
 function migrationFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((entry) => {
     const path = join(dir, entry);
     if (statSync(path).isDirectory()) return migrationFiles(path);
-    return /^V\d.*\.sql$/.test(entry) ? [path] : [];
+    return /^(?:V\d|R__).*\.sql$/.test(entry) ? [path] : [];
   });
 }
 
@@ -189,6 +190,26 @@ function realtimeClaimFailures(policies: Policy[]): { realtime: number; failures
   return { realtime: realtime.length, failures };
 }
 
+describe("§4.5 role sweep — which files are migrations", () => {
+  it("versioned V*.sql and repeatable R__*.sql, in every subdirectory; nothing else", () => {
+    const dir = mkdtempSync(join(tmpdir(), "role-sweep-"));
+    try {
+      mkdirSync(join(dir, "deltas"));
+      for (const f of ["V1__a.sql", "R__b.sql", "deltas/R__c.sql", "deltas/V2__d.sql", "x.sql", "README.md", "R_e.sql"]) {
+        writeFileSync(join(dir, f), "select 1;");
+      }
+      expect(migrationFiles(dir).map((f) => relative(dir, f)).sort()).toEqual([
+        "R__b.sql",
+        "V1__a.sql",
+        "deltas/R__c.sql",
+        "deltas/V2__d.sql",
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("§4.5 role sweep — the checkers fire (synthetic SQL, both ways)", () => {
   const pol = (sql: string) => parsePolicies("synthetic.sql", sql);
   const grt = (sql: string) => parseGrants("synthetic.sql", sql);
@@ -296,8 +317,10 @@ describe("§4.5 role sweep — every migration (static)", () => {
   it("scans every migration: files, policies and grants non-zero; realtime.messages policies exactly 4", () => {
     const b = authenticatedOnlySelects(grants);
     const c = realtimeClaimFailures(policies);
+    const repeatable = files.filter((f) => /(^|\/)R__[^/]*$/.test(f)).length;
     console.log(
-      `[role-sweep static] files: ${files.length}, policies: ${policies.length} (realtime.messages: ${c.realtime}), ` +
+      `[role-sweep static] files: ${files.length} (repeatable R__: ${repeatable}), ` +
+        `policies: ${policies.length} (realtime.messages: ${c.realtime}), ` +
         `grants: ${grants.length} (SELECT to authenticated: ${b.checked})`,
     );
     expect(files.length, "migration files scanned").toBeGreaterThan(0);
