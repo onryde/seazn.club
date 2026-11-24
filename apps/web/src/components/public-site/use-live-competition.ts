@@ -15,15 +15,18 @@
 //     It used to stop, so a subscribed channel that missed one push froze
 //     the page until the spectator reloaded;
 //   - realtime subscribes ONE channel PER DIVISION that currently has a live
-//     match — `division:{id}`, no token and no `private` flag — exactly
-//     `v2/slideshow.tsx:105-140`'s shape, because the hub is multi-division
-//     and W1's PRIVATE, TOKENED per-fixture channel cannot cover it.
+//     match — `division:{id}`. Since realtime push nudges (Task 13, spec §4.2)
+//     the topic is PRIVATE: the competition's division door
+//     (`lib/division-realtime-auth.ts`) sets one token covering every
+//     division on the division family's client, and only then are channels
+//     joined. A refused door (403, 429, …) means no channel and the poll.
 //     `lib/realtime.ts`'s `publishDivisionUpdate` is the producer:
 //     `state_changed` for a scoring write, `schedule_changed` otherwise.
 //     Every broadcast carries `at`, the server's clock at publish, and a push
 //     is not satisfied by a document built before it (R10 H3, `onPush`).
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CompetitionHubDocT } from "@/server/public-site/competition-hub-schema";
+import { acquireDivisionRealtime, type DivisionRealtimeSession } from "@/lib/division-realtime-auth";
 import { fetchCompetitionHub } from "./competition-hub-data";
 import { closeStandingsPopovers } from "./standings-popover";
 
@@ -306,20 +309,99 @@ export function useLiveCompetition({
     setSubscribed(wanted.length > 0 && wanted.every((id) => channels.get(id)?.up === true));
   }, []);
 
+  // Let a division's channel go. Its leave is a round trip, held in `leaving`
+  // until it completes; an earlier leave of the same topic is waited on too.
+  const letGo = useCallback((id: string) => {
+    const channels = channelsRef.current;
+    const leaving = leavingRef.current;
+    const entry = channels.get(id);
+    if (entry === undefined) return;
+    channels.delete(id);
+    const left = Promise.all([leaving.get(id), entry.channel?.unsubscribe?.()]).catch(() => undefined);
+    leaving.set(id, left);
+    void left.then(() => {
+      if (leaving.get(id) === left) leaving.delete(id);
+    });
+  }, []);
+
+  // Join `division:{id}`, PRIVATE, on the session's client. A division the
+  // token does not cover is left to the poll (it stays wanted and not up, so
+  // the transport reports "poll" and the cadence stays HUB_POLL_MS).
+  const join = useCallback(
+    (session: DivisionRealtimeSession, id: string) => {
+      const channels = channelsRef.current;
+      if (channels.has(id) || !session.covers(id)) return;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const entry: { channel: any; up: boolean } = { channel: null, up: false };
+      channels.set(id, entry);
+      const handler = (message?: unknown) => onPushRef.current(message);
+      const open = () => {
+        // Let go again (or unmounted) while its old channel was leaving.
+        if (channels.get(id) !== entry) return;
+        entry.channel = session.client
+          .channel(`division:${id}`, { config: { private: true } })
+          .on("broadcast", { event: "state_changed" }, handler)
+          .on("broadcast", { event: "schedule_changed" }, handler)
+          .subscribe((status: string) => {
+            // A channel already let go writes an entry nothing reads any more,
+            // and its CLOSED is the leave this hook asked for, not a failure.
+            entry.up = status === "SUBSCRIBED";
+            if (channels.get(id) === entry && mountedRef.current) session.channelStatus(status);
+            report();
+          });
+      };
+      // T17 review n4: until a leave completes, realtime-js hands back the
+      // same-topic LEAVING channel, whose subscribe() does nothing — the
+      // division would silently poll. A leave that fails (`error`) still
+      // does, which is the fallback.
+      const left = leavingRef.current.get(id);
+      if (left) void left.then(open);
+      else open();
+    },
+    [report],
+  );
+
+  // After the door hands the client a fresh token (the 50-minute refresh, or
+  // a re-fetch after CHANNEL_ERROR / CLOSED), every wanted division that is
+  // not up is let go and joined again on it; one that never had a channel
+  // (outside the old token) joins now if the new one covers it.
+  const rejoin = useCallback(
+    (session: DivisionRealtimeSession) => {
+      if (!mountedRef.current) return;
+      for (const id of wantedRef.current) {
+        if (channelsRef.current.get(id)?.up === true) continue;
+        letGo(id);
+        join(session, id);
+      }
+      report();
+    },
+    [letGo, join, report],
+  );
+
+  // ONE door session for the page, asked for lazily — an idle hub (nothing
+  // live) never calls the door — and held across every change of the live
+  // set: a second division going live joins on the token already set. A
+  // refusal is remembered as null for the page (it polls; the door is not
+  // asked again on every change of the live set).
+  const competitionId = initial.competitionId;
+  const sessionRef = useRef<Promise<DivisionRealtimeSession | null> | null>(null);
+  // The same session once it has resolved, so unmount can hand it back at once.
+  const sessionHeldRef = useRef<DivisionRealtimeSession | null>(null);
+  const divisionSession = useCallback(() => {
+    sessionRef.current ??= acquireDivisionRealtime(competitionId).then((session) => {
+      sessionHeldRef.current = session;
+      session?.onRenewed(() => rejoin(session));
+      return session;
+    });
+    return sessionRef.current;
+  }, [competitionId, rejoin]);
+
   useEffect(() => {
     const ids = realtime && process.env.NEXT_PUBLIC_SUPABASE_URL && liveDivisionKey ? liveDivisionKey.split(",") : [];
     wantedRef.current = ids;
     const channels = channelsRef.current;
-    const leaving = leavingRef.current;
-    for (const [id, entry] of channels) {
-      if (ids.includes(id)) continue;
-      channels.delete(id);
-      // An earlier leave of this topic may still be in flight; wait on both.
-      const left = Promise.all([leaving.get(id), entry.channel?.unsubscribe?.()]).catch(() => undefined);
-      leaving.set(id, left);
-      void left.then(() => {
-        if (leaving.get(id) === left) leaving.delete(id);
-      });
+    for (const id of [...channels.keys()]) {
+      if (!ids.includes(id)) letGo(id);
     }
     report();
     if (!ids.some((id) => !channels.has(id))) return;
@@ -327,37 +409,11 @@ export function useLiveCompetition({
 
     (async () => {
       try {
-        const { supabaseBrowser } = await import("@/lib/supabase-browser");
+        const session = await divisionSession();
         // A later run owns the set now; it subscribes whatever it still wants.
-        if (cancelled) return;
-        const sb = supabaseBrowser();
-        const handler = (message?: unknown) => onPushRef.current(message);
-        for (const id of ids) {
-          if (channels.has(id)) continue;
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const entry: { channel: any; up: boolean } = { channel: null, up: false };
-          channels.set(id, entry);
-          const join = () => {
-            // Let go again (or unmounted) while its old channel was leaving.
-            if (channels.get(id) !== entry) return;
-            entry.channel = sb
-              .channel(`division:${id}`)
-              .on("broadcast", { event: "state_changed" }, handler)
-              .on("broadcast", { event: "schedule_changed" }, handler)
-              .subscribe((status: string) => {
-                // A channel already let go writes an entry nothing reads any more.
-                entry.up = status === "SUBSCRIBED";
-                report();
-              });
-          };
-          // T17 review n4: until a leave completes, realtime-js hands back the
-          // same-topic LEAVING channel, whose subscribe() does nothing — the
-          // division would silently poll. A leave that fails (`error`) still
-          // does, which is the fallback.
-          const left = leaving.get(id);
-          if (left) void left.then(join);
-          else join();
-        }
+        // Null: the door refused (or no client) — the poll carries the page.
+        if (cancelled || session === null) return;
+        for (const id of ids) join(session, id);
         report();
       } catch {
         // env missing / websocket refused → polling
@@ -370,14 +426,22 @@ export function useLiveCompetition({
     return () => {
       cancelled = true;
     };
-  }, [realtime, liveDivisionKey, report]);
+  }, [realtime, liveDivisionKey, report, letGo, join, divisionSession]);
 
-  // Unmount lets every channel go.
+  // Unmount lets every channel go, and hands the door session back (its
+  // 50-minute refresh stops with the last holder).
   useEffect(() => {
     const channels = channelsRef.current;
     return () => {
       for (const entry of channels.values()) void entry.channel?.unsubscribe?.();
       channels.clear();
+      // Synchronously when it has resolved (no door timer outlives the hook);
+      // otherwise once it does. `release` is idempotent.
+      sessionHeldRef.current?.release();
+      sessionHeldRef.current = null;
+      const session = sessionRef.current;
+      sessionRef.current = null;
+      void session?.then((s) => s?.release());
     };
   }, []);
 

@@ -8,6 +8,7 @@ import { tooFewOfferFrom } from "@/components/v2/third-place-use-shared";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
+import { acquireDivisionRealtime, type DivisionRealtimeSession } from "@/lib/division-realtime-auth";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { isSwissRefusalCode } from "@/lib/swiss-refusals";
 import { isKnockoutRefusalCode, knockoutRefusalText } from "@/lib/knockout-refusals";
@@ -39,6 +40,10 @@ import {
   type BoardFixture,
   type PublishAllOutcome,
 } from "./types";
+
+/** The board's safety-net refresh (realtime push nudges, spec §4.3). It runs whether push is up or not: before it
+ *  the board relied on push alone, so a board on a topic gone silent never refreshed until reload. */
+export const BOARD_POLL_MS = 60_000;
 
 // P9 pass 4a: court_id — the merge `{...f, ...o}` (below) has to overwrite
 // the field board-grid/movableForRun/etc. actually key on, or an optimistic
@@ -199,6 +204,9 @@ export function useBoardActions(
   entrantNames: Record<string, string>,
   feedLabels: Record<string, FeedLabelPair>,
   canEdit: boolean,
+  /** The competition whose division door admits the board to its private `division:{id}` topics (the official
+   *  path: any org role or an accepted official, no entitlement). Null: no push, the 60 s poll alone. */
+  competitionId: string | null = null,
 ): BoardActions {
   const msg = useMsg();
   // `useMsgPlural`, not the throwing `usePlural`: this hook is mounted by board
@@ -799,22 +807,54 @@ export function useBoardActions(
   );
 
   // Realtime board refresh on division:{id} (doc 12 §6 — two organisers).
+  // Since realtime push nudges (Task 13) the topics are PRIVATE: the
+  // competition's division door sets its token on the division family's
+  // client first, and a refused door (403, 429, …) means no channel and the
+  // poll below. Keyed on the joined ids, not the array: every router.refresh()
+  // (the poll's, a push's) hands down a fresh `divisions`, and identity-keying
+  // would leave and rejoin every topic each time.
+  const divisionKey = divisions.map((d) => d.id).join(",");
+  // Bumped when the door hands the client a fresh token after a channel
+  // failed: the effect re-runs and rejoins every topic on it.
+  const [rejoinTick, setRejoinTick] = useState(0);
+  // The previous run's leaves: until one completes, realtime-js hands back the
+  // same-topic LEAVING channel, whose subscribe() does nothing.
+  const leavingRef = useRef<Promise<unknown>>(Promise.resolve());
   useEffect(() => {
+    const ids = divisionKey ? divisionKey.split(",") : [];
+    if (competitionId === null || ids.length === 0) return;
     if (!process.env.NEXT_PUBLIC_SUPABASE_URL) return;
     let cancelled = false;
+    let session: DivisionRealtimeSession | null = null;
+    let failed = false;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const channels: any[] = [];
     (async () => {
       try {
-        const { supabaseBrowser } = await import("@/lib/supabase-browser");
-        const sb = supabaseBrowser();
-        for (const d of divisions) {
-          if (cancelled) return;
+        const held = await acquireDivisionRealtime(competitionId);
+        if (held === null) return;
+        if (cancelled) {
+          held.release();
+          return;
+        }
+        session = held;
+        held.onRenewed(() => {
+          if (!cancelled && failed) setRejoinTick((n) => n + 1);
+        });
+        await leavingRef.current;
+        if (cancelled) return;
+        for (const id of ids) {
+          if (!held.covers(id)) continue;
           channels.push(
-            sb
-              .channel(`division:${d.id}`)
+            held.client
+              .channel(`division:${id}`, { config: { private: true } })
               .on("broadcast", { event: "schedule_changed" }, () => router.refresh())
-              .subscribe(),
+              .subscribe((status: string) => {
+                // After cleanup: the CLOSED is the leave this board asked for.
+                if (cancelled) return;
+                if (status === "CHANNEL_ERROR" || status === "CLOSED") failed = true;
+                held.channelStatus(status);
+              }),
           );
         }
       } catch {
@@ -823,9 +863,17 @@ export function useBoardActions(
     })();
     return () => {
       cancelled = true;
-      for (const ch of channels) ch?.unsubscribe();
+      leavingRef.current = Promise.all(channels.map((ch) => ch?.unsubscribe?.())).catch(() => undefined);
+      session?.release();
     };
-  }, [divisions, router]);
+  }, [divisionKey, competitionId, router, rejoinTick]);
+
+  // The safety net, push or no push (spec §4.3): a missed push, a topic gone
+  // silent, or a refused door is a minute stale at most.
+  useEffect(() => {
+    const t = setInterval(() => router.refresh(), BOARD_POLL_MS);
+    return () => clearInterval(t);
+  }, [router]);
 
   return {
     board,

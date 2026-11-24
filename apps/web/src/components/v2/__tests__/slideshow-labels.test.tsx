@@ -430,6 +430,7 @@ describe("<Slideshow> renders every string from its labels (R10e u1)", () => {
   it("es: every branch shows the es dictionary value and no English", async () => {
     const { es, englishProbes } = await catalogs();
     const board = createElement(Slideshow, {
+      competitionId: "c1",
       title: "Copa",
       slides: EVERY_BRANCH,
       backHref: "/live/o/c",
@@ -457,6 +458,7 @@ describe("<Slideshow> renders every string from its labels (R10e u1)", () => {
     const cell = (status: string) =>
       renderToStaticMarkup(
         createElement(Slideshow, {
+          competitionId: "c1",
           title: "Copa",
           slides: [{ kind: "fixtures", division: "Open", title: "Board", items: [item(status, 1)] }],
           backHref: "/",
@@ -503,6 +505,7 @@ describe("<Slideshow> renders every string from its labels (R10e u1)", () => {
       expect(locale, `${key}: fr or nl must spell "${english}" differently`).toBeDefined();
       const local = t(others[locale!], key, vars);
       const board = createElement(Slideshow, {
+        competitionId: "c1",
         title: "Copa",
         slides: EVERY_BRANCH,
         backHref: "/live/o/c",
@@ -590,6 +593,7 @@ describe("public /present kiosk: fixtures rows name the round, not the organiser
     // carry no round name, the organiser board's shape.
     const organiser = renderToStaticMarkup(
       createElement(Slideshow, {
+        competitionId: "c1",
         title: "Copa",
         slides: [{ kind: "fixtures", division: "Open", title: "Board", items: [item("scheduled", 3)] }],
         backHref: "/",
@@ -698,7 +702,7 @@ describe("public /present kiosk: the phone card (C1)", () => {
 
   it("the board's card links the liveHref it is handed, not its back link", () => {
     const html = renderToStaticMarkup(
-      createElement(Slideshow, { title: "Copa", slides: [], backHref: "/probe/back", liveHref: "/probe/live", labels: slideshowLabels("en") }),
+      createElement(Slideshow, { competitionId: "c1", title: "Copa", slides: [], backHref: "/probe/back", liveHref: "/probe/live", labels: slideshowLabels("en") }),
     );
     expect(openLiveTag(html)).toContain('href="/probe/live"');
     expect(openLiveTag(html)).not.toContain('href="/probe/back"');
@@ -708,6 +712,7 @@ describe("public /present kiosk: the phone card (C1)", () => {
     const palette = { "--ps-accent": "#123456", "--ps-court": "#0a0b0c" } as CSSProperties;
     const html = renderToStaticMarkup(
       createElement(Slideshow, {
+        competitionId: "c1",
         title: "Copa",
         slides: [],
         backHref: "/probe/back",
@@ -731,7 +736,7 @@ describe("<Slideshow> draws a double walkover's tag where the score would be (re
   const TAG = "2× w/o";
   const muted = new RegExp(`<span class="[^"]*text-court-muted[^"]*">${TAG}</span>`);
   const render = (slide: Slide) =>
-    renderToStaticMarkup(createElement(Slideshow, { title: "Copa", slides: [slide], backHref: "/", liveHref: "/live/o/c", labels: slideshowLabels("en") }));
+    renderToStaticMarkup(createElement(Slideshow, { competitionId: "c1", title: "Copa", slides: [slide], backHref: "/", liveHref: "/live/o/c", labels: slideshowLabels("en") }));
 
   it("the fixtures slide and every bracket kind: the tag, muted, once; the credited pair keeps its accent score", () => {
     const sites: string[] = [];
@@ -765,6 +770,7 @@ describe("<Slideshow> names a credited result's reason in the status cell (Loop 
   const render = (items: FixtureSlideItem[], locale = "en") =>
     renderToStaticMarkup(
       createElement(Slideshow, {
+        competitionId: "c1",
         title: "Copa",
         slides: [{ kind: "fixtures", division: "Open", title: "Latest results", items }],
         backHref: "/",

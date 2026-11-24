@@ -4,6 +4,9 @@
 // is entitlement-split (doc 09 §4 pattern, same as live-score): Pro orgs
 // subscribe to `division:{id}` realtime broadcasts and refresh on push;
 // everyone else (and any subscription failure) falls back to 45 s polling.
+// Since realtime push nudges (Task 13, spec §4.2) the topics are PRIVATE: the
+// competition's division door (`lib/division-realtime-auth.ts`) sets its token
+// on the division family's client first, and a refused door means the poll.
 // Escape returns to `backHref`: the console on an organiser board, the public
 // division or competition page on the /present kiosk.
 //
@@ -26,6 +29,7 @@ import { slideAt, stepFor } from "@/components/v2/slideshow-rotation";
 // English left in this file. Per-slide text (titles, side names and, on the
 // public kiosk, each row's round name — N1d d4) arrives on the slides.
 import type { SlideshowLabels } from "@/server/slideshow-labels";
+import { acquireDivisionRealtime, type DivisionRealtimeSession } from "@/lib/division-realtime-auth";
 // Leaf import, not the barrel — see bracket-panel.tsx's comment: the barrel
 // used to drag `build.ts` -> `placement-client.ts` -> `@grpc/grpc-js` (Node-only)
 // into this client component's browser bundle and break `next build` outright
@@ -39,8 +43,11 @@ import {
 } from "@seazn/engine/scheduling/bracket-layout";
 
 const SLIDE_MS = 9000;
-const POLL_MS = 45_000;
-const SUBSCRIBED_POLL_MS = 5 * 60_000; // safety net once push is live
+/** The board's refresh with no push. */
+export const SLIDESHOW_POLL_MS = 45_000;
+/** The safety net once push is live. Five minutes until realtime push nudges (spec §4.3, D-a): a kiosk left on a
+ *  topic that has gone silent is now at most a minute behind, not five. */
+export const SLIDESHOW_SUBSCRIBED_POLL_MS = 60_000;
 
 /**
  * The board's wall clock, "14:30", in the board's locale (`labels.clockLocale`,
@@ -149,6 +156,7 @@ export function Slideshow({
   title,
   slides,
   backHref,
+  competitionId,
   divisionIds = [],
   realtime = false,
   themeStyle,
@@ -160,6 +168,9 @@ export function Slideshow({
   title: string;
   slides: Slide[];
   backHref: string;
+  /** The competition whose division door (`/api/v1/public/competitions/{id}/realtime-token`) admits the board to
+   *  its private `division:{id}` topics. Never a token: that is fetched in the browser and kept out of props. */
+  competitionId: string;
   /** Divisions on show — realtime subscription topics. */
   divisionIds?: string[];
   /** Org `realtime` entitlement, resolved server-side. */
@@ -212,11 +223,21 @@ export function Slideshow({
   // time and identity-keying would tear down the sockets on every refresh.
   const divisionKey = divisionIds.join(",");
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Bumped when the door hands the client a fresh token after a channel
+  // failed: the effect re-runs and rejoins every topic on it.
+  const [rejoinTick, setRejoinTick] = useState(0);
+  // The previous run's leaves. Until a leave completes, realtime-js hands back
+  // the same-topic LEAVING channel, whose subscribe() does nothing; a rejoin
+  // waits for them.
+  const leavingRef = useRef<Promise<unknown>>(Promise.resolve());
   useEffect(() => {
     const ids = divisionKey ? divisionKey.split(",") : [];
     if (!realtime || ids.length === 0) return;
     if (!process.env.NEXT_PUBLIC_SUPABASE_URL) return;
     let cancelled = false;
+    let session: DivisionRealtimeSession | null = null;
+    // A channel of THIS run reported CHANNEL_ERROR or CLOSED.
+    let failed = false;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const channels: any[] = [];
     const onPush = () => {
@@ -225,17 +246,32 @@ export function Slideshow({
     };
     (async () => {
       try {
-        const { supabaseBrowser } = await import("@/lib/supabase-browser");
-        const sb = supabaseBrowser();
+        const held = await acquireDivisionRealtime(competitionId);
+        // Null: the door refused (403, 429, …) or there is no client — the poll carries the board.
+        if (held === null) return;
+        if (cancelled) {
+          held.release();
+          return;
+        }
+        session = held;
+        held.onRenewed(() => {
+          if (!cancelled && failed) setRejoinTick((n) => n + 1);
+        });
+        await leavingRef.current;
+        if (cancelled) return;
         for (const id of ids) {
-          if (cancelled) return;
+          if (!held.covers(id)) continue;
           channels.push(
-            sb
-              .channel(`division:${id}`)
+            held.client
+              .channel(`division:${id}`, { config: { private: true } })
               .on("broadcast", { event: "state_changed" }, onPush)
               .on("broadcast", { event: "schedule_changed" }, onPush)
               .subscribe((status: string) => {
-                if (!cancelled && status === "SUBSCRIBED") setSubscribed(true);
+                // After cleanup: the CLOSED is the leave this board asked for.
+                if (cancelled) return;
+                if (status === "SUBSCRIBED") setSubscribed(true);
+                if (status === "CHANNEL_ERROR" || status === "CLOSED") failed = true;
+                held.channelStatus(status);
               }),
           );
         }
@@ -247,15 +283,16 @@ export function Slideshow({
       cancelled = true;
       if (debounceRef.current) clearTimeout(debounceRef.current);
       setSubscribed(false);
-      for (const ch of channels) void ch.unsubscribe?.();
+      leavingRef.current = Promise.all(channels.map((ch) => ch.unsubscribe?.())).catch(() => undefined);
+      session?.release();
     };
-  }, [realtime, divisionKey, router]);
+  }, [realtime, divisionKey, competitionId, router, rejoinTick]);
 
   // Polling — primary refresh on Community, slow safety net once push is live.
   useEffect(() => {
     const t = setInterval(
       () => router.refresh(),
-      subscribed ? SUBSCRIBED_POLL_MS : POLL_MS,
+      subscribed ? SLIDESHOW_SUBSCRIBED_POLL_MS : SLIDESHOW_POLL_MS,
     );
     return () => clearInterval(t);
   }, [router, subscribed]);

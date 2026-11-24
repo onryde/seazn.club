@@ -51,7 +51,7 @@ const slide = (title: string, pinned = false): Slide => ({
 });
 
 function boardProps(slides: Slide[]) {
-  return { title: "Board", slides, backHref: "/b", liveHref: "/l", labels: slideshowLabels("en") };
+  return { title: "Board", slides, backHref: "/b", liveHref: "/l", labels: slideshowLabels("en"), competitionId: "c1" };
 }
 
 function press(key: string) {

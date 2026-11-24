@@ -71,6 +71,7 @@ describe("<Slideshow> — the clock effect formats in the labels' locale", () =>
     it(`${locale}: the clock is formatted with ${locale}'s board locale, and it is on the board`, () => {
       const labels = slideshowLabels(locale);
       const board = renderIsland(Slideshow, {
+        competitionId: "c1",
         title: "Zqx Board",
         slides: [],
         backHref: "/b",

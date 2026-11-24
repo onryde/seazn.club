@@ -264,6 +264,7 @@ export default async function CompetitionSchedulePage({
           // entitlement gate is structural here, and re-checked server-side on
           // all three joint endpoints.
           competition={{ id, divisionSettings }}
+          realtimeCompetitionId={id}
           // Same call the division board already made (../d/[divSlug]/schedule
           // /page.tsx:313, "moved off the board where they crowded the grid"):
           // the inline settings toggle is dropped here too. On this page it was

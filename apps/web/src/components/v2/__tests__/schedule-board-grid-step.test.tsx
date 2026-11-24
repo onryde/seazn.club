@@ -150,6 +150,7 @@ function baseProps(
     competitionEnd: "2026-12-31",
     officialsWithBlackout: 0,
     viewerPlan: "community",
+    realtimeCompetitionId: "c1",
   } as Parameters<typeof ScheduleBoard>[0];
 }
 

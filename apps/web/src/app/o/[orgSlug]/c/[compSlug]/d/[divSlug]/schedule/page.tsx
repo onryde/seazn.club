@@ -329,6 +329,8 @@ export default async function DivisionSchedulePage({
               currency={currency}
               competitionStart={competition.starts_on}
               competitionEnd={competition.ends_on}
+              // The board's private division topic is admitted by this competition's door (realtime push nudges).
+              realtimeCompetitionId={division.competition_id}
               venueCap={venueLabel(division.sport_key)}
               venues={boardVenues}
               showSettings={false}

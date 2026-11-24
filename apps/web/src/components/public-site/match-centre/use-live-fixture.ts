@@ -318,8 +318,10 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
       }
       if (cancelled || stubHost) return;
       try {
-        const { supabaseBrowser } = await import("@/lib/supabase-browser");
-        const sb = supabaseBrowser();
+        // The FIXTURE family's own client: `setAuth` is socket-wide, and a page that also holds a division or
+        // lobby token must not have one overwrite the other (realtime push nudges, spec §4.2).
+        const { realtimeClient } = await import("@/lib/supabase-browser");
+        const sb = realtimeClient("fixture");
         await sb.realtime.setAuth(token.token);
         if (cancelled) return;
         channel = sb

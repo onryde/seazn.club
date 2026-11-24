@@ -56,6 +56,8 @@ export default async function CompetitionSlideshowPage({
       // Its Open the live page goes where the back link goes: this
       // competition's console page, which the viewer can always open.
       liveHref={routes.competition(org.slug, competition.slug)}
+      // The door the board asks for its private division topics (the token is fetched in the browser).
+      competitionId={id}
       divisionIds={ordered.map((d) => d.id)}
       realtime={realtime}
       // Same gate as the division board: console reads don't empty branding,

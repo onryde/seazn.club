@@ -92,7 +92,7 @@ const spacingPx = (steps: string) => Number(steps) * themePx("spacing");
 // ---- The board's rendered classes -------------------------------------------
 type Loc = Parameters<typeof slideshowLabels>[0];
 const board = (slide: Slide, locale: Loc = "en") =>
-  renderToStaticMarkup(createElement(Slideshow, { title: "Cup", slides: [slide], backHref: "/", liveHref: "/live/o/c", labels: slideshowLabels(locale) }));
+  renderToStaticMarkup(createElement(Slideshow, { competitionId: "c1", title: "Cup", slides: [slide], backHref: "/", liveHref: "/live/o/c", labels: slideshowLabels(locale) }));
 
 /** Class tokens of the first element whose class list satisfies `pick`. */
 function classesWhere(html: string, pick: (tokens: string[]) => boolean, what: string): string[] {
@@ -671,7 +671,7 @@ describe("W2d follow-up m8: an IIHF slide prints W · OTW · OTL · L, and folds
     if (iihf.kind !== "standings") throw new Error("premise");
     const unfolded: Slide = { ...iihf, columns: iihf.columns.map((c) => ({ ...c, compact: true })) };
     const draw = (slide: Slide) =>
-      renderToStaticMarkup(createElement(Slideshow, { title: "Cup", slides: [slide], backHref: "/", liveHref: "/x", labels: slideshowLabels("en") }));
+      renderToStaticMarkup(createElement(Slideshow, { competitionId: "c1", title: "Cup", slides: [slide], backHref: "/", liveHref: "/x", labels: slideshowLabels("en") }));
     expect(() => draw(unfolded)).toThrow("standings slide: no grid template for 5/5 result columns");
     // The positive pair: the builder's own shapes draw.
     expect(draw(iihf)).toContain("OTW");
@@ -685,7 +685,7 @@ describe("W2d follow-up m8: an IIHF slide prints W · OTW · OTL · L, and folds
     if (iihf.kind !== "standings") throw new Error("premise");
     const withRatio: Slide = { ...iihf, rows: iihf.rows.map((r) => ({ ...r, pointRatio: "1.000" })) };
     const draw = (slide: Slide) =>
-      renderToStaticMarkup(createElement(Slideshow, { title: "Cup", slides: [slide], backHref: "/", liveHref: "/x", labels: slideshowLabels("en") }));
+      renderToStaticMarkup(createElement(Slideshow, { competitionId: "c1", title: "Cup", slides: [slide], backHref: "/", liveHref: "/x", labels: slideshowLabels("en") }));
     expect(() => draw(withRatio)).toThrow("standings slide: no grid template for 5/1 result columns with a ratio column");
     // The positive pair: a plain slide with the ratio draws its ratio track.
     const plainWithRatio: Slide = { ...plainSlide, rows: plainSlide.kind === "standings" ? plainSlide.rows.map((r) => ({ ...r, pointRatio: "1.250" })) : [] };
