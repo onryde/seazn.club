@@ -39,9 +39,11 @@ const HAS_DB = !!process.env.DATABASE_URL;
 const after = vi.hoisted(() => ({ tasks: [] as Array<() => unknown> }));
 vi.mock("@/lib/deferred", () => ({ deferred: (fn: () => unknown) => void after.tasks.push(fn) }));
 vi.mock("next/cache", () => ({ unstable_cache: (fn: (...a: unknown[]) => unknown) => fn, revalidateTag: vi.fn(), revalidatePath: vi.fn() }));
-// Never a live vendor call from a test: the division push after a refresh is dropped.
+// Never a live vendor call from a test: the division push after a refresh is dropped, and so is a score's or a schedule
+// write's one batched `broadcast` (realtime T0.2).
 vi.mock("@/lib/realtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/realtime")>()),
+  broadcast: async () => {},
   publishDivisionUpdate: async () => {},
   publishFixtureUpdate: async () => {},
 }));

@@ -61,11 +61,13 @@ vi.mock("@/lib/cache", async (importOriginal) => {
         : actual.cacheDel(...keys),
   };
 });
-// Recorded, never sent.
+// Recorded, never sent: never a live vendor call from a test. A score's or a schedule write's one batched `broadcast`
+// (realtime T0.2) is dropped.
 vi.mock("@/lib/realtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/realtime")>();
   return {
     ...actual,
+    broadcast: async () => {},
     publishFixtureUpdate: async () => {},
     publishDivisionUpdate: (divisionId: string, reason: string) => {
       probe.divisionPushes.push({ divisionId, reason });
