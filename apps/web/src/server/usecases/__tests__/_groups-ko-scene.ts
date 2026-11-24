@@ -17,6 +17,7 @@ import { createEntrants, patchEntrant } from "../entrants";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
 import { createStages, generateStageFixtures, getSeedProposal } from "../stages";
+import { storeAsOnComplete } from "./_stored-on-complete";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOrg } from "./_seed";
 
@@ -77,11 +78,13 @@ export async function scene(o: {
       kind: d.kind,
       name: d.name,
       config: d.config,
-      progression: d.progression === null ? null : (o.progression ?? ((x) => x))({ ...d.progression, timing: o.timing }),
+      progression: d.progression === null ? null : (o.progression ?? ((x) => x))({ ...d.progression, timing: "setup" }),
     })) as never,
   );
   const src = stages.find((s) => s.seq === 1)!;
   const ko = stages.find((s) => s.seq === 2)!;
+  // Saved as `setup` (the save door judges an `on_complete` shape - see _stored-on-complete.ts), stored as the scene's timing.
+  if (o.timing === "on_complete") for (const s of stages) if (s.seq > 1) await storeAsOnComplete(s.id);
   // The setup path proposes INTO the knockout's TBD lines, so they exist first; the on_complete path seeds before any draw.
   if (o.timing === "setup") await generateStageFixtures(auth, ko.id);
   await generateStageFixtures(auth, src.id);

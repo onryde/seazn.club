@@ -69,6 +69,13 @@ describe("groupTakeRefusal: what a per-group take from several groups is refused
     expect(checked, "anti-vacuity").toBeGreaterThan(10);
   });
 
+  it("with no count that would work (a field of one) the refusal names none and says so by phase", () => {
+    const refusal = groupTakeRefusal({ destKind: "knockout", placement: "rank_order", pools: 4, take: groupsKoTake(5, 4), entrants: 1 })!;
+    expect(refusal.code).toBe("SEEDING_POOL_SEPARATION_IMPOSSIBLE");
+    expect(refusal.vars).toMatchObject({ options: "", phase: "saveNone" });
+    expect(groupTakeWorkingCounts("knockout", 4, 1), "the premise: nothing is offered").toEqual([]);
+  });
+
   it("the entrant cap shapes the options: a field of 8 never offers a count above 8", () => {
     const refusal = groupTakeRefusal({ destKind: "knockout", placement: "rank_order", pools: 4, take: groupsKoTake(5, 4), entrants: 8 })!;
     expect(refusal.code).toBe("SEEDING_POOL_SEPARATION_IMPOSSIBLE");

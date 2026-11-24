@@ -72,7 +72,7 @@ function judged(ask: GroupTakeAsk): boolean {
 function plainRefusal(ask: GroupTakeAsk): GroupTakeRefusal | null {
   if (!judged(ask)) return null;
   const q = takeSlots(ask.take, ask.pools);
-  if (q < FORMAT_BOUNDS.qualify.min) return { code: "SEEDING_QUALIFY_TOO_FEW", vars: { pools: ask.pools, qualified: q, min: FORMAT_BOUNDS.qualify.min, phase: "save" } };
+  if (q < FORMAT_BOUNDS.qualify.min) return { code: "SEEDING_QUALIFY_TOO_FEW", vars: { pools: ask.pools, qualified: q, min: FORMAT_BOUNDS.qualify.min } };
   if (ask.destKind === "page_playoff" && q !== PAGE_PLAYOFF_SIZE) {
     return { code: "SEEDING_PAGE_PLAYOFF_NEEDS_FOUR", vars: { entrants: q, size: PAGE_PLAYOFF_SIZE, phase: "save" } };
   }

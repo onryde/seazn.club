@@ -204,10 +204,11 @@ describe.skipIf(!HAS_DB)("public_stages_v — qualification columns (V414)", () 
         kind: "knockout",
         name: "KO",
         config: {},
-        progression: prog([
+        // Saved as `setup`: this shape (3 winners + 1 best runner-up) is refused at save as `on_complete` (X-PD-4); the view reads either.
+        progression: { ...prog([
           { kind: "topNPerGroup", n: 1 },
           { kind: "bestNth", nth: 2, count: 1 },
-        ]),
+        ]), timing: "setup" },
       },
     ] as never);
     expect(await cuts(d.divisionId)).toEqual([

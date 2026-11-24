@@ -22,6 +22,7 @@ import { createEntrants } from "../entrants";
 import { startDivision } from "../schedule";
 import { listCrossPoolDraws } from "../knockout-desk";
 import { buildTemplateStages } from "@/lib/format-templates";
+import { storeAsOnComplete } from "./_stored-on-complete";
 import { post } from "./_groups-ko-scene";
 import { seedOrg } from "./_seed";
 
@@ -63,8 +64,9 @@ async function build(o: { entrants: number; pools: number | "league"; kind: stri
   const source = o.pools === "league" ? { kind: "league", config: { legs: 1 } } : { kind: "group", config: { legs: 1, pools: { count: o.pools } } };
   const [src, ko] = await createStages(auth, div.id, [
     { seq: 1, ...source, name: "Groups" },
-    { seq: 2, kind: o.kind, name: "Finals", config: o.kind === "knockout" ? { thirdPlace: false } : {}, progression: { sources: [{ stage: "previous", take: o.take }], placement: "rank_order", timing: o.timing ?? "setup" } },
+    { seq: 2, kind: o.kind, name: "Finals", config: o.kind === "knockout" ? { thirdPlace: false } : {}, progression: { sources: [{ stage: "previous", take: o.take }], placement: "rank_order", timing: "setup" } },
   ] as never);
+  if (o.timing === "on_complete") await storeAsOnComplete(ko!.id);
   // An on_complete destination has no lines until its source completes: `seedNextStage` writes `config.qualified`, then completion
   // generates it.
   if ((o.timing ?? "setup") === "setup") await generateStageFixtures(auth, ko!.id);
