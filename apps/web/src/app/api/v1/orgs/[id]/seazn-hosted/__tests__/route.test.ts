@@ -25,6 +25,8 @@ vi.mock("next/headers", () => ({
 }));
 
 import { sql } from "@/lib/db";
+import { invalidateOrgEntitlements } from "@/lib/entitlements";
+import { frozenMemberIds } from "@/server/usecases/entitlement-freeze";
 import { buildOpenApiDocument } from "@/server/api-v1/openapi";
 import { NEVER_KEY_ROUTES } from "@/server/api-v1/key-scopes";
 import { createApiKey } from "@/server/usecases/api-keys";
@@ -69,6 +71,20 @@ async function memberOf(orgId: string, role: "admin" | "viewer"): Promise<string
   await sql`insert into org_members (org_id, user_id, role) values (${orgId}, ${u.id}, ${role})`;
   return u.id;
 }
+/** Over-quota seats (doc 10 §2.4): `members.max` overridden to 1, which the owner's own seat fills, so an added ADMIN's seat is read-only.
+ *  Checked with the engine's own `frozenMemberIds`, so a changed freeze rule fails here instead of freezing nobody. */
+async function frozenAdmin(orgId: string): Promise<string> {
+  await sql`insert into org_entitlement_overrides (org_id, feature_key, int_value, reason) values (${orgId}, 'members.max', 1, 'frozen seat')
+            on conflict (org_id, feature_key) do update set int_value = 1`;
+  await invalidateOrgEntitlements(orgId);
+  const admin = await memberOf(orgId, "admin");
+  expect((await frozenMemberIds(orgId)).has(admin), "PREMISE: the admin's seat is frozen").toBe(true);
+  return admin;
+}
+/** The documented error statuses of PUT /orgs/{id}/seazn-hosted. */
+const putResponses = () =>
+  Object.keys((buildOpenApiDocument() as unknown as { paths: Record<string, Record<string, { responses: Record<string, unknown> }>> })
+    .paths["/api/v1/orgs/{id}/seazn-hosted"]!.put!.responses);
 
 describe.skipIf(!HAS_DB)("GET/PUT /orgs/{id}/seazn-hosted — the route", () => {
   it("the owner: GET reads the default ON; PUT off is 200 { offered: false } and the GET and the usecase read it back; a SECOND PUT off is the same 200; PUT on restores it (sequence)", async () => {
@@ -108,6 +124,20 @@ describe.skipIf(!HAS_DB)("GET/PUT /orgs/{id}/seazn-hosted — the route", () => 
       granted++;
     }
     expect(granted).toBe(2);
+  });
+
+  it("fix round 1 (m6): a FROZEN admin seat (over quota) is read-only — its PUT is 402 members.max (documented) and writes nothing, while its GET still reads; the owner of the same org then writes", async () => {
+    const o = await organiser();
+    authState.userId = await frozenAdmin(o.orgId);
+    expect(await dataOf(await get(o.orgId)), "a frozen admin still reads").toEqual({ offered: true });
+    const refused = await put(o.orgId, { offered: false });
+    expect(refused.status).toBe(402);
+    expect(((await refused.json()) as Envelope).error?.message).toBe("Plan upgrade required: members.max");
+    expect(putResponses(), "the 402 is documented").toContain("402");
+    expect(await seaznOfferOf(o.orgId), "nothing written").toEqual({ offered: true });
+    authState.userId = o.ownerId;
+    expect((await put(o.orgId, { offered: false })).status, "the owner (never frozen)").toBe(200);
+    expect(await seaznOfferOf(o.orgId)).toEqual({ offered: false });
   });
 
   it("the door before the body: a viewer's MALFORMED body is 403, a non-member's 401 — never the 400 the owner gets for it (counted)", async () => {
@@ -171,7 +201,7 @@ describe("the route is documented and never key-reachable (no DB)", () => {
     const props = path!.put!.requestBody!.content["application/json"].schema.properties;
     expect(Object.keys(props)).toEqual(["offered"]);
     expect(props.offered!.type).toBe("boolean");
-    expect(Object.keys(path!.put!.responses)).toEqual(expect.arrayContaining(["200", "403", "404"]));
+    expect(Object.keys(path!.put!.responses)).toEqual(expect.arrayContaining(["200", "402", "403", "404"]));
     expect(NEVER_KEY_ROUTES).toEqual(expect.arrayContaining(["GET /orgs/:id/seazn-hosted", "PUT /orgs/:id/seazn-hosted"]));
   });
 });

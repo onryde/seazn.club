@@ -80,6 +80,23 @@ const goLive = async (r: Rig, fixtureId: string, body: { mode: "passthrough" | "
 };
 const off = (r: { auth: Rig["auth"] }) => setSeaznOffered(r.auth, r.auth.orgId, false);
 const on = (r: { auth: Rig["auth"] }) => setSeaznOffered(r.auth, r.auth.orgId, true);
+/** Task 33 fix round 1 (m1): `deps` whose FIRST storage read runs `flip` before answering. For a Seazn start that read is the one
+ *  provider call between `startBroadcast`'s early `isSeaznTarget` read and admission's target row lock (no probe and no YouTube prepare
+ *  for Seazn), so `flip` commits a switch-off exactly inside the window the review named. `flipped()` is how many reads ran it. */
+function flipAtStorageRead(deps: SessionDeps, flip: () => Promise<unknown>): { deps: SessionDeps; flipped: () => number } {
+  let flipped = 0;
+  const ingest = new Proxy(deps.drivers.ingest, {
+    get(t, p) {
+      const v = Reflect.get(t, p, t) as unknown;
+      if (p !== "storageUsage" || typeof v !== "function") return v;
+      return async (...args: unknown[]) => {
+        if (flipped++ === 0) await flip();
+        return (v as (...a: unknown[]) => unknown).apply(t, args);
+      };
+    },
+  });
+  return { deps: { ...deps, drivers: { ...deps.drivers, ingest } }, flipped: () => flipped };
+}
 
 describe.skipIf(!HAS_DB)("the org's Seazn switch: read and write (V553)", () => {
   it("default ON; off reads back off; a SECOND off is idempotent; on → off → on round-trips; another org's switch never moves", async () => {
@@ -165,6 +182,22 @@ describe.skipIf(!HAS_DB)("off gates NEW picks and starts (LIVE on)", () => {
     expect((await sessionsOn(f1)).map((s) => s.destination_kind), "the positive pair: the switch was the refusal").toEqual(["seazn"]);
   });
 
+  it("fix round 1 (m1): a switch-off that commits BETWEEN the start's early read and admission's row lock is refused there — 422 seazn_unavailable, no row, only the storage read asked; on again the same start is admitted", async () => {
+    const r = await rig();
+    const [f1] = r.fixtureIds;
+    expect(await seaznOfferOf(r.auth.orgId), "PREMISE: the early read sees the switch on").toEqual({ offered: true });
+    const raced = flipAtStorageRead(r.deps, () => off(r));
+    expect(wire(await refusalOf(goLive(r, f1, { mode: "composed", targetId: r.seazn }, raced.deps)))).toEqual({ status: 422, code: SEAZN_UNAVAILABLE });
+    expect(raced.flipped(), "PREMISE: the switch went off inside the window (once)").toBe(1);
+    expect(await seaznOfferOf(r.auth.orgId), "PREMISE: the off committed").toEqual({ offered: false });
+    expect(r.calls, "nothing asked of the provider past the storage read").toEqual(["ingest.storageUsage"]);
+    expect(await sessionsOn(f1), "no session row").toEqual([]);
+    await on(r);
+    r.calls.length = 0;
+    await goLive(r, f1, { mode: "composed", targetId: r.seazn });
+    expect((await sessionsOn(f1)).map((s) => s.destination_kind), "the positive pair: on, the same start is admitted").toEqual(["seazn"]);
+  });
+
   it("LIVE off is the master: offered true still hides Seazn from the list and the pick, and refuses the PUT and the start", async () => {
     const r = await rig();
     const [f1, f2] = r.fixtureIds;
@@ -241,6 +274,14 @@ describe.skipIf(!HAS_DB)("off: the phone's start and the automatic start", () =>
     expect(refused!.auto_start_refusal, "the automatic start ran and was refused").toBe("no_destination");
     expect(await sessionsOn(saved.fixtureId)).toEqual([]);
     expect(saved.calls).toEqual([]);
+    // Fix round 1 (m3), the positive pair: on again, the next retry (after the spacing) starts on Seazn and clears the stored refusal —
+    // nothing latches the refusal across the switch.
+    await on(saved);
+    saved.tick(AUTO_START_RETRY_SECONDS * SEC);
+    await beat(saved, phone);
+    expect((await sessionsOn(saved.fixtureId)).map((s) => s.destination_kind), "on again: the retry starts on Seazn").toEqual(["seazn"]);
+    const [cleared] = await sql<{ auto_start_refusal: string | null }[]>`select auto_start_refusal from fixture_stream_settings where fixture_id = ${saved.fixtureId}`;
+    expect(cleared!.auto_start_refusal, "the stored refusal is cleared by the start").toBeNull();
 
     const unpicked = await phoneRig();
     const phone2 = phoneId("b");
@@ -253,6 +294,25 @@ describe.skipIf(!HAS_DB)("off: the phone's start and the automatic start", () =>
     expect(await sessionsOn(unpicked.fixtureId), "the next destination, the pasted key").toEqual([
       expect.objectContaining({ destination_kind: "youtube", target_id: unpicked.target.id }),
     ]);
+  });
+});
+
+describe.skipIf(!HAS_DB)("fix round 1: the automatic start racing a switch-off", () => {
+  it("(m1 + m2) the switch goes off after the automatic start resolved its saved Seazn pick but before admission's lock: refused under the lock and STORED as no_destination (the organiser's to fix), never `unavailable`; no row", async () => {
+    const r = await phoneRig();
+    const phone = phoneId("r");
+    await beat(r, phone, { claim: "new", mode: "operator" });
+    await saveStreamSettings(r.auth, r.fixtureId, { autoStream: true, targetId: r.seazn });
+    expect(await pickOf(r.auth.orgId, r.fixtureId), "PREMISE: on, the pick resolves to Seazn").toMatchObject({ id: r.seazn });
+    const raced = flipAtStorageRead(r.deps, () => off(r));
+    r.deps = raced.deps;
+    await beat(r, phone);
+    expect(raced.flipped(), "PREMISE: the switch went off inside the window (once)").toBe(1);
+    const [row] = await sql<{ auto_start_refusal: string | null; auto_started_at: Date | null }[]>`
+      select auto_start_refusal, auto_started_at from fixture_stream_settings where fixture_id = ${r.fixtureId}`;
+    expect(row, "refused by the lock-time read, stored as the organiser's to fix").toEqual({ auto_start_refusal: "no_destination", auto_started_at: null });
+    expect(await sessionsOn(r.fixtureId), "no session row").toEqual([]);
+    expect(r.calls, "nothing asked of the provider past the storage read").toEqual(["ingest.storageUsage"]);
   });
 });
 

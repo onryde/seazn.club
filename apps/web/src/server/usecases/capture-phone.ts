@@ -851,7 +851,8 @@ export function phoneStartRefusal(err: unknown): CaptureRefusalError | { already
     // composed gate CAN answer a phone start now; it and an unconfigured Seazn are the deployment's, and the phone tries again.
     case "composed_unavailable":
     case SEAZN_VIDEO_UNCONFIGURED: return new CaptureRefusalError(503, "unavailable", `the stream cannot start: ${err.code}`);
-    // Seazn is off on this deployment: the organiser picks another destination.
+    // Seazn is not offered — off on this deployment, or switched off by the organisation (V553, Task 33): the organiser turns it on
+    // or picks another destination.
     case SEAZN_UNAVAILABLE: return noDestination("the picked destination is Seazn, which is not available");
     // An assumption made a guard: a phone start passes phone: "present" because the caller IS the current phone (T12,
     // checked first), so W5 cannot answer it — neither of its answers (owner ruling 2026-10-09 split it in two). Refused by

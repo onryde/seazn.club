@@ -41,13 +41,16 @@ export function autoStartRefusalOf(err: unknown): AutoStartRefusal | "already_ru
     case "no_credits": return "no_credit";
     case "target_in_use": return "destination_in_use";
     case DESTINATION_NOT_ALLOWED:
-    case TARGET_UNREADABLE: return "no_destination";
+    case TARGET_UNREADABLE:
+    // Task 33 fix round 1 (m2): Seazn not offered — the deployment's flag or, since V553, the organisation's own switch — is the
+    // organiser's to fix (turn it on, or pick another destination), as the phone's start maps it (`phoneStartRefusal`). Reached only
+    // when the switch goes off after the pick resolved; the steady state is the resolver hiding the row, stored as no_destination too.
+    case SEAZN_UNAVAILABLE: return "no_destination";
     case "storage_exhausted":
     case "ingest_unavailable":
     // Seazn-hosted video (Task 11): a Seazn destination makes the start composed whatever `startModeFor` resolved, so the
-    // composed gate CAN answer it now, and the Seazn destination's own two refusals are the deployment's — retried, not fixed.
+    // composed gate CAN answer it now; it and an unconfigured Seazn are the deployment's — retried, not fixed.
     case "composed_unavailable":
-    case SEAZN_UNAVAILABLE:
     case SEAZN_VIDEO_UNCONFIGURED: return "unavailable";
     case "active_session": return "already_running";
     // An assumption made a guard: an automatic start passes phone: "present" because the arriving beat IS the current

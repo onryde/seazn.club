@@ -458,6 +458,15 @@ export async function startBroadcast(
     // Remove take the same lock, so a Remove cannot interleave with this Go live. An archived target is absent here
     // (`archived_at is null`), so `admit` answers the existing 404 target_not_found shape.
     const targetBelongsToOrg = await lockStreamTarget(tx, orgId, body.targetId);
+    // Task 33 fix round 1 (m1): the org's Seazn switch (V553 `offered`) is re-read UNDER that lock. The early read above ran before
+    // the storage read (a provider call: seconds), and the switch's PUT updates this same row, so the two serialise here: an off that
+    // committed before this lock refuses this start by the same 422, before anything is written; one that commits after it finds
+    // the session already admitted, which it never stops (owner ruling: the switch gates only NEW starts). A row archived since the
+    // early read reads `seazn: false` here and `admit` answers it 404, as for any start.
+    if (seazn && seaznClosed(await isSeaznTarget(tx, orgId, body.targetId))) {
+      log.warn({ fixtureId, orgId }, "stream session: the org switched the Seazn destination off while this start was admitted — start refused");
+      throw seaznUnavailable();
+    }
     // O17 fix round 1 (finding 3): a court start re-reads the match's Stream switch under its settings-row lock, in the
     // transaction that inserts the session. `pairingFor` read it before the slow prepare; a switch-off landing in between
     // (setCourtStream holds the same row lock while it writes) is refused here by name, so no session is ever inserted for a

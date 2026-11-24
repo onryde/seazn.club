@@ -38,6 +38,9 @@ import { stopSession } from "@/server/usecases/stream-sessions";
 import { createPlaybackTokenCache } from "../cf-playback";
 import { seaznFixtureVideo, seaznReplayPartNos } from "../seazn-video";
 import { seaznVideoPlan } from "../seazn-video-plan";
+import { FakeReplayHost } from "../replay-fake";
+import { setSeaznOffered } from "@/server/usecases/stream-targets";
+import { movedReplays } from "./_seazn-replay-rig";
 import { type SeaznRig as Rig, goLive, installSeaznEnv, kindOf, live, seaznRig as rig, seedLockedRecording, stateOf, stopAndSettle } from "./_seazn-session-rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -187,6 +190,46 @@ describe.skipIf(!HAS_DB)("seaznVideoPlan: which player the match page mounts", (
     await stopAndSettle(r, f, sid2);
     await setStatus(f, "decided");
     expect((await hintsOf(f, now)).activeUntil, "ended and decided").toBeNull();
+  });
+
+  // Task 33 fix round 1 (m5): the org's Seazn switch (V553) gates only NEW Seazn picks and starts (owner ruling). Arm 1 (a Seazn session
+  // or replay) never reads it, so a running or replayed Seazn fixture keeps its player; arm 3 (unstarted) reads it only through the
+  // resolver, on purpose — the player appears exactly when Go live would stream to Seazn.
+  it("fix round 1 (m5): the switch is NOT read for a fixture with a Seazn session or replay — off, a LIVE session's plan and a replayed fixture's plan are unchanged, whole (counted)", async () => {
+    const r = await rig();
+    const [running, replayed] = r.fixtureIds;
+    const host = new FakeReplayHost();
+    const m = await movedReplays(r, replayed, host, { parts: 2 });
+    const sid = await live(r, running, r.seazn);
+    expect(await kindOf(sid), "PREMISE: the running session is Seazn's").toBe("seazn");
+    const at = new Date(m.t0 + 16 * 60_000);
+    const plans = async () => ({ running: await seaznVideoPlan(running, at), replayed: await seaznVideoPlan(replayed, at) });
+    const before = await plans();
+    expect(before.running.player, "PREMISE: the running fixture plays Seazn").toBe("seazn");
+    expect(before.replayed, "PREMISE: the replayed fixture lists its two parts").toMatchObject({ player: "seazn", replayParts: [1, 2] });
+    expect(await setSeaznOffered(r.auth, r.auth.orgId, false), "PREMISE: the switch is off").toEqual({ offered: false });
+    const after = await plans();
+    let checked = 0;
+    for (const k of ["running", "replayed"] as const) {
+      expect(after[k], `${k}: the same plan, whole`).toEqual(before[k]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(2);
+  });
+
+  it("fix round 1 (m5): an UNSTARTED fixture follows the switch, by its default and by its saved Seazn pick — off: external (the default falls to the pasted key; the saved pick resolves to none); on again: seazn", async () => {
+    const r = await rig();
+    const [byDefault, bySaved] = r.fixtureIds;
+    await saveStreamSettings(r.auth, bySaved, { targetId: r.seazn });
+    expect(await defaultPick(r, byDefault), "PREMISE: on, the default is Seazn").toBe(r.seazn);
+    expect(await defaultPick(r, bySaved), "PREMISE: on, the saved pick is Seazn").toBe(r.seazn);
+    expect([await playerOf(byDefault), await playerOf(bySaved)], "on").toEqual(["seazn", "seazn"]);
+    await setSeaznOffered(r.auth, r.auth.orgId, false);
+    expect(await defaultPick(r, byDefault), "PREMISE: off, the default falls to the pasted key").toBe(r.pasted);
+    expect(await defaultPick(r, bySaved), "PREMISE: off, the saved Seazn pick resolves to none").toBeNull();
+    expect([await playerOf(byDefault), await playerOf(bySaved)], "off").toEqual(["external", "external"]);
+    await setSeaznOffered(r.auth, r.auth.orgId, true);
+    expect([await playerOf(byDefault), await playerOf(bySaved)], "on again").toEqual(["seazn", "seazn"]);
   });
 
   it("an UNSTARTED fixture (no session, not over): seazn when its default is Seazn and LIVE is on; external with LIVE off, where the default is the pasted key", async () => {

@@ -42,9 +42,9 @@ export async function targetConnectionId(tx: Tx, orgId: string, targetId: string
 /** Seazn-hosted video (Task 11): is `targetId` this org's ACTIVE `seazn` destination (V541), and is it offered (the org's switch,
  *  V553, Task 33)? Another org's target, an archived or a missing one answers `{ seazn: false }`, so admission carries on and `admit`
  *  answers it 404 as before (no oracle). A row's kind is fixed when it is made (no code updates it), so a read before the admission's
- *  row lock answers as one under it would. `offered` is NOT fixed: it is read once, here, and a switch-off that commits after this
- *  read does not stop this start — the same as a switch-off never stops a session already running (owner ruling: the switch gates
- *  only NEW starts). An external row always reads `offered: true` (V553's check). */
+ *  row lock answers as one under it would. `offered` is NOT fixed: `startBroadcast` reads it early (to refuse before any provider
+ *  call) and again UNDER admission's row lock, where the switch's own UPDATE serialises with the start (Task 33 fix round 1, m1). An
+ *  external row always reads `offered: true` (V553's check). */
 export async function isSeaznTarget(exec: Tx | typeof sql, orgId: string, targetId: string): Promise<{ seazn: boolean; offered: boolean }> {
   const [t] = await exec<{ seazn: boolean; offered: boolean }[]>`
     select kind = 'seazn' as seazn, offered from org_stream_targets where id = ${targetId} and org_id = ${orgId} and archived_at is null`;

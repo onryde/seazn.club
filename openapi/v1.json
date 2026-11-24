@@ -100837,7 +100837,7 @@
         ]
       },
       "put": {
-        "summary": "Turn the organisation's Seazn destination on or off. Off gates only NEW Seazn picks and starts: naming it then answers 422 seazn_unavailable, a match that saved it as its pick resolves to no destination, and one that only defaulted to it falls to the organisation's next destination. A live Seazn stream keeps running and stops normally, and every recording and replay stays playable, downloadable and deletable. Returns the stored switch; a second PUT with the same value is the same answer. Editors only (owner / admin); never key-accessible. 404 when the organisation has no Seazn destination",
+        "summary": "Turn the organisation's Seazn destination on or off. Off gates only NEW Seazn picks and starts: naming it then answers 422 seazn_unavailable, a match that saved it as its pick resolves to no destination, and one that only defaulted to it falls to the organisation's next destination. A live Seazn stream keeps running and stops normally, and every recording and replay stays playable, downloadable and deletable. Returns the stored switch; a second PUT with the same value is the same answer. Editors only (owner / admin); a viewer is 403, and an admin whose seat is over the plan's member quota is read-only, 402. Never key-accessible. 404 when the organisation has no Seazn destination",
         "tags": [
           "fixtures"
         ],
@@ -100965,6 +100965,50 @@
           },
           "401": {
             "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Plan upgrade required",
             "content": {
               "application/json": {
                 "schema": {
