@@ -65,6 +65,47 @@ export interface TemplateKnobs {
   legs: number;
 }
 
+/** The builder's split of a qualifier count over pools: `q = pools * n + r` - the top `n` of EVERY pool, then `r` more from the next
+ *  place. ONE function for every door that turns a count into a per-group take: the division builder's Groups + Knockout (below) and the
+ *  Add stage form after a group stage (components/v2/stages-panel.tsx), so the two say the same thing for the same count. */
+export function splitQualifiers(q: number, poolCount: number): { n: number; r: number } {
+  const n = Math.floor(q / poolCount);
+  return { n, r: q - n * poolCount };
+}
+
+/** The take for `q` qualifiers out of `poolCount` pools (`splitQualifiers`): `topNPerGroup{n}`, then `bestNth{n+1, r}` for the
+ *  remainder. See the groups_ko template below for why each piece is what it is. */
+export function groupsKoTake(q: number, poolCount: number): TakeRule[] {
+  // n === 0 (q < poolCount) collapses to a no-op topNPerGroup(0) — the
+  // engine's expandOne loops `wave <= rule.n`, so n=0 contributes zero
+  // pots — so it's omitted here, and the whole take becomes
+  // bestNth(nth:1, count:q): the best q pool-winners by cross-pool
+  // rank, i.e. "topNPerGroup 1" (every pool's winner) truncated to q.
+  // Reachable from EITHER the Settings tab's free 2-32 qualified input
+  // (division-settings.tsx) OR the builder's own dropdown (qualified 2,
+  // pools >= 3, division-builder.tsx) — not the Settings tab alone.
+  const { n, r } = splitQualifiers(q, poolCount);
+  const take: TakeRule[] = [];
+  if (n > 0) take.push({ kind: "topNPerGroup", n });
+  // normaliseUnequalPools:true is accepted and ignored (ruling 286, engine 10;
+  // W5 app PR B T4, K20). Pools are built by snakeDistribute
+  // (usecases/stages/generators.ts), which leaves unequal sizes whenever the
+  // entrants don't divide by poolCount - the common case. Since ruling 286
+  // the engine ALWAYS compares a best-Nth across unequal pools on the
+  // smallest SUPPLYING pool's matches (k = effective size - that minimum,
+  // each larger pool's bottom k results left out; RB5-U1/U8), whatever the
+  // flag says; it is still stamped so a stored config reads the same before
+  // and after the bump. SEEDING_BESTNTH_UNEQUAL_POOLS is no longer thrown.
+  //
+  // A pool SHORTER than nth (= n+1) is no hazard either: it supplies no
+  // candidate and is left out of the comparison (RB5-U7). Only a best-Nth
+  // that NO pool supplies is refused, by name: SEEDING_BESTNTH_NO_SUPPLIER
+  // (stored-progression.ts `bestNthRefusal`), and the builder's cut gate
+  // (field-cut-gate.ts `potSupply`) refuses it before Start.
+  if (r > 0) take.push({ kind: "bestNth", nth: n + 1, count: r, normaliseUnequalPools: true });
+  return take;
+}
+
 export const STAGE_TEMPLATES: {
   key: string;
   build: (knobs: TemplateKnobs) => StageDraft[];
@@ -110,34 +151,7 @@ export const STAGE_TEMPLATES: {
       // `picks` interleave, which hardcoded pools "A"/"B" and silently
       // produced zero qualifiers from any pool beyond the second.
       //
-      // n === 0 (q < poolCount) collapses to a no-op topNPerGroup(0) — the
-      // engine's expandOne loops `wave <= rule.n`, so n=0 contributes zero
-      // pots — so it's omitted here, and the whole take becomes
-      // bestNth(nth:1, count:q): the best q pool-winners by cross-pool
-      // rank, i.e. "topNPerGroup 1" (every pool's winner) truncated to q.
-      // Reachable from EITHER the Settings tab's free 2-32 qualified input
-      // (division-settings.tsx) OR the builder's own dropdown (qualified 2,
-      // pools >= 3, division-builder.tsx) — not the Settings tab alone.
-      const n = Math.floor(q / poolCount);
-      const r = q - n * poolCount;
-      const take: TakeRule[] = [];
-      if (n > 0) take.push({ kind: "topNPerGroup", n });
-      // normaliseUnequalPools:true is accepted and ignored (ruling 286, engine 10;
-      // W5 app PR B T4, K20). Pools are built by snakeDistribute
-      // (usecases/stages/generators.ts), which leaves unequal sizes whenever the
-      // entrants don't divide by poolCount - the common case. Since ruling 286
-      // the engine ALWAYS compares a best-Nth across unequal pools on the
-      // smallest SUPPLYING pool's matches (k = effective size - that minimum,
-      // each larger pool's bottom k results left out; RB5-U1/U8), whatever the
-      // flag says; it is still stamped so a stored config reads the same before
-      // and after the bump. SEEDING_BESTNTH_UNEQUAL_POOLS is no longer thrown.
-      //
-      // A pool SHORTER than nth (= n+1) is no hazard either: it supplies no
-      // candidate and is left out of the comparison (RB5-U7). Only a best-Nth
-      // that NO pool supplies is refused, by name: SEEDING_BESTNTH_NO_SUPPLIER
-      // (stored-progression.ts `bestNthRefusal`), and the builder's cut gate
-      // (field-cut-gate.ts `potSupply`) refuses it before Start.
-      if (r > 0) take.push({ kind: "bestNth", nth: n + 1, count: r, normaliseUnequalPools: true });
+      const take = groupsKoTake(q, poolCount);
       return [
         {
           kind: "group",
