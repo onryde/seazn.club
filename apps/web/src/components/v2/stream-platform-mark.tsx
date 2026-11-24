@@ -32,8 +32,10 @@ const MARK: Record<StreamTargetKind, { bg: string; fg: string; letter: string }>
   facebook: { bg: "#1877f2", fg: "#ffffff", letter: "f" },
   kick: { bg: "#53fc18", fg: "#0b0e0f", letter: "K" },
   custom_rtmp: { bg: "#e2e8f0", fg: "#334155", letter: "•" },
-  // Seazn-hosted video (V541): the house tile. The Streaming page lists the row only while SEAZN_HOSTED_LIVE is on.
-  seazn: { bg: "#0f172a", fg: "#ffffff", letter: "S" },
+  // Seazn-hosted video (V541): the house lime (owner, 2026-11-24: "green lime") with the night letter. The Streaming page lists the row
+  // only while SEAZN_HOSTED_LIVE is on. A rendered lime aliases Tailwind's `--color-lime-400`, NEVER `--mk-lime` (globals.css, the note
+  // beside `--color-night`: the two differ under Tailwind v4); the fallback is that token's own sRGB value.
+  seazn: { bg: "var(--color-lime-400, #9ae600)", fg: "var(--color-night)", letter: "S" },
 };
 
 /** Every kind with a mark — held equal to `StreamTargetKind.options` by the destinations panel's test. */
