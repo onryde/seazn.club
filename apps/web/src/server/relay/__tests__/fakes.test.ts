@@ -70,6 +70,42 @@ describe("FakeIngest", () => {
     expect(await fake.listInputVideos(camera.inputId), "the fake's own page holds all three").toHaveLength(3);
   });
 
+  // Seazn Task 36: the held create the provisioning tests settle by hand. Read back here so they can trust it: a held create
+  // makes nothing (no input, no provider call) until it is answered, a failed one never makes anything, `whenHeld` wakes on the
+  // n-th ask and not before, and the order the test answers in is the order the creates settle in.
+  it("Seazn Task 36: holdCreates — a held create makes nothing until answered; a failed one makes nothing; whenHeld wakes on the n-th ask; the test picks the settle order", async () => {
+    const recorder = new FakeRecorder();
+    const fake = new FakeIngest({ recorder });
+    const flush = () => new Promise<void>((res) => setImmediate(res));
+    const settled: string[] = [];
+    const track = <T,>(p: Promise<T>, name: string) => { p.then(() => settled.push(name), () => settled.push(`${name}:failed`)); return p; };
+    // The empty case: nothing asked, so a wait for one is still waiting after a flush.
+    fake.holdCreates();
+    let wokeForTwo = false;
+    void fake.whenHeld(2).then(() => { wokeForTwo = true; });
+    const camera = track(fake.createLiveInput({ sessionId: "s1", slot: 0 }), "camera");
+    await flush();
+    expect([fake.heldCreates.length, settled, wokeForTwo], "one asked, none answered, the wait for two still waiting").toEqual([1, [], false]);
+    const programme = track(fake.createLiveInput({ sessionId: "s1", slot: 0, role: "programme" }), "programme");
+    await fake.whenHeld(2);
+    await fake.whenHeld(1);   // already met: answers at once
+    expect(wokeForTwo).toBe(true);
+    expect(fake.heldCreates.map((h) => h.spec.role ?? "camera"), "both asked, in order").toEqual(["camera", "programme"]);
+    await flush();
+    expect([settled, recorder.calls], "neither answered: nothing settled, no provider call recorded").toEqual([[], []]);
+    // The test answers the PROGRAMME first: it settles first, and only then is its input made.
+    fake.heldCreates[1]!.answer();
+    const made = await programme;
+    expect(settled).toEqual(["programme"]);
+    expect(fake.isEnabled(made.inputId), "the answered create made its input").toBe(true);
+    const refusal = Object.assign(new Error("provider 500"), { status: 500 });
+    fake.heldCreates[0]!.fail(refusal);
+    await expect(camera).rejects.toBe(refusal);
+    await flush();
+    expect(settled).toEqual(["programme", "camera:failed"]);
+    expect(recorder.calls.map((c) => [c.operation, c.subjectId]), "ONE create recorded — the answered one; the failed one made nothing").toEqual([["createLiveInput", made.inputId]]);
+  });
+
   // Seazn Task 13: the fake's token, its per-video lock, and the seeded listing that stands in for C6 (a listing that answers
   // another input's recording). Each control is read back here so the usecase tests can trust it.
   it("Seazn Task 13: a token reads fake.<uid>.<exp seconds>[.dl]; requireSignedVideo signs a video it holds and answers absent for one it does not; a seeded listing answers another input's video under ITS OWN inputId", async () => {
