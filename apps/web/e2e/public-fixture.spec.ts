@@ -546,6 +546,54 @@ test.describe("the Seazn player over time (1280)", () => {
     }
   });
 
+  // The T15 seam on the hls.js path, witnessed in CI: the test above takes whichever path this Chromium has, and the pinned build answers
+  // "maybe" to HLS (the native path, where a refresh is a `video.src` re-point and hls.js never runs). Forced onto hls.js here, so the
+  // per-request token rewrite is what is proved: one manifest load under the first token, then, after a refresh, a segment asked for
+  // under the NEWEST token. (The stand-in answers the segment with a playlist, which hls.js will not accept: that failure comes after the
+  // request this asserts, and nothing here follows it.)
+  test("on hls.js a refreshed address is not a reload: the manifest is loaded once, and the segment goes out under the refreshed token", async ({ page }) => {
+    test.setTimeout(SEAZN_SEED_MS + SEAZN_NAV_MS + 2 * ONE_RE_READ_MS);
+    const m = await seedSeaznMatch(page, { name: `Seazn Refresh hls.js ${TAG}`, live: true });
+    try {
+      await forceHlsJs(page);
+      const stub = await stubFakePlaybackHost(page);
+      // The REAL route's answer; only its expiry (the island's own schedule re-reads at the floor) and, from the second read on, the token
+      // segment of its address are changed.
+      let liveReads = 0;
+      await page.route(VIDEO_ROUTE, async (route) => {
+        const real = await route.fetch();
+        const body = (await real.json()) as { ok: boolean; data: { live: { src: string; expiresAt: string } | null } };
+        if (body.data?.live) {
+          liveReads += 1;
+          body.data.live.expiresAt = new Date(Date.now() + (SEAZN_TOKEN_REFRESH_BEFORE_SECONDS * 1000 + SEAZN_VIDEO_POLL_FLOOR_MS + 1_000)).toISOString();
+          if (liveReads >= 2) body.data.live.src = body.data.live.src.replace(/\/fake\.[^/]+\//, `/refreshed-${liveReads}/`);
+        }
+        await route.fulfill({ response: real, json: body });
+      });
+      await page.goto(m.publicPath);
+      await dismissCookieBanner(page);
+      const video = seaznPlayer(page);
+      await expect(video).toBeVisible({ timeout: ONE_RE_READ_MS });
+      expect(await playsHlsNatively(page), "premise: the page is on the hls.js path (forceHlsJs took)").toBe(false);
+      const first = (await video.getAttribute("data-src"))!;
+      expect(first, "premise: the first address is the unrefreshed one").not.toMatch(/\/refreshed-\d+\//);
+      await expect.poll(() => stub.requests, { message: "hls.js loaded the manifest under the first token" }).toContain(first);
+      const element = await video.elementHandle();
+      await expect(video, "the next re-read hands over the refreshed address").toHaveAttribute("data-src", /\/refreshed-2\//, { timeout: ONE_RE_READ_MS });
+      expect(await video.elementHandle().then((h) => h!.evaluate((el, old) => el === old, element)), "the same <video> node").toBe(true);
+      // A refresh is NOT a load on hls.js: handing it another address would detach the media; nothing asked for the refreshed manifest.
+      expect(stub.requests.filter((u) => /\/refreshed-\d+\//.test(u)), "no request yet names the refreshed token").toEqual([]);
+      expect(stub.requests.filter((u) => /\/manifest\/video\.m3u8$/.test(u)).every((u) => u === first), "the manifest was only ever asked for under the first token").toBe(true);
+      await video.evaluate((el: HTMLVideoElement) => { el.muted = true; void el.play().catch(() => undefined); });
+      await expect
+        .poll(() => stub.requests.some((u) => /\/refreshed-\d+\/manifest\/seg0\.ts$/.test(u)), { message: "the segment went out under the refreshed token", timeout: 15_000 })
+        .toBe(true);
+      expect(stub.requests.filter((u) => /\/seg0\.ts$/.test(u) && !/\/refreshed-\d+\//.test(u)), "and none under the first token").toEqual([]);
+    } finally {
+      await finishSeaznMatch(m);
+    }
+  });
+
   test("a player that gave up is rebuilt by the next read: the note shows, then a fresh element takes its place", async ({ page }) => {
     // Seed + load, the failure (hls.js retries a refused manifest once), then one re-read (the island asks at once; it waits out the floor).
     test.setTimeout(SEAZN_SEED_MS + SEAZN_NAV_MS + ONE_RE_READ_MS + 20_000);
