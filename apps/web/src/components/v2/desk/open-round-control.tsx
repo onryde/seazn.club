@@ -17,6 +17,7 @@ import type { ArbiterBoard } from "@/lib/arbiter-view";
 import { SEAT_WORD_KEYS, seatWords } from "@/lib/invite-status";
 import type { MessageKey } from "@/lib/messages";
 import { ONLINE_CHESS_DISABLED_CODE } from "@/lib/online-chess";
+import { paymentNoticeOf } from "@/lib/online-receipt";
 import {
   BILLING_FROZEN_CODE,
   ONLINE_GAME_EXISTS_CODE,
@@ -196,7 +197,20 @@ export function openNoticeText(n: OpenRoundNotice, round: OpenRoundView, msg: Ms
     const p = round.pairings.find((x) => x.fixtureId === fixtureId);
     return p ? boardLabel(p, msg) : fixtureId;
   };
+  // Online Chess credits: a line about money is said only when the server says this press applied a payment (`paymentNoticeOf`: never for a
+  // `pay` the package ignored - frozen, or already at that size - and never for a round that did not open).
+  const payment = paymentNoticeOf(r);
+  const paymentLines =
+    payment === null
+      ? []
+      : [
+          payment.kind === "paid"
+            ? plural("onlineChess.openRound.paid", payment.credits, { round: round.roundNo })
+            : msg("onlineChess.openRound.moved", { size: payment.size, round: round.roundNo }),
+          ...(payment.capacityLoweredTo === null ? [] : [msg("onlineChess.openRound.capacityLowered", { size: payment.capacityLoweredTo })]),
+        ];
   return [
+    ...paymentLines,
     ...head,
     ...r.skipped.map((s) =>
       msg("runsheet.round.skipLine", { board: boardOf(s.fixtureId), reason: msg(OPEN_ROUND_SKIP_KEYS[s.reason] as MessageKey) }),

@@ -15,6 +15,8 @@
 import { describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import { ApiV1Error } from "@/lib/client-v1";
+import { ONLINE_PACKAGE_CODES } from "@/lib/online-chess-package";
+import { quoteOf } from "@/lib/__tests__/_receipt-quote";
 import type { OpenRoundResult } from "@/lib/open-round";
 import {
   initialOpenRoundUi,
@@ -30,7 +32,7 @@ const run = (...actions: OpenRoundUiAction[]) => actions.reduce(openRoundUi, s0)
 
 describe("open-round reducer — the rules, one at a time", () => {
   it("the empty case first: nothing pressed ⇒ no dialog, nothing in flight, no notice", () => {
-    expect(s0).toEqual({ confirming: false, busy: null, notice: null, rowNotice: null });
+    expect(s0).toEqual({ confirming: false, busy: null, notice: null, rowNotice: null, pay: null });
   });
 
   it("R2: Open sends nothing until the confirmation is up; from it, it is THE request in flight", () => {
@@ -60,7 +62,7 @@ describe("open-round reducer — the rules, one at a time", () => {
     const stray = openRoundUi(s0, { type: "openDone", outcome: { ok: true, result: OPENED } });
     expect(stray, "no open in flight").toBe(s0);
     const done = run({ type: "ask" }, { type: "open" }, { type: "openDone", outcome: { ok: true, result: OPENED } });
-    expect(done).toEqual({ confirming: false, busy: null, notice: { kind: "answered", result: OPENED }, rowNotice: null });
+    expect(done).toEqual({ confirming: false, busy: null, notice: { kind: "answered", result: OPENED }, rowNotice: null, pay: null });
     const failed = run({ type: "ask" }, { type: "open" }, { type: "openDone", outcome: { ok: false, code: "ROUND_CHANGED" } });
     expect(failed.notice).toEqual({ kind: "failed", code: "ROUND_CHANGED" });
     expect(failed.confirming).toBe(false);
@@ -77,6 +79,7 @@ describe("open-round reducer — the rules, one at a time", () => {
       busy: null,
       notice: null,
       rowNotice: { fixtureId: "f1", notice: { kind: "resent", emailed: 2, retrying: 1 } },
+      pay: null,
     });
   });
 
@@ -124,7 +127,7 @@ describe("open-round reducer — reset (the round on screen changed)", () => {
 // The sequence property: random presses and answers, the reducer against a
 // model of R1–R5 (written from the rules above).
 
-type Model = { confirming: boolean; busy: OpenRoundUiState["busy"] };
+type Model = { confirming: boolean; busy: OpenRoundUiState["busy"]; pay: boolean };
 const IDS = ["f1", "f2"] as const;
 const openDone = (ok: boolean): OpenRoundUiAction =>
   ok ? { type: "openDone", outcome: { ok: true, result: OPENED } } : { type: "openDone", outcome: { ok: false, code: "E" } };
@@ -133,6 +136,10 @@ const resendDone = (fixtureId: string, ok: boolean): OpenRoundUiAction =>
     ? { type: "resendDone", fixtureId, outcome: { ok: true, emailed: 2, retrying: 0 } }
     : { type: "resendDone", fixtureId, outcome: { ok: false, code: "E" } };
 const actionArb: fc.Arbitrary<OpenRoundUiAction> = fc.oneof(
+  fc.constant<OpenRoundUiAction>({ type: "unpaid", quote: quoteOf({ size: 16 }), next: null }),
+  fc.constant<OpenRoundUiAction>({ type: "pay" }),
+  fc.constant<OpenRoundUiAction>({ type: "payFailed" }),
+  fc.constant<OpenRoundUiAction>({ type: "closePay" }),
   fc.constant<OpenRoundUiAction>({ type: "ask" }),
   fc.constant<OpenRoundUiAction>({ type: "cancel" }),
   fc.constant<OpenRoundUiAction>({ type: "open" }),
@@ -144,17 +151,25 @@ const actionArb: fc.Arbitrary<OpenRoundUiAction> = fc.oneof(
 function step(m: Model, a: OpenRoundUiAction): Model {
   switch (a.type) {
     case "reset":
-      return { confirming: false, busy: null };
+      return { confirming: false, busy: null, pay: false };
     case "ask":
-      return m.busy === null ? { ...m, confirming: true } : m;
+      return m.busy === null && !m.pay ? { ...m, confirming: true } : m;
     case "cancel":
       return m.busy === null ? { ...m, confirming: false } : m;
     case "open":
       return m.busy === null && m.confirming ? { ...m, busy: { kind: "open" } } : m;
+    case "unpaid":
+      return m.busy?.kind === "open" ? { confirming: false, busy: null, pay: true } : m;
+    case "pay":
+      return m.busy === null && m.pay ? { ...m, busy: { kind: "open" } } : m;
+    case "payFailed":
+      return m.busy?.kind === "open" && m.pay ? { ...m, busy: null } : m;
+    case "closePay":
+      return m.busy === null && m.pay ? { ...m, pay: false } : m;
     case "resend":
-      return m.busy === null && !m.confirming ? { ...m, busy: { kind: "resend", fixtureId: a.fixtureId } } : m;
+      return m.busy === null && !m.confirming && !m.pay ? { ...m, busy: { kind: "resend", fixtureId: a.fixtureId } } : m;
     case "openDone":
-      return m.busy?.kind === "open" ? { confirming: false, busy: null } : m;
+      return m.busy?.kind === "open" ? { confirming: false, busy: null, pay: false } : m;
     case "resendDone":
       return m.busy?.kind === "resend" && m.busy.fixtureId === a.fixtureId ? { ...m, busy: null } : m;
   }
@@ -162,31 +177,42 @@ function step(m: Model, a: OpenRoundUiAction): Model {
 
 describe("open-round reducer — random sequences hold R1–R5", () => {
   it("over random sequences the reducer agrees with the rules' model at every step (anti-vacuity: each rule's case reached)", () => {
-    const reached = { opens: 0, refusedSecond: 0, resends: 0, strayDone: 0, cancelBusy: 0 };
+    const reached = { opens: 0, refusedSecond: 0, resends: 0, strayDone: 0, cancelBusy: 0, unpaid: 0, pays: 0, payRefused: 0, receiptClosed: 0 };
     fc.assert(
-      fc.property(fc.array(actionArb, { minLength: 1, maxLength: 24 }), (actions) => {
+      fc.property(
+        // A random tail after a random prefix: the receipt's path (ask, open, unpaid, pay) is five coordinated presses, which a purely random
+        // sequence almost never strings together; the prefixes put the property INSIDE it (anti-vacuity below counts that it got there).
+        fc.tuple(fc.constantFrom<OpenRoundUiAction[]>([], [{ type: "ask" }, { type: "open" }, { type: "unpaid", quote: quoteOf({ size: 16 }), next: null }], [{ type: "ask" }, { type: "open" }, { type: "unpaid", quote: quoteOf({ size: 16 }), next: null }, { type: "pay" }]), fc.array(actionArb, { minLength: 1, maxLength: 24 })).map(([prefix, tail]) => [...prefix, ...tail]),
+        (actions) => {
         let s = s0;
-        let m: Model = { confirming: false, busy: null };
+        let m: Model = { confirming: false, busy: null, pay: false };
         for (const a of actions) {
           const before = s;
           s = openRoundUi(s, a);
           m = step(m, a);
-          expect({ confirming: s.confirming, busy: s.busy }).toEqual(m);
+          expect({ confirming: s.confirming, busy: s.busy, pay: s.pay !== null }).toEqual(m);
           // R1: never two requests, by construction of `busy`; count what the property saw.
           if (a.type === "open" && before.busy === null && before.confirming) reached.opens += 1;
           if ((a.type === "open" || a.type === "resend") && before.busy !== null) reached.refusedSecond += 1;
           if (a.type === "resend" && before.busy === null && !before.confirming) reached.resends += 1;
           if ((a.type === "openDone" || a.type === "resendDone") && s === before) reached.strayDone += 1;
           if (a.type === "cancel" && before.busy !== null) reached.cancelBusy += 1;
+          if (a.type === "unpaid" && before.busy?.kind === "open") reached.unpaid += 1;
+          if (a.type === "pay" && before.busy === null && before.pay !== null) reached.pays += 1;
+          if (a.type === "payFailed" && before.busy?.kind === "open" && before.pay !== null) reached.payRefused += 1;
+          if (a.type === "closePay" && before.busy === null && before.pay !== null) reached.receiptClosed += 1;
           // R5: an open's answer is the round's notice, and only it sets one.
           if (a.type === "openDone" && before.busy?.kind === "open") {
             expect(s.notice).toEqual(a.outcome.ok ? { kind: "answered", result: a.outcome.result } : { kind: "failed", code: a.outcome.code });
+          } else if (a.type === "unpaid" && before.busy?.kind === "open") {
+            expect(s.notice, "R6: an unpaid answer sets no notice").toBeNull();
           } else if (a.type !== "open") {
             expect(s.notice).toBe(before.notice);
           }
         }
-      }),
-      { numRuns: 300, seed: 160416 },
+      },
+      ),
+      { numRuns: 600, seed: 160416 },
     );
     for (const [rule, n] of Object.entries(reached)) expect(n, `anti-vacuity: ${rule}`).toBeGreaterThan(0);
   });
@@ -239,3 +265,128 @@ describe("openRoundRunner — at most one request on the network", () => {
     expect(await runner.open("s1", 1)).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Online Chess credits (spec 2026-11-23-online-chess-credits-design.md §7.6, §8.4; plan Task 12): an Open press on an UNPAID package is answered
+// with the receipt's ask (402 ONLINE_CHESS_UNPAID { quote, next }), and the receipt's confirm is the open again with `pay`. The rules:
+//   R6 an unpaid answer lands only on the open in flight (R3): it closes the confirmation, sets no notice and stands the receipt up;
+//   R7 the receipt's confirm is a request in flight too (one at a time, R1) and only from a standing receipt; a refusal of it (409 changed, 402 short,
+//      anything else) leaves the receipt standing and frees the press, and ITS answer is the round's notice and closes the receipt (R5);
+//   R8 the receipt can be closed only while nothing is in flight (R4), and while it stands no confirmation or resend can be raised.
+const ASK = { quote: quoteOf({ size: 64, held: 41, rounds: 5 }), next: null };
+const unpaidOpen = (): OpenRoundUiState => run({ type: "ask" }, { type: "open" }, { type: "unpaid", ...ASK });
+const paying = (): OpenRoundUiState => openRoundUi(unpaidOpen(), { type: "pay" });
+
+describe("open-round reducer - the unpaid answer and the receipt it stands up (R6-R8)", () => {
+  it("R6: the unpaid answer to the open in flight closes the confirmation, sets no notice and stands the receipt up with the server's quote", () => {
+    const st = unpaidOpen();
+    expect(st).toEqual({ confirming: false, busy: null, notice: null, rowNotice: null, pay: ASK });
+    expect(st.pay!.quote.size, "the receipt is for the STORED size the server quoted").toBe(64);
+  });
+
+  it("R6: it clears the previous answer the open replaced, and an unpaid answer nobody asked for is dropped", () => {
+    const answered = run({ type: "ask" }, { type: "open" }, { type: "openDone", outcome: { ok: false, code: "ROUND_CHANGED" } });
+    expect(answered.notice).not.toBeNull();
+    const again = openRoundUi(openRoundUi(answered, { type: "ask" }), { type: "open" });
+    expect(openRoundUi(again, { type: "unpaid", ...ASK }).notice, "the old failure is gone").toBeNull();
+    expect(openRoundUi(s0, { type: "unpaid", ...ASK }), "no open in flight").toBe(s0);
+    const resending = run({ type: "resend", fixtureId: "f1" });
+    expect(openRoundUi(resending, { type: "unpaid", ...ASK }), "a resend in flight is not the open").toBe(resending);
+  });
+
+  it("R7: Pay and open is THE request in flight, from a standing receipt only; a second is refused", () => {
+    expect(openRoundUi(s0, { type: "pay" }), "no receipt standing").toBe(s0);
+    const st = paying();
+    expect(st.busy).toEqual({ kind: "open" });
+    expect(st.pay, "the receipt stays up while it is paid").toEqual(ASK);
+    expect(openRoundUi(st, { type: "pay" })).toBe(st);
+    expect(openRoundUi(st, { type: "resend", fixtureId: "f1" })).toBe(st);
+  });
+
+  it("R7: a refusal of the pay (changed, short, any other) frees the press and leaves the receipt standing, with no notice", () => {
+    const st = openRoundUi(paying(), { type: "payFailed" });
+    expect(st).toEqual({ confirming: false, busy: null, notice: null, rowNotice: null, pay: ASK });
+    expect(openRoundUi(st, { type: "pay" }).busy, "the organiser can press again").toEqual({ kind: "open" });
+    expect(openRoundUi(s0, { type: "payFailed" }), "nothing in flight").toBe(s0);
+    const resending = run({ type: "resend", fixtureId: "f1" });
+    expect(openRoundUi(resending, { type: "payFailed" })).toBe(resending);
+  });
+
+  it("R5+R7: the pay's answer is the round's notice and closes the receipt, whether the round opened or gave its own reason", () => {
+    const opened = openRoundUi(paying(), { type: "openDone", outcome: { ok: true, result: OPENED } });
+    expect(opened).toEqual({ confirming: false, busy: null, notice: { kind: "answered", result: OPENED }, rowNotice: null, pay: null });
+    const refusedResult: OpenRoundResult = { opened: false, reason: "not_paired" };
+    const refused = openRoundUi(paying(), { type: "openDone", outcome: { ok: true, result: refusedResult } });
+    expect(refused.notice, "the round's own reason").toEqual({ kind: "answered", result: refusedResult });
+    expect(refused.pay).toBeNull();
+  });
+
+  it("R8: the receipt closes only while nothing is in flight; while it stands no confirmation or resend is raised", () => {
+    const standing = unpaidOpen();
+    expect(openRoundUi(paying(), { type: "closePay" }), "in flight").toEqual(paying());
+    expect(openRoundUi(standing, { type: "closePay" })).toEqual(s0);
+    expect(openRoundUi(s0, { type: "closePay" }), "nothing standing").toBe(s0);
+    expect(openRoundUi(standing, { type: "ask" }), "no dialog over the receipt").toBe(standing);
+    expect(openRoundUi(standing, { type: "resend", fixtureId: "f1" })).toBe(standing);
+  });
+
+  it("reset wipes a standing receipt, and a pay answer in flight for the old round is then dropped (R3)", () => {
+    for (const st of [unpaidOpen(), paying()]) expect(openRoundUi(st, { type: "reset" })).toEqual(s0);
+    const afterReset = openRoundUi(paying(), { type: "reset" });
+    expect(openRoundUi(afterReset, { type: "openDone", outcome: { ok: true, result: OPENED } })).toBe(afterReset);
+    expect(openRoundUi(afterReset, { type: "payFailed" })).toBe(afterReset);
+  });
+});
+
+describe("openRoundRunner - the unpaid answer and the pay-and-open", () => {
+  const unpaidError = (ask = ASK) => new ApiV1Error("Pay first", 402, ONLINE_PACKAGE_CODES.unpaid, ask as unknown as Record<string, unknown>);
+
+  it("a 402 ONLINE_CHESS_UNPAID is the receipt's ask, not a failure: the quote and next are dispatched and nothing is refreshed", async () => {
+    const dispatch = vi.fn();
+    const refresh = vi.fn();
+    const post = vi.fn().mockRejectedValueOnce(unpaidError());
+    const runner = openRoundRunner({ dispatch, post, refresh });
+    expect(await runner.open("s1", 1)).toBe(true);
+    expect(dispatch.mock.calls.map((c) => c[0].type)).toEqual(["open", "unpaid"]);
+    expect(dispatch).toHaveBeenLastCalledWith({ type: "unpaid", quote: ASK.quote, next: null });
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("a 402 that carries no quote (a body that does not parse) is an ordinary failure by its code, never a half-drawn receipt", async () => {
+    const dispatch = vi.fn();
+    const post = vi.fn().mockRejectedValueOnce(new ApiV1Error("Pay first", 402, ONLINE_PACKAGE_CODES.unpaid, { quote: { size: 64 } }));
+    await openRoundRunner({ dispatch, post, refresh: vi.fn() }).open("s1", 1);
+    expect(dispatch).toHaveBeenLastCalledWith({ type: "openDone", outcome: { ok: false, code: ONLINE_PACKAGE_CODES.unpaid } });
+  });
+
+  it("payOpen sends the open again WITH the pay body, once; its answer is the open's answer and the page refreshes", async () => {
+    const dispatch = vi.fn();
+    const refresh = vi.fn();
+    let answer!: (v: unknown) => void;
+    const post = vi.fn(() => new Promise((r) => (answer = r)));
+    const runner = openRoundRunner({ dispatch, post, refresh });
+    const body = { size: 64 as const, expectedOwed: 4 };
+    const first = runner.payOpen("s1", 1, body);
+    await expect(runner.payOpen("s1", 1, body), "a second press while one is out").rejects.toThrow();
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledWith("/api/v1/stages/s1/open-round", { roundNo: 1, pay: body });
+    answer(OPENED);
+    await first;
+    expect(dispatch.mock.calls.map((c) => c[0])).toEqual([{ type: "pay" }, { type: "openDone", outcome: { ok: true, result: OPENED } }]);
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("a refused pay (409 changed, 402 short, a 500) is freed and RETHROWN to the receipt - never swallowed, never the round's notice, no refresh", async () => {
+    const dispatch = vi.fn();
+    const refresh = vi.fn();
+    const changed = new ApiV1Error("Changed", 409, ONLINE_PACKAGE_CODES.quoteChanged, { quote: ASK.quote } as unknown as Record<string, unknown>);
+    const post = vi.fn().mockRejectedValueOnce(changed).mockResolvedValueOnce(OPENED);
+    const runner = openRoundRunner({ dispatch, post, refresh });
+    await expect(runner.payOpen("s1", 1, { size: 64, expectedOwed: 4 })).rejects.toBe(changed);
+    expect(dispatch.mock.calls.map((c) => c[0].type)).toEqual(["pay", "payFailed"]);
+    expect(refresh).not.toHaveBeenCalled();
+    await runner.payOpen("s1", 1, { size: 64, expectedOwed: 4 }); // the runner is free again
+    expect(post).toHaveBeenCalledTimes(2);
+  });
+});
+

@@ -53,6 +53,14 @@ vi.mock("@/server/usecases/match-day", () => ({
 vi.mock("@/server/usecases/divisions", () => ({ listDivisions: async () => [] }));
 vi.mock("@/lib/entitlements", () => ({ orgPlanKey: async () => "community" }));
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
+// Online Chess credits: the currency the pay-and-open receipt's credits chooser charges in (a database + cookie read, so doubled; the call is counted).
+const currencyRead = vi.hoisted(() => ({ calls: [] as (string | null)[] }));
+vi.mock("@/lib/currency-server", () => ({
+  preferredCurrency: async (orgId: string | null) => {
+    currencyRead.calls.push(orgId);
+    return "eur";
+  },
+}));
 
 import Page from "../page";
 import { t } from "@/lib/i18n-runtime";
@@ -111,6 +119,37 @@ describe("court stream - the page hands the shell its organisation and the refus
     expect(props.dict["stream.auto.refusal.no_credit"]).toBe((en as Dict)["stream.auto.refusal.no_credit"]);
     expect(props.dict["stream.auto.refused"]).toBe((en as Dict)["stream.auto.refused"]);
     expect(props.dict["matchDay.courtStream.link"]).toBe((en as Dict)["matchDay.courtStream.link"]);
+  });
+});
+
+// Online Chess credits (plan Task 12): the pay-and-open receipt on Match Day offers the credits chooser in the organisation's currency, so the page reads it
+// and hands it to the shell - for the organiser who can open a round, and for no one else (a viewer's page never draws the receipt and pays nothing).
+describe("Online Chess credits - the page hands the shell the organisation's currency, for an organiser only", () => {
+  const shellProps = async () => {
+    const tree = (await Page({ params: Promise.resolve({ orgSlug: "riverside", compSlug: "summer-league" }), searchParams: Promise.resolve({}) })) as {
+      props: { children: { type: unknown; props: { currency?: string; orgId?: string } } };
+    };
+    expect(tree.props.children.type).toBe(MatchDayShell);
+    return tree.props.children.props;
+  };
+
+  it("an organiser's page carries the currency read for THIS organisation", async () => {
+    h.frozen = false;
+    h.canEdit = true;
+    currencyRead.calls.length = 0;
+    const props = await shellProps();
+    expect(props.currency).toBe("eur");
+    expect(currencyRead.calls).toEqual([props.orgId]);
+    expect(props.orgId, "premise: the page's authorised organisation").toBe("org-1");
+  });
+
+  it("a view-only reader's page carries none and the read is never made (the pair)", async () => {
+    h.frozen = false;
+    h.canEdit = false;
+    currencyRead.calls.length = 0;
+    const props = await shellProps();
+    expect(props.currency).toBeUndefined();
+    expect(currencyRead.calls).toEqual([]);
   });
 });
 

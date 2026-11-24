@@ -4,13 +4,25 @@
 // only from its confirmation; an answer lands only if it answers the request in flight; a request in flight holds the dialog; the
 // open's answer is the round's notice, a resend's is its pairing's. The round's "+5 min" used to be a third request here; it is the
 // panel's own `RoundExtend` now (checkin-extend-ui.ts) and has no part in this state.
+//
+// Online Chess credits (spec 2026-11-23-online-chess-credits-design.md §7.6, §8.4): an Open on an UNPAID package is answered with the receipt's ask
+// (402 ONLINE_CHESS_UNPAID `{ quote, next }`, `unpaidOf`), and the receipt's confirm is the same open again with `pay` (`payOpen`). Rules:
+//   R6 the unpaid answer lands only on the open in flight (R3): it closes the confirmation, sets no notice and stands the receipt up (`pay`);
+//   R7 the receipt's confirm is a request in flight too (one at a time, R1), only from a standing receipt; a refusal of it frees the press and
+//      leaves the receipt standing (the receipt words it); ITS answer is the round's notice (R5) and closes the receipt;
+//   R8 the receipt closes only while nothing is in flight (R4), and while it stands no confirmation or resend is raised.
 import type { OpenRoundResult } from "@/lib/open-round";
+import { unpaidOf, type PayBody, type ReceiptQuote } from "@/lib/online-receipt";
 import { codeOf } from "../checkin-extend-ui";
 
 export type OpenRoundNotice = { kind: "answered"; result: OpenRoundResult } | { kind: "failed"; code: string };
 /** `emailed` invites the provider took; `retrying` invites queued and still sending (the mail worker keeps trying). Both zero is the
  *  one true failure: nothing went out and nothing is waiting to. */
 export type ResendNotice = { kind: "resent"; emailed: number; retrying: number } | { kind: "failed"; code: string };
+
+/** What an unpaid package asks of the organiser before round 1 opens: the quote for the STORED size and, when that size cannot hold the division,
+ *  the smallest size that can. */
+export type OpenRoundPayAsk = { quote: ReceiptQuote; next: ReceiptQuote | null };
 
 export type OpenRoundUiState = {
   /** The confirmation is up. */
@@ -21,6 +33,8 @@ export type OpenRoundUiState = {
   notice: OpenRoundNotice | null;
   /** The answer to the last Resend, on the pairing it was sent for. */
   rowNotice: { fixtureId: string; notice: ResendNotice } | null;
+  /** The receipt is up: the open was answered with an unpaid package (R6). */
+  pay: OpenRoundPayAsk | null;
 };
 
 type Failed = { ok: false; code: string };
@@ -30,12 +44,16 @@ export type OpenRoundUiAction =
   | { type: "ask" }
   | { type: "cancel" }
   | { type: "open" }
+  | { type: "unpaid"; quote: ReceiptQuote; next: ReceiptQuote | null }
+  | { type: "pay" }
+  | { type: "payFailed" }
+  | { type: "closePay" }
   | { type: "resend"; fixtureId: string }
   | { type: "openDone"; outcome: { ok: true; result: OpenRoundResult } | Failed }
   | { type: "resendDone"; fixtureId: string; outcome: { ok: true; emailed: number; retrying: number } | Failed };
 
 export function initialOpenRoundUi(): OpenRoundUiState {
-  return { confirming: false, busy: null, notice: null, rowNotice: null };
+  return { confirming: false, busy: null, notice: null, rowNotice: null, pay: null };
 }
 
 export function openRoundUi(s: OpenRoundUiState, a: OpenRoundUiAction): OpenRoundUiState {
@@ -45,7 +63,7 @@ export function openRoundUi(s: OpenRoundUiState, a: OpenRoundUiAction): OpenRoun
       // answer still in flight for it finds no request to answer (R3) and is dropped.
       return initialOpenRoundUi();
     case "ask":
-      if (s.busy !== null) return s; // R4
+      if (s.busy !== null || s.pay !== null) return s; // R4, R8
       return s.confirming ? s : { ...s, confirming: true };
     case "cancel":
       if (s.busy !== null) return s; // R4
@@ -53,8 +71,20 @@ export function openRoundUi(s: OpenRoundUiState, a: OpenRoundUiAction): OpenRoun
     case "open":
       if (s.busy !== null || !s.confirming) return s; // R1, R2
       return { ...s, busy: { kind: "open" }, notice: null };
+    case "unpaid":
+      if (s.busy?.kind !== "open") return s; // R3
+      return { ...s, busy: null, confirming: false, notice: null, pay: { quote: a.quote, next: a.next } }; // R6
+    case "pay":
+      if (s.busy !== null || s.pay === null) return s; // R1, R7
+      return { ...s, busy: { kind: "open" } };
+    case "payFailed":
+      if (s.busy?.kind !== "open" || s.pay === null) return s; // R3
+      return { ...s, busy: null }; // R7
+    case "closePay":
+      if (s.busy !== null || s.pay === null) return s; // R8
+      return { ...s, pay: null };
     case "resend":
-      if (s.busy !== null || s.confirming) return s; // R1 (the dialog is modal)
+      if (s.busy !== null || s.confirming || s.pay !== null) return s; // R1 (the dialog is modal), R8
       return { ...s, busy: { kind: "resend", fixtureId: a.fixtureId }, rowNotice: null };
     case "openDone":
       if (s.busy?.kind !== "open") return s; // R3
@@ -62,6 +92,7 @@ export function openRoundUi(s: OpenRoundUiState, a: OpenRoundUiAction): OpenRoun
         ...s,
         busy: null,
         confirming: false,
+        pay: null, // R7: the pay's answer closes the receipt
         notice: a.outcome.ok ? { kind: "answered", result: a.outcome.result } : { kind: "failed", code: a.outcome.code },
       };
     case "resendDone":
@@ -98,11 +129,31 @@ export function openRoundRunner(deps: {
         deps.dispatch({ type: "openDone", outcome: { ok: true, result } });
         deps.refresh();
       } catch (err) {
-        deps.dispatch({ type: "openDone", outcome: { ok: false, code: codeOf(err) } });
+        // An unpaid package is not a failure: it is the receipt's ask (R6). A 402 whose quote does not parse is an ordinary failure by its code.
+        const unpaid = unpaidOf(err);
+        if (unpaid !== null) deps.dispatch({ type: "unpaid", quote: unpaid.quote, next: unpaid.next });
+        else deps.dispatch({ type: "openDone", outcome: { ok: false, code: codeOf(err) } });
       } finally {
         inflight = false;
       }
       return true;
+    },
+    /** The receipt's confirm: the open again, with the body the receipt showed. Resolves when the open answered (the answer is the round's notice);
+     *  REJECTS with whatever the door threw (409 changed, 402 short, ...) after freeing the press, so the receipt words it (R7). */
+    payOpen: async (stageId: string, roundNo: number, pay: PayBody): Promise<void> => {
+      if (inflight) throw new Error("OPEN_ROUND_BUSY");
+      inflight = true;
+      deps.dispatch({ type: "pay" });
+      try {
+        const result = (await deps.post(`/api/v1/stages/${encodeURIComponent(stageId)}/open-round`, { roundNo, pay })) as OpenRoundResult;
+        deps.dispatch({ type: "openDone", outcome: { ok: true, result } });
+        deps.refresh();
+      } catch (err) {
+        deps.dispatch({ type: "payFailed" });
+        throw err;
+      } finally {
+        inflight = false;
+      }
     },
     resend: async (fixtureId: string): Promise<boolean> => {
       if (inflight) return false;

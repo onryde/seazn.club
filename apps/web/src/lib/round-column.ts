@@ -306,6 +306,10 @@ export const ROUND_COLUMN_HELPER_KEYS: readonly ColumnKey[] = [
   "arbiter.column.confirmSeat",
   // The venue's name after a time of day (Task 16 D1): venue-clock.ts and useFmt's `named` ask for it
   "arbiter.venueTime",
+  // The payment a pay-and-open press made, said above the open's own lines (Online Chess credits: `openNoticeText`, from `paymentNoticeOf`)
+  "onlineChess.openRound.paid",
+  "onlineChess.openRound.moved",
+  "onlineChess.openRound.capacityLowered",
   "externalPlay.openRound.alreadyOpen",
   "externalPlay.openRound.clockNotPlayable",
   "externalPlay.openRound.divisionNotStarted",

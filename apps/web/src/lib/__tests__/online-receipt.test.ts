@@ -334,8 +334,14 @@ describe("paymentNoticeOf: never a word of money unless the payment was applied"
     expect(paymentNoticeOf(opened({ applied: false, credits: 4, size: 32, capacityLoweredTo: null }))).toBeNull(); // a figure on a skipped pay is not a payment
   });
 
-  it("no pay was sent: nothing", () => {
+  it("no pay was sent: nothing - whether the answer says null or omits the field (an older answer, a double that predates it)", () => {
     expect(paymentNoticeOf(opened(null))).toBeNull();
+    expect(paymentNoticeOf({ opened: true, invited: 2, retrying: 0, skipped: [] } as unknown as OpenRoundResult)).toBeNull();
+    expect(paymentNoticeOf(opened(undefined))).toBeNull();
+  });
+
+  it("a payment that is not an object (a number, a string) says nothing rather than throwing", () => {
+    for (const bad of [0, 4, "applied", true]) expect(paymentNoticeOf(opened(bad)), String(bad)).toBeNull();
   });
 
   it("a round that did not open pays nothing, so says nothing", () => {

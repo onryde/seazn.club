@@ -21,6 +21,7 @@ import { getMatchDay } from "@/server/usecases/match-day";
 import { getCompetition, listFrozenCompetitions } from "@/server/usecases/competitions";
 import { orgPlanKey } from "@/lib/entitlements";
 import { viewerPlanFrom } from "@/lib/viewer-plan";
+import { preferredCurrency } from "@/lib/currency-server";
 import { listDivisions } from "@/server/usecases/divisions";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary } from "@/lib/i18n";
@@ -61,6 +62,9 @@ export default async function MatchDayPage({
   // PB3 item 7: the banner names the org's frozen competitions. It is the organiser's banner (`frozen && !readOnly`), so only an
   // organiser on a frozen competition pays the read; everyone else costs nothing. The names are an addition to the banner: a read
   // that fails leaves the banner as it was rather than failing the page.
+  // Online Chess credits: the currency the pay-and-open receipt's credits chooser charges in. Only an organiser can open a round, so only an
+  // organiser pays the read; a viewer's page carries none (the receipt is never drawn for them).
+  const currency = page.canEdit ? await preferredCurrency(page.auth.orgId) : undefined;
   const frozenNames =
     competition.frozen === true && page.canEdit
       ? frozenNamesFor(await listFrozenCompetitions(page.auth).catch(() => []), id)
@@ -73,6 +77,7 @@ export default async function MatchDayPage({
         orgSlug={orgSlug}
         compSlug={page.competition.slug}
         orgId={page.auth.orgId}
+        currency={currency}
         locale={locale}
         divisions={divisions.map((d) => ({ id: d.id, name: d.name }))}
         initial={initial}

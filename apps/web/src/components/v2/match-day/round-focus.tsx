@@ -54,7 +54,9 @@ import {
 import { ConfirmDialog } from "../confirm-dialog";
 import { OpenRoundConfirmBody, openNoticeText, owedPlayers, resendNoticeText, timedBatches, type BoardSeats } from "../desk/open-round-control";
 import type { OpenRoundUiState } from "../desk/open-round-state";
+import { routes } from "@/lib/routes";
 import { useOpenRoundWith, type OpenRoundHandle } from "../desk/use-open-round";
+import { OpenPayReceipt } from "../online-chess/open-pay-receipt";
 import { useExtendClock } from "../use-extend-clock";
 import { useVenueClock } from "../venue-clock";
 import type { MatchDayCtx } from "./court-focus";
@@ -1022,6 +1024,19 @@ export function RoundFocus(p: RoundFocusProps) {
         </p>
       )}
       {body}
+      {/* Online Chess credits: the open was answered with an unpaid package, so the receipt stands over the panel ("Pay N credits and open round
+          1"). Its confirm is the open again with `pay`; the round's own notice, under the press, is the answer. Only while a receipt is asked for. */}
+      {openRound.state.pay !== null && (
+        <OpenPayReceipt
+          ask={openRound.state.pay}
+          divisionId={round.division_id}
+          viewerPlan={ctx.viewerPlan}
+          buy={ctx.orgId !== undefined && ctx.currency !== undefined ? { orgId: ctx.orgId, currency: ctx.currency } : null}
+          buyMoreHref={routes.creditsStream(ctx.orgSlug)}
+          onPay={openRound.pay}
+          onClose={openRound.closePay}
+        />
+      )}
     </OnlineFocusFrame>
   );
 }

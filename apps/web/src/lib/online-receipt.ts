@@ -15,7 +15,7 @@ import { ONLINE_PACKAGE_CODES, ONLINE_SIZES, includedRounds, isOnlineSize, type 
 import { onlineSizeOptions, type OnlineSizeDisabled } from "@/lib/online-size-options";
 import { intlLocaleFor } from "@/lib/public-date-locale";
 import { STREAM_CREDIT_PACKS, type StreamPackSize } from "@/lib/stream-credit-packs";
-import type { OpenRoundResult } from "@/lib/open-round";
+import type { OpenRoundPayment, OpenRoundResult } from "@/lib/open-round";
 
 /** The three ways the receipt opens (brief): `pay` the stored size (the amber line, a checkout return), `payAndOpen` the same at the
  *  moment the organiser presses Open round (decision 15), `change` a paid size (the chip, the select). */
@@ -260,8 +260,13 @@ export type PaymentNotice =
   | { kind: "moved"; size: number; capacityLoweredTo: number | null };
 
 export function paymentNoticeOf(result: OpenRoundResult): PaymentNotice | null {
-  if (!result.opened || result.payment === null || !result.payment.applied) return null;
-  const p = result.payment;
+  // `payment` is null when no `pay` was sent; an answer from before the field existed omits it, and a body that is not an object is no payment.
+  const p = result.opened ? (result.payment as unknown) : null;
+  if (typeof p !== "object" || p === null || (p as { applied?: unknown }).applied !== true) return null;
+  return paymentNoticeFrom(p as OpenRoundPayment);
+}
+
+function paymentNoticeFrom(p: OpenRoundPayment): PaymentNotice {
   return p.credits > 0
     ? { kind: "paid", credits: p.credits, size: p.size, capacityLoweredTo: p.capacityLoweredTo }
     : { kind: "moved", size: p.size, capacityLoweredTo: p.capacityLoweredTo };

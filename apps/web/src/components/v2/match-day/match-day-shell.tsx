@@ -34,6 +34,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNod
 import { useSearchParams } from "next/navigation";
 import Link from "@/components/ui/console-link";
 import { fmtPublicDate } from "@/lib/format";
+import type { Currency } from "@/lib/currency";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import { routes } from "@/lib/routes";
@@ -95,6 +96,8 @@ export interface MatchDayShellProps {
   compSlug: string;
   /** The organisation (its channels are what a court streams to); absent, a court cannot be linked from here. */
   orgId?: string;
+  /** The currency the organisation is charged in, for the credits chooser inside Online Chess's pay-and-open receipt; absent, it links to the credits page. */
+  currency?: Currency;
   locale: Locale;
   /** The competition's live divisions, for the filter chips. */
   divisions: { id: string; name: string }[];
@@ -132,6 +135,7 @@ export function MatchDayShell({
   orgSlug,
   compSlug,
   orgId,
+  currency,
   locale,
   divisions,
   initial,
@@ -279,7 +283,7 @@ export function MatchDayShell({
   /** A phone shows one court (a match, a round, a board) full-screen only while what it opened is still there. */
   const phoneCourt = phoneOpen && (focused !== null || focusedMatch !== null || focusedRound !== null || focusedBoard !== null);
   const noun = sharedNoun(courts.length > 0 ? courts : allCourts);
-  const ctx: MatchDayCtx = { competitionId, orgSlug, compSlug, locale, tz: view.tz, dict, scoreDict, viewerPlan, readOnly, frozen: frozenNow, orgId, viewNow: view.now, onTailEnd: refreshOnTailEnd };
+  const ctx: MatchDayCtx = { competitionId, orgSlug, compSlug, locale, tz: view.tz, dict, scoreDict, viewerPlan, readOnly, frozen: frozenNow, orgId, currency, viewNow: view.now, onTailEnd: refreshOnTailEnd };
   const words = levelWords(scoreDict);
   /** The round or board in focus, for the list's highlight (`aria-current`). */
   const selectedOnline: OnlineOpened | null =
