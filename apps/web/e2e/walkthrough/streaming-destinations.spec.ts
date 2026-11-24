@@ -1355,6 +1355,11 @@ for (const width of [320, 768, 1280] as const) {
     await page.setViewportSize({ width, height: 900 });
     const rig = await seedRig(page, { entrants: 2 });
     const f = rig.fixtures[0]!;
+    // The rig stores Camera only on its fixtures (this file follows the camera's lifecycle); this case is about the SCORE's card, which
+    // Camera only replaces with one line — so the match gets the default back (null = the score), as the answer says.
+    const scoreBack = await apiJson<{ streamMode: string | null }>(page.request, `/api/v1/fixtures/${f.id}/stream-settings`, "PUT", { streamMode: null });
+    expect(scoreBack.status, `PUT stream-settings { streamMode: null }: ${JSON.stringify(scoreBack.error)}`).toBe(200);
+    expect(scoreBack.data?.streamMode, "the stored mode is none: the score is the default").toBeNull();
     // Two styles of the sport, the club's and the match's own — derived from the registry, never typed (the club's is not the sport's default,
     // so it cannot be taken for the fallback the match would show with no club style at all).
     const sportDefault = defaultTemplateFor(CLUB_SPORT);
