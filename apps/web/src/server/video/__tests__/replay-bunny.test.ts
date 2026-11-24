@@ -532,6 +532,41 @@ describe("BunnyReplayHost: openDownload (B5, B9)", () => {
     expect(await thrown(noOrigin.host.openDownload(GUID))).not.toBeInstanceOf(ReplayNotDownloadable);
   });
 
+  it("Task 48 review m2: checkDownload makes the SAME refusals as openDownload and ZERO CDN requests — two API reads, no signed address made, no Referer sent", async () => {
+    const ok = downloadHarness({ hls: [240, 1080], mp4: [240, 720] });
+    await expect(ok.host.checkDownload(GUID)).resolves.toBeUndefined();
+    expect(ok.calls.map((c) => c.url), "exactly the two API reads").toEqual([`${API}/videos/${GUID}`, `${API}/videos/${GUID}/resolutions`]);
+    expect(ok.calls.filter((c) => c.url.startsWith(`https://${CONFIG.cdnHost}`)), "no CDN request").toEqual([]);
+    expect(ok.calls.every((c) => c.headers.referer === undefined), "no Referer sent").toBe(true);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(ok.recorder.calls.map((c) => c.operation), "nothing recorded as a download").toEqual(["video", "mp4Resolutions"]);
+    for (const r of ok.recorder.calls) expect(JSON.stringify(r)).not.toMatch(/bcdn_token|\[signed\]/);
+
+    const thrown = async (p: Promise<unknown>) => p.then(() => null, (e: unknown) => e);
+    const processing = harness(() => ({ status: 200, body: videoBody({ status: 3, resolutions: "240p" }) }));
+    const noFiles = downloadHarness({ hls: [720, 1080], mp4: [] });
+    const noVideo = downloadHarness({ mp4: [720], resolutionsStatus: 404 });
+    const noOrigin = downloadHarness({ mp4: [720], origins: null });
+    const refused = harness((c) => (c.url.endsWith("/resolutions") ? { status: 401 } : { status: 200, body: videoBody({ status: 4, resolutions: "720p" }) }));
+    const unavailable = harness((c) => (c.url.endsWith("/resolutions") ? { status: 503 } : { status: 200, body: videoBody({ status: 4, resolutions: "720p" }) }));
+    const WANT: [string, { host: ReplayHost; calls: Call[] }, (e: unknown) => boolean][] = [
+      ["not playable", processing, (e) => e instanceof ReplayNotDownloadable],
+      ["empty MP4 set", noFiles, (e) => e instanceof ReplayNotDownloadable],
+      ["no such video", noVideo, (e) => e instanceof ReplayNotDownloadable],
+      ["origin not set (a fault, not 'not ready')", noOrigin, (e) => e instanceof Error && !(e instanceof ReplayNotDownloadable)],
+      ["API key refused", refused, (e) => e instanceof ReplayHostRefused],
+      ["host not answering", unavailable, (e) => e instanceof ReplayHostUnavailable],
+    ];
+    let checked = 0;
+    for (const [label, h, is] of WANT) {
+      const e = await thrown(h.host.checkDownload(GUID));
+      expect(is(e), `${label}: ${String(e)}`).toBe(true);
+      expect(h.calls.filter((c) => c.url.startsWith(`https://${CONFIG.cdnHost}`)), `${label}: no CDN request`).toEqual([]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(WANT.length);
+  });
+
   it("Task 48: a 404 from the CDN for a file the list named is the typed not-downloadable (try again), with the CDN's body cancelled; 403, 500 are still faults", async () => {
     const gone = downloadHarness({ mp4: [720], cdnStatus: 404 });
     const err = await gone.host.openDownload(GUID).then(() => null, (e: unknown) => e);

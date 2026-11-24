@@ -8,8 +8,9 @@
 // Task 26: every part has Delete (the house confirm first, danger tone, touch size), and a playable part has Download — a link to the
 // download route, which streams the file as an attachment (no token, no address of the host: the route is the only thing the browser
 // talks to). The link is a real `<a href download>` (a no-script browser still gets the file), but a click is first a probe
-// (`downloadSeaznReplayFlow`, Task 48): the route is asked, and the browser is told to SAVE only when the answer is ok and an mp4.
-// A 409 "not ready" (or any refusal) is a JSON error body, and saving that put a `download.json` on the organiser's disk. The delete's flow (`deleteSeaznReplayFlow`) is a plain async function so the node-only tests drive it; the hook is glue.
+// (`downloadSeaznReplayFlow`, Task 48): the route is asked `?check=1` (204, or the refusal, with no file opened and no token in the
+// address), and the browser is told to SAVE only on the 204. A 409 "not ready" (or any refusal) is a JSON error body, and saving
+// that put a `download.json` on the organiser's disk. The button is busy (disabled, "Preparing…") while the probe runs. The delete's flow (`deleteSeaznReplayFlow`) is a plain async function so the node-only tests drive it; the hook is glue.
 //
 // The panel's own row style (a slate-bordered box, the slate chip): one quiet line per part, the state's colour on a small dot, the
 // failure in red words, the actions under the state at every width (44 px targets). The card is a pure function of its props, as the
@@ -20,7 +21,7 @@
 // scope). They still see every part and its state, but no Download and no Delete: one quiet line under the list says why and who can
 // act, in the state lines' own slate, never an error's red. The routes stay the guard; this only stops offering what they refuse.
 import { useCallback, useState } from "react";
-import { CirclePause, Download, Trash2 } from "lucide-react";
+import { CirclePause, Download, LoaderCircle, Trash2 } from "lucide-react";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { useConfirm, type ConfirmOptions } from "@/components/ui/confirm-provider";
 import { apiV1 } from "@/lib/client-v1";
@@ -40,29 +41,33 @@ export interface SeaznReplayActions {
   failed: string | null;
   gone: ReadonlySet<string>;
   onDelete: (replay: Replay, multi: boolean) => void;
-  /** The part whose download is being asked for, and the part whose download was answered "not ready" (Task 48). */
+  /** The part whose download is being asked for, and the part whose last ask was refused: `not_ready` (409: try again in a few
+   *  minutes) or `failed` (anything else) (Task 48). */
   downloading: string | null;
-  downloadFailed: string | null;
+  downloadFailed: { id: string; kind: "not_ready" | "failed" } | null;
   onDownload: (replay: Replay) => void;
 }
 
-/** The download, step by step (Task 48): ask the route; save only an ok answer that is an mp4. The probe's body is cancelled
- *  unread (the file streams in the SAVE, which is a second request), so a multi-gigabyte file is never held by the page. Any
- *  other answer, or none, is "not_ready": the file is never saved from it. */
+/** The probe's address: the route's own, `?check=1`. No token, no host, nothing but the ids. */
+export const replayDownloadCheckHref = (href: string): string => `${href}?check=1`;
+
+/** The download, step by step (Task 48): ask the route whether the file would start (`?check=1`: 204, and no file opened); save only on
+ *  the 204. A 409 is `not_ready` (the file is not there yet: try again), any other answer, a non-204 success included, and a request that
+ *  never answered, is `failed`. Nothing is saved from either. The save is the real GET, which streams the file. */
 export async function downloadSeaznReplayFlow(d: {
   href: string;
-  ask: (href: string) => Promise<Response>;
+  ask: (checkHref: string) => Promise<Response>;
   save: (href: string) => void;
-}): Promise<"saved" | "not_ready"> {
+}): Promise<"saved" | "not_ready" | "failed"> {
   let res: Response;
   try {
-    res = await d.ask(d.href);
+    res = await d.ask(replayDownloadCheckHref(d.href));
   } catch {
-    return "not_ready";
+    return "failed";
   }
-  const mp4 = res.ok && /^video\/mp4\b/i.test(res.headers.get("content-type") ?? "");
   await res.body?.cancel().catch(() => undefined);
-  if (!mp4) return "not_ready";
+  if (res.status === 409) return "not_ready";
+  if (res.status !== 204) return "failed";
   d.save(d.href);
   return "saved";
 }
@@ -106,7 +111,7 @@ export function useSeaznReplayActions(fixtureId: string, reread: () => Promise<u
   const [failed, setFailed] = useState<string | null>(null);
   const [gone, setGone] = useState<ReadonlySet<string>>(() => new Set());
   const [downloading, setDownloading] = useState<string | null>(null);
-  const [downloadFailed, setDownloadFailed] = useState<string | null>(null);
+  const [downloadFailed, setDownloadFailed] = useState<SeaznReplayActions["downloadFailed"]>(null);
   const onDownload = useCallback(
     (replay: Replay) => {
       if (downloading !== null) return;
@@ -117,7 +122,7 @@ export function useSeaznReplayActions(fixtureId: string, reread: () => Promise<u
         ask: (href) => fetch(href, { credentials: "same-origin", cache: "no-store" }),
         save: saveFromBrowser,
       }).then((outcome) => {
-        if (outcome === "not_ready") setDownloadFailed(replay.id);
+        if (outcome !== "saved") setDownloadFailed({ id: replay.id, kind: outcome });
         setDownloading(null);
       });
     },
@@ -252,16 +257,17 @@ export function SeaznReplaysCard({
                       href={replayDownloadHref(fixtureId, p.id)}
                       download
                       aria-busy={actions.downloading === p.id || undefined}
+                      aria-disabled={actions.downloading !== null || undefined}
                       onClick={(e) => {
                         // A modified click (new tab, save-as) is the browser's own; a plain one is probed first.
                         if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
                         e.preventDefault();
                         actions.onDownload(p);
                       }}
-                      className="btn btn-ghost min-h-11 max-md:grow"
+                      className={`btn btn-ghost min-h-11 max-md:grow ${actions.downloading !== null ? "pointer-events-none opacity-60" : ""}`}
                     >
-                      <Download aria-hidden className="h-4 w-4" />
-                      {msg("stream.replay.download")}
+                      {actions.downloading === p.id ? <LoaderCircle aria-hidden data-testid="stream-seazn-replay-download-busy" className="h-4 w-4 animate-spin" /> : <Download aria-hidden className="h-4 w-4" />}
+                      {actions.downloading === p.id ? msg("stream.replay.downloadPreparing") : msg("stream.replay.download")}
                       {which}
                     </a>
                   )}
@@ -279,9 +285,13 @@ export function SeaznReplaysCard({
                   </button>
                 </div>
               )}
-              {!memberFrozen && actions.downloadFailed === p.id && (
-                <p role="alert" data-testid="stream-seazn-replay-download-not-ready" className={`mt-2 text-xs text-slate-700 md:pl-4 ${multi ? "col-span-full md:col-start-2" : ""}`}>
-                  {msg("stream.replay.downloadNotReady")}
+              {!memberFrozen && actions.downloadFailed?.id === p.id && (
+                <p
+                  role="alert"
+                  data-testid={actions.downloadFailed.kind === "not_ready" ? "stream-seazn-replay-download-not-ready" : "stream-seazn-replay-download-failed"}
+                  className={`mt-2 text-xs ${actions.downloadFailed.kind === "not_ready" ? "text-slate-700" : "text-red-700"} md:pl-4 ${multi ? "col-span-full md:col-start-2" : ""}`}
+                >
+                  {msg(actions.downloadFailed.kind === "not_ready" ? "stream.replay.downloadNotReady" : "stream.replay.downloadFailed")}
                 </p>
               )}
               {!memberFrozen && actions.failed === p.id && (

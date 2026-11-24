@@ -71026,7 +71026,7 @@
     },
     "/api/v1/fixtures/{id}/replays/{replayId}/download": {
       "get": {
-        "summary": "Download one PLAYABLE part of the fixture's Seazn replay (an editor's session only) as a `video/mp4` attachment named for the match and the part (`seazn-<home>-v-<away>-part-<n>.mp4`), with its size when the host gives it. The file streams through this route: never a redirect, and no host address or token in any header. 409 replay_not_downloadable for a part that is processing, failed or deleted, or that the video host is not ready to hand over yet (try again later). A viewer is 403, and so is an API key (never key-reachable); an over-quota admin seat 402 and 404 as the delete. 503 replay_host_unavailable when the video host does not start the file (no response within its 4 s, a network fault, or the host's own 5xx / 429): try again. 500 replay_host_refused when the host refuses this server's credentials or address (a configuration fault on our side, reported; retrying does not help), and 500 replay_download_failed for any other fault of ours. A download the viewer abandons before the host answers is answered 499 download_cancelled, which nobody reads. Served `Cache-Control: private, no-store`; refusals are the usual JSON envelope",
+        "summary": "Download one PLAYABLE part of the fixture's Seazn replay (an editor's session only) as a `video/mp4` attachment named for the match and the part (`seazn-<home>-v-<away>-part-<n>.mp4`), with its size when the host gives it. The file streams through this route: never a redirect, and no host address or token in any header. 409 replay_not_downloadable for a part that is processing, failed or deleted, or that the video host is not ready to hand over yet (try again later). A viewer is 403, and so is an API key (never key-reachable); an over-quota admin seat 402 and 404 as the delete. 503 replay_host_unavailable when the video host does not start the file (no response within its 4 s, a network fault, or the host's own 5xx / 429): try again. 500 replay_host_refused when the host refuses this server's credentials or address (a configuration fault on our side, reported; retrying does not help), and 500 replay_download_failed for any other fault of ours. A download the viewer abandons before the host answers is answered 499 download_cancelled, which nobody reads. `?check=1` asks only whether the download would start: 204 with no body when it would, else the same refusals, and no file is opened. Served `Cache-Control: private, no-store`; refusals are the usual JSON envelope",
         "tags": [
           "fixtures"
         ],
@@ -71049,6 +71049,18 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "check",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            },
+            "description": "`1`: answer 204 (it would start) or the refusal, without opening the file"
           }
         ],
         "responses": {

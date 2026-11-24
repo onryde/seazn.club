@@ -195,7 +195,11 @@ export interface SeaznReplayFile {
   fileName: string;
 }
 
-export async function seaznReplayDownload(auth: AuthCtx, fixtureId: string, replayId: string, deps: OrganiserReplayDeps = {}): Promise<SeaznReplayFile> {
+interface DownloadRow { state: string; deleted_at: Date | null; bunny_video_id: string; part_no: number; home: string | null; away: string | null }
+
+/** The part's row, for a download or its check: the editor's door, the id shapes, the row of THIS fixture and org, and the part being
+ *  playable with a copy on the host (else 409). One place, so the check answers exactly what the download would. */
+async function downloadableRow(auth: AuthCtx, fixtureId: string, replayId: string): Promise<DownloadRow> {
   requireReplayEditor(auth);
   if (!UUID.test(fixtureId) || !UUID.test(replayId)) throw new HttpError(404, REPLAY_NOT_FOUND);
   const [row] = await sql<{ state: string; deleted_at: Date | null; bunny_video_id: string | null; part_no: number; home: string | null; away: string | null }[]>`
@@ -209,33 +213,55 @@ export async function seaznReplayDownload(auth: AuthCtx, fixtureId: string, repl
   if (row.state !== "playable" || row.deleted_at !== null || row.bunny_video_id === null) {
     throw new HttpError(409, REPLAY_NOT_DOWNLOADABLE, "replay_not_downloadable");
   }
+  return { ...row, bunny_video_id: row.bunny_video_id };
+}
+
+/** What a host failure at the start of a download (or its check) is answered as: always a thrown HttpError. */
+function downloadFailure(err: unknown, row: DownloadRow, replayId: string, deps: OrganiserReplayDeps): never {
+  if (err instanceof ReplayNotDownloadable) {
+    // Not a fault: the copy reads playable and the host has no file for it yet (Task 48). One info line, so it never reaches Sentry.
+    log.info({ replayId, guid: row.bunny_video_id, why: err.why }, "seazn replay: the host has no file to download yet — answered not ready");
+    throw new HttpError(409, REPLAY_NOT_DOWNLOADABLE, "replay_not_downloadable");
+  }
+  // The host's own words (redacted by its adapter: no key, no signed URL) go to the log through the file's scrubber, never to the
+  // caller. Each kind of failure has its own answer and its own level (T26 re-review m1 a, b, d).
+  const fields = { replayId, guid: row.bunny_video_id, errClass: errClass(err), detail: detail(err) };
+  if (deps.signal?.aborted) {
+    // The viewer left first: whatever the host then threw is the cancel's echo. Below 500, so v1() never reports it to Sentry.
+    log.info(fields, "seazn replay: the download was cancelled before the host answered — the viewer left");
+    throw new HttpError(499, REPLAY_DOWNLOAD_CANCELLED, "download_cancelled");
+  }
+  if (err instanceof ReplayHostUnavailable) {
+    log.warn(fields, "seazn replay: the host did not start the download — retryable");
+    throw new HttpError(503, REPLAY_HOST_UNAVAILABLE, "replay_host_unavailable");
+  }
+  if (err instanceof ReplayHostRefused) {
+    log.error({ ...fields, status: err.status, credential: err.credential }, REFUSED_LINE[err.credential]);
+    throw new HttpError(500, REPLAY_DOWNLOAD_FAULT, "replay_host_refused");
+  }
+  log.error(fields, "seazn replay: the download failed to start");
+  throw new HttpError(500, REPLAY_DOWNLOAD_FAULT, "replay_download_failed");
+}
+
+export async function seaznReplayDownload(auth: AuthCtx, fixtureId: string, replayId: string, deps: OrganiserReplayDeps = {}): Promise<SeaznReplayFile> {
+  const row = await downloadableRow(auth, fixtureId, replayId);
   let file;
   try {
     file = await (deps.replay ?? replayDriver()).openDownload(row.bunny_video_id, deps.signal);
   } catch (err) {
-    if (err instanceof ReplayNotDownloadable) {
-      // Not a fault: the copy reads playable and the host has no file for it yet (Task 48). One info line, so it never reaches Sentry.
-      log.info({ replayId, guid: row.bunny_video_id, why: err.why }, "seazn replay: the host has no file to download yet — answered not ready");
-      throw new HttpError(409, REPLAY_NOT_DOWNLOADABLE, "replay_not_downloadable");
-    }
-    // The host's own words (redacted by its adapter: no key, no signed URL) go to the log through the file's scrubber, never to the
-    // caller. Each kind of failure has its own answer and its own level (T26 re-review m1 a, b, d).
-    const fields = { replayId, guid: row.bunny_video_id, errClass: errClass(err), detail: detail(err) };
-    if (deps.signal?.aborted) {
-      // The viewer left first: whatever the host then threw is the cancel's echo. Below 500, so v1() never reports it to Sentry.
-      log.info(fields, "seazn replay: the download was cancelled before the host answered — the viewer left");
-      throw new HttpError(499, REPLAY_DOWNLOAD_CANCELLED, "download_cancelled");
-    }
-    if (err instanceof ReplayHostUnavailable) {
-      log.warn(fields, "seazn replay: the host did not start the download — retryable");
-      throw new HttpError(503, REPLAY_HOST_UNAVAILABLE, "replay_host_unavailable");
-    }
-    if (err instanceof ReplayHostRefused) {
-      log.error({ ...fields, status: err.status, credential: err.credential }, REFUSED_LINE[err.credential]);
-      throw new HttpError(500, REPLAY_DOWNLOAD_FAULT, "replay_host_refused");
-    }
-    log.error(fields, "seazn replay: the download failed to start");
-    throw new HttpError(500, REPLAY_DOWNLOAD_FAULT, "replay_download_failed");
+    downloadFailure(err, row, replayId, deps);
   }
   return { body: file.body, bytes: file.bytes, fileName: replayFileName(row.home ?? "", row.away ?? "", row.part_no) };
+}
+
+/** Whether the part's download would start (Task 48 review m2): the same door, gates and host checks as `seaznReplayDownload`, and no
+ *  file opened — the page asks this before it tells the browser to save, so an error body is never saved as the file. Resolves when it
+ *  would; throws what the download would (409 not ready, 503, 500 ...). */
+export async function seaznReplayDownloadCheck(auth: AuthCtx, fixtureId: string, replayId: string, deps: OrganiserReplayDeps = {}): Promise<void> {
+  const row = await downloadableRow(auth, fixtureId, replayId);
+  try {
+    await (deps.replay ?? replayDriver()).checkDownload(row.bunny_video_id);
+  } catch (err) {
+    downloadFailure(err, row, replayId, deps);
+  }
 }

@@ -691,6 +691,83 @@ test("Task 26: the organiser's panel lists both parts with Download and Delete; 
 });
 
 // ===========================================================================
+// Task 48 (review I1): the Download BUTTON in a browser — what it saves, and what it never does
+// ===========================================================================
+// The button asks the route `?check=1` first (204, or the refusal) and tells the browser to save only on the 204. Two halves, one page:
+//  - READY: this server's replay host holds no copy of a seeded part (Task 26), so the route is answered here by the browser's own
+//    stand-in — the probe 204, the file an `attachment` mp4 — and the assert is the BUTTON's: a Playwright `download` event with an
+//    mp4 filename, after exactly one probe (no token in its address) and one file request. The route's own answers are the route
+//    test's (real adapter, zero CDN calls on a check).
+//  - NOT READY: the REAL route (no stand-in): the host holds no copy, so it answers 409. The localised not-ready line shows, on that
+//    part, and NO download event follows and no file request is made — the defect was a `download.json` on the organiser's disk.
+// Not gated on LIVE (as Tasks 25, 26, 31b).
+test("Task 48: Download saves an mp4 only once the route says it would start; a 409 shows the not-ready line and saves nothing", async ({ page }) => {
+  test.setTimeout(REPLAY_SEED_MS + 3 * NAV_MS + 3 * CALL_MS);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const m = await seedSeaznMatch(page, { name: `Seazn Download ${Date.now().toString(36)}`, live: true });
+  try {
+    await finishSeaznMatch(m);
+    await seedPlayableReplays(m, await lockRecordings(m, 1));
+    const [part] = await withDb((sql) => sql<{ id: string }[]>`select id from fixture_video_replays where fixture_id = ${m.fixtureId} and state = 'playable'`);
+    expect(part?.id, "premise: one playable part").toBeTruthy();
+    const route = `/api/v1/fixtures/${m.fixtureId}/replays/${part!.id}/download`;
+    const body = await openPhoneTab(page, m.fixturePath);
+    const card = body.getByTestId("stream-seazn-replays");
+    const button = card.getByTestId("stream-seazn-replay-download");
+    await expect(button).toHaveCount(1, { timeout: CALL_MS });
+    const notReady = card.getByTestId("stream-seazn-replay-download-not-ready");
+
+    // NOT READY first (the real route): the empty case of "a save happened" is that none did.
+    const saved: string[] = [];
+    const files: string[] = [];
+    page.on("download", (d) => { saved.push(d.suggestedFilename()); });
+    page.on("request", (r) => { if (new URL(r.url()).pathname === route && !new URL(r.url()).search) files.push(r.method()); });
+    await button.click();
+    await expect(notReady, "the 409 reads in the part's own row, in the dictionary's words").toBeVisible({ timeout: CALL_MS });
+    await expect(notReady).toHaveText(ui("stream.replay.downloadNotReady"));
+    await expect(button, "idle again: the probe's busy state is over").not.toHaveAttribute("aria-busy", "true");
+    await expect(button).toBeVisible();
+    await page.waitForTimeout(1_000);
+    expect(saved, "no download event after a 409").toEqual([]);
+    expect(files, "the file itself was never asked for").toEqual([]);
+
+    // READY: the browser's stand-in answers the route. One probe (no token, no expiry in its address), then one file.
+    const probes: string[] = [];
+    const MP4 = Buffer.from("not a real mp4, a browser-side stand-in");
+    files.length = 0;   // (the request listener above counts the file requests, stand-in or real)
+    await page.route(`**${route}**`, async (r) => {
+      const u = new URL(r.request().url());
+      if (u.searchParams.get("check") === "1") {
+        probes.push(u.search);
+        await r.fulfill({ status: 204, headers: { "cache-control": "private, no-store" } });
+        return;
+      }
+      await r.fulfill({
+        status: 200, body: MP4,
+        headers: { "content-type": "video/mp4", "content-disposition": 'attachment; filename="seazn-seazn-home-v-seazn-away-part-1.mp4"', "cache-control": "private, no-store" },
+      });
+    });
+    const [download] = await Promise.all([page.waitForEvent("download", { timeout: CALL_MS }), button.click()]);
+    expect(download.suggestedFilename(), "an mp4, named for the match and the part").toMatch(/^seazn-.+-part-1\.mp4$/);
+    expect(probes, "exactly one probe, and its address is `?check=1` and nothing else").toEqual(["?check=1"]);
+    expect(files, "exactly one file request, after the probe").toEqual(["GET"]);
+    await expect(notReady, "a part that now saves clears the old line").toHaveCount(0);
+
+    // The failed line: a probe that is neither 204 nor 409 reads as a plain failure, saves nothing, and is its own words.
+    await page.unroute(`**${route}**`);
+    await page.route(`**${route}**`, (r) => r.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ ok: false, error: { code: "replay_host_unavailable", message: "x" } }) }));
+    const before = saved.length;
+    await button.click();
+    const failed = card.getByTestId("stream-seazn-replay-download-failed");
+    await expect(failed).toHaveText(ui("stream.replay.downloadFailed"), { timeout: CALL_MS });
+    await page.waitForTimeout(500);
+    expect(saved.length, "no download event after a 503").toBe(before);
+  } finally {
+    await finishSeaznMatch(m);
+  }
+});
+
+// ===========================================================================
 // Task 31b (T31b review m1): the replays list WITHOUT the Stream panel
 // ===========================================================================
 // An organiser whose org lost the panel (here `streaming.overlay` switched off by an org-wide override — every plan grants it since

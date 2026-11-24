@@ -22,7 +22,7 @@ import { DictProvider } from "@/components/i18n/dict-provider";
 import { LOCALES } from "@/lib/i18n-constants";
 import type { StreamSessionCurrent } from "@/server/api-v1/schemas";
 import { DELETE_RECORDING_AFTER_DAYS } from "@/server/relay/config";
-import { type SeaznReplayActions, SeaznReplaysCard, deleteSeaznReplayFlow, downloadSeaznReplayFlow, replayDownloadHref, replayLength } from "../seazn-replays-card";
+import { type SeaznReplayActions, SeaznReplaysCard, deleteSeaznReplayFlow, downloadSeaznReplayFlow, replayDownloadCheckHref, replayDownloadHref, replayLength } from "../seazn-replays-card";
 
 type Replay = StreamSessionCurrent["seaznReplays"][number];
 const DICT_DIR = join(__dirname, "../../../dictionaries");
@@ -361,45 +361,43 @@ describe("deleteSeaznReplayFlow", () => {
 });
 
 // Task 48: the Download button must never SAVE an error body (a 409 envelope was saved as `download.json`). The click asks the route
-// first; the browser is told to save only an ok answer that is an mp4. The steps are the hook's (useSeaznReplayActions) without state.
+// `?check=1` first (204, or the refusal: no file opened, no token in the address); the browser is told to save only on the 204. The
+// steps are the hook's (useSeaznReplayActions) without state.
 describe("downloadSeaznReplayFlow", () => {
   const HREF = replayDownloadHref(FIXTURE, id(1));
-  const answer = (status: number, contentType: string | null, body = "x") =>
-    new Response(body, { status, headers: contentType === null ? {} : { "content-type": contentType } });
+  const answer = (status: number, body: string | null = null) => new Response(body, { status, headers: body === null ? {} : { "content-type": "application/json" } });
   const rig = (reply: () => Promise<Response>) => {
     const log: string[] = [];
     return { log, run: () => downloadSeaznReplayFlow({ href: HREF, ask: async (h) => (log.push(`ASK ${h}`), reply()), save: (h) => { log.push(`SAVE ${h}`); } }) };
   };
 
-  it("EMPTY CASE FIRST: an ok mp4 answer is saved — once, from the part's own route, after the ask — and the probe's body is not left open", async () => {
-    let cancelled = false;
-    const res = answer(200, "video/mp4");
-    const real = res.body!.cancel.bind(res.body!);
-    res.body!.cancel = async (...a: []) => { cancelled = true; return real(...a); };
-    const r1 = rig(async () => res);
+  it("EMPTY CASE FIRST: a 204 is saved — once, from the part's own route WITHOUT the probe's query, after the ask; the probe's address is the route's own with `?check=1` and nothing else", async () => {
+    const r1 = rig(async () => answer(204));
     expect(await r1.run()).toBe("saved");
-    expect(r1.log).toEqual([`ASK ${HREF}`, `SAVE ${HREF}`]);
-    expect(cancelled, "the file streams in the save, not in the probe").toBe(true);
+    expect(r1.log).toEqual([`ASK ${HREF}?check=1`, `SAVE ${HREF}`]);
+    expect(replayDownloadCheckHref(HREF)).toBe(`/api/v1/fixtures/${FIXTURE}/replays/${id(1)}/download?check=1`);
+    expect(replayDownloadCheckHref(HREF), "no token, no host in the probe's address").not.toMatch(/token|expires|https?:|bunny|b-cdn/i);
+    expect(HREF, "the save's address has no query").not.toContain("?");
   });
 
-  it("every answer that is not an ok mp4 saves NOTHING and reads 'not_ready': the 409 envelope, a 5xx, a 200 that is JSON or HTML or has no type, and a request that never answered", async () => {
-    const CASES: [string, () => Promise<Response>][] = [
-      ["409 JSON envelope (the defect: saved as download.json)", async () => answer(409, "application/json", JSON.stringify({ ok: false, error: { code: "replay_not_downloadable" } }))],
-      ["404", async () => answer(404, "application/json")],
-      ["500", async () => answer(500, "application/json")],
-      ["503", async () => answer(503, "application/json")],
-      ["200 but JSON", async () => answer(200, "application/json")],
-      ["200 but HTML (a login page)", async () => answer(200, "text/html; charset=utf-8")],
-      ["200 with no content type", async () => answer(200, null)],
-      ["200 with a look-alike type", async () => answer(200, "video/mp4x")],
-      ["the request threw", async () => { throw new TypeError("offline"); }],
+  it("a 409 is 'not_ready'; every other answer or none is 'failed'; NOTHING is saved from any of them", async () => {
+    const CASES: [string, "not_ready" | "failed", () => Promise<Response>][] = [
+      ["409 JSON envelope (the defect: saved as download.json)", "not_ready", async () => answer(409, JSON.stringify({ ok: false, error: { code: "replay_not_downloadable" } }))],
+      ["404", "failed", async () => answer(404, "{}")],
+      ["402", "failed", async () => answer(402, "{}")],
+      ["403", "failed", async () => answer(403, "{}")],
+      ["500", "failed", async () => answer(500, "{}")],
+      ["503", "failed", async () => answer(503, "{}")],
+      ["200 JSON (not the 204 the probe promises)", "failed", async () => answer(200, "{}")],
+      ["200 with no body", "failed", async () => answer(200)],
+      ["the request threw", "failed", async () => { throw new TypeError("offline"); }],
     ];
     let checked = 0;
-    for (const [label, reply] of CASES) {
+    for (const [label, want, reply] of CASES) {
       const r1 = rig(reply);
-      expect(await r1.run(), label).toBe("not_ready");
+      expect(await r1.run(), label).toBe(want);
       expect(r1.log.filter((l) => l.startsWith("SAVE")), `${label}: nothing saved`).toEqual([]);
-      expect(r1.log, `${label}: it did ask`).toEqual([`ASK ${HREF}`]);
+      expect(r1.log, `${label}: it did ask`).toEqual([`ASK ${HREF}?check=1`]);
       checked++;
     }
     expect(checked, "anti-vacuity").toBe(CASES.length);
@@ -407,23 +405,55 @@ describe("downloadSeaznReplayFlow", () => {
 
   it("a second click asks again (no memory of the first answer): not ready, then ready, saves exactly once", async () => {
     let n = 0;
-    const r1 = rig(async () => (++n === 1 ? answer(409, "application/json") : answer(200, "Video/MP4")));
+    const r1 = rig(async () => (++n === 1 ? answer(409, "{}") : answer(204)));
     expect([await r1.run(), await r1.run()]).toEqual(["not_ready", "saved"]);
     expect(r1.log.filter((l) => l.startsWith("SAVE"))).toHaveLength(1);
   });
 
-  it("the not-ready line shows on the part it is about and no other, in every locale's own words, and never when idle", () => {
+  it("the not-ready line (409) and the failed line (anything else) show on the part they are about and no other, each in every locale's own words, and never when idle", () => {
     const parts = [r(1, "playable", 60), r(2, "playable", 60)];
-    const MARK = `data-testid="stream-seazn-replay-download-not-ready"`;
-    expect(html(parts), "idle: no line").not.toContain(MARK);
+    const NOT_READY = `data-testid="stream-seazn-replay-download-not-ready"`;
+    const FAILED = `data-testid="stream-seazn-replay-download-failed"`;
+    const idle = html(parts);
+    expect([idle.includes(NOT_READY), idle.includes(FAILED)], "idle: no line").toEqual([false, false]);
     let checked = 0;
     for (const locale of LOCALES) {
       const d = uiDict(locale);
-      const out = html(parts, locale, { ...IDLE, downloadFailed: id(2) });
-      expect([...out.matchAll(LI)].map((m) => m[2]!.includes(MARK)), `${locale}: only part 2`).toEqual([false, true]);
-      expect(d["stream.replay.downloadNotReady"], `${locale}: has words`).toBeTruthy();
-      expect(out, `${locale}: its own words`).toContain(esc(d["stream.replay.downloadNotReady"]!));
-      expect(out).not.toContain("stream.replay.downloadNotReady");
+      for (const [kind, mark, other, key] of [["not_ready", NOT_READY, FAILED, "stream.replay.downloadNotReady"], ["failed", FAILED, NOT_READY, "stream.replay.downloadFailed"]] as const) {
+        const out = html(parts, locale, { ...IDLE, downloadFailed: { id: id(2), kind } });
+        expect([...out.matchAll(LI)].map((m) => m[2]!.includes(mark)), `${locale} ${kind}: only part 2`).toEqual([false, true]);
+        expect(out.includes(other), `${locale} ${kind}: not the other line`).toBe(false);
+        expect(d[key], `${locale}: ${key} has words`).toBeTruthy();
+        expect(out, `${locale}: ${key}`).toContain(esc(d[key]!));
+        expect(out).not.toContain(key);
+        checked++;
+      }
+    }
+    expect(checked).toBe(LOCALES.length * 2);
+    expect(en["stream.replay.downloadNotReady"], "PREMISE: the two lines differ").not.toBe(en["stream.replay.downloadFailed"]);
+  });
+
+  it("while the probe runs the asked part says 'Preparing…' with a spinner and every Download is aria-disabled and inert; idle shows neither (m5), in every locale", () => {
+    const parts = [r(1, "playable", 60), r(2, "playable", 60)];
+    const idle = actionsOf(html(parts));
+    expect(idle.map((row) => row[0]!.text)).toEqual([`${en["stream.replay.download"]}| Part 1`, `${en["stream.replay.download"]}| Part 2`]);
+    expect(html(parts)).not.toContain("aria-disabled");
+    expect(html(parts)).not.toContain("stream-seazn-replay-download-busy");
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const d = uiDict(locale);
+      const out = html(parts, locale, { ...IDLE, downloading: id(2) });
+      const [first, second] = [...out.matchAll(LI)].map((m) => m[2]!);
+      expect(second, `${locale}: part 2 is busy`).toContain("stream-seazn-replay-download-busy");
+      expect(second, `${locale}: part 2 says Preparing`).toContain(esc(d["stream.replay.downloadPreparing"]!));
+      expect(first, `${locale}: part 1 shows no spinner`).not.toContain("stream-seazn-replay-download-busy");
+      expect(first, `${locale}: part 1 keeps its words`).toContain(esc(d["stream.replay.download"]!));
+      for (const li of [first!, second!]) {
+        const a = /<a [^>]*stream-seazn-replay-download"[^>]*>/.exec(li)?.[0] ?? "";
+        expect(a, `${locale}: aria-disabled`).toContain('aria-disabled="true"');
+        expect(a, `${locale}: inert`).toContain("pointer-events-none");
+      }
+      expect(second).toContain('aria-busy="true"');
       checked++;
     }
     expect(checked).toBe(LOCALES.length);

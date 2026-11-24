@@ -71,6 +71,9 @@ export interface ReplayHost {
    *  over yet throws ReplayNotDownloadable. `signal` is the caller's cancel (the download route's request.signal): when it fires,
    *  before the file starts or while it streams, the host stops sending (Task 26 review m1). */
   openDownload(videoId: string, signal?: AbortSignal): Promise<ReplayDownload>;
+  /** Whether `openDownload` would hand a file over, without opening it: the same refusals (ReplayNotDownloadable, and every other
+   *  failure of its first steps), no file stream and no signed address made (Task 48 review m2). Resolves when a file is there. */
+  checkDownload(videoId: string): Promise<void>;
   /** Minutes of the video watched between `from` and `to` (Phase 3). A window `assertWatchWindow` refuses is refused before any
    *  call, by every host. Null: the host holds no such video — never stored, or removed — so nothing about it can be read any more
    *  (Task 31: the host forgets a removed video's watch time with it). Never 0 in its place: a caller adds a number as minutes. */

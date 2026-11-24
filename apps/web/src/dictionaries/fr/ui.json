@@ -7389,6 +7389,8 @@
   "stream.replay.delete": "Supprimer le replay",
   "stream.replay.download": "Télécharger",
   "stream.replay.downloadNotReady": "Téléchargement pas encore prêt, réessayez dans quelques minutes.",
+  "stream.replay.downloadPreparing": "Préparation…",
+  "stream.replay.downloadFailed": "Le téléchargement a échoué. Réessayez.",
   "stream.replay.deleteConfirm": "Supprimer ce replay pour tout le monde ? Cette action est irréversible.",
   "stream.replay.deletePartTitle": "Supprimer la partie {n} du replay",
   "stream.replay.deleteKeep": "Garder le replay",

@@ -86,6 +86,11 @@ export class FakeReplayHost implements ReplayHost {
     };
   }
 
+  async checkDownload(videoId: string): Promise<void> {
+    const state = this.videos.get(videoId)?.state ?? "absent";
+    if (state !== "playable") throw new ReplayNotDownloadable(videoId, `not playable (${state})`);
+  }
+
   async openDownload(videoId: string): Promise<ReplayDownload> {
     const state = this.videos.get(videoId)?.state ?? "absent";
     if (state !== "playable") throw new ReplayNotDownloadable(videoId, `not playable (${state})`);

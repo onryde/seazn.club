@@ -171,6 +171,24 @@ export class BunnyReplayHost implements ReplayHost {
     };
   }
 
+  /** Whether a download would start (Task 48 review m2): the SAME checks `openDownload` makes before it opens the CDN — playable, the
+   *  Referer origin set, an MP4 file listed — and nothing after. Two API reads, no CDN request, no token made. Throws as `openDownload`
+   *  does; resolves when a file is listed. (A file the list names but the CDN does not hold is only `openDownload`'s to find.) */
+  async checkDownload(videoId: string): Promise<void> {
+    await this.downloadPlan(videoId, "checkDownload");
+  }
+
+  /** The checks every download starts with, in order, and the file they choose: the tallest of the MP4 set. */
+  private async downloadPlan(videoId: string, operation: string): Promise<{ origin: string; height: number }> {
+    const v = await this.video(videoId);
+    if (v.state !== "playable") throw new ReplayNotDownloadable(videoId, `not playable (${v.state})`);
+    const origin = this.videoOrigins()?.[0];
+    if (!origin) throw this.error(`${operation}: SEAZN_VIDEO_ORIGINS is not set, and the replay host serves a file only to an allowed Referer (video ${videoId})`);
+    const files = await this.mp4Heights(videoId);
+    if (files.length === 0) throw new ReplayNotDownloadable(videoId, "no MP4 file yet");
+    return { origin, height: Math.max(...files) };
+  }
+
   /** The video's TALLEST MP4 file, as `play_{h}p.mp4` (B9) under the B5 CDN token, sent with the first SEAZN_VIDEO_ORIGINS host
    *  as Referer. The tallest is taken from the MP4 fallback set (`/resolutions`, Task 48), never from `availableResolutions`: the
    *  two sets differ. No file yet (the set is empty, or the CDN answers 404) is ReplayNotDownloadable: "try again", not a fault. The CDN's body is answered as it streams in, never buffered here.
@@ -180,13 +198,7 @@ export class BunnyReplayHost implements ReplayHost {
    *  is read (never AbortSignal.timeout on the whole request). The caller's `cancel` aborts the CDN request at any point — before
    *  the headers (recorded `cancelled`, not a failure of the host's) or while the body streams. */
   async openDownload(videoId: string, cancel?: AbortSignal): Promise<ReplayDownload> {
-    const v = await this.video(videoId);
-    if (v.state !== "playable") throw new ReplayNotDownloadable(videoId, `not playable (${v.state})`);
-    const origin = this.videoOrigins()?.[0];
-    if (!origin) throw this.error(`openDownload: SEAZN_VIDEO_ORIGINS is not set, and the replay host serves a file only to an allowed Referer (video ${videoId})`);
-    const files = await this.mp4Heights(videoId);
-    if (files.length === 0) throw new ReplayNotDownloadable(videoId, "no MP4 file yet");
-    const height = Math.max(...files);
+    const { origin, height } = await this.downloadPlan(videoId, "openDownload");
     const file = `play_${height}p.mp4`;
     const dir = `/${videoId}/`;
     // B5: base64url without padding of a plain sha256 (not an HMAC) over key + path + expiry + "token_path=" + path.

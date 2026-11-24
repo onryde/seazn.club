@@ -309,3 +309,27 @@ describe("FakeReplayHost implements the whole port", () => {
     expect(methods).toHaveLength(7);
   });
 });
+
+describe("FakeReplayHost.checkDownload (Task 48 review m2): the same refusals as openDownload, no file opened", () => {
+  it("a playable video resolves; processing, failed, removed and unknown are ReplayNotDownloadable — exactly where openDownload throws", async () => {
+    const fake = new FakeReplayHost();
+    const playable = await fetchOne(fake);
+    const processing = await fetchOne(fake);
+    const failed = await fetchOne(fake);
+    const removed = await fetchOne(fake);
+    fake.advance(playable);
+    fake.fail(failed);
+    await fake.remove(removed);
+    await expect(fake.checkDownload(playable)).resolves.toBeUndefined();
+    let checked = 0;
+    for (const id of [processing, failed, removed, "never-stored"]) {
+      const viaCheck = await fake.checkDownload(id).then(() => null, (e: unknown) => e);
+      const viaOpen = await fake.openDownload(id).then(() => null, (e: unknown) => e);
+      expect(viaCheck, id).toBeInstanceOf(ReplayNotDownloadable);
+      expect(viaOpen, id).toBeInstanceOf(ReplayNotDownloadable);
+      expect((viaCheck as Error).message, `${id}: the same words`).toBe((viaOpen as Error).message);
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(4);
+  });
+});
