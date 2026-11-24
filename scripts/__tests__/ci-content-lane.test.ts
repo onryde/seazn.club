@@ -10,7 +10,8 @@
 //     helper (_help-copy.ts) are found the same way, never listed here.
 //   * For each, the job(s) that run it are read from ci.yml's own commands. A test with no DB
 //     gate runs in `test`, which holds every apps/web unit test and stays in the lane. A test
-//     with a DB gate (`describe.skipIf(!HAS_DB)`) compares the content with the database, and
+//     with a DB gate (`describe.skipIf(!HAS_DB)`, `(HAS_DB ? describe : describe.skip)`, or any file naming
+//     HAS_DB / DATABASE_URL: `isGated`) compares the content with the database, and
 //     that half runs only in a DB job: so a lane job OTHER than `test` must select it, or the
 //     file must be exempted by name with a reason that is itself checked.
 //   * The skip list is read from the jobs' `if:` lines, and ci-gate's own script is RUN against
@@ -100,10 +101,16 @@ const IMPORT =
   /(?:import|export)\s[^'"`;]*?from\s*["']([^"']+)["']|import\s*["']([^"']+)["']|import\(\s*["']([^"']+)["']\s*\)|vi\.(?:mock|importActual)\(\s*["']([^"']+)["']/g;
 const EXTS = ["", ".ts", ".tsx", ".mts", ".js", ".mjs", "/index.ts", "/index.tsx", "/index.js"];
 
+/**
+ * A test file counts as gated when it names the database gate at all, not only when it spells it `.skipIf(`/`.runIf(`:
+ * three files gate with `(HAS_DB ? describe : describe.skip)(...)`, which no `.skipIf(` match sees.
+ */
+const isGated = (text: string): boolean => /\.(?:skipIf|runIf)\(|\bHAS_DB\b|\bDATABASE_URL\b/.test(text);
+
 interface Reader {
   /** Repo-relative path. */
   file: string;
-  /** A `.skipIf(`/`.runIf(` in the file: part of it runs only where the gate opens (a database, a live URL). */
+  /** The file gates part of itself (see `isGated`): that part runs only where the gate opens (a database, a live URL). */
   gated: boolean;
   /** Why it counts: it names a content root itself, or imports a module that does. */
   via: string;
@@ -145,7 +152,7 @@ const readers = (): { found: Reader[]; modules: string[]; scanned: number } => {
   const found = [...via.keys()]
     .filter((f) => IS_TEST.test(f))
     .sort()
-    .map((file) => ({ file, gated: /\.(?:skipIf|runIf)\(/.test(text.get(file)!), via: via.get(file)! }));
+    .map((file) => ({ file, gated: isGated(text.get(file)!), via: via.get(file)! }));
   return { found, modules: roots.filter((r) => !IS_TEST.test(r)).sort(), scanned: files.length };
 };
 
@@ -173,9 +180,38 @@ const GATED_HALF_READS_NO_CONTENT: Record<string, string> = {
   "apps/web/src/app/__tests__/sitemap.test.ts":
     "Its describe.skipIf(!HAS_DB) block seeds a competition and asserts the competition and division URLs and that no non-blog entry carries a lastmod. " +
     "The help and blog entries are asserted by the file's DB-free tests (`/help/formats` pages, the blog dates), which run in `test`, and by sitemap-help-blog.test.ts.",
+  "apps/web/src/app/help/__tests__/help-route-config.test.ts":
+    "Names DATABASE_URL only inside a mocked rejection message (`new Error(\"DATABASE_URL is not set\")`); nothing in the file is database-gated. " +
+    "Its reads of the help tree are plain tests, so they run in `test`.",
+  "apps/web/src/app/(public)/live/__tests__/english-sweep.test.tsx":
+    "Names DATABASE_URL only inside a thrown message, and mocks `@/server/help-content` out; nothing in the file is database-gated and it reads no help or blog content. " +
+    "It is a reader to this sweep only through that `vi.mock` import edge.",
 };
 
 describe("ci.yml: the content lane", () => {
+  it("counts a test file as gated by every spelling of the database gate, and no other", () => {
+    const spellings: Record<string, string> = {
+      skipIf: 'describe.skipIf(!HAS_DB)("x", () => {});',
+      runIf: 'describe.runIf(process.env.LIVE_URL)("x", () => {});',
+      "ternary, which `.skipIf(` never matched": 'const d = (HAS_DB ? describe : describe.skip)("x", () => {});',
+      "bare HAS_DB": "const live = HAS_DB;",
+      DATABASE_URL: "if (!process.env.DATABASE_URL) return;",
+    };
+    for (const [name, text] of Object.entries(spellings)) expect(isGated(text), name).toBe(true);
+    expect(Object.keys(spellings).length, "gate spellings judged").toBe(5);
+    // The negatives: an ungated reader, and a name that merely contains one.
+    expect(isGated('describe("x", () => { it("reads", () => {}); });')).toBe(false);
+    expect(isGated("const NOT_HAS_DBX = 1; const MY_DATABASE_URLS = 2;")).toBe(false);
+    // The three files the brief found are gated by this rule (they are not content readers, so they are judged here, not below).
+    for (const file of [
+      "apps/web/src/lib/__tests__/revshare-org-seam.test.ts",
+      "apps/web/src/server/usecases/__tests__/billing-invoice-attribution.test.ts",
+      "apps/web/src/server/usecases/__tests__/revshare-sale-seam.test.ts",
+    ]) {
+      expect(isGated(readFileSync(join(REPO, file), "utf8")), `${file} is gated`).toBe(true);
+    }
+  });
+
   it("skips exactly the jobs that run nothing which reads content, derived from the jobs' own `if:` lines", () => {
     const all = jobs();
     expect(all.length, "jobs found").toBeGreaterThan(10);

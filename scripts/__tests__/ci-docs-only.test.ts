@@ -218,6 +218,30 @@ describe("ci-docs-only.sh", () => {
     expect(answer("pull_request", capped.slice(0, 2999))).toBe("content");
   });
 
+  it("answers code for a non-article, non-picture file dropped inside a content root, and content for its article and picture twins", () => {
+    // The same folder, the same stem: the one difference is the extension. Each code answer has its content twin below it.
+    const roots = ["apps/web/content/help/zq-section", "apps/web/content/blog", "apps/web/public/help/zq-section"];
+    const notContent = ["zq-new.ts", "zq-new.tsx", "zq-new.json", "zq-new.mjs", "zq-new.svg", "zq-new.md.ts", "zq-new.webp.json", "zq-new", "zq-new.MD"];
+    const content = ["zq-new.md", "zq-new.webp", "zq-new.png", "zq-new.jpg", "zq-new.jpeg", "zq-new.gif", "zq-new.avif"];
+    let judged = 0;
+    for (const root of roots) {
+      for (const f of notContent) {
+        expect(answer("pull_request", [`${root}/${f}`]), `${root}/${f}`).toBe("code");
+        // …and beside a genuine article it still drags the whole change to code.
+        expect(answer("pull_request", [`${root}/${f}`, "apps/web/content/blog/zq-new-post.md"]), `${root}/${f} beside an article`).toBe("code");
+        judged += 2;
+      }
+      for (const f of content) {
+        expect(answer("pull_request", [`${root}/${f}`]), `${root}/${f}`).toBe("content");
+        judged++;
+      }
+    }
+    expect(judged, "paths judged").toBe(roots.length * (notContent.length * 2 + content.length));
+    // The named cases from the review: a .ts and a .json in the help root.
+    expect(answer("pull_request", ["apps/web/content/help/zz.ts"])).toBe("code");
+    expect(answer("pull_request", ["apps/web/content/help/zz.json"])).toBe("code");
+  });
+
   it("recognises EVERY tracked help and blog file in the real repo as content (a sweep, with its count)", () => {
     // The fixture repo has no code that names them, so each real path must answer `content`; a path the
     // script misses as content (a renamed root, a new section kind) answers `code` and fails here.

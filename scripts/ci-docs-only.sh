@@ -19,11 +19,15 @@
 #   docs     docs/**, mockups/**, .claude/**, or a ROOT-level *.md / *.txt. An .md
 #            anywhere else is code: unit and DB tests content-scan the .md files
 #            inside apps/, scripts/ and tools/.
-#   content  apps/web/content/help/**, apps/web/content/blog/** and the pictures
-#            they show, apps/web/public/help/**. These are the three roots the help
-#            and blog loaders read (HELP_ROOT, BLOG_ROOT, and the figures under
-#            public/help); the .md files in them are NOT docs, because the help-copy
-#            sweeps, the blog goldens and the leak, picture and link guards read them.
+#   content  an .md file or a picture (.webp .png .jpg .jpeg .gif .avif) under
+#            apps/web/content/help/, apps/web/content/blog/ or apps/web/public/help/.
+#            These are the three roots the help and blog loaders read (HELP_ROOT,
+#            BLOG_ROOT, and the figures under public/help); the .md files in them are
+#            NOT docs, because the help-copy sweeps, the blog goldens and the leak,
+#            picture and link guards read them. Anything else under those roots (a
+#            .ts, a .json, an .svg, a file with no extension) is code: it is not
+#            something the loaders read as content, and only an .md or a picture is
+#            what the lane's reader sweep reasoned about.
 #   code     everything else.
 #
 # `code=false` (docs-only) needs BOTH:
@@ -40,12 +44,17 @@
 #   2. at least one is a content path, and
 #   3. no tracked code file names a changed content file's BASENAME (a section
 #      folder such as `billing` or `sports` names half the repo, so folders are not
-#      searched for a content path). Measured when this was written: 64 of the 251
-#      content files (143 .md, 108 .webp) are named somewhere in code, so a PR that
-#      touches one of those answers `code` and runs everything. That is deliberate:
-#      the readers it finds run in the content lane anyway, but a name this script
-#      cannot place in a running job is exactly what rule 3 exists to refuse, and a
-#      false "code" costs one full run.
+#      searched for a content path). This is a cheap tripwire, NOT the argument that
+#      the lane is safe: it sees a test that spells a file name, and does not see one
+#      that reaches an article by slug (helpArticleBySlug("sharing/embeds")), by
+#      section, or by walking the directory. What makes the lane safe is
+#      scripts/__tests__/ci-content-lane.test.ts: its reader sweep derives, by
+#      behaviour, every test that reads help or blog content however it names it,
+#      and proves each one runs in a job that stays in the lane. A reader this name
+#      search misses is therefore still run. Measured when this was written: 64 of
+#      the 251 content files (143 .md, 108 .webp) are named somewhere in code, so a
+#      PR that touches one of those answers `code` and runs everything: a false
+#      "code" costs one full run.
 #
 # Why a content PR cannot simply skip every DB job: the DB-gated halves of
 # help-copy-truth, pricing-cards, retired-plan-copy, dictionary-copy-truth and
@@ -92,7 +101,13 @@ fi
 kind_of() {
   case "$1" in
     docs/* | mockups/* | .claude/*) kind=docs ;;
-    apps/web/content/help/* | apps/web/content/blog/* | apps/web/public/help/*) kind=content ;;
+    apps/web/content/help/* | apps/web/content/blog/* | apps/web/public/help/*)
+      # Only an article or a picture is content; a .ts or .json dropped in a content folder is code.
+      case "$1" in
+        *.md | *.webp | *.png | *.jpg | *.jpeg | *.gif | *.avif) kind=content ;;
+        *) kind=code ;;
+      esac
+      ;;
     */*) kind=code ;;
     *.md | *.txt) kind=docs ;;
     *) kind=code ;;
