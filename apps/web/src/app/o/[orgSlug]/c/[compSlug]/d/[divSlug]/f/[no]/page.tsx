@@ -231,18 +231,23 @@ export default async function FixturePage({
   // 402 to such a seat (auth.ts `requireOrgAuth`), so the list then offers neither and says why. A lost plan or a billing-frozen
   // competition is NOT a paused seat: those keep both actions. The panel needs no such read: its list rides the session view, whose read
   // is write-scoped too, so a paused seat never gets that list at all. A failed read costs nothing: the actions stay, the routes guard.
+  // Fix round 1 (T33d review m2): the same rule as the routes — `requireOrgAuth` refuses a paused seat only for an ADMIN's write
+  // (auth.ts, `scope === "write" && role === "admin"`), so only an admin is read; the owner keeps both actions whatever the set says.
+  const seatUserId = auth.role === "admin" ? auth.userId : null;
   const [replaysAlone, memberFrozen] = offersStandaloneReplays({ canEdit, mode: streamMode })
     ? await Promise.all([
         fixtureSeaznReplays(auth.orgId, id).catch((err: unknown) => {
           log.warn({ fixtureId: id, err: String(err) }, "fixture page: the Seazn replays could not be read — the list is not shown");
           return [];
         }),
-        frozenMemberIds(auth.orgId)
-          .then((ids) => auth.userId !== null && ids.has(auth.userId))
-          .catch((err: unknown) => {
-            log.warn({ fixtureId: id, err: String(err) }, "fixture page: the member-seat freeze could not be read — the replay actions stay offered");
-            return false;
-          }),
+        seatUserId === null
+          ? false
+          : frozenMemberIds(auth.orgId)
+              .then((ids) => ids.has(seatUserId))
+              .catch((err: unknown) => {
+                log.warn({ fixtureId: id, err: String(err) }, "fixture page: the member-seat freeze could not be read — the replay actions stay offered");
+                return false;
+              }),
       ])
     : ([[], false] as const);
 

@@ -7385,7 +7385,7 @@
   "stream.replay.seazn.readyPrivate": "Ready — the public can't see this match, so it isn't on the match page",
   "stream.replay.seazn.failedStillPlays": "Meanwhile the original recording still plays on the match page, for up to {days} days after it was recorded",
   "stream.replay.seazn.failedStillPlaysPrivate": "The original recording is kept for up to {days} days after it was recorded. The public can't see this match, so it isn't on the match page",
-  "stream.replay.seazn.seatPaused": "Your seat is paused, so replays can't be changed or downloaded. Ask the club owner.",
+  "stream.replay.seazn.seatPaused": "Your seat is read-only while the club is over its member limit, so replays can't be changed or downloaded. Ask the owner.",
   "stream.replay.delete": "Delete replay",
   "stream.replay.download": "Download",
   "stream.replay.deleteConfirm": "Delete this replay for everyone? This can't be undone.",

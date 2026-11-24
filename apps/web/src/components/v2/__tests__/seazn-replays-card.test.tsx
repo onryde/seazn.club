@@ -208,8 +208,18 @@ describe("SeaznReplaysCard", () => {
   // Task 33d (T31b review m3): a member whose seat is paused by the plan's member limit (entitlement-freeze.ts `frozenMemberIds`; the
   // owner is never in it) would get 402 from both routes (auth.ts `requireOrgAuth`, write scope). So the card shows every part and its
   // state, offers neither action, and says why in ONE line. The English is the controller's sentence, literal, so a reworded key reds.
+  // Fix round 1 (T33d review m1): the line names the state the way the app already does (`streamDest.error.seatFrozen`: "read-only",
+  // "member limit", "the owner"), so an admin who meets both surfaces reads one name for one state.
   describe("Task 33d: a member whose seat is paused", () => {
-    const PAUSED_LINE = "Your seat is paused, so replays can't be changed or downloaded. Ask the club owner.";
+    const PAUSED_LINE = "Your seat is read-only while the club is over its member limit, so replays can't be changed or downloaded. Ask the owner.";
+    // [locale, the house's words for "read-only", for "member limit"] — each must appear in BOTH this line and that locale's
+    // `streamDest.error.seatFrozen`, so the table is checked against the house key, not only against this line.
+    const SEAT_STATE_WORDS: [locale: string, readOnly: string, memberLimit: string][] = [
+      ["en", "read-only", "member limit"],
+      ["nl", "alleen-lezen", "ledenlimiet"],
+      ["fr", "en lecture seule", "limite de membres"],
+      ["es", "de solo lectura", "límite de miembros"],
+    ];
     const PARTS = [r(1, "playable", 60), r(2, "processing"), r(3, "failed")];
     const card = (o: { replays?: Replay[]; frame?: "inset" | "page"; memberFrozen?: boolean; locale?: string; actions?: SeaznReplayActions } = {}) =>
       renderToStaticMarkup(
@@ -269,6 +279,22 @@ describe("SeaznReplaysCard", () => {
         checked++;
       }
       expect(checked, "anti-vacuity: every locale").toBe(LOCALES.length);
+    });
+
+    it("one name for one state: in every locale the line says \"read-only\" and \"member limit\" in the same words as the app's existing seat line (streamDest.error.seatFrozen)", () => {
+      let checked = 0;
+      for (const [locale, readOnly, memberLimit] of SEAT_STATE_WORDS) {
+        const d = uiDict(locale);
+        const house = d["streamDest.error.seatFrozen"];
+        const line = d["stream.replay.seazn.seatPaused"];
+        for (const words of [readOnly, memberLimit]) {
+          expect(house, `${locale}: PREMISE: the house line says "${words}"`).toContain(words);
+          expect(line, `${locale}: the replay line says "${words}" too`).toContain(words);
+          checked++;
+        }
+      }
+      expect(new Set(SEAT_STATE_WORDS.map(([l]) => l)), "every locale is in the table").toEqual(new Set(LOCALES));
+      expect(checked, "anti-vacuity: two phrases per locale").toBe(LOCALES.length * 2);
     });
   });
 

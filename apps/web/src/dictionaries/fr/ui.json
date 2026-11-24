@@ -7385,7 +7385,7 @@
   "stream.replay.seazn.readyPrivate": "Prêt — le public ne peut pas voir ce match, il n'est donc pas sur la page du match",
   "stream.replay.seazn.failedStillPlays": "En attendant, l'enregistrement d'origine reste visible sur la page du match, jusqu'à {days} jours après l'enregistrement",
   "stream.replay.seazn.failedStillPlaysPrivate": "L'enregistrement d'origine est conservé jusqu'à {days} jours après l'enregistrement. Le public ne peut pas voir ce match, il n'est donc pas sur la page du match",
-  "stream.replay.seazn.seatPaused": "Votre accès est en pause : les replays ne peuvent être ni modifiés ni téléchargés. Adressez-vous au propriétaire du club.",
+  "stream.replay.seazn.seatPaused": "Votre accès est en lecture seule tant que le club dépasse sa limite de membres, donc les replays ne peuvent être ni modifiés ni téléchargés. Adressez-vous au propriétaire.",
   "stream.replay.delete": "Supprimer le replay",
   "stream.replay.download": "Télécharger",
   "stream.replay.deleteConfirm": "Supprimer ce replay pour tout le monde ? Cette action est irréversible.",

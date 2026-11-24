@@ -485,19 +485,22 @@ describe("Task 33d: a member whose seat is paused sees the replays without the a
     const stream = (consoleEl?.props as { stream?: { mode: string; context?: Record<string, unknown> } } | undefined)?.stream;
     return { consoleEl, section, stream, paused: (section?.props as { memberFrozen?: unknown } | undefined)?.memberFrozen };
   }
-  // [name, role, the user ids the freeze answers, paused?] — the signed-in user is "u-1". The freeze set is what the REAL selector
-  // answers in each case: it never names an owner, and in an over-quota org it names only the seats past the limit.
-  const SEATS: [name: string, role: string, frozenIds: string[], paused: boolean][] = [
-    ["an admin of an org within its limit", "admin", [], false],
-    ["an admin whose seat is paused", "admin", ["u-1"], true],
-    ["an admin of an over-quota org who keeps a seat (another admin is paused)", "admin", ["u-2"], false],
-    ["the owner after a downgrade (the admins are paused, never the owner)", "owner", ["u-2", "u-3"], false],
+  // [name, role, the user ids the freeze answers, paused?, seat reads] — the signed-in user is "u-1". The page's rule is the routes'
+  // (auth.ts `requireOrgAuth`): only an ADMIN's write is refused for a paused seat, so only an admin is read. The owner row names the
+  // owner IN the freeze set on purpose — today's selector never does (it skips owners), but the route would still serve the owner if it
+  // ever did, so the page must not hide the owner's actions on the set alone. That row is the one a page without the role gate fails.
+  const SEATS: [name: string, role: string, frozenIds: string[], paused: boolean, reads: number][] = [
+    ["an admin of an org within its limit", "admin", [], false, 1],
+    ["an admin whose seat is paused", "admin", ["u-1"], true, 1],
+    ["an admin of an over-quota org who keeps a seat (another admin is paused)", "admin", ["u-2"], false, 1],
+    ["the owner, even with the freeze set naming them (the routes never refuse an owner's write)", "owner", ["u-1", "u-2"], false, 0],
   ];
 
-  it("the standalone list (no Stream panel: the org lost the plan): paused exactly for the member whose seat is paused; read once, for this org", async () => {
+  it("the standalone list (no Stream panel: the org lost the plan): paused exactly for the admin whose seat is paused; an admin is read once, for this org; the owner never", async () => {
     let checked = 0;
     let paused = 0;
-    for (const [name, role, frozenIds, want] of SEATS) {
+    let ownerNamed = 0;
+    for (const [name, role, frozenIds, want, reads] of SEATS) {
       Object.assign(scene, { role, frozenIds, frozen: false, open: [] });
       spies.loader.mockImplementation(async () => ({ ...CONTEXT, entitled: false }));
       spies.frozen.mockClear();
@@ -505,11 +508,12 @@ describe("Task 33d: a member whose seat is paused sees the replays without the a
       expect(p.stream, `${name}: PREMISE: no panel`).toBeUndefined();
       expect(p.section, `${name}: PREMISE: the list stands alone`).not.toBeNull();
       expect(p.paused, name).toBe(want);
-      expect(spies.frozen.mock.calls, `${name}: one read per page, for this org`).toEqual([["org-1"]]);
+      expect(spies.frozen.mock.calls, `${name}: seat reads, for this org`).toEqual(Array.from({ length: reads }, () => ["org-1"]));
       checked++;
       if (want) paused++;
+      if (role !== "admin" && frozenIds.includes("u-1")) ownerNamed++;
     }
-    expect([checked, paused], "anti-vacuity: every seat, one of them paused").toEqual([SEATS.length, 1]);
+    expect([checked, paused, ownerNamed], "anti-vacuity: every seat, one paused, one non-admin the set names").toEqual([SEATS.length, 1, 1]);
   });
 
   it("a billing-frozen competition is NOT a paused seat: an admin with a seat keeps both actions on the standalone list (Task 31b) — and a paused admin there is still paused", async () => {
