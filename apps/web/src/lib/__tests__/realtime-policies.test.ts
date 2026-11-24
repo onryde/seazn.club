@@ -43,6 +43,8 @@ const POLICY = "capture pairing read by claim";
 /** The policies V403 and V452 create (V537 re-creates both). */
 const EARLIER = ["external play lobby read by claim", "fixture broadcast read by claim"];
 const WRAPPED = "( SELECT realtime.topic() AS topic)";
+/** The claim read, wrapped in its own scalar sub-select (one evaluation per statement), as pg_policies prints it. */
+const wrappedJwt = (claim: string) => `( SELECT (auth.jwt() ->> '${claim}'::text))`;
 
 type Delta = { file: string; version: number; text: string };
 const DELTA_FILES = readdirSync(DELTAS).filter((f) => /^V\d+__.+\.sql$/.test(f));
@@ -227,7 +229,7 @@ describe("capture pairing read by claim", () => {
       expect(reads.filter(([k]) => k.endsWith("<- no claims"))).toEqual([]);
     });
 
-    it("the row: SELECT, to authenticated, permissive, no WITH CHECK, topic() wrapped, keyed on the capture claim; earlier policies untouched", async ({
+    it("the row: SELECT, to authenticated, permissive, no WITH CHECK, topic() and the claim each wrapped, keyed on the capture claim; earlier policies untouched", async ({
       skip,
     }) => {
       if (await hasRealtime()) return skip();
@@ -245,7 +247,7 @@ describe("capture pairing read by claim", () => {
       const { qual, ...rest } = value.mine[0]!;
       expect(rest).toEqual({ policyname: POLICY, cmd: "SELECT", roles: ["authenticated"], permissive: "PERMISSIVE", with_check: null });
       expect(qual).toContain(WRAPPED);
-      expect(qual).toContain(`auth.jwt() ->> '${claim}'`);
+      expect(qual).toContain(wrappedJwt(claim));
       expect(qual).toContain("extension = 'broadcast'");
     });
 
@@ -332,14 +334,14 @@ describe("capture pairing read by claim", () => {
   });
 
   describe.skipIf(!HAS_DB)("against a database WITH Supabase Realtime", () => {
-    it("the live policy exists, to authenticated, topic() wrapped, keyed on the capture claim", async ({ skip }) => {
+    it("the live policy exists, to authenticated, topic() and the claim each wrapped, keyed on the capture claim", async ({ skip }) => {
       if (!(await hasRealtime())) return skip();
       const claim = await captureClaim();
       const live = await readPolicies(sql, [POLICY]);
       expect(live).toHaveLength(1);
       expect(live[0]!.roles).toEqual(["authenticated"]);
       expect(live[0]!.qual).toContain(WRAPPED);
-      expect(live[0]!.qual).toContain(`auth.jwt() ->> '${claim}'`);
+      expect(live[0]!.qual).toContain(wrappedJwt(claim));
     });
   });
 });
