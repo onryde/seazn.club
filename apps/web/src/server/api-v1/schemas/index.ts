@@ -46,6 +46,8 @@ export {
   CAPTURE_POOL_RE, CaptureStageRole, CaptureStage, CAPTURE_STAGE_LABEL_MAX, CAPTURE_COURT_NAME_MAX, CaptureCourt, CaptureNext, CAPTURE_AUTO_REFUSALS, CaptureAutoRefusal, CAPTURE_SCORING_LINK_URL_RE, CAPTURE_MATCHDAY_WATCH_URL_RE, CaptureScoringLinkOk,
   // Realtime push nudges (spec 2026-11-24 §2.1).
   CaptureRealtime, CAPTURE_REALTIME_URL_RE,
+  // Task 46 (2026-11-24): the beat answer's delivery facts.
+  CaptureDelivery,
   // capture-record.v1 (spec 2026-10-12, approved).
   CAPTURE_RECORD_MAX_LINES, CAPTURE_RECORD_MAX_BYTES, CAPTURE_RECORD_REF_RE, CaptureRecordLine, CaptureRecordOk,
   CaptureRecordRefusalCode, CaptureRecordRefusal, CaptureRecordSecretS2, CaptureRecordSecretS3, CaptureRecordSecretS4,

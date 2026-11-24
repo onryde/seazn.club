@@ -34,6 +34,8 @@ import * as S from "../schemas";
 import { CaptureQrV2, captureQrV2Text, parseCaptureQrV2 } from "@/lib/capture-qr";
 import { CAPTURE_NUDGE_REASONS, MATCH_DAY_NUDGE_REASONS, MATCH_DAY_TOKEN_TTL_SECONDS, captureTopic, divisionTopic, matchDayTopic } from "@/lib/realtime";
 import { contractUrlPatterns } from "@/server/usecases/__tests__/_capture-realtime";
+import { PROGRAMME_PHASES } from "@/lib/relay-phase";
+import type { CfLiveEvent } from "@/server/relay/cf-live-notification";
 import type { RoundRole } from "@seazn/engine/competition";
 
 type Json = Record<string, unknown>;
@@ -54,7 +56,8 @@ const SHA256: Record<string, string> = {
   "capture-qr.v2.json": "0943072e30489dad04822cf266cc62d4e004e3a2ef46fe20e712a274ae272fbe",
   "capture-descriptor.v1.json": "308d58807d3b3754ccf5b400c18827d09ffb5dd0177aaed7d10b31b307c027f4",
   // Realtime push nudges (spec 2026-11-24 §2.1, plan Task 4): + the answer's optional `realtime`, additive.
-  "capture-beat.v1.json": "b86686ca4690a57b63830600c25fbdb8739b761d203dce113e32a70d4667ecef",
+  // Task 46 (owner 2026-11-24): + the answer's optional `delivery`, additive (never replaced/taken). Re-pinned on the rebase.
+  "capture-beat.v1.json": "8b037827fc5922f4b6fb9e891ad58df3e6912582bb17722f5aab89b14670d7e9",
   "capture-start.v1.json": "46162c64e4b9e0da3f17a571103c3ba7e3e9e972997367c916bf7f6ea8e08778",
   "capture-scoring-link.v1.json": "daa81ed4f907545f0fb1a8265d11011fab3b90a52d880dda8e3839f7651b5032",
   "capture-record.v1.json": "213f766043b7682f198cc98da13e93995b6602e46533ecf60c78bf562aebd6f8",
@@ -87,10 +90,12 @@ const COMMON_NULLABLE = new Set<string>(["scheduledStart", "destinationName", "o
 // E2 (2026-11-17): `autoRefusal` is optional on the waiting branch only.
 // Realtime push nudges (spec 2026-11-24 §2.1): `realtime` is "sent on every 2xx where the caller is the code's current
 // pairing (waiting, go-live, live, over-with-current-pairing); never on replaced or taken".
-const ANSWER_FIELDS = ["sid", "startedBy", "endReason", "device", "next", "autoRefusal", "realtime", ...COMMON] as const;
+// Task 46 (owner 2026-11-24, the brief's words): `delivery` is optional where the common fields are required, and "absent on
+// replaced/taken branches (`.omit({delivery:true})` there)" — so forbidden on those two.
+const ANSWER_FIELDS = ["sid", "startedBy", "endReason", "device", "next", "autoRefusal", "realtime", "delivery", ...COMMON] as const;
 type AnswerField = (typeof ANSWER_FIELDS)[number];
-const answerRow = (sid: Cell, startedBy: Cell, endReason: Cell, device: Cell, common: Cell, realtime: Cell, autoRefusal: Cell = NO): Record<AnswerField, Cell> => ({
-  sid, startedBy, endReason, device, next: OPT, autoRefusal, realtime, ...(Object.fromEntries(COMMON.map((f) => [f, common])) as Record<(typeof COMMON)[number], Cell>),
+const answerRow = (sid: Cell, startedBy: Cell, endReason: Cell, device: Cell, common: Cell, realtime: Cell, autoRefusal: Cell = NO, delivery: Cell = OPT): Record<AnswerField, Cell> => ({
+  sid, startedBy, endReason, device, next: OPT, autoRefusal, realtime, delivery, ...(Object.fromEntries(COMMON.map((f) => [f, common])) as Record<(typeof COMMON)[number], Cell>),
 });
 /** §17.5's table, row for row (absent = forbidden), with the push-nudge spec's `realtime` column. */
 const ANSWER_MATRIX: Record<string, Record<AnswerField, Cell>> = {
@@ -98,8 +103,8 @@ const ANSWER_MATRIX: Record<string, Record<AnswerField, Cell>> = {
   "go-live": answerRow(REQ, REQ, NO, NO, REQ, OPT),
   live: answerRow(REQ, NO, NO, NO, REQ, OPT),
   over: answerRow(REQ, NO, REQ, NO, REQ, OPT),
-  replaced: answerRow(NO, NO, NO, OPT, OPT, NO),
-  taken: answerRow(NO, NO, NO, OPT, OPT, NO),
+  replaced: answerRow(NO, NO, NO, OPT, OPT, NO, NO, NO),
+  taken: answerRow(NO, NO, NO, OPT, OPT, NO, NO, NO),
 };
 /** Push-nudge spec §2.1 and the plan's beat-reply constraint: the realtime object is exactly these five keys. */
 const REALTIME_KEYS = ["url", "apikey", "topic", "token", "expiresAt"] as const;
@@ -326,7 +331,7 @@ type Route = [
 const DIRS: Record<string, { file: string; routes: Route[]; count: number }> = {
   "capture-qr.v2": { file: QR, routes: [["", CaptureQrV2, ""]], count: 12 },
   "capture-descriptor.v1": { file: DESCRIPTOR, routes: [["refusal-", S.CaptureRefusal, "#/$defs/refusal"], ["", S.CaptureDescriptor, ""]], count: 58 },
-  "capture-beat.v1": { file: BEAT, routes: [["beat-", S.CaptureBeat, ""], ["answer-", S.CaptureBeatAnswer, "#/$defs/answer"], ["refusal-", S.CaptureRefusal, "#/$defs/refusal"]], count: 57 },
+  "capture-beat.v1": { file: BEAT, routes: [["beat-", S.CaptureBeat, ""], ["answer-", S.CaptureBeatAnswer, "#/$defs/answer"], ["refusal-", S.CaptureRefusal, "#/$defs/refusal"]], count: 62 },
   "capture-start.v1": { file: START, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureStartOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 18 },
   "capture-scoring-link.v1": { file: SCORING, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureScoringLinkOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 20 },
   [RECORD_DIR]: { file: RECORD, routes: [["line-", S.CaptureRecordLine, ""], ["ok-", S.CaptureRecordOk, "#/$defs/ok"], ["", S.CaptureRecordRefusal, "#/$defs/refusal"]], count: 63 },
@@ -438,7 +443,7 @@ const RECORD_NEAR_MISS: Record<string, "S2" | "S3" | "S4" | "S5"> = {
  *  twins in RECORD_TWINS, its refusal words, its ref pattern and its two limits). */
 const CAPTURE_SCHEMAS_EXPORTS = [
   "CAPTURE_AUTO_REFUSALS", "CaptureAutoRefusal", "CAPTURE_CODE_RE", "CAPTURE_COURT_NAME_MAX", "CAPTURE_MATCHDAY_WATCH_URL_RE", "CAPTURE_POOL_RE", "CAPTURE_SCORING_LINK_URL_RE", "CAPTURE_STAGE_LABEL_MAX", "CaptureBeat",
-  "CaptureBeatAnswer", "CaptureCause", "CaptureCourt", "CaptureCred", "CaptureDescriptor", "CaptureEndReason", "CaptureNotReady",
+  "CaptureBeatAnswer", "CaptureCause", "CaptureCourt", "CaptureCred", "CaptureDelivery", "CaptureDescriptor", "CaptureEndReason", "CaptureNotReady",
   "CapturePhoneState", "CaptureNext", "CaptureRefusal", "CaptureRefusalCode", "CaptureScoringLinkOk", "CaptureSession", "CaptureStage",
   "CaptureStageRole", "CaptureStartBody", "CaptureStartFailed", "CaptureStartOk", "CaptureStartedBy", "CaptureWaiting",
   // Realtime push nudges (spec 2026-11-24 §2.1): the beat answer's realtime object, and its url pattern (the server's
@@ -655,7 +660,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       expect(checked, `${dir}: fixtures checked`).toBe(count);
       total += checked;
     }
-    expect(total).toBe(12 + 58 + 57 + 18 + 20 + 63 + 15 + 10 + 17 + 26 + 18);
+    expect(total).toBe(12 + 58 + 62 + 18 + 20 + 63 + 15 + 10 + 17 + 26 + 18);
     expect(byFile, "fixtures checked against the published bytes").toBe(total);
     // Every ZOD_ONLY entry names a fixture that exists and was swept (a stale entry would excuse nothing, silently).
     expect(zodOnlySeen, "ZOD_ONLY fixtures swept").toBe(Object.keys(ZOD_ONLY).length);
@@ -762,17 +767,17 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     expect(all.some((b) => b.claim === "resume"), "a valid resume claim").toBe(true);
   });
 
-  it("R5/A21 beat answer: each state admits only its own fields — 6 states × 13 fields (court stream's `next` and the push nudges' `realtime` included) against the twin AND the file", () => {
+  it("R5/A21 beat answer: each state admits only its own fields — 6 states × 14 fields (court stream's `next`, the push nudges' `realtime` and Task 46's `delivery` included) against the twin AND the file", () => {
     const states = Object.keys(ANSWER_MATRIX);
     const valid = Object.fromEntries(states.map((s) => [s, fixture("capture-beat.v1", `answer-valid-${s}`)]));
     const donors = [
       ...Object.values(valid), fixture("capture-beat.v1", "answer-valid-replaced-device"), fixture("capture-beat.v1", "answer-valid-waiting-next"),
-      fixture("capture-beat.v1", "answer-valid-waiting-autoRefusal"), fixture("capture-beat.v1", "answer-valid-live-realtime"),
+      fixture("capture-beat.v1", "answer-valid-waiting-autoRefusal"), fixture("capture-beat.v1", "answer-valid-live-realtime"), fixture("capture-beat.v1", "answer-valid-live-delivery"),
     ];
     const twinCells = sweepTwin(ANSWER_MATRIX, ANSWER_FIELDS, valid, donors, S.CaptureBeatAnswer);
-    expect(twinCells).toBe(78);
+    expect(twinCells).toBe(6 * 14);
     const fileCells = sweepFile(ANSWER_MATRIX, ANSWER_FIELDS, branchesByState(defOf(contract(BEAT), "answer")));
-    expect(fileCells).toBe(78);
+    expect(fileCells).toBe(6 * 14);
   });
 
   it("R5/A21 descriptor: each state admits only its own fields — 6 states × 12 fields (W28's stage and the court stream's court included) against the twin AND the file", () => {
@@ -795,8 +800,8 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     }
     for (const [state, row] of Object.entries(ANSWER_MATRIX)) {
       for (const [field, cell] of Object.entries(row)) {
-        // `next`, `autoRefusal` and `realtime` have their own null tests below, on every state that admits them.
-        if (cell === OPT && field !== "next" && field !== "autoRefusal" && field !== "realtime" && !COMMON_NULLABLE.has(field)) owed.push(["capture-beat.v1", `answer-invalid-null-${state}-${field}`, field, S.CaptureBeatAnswer]);
+        // `next`, `autoRefusal`, `realtime` and `delivery` (Task 46) have their own null tests below, on every state that admits them.
+        if (cell === OPT && field !== "next" && field !== "autoRefusal" && field !== "realtime" && field !== "delivery" && !COMMON_NULLABLE.has(field)) owed.push(["capture-beat.v1", `answer-invalid-null-${state}-${field}`, field, S.CaptureBeatAnswer]);
       }
     }
     let checked = 0;
@@ -1488,6 +1493,98 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     expect(CAPTURE_NUDGE_REASONS.length, "premise: the server declares reasons").toBeGreaterThan(0);
   });
 
+  it("Task 46 (owner 2026-11-24): `delivery` is ONE new top-level key of six optional plain members (no phone read name reused), each closed vocabulary the STORED one, never null, never on replaced or taken, strict — in the twin AND the file", () => {
+    const fileAdmits = fileValidator();
+    const B = "capture-beat.v1", ANSWER = "#/$defs/answer";
+    const live = fixture(B, "answer-valid-live"), full = fixture(B, "answer-valid-live-delivery");
+    expect(without(full, "delivery"), "premise: differs from answer-valid-live in delivery alone").toEqual(live);
+    const given = full.delivery as Json;
+
+    // The phone's constraints (the mobile session, ledger 2026-11-24): exactly ONE new top-level key, `delivery`, whose members
+    // are exactly these six; no read name is reused, `realtime` (the realtime branch's) included.
+    const PHONE_READ_NAMES = ["state", "label", "autoAllowed", "pollSeconds", "venueTimezone", "scheduledStart", "destinationName", "next", "autoRefusal", "stage", "role", "realtime"];
+    // `realtime` (push nudges, main #1302) predates this key on the merged tree.
+    const BEFORE_T46 = ["state", "sid", "startedBy", "endReason", "device", "next", "autoRefusal", "realtime", ...COMMON];
+    const topLevel = new Set(S.CaptureBeatAnswer.options.flatMap((o) => Object.keys(o.shape)));
+    expect([...topLevel].filter((k) => !BEFORE_T46.includes(k)), "the one new top-level key").toEqual(["delivery"]);
+    const MEMBERS = ["relayOutput", "programmePhase", "fps", "kbps", "cameraIngest", "programmeIngest"];
+    expect(Object.keys(CS.CaptureDelivery.shape).sort()).toEqual([...MEMBERS].sort());
+    expect(Object.keys(given).sort(), "premise: the valid fixture carries every member").toEqual([...MEMBERS].sort());
+    for (const name of ["delivery", ...MEMBERS]) expect(PHONE_READ_NAMES, `${name} reuses a read name`).not.toContain(name);
+
+    // The five named fixtures, and taken's twin of the replaced one.
+    const cases: [value: Json, admitted: boolean, what: string][] = [
+      [full, true, "answer-valid-live-delivery"],
+      [fixture(B, "answer-invalid-null-delivery"), false, "answer-invalid-null-delivery"],
+      [fixture(B, "answer-invalid-delivery-extra-key"), false, "answer-invalid-delivery-extra-key"],
+      [fixture(B, "answer-invalid-delivery-url-value"), false, "answer-invalid-delivery-url-value"],
+      [fixture(B, "answer-invalid-replaced-delivery"), false, "answer-invalid-replaced-delivery"],
+      [{ ...fixture(B, "answer-valid-taken"), delivery: { relayOutput: "connected" } }, false, "taken + delivery"],
+    ];
+    expect(fixture(B, "answer-invalid-null-delivery").delivery, "premise").toBeNull();
+    expect(Object.keys(fixture(B, "answer-invalid-delivery-extra-key").delivery as Json).filter((k) => !MEMBERS.includes(k)), "premise: one extra member").toHaveLength(1);
+    let verdicts = 0;
+    for (const [value, admitted, what] of cases) {
+      expect(parses(S.CaptureBeatAnswer, value), `${what}: twin`).toBe(admitted);
+      expect(fileAdmits(BEAT, ANSWER, value), `${what}: file`).toBe(admitted);
+      verdicts++;
+    }
+
+    // Every member is optional on its own, and null on any member is refused (omitted, never null).
+    for (const m of MEMBERS) {
+      const one = { ...live, delivery: { [m]: given[m] } };
+      expect(parses(S.CaptureBeatAnswer, one), `${m} alone: twin`).toBe(true);
+      expect(fileAdmits(BEAT, ANSWER, one), `${m} alone: file`).toBe(true);
+      const nulled = { ...live, delivery: { ...given, [m]: null } };
+      expect(parses(S.CaptureBeatAnswer, nulled), `${m} null: twin`).toBe(false);
+      expect(fileAdmits(BEAT, ANSWER, nulled), `${m} null: file`).toBe(false);
+      verdicts += 2;
+    }
+
+    // Each closed vocabulary is the one the server STORES, read off its declarations (never off the twin): the Machine's beat
+    // (RelayHeartbeat's `output`, lib/relay-phase's PROGRAMME_PHASES) and Cloudflare's live-input events, `live_input.` dropped.
+    const CF_EVENTS: Record<CfLiveEvent, true> = { "live_input.connected": true, "live_input.disconnected": true, "live_input.errored": true };
+    const ingestWords = Object.keys(CF_EVENTS).map((e) => e.slice("live_input.".length));
+    const VOCAB: Record<string, readonly string[]> = {
+      relayOutput: S.RelayHeartbeat.shape.output.unwrap().unwrap().options,
+      programmePhase: PROGRAMME_PHASES,
+      cameraIngest: ingestWords,
+      programmeIngest: ingestWords,
+    };
+    const answer = defOf(contract(BEAT), "answer");
+    let words = 0;
+    for (const [m, list] of Object.entries(VOCAB)) {
+      expect(list.length, `${m}: premise — a stored vocabulary`).toBeGreaterThan(0);
+      for (const [side, shape] of [["file", answer], ["twin", zodJson(S.CaptureBeatAnswer, "output")]] as const) {
+        const found = nodesAt(shape, ["delivery", m]).map(enumOf);
+        // waiting, go-live, live and over carry `delivery`; replaced and taken do not.
+        expect(found, `${m} (${side}): nodes`).toHaveLength(4);
+        for (const values of found) expect(values, `${m} (${side})`).toEqual([...list].sort());
+      }
+      for (const word of list) {
+        expect(parses(S.CaptureBeatAnswer, { ...live, delivery: { [m]: word } }), `${m}=${word}: twin`).toBe(true);
+        words++;
+      }
+      // Outside the set: the port's `unknown` (an errored input's word), a case change, an empty string, a URL.
+      for (const bad of ["unknown", list[0]!.toUpperCase(), "", "https://customer-x.cloudflarestream.com/v/manifest/video.m3u8"]) {
+        expect(parses(S.CaptureBeatAnswer, { ...live, delivery: { [m]: bad } }), `${m}=${bad}: twin`).toBe(false);
+        expect(fileAdmits(BEAT, ANSWER, { ...live, delivery: { [m]: bad } }), `${m}=${bad}: file`).toBe(false);
+        verdicts++;
+      }
+    }
+    // fps and kbps are whole numbers from 0: a fraction, a negative and a numeric string are refused.
+    for (const m of ["fps", "kbps"]) {
+      expect(parses(S.CaptureBeatAnswer, { ...live, delivery: { [m]: 0 } }), `${m}=0`).toBe(true);
+      for (const bad of [29.97, -1, "30"]) {
+        expect(parses(S.CaptureBeatAnswer, { ...live, delivery: { [m]: bad } }), `${m}=${String(bad)}: twin`).toBe(false);
+        expect(fileAdmits(BEAT, ANSWER, { ...live, delivery: { [m]: bad } }), `${m}=${String(bad)}: file`).toBe(false);
+        verdicts++;
+      }
+    }
+    expect(verdicts).toBe(6 + MEMBERS.length * 2 + 4 * 4 + 2 * 3);
+    expect(words).toBe(VOCAB.relayOutput!.length + PROGRAMME_PHASES.length + 2 * 3);
+  });
+
   it("finding A (2026-11-19): the beat publishes its refusals, `app_outdated` (426, court codes only) among them — a word every refusal-bearing contract admits, with no extras, distinct from the unknown code's", () => {
     const fileAdmits = fileValidator();
     const dir = "capture-beat.v1";
@@ -1902,7 +1999,8 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     expect(names.length, "premise: capture-schemas.ts exports").toBeGreaterThan(0);
     // The full list, not a name pattern (review fix 8): a twin named, say, CaptureLogLine trips it too.
     expect([...names].sort()).toEqual([...CAPTURE_SCHEMAS_EXPORTS].sort());
-    expect(CAPTURE_SCHEMAS_EXPORTS).toHaveLength(26 + 2 + 3 + 11 + 6 + 1 + 3 + 9 + 1);
+    // Task 46: + CaptureDelivery (26 → 27 before the realtime pair).
+    expect(CAPTURE_SCHEMAS_EXPORTS).toHaveLength(27 + 2 + 3 + 11 + 6 + 1 + 3 + 9 + 1);
     // Every record-named export that is a SHAPE (a zod object or string) is a twin the parity test compares, by
     // identity — an enum is checked by its options instead, a constant by the contract's prose.
     const twins = new Map(RECORD_TWINS.map(([pointer, twin, name]) => [name, { pointer, twin }]));

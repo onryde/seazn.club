@@ -90,6 +90,9 @@ export async function captureV2Suite(): Promise<void> {
     state?: string; sid?: string; startedBy?: string; endReason?: string; cred?: unknown; playbackUrl?: string; code?: string;
     heartbeatUrl?: string; stage?: { code: string; role: { kind: string; n?: number; entrants?: number }; pool?: string; label?: string }; url?: string;
     message?: string;
+    // Task 46 (2026-11-24): the beat answer's optional delivery facts — go-live / live on a Seazn-hosted session only, so this
+    // suite's sessions (on its own pasted destination) never carry it; typed so an answer that does still reads (each member optional).
+    delivery?: { relayOutput?: string; programmePhase?: string; fps?: number; kbps?: number; cameraIngest?: string; programmeIngest?: string };
   };
   const phoneCallOn = async (q: Qr, path: string, method: "GET" | "POST", body?: unknown): Promise<{ status: number; json: Answer | null; headers: Headers; url: string }> => {
     const res = await fetch(`${BASE}/api/v1/capture/codes/${q.code}${path}`, {

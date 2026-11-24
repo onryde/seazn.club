@@ -249,6 +249,10 @@ export const RELAY_HEARTBEAT_INTERVAL_MS = 5_000;
  *  the LOWER edge of the YouTube split threshold, 15–30 s of output gap (compositor `_FINDINGS.md` F-004 addendum): the
  *  in-place restart is what keeps a crash inside it; this window only decides when web stops waiting for one. */
 export const STALE_HEARTBEAT_SECONDS_COMPOSED = (3 * RELAY_HEARTBEAT_INTERVAL_MS) / 1000;
+/** Task 46 (the brief's words): on the phone's beat answer (`delivery`, domain/delivery.ts), "a relay fact older than 3 relay
+ *  beats ... is omitted, not reported stale-as-fresh" — defined from the cadence the compositor is served, never a literal. A
+ *  stored beat exactly this old is still told; a millisecond older is not. */
+export const DELIVERY_RELAY_FRESH_MS = 3 * RELAY_HEARTBEAT_INTERVAL_MS;
 /** Compositor plan Global Constraints "Exit codes" (`78`: unauthorized or not found), whose final beat says
  *  `exitReason: "refused"`: the compositor's REFUSAL exit — its bootstrap read was refused or did not decode. A
  *  replacement would be refused the same way, so a runner that exits with it never spends the ONE retry

@@ -81,7 +81,7 @@ const BRANCHES = CaptureBeatAnswer.options;
 const keysOf = (state: Answer["state"]): string[] => {
   const branch = BRANCHES.find((o) => o.shape.state.value === state);
   if (!branch) throw new Error(`no contract branch for ${state}`);
-  return Object.keys(branch.shape).filter((k) => k !== "device" && k !== "next" && k !== "autoRefusal" && k !== "realtime").sort();
+  return Object.keys(branch.shape).filter((k) => k !== "device" && k !== "next" && k !== "autoRefusal" && k !== "realtime" && k !== "delivery").sort();
 };
 let answersChecked = 0;
 const statesSeen = new Set<string>();
@@ -94,6 +94,8 @@ function checked(a: Answer): Answer {
   expect(a, "a fixture code's answer never carries the court's next").not.toHaveProperty("next");
   expect(a, "nor the court's autoRefusal (E2)").not.toHaveProperty("autoRefusal");
   if (a.state === "replaced" || a.state === "taken") expect(a, "replaced and taken never carry realtime (§2.1)").not.toHaveProperty("realtime");
+  // Task 46: `delivery` rides only on a Seazn-hosted session's go-live / live; every session here is a pasted-key passthrough.
+  expect(a, "no Seazn session here, so no delivery (Task 46)").not.toHaveProperty("delivery");
   for (const v of Object.values(a)) expect(v, "an absent field is omitted, never undefined").not.toBeUndefined();
   answersChecked++;
   statesSeen.add(a.state);

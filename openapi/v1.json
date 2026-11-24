@@ -65413,6 +65413,56 @@
                           ],
                           "additionalProperties": false
                         },
+                        "delivery": {
+                          "type": "object",
+                          "properties": {
+                            "relayOutput": {
+                              "type": "string",
+                              "enum": [
+                                "connecting",
+                                "connected",
+                                "backoff"
+                              ]
+                            },
+                            "programmePhase": {
+                              "type": "string",
+                              "enum": [
+                                "waiting",
+                                "live",
+                                "frozen",
+                                "reconnecting",
+                                "final"
+                              ]
+                            },
+                            "fps": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "kbps": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "cameraIngest": {
+                              "type": "string",
+                              "enum": [
+                                "connected",
+                                "disconnected",
+                                "errored"
+                              ]
+                            },
+                            "programmeIngest": {
+                              "type": "string",
+                              "enum": [
+                                "connected",
+                                "disconnected",
+                                "errored"
+                              ]
+                            }
+                          },
+                          "additionalProperties": false
+                        },
                         "state": {
                           "type": "string",
                           "const": "waiting"
@@ -65553,6 +65603,56 @@
                             "token",
                             "expiresAt"
                           ],
+                          "additionalProperties": false
+                        },
+                        "delivery": {
+                          "type": "object",
+                          "properties": {
+                            "relayOutput": {
+                              "type": "string",
+                              "enum": [
+                                "connecting",
+                                "connected",
+                                "backoff"
+                              ]
+                            },
+                            "programmePhase": {
+                              "type": "string",
+                              "enum": [
+                                "waiting",
+                                "live",
+                                "frozen",
+                                "reconnecting",
+                                "final"
+                              ]
+                            },
+                            "fps": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "kbps": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "cameraIngest": {
+                              "type": "string",
+                              "enum": [
+                                "connected",
+                                "disconnected",
+                                "errored"
+                              ]
+                            },
+                            "programmeIngest": {
+                              "type": "string",
+                              "enum": [
+                                "connected",
+                                "disconnected",
+                                "errored"
+                              ]
+                            }
+                          },
                           "additionalProperties": false
                         },
                         "state": {
@@ -65700,6 +65800,56 @@
                           ],
                           "additionalProperties": false
                         },
+                        "delivery": {
+                          "type": "object",
+                          "properties": {
+                            "relayOutput": {
+                              "type": "string",
+                              "enum": [
+                                "connecting",
+                                "connected",
+                                "backoff"
+                              ]
+                            },
+                            "programmePhase": {
+                              "type": "string",
+                              "enum": [
+                                "waiting",
+                                "live",
+                                "frozen",
+                                "reconnecting",
+                                "final"
+                              ]
+                            },
+                            "fps": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "kbps": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "cameraIngest": {
+                              "type": "string",
+                              "enum": [
+                                "connected",
+                                "disconnected",
+                                "errored"
+                              ]
+                            },
+                            "programmeIngest": {
+                              "type": "string",
+                              "enum": [
+                                "connected",
+                                "disconnected",
+                                "errored"
+                              ]
+                            }
+                          },
+                          "additionalProperties": false
+                        },
                         "state": {
                           "type": "string",
                           "const": "live"
@@ -65834,6 +65984,56 @@
                             "token",
                             "expiresAt"
                           ],
+                          "additionalProperties": false
+                        },
+                        "delivery": {
+                          "type": "object",
+                          "properties": {
+                            "relayOutput": {
+                              "type": "string",
+                              "enum": [
+                                "connecting",
+                                "connected",
+                                "backoff"
+                              ]
+                            },
+                            "programmePhase": {
+                              "type": "string",
+                              "enum": [
+                                "waiting",
+                                "live",
+                                "frozen",
+                                "reconnecting",
+                                "final"
+                              ]
+                            },
+                            "fps": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "kbps": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "cameraIngest": {
+                              "type": "string",
+                              "enum": [
+                                "connected",
+                                "disconnected",
+                                "errored"
+                              ]
+                            },
+                            "programmeIngest": {
+                              "type": "string",
+                              "enum": [
+                                "connected",
+                                "disconnected",
+                                "errored"
+                              ]
+                            }
+                          },
                           "additionalProperties": false
                         },
                         "state": {

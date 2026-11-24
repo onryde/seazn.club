@@ -35,6 +35,7 @@ import {
   relayDriverMode, srtEnabled, streamPlaybackHost, tunable,
 } from "@/server/relay/config";
 import { beatAnswer, wireBeatAnswer, type BeatAnswerCommon } from "@/server/relay/domain/beat-answer";
+import { deliveryOf } from "@/server/relay/domain/delivery";
 import { wireEndReason, type DbEndReason } from "@/server/relay/domain/end-reason";
 import { type ClaimOutcome, deadForTakeover, decideClaim, isNotResponding } from "@/server/relay/domain/pairing";
 import { phoneFlagsOf } from "@/server/relay/domain/phone-health";
@@ -47,6 +48,7 @@ import { ingestCred, ingestHostOf } from "@/server/relay/ingest-cred";
 import type { IngestState } from "@/server/relay/ports";
 import { readFirstInput } from "@/server/relay/secret-columns";
 import { recordEvent } from "@/server/relay/telemetry";
+import { readDeliveryFacts } from "./capture-delivery";
 import { captureStageOf } from "./capture-stage";
 import { getCourtCode, postCourtBeat, postCourtScoringLink, postCourtStart } from "./capture-court";
 import { matchLabelOf } from "./court-stream-codes";
@@ -801,7 +803,20 @@ export async function runBeat(scope: BeatScope, body: Beat, deps: SessionDeps, n
       captureError(err, { orgId: scope.orgId, route: "capture.beat.realtime_mint", extra: { codeId: scope.codeId } });
     }
   }
-  const answer = wireBeatAnswer(core, { ...common, realtime });
+  // Task 46: the delivery facts, for an answer that tells the phone to publish (go-live, live) — the slot's current phone, so
+  // never replaced or taken. One read on the pool, after the transaction; a Seazn-hosted session only (the read's own gate). A
+  // failed read is reported and the beat answered without it: wireBeatAnswer omits an absent or empty `delivery`.
+  let delivery: BeatAnswerCommon["delivery"] = null;
+  if (core.state === "go-live" || core.state === "live") {
+    try {
+      const facts = await readDeliveryFacts(core.sid);
+      delivery = facts === null ? null : deliveryOf(facts, now);
+    } catch (err) {
+      log.error({ err: String(err), sid: core.sid, orgId: scope.orgId }, "capture beat: the delivery read failed — the beat is answered without delivery");
+      captureError(err, { orgId: scope.orgId, route: "capture.beat.delivery_read", extra: { sid: core.sid } });
+    }
+  }
+  const answer = wireBeatAnswer(core, { ...common, realtime, delivery });
   if (decided.mine !== null && answer.pollSeconds !== undefined) {
     await sql`update fixture_stream_pairings set answered_poll_seconds = ${answer.pollSeconds} where id = ${decided.mine.id}`;
   }

@@ -1,7 +1,7 @@
 // Capture QR v2 §6.3.3 — the beat answer. Pure. `beatAnswer` decides the state (first row that applies wins, the
 // CLAIM_ROWS shape); `wireBeatAnswer` puts it on the wire as capture's R5 union (`CaptureBeatAnswer`, final).
 // The use-case (T8b) sends exactly what wireBeatAnswer returns, and stores ITS pollSeconds as the answered cadence.
-import type { CaptureAutoRefusal, CaptureBeatAnswer, CaptureNext, CaptureRealtime, CaptureStartedBy } from "@/server/api-v1/capture-schemas";
+import type { CaptureAutoRefusal, CaptureBeatAnswer, CaptureDelivery, CaptureNext, CaptureRealtime, CaptureStartedBy } from "@/server/api-v1/capture-schemas";
 import { POLL_STARTING_SECONDS } from "../config";
 import type { WireEndReason } from "./end-reason";
 import type { ClaimOutcome } from "./pairing";
@@ -73,7 +73,18 @@ export type BeatAnswerCommon = {
    *  go-live, live and over only — never replaced or taken, whose caller no longer holds the pairing. Absent or null →
    *  omitted (never null on the wire). It moves no other field: pollSeconds is the same with or without it. */
   realtime?: CaptureRealtime | null;
+  /** Task 46: the session's delivery facts (domain/delivery.ts), on the go-live and live answers only — the two that tell the
+   *  phone to publish. Absent, null or with no member → omitted (never null, never `{}`). */
+  delivery?: CaptureDelivery | null;
 };
+
+/** Task 46: the members picked by name (a wider object never leaks onto the strict wire); none → no object at all. */
+const DELIVERY_MEMBERS = ["relayOutput", "programmePhase", "fps", "kbps", "cameraIngest", "programmeIngest"] as const satisfies readonly (keyof CaptureDelivery)[];
+function deliveryField(d: CaptureDelivery | null | undefined): { delivery?: CaptureDelivery } {
+  if (d == null) return {};
+  const picked = Object.fromEntries(DELIVERY_MEMBERS.filter((m) => d[m] !== undefined).map((m) => [m, d[m]])) as CaptureDelivery;
+  return Object.keys(picked).length > 0 ? { delivery: picked } : {};
+}
 
 /** R5: one branch per state, each strict. Fields are picked by name, so a wider caller object never leaks a key onto the
  *  strict wire. Row 5 (`starting`) answers POLL_STARTING_SECONDS whatever cadence the caller computed. `device` is
@@ -89,8 +100,8 @@ export function wireBeatAnswer(core: BeatAnswerCore, common: BeatAnswerCommon): 
   const realtime = rt != null ? { realtime: { url: rt.url, apikey: rt.apikey, topic: rt.topic, token: rt.token, expiresAt: rt.expiresAt } } : {};
   switch (core.state) {
     case "waiting": return { state: "waiting", ...fields, ...(common.autoRefusal != null ? { autoRefusal: common.autoRefusal } : {}), ...realtime };
-    case "go-live": return { state: "go-live", sid: core.sid, startedBy: core.startedBy, ...fields, ...realtime };
-    case "live": return { state: "live", sid: core.sid, ...fields, ...realtime };
+    case "go-live": return { state: "go-live", sid: core.sid, startedBy: core.startedBy, ...fields, ...deliveryField(common.delivery), ...realtime };
+    case "live": return { state: "live", sid: core.sid, ...fields, ...deliveryField(common.delivery), ...realtime };
     case "over": return { state: "over", sid: core.sid, endReason: core.endReason, ...fields, ...realtime };
     case "replaced": return { state: "replaced", ...fields };
     case "taken": return { state: "taken", ...fields };
