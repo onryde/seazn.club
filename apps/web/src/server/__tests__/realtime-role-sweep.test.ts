@@ -21,10 +21,18 @@
 // still reds. The mentions inside realtime.messages policies are pinned by
 // file and policy.
 //
+// Known blind spot: the comment stripper does not know string literals, so a
+// `--` or `/*` INSIDE a quoted string is read as the start of a comment and
+// the rest of that line (or up to the next `*/`) is dropped. Contrived — no
+// policy or grant sits after such a string today — and an unparseable
+// `create policy` throws at collection rather than passing.
+//
 // Anti-vacuity: each half reports what it scanned (files, policies, grants);
-// zero files, zero policies, zero grants, or fewer than two realtime policies
-// fails. The checkers are also run on synthetic SQL, both ways, so a
-// checker that can never fire cannot pass here.
+// zero files, zero policies or zero grants fails, and the realtime.messages
+// policy statements are pinned at an EXACT count (5 since V554), so one more
+// or one fewer fails until the pin moves on purpose. The checkers are also
+// run on synthetic SQL, both ways, so a checker that can never fire cannot
+// pass here.
 //
 // The DB-level half runs only with DATABASE_URL set AND the `authenticated`
 // and `anon` roles present (a Supabase database). A plain Postgres — local
@@ -327,6 +335,8 @@ describe("§4.5 role sweep — the checkers fire (synthetic SQL, both ways)", ()
     expect(tokenRolePolicies(pol("alter policy p on public.fixtures to authenticated;"))).toHaveLength(1);
     expect(tokenRolePolicies(pol("alter policy p on fixtures to app_user, anon using (true);"))).toHaveLength(1);
     expect(tokenRolePolicies(pol("alter policy p on fixtures rename to q;"))).toEqual([]);
+    // A rename TO a token role's name is still a rename: without the rename guard this reads as `to anon`.
+    expect(tokenRolePolicies(pol("alter policy p on t rename to anon;"))).toEqual([]);
     expect(tokenRolePolicies(pol("alter policy p on fixtures using (org_id = x);"))).toEqual([]);
   });
 
@@ -422,7 +432,7 @@ describe("§4.5 role sweep — every migration (static)", () => {
   const policies = files.flatMap((f) => parsePolicies(relative(MIGRATIONS, f), readFileSync(f, "utf8")));
   const grants = files.flatMap((f) => parseGrants(relative(MIGRATIONS, f), readFileSync(f, "utf8")));
 
-  it("scans every migration: files, policies and grants non-zero; realtime.messages policies exactly 4", () => {
+  it("scans every migration: files, policies and grants non-zero; realtime.messages policies exactly 5", () => {
     const b = authenticatedWidening(grants);
     const c = realtimeClaimFailures(policies);
     const repeatable = files.filter((f) => /(^|\/)R__[^/]*$/.test(f)).length;
@@ -434,8 +444,9 @@ describe("§4.5 role sweep — every migration (static)", () => {
     expect(files.length, "migration files scanned").toBeGreaterThan(0);
     expect(policies.length, "create policy statements scanned").toBeGreaterThan(0);
     expect(grants.length, "grant statements scanned").toBeGreaterThan(0);
-    // V403 and V452, each re-created by V537. Pinned: a new realtime policy (V554–V556) moves this on purpose.
-    expect(c.realtime, "realtime.messages policy statements scanned").toBe(4);
+    // V403 and V452, each re-created by V537, plus V554's capture pairing policy. Pinned: a new realtime policy
+    // (V555, V556) moves this on purpose.
+    expect(c.realtime, "realtime.messages policy statements scanned").toBe(5);
   });
 
   it("(a) no policy outside realtime.messages names authenticated, anon or public", () => {
@@ -450,17 +461,18 @@ describe("§4.5 role sweep — every migration (static)", () => {
     expect(realtimeClaimFailures(policies).failures).toEqual([]);
   });
 
-  it("backstop: authenticated/anon appear only inside the four known realtime.messages policies", () => {
+  it("backstop: authenticated/anon appear only inside the five known realtime.messages policy statements", () => {
     const all = files.map((f) => tokenRoleMentions(relative(MIGRATIONS, f), readFileSync(f, "utf8")));
     const hits = all.flatMap((m) => m.hits).map((h) => `${h.file} :: ${h.policy}`);
     console.log(`[role-sweep static] authenticated/anon mentions: ${hits.length} (all inside realtime.messages policies)`);
     expect(all.flatMap((m) => m.failures)).toEqual([]);
-    // Pinned by file and policy: a new realtime policy (V554–V556) adds its line here on purpose.
+    // Pinned by file and policy: a new realtime policy (V555, V556) adds its line here on purpose.
     expect(hits.sort()).toEqual([
       "deltas/V403__realtime_fixture_broadcast_policy.sql :: fixture broadcast read by claim",
       "deltas/V452__online_chess_realtime_policy.sql :: external play lobby read by claim",
       "deltas/V537__org_has_feature_plpgsql.sql :: external play lobby read by claim",
       "deltas/V537__org_has_feature_plpgsql.sql :: fixture broadcast read by claim",
+      "deltas/V554__pairing_realtime_policy.sql :: capture pairing read by claim",
     ]);
   });
 });
