@@ -17,18 +17,61 @@ export interface ExampleTable {
  * types only; a member's fields are the minimum its diagram needs and may be widened by that component's task.
  * Every member carries `title`, which the SVG's <title> and its caption repeat in text.
  */
+export interface BracketFeed {
+  /** The `id` of the match the seat is filled from. */
+  id: string;
+  /** `winner`: the winner goes on (a solid line). `loser`: the loser goes here (a dashed one). */
+  side: "winner" | "loser";
+}
+
+/** One match of a bracket diagram: the two seats, who won, and where each seat's player came from. */
+export interface BracketMatchModel {
+  /** Names the match for a later `homeFrom` / `awayFrom`; a match nobody feeds from may leave it out. */
+  id?: string;
+  /** The seat's player as the page prints it ("Ana (1)"). `null`: a bye, nobody on that side. */
+  home: string | null;
+  away: string | null;
+  /** One of the two seat strings above. */
+  winner?: string;
+  /** The product's name for the round ("Semi-finals", "Qualifier 1"), printed above the box. */
+  label?: string;
+  /** Matches of different lanes are stacked in separate blocks, each headed by its name (one figure, two formats). */
+  lane?: string;
+  homeFrom?: BracketFeed;
+  awayFrom?: BracketFeed;
+  /** A short word printed beside a seat's player ("plate", "walkover"), keyed by the seat string. */
+  tags?: Record<string, string>;
+}
+
 export type DiagramModel =
   | {
       kind: "bracket";
       title: string;
-      rounds: { name: string; matches: { home: string | null; away: string | null; winner?: string }[] }[];
+      /** The COLUMNS, left to right; the builder lays them out so every feed comes from an earlier column. */
+      rounds: { name: string; matches: BracketMatchModel[] }[];
     }
   | {
+      // Batch 3 widened this (the Swiss round grid, components/blog/swiss-round-diagram.tsx): one round's boards with each
+      // side's score going in, the colours (chess), the boards that pair across scores (a float), the byes, and the players
+      // the round did not seat (a late entrant not yet in, a player who has left).
       kind: "swissRound";
       title: string;
       round: number;
-      pairings: { board: number; first: string; second: string | null; result?: string }[];
+      pairings: {
+        board: number;
+        first: string;
+        second: string | null;
+        result?: string;
+        /** Points each side takes into the round, as the table prints them. */
+        firstScore?: string;
+        secondScore?: string;
+        /** Chess only: `first` has White. Absent, the diagram draws no colours. */
+        firstWhite?: boolean;
+        /** The board seats two different scores. */
+        float?: boolean;
+      }[];
       byes: string[];
+      notSeated?: { name: string; why: string }[];
     }
   | { kind: "roundRobinWheel"; title: string; fixed: string; rotating: string[]; round: number }
   | {
@@ -37,8 +80,33 @@ export type DiagramModel =
       groups: { name: string; entrants: string[]; advancing: number }[];
       bracket: { name: string; matches: { home: string | null; away: string | null }[] }[];
     }
+  // ---- batch 6 (Task 12): best-third-placed-teams ----
+  /** The best of one place across the groups (the third-placed teams): one card per group's team, best first as the cross-group
+   *  order ranks them on the matches they were compared on, the first `take` through. `group` is the card's group line
+   *  ("Group C, 4 teams"), `counted` what was counted ("0 points, -4 from 2 matches"), `leftOut` what was not ("Left out: v Eagles (4th)"
+   *  or "Nothing left out"). */
+  | { kind: "bestPlaced"; title: string; take: number; candidates: { team: string; group: string; counted: string; leftOut: string }[] }
+  // ---- batch 6 (Task 12): clinched-or-eliminated ----
+  /** A league table read with some rounds to play: one bar per team, from the fewest points it can finish on (`worst`) to the most
+   *  (`best`) on a shared 0..`axisMax` axis, with the points it has now and the words the table shows beside its name. */
+  | { kind: "pointsRanges"; title: string; axisMax: number; rows: { team: string; label: string; now: number; worst: number; best: number }[] }
+  // ---- batch 6 (Task 12): withdrawal-in-a-league, joining-a-league-late ----
+  /** One team's matches listed by round in one or more cases: each case has a heading, a verdict in two parts (`lead`, `effect`) and
+   *  one line per match with its round, the opponent and what became of the match (`tone` colours the dot beside it; the words say
+   *  the same). */
+  | { kind: "fixtureList"; title: string; scenes: { heading: string; lead: string; effect: string; lines: { round: string; opponent: string; fate: string; tone: "keep" | "drop" | "award" | "new" }[] }[] }
   | { kind: "ladder"; title: string; rungs: string[]; challenger: string; target: string; swapped: boolean }
-  | { kind: "partnerGrid"; title: string; players: string[]; rounds: { pairs: [string, string][] }[] };
+  // ---- batch 5, fix round 1 (M9): one picture for each of the walkover posts ----
+  /** A walkover in a bracket: rounds left to right, each match with its two sides (a seat not filled reads as the words the
+   *  example gives it), the sides to strike (the ones that left or did not turn up), the sides that are not a player at all ("nobody", "not known yet":
+   *  drawn muted and italic, never as a name), the winner, and one short result line. `sides` is two strings, which the claims check. */
+  | {
+      kind: "walkoverBracket";
+      title: string;
+      rounds: { name: string; matches: { sides: string[]; struck?: string[]; vacant?: string[]; winner?: string; result: string }[] }[];
+    }
+  /** One tile per sport: its name and the score a walkover shows there (the example's own words, never a key). */
+  | { kind: "scoreTiles"; title: string; tiles: { sport: string; score: string }[] };
 
 /** What an example produces, and what the committed golden holds: plain JSON, nothing that needs the engine to read. */
 export interface ExampleResult {
@@ -69,13 +137,30 @@ export interface Claim {
   check(result: ExampleResult): boolean | string;
 }
 
-export interface BlogExample {
+interface BlogExampleBase {
   id: string;
-  /** `engine`: a pure call into the engine. `server`: a rule the app owns, checked by an env-gated DB test. */
-  kind: "engine" | "server";
   /** The sports it sweeps. A single-sport example says why it is one. */
   sports: SportKey[] | "all";
   singleSportReason?: string;
-  build(): ExampleResult;
   claims: Claim[];
 }
+
+/** `engine`: a pure call into the engine (and the app's pure readers); `build()` regenerates the golden in the unit run. */
+export interface EngineExample extends BlogExampleBase {
+  kind: "engine";
+  build(): ExampleResult;
+}
+
+/**
+ * `server` (batch 5, Task 11): a rule the APP owns, run inside a database transaction with no pure function to call (the
+ * ladder's challenge reach and swap). Its golden is regenerated and compared by the env-gated DB test named in `runner`,
+ * which drives the real usecases; the unit harness checks the claims against the committed golden, and that the runner
+ * exists and names this example. There is no `build()`: without a database there is nothing to run.
+ */
+export interface ServerExample extends BlogExampleBase {
+  kind: "server";
+  /** The DB test that runs the example through the real usecases, relative to apps/web. */
+  runner: string;
+}
+
+export type BlogExample = EngineExample | ServerExample;

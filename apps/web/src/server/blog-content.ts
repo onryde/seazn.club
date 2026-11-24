@@ -27,44 +27,20 @@ export const BLOG_ROOT = join(process.cwd(), "content", "blog");
 export type BlogPost = BlogPostMeta & { markdown: string };
 
 /**
- * The approved topic list's slugs (design, "The first topic list") that are not written yet. A `related` link may
+ * The approved topic list's slugs (design, "The first topic list") that are not published. A `related` link may
  * name one while the programme is being written; the DEFAULT root accepts them, an explicit root (the fixtures)
  * never does. The list shrinks as posts land: blog-tree.test.ts fails on an entry that is now a post, and the
- * pages that print related links must show only the slugs `blogPost()` resolves. It is deleted with the last batch.
+ * pages that print related links must show only the slugs `blogPost()` resolves. It is NOT deleted with the last
+ * batch: the two HELD posts (#22 and #23, below) stay in it until they are released, and it goes when the last of
+ * them is published (blog-held-posts.test.ts says when that is).
  */
 export const BLOG_PLANNED_SLUGS: ReadonlySet<string> = new Set([
-  "shootout-win-league-points",
-  "cricket-points-ties-no-results",
-  "chess-points-and-half-points",
-  "why-matches-won-come-first",
-  "table-tennis-loss-still-scores",
-  "level-on-points-who-finishes-higher",
-  "three-way-tie-head-to-head",
-  "net-run-rate-explained",
-  "set-ratio-or-set-difference",
-  "buchholz-and-sonneborn-berger",
-  "when-lots-decide-a-tie",
-  "how-swiss-pairing-works",
-  "swiss-chess-bye",
-  "joining-or-leaving-a-swiss",
-  "knockout-seeds-and-byes",
-  "third-place-match",
-  "knockout-match-ends-level",
-  "page-playoff-and-stepladder",
-  "double-elimination-explained",
-  "what-is-a-plate",
+  // batch 5 (#22 to #27) is written, except the two HELD posts below (owner ruling 2026-11-23: until W7 fixes score entry
+  // and mexicano round two; text and examples are in git history: the parent of commit 6d6a8322b9, see blog-held-posts.test.ts).
+  // batch 3 (Swiss and seeding): how-swiss-pairing-works, swiss-chess-bye, joining-or-leaving-a-swiss and
+  // knockout-seeds-and-byes are written (blog-tree.test.ts: posts + planned = 33), so they are no longer planned.
   "how-americano-works",
   "how-mexicano-works",
-  "how-a-ladder-works",
-  "withdrawal-in-a-knockout",
-  "forfeits-and-walkovers-by-sport",
-  "double-walkover",
-  "round-robin-schedule",
-  "groups-into-knockout",
-  "best-third-placed-teams",
-  "clinched-or-eliminated",
-  "withdrawal-in-a-league",
-  "joining-a-league-late",
 ]);
 
 /**

@@ -97,7 +97,7 @@ export default async function FormatExplainerPage({ params }: Props) {
         This is the draw the app generates for eight entrants. Your real
         fixtures are built the same way.
       </p>
-      <FormatPreviewView phases={phases} />
+      <FormatPreviewView phases={phases} level={3} />
       <HelpRelated related={[]} prev={null} next={null} blogLinks={blogLinks} />
     </article>
     </HelpShell>

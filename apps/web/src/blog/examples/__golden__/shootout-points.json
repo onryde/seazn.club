@@ -1,0 +1,130 @@
+{
+  "facts": {
+    "footballRegTotal": "3",
+    "footballOtWin": "3",
+    "footballOtLoss": "0",
+    "footballOtTotal": "3",
+    "footballSoWin": "2",
+    "footballSoLoss": "1",
+    "footballSoTotal": "3",
+    "cricketRegTotal": "2",
+    "cricketSoWin": "2",
+    "cricketSoLoss": "0",
+    "cricketSoTotal": "2",
+    "icehockeyRegTotal": "3",
+    "icehockeyOtWin": "2",
+    "icehockeyOtLoss": "1",
+    "icehockeyOtTotal": "3",
+    "icehockeySoWin": "2",
+    "icehockeySoLoss": "1",
+    "icehockeySoTotal": "3",
+    "icehockeyRecreationalRegTotal": "2",
+    "icehockeyRecreationalOtWin": "2",
+    "icehockeyRecreationalOtLoss": "0",
+    "icehockeyRecreationalOtTotal": "2",
+    "icehockeyRecreationalSoWin": "2",
+    "icehockeyRecreationalSoLoss": "0",
+    "icehockeyRecreationalSoTotal": "2",
+    "hockeyRegTotal": "3",
+    "hockeySoWin": "2",
+    "hockeySoLoss": "1",
+    "hockeySoTotal": "3",
+    "sportCount": 11,
+    "sportsBeyond": 4,
+    "sportsRegulationOnly": 7,
+    "regulationOnlyList": "Chess, carrom, a generic division, volleyball, badminton, table tennis and tennis",
+    "beyondList": "Football, Cricket, Ice hockey and Hockey",
+    "leagueOffFromStart": "football, cricket and hockey",
+    "leagueOnFromStart": "Ice hockey",
+    "leagueOnVariants": "Hockey (FIH with shoot-out)",
+    "leagueBoardSports": "Carrom"
+  },
+  "table": {
+    "caption": "What a win settled beyond regulation earns each side in a league, by sport and by way of settling it.",
+    "columns": [
+      "Sport",
+      "Settled by",
+      "Winner gets",
+      "Loser gets",
+      "The table books it as",
+      "Both sides together"
+    ],
+    "rows": [
+      [
+        "Football",
+        "Extra time",
+        "3",
+        "0",
+        "a win and a loss",
+        "3"
+      ],
+      [
+        "Football",
+        "Penalty shoot-out",
+        "2",
+        "1",
+        "a draw for each side, with 1 bonus point for the winner",
+        "3"
+      ],
+      [
+        "Cricket",
+        "Super over",
+        "2",
+        "0",
+        "a win and a loss",
+        "2"
+      ],
+      [
+        "Ice hockey (IIHF)",
+        "Overtime",
+        "2",
+        "1",
+        "a win and a loss",
+        "3"
+      ],
+      [
+        "Ice hockey (IIHF)",
+        "Shoot-out",
+        "2",
+        "1",
+        "a win and a loss",
+        "3"
+      ],
+      [
+        "Ice hockey (Recreational)",
+        "Overtime",
+        "2",
+        "0",
+        "a win and a loss",
+        "2"
+      ],
+      [
+        "Ice hockey (Recreational)",
+        "Shoot-out",
+        "2",
+        "0",
+        "a win and a loss",
+        "2"
+      ],
+      [
+        "Hockey",
+        "Shoot-out",
+        "2",
+        "1",
+        "a draw for each side, with 1 bonus point for the winner",
+        "3"
+      ]
+    ]
+  },
+  "text": [
+    "Each row comes from real matches in a league whose organiser switched the deciders on: Ana beats Ben in regulation and again after each way the league can settle a match beyond regulation.",
+    "Football: Ana beat Ben after extra time, 1 — 0.",
+    "Football: Ana beat Ben after penalty shoot-out, 2 — 2 (5–4 pens).",
+    "Cricket: Ana beat Ben after super over, 113/9 (20) — 113/7 (20) · SO 10–8.",
+    "Ice hockey (IIHF): Ana beat Ben after overtime, 1 — 0 (OT).",
+    "Ice hockey (IIHF): Ana beat Ben after shoot-out, 2 — 1 (GWS 5–4).",
+    "Ice hockey (Recreational): Ana beat Ben after overtime, 1 — 0 (OT).",
+    "Ice hockey (Recreational): Ana beat Ben after shoot-out, 2 — 1 (GWS 5–4).",
+    "Hockey: Ana beat Ben after shoot-out, 1 — 1 (SO 4–1)."
+  ]
+}

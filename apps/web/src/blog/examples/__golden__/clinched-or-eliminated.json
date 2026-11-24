@@ -1,0 +1,168 @@
+{
+  "facts": {
+    "teams": 6,
+    "cut": 2,
+    "matchesEach": 5,
+    "roundsPlayed": 4,
+    "leftEach": 1,
+    "mostPerMatch": 3,
+    "fewestPerMatch": 0,
+    "throughTeam": "Hawks",
+    "throughHeadline": "Through to Knockout, whatever happens next.",
+    "throughPoints": 9,
+    "throughRivals": "Rockets",
+    "winAndInTeam": "Rockets",
+    "winAndInLabel": "Win and in",
+    "winAndInIfLose": "If you lose your next match, you'll need other results to go your way.",
+    "winAndInBest": 11,
+    "winManyLabel": "Win 2 and in",
+    "winAndInRivalsAfterWin": "Hawks",
+    "needsHelpTeams": "Comets",
+    "needsHelpHeadline": "Still open: you need other results to go your way.",
+    "needsHelpPoints": 5,
+    "needsHelpBest": 8,
+    "outTeams": "Wolves, Dynamos and Tigers",
+    "outHeadline": "Can no longer finish in the top 2.",
+    "outFirstTeam": "Wolves",
+    "outFirstBest": 7,
+    "aheadOfOut": "Hawks and Rockets",
+    "aheadOfOutFewest": "9 and 8",
+    "levelTeam": "Rockets",
+    "levelTeamPoints": 8,
+    "levelRival": "Comets",
+    "levelRivalBest": 8,
+    "levelRivals": "Hawks and Comets",
+    "levelWhatIf": "If you finish level on points with Comets, head-to-head decides.",
+    "noStatusBeforePlay": "none",
+    "qualifiedTeams": "Rockets and Hawks",
+    "finalOutHeadline": "Did not go through to Knockout.",
+    "sportCount": 11
+  },
+  "table": {
+    "caption": "Six teams play five rounds and the top two go on. The table is read with one round to play, then again once it is played.",
+    "columns": [
+      "Team",
+      "Points",
+      "Matches left",
+      "Can finish on",
+      "With one round to play",
+      "After the last round"
+    ],
+    "rows": [
+      [
+        "Hawks",
+        9,
+        1,
+        "9 to 12",
+        "Through",
+        "9 points, Qualified"
+      ],
+      [
+        "Rockets",
+        8,
+        1,
+        "8 to 11",
+        "Win and in",
+        "11 points, Qualified"
+      ],
+      [
+        "Comets",
+        5,
+        1,
+        "5 to 8",
+        "Needs help",
+        "8 points, Out"
+      ],
+      [
+        "Wolves",
+        4,
+        1,
+        "4 to 7",
+        "Out",
+        "4 points, Out"
+      ],
+      [
+        "Dynamos",
+        4,
+        1,
+        "4 to 7",
+        "Out",
+        "7 points, Out"
+      ],
+      [
+        "Tigers",
+        3,
+        1,
+        "3 to 6",
+        "Out",
+        "3 points, Out"
+      ]
+    ]
+  },
+  "diagram": {
+    "kind": "pointsRanges",
+    "title": "Each bar runs from the fewest points a team can finish on to the most. A team is out when two rivals are already ahead of the most it can reach, and through when fewer than two rivals can still reach its fewest.",
+    "axisMax": 12,
+    "rows": [
+      {
+        "team": "Hawks",
+        "label": "Through",
+        "now": 9,
+        "worst": 9,
+        "best": 12
+      },
+      {
+        "team": "Rockets",
+        "label": "Win and in",
+        "now": 8,
+        "worst": 8,
+        "best": 11
+      },
+      {
+        "team": "Comets",
+        "label": "Needs help",
+        "now": 5,
+        "worst": 5,
+        "best": 8
+      },
+      {
+        "team": "Wolves",
+        "label": "Out",
+        "now": 4,
+        "worst": 4,
+        "best": 7
+      },
+      {
+        "team": "Dynamos",
+        "label": "Out",
+        "now": 4,
+        "worst": 4,
+        "best": 7
+      },
+      {
+        "team": "Tigers",
+        "label": "Out",
+        "now": 3,
+        "worst": 3,
+        "best": 6
+      }
+    ]
+  },
+  "text": [
+    "Round 1: Hawks 2 — 0 Tigers.",
+    "Round 1: Rockets 1 — 0 Wolves.",
+    "Round 1: Comets 0 — 1 Dynamos.",
+    "Round 2: Hawks 1 — 0 Wolves.",
+    "Round 2: Tigers 1 — 0 Dynamos.",
+    "Round 2: Rockets 1 — 1 Comets.",
+    "Round 3: Hawks 2 — 0 Dynamos.",
+    "Round 3: Wolves 0 — 0 Comets.",
+    "Round 3: Tigers 0 — 1 Rockets.",
+    "Round 4: Hawks 0 — 1 Comets.",
+    "Round 4: Dynamos 0 — 0 Rockets.",
+    "Round 4: Wolves 1 — 0 Tigers.",
+    "Round 5: Hawks 0 — 1 Rockets.",
+    "Round 5: Comets 1 — 0 Tigers.",
+    "Round 5: Dynamos 1 — 0 Wolves."
+  ]
+}

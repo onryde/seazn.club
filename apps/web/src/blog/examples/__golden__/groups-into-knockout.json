@@ -1,0 +1,156 @@
+{
+  "facts": {
+    "teams": 9,
+    "groupCount": 3,
+    "groupSize": 3,
+    "advance": 2,
+    "qualifiers": 6,
+    "bracketSize": 8,
+    "byes": 2,
+    "signUpOrder": "Hawks, Rockets, Comets, Dynamos, Wolves, Tigers, Lions, Bears, Foxes",
+    "straightThrough": "Hawks and Rockets",
+    "tableOrderMatch": "Comets v Dynamos",
+    "tableOrderClashGroup": "Group C",
+    "drawnMatches": "Tigers v Dynamos, Comets v Wolves",
+    "movedUp": "Dynamos",
+    "movedDown": "Wolves",
+    "winnersByGroup": "Hawks, Rockets and Comets",
+    "winnersByRecord": "Comets, Rockets and Hawks",
+    "runnersByGroup": "Tigers, Wolves and Dynamos",
+    "runnersByRecord": "Tigers, Dynamos and Wolves",
+    "bestWinner": "Comets",
+    "bestWinnerSeat": 3,
+    "winnerMatch": "Comets v Wolves",
+    "runnerMatch": "Tigers v Dynamos",
+    "fourGroupsQualified": 8,
+    "fourGroupsRoundOne": "A1 v D2, D1 v A2, C1 v B2, B1 v C2",
+    "fourGroupsSamePool": 0,
+    "proposalBadge": "A seed proposal is waiting for you to confirm",
+    "proposalHeading": "Proposed qualifiers",
+    "confirmButton": "Confirm proposal",
+    "confirmFinal": "Once confirmed, Undo can't take this draw back.",
+    "drawNote": "No round-one match is between entrants from the same group. Entrants level across groups are ordered by this number. The same entrants and this number always produce this draw. Rebuild keeps it.",
+    "sportCount": 11
+  },
+  "table": {
+    "caption": "Three groups of three, two from each go through. In group order round one would have put Comets against Dynamos, two teams from Group C, so the draw moves the runners-up.",
+    "columns": [
+      "Team",
+      "Finished",
+      "Seat by group order",
+      "Seat after the draw",
+      "Round one"
+    ],
+    "rows": [
+      [
+        "Hawks",
+        "1st in Group A: 6 points, +2",
+        1,
+        1,
+        "Straight through"
+      ],
+      [
+        "Rockets",
+        "1st in Group B: 6 points, +4",
+        2,
+        2,
+        "Straight through"
+      ],
+      [
+        "Comets",
+        "1st in Group C: 6 points, +6",
+        3,
+        3,
+        "v Wolves"
+      ],
+      [
+        "Tigers",
+        "2nd in Group A: 3 points, +1",
+        4,
+        4,
+        "v Dynamos"
+      ],
+      [
+        "Dynamos",
+        "2nd in Group C: 3 points, 0",
+        6,
+        5,
+        "v Tigers"
+      ],
+      [
+        "Wolves",
+        "2nd in Group B: 3 points, -1",
+        5,
+        6,
+        "v Comets"
+      ]
+    ]
+  },
+  "diagram": {
+    "kind": "groupsToBracket",
+    "title": "Three groups of three, the top two of each go through. The best two group winners are straight through to the next round, and nobody meets a team from their own group in round one.",
+    "groups": [
+      {
+        "name": "Group A",
+        "entrants": [
+          "Hawks",
+          "Tigers",
+          "Lions"
+        ],
+        "advancing": 2
+      },
+      {
+        "name": "Group B",
+        "entrants": [
+          "Rockets",
+          "Wolves",
+          "Bears"
+        ],
+        "advancing": 2
+      },
+      {
+        "name": "Group C",
+        "entrants": [
+          "Comets",
+          "Dynamos",
+          "Foxes"
+        ],
+        "advancing": 2
+      }
+    ],
+    "bracket": [
+      {
+        "name": "Round one",
+        "matches": [
+          {
+            "home": "Hawks",
+            "away": null
+          },
+          {
+            "home": "Tigers",
+            "away": "Dynamos"
+          },
+          {
+            "home": "Comets",
+            "away": "Wolves"
+          },
+          {
+            "home": "Rockets",
+            "away": null
+          }
+        ]
+      }
+    ]
+  },
+  "text": [
+    "Hawks 1 — 0 Tigers.",
+    "Hawks 1 — 0 Lions.",
+    "Tigers 2 — 0 Lions.",
+    "Rockets 2 — 0 Wolves.",
+    "Rockets 2 — 0 Bears.",
+    "Wolves 1 — 0 Bears.",
+    "Comets 3 — 0 Dynamos.",
+    "Comets 3 — 0 Foxes.",
+    "Dynamos 3 — 0 Foxes."
+  ]
+}

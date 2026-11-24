@@ -110,3 +110,29 @@ describe("callouts and pictures go through P1's pipeline", () => {
     expect(html).toContain("Draws stand in football.");
   });
 });
+
+// A post's scrolling boxes come from the SAME pipeline as help's (help-scroll-boxes.ts): a table in a body is wrapped in
+// a focusable, named region (the blog's own example table draws its own, in blog-example-table.tsx). A post carries no
+// code block (the content layer refuses a fence), so the table is the one prose scroller a post can have.
+describe("a prose table in a post is a focusable, named scroll region", () => {
+  const TABLE = "| Team | Points |\n| --- | --- |\n| Ana | 3 |\n| Ben | 1 |\n";
+
+  it("each table in each segment is wrapped, and the text round it is not", async () => {
+    const out = await renderBlogPost(post(`Before.\n\n${TABLE}\n{{example:one}}\n\nAfter.\n\n${TABLE}`), GOLDENS);
+    const html = out.parts.flatMap((p) => (p.kind === "html" ? [p.html] : []));
+    expect(html.length, "anti-vacuity: two html segments").toBe(2);
+    for (const part of html) {
+      expect(part.match(/<table>/g)?.length, "anti-vacuity: the segment has a table").toBe(1);
+      expect(part).toMatch(/<div class="help-scroll" tabindex="0" role="region" aria-label="Table"><table>/);
+      expect(part).toMatch(/<\/table><\/div>/);
+    }
+    expect(html[0]).toMatch(/<p>Before\.<\/p>\s*<div class="help-scroll"/);
+  });
+
+  it("a post with no table carries none of it (the empty case)", async () => {
+    const out = await renderBlogPost(post("Just words.\n\n{{example:one}}\n"), GOLDENS);
+    const html = (out.parts[0] as { html: string }).html;
+    expect(html).toContain("Just words.");
+    expect(html).not.toMatch(/tabindex|role=|aria-label|help-scroll/);
+  });
+});

@@ -69,11 +69,27 @@ const EXEMPT: readonly { file: string; pattern: RegExp; text: string; reason: st
       "the blog example's CLAIMS (`expectedRows`): the cells the committed golden must hold, recomputed from the sport's own points declaration, because an expected value is never derived from the code under test - the example's `build()` reads the loader (`tableRulesOf`). Run only by blog-examples.test.ts over the golden; no stage exists, and nothing is ranked, captioned or paid from it",
   },
   {
+    file: "blog/examples/kit.ts",
+    pattern: READS[3]!,
+    text: 'return module.tablePointsRule(cfg as never, "league");',
+    reason:
+      "the blog examples' one declaration read (`declaredLeaguePoints`): the numbers their CLAIMS recompute the golden from, because an expected value is never derived from the code under test - the examples' `build()` reads the loader (`tableRulesOf`, via `leagueRules`). It reads no stage's rules and shows no standings",
+  },
+  {
     file: "blog/examples/standings-points.ts",
     pattern: READS[3]!,
     text: "const DECLARED_POINTS = 'tablePointsRule(cfg, \"league\")';",
     reason: "a string, not a call: the label the blog example's claims cite as their `source` (the declaration above), never evaluated",
   },
+  // ---- blog batch 3 (Swiss and seeding) ----
+  {
+    file: "blog/examples/swiss-bye.ts",
+    pattern: READS[3]!,
+    text: 'const declaredSwiss = (module: AnySportModule, cfg: unknown) => module.tablePointsRule(cfg as never, "swiss");',
+    reason:
+      "the blog example's CLAIMS for post #14 (what a Swiss bye earns): the expected cells recomputed from the sport's own Swiss points declaration, because an expected value is never derived from the code under test - the example's `build()` reads the loader (`tableRulesOf`) and the app's bye credit. Run only by blog-examples.test.ts over the golden; no stage exists, and nothing is ranked, captioned or paid from it",
+  },
+  // ---- end blog batch 3 ----
 ];
 
 function sources(dir: string, out: string[] = []): string[] {

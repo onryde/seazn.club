@@ -1,0 +1,61 @@
+{
+  "facts": {
+    "won30Score": "3-0",
+    "won30Winner": "2",
+    "won30Loser": "1",
+    "won31Score": "3-1",
+    "won31Winner": "2",
+    "won31Loser": "1",
+    "won32Score": "3-2",
+    "won32Winner": "2",
+    "won32Loser": "1",
+    "winScores": "3-0, 3-1 or 3-2",
+    "forfeitWinner": "2",
+    "forfeitLoser": "0",
+    "sportCount": 11,
+    "sportsEveryLossPays": 1,
+    "everyLossPaysList": "Table tennis",
+    "sportsSomeLossPaysNothing": 10,
+    "someLossPaysNothingList": "Football, cricket, chess, carrom, a generic division, volleyball, badminton, tennis, ice hockey and hockey",
+    "sportsDecidingUnplayed": 1,
+    "variantCount": 3,
+    "variantsList": "Best of 5, Best of 7 and Hardbat (21 points)"
+  },
+  "table": {
+    "caption": "What each side gets for a table tennis match: played at any score, or forfeited before a point is played.",
+    "columns": [
+      "How the match ended",
+      "Winner gets",
+      "Loser gets"
+    ],
+    "rows": [
+      [
+        "Played, won 3-0",
+        "2",
+        "1"
+      ],
+      [
+        "Played, won 3-1",
+        "2",
+        "1"
+      ],
+      [
+        "Played, won 3-2",
+        "2",
+        "1"
+      ],
+      [
+        "A forfeit before a point is played",
+        "2",
+        "0"
+      ]
+    ]
+  },
+  "text": [
+    "Ana beats Ben at each set score the format can end on, and again when Ben forfeits before a point is played. Each is a real match, paid by the table's rule.",
+    "Played, won 3-0: Ana beat Ben 3 — 0 · 15–13, 11–9, 11–0.",
+    "Played, won 3-1: Ana beat Ben 3 — 1 · 11–2, 4–11, 11–5, 11–1.",
+    "Played, won 3-2: Ana beat Ben 3 — 2 · 12–10, 4–11, 8–11, 11–9, 11–2.",
+    "A forfeit before a point is played: Ben forfeited, 3 — 0."
+  ]
+}

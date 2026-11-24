@@ -2385,6 +2385,104 @@ jobs:
           done
           echo "the gate did not log ENGINE_EPOCH_FLOOR_OVERRIDDEN for generic"; cat epoch-override-server.log; exit 1
 
+      # Lighthouse and blog SEO against THIS job's production server (the "Start server" one, :3000). Blog P2 Task 13b; the
+      # owner put them in PR #1295 because a local Lighthouse run is not reliable under machine load (Task 13 read the same
+      # page at Performance 35 and 89 on one build).
+      #
+      # A STEP here, not a job of its own. A second job would pay checkout + pnpm install + the production build + a server
+      # boot again (a job cannot take this one's standalone tree without an artifact round trip of several hundred MB), to
+      # save the ~3 minutes these two steps add to this one's wall clock. In this job both are gated by exactly what gates
+      # it (`if: needs.changes.outputs.code == 'true'` on the job, which ci-gate-wiring.test.ts pins), and ci-gate already
+      # waits on it, so no `needs` list moves. Wiring pinned by lighthouse-seo-ci-wiring.test.ts.
+      #
+      # THE GATE. Accessibility, Best Practices and SEO must be 100 on all five pages below; Performance goes to the step
+      # summary and never fails the step (a shared runner's CPU moves it by tens of points; the blog adds nothing measurable
+      # to the shared chrome, Task 13). scripts/lighthouse-check.ts decides, over the JSON reports, and is the part that
+      # refuses a vacuous pass: fewer than five distinct pages scored, a missing or score-less category, a Lighthouse runtime
+      # error, or a non-mobile profile each FAIL it (scripts/__tests__/lighthouse-check.test.ts, over real reports).
+      #
+      # Lighthouse is pinned (13.4.0, the version Task 13 measured with) and run through npx, so no dependency is added. The
+      # browser is the Playwright Chromium the gallery step below also installs (the install is idempotent), found by
+      # Playwright's own executablePath, so it does not depend on what the runner image ships. Each page is fetched once
+      # first: a page that has gone would otherwise score as a 404 (SEO 0), which reads as a scoring failure and not as a
+      # missing page. A Lighthouse RUN that fails (Chrome crash, NO_FCP) is retried once; a LOW SCORE is never re-rolled.
+      - name: Lighthouse (Accessibility, Best Practices and SEO must be 100; Performance is reported)
+        timeout-minutes: 20
+        env:
+          LIGHTHOUSE_VERSION: "13.4.0"
+        run: |
+          set -euo pipefail
+          (cd apps/web && npx playwright install --with-deps chromium)
+          CHROME_PATH="$(cd apps/web && node -p "require('@playwright/test').chromium.executablePath()")"
+          export CHROME_PATH
+          if [ ! -x "$CHROME_PATH" ]; then
+            echo "::error::Playwright's chromium is not at $CHROME_PATH: Lighthouse has no browser to drive"
+            exit 1
+          fi
+          out="$RUNNER_TEMP/lighthouse"
+          rm -rf "$out"
+          mkdir -p "$out"
+          pages="/blog /blog/level-on-points-who-finishes-higher /blog/swiss-chess-bye /help/divisions/settings /help/formats/swiss"
+          rc=0
+          n=0
+          for p in $pages; do
+            n=$((n + 1))
+            code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 "http://localhost:3000$p" || true)"
+            if [ "$code" != "200" ]; then
+              echo "::error::$p answered HTTP $code before Lighthouse ran"
+              rc=1
+              continue
+            fi
+            scored=""
+            for attempt in 1 2; do
+              if npx --yes "lighthouse@${LIGHTHOUSE_VERSION}" "http://localhost:3000$p" \
+                --form-factor=mobile \
+                --only-categories=performance,accessibility,best-practices,seo \
+                --output=json --output-path="$out/page-$n.json" --quiet \
+                --chrome-flags="--headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage"; then
+                scored=1
+                break
+              fi
+              echo "::warning::Lighthouse run $attempt of $p failed"
+            done
+            if [ -z "$scored" ]; then
+              echo "::error::Lighthouse could not score $p"
+              rc=1
+            fi
+          done
+          node --experimental-strip-types scripts/lighthouse-check.ts --dir "$out" || rc=1
+          exit "$rc"
+
+      # The reports, kept so a red here can be read without running Lighthouse again (a local run is the unreliable one).
+      - name: Upload Lighthouse reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lighthouse-reports
+          path: ${{ runner.temp }}/lighthouse/*.json
+          if-no-files-found: warn
+          retention-days: 7
+          overwrite: true
+
+      # Every post the blog CONTENT LOADER lists (the count is the loader's, never typed here; zero is a failure) must answer
+      # 200 with parseable JSON-LD (non-empty headline, ISO datePublished, the Organization author "Seazn", an absolute url),
+      # an absolute canonical that is distinct per post, og:title and og:description, a place in /sitemap.xml and in the RSS
+      # feed; and /robots.txt must answer 200 and name the sitemap. The rules are apps/web/src/lib/blog-seo-check.ts, unit-tested
+      # over fixture HTML; the file below fetches and hands the answers over. It SKIPS without BLOG_SEO_BASE, and a skip exits
+      # 0, so the jq below is the gate: exactly the one file ran, nothing failed and nothing was skipped.
+      - name: Blog SEO (every post's JSON-LD, canonical and og tags; sitemap, feed and robots.txt)
+        timeout-minutes: 10
+        working-directory: apps/web
+        env:
+          BLOG_SEO_BASE: http://localhost:3000
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/blog-seo-vitest.json"
+          npx vitest run src/blog/__tests__/blog-seo.live.test.ts --reporter=default --reporter=json --outputFile="$report" 2>&1 | tee "$RUNNER_TEMP/blog-seo.log"
+          jq -e '.numTotalTests == 1 and .numPassedTests == 1 and .numFailedTests == 0 and .numPendingTests == 0 and ([.testResults[].name | select(endswith("/src/blog/__tests__/blog-seo.live.test.ts"))] | length) == 1' "$report" > /dev/null
+          line="$(grep -a 'blog SEO: ' "$RUNNER_TEMP/blog-seo.log" | head -1 || true)"
+          echo "${line:-blog SEO: passed}" >> "$GITHUB_STEP_SUMMARY"
+
       # The Playwright UI e2e suite moved to its own workflow (e2e.yml): it
       # runs on pushes to main, or on demand against a PR by number.
 

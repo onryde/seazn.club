@@ -1,0 +1,201 @@
+{
+  "facts": {
+    "players": 4,
+    "matchesWithReset": 7,
+    "matchesNoReset": 6,
+    "champion": "Ben",
+    "championDefeats": 1,
+    "wbChampion": "Ana",
+    "wbChampionPlace": "2nd",
+    "wbChampionDefeats": 2,
+    "noResetChampion": "Ben",
+    "noResetRunnerUp": "Ana",
+    "noResetRunnerUpDefeats": 1,
+    "sportsOffered": 11,
+    "sportCount": 11
+  },
+  "table": {
+    "caption": "Four players, double elimination with the grand final reset on. The losers' bracket champion wins the grand final, so the reset is played, and every player but the champion leaves with two defeats.",
+    "columns": [
+      "Bracket",
+      "Match",
+      "Players (seed)",
+      "Winner",
+      "Loser's defeats so far"
+    ],
+    "rows": [
+      [
+        "Winners bracket",
+        "Semi-finals",
+        "Ana (1) v Dev (4)",
+        "Ana (1)",
+        1
+      ],
+      [
+        "Winners bracket",
+        "Semi-finals",
+        "Cy (3) v Ben (2)",
+        "Ben (2)",
+        1
+      ],
+      [
+        "Winners bracket",
+        "Winners' final",
+        "Ana (1) v Ben (2)",
+        "Ana (1)",
+        1
+      ],
+      [
+        "Losers bracket",
+        "Losers' round 1",
+        "Dev (4) v Cy (3)",
+        "Cy (3)",
+        2
+      ],
+      [
+        "Losers bracket",
+        "Losers' final",
+        "Cy (3) v Ben (2)",
+        "Ben (2)",
+        2
+      ],
+      [
+        "Grand final",
+        "Grand final",
+        "Ana (1) v Ben (2)",
+        "Ben (2)",
+        1
+      ],
+      [
+        "Grand final",
+        "Grand final (reset)",
+        "Ben (2) v Ana (1)",
+        "Ben (2)",
+        2
+      ]
+    ]
+  },
+  "diagram": {
+    "kind": "bracket",
+    "title": "Ana (1) wins the winners bracket but loses the grand final, so both finalists have lost once and the reset is played: Ben (2) wins it too, and Ana (1) finishes 2nd after 2 defeats. A dashed line is a winners bracket loser dropping into the losers bracket.",
+    "rounds": [
+      {
+        "name": "Semi-finals",
+        "matches": [
+          {
+            "id": "wb-r0-i0",
+            "home": "Ana (1)",
+            "away": "Dev (4)",
+            "winner": "Ana (1)",
+            "label": "Semi-finals"
+          },
+          {
+            "id": "wb-r0-i1",
+            "home": "Cy (3)",
+            "away": "Ben (2)",
+            "winner": "Ben (2)",
+            "label": "Semi-finals"
+          }
+        ]
+      },
+      {
+        "name": "Winners' final / Losers' round 1",
+        "matches": [
+          {
+            "id": "wb-r1-i0",
+            "home": "Ana (1)",
+            "away": "Ben (2)",
+            "winner": "Ana (1)",
+            "label": "Winners' final",
+            "homeFrom": {
+              "id": "wb-r0-i0",
+              "side": "winner"
+            },
+            "awayFrom": {
+              "id": "wb-r0-i1",
+              "side": "winner"
+            }
+          },
+          {
+            "id": "lb-r0-i0",
+            "home": "Dev (4)",
+            "away": "Cy (3)",
+            "winner": "Cy (3)",
+            "label": "Losers' round 1",
+            "homeFrom": {
+              "id": "wb-r0-i0",
+              "side": "loser"
+            },
+            "awayFrom": {
+              "id": "wb-r0-i1",
+              "side": "loser"
+            }
+          }
+        ]
+      },
+      {
+        "name": "Losers' final",
+        "matches": [
+          {
+            "id": "lb-r1-i0",
+            "home": "Cy (3)",
+            "away": "Ben (2)",
+            "winner": "Ben (2)",
+            "label": "Losers' final",
+            "homeFrom": {
+              "id": "lb-r0-i0",
+              "side": "winner"
+            },
+            "awayFrom": {
+              "id": "wb-r1-i0",
+              "side": "loser"
+            }
+          }
+        ]
+      },
+      {
+        "name": "Grand final",
+        "matches": [
+          {
+            "id": "gf",
+            "home": "Ana (1)",
+            "away": "Ben (2)",
+            "winner": "Ben (2)",
+            "label": "Grand final",
+            "homeFrom": {
+              "id": "wb-r1-i0",
+              "side": "winner"
+            },
+            "awayFrom": {
+              "id": "lb-r1-i0",
+              "side": "winner"
+            }
+          }
+        ]
+      },
+      {
+        "name": "Grand final (reset)",
+        "matches": [
+          {
+            "id": "gf-reset",
+            "home": "Ben (2)",
+            "away": "Ana (1)",
+            "winner": "Ben (2)",
+            "label": "Grand final (reset)",
+            "homeFrom": {
+              "id": "gf",
+              "side": "winner"
+            },
+            "awayFrom": {
+              "id": "gf",
+              "side": "loser"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "text": [
+    "With the reset off, the same results end after 6 matches."
+  ]
+}

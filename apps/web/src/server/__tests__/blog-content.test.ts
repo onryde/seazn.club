@@ -258,8 +258,14 @@ describe("related: slugs planned but not yet written", () => {
     const self = new Map(valid).set("related-self", { ...parse("related-missing.md"), slug: "related-self", related: ["related-self", "how-swiss-pairs-round-two"] });
     expect(blogRelatedProblems(self, new Set(["related-self"]))).toEqual(["related-self: related 'related-self' is the post itself"]);
   });
-  it("the planned list is the approved topic list: kebab slugs, no duplicates, 32 posts after the pilot", () => {
-    expect(BLOG_PLANNED_SLUGS.size, "anti-vacuity: planned slugs").toBe(32);
+  it("the planned list is the approved topic list: kebab slugs, none already written, and posts written plus planned always make the programme's 33", () => {
+    // The 33 is the programme's approved topic count (an input, not read from the code under test). The planned list
+    // shrinks as each batch lands, so no remainder is typed here: written + planned is the invariant.
+    const written = allBlogPosts();
+    expect(BLOG_PLANNED_SLUGS.size, "anti-vacuity: planned slugs").toBeGreaterThan(0);
+    expect(written.length, "anti-vacuity: written posts").toBeGreaterThan(0);
+    expect(written.filter((p) => BLOG_PLANNED_SLUGS.has(p.slug)).map((p) => p.slug), "a written post is no longer planned").toEqual([]);
+    expect(written.length + BLOG_PLANNED_SLUGS.size, "posts written plus planned").toBe(33);
     for (const s of BLOG_PLANNED_SLUGS) expect(s, s).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
     expect(BLOG_PLANNED_SLUGS.has("how-standings-points-work"), "the pilot is a post, not planned").toBe(false);
   });
@@ -267,10 +273,13 @@ describe("related: slugs planned but not yet written", () => {
     const dir = mkdtempSync(join(tmpdir(), "blog-planned-"));
     try {
       for (const f of mdFiles(FIXTURES)) copyFileSync(join(FIXTURES, f), join(dir, f));
-      const raw = read(FIXTURES, mdFiles(FIXTURES)[0]!).replace(/^related: .*$/m, "related: shootout-win-league-points, cricket-points-ties-no-results");
+      // Two slugs from the planned list as it stands (the list shrinks as posts land, so none is named here).
+      const [first, second] = [...BLOG_PLANNED_SLUGS];
+      expect(BLOG_PLANNED_SLUGS.size, "anti-vacuity: planned slugs").toBeGreaterThanOrEqual(2);
+      const raw = read(FIXTURES, mdFiles(FIXTURES)[0]!).replace(/^related: .*$/m, `related: ${first}, ${second}`);
       writeFileSync(join(dir, mdFiles(FIXTURES)[0]!), raw);
-      expect(BLOG_PLANNED_SLUGS.has("shootout-win-league-points")).toBe(true);
-      expect(() => allBlogPosts(dir)).toThrow(/related 'shootout-win-league-points' is not a post/);
+      expect(BLOG_PLANNED_SLUGS.has(first!)).toBe(true);
+      expect(() => allBlogPosts(dir)).toThrow(new RegExp(`related '${first}' is not a post`));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

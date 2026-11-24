@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { FORMAT_FAMILIES } from "@/config/format-gallery";
 import { BLOG_EXAMPLES } from "@/blog/examples";
 import { BLOG_GOLDENS } from "@/blog/examples/goldens";
-import { blogLeakText, findBlogLeaks } from "@/blog/leaks";
+import { blogLeakText, findBlogLeaks, withoutDiagramKind } from "@/blog/leaks";
 import { BLOG_ROOT, BLOG_PLANNED_SLUGS, allBlogPosts, blogHelpHref, type BlogPost } from "@/server/blog-content";
 import { renderBlogPost } from "@/server/blog-render";
 import { allHelpArticles } from "@/server/help-content";
@@ -22,7 +22,8 @@ function leaves(v: unknown): string[] {
   if (v === null || typeof v !== "object") return v === undefined ? [] : [String(v)];
   return Object.values(v as Record<string, unknown>).flatMap(leaves);
 }
-const exampleStrings = (id: string): string[] => leaves(BLOG_GOLDENS[id]!);
+// The diagram's `kind` names the drawing component (`swissRound`), never a word a reader sees: left out of the scan, every other string stays in.
+const exampleStrings = (id: string): string[] => leaves(withoutDiagramKind(BLOG_GOLDENS[id]!));
 
 describe("the tree", () => {
   it("every file in content/blog parses (allBlogPosts throws on one that does not), and the folder is not empty", () => {
@@ -128,6 +129,30 @@ describe("the tree", () => {
       if (hasExample) withExample++;
     }
     expect(withExample, "posts with a generated example").toBeGreaterThan(0);
+  });
+
+  // Brief gate 4: every post owes one diagram OR screenshot, and a table does not count as one. A picture is a generated
+  // diagram (an example of the post whose result carries a `diagram`, which the page draws) or a `/help/blog/` screenshot.
+  it("every post carries a picture besides its table: a generated diagram or a /help/blog/ screenshot", () => {
+    const SCREENSHOT = /!\[[^\]]*\]\(\/help\/blog\/[^)]+\)/g;
+    let checked = 0;
+    let diagrams = 0;
+    let screenshots = 0;
+    const without: string[] = [];
+    for (const p of posts) {
+      const drawn = p.examples.filter((id) => BLOG_GOLDENS[id]?.diagram !== undefined).length;
+      const shots = (p.markdown.match(SCREENSHOT) ?? []).length;
+      diagrams += drawn;
+      screenshots += shots;
+      if (drawn + shots === 0) without.push(p.slug);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: posts checked").toBe(posts.length);
+    expect(checked, "anti-vacuity: posts checked").toBeGreaterThan(0);
+    // Both kinds are in the tree today, so a reader that stopped seeing one of them would show here instead of passing.
+    expect(diagrams, "anti-vacuity: generated diagrams seen").toBeGreaterThan(0);
+    expect(screenshots, "anti-vacuity: screenshots seen").toBeGreaterThan(0);
+    expect(without, `posts with neither a generated diagram nor a /help/blog/ picture (a table alone is not one), of ${checked} checked`).toEqual([]);
   });
 
   it("every post renders end to end: fact tokens resolved, one example part per listed example, no brace left in the HTML", async () => {

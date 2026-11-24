@@ -1,0 +1,91 @@
+{
+  "facts": {
+    "lotsFirst": "Larks",
+    "lotsSecond": "Owls",
+    "lastPlace": "Wrens",
+    "lastPlaceNumber": "3rd",
+    "onlyOwlsSeededFirst": "Owls",
+    "onlyOwlsSeededSplitBy": "seeding",
+    "noSeedsFirst": "Larks",
+    "noSeedsSplitBy": "drawing of lots",
+    "threeWayDrawsMade": 1,
+    "threeWayGroupSize": 3,
+    "threeWayFirst": "Wrens",
+    "threeWayLast": "Owls",
+    "seedingFirst": "Owls",
+    "storedFirst": "Larks",
+    "storedDrawsMade": 0,
+    "lotsSplitBy": "drawing of lots",
+    "seedingSplitBy": "seeding",
+    "levelPoints": 4,
+    "larksOwlsDraw": "1 — 1",
+    "genericOrder": "difference, total scored, head-to-head, drawing of lots",
+    "footballLastSteps": "lots",
+    "cricketLastSteps": "seeding first, then lots",
+    "boardgameLastSteps": "lots",
+    "carromLastSteps": "lots",
+    "genericLastSteps": "lots",
+    "volleyballLastSteps": "lots",
+    "badmintonLastSteps": "lots",
+    "tabletennisLastSteps": "lots",
+    "tennisLastSteps": "seeding first, then lots",
+    "icehockeyLastSteps": "seeding first, then lots",
+    "hockeyLastSteps": "lots",
+    "sportCount": 11,
+    "seedSports": "Cricket, Tennis and Ice hockey",
+    "seedSportCount": 3
+  },
+  "table": {
+    "caption": "Larks and Owls are level on points, difference and total scored, so a drawing of lots puts Larks first. With a seeding step before the lots, the seeding puts Owls first instead.",
+    "columns": [
+      "Team",
+      "Seed",
+      "Points",
+      "Difference",
+      "Scored",
+      "Points in their own match",
+      "Place, by drawing lots",
+      "Place, seeding before lots"
+    ],
+    "rows": [
+      [
+        "Larks",
+        2,
+        4,
+        "+2",
+        3,
+        1,
+        "1st",
+        "2nd"
+      ],
+      [
+        "Owls",
+        1,
+        4,
+        "+2",
+        3,
+        1,
+        "2nd",
+        "1st"
+      ],
+      [
+        "Wrens",
+        3,
+        0,
+        "-4",
+        0,
+        "Not in it",
+        "3rd",
+        "3rd"
+      ]
+    ]
+  },
+  "text": [
+    "Larks 1 — 1 Owls.",
+    "Larks 2 — 0 Wrens.",
+    "Owls 2 — 0 Wrens.",
+    "Second table: Larks 1 — 1 Owls.",
+    "Second table: Larks 1 — 1 Wrens.",
+    "Second table: Owls 1 — 1 Wrens."
+  ]
+}

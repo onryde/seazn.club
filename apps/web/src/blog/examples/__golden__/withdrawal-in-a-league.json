@@ -1,0 +1,157 @@
+{
+  "facts": {
+    "teams": 5,
+    "matchesEach": 4,
+    "signUpOrder": "Hawks, Rockets, Comets, Dynamos and Wolves",
+    "leaver": "Dynamos",
+    "earlyRound": 1,
+    "earlyPlayed": 1,
+    "earlyTotal": 4,
+    "earlyMode": "voided",
+    "lateRound": 3,
+    "latePlayed": 2,
+    "lateTotal": 4,
+    "lateMode": "awarded",
+    "half": 2,
+    "earlyCounted": 3,
+    "lateCounted": 4,
+    "firstOpponent": "Hawks",
+    "firstOpponentPointsEarly": 7,
+    "firstOpponentPointsLate": 10,
+    "walkoverWinners": "Wolves and Comets",
+    "walkoverRounds": "4 and 5",
+    "leaverEarlyPoints": 0,
+    "leaverEarlyPlayed": 0,
+    "leaverLatePoints": 3,
+    "earlyNote": "Dynamos (withdrawn): left after 1 of 4, so their results are removed and their other matches are void.",
+    "lateNote": "Dynamos (withdrawn): left after 2 of 4, so their results stand and their other 2 matches are walkovers.",
+    "sportCount": 11
+  },
+  "table": {
+    "caption": "Five football teams play one league. The same league is run twice: Dynamos withdraw after round 1 in one, and after round 3 in the other. Both tables are the league's last.",
+    "columns": [
+      "Team",
+      "Played (out after round 1)",
+      "Points (out after round 1)",
+      "Played (out after round 3)",
+      "Points (out after round 3)"
+    ],
+    "rows": [
+      [
+        "Hawks",
+        3,
+        "7 points",
+        4,
+        "10 points"
+      ],
+      [
+        "Rockets",
+        3,
+        "4 points",
+        4,
+        "4 points"
+      ],
+      [
+        "Comets",
+        3,
+        "5 points",
+        4,
+        "8 points"
+      ],
+      [
+        "Dynamos",
+        0,
+        "0 points",
+        4,
+        "3 points"
+      ],
+      [
+        "Wolves",
+        3,
+        "0 points",
+        4,
+        "3 points"
+      ]
+    ]
+  },
+  "diagram": {
+    "kind": "fixtureList",
+    "title": "The same team, Dynamos, leaves at two moments. Under half of their matches played, all of them are removed. Half or more, the results stand and the rest are walkovers.",
+    "scenes": [
+      {
+        "heading": "Dynamos leave after round 1",
+        "lead": "1 of 4 played, under half:",
+        "effect": "every match is removed",
+        "lines": [
+          {
+            "round": "Round 1",
+            "opponent": "Hawks",
+            "fate": "Result removed",
+            "tone": "drop"
+          },
+          {
+            "round": "Round 3",
+            "opponent": "Rockets",
+            "fate": "Match removed",
+            "tone": "drop"
+          },
+          {
+            "round": "Round 4",
+            "opponent": "Wolves",
+            "fate": "Match removed",
+            "tone": "drop"
+          },
+          {
+            "round": "Round 5",
+            "opponent": "Comets",
+            "fate": "Match removed",
+            "tone": "drop"
+          }
+        ]
+      },
+      {
+        "heading": "Dynamos leave after round 3",
+        "lead": "2 of 4 played, half or more:",
+        "effect": "results stand, the rest are walkovers",
+        "lines": [
+          {
+            "round": "Round 1",
+            "opponent": "Hawks",
+            "fate": "Result stands",
+            "tone": "keep"
+          },
+          {
+            "round": "Round 3",
+            "opponent": "Rockets",
+            "fate": "Result stands",
+            "tone": "keep"
+          },
+          {
+            "round": "Round 4",
+            "opponent": "Wolves",
+            "fate": "Walkover to Wolves",
+            "tone": "award"
+          },
+          {
+            "round": "Round 5",
+            "opponent": "Comets",
+            "fate": "Walkover to Comets",
+            "tone": "award"
+          }
+        ]
+      }
+    ]
+  },
+  "text": [
+    "Round 1: Hawks 2 — 0 Dynamos.",
+    "Round 1: Rockets 1 — 1 Comets.",
+    "Round 2: Wolves 0 — 1 Comets.",
+    "Round 2: Hawks 1 — 0 Rockets.",
+    "Round 3: Dynamos 1 — 0 Rockets.",
+    "Round 3: Wolves 1 — 2 Hawks.",
+    "Round 4: Comets 0 — 0 Hawks.",
+    "Round 4: Dynamos v Wolves is never played.",
+    "Round 5: Rockets 1 — 0 Wolves.",
+    "Round 5: Comets v Dynamos is never played."
+  ]
+}

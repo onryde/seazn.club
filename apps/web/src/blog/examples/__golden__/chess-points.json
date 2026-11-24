@@ -1,0 +1,50 @@
+{
+  "facts": {
+    "halfWin": "1",
+    "halfDraw": "½",
+    "halfLoss": "0",
+    "threeWin": "3",
+    "threeDraw": "1",
+    "threeLoss": "0",
+    "anaHalf": "3",
+    "benHalf": "3½",
+    "anaThree": "9",
+    "benThree": "7",
+    "halfLeader": "Ben",
+    "threeLeader": "Ana",
+    "leaguePresets": 2,
+    "swissPresets": 1,
+    "sportCount": 11,
+    "halfPointSports": 1,
+    "wholePointSports": 10,
+    "wholePointSportsList": "Football, cricket, carrom, a generic division, volleyball, badminton, table tennis, tennis, ice hockey and hockey"
+  },
+  "table": {
+    "caption": "The same seven games each, counted two ways: one player with three wins and four losses, one with seven draws.",
+    "columns": [
+      "Player",
+      "Their seven games",
+      "Points under 1 / ½ / 0",
+      "Points under 3 / 1 / 0"
+    ],
+    "rows": [
+      [
+        "Ana",
+        "3 wins, 4 losses",
+        "3",
+        "9"
+      ],
+      [
+        "Ben",
+        "7 draws",
+        "3½",
+        "7"
+      ]
+    ]
+  },
+  "text": [
+    "Two players have seven games each: Ana won three and lost four, Ben drew all seven. Each result is a real chess game, played to the end and paid under each of the two points rules a chess league offers.",
+    "Under the first rule a win is 1, a draw is ½ and a loss is 0; under the second a win is 3, a draw is 1 and a loss is 0.",
+    "Ana has 3 and Ben has 3½ under the first rule, 9 and 7 under the second."
+  ]
+}

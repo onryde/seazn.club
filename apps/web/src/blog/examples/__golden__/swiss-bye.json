@@ -1,0 +1,85 @@
+{
+  "facts": {
+    "chessBye": "1",
+    "volleyballIndoorBye": "3",
+    "sportCount": 11
+  },
+  "table": {
+    "caption": "What a Swiss bye is worth in each sport, beside the most one played win can earn.",
+    "columns": [
+      "Sport",
+      "A bye earns",
+      "The most one played win earns"
+    ],
+    "rows": [
+      [
+        "Football",
+        "3",
+        "3"
+      ],
+      [
+        "Cricket",
+        "2",
+        "2"
+      ],
+      [
+        "Chess",
+        "1",
+        "1"
+      ],
+      [
+        "Carrom",
+        "2",
+        "2"
+      ],
+      [
+        "Generic",
+        "3",
+        "3"
+      ],
+      [
+        "Volleyball (Beach)",
+        "2",
+        "2"
+      ],
+      [
+        "Volleyball (Indoor)",
+        "3",
+        "3"
+      ],
+      [
+        "Badminton",
+        "2",
+        "2"
+      ],
+      [
+        "Table tennis",
+        "2",
+        "2"
+      ],
+      [
+        "Tennis",
+        "2",
+        "2"
+      ],
+      [
+        "Ice hockey (IIHF)",
+        "3",
+        "3"
+      ],
+      [
+        "Ice hockey (Recreational)",
+        "2",
+        "2"
+      ],
+      [
+        "Hockey",
+        "3",
+        "3"
+      ]
+    ]
+  },
+  "text": [
+    "Each row books a bye the way a division books one, under the points a new division of that sport starts on."
+  ]
+}

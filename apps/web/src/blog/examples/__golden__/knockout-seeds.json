@@ -1,0 +1,47 @@
+{
+  "facts": {
+    "fieldSize": 6,
+    "bracketSize": 8,
+    "byeCount": 2,
+    "byeHolders": "Fay and Ana",
+    "lineOrder16": "1, 16, 9, 8, 5, 12, 13, 4, 3, 14, 11, 6, 7, 10, 15, 2",
+    "largeSize": 16,
+    "sportCount": 11
+  },
+  "table": {
+    "caption": "Six seeded players in a knockout: the bracket has eight lines, and the two empty ones are byes for the top two seeds.",
+    "columns": [
+      "First-round match",
+      "Top line",
+      "Bottom line"
+    ],
+    "rows": [
+      [
+        1,
+        "Fay (seed 1)",
+        "Bye"
+      ],
+      [
+        2,
+        "Ben (seed 5)",
+        "Cy (seed 4)"
+      ],
+      [
+        3,
+        "Eve (seed 3)",
+        "Dev (seed 6)"
+      ],
+      [
+        4,
+        "Bye",
+        "Ana (seed 2)"
+      ]
+    ]
+  },
+  "text": [
+    "Match 1: Fay (seed 1) against Bye.",
+    "Match 2: Ben (seed 5) against Cy (seed 4).",
+    "Match 3: Eve (seed 3) against Dev (seed 6).",
+    "Match 4: Bye against Ana (seed 2)."
+  ]
+}

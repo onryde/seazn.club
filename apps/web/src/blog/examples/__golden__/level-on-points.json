@@ -1,0 +1,129 @@
+{
+  "facts": {
+    "footballFirstTieBreak": "head-to-head",
+    "footballOrder": "head-to-head, head-to-head difference, head-to-head scoring, goal difference, goals scored, fair play, drawing of lots",
+    "cricketFirstTieBreak": "wins",
+    "cricketOrder": "wins, net run rate, head-to-head, seeding, drawing of lots",
+    "boardgameFirstTieBreak": "direct encounter",
+    "boardgameOrder": "direct encounter, wins, Sonneborn–Berger, drawing of lots",
+    "carromFirstTieBreak": "wins",
+    "carromOrder": "wins, set ratio, board ratio, point ratio, head-to-head, drawing of lots",
+    "genericFirstTieBreak": "difference",
+    "genericOrder": "difference, total scored, head-to-head, drawing of lots",
+    "volleyballFirstTieBreak": "points",
+    "volleyballOrder": "points, set ratio, point ratio, head-to-head, drawing of lots",
+    "badmintonFirstTieBreak": "head-to-head between the two",
+    "badmintonOrder": "head-to-head between the two, set difference, head-to-head between the two, point difference, head-to-head between the two, drawing of lots",
+    "tabletennisFirstTieBreak": "head-to-head",
+    "tabletennisOrder": "head-to-head, head-to-head set ratio, head-to-head point ratio, head-to-head among those still level, drawing of lots",
+    "tennisFirstTieBreak": "matches played",
+    "tennisOrder": "matches played, head-to-head between the two, set ratio, head-to-head between the two, game ratio, head-to-head between the two, seeding, drawing of lots",
+    "icehockeyFirstTieBreak": "head-to-head",
+    "icehockeyOrder": "head-to-head, head-to-head difference, head-to-head scoring, head-to-head re-applied, goal difference, goals scored, seeding, drawing of lots",
+    "hockeyFirstTieBreak": "wins",
+    "hockeyOrder": "wins, goal difference, goals scored, head-to-head, head-to-head wins, head-to-head difference, head-to-head scoring, field goals, drawing of lots",
+    "sportCount": 11,
+    "winsFirstSports": "Volleyball, badminton and tennis",
+    "standingsGoalDifference": "goal difference",
+    "standingsGoalsScored": "goals scored",
+    "editorGoalDifference": "difference",
+    "editorGoalsScored": "total scored",
+    "partialScheduleSports": "ice hockey",
+    "partialScheduleOrder": "fewest games played, goal difference, goals scored, seeding",
+    "partialScheduleCount": 1,
+    "hawksPoints": 6,
+    "rocketsPoints": 6,
+    "hawksGoalDifference": "+1",
+    "rocketsGoalDifference": "+4",
+    "hawksBeatRockets": "1 — 0",
+    "hawksPlaceOwnOrder": "1st",
+    "rocketsPlaceOwnOrder": "2nd",
+    "hawksPlaceClassic": "2nd",
+    "rocketsPlaceClassic": "1st",
+    "ownOrderSplitBy": "head-to-head",
+    "classicSplitBy": "goal difference",
+    "midHawksPoints": 3,
+    "midHawksGoalDifference": "+1",
+    "midRocketsGoalDifference": "+3",
+    "midHawksPlace": "2nd",
+    "midRocketsPlace": "1st",
+    "midSplitBy": "goal difference",
+    "midNote": "Head-to-head not complete: they have not all played each other yet."
+  },
+  "table": {
+    "caption": "What the league table of each of the 11 sports checks, in order, when teams are level on its first measure.",
+    "columns": [
+      "Sport",
+      "Ranked first by",
+      "When level, then"
+    ],
+    "rows": [
+      [
+        "Football",
+        "Points",
+        "head-to-head, head-to-head difference, head-to-head scoring, goal difference, goals scored, fair play, drawing of lots"
+      ],
+      [
+        "Cricket",
+        "Points",
+        "wins, net run rate, head-to-head, seeding, drawing of lots"
+      ],
+      [
+        "Chess",
+        "Points",
+        "direct encounter, wins, Sonneborn–Berger, drawing of lots"
+      ],
+      [
+        "Carrom",
+        "Points",
+        "wins, set ratio, board ratio, point ratio, head-to-head, drawing of lots"
+      ],
+      [
+        "Generic",
+        "Points",
+        "difference, total scored, head-to-head, drawing of lots"
+      ],
+      [
+        "Volleyball",
+        "Wins",
+        "points, set ratio, point ratio, head-to-head, drawing of lots"
+      ],
+      [
+        "Badminton",
+        "Wins",
+        "head-to-head between the two, set difference, head-to-head between the two, point difference, head-to-head between the two, drawing of lots"
+      ],
+      [
+        "Table tennis",
+        "Points",
+        "head-to-head, head-to-head set ratio, head-to-head point ratio, head-to-head among those still level, drawing of lots"
+      ],
+      [
+        "Tennis",
+        "Wins",
+        "matches played, head-to-head between the two, set ratio, head-to-head between the two, game ratio, head-to-head between the two, seeding, drawing of lots"
+      ],
+      [
+        "Ice hockey",
+        "Points",
+        "head-to-head, head-to-head difference, head-to-head scoring, head-to-head re-applied, goal difference, goals scored, seeding, drawing of lots"
+      ],
+      [
+        "Hockey",
+        "Points",
+        "wins, goal difference, goals scored, head-to-head, head-to-head wins, head-to-head difference, head-to-head scoring, field goals, drawing of lots"
+      ]
+    ]
+  },
+  "text": [
+    "Each row is the order a new division of that sport ranks its league table by, step by step.",
+    "Hawks 1 — 0 Rockets.",
+    "Hawks 1 — 0 Dynamos.",
+    "Comets 1 — 0 Hawks.",
+    "Rockets 3 — 0 Comets.",
+    "Rockets 2 — 0 Dynamos.",
+    "Comets 0 — 0 Dynamos.",
+    "Part way through: Hawks 1 — 0 Dynamos.",
+    "Part way through: Rockets 3 — 0 Comets."
+  ]
+}

@@ -101,6 +101,8 @@ const UNREAD_WRITERS: Record<string, { writes: number; why: string }> = {
   "apps/web/src/server/usecases/__tests__/quick-match-device-link.test.ts": { writes: 1, why: "quick match spec C23's refusal table: a guest link's forfeit with an empty `{}` payload, refused 403 (\"Only an organiser can record a walkover for a match\") before its payload is read, and the case asserts nothing lands — no reason exists to be free text" },
   "apps/web/src/server/usecases/withdrawal.ts": { writes: 1, why: "`REASON` (\"withdrew\"), the withdrawal cascade's own constant" },
   "scripts/smoke/suites/walkoverCredit.ts": { writes: 6, why: "walkoverCreditSuite's `reason: WALKOVER`, its constant \"walkover\" typed `ForfeitReason` (tsc refuses free text and \"bye\", which core.forfeit rejects) and checked against AWARD_REASONS at run time" },
+  "apps/web/src/blog/examples/forfeit-scores.ts": { writes: 1, why: "the blog examples' shared `forfeitFold(module, by, reason: ForfeitReason)` helper writes its `reason` PARAMETER: tsc refuses any string outside the engine's FORFEIT_REASONS at every call site (they pass \"walkover\" or \"withdrew\"), and the event is folded in memory through the app's read fold and never posted" },
+  "apps/web/src/blog/examples/tie-break-play.ts": { writes: 1, why: "the tie-break examples' walkover meeting: `reason: m.walkoverReason ?? \"walkover\"`, where `Meeting.walkoverReason` is the literal union `\"walkover\" | \"withdrew\"` (both FORFEIT_REASONS members, checked by tsc), folded in memory through the app's read fold and never posted" },
 };
 
 /** The retired chess forfeit methods in every spelling a write could take: a keyed value (spaced or not, either quote,

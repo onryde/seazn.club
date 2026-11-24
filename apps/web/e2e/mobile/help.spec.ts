@@ -30,15 +30,13 @@ const WITH_POSTS = helpPageWithPosts();
 const PAGES = ["/help", LONG, "/help/scoring/basics", "/help/formats", "/help/formats/knockout", WITH_POSTS] as const;
 
 /**
- * axe's serious and critical findings, less ONE known gap: a wide prose table scrolls sideways but has no tab
- * stop (`scrollable-region-focusable`), because the help renderer's sanitiser drops `tabindex` — recorded in
- * help-copy-truth.test.ts's KNOWN_GAPS (#303), not this template's to fix. Only a finding whose every node is a
- * prose table is dropped; the same rule on any other box still fails.
+ * axe's serious and critical findings, none excused. A prose code block and a prose table both scroll sideways, and
+ * the renderer gives each a tab stop, a role and a name (server/help-scroll-boxes.ts), so
+ * `scrollable-region-focusable` is a real finding on any box (AGENTS.md class 23).
  */
 function seriousAxe(violations: { id: string; impact?: string | null; nodes: { html: string; target: unknown[] }[] }[]): string[] {
   return violations
     .filter((v) => v.impact === "serious" || v.impact === "critical")
-    .filter((v) => !(v.id === "scrollable-region-focusable" && v.nodes.every((n) => n.html.startsWith("<table"))))
     .map((v) => `${v.id} - ${v.nodes[0]?.html}`);
 }
 
@@ -155,8 +153,9 @@ test("no horizontal scroll, nothing clipped, every sideways scroller reachable, 
     await expectNoHorizontalScroll(page);
     const over = await overflowingIn(page, "main", "*", `${path}: no <main>`);
     expect(over.clipped, `${path}: clipped boxes`).toEqual([]);
-    // The only boxes allowed to scroll sideways are the prose's own scroll boxes (a wide table, a code block).
-    for (const s of over.scrollable) expect(s, `${path}: an excused scroller is a prose table or code block`).toMatch(/^(table|pre) /);
+    // The only boxes allowed to scroll sideways are the prose's own scroll boxes (a code block, or the wrapper round a
+    // wide table), and every one of them is a tab stop: the renderer writes the tabindex, so a bare scroller is a defect.
+    for (const s of over.scrollable) expect(s, `${path}: an excused scroller is a prose code block or table wrapper, with a tab stop`).toMatch(/^(div|pre) \d+px content in \d+px tabindex=0$/);
     const axe = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
     expect(
       seriousAxe(axe.violations),

@@ -20,7 +20,7 @@ import { BLOG_AUTHOR, BLOG_TOPICS, blogPostShowsFor, blogUrl, formatBlogDate } f
 import { blogIndexLd, blogOgTitleSize, blogPostBreadcrumbLd, blogPostMetadata, blogPostingLd } from "@/lib/blog-seo";
 import { helpUrl } from "@/lib/help";
 import { LOCALES } from "@/lib/i18n-constants";
-import { allBlogPosts, blogPost, type BlogPost } from "@/server/blog-content";
+import { allBlogPosts, blogPost, BLOG_PLANNED_SLUGS, type BlogPost } from "@/server/blog-content";
 import { blogIndexModel, resolveBlogRelated } from "@/server/blog-index";
 import { blogRssXml, rssDate } from "@/server/blog-rss";
 import { BLOG_GOLDENS } from "@/blog/examples/goldens";
@@ -136,12 +136,45 @@ describe("the post page, through the real renderer (the pilot)", () => {
     expect(markup.match(/<th scope="row"/g)!.length).toBe(BLOG_GOLDENS["standings-points"]!.table!.rows.length);
   });
 
-  it("shows only related posts that resolve: the pilot names three that are not written yet", async () => {
+  it("shows exactly the related posts that resolve, and none of those still to be written (the pilot names some of each while the programme lands)", async () => {
     const markup = await html(PILOT);
     expect(post.related.length).toBeGreaterThanOrEqual(2);
-    expect(post.related.every((s) => blogPost(s) === null), "premise: none resolves today").toBe(true);
-    for (const slug of post.related) expect(markup, slug).not.toContain(blogUrl(slug));
-    expect(markup).not.toContain('data-testid="blog-related"');
+    const resolved = post.related.filter((s) => blogPost(s) !== null);
+    const unresolved = post.related.filter((s) => blogPost(s) === null);
+    expect(resolved.length + unresolved.length, "every related slug is one or the other").toBe(post.related.length);
+    expect(resolved.length, "anti-vacuity: related posts that resolve").toBeGreaterThan(0);
+    // Anti-vacuity for the unresolved arm: the slugs that do not resolve are EXACTLY the pilot's related slugs the programme
+    // still has planned, read from the planned set, so a slug that vanished (neither a post nor planned) is a failure and not
+    // an empty loop. When the last one lands the arm is empty by design, and the fixture test below keeps it exercised.
+    const planned = post.related.filter((s) => BLOG_PLANNED_SLUGS.has(s));
+    expect(unresolved, "every related slug that does not resolve is one still to be written").toEqual(planned);
+    for (const slug of resolved) expect(markup, slug).toContain(blogUrl(slug));
+    let absent = 0;
+    for (const slug of unresolved) {
+      expect(markup, slug).not.toContain(blogUrl(slug));
+      absent++;
+    }
+    // While the pilot still names a planned slug, the arm must have checked at least one (the loop above cannot run empty).
+    if (planned.length > 0) expect(absent, "anti-vacuity: unresolved related slugs checked absent from the page").toBeGreaterThan(0);
+    expect(absent).toBe(planned.length);
+    expect(markup).toContain('data-testid="blog-related"');
+  });
+
+  it("shows only related posts that resolve: when the related slugs are not posts, no link and no section", async () => {
+    // Blog batch 2: the pilot's own related slugs become posts as the batches land, so "none resolves" is made true here
+    // by naming slugs that are posts nowhere, never read off today's tree.
+    const unwritten = ["a-post-nobody-has-written", "another-post-nobody-has-written"];
+    rel.on = true;
+    rel.related = unwritten;
+    rel.find = () => null;
+    try {
+      const markup = await html(PILOT);
+      expect(unwritten.every((s) => blogPost(s) === null), "premise: these are not posts").toBe(true);
+      for (const slug of unwritten) expect(markup, slug).not.toContain(blogUrl(slug));
+      expect(markup).not.toContain('data-testid="blog-related"');
+    } finally {
+      rel.on = false;
+    }
   });
 
   it("related cards on the real page: resolved slugs are linked in front-matter order, with their titles; an unresolved one is not", async () => {
@@ -450,10 +483,57 @@ describe("the share card", () => {
 
 describe("pieces that guard themselves", () => {
   it("a diagram model has no drawing yet, so an example that gains one fails the build instead of printing a caption alone", () => {
-    const model: DiagramModel = { kind: "ladder", title: "t", rungs: [], challenger: "a", target: "b", swapped: false };
-    expect(() => renderToStaticMarkup(<BlogDiagram model={model} />)).toThrow(/no drawing for 'ladder'/);
+    // A kind no batch draws (the drawn set grows batch by batch, so the refusal is pinned on a kind that never will be).
+    const model = { kind: "no-drawing-ever", title: "t" } as unknown as DiagramModel;
+    expect(() => renderToStaticMarkup(<BlogDiagram model={model} />)).toThrow(/no drawing for 'no-drawing-ever'/);
     expect(() => renderToStaticMarkup(<BlogExample id="x" result={{ facts: {}, text: [], diagram: model }} swipeHint="s" />)).toThrow(/no drawing/);
   });
+
+  // ---- batch 5 (Task 11) ----
+  it("batch 5's four drawings render their golden's model: an SVG whose title is the model's title, naming every word the model holds", () => {
+    let drawn = 0;
+    const kinds = new Set<string>();
+    for (const id of ["ladder-challenge", "knockout-withdrawal", "double-walkover", "forfeit-scores"]) {
+      const model = BLOG_GOLDENS[id]?.diagram;
+      expect(model, `${id} carries a diagram`).toBeDefined();
+      const html = renderToStaticMarkup(<BlogDiagram model={model!} />);
+      expect(html, id).toContain("<svg");
+      expect(html, id).toContain(`>${model!.title.replace(/'/g, "&#x27;")}</title>`);
+      // Every name, round heading, result line and score the model holds must be on the page (an apostrophe is escaped by React).
+      const words: string[] =
+        model!.kind === "ladder"
+          ? model!.rungs
+          : model!.kind === "walkoverBracket"
+            ? model!.rounds.flatMap((r) => [r.name, ...r.matches.flatMap((m) => [...m.sides, m.result])])
+            : model!.kind === "scoreTiles"
+              ? model!.tiles.flatMap((t) => [t.sport, t.score])
+              : [];
+      expect(words.length, `${id}: anti-vacuity`).toBeGreaterThan(3);
+      // A seat that holds no player ("nobody", "not known yet") is drawn muted italic, and no name is (cleanup N3).
+      if (model!.kind === "walkoverBracket") {
+        const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        let vacantSeen = 0;
+        let namesSeen = 0;
+        for (const m of model!.rounds.flatMap((r) => r.matches))
+          for (const side of m.sides) {
+            const classes = [...html.matchAll(new RegExp(`<text[^>]*class="([^"]*)"[^>]*>${esc(side)}</text>`, "g"))].map((x) => x[1]!);
+            expect(classes.length, `${id}: ${side} is drawn`).toBeGreaterThan(0);
+            const vacant = (m.vacant ?? []).includes(side);
+            for (const c of classes) expect(/\bitalic\b/.test(c), `${id}: ${side} ${vacant ? "is italic" : "is not italic"}`).toBe(vacant);
+            if (vacant) vacantSeen++;
+            else namesSeen++;
+          }
+        expect(vacantSeen, `${id}: a vacant seat is drawn`).toBeGreaterThan(0);
+        expect(namesSeen, `${id}: a player is drawn`).toBeGreaterThan(0);
+      }
+      for (const w of words) expect(html, `${id} shows ${w}`).toContain(`>${w.replace(/'/g, "&#x27;")}<`);
+      kinds.add(model!.kind);
+      drawn++;
+    }
+    expect(drawn).toBe(4);
+    expect([...kinds].sort(), "the three drawings batch 5 keeps").toEqual(["ladder", "scoreTiles", "walkoverBracket"]);
+  });
+  // ---- end batch 5 ----
 
   it("an example with no table draws nothing (and the page's example guard lives in the renderer)", () => {
     expect(renderToStaticMarkup(<BlogExample id="x" result={{ facts: {}, text: [] }} swipeHint="s" />)).toBe("");

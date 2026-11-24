@@ -1,0 +1,78 @@
+{
+  "facts": {
+    "fieldSize": 5,
+    "rounds": 5,
+    "matches": 10,
+    "matchesPerRound": 2,
+    "opponentsEach": 4,
+    "homeEach": 2,
+    "awayEach": 2,
+    "twoLegRounds": 10,
+    "twoLegMatches": 20,
+    "firstLegRoundOne": "Hawks v Dynamos, Rockets v Comets",
+    "secondLegRoundOne": "Dynamos v Hawks, Comets v Rockets",
+    "evenFieldSize": 6,
+    "evenRounds": 5,
+    "evenMatches": 15,
+    "evenMatchesPerRound": 3,
+    "evenOpponentsEach": 5,
+    "evenHomeFewest": 2,
+    "evenHomeMost": 3,
+    "sportCount": 11
+  },
+  "table": {
+    "caption": "The first leg of a league of five teams. Every team meets every other once, and one team rests in each of the five rounds.",
+    "columns": [
+      "Round",
+      "Match",
+      "Match",
+      "Sits out"
+    ],
+    "rows": [
+      [
+        1,
+        "Hawks v Dynamos",
+        "Rockets v Comets",
+        "Wolves"
+      ],
+      [
+        2,
+        "Wolves v Comets",
+        "Hawks v Rockets",
+        "Dynamos"
+      ],
+      [
+        3,
+        "Dynamos v Rockets",
+        "Wolves v Hawks",
+        "Comets"
+      ],
+      [
+        4,
+        "Comets v Hawks",
+        "Dynamos v Wolves",
+        "Rockets"
+      ],
+      [
+        5,
+        "Rockets v Wolves",
+        "Comets v Dynamos",
+        "Hawks"
+      ]
+    ]
+  },
+  "diagram": {
+    "kind": "roundRobinWheel",
+    "title": "Round one of five teams. Five teams and an empty seat make six places. The empty seat stays where it is, the five teams move one place round the loop every round, and each column of the picture is a match. Whoever meets the empty seat sits out.",
+    "fixed": "Empty seat",
+    "rotating": [
+      "Hawks",
+      "Rockets",
+      "Comets",
+      "Dynamos",
+      "Wolves"
+    ],
+    "round": 1
+  },
+  "text": []
+}
