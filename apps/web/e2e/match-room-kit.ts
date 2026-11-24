@@ -166,9 +166,72 @@ async function createLegacyLeague(request: APIRequestContext, divisionId: string
   return { stageId, fixtureIds: (generated.data?.fixtures ?? []).map((f) => f.id) };
 }
 
+/** Online Chess credits (spec 2026-11-23-online-chess-credits-design.md §7.6): the e2e org is SHARED by every worker, so a payment is
+ *  funded by its own grant - `credits` bought-bucket credits granted for exactly the payment about to be made, under the org's money
+ *  lock (the key `lockOrg` takes: stream-credits.ts `orgMoneyLockKey`), with `balance_after` the org total after the row as every
+ *  ledger writer keeps it. A worker never spends another's grant, so concurrent payers cannot leave each other short. The one
+ *  staff-shaped write here (V426's grant row: no API grants credits but Stripe); the PAYMENT itself is the real route's. */
+async function fundOnlinePayment(divisionId: string, credits: number): Promise<void> {
+  if (credits <= 0) return;
+  await withDb((sql) =>
+    sql.begin(async (tx) => {
+      const [d] = await tx<{ org_id: string }[]>`select org_id from divisions where id = ${divisionId}`;
+      await tx`select pg_advisory_xact_lock(hashtext(${`stream-credits-org:${d!.org_id.toLowerCase()}`}))`;
+      await tx`
+        insert into org_stream_credits (org_id, delta, reason, bucket, balance_after, note)
+        select ${d!.org_id}, ${credits}, 'grant', 'pack', coalesce(sum(delta), 0)::int + ${credits}, 'e2e: an online division paid for'
+          from org_stream_credits where org_id = ${d!.org_id}`;
+    }),
+  );
+}
+
+/** The division's Online Chess package paid at the size it holds, through the PAY DOOR (`POST /divisions/{id}/online-package`), with
+ *  the camera price: the receipt's quote read first (`GET`), then confirmed. Used where an open cannot carry the payment: before a
+ *  legacy league is staged (the pay door refuses to CHARGE a league - P16 - so it pays while the division has no stage), and on a
+ *  division whose round is opened later by the spec itself (the UI's Open round, or its own POST). */
+async function payThroughPayDoor(request: APIRequestContext, divisionId: string): Promise<void> {
+  const size = await withDb(async (sql) => {
+    const [p] = await sql<{ size: number }[]>`
+      select size from division_online_packages where division_id = ${divisionId} and refunded_at is null`;
+    if (!p) throw new Error(`payThroughPayDoor: division ${divisionId} has no live Online Chess package`);
+    return p.size;
+  });
+  const quote = await apiJson<{ owed: number; refusal: string | null }>(
+    request, `/api/v1/divisions/${divisionId}/online-package?size=${size}&addCameras=true`,
+  );
+  expect(quote.status, `online package quote: ${JSON.stringify(quote.error)}`).toBe(200);
+  expect(quote.data!.refusal, `size ${size} can be bought`).toBeNull();
+  await fundOnlinePayment(divisionId, quote.data!.owed);
+  const paid = await apiJson(request, `/api/v1/divisions/${divisionId}/online-package`, "POST", {
+    size, expectedOwed: quote.data!.owed, addCameras: true,
+  });
+  expect(paid.status, `pay for the online package: ${JSON.stringify(paid.error)}`).toBeLessThan(300);
+}
+
+/** Round 1 opened through the open-round route as the organiser meets it: the first press on an unpaid package answers 402
+ *  ONLINE_CHESS_UNPAID with the quote (asserted - the gate is live on this server), and the same press carrying that quote's `pay`
+ *  pays and opens in one transaction ("Pay and open"). A package already paid opens on the first press. */
+async function openRoundOne(request: APIRequestContext, stageId: string, divisionId: string): Promise<void> {
+  const first = await apiJson(request, `/api/v1/stages/${stageId}/open-round`, "POST", { roundNo: 1 });
+  if (first.status < 300) return;
+  const error = first.error as { code?: string; quote?: { size: number; owed: number } } | undefined;
+  expect([first.status, error?.code], `open-round: ${JSON.stringify(first.error)}`).toEqual([402, "ONLINE_CHESS_UNPAID"]);
+  const quote = error!.quote!;
+  await fundOnlinePayment(divisionId, quote.owed);
+  const opened = await apiJson(request, `/api/v1/stages/${stageId}/open-round`, "POST", {
+    roundNo: 1, pay: { size: quote.size, expectedOwed: quote.owed },
+  });
+  expect(opened.status, `pay and open round 1: ${JSON.stringify(opened.error)}`).toBeLessThan(300);
+}
+
 /**
  * The ONE place an e2e online division is staged, started and (unless `open: false`) has round 1 opened - every seed in this file
  * goes through it, so a rule that gates one of these steps (Task 9's pay gate on Open round 1) is extended HERE and nowhere else.
+ *
+ * Online Chess credits (Task 9): the package is PAID before this returns, through the real routes. A Swiss or a knockout opened here
+ * pays ON the open (the 402, then "Pay and open": `openRoundOne`); a legacy league pays at the pay door BEFORE its stage is written
+ * (the door refuses to charge a league), and a division left unopened (`open: false`) pays at the pay door too, so the round the spec
+ * opens itself is a paid one.
  *
  * - "knockout": the stage and its fixtures, then Start. Two entrants make one match (n - 1).
  * - "swiss": the stage mints its shells at Start and round 1 is paired on the next Generate - the organiser's two presses.
@@ -182,6 +245,8 @@ export async function setUpOnlineDivision(
   opts: { stage?: OnlineStage | undefined; open?: boolean | undefined } = {},
 ): Promise<{ stageId: string; fixtureIds: string[] }> {
   const kind = opts.stage ?? "league";
+  const payOnOpen = kind !== "league" && opts.open !== false;
+  if (!payOnOpen) await payThroughPayDoor(request, divisionId);
   let stageId: string;
   let fixtureIds: string[];
   if (kind === "swiss") {
@@ -206,10 +271,7 @@ export async function setUpOnlineDivision(
     const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
     expect(started.status, `start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
   }
-  if (opts.open !== false) {
-    const opened = await apiJson(request, `/api/v1/stages/${stageId}/open-round`, "POST", { roundNo: 1 });
-    expect(opened.status, `open-round: ${JSON.stringify(opened.error)}`).toBeLessThan(300);
-  }
+  if (opts.open !== false) await openRoundOne(request, stageId, divisionId);
   return { stageId, fixtureIds };
 }
 
