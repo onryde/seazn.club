@@ -101,14 +101,16 @@ function credentialKeyOf(req: Request): string {
 }
 
 /**
- * The client IP the failed-401 budget is keyed on: the shared reader (`lib/client-ip.ts`, R4 final review S10 M1, N1) -
+ * The LIMITER SUBJECT of the request's client — not its address (Task 25d; renamed from `clientIpOf`, Phase 3 review m7): the
+ * client IP from the shared reader (`lib/client-ip.ts`, R4 final review S10 M1, N1), grouped by `limiterSubject` - an IPv4 as
+ * it is, an IPv6 as its /64 - so it names a Redis bucket and is never an address to keep, log or send on. The IP it reads is
  * Cloudflare's `CF-Connecting-IP` when Fly's peer is one of Cloudflare's edges (the public hosts are behind Cloudflare), else
  * Fly's peer, so a `CF-Connecting-IP` forged at the fly.dev origin picks no bucket (a partial guard: see `lib/client-ip.ts`).
  * A forged value can still spend ANOTHER client's failure bucket, but that only refuses failures: a valid tok never touches
  * the budget, so it never refuses a valid tok (B6 review I-1).
  */
-export function clientIpOf(req: Request): string {
-  // Task 25d: every caller keys a limiter on it (capture-fail, mdfail, dlmint), so it is the client's SUBJECT: an IPv6 /64 is one.
+export function limiterSubjectOf(req: Request): string {
+  // Every caller keys a limiter on it (capture-fail, mdfail, dlmint).
   return limiterSubject(clientIp(req.headers));
 }
 
@@ -145,7 +147,7 @@ export async function capturePhoneRoute(
     try {
       return await fn();
     } catch (e) {
-      if (e instanceof CaptureRefusalError && e.status === 401) await rateLimit(`capture-fail:${clientIpOf(req)}`, CAPTURE_FAIL_LIMIT);
+      if (e instanceof CaptureRefusalError && e.status === 401) await rateLimit(`capture-fail:${limiterSubjectOf(req)}`, CAPTURE_FAIL_LIMIT);
       throw e;
     }
   });

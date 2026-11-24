@@ -9,7 +9,7 @@
 // Expected values: the ranges are Cloudflare's published lists (https://www.cloudflare.com/ips-v4, /ips-v6), the edges are
 // each range's first and last address and the addresses either side - arithmetic on the published CIDR, not the code's.
 //
-// Every limiter that keys on it moves with it: capture's failed-401 budget (`clientIpOf`, its route pin is
+// Every limiter that keys on it moves with it: capture's failed-401 budget (`limiterSubjectOf`, its route pin is
 // limits-route.test.ts), the public read limiters (`publicClientIp`), and the /s/ redirect's miss budget and click dedupe.
 // The auth, registration, device-link, consent and funnel limiters are pinned in client-ip-limiters.test.ts,
 // and client-ip-readers.test.ts fails any other source file that reads one of these headers itself.
@@ -39,7 +39,7 @@ import {
   isCloudflarePeer,
   limiterSubject,
 } from "../client-ip";
-import { clientIpOf } from "@/server/api-v1/capture-http";
+import { limiterSubjectOf } from "@/server/api-v1/capture-http";
 import { publicPollRateLimit, publicRateLimit } from "@/server/usecases/public";
 import { GET as sponsorLink } from "@/app/s/[key]/route";
 import { scrubSentryEvent } from "../scrub-score-url";
@@ -530,7 +530,7 @@ describe("every limiter the batch names keys on it (the real callers)", () => {
   const keys = () => vi.mocked(rateLimit).mock.calls.map(([k]) => k);
   const allOf = async (headers: Record<string, string>) => {
     vi.mocked(rateLimit).mockClear();
-    const capture = clientIpOf(req(headers));
+    const capture = limiterSubjectOf(req(headers));
     await publicRateLimit(req(headers));
     await publicPollRateLimit(req(headers));
     const res = await sponsorLink(req(headers, "http://x/s/zz"), { params: Promise.resolve({ key: "zz" }) });
@@ -547,7 +547,7 @@ describe("every limiter the batch names keys on it (the real callers)", () => {
     expect(two, "a second visitor through the SAME edge is another bucket").toEqual({ capture: VISITOR6_64, keys: bucketsOf(VISITOR6_64) });
   });
 
-  it("Task 25d: two IPv6 addresses in ONE /64 are ONE bucket in capture's failed-401 budget (and every clientIpOf limiter: mdfail, dlmint), the public read limiters and the /s/ miss budget; another /64 is another", async () => {
+  it("Task 25d: two IPv6 addresses in ONE /64 are ONE bucket in capture's failed-401 budget (and every limiterSubjectOf limiter: mdfail, dlmint), the public read limiters and the /s/ miss budget; another /64 is another", async () => {
     const a = await allOf({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR6 });
     const b = await allOf({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR6_SAME64 });
     const c = await allOf({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": OTHER_64 });

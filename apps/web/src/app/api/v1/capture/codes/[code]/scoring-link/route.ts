@@ -1,5 +1,5 @@
 import { baseUrl } from "@/lib/oauth";
-import { CaptureRefusalError, captureBearer, captureJson, capturePhoneRoute, clientIpOf } from "@/server/api-v1/capture-http";
+import { CaptureRefusalError, captureBearer, captureJson, capturePhoneRoute, limiterSubjectOf } from "@/server/api-v1/capture-http";
 import { CaptureStartBody } from "@/server/api-v1/capture-schemas";
 import { postScoringLink } from "@/server/usecases/capture-phone";
 import { defaultDeps } from "@/server/usecases/stream-sessions";
@@ -28,6 +28,6 @@ export async function POST(req: Request, { params }: Ctx) {
       const fields = [...new Set(parsed.error.issues.map((i) => i.path.join(".") || "(body)"))].join(", ");
       throw new CaptureRefusalError(422, "invalid", `the request does not match the contract: ${fields}`);
     }
-    return captureJson(200, await postScoringLink(code, tok, parsed.data, defaultDeps(baseUrl(req)), new Date(), clientIpOf(req)));
+    return captureJson(200, await postScoringLink(code, tok, parsed.data, defaultDeps(baseUrl(req)), new Date(), limiterSubjectOf(req)));
   });
 }

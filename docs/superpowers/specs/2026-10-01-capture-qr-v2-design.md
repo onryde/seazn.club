@@ -618,7 +618,8 @@ Rate limits (§10.4): the code's own budget (`CAPTURE_CODE_LIMIT`, shared with t
 route before anything else; then, inside the use-case once the tok and holder checks pass (step 4; review M2), the
 console's `DEVICE_LINK_MINT_LIMIT` per client IP. Build decision (2026-10-06, for review): the per-IP bucket is the
 console's own `dlmint:<ip>` — its rule is "a reissue IS a mint: one bucket, one number" — with the IP read by the
-capture routes' `clientIpOf`.
+capture routes' `limiterSubjectOf` (named `clientIpOf` until Task 25d of the Seazn-hosted video plan grouped an IPv6 client
+by its /64).
 
 What the console still owns: its ensure and print re-show the newest live sealed link, which after a phone call is the
 phone's link (or the one the phone was given), so no printed or handed-over QR is killed by a phone. **Revoke &
