@@ -216,11 +216,19 @@ export async function captureV2Suite(): Promise<void> {
           select role, ingest_input_id, (playback_srt_url is not null) as playback from fixture_stream_inputs where session_id = ${csid} order by role` : [];
         const [srow] = csid ? await quiet<{ ingest_input_uid: string | null; output_uid: string | null; reserved_minutes: number; overlay_delay_ms: number }[]>`
           select ingest_input_uid, output_uid, reserved_minutes, overlay_delay_ms from fixture_stream_sessions where id = ${csid}` : [];
+        // Seazn Task 36: what the start ASKED the providers for, from the session's own ledger (each effect it recorded before
+        // it answered): exactly two inputs made — the camera and the programme, asked for at once — and ONE Machine.
+        const effects = csid ? await quiet<{ type: string; n: number }[]>`
+          select type, count(*)::int as n from fixture_stream_events
+           where session_id = ${csid} and kind = 'effect' and result = 'ok' and type in ('create_live_input', 'create_machine')
+           group by type` : [];
+        const made = (type: string) => effects.find((e) => e.type === type)?.n ?? 0;
         step(
-          `R2004: a composed Go live with a compositor image → 201, a camera input (playback stored) and a programme input, the output on the programme, ${2 * RESERVATION_BUFFER_MINUTES} minutes reserved (two recordings, each holding the buffer at admission — owner ruling 2026-10-26), the default delay copied (got ${composed.status} ${composed.json.error?.code ?? ""}, inputs ${ins.map((i) => `${i.role}${i.playback ? "+playback" : ""}`).join(",")}, output input ${srow?.ingest_input_uid === ins[1]?.ingest_input_id ? "programme" : "other"}, reserved ${srow?.reserved_minutes}, delay ${srow?.overlay_delay_ms})`,
+          `R2004: a composed Go live with a compositor image → 201, a camera input (playback stored) and a programme input, the output on the programme, ${2 * RESERVATION_BUFFER_MINUTES} minutes reserved (two recordings, each holding the buffer at admission — owner ruling 2026-10-26), the default delay copied, 2 inputs made and 1 Machine asked for (got ${composed.status} ${composed.json.error?.code ?? ""}, inputs ${ins.map((i) => `${i.role}${i.playback ? "+playback" : ""}`).join(",")}, output input ${srow?.ingest_input_uid === ins[1]?.ingest_input_id ? "programme" : "other"}, reserved ${srow?.reserved_minutes}, delay ${srow?.overlay_delay_ms}, ${made("create_live_input")} inputs made, ${made("create_machine")} Machine)`,
           composed.status === 201 && ins.length === 2 && ins[0].role === "camera" && ins[0].playback && ins[1].role === "programme" && !ins[1].playback
             && !!ins[1].ingest_input_id && srow?.ingest_input_uid === ins[1].ingest_input_id && srow?.output_uid != null
-            && srow?.reserved_minutes === 2 * RESERVATION_BUFFER_MINUTES && srow?.overlay_delay_ms === RELAY_OVERLAY_DELAY_DEFAULT_MS,
+            && srow?.reserved_minutes === 2 * RESERVATION_BUFFER_MINUTES && srow?.overlay_delay_ms === RELAY_OVERLAY_DELAY_DEFAULT_MS
+            && made("create_live_input") === 2 && made("create_machine") === 1,
         );
         const cstop = csid ? await v1(owner, `/api/v1/fixtures/${fx.fixtureId}/stream-sessions/${csid}/stop`, "POST") : null;
         let cstate: string | undefined;

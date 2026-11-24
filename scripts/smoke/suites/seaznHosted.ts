@@ -49,6 +49,15 @@ import { BASE, type Session, cookieHeader, newSession, check, signIn, smokeDb, t
  *    whole number; what other sessions owe is not this suite's to say.
  *    The sweep is server-wide, as the YouTube suite's later one is; its passes act only on what is past a retention, a grace or an
  *    expiry, and the earlier suites retire what they start (sponsors.ts's note).
+ *
+ * Phase 4 (Task 36): a REAL Seazn start on the fake relay, last, so the steps above see only the SQL session:
+ * 10. SEAZN START ON THE FAKES — told LIVE is on AND a compositor image (RELAY_IMAGE in this process, as captureV2's composed
+ *    branch reads it), a phone claims this match's stream code and the organiser's Go live on the Seazn destination is 201:
+ *    composed, BOTH inputs made (two `create_live_input` effects in the session's ledger, the camera and the programme asked
+ *    for at once) and ONE Machine asked for (one `create_machine`), the programme input signed and the camera not, no output;
+ *    then its Stop completes it. Two steps. Not run anywhere else — LIVE off, or no image on the server, cannot admit a Seazn
+ *    start — and EXPECTED_STEPS says so. No CI smoke job runs it today (the job's servers leave LIVE off): a LIVE-on server
+ *    with an image and SEAZN_VIDEO_ORIGINS (e2e-seazn's shape) is where it runs.
  * HOW THE ROW GETS THERE, AND WHY NOT BY THE MOVE. The session, its programme input, the locked recording and the replay row are
  * written by SQL, in the shape the stream tick's passes leave them (the e2e seed's shape, e2e/helpers/seazn-video-seed.ts), and
  * `encoding → playable` is the conditional update the move's poll and the Bunny webhook write. The move cannot run here: it is
@@ -98,17 +107,19 @@ export async function seaznHostedSuite(): Promise<void> {
       return false;
     }
   })();
+  // Phase 4 (Task 36): a Seazn start can be admitted only with LIVE on and a compositor image on the server (step 10).
+  const startsOnFakes = live && !!process.env.RELAY_IMAGE;
   // LIVE on drops the two refusal steps (3) — the refusal exists only while LIVE is off. Phase 2 (5–7) adds five in both modes:
   // the read path reads no flag. Phase 3 (8–9) adds four in every mode: the two staff-table reads, the sweep's answer and its
-  // counters by COST's mode. Phase 4 (3b, the org switch) adds four in both modes.
-  const EXPECTED_STEPS = (live ? 6 : 8) + 4 + 5 + 4;
+  // counters by COST's mode. Phase 4 (3b, the org switch) adds four in both modes, and step 10 two where a start can be admitted.
+  const EXPECTED_STEPS = (live ? 6 : 8) + 4 + 5 + 4 + (startsOnFakes ? 2 : 0);
   let steps = 0;
   const step = (label: string, cond: boolean) => {
     check(`seazn-hosted smoke: ${label}`, cond);
     steps++;
   };
   const done = () => {
-    console.log(`seazn-hosted smoke: ${steps} steps (LIVE ${live ? "on" : "off"}, COST ${cost ? "on" : "off"})`);
+    console.log(`seazn-hosted smoke: ${steps} steps (LIVE ${live ? "on" : "off"}, COST ${cost ? "on" : "off"}, Seazn start ${startsOnFakes ? "run" : "not run"})`);
     check(`seazn-hosted smoke: all ${EXPECTED_STEPS} steps ran (ran ${steps})`, steps === EXPECTED_STEPS);
   };
 
@@ -397,6 +408,59 @@ export async function seaznHostedSuite(): Promise<void> {
       table.status === 200 && table.has(PANEL) && !table.has(EMPTY) && table.count(ROW) === 1 && table.has(sessionRow) &&
         table.has(fixtureLabel) && table.has(deletedPart),
     );
+
+    // ── Phase 4 (Task 36): a Seazn start on the fake relay — both inputs, one Machine (see the header, step 10). ──
+    if (startsOnFakes) {
+      // The phone the start needs: the organiser's stream code, claimed by a bare HTTP client with the QR's Bearer tok (no cookie),
+      // as Seazn Capture claims it (captureV2's claim beat).
+      const minted = await v1(owner, `/api/v1/fixtures/${fx.fixtureId}/stream-code`, "POST");
+      const qr = (minted.json.data as { qr?: { code: string; slot: number; tok: string } } | undefined)?.qr;
+      const phone = randomBytes(16).toString("hex");
+      const claim = qr
+        ? await fetch(`${BASE}/api/v1/capture/codes/${qr.code}/beats`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${qr.tok}`, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              code: qr.code, slot: qr.slot, phone, claim: "new", device: { model: "Smoke phone" }, sid: null,
+              at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), state: "paired", cause: null, notReady: null,
+              startFailed: null, stopped: null, mode: "operator", transport: null, bitrateKbps: null, delivery: "unknown",
+              deliveredLagS: null, audioOk: null, battery: { percent: 80, charging: false, drainPctPerHour: null }, thermal: 0,
+              dataUsedMB: 0, appVersion: "1.4.0",
+            }),
+          }).then(async (r) => ({ status: r.status, state: ((await r.json().catch(() => null)) as { state?: string } | null)?.state }))
+        : { status: 0, state: undefined };
+      const started = await v1(owner, `/api/v1/fixtures/${fx.fixtureId}/stream-sessions`, "POST", { mode: "passthrough", targetId: seaznId });
+      const sid = v1data<{ sessionId?: string } | undefined>(started)?.sessionId ?? null;
+      // What the start made, read from its own ledger (the effects it recorded before it answered) and its input rows. A count,
+      // never a credential: nothing here reads a key, a passphrase or a URL.
+      const effects = sid ? await db<{ type: string; n: number }[]>`
+        select type, count(*)::int as n from fixture_stream_events
+         where session_id = ${sid} and kind = 'effect' and result = 'ok' and type in ('create_live_input', 'create_machine')
+         group by type` : [];
+      const made = (type: string) => effects.find((e) => e.type === type)?.n ?? 0;
+      const rows = sid ? await db<{ role: string; made: boolean; signed: boolean }[]>`
+        select role, ingest_input_id is not null as made, access is not null as signed
+          from fixture_stream_inputs where session_id = ${sid} order by role` : [];
+      const [srow] = sid ? await db<{ mode: string; destination_kind: string | null; output_uid: string | null }[]>`
+        select mode, destination_kind, output_uid from fixture_stream_sessions where id = ${sid}` : [];
+      step(
+        `SEAZN START ON THE FAKES: a paired phone, then Go live on Seazn → 201, composed, BOTH inputs made (2 create_live_input) and ONE Machine asked for (1 create_machine), the programme signed and the camera not, no output (got claim ${claim.status} ${String(claim.state)}, start ${started.status} ${String(started.json.error?.code ?? "")}, ${made("create_live_input")} inputs, ${made("create_machine")} Machine, rows ${rows.map((r) => `${r.role}${r.made ? "" : "-unmade"}${r.signed ? "+signed" : ""}`).join(",")}, ${String(srow?.mode)}/${String(srow?.destination_kind)}, output ${srow?.output_uid == null ? "none" : "set"})`,
+        claim.status === 200 && claim.state === "waiting" && started.status === 201 && sid !== null &&
+          made("create_live_input") === 2 && made("create_machine") === 1 &&
+          rows.length === 2 && rows[0]?.role === "camera" && rows[0].made && !rows[0].signed &&
+          rows[1]?.role === "programme" && rows[1].made && rows[1].signed &&
+          srow?.mode === "composed" && srow.destination_kind === "seazn" && srow.output_uid == null,
+      );
+      // Its Stop, and the next reads of the fake Machine complete it, so nothing of this suite is left running.
+      const stopped = sid ? await v1(owner, `/api/v1/fixtures/${fx.fixtureId}/stream-sessions/${sid}/stop`, "POST") : null;
+      let state: string | undefined;
+      for (let i = 0; i < 10 && state !== "completed"; i++) {
+        const cur = await v1(owner, `/api/v1/fixtures/${fx.fixtureId}/stream-sessions/current`, "GET");
+        const data = v1data<{ id?: string; state?: string } | null | undefined>(cur);
+        if (data?.id === sid) state = data.state;
+      }
+      step(`SEAZN START ON THE FAKES: its Stop → 200, and it completes (got ${String(stopped?.status)}, ${String(state)})`, stopped?.status === 200 && state === "completed");
+    }
     done();
   } finally {
     await db.end();
