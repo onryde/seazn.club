@@ -709,7 +709,7 @@ describe("resolveScheduleLocks", () => {
       // `fixtureKey` is `JSON.stringify([divisionRef, extKey])` — a delimiter
       // join would silently merge two fixtures into one bucket, which is why
       // it is built here through the real function rather than typed out.
-      fixtureIdByKey: overrides.fixtures ?? new Map([[fixtureKey("d-tiny", "rr-r1-c1"), "fx-1"]]),
+      fixtureIdByKey: overrides.fixtures ?? new Map([[fixtureKey("d-tiny", "rr-r1-c1-L1"), "fx-1"]]),
       courtIdByRef: overrides.courts ?? new Map([["c-tiny-1", "court-1"], ["c-tiny-2", "court-2"]]),
     };
   }

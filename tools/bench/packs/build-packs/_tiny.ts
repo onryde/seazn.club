@@ -48,6 +48,14 @@ import {
  *  hand-authored d-tiny division it is meant to carry through unchanged. */
 type PackInput = z.input<typeof PackSchema>;
 
+/** A league stream's fixture ext_key as the product's `/generate` mints it since W5 T2
+ *  (`rrExtKey`, apps/web/src/lib/roundrobin-reconcile.ts): `rr-r{round}-c{court}-L{leg}`. The engine's
+ *  round numbers run on across legs, so a 2-entrant, 3-leg division is r1/L1, r2/L2, r3/L3 and a one-leg
+ *  division is always L1. This builder may not import apps/web, so the format is restated here and the
+ *  test in `__tests__/_tiny.test.ts` pins every key against the engine's own schedule + `rrExtKey`.
+ *  Court is always 1: every streamed division has one game per round. */
+const rrKey = (round: number, leg: number): string => `rr-r${round}-c1-L${leg}`;
+
 // ---------------------------------------------------------------------------
 // B04 T6 — venues, and the per-division scheduleConfig (design §7)
 //
@@ -352,7 +360,7 @@ const TINY_ENTRANTS: PackInput["entrants"] = [
 const TINY_STREAMS: NonNullable<PackInput["streams"]> = [
   {
     divisionRef: "d-tiny",
-    fixtureExtKey: "rr-r1-c1",
+    fixtureExtKey: rrKey(1, 1),
     stageRef: "s-league",
     home: "e-alpha",
     away: "e-bravo",
@@ -364,7 +372,7 @@ const TINY_STREAMS: NonNullable<PackInput["streams"]> = [
   },
   {
     divisionRef: "d-tiny",
-    fixtureExtKey: "rr-r2-c1",
+    fixtureExtKey: rrKey(2, 2),
     stageRef: "s-league",
     home: "e-bravo",
     away: "e-alpha",
@@ -379,7 +387,7 @@ const TINY_STREAMS: NonNullable<PackInput["streams"]> = [
   },
   {
     divisionRef: "d-tiny",
-    fixtureExtKey: "rr-r3-c1",
+    fixtureExtKey: rrKey(3, 3),
     stageRef: "s-league",
     home: "e-alpha",
     away: "e-bravo",
@@ -427,7 +435,7 @@ const TINY_STREAMS: NonNullable<PackInput["streams"]> = [
 const TINY_MATCHES: NonNullable<PackInput["expected"]["matches"]> = [
   {
     divisionRef: "d-tiny",
-    fixtureExtKey: "rr-r1-c1",
+    fixtureExtKey: rrKey(1, 1),
     outcome: { kind: "win", winner: "e-alpha", loser: "e-bravo", method: "regulation" },
     perSide: [
       { entrant: "e-alpha", line: "3" },
@@ -436,7 +444,7 @@ const TINY_MATCHES: NonNullable<PackInput["expected"]["matches"]> = [
   },
   {
     divisionRef: "d-tiny",
-    fixtureExtKey: "rr-r2-c1",
+    fixtureExtKey: rrKey(2, 2),
     outcome: { kind: "draw" },
     perSide: [
       { entrant: "e-bravo", line: "2" },
@@ -445,7 +453,7 @@ const TINY_MATCHES: NonNullable<PackInput["expected"]["matches"]> = [
   },
   {
     divisionRef: "d-tiny",
-    fixtureExtKey: "rr-r3-c1",
+    fixtureExtKey: rrKey(3, 3),
     outcome: { kind: "award", winner: "e-alpha" },
     // W2b Loop R M-2: Bravo RETIRED, so Alpha won the game — "W", not the walkover's "W/O" (generic's sideLine marks a
     // walked-over side "W/O" only for a walkover, a withdrawal or a bye).
@@ -551,7 +559,7 @@ const TINY_SPECIALS: NonNullable<PackInput["expected"]["specials"]> = [
   {
     kind: "retirement",
     divisionRef: "d-tiny",
-    fixtureExtKey: "rr-r3-c1",
+    fixtureExtKey: rrKey(3, 3),
     note:
       "Bravo retires hurt; the match is awarded to Alpha. Asserted against the FOLDED outcome, " +
       "because a retirement has no event type of its own — it is the CORE type core.forfeit.",
@@ -580,7 +588,7 @@ const TINY_OFFICIALS: NonNullable<PackInput["officials"]> = [
     // MANUAL: a named assignment, so `seedOfficialsAndClaims` PATCHes her
     // onto rr-r1-c1 directly rather than leaving her to auto-assign
     // (pack-schema.ts:768-769's own rule).
-    assignments: [{ divisionRef: "d-tiny", fixtureExtKey: "rr-r1-c1", roleKey: "referee" }],
+    assignments: [{ divisionRef: "d-tiny", fixtureExtKey: rrKey(1, 1), roleKey: "referee" }],
   },
   {
     ref: "off-eli",
@@ -708,16 +716,16 @@ const BADMINTON_VARIANT = "bwf";
 const BADMINTON_STAGE_REF = "s-badminton-league";
 const BADMINTON_HOME = "e-cho";
 const BADMINTON_AWAY = "e-dahl";
-// `rr-r{round}-c{court}` — the product's OWN round-robin fixture-id format
-// (`packages/engine/src/scheduling/roundrobin.ts:138`), sport-agnostic. Two
-// entrants over one leg is one round, one court: "rr-r1-c1". Legal alongside
-// d-tiny's OWN "rr-r1-c1" (streams[0]) because an ext_key is unique per
+// `rr-r{round}-c{court}-L{leg}` — the product's OWN round-robin fixture-id format
+// (`rrExtKey`), sport-agnostic. Two
+// entrants over one leg is one round, one court: "rr-r1-c1-L1". Legal alongside
+// d-tiny's OWN "rr-r1-c1-L1" (streams[0]) because an ext_key is unique per
 // DIVISION, never globally (pack-schema.ts's `checkStreams` comment) — and
 // it has to be this, not an invented "bm-..." key, because
 // `seedSuite`/`bindStreamFixtures` (lib/seed.ts) binds a stream to whatever
 // ext_key the REAL `/generate` response actually returns, and that response
 // never varies by sport.
-const BADMINTON_FIXTURE = "rr-r1-c1";
+const BADMINTON_FIXTURE = rrKey(1, 1);
 
 /** A stable literal, never `Date.now()` / `Math.random()` — see
  *  lib/reconstruct.ts's own "DETERMINISM" header note. Recorded onto the
@@ -1067,7 +1075,7 @@ const TIEBREAK_AWAY_FOXTROT = "e-foxtrot";
 const TIEBREAK_THIRD_GOLF = "e-golf";
 // B05 T5b-3: named because `expected.suspensions` has to point at the SAME
 // fixture the stream below declares — a literal on both ends could drift.
-const TIEBREAK_STREAM_R3 = "rr-r3-c1";
+const TIEBREAK_STREAM_R3 = rrKey(3, 1);
 
 // B05 T5b: seat 3 has NO person of its own. The entrant refs here are NATO
 // SEAT LABELS — exactly what `e-alpha`/`e-bravo` are in d-tiny, where the
@@ -1194,7 +1202,7 @@ const TIEBREAK_DIVISION: PackInput["divisions"][number] = {
 const TIEBREAK_STREAMS: NonNullable<PackInput["streams"]> = [
   {
     divisionRef: TIEBREAK_DIVISION_REF,
-    fixtureExtKey: "rr-r1-c1",
+    fixtureExtKey: rrKey(1, 1),
     stageRef: TIEBREAK_STAGE_REF,
     home: TIEBREAK_HOME_ECHO,
     away: TIEBREAK_AWAY_FOXTROT,
@@ -1206,7 +1214,7 @@ const TIEBREAK_STREAMS: NonNullable<PackInput["streams"]> = [
   },
   {
     divisionRef: TIEBREAK_DIVISION_REF,
-    fixtureExtKey: "rr-r2-c1",
+    fixtureExtKey: rrKey(2, 1),
     stageRef: TIEBREAK_STAGE_REF,
     home: TIEBREAK_THIRD_GOLF,
     away: TIEBREAK_HOME_ECHO,
@@ -1244,7 +1252,7 @@ const TIEBREAK_STREAMS: NonNullable<PackInput["streams"]> = [
 const TIEBREAK_MATCHES: NonNullable<PackInput["expected"]["matches"]> = [
   {
     divisionRef: TIEBREAK_DIVISION_REF,
-    fixtureExtKey: "rr-r1-c1",
+    fixtureExtKey: rrKey(1, 1),
     outcome: { kind: "win", winner: TIEBREAK_HOME_ECHO, loser: TIEBREAK_AWAY_FOXTROT, method: "regulation" },
     perSide: [
       { entrant: TIEBREAK_HOME_ECHO, line: "3" },
@@ -1253,7 +1261,7 @@ const TIEBREAK_MATCHES: NonNullable<PackInput["expected"]["matches"]> = [
   },
   {
     divisionRef: TIEBREAK_DIVISION_REF,
-    fixtureExtKey: "rr-r2-c1",
+    fixtureExtKey: rrKey(2, 1),
     outcome: { kind: "draw" },
     perSide: [
       { entrant: TIEBREAK_THIRD_GOLF, line: "1" },
@@ -1262,7 +1270,7 @@ const TIEBREAK_MATCHES: NonNullable<PackInput["expected"]["matches"]> = [
   },
   {
     divisionRef: TIEBREAK_DIVISION_REF,
-    fixtureExtKey: "rr-r3-c1",
+    fixtureExtKey: rrKey(3, 1),
     outcome: { kind: "win", winner: TIEBREAK_THIRD_GOLF, loser: TIEBREAK_AWAY_FOXTROT, method: "regulation" },
     perSide: [
       { entrant: TIEBREAK_AWAY_FOXTROT, line: "8" },

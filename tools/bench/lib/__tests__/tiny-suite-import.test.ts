@@ -42,7 +42,7 @@ import {
   TINY_SPECIAL_STATE,
   echoSpecialSubjects,
 } from "./_oracle-routes.ts";
-import { roundRobinRoundCount } from "./_roundrobin-rounds.ts";
+import { roundRobinExtKey, roundRobinRoundCount } from "./_roundrobin-rounds.ts";
 
 const silent = pino({ level: "silent" });
 
@@ -284,7 +284,7 @@ function fakeServer(opts: {
                 (_v, i) => {
                   const id = `fx-${++fixtureCounter}`;
                   if (divisionId !== undefined) fixtureDivisionId.set(id, divisionId);
-                  const extKey = `rr-r${i + 1}-c1`;
+                  const extKey = roundRobinExtKey(i, divisionId === undefined ? 0 : schedule.entrantsOfDivision(divisionId).length);
                   fixtureExtKeyById.set(id, extKey);
                   return { id, ext_key: extKey };
                 },

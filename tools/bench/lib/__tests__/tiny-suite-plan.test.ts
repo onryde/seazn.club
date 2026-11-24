@@ -14,7 +14,7 @@
 // tracked per stage at creation time, `ext_key`s derived as `rr-r{n}-c1` for
 // n=1..legs) rather than special-cased per division name — which happens to
 // match `_tiny.json`'s own two league stages' declared ext_keys exactly
-// (`legs: 3` → rr-r1-c1/rr-r2-c1/rr-r3-c1, `legs: 1` → rr-r1-c1) AND serves
+// (`legs: 3` → rr-r1-c1-L1/rr-r2-c1-L2/rr-r3-c1-L3, `legs: 1` → rr-r1-c1-L1) AND serves
 // the DLS-gate probe's own throwaway cricket divisions with no special
 // casing at all.
 import { describe, expect, it } from "vitest";
@@ -48,7 +48,7 @@ import {
   TINY_SPECIAL_STATE,
   echoSpecialSubjects,
 } from "./_oracle-routes.ts";
-import { roundRobinRoundCount } from "./_roundrobin-rounds.ts";
+import { roundRobinExtKey, roundRobinRoundCount } from "./_roundrobin-rounds.ts";
 
 const silent = pino({ level: "silent" });
 
@@ -322,7 +322,10 @@ function fakeServer(opts: {
                 (_v, i) => {
                   const id = `fx-${++fixtureCounter}`;
                   if (divisionId !== undefined) fixtureDivisionId.set(id, divisionId);
-                  return { id, ext_key: `rr-r${i + 1}-c1` };
+                  return {
+                    id,
+                    ext_key: roundRobinExtKey(i, divisionId === undefined ? 0 : schedule.entrantsOfDivision(divisionId).length),
+                  };
                 },
               );
         schedule.addFixtures(stageId, fixtures);

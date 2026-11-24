@@ -454,7 +454,7 @@
   "streams": [
     {
       "divisionRef": "d-tiny",
-      "fixtureExtKey": "rr-r1-c1",
+      "fixtureExtKey": "rr-r1-c1-L1",
       "stageRef": "s-league",
       "home": "e-alpha",
       "away": "e-bravo",
@@ -474,7 +474,7 @@
     },
     {
       "divisionRef": "d-tiny",
-      "fixtureExtKey": "rr-r2-c1",
+      "fixtureExtKey": "rr-r2-c1-L2",
       "stageRef": "s-league",
       "home": "e-bravo",
       "away": "e-alpha",
@@ -514,7 +514,7 @@
     },
     {
       "divisionRef": "d-tiny",
-      "fixtureExtKey": "rr-r3-c1",
+      "fixtureExtKey": "rr-r3-c1-L3",
       "stageRef": "s-league",
       "home": "e-alpha",
       "away": "e-bravo",
@@ -563,7 +563,7 @@
     {
       "divisionRef": "d-badminton",
       "stageRef": "s-badminton-league",
-      "fixtureExtKey": "rr-r1-c1",
+      "fixtureExtKey": "rr-r1-c1-L1",
       "home": "e-cho",
       "away": "e-dahl",
       "provenance": "reconstructed",
@@ -1030,7 +1030,7 @@
     },
     {
       "divisionRef": "d-tiebreak",
-      "fixtureExtKey": "rr-r1-c1",
+      "fixtureExtKey": "rr-r1-c1-L1",
       "stageRef": "s-tiebreak-league",
       "home": "e-echo",
       "away": "e-foxtrot",
@@ -1050,7 +1050,7 @@
     },
     {
       "divisionRef": "d-tiebreak",
-      "fixtureExtKey": "rr-r2-c1",
+      "fixtureExtKey": "rr-r2-c1-L1",
       "stageRef": "s-tiebreak-league",
       "home": "e-golf",
       "away": "e-echo",
@@ -1082,7 +1082,7 @@
     },
     {
       "divisionRef": "d-tiebreak",
-      "fixtureExtKey": "rr-r3-c1",
+      "fixtureExtKey": "rr-r3-c1-L1",
       "stageRef": "s-tiebreak-league",
       "home": "e-foxtrot",
       "away": "e-golf",
@@ -1170,7 +1170,7 @@
       "assignments": [
         {
           "divisionRef": "d-tiny",
-          "fixtureExtKey": "rr-r1-c1",
+          "fixtureExtKey": "rr-r1-c1-L1",
           "roleKey": "referee"
         }
       ]
@@ -1200,7 +1200,7 @@
     "matches": [
       {
         "divisionRef": "d-tiny",
-        "fixtureExtKey": "rr-r1-c1",
+        "fixtureExtKey": "rr-r1-c1-L1",
         "outcome": {
           "kind": "win",
           "winner": "e-alpha",
@@ -1220,7 +1220,7 @@
       },
       {
         "divisionRef": "d-tiny",
-        "fixtureExtKey": "rr-r2-c1",
+        "fixtureExtKey": "rr-r2-c1-L2",
         "outcome": {
           "kind": "draw"
         },
@@ -1237,7 +1237,7 @@
       },
       {
         "divisionRef": "d-tiny",
-        "fixtureExtKey": "rr-r3-c1",
+        "fixtureExtKey": "rr-r3-c1-L3",
         "outcome": {
           "kind": "award",
           "winner": "e-alpha"
@@ -1275,7 +1275,7 @@
       },
       {
         "divisionRef": "d-badminton",
-        "fixtureExtKey": "rr-r1-c1",
+        "fixtureExtKey": "rr-r1-c1-L1",
         "outcome": {
           "kind": "win",
           "winner": "e-cho",
@@ -1295,7 +1295,7 @@
       },
       {
         "divisionRef": "d-tiebreak",
-        "fixtureExtKey": "rr-r1-c1",
+        "fixtureExtKey": "rr-r1-c1-L1",
         "outcome": {
           "kind": "win",
           "winner": "e-echo",
@@ -1315,7 +1315,7 @@
       },
       {
         "divisionRef": "d-tiebreak",
-        "fixtureExtKey": "rr-r2-c1",
+        "fixtureExtKey": "rr-r2-c1-L1",
         "outcome": {
           "kind": "draw"
         },
@@ -1332,7 +1332,7 @@
       },
       {
         "divisionRef": "d-tiebreak",
-        "fixtureExtKey": "rr-r3-c1",
+        "fixtureExtKey": "rr-r3-c1-L1",
         "outcome": {
           "kind": "win",
           "winner": "e-golf",
@@ -1550,7 +1550,7 @@
         "divisionRef": "d-tiebreak",
         "person": "p-hotel",
         "missesFixtureExtKeys": [
-          "rr-r3-c1"
+          "rr-r3-c1-L1"
         ],
         "reason": "Dissent toward the match official"
       }
@@ -1559,7 +1559,7 @@
       {
         "kind": "retirement",
         "divisionRef": "d-tiny",
-        "fixtureExtKey": "rr-r3-c1",
+        "fixtureExtKey": "rr-r3-c1-L3",
         "note": "Bravo retires hurt; the match is awarded to Alpha. Asserted against the FOLDED outcome, because a retirement has no event type of its own — it is the CORE type core.forfeit.",
         "claims": [
           {

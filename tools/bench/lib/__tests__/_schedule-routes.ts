@@ -179,7 +179,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  *  the key names — and so a fixture with no parseable key lands at round 1
  *  rather than at an invented one. */
 function roundOf(extKey: string, fallback: number): number {
-  const match = /^(?:p[A-Z]-)?rr-r(\d+)-c\d+$/.exec(extKey);
+  const match = /^(?:p[A-Z]-)?rr-r(\d+)-c\d+(?:-L\d+)?$/.exec(extKey);
   return match === undefined || match === null ? fallback : Number(match[1]);
 }
 

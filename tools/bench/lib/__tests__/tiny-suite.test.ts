@@ -694,7 +694,7 @@ export function makeFakeServer(
         const stageId = routePath.split("/")[4]!;
         const generated =
           stageId === "stage-badminton-league"
-            ? [{ id: "fx-bm-1", ext_key: "rr-r1-c1" }]
+            ? [{ id: "fx-bm-1", ext_key: "rr-r1-c1-L1" }]
             : stageId === "stage-playoff"
               ? [{ id: "fx-playoff-1", ext_key: "se-r0-i0" }]
               : // B05 T5a — `d-tiebreak`'s own league (3 entrants, 1 leg — the
@@ -705,14 +705,14 @@ export function makeFakeServer(
                 // shared table and silently orphan d-tiny's own fixtures.
                 stageId === "stage-tiebreak-league"
                 ? [
-                    { id: "fx-tb-1", ext_key: "rr-r1-c1" },
-                    { id: "fx-tb-2", ext_key: "rr-r2-c1" },
-                    { id: "fx-tb-3", ext_key: "rr-r3-c1" },
+                    { id: "fx-tb-1", ext_key: "rr-r1-c1-L1" },
+                    { id: "fx-tb-2", ext_key: "rr-r2-c1-L1" },
+                    { id: "fx-tb-3", ext_key: "rr-r3-c1-L1" },
                   ]
                 : [
-                    { id: "fx-1", ext_key: "rr-r1-c1" },
-                    { id: "fx-2", ext_key: "rr-r2-c1" },
-                    { id: "fx-3", ext_key: "rr-r3-c1" },
+                    { id: "fx-1", ext_key: "rr-r1-c1-L1" },
+                    { id: "fx-2", ext_key: "rr-r2-c1-L2" },
+                    { id: "fx-3", ext_key: "rr-r3-c1-L3" },
                   ];
         // B04: the SAME rows become this world's fixture table, so the board
         // `GET /divisions/{id}/fixtures` returns below is the one `/generate`
