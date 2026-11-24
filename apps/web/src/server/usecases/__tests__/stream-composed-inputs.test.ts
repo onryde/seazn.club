@@ -1,10 +1,12 @@
 // R2004 (compositor plan 2026-10-14; spec §5.3): a COMPOSED session publishes to its own Cloudflare input. The real
 // provisioning usecase (createSession → startBroadcast → provisionSession → the `provisioned` effects), on the fakes and
 // real Postgres. What this file proves:
-//   1. a composed start makes TWO inputs — the camera (A) first, then the programme (B) — and the destination output
-//      attaches to B, never A; the passthrough start is the one call and the one row it always was, its output on A;
-//   2. every way the second create can fail leaves nothing behind: A is deleted at the provider, the session row goes,
-//      the organiser reads 503 ingest_unavailable, no Machine is asked for;
+//   1. a composed start makes TWO inputs — the camera (A) and the programme (B), asked for AT ONCE (Seazn Task 36: both are
+//      in flight before either answers) — and the destination output attaches to B, never A; the passthrough start is the
+//      one call and the one row it always was, its output on A;
+//   2. every way either create can fail leaves nothing behind: whichever input WAS made is deleted at the provider (both, for
+//      a camera with no playback credential; none when both fail), the session row goes, the organiser reads 503
+//      ingest_unavailable, no Machine is asked for;
 //   3. a composed session's output is released from B when it ends, once;
 //   4. storage (owner ruling 2026-10-18, option (a)): both inputs record, so a composed session makes TWO recordings while
 //      it runs and passthrough one. Owner rulings 2026-10-26: a RUNNING session reserves, per recording, min(its booking,
@@ -111,15 +113,53 @@ async function sessionRow(sessionId: string) {
 const destinationOf = async (orgId: string, targetId: string) =>
   (await sql.begin((tx) => readTargetSecret(tx, orgId, targetId))) as { url: string; streamKey: string };
 
+// ── Seazn Task 36: the creates HELD at the fake, so a test sees both in flight and settles them in the order it names ────
+type Role = "camera" | "programme";
+const roleOf = (spec: IngestCreateSpec): Role => spec.role ?? "camera";
+/** The held create of `role` — the provider has been asked for it and has not answered. */
+function held(ingest: FakeIngest, role: Role) {
+  const h = ingest.heldCreates.find((c) => roleOf(c.spec) === role);
+  expect(h, `PREMISE: the ${role} create was asked for`).toBeDefined();
+  return h!;
+}
+/** Starts a composed session with every create held, waits until the provider has been asked, and asserts that BOTH inputs were
+ *  asked for while neither has answered (nothing is answered until the test says so). Checked once the first ask has landed plus
+ *  one turn of the event loop, never by waiting for a second ask: a start that asks one at a time would hold its first create
+ *  forever, so a wait would be a 30 s timeout where this is a named red. A start that settles before asking (a refusal at
+ *  admission) fails the premise rather than hang. `outcome` is the start's — its value, or the error it refused with — so a
+ *  refusal is never an unhandled rejection. It is returned INSIDE an object: an async function returning the promise itself
+ *  would adopt it, and the caller's await would then wait on the very creates it has not yet answered. */
+async function heldComposedStart(r: { ingest: FakeIngest; start: (mode: Mode) => Promise<{ sessionId: string }> }) {
+  r.ingest.holdCreates();
+  const outcome = r.start("composed").then((v) => ({ ok: v, err: null }), (err: unknown) => ({ ok: null, err }));
+  const first = await Promise.race([r.ingest.whenHeld(1).then(() => "asked" as const), outcome.then(() => "settled" as const)]);
+  expect(first, "PREMISE: the start asked the provider for an input before it settled").toBe("asked");
+  await new Promise<void>((res) => setImmediate(res));
+  expect(r.ingest.heldCreates.map((h) => roleOf(h.spec)).sort(), "both inputs asked for while neither has answered").toEqual(["camera", "programme"]);
+  return { outcome };
+}
+/** The input each ANSWERED create made, by role (a failed create made none): what the cleanup must delete. */
+async function madeBy(spy: { mock: { calls: [IngestCreateSpec][]; results: { value: unknown }[] } }): Promise<Partial<Record<Role, string>>> {
+  const settled = await Promise.allSettled(spy.mock.results.map((x) => x.value as ReturnType<FakeIngest["createLiveInput"]>));
+  const made: Partial<Record<Role, string>> = {};
+  settled.forEach((s, i) => { if (s.status === "fulfilled") made[roleOf(spy.mock.calls[i]![0])] = s.value.inputId; });
+  return made;
+}
+const sessionsOn = async (fixtureId: string) =>
+  (await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where fixture_id = ${fixtureId}`)[0]!.n;
+const refusal = () => Object.assign(new Error("provider 500"), { status: 500 });
+
 describe.skipIf(!HAS_DB)("R2004: composed provisioning — two inputs, the output on the programme", () => {
-  it("composed_creates_two_inputs_and_attaches_output_to_b: the camera then the programme, the output on B and none on A, B is the session's output input", async () => {
+  it("composed_creates_two_inputs_and_attaches_output_to_b: the camera and the programme, the output on B and none on A, B is the session's output input", async () => {
     const r = await rig();
     const spy = vi.spyOn(r.ingest, "createLiveInput");
     const { sessionId } = await r.start("composed");
-    const specs = spy.mock.calls.map((c) => c[0]);
-    expect(specs, "A first (the camera, no role — the passthrough call), then B").toStrictEqual([{ sessionId, slot: 0 }, { sessionId, slot: 0, role: "programme" }]);
-    const made = await Promise.all(spy.mock.results.map((x) => x.value as ReturnType<FakeIngest["createLiveInput"]>));
-    const [a, b] = made as [Awaited<ReturnType<FakeIngest["createLiveInput"]>>, Awaited<ReturnType<FakeIngest["createLiveInput"]>>];
+    // Seazn Task 36: the two are asked for at once, so which is asked first is no promise — compared as a set, by role.
+    const specs = spy.mock.calls.map((c) => c[0]).sort((x, y) => (x.role ?? "").localeCompare(y.role ?? ""));
+    expect(specs, "A (the camera, no role — the passthrough call) and B, one create each").toStrictEqual([{ sessionId, slot: 0 }, { sessionId, slot: 0, role: "programme" }]);
+    const made = await madeBy(spy);
+    const a = { inputId: made.camera! };
+    const b = { inputId: made.programme! };
     expect(await inputs(sessionId)).toEqual([
       { role: "camera", slot: 0, ingest_input_id: a.inputId, has_playback: true },
       { role: "programme", slot: 0, ingest_input_id: b.inputId, has_playback: false },
@@ -138,10 +178,28 @@ describe.skipIf(!HAS_DB)("R2004: composed provisioning — two inputs, the outpu
     await expect(r.start("composed")).rejects.toMatchObject({ code: "active_session" });
     expect(spy, "no input made by the refused start").toHaveBeenCalledTimes(2);
     expect((await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_inputs where session_id = ${sessionId}`)[0]!.n).toBe(2);
-    // Review m4: the ledger says WHICH input each create made — the role survives the payload allowlist.
+    // Review m4: the ledger says WHICH input each create made — the role survives the payload allowlist. T36: the two answers
+    // race for the row lock, so the ledger's order between them is not a fact — compared as a set.
     const creates = await sql<{ payload: Record<string, unknown> }[]>`
       select payload from fixture_stream_events where session_id = ${sessionId} and kind = 'effect' and type = 'create_live_input' order by seq`;
-    expect(creates.map((c) => c.payload), "the camera's create, then the programme's, by role").toEqual([{ slot: 0 }, { slot: 0, role: "programme" }]);
+    const byRole = creates.map((c) => c.payload).sort((x, y) => String(x.role ?? "").localeCompare(String(y.role ?? "")));
+    expect(byRole, "the camera's create and the programme's, by role").toEqual([{ slot: 0 }, { slot: 0, role: "programme" }]);
+  });
+
+  it("Seazn Task 36: a composed start asks for BOTH inputs before EITHER answers — the camera and the programme in flight together, no Machine yet; answered programme-first, it is the same session: two inputs, one Machine, nothing deleted", async () => {
+    const r = await rig();
+    const { outcome } = await heldComposedStart(r);
+    expect(r.ingest.heldCreates.map((h) => roleOf(h.spec)).sort(), "both creates asked while neither has answered").toEqual(["camera", "programme"]);
+    expect(r.runner.created, "no Machine while the inputs are out").toHaveLength(0);
+    // The provider answers the programme first: the order the answers arrive in is not the start's to assume.
+    held(r.ingest, "programme").answer();
+    held(r.ingest, "camera").answer();
+    const { ok, err } = await outcome;
+    expect(err).toBeNull();
+    expect((await inputs(ok!.sessionId)).map((i) => [i.role, i.has_playback, i.ingest_input_id !== null])).toEqual([["camera", true, true], ["programme", false, true]]);
+    expect(r.runner.created, "one Machine, asked after the inputs").toHaveLength(1);
+    expect(r.ingest.deletedInputs).toEqual([]);
+    expect(r.ingest.heldCreates, "exactly two creates — none repeated").toHaveLength(2);
   });
 
   it("passthrough_provisioning_is_unchanged: ONE create (the same call), ONE camera row with no playback stored, the output on A, one recording reserved", async () => {
@@ -161,49 +219,89 @@ describe.skipIf(!HAS_DB)("R2004: composed provisioning — two inputs, the outpu
 
   it("the programme create FAILS: 503 ingest_unavailable, A deleted at the provider, the session row gone, no Machine; a retry then starts cleanly (sequence)", async () => {
     const r = await rig();
-    const real = r.ingest.createLiveInput.bind(r.ingest);
-    const made: string[] = [];
-    const spy = vi.spyOn(r.ingest, "createLiveInput").mockImplementation(async (spec: IngestCreateSpec) => {
-      if (spec.role === "programme") throw Object.assign(new Error("provider 500"), { status: 500 });
-      const c = await real(spec);
-      made.push(c.inputId);
-      return c;
-    });
-    const err = await r.start("composed").then(() => null, (e: unknown) => e);
+    const spy = vi.spyOn(r.ingest, "createLiveInput");
+    const { outcome } = await heldComposedStart(r);
+    held(r.ingest, "camera").answer();
+    held(r.ingest, "programme").fail(refusal());
+    const { err } = await outcome;
     expect(err).toBeInstanceOf(HttpError);
     expect(err).toMatchObject({ status: 503, code: "ingest_unavailable" });
-    expect(made, "PREMISE: A was made before B was asked for").toHaveLength(1);
-    expect(r.ingest.deletedInputs, "A is not left behind at the provider").toEqual(made);
-    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where fixture_id = ${r.fixtureId}`;
-    expect(n, "no session row").toBe(0);
+    const made = await madeBy(spy);
+    expect(made, "PREMISE: A was made, B was not").toEqual({ camera: expect.any(String) });
+    expect(r.ingest.deletedInputs, "A is not left behind at the provider").toEqual([made.camera]);
+    expect(await sessionsOn(r.fixtureId), "no session row").toBe(0);
     expect(r.runner.created, "no Machine").toHaveLength(0);
     // Sequence: the provider recovers; the next start makes both inputs and the output on B.
-    spy.mockRestore();
+    r.ingest.holdCreates(false);
     const { sessionId } = await r.start("composed");
     expect((await inputs(sessionId)).map((i) => i.role)).toEqual(["camera", "programme"]);
   });
 
-  it("a camera input that comes back WITHOUT an SRT playback credential is refused the same way — A deleted, nothing kept, B never asked for: a composed session the compositor cannot read is not started", async () => {
+  it("Seazn Task 36: the CAMERA create FAILS while the programme's is still out — the programme, answered AFTER the failure, is deleted at the provider; no session row, no Machine, 503 ingest_unavailable", async () => {
+    const r = await rig();
+    const spy = vi.spyOn(r.ingest, "createLiveInput");
+    const { outcome } = await heldComposedStart(r);
+    // The camera's refusal lands first; the programme's input is made only after it.
+    held(r.ingest, "camera").fail(refusal());
+    held(r.ingest, "programme").answer();
+    const { err } = await outcome;
+    expect(err).toBeInstanceOf(HttpError);
+    expect(err).toMatchObject({ status: 503, code: "ingest_unavailable" });
+    const made = await madeBy(spy);
+    expect(made, "PREMISE: B was made, A was not").toEqual({ programme: expect.any(String) });
+    expect(r.ingest.deletedInputs, "B is not left behind at the provider").toEqual([made.programme]);
+    expect(await sessionsOn(r.fixtureId), "no session row").toBe(0);
+    expect(r.runner.created, "no Machine").toHaveLength(0);
+  });
+
+  it("Seazn Task 36: BOTH creates fail — nothing was made, so nothing is deleted; no session row, no Machine, 503 ingest_unavailable", async () => {
+    const r = await rig();
+    const { outcome } = await heldComposedStart(r);
+    held(r.ingest, "programme").fail(refusal());
+    held(r.ingest, "camera").fail(refusal());
+    const { err } = await outcome;
+    expect(err).toBeInstanceOf(HttpError);
+    expect(err).toMatchObject({ status: 503, code: "ingest_unavailable" });
+    expect(r.ingest.deletedInputs, "no delete call: there is no input to delete").toEqual([]);
+    expect(await sessionsOn(r.fixtureId), "no session row").toBe(0);
+    expect(r.runner.created, "no Machine").toHaveLength(0);
+  });
+
+  it("a camera input that comes back WITHOUT an SRT playback credential is refused the same way — BOTH inputs deleted (T36: B was asked for beside A), nothing kept: a composed session the compositor cannot read is not started", async () => {
     const r = await rig();
     const real = r.ingest.createLiveInput.bind(r.ingest);
     const spy = vi.spyOn(r.ingest, "createLiveInput").mockImplementation(async (spec: IngestCreateSpec) => ({ ...(await real(spec)), srtPlayback: null }));
     const err = await r.start("composed").then(() => null, (e: unknown) => e);
     expect(err).toMatchObject({ status: 503, code: "ingest_unavailable" });
-    expect(spy, "B was never asked for").toHaveBeenCalledTimes(1);
-    expect(r.ingest.deletedInputs).toHaveLength(1);
-    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where fixture_id = ${r.fixtureId}`;
-    expect(n).toBe(0);
+    expect(spy, "A and B were both asked for").toHaveBeenCalledTimes(2);
+    const made = await madeBy(spy);
+    expect([...r.ingest.deletedInputs].sort(), "both inputs deleted at the provider").toEqual([made.camera, made.programme].sort());
+    expect(await sessionsOn(r.fixtureId)).toBe(0);
+    expect(r.runner.created, "no Machine").toHaveLength(0);
     // The differential: passthrough never reads the playback credential, so the same provider answer starts it.
     const { sessionId } = await r.start("passthrough");
     expect((await inputs(sessionId)).map((i) => i.role)).toEqual(["camera"]);
   });
 
-  it("the CAMERA create failing is the old failure: one create, nothing deleted (nothing was made), 503", async () => {
+  it("Seazn Task 36: a cleanup DELETE that fails is reported by name with the orphan's uid — and the OTHER input is still deleted; the start is still 503 with no session row", async () => {
+    sentry.captureError.mockClear();
     const r = await rig();
-    const spy = vi.spyOn(r.ingest, "createLiveInput").mockRejectedValueOnce(new Error("provider down"));
-    await expect(r.start("composed")).rejects.toMatchObject({ status: 503, code: "ingest_unavailable" });
-    expect(spy).toHaveBeenCalledTimes(1);
-    expect(r.ingest.deletedInputs).toEqual([]);
+    const real = r.ingest.createLiveInput.bind(r.ingest);
+    const spy = vi.spyOn(r.ingest, "createLiveInput").mockImplementation(async (spec: IngestCreateSpec) => ({ ...(await real(spec)), srtPlayback: null }));
+    const realDelete = r.ingest.deleteInput.bind(r.ingest);
+    let cameraUid: string | undefined;
+    vi.spyOn(r.ingest, "deleteInput").mockImplementation(async (id: string) => {
+      cameraUid ??= (await madeBy(spy)).camera;
+      if (id === cameraUid) throw Object.assign(new Error("provider 502"), { status: 502 });
+      return realDelete(id);
+    });
+    const err = await r.start("composed").then(() => null, (e: unknown) => e);
+    expect(err).toMatchObject({ status: 503, code: "ingest_unavailable" });
+    const made = await madeBy(spy);
+    expect(r.ingest.deletedInputs, "the programme is deleted though the camera's delete failed").toEqual([made.programme]);
+    const reports = sentry.captureError.mock.calls.filter(([, ctx]) => (ctx as { route?: string }).route === "relay.provision_cleanup");
+    expect(reports.map(([, ctx]) => (ctx as { extra: { inputUid: string } }).extra.inputUid), "ONE report, naming the orphaned camera input").toEqual([made.camera]);
+    expect(await sessionsOn(r.fixtureId)).toBe(0);
   });
 
   it("a composed session's output is released from B when it ends — once; A never held one", async () => {

@@ -3,7 +3,7 @@ import "server-only";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { machineNameFor } from "@/server/relay/domain/runner";
-import type { InputAccess } from "@/server/relay/ports";
+import type { IngestCreateSpec, IngestCredentials, InputAccess } from "@/server/relay/ports";
 import { storeInputCredentials, storePlaybackCredentials } from "@/server/relay/secret-columns";
 import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
@@ -22,50 +22,66 @@ class CameraPlaybackMissing extends Error {
   }
 }
 
+/** A start that cannot be provisioned, and its ONE exit (Seazn Task 36: both creates, any failure). Each failure is logged with
+ *  the input it was for (`role`: camera or programme), every input this attempt DID make is deleted, and the session goes. */
+async function abandonProvisioning(
+  sessionId: string, orgId: string, failures: { role: string; err: unknown }[], made: string[], deps: SessionDeps,
+): Promise<never> {
+  for (const { role, err } of failures) log.error({ sid: sessionId, role, err }, "stream session: ingest create failed");
+  // R2004: an input this attempt DID make is not left at the provider — nothing has connected to it, so it holds no
+  // recording for the delete to leak (C2). A failed cleanup is reported with the uid; the sweep cannot reclaim an input
+  // whose row is about to go with its session, so the alarm is the only trace. Task 36: the deletes run side by side, and
+  // each reports its own failure, so one failed delete never keeps the other input.
+  await Promise.all(made.map((orphan) => deps.drivers.ingest.deleteInput(orphan).catch((cleanup: unknown) => {
+    captureError(cleanup, { orgId, route: "relay.provision_cleanup", extra: { sessionId, inputUid: orphan } });
+    log.error({ sid: sessionId, inputUid: orphan, err: String(cleanup) }, "stream session: a provisioned input was NOT deleted after the create failed — it is orphaned at the provider");
+  })));
+  // No §6.4 reason fits; no dead row (E5's logic) — the events cascade with it (the ONE delete the append-only trigger
+  // allows). Final review m-1: an automatic start's stamp goes WITH its session, in one transaction — the FK's
+  // `on delete set null` would clear only the id and leave `auto_started_at`, so a start that never existed would block
+  // every retry of the match.
+  await sql.begin(async (tx) => {
+    await tx`update fixture_stream_settings set auto_started_at = null, auto_start_session_id = null where auto_start_session_id = ${sessionId}`;
+    await tx`delete from fixture_stream_sessions where id = ${sessionId}`;
+  });
+  throw new HttpError(503, "the streaming ingest is unavailable", "ingest_unavailable");
+}
+
 export async function provisionSession(sessionId: string, deps: SessionDeps): Promise<void> {
   const provisioning = (await apply(sessionId, { type: "provision" }, deps))!;
   const composed = provisioning.mode === "composed";
-  let creds: Awaited<ReturnType<SessionDeps["drivers"]["ingest"]["createLiveInput"]>> | undefined;
-  let programme: typeof creds;
+  // Task 12 (G5): a Seazn session's programme input is created SIGNED (the camera never is). Read before any input is made,
+  // so a deployment that cannot sign (admission refuses that first, on every driver: this is the backstop) or a Seazn session
+  // that is not composed fails the start closed below with nothing at the provider to clean up.
   let access: InputAccess | undefined;
   try {
-    // Task 12 (G5): a Seazn session's programme input is created SIGNED (the camera never is). Read before any input is made,
-    // so a deployment that cannot sign (admission refuses that first, on every driver: this is the backstop) or a Seazn session
-    // that is not composed fails the start closed below with nothing at the provider to clean up.
     access = programmeAccess(provisioning);
-    creds = await recordEffect(provisioning, "create_live_input", "ingest", () => deps.drivers.ingest.createLiveInput({ sessionId, slot: 0 }), { slot: 0 });
-    if (composed) {
-      // R2004 (spec §5.3): Input A is the camera, read by the compositor over SRT PLAYBACK; Input B is the programme, which
-      // the compositor publishes to and the destination output attaches to (Seazn: no output; viewers play B). A first, so a
-      // camera the compositor could not read never costs a second input.
-      if (!creds.srtPlayback) throw new CameraPlaybackMissing(creds.inputId);
-      const signing = access;
-      programme = await recordEffect(provisioning, "create_live_input", "ingest",
-        () => deps.drivers.ingest.createLiveInput({ sessionId, slot: 0, role: "programme", ...(signing ? { access: signing } : {}) }), { slot: 0, role: "programme" });
-    }
   } catch (err) {
-    log.error({ sid: sessionId, err }, "stream session: ingest create failed");
-    // R2004: an input this attempt DID make is not left at the provider — nothing has connected to it, so it holds no
-    // recording for the delete to leak (C2). A failed cleanup is reported with the uid; the sweep cannot reclaim an input
-    // whose row is about to go with its session, so the alarm is the only trace.
-    if (creds) {
-      const orphan = creds.inputId;
-      await deps.drivers.ingest.deleteInput(orphan).catch((cleanup: unknown) => {
-        captureError(cleanup, { orgId: provisioning.orgId, route: "relay.provision_cleanup", extra: { sessionId, inputUid: orphan } });
-        log.error({ sid: sessionId, inputUid: orphan, err: String(cleanup) }, "stream session: a provisioned input was NOT deleted after the create failed — it is orphaned at the provider");
-      });
-    }
-    // No §6.4 reason fits; no dead row (E5's logic) — the events cascade with it (the ONE delete the append-only trigger
-    // allows). Final review m-1: an automatic start's stamp goes WITH its session, in one transaction — the FK's
-    // `on delete set null` would clear only the id and leave `auto_started_at`, so a start that never existed would block
-    // every retry of the match.
-    await sql.begin(async (tx) => {
-      await tx`update fixture_stream_settings set auto_started_at = null, auto_start_session_id = null where auto_start_session_id = ${sessionId}`;
-      await tx`delete from fixture_stream_sessions where id = ${sessionId}`;
-    });
-    throw new HttpError(503, "the streaming ingest is unavailable", "ingest_unavailable");
+    return abandonProvisioning(sessionId, provisioning.orgId, [{ role: "programme", err }], [], deps);
   }
-  const camera = creds!;
+  // R2004 (spec §5.3): Input A is the camera, read by the compositor over SRT PLAYBACK; Input B is the programme, which the
+  // compositor publishes to and the destination output attaches to (Seazn: no output; viewers play B). Seazn Task 36: a
+  // composed start asks for A and B AT ONCE, so it waits for the slower create rather than the sum of the two. The price is
+  // the old "A first" ordering, which kept a camera the compositor could not read from ever costing a second input: that rare
+  // failure now costs one extra create and its delete. Passthrough asks for A alone, the one call it always made.
+  const asks: { role: "camera" | "programme"; spec: IngestCreateSpec; payload: Record<string, unknown> }[] = [
+    { role: "camera", spec: { sessionId, slot: 0 }, payload: { slot: 0 } },
+    ...(composed
+      ? [{ role: "programme" as const, spec: { sessionId, slot: 0, role: "programme" as const, ...(access ? { access } : {}) }, payload: { slot: 0, role: "programme" } }]
+      : []),
+  ];
+  const settled = await Promise.allSettled(asks.map(({ spec, payload }) =>
+    recordEffect(provisioning, "create_live_input", "ingest", () => deps.drivers.ingest.createLiveInput(spec), payload)));
+  // Every input that WAS made, whatever happened to the other create: the cleanup's list. A create still out cannot be
+  // forgotten — allSettled waits for the last answer before anything is decided.
+  const made = settled.flatMap((t) => (t.status === "fulfilled" ? [t.value] : []));
+  const failures = settled.flatMap((t, i) => (t.status === "rejected" ? [{ role: asks[i]!.role, err: t.reason as unknown }] : []));
+  if (failures.length > 0) return abandonProvisioning(sessionId, provisioning.orgId, failures, made.map((m) => m.inputId), deps);
+  // Nothing failed, so `made` holds every ask, in the order asked: the camera, then (composed) the programme.
+  const [camera, programme] = made as [IngestCredentials, IngestCredentials | undefined];
+  if (composed && !camera.srtPlayback) {
+    return abandonProvisioning(sessionId, provisioning.orgId, [{ role: "camera", err: new CameraPlaybackMissing(camera.inputId) }], made.map((m) => m.inputId), deps);
+  }
   await sql.begin(async (tx) => {
     const [inp] = await tx<{ id: string }[]>`select id from fixture_stream_inputs where session_id = ${sessionId} and role = 'camera' and slot = 0`;
     await storeInputCredentials(tx, inp!.id, camera.inputId, camera);
