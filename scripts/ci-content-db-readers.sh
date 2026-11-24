@@ -12,13 +12,22 @@
 # DB job covers) and fails when the file disagrees. Regenerate it with
 #   UPDATE_CONTENT_DB_MANIFEST=1 ./node_modules/.bin/vitest run scripts/__tests__/ci-content-lane.test.ts
 #
-# A run that tests nothing must not pass, so the guard is part of the run. For each of the two vitest
-# invocations (repo-root files, then apps/web files) it reads the JSON report and fails unless
-#   - the report exists and numTotalTests > 0,
-#   - every file the manifest names ran, and no other file did (a filter that matches too little is a
-#     skipped reader; one that matches too much means the manifest no longer says what runs). Those two
-#     together are "ran exactly the manifest's count": the counts are printed, not tested a third time.
+# A run that tests nothing must not pass, and a SKIPPED test is not a pass: these readers gate their
+# database halves on `DATABASE_URL`, so a job that lost that variable would run every file, skip every
+# comparison with plan_entitlements, and report green. So the guard is part of the run, in two layers.
+#   1. DATABASE_URL must be non-empty before anything starts.
+#   2. For each of the two vitest invocations (repo-root files, then apps/web files) the JSON report is
+#      read, file by file, and the run fails unless
+#        - every file the manifest names ran (a filter that matches too little is a skipped reader),
+#        - no other file did (one that matches too much means the manifest no longer says what runs),
+#        - every manifest file has at least one PASSED test: a file that collected no tests, or whose
+#          tests were all skipped, is dead however green its siblings are.
+#      Files are matched by their exact path under this checkout, so a nested file with the same ending
+#      cannot stand in for a manifest file. The counts are printed per file, not tested a second time.
 # A failing test fails the step as before: the runner's exit code is kept, not replaced.
+#
+# What this does not catch: a file with a mix of tests, some of which skip for a reason other than the
+# database (it still has a passing test). The skip counts are in the log for a reader to see.
 #
 # Overrides, for scripts/__tests__/ci-content-db-readers.test.ts (which stubs the runners):
 #   CONTENT_DB_MANIFEST, CONTENT_DB_ROOT_RUNNER, CONTENT_DB_WEB_RUNNER, CONTENT_DB_ROOT_REPORT, CONTENT_DB_WEB_REPORT
@@ -36,6 +45,7 @@ fail() {
   exit 1
 }
 
+[ -n "${DATABASE_URL:-}" ] || fail "DATABASE_URL is empty: the readers' database halves would skip, and a skipped test is not a pass"
 [ -f "$manifest" ] || fail "no manifest at $manifest"
 if ! files="$(jq -r 'if (.files | type) == "array" and all(.files[]; type == "string") then .files[] else error("files is not an array of strings") end' "$manifest" 2>/dev/null)"; then
   fail "$manifest has no \"files\" array of strings"
@@ -80,19 +90,30 @@ verify() {
   local want
   want="$(printf '%s\n' "$@" | jq -R . | jq -s .)"
   local verdict
-  verdict="$(jq -r --argjson want "$want" '
-    [.testResults[].name] as $ran
-    | ($want | map(select(. as $w | any($ran[]; . == $w or endswith("/" + $w)) | not))) as $missing
-    | ($ran | map(select(. as $n | any($want[]; . as $w | $n == $w or ($n | endswith("/" + $w))) | not))) as $extra
-    | "tests=\(.numTotalTests) passed=\(.numPassedTests) failed=\(.numFailedTests) pending=\(.numPendingTests) files_ran=\($ran | length) files_expected=\($want | length) missing=\($missing | length) extra=\($extra | length)"
+  verdict="$(jq -r --argjson want "$want" --arg here "$here" '
+    def stat: {
+      name: (.name | ltrimstr($here + "/")),
+      total: (.assertionResults | length),
+      passed: ([.assertionResults[] | select(.status == "passed")] | length),
+      failed: ([.assertionResults[] | select(.status == "failed")] | length),
+      skipped: ([.assertionResults[] | select(.status != "passed" and .status != "failed")] | length)
+    };
+    [.testResults[] | stat] as $ran
+    | ($ran | map(.name)) as $names
+    | ($want - $names) as $missing
+    | ($names - $want) as $extra
+    | ($ran | map(select(.name | IN($want[])) | select(.passed == 0))) as $dead
+    | "tests=\(.numTotalTests) passed=\(.numPassedTests) failed=\(.numFailedTests) pending=\(.numPendingTests) files_ran=\($names | length) files_expected=\($want | length) missing=\($missing | length) extra=\($extra | length) dead=\($dead | length)"
+      + ($ran | map(select(.name | IN($want[])) | "\n  \(.name): passed=\(.passed) skipped=\(.skipped) failed=\(.failed)") | join(""))
       + (if ($missing | length) > 0 then "\n  missing: \($missing | join(", "))" else "" end)
       + (if ($extra | length) > 0 then "\n  not in the manifest: \($extra | join(", "))" else "" end)
-      + (if .numTotalTests > 0 and ($missing | length) == 0 and ($extra | length) == 0 then "\nOK" else "\nVACUOUS-OR-WRONG" end)
+      + ($dead | map("\n  no passing test: \(.name) (" + (if .total == 0 then "collected no tests" elif .skipped == .total then "every test skipped, so its database half did not run" else "no test passed" end) + ")") | join(""))
+      + (if ($missing | length) == 0 and ($extra | length) == 0 and ($dead | length) == 0 then "\nOK" else "\nVACUOUS-OR-WRONG" end)
   ' "$report")" || fail "$label: the report at $report is not a vitest JSON report"
   printf '%s: %s\n' "$label" "$verdict"
   case "$verdict" in
     *$'\nOK') ;;
-    *) fail "$label: the run did not cover exactly the manifest's files with at least one test" ;;
+    *) fail "$label: the run did not cover exactly the manifest's files with at least one passing test in each" ;;
   esac
 }
 

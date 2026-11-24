@@ -241,8 +241,9 @@ const stepRuns = (cond: string | undefined, content: boolean): boolean => {
     if (atom === "always()") return true;
     if (atom === "needs.changes.outputs.content == 'true'") return content;
     if (atom === "needs.changes.outputs.content != 'true'") return !content;
-    // The Stripe key is present on this repo's branch pull requests and absent on forks, whatever the lane: not a lane condition.
-    if (atom === "env.STRIPE_SECRET_KEY != ''") return true;
+    // A secret's presence (`env.X != ''`) is present on this repo's branch pull requests and absent on forks, whatever the lane: not a
+    // lane condition. (Spelled as a pattern, not a name: this file is itself in the manifest and must not name a service env var.)
+    if (/^env\.[A-Z][A-Z0-9_]* != ''$/.test(atom)) return true;
     throw new Error(`step condition not modelled by ci-content-lane.test.ts: ${atom}`);
   });
 };
@@ -372,12 +373,30 @@ describe("ci.yml: the content lane", () => {
       expect(IS_TEST.test(f), `${f} is a test file`).toBe(true);
       expect(existsSync(join(REPO, f)), `${f} exists`).toBe(true);
     }
+
+    // The subset step replaces steps that handed the lib + server suite the placement service's host and secret, and the Redis and
+    // Stripe steps their own variables. None of the manifest's files may need any of them, or the subset would skip or fail what the
+    // full suite ran. Spelled in pieces so this file (which is in the manifest) does not name them itself.
+    const SERVICE_ENV = [["PLACEMENT", "SERVICE"].join("_"), ["REDIS", "URL"].join("_"), ["STRIPE", ""].join("_"), ["BILLING", "LIVE"].join("_")];
+    let checked = 0;
+    const naming: string[] = [];
+    for (const f of manifest.files) {
+      const text = readFileSync(join(REPO, f), "utf8");
+      checked++;
+      for (const name of SERVICE_ENV) if (text.includes(name)) naming.push(`${f} names ${name}`);
+    }
+    expect(checked, "manifest files checked for service env vars").toBe(manifest.files.length);
+    expect(checked, "manifest files checked for service env vars (anti-vacuity)").toBeGreaterThan(8);
+    expect(naming).toEqual([]);
   });
 
   it("smoke-db runs its whole suite on a code pull request, and on a content-only one only the manifest's readers", () => {
     const smokeDb = jobs().find((j) => j.id === "smoke-db")!;
     // The job itself is unchanged: same name, same `if`, so ci-gate sees the same check in both lanes.
     expect(smokeDb.header).toContain(`    ${CODE_IF}`);
+    // The readers gate their database halves on DATABASE_URL, which is job-wide env: ci-content-db-readers.sh refuses to start without
+    // it, and a step-level override would hide a missing job-level line from that check.
+    expect(smokeDb.text, "DATABASE_URL is set in the job's env").toMatch(/^ {6}DATABASE_URL: postgresql:\/\/\S+$/m);
     expect(smokeDb.header.join("\n")).not.toContain("outputs.content");
     expect(smokeDb.header.some((h) => h.startsWith("    name: Smoke — DB + Redis suites"))).toBe(true);
 
@@ -438,6 +457,7 @@ describe("ci.yml: the content lane", () => {
     expect(named(/^Vitest collection reconciliation/).text).toContain("scripts/check-vitest-collection.ts");
     // The subset is the manifest, run by the script that checks it ran: no test path typed into the workflow.
     expect(subset.text).toContain("bash scripts/ci-content-db-readers.sh");
+    expect(subset.text, "the subset step sets no env of its own (DATABASE_URL comes from the job)").not.toMatch(/^ {8}env:/m);
     expect(subset.text, "a hand-typed list in the workflow").not.toMatch(/\.test\.|__tests__/);
     // It runs after the schema and the sport catalog exist, which the readers' DB halves read.
     const order = steps.map((st) => st.name);

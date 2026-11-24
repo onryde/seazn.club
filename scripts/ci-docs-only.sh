@@ -63,7 +63,8 @@
 # help-token-cells compare the help articles with the plan_entitlements rows, and
 # those run only in smoke-db. So smoke-db stays in the content lane, but it runs
 # ONLY the content readers it owns (scripts/content-db-readers.json, run by
-# scripts/ci-content-db-readers.sh, which fails if it ran none or any other), not the
+# scripts/ci-content-db-readers.sh, which fails on an empty DATABASE_URL, a manifest file that
+# did not run, any other that did, or a manifest file with no PASSED test), not the
 # ~300 DB, Redis, Stripe and placement tests a content change cannot move. Which jobs
 # skip, the proof that none of them runs a test that reads content, and the proof that
 # the manifest is exactly the readers only smoke-db covers, is

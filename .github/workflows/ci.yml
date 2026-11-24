@@ -89,7 +89,8 @@ jobs:
   # help-copy-truth, pricing-cards, retired-plan-copy, dictionary-copy-truth and
   # help-token-cells, which compare the help articles with the plan_entitlements rows, and
   # on this lane it runs ONLY those readers (scripts/content-db-readers.json, run by
-  # scripts/ci-content-db-readers.sh, which fails if it ran none or any other), never its
+  # scripts/ci-content-db-readers.sh, which fails on an empty DATABASE_URL, a manifest file that did
+  # not run, any other that did, or a manifest file with no PASSED test), never its
   # suite: its Redis and live-Stripe steps, the repo-root scripts directory and the lib +
   # server suite are `content != 'true'` steps. Same job, same name, so ci-gate sees
   # the same check.
@@ -805,7 +806,9 @@ jobs:
   # there it runs only the readers in scripts/content-db-readers.json (the same
   # job, the same name, so ci-gate sees the same check): the database is migrated and
   # the sport catalog synced, then scripts/ci-content-db-readers.sh runs the manifest's
-  # files and fails if it ran none, or any other than the manifest's. What it skips on
+  # files and fails on an empty DATABASE_URL (the readers' DB halves would skip), a
+  # manifest file that did not run, any other that did, or a manifest file with no
+  # passed test: a skipped test is not a pass. What it skips on
   # that lane is the lib + server suite and its collection reconciliation, the
   # repo-root scripts directory, the Redis-gated suites and the live-Stripe suites;
   # the readers need none of them (checked: no reader names PLACEMENT_SERVICE_*,
