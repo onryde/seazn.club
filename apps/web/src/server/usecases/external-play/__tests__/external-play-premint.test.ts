@@ -45,6 +45,7 @@ import {
   type PremintDeps,
 } from "../premint";
 import {
+  paySeededPackage,
   seedOnlineChessRound,
   seedOnlineSwiss,
   seedOwner,
@@ -52,6 +53,7 @@ import {
   type SeedOnlineChessRoundResult,
 } from "../../__tests__/_external-play-seed";
 import { seedSecondOnlineRound } from "../../__tests__/_second-online-round-seed";
+import { freezeGrandfathered, liveOf } from "../../online-package/__tests__/_oc-rig";
 
 // MD-R20: the freeze read, switchable per org. It is the REAL `frozenCompetitionIds` unless an org is named here, in which case it rejects
 // as a failing database read would; every other test in this file reads the real one.
@@ -306,6 +308,41 @@ describe.skipIf(!DB)("premint candidates (the set)", () => {
     const [w] = await sql<{ naive: boolean | null; total: boolean | null }[]>`
       select not (null::boolean) as naive, ${premintBoardLeftWhere(sql`null::boolean`)} as total`;
     expect(w, "premise: the naive negation of NULL is NULL; the total one is true").toEqual({ naive: null, total: true });
+  });
+
+  it("Online Chess credits (review m3): a division whose live package is UNPAID and unfrozen cannot open, so its boards are no candidate; a PAID one and a GRANDFATHERED one (frozen, never paid) are; the sweep's negation reads the unpaid one LEFT; paid, it is a candidate again (counted)", async () => {
+    const paid = await seedRound(1);
+    const unpaid = await seedRound(1, { onlinePackage: "unpaid" });
+    const grandfathered = await seedRound(1, { onlinePackage: "unpaid" });
+    await freezeGrandfathered((await liveOf(grandfathered.divisionId)).id);
+    const states = await Promise.all([paid, unpaid, grandfathered].map(async (r) => {
+      const p = await liveOf(r.divisionId);
+      return [p.paid_at !== null, p.frozen_at !== null];
+    }));
+    expect(states, "premise: paid & unfrozen, unpaid & unfrozen, unpaid & frozen").toEqual([[true, false], [false, false], [false, true]]);
+
+    let checked = 0;
+    for (const [why, r, wanted] of [
+      ["paid, not yet frozen: its first open is allowed", paid, true],
+      ["grandfathered: no open of it asks anything", grandfathered, true],
+      ["unpaid and unfrozen: its first open is refused 402", unpaid, false],
+    ] as const) {
+      expect(keysOf(await rowsOf([r.orgId])).sort(), why).toEqual(wanted ? bothSides(ids(r)) : []);
+      const [row] = await sql<{ wanted: boolean | null; left: boolean | null }[]>`
+        select (${premintBoardWhere()}) as wanted, ${premintBoardLeftWhere()} as "left"
+          from fixtures f
+          join stages s on s.id = f.stage_id
+          join divisions d on d.id = f.division_id
+          join competitions c on c.id = d.competition_id
+         where f.id = ${ids(r)[0]!}`;
+      expect(row, `${why}: in exactly one of the two sets (G2)`).toEqual({ wanted, left: !wanted });
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: three package states").toBe(3);
+
+    // The sequence: the unpaid division is paid (the pay door, not yet opened) - its boards are wanted again.
+    await paySeededPackage(unpaid.owner, unpaid.divisionId);
+    expect(keysOf(await rowsOf([unpaid.orgId])).sort(), "paid now: a candidate").toEqual(bothSides(ids(unpaid)));
   });
 
   it("a fixture is playable only while `scheduled` or `in_play` (controller ruling Q2): every FIXTURE_STATUSES value is a candidate iff it is one of those two (counted)", async () => {
