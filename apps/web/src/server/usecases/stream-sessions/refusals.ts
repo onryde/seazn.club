@@ -12,9 +12,12 @@ import {
 } from "@/server/relay/secret-columns";
 import { youtubeRefusal } from "@/server/youtube/prepare";
 import { log } from "@/server/logger";
+import { captureError } from "@/lib/sentry";
 import { TargetUnreadableError } from "../stream-targets";
+import { holderRows } from "../stream-target-holders";
 import { activeSessionIdFor } from "./lookups";
 import { targetConnectionId } from "./destination";
+import { targetInUse } from "./holders";
 
 export function refuse(refusal: Exclude<ReturnType<typeof admit>, { ok: true }>, headroom: number): never {
   switch (refusal.refusal) {
@@ -85,4 +88,29 @@ export function pooledKeyRefusal(err: unknown, fixtureId: string, targetId: stri
   if (!(err instanceof TargetSecretUnreadableError)) return err;
   log.warn({ fixtureId, targetId, keyId: err.targetId, connectionId }, "stream session: the broadcast's pooled stream key will not open — start refused youtube_unavailable");
   return youtubeRefusal("youtube_unavailable", connectionId);
+}
+
+/** Task 36d: Postgres rolled the transaction back whole — chosen as a deadlock victim (40P01) or unable to serialise it (40001).
+ *  Nothing it wrote exists, and the same request run alone would not have met it. Read off the driver's `code`. */
+export function isSerializationFailure(err: unknown): boolean {
+  const code = typeof err === "object" && err !== null ? (err as { code?: unknown }).code : undefined;
+  return code === "40P01" || code === "40001";
+}
+
+/** Task 36d (defence in depth, controller ruling): a start whose ADMISSION transaction Postgres rolled back as a deadlock victim
+ *  or a serialization failure is answered as it would have been had it run AFTER the other transaction — read fresh, now that the
+ *  other side has had its turn. This fixture already has an active session: `active_session` (admit's own answer, which outranks
+ *  every destination question, F-A5). Another match holds this pasted destination: `target_in_use` naming it (the pre-check's
+ *  answer; API-backed and Seazn rows hold nothing, `holderRows`). Neither: the typed, retryable 503 of the ingest family — the
+ *  same start run again is admitted. Never the raw error, which the route answers as a 500. Reported, because a lock cycle that
+ *  reaches here is a defect the lock order should not have (the target row lock's own cycle is closed: lockStreamTarget). */
+export async function refuseRaceLoss(err: unknown, orgId: string, fixtureId: string, targetId: string): Promise<never> {
+  const code = (err as { code?: unknown }).code;
+  log.warn({ fixtureId, targetId, code }, "stream session: Postgres rolled the admission back (a race with another start) — answered as if the two had run one after the other");
+  captureError(err, { orgId, route: "relay.session.admission_race", extra: { fixtureId, targetId, code } });
+  const active = await activeSessionIdFor(fixtureId);
+  if (active !== null) refuse({ ok: false, refusal: "active_session", activeSessionId: active }, 0);
+  const [holder] = await holderRows(sql, { orgId, targetId, notFixtureId: fixtureId });
+  if (holder) throw targetInUse(holder);
+  throw new HttpError(503, "another start met this one at the same moment; try again", "ingest_unavailable");
 }

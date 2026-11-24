@@ -321,10 +321,17 @@ export async function readKeyHints(tx: Tx, orgId: string): Promise<Map<string, s
 
 /** §5.2 — the row lock Replace key, Remove and createSession all take BEFORE they check, so Remove cannot interleave
  *  with Go live. False for an archived row, another org's row, or no row: the callers' 404. Under READ COMMITTED a
- *  lock that waited re-evaluates `archived_at is null` on the committed row, so a Remove that won reads as absent. */
+ *  lock that waited re-evaluates `archived_at is null` on the committed row, so a Remove that won reads as absent.
+ *
+ *  Task 36d: `FOR NO KEY UPDATE`, never `FOR UPDATE`. It still conflicts with itself, so every caller above still queues on
+ *  every other, and with the writes they make (archive, re-key, rename: none changes the row's only key column, `id`). What it
+ *  does NOT block is the FOR KEY SHARE a session row's `target_id` FK check takes — and a session's apply re-runs that check
+ *  when it writes a row version of its own transaction a second time. Under FOR UPDATE two starts on one pasted destination
+ *  deadlocked (40P01): the loser held this lock while its insert waited on the winner at one_active_target, and the winner's
+ *  second write waited on this lock. Nothing here deletes the row (Remove is an archive), so no caller needs the key lock. */
 export async function lockStreamTarget(tx: Tx, orgId: string, targetId: string): Promise<boolean> {
   const rows = await tx<{ id: string }[]>`
-    select id from org_stream_targets where id = ${targetId} and org_id = ${orgId} and archived_at is null for update`;
+    select id from org_stream_targets where id = ${targetId} and org_id = ${orgId} and archived_at is null for no key update`;
   return rows.length === 1;
 }
 

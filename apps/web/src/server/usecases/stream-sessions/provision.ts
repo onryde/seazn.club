@@ -7,11 +7,12 @@ import type { IngestCreateSpec, IngestCredentials, InputAccess } from "@/server/
 import { storeInputCredentials, storePlaybackCredentials } from "@/server/relay/secret-columns";
 import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
-import { readRow } from "./session-row";
+import { readRow, toSession } from "./session-row";
 import type { SessionDeps } from "./deps";
 import { programmeAccess } from "./destination";
-import { recordEffect } from "./port-effects";
+import { forceDestroy, recordEffect } from "./port-effects";
 import { apply } from "./apply";
+import { isSerializationFailure } from "./refusals";
 
 /** R2004: a composed camera input with no SRT playback credential cannot be read by the compositor — refused by name at
  *  provisioning, never discovered by a Machine that boots and has nothing to read. */
@@ -70,11 +71,16 @@ export async function provisionSession(sessionId: string, deps: SessionDeps): Pr
       ? [{ role: "programme" as const, spec: { sessionId, slot: 0, role: "programme" as const, ...(access ? { access } : {}) }, payload: { slot: 0, role: "programme" } }]
       : []),
   ];
-  const settled = await Promise.allSettled(asks.map(({ spec, payload }) =>
-    recordEffect(provisioning, "create_live_input", "ingest", () => deps.drivers.ingest.createLiveInput(spec), payload)));
-  // Every input that WAS made, whatever happened to the other create: the cleanup's list. A create still out cannot be
-  // forgotten — allSettled waits for the last answer before anything is decided.
-  const made = settled.flatMap((t) => (t.status === "fulfilled" ? [t.value] : []));
+  // Task 36d (T36 review m3): each input the PROVIDER made is captured inside the thunk, the moment the driver answers — as
+  // forceDestroy captures its provider failure. A create that succeeded and whose ledger write then threw rejects through
+  // recordEffect, and reading `made` off the settled results alone lost its uid: the input was orphaned with no
+  // relay.provision_cleanup report. From the capture it is in the cleanup's list like any other.
+  const created: (IngestCredentials | undefined)[] = asks.map(() => undefined);
+  const settled = await Promise.allSettled(asks.map(({ spec, payload }, i) =>
+    recordEffect(provisioning, "create_live_input", "ingest", async () => (created[i] = await deps.drivers.ingest.createLiveInput(spec)), payload)));
+  // Every input that WAS made, whatever happened to the other create or to its own ledger row: the cleanup's list, in the order
+  // asked. A create still out cannot be forgotten — allSettled waits for the last answer before anything is decided.
+  const made = created.flatMap((c) => (c ? [c] : []));
   const failures = settled.flatMap((t, i) => (t.status === "rejected" ? [{ role: asks[i]!.role, err: t.reason as unknown }] : []));
   if (failures.length > 0) return abandonProvisioning(sessionId, provisioning.orgId, failures, made.map((m) => m.inputId), deps);
   // Nothing failed, so `made` holds every ask, in the order asked: the camera, then (composed) the programme.
@@ -82,6 +88,38 @@ export async function provisionSession(sessionId: string, deps: SessionDeps): Pr
   if (composed && !camera.srtPlayback) {
     return abandonProvisioning(sessionId, provisioning.orgId, [{ role: "camera", err: new CameraPlaybackMissing(camera.inputId) }], made.map((m) => m.inputId), deps);
   }
+  try {
+    await storeAndAdvance(sessionId, composed, camera, programme, access, deps);
+  } catch (err) {
+    if (!isSerializationFailure(err)) throw err;
+    return abandonAfterRace(sessionId, provisioning.orgId, err, made.map((m) => m.inputId), deps);
+  }
+}
+
+/** Task 36d (defence in depth): a step after the inputs exist was rolled back by Postgres as a deadlock victim (40P01) or a
+ *  serialization failure (40001) — the credentials' write, the runner's first edge, or `provisioned`. Left alone, the inputs
+ *  stay at the provider with their credentials stored, the session sits in `provisioning` until F18, and the organiser reads a
+ *  500. It goes out through the ONE exit instead (`abandonProvisioning`: the inputs deleted, the session and its automatic stamp
+ *  gone, 503 ingest_unavailable). Only while the row is STILL `provisioning`: one a stop or the timeout moved on is that
+ *  writer's to tear down, and the error goes on unchanged. A composed row whose Machine was already made has it destroyed first
+ *  (forceDestroy: recorded, alarmed on failure); a Machine whose create answered but whose `create_ok` never landed is named by
+ *  no row once the session goes, which is the daily sweep's orphan pass (A22(b)). */
+async function abandonAfterRace(sessionId: string, orgId: string, err: unknown, made: string[], deps: SessionDeps): Promise<never> {
+  const row = await readRow(sessionId);
+  if (row?.state !== "provisioning") throw err;
+  const code = (err as { code?: unknown }).code;
+  log.error({ sid: sessionId, code, err }, "stream session: Postgres rolled a provisioning step back (a race with another writer) — the start is abandoned");
+  captureError(err, { orgId, route: "relay.session.provision_race", extra: { sessionId, code } });
+  const s = toSession(row);
+  if (s.runner.machineId !== null) await forceDestroy(s, s.runner.machineId, "force_destroy", { reason: "provision_race" }, deps);
+  return abandonProvisioning(sessionId, orgId, [], made, deps);
+}
+
+/** Everything after both inputs exist: their credentials, the runner's first edge (composed), and `provisioned`. */
+async function storeAndAdvance(
+  sessionId: string, composed: boolean, camera: IngestCredentials, programme: IngestCredentials | undefined,
+  access: InputAccess | undefined, deps: SessionDeps,
+): Promise<void> {
   await sql.begin(async (tx) => {
     const [inp] = await tx<{ id: string }[]>`select id from fixture_stream_inputs where session_id = ${sessionId} and role = 'camera' and slot = 0`;
     await storeInputCredentials(tx, inp!.id, camera.inputId, camera);

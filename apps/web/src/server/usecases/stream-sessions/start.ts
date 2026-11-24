@@ -46,7 +46,7 @@ import { isSeaznTarget, targetConnectionId } from "./destination";
 import { applyExpiry } from "./expiry";
 import { storageUsageForColumns, storageHeadroomMinutes } from "./storage";
 import { targetHolderFor, tearDownPriorMachines, releasePriorOutputs, targetInUse } from "./holders";
-import { refuse, unreadableRefusal, refuseUnreadableTarget, pooledKeyRefusal, seaznUnavailable, seaznVideoUnconfigured } from "./refusals";
+import { refuse, unreadableRefusal, refuseUnreadableTarget, pooledKeyRefusal, seaznUnavailable, seaznVideoUnconfigured, isSerializationFailure, refuseRaceLoss } from "./refusals";
 import { provisionSession } from "./provision";
 import { endOtherCourtSessions } from "../court-stream-sessions";
 
@@ -599,6 +599,9 @@ export async function startBroadcast(
       // this branch is the loser of a real race (G-T6), not the path an organiser normally meets.
       throw new HttpError(409, "that destination is already streaming for another fixture", "target_in_use", { holder: null });
     }
+    // Task 36d (defence in depth): a deadlock victim (40P01) or a serialization failure (40001) is answered as if the two starts
+    // had run one after the other — never the raw error, a 500. Mapped before `abandonThenRethrow`, which still runs.
+    if (isSerializationFailure(err)) await refuseRaceLoss(err, orgId, fixtureId, body.targetId);
     throw err;
   }).catch(abandonThenRethrow);
 
