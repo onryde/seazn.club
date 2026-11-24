@@ -10721,18 +10721,12 @@
                   "expectedOwed": {
                     "type": "integer",
                     "minimum": -32,
-                    "maximum": 32,
-                    "examples": [
-                      2
-                    ]
+                    "maximum": 32
                   },
                   "addCameras": {
                     "type": "boolean"
                   },
                   "expectedForfeited": {
-                    "examples": [
-                      1
-                    ],
                     "type": "integer",
                     "minimum": 0,
                     "maximum": 32
@@ -10742,13 +10736,24 @@
                   "size",
                   "expectedOwed"
                 ],
-                "additionalProperties": false
+                "additionalProperties": false,
+                "examples": [
+                  {
+                    "size": 16,
+                    "expectedOwed": 2,
+                    "addCameras": true
+                  },
+                  {
+                    "size": 16,
+                    "expectedOwed": -2,
+                    "expectedForfeited": 0
+                  }
+                ]
               },
               "example": {
                 "size": 16,
                 "expectedOwed": 2,
-                "addCameras": true,
-                "expectedForfeited": 1
+                "addCameras": true
               }
             }
           }
@@ -31566,18 +31571,12 @@
                       "expectedOwed": {
                         "type": "integer",
                         "minimum": -32,
-                        "maximum": 32,
-                        "examples": [
-                          2
-                        ]
+                        "maximum": 32
                       },
                       "addCameras": {
                         "type": "boolean"
                       },
                       "expectedForfeited": {
-                        "examples": [
-                          1
-                        ],
                         "type": "integer",
                         "minimum": 0,
                         "maximum": 32
@@ -31587,7 +31586,19 @@
                       "size",
                       "expectedOwed"
                     ],
-                    "additionalProperties": false
+                    "additionalProperties": false,
+                    "examples": [
+                      {
+                        "size": 16,
+                        "expectedOwed": 2,
+                        "addCameras": true
+                      },
+                      {
+                        "size": 16,
+                        "expectedOwed": -2,
+                        "expectedForfeited": 0
+                      }
+                    ]
                   }
                 },
                 "required": [
@@ -31600,8 +31611,7 @@
                 "pay": {
                   "size": 16,
                   "expectedOwed": 2,
-                  "addCameras": true,
-                  "expectedForfeited": 1
+                  "addCameras": true
                 }
               }
             }

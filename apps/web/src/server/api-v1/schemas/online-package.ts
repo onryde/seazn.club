@@ -26,16 +26,25 @@ export type OnlinePackageQuoteQuery = z.infer<typeof OnlinePackageQuoteQuery>;
 /** POST /divisions/{id}/online-package: what the organiser confirmed. A size, the total the receipt showed (positive to pay,
  *  negative to return), at most the `addCameras` intent, and — on a move down — the credits the receipt said would NOT come
  *  back. Strict: the server derives the camera state, the rounds and the places itself, so a body carrying `cameras` (or any
- *  other field) is refused rather than ignored. */
+ *  other field) is refused rather than ignored.
+ *  The published examples are whole bodies, priced from the leaf's table (review m9: the field-by-field example put a forfeit
+ *  beside a positive total, a body no receipt shows): a payment (16 with cameras), and a move down (32 with cameras paid,
+ *  moved to 16 with cameras: the difference comes back, nothing forfeited). The first is the one the document shows. */
+export const ONLINE_PAY_EXAMPLES = [
+  { size: 16, expectedOwed: packagePrice(16, true), addCameras: true },
+  { size: 16, expectedOwed: packagePrice(16, true) - packagePrice(32, true), expectedForfeited: 0 },
+] as const;
 export const OnlinePackagePayInput = z
   .object({
     size: OnlineSizeS,
-    expectedOwed: z.number().int().min(-ONLINE_MAX_OWED).max(ONLINE_MAX_OWED).meta({ examples: [2] }),
+    expectedOwed: z.number().int().min(-ONLINE_MAX_OWED).max(ONLINE_MAX_OWED),
     addCameras: z.boolean().optional(),
-    /** A forfeit is included credits a package held, so never more than its price: bounded by the dearest one, as `owed` is. */
-    expectedForfeited: z.number().int().min(0).max(ONLINE_MAX_OWED).optional().meta({ examples: [1] }),
+    /** A forfeit is included credits a package held, so never more than its price: bounded by the dearest one, as `owed` is. Sent
+     *  only on a move down (a negative `expectedOwed`). */
+    expectedForfeited: z.number().int().min(0).max(ONLINE_MAX_OWED).optional(),
   })
-  .strict();
+  .strict()
+  .meta({ examples: [...ONLINE_PAY_EXAMPLES] });
 export type OnlinePackagePayInput = z.infer<typeof OnlinePackagePayInput>;
 
 const BucketSplitS = z.object({ monthly: z.number().int(), pack: z.number().int() });

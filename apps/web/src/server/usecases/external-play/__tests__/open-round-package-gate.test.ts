@@ -102,6 +102,7 @@ vi.mock("@/server/usecases/registrations/promote-into-room", async (importOrigin
 
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
+import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { HttpError } from "@/lib/errors";
 import { OPEN_ROUND_REFUSALS } from "@/lib/open-round";
 import { ONLINE_PACKAGE_CODES, ONLINE_SIZES, sizeFor, type OnlineSize } from "@/lib/online-chess-package";
@@ -210,6 +211,10 @@ describe.skipIf(!HAS_DB)("Open round: the payment door (Online Chess credits §7
     expect(q.covers, "nothing paid covers nothing").toBe(false);
     expect(q.refusal, "64 can be bought").toBeNull();
     expect(nextIn(e), "the stored size is not refused: no other size is offered").toBeNull();
+    expect(gcPrice(64), "premise: more than one credit (the plural)").toBeGreaterThan(1);
+    expect(e.message, "the first round, and what the stored size costs").toBe(
+      `The first round needs a paid Online Chess package: size 64 costs ${gcPrice(64)} credits`,
+    );
     expect(await stampsOf(s.stageId), "no stamp").toBe(0);
     expect(mail.sent, "no invite").toEqual([]);
     expect(await ledgerCount(s.orgId), "no ledger row (not even the month's rollover)").toBe(ledgerBefore);
@@ -247,7 +252,10 @@ describe.skipIf(!HAS_DB)("Open round: the payment door (Online Chess credits §7
       const q = quoteIn(e);
       expect([q.size, q.cameras, q.covers], "the paid size, now with cameras, not covering").toEqual([16, true, false]);
       expect(q.owed, "the difference: 16 with cameras minus 16 without").toBe(gcPrice(16, true) - gcPrice(16));
-      expect(e.message, "it says the paid package no longer covers").toMatch(/no longer covers/);
+      expect(q.owed, "premise: ONE credit (the singular)").toBe(1);
+      expect(e.message, "it says the paid package no longer covers, and what is missing").toBe(
+        "The Online Chess package paid for this division (size 16) no longer covers it: 1 more credit is needed",
+      );
       expect(await stampsOf(s.stageId)).toBe(0);
       expect((await liveOf(s.divisionId)).frozen_at).toBeNull();
       // ...and paying that difference on the open opens it (the camera price is then paid, P19).
@@ -272,6 +280,10 @@ describe.skipIf(!HAS_DB)("Open round: the payment door (Online Chess credits §7
       const next = nextIn(e);
       expect(next?.size, "the smallest size that includes 7 rounds").toBe(32);
       expect(next?.owed, "the difference: 32 minus the 16 already paid").toBe(gcPrice(32) - gcPrice(16));
+      expect(next?.owed, "premise: ONE credit more (the singular)").toBe(1);
+      expect(e.message, "why, and the next size's difference").toBe(
+        `The Online Chess package paid for this division (size 16) no longer covers it (the division plays ${raised} Swiss rounds and size 16 includes ${INCLUDED[16]}): size 32 costs 1 credit more`,
+      );
       expect(await stampsOf(s.stageId)).toBe(0);
     }, 120_000);
 
@@ -284,6 +296,7 @@ describe.skipIf(!HAS_DB)("Open round: the payment door (Online Chess credits §7
       const q = quoteIn(e);
       expect([e.code, q.size, q.held, q.refusal, q.covers]).toEqual(["ONLINE_CHESS_UNPAID", 16, 17, "below_held", false]);
       expect([nextIn(e)?.size, nextIn(e)?.owed]).toEqual([32, gcPrice(32) - gcPrice(16)]);
+      expect(e.message).toBe("The Online Chess package paid for this division (size 16) no longer covers it (17 places are held): size 32 costs 1 credit more");
     }, 120_000);
   });
 
@@ -364,6 +377,10 @@ describe.skipIf(!HAS_DB)("Open round: the payment door (Online Chess credits §7
       const k = await seedOnlineKnockout(4);
       const e = await refusal(openRound({ stageId: k.stageId, roundNo: 1, actorUserId: k.owner.userId! }));
       expect([e.status, e.code, quoteIn(e).size, quoteIn(e).rounds]).toEqual([402, "ONLINE_CHESS_UNPAID", 16, 0]);
+      expect(gcPrice(16), "premise: ONE credit (the singular)").toBe(1);
+      expect(e.message, "a knockout has no 'round 1' of a Swiss: the first round, and 1 credit").toBe(
+        "The first round needs a paid Online Chess package: size 16 costs 1 credit",
+      );
       const r = await openRound({ stageId: k.stageId, roundNo: 1, actorUserId: k.owner.userId!, pay: await confirmFor(k.owner, k.divisionId, 16) });
       expect(r.opened).toBe(true);
       expect((await liveOf(k.divisionId)).frozen_at).not.toBeNull();
@@ -373,6 +390,8 @@ describe.skipIf(!HAS_DB)("Open round: the payment door (Online Chess credits §7
       const r2 = await seedOnlineChessRound({ roundNo: 2, fixtures: 1, onlinePackage: "unpaid" });
       const e = await refusal(openRound({ stageId: r2.stageId, roundNo: 2, actorUserId: r2.ownerUserId }));
       expect([e.status, e.code]).toEqual([402, "ONLINE_CHESS_UNPAID"]);
+      expect(e.message, "round 2 is opening first: the copy names no round 1").toMatch(/^The first round needs a paid Online Chess package/);
+      expect(e.message).not.toMatch(/round 1/i);
       expect(await stampsOf(r2.stageId)).toBe(0);
       await paySeededPackage(r2.owner, r2.divisionId);
       const opened = await openRound({ stageId: r2.stageId, roundNo: 2, actorUserId: r2.ownerUserId });
@@ -750,6 +769,41 @@ describe.skipIf(!HAS_DB)("Open round: the payment door (Online Chess credits §7
     }, 180_000);
   });
 
+  it("a stored size the plan does not allow (unpaid): the copy names the plan, never 'no longer holds', and offers the size that fits", async () => {
+    const s = await seedOnlineSwiss({ players: 4, onlineSize: 64, onlinePackage: "unpaid" });
+    const cap = 32;
+    await sql`
+      insert into org_entitlement_overrides (org_id, feature_key, int_value, reason)
+      values (${s.orgId}, 'entrants.per_division.max', ${cap}, 'test - a plan cap below the stored size')`;
+    await invalidateOrgEntitlements(s.orgId);
+    const e = await refusal(openRound({ stageId: s.stageId, roundNo: 1, actorUserId: s.ownerUserId }));
+    expect([e.status, e.code, quoteIn(e).size, quoteIn(e).refusal], "premise: the plan refuses the stored 64").toEqual([402, "ONLINE_CHESS_UNPAID", 64, "plan"]);
+    expect([nextIn(e)?.size, nextIn(e)?.owed], "the smallest size that holds 4 under the cap").toEqual([16, gcPrice(16)]);
+    expect(e.message).toBe(
+      `The first round needs a paid Online Chess package, and size 64 cannot be bought for this division (the plan allows ${cap} places in one division): size 16 costs 1 credit`,
+    );
+    expect(e.message).not.toMatch(/no longer/);
+  }, 120_000);
+
+  it("a PAID package whose plan was then lowered, outgrown by its rounds: the reason given is the rounds, never the plan (which never breaks a paid package)", async () => {
+    const s = await seedOnlineSwiss({ players: 4, onlinePackage: "unpaid" });
+    await payOnlinePackage(s.owner, s.divisionId, await confirmFor(s.owner, s.divisionId, 64));
+    await sql`
+      insert into org_entitlement_overrides (org_id, feature_key, int_value, reason)
+      values (${s.orgId}, 'entrants.per_division.max', 32, 'test - a plan lowered after the payment')`;
+    await invalidateOrgEntitlements(s.orgId);
+    const raised = INCLUDED[64] + 1;
+    await sql`update stages set config = config || ${sql.json({ rounds: raised } as never)} where id = ${s.stageId}`;
+    const e = await refusal(openRound({ stageId: s.stageId, roundNo: 1, actorUserId: s.ownerUserId }));
+    const q = quoteIn(e);
+    expect([e.code, q.size, q.refusal, q.covers], "premise: the quote's refusal is the plan (it comes first), the cover breaks on the rounds")
+      .toEqual(["ONLINE_CHESS_UNPAID", 64, "plan", false]);
+    expect(nextIn(e), "no size the plan allows includes the rounds").toBeNull();
+    expect(e.message).toBe(
+      `The Online Chess package paid for this division (size 64) no longer covers it (the division plays ${raised} Swiss rounds and size 64 includes ${INCLUDED[64]})`,
+    );
+  }, 120_000);
+
   it("held above 256 (a backfilled 256 that is full): the refusal says so plainly, and offers no size", async () => {
     const s = await seedOnlineChessRound({ fixtures: 1, onlinePackage: "unpaid" });
     // The backfill's shape (V549): a division already over the online cap was given 256 and reads as full.
@@ -761,7 +815,7 @@ describe.skipIf(!HAS_DB)("Open round: the payment door (Online Chess credits §7
     expect([e.status, e.code, quoteIn(e).held, quoteIn(e).refusal]).toEqual([402, "ONLINE_CHESS_UNPAID", held, "below_held"]);
     expect(nextIn(e), "no size holds 300").toBeNull();
     expect(e.message, "it names the places, the largest size and how many must go").toBe(
-      `${held} places are held, more than Online Chess holds in one division (${LARGEST}): ${held - LARGEST} must leave before round 1 can open`,
+      `${held} places are held, more than Online Chess holds in one division (${LARGEST}): ${held - LARGEST} must leave before the first round can open`,
     );
   }, 120_000);
 

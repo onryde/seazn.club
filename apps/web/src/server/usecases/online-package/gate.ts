@@ -32,7 +32,7 @@ import {
 import { lockOrg } from "@/server/usecases/stream-credits";
 import { formatNotSupported } from "./format";
 import { payOnlinePackageInTx, refusedStageKind, type PayInput } from "./pay";
-import { quoteLocked, readPackageFacts, type PackageQuote } from "./quote";
+import { quoteLocked, readPackageFacts, refusalFor, type PackageQuote } from "./quote";
 import { livePackage } from "./read";
 import type { PackageFacts, PackageRow } from "./types";
 
@@ -56,22 +56,46 @@ function smallestHolding(facts: PackageFacts): OnlineSize | null {
   return ONLINE_SIZES.find((s) => s >= facts.held && includedRounds(s) >= facts.rounds && sizeAllowedByPlan(s, facts.planCap)) ?? null;
 }
 
-/** The 402's sentence: what stands between this division and round 1, in the organiser's terms. No size can hold it (places above
- *  the largest size, or more Swiss rounds than any size includes) comes first, because nothing can be bought; then a paid package
- *  the division has outgrown; then the unpaid one. `next` is the size offered beside a refused stored size. */
-function unpaidMessage(row: PackageRow, quote: PackageQuote, next: PackageQuote | null): string {
-  if (quote.held > LARGEST) {
-    return `${quote.held} places are held, more than Online Chess holds in one division (${LARGEST}): ${quote.held - LARGEST} must leave before round 1 can open`;
+/** "1 credit", "2 credits". */
+function creditsText(n: number): string {
+  return `${n} credit${n === 1 ? "" : "s"}`;
+}
+
+/** Why a size does not do for this division, in the organiser's terms, or null when no refusal names a reason (`frozen` is never
+ *  asked here: the gate returns on a frozen row first). */
+function refusalReason(size: OnlineSize, refusal: PackageQuote["refusal"], facts: PackageFacts): string | null {
+  if (refusal === "below_held") return `${facts.held} places are held`;
+  if (refusal === "plan") return `the plan allows ${facts.planCap} places in one division`;
+  if (refusal === "rounds") return `the division plays ${facts.rounds} Swiss rounds and size ${size} includes ${includedRounds(size)}`;
+  return null;
+}
+
+/** The 402's sentence: what stands between this division and its FIRST round (round 1, or whichever round opens first: a knockout
+ *  stage, a round 2 opened before round 1 - P8), in the organiser's terms. No size can hold it (places above the largest size, or
+ *  more Swiss rounds than any size includes) comes first, read from the division's facts rather than the quote's refusal (the
+ *  refusal order puts the plan first, which would hide it), because nothing can be bought; then a paid package the division has
+ *  outgrown - its reason judged WITHOUT the plan, as `quote.covers` is (a downgraded plan never breaks a paid package, so it is never
+ *  the reason given); then the unpaid one, whose stored size cannot be bought for the reason the quote refused it. `next` is the
+ *  size offered beside a refused stored size: what it costs MORE on a paid row, what it costs on an unpaid one. */
+function unpaidMessage(row: PackageRow, quote: PackageQuote, next: PackageQuote | null, facts: PackageFacts): string {
+  if (facts.held > LARGEST) {
+    return `${facts.held} places are held, more than Online Chess holds in one division (${LARGEST}): ${facts.held - LARGEST} must leave before the first round can open`;
   }
-  if (quote.refusal === "rounds_above_max") {
-    return `${quote.rounds} Swiss rounds are more than Online Chess includes in one division (${includedRounds(LARGEST)}): lower the rounds before round 1 can open`;
+  const maxRounds = includedRounds(LARGEST);
+  if (facts.rounds > maxRounds) {
+    return `${facts.rounds} Swiss rounds are more than Online Chess includes in one division (${maxRounds}): lower the rounds before the first round can open`;
   }
-  const offer = next !== null ? `size ${next.size} costs ${next.owed} more credits` : quote.refusal === null ? `${quote.owed} more credits are needed` : null;
   if (row.paidAt !== null) {
-    return `The Online Chess package paid for this division (size ${row.size}) no longer covers it${offer === null ? "" : `: ${offer}`}`;
+    const why = refusalReason(row.size, refusalFor(row.size, { ...facts, planCap: null }, false), facts);
+    const offer = next !== null
+      ? `size ${next.size} costs ${creditsText(next.owed)} more`
+      : quote.refusal === null ? `${quote.owed} more ${quote.owed === 1 ? "credit is" : "credits are"} needed` : null;
+    return `The Online Chess package paid for this division (size ${row.size}) no longer covers it${why === null ? "" : ` (${why})`}${offer === null ? "" : `: ${offer}`}`;
   }
-  if (quote.refusal === null) return `Round 1 needs a paid Online Chess package: size ${quote.size} costs ${quote.owed} credits`;
-  return `Round 1 needs a paid Online Chess package, and size ${row.size} no longer holds this division${offer === null ? "" : `: ${offer}`}`;
+  if (quote.refusal === null) return `The first round needs a paid Online Chess package: size ${quote.size} costs ${creditsText(quote.owed)}`;
+  const why = refusalReason(row.size, quote.refusal, facts);
+  const offer = next === null ? "" : `: size ${next.size} costs ${creditsText(next.owed)}`;
+  return `The first round needs a paid Online Chess package, and size ${row.size} cannot be bought for this division${why === null ? "" : ` (${why})`}${offer}`;
 }
 
 /** The division's live package, under the caller's transaction, asserted present: every online division has one (V549's backfill,
@@ -131,7 +155,7 @@ export async function gateFirstOpen(
     const next = fits === null || fits === row.size
       ? null
       : await quoteLocked(tx, { orgId: a.orgId, divisionId: a.divisionId, size: fits, rate: money.rate }, facts);
-    throw new HttpError(402, unpaidMessage(row, quote, next), ONLINE_PACKAGE_CODES.unpaid, { quote, next });
+    throw new HttpError(402, unpaidMessage(row, quote, next, facts), ONLINE_PACKAGE_CODES.unpaid, { quote, next });
   }
   await freezeOnlinePackage(tx, row.id);
   return { asked: true, movedUp, payment };

@@ -11,6 +11,8 @@
 // whose example fails owes a patch.
 import { describe, expect, it } from "vitest";
 import { REQUEST_EXAMPLE_PATCHES, ROUTES, buildOpenApiDocument, exampleOf, requestExampleOf } from "../openapi";
+import { ONLINE_PAY_EXAMPLES, OnlinePackagePayInput } from "../schemas/online-package";
+import { packagePrice, type OnlineSize } from "@/lib/online-chess-package";
 
 type Op = { requestBody?: { content: Record<string, { example?: unknown }> } };
 
@@ -120,6 +122,45 @@ describe("OpenAPI — every published request example parses against its own sch
 // The generator's constraint handling, directly, on synthetic JSON Schemas: the routes above exercise only the constraints
 // today's request bodies happen to carry, so a handler no route needs would be unproven (a maxLength cut, a uri). Each
 // expectation is the constraint itself, never a string typed from the generator's output.
+describe("OpenAPI — the Online Chess pay bodies are bodies a receipt shows (review m9)", () => {
+  const doc = buildOpenApiDocument() as { paths: Record<string, Record<string, Op>> };
+  type Pay = { size: number; expectedOwed: number; addCameras?: boolean; expectedForfeited?: number };
+  const payOf = (example: unknown): Pay | null => {
+    if (typeof example !== "object" || example === null) return null;
+    if ("expectedOwed" in example) return example as Pay;
+    return "pay" in example ? payOf((example as { pay: unknown }).pay) : null;
+  };
+
+  it("every published example carrying a payment pairs a forfeit with a RETURN only (counted over both routes that take one)", () => {
+    const pays = ROUTES.flatMap((r) => {
+      const content = doc.paths[`/api/v1${r.path}`]?.[r.method]?.requestBody?.content ?? {};
+      return Object.values(content).map((c) => ({ key: `${r.method.toUpperCase()} ${r.path}`, pay: payOf(c.example) }));
+    }).filter((p): p is { key: string; pay: Pay } => p.pay !== null);
+    expect(pays.map((p) => p.key).sort(), "anti-vacuity: the pay door and the open's `pay`").toEqual([
+      "POST /divisions/{id}/online-package", "POST /stages/{id}/open-round",
+    ]);
+    for (const { key, pay } of pays) {
+      if (pay.expectedForfeited !== undefined) expect(pay.expectedOwed, `${key}: a forfeit beside a positive total`).toBeLessThan(0);
+      expect(pay.expectedOwed, `${key}: the payment example is the leaf's price`).toBe(packagePrice(pay.size as OnlineSize, pay.addCameras === true));
+    }
+  });
+
+  it("the declared examples: a payment and a move down, each priced from the leaf and accepted by the schema; the forfeit only on the return", () => {
+    let checked = 0;
+    for (const ex of ONLINE_PAY_EXAMPLES) {
+      expect(OnlinePackagePayInput.safeParse(ex).success, JSON.stringify(ex)).toBe(true);
+      if ("expectedForfeited" in ex) {
+        expect(ex.expectedOwed, "a move down returns").toBeLessThan(0);
+        expect(ex.expectedOwed, "32 with cameras moved to 16 with cameras").toBe(packagePrice(16, true) - packagePrice(32, true));
+      } else {
+        expect(ex.expectedOwed, "a payment pays the price").toBe(packagePrice(ex.size, ex.addCameras));
+      }
+      checked++;
+    }
+    expect(checked, "anti-vacuity: both examples").toBe(2);
+  });
+});
+
 describe("exampleOf honours what the JSON Schema says of a value", () => {
   const str = (extra: Record<string, unknown>) => exampleOf({ type: "string", ...extra }) as string;
 
