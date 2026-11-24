@@ -162,15 +162,42 @@ test.describe("competition desk", () => {
     const rig = await seed(request);
     await setStageStatusSql(rig.stageId, "complete");
     for (const id of rig.fixtureIds) await setFixtureStatusSql(id, "decided");
-    // Match Day B2: a finished division is hidden from the divisions list until asked for, with the count on the toggle.
+    // Finished-competition page (owner, Option 1): the only division is finished, so the COMPETITION is finished - its division is
+    // listed outright, with no "Show finished" switch, no all-finished card, and no ?finished=1 to ask for.
     await page.goto(`/o/${org.slug}/c/${rig.compSlug}`);
-    await expect(page.getByTestId("desk-ledger-row")).toHaveCount(0);
-    await expect(page.getByTestId("desk-ledger-all-finished")).toBeVisible();
-    await expect(page.getByTestId("desk-ledger-finished-toggle")).toContainText("Show finished (1)");
-    await page.goto(`/o/${org.slug}/c/${rig.compSlug}?finished=1`);
+    await expect(page.getByTestId("desk-masthead-pill")).toHaveAttribute("data-phase", "finished");
     await expect(page.getByTestId("desk-ledger-row").first()).toHaveAttribute("data-phase", "finished");
+    await expect(page.getByTestId("desk-ledger-row")).toHaveCount(1);
+    await expect(page.getByTestId("desk-ledger-all-finished")).toHaveCount(0);
+    await expect(page.getByTestId("desk-ledger-finished-toggle")).toHaveCount(0);
+    // ...and the header lost the tools that run a live event, kept Open + Settings, and demoted Add division to a quiet link.
+    await expect(page.getByTestId("desk-tool-schedule")).toHaveCount(0);
+    await expect(page.locator(`a[href$="/c/${rig.compSlug}/registration"]`)).toHaveCount(0);
+    await expect(page.getByTestId("desk-open-menu")).toBeVisible();
+    await expect(page.getByTestId("desk-add-division")).toHaveAttribute("data-variant", "quiet");
+    await expect(page.getByTestId("desk-add-division")).toHaveText("Add another division");
     await expect(page.getByTestId("desk-needs-you")).toHaveCount(0);
   });
+
+  // Owner, 2026-11-24 (bug, both phases): a completed or archived competition takes no new division - the write answers 409
+  // COMPETITION_ENDED - so neither "Add division" button is offered and /d/new is not a form that can only fail on submit.
+  for (const status of ["completed", "archived"]) {
+    test(`a ${status} competition offers no Add division, and /d/new sends the organiser back to the competition`, async ({ page, request }) => {
+      const org = await activeOrg(page);
+      const rig = await seed(request); // one started division: a LIVE phase, so the primary button would normally show
+      const base = `/o/${org.slug}/c/${rig.compSlug}`;
+      await page.goto(base);
+      await expect(page.getByTestId("desk-add-division"), "the positive pair: a live competition offers it").toHaveAttribute("data-variant", "primary");
+      const patched = await apiJson(request, `/api/v1/competitions/${rig.compId}`, "PATCH", { status });
+      expect(patched.status, `PATCH status=${status}`).toBe(200);
+      await page.goto(base);
+      await expect(page.getByTestId("desk-ledger-row"), "rendered in the state under test").toHaveCount(1);
+      await expect(page.getByTestId("desk-add-division")).toHaveCount(0);
+      await page.goto(`${base}/d/new`);
+      await expect(page).toHaveURL(new RegExp(`${base}$`));
+      await expect(page.getByTestId("desk-ledger")).toBeVisible();
+    });
+  }
 
   // fix-round-c, Defect 1 (owner ruling 2026-09-02): a scoped re-review found
   // the wave's headline contradiction still reachable through a knockout

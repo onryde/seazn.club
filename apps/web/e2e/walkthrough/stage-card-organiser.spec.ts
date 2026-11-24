@@ -425,24 +425,16 @@ test.describe("The stage card, walked", () => {
     await expect(card.getByTestId("stage-controls"), "opened: its header is back").toBeVisible();
     await expectNoHorizontalScroll(page);
 
-    // The competition page: the finished division is out of the list; Show finished brings it back, and the switch puts it away again.
+    // The competition page: this is the competition's only division, so the COMPETITION is finished and its division is listed
+    // outright (owner, Option 1) - no "Show finished" switch to press, and no all-finished card.
     await page.goto(await competitionPath(request, competitionId), { waitUntil: "load" });
     await dismissCookieBanner(page);
     const rows = page.getByTestId("desk-ledger-row");
-    const switchEl = page.getByTestId("desk-ledger-finished-toggle");
-    await expect(rows, "a finished division is hidden by default").toHaveCount(0);
-    await expect(switchEl).toContainText(fill("desk.ledger.showFinished", { n: 1 }));
-    await expect(switchEl).toHaveAttribute("aria-checked", "false");
-    await switchEl.click();
-    await expect(page).toHaveURL(/[?&]finished=1(&|$)/);
-    await expect(rows, "Show finished: the division is in the list").toHaveCount(1);
+    await expect(rows, "a finished competition lists its finished division").toHaveCount(1);
     await expect(rows.first()).toHaveAttribute("data-phase", "finished");
-    await expect(switchEl).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByTestId("desk-ledger-finished-toggle"), "no Show-finished switch").toHaveCount(0);
+    await expect(page.getByTestId("desk-ledger-all-finished")).toHaveCount(0);
     await expectNoHorizontalScroll(page);
-    await switchEl.click();
-    await expect(page).not.toHaveURL(/[?&]finished=1(&|$)/);
-    await expect(rows, "switched off: hidden again").toHaveCount(0);
-    await expect(switchEl).toHaveAttribute("aria-checked", "false");
   });
 
   test("the Entrants tab: the kinds block sits above the roster, starts closed on an empty division and with an entrant, Save and Reset", async ({ page, request }) => {

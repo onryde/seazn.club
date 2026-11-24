@@ -272,11 +272,17 @@ test("an organiser watches the desk go Setting up → Scheduled → Today (a mat
   for (const id of ids) await scoreFixture(request, id, 2, 1);
   await setStageStatusSql(stage.data!.id, "complete");
   await page.goto(compPath);
-  // Match Day B2: the divisions list hides a finished division until asked, and says so with the count on a toggle.
-  await expect(row).toHaveCount(0);
-  await expect(page.getByTestId("desk-ledger-finished-toggle")).toContainText("Show finished (1)");
-  await page.getByTestId("desk-ledger-finished-toggle").click();
-  await expect(page).toHaveURL(/[?&]finished=1(&|$)/);
+  // Finished-competition page (owner, Option 1): the competition itself is Finished, so its division is listed outright - no "Show
+  // finished" switch to press, no all-finished card - and the header drops the tools that run a live event.
+  await expect(page.getByTestId("desk-masthead-pill")).toHaveAttribute("data-phase", "finished");
+  await expect(row).toHaveCount(1);
+  await expect(page.getByTestId("desk-ledger-finished-toggle")).toHaveCount(0);
+  await expect(page.getByTestId("desk-ledger-all-finished")).toHaveCount(0);
+  await expect(page.getByTestId("desk-tool-schedule"), "no Multi Schedule Board on a finished competition").toHaveCount(0);
+  await expect(page.locator(`a[href="${compPath}/registration"]`), "no Registration entry on a finished competition").toHaveCount(0);
+  await expect(page.getByTestId("desk-open-menu-toggle"), "Open stays").toBeVisible();
+  await expect(page.locator(`a[href="${compPath}/settings"]:visible`).first(), "Settings stays").toBeVisible();
+  await expect(page.getByTestId("desk-add-division"), "Add division is a quiet link").toHaveAttribute("data-variant", "quiet");
   await expect(row).toHaveAttribute("data-phase", "finished");
   await expect(row).toContainText("complete");
   // Nothing needs the organiser, on either surface: no list here, and no line pointing at one in Match Day.
