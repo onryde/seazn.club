@@ -93,6 +93,7 @@ describe("tie-break explainers", () => {
       expect(unitExplainKey(rung, "tennis"), `tennis ${rung}`).toBe(shared);
       expect(dictOf("en")[shared], `${rung} shared says sets`).toMatch(/set/i);
     }
+    // single-sport: a shared (non-wording) rung stays on the shared key even for a sport with its own wording; the full-sport sweep is the forEachSport tests above.
     expect(unitExplainKey("buchholz", "badminton")).toBe(`${EXPLAIN}buchholz`);
     expect(dictOf("en")[`${EXPLAIN}buchholz`]).toBe("Total score of the opponents you played.");
     expect(dictOf("en")[`${EXPLAIN}buchholz_cut1`]).toBe("Buchholz without your weakest opponent.");
