@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { BunnyConfig } from "@/server/relay/config";
 import { FakeRecorder } from "@/server/relay/fakes";
 import { pathTemplate } from "@/server/relay/sanitise";
-import { BunnyReplayHost, WATCH_TIME_CHART_SECONDS_PER_UNIT } from "../replay-bunny";
+import { BunnyReplayHost, WATCH_TIME_CHART_SECONDS_PER_UNIT, mp4HeightsIn } from "../replay-bunny";
 import { type ReplayHost, ReplayHostRefused, ReplayHostUnavailable, ReplayNotDownloadable } from "../replay-ports";
 
 const CONFIG: BunnyConfig = {
@@ -42,12 +42,8 @@ function harness(reply: (c: Call) => Reply | Promise<Reply>, origins: string[] |
     return new Response(r.body === undefined ? null : JSON.stringify(r.body), { status: r.status, headers: { "content-type": "application/json" } });
   }) as unknown as typeof fetch;
   const recorder = new FakeRecorder();
-  const warnings: { fields: Record<string, unknown>; msg: string }[] = [];
-  const host = new BunnyReplayHost(CONFIG, {
-    fetchImpl, recorder, now: () => NOW, videoOrigins: () => origins,
-    warn: (fields, msg) => { warnings.push({ fields, msg }); },
-  });
-  return { host, calls, recorder, warnings };
+  const host = new BunnyReplayHost(CONFIG, { fetchImpl, recorder, now: () => NOW, videoOrigins: () => origins });
+  return { host, calls, recorder };
 }
 
 const errorOf = async (p: Promise<unknown>): Promise<string> => {
@@ -60,6 +56,15 @@ const videoBody = (o: { status: number; resolutions?: string | null; length?: nu
   guid: GUID, title: o.title ?? "Final, part 1", status: o.status, length: o.length ?? 0, collectionId: "c1",
   availableResolutions: o.resolutions ?? null, hasMP4Fallback: true,
 });
+
+/** The `/resolutions` answer: the MP4 fallback FILES the video holds, as paths (the shape is the controller's reading of Bunny's
+ *  answer; mp4HeightsIn finds the paths wherever they nest). */
+const mp4Body = (heights: readonly number[]) => ({
+  success: true, statusCode: 200, data: { videoId: GUID, resolutions: heights.map((h) => ({ resolution: `${h}p`, path: `/${GUID}/play_${h}p.mp4` })) },
+});
+/** The API's answer to a playable video with one 720 rendition and one 720 file: `GET /videos/{id}` or `GET /videos/{id}/resolutions`. */
+const playable720 = (url: string): { status: number; body: unknown } =>
+  url.endsWith("/resolutions") ? { status: 200, body: mp4Body([720]) } : { status: 200, body: videoBody({ status: 4, resolutions: "720p" }) };
 
 describe("BunnyReplayHost: the API calls (AccessKey header, library base URL)", () => {
   it("createCollection POSTs the name org:<orgId> and answers the guid; an answer with no guid throws", async () => {
@@ -122,20 +127,16 @@ describe("BunnyReplayHost: the API calls (AccessKey header, library base URL)", 
     expect(await early.host.video(GUID)).toMatchObject({ state: "processing", lengthSeconds: null, heights: [] });
   });
 
-  it("heights: availableResolutions is parsed, unordered (B9), and every height above 720 is dropped with ONE warning naming the video id only", async () => {
-    const { host, warnings } = harness(() => ({ status: 200, body: videoBody({ status: 4, resolutions: "360p,480p,720p,240p,1080p" }) }));
+  it("heights: availableResolutions is parsed, unordered (B9), with NO ceiling: a 1080 is listed, and nothing is warned or dropped (Task 48)", async () => {
+    const { host, calls } = harness(() => ({ status: 200, body: videoBody({ status: 4, resolutions: "360p,480p,720p,240p,1080p" }) }));
     const v = await host.video(GUID);
-    expect([...v.heights].sort((a, b) => a - b)).toEqual([240, 360, 480, 720]);
-    expect(warnings).toHaveLength(1);
-    expect(JSON.stringify(warnings[0])).toContain(GUID);
-    const said = JSON.stringify(warnings[0]);
-    for (const s of [...SECRETS, "http", CONFIG.cdnHost, "bcdn_token"]) expect(said, s).not.toContain(s);
+    expect([...v.heights].sort((a, b) => a - b)).toEqual([240, 360, 480, 720, 1080]);
     await host.video(GUID);
-    expect(warnings, "one warning per video, not one per read").toHaveLength(1);
+    expect(calls, "the HLS list is read from the video body alone: no second endpoint").toHaveLength(2);
+    expect(calls.every((c) => c.url === `${API}/videos/${GUID}`)).toBe(true);
 
-    const capped = harness(() => ({ status: 200, body: videoBody({ status: 4, resolutions: "240p,360p,480p,720p" }) }));
-    expect([...(await capped.host.video(GUID)).heights].sort((a, b) => a - b)).toEqual([240, 360, 480, 720]);
-    expect(capped.warnings).toEqual([]);
+    const repeated = harness(() => ({ status: 200, body: videoBody({ status: 4, resolutions: "720p, 720p,abc,,0p,1080p" }) }));
+    expect([...(await repeated.host.video(GUID)).heights].sort((a, b) => a - b), "repeats, junk and zero dropped").toEqual([720, 1080]);
   });
 
   it("remove GETs first: a present video is DELETEd and reads deleted; a second remove reads absent though DELETE answers 200 again (B10)", async () => {
@@ -285,7 +286,7 @@ describe("BunnyReplayHost: every API call gives up at the move's 4 s timeout (Ta
         return new Promise<Response>((_, reject) => signal?.addEventListener("abort", () => reject(signal.reason), { once: true }));
       }) as unknown as typeof fetch;
       const recorder = new FakeRecorder();
-      const host = new BunnyReplayHost(CONFIG, { fetchImpl, recorder, now: () => NOW, videoOrigins: () => ["seazn.club"], warn: () => undefined });
+      const host = new BunnyReplayHost(CONFIG, { fetchImpl, recorder, now: () => NOW, videoOrigins: () => ["seazn.club"] });
       const calls: [string, () => Promise<unknown>][] = [
         ["createCollection", () => host.createCollection("o1")],
         ["fetchFromUrl", () => host.fetchFromUrl({ collectionId: "c1", title: "Final, part 1", url: "https://example.test/x.mp4" })],
@@ -334,7 +335,7 @@ describe("BunnyReplayHost: a body that never arrives is a failed call (Task 24 r
       let answered = 0;
       const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => { answered++; return stalledBody(init?.signal); }) as unknown as typeof fetch;
       const recorder = new FakeRecorder();
-      const host = new BunnyReplayHost(CONFIG, { fetchImpl, recorder, now: () => NOW, videoOrigins: () => ["seazn.club"], warn: () => undefined });
+      const host = new BunnyReplayHost(CONFIG, { fetchImpl, recorder, now: () => NOW, videoOrigins: () => ["seazn.club"] });
       const calls: [string, () => Promise<unknown>][] = [
         ["createCollection", () => host.createCollection("o1")],
         ["fetchFromUrl", () => host.fetchFromUrl({ collectionId: "c1", title: "Final, part 1", url: "https://example.test/x.mp4" })],
@@ -365,7 +366,7 @@ describe("BunnyReplayHost: a body that never arrives is a failed call (Task 24 r
     let cut = true;
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) =>
       cut ? stalledBody(init?.signal, () => new TypeError("terminated")) : new Response("<html>gateway</html>", { status: 200 })) as unknown as typeof fetch;
-    const host = new BunnyReplayHost(CONFIG, { fetchImpl, recorder, now: () => NOW, videoOrigins: () => ["seazn.club"], warn: () => undefined });
+    const host = new BunnyReplayHost(CONFIG, { fetchImpl, recorder, now: () => NOW, videoOrigins: () => ["seazn.club"] });
     expect(await errorOf(host.video(GUID))).toMatch(/^bunny video: the response did not arrive in full/);
     cut = false;
     const notJson = await errorOf(host.video(GUID));
@@ -409,68 +410,139 @@ describe("BunnyReplayHost: openDownload (B5, B9)", () => {
     } as unknown as Response;
     return { res, body };
   }
-  function downloadHarness(resolutions: string, cdnStatus = 200, origins: string[] | null = ["stg.seazn.club", "seazn.club"]) {
-    const cdn = cdnAnswer(cdnStatus);
-    const h = harness((c) => (c.url.startsWith(API) ? { status: 200, body: videoBody({ status: 4, resolutions }) } : cdn.res), origins);
+  /** `hls`: the video body's availableResolutions (what a viewer plays); `mp4`: the files the download may take. They are NOT the same set. */
+  function downloadHarness(o: { hls?: readonly number[]; mp4: readonly number[]; cdnStatus?: number; origins?: string[] | null; resolutionsStatus?: number }) {
+    const cdn = cdnAnswer(o.cdnStatus ?? 200);
+    const hls = (o.hls ?? o.mp4).map((h) => `${h}p`).join(",");
+    const h = harness((c) => {
+      if (c.url === `${API}/videos/${GUID}`) return { status: 200, body: videoBody({ status: 4, resolutions: hls }) };
+      if (c.url === `${API}/videos/${GUID}/resolutions`) return { status: o.resolutionsStatus ?? 200, body: mp4Body(o.mp4) };
+      return cdn.res;
+    }, o.origins === undefined ? ["stg.seazn.club", "seazn.club"] : o.origins);
     return { ...h, stream: cdn.body };
   }
+  const cdnUrlOf = (calls: Call[]) => calls.find((c) => c.url.startsWith(`https://${CONFIG.cdnHost}/`))?.url;
 
-  it("fetches play_720p.mp4 at the B5 URL with the allowed Referer, and answers the CDN body itself as a stream", async () => {
-    const { host, calls, stream } = downloadHarness("240p,360p,480p,720p");
+  it("fetches the tallest MP4 file at the B5 URL with the allowed Referer, and answers the CDN body itself as a stream", async () => {
+    const { host, calls, stream } = downloadHarness({ mp4: [240, 360, 480, 720] });
     const dl = await host.openDownload(GUID);
-    expect(calls).toHaveLength(2);
+    expect(calls.map((c) => c.url.replace(API, "").replace(/^https:.*\/(play_\d+p\.mp4)$/, "CDN $1"))).toEqual([`/videos/${GUID}`, `/videos/${GUID}/resolutions`, "CDN play_720p.mp4"]);
     // base64url-no-pad(sha256("ZZ-token-key-7f3e91c2" + "/{GUID}/" + "1795255500" + "token_path=/{GUID}/")), via openssl
     // outside the repo's code; 1795255500 is NOW (whole seconds) + 300.
-    expect(calls[1].url).toBe(
+    expect(calls[2]!.url).toBe(
       `https://vz-test0001.b-cdn.net/bcdn_token=iHh1EY5kWAt8pzmkxls-qj52SwTi4HKGSqZNqeEQypY&expires=1795255500&token_path=%2F${GUID}%2F/${GUID}/play_720p.mp4`,
     );
-    expect(calls[1].method).toBe("GET");
-    expect(calls[1].headers.referer).toBe("https://stg.seazn.club/"); // the FIRST SEAZN_VIDEO_ORIGINS host (B3, B9)
-    expect(calls[1].headers.accesskey, "the API key never goes to the CDN").toBeUndefined();
+    expect(calls[2]!.method).toBe("GET");
+    expect(calls[2]!.headers.referer).toBe("https://stg.seazn.club/"); // the FIRST SEAZN_VIDEO_ORIGINS host (B3, B9)
+    expect(calls[2]!.headers.accesskey, "the API key never goes to the CDN").toBeUndefined();
+    expect(calls[1]!.headers.accesskey, "the API's own calls carry it, in the header").toBe(CONFIG.apiKey);
     expect(dl.body, "the CDN's own stream, not a buffered copy").toBe(stream);
     expect(dl.bytes).toBe(1234);
-    expect(dl.fileName).toMatch(/\.mp4$/);
+    expect(dl.fileName).toBe(`${GUID}-720p.mp4`);
   });
 
-  it("asks for the highest height at or under 720 from an unordered list that holds 1080 (B9)", async () => {
-    const { host, calls } = downloadHarness("360p,480p,720p,240p,1080p");
-    await host.openDownload(GUID);
-    expect(calls[1].url).toMatch(/\/play_720p\.mp4$/);
-    const low = downloadHarness("360p,240p");
-    await low.host.openDownload(GUID);
-    expect(low.calls[1].url).toMatch(/\/play_360p\.mp4$/);
+  it("Task 48: takes the TALLEST file of the MP4 set, whatever its order — 1080 where there is one, the top of a short set where there is not", async () => {
+    const SETS: { mp4: number[]; want: number }[] = [
+      { mp4: [360, 1080, 240, 720, 480], want: 1080 },
+      { mp4: [240, 360, 480, 720, 1080], want: 1080 },
+      { mp4: [720, 240, 360], want: 720 },
+      { mp4: [360, 240], want: 360 },
+      { mp4: [480], want: 480 },
+    ];
+    let checked = 0;
+    for (const { mp4, want } of SETS) {
+      const { host, calls } = downloadHarness({ mp4 });
+      const dl = await host.openDownload(GUID);
+      expect(cdnUrlOf(calls), `[${mp4}]`).toMatch(new RegExp(`/play_${want}p\\.mp4$`));
+      expect(dl.fileName).toBe(`${GUID}-${want}p.mp4`);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every set").toBe(SETS.length);
+  });
+
+  it("Task 48: the file comes from the MP4 set, never from availableResolutions — an HLS set that holds 1080 over MP4 files that stop at 720 asks for 720, and the reverse asks for what the files hold", async () => {
+    const hlsTaller = downloadHarness({ hls: [240, 360, 480, 720, 1080], mp4: [240, 360, 480, 720] });
+    await hlsTaller.host.openDownload(GUID);
+    expect(cdnUrlOf(hlsTaller.calls)).toMatch(/\/play_720p\.mp4$/);
+    const mp4Taller = downloadHarness({ hls: [240, 360], mp4: [240, 360, 480, 720, 1080] });
+    await mp4Taller.host.openDownload(GUID);
+    expect(cdnUrlOf(mp4Taller.calls)).toMatch(/\/play_1080p\.mp4$/);
+  });
+
+  it("Task 48: mp4HeightsIn reads the file PATHS wherever the answer nests them, and nothing else (a label is not a file)", () => {
+    const p = (h: number) => `/${GUID}/play_${h}p.mp4`;
+    expect(mp4HeightsIn({ data: { resolutions: [{ path: p(720) }, { path: p(1080) }] } }).sort((a, b) => a - b)).toEqual([720, 1080]);
+    expect(mp4HeightsIn({ files: [p(360), p(360), `https://x/${p(480)}`] }).sort((a, b) => a - b), "flat list, repeats once, a full URL's tail").toEqual([360, 480]);
+    expect(mp4HeightsIn({ enabledResolutions: "240p,360p,720p", list: ["720p", "play_720p.m3u8", "/g/play_720p.mp4.bak", "/g/xplay_720p.mp4"] }), "labels, an HLS playlist, a near miss").toEqual([]);
+    expect([mp4HeightsIn(null), mp4HeightsIn(undefined), mp4HeightsIn({}), mp4HeightsIn([]), mp4HeightsIn(7), mp4HeightsIn("")], "the empty case").toEqual([[], [], [], [], [], []]);
+    let deep: unknown = p(720);
+    for (let i = 0; i < 12; i++) deep = { n: deep };
+    expect(mp4HeightsIn(deep), "a path nested past the scan's depth is not read (a bound, not a crash)").toEqual([]);
   });
 
   it("matches the B5 formula on a second vector", async () => {
-    const { host, calls } = downloadHarness("480p,240p");
+    const { host, calls } = downloadHarness({ mp4: [480, 240] });
     await host.openDownload(GUID);
     const expires = Math.floor(NOW.getTime() / 1000) + 300;
     const t = createHash("sha256").update(`${CONFIG.tokenKey}/${GUID}/${expires}token_path=/${GUID}/`).digest("base64url");
-    expect(calls[1].url).toBe(`https://${CONFIG.cdnHost}/bcdn_token=${t}&expires=${expires}&token_path=%2F${GUID}%2F/${GUID}/play_480p.mp4`);
+    expect(cdnUrlOf(calls)).toBe(`https://${CONFIG.cdnHost}/bcdn_token=${t}&expires=${expires}&token_path=%2F${GUID}%2F/${GUID}/play_480p.mp4`);
   });
 
-  it("refuses before the CDN when the video is not playable, has no rendition, or SEAZN_VIDEO_ORIGINS is not set", async () => {
+  it("refuses before the CDN when the video is not playable, the MP4 set is empty (or the library holds no such video), or SEAZN_VIDEO_ORIGINS is not set", async () => {
     const processing = harness(() => ({ status: 200, body: videoBody({ status: 3, resolutions: "240p" }) }));
     expect(await errorOf(processing.host.openDownload(GUID))).toMatch(/not playable \(processing\)/);
     expect(processing.calls).toHaveLength(1);
 
-    const onlyHd = harness(() => ({ status: 200, body: videoBody({ status: 4, resolutions: "1080p" }) }));
-    expect(await errorOf(onlyHd.host.openDownload(GUID))).toMatch(/no rendition/);
-    expect(onlyHd.calls).toHaveLength(1);
+    // Task 48: an HLS set with renditions over an MP4 set with no files (a video encoded before the fallback was switched on).
+    const noFiles = downloadHarness({ hls: [240, 720, 1080], mp4: [] });
+    expect(await errorOf(noFiles.host.openDownload(GUID))).toMatch(/no MP4 file/);
+    expect(noFiles.calls.map((c) => c.url)).toEqual([`${API}/videos/${GUID}`, `${API}/videos/${GUID}/resolutions`]);
+    const noVideo = downloadHarness({ mp4: [720], resolutionsStatus: 404 });
+    expect(await errorOf(noVideo.host.openDownload(GUID))).toMatch(/no MP4 file/);
+    expect(noVideo.calls, "never reaches the CDN").toHaveLength(2);
 
-    const noOrigin = downloadHarness("720p", 200, null);
+    const noOrigin = downloadHarness({ mp4: [720], origins: null });
     expect(await errorOf(noOrigin.host.openDownload(GUID))).toMatch(/SEAZN_VIDEO_ORIGINS/);
-    expect(noOrigin.calls).toHaveLength(1);
-    // Task 26 (T22 review m6): "not playable" and "no rendition" are the port's typed refusal — the download answers "not ready,
+    expect(noOrigin.calls, "a configuration fault costs no second call").toHaveLength(1);
+    // Task 26 (T22 review m6): "not playable" and "no file" are the port's typed refusal — the download answers "not ready,
     // try again" (409) — and nothing else is: a missing origin is a configuration fault, not a video that is not ready.
     const thrown = async (p: Promise<unknown>) => p.then(() => null, (e: unknown) => e);
     expect(await thrown(processing.host.openDownload(GUID))).toBeInstanceOf(ReplayNotDownloadable);
-    expect(await thrown(onlyHd.host.openDownload(GUID))).toBeInstanceOf(ReplayNotDownloadable);
+    expect(await thrown(noFiles.host.openDownload(GUID))).toBeInstanceOf(ReplayNotDownloadable);
+    expect(await thrown(noVideo.host.openDownload(GUID))).toBeInstanceOf(ReplayNotDownloadable);
     expect(await thrown(noOrigin.host.openDownload(GUID))).not.toBeInstanceOf(ReplayNotDownloadable);
   });
 
+  it("Task 48: a 404 from the CDN for a file the list named is the typed not-downloadable (try again), with the CDN's body cancelled; 403, 500 are still faults", async () => {
+    const gone = downloadHarness({ mp4: [720], cdnStatus: 404 });
+    const err = await gone.host.openDownload(GUID).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(ReplayNotDownloadable);
+    expect((err as ReplayNotDownloadable).why).toMatch(/not on the CDN/);
+    const said = (err as Error).message;
+    for (const piece of [...SECRETS, "bcdn_token", "expires=", CONFIG.cdnHost]) expect(said, piece).not.toContain(piece);
+    for (const status of [403, 500]) {
+      const h = downloadHarness({ mp4: [720], cdnStatus: status });
+      const e = await h.host.openDownload(GUID).then(() => null, (x: unknown) => x);
+      expect(e, `CDN ${status}`).toBeInstanceOf(Error);
+      expect(e, `CDN ${status}`).not.toBeInstanceOf(ReplayNotDownloadable);
+    }
+  });
+
+  it("Task 48: the /resolutions call is an API call (AccessKey header, never a URL), recorded under its own operation, and a refusal of it is a fault, not 'not ready'", async () => {
+    const { host, calls, recorder } = downloadHarness({ mp4: [720] });
+    await host.openDownload(GUID);
+    expect(calls[1]!.url).toBe(`${API}/videos/${GUID}/resolutions`);
+    expect(calls[1]!.url).not.toContain(CONFIG.apiKey);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(recorder.calls.map((c) => c.operation)).toEqual(["video", "mp4Resolutions", "openDownload"]);
+    const refused = harness((c) => (c.url.endsWith("/resolutions") ? { status: 401, body: { Message: `AccessKey ${CONFIG.apiKey} is not valid` } } : { status: 200, body: videoBody({ status: 4, resolutions: "720p" }) }));
+    const e = await refused.host.openDownload(GUID).then(() => null, (x: unknown) => x);
+    expect(e).toBeInstanceOf(ReplayHostRefused);
+    for (const s of SECRETS) expect((e as Error).message).not.toContain(s);
+  });
+
   it("a CDN refusal throws with the status and the video id", async () => {
-    const { host } = downloadHarness("720p", 403);
+    const { host } = downloadHarness({ mp4: [720], cdnStatus: 403 });
     const message = await errorOf(host.openDownload(GUID));
     expect(message).toMatch(/HTTP 403/);
     expect(message).toContain(GUID);
@@ -503,7 +575,6 @@ describe("BunnyReplayHost: no secret and no signed token in a message, a record 
     for (const h of [echo, net, floor]) {
       expect(h.recorder.calls.length).toBeGreaterThan(0);
       for (const r of h.recorder.calls) for (const s of SECRETS) expect(JSON.stringify(r)).not.toContain(s);
-      expect(h.warnings).toEqual([]);
     }
   });
 
@@ -542,7 +613,7 @@ describe("BunnyReplayHost: no secret and no signed token in a message, a record 
 
   it("the CDN call is recorded as [signed], and a CDN failure that quotes its URL leaves no token in the message", async () => {
     const recorded = harness((c) => (c.url.startsWith(API)
-      ? { status: 200, body: videoBody({ status: 4, resolutions: "720p" }) }
+      ? playable720(c.url)
       : new Response("mp4 bytes", { status: 200 })));
     await recorded.host.openDownload(GUID);
     const cdnRecord = recorded.recorder.calls.find((r) => r.operation === "openDownload");
@@ -551,13 +622,13 @@ describe("BunnyReplayHost: no secret and no signed token in a message, a record 
     expect(pathTemplate(cdnRecord!.url, cdnRecord!.ids)).toBe("/[signed]/{id}/play_720p.mp4"); // what the table would keep
 
     const net = harness((c) => {
-      if (c.url.startsWith(API)) return { status: 200, body: videoBody({ status: 4, resolutions: "720p" }) };
+      if (c.url.startsWith(API)) return playable720(c.url);
       throw new TypeError(`fetch failed: ${c.url} referer ${c.headers.referer}`);
     });
     const message = await errorOf(net.host.openDownload(GUID));
     expect(message).toContain(GUID);
     const texts = [message, ...[recorded, net].flatMap((h) => h.recorder.calls.map((r) => JSON.stringify(r)))];
-    expect(texts.length).toBe(5);
+    expect(texts.length, "the message, then each call's record: video, resolutions, CDN (x2)").toBe(7);
     for (const t of texts) {
       for (const piece of shards(cdnToken)) expect(t).not.toContain(piece);
       expect(t).not.toContain("bcdn_token");
@@ -580,7 +651,7 @@ describe("BunnyReplayHost: openDownload times out on the headers only, and follo
     const upstream: { signal: AbortSignal | null; bodyError: unknown } = { signal: null, bodyError: null };
     const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       if (String(url).startsWith(API)) {
-        return new Response(JSON.stringify(videoBody({ status: 4, resolutions: "720p" })), { status: 200, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify(playable720(String(url)).body), { status: 200, headers: { "content-type": "application/json" } });
       }
       const signal = init?.signal ?? null;
       upstream.signal = signal;
@@ -738,17 +809,17 @@ describe("BunnyReplayHost: a failure says what kind it is (Task 27, carrying T26
     expect(kindOf(await thrown(cut.host.video(GUID)))).toBe("unavailable");
   });
 
-  it("openDownload: the CDN's 401 and 403 are a refusal (the token key, or a Referer the library does not allow), its 5xx the host not answering, its 404 neither; a missing SEAZN_VIDEO_ORIGINS neither", async () => {
-    const cdn = (status: number) => harness((c) => (c.url.startsWith(API) ? { status: 200, body: videoBody({ status: 4, resolutions: "720p" }) } : new Response(status < 300 ? "x" : null, { status })));
+  it("openDownload: the CDN's 401 and 403 are a refusal (the token key, or a Referer the library does not allow), its 5xx the host not answering, its 404 the typed not-downloadable (Task 48), any other status neither; a missing SEAZN_VIDEO_ORIGINS neither", async () => {
+    const cdn = (status: number) => harness((c) => (c.url.startsWith(API) ? playable720(c.url) : new Response(status < 300 ? "x" : null, { status })));
     // The CDN's refusal is of the delivery token (the token key) or the Referer: Task 27 review m3.
-    const table: [number, string][] = [[401, "refused 401 delivery_token"], [403, "refused 403 delivery_token"], [500, "unavailable"], [503, "unavailable"], [429, "unavailable"], [404, "other"]];
+    const table: [number, string][] = [[401, "refused 401 delivery_token"], [403, "refused 403 delivery_token"], [500, "unavailable"], [503, "unavailable"], [429, "unavailable"], [404, "not-downloadable"], [410, "other"]];
     let checked = 0;
     for (const [status, kind] of table) {
       expect([status, kindOf(await thrown(cdn(status).host.openDownload(GUID)))]).toEqual([status, kind]);
       checked++;
     }
-    expect(checked).toBe(6);
-    const noOrigin = harness(() => ({ status: 200, body: videoBody({ status: 4, resolutions: "720p" }) }), null);
+    expect(checked).toBe(7);
+    const noOrigin = harness((c) => playable720(c.url), null);
     expect(kindOf(await thrown(noOrigin.host.openDownload(GUID))), "a configuration fault of ours is not the host's").toBe("other");
   });
 
@@ -757,7 +828,7 @@ describe("BunnyReplayHost: a failure says what kind it is (Task 27, carrying T26
     const hangingCdn = () => {
       const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) =>
         String(url).startsWith(API)
-          ? new Response(JSON.stringify(videoBody({ status: 4, resolutions: "720p" })), { status: 200, headers: { "content-type": "application/json" } })
+          ? new Response(JSON.stringify(playable720(String(url)).body), { status: 200, headers: { "content-type": "application/json" } })
           : new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true }))) as typeof fetch;
       return new BunnyReplayHost(CONFIG, { fetchImpl, recorder: new FakeRecorder(), now: () => NOW, videoOrigins: () => ["stg.seazn.club"] });
     };
@@ -774,7 +845,7 @@ describe("BunnyReplayHost: a failure says what kind it is (Task 27, carrying T26
     } finally {
       vi.useRealTimers();
     }
-    const net = harness((c) => (c.url.startsWith(API) ? { status: 200, body: videoBody({ status: 4, resolutions: "720p" }) } : Promise.reject(new TypeError("fetch failed"))));
+    const net = harness((c) => (c.url.startsWith(API) ? playable720(c.url) : Promise.reject(new TypeError("fetch failed"))));
     expect(kindOf(await thrown(net.host.openDownload(GUID))), "a network fault").toBe("unavailable");
   });
 });

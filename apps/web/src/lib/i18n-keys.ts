@@ -11153,6 +11153,7 @@ export type DictionaryKey =
   | "stream.replay.deletePartTitle"
   | "stream.replay.deleting"
   | "stream.replay.download"
+  | "stream.replay.downloadNotReady"
   | "stream.replay.latestSession"
   | "stream.replay.seazn.failed"
   | "stream.replay.seazn.failedStillPlays"

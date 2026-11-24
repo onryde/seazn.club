@@ -7,7 +7,9 @@
 //
 // Task 26: every part has Delete (the house confirm first, danger tone, touch size), and a playable part has Download — a link to the
 // download route, which streams the file as an attachment (no token, no address of the host: the route is the only thing the browser
-// talks to). The delete's flow (`deleteSeaznReplayFlow`) is a plain async function so the node-only tests drive it; the hook is glue.
+// talks to). The link is a real `<a href download>` (a no-script browser still gets the file), but a click is first a probe
+// (`downloadSeaznReplayFlow`, Task 48): the route is asked, and the browser is told to SAVE only when the answer is ok and an mp4.
+// A 409 "not ready" (or any refusal) is a JSON error body, and saving that put a `download.json` on the organiser's disk. The delete's flow (`deleteSeaznReplayFlow`) is a plain async function so the node-only tests drive it; the hook is glue.
 //
 // The panel's own row style (a slate-bordered box, the slate chip): one quiet line per part, the state's colour on a small dot, the
 // failure in red words, the actions under the state at every width (44 px targets). The card is a pure function of its props, as the
@@ -38,6 +40,42 @@ export interface SeaznReplayActions {
   failed: string | null;
   gone: ReadonlySet<string>;
   onDelete: (replay: Replay, multi: boolean) => void;
+  /** The part whose download is being asked for, and the part whose download was answered "not ready" (Task 48). */
+  downloading: string | null;
+  downloadFailed: string | null;
+  onDownload: (replay: Replay) => void;
+}
+
+/** The download, step by step (Task 48): ask the route; save only an ok answer that is an mp4. The probe's body is cancelled
+ *  unread (the file streams in the SAVE, which is a second request), so a multi-gigabyte file is never held by the page. Any
+ *  other answer, or none, is "not_ready": the file is never saved from it. */
+export async function downloadSeaznReplayFlow(d: {
+  href: string;
+  ask: (href: string) => Promise<Response>;
+  save: (href: string) => void;
+}): Promise<"saved" | "not_ready"> {
+  let res: Response;
+  try {
+    res = await d.ask(d.href);
+  } catch {
+    return "not_ready";
+  }
+  const mp4 = res.ok && /^video\/mp4\b/i.test(res.headers.get("content-type") ?? "");
+  await res.body?.cancel().catch(() => undefined);
+  if (!mp4) return "not_ready";
+  d.save(d.href);
+  return "saved";
+}
+
+/** The browser's save: a click on a throwaway link, which is what `<a download>` does. */
+function saveFromBrowser(href: string): void {
+  const a = document.createElement("a");
+  a.href = href;
+  a.download = "";
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
 }
 
 /** The delete, step by step: the confirm (nothing happens unless the organiser confirms), the route, then a fresh read of the view.
@@ -67,6 +105,24 @@ export function useSeaznReplayActions(fixtureId: string, reread: () => Promise<u
   const [deleting, setDeleting] = useState<string | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [gone, setGone] = useState<ReadonlySet<string>>(() => new Set());
+  const [downloading, setDownloading] = useState<string | null>(null);
+  const [downloadFailed, setDownloadFailed] = useState<string | null>(null);
+  const onDownload = useCallback(
+    (replay: Replay) => {
+      if (downloading !== null) return;
+      setDownloadFailed(null);
+      setDownloading(replay.id);
+      void downloadSeaznReplayFlow({
+        href: replayDownloadHref(fixtureId, replay.id),
+        ask: (href) => fetch(href, { credentials: "same-origin", cache: "no-store" }),
+        save: saveFromBrowser,
+      }).then((outcome) => {
+        if (outcome === "not_ready") setDownloadFailed(replay.id);
+        setDownloading(null);
+      });
+    },
+    [downloading, fixtureId],
+  );
   const onDelete = useCallback(
     (replay: Replay, multi: boolean) => {
       if (deleting !== null) return;
@@ -99,7 +155,7 @@ export function useSeaznReplayActions(fixtureId: string, reread: () => Promise<u
     },
     [confirm, deleting, fixtureId, msg, reread],
   );
-  return { deleting, failed, gone, onDelete };
+  return { deleting, failed, gone, onDelete, downloading, downloadFailed, onDownload };
 }
 /** The state's words. A playable part names where it plays (m3): the public match page, or not when the public cannot see it. */
 const stateKey = (p: Replay) =>
@@ -195,6 +251,13 @@ export function SeaznReplaysCard({
                       data-testid="stream-seazn-replay-download"
                       href={replayDownloadHref(fixtureId, p.id)}
                       download
+                      aria-busy={actions.downloading === p.id || undefined}
+                      onClick={(e) => {
+                        // A modified click (new tab, save-as) is the browser's own; a plain one is probed first.
+                        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                        e.preventDefault();
+                        actions.onDownload(p);
+                      }}
                       className="btn btn-ghost min-h-11 max-md:grow"
                     >
                       <Download aria-hidden className="h-4 w-4" />
@@ -215,6 +278,11 @@ export function SeaznReplaysCard({
                     {which}
                   </button>
                 </div>
+              )}
+              {!memberFrozen && actions.downloadFailed === p.id && (
+                <p role="alert" data-testid="stream-seazn-replay-download-not-ready" className={`mt-2 text-xs text-slate-700 md:pl-4 ${multi ? "col-span-full md:col-start-2" : ""}`}>
+                  {msg("stream.replay.downloadNotReady")}
+                </p>
               )}
               {!memberFrozen && actions.failed === p.id && (
                 <p role="alert" data-testid="stream-seazn-replay-delete-failed" className={`mt-2 text-xs text-red-700 md:pl-4 ${multi ? "col-span-full md:col-start-2" : ""}`}>

@@ -7388,6 +7388,7 @@
   "stream.replay.seazn.seatPaused": "Your seat is read-only while the club is over its member limit, so replays can't be changed or downloaded. Ask the owner.",
   "stream.replay.delete": "Delete replay",
   "stream.replay.download": "Download",
+  "stream.replay.downloadNotReady": "Download not ready yet, try again in a few minutes.",
   "stream.replay.deleteConfirm": "Delete this replay for everyone? This can't be undone.",
   "stream.replay.deletePartTitle": "Delete part {n} of the replay",
   "stream.replay.deleteKeep": "Keep replay",

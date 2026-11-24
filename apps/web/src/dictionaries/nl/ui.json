@@ -7388,6 +7388,7 @@
   "stream.replay.seazn.seatPaused": "Je toegang is alleen-lezen zolang de club over de ledenlimiet zit, dus herhalingen kunnen niet worden gewijzigd of gedownload. Vraag het de eigenaar.",
   "stream.replay.delete": "Herhaling verwijderen",
   "stream.replay.download": "Downloaden",
+  "stream.replay.downloadNotReady": "Download nog niet klaar, probeer het over een paar minuten opnieuw.",
   "stream.replay.deleteConfirm": "Deze herhaling voor iedereen verwijderen? Dit kan niet ongedaan worden gemaakt.",
   "stream.replay.deletePartTitle": "Deel {n} van de herhaling verwijderen",
   "stream.replay.deleteKeep": "Herhaling houden",

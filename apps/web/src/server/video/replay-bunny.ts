@@ -4,7 +4,9 @@
 //  * Fetch: `POST /videos/fetch?collectionId=` with `{url, title}`. The answer's `id` is the new video (B1, B7).
 //  * Status: the video API's numbers, mapped by Task 21's table. The webhook's numbers are a different list (B6, Task 27).
 //  * `availableResolutions` is a comma list in no order (B9 read `360p,480p,720p,240p,1080p`), and the library is NOT capped
-//    at 720p (B9). The port promises heights at or under 720, so anything above is dropped here, with one warning per video.
+//    at 720p (B9; the owner keeps 1080p on, 2026-11-24): `video().heights` lists every height in it, the HLS set a viewer plays.
+//    It is NOT the set of files a download may take: the MP4 fallback files (`play_{h}p.mp4`) are their own set, read from
+//    `GET /videos/{id}/resolutions` (Task 48), and exist only for videos encoded after the fallback was switched on.
 //  * A DELETE answers 200 every time, a second one included (B10). So `remove` decides `absent` from a GET that answers 404,
 //    never from the DELETE's status.
 //  * The embed token is B4's. A file needs B5's CDN token AND an allowed Referer (B3, B9).
@@ -25,8 +27,6 @@ import {
 } from "./replay-ports";
 
 export const BUNNY_API_BASE = "https://video.bunnycdn.com/library";
-/** The tallest rendition a replay is served at: the port promises nothing above it. */
-const MAX_HEIGHT = 720;
 /** How long the CDN token for one server-side download is valid. The server makes the request at once, so this only has to
  *  cover the start of one GET. A provider-protocol number, like the base URL above. */
 export const DOWNLOAD_TOKEN_TTL_SECONDS = 300;
@@ -62,9 +62,29 @@ export interface BunnyReplayOptions {
   now?: () => Date;
   /** SEAZN_VIDEO_ORIGINS, read per download: the first host is the Referer the library allows (B3). */
   videoOrigins?: () => string[] | null;
-  /** Where the above-720p warning goes. INJECTED, like ingest-cf's `reportError`, so this adapter imports no app module.
-   *  Default: nothing. */
-  warn?: (fields: Record<string, unknown>, msg: string) => void;
+}
+
+/** `availableResolutions` (`"360p,480p,720p,240p,1080p"`) as heights, in the order Bunny gave, without repeats. The HLS set. */
+export function heightsOf(list: unknown): number[] {
+  const all = (typeof list === "string" ? list : "").split(",").map((s) => Number.parseInt(s.trim(), 10)).filter((n) => Number.isInteger(n) && n > 0);
+  return [...new Set(all)];
+}
+
+const MP4_PATH = /(?:^|\/)play_(\d+)p\.mp4$/i;
+const MP4_SCAN_DEPTH = 6;
+/** The heights of the `play_{h}p.mp4` paths in a `/resolutions` answer, without repeats and in no promised order. The answer is
+ *  scanned for the PATHS (the files themselves), wherever the answer nests them, so a field Bunny renames or wraps differently does
+ *  not turn into "no file". Nothing else in the answer is read: a height named only in a label (`720p`) is not a file. */
+export function mp4HeightsIn(json: unknown, depth = 0): number[] {
+  const found = new Set<number>();
+  if (typeof json === "string") {
+    const m = MP4_PATH.exec(json.trim());
+    const h = m ? Number.parseInt(m[1]!, 10) : 0;
+    if (h > 0) found.add(h);
+  } else if (depth < MP4_SCAN_DEPTH && json !== null && typeof json === "object") {
+    for (const v of Array.isArray(json) ? json : Object.values(json)) for (const h of mp4HeightsIn(v, depth + 1)) found.add(h);
+  }
+  return [...found];
 }
 
 export class BunnyReplayHost implements ReplayHost {
@@ -74,10 +94,7 @@ export class BunnyReplayHost implements ReplayHost {
   private readonly rec: ProviderCallRecorder;
   private readonly now: () => Date;
   private readonly videoOrigins: () => string[] | null;
-  private readonly warn: (fields: Record<string, unknown>, msg: string) => void;
   private readonly secrets: readonly string[];
-  /** The videos already warned about, so a video polled every tick warns once per process. */
-  private readonly warnedAbove = new Set<string>();
 
   constructor(config: BunnyConfig, opts: BunnyReplayOptions = {}) {
     this.config = config;
@@ -86,7 +103,6 @@ export class BunnyReplayHost implements ReplayHost {
     this.rec = opts.recorder ?? NOOP_RECORDER;
     this.now = opts.now ?? (() => new Date());
     this.videoOrigins = opts.videoOrigins ?? (() => seaznVideoOrigins());
-    this.warn = opts.warn ?? (() => undefined);
     this.secrets = [config.apiKey, config.readOnlyKey, config.tokenKey];
   }
 
@@ -122,7 +138,7 @@ export class BunnyReplayHost implements ReplayHost {
       // 0 is Bunny's "not read yet" (an unencoded video reads length 0), and no replay is 0 s long.
       lengthSeconds: typeof body.length === "number" && body.length > 0 ? body.length : null,
       title: typeof body.title === "string" ? body.title : null,
-      heights: this.heightsOf(videoId, body.availableResolutions),
+      heights: heightsOf(body.availableResolutions),
     };
   }
 
@@ -145,8 +161,9 @@ export class BunnyReplayHost implements ReplayHost {
     };
   }
 
-  /** The video's tallest rendition at or under 720p, as `play_{h}p.mp4` (B9) under the B5 CDN token, sent with the first
-   *  SEAZN_VIDEO_ORIGINS host as Referer. The CDN's body is answered as it streams in, never buffered here.
+  /** The video's TALLEST MP4 file, as `play_{h}p.mp4` (B9) under the B5 CDN token, sent with the first SEAZN_VIDEO_ORIGINS host
+   *  as Referer. The tallest is taken from the MP4 fallback set (`/resolutions`, Task 48), never from `availableResolutions`: the
+   *  two sets differ. No file yet (the set is empty, or the CDN answers 404) is ReplayNotDownloadable: "try again", not a fault. The CDN's body is answered as it streams in, never buffered here.
    *
    *  Task 26 review m1: the CDN's HEADERS must arrive within SEAZN_REPLAY_CALL_TIMEOUT_MS (4 s, every call's deadline), else the
    *  request is aborted and recorded `timeout`; once they are in the deadline is cleared, so a 3 h file streams for as long as it
@@ -155,10 +172,11 @@ export class BunnyReplayHost implements ReplayHost {
   async openDownload(videoId: string, cancel?: AbortSignal): Promise<ReplayDownload> {
     const v = await this.video(videoId);
     if (v.state !== "playable") throw new ReplayNotDownloadable(videoId, `not playable (${v.state})`);
-    if (v.heights.length === 0) throw new ReplayNotDownloadable(videoId, `no rendition at or under ${MAX_HEIGHT}p`);
     const origin = this.videoOrigins()?.[0];
     if (!origin) throw this.error(`openDownload: SEAZN_VIDEO_ORIGINS is not set, and the replay host serves a file only to an allowed Referer (video ${videoId})`);
-    const height = Math.max(...v.heights);
+    const files = await this.mp4Heights(videoId);
+    if (files.length === 0) throw new ReplayNotDownloadable(videoId, "no MP4 file yet");
+    const height = Math.max(...files);
     const file = `play_${height}p.mp4`;
     const dir = `/${videoId}/`;
     // B5: base64url without padding of a plain sha256 (not an HMAC) over key + path + expiry + "token_path=" + path.
@@ -202,6 +220,8 @@ export class BunnyReplayHost implements ReplayHost {
     if (!res.ok || !res.body) {
       cancel?.removeEventListener("abort", onCancel);
       await res.body?.cancel().catch(() => undefined);
+      // The file the list named is not on the CDN (yet): the same "try again" as an empty list, never a fault (Task 48).
+      if (res.status === 404) throw new ReplayNotDownloadable(videoId, "the MP4 file is not on the CDN yet");
       throw this.httpError(res.status, `openDownload: HTTP ${res.status} (video ${videoId})`, "delivery_token");
     }
     const size = Number(res.headers.get("content-length"));
@@ -242,15 +262,13 @@ export class BunnyReplayHost implements ReplayHost {
     return r.json;
   }
 
-  /** `availableResolutions` (`"360p,480p,720p,240p"`) as heights, in the order Bunny gave, without repeats, at or under 720.
-   *  Anything above is dropped and warned about once per video, naming the video id and nothing else. */
-  private heightsOf(videoId: string, list: unknown): number[] {
-    const all = (typeof list === "string" ? list : "").split(",").map((s) => Number.parseInt(s.trim(), 10)).filter((n) => Number.isInteger(n) && n > 0);
-    if (all.some((n) => n > MAX_HEIGHT) && !this.warnedAbove.has(videoId)) {
-      this.warnedAbove.add(videoId);
-      this.warn({ videoId }, "replay encoded above 720p: the library's 720p cap is off; only renditions at or under 720p are used");
-    }
-    return [...new Set(all.filter((n) => n <= MAX_HEIGHT))];
+  /** `GET /videos/{id}/resolutions` (Task 48): the heights of the MP4 fallback files the video HAS, as the paths it lists. A video
+   *  the library does not hold (404) has none. */
+  private async mp4Heights(videoId: string): Promise<number[]> {
+    const r = await this.api<unknown>("GET", `/videos/${encodeURIComponent(videoId)}/resolutions`, undefined, { operation: "mp4Resolutions", ids: [videoId], subjectId: videoId });
+    if (r.status === 404) return [];
+    if (!r.ok) throw this.httpError(r.status, `mp4Resolutions: HTTP ${r.status} (video ${videoId})`, "api_key");
+    return mp4HeightsIn(r.json);
   }
 
   /** One API request, one record. The AccessKey goes in its header and nowhere else. A network failure throws a message of

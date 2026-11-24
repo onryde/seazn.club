@@ -73,24 +73,21 @@ describe("replayDriver", () => {
     expect(next).not.toBe(host);
   });
 
-  it("the Bunny adapter the driver builds sends its above-720p warning to the server log, naming the video id", async () => {
+  it("the Bunny adapter the driver builds lists a 1080 rendition and says nothing about it: the library is not capped at 720, so there is no warning to send (Task 48)", async () => {
     // The adapter takes the global fetch when it is built, so the stub goes in first: no request leaves the process.
     const guid = "3f1c2a9e-0b7d-4c55-9a61-2d8e4f7b1c03";
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ guid, status: 4, length: 28, availableResolutions: "360p,720p,1080p" }), { status: 200 })));
-    // The adapter also records the call through dbRecorder, whose failed insert warns through the SAME log.warn (once per
-    // process). With no database — CI's unit job has no DATABASE_URL — that insert fails at once and its warning lands
-    // BEFORE this one; with a database it lands later or never. The recorder is the next test's subject, so it is stubbed
-    // here and this test counts the adapter's warning alone, with or without a database.
+    // The adapter also records the call through dbRecorder, whose failed insert warns through log.warn (once per process, and with
+    // no database — CI's unit job has none — at once). The recorder is the next test's subject, so it is stubbed here and this
+    // test counts what the adapter itself logs: nothing.
     const record = vi.spyOn(dbRecorder, "record").mockImplementation(async () => undefined);
     const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
     setEnv({ REPLAY_DRIVER: "bunny", ...BUNNY_ENV });
     const v = await replayDriver().video(guid);
-    expect([...v.heights].sort((a, b) => a - b)).toEqual([360, 720]);
+    expect([...v.heights].sort((a, b) => a - b)).toEqual([360, 720, 1080]);
     await new Promise((done) => setImmediate(done));   // the fire-and-forget record settles before anything is counted
     expect(record, "the stub stood where the adapter records").toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0][0]).toEqual({ videoId: guid });
-    expect(String(warn.mock.calls[0][1])).toMatch(/720p/);
+    expect(warn, "no above-720 warning: nothing is capped").not.toHaveBeenCalled();
   });
 
   it("the Bunny adapter the driver builds records every call through the database recorder (V542 admits `bunny`)", async () => {

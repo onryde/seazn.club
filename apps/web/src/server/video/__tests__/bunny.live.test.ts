@@ -8,8 +8,8 @@
 //       reaches seazn.club). A control embed whose `expires` has already passed must be refused, or the main result
 //       means nothing.
 //   B9  MP4 fallback: `play_{h}p.mp4` under the B5 CDN token answers 200 with an allowed `Referer` and 403 without
-//       one, for the highest `h` listed. The 720p cap (`availableResolutions` holds nothing above 720p, also for a
-//       1080p source) is an owner library setting, so it is checked in its own test.
+//       one, for the highest `h` listed. The library is NOT capped at 720p (owner ruling 2026-11-24: 1080p stays on), which is an
+//       owner library setting, so it is checked in its own test.
 //   B10 delete: `DELETE /videos/{id}` answers 200 and the video then reads 404. (The brief expected a second DELETE
 //       to answer 404; it answers 200, so the probe pins what was measured.)
 //   B8 also reads the CDN token the embed was handed (its form and its own `expires`) and re-requests the embed's
@@ -569,12 +569,12 @@ describe.skipIf(!GATE.enabled)("Bunny Stream — collections, embed past expiry,
     expect.soft(hdMinutes, "B11 control: hd, never played in a player, reads 0 minutes (else videoGuid was not applied)").toBe(0);
   }, 45 * 60_000);
 
-  // An OWNER LIBRARY SETTING, not code and not vendor behaviour (Operator setup, Phase 2: "resolutions capped at
-  // 720p"; B2). Kept in its own test so a red here is never mistaken for a vendor fact that moved. Only `hd` (a 1080p
-  // source) can witness the cap; `long` is a 720p source and cannot. Red on 2026-11-21 (B9): owner action pending.
-  it("library setting, not code (Operator setup Phase 2; owner action pending): a 1080p source lists nothing above 720p", () => {
+  // An OWNER LIBRARY SETTING, not code and not vendor behaviour (Task 48, owner 2026-11-24: 1080p stays ON; encoding is free, only
+  // storage and delivery are billed — this supersedes Operator setup Phase 2's "capped at 720p"). Kept in its own test so a red here
+  // is never mistaken for a vendor fact that moved. Only `hd` (a 1080p source) can witness it; `long` is a 720p source and cannot.
+  it("library setting, not code (owner 2026-11-24): a 1080p source lists 1080", () => {
     const heights = heightsOf(playable.hd);
     expect(heights.length, "the hd video was read once encoded (the first test reached that step)").toBeGreaterThan(0);
-    expect(Math.max(...heights), "B9 library setting: the 1080p source's highest listed resolution").toBeLessThanOrEqual(720);
+    expect(Math.max(...heights), "B9 library setting: the 1080p source's highest listed resolution").toBe(1080);
   });
 });

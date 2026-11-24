@@ -213,7 +213,11 @@ export async function seaznReplayDownload(auth: AuthCtx, fixtureId: string, repl
   try {
     file = await (deps.replay ?? replayDriver()).openDownload(row.bunny_video_id, deps.signal);
   } catch (err) {
-    if (err instanceof ReplayNotDownloadable) throw new HttpError(409, REPLAY_NOT_DOWNLOADABLE, "replay_not_downloadable");
+    if (err instanceof ReplayNotDownloadable) {
+      // Not a fault: the copy reads playable and the host has no file for it yet (Task 48). One info line, so it never reaches Sentry.
+      log.info({ replayId, guid: row.bunny_video_id, why: err.why }, "seazn replay: the host has no file to download yet — answered not ready");
+      throw new HttpError(409, REPLAY_NOT_DOWNLOADABLE, "replay_not_downloadable");
+    }
     // The host's own words (redacted by its adapter: no key, no signed URL) go to the log through the file's scrubber, never to the
     // caller. Each kind of failure has its own answer and its own level (T26 re-review m1 a, b, d).
     const fields = { replayId, guid: row.bunny_video_id, errClass: errClass(err), detail: detail(err) };

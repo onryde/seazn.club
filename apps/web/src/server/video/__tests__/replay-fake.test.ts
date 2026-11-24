@@ -1,12 +1,12 @@
 // Task 21: the in-memory ReplayHost. Later tasks (the mover, the webhook, the playback reader, the download route) drive this
-// fake, so what it promises is pinned here: ids, the processing -> playable | failed machine, the 720 ceiling on heights,
+// fake, so what it promises is pinned here: ids, the processing -> playable | failed machine, the heights (the tallest is 1080, the owner's library),
 // remove, the pure signed embed, and a download that streams.
 import { describe, expect, it } from "vitest";
 import { FakeReplayHost } from "../replay-fake";
 import { type ReplayHost, ReplayNotDownloadable, type ReplayState } from "../replay-ports";
 
-/** The owner's library setting (probe B2, spec): no replay is encoded above this. */
-const CEILING = 720;
+/** The owner's library setting (Task 48, 2026-11-24): 1080p stays ON, so the tallest rendition the library lists is this. */
+const TALLEST = 1080;
 
 const readAll = async (body: ReadableStream<Uint8Array>): Promise<Uint8Array> => {
   const reader = body.getReader();
@@ -124,7 +124,7 @@ describe("FakeReplayHost: the state machine", () => {
   });
 });
 
-describe("FakeReplayHost: heights never exceed 720", () => {
+describe("FakeReplayHost: heights reach the library's 1080 (Task 48)", () => {
   it("holds in every state, and the list is not ordered, so the best rendition is the maximum and not the last", async () => {
     const fake = new FakeReplayHost();
     const processing = await fetchOne(fake);
@@ -138,13 +138,14 @@ describe("FakeReplayHost: heights never exceed 720", () => {
     for (const id of [processing, playable, failed, removed, "never-stored"]) {
       const v = await fake.video(id);
       seen.set(v.state, v.heights);
-      for (const h of v.heights) expect(h, `${v.state} height`).toBeLessThanOrEqual(CEILING);
+      if (v.state !== "playable") expect(v.heights, `${v.state}: nothing encoded to list`).toEqual([]);
     }
     expect([...seen.keys()].sort()).toEqual(["absent", "failed", "playable", "processing"]); // every state was checked
     const heights = seen.get("playable")!;
     expect(heights.length).toBeGreaterThan(1);
-    expect(Math.max(...heights)).toBe(CEILING);
+    expect(Math.max(...heights)).toBe(TALLEST);
     expect(heights[heights.length - 1]).not.toBe(Math.max(...heights));
+    expect(heights[0], "nor is the tallest the first").not.toBe(Math.max(...heights));
   });
 });
 

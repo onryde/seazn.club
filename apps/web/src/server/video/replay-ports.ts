@@ -14,8 +14,9 @@ export interface ReplayVideo {
   lengthSeconds: number | null;
   /** The title the video was stored under. Read only when a webhook names an id no row holds; the host is never searched by it. */
   title: string | null;
-  /** The heights, in pixels, of the encoded renditions, in no promised order, never above 720: the host is set to cap its
-   *  encodes there. A caller that wants the best rendition takes the maximum, never the last item. Empty until encoded. */
+  /** The heights, in pixels, of the encoded renditions a viewer can play, in no promised order and with no ceiling (the library
+   *  encodes up to the source's own height, 1080 included). A caller that wants the best rendition takes the maximum, never the
+   *  last item. Empty until encoded. This is NOT the set of files a download can take: `openDownload` finds its own. */
   heights: number[];
 }
 
@@ -27,7 +28,7 @@ export interface ReplayDownload {
 }
 
 /** The host's refusal to hand a video's file over: the video is not playable there (still processing, failed, absent), or it has no
- *  rendition to give. A caller that believes the video playable answers "not ready, try again" rather than an error (Task 22 review
+ *  downloadable file yet (an empty file list, or the file's address answering "not found"). A caller that believes the video playable answers "not ready, try again" rather than an error (Task 22 review
  *  m6: a row can read playable while the host is still finishing). Every other failure — a timeout, a refused request — is NOT this. */
 export class ReplayNotDownloadable extends Error {
   override readonly name = "ReplayNotDownloadable";

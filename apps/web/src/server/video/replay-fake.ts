@@ -4,7 +4,7 @@
 // What it models, because a later task's code will lean on it:
 //   * A fetched video is `processing`. A test moves it with `advance` (-> playable) or `fail` (-> failed), the only two moves
 //     the real host makes; any other move throws, so a test cannot drive the fake somewhere the host never goes.
-//   * `heights` never exceed 720 and are NOT in order, as the real list is not: the best rendition is the maximum.
+//   * `heights` are NOT in order, as the real list is not (the best rendition is the maximum), and reach 1080 as the owner's library does.
 //   * `remove` reads the fake's own state, never a status: after it the video reads `absent`, and a second remove says so.
 //   * Ids are a counter under a prefix of the fake's own (`fake-video-<8 hex>-1`, …). The prefix is per INSTANCE because a copy's id
 //     is unique across the whole replay table (V545's unique index, Task 27b), as Bunny's guids are across the library: every test
@@ -20,8 +20,8 @@ export { FAKE_REPLAY_EMBED_HOST };
 /** The library segment of an embed URL: digits, as the real one is. */
 export const FAKE_REPLAY_LIBRARY_ID = "1";
 export const FAKE_REPLAY_LENGTH_SECONDS = 120;
-/** Unordered on purpose (the real host lists them unordered), and never above the 720 ceiling. */
-export const FAKE_REPLAY_HEIGHTS: readonly number[] = [360, 480, 720, 240];
+/** Unordered on purpose (the real host lists them unordered); the tallest is 1080, as in the owner's library (Task 48). */
+export const FAKE_REPLAY_HEIGHTS: readonly number[] = [360, 1080, 480, 720, 240];
 /** The bytes every playable fake video's file holds (`openDownload`). */
 export const FAKE_REPLAY_FILE = new TextEncoder().encode("fake replay: not a real mp4");
 

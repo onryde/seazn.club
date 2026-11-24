@@ -21,6 +21,9 @@ async function producedUrl(): Promise<{ url: string; token: string }> {
   let url = "";
   const fetchImpl = (async (u: string | URL | Request) => {
     const s = String(u);
+    if (s.endsWith("/resolutions")) {
+      return new Response(JSON.stringify({ data: { resolutions: [{ path: `/${GUID}/play_240p.mp4` }, { path: `/${GUID}/play_720p.mp4` }] } }), { status: 200 });
+    }
     if (s.startsWith("https://video.bunnycdn.com/")) {
       return new Response(JSON.stringify({ guid: GUID, status: 4, length: 60, availableResolutions: "240p,720p" }), { status: 200 });
     }

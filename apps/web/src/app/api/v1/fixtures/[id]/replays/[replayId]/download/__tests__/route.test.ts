@@ -36,6 +36,7 @@ vi.mock("@sentry/nextjs", async (importOriginal) => ({
 }));
 
 import { sql } from "@/lib/db";
+import { log } from "@/server/logger";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { replayFileName } from "@/lib/poster-file-name";
 import { buildOpenApiDocument } from "@/server/api-v1/openapi";
@@ -130,7 +131,10 @@ describe.skipIf(!HAS_DB)("GET …/fixtures/{id}/replays/{replayId}/download over
         // The route's database work is done by now: the clock goes fake here, before the adapter sets its deadline for the CDN's
         // headers, so the 4 s are counted on it and the test waits for none of them.
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-        return new Response(JSON.stringify({ guid: "g", status: 4, length: 60, availableResolutions: "720p" }), { status: 200, headers: { "content-type": "application/json" } });
+        const body = String(url).endsWith("/resolutions")
+          ? { data: { resolutions: [{ path: "/g/play_720p.mp4" }] } }
+          : { guid: "g", status: 4, length: 60, availableResolutions: "720p" };
+        return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
       }
       cdn.signal = init?.signal ?? null;
       cdn.asked();
@@ -286,6 +290,53 @@ describe.skipIf(!HAS_DB)("GET …/fixtures/{id}/replays/{replayId}/download over
     const second = await get(o.fixtures[0], o.playable.id);
     await second.body!.cancel("viewer left");
     expect(cancelled).toBe("viewer left");
+  });
+
+  it("Task 48: a part the library reads playable but holds no MP4 file for — an empty file list, or the CDN's 404 — is 409 replay_not_downloadable through the REAL Bunny adapter: one info line, no Sentry, no 500, and nothing of the host in the body; a 403 from the same CDN is still a reported fault", async () => {
+    const o = await organiser();
+    const GUID = o.playable.bunny_video_id!;
+    const files = (heights: number[]) => ({ data: { resolutions: heights.map((h) => ({ path: `/${GUID}/play_${h}p.mp4` })) } });
+    const answer = (mp4: number[], cdnStatus: number) => (async (url: string | URL | Request) => {
+      const u = String(url);
+      const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { "content-type": "application/json" } });
+      if (u.endsWith("/resolutions")) return json(files(mp4));
+      if (u.startsWith("https://video.bunnycdn.com/")) return json({ guid: GUID, status: 4, length: 60, availableResolutions: "240p,720p,1080p" });
+      return new Response(cdnStatus < 300 ? "x" : null, { status: cdnStatus });
+    }) as typeof fetch;
+    const info = vi.spyOn(log, "info");
+    const aboutNotReady = () => info.mock.calls.filter((c) => String(c[1]).includes("no file to download yet")).length;
+    sentry.captured.length = 0;
+    // EMPTY CASE FIRST: a file that is there downloads, and says nothing.
+    setReplayDriverForTest(new BunnyReplayHost(BUNNY, { fetchImpl: answer([240, 720], 200), recorder: new FakeRecorder(), videoOrigins: () => ["stg.seazn.club"] }));
+    const ok = await get(o.fixtures[0], o.playable.id);
+    expect(ok.status).toBe(200);
+    await ok.body?.cancel().catch(() => undefined);
+    expect([aboutNotReady(), sentry.captured]).toEqual([0, []]);
+
+    let checked = 0;
+    for (const [label, mp4, cdn] of [["no MP4 file listed (the HLS set holds 1080 and 720)", [], 200], ["the listed file is 404 on the CDN", [720, 240], 404]] as const) {
+      setReplayDriverForTest(new BunnyReplayHost(BUNNY, { fetchImpl: answer([...mp4], cdn), recorder: new FakeRecorder(), videoOrigins: () => ["stg.seazn.club"] }));
+      const before = aboutNotReady();
+      const res = await get(o.fixtures[0], o.playable.id);
+      const raw = await res.text();
+      expect([res.status, (JSON.parse(raw) as Envelope).error?.code], label).toEqual([409, "replay_not_downloadable"]);
+      expect(res.headers.get("content-type") ?? "", `${label}: an error envelope, never a file`).not.toMatch(/video\/mp4/);
+      privateNoStore(res, label);
+      for (const piece of ["bcdn_token", "expires=", "b-cdn.net", BUNNY.apiKey, BUNNY.readOnlyKey, BUNNY.tokenKey, GUID]) expect(raw, `${label}: ${piece}`).not.toContain(piece);
+      expect(aboutNotReady() - before, `${label}: exactly one info line`).toBe(1);
+      for (const call of info.mock.calls) for (const piece of ["bcdn_token", BUNNY.apiKey, BUNNY.tokenKey]) expect(JSON.stringify(call), piece).not.toContain(piece);
+      expect(sentry.captured, `${label}: a 409 is not an error`).toEqual([]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: both ways").toBe(2);
+    expect(documented()).toContain("409");
+
+    // The neighbour: a refused token is a configuration fault, reported, and never "try again".
+    setReplayDriverForTest(new BunnyReplayHost(BUNNY, { fetchImpl: answer([720], 403), recorder: new FakeRecorder(), videoOrigins: () => ["stg.seazn.club"] }));
+    const refused = await get(o.fixtures[0], o.playable.id);
+    expect([refused.status, ((await refused.json()) as Envelope).error?.code]).toEqual([500, "replay_host_refused"]);
+    expect(sentry.captured).toHaveLength(1);
+    info.mockRestore();
   });
 
   it("a part still processing is 409 replay_not_downloadable (the envelope, documented) and the host is never asked", async () => {
