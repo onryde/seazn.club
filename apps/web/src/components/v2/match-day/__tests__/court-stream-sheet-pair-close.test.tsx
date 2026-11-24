@@ -159,6 +159,46 @@ describe("courtPairSeen — the desk's read of a court's phone, as the close-on-
   });
 });
 
+describe("CourtFocus — it tells the shell which court's sheet is open, so the shell can pin the focus (P1)", () => {
+  beforeEach(() => {
+    apiV1.mockReset().mockImplementation(async () => []);
+  });
+
+  it("opened to link: the court's id; closed by the sheet's own Close: null; opened on a QR: the id again; closed by the phone pairing: null", () => {
+    const told: (string | null)[] = [];
+    const island = renderIsland(CourtFocus, props(court(link()), () => {}, { onSheetCourt: (id: string | null) => told.push(id) }));
+    // PREMISE: an effect that reports nothing at mount (no sheet) would hide a missing report; the first answer is the null of "none open".
+    expect(told.at(-1), "no sheet: none open").toBeNull();
+    showQr(island);
+    expect(told.at(-1), "Show court QR: this court").toBe("c-2");
+    (propsOf(sheetIn(island)!).onClose as () => void)();
+    expect(told.at(-1), "the sheet's Close: none open").toBeNull();
+    showQr(island);
+    expect(told.at(-1)).toBe("c-2");
+    island.rerender(props(court(link({ phone: PAIRED_STATUSES[0] })), () => {}, { onSheetCourt: (id: string | null) => told.push(id) }));
+    expect(sheetIn(island), "PREMISE: the pairing closed it").toBeUndefined();
+    expect(told.at(-1), "closed by the pairing: none open").toBeNull();
+    expect(told.filter((x) => x === "c-2").length, "it was told twice that the sheet opened").toBe(2);
+  });
+
+  it("opened to LINK a court with no link: the court's id as well; and an unmounted focus leaves no pin (the cleanup tells none open)", () => {
+    const told: (string | null)[] = [];
+    const island = renderIsland(CourtFocus, props(court(null), () => {}, { onSheetCourt: (id: string | null) => told.push(id) }));
+    openToLink(island);
+    expect(told.at(-1)).toBe("c-2");
+    island.unmount();
+    expect(told.at(-1), "unmounted: nothing stays pinned").toBeNull();
+  });
+
+  it("a static mount that hands no onSheetCourt opens and closes the sheet exactly as before", () => {
+    const island = renderIsland(CourtFocus, props(court(link())));
+    showQr(island);
+    expect(sheetIn(island)).toBeDefined();
+    (propsOf(sheetIn(island)!).onClose as () => void)();
+    expect(sheetIn(island)).toBeUndefined();
+  });
+});
+
 describe("CourtFocus — the court's QR sheet closes once the court's phone pairs (Task 35 Part B)", () => {
   beforeEach(() => {
     apiV1.mockReset().mockImplementation(async () => []);

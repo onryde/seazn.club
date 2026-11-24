@@ -60,6 +60,7 @@ import {
   openedFromParams,
   orderCourts,
   parseVenueParam,
+  pinOpened,
   resolveDayFocus,
   scopeCourtNames,
   sharedNoun,
@@ -177,6 +178,9 @@ export function MatchDayShell({
   const needsId = useId();
   /** The Match Day code sheet (MD-1 Task 2), open over the page. Editors only: a viewer never sees its button. */
   const [codeOpen, setCodeOpen] = useState(false);
+  /** P1: the court whose QR sheet is open, told by the focus (`onSheetCourt`). It pins the default focus (`pinOpened`) so a poll that
+   *  re-orders the courts cannot swap the court under the open sheet; null again once the sheet is closed. */
+  const [sheetCourt, setSheetCourt] = useState<string | null>(null);
 
   // One read of the day for the poll, the Refresh button and a court's tail countdown reaching 0 (use-day-refresh.ts).
   // A poll whose online rounds read failed keeps the online rounds the page holds, and one whose held or flagged read failed for a division keeps
@@ -255,7 +259,7 @@ export function MatchDayShell({
   // The online block: the division chips narrow it, `orderOnlineRounds` lists it (check-in or in progress, paired, over), and it is the
   // LAST place the default focus looks - a court first, then a match on no court, then the first round.
   const onlineRounds = useMemo(() => orderOnlineRounds(filterOnlineRounds(online, filter), clock), [online, filter, clock]);
-  const focus = resolveDayFocus(courts, noCourt, onlineRounds, opened);
+  const focus = resolveDayFocus(courts, noCourt, onlineRounds, pinOpened(opened, sheetCourt, courts));
   const focused = focus.kind === "court" ? focus.court : null;
   const focusedMatch = focus.kind === "match" ? focus.fixture : null;
   const focusedRound = focus.kind === "round" ? focus.round : null;
@@ -595,6 +599,7 @@ export function MatchDayShell({
                 void refresh();
               }}
               onRead={() => void refresh()}
+              onSheetCourt={setSheetCourt}
               onRefused={(message) => {
                 setNotice({ courtId: focused.court_id, message });
                 void refresh();

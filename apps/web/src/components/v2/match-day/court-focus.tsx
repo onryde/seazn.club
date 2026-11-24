@@ -108,6 +108,7 @@ export function CourtFocus({
   onBack,
   onChanged,
   onRead,
+  onSheetCourt,
   onRefused,
   notice = null,
   onDismissNotice = () => {},
@@ -125,6 +126,10 @@ export function CourtFocus({
   /** Read the day again, nothing else (unlike `onChanged`, it keeps this court's notice). The court's QR sheet reads through it while
    *  it waits for the phone (Task 35 Part B); with none handed (a static mount), nothing polls. */
   onRead?: () => void;
+  /** P1: the court whose QR sheet is open (null when none is), told on every change so the shell can pin the focus on it: the default
+   *  focus is the first court of a list a poll re-orders, and the sheet would vanish with the court it was opened on. With none
+   *  handed (a static mount) nothing is pinned. */
+  onSheetCourt?: (courtId: string | null) => void;
   /** A call or an undo was refused, in the organiser's words: the shell keeps it for this court and refreshes. */
   onRefused: (message: string) => void;
   /** This court's last refusal, kept through refreshes until dismissed or another court is opened. */
@@ -165,6 +170,17 @@ export function CourtFocus({
   useEffect(() => {
     latestRead.current = onRead;
   });
+  // P1: tell the shell which court's sheet is open, whichever way it opened or closed (a press, the pair-close above, a Close). The
+  // cleanup clears it, so an unmounted focus never leaves a pin behind.
+  const sheetCourtId = sheet?.courtId ?? null;
+  const latestSheetCourt = useRef(onSheetCourt);
+  useEffect(() => {
+    latestSheetCourt.current = onSheetCourt;
+  });
+  useEffect(() => {
+    latestSheetCourt.current?.(sheetCourtId);
+    return () => latestSheetCourt.current?.(null);
+  }, [sheetCourtId]);
   useEffect(() => {
     if (!waitingForPhone) return;
     const opened = Date.now();
