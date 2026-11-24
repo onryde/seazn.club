@@ -2201,7 +2201,9 @@ export async function addEntrantsViaApi(
   return { status: res.status, ids: (res.data ?? []).map((e) => e.id) };
 }
 
-/** Create a stage and generate its fixtures; returns stage + fixture ids. */
+/** Create a stage and generate its fixtures; returns stage + fixture ids. A refused stage create THROWS with the server's code and
+ *  message (an online division refuses a league with 422 ONLINE_FORMAT_NOT_SUPPORTED, for one), never a `TypeError` on the missing
+ *  id. A refused Generate keeps answering no fixtures: callers that assert on the count say so themselves. */
 export async function createStageAndGenerate(
   request: APIRequestContext,
   divisionId: string,
@@ -2216,12 +2218,17 @@ export async function createStageAndGenerate(
     "POST",
     { seq: 1, ...stage },
   );
+  if (created.status >= 300 || !created.data?.id) {
+    throw new Error(
+      `createStageAndGenerate: the ${stage.kind} stage on division ${divisionId} was refused: ${created.status} ${created.error?.code ?? "(no code)"} ${created.error?.message ?? ""}`.trimEnd(),
+    );
+  }
   const gen = await apiJson<{ fixtures: { id: string }[] }>(
     request,
-    `/api/v1/stages/${created.data!.id}/generate`,
+    `/api/v1/stages/${created.data.id}/generate`,
     "POST",
   );
-  return { stageId: created.data!.id, fixtureIds: (gen.data?.fixtures ?? []).map((f) => f.id) };
+  return { stageId: created.data.id, fixtureIds: (gen.data?.fixtures ?? []).map((f) => f.id) };
 }
 
 /** One entrant's real roster: the persons behind it and the lineup slot each
