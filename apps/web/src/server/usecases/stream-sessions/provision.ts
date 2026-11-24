@@ -167,6 +167,10 @@ export async function provisionSession(sessionId: string, deps: SessionDeps): Pr
     await advance(sessionId, deps);
   } catch (err) {
     if (!isSerializationFailure(err)) throw err;
+    // Task 36b review m1: the Machine's create may STILL be out (the credentials' write lost the race, not the Machine's). The
+    // abandon lists and destroys what exists and then deletes the row — a create that lands after that finds no row, and its
+    // Machine is named by nothing. So the create settles first, as it does on an input failure.
+    await settledRunner(sessionId, runner);
     return abandonAfterRace(sessionId, provisioning.orgId, err, madeIds, deps);
   }
   // Task 36b: a Machine create that failed for good (made nothing, or a last attempt) failed the session before it ever went

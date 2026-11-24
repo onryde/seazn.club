@@ -64,6 +64,10 @@ export async function sessionFactsForJob(sessionId: string, token: string, deps:
     log.info({ sid: sessionId, orgId: s.orgId }, "stream session: the Machine asked for its facts before the inputs' credentials were stored — answered inputs_not_ready");
     throw new HttpError(503, "the session's inputs are not ready yet; try again", "inputs_not_ready", undefined, { "Retry-After": String(INPUTS_NOT_READY_RETRY_AFTER_SECONDS) });
   }
+  // Task 36b review m2: an `ending` session whose credentials never landed (the write was rolled back and the stop owns the row)
+  // is over as far as a Machine is concerned. A typed 410 — the compositor's GET table maps it to `Gone`, a clean exit — and not
+  // the plain Error below, which is a 500 and a Sentry report on every poll until the stop completes.
+  if (s.state === "ending" && (!programme?.rtmps || !playback)) throw new HttpError(410, "session has ended", "SESSION_ENDED");
   // Past `provisioning` a composed session always has them (storing them precedes `provisioned`). A row without either is
   // refused by name — never a session served with a guessed or empty credential.
   if (!programme?.rtmps) throw new Error(`stream session ${sessionId}: a composed session has no programme input credential to publish to`);

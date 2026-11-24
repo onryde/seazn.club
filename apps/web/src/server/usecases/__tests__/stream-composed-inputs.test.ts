@@ -762,6 +762,40 @@ describe.skipIf(!HAS_DB)("Seazn Task 36b: the relay Machine is asked for while t
     expect(checked).toBe(3);
   });
 
+  it("review m1: a rollback of the CREDENTIALS' write while the Machine's create is STILL out waits for the create, then destroys the Machine it made — none alive for the session, no row, 503 (mutant: the abandon no longer waits)", async () => {
+    const r = await rig();
+    const makeSpy = vi.spyOn(r.runner, "create");
+    const { outcome, sessionId } = await heldAllStart(r);
+    const store = vi.spyOn(secretColumns, "storeInputCredentials").mockRejectedValueOnce(pgRollback("40P01"));
+    held(r.ingest, "camera").answer();
+    held(r.ingest, "programme").answer();
+    // The rollback has happened and the abandon is under way; the Machine's create is still held, so the start must not be over.
+    const early = await Promise.race([outcome.then(() => "settled" as const), sleep(500).then(() => "waiting" as const)]);
+    store.mockRestore();
+    expect(early, "the start waits for the Machine's create").toBe("waiting");
+    r.runner.heldCreates[0]!.answer();
+    const { err } = await outcome;
+    expect(err).toMatchObject({ status: 503, code: "ingest_unavailable" });
+    const made = await makeSpy.mock.results[0]!.value as { runnerId: string };
+    expect(r.runner.created, "PREMISE: the Machine was made after the rollback").toHaveLength(1);
+    expect(r.runner.destroyed, "destroyed").toEqual([made.runnerId]);
+    expect((await r.runner.list()).filter((m) => m.sessionId === sessionId), "none alive for the session").toEqual([]);
+    expect(await sessionsOn(r.fixtureId), "no row").toBe(0);
+  });
+
+  it("review m2: an `ending` composed session whose credentials were rolled back answers a typed 410 SESSION_ENDED (never a 500 Error) — and one WITH its credentials still serves its facts, the positive pair", async () => {
+    const r = await rig();
+    const { sessionId } = await r.start("composed");
+    const token = r.runner.created[0]!.jobToken;
+    await sql`update fixture_stream_sessions set state = 'ending' where id = ${sessionId}`;
+    await expect(sessionFactsForJob(sessionId, token, r.deps), "ending with credentials: served").resolves.toMatchObject({ mode: "composed" });
+    await sql`update fixture_stream_inputs set ingest_rtmps_url = null where role = 'programme' and session_id = ${sessionId}`;
+    await sql`update fixture_stream_inputs set playback_srt_url = null where role = 'camera' and session_id = ${sessionId}`;
+    await expect(sessionFactsForJob(sessionId, token, r.deps), "ending, credentials gone").rejects.toMatchObject({ status: 410, code: "SESSION_ENDED" });
+    await sql`update fixture_stream_sessions set state = 'warming' where id = ${sessionId}`;
+    await expect(sessionFactsForJob(sessionId, token, r.deps), "warming, credentials gone: still refused by name").rejects.toThrow(/no (programme input|camera playback) credential/);
+  });
+
   it("m2 (T36d), the filter: of the uids a start made, only those NO input row of the session names are returned — a row's own uid is its writer's, another session's row is not this session's, and nothing made is nothing to delete", async () => {
     const r = await rig();
     const { sessionId } = await r.start("composed");
@@ -822,11 +856,13 @@ describe.skipIf(!HAS_DB)("R2004 + E1 + C: storage reservations (owner rulings 20
   // recordings are marked deleted, and a RUNNING one that a far-clock read stopped (`ending`, its Machine "flushing") keeps
   // counting at every later clock. The far-future tests below would leave both for the next test, or the next run, to find.
   const made: string[] = [];
+  const release = async (ids: string[]) => {
+    if (!ids.length) return;
+    await sql`update fixture_stream_inputs set recordings_deleted_at = now() where session_id in ${sql(ids)} and role = 'camera'`;
+    await sql`update fixture_stream_sessions set state = 'completed', ended_at = coalesce(ended_at, now()) where id in ${sql(ids)} and state in ${sql([...ACTIVE_STATES])}`;
+  };
   afterEach(async () => {
-    if (made.length) {
-      await sql`update fixture_stream_inputs set recordings_deleted_at = now() where session_id in ${sql(made)} and role = 'camera'`;
-      await sql`update fixture_stream_sessions set state = 'completed', ended_at = coalesce(ended_at, now()) where id in ${sql(made)} and state in ${sql([...ACTIVE_STATES])}`;
-    }
+    await release(made);
     made.length = 0;
   });
   const startMade = async (r: Awaited<ReturnType<typeof rig>>, mode: Mode) => {
@@ -997,8 +1033,18 @@ describe.skipIf(!HAS_DB)("R2004 + E1 + C: storage reservations (owner rulings 20
       const before = await foreignMinutes(ids, r.deps.now());
       r.ingest.storage = { totalStorageMinutes: STG_USAGE_MINUTES, totalStorageMinutesLimit: STG_USED + net + before, videoCount: 4 };
       const out = await r.start("composed").then((s) => ({ sessionId: s.sessionId }), (e: unknown) => ({ refusal: e }));
-      if ("sessionId" in out) { made.push(out.sessionId); return out; }
-      if (await foreignMinutes(ids, r.deps.now()) === before) return out;
+      const settled = await foreignMinutes(ids, r.deps.now()) === before;
+      if ("sessionId" in out) {
+        made.push(out.sessionId);
+        if (settled) return out;
+        // Task 36b review m4: an ADMISSION is as untrustworthy as a refusal when the foreign figure moved across it — a parallel
+        // file's reservation ended between the read and the admission, so "one minute short" was admitted. The session is
+        // released (the fixture is free again, its reservation gone) and the attempt is made again on a fresh figure.
+        await release([out.sessionId]);
+        made.splice(made.indexOf(out.sessionId), 1);
+        continue;
+      }
+      if (settled) return out;
     }
     throw new Error("the foreign reservations never settled across 5 attempts");
   }
