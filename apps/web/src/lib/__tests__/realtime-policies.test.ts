@@ -19,8 +19,13 @@
 //     realtime.messages skip;
 //   - after a withdrawal: the policy dropped by hand reads nothing, and a re-run restores the identical row;
 //   - another surface: fixture, lobby, match-day and division tokens read no capture topic, and a capture token reads
-//     none of theirs (V555 and V556 add their own pairs to this one matrix);
+//     none of theirs (V556 adds its own pair to this one matrix; V555's `match day code read by claim` is the second
+//     policy under test, in its own describe, and its token and topic are already in the matrix);
 //   - not the table's owner: the delta skips with its notice and leaves the earlier policies as they were.
+//
+// V555 (`match day code read by claim`, claim `md_code_id`) is held to the same cases: its own token reads only
+// `match-day:A`; a blank AND a whitespace claim read nothing; every other token reads no match-day topic; the delta
+// run twice is one row; a withdrawal; the empty and not-the-owner skips.
 //
 // Applies to another sport: N/A (no sport rules).
 import { readdirSync, readFileSync } from "node:fs";
@@ -47,6 +52,8 @@ const DELTAS = resolve(__dirname, "../../../../../db/migration/deltas");
 
 /** The policy under test, as the design names it. */
 const POLICY = "capture pairing read by claim";
+/** The Match Day policy (V555), under test in its own describe. */
+const MD_POLICY = "match day code read by claim";
 /** The policies V403 and V452 create (V537 re-creates both). */
 const EARLIER = ["external play lobby read by claim", "fixture broadcast read by claim"];
 const WRAPPED = "( SELECT realtime.topic() AS topic)";
@@ -69,11 +76,11 @@ function bySuffix(suffix: string): Delta {
   return read(hits[0]!);
 }
 
-/** The one delta that creates `POLICY`. Throws inside the test that asks, so a missing delta is a red test. */
-function theDelta(): Delta {
-  const creates = new RegExp(`create\\s+policy\\s+"${POLICY}"`, "i");
+/** The one delta that creates `policy` (the capture one by default). Throws inside the test that asks, so a missing delta is a red test. */
+function theDelta(policy: string = POLICY): Delta {
+  const creates = new RegExp(`create\\s+policy\\s+"${policy}"`, "i");
   const hits = DELTA_FILES.filter((f) => creates.test(readFileSync(resolve(DELTAS, f), "utf8")));
-  if (hits.length !== 1) throw new Error(`premise: one delta creates "${POLICY}", found ${hits.length}`);
+  if (hits.length !== 1) throw new Error(`premise: one delta creates "${policy}", found ${hits.length}`);
   return read(hits[0]!);
 }
 
@@ -89,6 +96,12 @@ async function earlierPolicies(tx: Tx): Promise<void> {
   await tx.unsafe(bySuffix("realtime_fixture_broadcast_policy").text).simple();
   await tx.unsafe(bySuffix("online_chess_realtime_policy").text).simple();
   await tx.unsafe(v537Block()).simple();
+}
+
+/** …and the capture delta too: what the Match Day delta runs after. */
+async function priorPolicies(tx: Tx): Promise<void> {
+  await earlierPolicies(tx);
+  await tx.unsafe(theDelta().text).simple();
 }
 
 /** V403's guard notices, for delta `v`. */
@@ -125,6 +138,9 @@ async function tokens(): Promise<Token[]> {
     { name: "division A", claims: divisionA },
     { name: "capture blank id", claims: blanked(captureA) },
     { name: "match day blank id", claims: blanked(matchDayA) },
+    // The token a mint would make for a whitespace id (every mint refuses one): a claim of spaces, which `nullif(…, '')`
+    // does NOT null, so it can only ever bind a topic that literally ends in spaces.
+    { name: "match day whitespace id", claims: { ...matchDayA, md_code_id: "   " } },
     { name: "division blank id", claims: blanked(divisionA) },
     { name: "no claims", claims: {} },
   ];
@@ -200,16 +216,20 @@ describe("capture pairing read by claim", () => {
     expect(d.version).toBeGreaterThan(bySuffix("org_has_feature_plpgsql").version);
   });
 
+  it("premise: exactly one delta creates the match day policy, and it runs after the capture one", () => {
+    expect(theDelta(MD_POLICY).version).toBeGreaterThan(theDelta().version);
+  });
+
   describe.skipIf(!HAS_DB)("against a stub of Supabase Realtime (rolled back)", () => {
-    /** The whole read matrix after V403, V452, V537 and the delta — computed once, asserted case by case. */
+    /** The whole read matrix after V403, V452, V537, V554 and V555 — computed once, asserted case by case. */
     let matrix: Promise<Matrix> | undefined;
     const afterAllFour = () =>
       (matrix ??= (async () => {
         const ts = await tokens();
         const { value } = await rolledBack(async (tx) => {
           await stubRealtime(tx);
-          await earlierPolicies(tx);
-          await tx.unsafe(theDelta().text).simple();
+          await priorPolicies(tx);
+          await tx.unsafe(theDelta(MD_POLICY).text).simple();
           return readable(tx, ts);
         });
         return value;
@@ -218,15 +238,16 @@ describe("capture pairing read by claim", () => {
     it("anti-vacuity: every (topic, token) pair was read, and exactly the own-family pairs read anything", async ({ skip }) => {
       if (await hasRealtime()) return skip();
       const { pairs, tokens: n, reads } = await afterAllFour();
-      expect(n, "tokens in the matrix").toBe(10);
+      expect(n, "tokens in the matrix").toBe(11);
       expect(pairs, "pairs checked").toBe(TOPICS.length * n);
-      // One row each — the broadcast row, never the presence one. No blank-id token reads anything (V554's nullif).
-      // The match-day and division tokens read nothing yet: V555 and V556 add their own pairs to THIS list.
+      // One row each — the broadcast row, never the presence one. No blank-id token reads anything (V554's and V555's
+      // nullif). The division token reads nothing yet: V556 adds its own pair to THIS list.
       expect(reads).toEqual([
         ["capture:A <- capture A", 1],
         ["capture:B <- capture B", 1],
         ["fixture:A <- fixture A", 1],
         ["external-play:A <- lobby A", 1],
+        ["match-day:A <- match day A", 1],
       ]);
     });
 
@@ -266,7 +287,7 @@ describe("capture pairing read by claim", () => {
       expect(theirsOnCapture).toEqual([]);
       // Non-vacuous: both sides of the check are in the matrix.
       expect(TOPICS.filter((t) => /^(match-day|division):/.test(t.topic))).toHaveLength(4);
-      expect((await tokens()).filter((t) => /^(match day|division) /.test(t.name))).toHaveLength(4);
+      expect((await tokens()).filter((t) => /^(match day|division) /.test(t.name))).toHaveLength(5);
     });
 
     it("empty input: a token with no claims reads nothing, on any topic", async ({ skip }) => {
@@ -351,6 +372,161 @@ describe("capture pairing read by claim", () => {
       expect(value.again).toEqual(value.first);
     });
 
+    // ── V555: `match day code read by claim` (claim md_code_id) ────────────────────────────────────────────────────
+    // The matrix above already holds the md tokens and the `match-day:` topics; these cases read the V555 column out of it.
+    const mdKeys = (reads: [string, number][]) => reads.map(([k]) => k);
+
+    it("match day: an md token reads match-day:A and nothing else, one broadcast row", async ({ skip }) => {
+      if (await hasRealtime()) return skip();
+      const { reads } = await afterAllFour();
+      expect(reads.filter(([k]) => k.endsWith("<- match day A"))).toEqual([["match-day:A <- match day A", 1]]);
+    });
+
+    it("match day: an md token reads neither capture:A, fixture:A, external-play:A nor division:A", async ({ skip }) => {
+      if (await hasRealtime()) return skip();
+      const { reads } = await afterAllFour();
+      const keys = mdKeys(reads);
+      for (const t of ["capture:A", "capture:B", "fixture:A", "external-play:A", "division:A"]) {
+        expect(TOPICS.map((x) => x.name), `${t} is in the matrix`).toContain(t);
+        expect(keys, `${t} <- match day A`).not.toContain(`${t} <- match day A`);
+      }
+    });
+
+    it("match day: no other family's token reads match-day:A (capture, fixture, lobby, division)", async ({ skip }) => {
+      if (await hasRealtime()) return skip();
+      const { reads } = await afterAllFour();
+      const theirs = (await tokens()).filter((t) => !t.name.startsWith("match day") && t.name !== "no claims");
+      expect(theirs.length, "other families' tokens checked").toBeGreaterThanOrEqual(6);
+      expect(mdKeys(reads).filter((k) => k.startsWith("match-day:") && !k.endsWith("<- match day A"))).toEqual([]);
+    });
+
+    it("match day: a blank md_code_id reads nothing, not even the bare match-day: topic", async ({ skip }) => {
+      if (await hasRealtime()) return skip();
+      const { reads } = await afterAllFour();
+      const blank = (await tokens()).find((t) => t.name === "match day blank id")!;
+      expect(blank.claims.md_code_id, "premise: the token carries a blank claim").toBe("");
+      expect(TOPICS.map((t) => t.topic), "the bare topic is in the matrix").toContain("match-day:");
+      expect(reads.filter(([k]) => k.endsWith("<- match day blank id"))).toEqual([]);
+      expect(() => matchDayTopic("")).toThrow(/^Realtime match day: /);
+      await expect(mintMatchDayToken("", new Date(Date.now() + 60_000))).rejects.toThrow(/^Realtime match day: /);
+    });
+
+    it("match day: a whitespace md_code_id reads nothing in the matrix, and no builder or mint makes one", async ({ skip }) => {
+      if (await hasRealtime()) return skip();
+      const { reads } = await afterAllFour();
+      const ws = (await tokens()).find((t) => t.name === "match day whitespace id")!;
+      expect((ws.claims.md_code_id as string).length, "premise: a non-empty claim").toBeGreaterThan(0);
+      expect((ws.claims.md_code_id as string).trim(), "premise: of whitespace only").toBe("");
+      expect(reads.filter(([k]) => k.endsWith("<- match day whitespace id"))).toEqual([]);
+      expect(() => matchDayTopic("   ")).toThrow(/^Realtime match day: /);
+      await expect(mintMatchDayToken("   ", new Date(Date.now() + 60_000))).rejects.toThrow(/^Realtime match day: /);
+    });
+
+    it("match day: a token with no claims reads no match-day topic", async ({ skip }) => {
+      if (await hasRealtime()) return skip();
+      const { reads } = await afterAllFour();
+      expect(reads.filter(([k]) => k.startsWith("match-day:") && k.endsWith("<- no claims"))).toEqual([]);
+    });
+
+    it("match day, the row: SELECT, to authenticated, permissive, no WITH CHECK, topic() and the claim each wrapped, keyed on md_code_id; earlier policies untouched", async ({
+      skip,
+    }) => {
+      if (await hasRealtime()) return skip();
+      const [matchDay] = await tokens().then((ts) => ts.filter((t) => t.name === "match day A"));
+      const own = Object.keys(matchDay!.claims).filter((k) => !COMMON.includes(k));
+      expect(own, "an md token carries exactly one claim of its own").toEqual(["md_code_id"]);
+      const guarded = [...EARLIER, POLICY];
+      const { value } = await rolledBack(async (tx) => {
+        await stubRealtime(tx);
+        await priorPolicies(tx);
+        const before = await readPolicies(tx, guarded);
+        await tx.unsafe(theDelta(MD_POLICY).text).simple();
+        return { before, after: await readPolicies(tx, guarded), mine: await readPolicies(tx, [MD_POLICY]) };
+      });
+      expect(value.before).toHaveLength(3);
+      expect(value.after).toEqual(value.before);
+      expect(value.mine).toHaveLength(1);
+      const { qual, ...rest } = value.mine[0]!;
+      expect(rest).toEqual({ policyname: MD_POLICY, cmd: "SELECT", roles: ["authenticated"], permissive: "PERMISSIVE", with_check: null });
+      expect(qual).toContain(WRAPPED);
+      expect(qual).toContain(claimRead(own[0]!));
+      expect(qual).toContain("extension = 'broadcast'");
+    });
+
+    it("match day: a second run is a no-op: one row, unchanged, and the 'already present' notice", async ({ skip }) => {
+      if (await hasRealtime()) return skip();
+      const d = theDelta(MD_POLICY);
+      const { value, notices } = await rolledBack(async (tx, raised) => {
+        await stubRealtime(tx);
+        await priorPolicies(tx);
+        await tx.unsafe(d.text).simple();
+        const first = await readPolicies(tx, [MD_POLICY]);
+        const before = raised.length;
+        await tx.unsafe(d.text).simple();
+        return { first, again: await readPolicies(tx, [MD_POLICY]), secondRun: raised.slice(before) };
+      });
+      expect(value.first).toHaveLength(1);
+      expect(value.again).toEqual(value.first);
+      expect(value.secondRun).toEqual([notice(d.version).present]);
+      expect(notices.filter((n) => n === notice(d.version).present)).toHaveLength(1);
+    });
+
+    it("match day, after a withdrawal: with the policy dropped an md token reads nothing, and a re-run restores the identical row", async ({
+      skip,
+    }) => {
+      if (await hasRealtime()) return skip();
+      const d = theDelta(MD_POLICY);
+      const ts = (await tokens()).filter((t) => t.name === "match day A");
+      expect(ts).toHaveLength(1);
+      const { value } = await rolledBack(async (tx) => {
+        await stubRealtime(tx);
+        await priorPolicies(tx);
+        await tx.unsafe(d.text).simple();
+        const first = await readPolicies(tx, [MD_POLICY]);
+        await tx.unsafe(`drop policy "${MD_POLICY}" on realtime.messages`);
+        const dropped = await readable(tx, ts);
+        await tx.unsafe(d.text).simple();
+        return { first, dropped, restored: await readable(tx, ts), again: await readPolicies(tx, [MD_POLICY]) };
+      });
+      expect(value.dropped.pairs).toBe(TOPICS.length);
+      expect(value.dropped.reads).toEqual([]);
+      expect(value.restored.reads).toEqual([["match-day:A <- match day A", 1]]);
+      expect(value.again).toEqual(value.first);
+    });
+
+    it("match day: no realtime schema or no realtime.messages skips with its notice; a non-owner skips and leaves the earlier policies", async ({
+      skip,
+    }) => {
+      if (await hasRealtime()) return skip();
+      const d = theDelta(MD_POLICY);
+      const noSchema = await rolledBack(async (tx) => {
+        await tx.unsafe(d.text).simple();
+        return (await tx<{ n: number }[]>`select count(*)::int as n from pg_namespace where nspname = 'realtime'`)[0]!.n;
+      });
+      expect(noSchema.value).toBe(0);
+      expect(noSchema.notices).toContain(notice(d.version).noSchema);
+      const noTable = await rolledBack(async (tx) => {
+        await tx`create schema realtime`;
+        await tx.unsafe(d.text).simple();
+      });
+      expect(noTable.notices).toContain(notice(d.version).noTable);
+      const guarded = [...EARLIER, POLICY];
+      const notOwner = await rolledBack(async (tx) => {
+        await stubRealtime(tx);
+        await priorPolicies(tx);
+        const before = await readPolicies(tx, guarded);
+        await tx`grant usage on schema realtime to app_user`;
+        await tx`set local role app_user`;
+        await tx.unsafe(d.text).simple();
+        await tx`reset role`;
+        return { before, after: await readPolicies(tx, guarded), mine: await readPolicies(tx, [MD_POLICY]) };
+      });
+      expect(notOwner.notices).toContain(notice(d.version).notOwner);
+      expect(notOwner.value.mine).toEqual([]);
+      expect(notOwner.value.before).toHaveLength(3);
+      expect(notOwner.value.after).toEqual(notOwner.value.before);
+    });
+
     // The empty cases: the delta must skip, cleanly, wherever there is nothing to bind.
     it("no realtime schema: the delta skips with its notice, raises nothing and creates nothing", async ({ skip }) => {
       if (await hasRealtime()) return skip();
@@ -402,6 +578,15 @@ describe("capture pairing read by claim", () => {
       expect(live[0]!.roles).toEqual(["authenticated"]);
       expect(live[0]!.qual).toContain(WRAPPED);
       expect(live[0]!.qual).toContain(claimRead(claim));
+    });
+
+    it("the live match day policy exists, to authenticated, topic() and the claim each wrapped, keyed on md_code_id", async ({ skip }) => {
+      if (!(await hasRealtime())) return skip();
+      const live = await readPolicies(sql, [MD_POLICY]);
+      expect(live).toHaveLength(1);
+      expect(live[0]!.roles).toEqual(["authenticated"]);
+      expect(live[0]!.qual).toContain(WRAPPED);
+      expect(live[0]!.qual).toContain(claimRead("md_code_id"));
     });
   });
 });
