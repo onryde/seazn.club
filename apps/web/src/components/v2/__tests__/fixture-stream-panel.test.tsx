@@ -3675,6 +3675,114 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(bodyOf(island).code).toMatchObject({ status: "ok" });
   });
 
+  // Task 35 (owner 2026-11-24, "when phone is pair then can we close the QR automatically"). A phone pairing at Ready already
+  // folds the card (F4: Ready with no phone draws the code card; paired draws the fold, and `codeOpen` starts false). What is
+  // pinned here is the fold the ORGANISER opened with "Show the code again": the container's own poll of the read model closes
+  // it once a phone pairs — a phone where there was none, or another phone taking the slot — and never on a re-poll of the
+  // same pairing, so re-opened it stays open. The read model has no pairing id; a takeover's instant is the identity it serves.
+  describe("Task 35: the fold the organiser opened closes once a phone pairs", () => {
+    const TOOK_AT = "2026-09-14T11:50:00.000Z";
+    const NEW = CaptureQrV2.parse({ v: 2, code: "m3n4p5q6r7s8", slot: 0, tok: "Zz9_Yy8-Xx7Ww6Vv5Uu4Tt" });
+    const NEW_AT = "2026-09-14T11:55:00.000Z";
+    const NEW_CODE = { issuedAt: NEW_AT, state: "active" as const, endCause: null };
+    /** One more read model poll, landed. */
+    const poll = async (n = 1) => {
+      await vi.advanceTimersByTimeAsync(STREAM_POLL_MS * n);
+      await settle();
+    };
+    /** What the body draws for the fold: open or not, and whether the code's QR is inside it. */
+    const fold = (island: { tree: () => ReactElement[] }) => {
+      const tree = walk(expandWithHooks(PhoneTabBody, bodyOf(island)));
+      const d = byTestId(tree, "stream-code-disclosure");
+      return { drawn: d !== undefined, open: d ? attr(d, "open") : undefined, qr: qrImageOf(tree, "stream-qr") !== undefined };
+    };
+
+    it("another phone takes the slot → the open fold closes; the same pairing re-polled keeps it open, before and after (re-opened, it stays)", async () => {
+      const s = serve({ current: null, targets: TARGETS });
+      const island = track(await mount(s));
+      expect(bodyOf(island).codeOpen, "PREMISE (F4): paired, the fold starts closed").toBe(false);
+      bodyOf(island).onToggleCode(true);
+      await settle();
+      expect(fold(island), "opened: the QR is in it").toEqual({ drawn: true, open: true, qr: true });
+      // The same pairing, re-polled — its own facts moving (a later beat) — twice.
+      s.phone = readModel({ phone: facts({ elapsedMs: 20_000 }) });
+      const before = phoneReads();
+      await poll(2);
+      expect(phoneReads() - before, "PREMISE: two more reads landed").toBe(2);
+      expect(bodyOf(island).codeOpen, "the same pairing re-polled: still open").toBe(true);
+      // Another phone scans the shown code and takes the slot (§7.5): the read model serves the takeover's instant.
+      s.phone = readModel({ lastTakeover: { at: TOOK_AT, model: "Galaxy S24", elapsedMs: 0 }, phone: facts({ model: "Galaxy S24" }) });
+      await poll();
+      expect(bodyOf(island).codeOpen, "a new pairing closes it").toBe(false);
+      expect(fold(island), "closed: the fold is drawn, shut, no QR").toEqual({ drawn: true, open: false, qr: false });
+      // Re-opened ("Show the code again" still works), and that pairing re-polled — the notice ageing — leaves it open.
+      bodyOf(island).onToggleCode(true);
+      s.phone = readModel({ lastTakeover: { at: TOOK_AT, model: "Galaxy S24", elapsedMs: 10_000 }, phone: facts({ model: "Galaxy S24" }) });
+      await poll(2);
+      expect(fold(island), "the close was once: re-opened, it stays open").toEqual({ drawn: true, open: true, qr: true });
+    });
+
+    it("the EMPTY case: no phone, read after read, changes nothing (live, the fold open); then a phone pairs → closed", async () => {
+      const s = serve({ current: session({ state: "live", startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS, phone: readModel({ phone: null }) });
+      const island = track(await mount(s));
+      bodyOf(island).onToggleCode(true);
+      await settle();
+      expect(fold(island), "PREMISE: live with no phone still draws the fold, open").toMatchObject({ drawn: true, open: true });
+      const before = phoneReads();
+      await poll(2);
+      expect(phoneReads() - before, "PREMISE: two more reads landed").toBe(2);
+      expect(bodyOf(island).codeOpen, "no phone: no change").toBe(true);
+      s.phone = readModel();
+      await poll();
+      expect(bodyOf(island).codeOpen, "a phone where there was none closes it").toBe(false);
+    });
+
+    it("a re-pair after Revoke & reissue: the reissue keeps it open (no phone on the new code: the card), the phone that scans the NEW code closes it", async () => {
+      const s = serve({ current: null, targets: TARGETS });
+      s.reissue = () => {
+        // The old code ends; the new one has no phone (the claim on the old one ended with it).
+        s.phone = readModel({ phone: null, code: NEW_CODE });
+        return { qr: NEW, issuedAt: NEW_AT };
+      };
+      const island = track(await mount(s));
+      bodyOf(island).onToggleCode(true);
+      await settle();
+      bodyOf(island).onReissue();
+      await settle();
+      expect(calls().filter((c) => c === REISSUE), "PREMISE: reissued").toHaveLength(1);
+      expect(bodyOf(island).phone?.phone, "PREMISE: the read after the reissue names no phone").toBeNull();
+      expect(bodyOf(island).code).toMatchObject({ status: "ok", text: captureQrV2Text(NEW) });
+      await poll();
+      expect(bodyOf(island).codeOpen, "no phone on the new code: nothing paired, nothing closed").toBe(true);
+      s.phone = readModel({ code: NEW_CODE });
+      await poll();
+      expect(bodyOf(island).codeOpen, "the phone on the new code closes it").toBe(false);
+      expect(fold(island)).toEqual({ drawn: true, open: false, qr: false });
+    });
+
+    it("Revoke & reissue answering a TAKEOVER on a live session: the takeover goes from the read, the held phone stays — the fold stays open on the new code", async () => {
+      const s = serve({
+        current: session({ state: "live", startedAt: "2026-09-14T11:40:00Z" }),
+        targets: TARGETS,
+        phone: readModel({ lastTakeover: { at: TOOK_AT, model: "Galaxy S24", elapsedMs: 60_000 }, phone: facts({ model: "Galaxy S24" }) }),
+      });
+      s.reissue = () => {
+        // B7 review I-2: a takeover on an ended code is never served; the session's phone is held (C1b), so it is still read.
+        s.phone = readModel({ code: NEW_CODE, lastTakeover: null, phone: facts({ model: "Galaxy S24" }) });
+        return { qr: NEW, issuedAt: NEW_AT };
+      };
+      const island = track(await mount(s));
+      bodyOf(island).onToggleCode(true);
+      await settle();
+      bodyOf(island).onReissue();
+      await settle();
+      expect(bodyOf(island).phone?.lastTakeover, "PREMISE: the takeover is no longer served").toBeNull();
+      await poll(2);
+      expect(bodyOf(island).codeOpen, "the organiser's new code stays in front of them").toBe(true);
+      expect(fold(island)).toEqual({ drawn: true, open: true, qr: true });
+    });
+  });
+
   it("§6.7.3: a pick writes the fixture's pre-pick (PUT stream-settings); the saved pre-pick is what the picker opens at until the organiser picks", async () => {
     const s = serve({ current: null, targets: TARGETS, saved: { row: true, targetId: "t2" } });
     const island = track(await mount(s));

@@ -21,6 +21,9 @@ import {
   presenceAfterRefusal,
   readClearsW5,
   type PresenceWatch,
+  closeCodeOnPair,
+  streamPairSeen,
+  type PairSeen,
   createErrorCode,
   seaznRefinedCode,
   createErrorHolder,
@@ -239,6 +242,12 @@ export function PhoneTab({
   const [phone, setPhone] = useState<StreamPhone | null>(null);
   const [phoneLoaded, setPhoneLoaded] = useState(false);
   const phoneSeq = useRef(0);
+  // "Show the code again" is open (the stream code, below). Task 35 (owner 2026-11-24): a phone pairing closes it ONCE, from
+  // the landed read (`closeCodeOnPair` over `streamPairSeen`): a phone where there was none, or another phone taking the slot.
+  // A re-poll of the same pairing leaves it as the organiser set it, so opened again it stays open. `pairSeen` is the last
+  // landed read's pairing (null before the first: the fold is not drawn until it lands, and it starts closed).
+  const [codeOpen, setCodeOpen] = useState(false);
+  const pairSeen = useRef<PairSeen>(null);
   // Owner ruling 2026-10-09 ("A"): a Go live refused for want of a phone clears on the first present answer to a read
   // sent after the refusal (`readClearsW5`); the watch lives in a ref so the interval's callback never reads a stale one.
   const presence = useRef<PresenceWatch>(PRESENCE_WATCH_START);
@@ -259,6 +268,9 @@ export function PhoneTab({
       try {
         if (got === null || seq !== phoneSeq.current) return;
         setPhone(got);
+        const seen = streamPairSeen(got);
+        if (closeCodeOnPair(pairSeen.current, seen)) setCodeOpen(false);
+        pairSeen.current = seen;
         if (readClearsW5(presence.current, { seq, present: got.phone?.present === true })) {
           setCreateError((e) => (e !== null && isW5Refusal(e.code) ? null : e));
         }
@@ -356,7 +368,6 @@ export function PhoneTab({
   // rendered CLIENT-SIDE from the answer — never in page HTML — and the answer is never cached (`private, no-store`).
   type Code = { status: "idle" } | { status: "loading" } | { status: "error" } | { status: "ok"; qr: CaptureQrV2; issuedAt: string };
   const [code, setCode] = useState<Code>({ status: "idle" });
-  const [codeOpen, setCodeOpen] = useState(false);
   // `askCode` only asks (and sets nothing); the answer is landed by `landCode`, from its own callback — which is how the
   // effect below starts an ask without calling a state setter. `ensureCode` is the event-handler form (Retry): it shows
   // the ask in flight first.
