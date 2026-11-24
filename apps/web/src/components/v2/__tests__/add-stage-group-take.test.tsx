@@ -122,13 +122,24 @@ describe("the form after a stage of several groups", () => {
     expect(slots, "the posted count is the offered one, not the stale pick").toBe(now.value);
   });
 
-  it("more groups than the draw takes: no count is offered, the line says why, and Add stage cannot be pressed", () => {
-    const m = mount({ pools: 9, entrants: 18 });
+  it("no count the draw can take: no count is offered, the line says why, and Add stage cannot be pressed (a field of one)", () => {
+    const m = mount({ pools: 4, entrants: 1 });
     expect(propsOf(field(m.island.tree())!).value).toBeNull();
     expect((propsOf(addButton(m.island.tree())) as { disabled?: boolean }).disabled).toBe(true);
-    const shown = GroupTakeField({ msg: en as never, locale: "en", source: { pools: 9, entrants: 18 }, destKind: "knockout", counts: [], value: null, onChange: () => {} }) as ReactElement;
-    expect(textOf(shown)).toContain("9");
+    const shown = GroupTakeField({ msg: en as never, locale: "en", source: { pools: 4, entrants: 1 }, destKind: "knockout", counts: [], value: null, onChange: () => {} }) as ReactElement;
+    expect(textOf(shown)).toBe(en("schedule.groupTake.none"));
     expect(textOf(shown)).not.toMatch(/\{\w+\}/);
+  });
+
+  it("more groups than the draw takes (9): counts are offered only while the qualifiers come from at most 8 pools - never all nine groups' winners", () => {
+    // The draw counts the distinct pools its qualifiers come from (cross-pool-draw.ts), so a take of the best 4 winners out of 9 groups is
+    // a draw over 4 pools, inside the bound; the count that takes every group's winner (9) is a draw over 9 pools, outside it.
+    const m = mount({ pools: 9, entrants: 18 });
+    const offered = propsOf(field(m.island.tree())!).counts as number[];
+    expect(offered.length, "anti-vacuity: something is offered").toBeGreaterThan(0);
+    expect(offered).toContain(4);
+    expect(offered).not.toContain(9);
+    expect(Math.max(...offered), "the most the draw takes from 9 groups with no whole-group rule").toBe(8);
   });
 });
 

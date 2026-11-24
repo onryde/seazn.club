@@ -4,8 +4,9 @@
 // live line says what the count means - the split ("Top 2 per group and 2 best 3rd-placed", the builder's own `groupsKoTake`, its
 // phrases `templates.detail.take.*`) and what knockout it makes (a whole round, or a bracket with byes).
 //
-// The counts offered are the ones the save door accepts (`groupTakeWorkingCounts`, the same predicate the server's
-// `refuseGroupTakeShape` asks as the authority), so the form cannot submit a count the stage could never be drawn from. A count left
+// The counts offered are the ones the draw can NEVER refuse (`groupTakeWorkingCounts`, the "can" reading of the one predicate). The
+// server's `refuseGroupTakeShape` is more lenient (it refuses only a shape every outcome refuses), so the form never posts a count
+// the save door would refuse, and an API shape that only can refuse is saved and refused by the draw by name. A count left
 // out is said once, plainly. One DOM at every width: the control and its line wrap, nothing is duplicated for phones.
 import { groupsKoTake } from "@/lib/format-templates";
 import { groupTakeRefusal, groupTakeWorkingCounts } from "@/lib/group-take-refusal";
@@ -76,7 +77,7 @@ export function GroupTakeField({
 }) {
   if (value === null) {
     // Nothing can be drawn from these groups: say why, in the dictionary's words, never an empty select.
-    const why = groupTakeRefusal({ destKind, placement: "rank_order", pools: source.pools, take: groupsKoTake(FORMAT_BOUNDS.qualify.min, source.pools), entrants: source.entrants });
+    const why = groupTakeRefusal({ destKind, placement: "rank_order", pools: source.pools, take: groupsKoTake(FORMAT_BOUNDS.qualify.min, source.pools), entrants: source.entrants }, "can");
     return (
       <p data-testid="add-stage-group-none" role="alert" className="w-full min-w-0 basis-full text-sm text-red-600">
         {why === null ? msg("schedule.groupTake.none") : seedingErrorMessage(locale, why.code, msg("schedule.groupTake.none"), why.vars)}

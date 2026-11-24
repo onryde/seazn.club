@@ -7,7 +7,8 @@
 //   never warns.
 // Pure: no DB, no DOM.
 import { describe, expect, it } from "vitest";
-import { crossPoolDrawCanRefuse } from "@/lib/cross-pool-draw-risk";
+import { crossPoolDrawCanRefuse, crossPoolShapeAlwaysRefuses, crossPoolShapeCanRefuse, crossPoolShapeRefusalKind } from "@/lib/cross-pool-draw-risk";
+import { CROSS_POOL_SHAPES } from "@/lib/cross-pool-ties";
 import { FORMAT_BOUNDS } from "@/lib/format-bounds";
 import { STAGE_TEMPLATES, buildTemplateStages, type StageDraft } from "@/lib/format-templates";
 
@@ -84,5 +85,39 @@ describe("crossPoolDrawCanRefuse: the builder's RB5-D10 warning, asked of the en
     expect(checked, "anti-vacuity").toBe(STAGE_TEMPLATES.length * (FORMAT_BOUNDS.pools.max - FORMAT_BOUNDS.pools.min + 1) * (FORMAT_BOUNDS.qualify.max - FORMAT_BOUNDS.qualify.min + 1));
     expect(warned, "the rulebook's two named shapes are among the warnings").toEqual(expect.arrayContaining(["groups_ko 2/3", "groups_ko 3/4"]));
     console.info(`cross-pool draw risk sweep: ${checked} shapes, ${warned.length} warn: ${warned.join(", ")}`);
+  });
+});
+
+// Save-gate policy (owner, 2026-11-24): the save door refuses only a shape the draw refuses for EVERY set of pools the best places
+// could come from ("always"); a shape that only CAN refuse is saved and the draw refuses it by name later. One oracle, three answers.
+describe("crossPoolShapeRefusalKind: never / sometimes / always, from the one enumeration of supplies", () => {
+  const knockout = CROSS_POOL_SHAPES.knockout!;
+  // tables-w2d's rig: two pools, winners + the best 2nd + the best 3rd into a 4-draw. By X-PD-4 the winners keep their fold places and a
+  // tier of one seat swaps with nobody: the 2nd (seat 3) meets the OTHER pool's winner (seat 2), the 3rd (seat 4) meets seat 1, group
+  // A's winner. So it refuses unless the 2nd is A2 AND the 3rd is B3 - one of the four outcomes separates, three refuse.
+  const RIG = [{ kind: "topNPerGroup", n: 1 }, { kind: "bestNth", nth: 2, count: 1 }, { kind: "bestNth", nth: 3, count: 1 }] as const;
+
+  it("the e2e rig (2 pools, top 1 + best 2nd + best 3rd) is 'sometimes': it can refuse, and it does not always", () => {
+    expect(crossPoolShapeRefusalKind(knockout, 2, RIG)).toBe("sometimes");
+    expect(crossPoolShapeCanRefuse(knockout, 2, RIG)).toBe(true);
+    expect(crossPoolShapeAlwaysRefuses(knockout, 2, RIG)).toBe(false);
+  });
+
+  it("X-PD-4's named shapes are 'sometimes' - refused only WHEN the best runner-up shares a pool with the winner she would meet, so it depends on which group's runner-up is best - and whole pool places (X-PD-2) are 'never'", () => {
+    expect(crossPoolShapeRefusalKind(knockout, 2, [{ kind: "topNPerGroup", n: 1 }, { kind: "bestNth", nth: 2, count: 1 }])).toBe("sometimes");
+    expect(crossPoolShapeRefusalKind(knockout, 3, [{ kind: "topNPerGroup", n: 1 }, { kind: "bestNth", nth: 2, count: 1 }])).toBe("sometimes");
+    for (const [p, n] of [[2, 2], [3, 2], [4, 2]] as const) expect(crossPoolShapeRefusalKind(knockout, p, [{ kind: "topNPerGroup", n }]), `${p} pools top ${n}`).toBe("never");
+  });
+
+  it("the empty set is not 'always': a best tier that asks more pools than there are has no supply to refuse, so never", () => {
+    // 2 pools cannot supply 3 best seconds: no set of pools exists, and "every set refuses" over none must not read as true.
+    expect(crossPoolShapeRefusalKind(knockout, 2, [{ kind: "topNPerGroup", n: 1 }, { kind: "bestNth", nth: 2, count: 3 }])).toBe("never");
+    expect(crossPoolShapeAlwaysRefuses(knockout, 2, [{ kind: "topNPerGroup", n: 1 }, { kind: "bestNth", nth: 2, count: 3 }])).toBe(false);
+  });
+
+  it("a second ask answers the same (the cached answer keeps its kind, not just its boolean)", () => {
+    expect(crossPoolShapeRefusalKind(knockout, 2, RIG)).toBe("sometimes");
+    expect(crossPoolShapeRefusalKind(knockout, 2, RIG)).toBe("sometimes");
+    expect(crossPoolShapeAlwaysRefuses(knockout, 2, RIG)).toBe(false);
   });
 });

@@ -12,7 +12,11 @@ import "server-only";
 //   1. more places than the groups hold (RR_CUT_EXCEEDS_FIELD, `takeCutIssue` - the cut gate's own count over the field snaked into the
 //      pools). Asked before the draw's shape, so a refusal never offers a count above the field; and not asked of a finished source
 //      (`refuseUnfillableFromFinishedSources` reads the tables it finished with, where a departed entrant keeps her row);
-//   2. the draw's own refusals (`groupTakeRefusal`): too few places (SEEDING_QUALIFY_TOO_FEW), too large, a page playoff not of four, no ordering that keeps pool-mates apart.
+//   2. the draw's own refusals (`groupTakeRefusal`, read "always"): too few places (SEEDING_QUALIFY_TOO_FEW), too large, a page playoff not of
+//      four, no ordering that keeps pool-mates apart. Only a shape the draw refuses for EVERY set of pools its best places could come from
+//      is refused here (owner, 2026-11-24); one that only CAN refuse (it depends on which group's runner-up is best) is saved, and the draw
+//      refuses it by name once the groups are played, as it did before this door existed. The Add stage form lists only counts that
+//      can never refuse.
 import type { ProgressionSpec } from "@seazn/engine/competition";
 import { HttpError } from "@/lib/errors";
 import { snakeSizes, takeCutIssue } from "@/lib/field-cut-gate";
@@ -53,7 +57,10 @@ export async function refuseGroupTakeShape(
   // A pooled source: only a group stage has pool keys (`sourceShapeOf`), so two or more of them is a group of two or more pools.
   if (pools < 2 || take.length === 0 || !take.every((t) => t.kind === "topNPerGroup" || t.kind === "bestNth")) return;
   const field = await rosterSize(tx, target.division_id);
-  const refused = groupTakeRefusal({ destKind: target.kind ?? "", placement: progression.placement, pools, take, entrants: field });
+  // The remedy's counts are capped by the field the groups hold. A FED group stage holds what it was fed, not the roster, and the
+  // page cannot tell either (`addStageGroupSource`): its options are bounded by the draw alone, exactly as the form's are.
+  const fed = source.id !== undefined && (await isFed(tx, source.id));
+  const refused = groupTakeRefusal({ destKind: target.kind ?? "", placement: progression.placement, pools, take, entrants: fed ? null : field });
   if (field !== null && pools <= POOL_COUNT_MAX && source.status !== "complete") {
     const sizes = snakeSizes(field, pools);
     const issue = takeCutIssue(take, sizes);
@@ -73,6 +80,12 @@ export async function refuseGroupTakeShape(
     }
   }
   if (refused !== null) throw refusal(refused);
+}
+
+/** Whether the stage is fed by an earlier one (it has a progression), so its field is not the roster. */
+async function isFed(tx: Tx, stageId: string): Promise<boolean> {
+  const [row] = await tx<{ fed: boolean }[]>`select progression is not null as fed from stages where id = ${stageId}`;
+  return row?.fed === true;
 }
 
 /** The division's active roster (registered and confirmed, the generators' own field, as `refuseCutBeyondField` reads it), or null when

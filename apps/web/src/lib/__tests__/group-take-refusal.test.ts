@@ -12,9 +12,11 @@ import { crossPoolDrawCanRefuse } from "@/lib/cross-pool-draw-risk";
 import { FORMAT_BOUNDS } from "@/lib/format-bounds";
 import { PAGE_PLAYOFF_SIZE } from "@/lib/format-size-gates";
 import { buildTemplateStages, groupsKoTake } from "@/lib/format-templates";
-import { crossPoolTooLarge, groupTakeRefusal, groupTakeWorkingCounts } from "@/lib/group-take-refusal";
+import { crossPoolTooLarge, groupTakeRefusal, groupTakeWorkingCounts, supplyingPools, type GroupTakeAsk } from "@/lib/group-take-refusal";
 
-const ask = (pools: number, q: number, destKind = "knockout") => groupTakeRefusal({ destKind, placement: "rank_order", pools, take: groupsKoTake(q, pools) });
+// The form's reading ("can"): the whole-grid sweeps below compare it with the builder's own warning, which is also "can". The SAVE door's
+// reading ("always", the default) is pinned in its own describe at the end.
+const ask = (pools: number, q: number, destKind = "knockout") => groupTakeRefusal({ destKind, placement: "rank_order", pools, take: groupsKoTake(q, pools) }, "can");
 const builderRefuses = (pools: number, q: number) => crossPoolDrawCanRefuse(buildTemplateStages("groups_ko", { qualified: q, poolCount: pools, swissRounds: 3, legs: 1 }));
 
 describe("groupTakeRefusal: what a per-group take from several groups is refused for at save", () => {
@@ -70,14 +72,14 @@ describe("groupTakeRefusal: what a per-group take from several groups is refused
   });
 
   it("with no count that would work (a field of one) the refusal names none and says so by phase", () => {
-    const refusal = groupTakeRefusal({ destKind: "knockout", placement: "rank_order", pools: 4, take: groupsKoTake(5, 4), entrants: 1 })!;
+    const refusal = groupTakeRefusal({ destKind: "knockout", placement: "rank_order", pools: 4, take: groupsKoTake(5, 4), entrants: 1 }, "can")!;
     expect(refusal.code).toBe("SEEDING_POOL_SEPARATION_IMPOSSIBLE");
     expect(refusal.vars).toMatchObject({ options: "", phase: "saveNone" });
     expect(groupTakeWorkingCounts("knockout", 4, 1), "the premise: nothing is offered").toEqual([]);
   });
 
   it("the entrant cap shapes the options: a field of 8 never offers a count above 8", () => {
-    const refusal = groupTakeRefusal({ destKind: "knockout", placement: "rank_order", pools: 4, take: groupsKoTake(5, 4), entrants: 8 })!;
+    const refusal = groupTakeRefusal({ destKind: "knockout", placement: "rank_order", pools: 4, take: groupsKoTake(5, 4), entrants: 8 }, "can")!;
     expect(refusal.code).toBe("SEEDING_POOL_SEPARATION_IMPOSSIBLE");
     const options = String(refusal.vars.options).split(", ").map(Number);
     expect(Math.max(...options)).toBeLessThanOrEqual(8);
@@ -118,12 +120,17 @@ describe("groupTakeRefusal: what a per-group take from several groups is refused
 
   it("not this check's to judge (null): one group, a league-shaped Top N, a kind the draw never runs on, a seeded_map placement, an empty take", () => {
     const base = { destKind: "knockout", placement: "rank_order" as const, pools: 4, take: groupsKoTake(5, 4) };
-    expect(groupTakeRefusal(base), "the premise: this shape IS refused").not.toBeNull();
-    expect(groupTakeRefusal({ ...base, pools: 1 }), "one group").toBeNull();
-    expect(groupTakeRefusal({ ...base, take: [{ kind: "rankRange", from: 1, to: 5 }] }), "a rankRange").toBeNull();
-    expect(groupTakeRefusal({ ...base, destKind: "double_elim" }), "double elimination is not drawn across pools").toBeNull();
-    expect(groupTakeRefusal({ ...base, placement: "seeded_map" }), "the organiser's own seats").toBeNull();
-    expect(groupTakeRefusal({ ...base, take: [] }), "an empty take").toBeNull();
+    for (const mode of ["can", "always"] as const) {
+      // The premise is a shape both readings judge: a qualifier count past the draw's bound is refused whichever way it is asked.
+      const refused = { ...base, take: groupsKoTake(FORMAT_BOUNDS.qualify.max + 1, 4) };
+      expect(groupTakeRefusal(refused, mode), `${mode}: the premise: this shape IS refused`).not.toBeNull();
+      expect(groupTakeRefusal({ ...refused, pools: 1 }, mode), `${mode}: one group`).toBeNull();
+      expect(groupTakeRefusal({ ...refused, take: [{ kind: "rankRange", from: 1, to: 5 }] }, mode), `${mode}: a rankRange`).toBeNull();
+      expect(groupTakeRefusal({ ...refused, destKind: "double_elim" }, mode), `${mode}: double elimination is not drawn across pools`).toBeNull();
+      expect(groupTakeRefusal({ ...refused, placement: "seeded_map" }, mode), `${mode}: the organiser's own seats`).toBeNull();
+      expect(groupTakeRefusal({ ...refused, take: [] }, mode), `${mode}: an empty take`).toBeNull();
+    }
+    expect(groupTakeRefusal(base, "can"), "the premise: the separation shape is refused as the form reads it").not.toBeNull();
   });
 });
 
@@ -137,5 +144,85 @@ describe("groupTakeWorkingCounts: the counts a form may offer", () => {
       expect(got, `${pools} groups, cap ${cap}`).toEqual(want);
       expect(got.length, "anti-vacuity").toBeGreaterThan(0);
     }
+  });
+});
+
+// Save-gate policy (owner, 2026-11-24): the SAVE refuses only a shape the draw refuses for every set of pools the best places could
+// come from. A shape that only CAN refuse is saved, and the draw refuses it by name later (as it did before the save gate existed).
+// The FORM keeps offering only counts that can never refuse ("can" mode).
+describe("save policy: only an 'always' refusal is a 422; a 'can' refusal saves", () => {
+  // tables-w2d.spec.ts: 2 pools, take [top 1, best 2nd, best 3rd] on_complete into a knockout. Three of its four outcomes refuse, one
+  // separates (see cross-pool-draw-risk.test.ts), so the draw can refuse it - and a real division saves and draws it.
+  const RIG: GroupTakeAsk["take"] = [{ kind: "topNPerGroup", n: 1 }, { kind: "bestNth", nth: 2, count: 1 }, { kind: "bestNth", nth: 3, count: 1 }];
+  const base = { destKind: "knockout", placement: "rank_order", pools: 2, take: RIG } as const;
+
+  it("the e2e rig SAVES (null), though the draw can refuse it", () => {
+    expect(groupTakeRefusal(base)).toBeNull();
+  });
+
+  it("the same rig IS refused when asked as the form asks ('can'): the premise that the save's null is the policy, not a missing check", () => {
+    expect(groupTakeRefusal(base, "can")?.code).toBe("SEEDING_POOL_SEPARATION_IMPOSSIBLE");
+  });
+
+  it("X-PD-4's named shapes (2 groups: winners + the best runner-up; 3 groups: winners + one) only CAN refuse - it depends on which group's runner-up is best - so they SAVE", () => {
+    for (const [pools, q] of [[2, 3], [3, 4]] as const) {
+      const take = groupsKoTake(q, pools);
+      expect(groupTakeRefusal({ ...base, pools, take }), `${pools} groups, ${q} through: saves`).toBeNull();
+      expect(groupTakeRefusal({ ...base, pools, take }, "can")?.code, `${pools} groups, ${q} through: the form still leaves it out`).toBe("SEEDING_POOL_SEPARATION_IMPOSSIBLE");
+    }
+  });
+
+  it("an always-refuse shape is a 422 by code at save: too few places, a page playoff not of four, more qualifiers than the draw takes, more groups than it takes", () => {
+    const save = (a: Partial<GroupTakeAsk>) => groupTakeRefusal({ ...base, ...a })?.code;
+    expect(save({ take: [{ kind: "bestNth", nth: 1, count: 1 }], pools: 4 })).toBe("SEEDING_QUALIFY_TOO_FEW");
+    expect(save({ destKind: "page_playoff", pools: 4, take: groupsKoTake(8, 4) })).toBe("SEEDING_PAGE_PLAYOFF_NEEDS_FOUR");
+    expect(save({ pools: 8, take: groupsKoTake(FORMAT_BOUNDS.qualify.max + 1, 8) })).toBe("SEEDING_CROSS_POOL_DRAW_TOO_LARGE");
+    expect(save({ pools: 9, take: groupsKoTake(9, 9) })).toBe("SEEDING_CROSS_POOL_DRAW_TOO_LARGE");
+  });
+
+  it("the counts the form offers do not move: a count with a refusing supply is still left out", () => {
+    // 2 groups: 3 is refused (above); 2 and 4 are not. The form's list is the 'can' reading, whatever the save door does.
+    const counts = groupTakeWorkingCounts("knockout", 2, null);
+    expect(counts).not.toContain(3);
+    expect(counts).toEqual(expect.arrayContaining([2, 4]));
+  });
+});
+
+describe("crossPoolTooLarge is asked of the pools that can SUPPLY a qualifier, not of the source's pool count", () => {
+  // A take with no whole-group rule draws from the pools its best places come from: four best winners from nine groups are four
+  // pools in the draw (cross-pool-draw.ts counts the distinct pools of the qualifiers it was handed), inside the bound of eight.
+  it("9 groups, 4 qualifiers (n=0: min(pools, q) = 4 pools) is not too large", () => {
+    expect(ask(9, 4), "groupsKoTake(4, 9) is four best winners").toBeNull();
+    expect(groupsKoTake(4, 9).every((t) => t.kind === "bestNth"), "the premise: no whole-group rule").toBe(true);
+    expect(ask(FORMAT_BOUNDS.pools.max + 1, 4)).toBeNull();
+  });
+
+  it("9 groups, every group's winner (9 pools supply) is still too large, with the groups remedy", () => {
+    const refusal = ask(9, 9)!;
+    expect(refusal.code).toBe("SEEDING_CROSS_POOL_DRAW_TOO_LARGE");
+    expect(refusal.vars.phase).toBe("saveGroups");
+  });
+
+  it("a whole-group rule takes every pool: 9 groups, top 1 + 1 best 2nd is too large; q > the entrant bound is too large whatever the pools", () => {
+    expect(ask(9, 10)?.code).toBe("SEEDING_CROSS_POOL_DRAW_TOO_LARGE");
+    expect(ask(2, FORMAT_BOUNDS.qualify.max + 1)?.code).toBe("SEEDING_CROSS_POOL_DRAW_TOO_LARGE");
+  });
+
+  it("at most vs at fewest: a best tier of eight and one of two from 9 groups draw from 8 to 9 pools - the form (can) leaves it out, the save (always) saves it", () => {
+    // The tier of eight asks eight groups; the tier of two may sit inside them (8 pools drawn) or reach the ninth (9 pools, past the bound
+    // of 8). Whether it is too large depends on the groups, so only the form's reading refuses it.
+    const take: GroupTakeAsk["take"] = [{ kind: "bestNth", nth: 1, count: 8 }, { kind: "bestNth", nth: 2, count: 2 }];
+    const base = { destKind: "knockout", placement: "rank_order", pools: 9, take } as const;
+    expect(supplyingPools(take, 9)).toEqual({ min: 8, max: 9 });
+    expect(groupTakeRefusal(base, "can")?.code).toBe("SEEDING_CROSS_POOL_DRAW_TOO_LARGE");
+    expect(groupTakeRefusal(base, "can")?.vars.phase).toBe("saveGroups");
+    expect(groupTakeRefusal(base)).toBeNull();
+  });
+
+  it("the form's counts for 9 groups are the counts under the bound, not none", () => {
+    const counts = groupTakeWorkingCounts("knockout", 9, null);
+    expect(counts.length, "anti-vacuity").toBeGreaterThan(0);
+    expect(counts).toContain(4);
+    expect(counts).not.toContain(9);
   });
 });

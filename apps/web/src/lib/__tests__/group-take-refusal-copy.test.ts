@@ -8,7 +8,9 @@ import { groupTakeRefusal, type GroupTakeRefusal } from "@/lib/group-take-refusa
 import { LOCALES } from "@/lib/i18n-constants";
 import { seedingErrorMessage } from "@/lib/seeding-error";
 
-const ask = (destKind: string, pools: number, q: number, take = groupsKoTake(q, pools)) => groupTakeRefusal({ destKind, placement: "rank_order", pools, take })!;
+// "can": the refusals a shape CAN draw (the form's reading). The save door's own default ("always") refuses only what every outcome
+// refuses, which the builder's space never reaches for a separation (see group-take-refusal.test.ts); the copy is the same text either way.
+const ask = (destKind: string, pools: number, q: number, take = groupsKoTake(q, pools)) => groupTakeRefusal({ destKind, placement: "rank_order", pools, take }, "can")!;
 
 /** One real refusal of each save variant: separation with options, separation with none, too large (counts), too large (groups),
  *  page playoff, too few. */
@@ -21,7 +23,7 @@ function refusals(): { name: string; r: GroupTakeRefusal }[] {
     { name: "too few", r: ask("knockout", 4, 0, [{ kind: "bestNth", nth: 1, count: 1 }]) },
     // A refusal with no count to pick: a field of one offers no count at all (the real call; the server's cut check answers a field this
     // small first, so this is the predicate's own empty case).
-    { name: "separation, nothing to pick", r: groupTakeRefusal({ destKind: "knockout", placement: "rank_order", pools: 4, take: groupsKoTake(5, 4), entrants: 1 })! },
+    { name: "separation, nothing to pick", r: groupTakeRefusal({ destKind: "knockout", placement: "rank_order", pools: 4, take: groupsKoTake(5, 4), entrants: 1 }, "can")! },
   ];
 }
 

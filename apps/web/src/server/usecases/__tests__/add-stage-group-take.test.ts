@@ -4,9 +4,10 @@
 // `createStages` (the usecase behind POST /divisions/{id}/stages), a real draw, real results through `scoreEvent`, the real
 // `completeStage` that seeds and generates the knockout - so a seam declared on one end and never read on the other cannot hide.
 //
-// Impossible shapes are refused AT SAVE by the draw's own codes (SEEDING_POOL_SEPARATION_IMPOSSIBLE, SEEDING_CROSS_POOL_DRAW_TOO_LARGE,
+// Shapes the draw refuses for EVERY outcome are refused AT SAVE by its own codes (SEEDING_CROSS_POOL_DRAW_TOO_LARGE,
 // SEEDING_PAGE_PLAYOFF_NEEDS_FOUR), by SEEDING_QUALIFY_TOO_FEW and by RR_CUT_EXCEEDS_FIELD, writing nothing - never a save that then
-// never generates. Expected values come from the rulebook / bounds (FORMAT_BOUNDS, the round-robin sizes), never from the code under test.
+// never generates. A shape the draw only CAN refuse (SEEDING_POOL_SEPARATION_IMPOSSIBLE, when the best runner-up comes from the wrong
+// group) is SAVED - owner policy 2026-11-24 - and the draw refuses it by name once the groups are played; the form never offers one. Expected values come from the rulebook / bounds (FORMAT_BOUNDS, the round-robin sizes), never from the code under test.
 // Sports: generic and boardgame (the two the scene builders can score through a result event; the take reads only places, so two
 // sports with different result events prove it is not generic-shaped). Real Postgres required; skipped without DATABASE_URL.
 import { afterAll, describe, expect, it } from "vitest";
@@ -15,6 +16,7 @@ import { HttpError } from "@/lib/errors";
 import { FORMAT_BOUNDS } from "@/lib/format-bounds";
 import { snakeSizes } from "@/lib/field-cut-gate";
 import { groupsKoTake } from "@/lib/format-templates";
+import { groupTakeWorkingCounts } from "@/lib/group-take-refusal";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { addStageGroupProgression } from "@/components/v2/stages-panel";
 import { completeStage, createStages, deleteStage, generateStageFixtures } from "../stages";
@@ -87,6 +89,9 @@ const formBody = (count: number, pools: number, kind = "knockout") => ({
   config: {},
   progression: addStageGroupProgression(count, pools),
 });
+
+/** A take of one place: refused at save whatever the groups do (a knockout needs FORMAT_BOUNDS.qualify.min). */
+const tooFewBody = () => ({ ...formBody(8, 4), progression: { ...addStageGroupProgression(8, 4), sources: [{ stage: "previous", take: [{ kind: "bestNth", nth: 1, count: 1 }] }] } });
 
 const refusalOf = (p: Promise<unknown>) =>
   p.then(
@@ -171,8 +176,8 @@ describe.skipIf(!HAS_DB)("Add stage after groups: sequences", () => {
     const [first] = await createStages(g.auth, g.divId, formBody(8, 4) as never);
     await deleteStage(g.auth, first!.id);
     expect(await stagesOf(g.divId), "deleted").toEqual([1]);
-    const refused = await refusalOf(createStages(g.auth, g.divId, formBody(5, 4) as never));
-    expect(refused?.code).toBe("SEEDING_POOL_SEPARATION_IMPOSSIBLE");
+    const refused = await refusalOf(createStages(g.auth, g.divId, tooFewBody() as never));
+    expect(refused?.code).toBe("SEEDING_QUALIFY_TOO_FEW");
     expect(await stagesOf(g.divId), "the refusal wrote nothing").toEqual([1]);
     const [second] = await createStages(g.auth, g.divId, formBody(8, 4) as never);
     await completeGroups(g);
@@ -202,10 +207,10 @@ describe.skipIf(!HAS_DB)("Add stage after groups: sequences", () => {
 });
 
 describe.skipIf(!HAS_DB)("Add stage after groups: what the save door does NOT judge", () => {
-  it("a setup-timing stage (the builder's templates) keeps its behaviour: the shape the Add stage form refuses still SAVES - the builder only warns of it", async () => {
-    const g = await groups({ sport: "generic", entrants: 16, pools: 4 });
-    const body = formBody(5, 4);
-    expect((await refusalOf(createStages(g.auth, g.divId, body as never)))?.code, "the premise: on_complete refuses it").toBe("SEEDING_POOL_SEPARATION_IMPOSSIBLE");
+  it("a setup-timing stage (the builder's templates) keeps its behaviour: the shape the save door refuses on_complete (more qualifiers than the draw takes) still SAVES - the builder only warns of it", async () => {
+    const g = await groups({ sport: "generic", entrants: 40, pools: 4 });
+    const body = formBody(FORMAT_BOUNDS.qualify.max + 1, 4);
+    expect((await refusalOf(createStages(g.auth, g.divId, body as never)))?.code, "the premise: on_complete refuses it").toBe("SEEDING_CROSS_POOL_DRAW_TOO_LARGE");
     const [saved] = await createStages(g.auth, g.divId, { ...body, progression: { ...body.progression, timing: "setup" } } as never);
     expect(saved!.seq).toBe(2);
   });
@@ -236,19 +241,39 @@ describe.skipIf(!HAS_DB)("Add stage after groups: what the save door does NOT ju
 });
 
 describe.skipIf(!HAS_DB)("Add stage after groups: impossible shapes are refused at SAVE, by name, writing nothing", () => {
-  it("separation: 4 groups, qualify 5 -> SEEDING_POOL_SEPARATION_IMPOSSIBLE naming counts that would save (each of which does)", async () => {
+  it("separation CAN happen, not always: 4 groups, qualify 5 (top 1 + the best runner-up) SAVES - the draw refuses it by name only if that runner-up is the wrong group's - and the form never offers it", async () => {
     const g = await groups({ sport: "generic", entrants: 16, pools: 4 });
-    const err = await refusalOf(createStages(g.auth, g.divId, formBody(5, 4) as never));
-    expect(err?.code).toBe("SEEDING_POOL_SEPARATION_IMPOSSIBLE");
-    expect(err!.status).toBe(422);
-    const options = String(err!.extra?.options).split(", ").map(Number);
-    expect(options.length).toBeGreaterThan(0);
-    expect(await stagesOf(g.divId), "nothing was added").toEqual([1]);
-    for (const o of options) {
-      const [saved] = await createStages(g.auth, g.divId, formBody(o, 4) as never);
-      expect(saved!.seq, `the offered ${o} saves`).toBe(2);
-      await deleteStage(g.auth, saved!.id);
+    const [saved] = await createStages(g.auth, g.divId, formBody(5, 4) as never);
+    expect(saved!.seq, "saved: only an 'always' refusal is a 422").toBe(2);
+    expect(groupTakeWorkingCounts("knockout", 4, 16), "the form's list leaves it out").not.toContain(5);
+    expect(groupTakeWorkingCounts("knockout", 4, 16), "anti-vacuity: and still offers counts").toContain(8);
+  });
+
+  it("a saved 'can refuse' shape is then DRAWN by the real Complete, and which way it goes is the groups' (the draw's own rule, X-PD-4): seats 5 with no pool-mates, or is refused SEEDING_POOL_SEPARATION_IMPOSSIBLE by name - never a silent stall", async () => {
+    const g = await groups({ sport: "generic", entrants: 16, pools: 4 });
+    const [saved] = await createStages(g.auth, g.divId, formBody(5, 4) as never);
+    const err = await refusalOf(completeGroups(g));
+    const lines = async () => (await sql<{ n: number }[]>`select count(*)::int as n from fixtures where stage_id = ${saved!.id}`)[0]!.n;
+    if (err === null) {
+      const field = await knockoutField(g, saved!.id);
+      expect(field.seated, "the knockout seats the 5 qualifiers").toBe(5);
+      // Rule: 5 into a bracket of 8 puts 3 seeds on byes, so round one holds 5 - 4 = 1 real line.
+      expect(field.realPairs, "anti-vacuity: round one has its one real line").toBe(1);
+      expect(field.sameGroupPairs, "no pool-mates meet in round one").toBe(0);
+    } else {
+      expect(err.status).toBe(422);
+      expect(err.code, "refused by the draw, by name").toBe("SEEDING_POOL_SEPARATION_IMPOSSIBLE");
+      expect(await lines(), "nothing was half-seeded").toBe(0);
     }
+  });
+
+  it("the tables-w2d rig: 2 groups, take [top 1, best 2nd, best 3rd] into a knockout saves (three of its four outcomes refuse, one does not)", async () => {
+    const g = await groups({ sport: "generic", entrants: 6, pools: 2 });
+    const [saved] = await createStages(g.auth, g.divId, {
+      seq: 2, kind: "knockout", name: "Finals", config: {},
+      progression: { sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: 1 }, { kind: "bestNth", nth: 2, count: 1 }, { kind: "bestNth", nth: 3, count: 1 }] }], placement: "rank_order", timing: "on_complete" },
+    } as never);
+    expect(saved!.seq).toBe(2);
   });
 
   it("past the draw's bounds: qualify 33 of 40 entrants -> SEEDING_CROSS_POOL_DRAW_TOO_LARGE with the bounds from FORMAT_BOUNDS", async () => {
@@ -298,8 +323,8 @@ describe.skipIf(!HAS_DB)("Add stage after groups: impossible shapes are refused 
     const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Batch", visibility: "private", branding: {} });
     const [variant] = await sql<{ key: string; config: Record<string, unknown> }[]>`select key, config from sport_variants where sport_key = 'generic' and is_system order by key limit 1`;
     const div = await createDivision(auth, comp.id, { name: "Open", slug: "open", sport_key: "generic", variant_key: variant!.key, config: variant!.config } as never);
-    const err = await refusalOf(createStages(auth, div.id, [{ seq: 1, kind: "group", name: "Groups", config: { legs: 1, pools: { count: 4 } } }, formBody(5, 4)] as never));
-    expect(err?.code).toBe("SEEDING_POOL_SEPARATION_IMPOSSIBLE");
+    const err = await refusalOf(createStages(auth, div.id, [{ seq: 1, kind: "group", name: "Groups", config: { legs: 1, pools: { count: 4 } } }, tooFewBody()] as never));
+    expect(err?.code).toBe("SEEDING_QUALIFY_TOO_FEW");
     expect(await stagesOf(div.id)).toEqual([]);
   });
 });
