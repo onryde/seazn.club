@@ -81,7 +81,9 @@ const lastPatch = () => {
 const pickOnlinePlay = (island: Strip, value: "off" | "lichess") =>
   (propsOf(byTestId(island, "division-online-play")!).onChange as (e: { target: { value: string } }) => void)({ target: { value } });
 
-beforeEach(() => apiV1Mock.mockReset().mockResolvedValue({}));
+beforeEach(() => {
+  apiV1Mock.mockReset().mockResolvedValue({});
+});
 
 describe("the size select appears under a Lichess division, and only there", () => {
   it("is drawn for a division that plays on Lichess, with the places, rounds, plan and package the page read", () => {

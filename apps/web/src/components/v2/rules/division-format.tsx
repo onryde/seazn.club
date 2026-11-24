@@ -34,6 +34,8 @@ import { OPENING_PLAN, openingTemplate } from "@/lib/division-builder/model";
 import { FORMAT_CHANGE_REFUSALS, previewOf, type FormatChangePreview } from "@/lib/format-change";
 import { formatChangeRefusalText } from "@/lib/format-change-copy";
 import { detectTemplate } from "@/lib/format-templates";
+import { templateRefusedOnline } from "@/lib/online-format-refusal";
+import { onlinePackageRefusalText } from "../online-package-refusal";
 import type { MessageKey } from "@/lib/messages";
 import { swissRoundsDefault } from "@/lib/swiss-rounds";
 import { venueNoun } from "@/lib/venue";
@@ -67,6 +69,8 @@ export interface DivisionFormatProps {
   canEdit: boolean;
   /** Open on first render: the old Settings › Format link lands here (`?tab=fixtures&format=open`). */
   initialOpen?: boolean;
+  /** The division plays Online Chess (its stored online play is Lichess): the picker greys the formats Online Chess does not run. */
+  onlinePlay?: boolean;
 }
 
 type Msg = ReturnType<typeof useMsg>;
@@ -143,6 +147,7 @@ export function DivisionFormatDialog({
   entrants,
   places,
   matchMinutes,
+  onlinePlay = false,
   onClose,
 }: DivisionFormatProps & { onClose: () => void }) {
   const msg = useMsg();
@@ -186,7 +191,7 @@ export function DivisionFormatDialog({
 
   function refused(err: unknown) {
     if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") setPaywall(String(err.extra.feature_key ?? ""));
-    else setError(formatChangeRefusalText(err, msg, msg("divset.failed"), locale));
+    else setError((err instanceof ApiV1Error ? onlinePackageRefusalText(err, (key, vars) => msg(key as MessageKey, vars)) : null) ?? formatChangeRefusalText(err, msg, msg("divset.failed"), locale));
     // Fix round 1 (review m6b): a first result landed while the dialog was open. The page re-reads the lock, so the
     // Format button behind the dialog greys with its reason instead of staying live until a reload.
     if (err instanceof ApiV1Error && err.code === "FORMAT_LOCKED") router.refresh();
@@ -354,7 +359,9 @@ export function DivisionFormatDialog({
     );
   }
 
-  const blocked = view.templateLock !== undefined || view.carryLocked;
+  // Online Chess runs Swiss and knockout events: a division that plays online cannot Save a format that builds anything else (the
+  // stage door's 422 says so; this says it before the trip).
+  const blocked = view.templateLock !== undefined || view.carryLocked || (onlinePlay && templateRefusedOnline(template));
   return (
     <Modal
       size="lg"
@@ -392,6 +399,7 @@ export function DivisionFormatDialog({
           thirdPlaceEntrants: counted ? entrants : 0,
           templateLocks,
           viewerPlan,
+          onlineChess: onlinePlay,
         })}
         {feedback}
       </div>

@@ -10,17 +10,16 @@
 import type { ReactNode } from "react";
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import type { OnlineSize } from "@/lib/online-chess-package";
+import type { ViewerPlan } from "@/lib/viewer-plan";
 import { onlineSizeOptions, type OnlineSizeOption } from "@/lib/online-size-options";
-
-/** The plan names the select can say "not on {plan}" with. `unknown` is a viewer whose plan could not be read. */
-export type OnlineViewerPlan = "community" | "pro" | "enterprise" | "unknown";
 
 export interface OnlineSizeSelectProps {
   /** The chosen size; null when no size holds the places and rounds (nothing is picked for the organiser). */
   value: OnlineSize | null;
   /** The plan's `entrants.per_division.max`; null is no cap. */
   planCap: number | null;
-  viewerPlan: OnlineViewerPlan;
+  /** The plan the select says "not on {plan}" with; `unknown` reads "your plan". */
+  viewerPlan: ViewerPlan;
   /** Places already held. */
   held: number;
   /** Swiss rounds the division's stages declare. */

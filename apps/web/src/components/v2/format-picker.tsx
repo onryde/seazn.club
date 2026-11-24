@@ -23,6 +23,7 @@ import { FORMAT_BOUNDS } from "@/lib/format-bounds";
 import { STAGE_TEMPLATES, type StageDraft, type StandingsCarry } from "@/lib/format-templates";
 import { thirdPlaceOffer, type FormatKnobsShown, type FormatPickerView } from "@/lib/division-builder/format-choice";
 import { crossPoolDrawCanRefuse } from "@/lib/cross-pool-draw-risk";
+import { templateRefusedOnline } from "@/lib/online-format-refusal";
 import type { ThirdPlaceMode } from "@/lib/third-place";
 import { ThirdPlaceChoice } from "@/components/v2/third-place-choice";
 import type { MessageKey } from "@/lib/messages";
@@ -127,6 +128,7 @@ export function formatPickerFields({
   thirdPlaceEntrants = guidanceEntrants,
   templateLocks,
   viewerPlan,
+  onlineChess = false,
 }: {
   msg: ReturnType<typeof useMsg>;
   msgPlural: ReturnType<typeof useMsgPlural>;
@@ -147,6 +149,10 @@ export function formatPickerFields({
   thirdPlaceEntrants?: number;
   templateLocks: Readonly<Record<string, string>>;
   viewerPlan: ViewerPlan;
+  /** The division plays Online Chess (spec 2026-11-23 §8.1): a format that builds a league, group or ladder stage stays on show, greyed
+   *  and unpickable, saying "Not available for Online Chess" - Online Chess runs Swiss and knockout events. A pick made before the
+   *  division went online keeps its picked look (the screen's Next / Save says why it cannot go on). */
+  onlineChess?: boolean;
 }): ReactNode {
   const hoursText = (minutes: number) =>
     new Intl.NumberFormat(locale, { style: "unit", unit: "hour", unitDisplay: "short", maximumFractionDigits: 1 }).format(Math.round((minutes / 60) * 10) / 10);
@@ -173,7 +179,8 @@ export function formatPickerFields({
             // W4 T15 (X-PL-1, X-QM-5; owner pick 5A): a format this field cannot play stays on show, greyed and unpickable, saying
             // what unlocks it. A pick made before the plan shrank keeps its picked look, and Next says why it cannot go on.
             const sizeGate = view.sizeGate(t.key);
-            const gated = sizeGate !== null;
+            const onlineRefused = onlineChess && sizeGate === null && templateRefusedOnline(t.key);
+            const gated = sizeGate !== null || onlineRefused;
             const surface = picked
               ? "border-purple-500 bg-purple-50 text-purple-900"
               : gated
@@ -185,6 +192,7 @@ export function formatPickerFields({
                 data-template={t.key}
                 data-suggested={suggested.includes(t.key) ? "" : undefined}
                 data-size-gated={sizeGate?.code}
+                data-online-refused={onlineRefused ? "" : undefined}
                 aria-disabled={gated ? "true" : undefined}
                 className={`${folded(t.key) ? "hidden" : "flex"} group min-h-11 min-w-0 ${gated ? "cursor-not-allowed" : "cursor-pointer"} gap-3 rounded-lg border p-3 text-sm transition has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-purple-600 ${surface}`}
               >
@@ -201,9 +209,13 @@ export function formatPickerFields({
                     {locked && <span className="rounded bg-amber-100 px-1.5 text-[11px] font-semibold text-amber-800">{msg("divBuilder.card.pro")}</span>}
                   </span>
                   <span className="mt-0.5 block text-xs text-slate-500">{msg(`format.template.${t.key}.help` as MessageKey)}</span>
-                  {gated ? (
+                  {sizeGate !== null ? (
                     <span className="mt-1 block text-xs font-semibold text-amber-800" data-testid={`division-builder-size-reason-${t.key}`}>
                       {msg("divBuilder.card.needsEntrants", { min: sizeGate.min, count: view.planEntrants })}
+                    </span>
+                  ) : onlineRefused ? (
+                    <span className="mt-1 block text-xs font-semibold text-amber-800" data-testid={`division-builder-online-reason-${t.key}`}>
+                      {msg("onlineChess.format.pickerNote")}
                     </span>
                   ) : (
                     <span className="mt-1 block text-xs font-medium text-slate-700" data-testid={`division-builder-estimate-${t.key}`}>
