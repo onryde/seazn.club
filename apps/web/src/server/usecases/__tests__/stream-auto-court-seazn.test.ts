@@ -41,7 +41,7 @@ import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { log } from "@/server/logger";
 import { CaptureBeat } from "@/server/api-v1/capture-schemas";
-import { AUTO_START_RETRY_SECONDS } from "@/server/relay/config";
+import { AUTO_START_RETRY_SECONDS, COURT_AUTO_STOP_AFTER_RESULT_SECONDS } from "@/server/relay/config";
 import { FakeIngest, FakeRecorder, FakeRunner } from "@/server/relay/fakes";
 import { rigUser } from "@/server/relay/__tests__/_session-rig";
 import { readHubStreamFlags } from "@/server/public-site/hub-stream-flags";
@@ -301,6 +301,30 @@ describe.skipIf(!HAS_DB)("a court streams to Seazn", () => {
     }
     expect(youtube.calls, "YouTube is never called").toEqual([]);
     expect((await sessionRow(sid)).state, "the session is untouched").toBe("live");
+  });
+
+  it("the court's tail: a live Seazn court session auto-stops COURT_AUTO_STOP_AFTER_RESULT_SECONDS after its result (not the per-fixture 180 s, not the Seazn arm's 15 min) - not a second earlier", async () => {
+    const tail = COURT_AUTO_STOP_AFTER_RESULT_SECONDS * SEC;
+    expect(tail, "PREMISE: the court's tail is shorter than both the per-fixture code's and the Seazn arm's").toBeLessThan(3 * MIN);
+    const sid = await startedLive(A, 0);
+    // The session's created_at is the database's real clock, so it is stamped back inside the injected timeline: the result lands
+    // after it (A15: only a session that predates the result is stopped by the tail), and the Machine keeps beating as it would.
+    await sql`update fixture_stream_sessions set created_at = ${at(-1)} where id = ${sid}`;
+    await decide(A, 2);
+    const finishedAt = at(2).getTime();
+    const jobToken = runner.created.find((c) => c.sessionId === sid)!.jobToken;
+    const tick = async () => {
+      await heartbeat(sid, jobToken, { state: "playing" }, deps);
+      await currentSession(day.auth, A, deps);
+    };
+    now = finishedAt + tail - SEC;
+    await tick();
+    expect(await sessionRow(sid), "a second before the tail: untouched").toMatchObject({ state: "live", end_reason: null });
+    now = finishedAt + tail + SEC;
+    for (let i = 0; i < 3 && (await sessionRow(sid)).state === "live"; i++) await tick();
+    expect(await sessionRow(sid), "a second after: ended by the tick, as the court's own auto stop").toMatchObject({ end_reason: "auto_stopped", destination_kind: "seazn", court_link_id: linkId });
+    expect(["ending", "completed"]).toContain((await sessionRow(sid)).state);
+    expect(youtube.calls, "no YouTube end for a Seazn session").toEqual([]);
   });
 
   it("T47: the hub's camera icon shows for a court Seazn live — no change to the read: absent before the session, 'live' while it is up (destination_kind seazn off the court-started session)", async () => {

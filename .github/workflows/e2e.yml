@@ -2340,6 +2340,9 @@ jobs:
           # browser loads the app from (PLAYWRIGHT_BASE below): a Seazn start refuses 503 seazn_video_unconfigured without them.
           SEAZN_HOSTED_LIVE: "true"
           SEAZN_VIDEO_ORIGINS: localhost
+          # Task 37: seazn-hosted.spec.ts links a court to Seazn, and linking is refused 503 court_streaming_unconfigured while this is
+          # unset. e2e-parallel's value (a version, not a duration); the case links over the API and claims nothing with a phone.
+          COURT_MIN_APP_VERSION: "1.0.14-1200"
         run: |
           rm -rf apps/web/.next/standalone/apps/web/.next/static
           cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static

@@ -37,6 +37,7 @@ import publicEn from "@/dictionaries/en/public.json";
 import type { Dict } from "@/lib/i18n-constants";
 import type { MatchDayCourt, MatchDayFixture, MatchDayView } from "@/lib/match-day/types";
 import { CourtFocus, NoCourtFocus } from "../court-focus";
+import { CourtStreamBand, CourtStreamSheet } from "../court-stream-sheet";
 import { CourtList, NoCourtList } from "../court-list";
 import { MatchDayShell, type MatchDayShellProps } from "../match-day-shell";
 import { NeedsYou, type NeedsYouItem } from "@/components/v2/desk/needs-you";
@@ -183,6 +184,33 @@ describe("P1 — the court focus is pinned while its QR sheet is open (Task 35 p
     // The sheet closes: the ordering is normal again — Court 2 leads.
     (polled.focus!.onSheetCourt as (id: string | null) => void)(null);
     expect(parts(island.tree()).focus!.court).toMatchObject({ court_id: "c-2" });
+  });
+
+  it("the two halves WIRED: a real CourtFocus opens its QR sheet and tells the real shell through the callback the shell handed it; the poll re-orders; the sheet and the focus stay; the sheet's Close releases the pin", async () => {
+    const link = { link_id: "link-1", target_label: "Seazn", expires_at: "2026-11-01T00:00:00.000Z", phone: "none", paired_at: null, refusal: null, tail_ends_at: null } as unknown as NonNullable<MatchDayCourt["stream_link"]>;
+    const L1 = court("c-1", "Court 1", { stream_link: link });
+    const shell = renderIsland(MatchDayShell, props(view([L1, C2], "2026-10-31T11:00:00.000Z")));
+    type FocusProps = Parameters<typeof CourtFocus>[0];
+    const focusProps = () => parts(shell.tree()).focus as unknown as FocusProps;
+    expect(focusProps().court, "PREMISE: the default focus is Court 1").toMatchObject({ court_id: "c-1" });
+    const focus = renderIsland(CourtFocus, focusProps());
+    const of = (type: unknown) => focus.tree().find((el) => el.type === type);
+    (propsOf(of(CourtStreamBand)!).onShowQr as () => void)();
+    expect(of(CourtStreamSheet), "PREMISE: the real focus opened its sheet").toBeDefined();
+
+    // A poll: Court 2 started a match and now leads. The shell hands the (same) focus its props again.
+    net.next = view([{ ...L1 }, court("c-2", "Court 2", { state: "playing" })], "2026-10-31T11:00:30.000Z");
+    poll.tick!();
+    await settle();
+    expect(focusProps().refreshKey, "PREMISE: the poll landed").toBe("2026-10-31T11:00:30.000Z");
+    expect(focusProps().court, "the real report pinned the shell's focus on Court 1").toMatchObject({ court_id: "c-1" });
+    focus.rerender(focusProps());
+    expect(of(CourtStreamSheet), "and the sheet is still open after the re-read").toBeDefined();
+
+    // Close releases the pin: the ordering is normal, Court 2 leads.
+    (propsOf(of(CourtStreamSheet)!).onClose as () => void)();
+    expect(of(CourtStreamSheet)).toBeUndefined();
+    expect(focusProps().court, "closed: the normal ordering resumes").toMatchObject({ court_id: "c-2" });
   });
 
   it("the control: with no sheet open the same poll moves the focus to the re-ordered first court", async () => {

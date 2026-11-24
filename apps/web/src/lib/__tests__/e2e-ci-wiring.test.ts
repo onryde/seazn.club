@@ -1711,6 +1711,23 @@ describe("COURT_MIN_APP_VERSION reaches the server the court-stream specs link o
     expect(version, "COURT_MIN_APP_VERSION on e2e-parallel's Start server").toBeDefined();
     expect(version).toBe("1.0.14-1200");
   });
+
+  // Task 37: seazn-hosted.spec.ts's court case links a court on e2e-seazn's server; without the version that is a 503.
+  it("e2e-seazn's Start server env carries the same version as e2e-parallel's (the court-on-Seazn case links a court)", () => {
+    const versionOf = (job: string, next: string): string | undefined => {
+      const jobAt = yml.search(new RegExp(`^ {2}${job}:\\n`, "m"));
+      const nextAt = yml.search(new RegExp(`^ {2}${next}:\\n`, "m"));
+      expect(jobAt, `${job} job found`).toBeGreaterThanOrEqual(0);
+      expect(nextAt, `${next} job found`).toBeGreaterThan(jobAt);
+      const body = yml.slice(jobAt, nextAt);
+      const server = body.indexOf("- name: Start server");
+      expect(server, `${job} Start server step`).toBeGreaterThan(0);
+      return /^\s+COURT_MIN_APP_VERSION:\s*"?(\d+\.\d+\.\d+-\d+)"?\s*$/m.exec(body.slice(server, body.indexOf("        run:", server)))?.[1];
+    };
+    const parallel = versionOf("e2e-parallel", "e2e-serial");
+    expect(parallel, "PREMISE: e2e-parallel carries it").toBeDefined();
+    expect(versionOf("e2e-seazn", "e2e-mobile"), "COURT_MIN_APP_VERSION on e2e-seazn's Start server").toBe(parallel);
+  });
 });
 
 // Capture QR v2 PR-2 B8 (the B6/B7 reviews' deferred item): the stream-slot pool was restated in six specs, and each sized
