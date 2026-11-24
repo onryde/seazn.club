@@ -1781,10 +1781,13 @@ describe("Task 17 — a playing court on air to Seazn plays it in the preview (t
         unavailable: pubFull["seaznVideo.unavailable"],
         part: pubFull["seaznVideo.part"],
         replay: pubFull["overlay.replay"],
-        starting: pubFull["seaznVideo.starting"],
+        // T33f: the held box's two lines (a live coming, a replay coming); Match Day mounts the same island, so the same rule.
+        startingLive: pubFull["seaznVideo.startingLive"],
+        startingReplay: pubFull["seaznVideo.startingReplay"],
         delay: pubFull["seaznVideo.delay"],
       });
       expect(labels.delay, `${locale}: premise, the delay line's key reaches the slice`).toEqual(expect.any(String));
+      expect([labels.startingLive, labels.startingReplay], `${locale}: premise, both held-box lines reach the slice`).toEqual([expect.any(String), expect.any(String)]);
       for (const [field, value] of Object.entries(labels)) {
         expect(value, `${locale} ${field}`).not.toMatch(/^(seaznVideo|overlay)\./);
         expect(value.trim(), `${locale} ${field}`).not.toBe("");
@@ -1800,7 +1803,8 @@ describe("Task 17 — a playing court on air to Seazn plays it in the preview (t
   });
 
   it("the page's dictionary slice carries every key the island reads (the m6 gap: matchCentre. + forfeit. alone left them to print as key names)", () => {
-    const wanted = ["seaznVideo.live", "seaznVideo.unavailable", "seaznVideo.part", "seaznVideo.starting", "overlay.replay"];
+    const wanted = ["seaznVideo.live", "seaznVideo.unavailable", "seaznVideo.part", "seaznVideo.startingLive", "seaznVideo.startingReplay", "seaznVideo.delay", "overlay.replay"];
+    for (const key of wanted) expect((publicEn as Dict)[key], `PREMISE: ${key} is in the dictionary (else the slice check below is undefined === undefined)`).toEqual(expect.any(String));
     const old = pickLegacySlice(publicEn as Dict);
     for (const key of wanted) expect(old[key], `PREMISE: the old slice lacks ${key}`).toBeUndefined();
     const slice = matchDayScoreDict(publicEn as Dict);

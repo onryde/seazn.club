@@ -197,6 +197,17 @@ const SEAZN_NAV_MS = 30_000;
 const ONE_RE_READ_MS = SEAZN_VIDEO_POLL_FLOOR_MS + 15_000;
 const VIDEO_ROUTE = /\/api\/v1\/public\/fixtures\/[^/]+\/video$/;
 const seaznPlayer = (page: Page) => page.locator('[data-testid="seazn-player"] video');
+/** Task 33f (owner 'Ok', 2026-11-24): the held box's one line names the video that is coming — a live on its way up, or the replay of a
+ *  stream that has stopped. The owner's words, literal (never the dictionary the code reads, T33c review m2), so a swapped or reworded
+ *  line reds here. */
+const LIVE_COMING = "The live video will start here shortly";
+const REPLAY_COMING = "The replay will be ready here in a few minutes";
+/** The held box's status line(s) in a page's SERVER HTML, read inside the box's own section: the page's flight payload carries the island's
+ *  labels, so BOTH lines are somewhere in the document and a bare `toContain` would pass for either. */
+const heldLinesIn = (html: string): string[] => {
+  const box = /<section data-testid="seazn-video-starting"[^>]*>([\s\S]*?)<\/section>/.exec(html);
+  return box === null ? [] : [...box[1]!.matchAll(/<p [^>]*role="status"[^>]*>(.*?)<\/p>/g)].map((m) => m[1]!);
+};
 
 // Phase 1 visual re-capture R1 and R2 (a browser fact a node render cannot see, AGENTS.md class 2: the SSR proxies compare class sets, and
 // class sets cannot see UA or global CSS): the player's box and the picker's row are on the page from the SERVER render, and the player
@@ -207,6 +218,9 @@ interface SeaznGeometry {
   summary: Box | null; frame: Box | null; ghostRow: Box | null; tablist: Box | null; player: Box | null; line: string | null;
   /** Task 33c: the live player's delay line, or the held box's invisible row for it (whichever is on the page). */
   delay: Box | null;
+  /** Task 33f: whether the held box's line fits its frame (nothing clipped or spilling: the status element does not overflow, and the
+   *  text's own box sits inside the frame); null with no line. Either line must, at every width, or the "same box" claim is false. */
+  lineFits: boolean | null;
 }
 const seaznGeometry = (page: Page): Promise<SeaznGeometry> =>
   page.evaluate(() => {
@@ -224,6 +238,17 @@ const seaznGeometry = (page: Page): Promise<SeaznGeometry> =>
       player: box('[data-testid="seazn-player"]'),
       line: document.querySelector('[data-testid="seazn-video-starting"] [role="status"]')?.textContent?.trim() ?? null,
       delay: box('[data-testid="seazn-video-delay"], [data-testid="seazn-video-delay-reserved"]'),
+      lineFits: (() => {
+        const line = document.querySelector('[data-testid="seazn-video-starting"] [role="status"]');
+        const frame = document.querySelector('[data-testid="seazn-video-starting"] [data-testid="seazn-video-frame"]');
+        if (!line || !frame) return null;
+        const range = document.createRange();
+        range.selectNodeContents(line);
+        const t = range.getBoundingClientRect();
+        const f = frame.getBoundingClientRect();
+        const inside = t.width > 0 && t.left >= f.left - 0.5 && t.right <= f.right + 0.5 && t.top >= f.top - 0.5 && t.bottom <= f.bottom + 0.5;
+        return inside && line.scrollHeight <= line.clientHeight + 1 && line.scrollWidth <= line.clientWidth + 1;
+      })(),
     };
   });
 /** Layout shifts from navigation start that moved the island's box or the Summary panel (install BEFORE the first goto). */
@@ -317,7 +342,7 @@ for (const width of [320, 768, 1280] as const) {
         const server = await (await page.request.get(m.publicPath)).text();
         expect(server, "the picker's row is in the server markup").toContain('data-testid="seazn-video-picker-reserved"');
         expect(server, "and the box, with its line").toContain('data-testid="seazn-video-starting"');
-        expect(server).toContain(publicEn["seaznVideo.starting"]);
+        expect(heldLinesIn(server), "T33f: stopped, so the box says the replay is coming, and only that").toEqual([REPLAY_COMING]);
         await stubFakePlaybackHost(page);
         await observeSeaznShifts(page);
         await delayFirstRead(page, FIRST_READ_DELAY_MS);
@@ -325,7 +350,8 @@ for (const width of [320, 768, 1280] as const) {
         await page.goto(m.publicPath);
         // BEFORE any answer is in: the row, the box and the Summary below them.
         const held = await seaznGeometry(page);
-        expect(held.line, "the line, in the page's words").toBe(publicEn["seaznVideo.starting"]);
+        expect(held.line, "the line, in the owner's words: the replay is coming (T33f)").toBe(REPLAY_COMING);
+        expect(held.lineFits, `T33f: the replay line fits its frame at ${width}`).toBe(true);
         expect(held.ghostRow, "the held row is laid out").not.toBeNull();
         expect(held.ghostRow!.height, "it is a real row: the pills' own height").toBeGreaterThanOrEqual(44);
         expect(held.frame!.height, "the box keeps its 200 px floor").toBeGreaterThanOrEqual(200);
@@ -355,6 +381,7 @@ for (const width of [320, 768, 1280] as const) {
           await finishSeaznMatch(m);
           const server = await (await page.request.get(m.publicPath)).text();
           expect(server, "the box and its line are in the server markup").toContain('data-testid="seazn-video-starting"');
+          expect(heldLinesIn(server), "T33f: its line says the replay is coming").toEqual([REPLAY_COMING]);
           expect(server, "no recording yet, so no picker row").not.toContain("seazn-video-picker-reserved");
           await stubFakePlaybackHost(page);
           await observeSeaznShifts(page);
@@ -362,12 +389,13 @@ for (const width of [320, 768, 1280] as const) {
           const firstRead = page.waitForResponse((r) => VIDEO_ROUTE.test(r.url()));
           await page.goto(m.publicPath);
           const before = await seaznGeometry(page);
-          expect(before.line, "before any answer: the line").toBe(publicEn["seaznVideo.starting"]);
+          expect(before.line, "before any answer: the line, the replay's (T33f: the stream has stopped)").toBe(REPLAY_COMING);
+          expect(before.lineFits, `T33f: the replay line fits its frame at ${width}`).toBe(true);
           expect(before.frame, "and the box").not.toBeNull();
           const answer = (await (await firstRead).json()) as { data: { live: unknown; replay: unknown[] } };
           expect(answer.data, "premise: the first answer has nothing to play").toEqual({ live: null, replay: [] });
           const read = await seaznGeometry(page);
-          expect(read.line, "the empty answer does not collapse the box: the line is still there").toBe(publicEn["seaznVideo.starting"]);
+          expect(read.line, "the empty answer does not collapse the box: the line is still there").toBe(REPLAY_COMING);
           samePlace("the box across the first read", before.frame, read.frame);
           samePlace("the Summary across the first read", before.summary, read.summary, { height: false });
           // The tick locks the recording: the next re-read puts it in the same box.
@@ -413,6 +441,7 @@ test.describe("the Seazn player over time (1280)", () => {
       await observeSeaznShifts(page);
       const server = await (await page.request.get(m.publicPath)).text();
       expect(server, "re-capture R2: the warming session's box and line are in the server markup").toContain('data-testid="seazn-video-starting"');
+      expect(heldLinesIn(server), "T33f: warming, so the box says the LIVE video is coming, and only that").toEqual([LIVE_COMING]);
       const firstRead = page.waitForResponse((r) => VIDEO_ROUTE.test(r.url()));
       await page.goto(m.publicPath);
       await dismissCookieBanner(page);
@@ -421,9 +450,10 @@ test.describe("the Seazn player over time (1280)", () => {
       await expect(page.getByTestId("mc-court-card"), "the page itself rendered").toBeVisible();
       // Re-capture R2: the empty answer does not collapse the box. It stays, with its one quiet line, and draws no PLAYER yet.
       await expect(page.getByTestId("seazn-video-starting"), "the island holds the player's box through the empty answer").toBeVisible();
-      await expect(page.getByTestId("seazn-video-starting").getByRole("status"), "with its line").toHaveText(publicEn["seaznVideo.starting"]);
+      await expect(page.getByTestId("seazn-video-starting").getByRole("status"), "with its line: the live video is coming (T33f)").toHaveText(LIVE_COMING);
       await expect(page.getByTestId("seazn-video"), "and draws no player yet").toHaveCount(0);
       const held = await seaznGeometry(page);
+      expect(held.lineFits, "T33f: the live line fits its frame").toBe(true);
       expect(held.frame, "the held box is laid out").not.toBeNull();
       expect(held.frame!.height, "at its 200 px floor").toBeGreaterThanOrEqual(200);
       // The page must not reload from here on: a marker on the window survives only the same document.

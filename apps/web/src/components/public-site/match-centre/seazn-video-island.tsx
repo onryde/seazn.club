@@ -21,9 +21,11 @@
 //     when it is shown again.
 //   - ...EXCEPT while a WAIT is on (re-capture R2: a Seazn session warming, or just stopped with its recording not locked yet): the
 //     player's own box holds, dark, with one quiet line, through every empty answer, until a player arrives or the wait runs out; so
-//     the player's arrival, a poll later, moves nothing. The wait is the page's (`holdUntil`) or starts when a player was on screen
-//     and leaves (seazn-video-hold.ts has the rules). The box goes ONCE, when the wait runs out; it is never dropped and drawn again
-//     between reads.
+//     the player's arrival, a poll later, moves nothing. The line says WHICH video is coming (owner 2026-11-24, Task 33f): the live one
+//     where a live comes next (`liveNext`, below: the session on its way up), else the replay (the stream has stopped and its recording
+//     is being made ready). Both lines are laid over the frame, so either fits the same box. The wait is the page's (`holdUntil`) or
+//     starts when a player was on screen and leaves (seazn-video-hold.ts has the rules). The box goes ONCE, when the wait runs out; it
+//     is never dropped and drawn again between reads.
 //   - the box also holds the picker's row, invisible, when the page knows the replay has two or more parts (`replayParts`, re-capture
 //     R1), so the real picker takes its place with no shift.
 //
@@ -122,7 +124,9 @@ interface StageProps {
  *  player's arrival moves nothing. With a wait on it carries the one quiet line, and is not hidden from assistive tech (the line is a
  *  status); without one it is empty and hidden, as D1 drew it. `picker` is the part numbers the page expects the picker to list (two
  *  or more draw its row, invisible). `liveNext` (Task 33c): a LIVE comes next, so the box keeps the delay line's row under the frame,
- *  invisible and silent; a recording does not get one (its player has no line), so it is drawn only where the live is expected. */
+ *  invisible and silent; a recording does not get one (its player has no line), so it is drawn only where the live is expected. The
+ *  same flag picks the line (Task 33f): "the live video will start here" where a live comes next, "the replay will be ready here"
+ *  otherwise; the one status element holds either, laid over the frame, so the box is the same for both. */
 function HeldBox({ starting, labels, picker, liveNext }: { starting: boolean; labels: SeaznVideoLabels; picker: readonly number[]; liveNext: boolean }) {
   const row =
     picker.length >= 2 ? (
@@ -144,7 +148,7 @@ function HeldBox({ starting, labels, picker, liveNext }: { starting: boolean; la
       {row}
       <div data-testid="seazn-video-frame" className={SEAZN_PLAYER_FRAME}>
         <p role="status" className="absolute inset-0 flex items-center justify-center px-6 text-center text-sm text-court-ink/70">
-          {labels.starting}
+          {liveNext ? labels.startingLive : labels.startingReplay}
         </p>
       </div>
       {delayRow}
@@ -285,7 +289,8 @@ export interface SeaznVideoIslandProps {
   /** Task 33c, from the page's plan: a LIVE is what the box expects next (the fixture's Seazn session on its way up, or live, as the
    *  page was drawn; Match Day's preview, which is mounted only on air). The held box keeps the delay line's row, invisible, until an
    *  answer shows a player: the live then brings its line into that row, and once a player has been on screen the box no longer
-   *  holds it (a stop is followed by a recording, which has no line). Absent: no row. */
+   *  holds it (a stop is followed by a recording, which has no line). Absent: no row. The same flag picks the held box's line (Task
+   *  33f): the live video's while it holds, the replay's once a player has been on screen or where it is absent. */
   liveExpected?: boolean;
 }
 
@@ -294,8 +299,9 @@ export function SeaznVideoIsland({
   liveExpected = false,
 }: SeaznVideoIslandProps) {
   const [video, setVideo] = useState<PublicFixtureVideo | null>(initial ?? null);
-  // Task 33c: whether the held box keeps the delay line's row. From the PROPS for the first render (the server markup and the hydrated
-  // one agree); the first answer that shows a player clears it for good.
+  // Task 33c: whether the held box keeps the delay line's row, and (Task 33f) whether its line says the live video or the replay is
+  // coming. From the PROPS for the first render (the server markup and the hydrated one agree); the first answer that shows a player
+  // clears it for good, so the box a Stop leaves behind says the replay.
   const [liveNext, setLiveNext] = useState(liveExpected);
   // The wait, as an instant (ms), or null: from the page's plan at first, then from the answers (`holdAfterAnswer`). Taken from the PROPS
   // alone for the first render, never from the clock, so the server markup and the hydrated one agree.

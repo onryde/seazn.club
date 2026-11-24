@@ -51,7 +51,7 @@ import { routes } from "../../src/lib/routes";
 // Clocks — DERIVED from the constants that set the pace (AGENTS.md class 20): helpers/seazn-hosted-clock.ts, one term per wait in
 // step order, where the CI wiring test also reads the walk's worst case to hold e2e-seazn's job timeout to it.
 // ===========================================================================
-const { LIVE_WAIT_MS, ONE_RE_READ_MS, END_MS, CALL_MS, CREDITS_KEY_WAIT_MS, HOLD_1_MS, HOLD_2_MS, WALK_MS } = seaznWalkClock(FAKE_CONNECT_MS);
+const { LIVE_WAIT_MS, ONE_RE_READ_MS, END_MS, CALL_MS, FRESH_PAGE_MS, CREDITS_KEY_WAIT_MS, HOLD_1_MS, HOLD_2_MS, WALK_MS } = seaznWalkClock(FAKE_CONNECT_MS);
 const POOL_HOLD = {
   file: "seazn-hosted.spec.ts",
   holdMs: Math.max(HOLD_1_MS, HOLD_2_MS),
@@ -82,6 +82,16 @@ const pub = (key: string) => copy(EN_PUBLIC, key);
 const DELAY_LINE = "Video runs about 15–20 seconds behind the live action.";
 /** Owner 2026-11-23: Seazn's own destination is called "Seazn Hosted", a brand in every locale. Literal for the same reason. */
 const SEAZN_BRAND = "Seazn Hosted";
+/** Task 33f (owner 'Ok', 2026-11-24): the held box's one line names the video that is coming: a live on its way up, or the replay of a
+ *  stream that has stopped. Literal for the same reason. */
+const LIVE_COMING = "The live video will start here shortly";
+const REPLAY_COMING = "The replay will be ready here in a few minutes";
+/** The held box's status line(s) in a page's SERVER HTML, read inside the box's own section: the page's flight payload carries the island's
+ *  labels, so BOTH lines are somewhere in the document and a bare `toContain` would pass for either. */
+const heldLinesIn = (html: string): string[] => {
+  const box = /<section data-testid="seazn-video-starting"[^>]*>([\s\S]*?)<\/section>/.exec(html);
+  return box === null ? [] : [...box[1]!.matchAll(/<p [^>]*role="status"[^>]*>(.*?)<\/p>/g)].map((m) => m[1]!);
+};
 
 // ===========================================================================
 // Kit
@@ -227,8 +237,11 @@ async function openViewer(browser: Browser, rig: Rig): Promise<Viewer> {
 
 /** One Go live of the Seazn destination, by tapping it, and the compositor stand-in that makes it live: the session row (one new
  *  one, for Seazn, composed), its facts, the first beat through the vendored contract, the keep-alive, the live pill, and the
- *  programme input the spectator's player will be handed. */
-async function goLiveSeazn(page: Page, body: Locator, rig: Rig, open: OpenSessions): Promise<{ sid: string; token: string; programme: { id: string; uid: string }; compositor: Compositor }> {
+ *  programme input the spectator's player will be handed. `whileWarming` (Task 33f) runs between the facts and the first beat, while
+ *  the session is still on its way up (nothing but that beat makes it live). */
+async function goLiveSeazn(
+  page: Page, body: Locator, rig: Rig, open: OpenSessions, whileWarming?: (sid: string) => Promise<void>,
+): Promise<{ sid: string; token: string; programme: { id: string; uid: string }; compositor: Compositor }> {
   const before = new Set((await withDb((sql) => sql<{ id: string }[]>`select id from fixture_stream_sessions where fixture_id = ${rig.fixtureId}`)).map((r) => r.id));
   await body.getByTestId("stream-go-live").click();
   let sid = "";
@@ -251,6 +264,7 @@ async function goLiveSeazn(page: Page, body: Locator, rig: Rig, open: OpenSessio
       return facts.overlayUrl && intervalMs > 0 ? "facts" : "facts without an overlayUrl or a cadence";
     }, { message: "the composed session's facts never served", timeout: LIVE_WAIT_MS, intervals: [1_000] })
     .toBe("facts");
+  if (whileWarming) await whileWarming(sid);
   const first = { state: "playing", programmePhase: "live" };
   expectContract("heartbeat", first, "the stand-in's first beat");
   const beat = await page.request.post(`/api/internal/relay/sessions/${sid}/heartbeat`, { headers: { Authorization: `Bearer ${token}` }, data: first });
@@ -393,7 +407,8 @@ test("Seazn pre-selected → a spectator opens the page before kick-off → Go l
   // player was, until the recording is locked (step 7) and takes its place (step 8).
   const starting = viewer.page.getByTestId("seazn-video-starting");
   await expect(starting, "the Stop leaves the player's box with its line, not a collapsed page").toBeVisible();
-  await expect(starting.getByRole("status")).toHaveText(pub("seaznVideo.starting"));
+  // Task 33f: the stream has stopped, so the line says the REPLAY is coming (never the live, which it no longer is).
+  await expect(starting.getByRole("status"), "the line names the replay").toHaveText(REPLAY_COMING);
   // Task 33c: the stream has ended, so the delay line is gone with the live player: no visible line, and the held box keeps no hidden row
   // for one either (a recording comes next, and its player has no line).
   await expect(viewer.page.getByTestId("seazn-video-delay"), "the delay line is gone after the Stop").toHaveCount(0);
@@ -449,7 +464,26 @@ test("Seazn pre-selected → a spectator opens the page before kick-off → Go l
   await body.getByTestId("stream-again").click();
   await expect(body.getByTestId("stream-state-pill"), "back to a fresh Go live").toHaveText(ui("stream.phone.state.idle"), { timeout: CALL_MS });
   await expect(targetPicker(body), "the match's pick is still Seazn").toHaveAttribute("data-value", rig.seaznId);
-  const second = await goLiveSeazn(page, body, rig, open);
+  // 9a. BEFORE IT IS LIVE (Task 33f): while the second session warms (the stand-in has not beaten `playing` yet), a fresh look at the
+  //     match page shows the held box saying the LIVE video is coming. The page is ISR (revalidate 30 s) and nothing has asked for its
+  //     HTML since step 2, minutes ago, so the first look is answered stale and starts a fresh render; a later look carries the warming
+  //     session. Read in the server HTML, the first paint a viewer opening the page now gets (the island's first read then shows the
+  //     first half's recording, which is already locked). The open page (step 2's) is untouched.
+  const lookWhileWarming = async (sid: string): Promise<void> => {
+    const [row] = await withDb((sql) => sql<{ state: string }[]>`select state from fixture_stream_sessions where id = ${sid}`);
+    expect(["requested", "provisioning", "warming"], "premise: the second session is still on its way up").toContain(row?.state);
+    // Polled on the line itself: a stale render (no box) keeps it polling, and on a timeout the red prints what the box last said.
+    await expect
+      .poll(async () => heldLinesIn(await (await viewer.page.request.get(rig.publicPath)).text()), {
+        message: "a fresh render of the match page: the held box says the LIVE video is coming, and only that",
+        timeout: FRESH_PAGE_MS,
+        intervals: [1_000],
+      })
+      .toEqual([LIVE_COMING]);
+    const [still] = await withDb((sql) => sql<{ state: string }[]>`select state from fixture_stream_sessions where id = ${sid}`);
+    expect(still?.state, "premise: and the session was not live yet when the page was read").not.toBe("live");
+  };
+  const second = await goLiveSeazn(page, body, rig, open, lookWhileWarming);
   expect(second.programme.uid, "premise: a new session publishes to a new programme input").not.toBe(first.programme.uid);
   await expect.poll(addressIs(player, second.programme.uid), { message: "the open page's player holds the NEW programme input's signed address", timeout: ONE_RE_READ_MS }).toBe(true);
   await expect(region, "the region is the LIVE one again").toHaveAttribute("aria-label", pub("seaznVideo.live"));

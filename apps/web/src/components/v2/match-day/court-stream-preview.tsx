@@ -17,8 +17,9 @@
 //
 // Only reached when `streamPreviewOf` found something to play; any other live stream (a pasted key, a made-for-kids broadcast)
 // keeps the C1 scoreboard with its corner badge. There is never an empty video box (§5) beyond the Seazn player's held box: before its
-// first read, and after a Stop, where it holds with "The video will appear here shortly" (re-capture R2) until the recording is locked
-// or the next board poll drops the preview (the stream is no longer live), whichever comes first.
+// first read (wordless: this mount holds no wait), and after a Stop, where it holds with "The replay will be ready here in a few minutes"
+// (re-capture R2; Task 33f: a player has been on screen, so the replay is what comes next, the public page's rule) until the recording
+// is locked or the next board poll drops the preview (the stream is no longer live), whichever comes first.
 import Link from "@/components/ui/console-link";
 import { ReplayEmbed } from "@/components/public-site/match-centre/replay-embed";
 import { SeaznVideoIsland } from "@/components/public-site/match-centre/seazn-video-island";

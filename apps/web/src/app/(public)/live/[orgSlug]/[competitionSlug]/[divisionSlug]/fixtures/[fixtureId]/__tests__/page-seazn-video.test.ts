@@ -34,12 +34,23 @@ import publicEn from "@/dictionaries/en/public.json";
 import { SEAZN_VIDEO_POLL_CEILING_MS } from "@/components/public-site/match-centre/seazn-video-schedule";
 import { FINALISATION_GRACE_SECONDS, MAX_DURATION_MINUTES, STREAM_TICK_PERIOD_SECONDS } from "@/server/relay/config";
 import { seaznVideoPlan } from "@/server/video/seazn-video-plan";
+import { ACTIVE_STATES, TERMINAL_STATES, type SessionState } from "@/server/relay/domain/session";
 import { type SeaznRig, goLive, installSeaznEnv, live, seaznRig, seedLockedRecording, stopAndSettle } from "@/server/video/__tests__/_seazn-session-rig";
 import { connect } from "@/server/youtube/__tests__/_connect-rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 installSeaznEnv("seazn-page-test");
 const liveOff = () => vi.stubEnv("SEAZN_HOSTED_LIVE", "false");
+
+// T33f (owner 'Ok', 2026-11-24): the held box's one line says which video is coming. The owner's words, verbatim, never read back from the
+// labels under test.
+const OWNER_LIVE_LINE = "The live video will start here shortly";
+const OWNER_REPLAY_LINE = "The replay will be ready here in a few minutes";
+/** The Seazn held box's status line(s), read inside its own section only (the page has other live regions). */
+const statusLinesOf = (markup: string): string[] => {
+  const box = /<section data-testid="seazn-video-starting"[^>]*>([\s\S]*?)<\/section>/.exec(markup);
+  return box === null ? [] : [...box[1]!.matchAll(/<p [^>]*role="status"[^>]*>(.*?)<\/p>/g)].map((m) => m[1]!);
+};
 
 /** Every element of `type` in the tree, through children and every other prop that holds elements (the replay is a prop). */
 function findAll(node: unknown, type: unknown, out: { props: Record<string, unknown> }[] = []) {
@@ -160,14 +171,15 @@ describe.skipIf(!HAS_DB)("the public match page's replay slot, through the real 
     const sid = await live(r, stopped, r.seazn);
     await stopAndSettle(r, stopped, sid);
     let checked = 0;
-    for (const [label, f] of [["warming", warming], ["just stopped", stopped]] as const) {
+    // T33f: and the box's one line says which video is coming — the live one while it warms, the replay once it has stopped.
+    for (const [label, f, line] of [["warming", warming, OWNER_LIVE_LINE], ["just stopped", stopped, OWNER_REPLAY_LINE]] as const) {
       const tree = await pageTree(f);
       const island = slots(tree).island;
       expect(island, `${label}: the island is mounted`).toHaveLength(1);
       expect(Date.parse(String(island[0]!.props.holdUntil)), `${label}: the plan's wait is a future instant`).toBeGreaterThan(Date.now());
       const markup = renderToStaticMarkup(tree);
       expect(markup, `${label}: the starting box`).toMatch(/<section data-testid="seazn-video-starting"[^>]*>/);
-      expect(markup).toContain(`>${publicEn["seaznVideo.starting"]}<`);
+      expect(statusLinesOf(markup), `${label}: its one line`).toEqual([line]);
       expect(markup, `${label}: and not the plain one`).not.toContain("seazn-video-reserved");
       checked++;
     }
@@ -180,6 +192,50 @@ describe.skipIf(!HAS_DB)("the public match page's replay slot, through the real 
     expect(slots(closed).island[0]!.props.reserve).toBe(false);
     const markup = renderToStaticMarkup(closed);
     expect(markup).not.toMatch(/seazn-video-(reserved|starting|frame)/);
+  });
+
+  // T33f: EVERY state of the fixture's latest Seazn session, through the REAL plan and the REAL page (the seam the island's own sweep cannot
+  // prove: that the plan hands it the right `liveExpected` for the right wait). Expected per state from the rulings, never from the plan:
+  //   - on its way up (requested, provisioning, warming): a live is coming (Task 33c's ladder), and R2 holds the box: the LIVE line;
+  //   - live: its answer IS the player, so no wait is held (R2): no line (D1's reserved box, wordless);
+  //   - ending, completed a moment ago: the recording is on its way (R2): the REPLAY line;
+  //   - failed: it never recorded, so nothing is coming (R2, review m2): no box and no line.
+  const LINE_BY_STATE: Record<SessionState, "live" | "replay" | null> = {
+    requested: "live", provisioning: "live", warming: "live", live: null, ending: "replay", completed: "replay", failed: null,
+  };
+  it("T33f: SWEEP every state of the latest Seazn session through the real plan and page — where the box holds, exactly ONE line, the live one only on the way up; elsewhere neither", async () => {
+    const all = [...ACTIVE_STATES, ...TERMINAL_STATES];
+    expect(Object.keys(LINE_BY_STATE).sort(), "PREMISE: the table names every state of the session domain, and no other").toEqual([...all].sort());
+    const liveAt = ACTIVE_STATES.indexOf("live");
+    for (const [state, line] of Object.entries(LINE_BY_STATE)) {
+      if (line === "live") expect(ACTIVE_STATES.indexOf(state as SessionState), `PREMISE: ${state} is on the ladder BEFORE live`).toBeLessThan(liveAt);
+    }
+    const r = await seaznRig();
+    orgs.push(r.auth.orgId);
+    const f = r.fixtureIds[0];
+    const sid = await goLive(r, f, r.seazn);
+    const counts = { live: 0, replay: 0, none: 0 };
+    for (const state of all) {
+      await sql`update fixture_stream_sessions set state = ${state}, ended_at = ${TERMINAL_STATES.includes(state) ? new Date() : null} where id = ${sid}`;
+      const tree = await pageTree(f);
+      expect(slots(tree).island, `${state}: premise, the island is mounted`).toHaveLength(1);
+      const markup = renderToStaticMarkup(tree);
+      const want = LINE_BY_STATE[state];
+      const both = [OWNER_LIVE_LINE, OWNER_REPLAY_LINE].filter((l) => markup.includes(l));
+      if (want === null) {
+        expect(markup, `${state}: no held box`).not.toContain('data-testid="seazn-video-starting"');
+        expect(both, `${state}: neither line anywhere on the page`).toEqual([]);
+        counts.none++;
+      } else {
+        const line = want === "live" ? OWNER_LIVE_LINE : OWNER_REPLAY_LINE;
+        expect(statusLinesOf(markup), `${state}: the held box's one line`).toEqual([line]);
+        expect(both, `${state}: and only that one, once, on the whole page`).toEqual([line]);
+        expect(markup.split(line).length - 1, `${state}: drawn once`).toBe(1);
+        counts[want]++;
+      }
+    }
+    expect(counts.live + counts.replay + counts.none, "anti-vacuity: every state was looked at").toBe(all.length);
+    expect(Math.min(counts.live, counts.replay, counts.none), "and each outcome was reached at least once").toBeGreaterThan(0);
   });
 
   // Visual re-capture R1: a replay of two or more parts, and the Summary panel moved 56 px when its picker row mounted.
