@@ -135,6 +135,7 @@ async function tokens(): Promise<Token[]> {
     { name: "fixture A", claims: await decoded(mintPublicFixtureToken("A")) },
     { name: "lobby A", claims: await decoded(mintExternalPlayLobbyToken("A", "person:p-1", until)) },
     { name: "match day A", claims: matchDayA },
+    { name: "match day B", claims: await decoded(mintMatchDayToken("B", until)) },
     { name: "division A", claims: divisionA },
     { name: "capture blank id", claims: blanked(captureA) },
     { name: "match day blank id", claims: blanked(matchDayA) },
@@ -154,7 +155,7 @@ async function captureClaim(): Promise<string> {
   return own[0]!;
 }
 
-/** Channel topics, from the real builders; the last five are the near-miss and empty cases. The bare family topics
+/** Channel topics, from the real builders; the near-miss (prefix: AB, bare, whitespace) and empty cases are typed or built from them. The bare family topics
  *  are typed: every family's builder refuses a blank id (review m2), so none can make them. */
 const TOPICS: { name: string; topic: string }[] = [
   { name: "capture:A", topic: captureTopic("A") },
@@ -162,10 +163,14 @@ const TOPICS: { name: string; topic: string }[] = [
   { name: "fixture:A", topic: fixtureMessage("A", "event").topic },
   { name: "external-play:A", topic: externalPlayLobbyTopic("A") },
   { name: "match-day:A", topic: matchDayTopic("A") },
+  { name: "match-day:B", topic: matchDayTopic("B") },
   { name: "division:A", topic: divisionTopic("A") },
   { name: "capture:AB", topic: captureTopic("AB") },
+  { name: "match-day:AB", topic: matchDayTopic("AB") },
   { name: "capture:", topic: "capture:" },
   { name: "match-day:", topic: "match-day:" },
+  // Typed: matchDayTopic refuses a whitespace id. The one topic a whitespace claim can bind (nullif only nulls '').
+  { name: "match-day:   ", topic: "match-day:   " },
   { name: "division:", topic: "division:" },
   { name: "(none)", topic: "" },
 ];
@@ -238,7 +243,7 @@ describe("capture pairing read by claim", () => {
     it("anti-vacuity: every (topic, token) pair was read, and exactly the own-family pairs read anything", async ({ skip }) => {
       if (await hasRealtime()) return skip();
       const { pairs, tokens: n, reads } = await afterAllFour();
-      expect(n, "tokens in the matrix").toBe(11);
+      expect(n, "tokens in the matrix").toBe(12);
       expect(pairs, "pairs checked").toBe(TOPICS.length * n);
       // One row each — the broadcast row, never the presence one. No blank-id token reads anything (V554's and V555's
       // nullif). The division token reads nothing yet: V556 adds its own pair to THIS list.
@@ -248,6 +253,9 @@ describe("capture pairing read by claim", () => {
         ["fixture:A <- fixture A", 1],
         ["external-play:A <- lobby A", 1],
         ["match-day:A <- match day A", 1],
+        ["match-day:B <- match day B", 1],
+        // The documented accepted case: a whitespace claim binds exactly its own spaces and nothing else.
+        ["match-day:    <- match day whitespace id", 1],
       ]);
     });
 
@@ -286,8 +294,8 @@ describe("capture pairing read by claim", () => {
       expect(captureOnTheirs).toEqual([]);
       expect(theirsOnCapture).toEqual([]);
       // Non-vacuous: both sides of the check are in the matrix.
-      expect(TOPICS.filter((t) => /^(match-day|division):/.test(t.topic))).toHaveLength(4);
-      expect((await tokens()).filter((t) => /^(match day|division) /.test(t.name))).toHaveLength(5);
+      expect(TOPICS.filter((t) => /^(match-day|division):/.test(t.topic))).toHaveLength(7);
+      expect((await tokens()).filter((t) => /^(match day|division) /.test(t.name))).toHaveLength(6);
     });
 
     it("empty input: a token with no claims reads nothing, on any topic", async ({ skip }) => {
@@ -376,10 +384,16 @@ describe("capture pairing read by claim", () => {
     // The matrix above already holds the md tokens and the `match-day:` topics; these cases read the V555 column out of it.
     const mdKeys = (reads: [string, number][]) => reads.map(([k]) => k);
 
-    it("match day: an md token reads match-day:A and nothing else, one broadcast row", async ({ skip }) => {
+    it("match day: md A reads match-day:A only, md B reads match-day:B only, neither reads match-day:AB; one broadcast row each", async ({
+      skip,
+    }) => {
       if (await hasRealtime()) return skip();
       const { reads } = await afterAllFour();
       expect(reads.filter(([k]) => k.endsWith("<- match day A"))).toEqual([["match-day:A <- match day A", 1]]);
+      expect(reads.filter(([k]) => k.endsWith("<- match day B"))).toEqual([["match-day:B <- match day B", 1]]);
+      // Non-vacuous: AB is a topic in the matrix and a prefix-extension of A (the claim-prefix and any-md-token mutants read it).
+      expect(TOPICS.map((t) => t.topic)).toContain("match-day:AB");
+      expect(mdKeys(reads).filter((k) => k.startsWith("match-day:AB "))).toEqual([]);
     });
 
     it("match day: an md token reads neither capture:A, fixture:A, external-play:A nor division:A", async ({ skip }) => {
@@ -397,7 +411,11 @@ describe("capture pairing read by claim", () => {
       const { reads } = await afterAllFour();
       const theirs = (await tokens()).filter((t) => !t.name.startsWith("match day") && t.name !== "no claims");
       expect(theirs.length, "other families' tokens checked").toBeGreaterThanOrEqual(6);
-      expect(mdKeys(reads).filter((k) => k.startsWith("match-day:") && !k.endsWith("<- match day A"))).toEqual([]);
+      const ofTheirs = mdKeys(reads).filter((k) => theirs.some((t) => k.endsWith(`<- ${t.name}`)));
+      expect(ofTheirs.filter((k) => k.startsWith("match-day:"))).toEqual([]);
+      // …and no token but md A reads match-day:A, no token but md B reads match-day:B.
+      expect(mdKeys(reads).filter((k) => k.startsWith("match-day:A ") && !k.endsWith("<- match day A"))).toEqual([]);
+      expect(mdKeys(reads).filter((k) => k.startsWith("match-day:B ") && !k.endsWith("<- match day B"))).toEqual([]);
     });
 
     it("match day: a blank md_code_id reads nothing, not even the bare match-day: topic", async ({ skip }) => {
@@ -411,13 +429,22 @@ describe("capture pairing read by claim", () => {
       await expect(mintMatchDayToken("", new Date(Date.now() + 60_000))).rejects.toThrow(/^Realtime match day: /);
     });
 
-    it("match day: a whitespace md_code_id reads nothing in the matrix, and no builder or mint makes one", async ({ skip }) => {
+    it("match day: a whitespace md_code_id binds only its own spaces topic, no other token reads it, and no builder or mint makes one", async ({
+      skip,
+    }) => {
       if (await hasRealtime()) return skip();
       const { reads } = await afterAllFour();
       const ws = (await tokens()).find((t) => t.name === "match day whitespace id")!;
       expect((ws.claims.md_code_id as string).length, "premise: a non-empty claim").toBeGreaterThan(0);
       expect((ws.claims.md_code_id as string).trim(), "premise: of whitespace only").toBe("");
-      expect(reads.filter(([k]) => k.endsWith("<- match day whitespace id"))).toEqual([]);
+      // The accepted behaviour (controller ruling): nullif turns only '' into null, so this token reads the topic that
+      // is literally `match-day:` + its spaces, and no other — not the bare `match-day:` topic, not match-day:A.
+      expect(ws.claims.md_code_id).toBe("   ");
+      expect(TOPICS.map((t) => t.topic)).toContain("match-day:   ");
+      expect(reads.filter(([k]) => k.endsWith("<- match day whitespace id"))).toEqual([
+        ["match-day:    <- match day whitespace id", 1],
+      ]);
+      expect(reads.filter(([k]) => k.startsWith("match-day:    <-") && !k.endsWith("<- match day whitespace id"))).toEqual([]);
       expect(() => matchDayTopic("   ")).toThrow(/^Realtime match day: /);
       await expect(mintMatchDayToken("   ", new Date(Date.now() + 60_000))).rejects.toThrow(/^Realtime match day: /);
     });
@@ -451,6 +478,8 @@ describe("capture pairing read by claim", () => {
       expect(qual).toContain(WRAPPED);
       expect(qual).toContain(claimRead(own[0]!));
       expect(qual).toContain("extension = 'broadcast'");
+      // The whole expression as Postgres prints it, so the `=` operator and the 'match-day:' literal are pinned too.
+      expect(qual).toBe(`((extension = 'broadcast'::text) AND (${WRAPPED} = ('match-day:'::text || ${claimRead("md_code_id")})))`);
     });
 
     it("match day: a second run is a no-op: one row, unchanged, and the 'already present' notice", async ({ skip }) => {
