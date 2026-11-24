@@ -4568,6 +4568,8 @@ export type DictionaryKey =
   | "matchesHub.live"
   | "matchesHub.round"
   | "matchesHub.startsIn"
+  | "matchesHub.stream.live"
+  | "matchesHub.stream.replay"
   | "matchesHub.timeTbd"
   | "matchesHub.timesIn"
   | "matchesHub.unscheduled"

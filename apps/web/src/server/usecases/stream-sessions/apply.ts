@@ -20,6 +20,7 @@ import { readFirstInput } from "@/server/relay/secret-columns";
 import { effectLandedSinceEnding, recordEvent } from "@/server/relay/telemetry";
 import { mintRelayToken, relayTokenExpiry } from "@/server/relay/tokens";
 import { log } from "@/server/logger";
+import { fireStreamPresenceRevalidate } from "@/server/public-site/revalidate";
 import { captureError } from "@/lib/sentry";
 import {
   NoCreditsError,
@@ -168,6 +169,13 @@ export async function apply(
   // nothing (`from === to`: a command function that returned null, an idempotent decision) is no nudge.
   const reason = nudgeReasonFor(outcome.from, outcome.session.state);
   if (reason !== null) fireNudge(nudgeSession(outcome.session.id, reason, deps));
+  // T47: a session that went INTO or OUT OF live moves the public hub's camera on this fixture's card: expire the hub now, after the
+  // commit, fire-and-forget (it never rejects). Any other transition (warming -> failed, ending -> completed) changes nothing the card shows.
+  // (Rebased onto the push nudges: `from` carries the pre-move state, so `from === "live"` is what T47 called wasLive; a null
+  // command returns `before` unchanged, so it never differs.)
+  if ((outcome.from === "live") !== (outcome.session.state === "live") && outcome.session.fixtureId !== null) {
+    void fireStreamPresenceRevalidate(outcome.session.fixtureId);
+  }
   return runEffects(outcome.session, outcome.effects, deps);
 }
 

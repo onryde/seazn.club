@@ -560,6 +560,8 @@
   "matchesHub.round": "Tour {round}",
   "matchesHub.timesIn": "horaires en {tz}",
   "matchesHub.card.label": "{home} contre {away}",
+  "matchesHub.stream.live": "Diffusion en direct",
+  "matchesHub.stream.replay": "Rediffusion disponible",
   "table.champion": "Champion",
   "title.poolWinners": "Vainqueurs de poule",
   "title.poolWinnerNone": "Pas de vainqueur unique",

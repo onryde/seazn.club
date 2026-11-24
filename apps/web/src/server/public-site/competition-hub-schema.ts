@@ -209,6 +209,11 @@ export const HubMatch = z.object({
    *  Absent on an abandon's tag, and wherever the hub cannot ask (a sport it cannot resolve, an older document): the
    *  banner then makes no walkover claim. */
   forfeit: z.object({ kind: z.string(), tag: z.string(), sentence: z.string(), played: z.boolean().optional() }).nullable().optional(),
+  /** Seazn-hosted video T47 (owner 2026-11-24, option A): the card's camera. `live` - a stream is on air for this match now; `replay` -
+   *  there is a video to watch back on the match page. The ENUM only: never an address, a uid or a token (`hub-stream-flags.ts` holds the
+   *  rule, shared with the match page's own). ABSENT when neither: the card is then exactly what it was. Optional, so a document cached
+   *  before the field existed (Redis 15s, ISR 30s) parses and reads as no camera, and no cache key moves. */
+  stream: z.enum(["live", "replay"]).optional(),
 });
 
 export const TableColumn = z.object({

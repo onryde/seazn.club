@@ -560,6 +560,8 @@
   "matchesHub.round": "Round {round}",
   "matchesHub.timesIn": "times in {tz}",
   "matchesHub.card.label": "{home} v {away}",
+  "matchesHub.stream.live": "Live stream",
+  "matchesHub.stream.replay": "Replay available",
   "table.champion": "Champion",
   "title.poolWinners": "Group winners",
   "title.poolWinnerNone": "No single winner",

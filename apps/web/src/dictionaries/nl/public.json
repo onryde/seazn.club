@@ -560,6 +560,8 @@
   "matchesHub.round": "Ronde {round}",
   "matchesHub.timesIn": "tijden in {tz}",
   "matchesHub.card.label": "{home} tegen {away}",
+  "matchesHub.stream.live": "Livestream",
+  "matchesHub.stream.replay": "Terugkijken beschikbaar",
   "table.champion": "Kampioen",
   "title.poolWinners": "Poulewinnaars",
   "title.poolWinnerNone": "Geen eenduidige winnaar",

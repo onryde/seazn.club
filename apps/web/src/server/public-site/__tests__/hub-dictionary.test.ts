@@ -90,6 +90,8 @@ export const W2_KEYS = [
   // `fmtTime` for the clock. Deleted from all four locales with this line.
   "matchesHub.startsIn", "matchesHub.timeTbd", "matchesHub.unscheduled", "matchesHub.empty", "matchesHub.emptyFilter", "matchesHub.live", "matchesHub.ended",
   "matchesHub.round", "matchesHub.timesIn", "matchesHub.card.label",
+  // T47: the camera icon's title and the card's description (match-card.tsx).
+  "matchesHub.stream.live", "matchesHub.stream.replay",
   // The Knockout tab (plan 2026-09-13, Task 2). Its division chips REUSE
   // `matchesHub.division.all` / `matchesHub.divisionsLabel` above rather than
   // owning a second copy of the same two strings.

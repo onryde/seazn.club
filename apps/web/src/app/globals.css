@@ -151,6 +151,22 @@ body {
 .animate-live-pulse {
   animation: live-pulse 2s ease-in-out infinite;
 }
+/* Seazn-hosted video T47: the match card's "streaming now" camera dot. RED, on purpose: the card's own score "Live" dot above is
+   green, and a card can carry both. A ring that grows and fades, in the same beat as the dot's opacity; off under reduced motion. */
+@keyframes stream-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.55);
+  }
+  50% {
+    opacity: 0.85;
+    box-shadow: 0 0 0 4px rgba(220, 38, 38, 0);
+  }
+}
+.animate-stream-pulse {
+  animation: stream-pulse 1.6s ease-in-out infinite;
+}
 
 /* Live status chip pulse (v3/03 §1) — violet system chip, not the green
    slideshow pulse above. */
@@ -190,6 +206,7 @@ body {
   .animate-slide-progress,
   .animate-blob,
   .animate-live-pulse,
+  .animate-stream-pulse,
   .chip-pulse-dot,
   .news-digit-settle {
     animation: none;

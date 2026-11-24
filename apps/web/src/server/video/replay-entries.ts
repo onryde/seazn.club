@@ -88,3 +88,61 @@ export async function readReplayEntries(
     row: r.part_no === null ? null : { partNo: r.part_no, state: r.state!, removed: r.removed!, listedVideo: r.listed_video },
   }));
 }
+
+/** T47: the PUBLIC reader's entries for MANY fixtures in ONE statement (the competition hub's camera icon asks it once per rebuild, never
+ *  once per match). The same join, the same order and the same public `listedVideo` as `readReplayEntries` with `orgId: null` and nothing
+ *  pending, and `replay-entries-many.test.ts` holds the two to each other fixture by fixture. Each fixture's entries are in recording
+ *  order; a fixture with none is absent from the map. */
+export async function readPublicReplayEntriesMany(
+  exec: typeof sql | Tx,
+  fixtureIds: readonly string[],
+): Promise<Map<string, ReplayEntryRead[]>> {
+  const out = new Map<string, ReplayEntryRead[]>();
+  if (fixtureIds.length === 0) return out;
+  const ids = exec([...fixtureIds]);
+  const rows = await exec<(EntryRow & { fixture_id: string })[]>`
+    with locked as (
+      select s.fixture_id, v.cf_video_id, s.id as session_id, s.created_at as session_created_at, v.recorded_at, v.locked_at,
+             i.replays_discovered_at is not null as input_discovered
+        from seazn_locked_videos v
+        join fixture_stream_inputs i on i.id = v.input_row_id
+        join fixture_stream_sessions s on s.id = i.session_id
+       where s.fixture_id in ${ids}
+         and s.destination_kind = 'seazn' and i.role = 'programme' and s.state in ${exec([...TERMINAL_STATES])}
+    ), listed as (
+      select r.fixture_id, r.cf_video_id, r.session_id, s.created_at as session_created_at, r.recorded_at, r.part_no, r.state,
+             (r.state = 'deleted' or r.deleted_at is not null) as removed,
+             (select pv.bunny_video_id from public_fixture_seazn_replays_v pv where pv.fixture_id = r.fixture_id and pv.part_no = r.part_no) as listed_video
+        from fixture_video_replays r
+        join fixture_stream_sessions s on s.id = r.session_id
+       where r.fixture_id in ${ids}
+    ), merged as (
+      select coalesce(l.fixture_id, p.fixture_id) as fixture_id,
+             coalesce(l.cf_video_id, p.cf_video_id) as cf_video_id,
+             coalesce(l.session_id, p.session_id) as session_id,
+             coalesce(l.session_created_at, p.session_created_at) as session_created_at,
+             l.cf_video_id is not null as locked,
+             coalesce(l.input_discovered, false) as input_discovered,
+             p.part_no, p.state, p.removed, p.listed_video,
+             coalesce(l.recorded_at, p.recorded_at) as sort_recorded_at, l.locked_at as sort_locked_at
+        from locked l full join listed p on p.cf_video_id = l.cf_video_id
+    )
+    select fixture_id, cf_video_id, session_id, session_created_at, locked, input_discovered, part_no, state, removed, listed_video, false as pending
+      from merged
+     order by fixture_id, session_created_at, session_id, sort_recorded_at nulls last, sort_locked_at nulls last, cf_video_id`;
+  for (const r of rows) {
+    const entry: ReplayEntryRead = {
+      cfVideoId: r.cf_video_id,
+      sessionId: r.session_id,
+      sessionCreatedAt: new Date(r.session_created_at),
+      locked: r.locked,
+      inputDiscovered: r.input_discovered,
+      pending: false,
+      row: r.part_no === null ? null : { partNo: r.part_no, state: r.state!, removed: r.removed!, listedVideo: r.listed_video },
+    };
+    const list = out.get(r.fixture_id);
+    if (list) list.push(entry);
+    else out.set(r.fixture_id, [entry]);
+  }
+  return out;
+}
