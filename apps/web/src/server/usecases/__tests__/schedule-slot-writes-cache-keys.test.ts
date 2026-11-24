@@ -81,11 +81,18 @@ vi.mock("@/lib/cache", async (importOriginal) => {
 // publishers (`voidLineEvents` still uses them) record through it too, so a push sent either way is seen, once.
 vi.mock("@/lib/realtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/realtime")>();
+  type Message = Parameters<typeof actual.broadcast>[0][number];
+  const isTwin = (publicMessage: Message, next: Message | undefined) =>
+    next !== undefined && JSON.stringify(next) === JSON.stringify({ ...publicMessage, private: true });
   const record = async (messages: Parameters<typeof actual.broadcast>[0]) => {
-    for (const { topic, payload } of messages) {
+    for (const [index, message] of messages.entries()) {
+      const { topic, payload } = message;
       const { reason } = payload as { reason: string };
       if (topic.startsWith("fixture:")) probe.fixturePushes.push([topic.slice("fixture:".length), reason]);
-      else if (topic.startsWith("division:")) probe.divisionPushes.push([topic.slice("division:".length), reason]);
+      // A division push is TWO messages (Task 14, D-a): the public one, then its private twin. It is recorded ONCE, at its
+      // public message, and only when the very next message is exactly its twin — a lost twin or a lost public message
+      // records no push at all.
+      else if (topic.startsWith("division:") && message.private !== true && isTwin(message, messages[index + 1])) probe.divisionPushes.push([topic.slice("division:".length), reason]);
     }
   };
   return {

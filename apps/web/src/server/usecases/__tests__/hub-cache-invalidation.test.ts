@@ -60,7 +60,7 @@ const fireScoreRevalidate = vi.hoisted(() => vi.fn());
 // handed; `divisionPushes()` / `fixturePushes()` below read it back as the `[id, reason]` pairs the per-message
 // publishers' spies used to record, so every assertion keeps its topic, reason, moment and count.
 const broadcast = vi.hoisted(() =>
-  vi.fn(async (messages: ReadonlyArray<{ topic: string; payload: unknown }>, label: string) => {
+  vi.fn(async (messages: ReadonlyArray<{ topic: string; event?: string; payload: unknown; private?: true }>, label: string) => {
     void messages;
     void label;
   }),
@@ -162,11 +162,21 @@ const SCHEDULE_DELETE_FAILED = "schedule: a public Redis delete failed (the writ
 
 const patterns = () => cacheDelPattern.mock.calls.map(([pattern]) => pattern);
 const deletedKeys = () => cacheDel.mock.calls.flat();
-/** Every push on one topic family that `broadcast` was handed, in send order, as `[id, reason]`. */
+/** Every push on one topic family that `broadcast` was handed, in send order, as `[id, reason]`. A division push is TWO
+ *  messages on the wire (Task 14, D-a: the public one, then its private twin); it is counted ONCE, by its public message,
+ *  and every one of them is checked to be followed, in the same call, by exactly its twin. */
 const pushesOn = (prefix: "division:" | "fixture:") =>
   broadcast.mock.calls
-    .flatMap(([messages]) => messages)
-    .filter((message) => message.topic.startsWith(prefix))
+    .flatMap(([messages]) => {
+      if (prefix !== "division:") return messages.filter((message) => message.topic.startsWith(prefix));
+      const publics = messages.filter((message) => message.topic.startsWith(prefix) && message.private !== true);
+      const twins = messages.filter((message) => message.topic.startsWith(prefix) && message.private === true);
+      expect(twins, "every public division message has exactly one private twin").toHaveLength(publics.length);
+      for (const message of publics) {
+        expect(messages[messages.indexOf(message) + 1], "the twin follows its public message").toStrictEqual({ ...message, private: true });
+      }
+      return publics;
+    })
     .map((message) => [message.topic.slice(prefix.length), (message.payload as { reason: string }).reason]);
 const divisionPushes = () => pushesOn("division:");
 const fixturePushes = () => pushesOn("fixture:");

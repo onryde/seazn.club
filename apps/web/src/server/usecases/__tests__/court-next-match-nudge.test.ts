@@ -24,6 +24,9 @@
 // catches up on its own poll. A link for another DAY than the fixture's is not looked at: a link live now whose court the fixture
 // sits on nudges its phone, and a nudge only makes the phone beat, the beat decides — harmless, never a wrong state.
 //
+// Task 14 (D-a): every division message is TWO on the wire, the public one then its private twin, so each topic list below
+// names `division:{id}` twice, in that order (the twin's shape is pinned by lib/__tests__/realtime-publish.test.ts).
+//
 // Applies to another sport: N/A (no sport rules) — the court link is the other surface; the fixtures here are generic.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -189,7 +192,7 @@ describe.skipIf(!HAS_DB)("a schedule write nudges the court's phone `next-match`
     const all = await sent();
     expect(all, "ONE POST for the division, the fixture and the court nudge").toHaveLength(1);
     const post = all[0]!;
-    expect(post.map((m) => m.topic).filter((t) => !t.startsWith("capture:"))).toEqual([`division:${day.comp.divisionId}`, `fixture:${fx[0]}`]);
+    expect(post.map((m) => m.topic).filter((t) => !t.startsWith("capture:"))).toEqual([`division:${day.comp.divisionId}`, `division:${day.comp.divisionId}`, `fixture:${fx[0]}`]);
     expect(nudgesOf(post), "anti-vacuity: exactly the one court nudge").toHaveLength(1);
     const nudge = nudgesOf(post)[0]!;
     expect(nudge.topic).toBe(`capture:${c2.pairingId}`);
@@ -229,7 +232,7 @@ describe.skipIf(!HAS_DB)("a schedule write nudges the court's phone `next-match`
     await moveFixture(day.auth, fx[0]!, { scheduled_at: new Date(Date.UTC(2026, 10, 7, 11, 0)).toISOString(), court_id: day.courts.c2 });
     const all = await sent();
     expect(all, "one POST for the whole move").toHaveLength(1);
-    expect(all[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `fixture:${fx[0]}`, `capture:${c2.pairingId}`]);
+    expect(all[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `division:${day.comp.divisionId}`, `fixture:${fx[0]}`, `capture:${c2.pairingId}`]);
     expect(nudgesOf(all[0]!)[0]!.payload.reason).toBe("next-match");
 
     // The other direction of the same producer: a move onto a court with no link nudges no one.
@@ -237,7 +240,7 @@ describe.skipIf(!HAS_DB)("a schedule write nudges the court's phone `next-match`
     await moveFixture(day.auth, fx[0]!, { scheduled_at: new Date(Date.UTC(2026, 10, 7, 12, 0)).toISOString(), court_id: day.courts.c3 });
     const second = await sent();
     expect(second, "the second move's own POST").toHaveLength(1);
-    expect(second[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `fixture:${fx[0]}`]);
+    expect(second[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `division:${day.comp.divisionId}`, `fixture:${fx[0]}`]);
   });
 
   it("only the courts the write touched are nudged: a linked court whose fixtures did not move hears nothing", async () => {
@@ -264,7 +267,7 @@ describe.skipIf(!HAS_DB)("a schedule write nudges the court's phone `next-match`
     await write([fx[2]!]);
     const third = await sent();
     expect(third, "PREMISE: the third write's own POST").toHaveLength(1);
-    expect(third[0]!.map((m) => m.topic), "a fixture with no court has no court to nudge").toEqual([`division:${day.comp.divisionId}`, `fixture:${fx[2]}`]);
+    expect(third[0]!.map((m) => m.topic), "a fixture with no court has no court to nudge").toEqual([`division:${day.comp.divisionId}`, `division:${day.comp.divisionId}`, `fixture:${fx[2]}`]);
   });
 
   describe("no nudge, still the one POST with the division and fixture messages", () => {
@@ -273,7 +276,7 @@ describe.skipIf(!HAS_DB)("a schedule write nudges the court's phone `next-match`
       await write([fx[0]!]);
       const all = await sent();
       expect(all, "the write's POST still goes").toHaveLength(1);
-      expect(all[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `fixture:${fx[0]}`]);
+      expect(all[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `division:${day.comp.divisionId}`, `fixture:${fx[0]}`]);
     }
     beforeEach(async () => { await place(day, fx[0]!, 0, day.courts.c2); });
 
@@ -332,7 +335,7 @@ describe.skipIf(!HAS_DB)("a schedule write nudges the court's phone `next-match`
       afterScheduleWrite(other.divisionId, other.id, "schedule", [otherFx]);
       const all = await sent();
       expect(all).toHaveLength(1);
-      expect(all[0]!.map((m) => m.topic)).toEqual([`division:${other.divisionId}`, `fixture:${otherFx}`]);
+      expect(all[0]!.map((m) => m.topic)).toEqual([`division:${other.divisionId}`, `division:${other.divisionId}`, `fixture:${otherFx}`]);
     });
 
     it("another surface: a fixture's OWN code and phone (not a court's) never gets a next-match", async () => {
@@ -355,7 +358,7 @@ describe.skipIf(!HAS_DB)("a schedule write nudges the court's phone `next-match`
       await write(ids);
       const all = await sent();
       expect(all).toHaveLength(1);
-      expect(all[0]!.map((m) => m.topic), "the division message only").toEqual([`division:${day.comp.divisionId}`]);
+      expect(all[0]!.map((m) => m.topic), "the division message only").toEqual([`division:${day.comp.divisionId}`, `division:${day.comp.divisionId}`]);
       expect(courtPairingNudges).not.toHaveBeenCalled();
     });
 
@@ -372,7 +375,7 @@ describe.skipIf(!HAS_DB)("a schedule write nudges the court's phone `next-match`
     it("`fixturePushes: false` (a quick match's create): no nudge and no read", async () => {
       await write([fx[0]!], { fixturePushes: false });
       const all = await sent();
-      expect(all[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`]);
+      expect(all[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `division:${day.comp.divisionId}`]);
       expect(courtPairingNudges).not.toHaveBeenCalled();
     });
 
@@ -386,13 +389,13 @@ describe.skipIf(!HAS_DB)("a schedule write nudges the court's phone `next-match`
       expect(vi.getTimerCount() - armedBefore, "only the DEL's push bound and the Match Day read's, never the court read's").toBe(2);
       await vi.advanceTimersByTimeAsync(10);
       await vi.waitFor(() => expect(posts()).toHaveLength(1));
-      expect(posts()[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, "fixture:fx-not-a-uuid"]);
+      expect(posts()[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `division:${day.comp.divisionId}`, "fixture:fx-not-a-uuid"]);
     });
 
     it("an empty fixture set: the division message only, and no read", async () => {
       await write([]);
       const all = await sent();
-      expect(all[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`]);
+      expect(all[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `division:${day.comp.divisionId}`]);
       expect(courtPairingNudges).not.toHaveBeenCalled();
     });
   });
@@ -411,7 +414,7 @@ describe.skipIf(!HAS_DB)("a schedule write nudges the court's phone `next-match`
         await write([fx[0]!]);
         const all = await sent();
         expect(all).toHaveLength(1);
-        expect(all[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `fixture:${fx[0]}`]);
+        expect(all[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `division:${day.comp.divisionId}`, `fixture:${fx[0]}`]);
         await sleep(30);
         expect(unhandled).not.toHaveBeenCalled();
       } finally {
@@ -423,7 +426,7 @@ describe.skipIf(!HAS_DB)("a schedule write nudges the court's phone `next-match`
       vi.mocked(courtPairingNudges).mockImplementationOnce(() => { throw new Error("boom"); });
       await write([fx[0]!]);
       const all = await sent();
-      expect(all[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `fixture:${fx[0]}`]);
+      expect(all[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `division:${day.comp.divisionId}`, `fixture:${fx[0]}`]);
     });
 
     it("a read that never answers: the POST goes out at the READ bound (750 ms), with no nudge", async () => {
@@ -436,7 +439,7 @@ describe.skipIf(!HAS_DB)("a schedule write nudges the court's phone `next-match`
       expect(posts(), "nothing sent while the read is pending, inside the bound").toHaveLength(0);
       await vi.advanceTimersByTimeAsync(100);
       expect(posts(), "out at the read's bound (750 ms), not later").toHaveLength(1);
-      expect(posts()[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `fixture:${fx[0]}`]);
+      expect(posts()[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `division:${day.comp.divisionId}`, `fixture:${fx[0]}`]);
     });
 
     describe("R10c: the read never pushes the division messages past PUSH_AFTER_DELETE_BOUND_MS", () => {
@@ -456,7 +459,7 @@ describe.skipIf(!HAS_DB)("a schedule write nudges the court's phone `next-match`
         // it advances the clock itself and would hide exactly that.
         expect(posts(), "the POST is out at the DEL bound, 1550 ms in").toHaveLength(1);
         expect(posts()[0]!.map((m) => m.topic)).toEqual([
-          `division:${day.comp.divisionId}`, `fixture:${fx[0]}`, "capture:pairing-slow-read",
+          `division:${day.comp.divisionId}`, `division:${day.comp.divisionId}`, `fixture:${fx[0]}`, "capture:pairing-slow-read",
         ]);
       });
 
@@ -468,7 +471,7 @@ describe.skipIf(!HAS_DB)("a schedule write nudges the court's phone `next-match`
         await write([fx[0]!]);
         await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS + 50);
         expect(posts(), "out at the DEL bound, not at the DEL bound plus the read's own bound").toHaveLength(1);
-        expect(posts()[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `fixture:${fx[0]}`]);
+        expect(posts()[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `division:${day.comp.divisionId}`, `fixture:${fx[0]}`]);
       });
 
       it("a DEL that settles at once and a read that takes 700 ms: the POST waits for the read (later of the two), not for 1500", async () => {

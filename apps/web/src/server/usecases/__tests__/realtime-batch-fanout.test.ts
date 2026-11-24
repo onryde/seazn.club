@@ -123,10 +123,16 @@ function posts(): Shape[][] {
     });
 }
 
-const divisionSchedule = (id: string, reason: string): Shape => ({
-  topic: `division:${id}`, event: "schedule_changed", reason, private: false,
-});
-const divisionScore = (id: string): Shape => ({ topic: `division:${id}`, event: "state_changed", reason: "score", private: false });
+// Task 14 (D-a): a division change is TWO messages in the write's one POST — the public one an old tab still joins, then
+// its private twin (the same topic, event and reason, `private: true`) that a page joined through the division door hears.
+const divisionSchedule = (id: string, reason: string): Shape[] => [
+  { topic: `division:${id}`, event: "schedule_changed", reason, private: false },
+  { topic: `division:${id}`, event: "schedule_changed", reason, private: true },
+];
+const divisionScore = (id: string): Shape[] => [
+  { topic: `division:${id}`, event: "state_changed", reason: "score", private: false },
+  { topic: `division:${id}`, event: "state_changed", reason: "score", private: true },
+];
 const fixtureMsg = (id: string, reason: "event" | "schedule"): Shape => ({
   topic: `fixture:${id}`, event: "state_changed", reason, private: true,
 });
@@ -178,26 +184,26 @@ describe("afterScheduleWrite sends ONE broadcast: the division and every fixture
     await settled();
     const sent = posts();
     expect(sent, `one POST for ${n} fixtures and their division (before T0.2: ${n + 1})`).toHaveLength(1);
-    expect(sent[0], "anti-vacuity: the POST carried every message").toHaveLength(n + 1);
-    expect(sent[0]).toEqual([divisionSchedule(DIVISION, reason), ...moved.map((id) => fixtureMsg(id, "schedule"))]);
+    expect(sent[0], "anti-vacuity: the POST carried every message — the division's two, one per fixture").toHaveLength(n + 2);
+    expect(sent[0]).toEqual([...divisionSchedule(DIVISION, reason), ...moved.map((id) => fixtureMsg(id, "schedule"))]);
   });
 
-  it("51 moved fixtures (past the cap): ONE POST with the division message only", async () => {
+  it("51 moved fixtures (past the cap): ONE POST with the division's two messages only", async () => {
     afterScheduleWrite(DIVISION, COMPETITION, "start", ids(51));
     await settled();
-    expect(posts()).toEqual([[divisionSchedule(DIVISION, "start")]]);
+    expect(posts()).toEqual([divisionSchedule(DIVISION, "start")]);
   });
 
-  it("the empty case, a write that moved no fixture: ONE POST with the division message", async () => {
+  it("the empty case, a write that moved no fixture: ONE POST with the division's public message and its twin", async () => {
     afterScheduleWrite(DIVISION, COMPETITION, "publish", []);
     await settled();
-    expect(posts()).toEqual([[divisionSchedule(DIVISION, "publish")]]);
+    expect(posts()).toEqual([divisionSchedule(DIVISION, "publish")]);
   });
 
-  it("`fixturePushes: false` (a quick match's create): ONE POST with the division message only", async () => {
+  it("`fixturePushes: false` (a quick match's create): ONE POST with the division's two messages only", async () => {
     afterScheduleWrite(DIVISION, COMPETITION, "start", ids(3), { fixturePushes: false });
     await settled();
-    expect(posts()).toEqual([[divisionSchedule(DIVISION, "start")]]);
+    expect(posts()).toEqual([divisionSchedule(DIVISION, "start")]);
   });
 
   it("a second write sends a second POST of its own, never merged into the first", async () => {
@@ -206,8 +212,8 @@ describe("afterScheduleWrite sends ONE broadcast: the division and every fixture
     afterScheduleWrite("div-other", COMPETITION, "publish", ["fx-b", "fx-c"]);
     await settled();
     expect(posts()).toEqual([
-      [divisionSchedule(DIVISION, "schedule"), fixtureMsg("fx-a", "schedule")],
-      [divisionSchedule("div-other", "publish"), fixtureMsg("fx-b", "schedule"), fixtureMsg("fx-c", "schedule")],
+      [...divisionSchedule(DIVISION, "schedule"), fixtureMsg("fx-a", "schedule")],
+      [...divisionSchedule("div-other", "publish"), fixtureMsg("fx-b", "schedule"), fixtureMsg("fx-c", "schedule")],
     ]);
   });
 });
@@ -264,9 +270,9 @@ describe.skipIf(!HAS_DB)("a score sends ONE broadcast: its fixture, its division
     fetchSpy.mockClear();
     await scoreEvent(rig.auth, first!.id, { expected_seq: 0, type: "core.start", payload: {} });
     await settled();
-    expect(posts()).toEqual([[fixtureMsg(first!.id, "event"), divisionScore(rig.divisionId)]]);
+    expect(posts()).toEqual([[fixtureMsg(first!.id, "event"), ...divisionScore(rig.divisionId)]]);
 
-    // 2. The decision names the winner up and drops the loser down: the second score's own ONE POST, 4 messages.
+    // 2. The decision names the winner up and drops the loser down: the second score's own ONE POST, 5 messages.
     fetchSpy.mockClear();
     const beforeDecide = await lineups(rig.divisionId);
     await scoreEvent(rig.auth, first!.id, {
@@ -277,12 +283,12 @@ describe.skipIf(!HAS_DB)("a score sends ONE broadcast: its fixture, its division
     await settled();
     const decided = posts();
     expect(decided, "one POST for the score (before T0.2: 4)").toHaveLength(1);
-    expect(decided[0], "anti-vacuity: 4 messages").toHaveLength(4);
-    expect(decided[0]!.slice(0, 2), "the scored fixture first, then its division").toEqual([
+    expect(decided[0], "anti-vacuity: 5 messages").toHaveLength(5);
+    expect(decided[0]!.slice(0, 3), "the scored fixture first, then its division's public message and its twin").toEqual([
       fixtureMsg(first!.id, "event"),
-      divisionScore(rig.divisionId),
+      ...divisionScore(rig.divisionId),
     ]);
-    expect([...decided[0]!.slice(2)].sort((a, b) => a.topic.localeCompare(b.topic)), "then one per advanced-into fixture")
+    expect([...decided[0]!.slice(3)].sort((a, b) => a.topic.localeCompare(b.topic)), "then one per advanced-into fixture")
       .toEqual(fed.map((id) => fixtureMsg(id, "schedule")).sort((a, b) => a.topic.localeCompare(b.topic)));
 
     // 3. After a void: the decision is erased and the names it advanced are taken back. The seats the void emptied ride
@@ -299,13 +305,14 @@ describe.skipIf(!HAS_DB)("a score sends ONE broadcast: its fixture, its division
     await settled();
     const voided = posts();
     expect(voided, "one POST for the void").toHaveLength(1);
-    expect(voided[0]).toHaveLength(2 + emptied.length);
-    expect(voided[0]!.slice(0, 2)).toEqual([fixtureMsg(first!.id, "event"), divisionScore(rig.divisionId)]);
-    expect(voided[0]!.slice(2).map((m) => m.topic).sort()).toEqual(emptied.map((id) => `fixture:${id}`));
-    expect(new Set(voided[0]!.slice(2).map((m) => m.reason))).toEqual(new Set(["schedule"]));
+    expect(voided[0]).toHaveLength(3 + emptied.length);
+    expect(voided[0]!.slice(0, 3)).toEqual([fixtureMsg(first!.id, "event"), ...divisionScore(rig.divisionId)]);
+    expect(voided[0]!.slice(3).map((m) => m.topic).sort()).toEqual(emptied.map((id) => `fixture:${id}`));
+    expect(new Set(voided[0]!.slice(3).map((m) => m.reason))).toEqual(new Set(["schedule"]));
   }, 120_000);
 
-  it("a score whose fixture's scope lookup finds no row: ONE POST with the fixture message only", async () => {
+  // The empty case of the twin: no division known, so neither the public division message nor its twin is sent.
+  it("a score whose fixture's scope lookup finds no row: ONE POST with the fixture message only (no division, no twin)", async () => {
     const { auth } = await seedGenericOrg();
     const rig = await divisionRig(auth, { entrants: 2 });
     const fixtureId = rig.fixtureIds[0]!;
@@ -328,7 +335,7 @@ describe.skipIf(!HAS_DB)("a real schedule writer reaches the one broadcast", () 
     fetchSpy.mockClear();
     await moveFixture(auth, rig.fixtureIds[0]!, { scheduled_at: "2030-06-01T10:00:00.000Z" });
     await settled();
-    expect(posts()).toEqual([[divisionSchedule(rig.divisionId, "schedule"), fixtureMsg(rig.fixtureIds[0]!, "schedule")]]);
+    expect(posts()).toEqual([[...divisionSchedule(rig.divisionId, "schedule"), fixtureMsg(rig.fixtureIds[0]!, "schedule")]]);
   }, 120_000);
 });
 
@@ -337,7 +344,7 @@ describe.skipIf(!HAS_DB)("a real schedule writer reaches the one broadcast", () 
 describe.skipIf(!HAS_DB)("voidLineEvents (batched by Task 10): ONE POST for its lines and its division", () => {
   const moduleOf = (key: string): AnySportModule => builtinModules.find((m) => m.key === key) as AnySportModule;
 
-  it("two voided lines: ONE POST of three messages — each line's fixture, and the division", async () => {
+  it("two voided lines: ONE POST of four messages — each line's fixture, and the division's public message and twin", async () => {
     const { auth } = await seedOrg("pro");
     const comp = await createCompetition(auth, {
       ends_on: "2030-12-31", name: "T02 " + randomUUID().slice(0, 6), visibility: "private", branding: {},
@@ -368,10 +375,10 @@ describe.skipIf(!HAS_DB)("voidLineEvents (batched by Task 10): ONE POST for its 
     await settled();
     const sent = posts();
     expect(sent, "one POST for two lines and the division (before Task 10: 3)").toHaveLength(1);
-    expect(sent[0], "anti-vacuity: the POST carries all three messages").toHaveLength(3);
-    const byTopic = (a: Shape, b: Shape) => a.topic.localeCompare(b.topic);
+    expect(sent[0], "anti-vacuity: the POST carries all four messages").toHaveLength(4);
+    const byTopic = (a: Shape, b: Shape) => a.topic.localeCompare(b.topic) || Number(a.private) - Number(b.private);
     expect(sent.flat().sort(byTopic)).toEqual(
-      [divisionScore(d.id), ...two.map((a) => fixtureMsg(a.fixture_id, "event"))].sort(byTopic),
+      [...divisionScore(d.id), ...two.map((a) => fixtureMsg(a.fixture_id, "event"))].sort(byTopic),
     );
   }, 120_000);
 });

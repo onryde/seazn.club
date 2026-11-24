@@ -1,15 +1,28 @@
 // Server-side Supabase Realtime: the one broadcast transport (`broadcast()`)
 // and the subscriber-JWT mint for private topics.
 //
-// Supabase quotas: UNVERIFIED (CS-2). Nothing in the repo states them; each
-// line below is a placeholder until it is read from the project's plan and
-// written here as a docs commit (realtime push-nudges plan, CS-2):
-//   - concurrent connections:            UNVERIFIED
-//   - channels per connection:           UNVERIFIED
-//   - channel joins per second:          UNVERIFIED
-//   - messages per month (billed):       UNVERIFIED
-//   - messages per broadcast request:    UNVERIFIED (`BROADCAST_CHUNK` assumes 100;
-//                                        lower it if the plan's maximum is below that)
+// Supabase quotas (CS-2, realtime push-nudges plan). Source: the owner's
+// screenshot of the project's billing page, 2026-11-24, plus Supabase's
+// published Realtime limits for the Pro plan; recorded in the plan's ledger
+// (.superpowers/sdd/2026-11-24-realtime-push-nudges/progress.md, "CS-2"):
+//   - plan:                              Pro, spend cap ON (owner, 2026-11-24):
+//                                        the caps below are HARD, never billed past
+//   - concurrent connections (peak):     500 (peak seen at the time: 3)
+//   - channels per connection:           100
+//   - channel joins per second:          500
+//   - messages per second:               500
+//   - messages per billing period:       5,000,000 (used at the time: 3,434)
+//   - broadcast payload:                 3,000 KB
+//   - messages per broadcast request:    UNVERIFIED — CS-2 names no count.
+//                                        `BROADCAST_CHUNK` assumes 100; lower it
+//                                        if the API refuses a chunk that size
+// DIVISIONS COST DOUBLE in the dual-publish window (Task 14, D-a): every
+// division change sends TWO messages — the public one and its private twin
+// (`divisionMessages`) — so the messages per publish and the messages per
+// second a division write puts on the API are twice what they were. A
+// subscriber still hears ONE of the two: an anonymous public subscriber gets
+// the public message and not the twin (CS-1a, measured on stg 2026-11-24); a
+// door-token subscriber on the private channel is CS-1b, owed post-merge.
 // A refused connection or join behaves like "Realtime down": every subscriber
 // falls back to its poll, and a publish only ever logs a warning.
 import "server-only";
@@ -61,7 +74,7 @@ export function realtimePublishEnabled(): boolean {
 export type RealtimeMessage = { topic: string; event: string; payload: unknown; private?: true };
 
 /** Messages per broadcast request. The API's per-request maximum is UNVERIFIED
- *  (CS-2 in the header); 100 is the design's assumption. */
+ *  (CS-2 in the header names none); 100 is the design's assumption. */
 export const BROADCAST_CHUNK = 100;
 
 /**
@@ -156,17 +169,20 @@ export function fixtureMessage(fixtureId: string, reason: FixtureUpdateReason): 
 }
 
 /** A change on one division: `state_changed` for a score, `schedule_changed`
- *  for every other reason. Today the ONE public message; the private twin of
- *  the design's §4.3 dual-publish window is added beside it later (Task 14),
- *  which is why this returns a list. */
+ *  for every other reason. TWO messages, the design's §4.3 dual-publish window
+ *  (D-a, Task 14): the PUBLIC one first, byte-identical to what every old tab
+ *  has always joined, then its private twin — the same object plus
+ *  `private: true` — for a page that joined through the division door
+ *  (Task 13). Both go in the caller's one request. The public message stays
+ *  until the window closes: dropping it would leave a tab loaded before the
+ *  door shipped on its poll alone. */
 export function divisionMessages(divisionId: string, reason: DivisionUpdateReason): RealtimeMessage[] {
-  return [
-    {
-      topic: divisionTopic(divisionId),
-      event: reason === "score" ? "state_changed" : "schedule_changed",
-      payload: { v: Date.now(), reason, at: new Date().toISOString() },
-    },
-  ];
+  const publicMessage: RealtimeMessage = {
+    topic: divisionTopic(divisionId),
+    event: reason === "score" ? "state_changed" : "schedule_changed",
+    payload: { v: Date.now(), reason, at: new Date().toISOString() },
+  };
+  return [publicMessage, { ...publicMessage, private: true }];
 }
 
 /**

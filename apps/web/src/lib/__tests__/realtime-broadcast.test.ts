@@ -262,9 +262,9 @@ describe("message and topic builders", () => {
     });
   });
 
-  it("divisionMessages is today's ONE public message: score → state_changed, every other reason → schedule_changed", async () => {
+  it("divisionMessages is the public message and its private twin: score → state_changed, every other reason → schedule_changed", async () => {
     const { divisionMessages } = await import("../realtime");
-    // Every reason publishDivisionUpdate declares, with the event today's body carries.
+    // Every reason publishDivisionUpdate declares, with the event its body carries.
     const EXPECTED = [
       ["schedule", "schedule_changed"],
       ["publish", "schedule_changed"],
@@ -274,10 +274,9 @@ describe("message and topic builders", () => {
     let checked = 0;
     for (const [reason, event] of EXPECTED) {
       const out = divisionMessages("dv-1", reason);
-      expect(out, reason).toStrictEqual([
-        { topic: "division:dv-1", event, payload: { v: FROZEN_MS, reason, at: FROZEN_AT } },
-      ]);
-      // Public until the §4 dual-publish window (Task 14 adds the private twin).
+      const publicMessage = { topic: "division:dv-1", event, payload: { v: FROZEN_MS, reason, at: FROZEN_AT } };
+      // The §4.3 dual-publish window (Task 14, D-a): the public message first, then its twin, `private: true`.
+      expect(out, reason).toStrictEqual([publicMessage, { ...publicMessage, private: true }]);
       expect("private" in out[0]!, reason).toBe(false);
       checked += 1;
     }

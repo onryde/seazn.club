@@ -22,6 +22,9 @@
 //   - publishing off (`REALTIME_PUBLISH=off`) or a non-uuid competition: nothing is sent AND nothing is read, no timer armed;
 //   - `fixturePushes: false` (a quick match's create) reads nothing for Match Day either.
 //
+// Task 14 (D-a): every division message is TWO on the wire, the public one then its private twin, so each topic list below
+// names `division:{id}` twice (the twin's shape is pinned by lib/__tests__/realtime-publish.test.ts).
+//
 // Applies to another sport: N/A (no sport rules) — the generic and badminton divisions here only give a fixture to score and void.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -394,7 +397,7 @@ describe.skipIf(!HAS_DB)("a schedule write nudges the open codes inside its ONE 
     await quiesce();
     const all = await write();
     expect(all, "ONE POST for the write and both nudges").toHaveLength(1);
-    expect(restOf(all[0]!)).toEqual([`division:${day.comp.divisionId}`, `fixture:${fx[0]}`]);
+    expect(restOf(all[0]!)).toEqual([`division:${day.comp.divisionId}`, `division:${day.comp.divisionId}`, `fixture:${fx[0]}`]);
     expect(topicsOf(all[0]!), "anti-vacuity: both codes").toEqual(topicsFor([a, b]));
     expect(mdOf(all[0]!).map((m) => m.payload.reason)).toEqual(["schedule", "schedule"]);
     expect(mdOf(all[0]!).every((m) => m.event === "nudge" && m.private === true)).toBe(true);
@@ -404,7 +407,7 @@ describe.skipIf(!HAS_DB)("a schedule write nudges the open codes inside its ONE 
     await quiesce();
     const all = await write();
     expect(all).toHaveLength(1);
-    expect(all[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `fixture:${fx[0]}`]);
+    expect(all[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `division:${day.comp.divisionId}`, `fixture:${fx[0]}`]);
     expect(probe.reads, "anti-vacuity: the codes were read and there were none").toBe(1);
   });
 
@@ -428,7 +431,7 @@ describe.skipIf(!HAS_DB)("a schedule write nudges the open codes inside its ONE 
     fetchSpy.mockClear();
     const second = await write({}, [fx[1]!]);
     expect(second, "ONE POST for the second write").toHaveLength(1);
-    expect(restOf(second[0]!)).toEqual([`division:${day.comp.divisionId}`, `fixture:${fx[1]}`]);
+    expect(restOf(second[0]!)).toEqual([`division:${day.comp.divisionId}`, `division:${day.comp.divisionId}`, `fixture:${fx[1]}`]);
     expect(topicsOf(second[0]!)).toEqual(topicsFor([id]));
     expect(probe.reads, "the second write's codes came from the memo").toBe(1);
   });
@@ -456,7 +459,7 @@ describe.skipIf(!HAS_DB)("a schedule write nudges the open codes inside its ONE 
     expect(all).toHaveLength(1);
     expect(mdOf(all[0]!).map((m) => m.payload.reason)).toEqual(["call"]);
     const rest = all[0]!.filter((m) => !m.topic.startsWith("match-day:"));
-    expect(rest.map((m) => m.payload.reason), "division schedule + fixture schedule").toEqual(["schedule", "schedule"]);
+    expect(rest.map((m) => m.payload.reason), "division schedule (public and twin) + fixture schedule").toEqual(["schedule", "schedule", "schedule"]);
   });
 
   it("past the 50-fixture cap the write still nudges the day (one message per code, never per fixture)", async () => {
@@ -465,7 +468,7 @@ describe.skipIf(!HAS_DB)("a schedule write nudges the open codes inside its ONE 
     const ids = Array.from({ length: 51 }, () => randomUUID());
     const all = await write({}, ids);
     expect(all).toHaveLength(1);
-    expect(all[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `match-day:${id}`]);
+    expect(all[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `division:${day.comp.divisionId}`, `match-day:${id}`]);
   });
 
   it("`fixturePushes: false` (a quick match's create): no Match Day message and NO read", async () => {
@@ -473,7 +476,7 @@ describe.skipIf(!HAS_DB)("a schedule write nudges the open codes inside its ONE 
     await quiesce();
     const all = await write({ fixturePushes: false });
     expect(all).toHaveLength(1);
-    expect(all[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`]);
+    expect(all[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `division:${day.comp.divisionId}`]);
     expect(probe.reads).toBe(0);
   });
 
@@ -482,7 +485,7 @@ describe.skipIf(!HAS_DB)("a schedule write nudges the open codes inside its ONE 
     await quiesce();
     const all = await write({}, []);
     expect(all).toHaveLength(1);
-    expect(all[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `match-day:${id}`]);
+    expect(all[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `division:${day.comp.divisionId}`, `match-day:${id}`]);
   });
 
   it("publishing off: nothing is sent and the codes are not even read", async () => {
@@ -500,7 +503,7 @@ describe.skipIf(!HAS_DB)("a schedule write nudges the open codes inside its ONE 
     probe.fail = true;
     const all = await write();
     expect(all, "the batch is not lost").toHaveLength(1);
-    expect(all[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `fixture:${fx[0]}`]);
+    expect(all[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `division:${day.comp.divisionId}`, `fixture:${fx[0]}`]);
     expect(probe.reads, "anti-vacuity: the read was attempted").toBe(1);
     for (const c of warn.mock.calls) {
       const line = JSON.stringify(c);
@@ -519,7 +522,7 @@ describe.skipIf(!HAS_DB)("a schedule write nudges the open codes inside its ONE 
     await Promise.race([nudgesSettled(), sleep(2_000)]);
     expect(Date.now() - started, "not before the bound").toBeGreaterThanOrEqual(MATCH_DAY_NUDGE_READ_BOUND_MS - 50);
     expect(posts()).toHaveLength(1);
-    expect(posts()[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `fixture:${fx[0]}`]);
+    expect(posts()[0]!.map((m) => m.topic)).toEqual([`division:${day.comp.divisionId}`, `division:${day.comp.divisionId}`, `fixture:${fx[0]}`]);
   });
 
   it("after a withdrawal: inside the memo window one more nudge (no data), after it none — the sequence through real writes", async () => {
@@ -597,7 +600,7 @@ describe.skipIf(!HAS_DB)("a score and a void nudge the open codes inside their O
     await scoreEvent(day.auth, f, { expected_seq: 0, type: "core.start", payload: {} });
     await settled();
     expect(posts()).toHaveLength(1);
-    expect(posts()[0]!.map((m) => m.topic)).toEqual([`fixture:${f}`, `division:${day.comp.divisionId}`]);
+    expect(posts()[0]!.map((m) => m.topic)).toEqual([`fixture:${f}`, `division:${day.comp.divisionId}`, `division:${day.comp.divisionId}`]);
     // Two codes, past the memo window (the first read said "none").
     const now = new Date();
     const a = await openCode(day, now);
@@ -608,7 +611,7 @@ describe.skipIf(!HAS_DB)("a score and a void nudge the open codes inside their O
     await settled();
     const sent = posts();
     expect(sent, "ONE POST for the score").toHaveLength(1);
-    expect(restOf(sent[0]!).slice(0, 2)).toEqual([`fixture:${f}`, `division:${day.comp.divisionId}`]);
+    expect(restOf(sent[0]!).slice(0, 3)).toEqual([`fixture:${f}`, `division:${day.comp.divisionId}`, `division:${day.comp.divisionId}`]);
     expect(topicsOf(sent[0]!), "anti-vacuity: both codes").toEqual(topicsFor([a, b]));
     expect(mdOf(sent[0]!).map((m) => m.payload.reason)).toEqual(["score", "score"]);
     // A second score on another fixture: its own POST, from the memo.
@@ -662,14 +665,14 @@ describe.skipIf(!HAS_DB)("a score and a void nudge the open codes inside their O
     await settled();
     resetMatchDayMemo();
 
-    // Zero open codes: 2 lines + the division = ONE POST of 3 messages.
+    // Zero open codes: 2 lines + the division's two (public and twin) = ONE POST of 4 messages.
     fetchSpy.mockClear();
     const written = await voidLineEvents(auth, d.id, lines(0, 2), { writer: "withdrawal_cascade" });
     expect(written.sort(), "anti-vacuity: both voids were written").toEqual(abandons.slice(0, 2).map((a) => a.fixture_id).sort());
     await settled();
     expect(posts(), "ONE POST (was 3)").toHaveLength(1);
     expect(posts()[0]!.map((m) => m.topic).sort()).toEqual(
-      [`division:${d.id}`, ...abandons.slice(0, 2).map((a) => `fixture:${a.fixture_id}`)].sort(),
+      [`division:${d.id}`, `division:${d.id}`, ...abandons.slice(0, 2).map((a) => `fixture:${a.fixture_id}`)].sort(),
     );
 
     // Two open codes (past the memo window): the same ONE POST plus a `score` nudge each.
@@ -683,7 +686,7 @@ describe.skipIf(!HAS_DB)("a score and a void nudge the open codes inside their O
     await settled();
     const sent = posts();
     expect(sent, "ONE POST with the nudges").toHaveLength(1);
-    expect(restOf(sent[0]!).sort()).toEqual([`division:${d.id}`, `fixture:${abandons[2]!.fixture_id}`].sort());
+    expect(restOf(sent[0]!).sort()).toEqual([`division:${d.id}`, `division:${d.id}`, `fixture:${abandons[2]!.fixture_id}`].sort());
     expect(topicsOf(sent[0]!)).toEqual(topicsFor([a, b]));
     expect(mdOf(sent[0]!).map((m) => m.payload.reason)).toEqual(["score", "score"]);
   }, 120_000);

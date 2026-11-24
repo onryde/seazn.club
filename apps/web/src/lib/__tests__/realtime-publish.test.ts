@@ -432,24 +432,55 @@ describe("golden wire bodies (byte-identical across the broadcast() delegation)"
     );
   });
 
-  it("publishDivisionUpdate score: state_changed on division:{id}, NO private key (public until the §4 dual window)", async () => {
+  // Task 14 (D-a, the §4.3 dual-publish window): the division's PUBLIC message is kept byte for byte — the literal inside
+  // each body below is the one captured at 964ee72479 — and its private twin follows it in the SAME request: the same
+  // topic, event and payload, plus `private: true`. An old public tab still hears the public one; a page that joined
+  // through the division door (Task 13) hears the twin. Never two requests.
+  const DIVISION_SCORE_PUBLIC =
+    '{"topic":"division:dv-1","event":"state_changed","payload":{"v":1795514400123,"reason":"score","at":"2026-11-24T10:00:00.123Z"}}';
+  const DIVISION_SCHEDULE_PUBLIC =
+    '{"topic":"division:dv-1","event":"schedule_changed","payload":{"v":1795514400123,"reason":"schedule","at":"2026-11-24T10:00:00.123Z"}}';
+  /** The twin of a golden public message: the same object, `private: true` appended as its last key. */
+  const twinOf = (publicMsg: string) => `${publicMsg.slice(0, -1)},"private":true}`;
+
+  it("publishDivisionUpdate score: ONE POST — the golden public state_changed, then its private twin", async () => {
     const { publishDivisionUpdate } = await import("../realtime");
     await publishDivisionUpdate("dv-1", "score");
     const init = onlyRequest();
     expect(init.signal).toBeInstanceOf(AbortSignal);
     expect(init.body).toBe(
-      '{"messages":[{"topic":"division:dv-1","event":"state_changed","payload":{"v":1795514400123,"reason":"score","at":"2026-11-24T10:00:00.123Z"}}]}',
+      '{"messages":[{"topic":"division:dv-1","event":"state_changed","payload":{"v":1795514400123,"reason":"score","at":"2026-11-24T10:00:00.123Z"}},' +
+        '{"topic":"division:dv-1","event":"state_changed","payload":{"v":1795514400123,"reason":"score","at":"2026-11-24T10:00:00.123Z"},"private":true}]}',
     );
+    expect(init.body).toBe(`{"messages":[${DIVISION_SCORE_PUBLIC},${twinOf(DIVISION_SCORE_PUBLIC)}]}`);
   });
 
-  it("publishDivisionUpdate schedule: schedule_changed on division:{id}", async () => {
+  it("publishDivisionUpdate schedule: ONE POST — the golden public schedule_changed, then its private twin", async () => {
     const { publishDivisionUpdate } = await import("../realtime");
     await publishDivisionUpdate("dv-1", "schedule");
     const init = onlyRequest();
     expect(init.signal).toBeInstanceOf(AbortSignal);
-    expect(init.body).toBe(
-      '{"messages":[{"topic":"division:dv-1","event":"schedule_changed","payload":{"v":1795514400123,"reason":"schedule","at":"2026-11-24T10:00:00.123Z"}}]}',
-    );
+    expect(init.body).toBe(`{"messages":[${DIVISION_SCHEDULE_PUBLIC},${twinOf(DIVISION_SCHEDULE_PUBLIC)}]}`);
+  });
+
+  // Every reason, in the rulebook's own words (the DivisionUpdateReason union, spelled out so a new reason must be
+  // added here): the public message is always first and never private; the twin differs from it ONLY by `private`.
+  it.each([
+    ["schedule", "schedule_changed"],
+    ["publish", "schedule_changed"],
+    ["start", "schedule_changed"],
+    ["score", "state_changed"],
+  ] as const)("divisionMessages %s: [public %s, its twin] — the twin is the public message plus private: true", async (reason, event) => {
+    const { divisionMessages } = await import("../realtime");
+    const [publicMsg, twin, ...rest] = divisionMessages("dv-1", reason);
+    expect(rest, "exactly two messages").toEqual([]);
+    expect(publicMsg).toStrictEqual({
+      topic: "division:dv-1",
+      event,
+      payload: { v: FROZEN_MS, reason, at: "2026-11-24T10:00:00.123Z" },
+    });
+    expect("private" in publicMsg!, "the public message carries no private key at all").toBe(false);
+    expect(twin).toStrictEqual({ ...publicMsg, private: true });
   });
 
   it("publishRoomBroadcast: room_state and board_state in ONE request, both private", async () => {
