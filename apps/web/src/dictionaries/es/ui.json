@@ -7385,6 +7385,7 @@
   "stream.replay.seazn.readyPrivate": "Lista — el público no puede ver este partido, así que no está en la página del partido",
   "stream.replay.seazn.failedStillPlays": "Mientras tanto, la grabación original se sigue viendo en la página del partido, hasta {days} días después de grabarse",
   "stream.replay.seazn.failedStillPlaysPrivate": "La grabación original se guarda hasta {days} días después de grabarse. El público no puede ver este partido, así que no está en la página del partido",
+  "stream.replay.seazn.seatPaused": "Tu acceso está en pausa, así que las repeticiones no se pueden cambiar ni descargar. Pide ayuda al propietario del club.",
   "stream.replay.delete": "Eliminar repetición",
   "stream.replay.download": "Descargar",
   "stream.replay.deleteConfirm": "¿Eliminar esta repetición para todos? No se puede deshacer.",

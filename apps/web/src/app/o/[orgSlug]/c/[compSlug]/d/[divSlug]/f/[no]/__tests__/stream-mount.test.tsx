@@ -20,6 +20,9 @@ const scene = vi.hoisted(() => ({
   homeId: "e-home" as string | null,
   awayId: "e-away" as string | null,
   outcome: null as unknown,
+  // Task 33d: the signed-in organiser's role, and the user ids the member-seat freeze answers for the org.
+  role: "admin" as string,
+  frozenIds: [] as string[],
 }));
 const spies = vi.hoisted(() => ({
   loader: vi.fn(),
@@ -30,11 +33,13 @@ const spies = vi.hoisted(() => ({
   formatLines: vi.fn(async (_auth: unknown, ids: readonly string[]) => new Map(ids.map((i) => [i, `line of ${i}`]))),
   // Task 31b: the fixture's Seazn replays, read for an organiser the Stream panel is not mounted for.
   replays: vi.fn(),
+  // Task 33d: the member-seat freeze (entitlement-freeze.ts `frozenMemberIds`) — WHO it is read for, and what the page does with it.
+  frozen: vi.fn(),
 }));
 
 vi.mock("@/server/page-auth", () => ({
   requireFixturePage: vi.fn(async () => ({
-    auth: { orgId: "org-1", userId: "u-1" },
+    auth: { orgId: "org-1", userId: "u-1", role: scene.role },
     fixtureId: "fx-7",
     canScore: scene.canScore,
     canEdit: scene.canEdit,
@@ -115,6 +120,7 @@ vi.mock("@/server/stream-panel-context", () => ({ loadStreamPanelContext: spies.
 vi.mock("@/server/usecases/stream-sessions", () => ({ openStreamStates: spies.openStreams }));
 vi.mock("@/server/video/organiser-replays", () => ({ fixtureSeaznReplays: spies.replays }));
 vi.mock("@/components/v2/fixture-replays-section", () => ({ FixtureReplaysSection: () => null }));
+vi.mock("@/server/usecases/entitlement-freeze", () => ({ frozenMemberIds: spies.frozen }));
 
 import FixturePage from "../page";
 import { FixtureConsole } from "@/components/v2/fixture-console";
@@ -168,7 +174,7 @@ async function consoleProps(query: Record<string, string> = {}): Promise<Record<
 beforeEach(() => {
   Object.assign(scene, {
     canEdit: true, canScore: true, frozen: false, status: "scheduled", open: [], feedsNext: true, stageKind: null,
-    homeId: "e-home", awayId: "e-away", outcome: null,
+    homeId: "e-home", awayId: "e-away", outcome: null, role: "admin", frozenIds: [],
   });
   spies.loader.mockReset();
   spies.loader.mockImplementation(async () => CONTEXT);
@@ -179,6 +185,8 @@ beforeEach(() => {
   spies.matchRules.mockImplementation(async () => MATCH_RULES);
   spies.replays.mockReset();
   spies.replays.mockImplementation(async () => REPLAYS);
+  spies.frozen.mockReset();
+  spies.frozen.mockImplementation(async () => new Set(scene.frozenIds));
 });
 
 describe("the organiser fixture page mounts Stream (spec 2026-09-30 §2)", () => {
@@ -433,7 +441,7 @@ describe("Task 31b: an organiser whose page mounts no Stream panel still reaches
       expect(spies.replays.mock.calls.length, `${label}: read only when shown`).toBe(want ? 1 : 0);
       if (want) {
         expect(spies.replays.mock.calls[0], label).toEqual(["org-1", "fx-7"]);
-        expect(p.replays!.props).toEqual({ fixtureId: "fx-7", replays: REPLAYS });
+        expect(p.replays!.props).toEqual({ fixtureId: "fx-7", replays: REPLAYS, memberFrozen: false });
         alone++;
       }
       checked++;
@@ -457,5 +465,98 @@ describe("Task 31b: an organiser whose page mounts no Stream panel still reaches
     expect(spies.replays, "PREMISE: read").toHaveBeenCalledTimes(1);
     expect(p.replays).toBeNull();
     expect(p.console, "the page rendered").not.toBeNull();
+  });
+});
+
+// Task 33d (T31b review m3): Delete and Download both go through `requireOrgAuth`'s write scope, which answers 402 to an ADMIN whose seat
+// the plan's member limit has paused (entitlement-freeze.ts `frozenMemberIds`; the owner is never in it — doc 10 §2.4). The page reads
+// that freeze ONCE, beside the standalone list's own read, and hands "this member's seat is paused" to the list, which then offers
+// neither action (seazn-replays-card.test.tsx draws it). The routes stay the guard (their own tests pin the 402). A paused seat is NOT
+// an unentitled org or a billing-frozen competition: those keep both actions (Task 31b). The PANEL's list needs no such read: it rides
+// the session view (`GET …/stream-sessions/current`), whose door is write-scoped too, so a paused seat never gets that list at all.
+describe("Task 33d: a member whose seat is paused sees the replays without the actions they cannot use", () => {
+  async function page() {
+    const tree = await FixturePage({
+      params: Promise.resolve({ orgSlug: "org", compSlug: "comp", divSlug: "div-one", no: "7" }),
+      searchParams: Promise.resolve({}),
+    });
+    const consoleEl = find(tree as ReactNode, FixtureConsole);
+    const section = find(tree as ReactNode, FixtureReplaysSection);
+    const stream = (consoleEl?.props as { stream?: { mode: string; context?: Record<string, unknown> } } | undefined)?.stream;
+    return { consoleEl, section, stream, paused: (section?.props as { memberFrozen?: unknown } | undefined)?.memberFrozen };
+  }
+  // [name, role, the user ids the freeze answers, paused?] — the signed-in user is "u-1". The freeze set is what the REAL selector
+  // answers in each case: it never names an owner, and in an over-quota org it names only the seats past the limit.
+  const SEATS: [name: string, role: string, frozenIds: string[], paused: boolean][] = [
+    ["an admin of an org within its limit", "admin", [], false],
+    ["an admin whose seat is paused", "admin", ["u-1"], true],
+    ["an admin of an over-quota org who keeps a seat (another admin is paused)", "admin", ["u-2"], false],
+    ["the owner after a downgrade (the admins are paused, never the owner)", "owner", ["u-2", "u-3"], false],
+  ];
+
+  it("the standalone list (no Stream panel: the org lost the plan): paused exactly for the member whose seat is paused; read once, for this org", async () => {
+    let checked = 0;
+    let paused = 0;
+    for (const [name, role, frozenIds, want] of SEATS) {
+      Object.assign(scene, { role, frozenIds, frozen: false, open: [] });
+      spies.loader.mockImplementation(async () => ({ ...CONTEXT, entitled: false }));
+      spies.frozen.mockClear();
+      const p = await page();
+      expect(p.stream, `${name}: PREMISE: no panel`).toBeUndefined();
+      expect(p.section, `${name}: PREMISE: the list stands alone`).not.toBeNull();
+      expect(p.paused, name).toBe(want);
+      expect(spies.frozen.mock.calls, `${name}: one read per page, for this org`).toEqual([["org-1"]]);
+      checked++;
+      if (want) paused++;
+    }
+    expect([checked, paused], "anti-vacuity: every seat, one of them paused").toEqual([SEATS.length, 1]);
+  });
+
+  it("a billing-frozen competition is NOT a paused seat: an admin with a seat keeps both actions on the standalone list (Task 31b) — and a paused admin there is still paused", async () => {
+    Object.assign(scene, { frozen: true, frozenIds: [] });
+    const kept = await page();
+    expect(kept.section, "PREMISE: the list stands alone").not.toBeNull();
+    expect(kept.paused).toBe(false);
+    Object.assign(scene, { frozen: true, frozenIds: ["u-1"] });
+    expect((await page()).paused).toBe(true);
+  });
+
+  it("the panel is mounted (entitled, unfrozen page): no standalone list, and the seat is not read at all — whatever the freeze says", async () => {
+    let checked = 0;
+    for (const [name, role, frozenIds] of SEATS) {
+      Object.assign(scene, { role, frozenIds, frozen: false, open: [] });
+      spies.frozen.mockClear();
+      const p = await page();
+      expect(p.stream?.mode, `${name}: PREMISE: the panel`).toBe("panel");
+      expect(p.stream?.context, `${name}: the panel's context is the loader's, untouched`).toEqual(CONTEXT);
+      expect(p.section, `${name}: never both`).toBeNull();
+      expect(spies.frozen, `${name}: nothing to hide here, so nothing read`).not.toHaveBeenCalled();
+      checked++;
+    }
+    expect(checked).toBe(SEATS.length);
+  });
+
+  it("organisers only: a scorer or a viewer (no canEdit) is never read for a seat — no list, no panel, no question asked", async () => {
+    let checked = 0;
+    for (const canScore of [true, false]) {
+      Object.assign(scene, { canEdit: false, canScore, role: "viewer", frozen: true, frozenIds: ["u-1"] });
+      spies.frozen.mockClear();
+      spies.replays.mockClear();
+      const p = await page();
+      expect([p.stream, p.section], `scorer ${String(canScore)}`).toEqual([undefined, null]);
+      expect(spies.frozen, `scorer ${String(canScore)}`).not.toHaveBeenCalled();
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a seat read that fails costs nothing: the page renders and the list keeps its actions (the routes stay the guard)", async () => {
+    spies.frozen.mockImplementation(async () => { throw new Error("database is down"); });
+    Object.assign(scene, { frozen: true });
+    const p = await page();
+    expect(spies.frozen, "PREMISE: read").toHaveBeenCalledTimes(1);
+    expect(p.consoleEl, "the page rendered").not.toBeNull();
+    expect(p.section, "the list too").not.toBeNull();
+    expect(p.paused).toBe(false);
   });
 });

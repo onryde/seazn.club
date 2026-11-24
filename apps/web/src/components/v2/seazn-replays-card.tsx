@@ -12,8 +12,13 @@
 // The panel's own row style (a slate-bordered box, the slate chip): one quiet line per part, the state's colour on a small dot, the
 // failure in red words, the actions under the state at every width (44 px targets). The card is a pure function of its props, as the
 // panel's body is.
+//
+// Task 33d (T31b review m3): a member whose seat the plan's member limit has paused (`memberFrozen`, read once by the fixture page from
+// entitlement-freeze.ts `frozenMemberIds`; the owner is never in it) would get 402 from both actions (auth.ts `requireOrgAuth`'s write
+// scope). They still see every part and its state, but no Download and no Delete: one quiet line under the list says why and who can
+// act, in the state lines' own slate, never an error's red. The routes stay the guard; this only stops offering what they refuse.
 import { useCallback, useState } from "react";
-import { Download, Trash2 } from "lucide-react";
+import { CirclePause, Download, Trash2 } from "lucide-react";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { useConfirm, type ConfirmOptions } from "@/components/ui/confirm-provider";
 import { apiV1 } from "@/lib/client-v1";
@@ -130,11 +135,14 @@ export function SeaznReplaysCard({
   replays,
   actions,
   frame = "inset",
+  memberFrozen = false,
 }: {
   fixtureId: string;
   replays: readonly Replay[] | undefined;
   actions: SeaznReplayActions;
   frame?: keyof typeof FRAME;
+  /** Task 33d: this member's seat is paused by the plan's member limit — no action is offered, and one line says why. */
+  memberFrozen?: boolean;
 }) {
   const msg = useMsg();
   if (replays === undefined) return null;
@@ -180,33 +188,35 @@ export function SeaznReplaysCard({
                   </p>
                 )}
               </div>
-              <div data-testid="stream-seazn-replay-actions" className={`mt-2 flex flex-wrap gap-2 md:pl-4 ${multi ? "col-span-full md:col-start-2" : ""}`}>
-                {p.state === "playable" && (
-                  <a
-                    data-testid="stream-seazn-replay-download"
-                    href={replayDownloadHref(fixtureId, p.id)}
-                    download
-                    className="btn btn-ghost min-h-11 max-md:grow"
+              {!memberFrozen && (
+                <div data-testid="stream-seazn-replay-actions" className={`mt-2 flex flex-wrap gap-2 md:pl-4 ${multi ? "col-span-full md:col-start-2" : ""}`}>
+                  {p.state === "playable" && (
+                    <a
+                      data-testid="stream-seazn-replay-download"
+                      href={replayDownloadHref(fixtureId, p.id)}
+                      download
+                      className="btn btn-ghost min-h-11 max-md:grow"
+                    >
+                      <Download aria-hidden className="h-4 w-4" />
+                      {msg("stream.replay.download")}
+                      {which}
+                    </a>
+                  )}
+                  <button
+                    type="button"
+                    data-testid="stream-seazn-replay-delete"
+                    disabled={actions.deleting !== null}
+                    aria-busy={deleting || undefined}
+                    onClick={() => actions.onDelete(p, multi)}
+                    className="btn btn-danger min-h-11 max-md:grow"
                   >
-                    <Download aria-hidden className="h-4 w-4" />
-                    {msg("stream.replay.download")}
+                    <Trash2 aria-hidden className="h-4 w-4" />
+                    {deleting ? msg("stream.replay.deleting") : msg("stream.replay.delete")}
                     {which}
-                  </a>
-                )}
-                <button
-                  type="button"
-                  data-testid="stream-seazn-replay-delete"
-                  disabled={actions.deleting !== null}
-                  aria-busy={deleting || undefined}
-                  onClick={() => actions.onDelete(p, multi)}
-                  className="btn btn-danger min-h-11 max-md:grow"
-                >
-                  <Trash2 aria-hidden className="h-4 w-4" />
-                  {deleting ? msg("stream.replay.deleting") : msg("stream.replay.delete")}
-                  {which}
-                </button>
-              </div>
-              {actions.failed === p.id && (
+                  </button>
+                </div>
+              )}
+              {!memberFrozen && actions.failed === p.id && (
                 <p role="alert" data-testid="stream-seazn-replay-delete-failed" className={`mt-2 text-xs text-red-700 md:pl-4 ${multi ? "col-span-full md:col-start-2" : ""}`}>
                   {msg("stream.replay.deleteFailed")}
                 </p>
@@ -215,6 +225,12 @@ export function SeaznReplaysCard({
           );
         })}
       </ul>
+      {memberFrozen && (
+        <p data-testid="stream-seazn-replays-paused" className="flex min-w-0 items-start gap-2 pt-2 text-xs text-slate-600">
+          <CirclePause aria-hidden className="mt-px h-4 w-4 shrink-0 text-slate-400" />
+          <span className="min-w-0">{msg("stream.replay.seazn.seatPaused")}</span>
+        </p>
+      )}
     </section>
   );
 }

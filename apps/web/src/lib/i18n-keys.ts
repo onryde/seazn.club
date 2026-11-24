@@ -11158,6 +11158,7 @@ export type DictionaryKey =
   | "stream.replay.seazn.processing"
   | "stream.replay.seazn.ready"
   | "stream.replay.seazn.readyPrivate"
+  | "stream.replay.seazn.seatPaused"
   | "stream.replay.seazn.title"
   | "stream.replay.times"
   | "stream.replay.timesOpen"

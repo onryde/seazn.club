@@ -32,7 +32,8 @@ import { test, expect, type Browser, type BrowserContext, type Locator, type Pag
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
-  addEntrantsViaApi, apiJson, createStageAndGenerate, expectNoHorizontalScroll, invalidateOrgEntitlements, setBoolEntitlementOverrideSql, withDb,
+  addEntrantsViaApi, apiJson, createStageAndGenerate, expectNoHorizontalScroll, invalidateOrgEntitlements, mintLoginPathBySql, setBoolEntitlementOverrideSql,
+  setEntitlementOverrideSql, withDb,
 } from "../helpers";
 import { dismissCookieBanner } from "../scorepad-a11y-kit";
 import { offeredTargetIds, targetPicker } from "../helpers/stream-target-picker";
@@ -759,6 +760,94 @@ test("Task 31b: with the Stream panel switched off, the fixture page lists the r
       }
     }
   } finally {
+    await finishSeaznMatch(m);
+  }
+});
+
+// ===========================================================================
+// Task 33d (T31b review m3): a member whose seat is paused sees the replays, never an action that answers 402
+// ===========================================================================
+// After a downgrade an org can hold more members than its plan's `members.max`: an ADMIN past the limit is read-only until the owner
+// frees seats (doc 10 §2.4; the owner is never paused), and both replay routes answer that admin 402 (their write scope). So the list on
+// its own (the org lost the panel: `streaming.overlay` off, as Task 31b) shows that admin every part, with neither Download nor Delete,
+// and one line saying why; the routes still refuse them, and the part stays. The owner of the same org keeps both actions. The limit is
+// an override on this test's OWN fresh org (members.max 1: the owner's own seat), never the shared Pro org. At 1280, then 320.
+test("Task 33d: an admin whose seat is paused sees the replays with no Download or Delete and one line saying why; both routes still answer 402; the owner keeps both actions", async ({ browser }) => {
+  test.setTimeout(REPLAY_SEED_MS + 2 * 30_000 + 4 * NAV_MS + 2 * CALL_MS);
+  const org = await seedStandInOrg(browser, "szs", { orgName: "Seazn Paused Seat" });
+  rigs.push(org);
+  const page = org.page;
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const m = await seedSeaznMatch(page, { name: `Seazn Paused ${Date.now().toString(36)}`, live: true });
+  let adminCtx: BrowserContext | null = null;
+  let adminId: string | null = null;
+  try {
+    expect(m.orgId, "premise: the match is this test's own org's (the overrides below are org-wide)").toBe(org.orgId);
+    await finishSeaznMatch(m);
+    expect(await seedPlayableReplays(m, await lockRecordings(m, 1)), "premise: one playable part").toHaveLength(1);
+    const [part] = await withDb((sql) => sql<{ id: string }[]>`select id from fixture_video_replays where fixture_id = ${m.fixtureId}`);
+    expect(part, "premise: the part's row").toBeTruthy();
+    const replayPath = `/api/v1/fixtures/${m.fixtureId}/replays/${part!.id}`;
+    const stateOf = async () => (await withDb((sql) => sql<{ state: string }[]>`select state from fixture_video_replays where id = ${part!.id}`))[0]?.state;
+
+    // The org loses the panel (as Task 31b) and seats: members.max 1 is the owner's own seat, so the admin added below is past it.
+    const email = `delivered+${org.orgSlug}-admin@resend.dev`;
+    adminId = await withDb(async (sql) => {
+      const [{ id }] = await sql<{ id: string }[]>`
+        insert into users (email, display_name, email_verified) values (${email}, ${"Paused Admin"}, true) returning id`;
+      await sql`insert into org_members (org_id, user_id, role) values (${org.orgId}, ${id}, 'admin')`;
+      return id;
+    });
+    await setBoolEntitlementOverrideSql(org.orgId, "streaming.overlay", false);
+    await setEntitlementOverrideSql(org.orgId, "members.max", 1);
+    await invalidateOrgEntitlements(page.request, org.orgId);
+
+    adminCtx = await browser.newContext({ storageState: EMPTY_JAR, viewport: { width: 1280, height: 900 } });
+    const admin = await adminCtx.newPage();
+    await admin.goto(await mintLoginPathBySql(email));
+    await admin.waitForURL((u) => !u.pathname.startsWith("/magic-link") && !u.pathname.startsWith("/login"), { timeout: 30_000 });
+    await dismissCookieBanner(admin);
+
+    // The server stays the guard: both routes answer the paused admin 402, and the part stays.
+    const refusedDelete = await admin.request.delete(replayPath);
+    expect(refusedDelete.status(), "the paused seat's Delete: 402").toBe(402);
+    const refusedDownload = await admin.request.get(`${replayPath}/download`, { maxRedirects: 0 });
+    expect(refusedDownload.status(), "the paused seat's Download: 402").toBe(402);
+    expect(await stateOf(), "the part stays").toBe("playable");
+
+    // So the page offers the paused admin neither: every part and its state, and one line saying why.
+    const section = admin.locator('[data-role="fixture-replays"]');
+    const paused = section.getByTestId("stream-seazn-replays-paused");
+    await admin.goto(m.fixturePath);
+    await expect(section, "the list stands alone (no panel)").toBeVisible({ timeout: NAV_MS });
+    await expect(section.getByTestId("stream-seazn-replay"), "the part is listed").toHaveCount(1);
+    await expect(section.getByTestId("stream-seazn-replay")).toContainText(ui("stream.replay.seazn.ready"));
+    await expect(section.getByTestId("stream-seazn-replay-download"), "no Download").toHaveCount(0);
+    await expect(section.getByTestId("stream-seazn-replay-delete"), "no Delete").toHaveCount(0);
+    await expect(paused, "one line").toHaveCount(1);
+    await expect(paused).toHaveText(ui("stream.replay.seazn.seatPaused"));
+    for (const width of [1280, 320]) {
+      await admin.setViewportSize({ width, height: 900 });
+      await expectNoHorizontalScroll(admin);
+      const box = await paused.boundingBox();
+      expect(box, `${width}: the line is laid out`).not.toBeNull();
+      expect(box!.x, `${width}: inside the left edge`).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width, `${width}: inside the right edge`).toBeLessThanOrEqual(width);
+    }
+
+    // The owner of the same org is never paused: both actions, and no line.
+    const ownerSection = page.locator('[data-role="fixture-replays"]');
+    await page.goto(m.fixturePath);
+    await expect(ownerSection, "the owner's list").toBeVisible({ timeout: NAV_MS });
+    await expect(ownerSection.getByTestId("stream-seazn-replay-download"), "the owner: Download").toHaveCount(1);
+    await expect(ownerSection.getByTestId("stream-seazn-replay-delete"), "the owner: Delete").toHaveCount(1);
+    await expect(ownerSection.getByTestId("stream-seazn-replays-paused"), "the owner: no line").toHaveCount(0);
+  } finally {
+    await adminCtx?.close().catch(() => {});
+    if (adminId !== null) {
+      const id = adminId;
+      await withDb((sql) => sql`delete from org_members where org_id = ${org.orgId} and user_id = ${id}`).catch(() => {});
+    }
     await finishSeaznMatch(m);
   }
 });

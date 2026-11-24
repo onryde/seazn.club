@@ -180,6 +180,35 @@ describe.skipIf(!HAS_DB)("DELETE …/fixtures/{id}/replays/{replayId} over HTTP"
     expect(await stateOf(o.part.id)).toBe("deleted");
   });
 
+  // Task 33d (T31b review m3): the fixture page hides Delete and Download from a member whose seat is paused — `frozenMemberIds(org)
+  // .has(user)`, the page's own read — and the route stays the guard. In ONE over-quota org (members.max 2: the owner's seat plus one,
+  // doc 10 §2.4), the seat the page hides the actions from is exactly the seat this route refuses: the paused admin is 402 and the part
+  // stays; the admin who keeps the seat and the owner (never paused) are served. Two admins so the hide is shown to be per SEAT, never
+  // per org.
+  it("Task 33d: in one over-quota org the page's paused seat is exactly the seat the route refuses — the paused admin 402 (the part stays), the admin who keeps a seat and the owner served", async () => {
+    const o = await organiser();
+    await sql`insert into org_entitlement_overrides (org_id, feature_key, int_value, reason) values (${o.orgId}, 'members.max', 2, 'task 33d')
+              on conflict (org_id, feature_key) do update set int_value = 2`;
+    await invalidateOrgEntitlements(o.orgId);
+    const admins = [await member(o.orgId, "admin"), await member(o.orgId, "admin")];
+    const frozen = await frozenMemberIds(o.orgId);
+    const paused = (userId: string) => frozen.has(userId);
+    // Two seats for an owner and two admins: the owner keeps hers, ONE admin keeps the other, one is paused.
+    expect(admins.filter(paused), "PREMISE: exactly one admin is paused").toHaveLength(1);
+    expect(paused(o.ownerId), "PREMISE: the owner is never paused").toBe(false);
+    const [pausedAdmin] = admins.filter(paused);
+    const [seatedAdmin] = admins.filter((a) => !paused(a));
+    authState.userId = pausedAdmin!;
+    const refused = await read(await del(o.fixtures[0], o.part.id));
+    expect([refused.status, refused.body.error?.message], "the paused seat: 402").toEqual([402, "Plan upgrade required: members.max"]);
+    expect(await stateOf(o.part.id), "and the part stays").toBe("playable");
+    authState.userId = seatedAdmin!;
+    expect((await del(o.fixtures[0], o.part.id)).status, "the admin who keeps a seat: served").toBe(200);
+    expect(await stateOf(o.part.id)).toBe("deleted");
+    authState.userId = o.ownerId;
+    expect((await del(o.fixtures[0], o.part.id)).status, "the owner: served (already deleted answers the same)").toBe(200);
+  });
+
   it("ANOTHER organisation's member, an unknown fixture and a malformed one: the same 404 fixture not found, no id of the part in the body, the part untouched", async () => {
     const a = await organiser();
     const b = await organiser();

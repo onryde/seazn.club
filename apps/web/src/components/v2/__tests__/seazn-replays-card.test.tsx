@@ -205,6 +205,73 @@ describe("SeaznReplaysCard", () => {
     ]);
   });
 
+  // Task 33d (T31b review m3): a member whose seat is paused by the plan's member limit (entitlement-freeze.ts `frozenMemberIds`; the
+  // owner is never in it) would get 402 from both routes (auth.ts `requireOrgAuth`, write scope). So the card shows every part and its
+  // state, offers neither action, and says why in ONE line. The English is the controller's sentence, literal, so a reworded key reds.
+  describe("Task 33d: a member whose seat is paused", () => {
+    const PAUSED_LINE = "Your seat is paused, so replays can't be changed or downloaded. Ask the club owner.";
+    const PARTS = [r(1, "playable", 60), r(2, "processing"), r(3, "failed")];
+    const card = (o: { replays?: Replay[]; frame?: "inset" | "page"; memberFrozen?: boolean; locale?: string; actions?: SeaznReplayActions } = {}) =>
+      renderToStaticMarkup(
+        <DictProvider dict={uiDict(o.locale ?? "en")} locale={(o.locale ?? "en") as "en"}>
+          <SeaznReplaysCard fixtureId={FIXTURE} replays={o.replays ?? PARTS} actions={o.actions ?? IDLE} frame={o.frame} memberFrozen={o.memberFrozen} />
+        </DictProvider>,
+      );
+    const PAUSED = /<p data-testid="stream-seazn-replays-paused"[^>]*>(.*?)<\/p>/g;
+    const pausedLines = (h: string) => [...h.matchAll(PAUSED)].map((m) => text(m[1]!));
+
+    it("EMPTY CASE FIRST: paused with no part — none read, or every part deleted here — is no card and no line", () => {
+      expect(card({ replays: [], memberFrozen: true })).toBe("");
+      expect(card({ replays: [r(1, "playable", 60)], memberFrozen: true, actions: { ...IDLE, gone: new Set([id(1)]) } })).toBe("");
+    });
+
+    it("paused: every part and its state stay, NO Download and NO Delete (no actions row at all), and one line saying why — in both frames", () => {
+      let checked = 0;
+      for (const frame of ["inset", "page"] as const) {
+        const shown = card({ frame });
+        const paused = card({ frame, memberFrozen: true });
+        expect(actionsOf(shown).flat().map((a) => a.testid), `${frame}: PREMISE: unpaused, the actions are there`).toEqual([
+          "stream-seazn-replay-download", "stream-seazn-replay-delete", "stream-seazn-replay-delete", "stream-seazn-replay-delete",
+        ]);
+        expect(rows(paused), `${frame}: the same parts in the same states`).toEqual(rows(shown));
+        expect(rows(paused), `${frame}: anti-vacuity`).toHaveLength(3);
+        expect(paused, `${frame}: no actions row`).not.toContain('data-testid="stream-seazn-replay-actions"');
+        expect(paused, `${frame}: no Download`).not.toContain('data-testid="stream-seazn-replay-download"');
+        expect(paused, `${frame}: no Delete`).not.toContain('data-testid="stream-seazn-replay-delete"');
+        expect(paused, `${frame}: no link to the download route`).not.toContain("/download");
+        expect(pausedLines(paused), `${frame}: ONE line, the controller's words`).toEqual([PAUSED_LINE]);
+        expect(pausedLines(shown), `${frame}: no line when the seat is not paused`).toEqual([]);
+        checked++;
+      }
+      expect(checked).toBe(2);
+    });
+
+    it("not paused (memberFrozen false: an admin with a seat, and the owner, who is never frozen) is exactly the card it was without the prop", () => {
+      for (const frame of ["inset", "page"] as const) expect(card({ frame, memberFrozen: false }), frame).toBe(card({ frame }));
+      expect(pausedLines(card({ memberFrozen: false }))).toEqual([]);
+    });
+
+    it("a paused member sees no row's delete failure either (there is no Delete to have failed)", () => {
+      const out = card({ memberFrozen: true, actions: { ...IDLE, failed: id(1) } });
+      expect(out).not.toContain('data-testid="stream-seazn-replay-delete-failed"');
+      expect(card({ actions: { ...IDLE, failed: id(1) } }), "PREMISE: unpaused, it shows").toContain('data-testid="stream-seazn-replay-delete-failed"');
+    });
+
+    it("every locale says it in its own words: the key is in each dictionary, translated outside English, and rendered as given", () => {
+      let checked = 0;
+      for (const locale of LOCALES) {
+        const d = uiDict(locale);
+        const want = d["stream.replay.seazn.seatPaused"];
+        expect(want, `${locale}: stream.replay.seazn.seatPaused`).toBeTruthy();
+        if (locale === "en") expect(want).toBe(PAUSED_LINE);
+        else expect(want, `${locale}: translated`).not.toBe(en["stream.replay.seazn.seatPaused"]);
+        expect(pausedLines(card({ locale, memberFrozen: true })), locale).toEqual([want]);
+        checked++;
+      }
+      expect(checked, "anti-vacuity: every locale").toBe(LOCALES.length);
+    });
+  });
+
   it("replayLength: m:ss under an hour, h:mm:ss from an hour, nothing for a length that is not one", () => {
     expect([replayLength(0), replayLength(59), replayLength(60), replayLength(125), replayLength(3_599), replayLength(3_600), replayLength(36_061)])
       .toEqual(["0:00", "0:59", "1:00", "2:05", "59:59", "1:00:00", "10:01:01"]);

@@ -7385,6 +7385,7 @@
   "stream.replay.seazn.readyPrivate": "Klaar — het publiek kan deze wedstrijd niet zien, dus hij staat niet op de wedstrijdpagina",
   "stream.replay.seazn.failedStillPlays": "Intussen speelt de oorspronkelijke opname nog op de wedstrijdpagina, tot {days} dagen na de opname",
   "stream.replay.seazn.failedStillPlaysPrivate": "De oorspronkelijke opname blijft tot {days} dagen na de opname bewaard. Het publiek kan deze wedstrijd niet zien, dus hij staat niet op de wedstrijdpagina",
+  "stream.replay.seazn.seatPaused": "Je toegang is gepauzeerd, dus herhalingen kunnen niet worden gewijzigd of gedownload. Vraag het de eigenaar van de club.",
   "stream.replay.delete": "Herhaling verwijderen",
   "stream.replay.download": "Downloaden",
   "stream.replay.deleteConfirm": "Deze herhaling voor iedereen verwijderen? Dit kan niet ongedaan worden gemaakt.",
