@@ -149,7 +149,9 @@ describe("what a member who cannot edit sees: the facts in words, no controls", 
     expect(m("streaming.club.error.forbidden"), "a club-specific 403").not.toBe(m("streamDest.error.forbidden"));
   });
 
-  it("a stored style this sport cannot show: said in words, naming the stored id and the sport; a style it can show says nothing (and a retired id that has a replacement is not 'unavailable')", () => {
+  // The retired-id clause (a retired id with a replacement is not "unavailable") is NOT covered here: the component reads the real registry, which has
+  // no retired entry, so no input reaches it.
+  it("a stored style this sport cannot show (an unknown id): said in words, naming the stored id and the sport; a style it can show, or none stored, says nothing", () => {
     const h = html({ stored: { overlayTemplate: "legacy-gone", overlayDelayMs: null, revision: 2 } });
     expect(h).toContain('data-testid="club-score-style-unavailable"');
     expect(h).toContain(esc(m("streaming.club.style.unavailable", { style: "legacy-gone", sport: "Football" })));

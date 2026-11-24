@@ -2056,17 +2056,17 @@ jobs:
     # the Seazn walk's own worst case (seazn-hosted.spec.ts's test timeout,
     # e2e/helpers/seazn-hosted-clock.ts `WALK_MS`: two waits for the whole
     # stream-slot pool at 385 s, two holds, and the pages and polls between)
-    # is 1545 s, about 25.8 min, at this job's 10 s connect delay. CI retries
+    # is 1575 s, 26.25 min, at this job's 10 s connect delay. CI retries
     # once, so a first attempt that runs to its timeout is followed by a
-    # second: 2 x 25.8 = 51.5 min. Plus the setup — about 106 s measured for
+    # second: 2 x 26.25 = 52.5 min. Plus the setup — about 106 s measured for
     # the migrate, sport sync, build, placement image and server start
-    # (e2e-parallel's leg note), allowed 6 min here — 57.5 min. Task 38 adds
+    # (e2e-parallel's leg note), allowed 6 min here — 58.5 min. Task 38 adds
     # streaming-destinations.spec.ts case 13 (the club's Score style and
     # timing) at three widths, each its own test timeout
     # (e2e/helpers/seazn-hosted-clock.ts `clubStyleCaseMs`, 320 s): 960 s,
     # 16 min per attempt, added in full — the cases run on the second worker
-    # beside the walk, but that overlap is not assumed — so 2 x (25.8 + 16) +
-    # 6 = 90.5 min, so 91. Too short, and the job cancels the retry: a cancel
+    # beside the walk, but that overlap is not assumed — so 2 x (26.25 + 16) +
+    # 6 = 90.5 min (5,430,000 ms, as the wiring test prints it), so 91. Too short, and the job cancels the retry: a cancel
     # skips the `if: failure()` report upload and loses the trace.
     # e2e-ci-wiring.test.ts recomputes this sum from the clock and the
     # config's retries and reds if 91 falls under it.

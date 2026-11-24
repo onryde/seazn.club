@@ -207,11 +207,11 @@ export function ScoreTiming(p: {
     <details data-testid="stream-timing" className="group">
       <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 text-sm md:min-h-9 [&::-webkit-details-marker]:hidden">
         <span className="font-medium text-slate-800">{msg("stream.timing.title")}</span>
-        <span data-testid="stream-timing-value" className="ml-auto tabular-nums text-slate-700">
+        <span data-testid="stream-timing-value" className="ml-auto whitespace-nowrap tabular-nums text-slate-700">
           {msg("stream.timing.value", { seconds: fmtDelaySeconds(locale, effective) })}
         </span>
         {p.storedMs === null && (
-          <span data-testid="stream-timing-default" className="text-xs text-slate-600">
+          <span data-testid="stream-timing-default" className="min-w-0 text-xs text-slate-600">
             {msg(p.clubDefault ? "stream.timing.clubDefault" : "stream.timing.default")}
           </span>
         )}
