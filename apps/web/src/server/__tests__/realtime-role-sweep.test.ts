@@ -141,9 +141,11 @@ function tokenRoleMentions(file: string, raw: string): { hits: { file: string; p
   return { hits, failures };
 }
 
-/** The JWT claims a policy's text reads: `auth.jwt() ->> 'x'`, `(select auth.jwt()) -> 'x'`. */
-const claimsRead = (text: string) =>
-  [...text.matchAll(/auth\.jwt\(\)\s*\)?\s*->>?\s*'([^']+)'/gi)].map((m) => m[1]!.toLowerCase());
+/** The distinct JWT claims a policy's text reads: `auth.jwt() ->> 'x'`, `(select auth.jwt()) -> 'x'`. One
+ *  claim read twice is one claim. */
+const claimsRead = (text: string) => [
+  ...new Set([...text.matchAll(/auth\.jwt\(\)\s*\)?\s*->>?\s*'([^']+)'/gi)].map((m) => m[1]!.toLowerCase())),
+];
 
 const grantsSelect = (g: Grant) => g.privileges.some((p) => /^select\b/.test(p) || p === "all" || p === "all privileges");
 
@@ -262,6 +264,11 @@ describe("§4.5 role sweep — the checkers fire (synthetic SQL, both ways)", ()
     expect(
       realtimeClaimFailures(pol(rt("a", "(select auth.jwt() ->> 'x') = 'a'") + rt("a", "(select auth.jwt() ->> 'x') = 'a'"))),
     ).toEqual({ realtime: 2, failures: [] });
+    // The same claim read twice is still ONE claim.
+    expect(
+      realtimeClaimFailures(pol(rt("a", "(select auth.jwt() ->> 'x') is not null and topic = (select auth.jwt() ->> 'x')")))
+        .failures,
+    ).toEqual([]);
     // V556's shape: a jsonb array claim read with `->`.
     expect(claimsRead("((select auth.jwt()) -> 'division_ids') ? substr((select realtime.topic()), 10)")).toEqual([
       "division_ids",
