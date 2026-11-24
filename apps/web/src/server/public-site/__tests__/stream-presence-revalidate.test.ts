@@ -29,7 +29,7 @@ import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { fireStreamPresenceRevalidate } from "@/server/public-site/revalidate";
 import { competitionTag, divisionTag } from "@/server/public-site/cache-tags";
-import { publicHubCacheKey } from "@/server/public-site/hub-doc-cache-keys";
+import { publicHubCacheKey, publicHubStaleCacheKey } from "@/server/public-site/hub-doc-cache-keys";
 import { stopSession } from "@/server/usecases/stream-sessions";
 import { goLive, installSeaznEnv, live, seaznRig, stateOf, stopAndSettle } from "@/server/video/__tests__/_seazn-session-rig";
 
@@ -85,7 +85,7 @@ describe.skipIf(!HAS_DB)("a session going into or out of live expires the public
 });
 
 describe.skipIf(!HAS_DB)("fireStreamPresenceRevalidate: the effect, on the real fixture row (T47)", () => {
-  it("expires the division (now) and competition tags and drops the competition's Redis hub document by name", async () => {
+  it("expires the division (now) and competition tags and drops the competition's Redis hub document AND its stale copy by name", async () => {
     const r = await seaznRig();
     orgs.push(r.auth.orgId);
     const f = r.fixtureIds[0];
@@ -99,7 +99,8 @@ describe.skipIf(!HAS_DB)("fireStreamPresenceRevalidate: the effect, on the real 
       { tag: divisionTag(row!.division_id), profile: { expire: 0 } },
     ]);
     expect(cacheDelSpy).toHaveBeenCalledTimes(1);
-    expect(cacheDelSpy).toHaveBeenCalledWith(publicHubCacheKey(row!.competition_id));
+    expect(publicHubStaleCacheKey(row!.competition_id), "premise: the stale copy has a key of its own").not.toBe(publicHubCacheKey(row!.competition_id));
+    expect(cacheDelSpy).toHaveBeenCalledWith(publicHubCacheKey(row!.competition_id), publicHubStaleCacheKey(row!.competition_id));
   });
 
   it("a fixture that does not exist expires nothing and does not throw; a failing Redis delete never rejects (the committed change stands)", async () => {

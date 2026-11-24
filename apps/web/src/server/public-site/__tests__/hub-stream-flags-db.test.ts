@@ -2,7 +2,7 @@
 // tick's lock pass, discovery and the replay move, the organiser's delete, a YouTube broadcast row), and the agreement with the public MATCH PAGE.
 //
 // What is held here (the rule itself, over every status, is `hub-stream-flags.test.ts`):
-//   - every SOURCE gives the right value in ONE batch: a Seazn live; a YouTube-kind (pasted key) live; a Seazn recording still on Cloudflare;
+//   - every SOURCE gives the right value in ONE batch: a Seazn live; a YouTube-kind (pasted key) live with no link (no camera: the page cannot play it); a Seazn recording still on Cloudflare;
 //     a Seazn replay on the replay host (Bunny); a YouTube broadcast part; the club's own link in play; the club's own link on a decided
 //     match; and nothing at all -> absent. Anti-vacuity: the batch's size is pinned, never "no throw";
 //   - the batch is ONE statement for the facts, plus one for the Seazn recordings only when some match has Seazn video, whatever the number
@@ -31,6 +31,7 @@ import { randomUUID } from "node:crypto";
 import { sql, statementCount } from "@/lib/db";
 import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { ReplayEmbed } from "@/components/public-site/match-centre/replay-embed";
+import { SeaznVideoIsland } from "@/components/public-site/match-centre/seazn-video-island";
 import { DELETE_RECORDING_AFTER_DAYS } from "@/server/relay/config";
 import { rigUser } from "@/server/relay/__tests__/_session-rig";
 import { divisionRig, seedOrg, startedCricketDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
@@ -123,7 +124,7 @@ describe.skipIf(!HAS_DB)("the hub's camera flags: each source, the one-statement
   it("EVERY SOURCE gives its value in ONE batch, and the batch is two statements however many matches (Seazn recordings are the second)", async () => {
     const w = await world(10);
     const [liveSeazn, livePasted, cfOnly, bunny, ytParts, linkLive, linkDecided, nothing] = w.ids as [string, string, string, string, string, string, string, string];
-    // A Seazn live, and a pasted-key (YouTube-kind) live: LIVE covers any destination.
+    // A Seazn live, and a pasted-key (YouTube-kind) live with no club link: only the Seazn one has a camera (the page plays only that).
     const seaznSid = await live(w.r, liveSeazn, w.r.seazn);
     const pastedSid = await live(w.r, livePasted, w.r.pasted);
     // A Seazn recording still on Cloudflare only.
@@ -149,9 +150,10 @@ describe.skipIf(!HAS_DB)("the hub's camera flags: each source, the one-statement
     const got = await flags(asked);
     const used = statementCount() - before - 1;
     expect(Object.fromEntries(asked.map((id, i) => [i, got.get(id) ?? null]))).toEqual({
-      0: "live", 1: "live", 2: "replay", 3: "replay", 4: "replay", 5: "live", 6: "replay", 7: null,
+      0: "live", 1: null, 2: "replay", 3: "replay", 4: "replay", 5: "live", 6: "replay", 7: null,
     });
-    expect(got.size, "anti-vacuity: seven of the eight carry a camera").toBe(7);
+    expect(got.size, "anti-vacuity: six of the eight carry a camera (the pasted-key live has none)").toBe(6);
+    expect(got.has(livePasted), "a pasted-key live with no link: no camera").toBe(false);
     expect(got.get(nothing)).toBeUndefined();
     expect(used, "the facts, then the Seazn recordings: two statements for eight matches").toBe(2);
     // The same two statements for ONE match as for all of them: the cost does not follow the number of matches.
@@ -379,18 +381,28 @@ describe.skipIf(!HAS_DB)("the camera never shows where the match page has no vid
     expect((await seaznReplayPartNos(f, new Date())).length, "the plan's own numbering agrees").toBe(1);
   });
 
-  it("the ruling's reach, stated: a pasted-key (YouTube-kind) LIVE has a camera but the page has no player and no button for it", async () => {
-    const w = await world(1);
-    const f = w.ids[0]!;
-    await live(w.r, f, w.r.pasted);
-    expect(await flagOf(f), "LIVE covers any destination (controller ruling 2026-11-24)").toBe("live");
-    const { tree, html } = await pageOf(f);
-    expect(mounted(tree, ReplayEmbed), "the page has no YouTube player for a live").toBe(false);
-    expect(html, "and no club link button (none saved)").not.toContain('data-testid="public-stream-link"');
-    // Twin: the same fixture with the club's link saved shows the button, so the silence above is a fact of this fixture.
+  it("the ruling's reach, stated: only a live the page can PLAY has a camera (Seazn, or the club's own link in play); a pasted-key or YouTube live alone has none", async () => {
+    const w = await world(2);
+    const [f, g] = w.ids as [string, string];
+    // A pasted-key (YouTube-kind) live, no club link: the page has no player and no button, so no camera.
+    const pastedSid = await live(w.r, f, w.r.pasted);
+    expect(
+      (await sql<{ state: string; k: string }[]>`select state, destination_kind as k from fixture_stream_sessions where id = ${pastedSid}`).map((x) => `${x.k}:${x.state}`),
+      "PREMISE: the session is a live on a YouTube-kind destination",
+    ).toEqual(["youtube:live"]);
+    expect(await flagOf(f), "pasted-key live, no link: no camera").toBeUndefined();
+    const bare = await pageOf(f);
+    expect(mounted(bare.tree, ReplayEmbed), "the page has no YouTube player for a live").toBe(false);
+    expect(bare.html, "and no club link button (none saved)").not.toContain('data-testid="public-stream-link"');
+    // With the club's link saved and the match in play, the page shows the "Watch live" button, and the camera follows it.
     await setStatus(f, "in_play");
     await setLink(f, CLUB_LINK);
-    expect((await pageOf(f)).html).toContain('data-testid="public-stream-link"');
+    expect((await pageOf(f)).html, "the button is there").toContain('data-testid="public-stream-link"');
+    expect(await flagOf(f), "the same live with the club's link and the match in play: camera").toBe("live");
+    // A Seazn live on another fixture: the camera, and the page plays it (the island is mounted).
+    await live(w.r, g, w.r.seazn);
+    expect(await flagOf(g), "a Seazn live: camera").toBe("live");
+    expect(mounted((await pageOf(g)).tree, SeaznVideoIsland), "the page mounts the Seazn player for it").toBe(true);
   });
 });
 

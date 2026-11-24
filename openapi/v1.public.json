@@ -53238,6 +53238,13 @@
                                     "type": "null"
                                   }
                                 ]
+                              },
+                              "stream": {
+                                "type": "string",
+                                "enum": [
+                                  "live",
+                                  "replay"
+                                ]
                               }
                             },
                             "required": [

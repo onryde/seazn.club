@@ -91,7 +91,7 @@ export async function readReplayEntries(
 
 /** T47: the PUBLIC reader's entries for MANY fixtures in ONE statement (the competition hub's camera icon asks it once per rebuild, never
  *  once per match). The same join, the same order and the same public `listedVideo` as `readReplayEntries` with `orgId: null` and nothing
- *  pending, and `replay-entries-many.test.ts` holds the two to each other fixture by fixture. Each fixture's entries are in recording
+ *  pending, and `hub-stream-flags-db.test.ts` holds the two to each other fixture by fixture. Each fixture's entries are in recording
  *  order; a fixture with none is absent from the map. */
 export async function readPublicReplayEntriesMany(
   exec: typeof sql | Tx,

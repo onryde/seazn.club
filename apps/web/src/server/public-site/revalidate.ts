@@ -59,7 +59,9 @@ export function fireStreamPresenceRevalidate(fixtureId: string): Promise<void> {
         select f.division_id, d.competition_id from fixtures f join divisions d on d.id = f.division_id where f.id = ${fixtureId}`;
       if (!row) return;
       fireDivisionRevalidate(row.division_id, row.competition_id);
-      await cacheDel(publicHubCacheKey(row.competition_id));
+      // Both copies, as `dropNamedPublicDocuments` drops them: the stale (last-known-good) copy would otherwise serve the old camera to a poll
+      // that waited out a rebuild.
+      await cacheDel(publicHubCacheKey(row.competition_id), publicHubStaleCacheKey(row.competition_id));
     } catch (err) {
       log.warn({ fixtureId, err: err instanceof Error ? err.message : String(err) }, "stream presence: the public hub could not be expired (the session change stands)");
     }

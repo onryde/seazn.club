@@ -14,7 +14,7 @@ import { streamLinkLabelKey } from "../../../app/(public)/live/[orgSlug]/[compet
 const CLUB_LINK = "https://www.twitch.tv/seaznclub";
 const part = (n: number, id = `vid${n}`) => ({ partNo: n, url: youtubeWatchUrl(id), madeForKids: false as boolean | null });
 const base = (status: string, over: Partial<HubStreamFacts> = {}): HubStreamFacts => ({
-  status, streamUrl: null, liveSession: false, seaznPlayer: false, seaznParts: 0, youtubeParts: [], ...over,
+  status, streamUrl: null, seaznLive: false, seaznPlayer: false, seaznParts: 0, youtubeParts: [], ...over,
 });
 
 let checked = 0;
@@ -38,12 +38,12 @@ describe("hubStreamOf: the camera rule, over every fixture status", () => {
     expect(checked).toBe(FIXTURE_STATUSES.length);
   });
 
-  it("a live session is LIVE in every status (any destination: the rule reads the session's state alone), and beats every replay source", () => {
+  it("a Seazn live session is LIVE in every status (the destination filter is the loader's, tested in the DB file), and beats every replay source", () => {
     checked = 0;
     eachStatus((status) => {
-      expect(hubStreamOf(base(status, { liveSession: true })), status).toBe("live");
+      expect(hubStreamOf(base(status, { seaznLive: true })), status).toBe("live");
       expect(
-        hubStreamOf(base(status, { liveSession: true, streamUrl: CLUB_LINK, seaznPlayer: true, seaznParts: 2, youtubeParts: [part(1)] })),
+        hubStreamOf(base(status, { seaznLive: true, streamUrl: CLUB_LINK, seaznPlayer: true, seaznParts: 2, youtubeParts: [part(1)] })),
         `${status}: live beats replay`,
       ).toBe("live");
     });
@@ -119,8 +119,8 @@ describe("hubStreamOf: the camera rule, over every fixture status", () => {
   it("the answer is an enum: no address, uid or token can leave the rule", () => {
     const seen = new Set<string | undefined>();
     eachStatus((status) => {
-      for (const liveSession of [false, true]) for (const streamUrl of [null, CLUB_LINK]) {
-        seen.add(hubStreamOf(base(status, { liveSession, streamUrl, youtubeParts: [part(1)], seaznPlayer: true, seaznParts: 1 })));
+      for (const seaznLive of [false, true]) for (const streamUrl of [null, CLUB_LINK]) {
+        seen.add(hubStreamOf(base(status, { seaznLive, streamUrl, youtubeParts: [part(1)], seaznPlayer: true, seaznParts: 1 })));
       }
     });
     expect([...seen].sort()).toEqual(["live", "replay"]);
