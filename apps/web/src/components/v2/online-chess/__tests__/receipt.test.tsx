@@ -333,6 +333,34 @@ describe("the Fair-play camera answer, on every receipt (Task 15)", () => {
     expect(m.has("online-receipt-row-total")).toBe(false);
   });
 
+  it("before the confirm, a Yes that turns the camera ON says what it means for players (fix m4); a division already on, or No, says nothing", () => {
+    const NOTE = "online-receipt-cameras-note";
+    let shown = 0;
+    let hidden = 0;
+    for (const mode of ["pay", "payAndOpen", "change"] as const) {
+      for (const setting of [false, true]) {
+        const m = make({ mode, size: mode === "change" ? null : 64, facts: mode === "change" ? { ...CH, cameras: setting } : { cameras: setting } });
+        for (const yes of [false, true]) {
+          answer(m, yes);
+          const label = `${mode}, setting ${setting ? "on" : "off"}, answer ${yes ? "Yes" : "No"}`;
+          // Yes over a setting that is off writes Required (P19): a player then cannot take their seat until their camera is live.
+          const want = yes && !setting;
+          expect(m.has(NOTE), label).toBe(want);
+          if (want) {
+            expect(textOfAll([m.by(NOTE)!]), label).toBe(EN["onlineChess.receipt.cameras.yesNote"]);
+            expect(propsOf(m.by("online-receipt-cameras")!)["aria-describedby"], `${label}: the radios name it`).toBe(propsOf(m.by(NOTE)!).id);
+            shown += 1;
+          } else {
+            expect(propsOf(m.by("online-receipt-cameras")!)["aria-describedby"], label).toBeUndefined();
+            hidden += 1;
+          }
+        }
+      }
+    }
+    expect([shown, hidden], "anti-vacuity: both outcomes, every mode").toEqual([3, 9]);
+    expect(EN["onlineChess.receipt.cameras.yesNote"], "premise: the copy exists").toMatch(/camera/);
+  });
+
   it("pay: Yes reads the camera price, the total follows it, and the confirm sends cameras: true; No goes back to the price without it", async () => {
     const m = make({ size: 32 });
     await flush();

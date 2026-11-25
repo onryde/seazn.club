@@ -4949,6 +4949,7 @@ export type DictionaryKey =
   | "onlineChess.receipt.cameras.no"
   | "onlineChess.receipt.cameras.set"
   | "onlineChess.receipt.cameras.yes"
+  | "onlineChess.receipt.cameras.yesNote"
   | "onlineChess.receipt.changed"
   | "onlineChess.receipt.checking"
   | "onlineChess.receipt.confirm.buy"

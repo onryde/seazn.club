@@ -3820,6 +3820,7 @@
   "onlineChess.receipt.cameras.yes": "Oui",
   "onlineChess.receipt.cameras.no": "Non",
   "onlineChess.receipt.cameras.set": "« Caméra pendant le jeu en ligne » est maintenant sur {policy}.",
+  "onlineChess.receipt.cameras.yesNote": "Avec Oui, les joueurs doivent avoir une caméra en direct pour prendre leur place.",
   "onlineChess.receipt.checking": "Vérification du prix…",
   "onlineChess.receipt.unclear": "Le prix n'a pas pu être vérifié. Fermez et réessayez.",
   "onlineChess.receipt.changed": "Le prix a changé. Vérifiez-le et confirmez à nouveau.",

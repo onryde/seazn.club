@@ -245,7 +245,12 @@ export function OnlineReceipt(props: OnlineReceiptProps): ReactNode {
       }
     >
       <div className="space-y-3" data-testid="online-receipt" data-mode={mode} data-size={want === null ? "none" : String(want.size)} data-confirm={confirm.kind} data-view="receipt">
-        <CameraChoice on={state.cameras} disabled={submitting || cameraFixed} onPick={(on) => dispatch({ type: "cameras", on })} />
+        <CameraChoice
+          on={state.cameras}
+          turnsOn={state.cameras && !facts.cameras}
+          disabled={submitting || cameraFixed}
+          onPick={(on) => dispatch({ type: "cameras", on })}
+        />
 
         {listed && rows.length > 0 && (
           <fieldset className="grid gap-1.5 border-0 p-0" data-testid="online-receipt-sizes">
@@ -376,9 +381,13 @@ export function OnlineReceipt(props: OnlineReceiptProps): ReactNode {
 
 /** The receipt's Fair-play camera answer: Yes or No, as a two-segment control in the house's segmented shape (`VisibilitySegmented`): a fieldset over two
  *  native radios of one name, each WRAPPED by its segment (visually hidden, still focusable: a click on the segment picks it, arrow keys walk the pair).
- *  Phone: the legend above, the two segments full width; from `sm`: the legend left, the segments right, on one line. */
-function CameraChoice(p: { on: boolean; disabled: boolean; onPick: (on: boolean) => void }): ReactNode {
+ *  Phone: the legend above, the two segments full width; from `sm`: the legend left, the segments right, on one line. `turnsOn`: the answer is Yes over a
+ *  setting that is off, so paying writes Required (P19) - said below the pair, before the confirm (fix m4), and named by the fieldset; a division already
+ *  on keeps the setting it has (it may be Optional), so nothing is said for it. */
+function CameraChoice(p: { on: boolean; turnsOn: boolean; disabled: boolean; onPick: (on: boolean) => void }): ReactNode {
   const msg = useMsg();
+  // A fixed id: the receipt is one dialog, mounted once per page.
+  const noteId = "online-receipt-cameras-note";
   const options = [
     { on: true, label: msg("onlineChess.receipt.cameras.yes"), Icon: Video, testid: "online-receipt-cameras-yes" },
     { on: false, label: msg("onlineChess.receipt.cameras.no"), Icon: VideoOff, testid: "online-receipt-cameras-no" },
@@ -390,6 +399,7 @@ function CameraChoice(p: { on: boolean; disabled: boolean; onPick: (on: boolean)
       data-testid="online-receipt-cameras"
       data-cameras={p.on ? "yes" : "no"}
       disabled={p.disabled}
+      aria-describedby={p.turnsOn ? noteId : undefined}
     >
       <legend className="float-left mb-1 text-xs font-medium text-slate-700 sm:mb-0 sm:text-sm sm:font-normal sm:text-slate-800">
         {msg("onlineChess.receipt.row.cameras")}
@@ -420,6 +430,11 @@ function CameraChoice(p: { on: boolean; disabled: boolean; onPick: (on: boolean)
           );
         })}
       </div>
+      {p.turnsOn && (
+        <p id={noteId} className="text-xs text-slate-600 sm:col-span-2" data-testid="online-receipt-cameras-note">
+          {msg("onlineChess.receipt.cameras.yesNote")}
+        </p>
+      )}
     </fieldset>
   );
 }

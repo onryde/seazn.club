@@ -3767,6 +3767,7 @@
   "onlineChess.receipt.cameras.yes": "Ja",
   "onlineChess.receipt.cameras.no": "Nee",
   "onlineChess.receipt.cameras.set": "‘Camera tijdens online spelen’ staat nu op {policy}.",
+  "onlineChess.receipt.cameras.yesNote": "Met Ja hebben spelers een live camera nodig om hun plaats in te nemen.",
   "onlineChess.receipt.checking": "Prijs controleren…",
   "onlineChess.receipt.unclear": "De prijs kon niet worden gecontroleerd. Sluit dit en probeer het opnieuw.",
   "onlineChess.receipt.changed": "De prijs is veranderd. Controleer hem en bevestig opnieuw.",

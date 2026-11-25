@@ -3767,6 +3767,7 @@
   "onlineChess.receipt.cameras.yes": "Sí",
   "onlineChess.receipt.cameras.no": "No",
   "onlineChess.receipt.cameras.set": "«Cámara durante el juego en línea» ahora está en {policy}.",
+  "onlineChess.receipt.cameras.yesNote": "Con Sí, los jugadores necesitan una cámara en directo para ocupar su asiento.",
   "onlineChess.receipt.checking": "Comprobando el precio…",
   "onlineChess.receipt.unclear": "No se pudo comprobar el precio. Cierra esto e inténtalo de nuevo.",
   "onlineChess.receipt.changed": "El precio ha cambiado. Compruébalo y confirma de nuevo.",
