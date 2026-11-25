@@ -19,6 +19,8 @@ import { failureKey, liveCopy } from "@/components/v2/device-link-copy";
 import { PHONE_HANDOVER_QR_MAX_PX, SeaznQrImage } from "@/components/v2/seazn-qr-image";
 import { renderSeaznQr, type SeaznQr } from "@/lib/seazn-qr";
 import { officialLabelKey } from "@/lib/official-label";
+import { scoreAppLink } from "@/lib/open-in-app";
+import { OpenInAppRow, ScoreInBrowserLink } from "@/components/v2/open-in-app";
 import { useSessionStorageItem, writeSessionStorageItem } from "@/lib/use-client-snapshot";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 
@@ -319,6 +321,14 @@ export function DeviceLinkPanel({
 
   const padUrl = minted ? `${window.location.origin}/score/${minted.secret}` : null;
   const live = active ? liveCopy(active.expires_at, fmtDate) : null;
+  /** "Open in app" and "Score in browser" for the secret this panel is holding, above its QR (Android phones only;
+   *  elsewhere it renders nothing). Built on the same origin as `padUrl`. */
+  const openInApp =
+    minted && padUrl !== null ? (
+      <OpenInAppRow href={scoreAppLink(window.location.origin, minted.secret)}>
+        <ScoreInBrowserLink href={padUrl} />
+      </OpenInAppRow>
+    ) : null;
 
   /** The on-screen question both destructive doors open — a native dialog
    *  would be invisible to e2e and easy to dismiss by reflex. */
@@ -481,6 +491,7 @@ export function DeviceLinkPanel({
         {minted ? (
           <div className="min-w-0">
             <div className="space-y-2 text-center">
+              {openInApp}
               {/* `ph-no-capture` on the QR and the URL, exactly as the full panel below (session replay). */}
               <SeaznQrImage testId="dlink-qr" sensitive qr={minted.qr} alt={msg("dlink.alt")} maxSize={PHONE_HANDOVER_QR_MAX_PX} />
               <button
@@ -591,6 +602,7 @@ export function DeviceLinkPanel({
 
       {minted ? (
         <div className="mt-3 space-y-3 text-center">
+          {openInApp}
           {/* `ph-no-capture` on the QR and the URL text: both paint the live
               secret, and PostHog replay compresses its DOM frames before the
               `before_send` scrub can see them — its recorder blocks this class

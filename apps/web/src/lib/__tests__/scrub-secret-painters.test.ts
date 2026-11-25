@@ -444,6 +444,9 @@ const PAINTERS: Record<string, { verdict: true | string; handoff?: string | stri
   "components/auth-form.tsx": { verdict: true },
   "components/v2/checkin-qr.tsx": { verdict: true },
   "components/v2/device-link-panel.tsx": { verdict: true },
+  // "Open in app" (plan 2026-11-25): the pad URL reaches its "Score in browser" link as a prop; the app links beside it
+  // carry the same credential after `#`, inside the one ph-no-capture block.
+  "components/v2/open-in-app.tsx": { verdict: true },
   "components/registration-hub-registrant-join-code.tsx": { verdict: true },
   "components/public-site/register/register-lichess-card.tsx": { verdict: true },
   "components/public-site/register/step-consent.tsx": {

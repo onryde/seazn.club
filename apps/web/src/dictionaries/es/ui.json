@@ -9275,5 +9275,12 @@
   "openApp.fallback.title": "Seazn Club aún no está en este teléfono",
   "openApp.fallback.play": "Descargar en Google Play",
   "openApp.fallback.retry": "Después, vuelve y toca Abrir en la app otra vez",
-  "openApp.fallback.scoreInBrowser": "Anotar en el navegador"
+  "openApp.fallback.scoreInBrowser": "Anotar en el navegador",
+  "openApp.button": "Abrir en la app",
+  "openApp.scoreInBrowser": "Anotar en el navegador",
+  "openApp.orScan": "o escanea con otro móvil",
+  "openApp.stream.thenGoLive": "Después, en la app, mantén pulsado para emitir.",
+  "openApp.stream.needDestination": "Primero elige un destino aquí.",
+  "openApp.stream.needCredit": "Primero necesitas un crédito de emisión.",
+  "openApp.stream.checkFirst": "Comprueba que hay un destino elegido y que tienes un crédito."
 }

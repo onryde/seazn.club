@@ -16,6 +16,9 @@ primary_region = "lhr"
     NEXT_PUBLIC_POSTHOG_API_HOST       = "https://n.seazn.club"
     # Revshare affiliate tracking is OFF on stg ("0"): no script, no capture, no sale reports.
     NEXT_PUBLIC_REVSHARE_ENABLED       = "0"
+    # "Open in app" buttons beside stream, scoring and Match Day codes (Android phones). Staging only until the phone
+    # release that handles /app/* links is on Play: fly.toml must NOT set it (lib/__tests__/open-in-app-release.test.ts).
+    NEXT_PUBLIC_OPEN_IN_APP            = "1"
     NEXT_PUBLIC_SENTRY_DSN             = "https://77cd7f66bdb8a600423328d6e561b6e9@o4512107033198592.ingest.de.sentry.io/4512119703208016"
     # Cloudflare Turnstile site key (public by design); TURNSTILE_SECRET / TURNSTILE_HOSTNAMES are runtime `fly secrets`.
     NEXT_PUBLIC_TURNSTILE_SITE_KEY     = "0x4AAAAAAF0vaX-2fN3egqBE"

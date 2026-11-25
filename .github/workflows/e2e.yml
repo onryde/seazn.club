@@ -860,6 +860,9 @@ jobs:
       # DEFAULT, and settled-poll-override.test.ts refuses this var in any deploy
       # config and requires it here in every job that runs Playwright.
       NEXT_PUBLIC_E2E_SETTLED_POLL_MS: "5000"
+      # "Open in app" buttons (fly.stg.toml sets the same; production does not). JOB level, so the BUILD bakes it in
+      # and the Playwright runner reads it: open-in-app-buttons.spec.ts FAILS under CI without it rather than skipping.
+      NEXT_PUBLIC_OPEN_IN_APP: "1"
       # sitemap.spec.ts: the sitemap's competition read is cached for an hour
       # when shipped (server/public-site/sitemap-cache.ts), and the spec proves
       # both halves of that — not re-read inside the window, picked up after
@@ -1759,6 +1762,9 @@ jobs:
       NEXT_PUBLIC_SCOREPAD_HOLD_MS: "3000"
       # Same as e2e-parallel's: the settled poll override (see that job's comment).
       NEXT_PUBLIC_E2E_SETTLED_POLL_MS: "5000"
+      # "Open in app" buttons (fly.stg.toml sets the same; production does not). JOB level, so the BUILD bakes it in
+      # and the Playwright runner reads it: open-in-app-buttons.spec.ts FAILS under CI without it rather than skipping.
+      NEXT_PUBLIC_OPEN_IN_APP: "1"
       STRIPE_SECRET_KEY: sk_test_ci_e2e_dummy
       STRIPE_WEBHOOK_SECRET: whsec_e2e_payments
       SCHEDULING_AI_BASE_URL: "http://127.0.0.1:4319"
@@ -2149,6 +2155,9 @@ jobs:
       NEXT_PUBLIC_SCOREPAD_HOLD_MS: "3000"
       # Same as e2e-parallel's: the settled poll override (see that job's comment).
       NEXT_PUBLIC_E2E_SETTLED_POLL_MS: "5000"
+      # "Open in app" buttons (fly.stg.toml sets the same; production does not). JOB level, so the BUILD bakes it in
+      # and the Playwright runner reads it: open-in-app-buttons.spec.ts FAILS under CI without it rather than skipping.
+      NEXT_PUBLIC_OPEN_IN_APP: "1"
       STRIPE_SECRET_KEY: sk_test_ci_e2e_dummy
       STRIPE_WEBHOOK_SECRET: whsec_e2e_payments
       SCHEDULING_AI_BASE_URL: "http://127.0.0.1:4319"
@@ -2622,6 +2631,9 @@ jobs:
       NEXT_PUBLIC_SCOREPAD_HOLD_MS: "3000"
       # Same as e2e-parallel's: the settled poll override (see that job's comment).
       NEXT_PUBLIC_E2E_SETTLED_POLL_MS: "5000"
+      # "Open in app" buttons (fly.stg.toml sets the same; production does not). JOB level, so the BUILD bakes it in
+      # and the Playwright runner reads it: open-in-app-buttons.spec.ts FAILS under CI without it rather than skipping.
+      NEXT_PUBLIC_OPEN_IN_APP: "1"
       STRIPE_SECRET_KEY: sk_test_ci_e2e_dummy
       STRIPE_WEBHOOK_SECRET: whsec_e2e_payments
       SCHEDULING_AI_BASE_URL: "http://127.0.0.1:4319"
