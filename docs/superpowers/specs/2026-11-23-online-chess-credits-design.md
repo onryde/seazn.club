@@ -461,6 +461,13 @@ In the Fixtures tab's rules strip, an unpaid online division shows an amber line
 - **Change size** focuses the "Players, up to" select in the same strip (P13: free while unpaid).
 - **Pay** opens the receipt (§8.4).
 
+**The competition page flags the same debt** (owner-added 2026-11-24; "Step 1b" in the plan and in the code's comments, which cite it as §8.8). In the competition page's list of divisions, an unpaid online division's card (the desktop row and the phone card alike) carries a small amber flag, "Online Chess not paid" (`data-testid="online-unpaid-flag"`, dictionary key `onlineChess.flag.text`), so an organiser sees what stands between a division and its first round without opening each one.
+
+- It is a link to that division's Fixtures tab, where the pay line above and its Pay button are. It is a sibling of the card's own link, never nested inside it, and 44px tall below `md`.
+- It shows exactly when the pay line does: the division plays online (chess, Lichess), its live package is unpaid, and no round has opened. It is hidden when the package is paid (nothing is owed), frozen (a round has opened; the grandfathered backfill row is frozen and never paid, and is not a debt) or refunded, and for a division that does not play online.
+- Organiser-only: drawn only for a member who can edit the competition, and only while the club is offered Online Chess. A view-only member, the public hub and a player page never see it.
+- One read for the whole competition (`listUnpaidOnlineDivisions`), asked only where it can matter (an editor, a chess division on the page). A read that fails is logged and the page renders without flags: a courtesy beside the ledger, never a 500.
+
 ### 8.4 The receipt
 
 Pay opens the house confirm (`useConfirm`, `components/ui/confirm-provider.tsx:44`) with a receipt in the `AiQuoteCard` layout (`components/v2/board/ai-quote-card.tsx:140`):
