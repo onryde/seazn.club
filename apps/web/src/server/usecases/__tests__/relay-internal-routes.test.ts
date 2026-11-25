@@ -747,6 +747,39 @@ describe.skipIf(!HAS_DB)("R2002: the relay-job.v1 contract through the internal 
     expect(await samples(s.sessionId)).toHaveLength(1);
   });
 
+  // T44 (compositor Owed 110 + 111): the camera's six keys, through the real route into BOTH stores. Without the allowlist entry
+  // (relay/sanitise.ts) the sample's raw would silently lose them while last_heartbeat kept them, so both are read.
+  it("T44: heartbeat-camera through the ROUTE is 200, and each of the six camera keys lands in BOTH stores as sent; a present 0 stays a present 0; heartbeat-invalid-give-up-reason is a 400 that writes nothing", async () => {
+    const s = await session();
+    const camera = vector("heartbeat-camera");
+    const keys = ["inputGiveUpReason", "inputGiveUpGen", "inputReceivedFps", "inputReceivedKbps", "inputWithheldSpans", "inputQueueOverruns"];
+    for (const k of keys) expect(camera, `premise: the vector carries ${k}`).toHaveProperty(k);
+    expect((await postBeat(s.sessionId, camera, { token: s.jobToken })).status).toBe(200);
+    let checked = 0;
+    for (const [store, row] of [["last_heartbeat", await lastHeartbeat(s.sessionId)], ["samples.raw", (await newestRaw(s.sessionId)).raw]] as const) {
+      for (const k of keys) {
+        expect(row, `${store}.${k}`).toHaveProperty(k, camera[k]);
+        checked++;
+      }
+      expect(row, `${store}: the whole body`).toEqual(camera);
+    }
+    expect(checked, "anti-vacuity: six keys, two stores").toBe(12);
+    // A measured zero is stored as 0: the key is present, never dropped as if unknown.
+    const zero = { state: "playing", inputReceivedFps: 0, inputReceivedKbps: 0, inputWithheldSpans: 0, inputQueueOverruns: 0 };
+    expect((await postBeat(s.sessionId, zero, { token: s.jobToken })).status).toBe(200);
+    expect(await lastHeartbeat(s.sessionId)).toEqual(zero);
+    expect((await newestRaw(s.sessionId)).raw).toEqual(zero);
+    // A beat that does not carry them (a compositor without RELAY_INPUT_BEAT) is stored with none, replacing the latest body.
+    expect((await postBeat(s.sessionId, { state: "playing" }, { token: s.jobToken })).status).toBe(200);
+    expect(await lastHeartbeat(s.sessionId)).toEqual({ state: "playing" });
+    // The refused one writes nothing: the three beats above are the only samples.
+    const before = (await newestRaw(s.sessionId)).n;
+    const bad = await postBeat(s.sessionId, vector("heartbeat-invalid-give-up-reason"), { token: s.jobToken });
+    expect(bad.status).toBe(400);
+    expect((await newestRaw(s.sessionId)).n, "a refused body is not a sample").toBe(before);
+    expect(before).toBe(3);
+  });
+
   // Owner scope addition (2026-10-15): the final beat carries the exit reason, recorded in both beat stores. The runner's
   // own exit columns are written from the OBSERVED exit (A5), never from a beat. What web DOES with each reason is R2003's
   // (the describe block "R2003: the final beat's exit reason" below); this test keeps the record and the one reaction

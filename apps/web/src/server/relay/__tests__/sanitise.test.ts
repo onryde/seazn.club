@@ -19,6 +19,8 @@ const R2_BEAT_FIELDS = ["programmePhase", "input", "output", "graphics", "inputK
   "phaseChannel"];
 /** R4 S8 (sponsors spec 2026-10-27 §3.6.2): the compositor's overflow count rides the beat and is kept like any count. */
 const R4_BEAT_FIELDS = ["airingsDropped"];
+/** T44 (compositor Owed 110 + 111): the camera as the relay receives it — enum words and counts, kept like any other beat fact. */
+const T44_BEAT_FIELDS = ["inputGiveUpReason", "inputGiveUpGen", "inputReceivedFps", "inputReceivedKbps", "inputWithheldSpans", "inputQueueOverruns"];
 /** R4 S8, ruling R14: the declared beat fields NEVER kept in a sample's raw (nor in last_heartbeat). `airings` is up to 64
  *  proof-of-play items per beat; the server records them as sponsor airings instead (server/sponsors/airings.ts). */
 const NOT_IN_RAW = ["airings"];
@@ -109,8 +111,9 @@ describe("sanitise — allowlist", () => {
     expect(NOT_IN_RAW.filter((k) => !declared.includes(k)), "every exclusion names a field the beat declares").toEqual([]);
     const kept = declared.filter((k) => !NOT_IN_RAW.includes(k));
     expect(kept.length).toBeGreaterThan(R2_BEAT_FIELDS.length);
-    // heartbeat-full carries every kept field but the final beat's two, which heartbeat-final-fatal carries (review M6).
-    const full = { ...contractFixture("heartbeat-full"), ...contractFixture("heartbeat-final-fatal") };
+    // heartbeat-full carries every kept field but the final beat's two, which heartbeat-final-fatal carries (review M6), and the
+    // camera's six (T44), which heartbeat-camera carries.
+    const full = { ...contractFixture("heartbeat-full"), ...contractFixture("heartbeat-final-fatal"), ...contractFixture("heartbeat-camera") };
     expect(Object.keys(full).sort(), "premise: the two beats carry every kept field").toEqual(kept);
     expect(sanitise(full)).toEqual(full);
     let checked = 0;
@@ -119,7 +122,9 @@ describe("sanitise — allowlist", () => {
       checked++;
     }
     expect(checked).toBe(kept.length);
-    for (const k of [...R2_BEAT_FIELDS, ...R4_BEAT_FIELDS]) expect(kept, k).toContain(k);
+    for (const k of [...R2_BEAT_FIELDS, ...R4_BEAT_FIELDS, ...T44_BEAT_FIELDS]) expect(kept, k).toContain(k);
+    expect(T44_BEAT_FIELDS.filter((k) => !ALLOWED_KEYS.has(k)), "T44: each camera key is on the allowlist").toEqual([]);
+    expect(T44_BEAT_FIELDS, "premise: Owed 110's four and 111's two").toHaveLength(6);
   });
 
   // R4 S8 (ruling R14): 64 proof-of-play items a beat must never put in a sample row. The usecase strips the list before

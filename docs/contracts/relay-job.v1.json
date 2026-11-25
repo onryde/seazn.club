@@ -606,6 +606,89 @@
               "type": "null"
             }
           ]
+        },
+        "inputGiveUpReason": {
+          "description": "Why the compositor gave up the camera generation inputGiveUpGen (moved it from connecting or running into backoff): connect_timeout (no first decoded frame within the connect timeout), stalled (running with no frame for the stall window, or a stall the pipeline reported), phone_live_discard (web's phone-live counter rose while the connect had carried no byte: one discard an outage), hold_end (Cloudflare's hold-end close on a connect), eos (the camera stream ended), error (a pipeline error). Sent with inputGiveUpGen; omitted until a generation is given up. The last one stays on every later beat until another replaces it.",
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "connect_timeout",
+                "stalled",
+                "phone_live_discard",
+                "hold_end",
+                "eos",
+                "error"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "inputGiveUpGen": {
+          "description": "The camera generation (its pipeline build number, 1 the first) that inputGiveUpReason is about. Sent with inputGiveUpReason; a rise between beats is a new give-up.",
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "inputReceivedFps": {
+          "description": "Camera frames per second as the relay received them: decoded camera frames written into the programme's camera slot over the beat window, to one decimal. Omitted when not measured, never sent as 0: a present 0 is a measured zero (the camera sent nothing the window long). A beat that comes within 2.5 s (the rate's minimum window, OUTPUT_FPS_MIN_WINDOW_MS) of the last reading repeats that reading and keeps the window open: so the edge beat that announces a programme phase change can carry the previous window's camera rates, not the camera at the change.",
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "inputReceivedKbps": {
+          "description": "Camera bitrate as the relay received it, kbit/s, rounded: the bytes out of the SRT source, every build's, decoded or not, over the beat window. Omitted when not measured, never sent as 0: a present 0 is a measured zero. A beat that comes within 2.5 s (the rate's minimum window, OUTPUT_FPS_MIN_WINDOW_MS) of the last reading repeats that reading and keeps the window open: so the edge beat that announces a programme phase change can carry the previous window's camera rates, not the camera at the change.",
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "inputWithheldSpans": {
+          "description": "C3 (S5): spans in which compressed camera video kept entering the relay's decoder and no picture came out for at least 500 ms (the programme's freeze, frozen_after_ms): the decoder withholding pictures to the next keyframe after a lost reference. A total for the relay process that only grows; a span is counted when its picture returns. Omitted when not measured, never sent as 0 for unknown: a present 0 is a measured zero.",
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "inputQueueOverruns": {
+          "description": "C3 (S5): the times the queue before the relay's camera decoder (4 s of compressed video, CAMERA_VIDEO_QUEUE_MS) was full and blocked the camera's source; it drops nothing. A total for the relay process that only grows. Omitted when not measured, never sent as 0 for unknown: a present 0 is a measured zero.",
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [

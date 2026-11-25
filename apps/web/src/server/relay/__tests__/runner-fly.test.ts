@@ -232,6 +232,41 @@ describe("FlyRunner", () => {
     expect(checked).toBe(5);
   });
 
+  // T44 (compositor Owed 110 + 111): the compositor sends the camera's six beat keys ONLY when its Machine carries
+  // RELAY_INPUT_BEAT=1, and web's heartbeat is strict until its contract declares them (it now does). The switch rides from web's
+  // own flag of the same name, default OFF and OFF in prod, and only its one "on" spelling. Both flags together, and each alone:
+  // the two switches are independent (RELAY_AIRINGS is sponsors', this is the camera's).
+  it("RELAY_INPUT_BEAT rides into the Machine env only when web's own env says exactly \"1\": off adds no key, on adds exactly RELAY_INPUT_BEAT=1; independent of RELAY_AIRINGS", async () => {
+    const BASE = { SESSION_ID: SPEC.sessionId, JOB_TOKEN: "jwt-SECRET", APP_URL: "https://seazn.club", RELAY_DEADLINE_AT: "2026-09-14T15:00:00.000Z" };
+    const envOf = async (): Promise<Record<string, string>> => {
+      const s = scripted(() => ({ status: 200, body: { id: "m_123", name: NAME, state: "created" } }));
+      await new FlyRunner({ client: s.client, image: "registry.fly.io/seazn-relay:abc" }).create(SPEC);
+      return (JSON.parse(String(s.calls[0]!.init.body)) as { config: { env: Record<string, string> } }).config.env;
+    };
+    let checked = 0;
+    try {
+      vi.stubEnv("RELAY_AIRINGS", undefined);
+      for (const off of [undefined, "", "0", "true", "yes"]) {
+        vi.stubEnv("RELAY_INPUT_BEAT", off);
+        const env = await envOf();
+        expect(env, `RELAY_INPUT_BEAT=${String(off)}: off, no key at all`).toEqual(BASE);
+        expect(Object.keys(env)).not.toContain("RELAY_INPUT_BEAT");
+        checked++;
+      }
+      vi.stubEnv("RELAY_INPUT_BEAT", "1");
+      expect(await envOf(), "on: the one added key, the constant 1").toEqual({ ...BASE, RELAY_INPUT_BEAT: "1" });
+      checked++;
+      vi.stubEnv("RELAY_AIRINGS", "1");
+      expect(await envOf(), "both on: both keys").toEqual({ ...BASE, RELAY_AIRINGS: "1", RELAY_INPUT_BEAT: "1" });
+      vi.stubEnv("RELAY_INPUT_BEAT", undefined);
+      expect(await envOf(), "airings alone: no camera key").toEqual({ ...BASE, RELAY_AIRINGS: "1" });
+      checked += 2;
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(checked).toBe(8);
+  });
+
   // R2003: what an in-place restart looks like from web. Fly reports the restarting Machine as `restarting`; the adapter
   // says `pending`, and the domain keeps the runner it has — same attempt, same name, no effect, no signal. The restart
   // is invisible to the lifecycle; only a beat that stays away for the composed window makes it a lost runner.

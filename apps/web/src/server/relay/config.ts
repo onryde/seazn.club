@@ -398,6 +398,16 @@ export function seaznHostedReplay(env: Record<string, string | undefined> = proc
 export function seaznHostedCost(env: Record<string, string | undefined> = process.env): boolean {
   return seaznFlag("SEAZN_HOSTED_COST", env);
 }
+/** T44 (compositor Owed 110 + 111): whether web copies `RELAY_INPUT_BEAT=1` into each relay Machine's env, which makes the
+ *  compositor send the camera's six beat keys (`inputGiveUpReason` … `inputQueueOverruns`, relay-job.v1's heartbeat). Web's heartbeat
+ *  contract declares them from T44, so it accepts the beat either way; the flag is what asks for them. DEFAULT OFF, and OFF in prod
+ *  until the owner says: the keys add a few fields to every beat and every sample's raw, and nothing reads them yet. Named like
+ *  RELAY_AIRINGS, the other switch web passes through to the Machine, and read the same way (runner-fly.ts): ONLY the exact "1"
+ *  turns it on, so a typo reads as off rather than throwing in the middle of a Machine create (the money path). Read at each create,
+ *  never cached: New Machines read it; a running stream keeps what it booted with. */
+export function relayInputBeat(env: Record<string, string | undefined> = process.env): boolean {
+  return env.RELAY_INPUT_BEAT === "1";
+}
 /** SEAZN_VIDEO_ORIGINS: comma-separated bare hostnames (the Cloudflare `allowedOrigins` for Seazn playback), trimmed and
  *  de-duplicated in first-seen order. Null when unset or blank. An entry with a scheme, port or path throws. */
 export function seaznVideoOrigins(env: Record<string, string | undefined> = process.env): string[] | null {

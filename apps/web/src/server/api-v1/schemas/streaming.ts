@@ -658,6 +658,17 @@ export const RelayHeartbeat = z
     // either beat store (ruling R14); `airingsDropped` is stored as sent.
     airings: z.array(RelayAiring).max(64).nullish(),
     airingsDropped: z.number().int().min(0).nullish(),
+    // T44 (compositor Owed 110 and 111; the compositor's docs/specs/2026-11-24-heartbeat-input-keys.proposed.json, whose six
+    // declarations these are, verbatim): the camera as the relay RECEIVES it. Additive and nullish like every R2 field, and
+    // absent from a compositor built before them or run without RELAY_INPUT_BEAT=1 (the flag web's runner copies into the Machine
+    // env, off by default: relay/config.ts `relayInputBeat`). Stored as sent, in both beat stores (relay/sanitise.ts); a present
+    // 0 is a measured zero, never "unknown". relay-contract.test.ts compares each to the proposal's copy.
+    inputGiveUpReason: z.enum(["connect_timeout", "stalled", "phone_live_discard", "hold_end", "eos", "error"]).nullish(),
+    inputGiveUpGen: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).nullish(),
+    inputReceivedFps: z.number().min(0).nullish(),
+    inputReceivedKbps: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullish(),
+    inputWithheldSpans: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullish(),
+    inputQueueOverruns: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullish(),
   })
   .strict()
   // Review M6: the exit fields ride only on the FINAL beat. null is no report (the fields are nullish), so only a

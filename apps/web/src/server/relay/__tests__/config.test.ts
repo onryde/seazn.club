@@ -2,7 +2,7 @@
 // And the money guard: a process that was never told RELAY_DRIVERS=live runs the fake drivers — outside production. In
 // production (Task 14b, R5) it runs NO drivers: "disabled", and createSession refuses. Explicit fake is refused on stg/prod.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import * as config from "../config";
 import { CF_ANALYTICS_MAX_WINDOW_DAYS } from "../../video/cf-analytics";
@@ -894,5 +894,38 @@ describe("STREAM_TICK_PERIOD_SECONDS and SEAZN_RECORDING_LOCK_BY_SECONDS (review
   it("the lock lands within the finalisation grace plus one whole tick period of the end: Cloudflare's own hold and a tick period both fit inside it", () => {
     expect(config.SEAZN_RECORDING_LOCK_BY_SECONDS).toBeGreaterThanOrEqual(config.INGEST_TIMEOUT_SECONDS + config.HOLD_SLACK_SECONDS + config.STREAM_TICK_PERIOD_SECONDS);
     expect(config.SEAZN_RECORDING_LOCK_BY_SECONDS, "a whole period beyond the grace the recording is finished by").toBeGreaterThanOrEqual(config.FINALISATION_GRACE_SECONDS + config.STREAM_TICK_PERIOD_SECONDS);
+  });
+});
+
+// T44 (compositor Owed 110 + 111): web's flag for the camera's beat keys.
+describe("T44 — relayInputBeat, the flag that asks the compositor for the camera's beat keys", () => {
+  it("is on for exactly the string \"1\" and off for every other value, unset included; it reads its argument, not a cached env", () => {
+    let checked = 0;
+    for (const [value, want] of [["1", true], [undefined, false], ["", false], ["0", false], ["true", false], ["yes", false], [" 1", false], ["1 ", false], ["on", false]] as const) {
+      expect(config.relayInputBeat({ RELAY_INPUT_BEAT: value }), JSON.stringify(value)).toBe(want);
+      checked++;
+    }
+    expect(config.relayInputBeat({}), "absent key").toBe(false);
+    expect(checked).toBe(9);
+    // The default argument is process.env, read at each call.
+    vi.stubEnv("RELAY_INPUT_BEAT", "1");
+    expect(config.relayInputBeat()).toBe(true);
+    vi.stubEnv("RELAY_INPUT_BEAT", "0");
+    expect(config.relayInputBeat()).toBe(false);
+    vi.unstubAllEnvs();
+  });
+
+  it("is documented in .env.example as a commented-out, empty entry (default off), and no workflow or deploy config of this repo turns it on", () => {
+    const root = resolve(import.meta.dirname, "../../../../../..");
+    const example = readFileSync(resolve(root, ".env.example"), "utf8").split("\n");
+    const lines = example.filter((l) => /RELAY_INPUT_BEAT/.test(l));
+    expect(lines.filter((l) => /^#\s*RELAY_INPUT_BEAT=\s*$/.test(l)), "one commented, empty entry").toHaveLength(1);
+    expect(lines.filter((l) => /^RELAY_INPUT_BEAT=/.test(l)), "never an active entry").toEqual([]);
+    // "OFF in prod": no file that configures a deployment sets it. Swept by content over every workflow and fly config.
+    const dirs = [resolve(root, ".github/workflows")];
+    const files = dirs.flatMap((d) => readdirSync(d).filter((f) => /\.ya?ml$/.test(f)).map((f) => resolve(d, f)));
+    for (const f of readdirSync(root).filter((f) => /^fly.*\.toml$/.test(f))) files.push(resolve(root, f));
+    expect(files.length, "anti-vacuity: the workflows and both fly configs were read").toBeGreaterThan(10);
+    expect(files.filter((f) => readFileSync(f, "utf8").includes("RELAY_INPUT_BEAT"))).toEqual([]);
   });
 });
