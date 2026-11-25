@@ -18,6 +18,7 @@ import fc from "fast-check";
 import Ajv2020 from "ajv/dist/2020";
 import addFormats from "ajv-formats";
 import type { CaptureRecordLine } from "@/server/api-v1/capture-schemas";
+import { H264_LEVEL_WORDS } from "@/server/api-v1/__tests__/_h264-levels";
 import {
   attributeLines, hasDuplicateKey, keptLines, screenRecordLine, secretRulesOf, tokenTag, type AttributableLine, type ScreenedLine,
 } from "../capture-record";
@@ -256,7 +257,9 @@ describe("screenRecordLine (§5 under owner ruling RL): the allow-list, then S1�
   it("Task 50 (owner 'yes', 2026-11-25): an `encoder-format` line carrying profile, codecLevel and entropy is ok and kept whole — every profile word, the level grid and the mask included; a bad profile, codecLevel or entropy is unreadable (dropped as shape), and `level` still means the log level (\"4.1\" there is unreadable) — counted", () => {
     const base = { at: "2026-10-11T21:19:03.123Z", kind: "encoder-format" };
     const PROFILES = ["baseline", "constrained-baseline", "main", "extended", "high", "progressive-high", "constrained-high", "high10", "high422", "high444", "unknown", "***"];
-    const LEVELS = ["1", "1b", "1.1", "1.2", "2", "2.1", "2.2", "3", "3.1", "3.2", "4", "4.1", "4.2", "5", "5.1", "5.2", "6", "6.1", "6.2", "***"];
+    // H.264 Table A-1's 20 levels (1.3 and 1b among them), as capture writes them, plus the mask.
+    expect(H264_LEVEL_WORDS).toHaveLength(20);
+    const LEVELS = [...H264_LEVEL_WORDS, "***"];
     const ENTROPY = ["cabac", "cavlc", "unknown", "***"];
     let ok = 0, unreadable = 0;
     const verdict = (line: Record<string, unknown>, want: boolean, why: string): void => {
@@ -277,7 +280,7 @@ describe("screenRecordLine (§5 under owner ruling RL): the allow-list, then S1�
     for (const v of ["4.7", "7", "0", "1c", 4.1, null]) verdict({ ...base, codecLevel: v }, false, `codecLevel ${JSON.stringify(v)}`);
     for (const v of ["huffman", "CABAC", "", true, null]) verdict({ ...base, entropy: v }, false, `entropy ${JSON.stringify(v)}`);
     for (const v of ["4.1", "1b", "high", "cabac"]) verdict({ ...base, level: v }, false, `level ${v}`);
-    expect(ok, "anti-vacuity: lines read").toBe(12 + 20 + 4);
+    expect(ok, "anti-vacuity: lines read").toBe(12 + 21 + 4);
     expect(unreadable, "anti-vacuity: lines unreadable").toBe(5 + 6 + 5 + 4);
     // The three fixtures as capture writes them, whole (the valid pair), and the three bad ones dropped.
     for (const name of ["line-valid-encoder-format", "line-valid-encoder-format-progressive-high"]) {

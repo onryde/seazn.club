@@ -327,7 +327,7 @@ const RECORD_ENCODER_PROFILES = [
 ] as const;
 const RECORD_ENCODER_KEYS = {
   profile: z.enum(RECORD_ENCODER_PROFILES).optional(),
-  codecLevel: z.string().regex(/^(1b|[1-6](\.[0-2])?|[*]{3})$/).optional(),
+  codecLevel: z.string().regex(/^(1b|1(\.[1-3])?|[2-6](\.[0-2])?|[*]{3})$/).optional(),
   entropy: z.enum(["cabac", "cavlc", "unknown", "***"]).optional(),
 };
 const keyed = <K extends string, T extends z.ZodType>(keys: readonly K[], make: () => T): Record<K, T> =>

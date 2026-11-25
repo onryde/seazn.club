@@ -34,6 +34,7 @@ import * as S from "../schemas";
 import { CaptureQrV2, captureQrV2Text, parseCaptureQrV2 } from "@/lib/capture-qr";
 import { CAPTURE_NUDGE_REASONS, MATCH_DAY_NUDGE_REASONS, MATCH_DAY_TOKEN_TTL_SECONDS, captureTopic, divisionTopic, matchDayTopic } from "@/lib/realtime";
 import { contractUrlPatterns } from "@/server/usecases/__tests__/_capture-realtime";
+import { H264_LEVEL_WORDS } from "./_h264-levels";
 import { PROGRAMME_PHASES } from "@/lib/relay-phase";
 import type { CfLiveEvent } from "@/server/relay/cf-live-notification";
 import type { RoundRole } from "@seazn/engine/competition";
@@ -61,7 +62,7 @@ const SHA256: Record<string, string> = {
   "capture-beat.v1.json": "2696d9d899c3870b86b50d1e90c6e760c26cb61e902ce092a79754c25400afdb",
   "capture-start.v1.json": "daf6383be934c600c6dbd439e8596f9af01f3d655578fa8b0b771d695672ad64",
   "capture-scoring-link.v1.json": "daa81ed4f907545f0fb1a8265d11011fab3b90a52d880dda8e3839f7651b5032",
-  "capture-record.v1.json": "75d8ea4033a5107c7023f92ef7bcd1e4a8c2a2aabccbc0f340ff9afef62543d9",
+  "capture-record.v1.json": "9c51829e4d1e9156cdf8ac19f1335476aa128bab62eaf126b1783fa182da8405",
   // MD-1 Task 3 (capture S4 Match Day design §5, §9.3): a Match Day code's day read.
   // Task 8e (2026-11-13): + can_call, additive.
   // Task 17 (Seazn-hosted video, 2026-11-21): + live_seazn on every row, additive and required.
@@ -372,7 +373,9 @@ const RECORD_ROUTES: [prefix: string, pointer: "" | "#/$defs/ok" | "#/$defs/refu
 ];
 /** Capture's `modules/capture-engine/src/scrub/allow-list.json` at capture 2b4df80 (ebac190's lists plus the seven
  *  scalars its reasons tag R-990P), list for list: the rulebook the record's keys come from, typed here and never read
- *  off the contract. A key added on capture's side is a contract bump here (the spec's §Body). */
+ *  off the contract. A key added on capture's side is a contract bump here (the spec's §Body). The one exception is
+ *  `encoder` (Task 50): the web's own addition, ahead of capture's list (capture adds the three keys to its allow-list
+ *  when it re-vendors), so it is NOT capture's at 2b4df80 — do not "correct" it against capture. */
 const ALLOW_LIST = {
   reserved: ["at", "kind", "level"],
   plain: ["action", "answer", "appVersion", "attempt", "cause", "claim", "count", "delivery", "endReason", "error", "exit",
@@ -382,7 +385,7 @@ const ALLOW_LIST = {
   publicUrl: ["url", "playbackUrl", "overlayUrl"],
   text: ["message", "problems"],
   /** Task 50 (owner "yes", 2026-11-25): the encoder's H.264 profile, level and entropy coding, each narrowed by its own
-   *  reason (an enum, a level pattern, an enum) — see ENCODER_CLASSES. `level` stays the log level. */
+   *  reason (an enum, a level pattern, an enum), proven in the Task 50 test below. `level` stays the log level. */
   encoder: ["profile", "codecLevel", "entropy"],
   never: ["tok", "token", "code", "passphrase", "streamKey", "streamId", "bearer", "authorization"],
   scalars: ["audioFps", "bandwidthBps", "bytes", "camera", "counted", "dropped", "egressBps", "encodeListed", "exitAtMs",
@@ -1970,8 +1973,15 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     // the entropy coders — each plus the scrub's mask (the `level` key's precedent).
     const PROFILES = ["baseline", "constrained-baseline", "main", "extended", "high", "progressive-high", "constrained-high", "high10", "high422", "high444", "unknown", "***"];
     const ENTROPY = ["cabac", "cavlc", "unknown", "***"];
-    const LEVELS = ["1", "1b", "1.1", "1.2", "2", "2.1", "2.2", "3", "3.1", "3.2", "4", "4.1", "4.2", "5", "5.1", "5.2", "6", "6.1", "6.2", "***"];
-    const NOT_LEVELS = ["4.7", "0", "7", "6.3", "1.3", "1c", "1B", "4.", ".1", "4.10", "10", "4,1", " 4.1", "high", "", "level 4.1", "**", "****"];
+    // The levels are H.264 Table A-1's (_h264-levels.ts: level_idc 9, 10-13, 20-22, 30-32, 40-42, 50-52, 60-62, 20 levels,
+    // 1.3 included), written as capture writes them, plus the mask — not a hand grid.
+    const LEVELS = [...H264_LEVEL_WORDS, "***"];
+    expect(H264_LEVEL_WORDS, "premise: Table A-1 has 20 levels, 1b and 1.3 among them").toHaveLength(20);
+    expect(H264_LEVEL_WORDS).toEqual(expect.arrayContaining(["1b", "1.3"]));
+    // The contract tolerates the ".0" spelling of a whole level 2-6 and refuses 1.0 (pinned, so a tightening or a
+    // loosening is seen); neither is a Table A-1 word.
+    const TOLERATED_LEVELS = ["2.0", "3.0", "4.0", "5.0", "6.0"];
+    const NOT_LEVELS = ["4.7", "0", "7", "6.3", "1.0", "1.4", "4.3", "1c", "1B", "4.", ".1", "4.10", "10", "4,1", " 4.1", "high", "", "level 4.1", "**", "****"];
     const NOT_WORDS = ["ultra", "High", "HIGH", "constrained", "progressive_high", "high 10", "", "***x", "**", "cabac ", "CABAC", "huffman", "cabc", "4.1"];
     const NOT_STRINGS = [3, 4.1, true, false, null, {}, ["high"]];
     const classes: [key: string, ok: string[], bad: unknown[]][] = [
@@ -1997,7 +2007,15 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       }
     }
     expect(admitted, "anti-vacuity: admitted").toBe(PROFILES.length + LEVELS.length + ENTROPY.length);
-    expect(admitted).toBe(12 + 20 + 4);
+    expect(admitted).toBe(12 + 21 + 4);
+    for (const v of TOLERATED_LEVELS) {
+      expect(LEVELS, `${v}: not a Table A-1 word`).not.toContain(v);
+      expect(fileAdmits(RECORD, "", { ...base, codecLevel: v }), `file: codecLevel = ${v}`).toBe(true);
+      expect(parses(S.CaptureRecordLine, { ...base, codecLevel: v }), `twin: codecLevel = ${v}`).toBe(true);
+    }
+    // Every Table A-1 level is read; 1.3 (level_idc 13) is the one the brief's first grid left out.
+    expect(fileAdmits(RECORD, "", { ...base, codecLevel: "1.3" }), "file: 1.3").toBe(true);
+    expect(parses(S.CaptureRecordLine, { ...base, codecLevel: "1.3" }), "twin: 1.3").toBe(true);
     expect(refused, "anti-vacuity: refused").toBe(classes.reduce((n, [, , bad]) => n + bad.length, 0));
     for (const [k, ok, bad] of classes) expect([ok.length, bad.length].every((n) => n > 3), `${k}: both sides swept`).toBe(true);
     // The progressive-high word (profile_idc 100 with constraint_set4) is its own profile, not constrained-high.
