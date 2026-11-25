@@ -9,7 +9,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { BuyStreamCredits } from "@/components/buy-stream-credits";
-import { ONLINE_SIZES, packagePrice, type OnlineSize } from "@/lib/online-chess-package";
+import { ApiV1Error } from "@/lib/client-v1";
+import { ONLINE_PACKAGE_CODES, ONLINE_SIZES, packagePrice, type OnlineSize } from "@/lib/online-chess-package";
+import { quoteOf } from "@/lib/__tests__/_receipt-quote";
 import type { PayBody } from "@/lib/online-receipt";
 import enUi from "@/dictionaries/en/ui.json";
 import { OnlinePaidChip } from "../paid-chip";
@@ -329,6 +331,39 @@ describe("what a confirm does", () => {
     const h = mount({ request: { size: null, key: "cs_a" } });
     await expect(receiptProps(h).onConfirm(BODY)).rejects.toThrow("boom");
     expect(refreshMock).not.toHaveBeenCalled();
+  });
+
+  // A round opened in another tab: the 409 leaves the receipt open on its frozen sentence, and the page BEHIND it (the pay line, the chip) still
+  // says what it said before the round opened. Closing the receipt is when the page catches up - not while the organiser reads the refusal.
+  it("a frozen 409 rejects to the receipt, and the page is refreshed ONCE when that receipt closes (the pay line and chip are not left stale)", async () => {
+    pay.mockRejectedValueOnce(new ApiV1Error("changed", 409, ONLINE_PACKAGE_CODES.quoteChanged, { quote: quoteOf({ size: 64, monthly: 20, refusal: "frozen" }) }));
+    const h = mount({ request: { size: null, key: "cs_a" } });
+    await expect(receiptProps(h).onConfirm(BODY)).rejects.toBeInstanceOf(ApiV1Error);
+    expect(refreshMock, "not while the receipt is open on its refusal").not.toHaveBeenCalled();
+    receiptProps(h).onClose();
+    expect(receipt(h), "the receipt is gone").toBeUndefined();
+    expect(refreshMock).toHaveBeenCalledTimes(1);
+    // The next receipt starts clean: closing it with nothing frozen refreshes nothing more.
+    (propsOf(find(h, OnlinePayLine)!).onPay as () => void)();
+    receiptProps(h).onClose();
+    expect(refreshMock, "a plain close after the frozen one refreshes nothing").toHaveBeenCalledTimes(1);
+  });
+
+  it("the other pair: a 409 over a moved price, and a 500, leave a close with no refresh", async () => {
+    let checked = 0;
+    for (const err of [
+      new ApiV1Error("changed", 409, ONLINE_PACKAGE_CODES.quoteChanged, { quote: quoteOf({ size: 64, cameras: true, monthly: 20 }) }),
+      new ApiV1Error("boom", 500, "INTERNAL", {}),
+    ]) {
+      refreshMock.mockReset();
+      pay.mockRejectedValueOnce(err);
+      const h = mount({ request: { size: null, key: "cs_a" } });
+      await expect(receiptProps(h).onConfirm(BODY)).rejects.toBe(err);
+      receiptProps(h).onClose();
+      expect(refreshMock, String(err.code)).not.toHaveBeenCalled();
+      checked += 1;
+    }
+    expect(checked).toBe(2);
   });
 
   it("a move that lowered the registration capacity is said on the page, in the organiser's words; a move that did not says nothing", async () => {

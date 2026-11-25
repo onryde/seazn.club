@@ -13,7 +13,7 @@
 // The checkout return is keyed on its arrival (`request.key`, the Stripe session): it opens ONCE per arrival, however the page was reached - a full
 // load, or a client navigation that hands this host a new request - and a `router.refresh()` of the same arrival does not reopen what the organiser
 // closed. A request that goes away (a navigation to the plain page) forgets the arrival, so the next `?oc=pay` opens again.
-import { useCallback, useState, type ReactNode } from "react";
+import { useCallback, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { BuyStreamCredits } from "@/components/buy-stream-credits";
@@ -21,7 +21,7 @@ import type { Currency } from "@/lib/currency";
 import { packagePrice, type OnlineSize } from "@/lib/online-chess-package";
 import { payPackage, readPackageQuote } from "@/lib/online-package-client";
 import type { OnlineReceiptRequest } from "@/lib/online-package-return";
-import type { PayBody, ReceiptMode } from "@/lib/online-receipt";
+import { payFailureOf, type PayBody, type ReceiptMode } from "@/lib/online-receipt";
 import type { ReceiptChoice } from "@/lib/online-receipt-state";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import type { CameraPolicy } from "@/lib/camera-policy";
@@ -111,9 +111,17 @@ export function OnlinePackageHost(p: OnlinePackageHostProps): ReactNode {
   }
 
   const readQuote = useCallback((choice: ReceiptChoice) => readPackageQuote(divisionId, choice), [divisionId]);
+  /** A press this receipt made was answered "a round has opened" (the 409 whose fresh quote is `frozen`). The receipt stays open on that sentence, and
+   *  the page behind it - the pay line, the chip - still says what it said before the round opened: it is refreshed when the receipt closes, not under
+   *  the organiser's eyes while they read the refusal. */
+  const sawFrozen = useRef(false);
   const onConfirm = useCallback(
     async (body: PayBody): Promise<void> => {
-      const result = await payPackage(divisionId, body);
+      const result = await payPackage(divisionId, body).catch((err: unknown) => {
+        const failure = payFailureOf(err);
+        if (failure.kind === "changed" && failure.quote.refusal === "frozen") sawFrozen.current = true;
+        throw err;
+      });
       // Said AFTER the payment (the receipt has closed by now), on the page: a capacity the size lowered, and the division's camera setting when the
       // camera answer moved it (Task 15: the receipt writes the setting, so the organiser is told where it now stands) - with money or without it
       // (fix round 3: the paid answer written back over a setting that said the other moves no credits, `applied: false`, and is said all the same).
@@ -174,7 +182,13 @@ export function OnlinePackageHost(p: OnlinePackageHostProps): ReactNode {
               <BuyStreamCredits orgId={p.buy.orgId} currency={p.buy.currency} preselect={pack} returnTo={{ divisionId, size, cameras }} />
             )
           }
-          onClose={() => setOpen(null)}
+          onClose={() => {
+            setOpen(null);
+            if (sawFrozen.current) {
+              sawFrozen.current = false;
+              router.refresh();
+            }
+          }}
         />
       )}
     </div>
