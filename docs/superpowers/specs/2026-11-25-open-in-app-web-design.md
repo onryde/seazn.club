@@ -133,6 +133,8 @@ Seen only when the app did not take the link.
   location.pathname)` to drop the fragment without reading it **(web call)**, and wiring **Score in browser
   instead** to `history.back()`. It never reads `location.hash` and never builds a `/score/` URL. With no history
   to go back to, the link is hidden **(web call)**.
+- Known limit: **Score in browser instead** returns to the page the person came from, which may have been
+  reloaded and lost the shown secret; they then tap **Show QR** again. It does not open the pad by itself.
 - Residual risk, accepted **(web call)**: the phone's own browser history may keep the visited URL, and a synced
   profile may sync it.
 - On staging, confirm nothing at the edge injects a script into these pages.
@@ -149,8 +151,12 @@ Seen only when the app did not take the link.
 No button on printed scorer sheets (paper) or the quick-match score redirect (nothing is shown).
 
 - A button exists only where the page already holds the code. No new server call, no minting on tap.
-- Scoring: **Open in app** sits next to **Score in browser**, which opens the same web pad link the panel shows
-  today.
+- Scoring: the phone spec calls **Score in browser** existing. It does not exist: the panel has the QR, **Copy
+  link** and the URL as text. It is a **new** link **(web call)**: shown with **Open in app** under the same
+  Android and below-`md` rule, `href` the same `/score/{token}` the panel already builds, opening in a new tab so
+  the panel keeps the token, under the §5.5 guards, in four locales.
+- Scoring states **(web call)**: only when the panel holds the secret (`minted`, i.e. after Create or Show QR),
+  full and compact. In compact both sit outside **More**. Rows without the secret get no button.
 - Shown only on **Android and below `md`** **(web call)**. One small user-agent helper (none exists today),
   decided on the client after mount. An Android phone in desktop-site mode or a wide landscape view gets no
   button; the QR and link still work.
@@ -192,18 +198,29 @@ The anchor's `href` holds a live credential on a page that does run analytics.
 ## 8. Order
 
 1. Part A can ship at any time.
-2. Part B: staging assetlinks and `/app/*` pages (plus telemetry guards) → the phone session verifies a dev build
+2. Part B starts with a **spike (web call)**: staging assetlinks, one stub `/app/score` page, one plain test
+   link on a signed-in staging page, and a dev build. The real tap in §3 must pass before the rest is built.
+3. Then: staging assetlinks and `/app/*` pages (plus telemetry guards) → the phone session verifies a dev build
    against `stg.seazn.club` → buttons → production assetlinks **before** the app release that declares the filter.
    Production buttons ship only once that release is on Play **(web call)**; before it, every tap would say "not
    installed". How the buttons are held back until then is the builder's call.
 
-## 9. Needed from the owner
+## 9. Open
+
+**One phone going live (blocks only the two stream buttons).** **Go live** is on the web page, but the camera
+phone must have the app open and unlocked (`stream.error.phone_not_responding`, `stream.phone.silent`). With one
+phone, going back to the browser backgrounds the app. The web has an automatic-start switch ("Stream the match
+automatically"). Asked of the phone session: after pairing, can the app go live itself, or stay responding in the
+background? If neither, either one-phone streaming works only with automatic start (the page must say so beside
+the button) or the stream buttons wait. Not verified on a device.
+
+Needed from the owner:
+
 
 - The Play app-signing SHA-256 (blocks only production assetlinks).
 - In-app browsers may not hand links to apps, so a person who has the app can see "isn't on this phone yet".
-  The page copy is the owner-approved phone spec's. Proposal: add one line, "Already installed? Open this page in
-  Chrome." Not added without a yes, and note that after the fragment is dropped, they would go back and tap again
-  in Chrome from the signed-in page.
+  The page copy is the owner-approved phone spec's. Proposal: add one line, "Already installed? Open this page in Chrome." It is left out of the build unless the owner says yes, and does not block it. Note that after the fragment is dropped, they would go back and tap again
+  in Chrome from the signed-in page, so the wording must send them there.
 
 ## 10. Left to the builder
 
