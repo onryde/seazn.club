@@ -1193,7 +1193,7 @@ type Act = "none" | "forfeit" | "void" | "withdraw";
 // T12-R1 (W1-driving fix round 1): live, both americano cells redded
 // life-entrants-edit-accepted with 422 ENTRANT_KIND_IN_USE — the probe saved
 // kinds = [the registered kind], and the product's withdraw-first guard
-// (divisions.ts:857-871) counts the pair entrants the stage MINTED, which the
+// (divisions/patch.ts:725-741) counts the pair entrants the stage MINTED, which the
 // organiser cannot withdraw. The probe now saves the kinds the product's
 // active entrants hold; the finding stays visible as a predicted W7 note.
 // The expected kinds are the engine's declared default kind (what the harness

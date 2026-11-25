@@ -100,7 +100,7 @@ const MESSAGE_FIELD_PATTERNS: readonly [RegExp, ConfigFieldKey][] = [
   // (usecases/divisions.ts), which compares the patch against the STORED row
   // and throws its own 422. That merge-check is the only REACHABLE producer of
   // this sentence at 422 — not the only producer in the code.
-  // `isAgeCutoffCheckViolation` (usecases/divisions.ts:914) raises the same
+  // `isAgeCutoffCheckViolation` (usecases/divisions/patch.ts:168) raises the same
   // AGE_CUTOFF_BOTH_OR_NEITHER string, but only for a RANGE violation of
   // divisions_age_cutoff_check, and PatchDivision's own `.min`/`.max` bound
   // every half before one can be sent, so nothing reaches it over /api/v1

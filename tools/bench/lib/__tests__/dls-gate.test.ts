@@ -671,7 +671,7 @@ describe("runDlsGateProbe", () => {
   it("B06a T7 — a catalog where no public plan sells news.auto reports it unsatisfied, never granted", async () => {
     // The outcome that decides whether the news step can run at all:
     // `PATCH /divisions/{id}` refuses `auto_posts: true` without this key
-    // (`usecases/divisions.ts:652-654`), and drafting is a side effect of
+    // (`usecases/divisions/patch.ts:201-203`), and drafting is a side effect of
     // FOLDING, so a run that discovered the gap later could not recover.
     // `enterprise` is is_public:false, so a grant that lives only there is
     // exactly a grant this bench cannot buy.

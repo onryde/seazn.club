@@ -449,7 +449,7 @@ function fakeServer(opts: {
       }
       // B06a T7 — `news.auto` on the plan this run buys. Without it the
       // enable step correctly REFUSES (`PATCH /divisions/{id}` would answer
-      // 402, `usecases/divisions.ts:652-654`) and the whole news step reports
+      // 402, `usecases/divisions/patch.ts:201-203`) and the whole news step reports
       // no subject — which is what this fake did before the row existed.
       if (featureKey === "news.auto") {
         return [

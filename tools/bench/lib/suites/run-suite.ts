@@ -2067,7 +2067,7 @@ export async function runPackSuite(
     // B06a T7 — whether the chosen plan sells `news.auto`. DERIVED from the
     // same plan selection as `officialsAutoGranted`, never assumed: without it
     // `PATCH /divisions/{id}` refuses `auto_posts: true`
-    // (`usecases/divisions.ts:652-654`), and because drafting is a side effect
+    // (`usecases/divisions/patch.ts:201-203`), and because drafting is a side effect
     // of FOLDING there is no later moment at which this run could recover.
     let newsAutoGranted = false;
     // B07a T11 — whether the chosen plan grants `scoring.device_links`, from

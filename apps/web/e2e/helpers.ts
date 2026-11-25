@@ -1259,7 +1259,7 @@ export async function archiveCourtBySql(courtId: string): Promise<void> {
  * asserting that nothing changed when nothing was changed.
  */
 /** Writes a division config STRAIGHT TO THE DB, bypassing `patchDivision`'s
- *  `sportModule.configSchema.safeParse` (usecases/divisions.ts:640) — which is
+ *  `sportModule.configSchema.safeParse` (usecases/divisions/patch.ts:535) — which is
  *  the only thing that would have rejected it. A config that cannot parse
  *  renders NO PAD AT ALL rather than an error, so the symptom of a bad object
  *  here is a missing scoring surface, not a config complaint. Cricket bites

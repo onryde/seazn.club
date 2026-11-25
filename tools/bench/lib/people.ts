@@ -212,7 +212,7 @@ export async function acceptClaimInvites(args: {
 //
 // That is why `enableAutoPosts` is a separate export that must run BEFORE the
 // folds: `PATCH /divisions/{id}` itself refuses `auto_posts: true` without
-// `news.auto` (`usecases/divisions.ts:652-654`), and once the events are
+// `news.auto` (`usecases/divisions/patch.ts:201-203`), and once the events are
 // folded there is no second chance to draft them.
 
 /** `GET /orgs/{id}/posts` rows (`api-v1/posts.ts#toApiPost`). No fixture id on

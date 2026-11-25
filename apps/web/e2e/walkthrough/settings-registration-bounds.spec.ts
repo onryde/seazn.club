@@ -765,7 +765,7 @@ test("card entry fees are gated on Connect first, then held to the 1.00 minimum 
     // nothing. This is the only test in the file that lands an accepted PUT,
     // so it is the only one that leaves a `registration_settings` row — and
     // the row it leaves is `enabled: true` with `closes_at: null`, which
-    // `assertRegistrationClosed` (`usecases/divisions.ts:365-374`) reads as
+    // `assertRegistrationClosed` (`usecases/divisions/lifecycle.ts:45-62`) reads as
     // OPEN. `DELETE /divisions/{id}` then answers 409 REGISTRATION_OPEN, and
     // `releaseDivision` (`settings-support.ts`) never checks the status, so
     // the failure is invisible and the division survives the test.

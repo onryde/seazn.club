@@ -655,7 +655,7 @@ export async function getEntrant(auth: AuthCtx, id: string): Promise<EntrantWith
 }
 
 /** Hard delete — only while the division is still `setup` (mirrors the
- *  division-delete guard, divisions.ts:445): once scheduling has produced
+ *  division-delete guard, divisions/lifecycle.ts:126): once scheduling has produced
  *  fixtures there is something to unwind, and `withdrawEntrantCascade`
  *  (withdrawal.ts) is the reversible tool for that. Cascades on
  *  entrant_members/lineups do the rest, and registrations/suspensions/

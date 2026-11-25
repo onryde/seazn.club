@@ -274,7 +274,7 @@ describe("acceptClaimInvites", () => {
 //     `[]` — a legitimate zero, indistinguishable from a broken step.
 //  2. `auto_posts` IS settable over the API (`PATCH /api/v1/divisions/{id}`,
 //     `api-v1/schemas/`), but setting it TRUE itself requires `news.auto`
-//     (`usecases/divisions.ts:652-654`). So the plan has to be provisioned
+//     (`usecases/divisions/patch.ts:201-203`). So the plan has to be provisioned
 //     before drafting can even be turned on — and because drafting is a side
 //     effect of FOLDING, there is no later moment at which a run could notice
 //     and recover.
@@ -341,7 +341,7 @@ function newsWorld(
     async raw(_base, _s, path, method = "GET", body): Promise<RawResult> {
       calls.push(`${method} ${path}`);
       if (method === "PATCH" && /^\/api\/v1\/divisions\/[^/]+$/.test(path)) {
-        // `divisions.ts:652-654` — turning it ON needs the entitlement;
+        // `divisions/patch.ts:201-203` — turning it ON needs the entitlement;
         // turning it off is always allowed.
         const wants = (body as { auto_posts?: boolean }).auto_posts === true;
         if (wants && opts.newsAutoGranted === false) {

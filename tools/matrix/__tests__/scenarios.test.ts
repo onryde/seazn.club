@@ -393,7 +393,7 @@ describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
   });
 
   // T12-R1: the probe saves the kinds the product's ACTIVE entrants hold
-  // (divisions.ts:857-871 checks a narrowed model against exactly those). On
+  // (divisions/patch.ts:725-741 checks a narrowed model against exactly those). On
   // a league that is the one kind the harness registered — the engine's
   // declared default — so the save is unchanged there. Empty first.
   it("T12-R1 empty case: no active entrant with a kind in the product's list → no entrants-only save is sent, it is noted, and the check fails as vacuous", async () => {
