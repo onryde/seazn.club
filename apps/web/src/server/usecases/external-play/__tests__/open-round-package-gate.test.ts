@@ -105,6 +105,7 @@ import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { HttpError } from "@/lib/errors";
 import { OPEN_ROUND_REFUSALS } from "@/lib/open-round";
+import { unpaidOf } from "@/lib/online-receipt";
 import { ONLINE_PACKAGE_CODES, ONLINE_SIZES, sizeFor, type OnlineSize } from "@/lib/online-chess-package";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { openRound } from "../open-round";
@@ -122,6 +123,7 @@ import {
   paySeededPackage,
   seedOnlineChessRound,
   seedOnlineSwiss,
+  linkWithoutPlayConsent,
   seedOwner,
   seedPlayer,
 } from "../../__tests__/_external-play-seed";
@@ -221,6 +223,48 @@ describe.skipIf(!HAS_DB)("Open round: the payment door (Online Chess credits §7
     const p = await liveOf(s.divisionId);
     expect([p.paid_at, p.frozen_at], "still unpaid and changeable").toEqual([null, null]);
   }, 180_000);
+
+  // Fix round 1 (I1, ruling 3): the 402 also says HOW MANY boards the press would invite - the boards of the round that are not held for a Lichess
+  // link (the same fact `lichessHeldBoards` gives the post-open `lichess_unlinked` / `lichess_reconnect` skips) - so the receipt can warn that
+  // paying opens a round nobody is invited to. The expected counts are the seeds' own: boards built, players unlinked by the test.
+  describe("the 402 carries the invitable-board count (ruling 3)", () => {
+    const unlink = (userId: string) => sql`delete from user_external_accounts where user_id = ${userId} and provider = 'lichess'`;
+    const invitableIn = (e: HttpError): unknown => (e.extra as { invitable?: unknown }).invitable;
+    /** What the browser reads out of this real 402 (`unpaidOf`: the reader the Match Day receipt feeds on): the producer's body, parsed by the consumer. */
+    const readByTheReceipt = (e: HttpError) => unpaidOf({ code: e.code, extra: e.extra });
+    const press = (r: { stageId: string; ownerUserId: string }) => refusal(openRound({ stageId: r.stageId, roundNo: 1, actorUserId: r.ownerUserId }));
+
+    it("every board linked: the count is every board", async () => {
+      const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 3, onlinePackage: "unpaid" });
+      const e = await press(r);
+      expect(invitableIn(e)).toBe(3);
+      expect(readByTheReceipt(e), "the receipt's reader parses the server's own body").toMatchObject({ invitable: 3 });
+    }, 120_000);
+
+    it("a board with an unlinked player is not invitable; a board whose link needs a reconnect is not either", async () => {
+      const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 4, onlinePackage: "unpaid" });
+      await unlink(r.boards[1]!.away.userId);
+      await unlink(r.boards[2]!.home.userId);
+      await linkWithoutPlayConsent(r.boards[2]!.home, "identity-only"); // an account the play gate refuses (no consent, no scopes): lichess_reconnect
+      expect(invitableIn(await press(r)), "4 boards, 1 unlinked, 1 needing a reconnect").toBe(2);
+    }, 120_000);
+
+    it("no player linked: the count is ZERO (the empty case), and nothing was written", async () => {
+      const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 2, onlinePackage: "unpaid" });
+      for (const b of r.boards) await unlink(b.home.userId);
+      const e = await press(r);
+      expect(e.status).toBe(402);
+      expect(invitableIn(e), "every board holds an unlinked player").toBe(0);
+      expect(readByTheReceipt(e), "zero reaches the receipt as zero, not as unknown").toMatchObject({ invitable: 0 });
+      expect(await stampsOf(r.stageId), "no stamp").toBe(0);
+    }, 120_000);
+
+    it("a withdrawn board is not a board of the round: it is not counted", async () => {
+      const s = await seedOnlineSwiss({ players: 4, onlinePackage: "unpaid" });
+      await withdrawEntrantCascade(s.owner, s.players[0]!.entrantId);
+      expect(invitableIn(await press(s)), "the board that lost a player is no longer played").toBe(1);
+    }, 120_000);
+  });
 
   it("paid and covering: opens, frozen_at set, and the open itself takes nothing", async () => {
     const s = await seedOnlineSwiss({ players: 4, onlinePackage: "unpaid" });

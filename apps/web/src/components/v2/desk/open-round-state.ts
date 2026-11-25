@@ -6,7 +6,7 @@
 // panel's own `RoundExtend` now (checkin-extend-ui.ts) and has no part in this state.
 //
 // Online Chess credits (spec 2026-11-23-online-chess-credits-design.md §7.6, §8.4): an Open on an UNPAID package is answered with the receipt's ask
-// (402 ONLINE_CHESS_UNPAID `{ quote, next }`, `unpaidOf`), and the receipt's confirm is the same open again with `pay` (`payOpen`). Rules:
+// (402 ONLINE_CHESS_UNPAID `{ quote, next, invitable }`, `unpaidOf`), and the receipt's confirm is the same open again with `pay` (`payOpen`). Rules:
 //   R6 the unpaid answer lands only on the open in flight (R3): it closes the confirmation, sets no notice and stands the receipt up (`pay`);
 //   R7 the receipt's confirm is a request in flight too (one at a time, R1), only from a standing receipt; a refusal of it frees the press and
 //      leaves the receipt standing (the receipt words it); ITS answer is the round's notice (R5) and closes the receipt;
@@ -22,7 +22,12 @@ export type ResendNotice = { kind: "resent"; emailed: number; retrying: number }
 
 /** What an unpaid package asks of the organiser before round 1 opens: the quote for the STORED size and, when that size cannot hold the division,
  *  the smallest size that can. */
-export type OpenRoundPayAsk = { quote: ReceiptQuote; next: ReceiptQuote | null };
+export type OpenRoundPayAsk = {
+  quote: ReceiptQuote;
+  next: ReceiptQuote | null;
+  /** How many boards of the round the press would invite (the 402's own count); 0 = nobody can be invited yet, null = the body did not say. */
+  invitable: number | null;
+};
 
 export type OpenRoundUiState = {
   /** The confirmation is up. */
@@ -44,7 +49,7 @@ export type OpenRoundUiAction =
   | { type: "ask" }
   | { type: "cancel" }
   | { type: "open" }
-  | { type: "unpaid"; quote: ReceiptQuote; next: ReceiptQuote | null }
+  | { type: "unpaid"; quote: ReceiptQuote; next: ReceiptQuote | null; invitable: number | null }
   | { type: "pay" }
   | { type: "payFailed" }
   | { type: "closePay" }
@@ -73,7 +78,7 @@ export function openRoundUi(s: OpenRoundUiState, a: OpenRoundUiAction): OpenRoun
       return { ...s, busy: { kind: "open" }, notice: null };
     case "unpaid":
       if (s.busy?.kind !== "open") return s; // R3
-      return { ...s, busy: null, confirming: false, notice: null, pay: { quote: a.quote, next: a.next } }; // R6
+      return { ...s, busy: null, confirming: false, notice: null, pay: { quote: a.quote, next: a.next, invitable: a.invitable } }; // R6
     case "pay":
       if (s.busy !== null || s.pay === null) return s; // R1, R7
       return { ...s, busy: { kind: "open" } };
@@ -131,7 +136,7 @@ export function openRoundRunner(deps: {
       } catch (err) {
         // An unpaid package is not a failure: it is the receipt's ask (R6). A 402 whose quote does not parse is an ordinary failure by its code.
         const unpaid = unpaidOf(err);
-        if (unpaid !== null) deps.dispatch({ type: "unpaid", quote: unpaid.quote, next: unpaid.next });
+        if (unpaid !== null) deps.dispatch({ type: "unpaid", quote: unpaid.quote, next: unpaid.next, invitable: unpaid.invitable });
         else deps.dispatch({ type: "openDone", outcome: { ok: false, code: codeOf(err) } });
       } finally {
         inflight = false;

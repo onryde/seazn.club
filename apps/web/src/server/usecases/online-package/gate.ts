@@ -11,7 +11,8 @@ import "server-only";
 //    never asked of one.
 //  * Otherwise the live package must be PAID and COVER the division as it stands (`quote.covers`: places held, Swiss rounds counted,
 //    cameras), or the open is refused 402 ONLINE_CHESS_UNPAID carrying the quote for the STORED size (decision 15: the organiser chose
-//    it; it is never silently re-picked) and, when that size is itself refused, the smallest size that would hold the division.
+//    it; it is never silently re-picked) and, when that size is itself refused, the smallest size that would hold the division - and
+//    `invitable`, how many boards of the round the press would invite (the receipt warns when it is 0).
 //  * `pay` (the organiser confirmed the receipt that 402 showed): the payment runs FIRST, on this transaction (`payOnlinePackageInTx`:
 //    the org money lock, the row lock, the quote under them, the debit), then the cover is asked again of the row it left. The debit,
 //    the stamp and the freeze commit together or not at all: a refusal in the open before the gate, in the gate, or at the commit
@@ -112,7 +113,16 @@ async function liveOrRefuse(tx: Tx, divisionId: string, forUpdate: boolean): Pro
  *  optional payment, then the cover asked of the row as it stands (402 ONLINE_CHESS_UNPAID when it does not cover), then the freeze. */
 export async function gateFirstOpen(
   tx: Tx,
-  a: { orgId: string; divisionId: string; userId: string; pay?: PayInput },
+  a: {
+    orgId: string;
+    divisionId: string;
+    userId: string;
+    pay?: PayInput;
+    /** The boards of the round this press would invite: those not held for a Lichess link (`lichessHeldBoards`, the fact the open's own
+     *  `lichess_unlinked` / `lichess_reconnect` skips come from). Counted by the caller, which reads the links through the pool; carried on
+     *  the 402 so the receipt can warn that paying opens a round nobody is invited to (decision: ruling 3). */
+    invitable: number;
+  },
   money: GateMoney,
 ): Promise<GateResult> {
   // Frozen is for good (V556: a frozen row is never refunded, and nothing un-freezes one), so an unlocked read under the division
@@ -155,7 +165,7 @@ export async function gateFirstOpen(
     const next = fits === null || fits === row.size
       ? null
       : await quoteLocked(tx, { orgId: a.orgId, divisionId: a.divisionId, size: fits, rate: money.rate }, facts);
-    throw new HttpError(402, unpaidMessage(row, quote, next, facts), ONLINE_PACKAGE_CODES.unpaid, { quote, next });
+    throw new HttpError(402, unpaidMessage(row, quote, next, facts), ONLINE_PACKAGE_CODES.unpaid, { quote, next, invitable: a.invitable });
   }
   await freezeOnlinePackage(tx, row.id);
   return { asked: true, movedUp, payment };

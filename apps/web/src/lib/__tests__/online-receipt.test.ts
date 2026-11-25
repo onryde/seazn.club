@@ -203,19 +203,34 @@ describe("payFailureOf / unpaidOf: the server's refusals, read", () => {
     expect(payFailureOf("x")).toEqual({ kind: "failed", code: "UNKNOWN" });
   });
 
-  it("unpaidOf reads the 402 an Open round press answers: the stored size's quote and the size that would hold the division", () => {
+  it("unpaidOf reads the 402 an Open round press answers: the stored size's quote, the size that would hold the division and how many boards it would invite", () => {
     const stored = quoteOf({ size: 16, monthly: 20, held: 20, refusal: "below_held" });
     const next = quoteOf({ size: 32, monthly: 20, held: 20 });
-    expect(unpaidOf(err(ONLINE_PACKAGE_CODES.unpaid, { quote: stored, next }))).toEqual({ quote: stored, next });
-    expect(unpaidOf(err(ONLINE_PACKAGE_CODES.unpaid, { quote: next, next: null }))).toEqual({ quote: next, next: null });
-    expect(unpaidOf(err(ONLINE_PACKAGE_CODES.unpaid, { quote: next }))).toEqual({ quote: next, next: null });
+    expect(unpaidOf(err(ONLINE_PACKAGE_CODES.unpaid, { quote: stored, next, invitable: 3 }))).toEqual({ quote: stored, next, invitable: 3 });
+    expect(unpaidOf(err(ONLINE_PACKAGE_CODES.unpaid, { quote: next, next: null, invitable: 1 }))).toEqual({ quote: next, next: null, invitable: 1 });
+    expect(unpaidOf(err(ONLINE_PACKAGE_CODES.unpaid, { quote: next, invitable: 2 }))).toEqual({ quote: next, next: null, invitable: 2 });
+  });
+
+  it("unpaidOf: ZERO invitable boards is a count (the warning's case), not an absent one", () => {
+    const q = quoteOf({ size: 16, monthly: 20 });
+    expect(unpaidOf(err(ONLINE_PACKAGE_CODES.unpaid, { quote: q, next: null, invitable: 0 }))!.invitable).toBe(0);
+  });
+
+  it("unpaidOf: a count the body does not carry, or carries malformed, is UNKNOWN (null) - never read as zero, so no warning is drawn from it", () => {
+    const q = quoteOf({ size: 16, monthly: 20 });
+    let checked = 0;
+    for (const extra of [{}, { invitable: null }, { invitable: -1 }, { invitable: 1.5 }, { invitable: "3" }, { invitable: Number.NaN }, { invitable: undefined }]) {
+      expect(unpaidOf(err(ONLINE_PACKAGE_CODES.unpaid, { quote: q, next: null, ...extra }))!.invitable, JSON.stringify(extra)).toBeNull();
+      checked += 1;
+    }
+    expect(checked, "every malformed shape was checked").toBe(7);
   });
 
   it("unpaidOf is null for another code or a quote that does not parse; a `next` that does not parse is dropped", () => {
     expect(unpaidOf(err(ONLINE_PACKAGE_CODES.quoteChanged, { quote: fresh }))).toBeNull();
     expect(unpaidOf(err(ONLINE_PACKAGE_CODES.unpaid, { quote: { size: 32 } }))).toBeNull();
     expect(unpaidOf(null)).toBeNull();
-    expect(unpaidOf(err(ONLINE_PACKAGE_CODES.unpaid, { quote: fresh, next: { size: 64 } }))).toEqual({ quote: fresh, next: null });
+    expect(unpaidOf(err(ONLINE_PACKAGE_CODES.unpaid, { quote: fresh, next: { size: 64 }, invitable: 2 }))).toEqual({ quote: fresh, next: null, invitable: 2 });
   });
 
   it("a short quote is the server's own owed less its balance", () => {

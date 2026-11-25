@@ -7,8 +7,11 @@
 // price and consequence, a 409 redraw, a short balance, the late-entrant line - is the division page's own receipt (`OnlineReceipt`); this wrapper only
 // feeds it the facts the 402 carried and routes its confirm to the open (`onPay`: the open again, with `pay`).
 //
+// The 402 also carries `invitable`, how many boards of the round the press would invite (the boards no Lichess link holds back): ZERO draws the
+// "No player has linked Lichess yet" warning (pay now, re-open free once they link); one or more, or a body that did not say, draws none.
+//
 // Data not available here, said rather than invented: the plan's per-division cap (the sizes above it read as refused by the QUOTE's own reason
-// after a pick, not greyed beforehand) and how many boards have a Lichess link before the open (so no "No player has linked Lichess yet" warning).
+// after a pick, not greyed beforehand).
 import { useMsg } from "@/components/i18n/dict-provider";
 import { BuyStreamCredits } from "@/components/buy-stream-credits";
 import type { Currency } from "@/lib/currency";
@@ -20,7 +23,7 @@ import type { ViewerPlan } from "@/lib/viewer-plan";
 import { OnlineReceipt } from "./receipt";
 
 export interface OpenPayReceiptProps {
-  /** The 402's ask: the stored size's quote and the smallest size that would hold the division when the stored one cannot. */
+  /** The 402's ask: the stored size's quote, the smallest size that would hold the division when the stored one cannot, and how many boards the press would invite. */
   ask: OpenRoundPayAsk;
   divisionId: string;
   viewerPlan: ViewerPlan;
@@ -45,6 +48,7 @@ export function OpenPayReceipt(p: OpenPayReceiptProps) {
       facts={{ planCap: null, held: q.held, rounds: q.rounds, cameras: q.cameras, paid: null, storedSize: q.size, viewerPlan: p.viewerPlan }}
       size={size}
       quote={first}
+      warnings={{ noInvitable: ask.invitable === 0 }}
       readQuote={(choice: ReceiptChoice) => readPackageQuote(divisionId, choice)}
       onConfirm={p.onPay}
       renderBuy={({ pack, size: shortSize }) =>

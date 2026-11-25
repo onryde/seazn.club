@@ -136,7 +136,7 @@ const resendDone = (fixtureId: string, ok: boolean): OpenRoundUiAction =>
     ? { type: "resendDone", fixtureId, outcome: { ok: true, emailed: 2, retrying: 0 } }
     : { type: "resendDone", fixtureId, outcome: { ok: false, code: "E" } };
 const actionArb: fc.Arbitrary<OpenRoundUiAction> = fc.oneof(
-  fc.constant<OpenRoundUiAction>({ type: "unpaid", quote: quoteOf({ size: 16 }), next: null }),
+  fc.constant<OpenRoundUiAction>({ type: "unpaid", quote: quoteOf({ size: 16 }), next: null, invitable: 2 }),
   fc.constant<OpenRoundUiAction>({ type: "pay" }),
   fc.constant<OpenRoundUiAction>({ type: "payFailed" }),
   fc.constant<OpenRoundUiAction>({ type: "closePay" }),
@@ -182,7 +182,7 @@ describe("open-round reducer — random sequences hold R1–R5", () => {
       fc.property(
         // A random tail after a random prefix: the receipt's path (ask, open, unpaid, pay) is five coordinated presses, which a purely random
         // sequence almost never strings together; the prefixes put the property INSIDE it (anti-vacuity below counts that it got there).
-        fc.tuple(fc.constantFrom<OpenRoundUiAction[]>([], [{ type: "ask" }, { type: "open" }, { type: "unpaid", quote: quoteOf({ size: 16 }), next: null }], [{ type: "ask" }, { type: "open" }, { type: "unpaid", quote: quoteOf({ size: 16 }), next: null }, { type: "pay" }]), fc.array(actionArb, { minLength: 1, maxLength: 24 })).map(([prefix, tail]) => [...prefix, ...tail]),
+        fc.tuple(fc.constantFrom<OpenRoundUiAction[]>([], [{ type: "ask" }, { type: "open" }, { type: "unpaid", quote: quoteOf({ size: 16 }), next: null, invitable: 2 }], [{ type: "ask" }, { type: "open" }, { type: "unpaid", quote: quoteOf({ size: 16 }), next: null, invitable: 2 }, { type: "pay" }]), fc.array(actionArb, { minLength: 1, maxLength: 24 })).map(([prefix, tail]) => [...prefix, ...tail]),
         (actions) => {
         let s = s0;
         let m: Model = { confirming: false, busy: null, pay: false };
@@ -273,7 +273,7 @@ describe("openRoundRunner — at most one request on the network", () => {
 //   R7 the receipt's confirm is a request in flight too (one at a time, R1) and only from a standing receipt; a refusal of it (409 changed, 402 short,
 //      anything else) leaves the receipt standing and frees the press, and ITS answer is the round's notice and closes the receipt (R5);
 //   R8 the receipt can be closed only while nothing is in flight (R4), and while it stands no confirmation or resend can be raised.
-const ASK = { quote: quoteOf({ size: 64, held: 41, rounds: 5 }), next: null };
+const ASK = { quote: quoteOf({ size: 64, held: 41, rounds: 5 }), next: null, invitable: 3 };
 const unpaidOpen = (): OpenRoundUiState => run({ type: "ask" }, { type: "open" }, { type: "unpaid", ...ASK });
 const paying = (): OpenRoundUiState => openRoundUi(unpaidOpen(), { type: "pay" });
 
@@ -282,6 +282,13 @@ describe("open-round reducer - the unpaid answer and the receipt it stands up (R
     const st = unpaidOpen();
     expect(st).toEqual({ confirming: false, busy: null, notice: null, rowNotice: null, pay: ASK });
     expect(st.pay!.quote.size, "the receipt is for the STORED size the server quoted").toBe(64);
+  });
+
+  it("R6: the count of boards the press would invite rides in the ask - zero and unknown stay different", () => {
+    for (const invitable of [0, 1, 7, null]) {
+      const st = run({ type: "ask" }, { type: "open" }, { type: "unpaid", ...ASK, invitable });
+      expect(st.pay!.invitable, `invitable ${String(invitable)}`).toBe(invitable);
+    }
   });
 
   it("R6: it clears the previous answer the open replaced, and an unpaid answer nobody asked for is dropped", () => {
@@ -348,8 +355,17 @@ describe("openRoundRunner - the unpaid answer and the pay-and-open", () => {
     const runner = openRoundRunner({ dispatch, post, refresh });
     expect(await runner.open("s1", 1)).toBe(true);
     expect(dispatch.mock.calls.map((c) => c[0].type)).toEqual(["open", "unpaid"]);
-    expect(dispatch).toHaveBeenLastCalledWith({ type: "unpaid", quote: ASK.quote, next: null });
+    expect(dispatch).toHaveBeenLastCalledWith({ type: "unpaid", quote: ASK.quote, next: null, invitable: 3 });
     expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("the 402's `invitable` count reaches the ask: 0 stays 0, an absent one is unknown (null)", async () => {
+    for (const [extra, want] of [[{ invitable: 0 }, 0], [{ invitable: 4 }, 4], [{}, null]] as const) {
+      const dispatch = vi.fn();
+      const post = vi.fn().mockRejectedValueOnce(new ApiV1Error("Pay first", 402, ONLINE_PACKAGE_CODES.unpaid, { quote: ASK.quote, next: null, ...extra }));
+      await openRoundRunner({ dispatch, post, refresh: vi.fn() }).open("s1", 1);
+      expect(dispatch.mock.calls.at(-1)![0], JSON.stringify(extra)).toEqual({ type: "unpaid", quote: ASK.quote, next: null, invitable: want });
+    }
   });
 
   it("a 402 that carries no quote (a body that does not parse) is an ordinary failure by its code, never a half-drawn receipt", async () => {

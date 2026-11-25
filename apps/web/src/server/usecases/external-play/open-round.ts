@@ -717,7 +717,10 @@ export async function openRound(
     // opened before, or the grandfathered row). Otherwise a paid package that covers the division, paid here when the organiser
     // confirmed `pay`, or 402 ONLINE_CHESS_UNPAID with the quote; then the freeze (P8). Any refusal - here, or anywhere above - rolls
     // the whole open back, the queued invites with it: they are sent only after the commit.
-    const gate = await gateFirstOpen(tx, { orgId: st.orgId, divisionId: st.divisionId, userId: a.actorUserId, pay: a.pay }, money);
+    // `invitable`: the boards of the round no link holds back - what the 402 tells the receipt, so it can warn that paying opens a round nobody
+    // is invited to (the SAME fact as the skips this open reports: `heldBoards`, read once above).
+    const invitable = boards.filter((b) => !heldBoards.has(b.f.fixtureId)).length;
+    const gate = await gateFirstOpen(tx, { orgId: st.orgId, divisionId: st.divisionId, userId: a.actorUserId, pay: a.pay, invitable }, money);
     return {
       kind, open, claims, queueFailed: [...queueFailed], retireBoards: [...new Set(retireBoards)], closedSkips: [...closedSkips, ...heldReport()],
       movedUp: gate.movedUp, payment: gate.payment,

@@ -243,7 +243,7 @@ describe("useOpenRoundWith - the presses follow THIS round", () => {
 // again with `pay`, and a round change takes the standing receipt with it. Driven through the real reducer and runner, the network doubled at `apiV1`.
 describe("useOpenRoundWith - the receipt an unpaid open stands up", () => {
   const QUOTE = quoteOf({ size: 64, held: 41, rounds: 5 });
-  const unpaid = () => new ApiV1Error("Pay first", 402, ONLINE_PACKAGE_CODES.unpaid, { quote: QUOTE, next: null } as unknown as Record<string, unknown>);
+  const unpaid = () => new ApiV1Error("Pay first", 402, ONLINE_PACKAGE_CODES.unpaid, { quote: QUOTE, next: null, invitable: 3 } as unknown as Record<string, unknown>);
   const BODY = { size: 64 as const, expectedOwed: 4 };
   const standUp = async () => {
     const m = mount(VIEW({ stageId: "stage-Z", roundNo: 1 }));
@@ -256,7 +256,7 @@ describe("useOpenRoundWith - the receipt an unpaid open stands up", () => {
 
   it("the 402 stands the receipt up (the quote, no notice, the confirmation closed) and refreshes nothing", async () => {
     const { handle } = await standUp();
-    expect(handle().state).toEqual({ confirming: false, busy: null, notice: null, rowNotice: null, pay: { quote: QUOTE, next: null } });
+    expect(handle().state).toEqual({ confirming: false, busy: null, notice: null, rowNotice: null, pay: { quote: QUOTE, next: null, invitable: 3 } });
     expect(shellRefresh).not.toHaveBeenCalled();
   });
 

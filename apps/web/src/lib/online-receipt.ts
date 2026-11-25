@@ -135,17 +135,20 @@ export function payFailureOf(err: unknown): PayFailure {
   return { kind: "failed", code };
 }
 
-/** The 402 an unpaid Open round answers (`ONLINE_CHESS_UNPAID { quote, next }`): the quote for the STORED size and, when that size cannot be
- *  bought for the division, the smallest size that would hold it. Null when the error is not one, or its quote does not parse. */
-export function unpaidOf(err: unknown): { quote: ReceiptQuote; next: ReceiptQuote | null } | null {
+/** The 402 an unpaid Open round answers (`ONLINE_CHESS_UNPAID { quote, next, invitable }`): the quote for the STORED size, when that size cannot be
+ *  bought for the division the smallest size that would hold it, and how many boards of the round the press would invite (the boards no Lichess
+ *  link holds back - `invitable` 0 is the receipt's "nobody to invite" warning). `invitable` is null when the body does not carry a whole,
+ *  non-negative count: UNKNOWN, never read as zero. Null when the error is not an unpaid 402, or its quote does not parse. */
+export function unpaidOf(err: unknown): { quote: ReceiptQuote; next: ReceiptQuote | null; invitable: number | null } | null {
   const e = (typeof err === "object" && err !== null ? err : {}) as { code?: unknown; extra?: unknown };
   if (e.code !== ONLINE_PACKAGE_CODES.unpaid) return null;
   const extra = (typeof e.extra === "object" && e.extra !== null ? e.extra : {}) as Record<string, unknown>;
   const quote = quoteFromWire(extra.quote);
   if (quote === null) return null;
   const next = extra.next === null || extra.next === undefined ? null : quoteFromWire(extra.next);
+  const invitable = Number.isInteger(extra.invitable) && (extra.invitable as number) >= 0 ? (extra.invitable as number) : null;
   // A `next` that is present and does not parse is dropped: the receipt still offers the stored size's own reason.
-  return { quote, next };
+  return { quote, next, invitable };
 }
 
 /** After a refused or short payment: the quote with the balance the server found, for the Buy credits button. The shortfall is the server's

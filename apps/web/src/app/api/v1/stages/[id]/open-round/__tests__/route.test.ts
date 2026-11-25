@@ -199,13 +199,25 @@ describe.skipIf(!HAS_DB)("POST /stages/{id}/open-round - the first open needs a 
       select paid_at is not null as paid, frozen_at is not null as frozen, credits_paid as credits
         from division_online_packages where division_id = ${divisionId} and refunded_at is null`)[0]!;
 
+  it("unpaid and NOBODY has linked Lichess: the 402 over HTTP carries `invitable: 0` (the receipt's warning), and 0 is on the wire as a number, not left out", async () => {
+    const s = await seedOnlineSwiss({ players: 4, onlinePackage: "unpaid" });
+    const gone = await sql`delete from user_external_accounts where provider = 'lichess' and user_id = any(${s.players.map((p) => p.userId)}::uuid[]) returning user_id`;
+    expect(gone.length, "premise: every player's link was there to remove").toBe(4);
+    authState.userId = s.ownerUserId;
+    const refused = await read(await openRoute(post(`/stages/${s.stageId}/open-round`, { roundNo: 1 }), ctx(s.stageId)));
+    expect(refused.status).toBe(402);
+    const error = refused.body.error as unknown as { code: string; invitable?: unknown };
+    expect([error.code, error.invitable]).toEqual(["ONLINE_CHESS_UNPAID", 0]);
+  });
+
   it("unpaid: 402 with the quote in the body; the same press with the quote's `pay` opens it, paid and frozen", async () => {
     const s = await seedOnlineSwiss({ players: 4, onlinePackage: "unpaid" });
     authState.userId = s.ownerUserId;
     const refused = await read(await openRoute(post(`/stages/${s.stageId}/open-round`, { roundNo: 1 }), ctx(s.stageId)));
     expect(refused.status).toBe(402);
-    const error = refused.body.error as unknown as { code: string; quote: { size: number; owed: number; covers: boolean }; next: unknown };
+    const error = refused.body.error as unknown as { code: string; quote: { size: number; owed: number; covers: boolean }; next: unknown; invitable: number };
     expect([error.code, error.quote.size, error.quote.covers, error.next]).toEqual(["ONLINE_CHESS_UNPAID", 16, false, null]);
+    expect(error.invitable, "4 linked players seat 2 boards: the receipt's count of boards the press would invite (fix round 1, ruling 3)").toBe(2);
     // The receipt's own read agrees with what the 402 carried (one quote, one answer).
     expect(error.quote.owed).toBe((await onlinePackageQuote(s.owner, s.divisionId, 16)).owed);
     expect(await stamps(s.stageId), "no stamp").toHaveLength(0);
