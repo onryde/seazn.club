@@ -10,9 +10,13 @@
  *      asks for nothing, and after the freeze the chip offers no Change size;
  *   B  pay and open: the first press on an unpaid package is refused 402, the receipt opens on the STORED size, its one confirm re-sends the open
  *      with the payment, and the round opens with the payment said in its notice;
- *   C  a division paid early from the amber line, moved up from the chip, moved down with the credits shown and then really back, and - paid
- *      without cameras - given the Fair-play camera at the SAME size from the chip (the camera box alone is enough, the total is the server's difference);
- *   D  the competition page flags the unpaid division for its organiser (a link to the Fixtures tab) and stops when it is paid.
+ *   C  a division paid early from the amber line WITHOUT the camera (the first receipt answered Yes, then No: the total follows the answer, the pay
+ *      body carries `cameras: false`), moved up from the chip, moved down with the credits shown and then really back, then given the Fair-play camera
+ *      at the SAME size from the chip (Yes alone is enough: the total is the server's camera difference, and the division's setting is written
+ *      Required with the payment), then - before round 1 - the camera turned OFF again from the chip, the camera price really back (Task 15);
+ *   D  the competition page flags the unpaid division for its organiser (a link to the Fixtures tab) and stops when it is paid;
+ *   E  a division paid WITH the camera on its first receipt (Yes): the camera price, `cameras: true` in the body, the package holds the camera and the
+ *      division's camera setting reads Required (Task 15).
  *
  * Where the expected numbers come from: the price table is the leaf's (`packagePrice`, checked against the spec's table by the unit suite), the
  * packs are the engine's own declarations (`STREAM_CREDIT_PACKS`), the words are the English dictionary's, the balance and the shortfall are read
@@ -49,8 +53,8 @@ interface Quote {
   size: number; price: number; owed: number; shortBy: number | null; balance: number; refusal: string | null; covers: boolean;
   back: { pack: number; monthly: number; forfeited: number } | null;
 }
-const quoteOf = async (page: Page, divisionId: string, size: number, addCameras = false): Promise<Quote> => {
-  const q = await apiJson<Quote>(page.request, `/api/v1/divisions/${divisionId}/online-package?size=${size}&addCameras=${addCameras}`);
+const quoteOf = async (page: Page, divisionId: string, size: number, cameras?: boolean): Promise<Quote> => {
+  const q = await apiJson<Quote>(page.request, `/api/v1/divisions/${divisionId}/online-package?size=${size}${cameras === undefined ? "" : `&cameras=${cameras}`}`);
   expect(q.status, `quote ${size}: ${JSON.stringify(q.error)}`).toBe(200);
   return q.data!;
 };
@@ -117,6 +121,24 @@ async function payWithTestCard(page: Page): Promise<void> {
 const credits = (n: number): string => fill(n === 1 ? "onlineChess.receipt.credits.one" : "onlineChess.receipt.credits.other", { count: n });
 
 const receipt = (page: Page) => page.getByTestId("online-receipt");
+/** The receipt's Fair-play camera answer (Task 15): its radio, and the label around it - the part a person taps (the radio itself is visually hidden). */
+const cameraRadio = (page: Page, yes: boolean) => page.getByTestId(yes ? "online-receipt-cameras-yes" : "online-receipt-cameras-no");
+const answerCamera = async (page: Page, yes: boolean): Promise<void> => {
+  await cameraRadio(page, yes).locator("xpath=..").click();
+  await expect(cameraRadio(page, yes), `the ${yes ? "Yes" : "No"} answer is chosen`).toBeChecked();
+  await expect(page.getByTestId("online-receipt-cameras")).toHaveAttribute("data-cameras", yes ? "yes" : "no");
+};
+/** The division's own camera setting ("Camera during online play"), as the database holds it. */
+const divisionCameraPolicy = (divisionId: string) =>
+  withDb(async (sql) => (await sql<{ p: string | null }[]>`select camera_policy as p from divisions where id = ${divisionId}`)[0]!.p);
+/** The pay door's request bodies, recorded as the browser sends them. */
+const recordPays = (page: Page, divisionId: string): Record<string, unknown>[] => {
+  const bodies: Record<string, unknown>[] = [];
+  page.on("request", (q) => {
+    if (q.method() === "POST" && q.url().includes(`/divisions/${divisionId}/online-package`)) bodies.push((q.postDataJSON() ?? {}) as Record<string, unknown>);
+  });
+  return bodies;
+};
 const confirm = (page: Page) => page.getByTestId("online-receipt-confirm");
 
 test.describe("Online Chess credits: the organiser pays", () => {
@@ -286,22 +308,34 @@ test.describe("Online Chess credits: the organiser pays", () => {
     expect((await packageRow(r.divisionId)).frozen_at, "paid and opened: frozen").not.toBeNull();
   });
 
-  test("C: pay early from the amber line, move up from the chip, move down - the credits are shown, then really back - then add the camera at the paid size", async ({ page }) => {
-    test.setTimeout(budget(28));
+  test("C: pay early WITHOUT the camera, move up from the chip, move down - the credits are shown, then really back - then the camera on at the paid size, and off again with its price back", async ({ page }) => {
+    test.setTimeout(budget(44));
     const r = await unpaidDivision(page, "ocmove");
     await page.setViewportSize({ width: 1280, height: 900 });
     const [small, mid] = [ONLINE_SIZES[0]!, ONLINE_SIZES[1]!];
     await fundOnlinePayment(r.divisionId, priceOf(mid) + 5);
     const start = await balanceOf(page, r.divisionId);
+    const pays = recordPays(page, r.divisionId);
+    expect(await divisionCameraPolicy(r.divisionId), "premise: the division inherits the competition's camera setting (off)").toBeNull();
 
-    // Pay early, at the stored size, from the amber line.
+    // Pay early, at the stored size, from the amber line. The first receipt opens at the division's camera setting (off: No); answering Yes prices the
+    // camera, answering No again prices without it - the total follows the answer, and the organiser pays WITHOUT the camera.
     await page.goto(r.fixturesTab);
     await page.getByTestId("online-pay-line-pay").click();
     await expect(receipt(page)).toHaveAttribute("data-mode", "pay");
+    await expect(cameraRadio(page, false), "the first receipt opens at the division's setting: No").toBeChecked();
+    await expect(page.getByTestId("online-receipt-row-total")).toContainText(credits(priceOf(small)));
+    await answerCamera(page, true);
+    await expect(page.getByTestId("online-receipt-row-total"), "Yes: the camera price").toContainText(credits(packagePrice(small, true)));
+    await answerCamera(page, false);
+    await expect(page.getByTestId("online-receipt-row-total"), "No: the price without it").toContainText(credits(priceOf(small)));
     await confirm(page).click();
     await expect(page.getByTestId("online-paid-chip")).toContainText(fill("onlineChess.chip.text", { size: small }), { timeout: 30_000 });
     await expect(page.getByTestId("online-pay-line")).toHaveCount(0);
     expect(await balanceOf(page, r.divisionId)).toBe(start - priceOf(small));
+    expect(pays.at(-1), "the pay body carries the No").toMatchObject({ size: small, expectedOwed: priceOf(small), cameras: false });
+    expect((await packageRow(r.divisionId)).cameras_paid, "paid without the camera").toBe(false);
+    expect(await divisionCameraPolicy(r.divisionId), "No over a division already off writes nothing").toBeNull();
 
     // Move up from the chip: the list offers sizes, picking the next one prices only the difference.
     await page.getByTestId("online-paid-chip-change").click();
@@ -330,32 +364,86 @@ test.describe("Online Chess credits: the organiser pays", () => {
     expect(await balanceOf(page, r.divisionId), "the credits the receipt promised are back").toBe(afterUp + backTotal);
     expect((await packageRow(r.divisionId)).size).toBe(small);
 
-    // Add the Fair-play camera at the SAME paid size (spec 8.6): the chip opens the change receipt with no size chosen, and the camera box alone must be
-    // enough to get a quote - the camera difference at this size, as the server prices it (the receipt's total is the server's, not the receipt's own sum).
+    // The Fair-play camera ON at the SAME paid size (spec 8.6, Task 15): the chip opens the change receipt at what was paid (No, no size chosen), and the
+    // Yes alone must be enough to get a quote - the camera difference at this size, as the server prices it (the receipt's total is the server's).
     expect((await packageRow(r.divisionId)).cameras_paid, "premise: paid without cameras").toBe(false);
     const camera = await quoteOf(page, r.divisionId, small, true);
     const cameraDiff = packagePrice(small, true) - packagePrice(small, false);
     expect(cameraDiff, "premise: the camera costs credits at the paid size").toBeGreaterThan(0);
-    expect(camera.owed, "the server's quote for (paid size, camera) is the leaf's camera difference").toBe(cameraDiff);
+    expect(camera.owed, "the server's quote for (paid size, Yes) is the leaf's camera difference").toBe(cameraDiff);
     const beforeCamera = await balanceOf(page, r.divisionId);
     await page.getByTestId("online-paid-chip-change").click();
     await expect(receipt(page)).toHaveAttribute("data-mode", "change");
+    await expect(cameraRadio(page, false), "the change receipt opens at what was paid: No").toBeChecked();
     await expect(confirm(page), "nothing chosen yet").toHaveText(uiEn["onlineChess.receipt.confirm.choose"]!);
-    await page.getByTestId("online-receipt-cameras").check();
-    await expect(page.getByText(uiEn["onlineChess.receipt.cameras.paid"]!), "the 'is paid' line is not said while the organiser is still deciding").toHaveCount(0);
+    await answerCamera(page, true);
     await expect(receipt(page), "the camera is quoted AT the paid size").toHaveAttribute("data-size", String(small));
     await expect(page.getByTestId("online-receipt-row-total")).toContainText(credits(camera.owed));
     await expect(confirm(page)).toHaveText(fill(camera.owed === 1 ? "onlineChess.payLine.pay.one" : "onlineChess.payLine.pay.other", { count: camera.owed }));
+    await expect(page.getByTestId("online-package-notice"), "nothing is said about the setting while the organiser is still deciding").toHaveCount(0);
     await confirm(page).click();
     await expect(receipt(page)).toHaveCount(0, { timeout: 30_000 });
     const after = await packageRow(r.divisionId);
     expect([after.size, after.cameras_paid], "the camera is paid, the size did not move").toEqual([small, true]);
-    // Spec 8.6: "Fair-play camera is paid. Turn it on in Division rules." is said AFTER the payment, on the page (the receipt has closed) - never while deciding.
-    await expect(page.getByTestId("online-package-notice")).toHaveText(uiEn["onlineChess.receipt.cameras.paid"]!);
+    expect(pays.at(-1), "the pay body carries the Yes").toMatchObject({ size: small, expectedOwed: cameraDiff, cameras: true });
+    // The answer is the division's setting now, written with the payment, and the page says so after the receipt has closed.
+    expect(await divisionCameraPolicy(r.divisionId), "the Yes wrote the division's setting").toBe("required");
+    await expect(page.getByTestId("online-package-notice")).toHaveText(fill("onlineChess.receipt.cameras.set", { policy: uiEn["divset.camera.required"]! }));
     expect(await balanceOf(page, r.divisionId), "exactly the camera difference left the balance").toBe(beforeCamera - camera.owed);
-    // Paid with cameras: the change receipt no longer offers the box.
+
+    // ...and OFF again before round 1 (Task 15): the change receipt opens at Yes (what was paid); No is a move down at the same size, and the camera
+    // price comes back, as the server's quote splits it.
+    const off = await quoteOf(page, r.divisionId, small, false);
+    expect(off.back, "premise: the quote offers the camera price back").not.toBeNull();
+    const offBack = off.back!.pack + off.back!.monthly;
+    expect(offBack + off.back!.forfeited, "the leaf: the camera difference is what comes back, less what is forfeited").toBe(cameraDiff);
     await page.getByTestId("online-paid-chip-change").click();
-    await expect(page.getByTestId("online-receipt-cameras")).toHaveCount(0);
+    await expect(receipt(page)).toHaveAttribute("data-mode", "change");
+    await expect(cameraRadio(page, true), "the change receipt opens at what was paid: Yes").toBeChecked();
+    await answerCamera(page, false);
+    // The next size up WITHOUT the camera costs what this one WITH it did: its row nets nothing and says so - never "paid" (it was never bought).
+    expect(packagePrice(mid, false), "premise: the next size without the camera is priced as the paid one with it").toBe(packagePrice(small, true));
+    await expect(page.getByTestId(`online-receipt-size-${mid}-note`)).toHaveText(uiEn["onlineChess.receipt.size.even"]!);
+    await expect(confirm(page)).toHaveText(
+      offBack === 0 ? uiEn["onlineChess.receipt.confirm.camerasOff.none"]! : fill(offBack === 1 ? "onlineChess.receipt.confirm.camerasOff.one" : "onlineChess.receipt.confirm.camerasOff.other", { count: offBack }),
+    );
+    const beforeOff = await balanceOf(page, r.divisionId);
+    await confirm(page).click();
+    await expect(receipt(page)).toHaveCount(0, { timeout: 30_000 });
+    expect(await balanceOf(page, r.divisionId), "the camera price the receipt promised is back").toBe(beforeOff + offBack);
+    const offRow = await packageRow(r.divisionId);
+    expect([offRow.size, offRow.cameras_paid], "the camera is off, the size did not move").toEqual([small, false]);
+    expect(pays.at(-1), "the pay body carries the No and the return").toMatchObject({ size: small, expectedOwed: -cameraDiff, cameras: false });
+    expect(await divisionCameraPolicy(r.divisionId), "the No wrote the division's setting").toBe("off");
+    await expect(page.getByTestId("online-package-notice")).toHaveText(fill("onlineChess.receipt.cameras.set", { policy: uiEn["divset.camera.off"]! }));
+  });
+
+  test("E: the first receipt answered Yes pays WITH the Fair-play camera, and the division's camera setting reads Required", async ({ page }) => {
+    test.setTimeout(budget(10));
+    const r = await unpaidDivision(page, "occamyes");
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const small = ONLINE_SIZES[0]!;
+    const withCamera = packagePrice(small, true);
+    expect(withCamera, "premise: the camera changes the price").toBeGreaterThan(priceOf(small));
+    await fundOnlinePayment(r.divisionId, withCamera);
+    const start = await balanceOf(page, r.divisionId);
+    const pays = recordPays(page, r.divisionId);
+    expect((await quoteOf(page, r.divisionId, small, true)).owed, "the server's quote for Yes is the leaf's camera price").toBe(withCamera);
+
+    await page.goto(r.fixturesTab);
+    await page.getByTestId("online-pay-line-pay").click();
+    await expect(receipt(page)).toHaveAttribute("data-mode", "pay");
+    await expect(cameraRadio(page, false), "the first receipt opens at the division's setting: No").toBeChecked();
+    await answerCamera(page, true);
+    await expect(page.getByTestId("online-receipt-row-total")).toContainText(credits(withCamera));
+    await expect(page.getByTestId("online-receipt-row-cameras")).toHaveAttribute("data-cameras", "on");
+    await confirm(page).click();
+    await expect(page.getByTestId("online-paid-chip")).toContainText(fill("onlineChess.chip.text", { size: small }), { timeout: 30_000 });
+    expect(pays.at(-1), "the pay body carries the Yes").toMatchObject({ size: small, expectedOwed: withCamera, cameras: true });
+    expect(await balanceOf(page, r.divisionId), "the camera price left the balance").toBe(start - withCamera);
+    expect((await packageRow(r.divisionId)).cameras_paid, "the package holds the camera").toBe(true);
+    expect(await divisionCameraPolicy(r.divisionId), "the division's camera setting is written with the payment").toBe("required");
+    await expect(page.getByTestId("online-package-notice")).toHaveText(fill("onlineChess.receipt.cameras.set", { policy: uiEn["divset.camera.required"]! }));
   });
 
   test("D: the competition page flags the unpaid online division for its organiser, links to the Fixtures tab, and stops when it is paid", async ({ page }) => {

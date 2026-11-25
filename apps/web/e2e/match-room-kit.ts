@@ -186,8 +186,9 @@ export async function fundOnlinePayment(divisionId: string, credits: number): Pr
   );
 }
 
-/** The division's Online Chess package paid at the size it holds, through the PAY DOOR (`POST /divisions/{id}/online-package`), with
- *  the camera price: the receipt's quote read first (`GET`), then confirmed. Used where an open cannot carry the payment: before a
+/** The division's Online Chess package paid at the size it holds, through the PAY DOOR (`POST /divisions/{id}/online-package`), at the
+ *  division's camera setting as it stands (no camera answer is sent, so nothing is written to it: a seed that wants the camera sets its
+ *  policy BEFORE this, as `seedOnlineRound` and `seedMatchRoom` do): the receipt's quote read first (`GET`), then confirmed. Used where an open cannot carry the payment: before a
  *  legacy league is staged (the pay door refuses to CHARGE a league - P16 - so it pays while the division has no stage), and on a
  *  division whose round is opened later by the spec itself (the UI's Open round, or its own POST). */
 export async function payThroughPayDoor(request: APIRequestContext, divisionId: string): Promise<void> {
@@ -198,13 +199,13 @@ export async function payThroughPayDoor(request: APIRequestContext, divisionId: 
     return p.size;
   });
   const quote = await apiJson<{ owed: number; refusal: string | null }>(
-    request, `/api/v1/divisions/${divisionId}/online-package?size=${size}&addCameras=true`,
+    request, `/api/v1/divisions/${divisionId}/online-package?size=${size}`,
   );
   expect(quote.status, `online package quote: ${JSON.stringify(quote.error)}`).toBe(200);
   expect(quote.data!.refusal, `size ${size} can be bought`).toBeNull();
   await fundOnlinePayment(divisionId, quote.data!.owed);
   const paid = await apiJson(request, `/api/v1/divisions/${divisionId}/online-package`, "POST", {
-    size, expectedOwed: quote.data!.owed, addCameras: true,
+    size, expectedOwed: quote.data!.owed,
   });
   expect(paid.status, `pay for the online package: ${JSON.stringify(paid.error)}`).toBeLessThan(300);
 }
