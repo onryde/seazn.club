@@ -13,11 +13,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sent = vi.hoisted(() => ({ calls: [] as { event: string; distinctId: string; orgId?: string; properties?: Record<string, unknown> }[] }));
-const failures = vi.hoisted(() => ({ capture: false, plan: false, logged: [] as unknown[][] }));
+const failures = vi.hoisted(() => ({ capture: false, hang: false, plan: false, logged: [] as unknown[][] }));
 
 vi.mock("@/lib/posthog-server", () => ({
   captureServer: vi.fn(async (a: { event: string; distinctId: string; orgId?: string; properties?: Record<string, unknown> }) => {
     if (failures.capture) throw new Error("posthog is down");
+    if (failures.hang) return new Promise<void>(() => undefined); // a flush that never comes back
     sent.calls.push(a);
   }),
 }));
@@ -30,11 +31,12 @@ vi.mock("@/lib/entitlements", () => ({
 vi.mock("@/server/logger", () => ({ log: { error: (...a: unknown[]) => failures.logged.push(a), warn: (...a: unknown[]) => failures.logged.push(a) } }));
 
 import { EVENTS } from "@/lib/analytics-events";
+import { orgPlanKey } from "@/lib/entitlements";
 import { ONLINE_SIZES, type OnlineSize } from "@/lib/online-chess-package";
 import type { PayResult } from "../pay";
 import type { PackageQuote } from "../quote";
 import type { PackageRow } from "../types";
-import { capturePackageEvent, PACKAGE_EVENT_NAMES, payEvent, refundEvents, type PackageEventFact } from "../events";
+import { CAPTURE_TIMEOUT_MS, capturePackageEvent, captureRefundEvents, PACKAGE_EVENT_NAMES, payEvent, refundEvents, type PackageEventFact } from "../events";
 
 const GC_PRICE: Record<OnlineSize, readonly [number, number]> = { 16: [1, 2], 32: [2, 4], 64: [4, 8], 128: [8, 16], 256: [16, 32] };
 const price = (size: OnlineSize, cameras: boolean): number => GC_PRICE[size][cameras ? 1 : 0];
@@ -50,8 +52,10 @@ const PROP_KEYS = ["at_round_one", "cameras", "credits", "forfeited", "monthly",
 beforeEach(() => {
   sent.calls.length = 0;
   failures.capture = false;
+  failures.hang = false;
   failures.plan = false;
   failures.logged.length = 0;
+  vi.mocked(orgPlanKey).mockClear();
 });
 
 /** A package row as the pay door leaves it: only what the builders read. */
@@ -120,6 +124,83 @@ describe("analytics never throws into the money path", () => {
     expect(sent.calls[0]!.properties!.plan).toBe("unknown");
     expect(failures.logged.length).toBeGreaterThan(0);
   });
+
+  it("a flush that never comes back cannot hold the request: the capture gives up after CAPTURE_TIMEOUT_MS, logs it, and returns", async () => {
+    vi.useFakeTimers();
+    try {
+      failures.hang = true;
+      let settled = false;
+      const done = capturePackageEvent("bought", FACT).then(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(CAPTURE_TIMEOUT_MS - 1);
+      expect(settled, "still inside the window: waiting for the flush").toBe(false);
+      await vi.advanceTimersByTimeAsync(2);
+      await done;
+      expect(settled, "past the window: the request is let go").toBe(true);
+      expect(sent.calls, "nothing was sent, and nothing threw").toHaveLength(0);
+      expect(failures.logged.some((l) => /did not come back in time/.test(String(l[1]))), "the give-up is logged").toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the refund doors' capture is bounded the same way (a hung flush on a door's first package does not hold the response)", async () => {
+    vi.useFakeTimers();
+    try {
+      failures.hang = true;
+      let settled = false;
+      const done = captureRefundEvents(
+        [{ size: 16, cameras: false, back: { pack: 1, monthly: 0, forfeited: 0 } }],
+        { orgId: ORG, actorId: USER },
+      ).then(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(CAPTURE_TIMEOUT_MS + 1);
+      await done;
+      expect(settled).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("captureRefundEvents: one plan lookup per door, one event per package, never a throw", () => {
+  const THREE = [
+    { size: 16, cameras: false, back: { pack: 1, monthly: 0, forfeited: 0 } },
+    { size: 64, cameras: true, back: { pack: 4, monthly: 4, forfeited: 0 } },
+    { size: 32, cameras: false, back: { pack: 0, monthly: 2, forfeited: 0 } },
+  ] as const;
+
+  it("three refunded packages are three events and ONE plan lookup (not one per package)", async () => {
+    await captureRefundEvents(THREE, { orgId: ORG, actorId: USER });
+    expect(sent.calls.map((c) => c.event)).toEqual(Array(3).fill("online_chess_package_refunded"));
+    expect(sent.calls.map((c) => c.properties!.size), "in the order the door refunded them").toEqual([16, 64, 32]);
+    expect(sent.calls.every((c) => c.properties!.plan === "pro")).toBe(true);
+    expect(vi.mocked(orgPlanKey), "one lookup for the door").toHaveBeenCalledTimes(1);
+  });
+
+  it("a malformed refund entry (the collector is typed, so this is a guard): the door resolves and logs, never throws into the delete", async () => {
+    await expect(captureRefundEvents([{ size: 16, cameras: false, back: undefined } as never], { orgId: ORG, actorId: USER })).resolves.toBeUndefined();
+    expect(failures.logged.length, "logged").toBe(1);
+    expect(sent.calls).toHaveLength(0);
+  });
+
+  it("nothing refunded: no event and no plan lookup at all (the empty case)", async () => {
+    await captureRefundEvents([], { orgId: ORG, actorId: USER });
+    expect(sent.calls).toHaveLength(0);
+    expect(vi.mocked(orgPlanKey)).not.toHaveBeenCalled();
+  });
+
+  it("PostHog failing on every package: the door resolves, every failure is logged, none is thrown", async () => {
+    failures.capture = true;
+    await expect(captureRefundEvents(THREE, { orgId: ORG, actorId: USER })).resolves.toBeUndefined();
+    expect(failures.logged.length, "one logged failure per package").toBe(3);
+  });
+
+  it("the plan lookup failing: all three still go, plan unknown, the lookup tried once", async () => {
+    failures.plan = true;
+    await captureRefundEvents(THREE, { orgId: ORG, actorId: USER });
+    expect(sent.calls).toHaveLength(3);
+    expect(sent.calls.every((c) => c.properties!.plan === "unknown")).toBe(true);
+    expect(vi.mocked(orgPlanKey)).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("payEvent: the pay door's own result, as an event", () => {
@@ -184,8 +265,28 @@ describe("payEvent: the pay door's own result, as an event", () => {
     expect(cells).toBe(10);
   });
 
-  it("a charge the door did not split is a named failure, not a silent zero (the door's own debit would have refused first)", () => {
-    expect(() => payEvent(paid({ size: 64, cameras: false, owed: 4, take: null }), CTX)).toThrow(/split/i);
+  it("a charge the door did not split cannot be made into an event: it is LOGGED and skipped (null), never a throw and never a silent zero", () => {
+    // The pay door calls payEvent after its money moved, and the open's gate calls it inside the open's own transaction: a throw
+    // here would be a 500 after a payment, or a rolled-back "Pay and open". The door's own debit would have refused first, so this
+    // is a guard, reached only by a result that is not what the door writes.
+    expect(payEvent(paid({ size: 64, cameras: false, owed: 4, take: null }), CTX)).toBeNull();
+    expect(failures.logged, "logged, naming the split").toHaveLength(1);
+    expect((failures.logged[0]![0] as { err: Error }).err.message).toMatch(/split/i);
+
+    failures.logged.length = 0;
+    // The same for a return with no split of what came back.
+    expect(payEvent(paid({ size: 32, cameras: false, owed: -2, back: null }), { ...CTX, paidBefore: true })).toBeNull();
+    expect(failures.logged, "a missing return split is logged too").toHaveLength(1);
+  });
+
+  it("a malformed result of any shape never throws out of payEvent (no package, no quote)", () => {
+    let guarded = 0;
+    for (const bad of [{ applied: true }, { applied: true, quote: null }, { applied: true, quote: { owed: 3 }, package: undefined }]) {
+      expect(() => payEvent(bad as unknown as PayResult, CTX), JSON.stringify(bad)).not.toThrow();
+      expect(payEvent(bad as unknown as PayResult, CTX)).toBeNull();
+      guarded += 1;
+    }
+    expect(guarded, "anti-vacuity: three malformed shapes").toBe(3);
   });
 });
 

@@ -25,6 +25,18 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 
 type Seen = { event: string; distinctId: string; orgId?: string; properties: Record<string, unknown>; committedAtCapture: boolean | null };
 const seen = vi.hoisted(() => ({ calls: [] as Seen[], throwOnCapture: false }));
+const builder = vi.hoisted(() => ({ corrupt: false }));
+
+// A pay result whose bucket split is missing: what `payEvent` cannot make an event from. The REAL builder runs on it (the wrapper only
+// corrupts its input), so a builder that throws instead of logging would fail the door that called it.
+vi.mock("../events", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../events")>();
+  return {
+    ...actual,
+    payEvent: (r: Parameters<typeof actual.payEvent>[0], a: Parameters<typeof actual.payEvent>[1]) =>
+      actual.payEvent(builder.corrupt && r.applied ? ({ ...r, quote: { ...r.quote, take: null, back: null } } as typeof r) : r, a),
+  };
+});
 
 vi.mock("@/lib/posthog-server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/posthog-server")>();
@@ -34,10 +46,11 @@ vi.mock("@/lib/posthog-server", async (importOriginal) => {
     captureServer: vi.fn(async (a: { event: string; distinctId: string; orgId?: string; properties?: Record<string, unknown> }) => {
       if (!a.event.startsWith("online_chess_package_")) return;
       if (seen.throwOnCapture) throw new Error("posthog is down");
-      // A SECOND connection: what is committed at the moment the event is sent. Null when the event names no package to look up.
+      // A SECOND connection: what is committed at the moment the event is sent - is there a live, PAID, unfrozen package for the org
+      // (the kind a pay leaves and a refund takes away; a frozen one is never refunded, and a competition delete keeps it)?
       const { sql: pool } = await import("@/lib/db");
       const [r] = await pool<{ paid: boolean }[]>`
-        select exists(select 1 from division_online_packages where org_id = ${a.orgId!} and paid_at is not null and refunded_at is null) as paid`;
+        select exists(select 1 from division_online_packages where org_id = ${a.orgId!} and paid_at is not null and refunded_at is null and frozen_at is null) as paid`;
       seen.calls.push({ event: a.event, distinctId: a.distinctId, orgId: a.orgId, properties: a.properties ?? {}, committedAtCapture: r?.paid ?? null });
     }),
   };
@@ -66,6 +79,7 @@ beforeAll(() => {
 beforeEach(() => {
   seen.calls.length = 0;
   seen.throwOnCapture = false;
+  builder.corrupt = false;
 });
 afterAll(async () => {
   if (ALWAYS === undefined) delete process.env.ONLINE_CHESS_ALWAYS;
@@ -156,6 +170,16 @@ describe.skipIf(!HAS_DB)("the pay door sends its events after the commit", () =>
     expect(eventsOf(poor.orgId)).toHaveLength(0);
   });
 
+  it("… an event that cannot be BUILT never fails the payment either: no 500 after the money moved, the package is paid, nothing is sent", async () => {
+    const o = await moneyOrg(10);
+    const d = await ocDivision(o, await ocCompetition(o));
+    builder.corrupt = true;
+    const r = await pay(o, d.id, 32); // resolves: a throw here would be a 500 for a payment that went through
+    expect(r.applied, "the door answered and the money moved").toBe(true);
+    expect((await liveOf(d.id)).paid_at, "the package is paid").not.toBeNull();
+    expect(eventsOf(o.orgId), "the event was skipped, not sent half-made").toHaveLength(0);
+  });
+
   it("… PostHog failing never fails the payment: the organiser's money moved and the door answers", async () => {
     const o = await moneyOrg(10);
     const d = await ocDivision(o, await ocCompetition(o));
@@ -180,6 +204,9 @@ describe.skipIf(!HAS_DB)("the refund doors send `refunded` after the commit", ()
     expect(e.event).toBe("online_chess_package_refunded");
     expect(e.distinctId).toBe(o.auth.userId);
     expect(e.properties).toEqual({ size: 64, cameras: false, credits: -gcPrice(64), monthly: 0, pack: gcPrice(64), forfeited: 0, plan: "pro", at_round_one: false });
+    // After the commit: another connection no longer sees a live paid package for the org when the event is sent (before it, the
+    // refund is uncommitted and that row is still live: true).
+    expect(e.committedAtCapture, "delete division: sent after the refund committed (no paid, unrefunded, unfrozen package is left)").toBe(false);
 
     seen.calls.length = 0;
     const unpaid = await ocDivision(o, c);
@@ -215,6 +242,7 @@ describe.skipIf(!HAS_DB)("the refund doors send `refunded` after the commit", ()
     expect(eventsOf(o.orgId)[0]!.properties).toEqual({
       size: 32, cameras: false, credits: -gcPrice(32), monthly: 0, pack: gcPrice(32), forfeited: 0, plan: "pro", at_round_one: false,
     });
+    expect(eventsOf(o.orgId)[0]!.committedAtCapture, "online play off: sent after the refund committed").toBe(false);
     await patchDivision(o.auth, d.id, { config: OFF }); // already off: a second save is a no-op
     expect(eventsOf(o.orgId), "the second save refunds nothing and sends nothing").toHaveLength(1);
   });
@@ -238,6 +266,9 @@ describe.skipIf(!HAS_DB)("the refund doors send `refunded` after the commit", ()
     expect(events.map((e) => e.event)).toEqual(["online_chess_package_refunded", "online_chess_package_refunded"]);
     expect(events.map((e) => e.properties.size).sort((x, y) => (x as number) - (y as number)), "one per refunded package").toEqual([32, 64]);
     expect(events.map((e) => e.properties.credits).sort((x, y) => (x as number) - (y as number))).toEqual([-gcPrice(64), -gcPrice(32)]);
+    // Every one of them after the delete committed (a send-before-commit door's first event would still see the two paid, unfrozen
+    // packages live: true; the frozen division's package is not counted, a competition delete keeps it).
+    expect(events.map((e) => e.committedAtCapture), "delete competition: every event sent after the commit").toEqual([false, false]);
   }, 120_000);
 
   it("a refund that forfeits last month's included credits sends the forfeited count", async () => {

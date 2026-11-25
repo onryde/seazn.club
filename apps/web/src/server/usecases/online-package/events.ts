@@ -13,8 +13,10 @@ import "server-only";
 // payment was made at the open's gate rather than beforehand. Never an id, a division's name or an address.
 //
 // WHEN: AFTER the commit of the transaction that moved the money - never inside it - and never for a no-op (a payment that wrote
-// nothing, a refund of nothing, a replay): the builders return nothing for those. The capture is best-effort: analytics NEVER throws
-// into the money path (PostHog failing is logged and swallowed, a failed plan lookup sends the event with the plan unknown).
+// nothing, a refund of nothing, a replay): the builders return nothing for those. Analytics NEVER throws into the money path and
+// never holds it up: a builder that cannot make its event logs and returns nothing (`payEvent` is called inside the open's own
+// transaction, where a throw would roll back a good "Pay and open"), PostHog failing is logged and swallowed, a failed plan lookup
+// sends the event with the plan unknown, and a flush that does not come back is given up on after CAPTURE_TIMEOUT_MS.
 import { EVENTS, type AnalyticsEvent } from "@/lib/analytics-events";
 import { orgPlanKey } from "@/lib/entitlements";
 import type { OnlineSize } from "@/lib/online-chess-package";
@@ -56,10 +58,25 @@ const returned = (credits: number): number => 0 - credits;
 /** The plan an event is sent with when the lookup fails: the event still counts, the plan cell reads unknown. */
 const PLAN_UNKNOWN = "unknown";
 
-/** The pay door's answer as an event, or null when it moved nothing (`applied` false: the second tab, a frozen row). `paidBefore`:
- *  the package was already paid when the payment came (a first payment is `bought`, any later one `resized`). Reads the quote the
- *  door ACTED on (`PayResult.quote`), so the split is the one the ledger wrote. */
+/** The pay door's answer as an event, or null when it moved nothing (`applied` false: the second tab, a frozen row) - or when the
+ *  event cannot be made (an answer whose bucket split is missing): that is logged and returns null, never a throw, because the
+ *  pay door calls this after its money moved and the open's gate calls it INSIDE the open's transaction, where a throw would
+ *  roll back a good "Pay and open". `paidBefore`: the package was already paid when the payment came (a first payment is
+ *  `bought`, any later one `resized`). Reads the quote the door ACTED on (`PayResult.quote`), so the split is the one the ledger
+ *  wrote. */
 export function payEvent(
+  result: PayResult,
+  a: { orgId: string; actorId: string; paidBefore: boolean; atRoundOne: boolean },
+): PackageEvent | null {
+  try {
+    return buildPayEvent(result, a);
+  } catch (err) {
+    log.error({ err, orgId: a.orgId }, "online package event: could not be built from the pay result; no event is sent and the payment stands");
+    return null;
+  }
+}
+
+function buildPayEvent(
   result: PayResult,
   a: { orgId: string; actorId: string; paidBefore: boolean; atRoundOne: boolean },
 ): PackageEvent | null {
@@ -113,38 +130,80 @@ export function refundEvents(refunded: readonly RefundedPackage[], a: { orgId: s
   }));
 }
 
-/** Send one package event. Call it AFTER the commit. Never throws: whatever goes wrong here is logged, and the money the event
- *  reports has already moved. */
+/** How long an event may hold the request that sent it. PostHog's `flush` has no timeout of its own, and the capture is awaited in
+ *  the response path (a division delete, a payment): past this the event is given up on, the response goes out. */
+export const CAPTURE_TIMEOUT_MS = 3000;
+
+/** The plan the org is on, or "unknown" when the lookup fails (logged): the event still counts. One lookup per call. */
+async function planOf(orgId: string): Promise<string> {
+  try {
+    return await orgPlanKey(orgId);
+  } catch (err) {
+    log.warn({ err, orgId }, "online package event: the plan lookup failed; the event is sent with the plan unknown");
+    return PLAN_UNKNOWN;
+  }
+}
+
+/** One capture, bounded by CAPTURE_TIMEOUT_MS. Throws what `captureServer` throws; the callers swallow it. */
+async function send(kind: PackageEventKind, fact: PackageEventFact, plan: string): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const gaveUp = new Promise<"gave-up">((resolve) => {
+    timer = setTimeout(() => resolve("gave-up"), CAPTURE_TIMEOUT_MS);
+    timer.unref?.();
+  });
+  try {
+    const outcome = await Promise.race([
+      captureServer({
+        event: PACKAGE_EVENT_NAMES[kind],
+        distinctId: fact.actorId ?? `org:${fact.orgId}`,
+        orgId: fact.orgId,
+        properties: {
+          size: fact.size,
+          cameras: fact.cameras,
+          credits: fact.credits,
+          monthly: fact.monthly,
+          pack: fact.pack,
+          forfeited: fact.forfeited,
+          plan,
+          at_round_one: fact.atRoundOne,
+        },
+      }).then(() => "sent" as const),
+      gaveUp,
+    ]);
+    if (outcome === "gave-up") {
+      log.warn({ kind, orgId: fact.orgId, afterMs: CAPTURE_TIMEOUT_MS }, "online package event: the analytics flush did not come back in time; the response goes out without it");
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Send one package event. Call it AFTER the commit. Never throws and never holds the request past CAPTURE_TIMEOUT_MS: whatever
+ *  goes wrong here is logged, and the money the event reports has already moved. */
 export async function capturePackageEvent(kind: PackageEventKind, fact: PackageEventFact): Promise<void> {
   try {
-    let plan = PLAN_UNKNOWN;
-    try {
-      plan = await orgPlanKey(fact.orgId);
-    } catch (err) {
-      log.warn({ err, orgId: fact.orgId }, "online package event: the plan lookup failed; the event is sent with the plan unknown");
-    }
-    await captureServer({
-      event: PACKAGE_EVENT_NAMES[kind],
-      distinctId: fact.actorId ?? `org:${fact.orgId}`,
-      orgId: fact.orgId,
-      properties: {
-        size: fact.size,
-        cameras: fact.cameras,
-        credits: fact.credits,
-        monthly: fact.monthly,
-        pack: fact.pack,
-        forfeited: fact.forfeited,
-        plan,
-        at_round_one: fact.atRoundOne,
-      },
-    });
+    await send(kind, fact, await planOf(fact.orgId));
   } catch (err) {
     log.error({ err, kind, orgId: fact.orgId }, "online package event: the analytics capture failed; the payment stands");
   }
 }
 
 /** The `refunded` events of one door's refunds, sent after its commit: one per package the door refunded (none when it refunded
- *  nothing). `refunded` is what `applyPackageDelete` collected. Never throws. */
+ *  nothing). `refunded` is what `applyPackageDelete` collected. The org's plan is looked up ONCE for the door, not once per package
+ *  (a competition delete can refund many). Never throws. */
 export async function captureRefundEvents(refunded: readonly RefundedPackage[], a: { orgId: string; actorId: string | null }): Promise<void> {
-  for (const fact of refundEvents(refunded, a)) await capturePackageEvent("refunded", fact);
+  try {
+    const facts = refundEvents(refunded, a);
+    if (facts.length === 0) return;
+    const plan = await planOf(a.orgId);
+    for (const fact of facts) {
+      try {
+        await send("refunded", fact, plan);
+      } catch (err) {
+        log.error({ err, kind: "refunded", orgId: a.orgId }, "online package event: the analytics capture failed; the refund stands");
+      }
+    }
+  } catch (err) {
+    log.error({ err, orgId: a.orgId }, "online package event: the refund events could not be sent; the refund stands");
+  }
 }

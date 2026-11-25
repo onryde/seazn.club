@@ -33,6 +33,19 @@ vi.mock("@/server/email-outbox/transport", async () => {
 
 type Seen = { event: string; distinctId: string; orgId?: string; properties: Record<string, unknown>; frozenAtCapture: boolean | null };
 const seen = vi.hoisted(() => ({ calls: [] as Seen[] }));
+const builder = vi.hoisted(() => ({ corrupt: false }));
+
+// A pay result whose bucket split is missing: what `payEvent` cannot make an event from. The gate calls `payEvent` INSIDE the open's own
+// transaction, so a builder that throws would roll back a good "Pay and open". The REAL builder runs on it (the wrapper only corrupts its
+// input).
+vi.mock("@/server/usecases/online-package/events", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/usecases/online-package/events")>();
+  return {
+    ...actual,
+    payEvent: (r: Parameters<typeof actual.payEvent>[0], a: Parameters<typeof actual.payEvent>[1]) =>
+      actual.payEvent(builder.corrupt && r.applied ? ({ ...r, quote: { ...r.quote, take: null, back: null } } as typeof r) : r, a),
+  };
+});
 vi.mock("@/lib/posthog-server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/posthog-server")>();
   return {
@@ -51,6 +64,7 @@ beforeEach(() => {
   stubOutboxEnv();
   mail.sent.length = 0;
   seen.calls.length = 0;
+  builder.corrupt = false;
 });
 
 import { sql } from "@/lib/db";
@@ -130,6 +144,19 @@ describe.skipIf(!HAS_DB)("Open round: the payment's analytics event (Online Ches
     expect(r2.opened, "premise: round 2 opened, so the gate was asked").toBe(true);
     if (r2.opened) expect(r2.payment, "premise: the frozen row ignored the payment").toMatchObject({ applied: false, credits: 0 });
     expect(seen.calls, "a `pay` on a frozen row sends nothing").toHaveLength(0);
+  }, 120_000);
+
+  it("an event that cannot be BUILT does not roll back a good Pay and open: the payment stands, the round opens, the package freezes, no event", async () => {
+    const s = await seedOnlineSwiss({ players: 4, onlinePackage: "unpaid" });
+    const shown = await onlinePackageQuote(s.owner, s.divisionId, 16);
+    builder.corrupt = true;
+    const r = await openRound({ stageId: s.stageId, roundNo: 1, actorUserId: s.ownerUserId, pay: { size: 16, expectedOwed: shown.owed } });
+    expect(r.opened, "the open committed (the builder's failure was inside its transaction)").toBe(true);
+    const row = await liveOf(s.divisionId);
+    expect(row.paid_at, "the payment stands").not.toBeNull();
+    expect(row.frozen_at, "the package froze with the open").not.toBeNull();
+    expect(seen.calls, "no half-made event was sent").toHaveLength(0);
+    expect(r.opened && r.payment, "the open still reports what it took").toMatchObject({ applied: true, credits: shown.owed });
   }, 120_000);
 
   it("a refused open sends nothing: a stale total (409) and an unpaid package with no `pay` (402) roll everything back", async () => {
