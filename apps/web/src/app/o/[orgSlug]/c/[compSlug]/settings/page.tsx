@@ -80,11 +80,13 @@ export default async function CompetitionSettingsPage({
   // What a PURGE of each archived division does to its Online Chess package (spec 2026-11-23 §11): archive holds the package and
   // refunds nothing, the purge is the delete door and refunds a paid, unfrozen one in full, so the purge dialog says what comes
   // back - off the refund's own split, read here, never worked out in the client. Only an editor can purge, so only an editor
-  // pays for the read; null where no money was paid (an over-the-board division, an unpaid package). A courtesy beside the
-  // confirm: a read that throws is logged and that row's dialog renders without the line - the purge still refunds.
+  // pays for the read, and only for a chess division (the only sport with a package - the competition page's own rule); null where no
+  // money was paid (an over-the-board division, an unpaid package). A courtesy beside the confirm: a read that throws is logged and that
+  // row's dialog renders without the line - the purge still refunds.
   const purgeRefunds = canEdit
     ? await Promise.all(
         archivedDivisions.map(async (d) => {
+          if (d.sport_key !== "boardgame") return null;
           try {
             return await packageRefundPreview(auth.orgId, d.id);
           } catch (err) {
