@@ -17,8 +17,9 @@ import type { UseLiveFixtureOptions, UseLiveFixtureResult } from "../use-live-fi
 const rt = vi.hoisted(() => ({ subscribes: 0, unsubscribes: 0 }));
 /** Captured before any test fakes the clock. */
 const realSetTimeout = globalThis.setTimeout;
+// Realtime push nudges (Task 13): the hook takes the FIXTURE family's client, `realtimeClient("fixture")`.
 vi.mock("@/lib/supabase-browser", () => ({
-  supabaseBrowser: () => ({
+  realtimeClient: () => ({
     realtime: { setAuth: async () => {} },
     channel: () => {
       const ch = {

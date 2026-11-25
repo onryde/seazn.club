@@ -96,11 +96,13 @@ vi.mock("@/lib/deferred", () => ({
   },
 }));
 
-// Never a live vendor call from a test: both pushes are recorded, not sent.
+// Never a live vendor call from a test: the per-message publishers' pushes are recorded, not sent, and a score's or a
+// schedule write's one batched `broadcast` (realtime T0.2) is dropped.
 vi.mock("@/lib/realtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/realtime")>();
   return {
     ...actual,
+    broadcast: async () => {},
     publishFixtureUpdate: async () => {},
     publishDivisionUpdate: async (divisionId: string, reason: string) => {
       probe.order.push(`push:${reason}`);

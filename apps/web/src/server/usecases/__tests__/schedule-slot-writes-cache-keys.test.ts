@@ -35,6 +35,7 @@
 // set, held open until the test releases it. `@/lib/db` is a passthrough whose
 // `withTenant` runs each callback inside an AsyncLocalStorage mark. Real
 // Postgres required; skipped without DATABASE_URL.
+import { nudgesSettled } from "../stream-sessions/nudge";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const probe = vi.hoisted(() => ({
@@ -45,6 +46,8 @@ const probe = vi.hoisted(() => ({
   gates: [] as Array<() => void>,
   fixturePushes: [] as Array<[string, string]>,
   divisionPushes: [] as Array<[string, string]>,
+  /** Division messages that arrived WITHOUT their pair (Task 14 review m1): checked empty after every test. */
+  loneDivision: [] as string[],
   /** R10f: when set, the Nth statement that takes a division's advisory lock
    *  (counted in `locks`) throws `injected`, so that transaction rolls back
    *  while the ones before it stay committed. */
@@ -75,16 +78,37 @@ vi.mock("@/lib/cache", async (importOriginal) => {
     },
   };
 });
+// Realtime push-nudges T0.2: a schedule write and a score each hand all their pushes to ONE `broadcast()` call. The
+// recorder reads each message it is handed back into the same `[id, reason]` lists, in send order, and the per-message
+// publishers (`voidLineEvents` still uses them) record through it too, so a push sent either way is seen, once.
 vi.mock("@/lib/realtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/realtime")>();
+  type Message = Parameters<typeof actual.broadcast>[0][number];
+  const isTwin = (publicMessage: Message | undefined, next: Message | undefined) =>
+    publicMessage !== undefined && publicMessage.private !== true && next !== undefined &&
+    JSON.stringify(next) === JSON.stringify({ ...publicMessage, private: true });
+  const record = async (messages: Parameters<typeof actual.broadcast>[0]) => {
+    for (const [index, message] of messages.entries()) {
+      const { topic, payload } = message;
+      const { reason } = payload as { reason: string };
+      if (topic.startsWith("fixture:")) probe.fixturePushes.push([topic.slice("fixture:".length), reason]);
+      // A division push is TWO messages (Task 14, D-a): the public one, then its private twin. It is recorded ONCE, at its
+      // public message. A message without its pair (a public one with no twin after it, a twin with no public one before
+      // it) records no push and is logged to `loneDivision`, which fails the test in afterEach (review m1).
+      else if (topic.startsWith("division:")) {
+        const paired = message.private === true ? isTwin(messages[index - 1], message) : isTwin(message, messages[index + 1]);
+        if (!paired) probe.loneDivision.push(`${message.private === true ? "twin" : "public"} ${topic} ${reason} without its pair`);
+        else if (message.private !== true) probe.divisionPushes.push([topic.slice("division:".length), reason]);
+      }
+    }
+  };
   return {
     ...actual,
-    publishFixtureUpdate: async (fixtureId: string, reason: Parameters<typeof actual.publishFixtureUpdate>[1]) => {
-      probe.fixturePushes.push([fixtureId, reason]);
-    },
-    publishDivisionUpdate: async (divisionId: string, reason: Parameters<typeof actual.publishDivisionUpdate>[1]) => {
-      probe.divisionPushes.push([divisionId, reason]);
-    },
+    broadcast: record,
+    publishFixtureUpdate: (fixtureId: string, reason: Parameters<typeof actual.publishFixtureUpdate>[1]) =>
+      record([actual.fixtureMessage(fixtureId, reason)]),
+    publishDivisionUpdate: (divisionId: string, reason: Parameters<typeof actual.publishDivisionUpdate>[1]) =>
+      record(actual.divisionMessages(divisionId, reason)),
   };
 });
 vi.mock("@/lib/db", async (importOriginal) => {
@@ -224,6 +248,7 @@ async function quiesce(): Promise<void> {
   probe.locks = 0;
   for (const release of probe.gates.splice(0)) release();
   await sleep(20);
+  await nudgesSettled();   // T1.5: a write's push also awaits its court read
   probe.dels.length = 0;
   probe.inTxAtDel.length = 0;
   probe.fixturePushes.length = 0;
@@ -235,6 +260,7 @@ async function quiesce(): Promise<void> {
 async function releaseDel(): Promise<void> {
   for (const release of probe.gates.splice(0)) release();
   await sleep(20);
+  await nudgesSettled();   // T1.5: a write's push also awaits its court read
 }
 
 async function competitionOf(divisionId: string): Promise<string> {
@@ -298,6 +324,7 @@ async function expectDelThenPushes(
 /** A write that changed nothing sent nothing, not even later. */
 async function expectNothingSent(): Promise<void> {
   await sleep(40);
+  await nudgesSettled();
   expect(probe.dels, "no DEL").toEqual([]);
   expect(probe.fixturePushes, "no fixture push").toEqual([]);
   expect(probe.divisionPushes, "no division push").toEqual([]);
@@ -385,8 +412,15 @@ async function ladderRig() {
   return { auth, divisionId: division.id, competitionId: competition.id, stageId: stage!.id, ladder: entrants.map((e) => e.id) };
 }
 
+/** Every division message the recorder saw travelled with its pair (Task 14, D-a; review m1). Cleared as it is read. */
+function expectEveryDivisionMessagePaired(): void {
+  const lone = probe.loneDivision.splice(0);
+  expect(lone, "a division message went out without its public/private pair").toEqual([]);
+}
+
 afterEach(async () => {
   await quiesce();
+  expectEveryDivisionMessagePaired();
 });
 
 afterAll(async () => {

@@ -61,7 +61,11 @@ const rt = vi.hoisted(() => {
   };
   return { names, channel, reset: () => void (names.length = 0) };
 });
-vi.mock("@/lib/supabase-browser", () => ({ supabaseBrowser: () => ({ channel: rt.channel }) }));
+// Realtime push nudges (Task 13): the hub joins on the DIVISION family's client, after the competition door's token
+// (`lib/division-realtime-auth.ts`, real) is set.
+vi.mock("@/lib/supabase-browser", () => ({
+  realtimeClient: () => ({ realtime: { setAuth: async () => undefined }, channel: rt.channel }),
+}));
 
 /** The ONE browser fact this environment cannot produce: what `useTabParam`
  *  reads out of a live `window.location`. Both harnesses answer
@@ -727,10 +731,22 @@ describe("CompetitionLanding — a poll re-renders the ACTIVE tab in place", () 
     // driven against each other.
     vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://example.supabase.co");
     vi.mocked(fetchCompetitionHub).mockResolvedValue(ONE_LIVE);
+    // The competition's division door answers for every division on the document.
+    const { _resetDivisionRealtimeAuth } = await import("@/lib/division-realtime-auth");
+    _resetDivisionRealtimeAuth();
+    const doorCalls: string[] = [];
+    vi.stubGlobal("fetch", async (input: unknown) => {
+      doorCalls.push(String(input));
+      return new Response(
+        JSON.stringify({ ok: true, data: { token: "t", divisionIds: ["d-premier"], expiresAt: 0, url: "u", apikey: "k" } }),
+        { status: 200 },
+      );
+    });
 
     const off = mount(ONE_LIVE); // realtime: false on the document
     await vi.advanceTimersByTimeAsync(0);
     expect(rt.names).toEqual([]);
+    expect(doorCalls, "a document without realtime asks the door nothing").toEqual([]);
     expect(transportOf(off.tree())).toBe("poll");
 
     rt.reset();
@@ -739,7 +755,11 @@ describe("CompetitionLanding — a poll re-renders the ACTIVE tab in place", () 
     // One channel PER DIVISION with a live match, named from the document —
     // not "a channel was opened".
     expect(rt.names).toEqual(["division:d-premier"]);
+    // The door asked is the DOCUMENT's competition (`competitionId`), once.
+    expect(doorCalls).toEqual(["/api/v1/public/competitions/c1/realtime-token"]);
     expect(transportOf(on.tree())).toBe("realtime");
+    on.unmount();
+    _resetDivisionRealtimeAuth();
   });
 
   it("a poll that REMOVES the chosen tab's data moves the spectator, rather than stranding them", async () => {

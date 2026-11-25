@@ -15,9 +15,10 @@ import type { LiveFixtureData } from "../../live-score-data";
 import type { PublicBoardPush } from "@/server/external-play/public-view";
 
 type Binding = { type: string; event: string; cb: (msg: { payload?: unknown }) => void };
-const fake = vi.hoisted(() => ({ bindings: [] as Binding[], topics: [] as string[], unsubscribed: 0 }));
+const fake = vi.hoisted(() => ({ bindings: [] as Binding[], topics: [] as string[], families: [] as string[], unsubscribed: 0 }));
+// Realtime push nudges (Task 13): the match centre takes the FIXTURE family's own client, `realtimeClient("fixture")`.
 vi.mock("@/lib/supabase-browser", () => ({
-  supabaseBrowser: () => ({
+  realtimeClient: (family: string) => (fake.families.push(family), {
     realtime: { setAuth: async () => undefined },
     channel: (topic: string) => {
       fake.topics.push(topic);
@@ -85,6 +86,7 @@ beforeEach(() => {
   vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://example.supabase.co");
   fake.bindings.length = 0;
   fake.topics.length = 0;
+  fake.families.length = 0;
   fake.unsubscribed = 0;
 });
 afterEach(() => {
@@ -102,6 +104,8 @@ describe("the match centre's subscription relays the board to the watch island",
     mount("fx-1");
     await vi.advanceTimersByTimeAsync(0);
     expect(fake.topics).toEqual(["fixture:fx-1"]);
+    // The fixture family's client, never the division's or the lobby's (one socket-wide token per family).
+    expect(fake.families).toEqual(["fixture"]);
     expect(emit("board_state", PUSH), "anti-vacuity: the hook bound board_state").toBe(1);
     expect(got).toEqual([PUSH]);
     expect(other, "another fixture's island hears nothing").toEqual([]);

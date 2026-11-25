@@ -1,3 +1,30 @@
+// Server-side Supabase Realtime: the one broadcast transport (`broadcast()`)
+// and the subscriber-JWT mint for private topics.
+//
+// Supabase quotas (CS-2, realtime push-nudges plan). Source: the owner's
+// screenshot of the project's billing page, 2026-11-24, plus Supabase's
+// published Realtime limits for the Pro plan; recorded in the plan's ledger
+// (.superpowers/sdd/2026-11-24-realtime-push-nudges/progress.md, "CS-2"):
+//   - plan:                              Pro, spend cap ON (owner, 2026-11-24):
+//                                        the caps below are HARD, never billed past
+//   - concurrent connections (peak):     500 (peak seen at the time: 3)
+//   - channels per connection:           100
+//   - channel joins per second:          500
+//   - messages per second:               500
+//   - messages per billing period:       5,000,000 (used at the time: 3,434)
+//   - broadcast payload:                 3,000 KB
+//   - messages per broadcast request:    UNVERIFIED — CS-2 names no count.
+//                                        `BROADCAST_CHUNK` assumes 100; lower it
+//                                        if the API refuses a chunk that size
+// DIVISIONS COST DOUBLE in the dual-publish window (Task 14, D-a): every
+// division change sends TWO messages — the public one and its private twin
+// (`divisionMessages`) — so the messages per publish and the messages per
+// second a division write puts on the API are twice what they were. A
+// subscriber still hears ONE of the two: an anonymous public subscriber gets
+// the public message and not the twin (CS-1a, measured on stg 2026-11-24); a
+// door-token subscriber on the private channel is CS-1b, owed post-merge.
+// A refused connection or join behaves like "Realtime down": every subscriber
+// falls back to its poll, and a publish only ever logs a warning.
 import "server-only";
 import {
   SignJWT,
@@ -23,12 +50,151 @@ export const BROADCAST_TIMEOUT_MS = 3_000;
  * project, so every local e2e/smoke score event posted a real broadcast there
  * (~370k/day, 2026-11-03). Blanking the key instead would break
  * `supabaseAdmin()` storage uploads, which read the same variables.
+ *
+ * Read case- and whitespace-insensitively: the repo's .env.local carries
+ * `REALTIME_PUBLISH=Off`, which an exact `=== "off"` read as "publish", so
+ * local servers kept broadcasting to stg (T0.2 review, m5).
  */
 function publishTarget(): { url: string; key: string } | null {
-  if (process.env.REALTIME_PUBLISH === "off") return null;
+  if (process.env.REALTIME_PUBLISH?.trim().toLowerCase() === "off") return null;
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   return url && key ? { url, key } : null;
+}
+
+/** Whether `broadcast` would send anything at all: false under the kill switch or without the project's URL and key. A caller that
+ *  would read from the database only to build messages (the court nudges of a schedule write) skips that read when this is false. */
+export function realtimePublishEnabled(): boolean {
+  return publishTarget() !== null;
+}
+
+/** One message of a broadcast request, exactly as it goes on the wire. A
+ *  message without `private` is joinable on a public channel by anyone holding
+ *  the anon key; every new topic sends `private: true`. */
+export type RealtimeMessage = { topic: string; event: string; payload: unknown; private?: true };
+
+/** Messages per broadcast request. The API's per-request maximum is UNVERIFIED
+ *  (CS-2 in the header names none); 100 is the design's assumption. */
+export const BROADCAST_CHUNK = 100;
+
+/**
+ * The one server-side broadcast transport. Sends `messages` as POSTs of at most
+ * `BROADCAST_CHUNK` each, one after another, each with the same headers and
+ * `BROADCAST_TIMEOUT_MS` abort as every publisher before it. An empty list or
+ * a null `publishTarget()` (kill switch, missing env) sends nothing.
+ *
+ * Fire-and-forget: never throws. A failed chunk warns
+ * `[realtime] <label> broadcast failed (<status>)` — the HTTP status, or the
+ * error's class name when the request itself failed — and the next chunk is
+ * still sent. The warn line never carries a message body, an error message or
+ * the service key: a body may hold a room's state, and a key in a log is a
+ * leaked credential.
+ */
+export async function broadcast(messages: readonly RealtimeMessage[], label: string): Promise<void> {
+  if (messages.length === 0) return;
+  const target = publishTarget();
+  if (!target) return;
+  const { url, key } = target;
+  for (let start = 0; start < messages.length; start += BROADCAST_CHUNK) {
+    try {
+      const body = JSON.stringify({ messages: messages.slice(start, start + BROADCAST_CHUNK) });
+      const res = await fetch(`${url}/realtime/v1/api/broadcast`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${key}`,
+          apikey: key,
+        },
+        body,
+        signal: AbortSignal.timeout(BROADCAST_TIMEOUT_MS),
+      });
+      if (!res.ok) console.warn(`[realtime] ${label} broadcast failed (${res.status})`);
+    } catch (err) {
+      const name = err instanceof Error ? err.name : "error";
+      if (name === "TimeoutError") {
+        // An endpoint that let one chunk time out will not answer the next one either: waiting 3 s for each
+        // remaining chunk would hold an awaiting caller for 3 s × chunks. Drop the rest and count them once.
+        const left = Math.ceil((messages.length - start - BROADCAST_CHUNK) / BROADCAST_CHUNK);
+        const skipped = left > 0 ? `, ${left} later chunk${left === 1 ? "" : "s"} skipped` : "";
+        console.warn(`[realtime] ${label} broadcast failed (TimeoutError)${skipped}`);
+        break;
+      }
+      console.warn(`[realtime] ${label} broadcast failed (${name})`);
+    }
+  }
+}
+
+export type FixtureUpdateReason = "event" | "finalize" | "schedule";
+export type DivisionUpdateReason = "schedule" | "publish" | "start" | "score";
+
+/** Why a capture phone is told to beat now (design §2.3). */
+export const CAPTURE_NUDGE_REASONS = ["go-live", "stop", "replaced", "over", "next-match"] as const;
+export type CaptureNudgeReason = (typeof CAPTURE_NUDGE_REASONS)[number];
+/** Why a Match Day screen is told to re-read its day (design §3). */
+export const MATCH_DAY_NUDGE_REASONS = ["score", "schedule", "call"] as const;
+export type MatchDayNudgeReason = (typeof MATCH_DAY_NUDGE_REASONS)[number];
+/** The longest a Match Day code's subscriber token lives (spec 2026-11-24 §3): the contract's "up to 60 minutes"
+ *  (capture-matchday-realtime.v1.json, pinned by capture-contract.test.ts); a code that ends sooner caps it at its own expiry. */
+export const MATCH_DAY_TOKEN_TTL_SECONDS = 3600;
+export type NudgeReason = CaptureNudgeReason | MatchDayNudgeReason;
+
+export type CaptureTopic = `capture:${string}`;
+export type MatchDayTopic = `match-day:${string}`;
+export type DivisionTopic = `division:${string}`;
+
+/** A family's id, refused when empty or blank: it names no pairing, code or division, and a policy's
+ *  `'capture:' || ''` would bind a token for it to the bare `capture:` topic. The Error names the family only. */
+function familyId(family: "capture" | "match day" | "division", what: string, id: string): string {
+  if (id.trim() === "") throw new Error(`Realtime ${family}: the ${what} is blank`);
+  return id;
+}
+
+/** Private topic of one capture pairing (V554 keys it on `capture_pairing_id`). */
+export function captureTopic(pairingId: string): CaptureTopic {
+  return `capture:${familyId("capture", "pairing id", pairingId)}`;
+}
+/** Private topic of one Match Day code (V555 keys it on `md_code_id`). */
+export function matchDayTopic(codeId: string): MatchDayTopic {
+  return `match-day:${familyId("match day", "code id", codeId)}`;
+}
+/** Topic of one division (V556 keys its private messages on `division_ids`). */
+export function divisionTopic(divisionId: string): DivisionTopic {
+  return `division:${familyId("division", "division id", divisionId)}`;
+}
+
+/** A score or schedule change on one fixture: private `state_changed`. */
+export function fixtureMessage(fixtureId: string, reason: FixtureUpdateReason): RealtimeMessage {
+  const payload = { v: Date.now(), reason, at: new Date().toISOString() };
+  return { topic: `fixture:${fixtureId}`, event: "state_changed", payload, private: true };
+}
+
+/** A change on one division: `state_changed` for a score, `schedule_changed`
+ *  for every other reason. TWO messages, the design's §4.3 dual-publish window
+ *  (D-a, Task 14): the PUBLIC one first, byte-identical to what every old tab
+ *  has always joined, then its private twin — the same object plus
+ *  `private: true` — for a page that joined through the division door
+ *  (Task 13). Both go in the caller's one request. The public message stays
+ *  until the window closes: dropping it would leave a tab loaded before the
+ *  door shipped on its poll alone. */
+export function divisionMessages(divisionId: string, reason: DivisionUpdateReason): RealtimeMessage[] {
+  const publicMessage: RealtimeMessage = {
+    topic: divisionTopic(divisionId),
+    event: reason === "score" ? "state_changed" : "schedule_changed",
+    payload: { v: Date.now(), reason, at: new Date().toISOString() },
+  };
+  return [publicMessage, { ...publicMessage, private: true }];
+}
+
+/**
+ * A nudge: a private ping `{v, reason, at}` that tells the subscriber to
+ * re-read through its own read path (design §1). It carries no state, ids,
+ * scores or URLs. The overloads tie each reason list to its family's topic,
+ * so a Match Day reason on a capture topic does not compile.
+ */
+export function nudgeMessage(topic: CaptureTopic, reason: CaptureNudgeReason): RealtimeMessage;
+export function nudgeMessage(topic: MatchDayTopic, reason: MatchDayNudgeReason): RealtimeMessage;
+export function nudgeMessage(topic: CaptureTopic | MatchDayTopic, reason: NudgeReason): RealtimeMessage {
+  return { topic, event: "nudge", payload: { v: Date.now(), reason, at: new Date().toISOString() }, private: true };
 }
 
 /**
@@ -47,34 +213,8 @@ function publishTarget(): { url: string; key: string } | null {
  * — bypassed the `realtime` entitlement gate on the token-mint route
  * (`api/v1/public/fixtures/[id]/realtime-token/route.ts`). Removed.
  */
-export async function publishFixtureUpdate(
-  fixtureId: string,
-  reason: "event" | "finalize" | "schedule",
-): Promise<void> {
-  const target = publishTarget();
-  if (!target) return;
-  const { url, key } = target;
-  try {
-    const payload = { v: Date.now(), reason, at: new Date().toISOString() };
-    const topic = `fixture:${fixtureId}`;
-    const res = await fetch(`${url}/realtime/v1/api/broadcast`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${key}`,
-        apikey: key,
-      },
-      body: JSON.stringify({
-        messages: [{ topic, event: "state_changed", payload, private: true }],
-      }),
-      signal: AbortSignal.timeout(BROADCAST_TIMEOUT_MS),
-    });
-    if (!res.ok) {
-      console.warn(`[realtime] fixture broadcast failed (${res.status}) for ${fixtureId}`);
-    }
-  } catch (err) {
-    console.warn("[realtime] fixture broadcast error:", err);
-  }
+export async function publishFixtureUpdate(fixtureId: string, reason: FixtureUpdateReason): Promise<void> {
+  await broadcast([fixtureMessage(fixtureId, reason)], `fixture ${fixtureId}`);
 }
 
 /**
@@ -84,38 +224,16 @@ export async function publishFixtureUpdate(
  * listeners like the slideshow refresh without one channel per fixture.
  * Fire-and-forget, never throws.
  */
-export async function publishDivisionUpdate(
-  divisionId: string,
-  reason: "schedule" | "publish" | "start" | "score",
-): Promise<void> {
-  const target = publishTarget();
-  if (!target) return;
-  const { url, key } = target;
+export async function publishDivisionUpdate(divisionId: string, reason: DivisionUpdateReason): Promise<void> {
+  let messages: RealtimeMessage[];
   try {
-    const res = await fetch(`${url}/realtime/v1/api/broadcast`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${key}`,
-        apikey: key,
-      },
-      body: JSON.stringify({
-        messages: [
-          {
-            topic: `division:${divisionId}`,
-            event: reason === "score" ? "state_changed" : "schedule_changed",
-            payload: { v: Date.now(), reason, at: new Date().toISOString() },
-          },
-        ],
-      }),
-      signal: AbortSignal.timeout(BROADCAST_TIMEOUT_MS),
-    });
-    if (!res.ok) {
-      console.warn(`[realtime] division broadcast failed (${res.status}) for ${divisionId}`);
-    }
+    messages = divisionMessages(divisionId, reason);
   } catch (err) {
-    console.warn("[realtime] division broadcast error:", err);
+    // A blank id (divisionTopic refuses it). Still fire-and-forget: callers `void` this, so it must not reject.
+    console.warn(`[realtime] division ${divisionId} broadcast failed (${err instanceof Error ? err.name : typeof err})`);
+    return;
   }
+  await broadcast(messages, `division ${divisionId}`);
 }
 
 type MintKey = {
@@ -184,9 +302,11 @@ export async function resolveRealtimeMintKey(): Promise<MintKey> {
       } catch (err) {
         // Unguarded JSON.parse used to throw a raw SyntaxError straight out of
         // mintPublicFixtureToken, 500ing the token route on a malformed key
-        // (review 2026-09-14, I7a).
+        // (review 2026-09-14, I7a). The parse error by NAME only: V8's message
+        // quotes the input around the bad token, i.e. a piece of the private
+        // key, and this error reaches log lines and Sentry (push nudges T5, m5).
         throw new Error(
-          `Realtime JWT mint: SUPABASE_JWT_PRIVATE_KEY is not valid JWK JSON (${err instanceof Error ? err.message : String(err)})`,
+          `Realtime JWT mint: SUPABASE_JWT_PRIVATE_KEY is not valid JWK JSON (${err instanceof Error ? err.name : "parse error"})`,
         );
       }
       // Use the JWK's own declared alg when it is one this function can mint
@@ -239,14 +359,83 @@ export async function resolveRealtimeMintKey(): Promise<MintKey> {
   return { key: new TextEncoder().encode(secret), alg: "HS256" };
 }
 
+/** Claims `mintRealtimeToken` sets itself: RFC 7519 §4.1's registered claims,
+ *  plus `role`, which is what Supabase authorises on. */
+const MINT_OWNED_CLAIMS = ["role", "sub", "aud", "exp", "iat", "nbf", "iss", "jti"] as const;
+
 /**
- * Mint a subscriber JWT for a PUBLIC fixture channel (doc 09 §4). No user —
- * spectators are anonymous; entitlement (org `realtime` feature) is checked by
- * the route before minting. Short TTL: a spectator page re-requests freely.
- *
- * Header must include `kid` when signing with an asymmetric key so Realtime
- * can pick the matching JWKS entry.
+ * Mint a subscriber JWT for one private realtime topic family. Every family
+ * gets the same header (`kid` when the key is asymmetric, so Realtime can pick
+ * the JWKS entry), `aud` and `role: authenticated`, `iat` now, and
+ * `exp = floor(expiresAt / 1000)`. `claims` is the family's OWN claim — one
+ * name per family, never shared (the V452 rule): its realtime.messages policy
+ * keys on that name alone. A claim the mint owns (`role`, `sub`, the times…)
+ * is refused rather than silently overriding the mint's own value.
  */
+export async function mintRealtimeToken({
+  sub,
+  claims,
+  expiresAt,
+}: {
+  sub: string;
+  claims: Record<string, unknown>;
+  expiresAt: Date;
+}): Promise<string> {
+  const owned = MINT_OWNED_CLAIMS.filter((claim) => claim in claims);
+  if (owned.length > 0) {
+    throw new Error(`Realtime JWT mint: claims may not set ${owned.join(", ")}`);
+  }
+  const { key, alg, kid } = await resolveRealtimeMintKey();
+  const header: { alg: typeof alg; typ: "JWT"; kid?: string } = { alg, typ: "JWT" };
+  if (kid) header.kid = kid;
+  return new SignJWT({ role: "authenticated", sub, ...claims })
+    .setProtectedHeader(header)
+    .setIssuedAt()
+    .setExpirationTime(Math.floor(expiresAt.getTime() / 1000))
+    .setAudience("authenticated")
+    .sign(key);
+}
+
+/** Subscriber JWT for one capture pairing's private topic (`captureTopic`). */
+export async function mintCaptureToken(pairingId: string, expiresAt: Date): Promise<string> {
+  familyId("capture", "pairing id", pairingId);
+  return mintRealtimeToken({ sub: `capture:${pairingId}`, claims: { capture_pairing_id: pairingId }, expiresAt });
+}
+
+/** Subscriber JWT for one Match Day code's private topic (`matchDayTopic`). */
+export async function mintMatchDayToken(codeId: string, expiresAt: Date): Promise<string> {
+  familyId("match day", "code id", codeId);
+  return mintRealtimeToken({ sub: `md:${codeId}`, claims: { md_code_id: codeId }, expiresAt });
+}
+
+/** A division id as Postgres prints a uuid: lowercase and hyphenated. V556 matches a topic's id against the
+ *  token's list by exact string, so an uppercase or otherwise re-spelt id would name no topic the server
+ *  broadcasts on. */
+const DIVISION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** Subscriber JWT for the private `division:{id}` topics of one competition.
+ *  `division_ids` is a JSON array even for one division. jsonb `?` alone
+ *  would also match a scalar string or an object key; it is V556's array
+ *  check (`jsonb_typeof(…) = 'array'`) that makes a non-array claim read
+ *  nothing. An empty list mints a token that authorises no topic. */
+export async function mintDivisionToken(
+  competitionId: string,
+  divisionIds: readonly string[],
+  expiresAt: Date,
+): Promise<string> {
+  // Each id is refused when blank or not a lowercase uuid; an empty LIST still mints (it authorises no topic — T0.1's
+  // ruling). The Error names the family only, never the id.
+  for (const id of divisionIds) {
+    familyId("division", "division id", id);
+    if (!DIVISION_ID.test(id)) throw new Error("Realtime division: a division id is not a lowercase uuid");
+  }
+  return mintRealtimeToken({
+    sub: `public-competition:${competitionId}`,
+    claims: { division_ids: [...divisionIds] },
+    expiresAt,
+  });
+}
+
 /** Private lobby topic. Not the paid `fixture:{id}` score channel. */
 export function externalPlayLobbyTopic(fixtureId: string): string {
   return `external-play:${fixtureId}`;
@@ -269,51 +458,25 @@ export async function mintExternalPlayLobbyToken(
   subject: string,
   expiresAt: Date,
 ): Promise<string> {
-  const { key, alg, kid } = await resolveRealtimeMintKey();
-  const header: { alg: typeof alg; typ: "JWT"; kid?: string } = { alg, typ: "JWT" };
-  if (kid) header.kid = kid;
-  return new SignJWT({
-    role: "authenticated",
-    sub: subject,
-    lobby_fixture_id: fixtureId,
-  })
-    .setProtectedHeader(header)
-    .setIssuedAt()
-    .setExpirationTime(Math.floor(expiresAt.getTime() / 1000))
-    .setAudience("authenticated")
-    .sign(key);
+  return mintRealtimeToken({ sub: subject, claims: { lobby_fixture_id: fixtureId }, expiresAt });
 }
 
-/** Tell the other lobby screen that Ready changed. Fire-and-forget. */
+/** Tell the other lobby screen that Ready changed. Fire-and-forget. Through
+ *  `broadcast()`, so it carries the 3 s timeout it lacked before (realtime
+ *  push-nudges T0.1): a lobby click must not be held by an endpoint that
+ *  never answers. */
 export async function publishExternalPlayLobby(fixtureId: string): Promise<void> {
-  const target = publishTarget();
-  if (!target) return;
-  const { url, key } = target;
-  try {
-    const res = await fetch(`${url}/realtime/v1/api/broadcast`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${key}`,
-        apikey: key,
+  await broadcast(
+    [
+      {
+        topic: externalPlayLobbyTopic(fixtureId),
+        event: "lobby_changed",
+        payload: { v: Date.now() },
+        private: true,
       },
-      body: JSON.stringify({
-        messages: [
-          {
-            topic: externalPlayLobbyTopic(fixtureId),
-            event: "lobby_changed",
-            payload: { v: Date.now() },
-            private: true,
-          },
-        ],
-      }),
-    });
-    if (!res.ok) {
-      console.warn(`[realtime] lobby broadcast failed (${res.status}) for ${fixtureId}`);
-    }
-  } catch (err) {
-    console.warn("[realtime] lobby broadcast error:", err);
-  }
+    ],
+    `lobby ${fixtureId}`,
+  );
 }
 
 /** The match room's whole state after an accepted move (chess design §3.4,
@@ -331,14 +494,14 @@ export type RoomBroadcast = {
   drawOfferBy: "white" | "black" | null;
 };
 
-/** Push the room state to both players, and the board to spectators. Same endpoint, headers and topic as
- *  `publishExternalPlayLobby` — the topic's realtime policy (V452) already
- *  admits a seated player, so no new policy — plus the timeout that
- *  `publishFixtureUpdate` carries. Fire-and-forget: never throws. */
+/** Push the room state to both players, and the board to spectators. Same
+ *  transport and topic as `publishExternalPlayLobby` — the topic's realtime
+ *  policy (V452) already admits a seated player, so no new policy.
+ *  Fire-and-forget: never throws. */
 export async function publishRoomBroadcast(fixtureId: string, body: RoomBroadcast): Promise<void> {
-  const target = publishTarget();
-  if (!target) return;
-  const { url, key } = target;
+  // Publishing off or unconfigured: skip the spectators' projection too, so a
+  // board nobody would be sent never warns.
+  if (!publishTarget()) return;
   // A board the spectators' copy cannot read (not a FEN, a status nobody
   // declared) costs the spectators one push — never the players theirs.
   let spectator: PublicBoardPush | null = null;
@@ -347,56 +510,36 @@ export async function publishRoomBroadcast(fixtureId: string, body: RoomBroadcas
   } catch (err) {
     console.warn(`[realtime] spectator board skipped for ${fixtureId}:`, err);
   }
-  try {
-    const res = await fetch(`${url}/realtime/v1/api/broadcast`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${key}`,
-        apikey: key,
+  await broadcast(
+    [
+      {
+        topic: externalPlayLobbyTopic(fixtureId),
+        event: "room_state",
+        payload: body,
+        private: true,
       },
-      body: JSON.stringify({
-        messages: [
-          {
-            topic: externalPlayLobbyTopic(fixtureId),
-            event: "room_state",
-            payload: body,
-            private: true,
-          },
-          // T16 — the spectators' copy, on the public fixture topic the public
-          // realtime token is minted for (V403): the board alone, never the
-          // draw offer. The watch island reads it through the match centre's
-          // one subscription (use-live-fixture → live-board-channel).
-          ...(spectator === null
-            ? []
-            : [{ topic: `fixture:${fixtureId}`, event: "board_state", payload: spectator, private: true }]),
-        ],
-      }),
-      signal: AbortSignal.timeout(BROADCAST_TIMEOUT_MS),
-    });
-    if (!res.ok) {
-      console.warn(`[realtime] room broadcast failed (${res.status}) for ${fixtureId}`);
-    }
-  } catch (err) {
-    console.warn("[realtime] room broadcast error:", err);
-  }
+      // T16 — the spectators' copy, on the public fixture topic the public
+      // realtime token is minted for (V403): the board alone, never the
+      // draw offer. The watch island reads it through the match centre's
+      // one subscription (use-live-fixture → live-board-channel).
+      ...(spectator === null
+        ? []
+        : [{ topic: `fixture:${fixtureId}`, event: "board_state", payload: spectator, private: true as const }]),
+    ],
+    `room ${fixtureId}`,
+  );
 }
 
-export async function mintPublicFixtureToken(
-  fixtureId: string,
-  ttlSeconds = 3600,
-): Promise<string> {
-  const { key, alg, kid } = await resolveRealtimeMintKey();
-  const header: { alg: typeof alg; typ: "JWT"; kid?: string } = { alg, typ: "JWT" };
-  if (kid) header.kid = kid;
-  return new SignJWT({
-    role: "authenticated",
+/**
+ * Mint a subscriber JWT for a PUBLIC fixture channel (doc 09 §4). No user —
+ * spectators are anonymous; entitlement (org `realtime` feature) is checked by
+ * the route before minting. Short TTL: a spectator page re-requests freely.
+ * `ttlSeconds` from now, as the `${ttl}s` lifetime it always had.
+ */
+export async function mintPublicFixtureToken(fixtureId: string, ttlSeconds = 3600): Promise<string> {
+  return mintRealtimeToken({
     sub: `public:${fixtureId}`,
-    fixture_id: fixtureId,
-  })
-    .setProtectedHeader(header)
-    .setIssuedAt()
-    .setExpirationTime(`${ttlSeconds}s`)
-    .setAudience("authenticated")
-    .sign(key);
+    claims: { fixture_id: fixtureId },
+    expiresAt: new Date(Date.now() + ttlSeconds * 1000),
+  });
 }

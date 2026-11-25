@@ -27,6 +27,7 @@ import type { SessionDeps } from "./stream-sessions/deps";
 import { stopSession } from "./stream-sessions/stop";
 import { finishOwedStop } from "./stream-sessions/apply";
 import { endCourtBroadcastSoon } from "./stream-sessions/court-end";
+import { fireNudge, nudgeCodesOver } from "./stream-sessions/nudge";
 import { courtFactsOf, type CourtLinkRef } from "./court-stream-codes";
 import { frozenCompetitionIds } from "./entitlement-freeze";
 import { hasValidKek } from "@/server/relay/crypto";
@@ -145,7 +146,8 @@ export async function linkCourtStream(
   const { opensAt, expiresAt } = dayBounds(day, tz);
   if (expiresAt.getTime() <= now.getTime()) throw new HttpError(422, "that day is already over", "day_over");
   const fresh = freshTok(); // seal first: a missing KEK writes nothing
-  return sql.begin(async (tx) => {
+  const reissued: string[] = [];   // codes this call ended `reissued`: nudged `over` once the transaction has committed
+  const shown = await sql.begin(async (tx) => {
     await tx`select pg_advisory_xact_lock(hashtext(${"court_stream:" + input.courtId + ":" + day}))`;
     const [live] = await linkSelect(tx, tx`l.court_id = ${input.courtId} and l.day = ${day}::date and l.withdrawn_at is null`);
     if (live) {
@@ -155,7 +157,10 @@ export async function linkCourtStream(
       const shown = await shownOf(tx, live);
       if (shown.qr !== null) return shown;
       // An envelope that will not open is never re-shown: end it and mint a fresh code for the same link.
-      if (live.code_id !== null) await wipeStreamCodeTok(tx, live.code_id, "reissued", auth.userId);
+      if (live.code_id !== null) {
+        await wipeStreamCodeTok(tx, live.code_id, "reissued", auth.userId);
+        reissued.push(live.code_id);
+      }
       await mintCourtCode(tx, auth, live.id, fresh);
       const [again] = await linkSelect(tx, tx`l.id = ${live.id}`);
       return shownOf(tx, again!);
@@ -168,6 +173,10 @@ export async function linkCourtStream(
     const [row] = await linkSelect(tx, tx`l.id = ${link!.id}`);
     return shownOf(tx, row!);
   });
+  // Push nudges (plan T1.4): an envelope that would not open was ended `reissued`; its phones are told `over`, after the commit.
+  // An `over` also reaches a phone whose open session still rides the ended code (C1b): harmless, the beat is the truth and answers it.
+  fireNudge(nudgeCodesOver(reissued));
+  return shown;
 }
 
 /** The competition's candidate courts (every live division's, the scheduler's own resolver) and the courts carrying one of
@@ -233,6 +242,7 @@ export async function courtLinkOwner(linkId: string): Promise<{ orgId: string; c
 export async function withdrawCourtStream(auth: AuthCtx, linkId: string): Promise<void> {
   requireSessionEditor(auth);
   assertUuid(linkId, "court link");
+  const withdrawn: string[] = [];   // codes this call ended `withdrawn`: nudged `over` once the transaction has committed
   await sql.begin(async (tx) => {
     const [link] = await tx<{ id: string; withdrawn_at: Date | null }[]>`
       select id, withdrawn_at from court_stream_links where id = ${linkId} and org_id = ${auth.orgId} for update`;
@@ -240,8 +250,14 @@ export async function withdrawCourtStream(auth: AuthCtx, linkId: string): Promis
     if (link.withdrawn_at !== null) return;
     await tx`update court_stream_links set withdrawn_at = now(), withdrawn_by = ${auth.userId} where id = ${linkId}`;
     const codes = await tx<{ id: string }[]>`select id from fixture_stream_codes where court_link_id = ${linkId} and ended_at is null`;
-    for (const c of codes) await wipeStreamCodeTok(tx, c.id, "withdrawn", auth.userId);
+    for (const c of codes) {
+      await wipeStreamCodeTok(tx, c.id, "withdrawn", auth.userId);
+      withdrawn.push(c.id);
+    }
   });
+  // Push nudges (plan T1.4): the court's phone is told `over`, after the commit. A second withdraw ended nothing and sends nothing.
+  // An `over` also reaches a phone whose open session still rides the withdrawn code (C1b): harmless, the beat is the truth and answers it.
+  fireNudge(nudgeCodesOver(withdrawn));
 }
 
 /** The court's link that is not withdrawn and is open at `now` (`opens_at <= now < expires_at`), or null — also for a match
@@ -280,6 +296,7 @@ export async function setCourtStream(
   requireSessionEditor(auth);
   assertUuid(fixtureId, "fixture");
   await fixtureOf(auth, fixtureId); // the 404 for another org's fixture
+  const retired: string[] = [];   // the idle own code the ON retired: nudged `over` once the transaction has committed
   await sql.begin(async (tx) => {
     await lockFixtureCode(tx, fixtureId);
     if (on) {
@@ -297,6 +314,7 @@ export async function setCourtStream(
       const idle = await activeCodeOf(tx, fixtureId);
       if (idle) {
         await wipeStreamCodeTok(tx, idle.id, "withdrawn", auth.userId);
+        retired.push(idle.id);
         log.info({ orgId: auth.orgId, fixtureId, codeId: idle.id }, "court stream: switched on — the match's idle own code was retired (Web G)");
       }
     }
@@ -307,6 +325,7 @@ export async function setCourtStream(
          set court_stream = excluded.court_stream, updated_by = excluded.updated_by, updated_at = now(),
              revision = fixture_stream_settings.revision + 1`;
   });
+  fireNudge(nudgeCodesOver(retired));   // Push nudges (plan T1.4): the retired code's phone, if any, is told `over` (after the commit)
   if (!on) await stopCourtSessionOf(auth, fixtureId, deps);
   return { on };
 }

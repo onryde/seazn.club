@@ -12,6 +12,8 @@ const KNOWN = [
   "v1",
   "captureV2",
   "captureRecord",
+  "matchDayRealtime",
+  "divisionRealtimeDoor",
   "bracketFinish",
   "walkoverCredit",
   "streamOverlay",

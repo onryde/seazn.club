@@ -204,7 +204,14 @@ export const SPONSOR_LINK_MISS_LIMIT: RateLimitConfig = { max: 30, windowSeconds
  * the MD-1 final review's I1, amending the plan's Global Constraint). md_ traffic is budgeted per CODE, never per client
  * IP: umpires share venue Wi-Fi and carrier NAT, and one code is held by every phone at its venue. All fail OPEN, as the
  * capture budgets do: the token (256 bits) is the real defence against guessing.
- *  - MD_DAY_LIMIT: the day read, per code — a phone polls every 15 s, so 600 a minute carries 150 phones on one code;
+ *  - MD_DAY_LIMIT: the day read, per code — 1800 a minute carries 150 phones on one code at 12 reads a minute each (push
+ *    nudges, spec 2026-11-24 §7 Q4: a 15 s poll is 4 a minute and a ping-driven read comes at most once per 4 s, so a
+ *    phone's worst minute is 19 and 1800 holds 94 phones at that peak; the figure is a budget for the average, not the peak.
+ *    Peak phones BEYOND it are answered 429 on the day read and simply fall back to their 15 s poll, which is harmless: the
+ *    poll is the floor every phone already stands on, and a 429 costs the phone only the nudge's head start);
+ *  - MD_REALTIME_LIMIT: the realtime-token door, per code (a bucket of its OWN, so a token never spends the day read's) —
+ *    a phone mints once and refreshes at 80% of its token's life or when its channel errors, so 120 a minute carries a
+ *    venue-wide reconnect storm of 150 phones over a minute and a half;
  *  - MD_REVIEW_LIMIT: an approval's review, per code — the costliest md_ call (it commits a Swiss round's lots draw and
  *    runs a rolled-back Pair under the division lock: final review m4), and nobody reviews twice a second;
  *  - MD_APPROVE_LIMIT: an approval, per code — the first phone wins, a second is MD_ALREADY;
@@ -218,7 +225,8 @@ export const SPONSOR_LINK_MISS_LIMIT: RateLimitConfig = { max: 30, windowSeconds
  * A new link minted by an open spends the console's mint number on top (`DEVICE_LINK_MINT_LIMIT`), keyed on the code
  * (`dlmint:md:{code}`, never the IP), and only when it mints: a re-shown link writes nothing.
  */
-export const MD_DAY_LIMIT: RateLimitConfig = { max: 600, windowSeconds: 60 };
+export const MD_DAY_LIMIT: RateLimitConfig = { max: 1800, windowSeconds: 60 };
+export const MD_REALTIME_LIMIT: RateLimitConfig = { max: 120, windowSeconds: 60 };
 export const MD_REVIEW_LIMIT: RateLimitConfig = { max: 1, windowSeconds: 1 };
 export const MD_APPROVE_LIMIT: RateLimitConfig = { max: 10, windowSeconds: 1 };
 export const MD_OPEN_LIMIT: RateLimitConfig = { max: 120, windowSeconds: 60 };

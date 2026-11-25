@@ -39,9 +39,21 @@ describe("publishFixtureUpdate", () => {
     });
   });
 
+  // T1.1 review m2: divisionTopic refuses a blank id, and publishDivisionUpdate is still fire-and-forget — it resolves,
+  // sends nothing and warns in broadcast()'s own shape. Its callers `void` it, so a rejection would go unhandled.
+  it("publishDivisionUpdate with a blank division id resolves, sends nothing and warns once", async () => {
+    const { publishDivisionUpdate } = await import("../realtime");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(publishDivisionUpdate(" ", "score")).resolves.toBeUndefined();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(warn.mock.calls).toEqual([["[realtime] division   broadcast failed (Error)"]]);
+    warn.mockRestore();
+  });
+
   // Review m1 (player-stats refresh): a caller that awaits a broadcast must not
-  // be held by a realtime endpoint that never answers.
-  it.each(["publishFixtureUpdate", "publishDivisionUpdate"] as const)(
+  // be held by a realtime endpoint that never answers. The lobby publisher had
+  // no timeout until it moved onto broadcast() (realtime push-nudges T0.1).
+  it.each(["publishFixtureUpdate", "publishDivisionUpdate", "publishExternalPlayLobby"] as const)(
     "%s aborts a broadcast that never answers after BROADCAST_TIMEOUT_MS, and resolves",
     async (fn) => {
       const realtime = await import("../realtime");
@@ -58,7 +70,9 @@ describe("publishFixtureUpdate", () => {
       const sent =
         fn === "publishFixtureUpdate"
           ? realtime.publishFixtureUpdate("fx-1", "event")
-          : realtime.publishDivisionUpdate("div-1", "score");
+          : fn === "publishDivisionUpdate"
+            ? realtime.publishDivisionUpdate("div-1", "score")
+            : realtime.publishExternalPlayLobby("fx-1");
       void sent.then(() => {
         settled = true;
       });
@@ -262,6 +276,44 @@ describe("mintPublicFixtureToken", () => {
     );
   });
 
+  // Push nudges T5 review (m5): V8's JSON.parse message QUOTES the input for some malformations ("Unexpected token 'S',
+  // "{"d":SECRET…}" is not valid JSON"), and the mint error reaches a log line and Sentry (the capture beat's
+  // realtime_mint report). So the error names the parse error by NAME only. Both env sources, both minters.
+  it("a malformed JWK's error carries no fragment of the key — raw or base64, the fixture mint or the capture mint", async () => {
+    const FRAGMENT = "KEYFRAG7Zx";   // short: V8 quotes a window of ~10 characters either side of the bad token
+    const malformed = `{"kty":"EC","d":${FRAGMENT}}`;
+    let parseMessage = "";
+    try {
+      JSON.parse(malformed);
+    } catch (err) {
+      parseMessage = (err as Error).message;
+    }
+    expect(parseMessage, "PREMISE: this engine's JSON.parse message quotes the input").toContain(FRAGMENT);
+    let checked = 0;
+    for (const source of ["raw", "b64"] as const) {
+      for (const minter of ["fixture", "capture"] as const) {
+        vi.resetModules();
+        delete process.env.SUPABASE_JWT_PRIVATE_KEY;
+        delete process.env.SUPABASE_JWT_SIGNING_KEY_B64;
+        delete process.env.SUPABASE_JWT_SECRET;
+        if (source === "raw") process.env.SUPABASE_JWT_PRIVATE_KEY = malformed;
+        else process.env.SUPABASE_JWT_SIGNING_KEY_B64 = Buffer.from(malformed, "utf8").toString("base64");
+        const m = await import("../realtime");
+        const minted = minter === "fixture" ? m.mintPublicFixtureToken("fx-5", 60) : m.mintCaptureToken("pairing-5", new Date(Date.now() + 60_000));
+        const err = await minted.then(() => null, (e: unknown) => e);
+        expect(err, `${source}/${minter}: refused`).toBeInstanceOf(Error);
+        const e = err as Error;
+        expect(e.message, `${source}/${minter}: the refusal names the variable`).toMatch(/SUPABASE_JWT_PRIVATE_KEY is not valid JWK JSON/);
+        for (const text of [e.message, e.stack ?? "", JSON.stringify(e, Object.getOwnPropertyNames(e))]) {
+          expect(text.includes(FRAGMENT), `${source}/${minter}: a key fragment in the error`).toBe(false);
+        }
+        expect(e.message, `${source}/${minter}: the parse error by name`).toContain("SyntaxError");
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
+  });
+
   // Review 2026-09-14, I7c — an unrecognized jwk.alg (ES512, EdDSA, …) used to
   // be silently coerced to ES256 rather than rejected, so the minted token's
   // header would lie about the algorithm that actually signed it.
@@ -326,5 +378,148 @@ describe("mintPublicFixtureToken", () => {
 
     const { mintPublicFixtureToken } = await import("../realtime");
     await expect(mintPublicFixtureToken("fx-6", 60)).rejects.toThrow();
+  });
+});
+
+// Realtime push-nudges T0.1, commit a — the four existing publishers delegate
+// to ONE transport, `broadcast()`, and must stay byte-identical on the wire.
+// Every literal below was COPIED from the bodies today's code put on the wire
+// (captured at 964ee72479, before the delegation), with the clock frozen so
+// `v` and `at` are fixed. They are never generated by the new code: a change
+// to key order, an added `private`, a dropped field or a split request fails
+// here. Applies to another sport: N/A (no sport rules).
+describe("golden wire bodies (byte-identical across the broadcast() delegation)", () => {
+  const fetchMock = vi.fn();
+  /** 2026-11-24T10:00:00.123Z — the frozen clock every literal was captured at. */
+  const FROZEN_MS = 1795514400123;
+  const URL = "https://example.supabase.co/realtime/v1/api/broadcast";
+  const HEADERS = { "Content-Type": "application/json", Authorization: "Bearer service-role", apikey: "service-role" };
+
+  beforeEach(() => {
+    vi.resetModules();
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue({ ok: true, status: 202 });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.useFakeTimers({ toFake: ["Date"], now: FROZEN_MS });
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "https://example.supabase.co";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role";
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+  });
+
+  /** The one request the publisher made: URL, method, headers (with their order) and the raw body string. */
+  const onlyRequest = () => {
+    expect(fetchMock, "exactly one POST per publish").toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0]! as [string, RequestInit];
+    expect(url).toBe(URL);
+    expect(init.method).toBe("POST");
+    expect(init.headers).toStrictEqual(HEADERS);
+    expect(Object.keys(init.headers as Record<string, string>)).toEqual(Object.keys(HEADERS));
+    return init;
+  };
+
+  it("publishFixtureUpdate: one private state_changed on fixture:{id}", async () => {
+    const { publishFixtureUpdate } = await import("../realtime");
+    await publishFixtureUpdate("fx-1", "event");
+    const init = onlyRequest();
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect(init.body).toBe(
+      '{"messages":[{"topic":"fixture:fx-1","event":"state_changed","payload":{"v":1795514400123,"reason":"event","at":"2026-11-24T10:00:00.123Z"},"private":true}]}',
+    );
+  });
+
+  // Task 14 (D-a, the §4.3 dual-publish window): the division's PUBLIC message is kept byte for byte — the literal inside
+  // each body below is the one captured at 964ee72479 — and its private twin follows it in the SAME request: the same
+  // topic, event and payload, plus `private: true`. An old public tab still hears the public one; a page that joined
+  // through the division door (Task 13) hears the twin. Never two requests.
+  const DIVISION_SCORE_PUBLIC =
+    '{"topic":"division:dv-1","event":"state_changed","payload":{"v":1795514400123,"reason":"score","at":"2026-11-24T10:00:00.123Z"}}';
+  const DIVISION_SCHEDULE_PUBLIC =
+    '{"topic":"division:dv-1","event":"schedule_changed","payload":{"v":1795514400123,"reason":"schedule","at":"2026-11-24T10:00:00.123Z"}}';
+  /** The twin of a golden public message: the same object, `private: true` appended as its last key. */
+  const twinOf = (publicMsg: string) => `${publicMsg.slice(0, -1)},"private":true}`;
+
+  it("publishDivisionUpdate score: ONE POST — the golden public state_changed, then its private twin", async () => {
+    const { publishDivisionUpdate } = await import("../realtime");
+    await publishDivisionUpdate("dv-1", "score");
+    const init = onlyRequest();
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect(init.body).toBe(
+      '{"messages":[{"topic":"division:dv-1","event":"state_changed","payload":{"v":1795514400123,"reason":"score","at":"2026-11-24T10:00:00.123Z"}},' +
+        '{"topic":"division:dv-1","event":"state_changed","payload":{"v":1795514400123,"reason":"score","at":"2026-11-24T10:00:00.123Z"},"private":true}]}',
+    );
+    expect(init.body).toBe(`{"messages":[${DIVISION_SCORE_PUBLIC},${twinOf(DIVISION_SCORE_PUBLIC)}]}`);
+  });
+
+  it("publishDivisionUpdate schedule: ONE POST — the golden public schedule_changed, then its private twin", async () => {
+    const { publishDivisionUpdate } = await import("../realtime");
+    await publishDivisionUpdate("dv-1", "schedule");
+    const init = onlyRequest();
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect(init.body).toBe(`{"messages":[${DIVISION_SCHEDULE_PUBLIC},${twinOf(DIVISION_SCHEDULE_PUBLIC)}]}`);
+  });
+
+  // Every reason, in the rulebook's own words (the DivisionUpdateReason union, spelled out so a new reason must be
+  // added here): the public message is always first and never private; the twin differs from it ONLY by `private`.
+  it.each([
+    ["schedule", "schedule_changed"],
+    ["publish", "schedule_changed"],
+    ["start", "schedule_changed"],
+    ["score", "state_changed"],
+  ] as const)("divisionMessages %s: [public %s, its twin] — the twin is the public message plus private: true", async (reason, event) => {
+    const { divisionMessages } = await import("../realtime");
+    const [publicMsg, twin, ...rest] = divisionMessages("dv-1", reason);
+    expect(rest, "exactly two messages").toEqual([]);
+    expect(publicMsg).toStrictEqual({
+      topic: "division:dv-1",
+      event,
+      payload: { v: FROZEN_MS, reason, at: "2026-11-24T10:00:00.123Z" },
+    });
+    expect("private" in publicMsg!, "the public message carries no private key at all").toBe(false);
+    expect(twin).toStrictEqual({ ...publicMsg, private: true });
+  });
+
+  it("publishRoomBroadcast: room_state and board_state in ONE request, both private", async () => {
+    const { publishRoomBroadcast } = await import("../realtime");
+    await publishRoomBroadcast("fx-1", {
+      fen: "rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2",
+      lastMove: "g1f3",
+      turn: "black",
+      whiteMs: 590_000,
+      blackMs: 595_000,
+      status: "started",
+      drawOfferBy: "white",
+    });
+    const init = onlyRequest();
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect(init.body).toBe(
+      '{"messages":[{"topic":"external-play:fx-1","event":"room_state","payload":{"fen":"rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2","lastMove":"g1f3","turn":"black","whiteMs":590000,"blackMs":595000,"status":"started","drawOfferBy":"white"},"private":true},{"topic":"fixture:fx-1","event":"board_state","payload":{"fen":"rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2","lastMove":"g1f3","turn":"black","ply":3,"whiteMs":590000,"blackMs":595000,"over":false},"private":true}]}',
+    );
+  });
+
+  it("publishExternalPlayLobby: one private lobby_changed whose payload is the version alone", async () => {
+    const { publishExternalPlayLobby } = await import("../realtime");
+    await publishExternalPlayLobby("fx-1");
+    const init = onlyRequest();
+    expect(init.signal, "the lobby publish carries the 3 s timeout too").toBeInstanceOf(AbortSignal);
+    expect(init.body).toBe(
+      '{"messages":[{"topic":"external-play:fx-1","event":"lobby_changed","payload":{"v":1795514400123},"private":true}]}',
+    );
+  });
+
+  // Sequence: a second publish is its own request carrying only its own message
+  // (the transport keeps no buffer between calls).
+  it("a second publish is an independent request with its own body", async () => {
+    const { publishFixtureUpdate } = await import("../realtime");
+    await publishFixtureUpdate("fx-1", "event");
+    await publishFixtureUpdate("fx-2", "finalize");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect((fetchMock.mock.calls[1]![1] as RequestInit).body).toBe(
+      '{"messages":[{"topic":"fixture:fx-2","event":"state_changed","payload":{"v":1795514400123,"reason":"finalize","at":"2026-11-24T10:00:00.123Z"},"private":true}]}',
+    );
   });
 });

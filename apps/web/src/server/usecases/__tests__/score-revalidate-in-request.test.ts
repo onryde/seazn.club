@@ -45,6 +45,8 @@ const probe = vi.hoisted(() => ({
   }>,
   fixturePushes: [] as Array<{ fixtureId: string; reason: string }>,
   divisionPushes: [] as Array<{ divisionId: string; reason: string }>,
+  /** Division messages that arrived WITHOUT their pair (Task 14 review m1): checked empty after every test. */
+  loneDivision: [] as string[],
   failScoreTag: false,
   failOnDecided: null as Error | null,
   // R10 M3: `scoreEvent` calls scoring.ts's own `onDecided` binding, which no
@@ -99,22 +101,49 @@ vi.mock("@/lib/cache", async (importOriginal) => {
         : actual.cacheDel(...keys),
   };
 });
+// Realtime push-nudges T0.2: a score hands its fixture push, its division push and every advanced-into fixture's push
+// to ONE `broadcast()` call. The passthrough records each message it is handed into the same lists, in send order, and
+// the per-message publishers (the `.catch` fallback still uses `publishFixtureUpdate`) record too, so a push sent either
+// way is seen, once.
 vi.mock("@/lib/realtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/realtime")>();
+  type Message = Parameters<typeof actual.broadcast>[0][number];
+  const isTwin = (publicMessage: Message | undefined, next: Message | undefined) =>
+    publicMessage !== undefined && publicMessage.private !== true && next !== undefined &&
+    JSON.stringify(next) === JSON.stringify({ ...publicMessage, private: true });
+  const record = (messages: Parameters<typeof actual.broadcast>[0]) => {
+    for (const [index, message] of messages.entries()) {
+      const { topic, payload } = message;
+      const { reason } = payload as { reason: string };
+      if (topic.startsWith("fixture:")) probe.fixturePushes.push({ fixtureId: topic.slice("fixture:".length), reason });
+      // A division push is TWO messages (Task 14, D-a): the public one, then its private twin. It is recorded ONCE, at its
+      // public message. A message without its pair (a public one with no twin after it, a twin with no public one before
+      // it) records no push and is logged to `loneDivision`, which fails the test in afterEach (review m1).
+      else if (topic.startsWith("division:")) {
+        const paired = message.private === true ? isTwin(messages[index - 1], message) : isTwin(message, messages[index + 1]);
+        if (!paired) probe.loneDivision.push(`${message.private === true ? "twin" : "public"} ${topic} ${reason} without its pair`);
+        else if (message.private !== true) probe.divisionPushes.push({ divisionId: topic.slice("division:".length), reason });
+      }
+    }
+  };
   return {
     ...actual,
+    broadcast: (messages: Parameters<typeof actual.broadcast>[0], label: string) => {
+      record(messages);
+      return actual.broadcast(messages, label);
+    },
     publishFixtureUpdate: (
       fixtureId: string,
       reason: Parameters<typeof actual.publishFixtureUpdate>[1],
     ) => {
-      probe.fixturePushes.push({ fixtureId, reason });
+      record([actual.fixtureMessage(fixtureId, reason)]);
       return actual.publishFixtureUpdate(fixtureId, reason);
     },
     publishDivisionUpdate: (
       divisionId: string,
       reason: Parameters<typeof actual.publishDivisionUpdate>[1],
     ) => {
-      probe.divisionPushes.push({ divisionId, reason });
+      record(actual.divisionMessages(divisionId, reason));
       return actual.publishDivisionUpdate(divisionId, reason);
     },
   };
@@ -315,7 +344,14 @@ const targetsOf = (kind: "del" | "scan") =>
 /** Every `log.error` message so far — for the quiet-twin checks. */
 const errorMessages = () => logMock.error.mock.calls.map((call) => call[1]);
 
+/** Every division message the recorder saw travelled with its pair (Task 14, D-a; review m1). Cleared as it is read. */
+function expectEveryDivisionMessagePaired(): void {
+  const lone = probe.loneDivision.splice(0);
+  expect(lone, "a division message went out without its public/private pair").toEqual([]);
+}
+
 afterEach(() => {
+  expectEveryDivisionMessagePaired();
   for (const gate of probe.gates.splice(0)) gate.resolve();
   probe.store = null;
   probe.failScoreTag = false;

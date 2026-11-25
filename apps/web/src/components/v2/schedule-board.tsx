@@ -492,6 +492,10 @@ interface Props {
     >;
   };
   viewerPlan: ViewerPlan;
+  /** The competition this board's divisions belong to — on EVERY board, division or competition. Its division door
+   *  admits the board to its private `division:{id}` topics (realtime push nudges). Separate from `competition`,
+   *  which only the competition schedule page passes and which turns the joint AI console on. */
+  realtimeCompetitionId: string;
 }
 
 /** Advance a YYYY-MM-DD key by n days (noon anchor dodges DST/midnight edges). */
@@ -654,7 +658,7 @@ export function ScheduleBoard({
   // ------------------------------------------------------------- actions
   // The read of the raw server list that everything else is built on, spelled
   // out in full so it reads as a deliberate act rather than a convenient local.
-  const actions = useBoardActions(divisions, props.fixtures, entrantNames, feedLabels, canEdit);
+  const actions = useBoardActions(divisions, props.fixtures, entrantNames, feedLabels, canEdit, props.realtimeCompetitionId);
 
   // Whole-division freeze toggle (Jul3/03 §4) — same endpoint the History
   // panel uses, surfaced where organisers actually are when it matters.

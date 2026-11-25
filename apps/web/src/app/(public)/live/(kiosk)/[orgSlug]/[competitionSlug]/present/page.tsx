@@ -79,6 +79,8 @@ export default async function PresentCompetitionPage({
       title={shell.competition.name}
       slides={slides}
       backHref={routes.publicHub(orgSlug, competitionSlug)}
+      // The public kiosk passes no `divisionIds` and no `realtime`, so it polls (unchanged by realtime push nudges).
+      competitionId={shell.competition.id}
       // C1 (OWNER RULING 2026-09-15): a phone gets a "made for a TV" card whose
       // Open the live page goes to the competition's hub.
       liveHref={kioskHubHref(orgSlug, competitionSlug)}

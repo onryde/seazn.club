@@ -19,6 +19,10 @@
 // subscription (use-live-fixture.ts, use-fixture-stream.ts), never on a timer,
 // so it stays on the 60 bucket.
 //
+// A THIRD bucket (realtime push nudges, plan Task 12): GET /public/competitions/{id}/realtime-token, the division-topic
+// token the hub, the slideshow and the board ask for, spends `pubv1rt` alone, 120 a minute, so a stadium behind one NAT
+// re-minting never touches the 60 or the poll budget, and the reverse.
+//
 // NOT_POLLED lists EVERY other route that calls `publicRateLimit` (13 of them,
 // review r2-m2), so moving any one of them to the poll bucket fails here.
 // register, register/join and by-ref/withdraw keep their own `rateLimit`
@@ -101,12 +105,19 @@ vi.mock("@/server/public-site/data", async (importOriginal) => ({
   fixtureRealtimeEligible: usecase.fixtureRealtimeEligible,
 }));
 vi.mock("@/server/video/seazn-video", () => ({ seaznFixtureVideo: usecase.seaznFixtureVideo }));
+const competitionRealtimeFor = vi.hoisted(() => vi.fn(async () => ({ token: "t", divisionIds: [], expiresAt: 1, url: "u", apikey: "k" })));
+vi.mock("@/server/public-site/division-realtime", () => ({ competitionRealtimeFor }));
+// The competition door reads the cookie session before its usecase; anonymous here (no request scope for next/headers).
+vi.mock("@/lib/auth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/auth")>()),
+  getCurrentUser: async () => null,
+}));
 vi.mock("@/lib/realtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/realtime")>()),
   mintPublicFixtureToken: usecase.mintPublicFixtureToken,
 }));
 
-import { publicPollRateLimit, publicRateLimit } from "@/server/usecases/public";
+import { publicPollRateLimit, publicRateLimit, publicRealtimeTokenRateLimit } from "@/server/usecases/public";
 import { GET as fixture } from "../fixtures/[id]/route";
 import { GET as overlay } from "../fixtures/[id]/overlay/route";
 import { GET as board } from "../fixtures/[id]/board/route";
@@ -118,6 +129,7 @@ import { GET as competition } from "../orgs/[orgSlug]/competitions/[slug]/route"
 import { GET as discovery } from "../discovery/route";
 import { GET as realtimeToken } from "../fixtures/[id]/realtime-token/route";
 import { GET as video } from "../fixtures/[id]/video/route";
+import { GET as competitionRealtimeToken } from "../competitions/[id]/realtime-token/route";
 import { GET as entrants } from "../orgs/[orgSlug]/competitions/[slug]/divisions/[divisionSlug]/entrants/route";
 import { GET as schedule } from "../orgs/[orgSlug]/competitions/[slug]/divisions/[divisionSlug]/schedule/route";
 import { GET as stats } from "../orgs/[orgSlug]/competitions/[slug]/divisions/[divisionSlug]/stats/route";
@@ -184,6 +196,7 @@ async function send(call: Call, ip: string, n: number): Promise<number[]> {
 
 beforeEach(() => {
   counters.clear();
+  competitionRealtimeFor.mockClear();
 });
 
 describe("the polled public endpoints: their own per-IP bucket, 300 a minute", () => {
@@ -257,7 +270,34 @@ describe("the two buckets are independent, and a request counts against exactly 
   });
 });
 
-describe("both limiters read the client IP the same way", () => {
+describe("the competition realtime-token door: a third bucket of its own, 120 a minute", () => {
+  const door: Call = (ip) => competitionRealtimeToken(from(ip), params({ id: "c1" }));
+
+  it("serves 120 from one IP, refuses the 121st, and touches neither the 60 nor the poll bucket", async () => {
+    const ip = "198.51.100.40";
+    const statuses = await send(door, ip, 121);
+    expect(statuses.slice(0, 120).filter((s) => s !== 200), "the first 120").toEqual([]);
+    expect(statuses[120], "the 121st").toBe(429);
+    expect(Object.fromEntries(counters), "counted in pubv1rt only").toEqual({ [`rl:pubv1rt:${ip}`]: 121 });
+    expect(competitionRealtimeFor, "the 121st never reached the usecase").toHaveBeenCalledTimes(120);
+  });
+
+  it("an exhausted realtime-token bucket still lets the same IP read (60) and poll (300)", async () => {
+    const ip = "198.51.100.41";
+    expect((await send(door, ip, 121)).at(-1), "premise: the realtime-token bucket is exhausted").toBe(429);
+    expect((await send(NOT_POLLED[0]![1], ip, 60)).filter((s) => s !== 200), "all 60 served").toEqual([]);
+    expect((await send(POLLED[2]![1], ip, 300)).filter((s) => s !== 200), "all 300 served").toEqual([]);
+  });
+
+  it("exhausted 60 and poll buckets still let the same IP mint all 120", async () => {
+    const ip = "198.51.100.42";
+    expect((await send(NOT_POLLED[0]![1], ip, 61)).at(-1), "premise: the 60 bucket is exhausted").toBe(429);
+    expect((await send(POLLED[2]![1], ip, 301)).at(-1), "premise: the poll bucket is exhausted").toBe(429);
+    expect((await send(door, ip, 120)).filter((s) => s !== 200), "all 120 served").toEqual([]);
+  });
+});
+
+describe("all three limiters read the client IP the same way", () => {
   it.each([
     ["the first x-forwarded-for hop", { "x-forwarded-for": " 203.0.113.9 , 10.0.0.1" }, "203.0.113.9"],
     ["x-real-ip when there is no x-forwarded-for", { "x-real-ip": "198.51.100.9" }, "198.51.100.9"],
@@ -266,6 +306,7 @@ describe("both limiters read the client IP the same way", () => {
     const req = new Request("http://x/", { headers });
     await publicRateLimit(req);
     await publicPollRateLimit(req);
-    expect(Object.fromEntries(counters)).toEqual({ [`rl:pubv1:${ip}`]: 1, [`rl:pubv1poll:${ip}`]: 1 });
+    await publicRealtimeTokenRateLimit(req);
+    expect(Object.fromEntries(counters)).toEqual({ [`rl:pubv1:${ip}`]: 1, [`rl:pubv1poll:${ip}`]: 1, [`rl:pubv1rt:${ip}`]: 1 });
   });
 });

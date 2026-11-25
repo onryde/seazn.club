@@ -32,6 +32,8 @@ import addFormats from "ajv-formats";
 import * as CS from "../capture-schemas";
 import * as S from "../schemas";
 import { CaptureQrV2, captureQrV2Text, parseCaptureQrV2 } from "@/lib/capture-qr";
+import { CAPTURE_NUDGE_REASONS, MATCH_DAY_NUDGE_REASONS, MATCH_DAY_TOKEN_TTL_SECONDS, captureTopic, divisionTopic, matchDayTopic } from "@/lib/realtime";
+import { contractUrlPatterns } from "@/server/usecases/__tests__/_capture-realtime";
 import type { RoundRole } from "@seazn/engine/competition";
 
 type Json = Record<string, unknown>;
@@ -51,7 +53,8 @@ const without = (o: Json, key: string): Json => Object.fromEntries(Object.entrie
 const SHA256: Record<string, string> = {
   "capture-qr.v2.json": "0943072e30489dad04822cf266cc62d4e004e3a2ef46fe20e712a274ae272fbe",
   "capture-descriptor.v1.json": "308d58807d3b3754ccf5b400c18827d09ffb5dd0177aaed7d10b31b307c027f4",
-  "capture-beat.v1.json": "2909429a2dba925d18fdddc357c9a8e393d7c5ef25156fb7f13f375e8daa7e87",
+  // Realtime push nudges (spec 2026-11-24 §2.1, plan Task 4): + the answer's optional `realtime`, additive.
+  "capture-beat.v1.json": "b86686ca4690a57b63830600c25fbdb8739b761d203dce113e32a70d4667ecef",
   "capture-start.v1.json": "46162c64e4b9e0da3f17a571103c3ba7e3e9e972997367c916bf7f6ea8e08778",
   "capture-scoring-link.v1.json": "daa81ed4f907545f0fb1a8265d11011fab3b90a52d880dda8e3839f7651b5032",
   "capture-record.v1.json": "213f766043b7682f198cc98da13e93995b6602e46533ecf60c78bf562aebd6f8",
@@ -66,6 +69,8 @@ const SHA256: Record<string, string> = {
   // Task 8e (owner 2026-11-13): a Match Day code calls a match to a court — the candidates, the preview, the call, the Undo.
   // Task 17: its candidates are rows too, so each reads live_seazn null.
   "capture-matchday-call.v1.json": "0f195d93e2f8cda7cdbaf2c0b84e3f1f3e132e9371c5821201ff86d4f07af796",
+  // Realtime push nudges (spec 2026-11-24 §3, plan Task 9): a Match Day code's realtime-token door. New file, no earlier version.
+  "capture-matchday-realtime.v1.json": "69cf50b5d21af717c91423c3a9d941eb53c8e63f9097af54a31a9b5370cc130a",
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -80,20 +85,30 @@ const COMMON = ["label", "scheduledStart", "autoAllowed", "destinationName", "ov
 const COMMON_NULLABLE = new Set<string>(["scheduledStart", "destinationName", "overlayUrl"]);
 // Court stream (spec 2026-11-14 §5.3): `next` is optional on EVERY answer branch, so it is a column of no state.
 // E2 (2026-11-17): `autoRefusal` is optional on the waiting branch only.
-const ANSWER_FIELDS = ["sid", "startedBy", "endReason", "device", "next", "autoRefusal", ...COMMON] as const;
+// Realtime push nudges (spec 2026-11-24 §2.1): `realtime` is "sent on every 2xx where the caller is the code's current
+// pairing (waiting, go-live, live, over-with-current-pairing); never on replaced or taken".
+const ANSWER_FIELDS = ["sid", "startedBy", "endReason", "device", "next", "autoRefusal", "realtime", ...COMMON] as const;
 type AnswerField = (typeof ANSWER_FIELDS)[number];
-const answerRow = (sid: Cell, startedBy: Cell, endReason: Cell, device: Cell, common: Cell, autoRefusal: Cell = NO): Record<AnswerField, Cell> => ({
-  sid, startedBy, endReason, device, next: OPT, autoRefusal, ...(Object.fromEntries(COMMON.map((f) => [f, common])) as Record<(typeof COMMON)[number], Cell>),
+const answerRow = (sid: Cell, startedBy: Cell, endReason: Cell, device: Cell, common: Cell, realtime: Cell, autoRefusal: Cell = NO): Record<AnswerField, Cell> => ({
+  sid, startedBy, endReason, device, next: OPT, autoRefusal, realtime, ...(Object.fromEntries(COMMON.map((f) => [f, common])) as Record<(typeof COMMON)[number], Cell>),
 });
-/** §17.5's table, row for row (absent = forbidden). */
+/** §17.5's table, row for row (absent = forbidden), with the push-nudge spec's `realtime` column. */
 const ANSWER_MATRIX: Record<string, Record<AnswerField, Cell>> = {
-  waiting: answerRow(NO, NO, NO, NO, REQ, OPT),
-  "go-live": answerRow(REQ, REQ, NO, NO, REQ),
-  live: answerRow(REQ, NO, NO, NO, REQ),
-  over: answerRow(REQ, NO, REQ, NO, REQ),
-  replaced: answerRow(NO, NO, NO, OPT, OPT),
-  taken: answerRow(NO, NO, NO, OPT, OPT),
+  waiting: answerRow(NO, NO, NO, NO, REQ, OPT, OPT),
+  "go-live": answerRow(REQ, REQ, NO, NO, REQ, OPT),
+  live: answerRow(REQ, NO, NO, NO, REQ, OPT),
+  over: answerRow(REQ, NO, REQ, NO, REQ, OPT),
+  replaced: answerRow(NO, NO, NO, OPT, OPT, NO),
+  taken: answerRow(NO, NO, NO, OPT, OPT, NO),
 };
+/** Push-nudge spec §2.1 and the plan's beat-reply constraint: the realtime object is exactly these five keys. */
+const REALTIME_KEYS = ["url", "apikey", "topic", "token", "expiresAt"] as const;
+/** The plan's Global Constraints (2026-11-24) and the phone's constraint 1: the names the phone already reads, which
+ *  the beat reply's realtime object must never reuse. */
+const PHONE_READ_NAMES = [
+  "state", "label", "autoAllowed", "pollSeconds", "venueTimezone", "scheduledStart", "destinationName", "next", "autoRefusal",
+  "stage", "role", "delivery",
+];
 
 /** §6.3.1's session shape, the fields the waiting shape lacks; §17.5: "endReason is required on ending, completed and
  *  failed, and absent on warming and live; cred is optional on warming, live and ending, and absent on completed and
@@ -275,6 +290,8 @@ const MD_APPROVAL = "capture-matchday-approval.v1.json", MD_APPROVAL_DIR = "capt
 // capture-matchday-call.v1 (Task 8e): the root is the candidates (the envelope's `data`); $defs.request the call's body,
 // $defs.preview / call / undo its 200s' `data`, $defs.refusal the `error`.
 const MD_CALL = "capture-matchday-call.v1.json", MD_CALL_DIR = "capture-matchday-call.v1";
+// capture-matchday-realtime.v1 (push nudges, Task 9): the root is the token door's answer (the envelope's `data`), $defs.refusal its `error`.
+const MD_RT = "capture-matchday-realtime.v1.json", MD_RT_DIR = "capture-matchday-realtime.v1";
 /** The record file's `$defs`, exactly: the two answers and the secret-shaped rules S2–S5 the server runs. */
 const RECORD_DEFS = ["ok", "refusal", "secretS2", "secretS3", "secretS4", "secretS5", "secretShaped"];
 /** Each file's `$defs`, exactly. */
@@ -284,6 +301,7 @@ const DEFS: Record<string, string[]> = {
   [MD_OPEN]: ["refusal"],
   [MD_APPROVAL]: ["ok", "refusal", "request"],
   [MD_CALL]: ["call", "preview", "refusal", "request", "undo"],
+  [MD_RT]: ["refusal"],
 };
 /** The record's twins, by the shape they mirror: the parity test compares each, and the tripwire holds every
  *  record-named zod export of capture-schemas.ts to exactly this list. `secretShaped` is the union of S2–S5 by `$ref`,
@@ -308,7 +326,7 @@ type Route = [
 const DIRS: Record<string, { file: string; routes: Route[]; count: number }> = {
   "capture-qr.v2": { file: QR, routes: [["", CaptureQrV2, ""]], count: 12 },
   "capture-descriptor.v1": { file: DESCRIPTOR, routes: [["refusal-", S.CaptureRefusal, "#/$defs/refusal"], ["", S.CaptureDescriptor, ""]], count: 58 },
-  "capture-beat.v1": { file: BEAT, routes: [["beat-", S.CaptureBeat, ""], ["answer-", S.CaptureBeatAnswer, "#/$defs/answer"], ["refusal-", S.CaptureRefusal, "#/$defs/refusal"]], count: 50 },
+  "capture-beat.v1": { file: BEAT, routes: [["beat-", S.CaptureBeat, ""], ["answer-", S.CaptureBeatAnswer, "#/$defs/answer"], ["refusal-", S.CaptureRefusal, "#/$defs/refusal"]], count: 57 },
   "capture-start.v1": { file: START, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureStartOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 18 },
   "capture-scoring-link.v1": { file: SCORING, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureScoringLinkOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 20 },
   [RECORD_DIR]: { file: RECORD, routes: [["line-", S.CaptureRecordLine, ""], ["ok-", S.CaptureRecordOk, "#/$defs/ok"], ["", S.CaptureRecordRefusal, "#/$defs/refusal"]], count: 63 },
@@ -336,6 +354,7 @@ const DIRS: Record<string, { file: string; routes: Route[]; count: number }> = {
     ],
     count: 26,
   },
+  [MD_RT_DIR]: { file: MD_RT, routes: [["refusal-", S.CaptureMatchdayRefusal, "#/$defs/refusal"], ["", S.CaptureMatchdayRealtime, ""]], count: 18 },
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -422,6 +441,9 @@ const CAPTURE_SCHEMAS_EXPORTS = [
   "CaptureBeatAnswer", "CaptureCause", "CaptureCourt", "CaptureCred", "CaptureDescriptor", "CaptureEndReason", "CaptureNotReady",
   "CapturePhoneState", "CaptureNext", "CaptureRefusal", "CaptureRefusalCode", "CaptureScoringLinkOk", "CaptureSession", "CaptureStage",
   "CaptureStageRole", "CaptureStartBody", "CaptureStartFailed", "CaptureStartOk", "CaptureStartedBy", "CaptureWaiting",
+  // Realtime push nudges (spec 2026-11-24 §2.1): the beat answer's realtime object, and its url pattern (the server's
+  // guard tests the RAW configured url with it; capture-beat-realtime.test.ts pins it to the file's).
+  "CaptureRealtime", "CAPTURE_REALTIME_URL_RE",
   // capture-record.v1 (2026-10-12).
   "CAPTURE_RECORD_MAX_BYTES", "CAPTURE_RECORD_MAX_LINES", "CAPTURE_RECORD_REF_RE", "CaptureRecordLine", "CaptureRecordOk",
   "CaptureRecordRefusal", "CaptureRecordRefusalCode", "CaptureRecordSecretS2", "CaptureRecordSecretS3",
@@ -437,6 +459,8 @@ const CAPTURE_SCHEMAS_EXPORTS = [
   "CaptureMatchdayCallRefusalCode", "CaptureMatchdayCallReason", "CaptureMatchdayCallRefusal", "CaptureMatchdayCandidate",
   "CaptureMatchdayCandidates", "CaptureMatchdayCallRequest", "CaptureMatchdayCallPreview", "CaptureMatchdayCallOk",
   "CaptureMatchdayUndoOk",
+  // capture-matchday-realtime.v1 (push nudges, Task 9): the realtime-token door's answer.
+  "CaptureMatchdayRealtime",
 ];
 
 /** The published bytes as a validator sees them: ajv 2020-12, strict, formats ASSERTED (uuid, uri, date-time) — the
@@ -453,13 +477,13 @@ function fileValidator(): (file: string, pointer: string, value: unknown) => boo
 }
 
 describe("capture contracts (docs/contracts/capture-*.json)", () => {
-  it("each of the ten contracts is checksummed (the cross-repo drift gate)", () => {
+  it("each of the eleven contracts is checksummed (the cross-repo drift gate)", () => {
     let checked = 0;
     for (const [file, sha] of Object.entries(SHA256)) {
       expect(createHash("sha256").update(contractText(file)).digest("hex"), file).toBe(sha);
       checked++;
     }
-    expect(checked).toBe(10);
+    expect(checked).toBe(11);
   });
 
   it("v1 is gone, and every published capture contract is twinned — the record included since its route landed (W4, §6.13; W27; 2026-10-12)", () => {
@@ -472,7 +496,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     // Every contract has its fixture directory in DIRS, the record's among them: no contract is left without a twin.
     expect(Object.values(DIRS).map((d) => d.file)).toContain(RECORD);
     expect(Object.keys(SHA256).filter((f) => !Object.values(DIRS).some((d) => d.file === f))).toEqual([]);
-    expect(Object.keys(DIRS)).toHaveLength(10);
+    expect(Object.keys(DIRS)).toHaveLength(11);
   });
 
   it("schemas.ts re-exports every twin by identity, never a re-typed copy", () => {
@@ -500,15 +524,15 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
   it("parity: each file (and each $def) equals z.toJSONSchema of its twin, as output AND as input, unions compared branch by branch on `state`", () => {
     const qr = contract(QR), desc = contract(DESCRIPTOR), beat = contract(BEAT), start = contract(START), scoring = contract(SCORING);
     const record = contract(RECORD), mdDay = contract(MD_DAY), mdOpen = contract(MD_OPEN), mdApproval = contract(MD_APPROVAL);
-    const mdCall = contract(MD_CALL);
+    const mdCall = contract(MD_CALL), mdRealtime = contract(MD_RT);
     let defsChecked = 0;
-    for (const [file, json] of [[QR, qr], [DESCRIPTOR, desc], [BEAT, beat], [START, start], [SCORING, scoring], [RECORD, record], [MD_DAY, mdDay], [MD_OPEN, mdOpen], [MD_APPROVAL, mdApproval], [MD_CALL, mdCall]] as const) {
+    for (const [file, json] of [[QR, qr], [DESCRIPTOR, desc], [BEAT, beat], [START, start], [SCORING, scoring], [RECORD, record], [MD_DAY, mdDay], [MD_OPEN, mdOpen], [MD_APPROVAL, mdApproval], [MD_CALL, mdCall], [MD_RT, mdRealtime]] as const) {
       expect(Object.keys((json.$defs as Json | undefined) ?? {}).sort(), `${file} $defs`).toEqual([...DEFS[file]!].sort());
       expect(json.$id, `${file} $id`).toBe(`https://seazn.club/contracts/${file}`);
       expect(json.$schema).toBe("https://json-schema.org/draft/2020-12/schema");
       defsChecked++;
     }
-    expect(defsChecked).toBe(10);
+    expect(defsChecked).toBe(11);
 
     const whole: [string, Json, Twin][] = [
       [QR, rootOf(qr), CaptureQrV2],
@@ -543,6 +567,9 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       [`${MD_CALL}#/$defs/call`, defOf(mdCall, "call"), S.CaptureMatchdayCallOk],
       [`${MD_CALL}#/$defs/undo`, defOf(mdCall, "undo"), S.CaptureMatchdayUndoOk],
       [`${MD_CALL}#/$defs/refusal`, defOf(mdCall, "refusal"), S.CaptureMatchdayCallRefusal],
+      // capture-matchday-realtime.v1 (push nudges, Task 9): the token door's answer and its refusal.
+      [MD_RT, rootOf(mdRealtime), S.CaptureMatchdayRealtime],
+      [`${MD_RT}#/$defs/refusal`, defOf(mdRealtime, "refusal"), S.CaptureMatchdayRefusal],
     ];
     let wholeChecked = 0;
     for (const io of IO) {
@@ -552,7 +579,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       }
     }
     expect(RECORD_TWINS).toHaveLength(7);
-    expect(wholeChecked).toBe((10 + 7 + 2 + 2 + 4 + 6) * 2);
+    expect(wholeChecked).toBe((10 + 7 + 2 + 2 + 4 + 6 + 2) * 2);
     // secretShaped is the union of S2–S5 by $ref, each once, in order — so "secret-shaped" is exactly the four twins.
     const shaped = defOf(record, "secretShaped");
     expect(shaped.type).toBe("string");
@@ -628,7 +655,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       expect(checked, `${dir}: fixtures checked`).toBe(count);
       total += checked;
     }
-    expect(total).toBe(12 + 58 + 50 + 18 + 20 + 63 + 15 + 10 + 17 + 26);
+    expect(total).toBe(12 + 58 + 57 + 18 + 20 + 63 + 15 + 10 + 17 + 26 + 18);
     expect(byFile, "fixtures checked against the published bytes").toBe(total);
     // Every ZOD_ONLY entry names a fixture that exists and was swept (a stale entry would excuse nothing, silently).
     expect(zodOnlySeen, "ZOD_ONLY fixtures swept").toBe(Object.keys(ZOD_ONLY).length);
@@ -735,14 +762,17 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     expect(all.some((b) => b.claim === "resume"), "a valid resume claim").toBe(true);
   });
 
-  it("R5/A21 beat answer: each state admits only its own fields — 6 states × 12 fields (court stream's `next` included) against the twin AND the file", () => {
+  it("R5/A21 beat answer: each state admits only its own fields — 6 states × 13 fields (court stream's `next` and the push nudges' `realtime` included) against the twin AND the file", () => {
     const states = Object.keys(ANSWER_MATRIX);
     const valid = Object.fromEntries(states.map((s) => [s, fixture("capture-beat.v1", `answer-valid-${s}`)]));
-    const donors = [...Object.values(valid), fixture("capture-beat.v1", "answer-valid-replaced-device"), fixture("capture-beat.v1", "answer-valid-waiting-next"), fixture("capture-beat.v1", "answer-valid-waiting-autoRefusal")];
+    const donors = [
+      ...Object.values(valid), fixture("capture-beat.v1", "answer-valid-replaced-device"), fixture("capture-beat.v1", "answer-valid-waiting-next"),
+      fixture("capture-beat.v1", "answer-valid-waiting-autoRefusal"), fixture("capture-beat.v1", "answer-valid-live-realtime"),
+    ];
     const twinCells = sweepTwin(ANSWER_MATRIX, ANSWER_FIELDS, valid, donors, S.CaptureBeatAnswer);
-    expect(twinCells).toBe(72);
+    expect(twinCells).toBe(78);
     const fileCells = sweepFile(ANSWER_MATRIX, ANSWER_FIELDS, branchesByState(defOf(contract(BEAT), "answer")));
-    expect(fileCells).toBe(72);
+    expect(fileCells).toBe(78);
   });
 
   it("R5/A21 descriptor: each state admits only its own fields — 6 states × 12 fields (W28's stage and the court stream's court included) against the twin AND the file", () => {
@@ -765,7 +795,8 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     }
     for (const [state, row] of Object.entries(ANSWER_MATRIX)) {
       for (const [field, cell] of Object.entries(row)) {
-        if (cell === OPT && field !== "next" && field !== "autoRefusal" && !COMMON_NULLABLE.has(field)) owed.push(["capture-beat.v1", `answer-invalid-null-${state}-${field}`, field, S.CaptureBeatAnswer]);
+        // `next`, `autoRefusal` and `realtime` have their own null tests below, on every state that admits them.
+        if (cell === OPT && field !== "next" && field !== "autoRefusal" && field !== "realtime" && !COMMON_NULLABLE.has(field)) owed.push(["capture-beat.v1", `answer-invalid-null-${state}-${field}`, field, S.CaptureBeatAnswer]);
       }
     }
     let checked = 0;
@@ -917,7 +948,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       expect(contractText(file), `${file}: a retired custom ingest host`).not.toMatch(RETIRED);
       contracts++;
     }
-    expect(contracts).toBe(10);
+    expect(contracts).toBe(11);
   });
 
   it("QR v2 `exp` (capture's A1, §1.2): optional, an integer ≥ 0 of epoch SECONDS; admitted when present, sent only on a court code", () => {
@@ -1308,6 +1339,153 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       expect(Object.keys(parsed).sort(), `${dir}/${name}: no court, no next added`).toEqual(Object.keys(fixture(dir, name)).sort());
     }
     expect(nulls + branches).toBe(12);
+  });
+
+  // Realtime push nudges (spec 2026-11-24 §2.1, plan Task 4): the beat answer's one optional `realtime` object.
+  it("realtime (push nudges §2.1): optional on waiting, go-live, live and over, refused on replaced and taken, never null, exactly five keys, strict and bounded — in the twin AND the file", () => {
+    const fileAdmits = fileValidator();
+    const B = "capture-beat.v1";
+    let judged = 0;
+    const judge = (v: unknown, admitted: boolean, what: string): void => {
+      expect(parses(S.CaptureBeatAnswer, v), `${what}: twin`).toBe(admitted);
+      expect(fileAdmits(BEAT, "#/$defs/answer", v), `${what}: file`).toBe(admitted);
+      judged++;
+    };
+    const live = fixture(B, "answer-valid-live");
+    const rt = fixture(B, "answer-valid-live-realtime").realtime as Json;
+    expect(Object.keys(rt).sort(), "premise: the fixture's object is the five keys").toEqual([...REALTIME_KEYS].sort());
+    expect(Object.keys(CS.CaptureRealtime.shape).sort(), "the twin's object is the five keys").toEqual([...REALTIME_KEYS].sort());
+    // Each named fixture differs from its plain sibling in `realtime` alone, so `realtime` is what it is judged on.
+    const named: [name: string, sibling: string, admitted: boolean][] = [
+      ["answer-valid-live-realtime", "answer-valid-live", true],
+      ["answer-valid-go-live-realtime", "answer-valid-go-live", true],
+      ["answer-invalid-null-realtime", "answer-valid-live", false],
+      ["answer-invalid-realtime-extra-key", "answer-valid-live", false],
+      ["answer-invalid-realtime-url-in-topic", "answer-valid-live", false],
+      ["answer-invalid-realtime-http-url", "answer-valid-live", false],
+      ["answer-invalid-replaced-realtime", "answer-valid-replaced", false],
+    ];
+    for (const [name, sibling, admitted] of named) {
+      const f = fixture(B, name);
+      expect(f.realtime, `${name}: premise — carries realtime`).not.toBeUndefined();
+      expect(without(f, "realtime"), `${name}: premise — differs from ${sibling} in realtime alone`).toEqual(fixture(B, sibling));
+      judge(f, admitted, name);
+    }
+    expect(fixture(B, "answer-invalid-null-realtime").realtime).toBeNull();
+    expect(Object.keys(fixture(B, "answer-invalid-realtime-extra-key").realtime as Json).filter((k) => !(REALTIME_KEYS as readonly string[]).includes(k))).toHaveLength(1);
+    // The rulebook's column, state by state: admitted on the current pairing's four, refused on replaced and taken (the
+    // caller no longer holds the pairing). Null is refused everywhere: omitted, never null.
+    const CURRENT_PAIRING_STATES = ["waiting", "go-live", "live", "over"];
+    let states = 0;
+    for (const state of Object.keys(ANSWER_MATRIX)) {
+      const base = fixture(B, `answer-valid-${state}`);
+      judge({ ...base, realtime: rt }, CURRENT_PAIRING_STATES.includes(state), `${state}: realtime`);
+      judge({ ...base, realtime: null }, false, `${state}: realtime null`);
+      states++;
+    }
+    expect(states).toBe(6);
+    // Every key is required; each bound admits itself and refuses one past it. The url is https, never in a secret's
+    // way: no userinfo, query or fragment (a token never rides a URL).
+    for (const key of REALTIME_KEYS) judge({ ...live, realtime: without(rt, key) }, false, `without ${key}`);
+    const cases: [field: (typeof REALTIME_KEYS)[number], value: unknown, admitted: boolean][] = [
+      ["apikey", "", false], ["apikey", "k", true], ["apikey", "k".repeat(512), true], ["apikey", "k".repeat(513), false],
+      ["token", "", false], ["token", "t", true], ["token", "t".repeat(4096), true], ["token", "t".repeat(4097), false],
+      ["expiresAt", 0, false], ["expiresAt", 1, true], ["expiresAt", 1_790_865_000.5, false], ["expiresAt", "1790865000", false],
+      ["url", "https://fixtureproject.supabase.co", true], ["url", "https://fixtureproject.supabase.co/", true],
+      ["url", "http://fixtureproject.supabase.co", false], ["url", "wss://fixtureproject.supabase.co", false],
+      ["url", "https://", false], ["url", "fixtureproject.supabase.co", false],
+      ["url", "https://fixtureproject.supabase.co?apikey=k", false], ["url", "https://fixtureproject.supabase.co#k", false],
+      // …and after a path, where the host's own refusal no longer reaches (the path part refuses them).
+      ["url", "https://fixtureproject.supabase.co/?apikey=k", false], ["url", "https://fixtureproject.supabase.co/p#k", false],
+      ["url", "https://user:k@fixtureproject.supabase.co", false],
+    ];
+    for (const [field, value, admitted] of cases) judge({ ...live, realtime: { ...rt, [field]: value } }, admitted, `${field} ${JSON.stringify(value).slice(0, 40)}`);
+    expect(judged).toBe(named.length + 2 * 6 + REALTIME_KEYS.length + cases.length);
+  });
+
+  it("realtime.topic is the bare capture:{pairingId} the real builder makes (lib/realtime.ts captureTopic) — never the joined realtime:{topic}, another family's topic, or a URL", () => {
+    const fileAdmits = fileValidator();
+    const B = "capture-beat.v1";
+    const live = fixture(B, "answer-valid-live");
+    const rt = fixture(B, "answer-valid-live-realtime").realtime as Json;
+    const pairing = "7b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e";
+    expect(rt.topic, "premise: the fixture's topic is the builder's").toBe(captureTopic(pairing));
+    const ids = [pairing, "00000000-0000-4000-8000-000000000000", "ffffffff-ffff-4fff-bfff-ffffffffffff", "01936f3e-8b2a-7c4d-9e5f-0a1b2c3d4e5f"];
+    // 36 characters that are not the lowercase 8-4-4-4-12 shape: 36 hex with no dashes, the first dash one place early,
+    // a dash INSIDE each of the five groups (so a group widened to [0-9a-f-] is refused), and 36 dashes. Premise: each is
+    // 36 long, so only the shape can refuse it.
+    const DASH_INSIDE_GROUP = [4, 10, 15, 20, 30];   // one index inside each group: 0-7, 9-12, 14-17, 19-22, 24-35
+    const impostors = [
+      ...ids.flatMap((id) => [id.replaceAll("-", "").padEnd(36, "0"), `${id.slice(0, 7)}-${id.slice(7, 8)}${id.slice(9)}`]),
+      ...ids.flatMap((id) => DASH_INSIDE_GROUP.map((i) => `${id.slice(0, i)}-${id.slice(i + 1)}`)),
+      "-".repeat(36),
+    ];
+    for (const s of impostors) expect(s, `premise: ${s} is 36 characters`).toHaveLength(36);
+    const topics: [topic: string, admitted: boolean][] = [
+      ...ids.map((id): [string, boolean] => [captureTopic(id), true]),
+      ...ids.flatMap((id): [string, boolean][] => [
+        [`realtime:${captureTopic(id)}`, false],     // the joined form: the phone adds the prefix itself
+        [captureTopic(id.slice(1)), false], [captureTopic(`${id}0`), false],
+        [captureTopic(`https://fixtureproject.supabase.co/${id}`), false],
+        [matchDayTopic(id), false], [divisionTopic(id), false], [`fixture:${id}`, false],
+      ]),
+      ...impostors.map((s): [string, boolean] => [captureTopic(s), false]),
+      [captureTopic(pairing.toUpperCase()), false],  // a pairing id is a lowercase uuid (Postgres writes uuids lowercase)
+      ["capture:", false],
+    ];
+    let admitted = 0, refused = 0;
+    for (const [topic, ok] of topics) {
+      const v = { ...live, realtime: { ...rt, topic } };
+      expect(parses(S.CaptureBeatAnswer, v), `${topic}: twin`).toBe(ok);
+      expect(fileAdmits(BEAT, "#/$defs/answer", v), `${topic}: file`).toBe(ok);
+      if (ok) admitted++; else refused++;
+    }
+    expect(admitted).toBe(ids.length);
+    expect(refused).toBe(ids.length * (9 + DASH_INSIDE_GROUP.length) + 3);
+  });
+
+  it("realtime reuses no read name: neither the answer's new key nor any key inside it is a name the phone already reads (plan Global Constraints; phone constraint 1)", () => {
+    expect(PHONE_READ_NAMES, "the new key").not.toContain("realtime");
+    let checked = 0;
+    for (const key of Object.keys(CS.CaptureRealtime.shape)) {
+      expect(PHONE_READ_NAMES, `realtime.${key}`).not.toContain(key);
+      checked++;
+    }
+    expect(checked).toBe(REALTIME_KEYS.length);
+    // The name checked is the one both shapes carry: the twin's four current-pairing branches and the file's.
+    const twinBranches = S.CaptureBeatAnswer.options.filter((o) => "realtime" in o.shape).map((o) => o.shape.state.value).sort();
+    expect(twinBranches).toEqual(["go-live", "live", "over", "waiting"]);
+    const fileNodes = nodesAt(defOf(contract(BEAT), "answer"), ["realtime"]);
+    expect(fileNodes).toHaveLength(4);
+    for (const node of fileNodes) expect(Object.keys(node.properties as Json).sort()).toEqual([...REALTIME_KEYS].sort());
+  });
+
+  it("the published realtime prose carries the phone team's decisions: the private join, the `nudge` event and payload, every nudge reason, the swap rule, epoch seconds and the https url", () => {
+    const answer = defOf(contract(BEAT), "answer");
+    // CAPTURE_NUDGE_REASONS is the server's own declaration of what it sends (lib/realtime.ts), written as prose lists it.
+    const reasons = `${CAPTURE_NUDGE_REASONS.slice(0, -1).join(", ")} or ${CAPTURE_NUDGE_REASONS.at(-1)}`;
+    const PINS: [path: string, text: string][] = [
+      ["realtime", "`realtime:{topic}` with private: true"], ["realtime", "broadcast event `nudge`"], ["realtime", "payload {v, reason, at}"],
+      ["realtime", "v epoch milliseconds"], ["realtime", "at ISO-8601"], ["realtime", `reason ${reasons}`],
+      ["realtime", "an unknown reason is still a ping"], ["realtime", "not a refresh signal"], ["realtime", "under 10 minutes left"],
+      ["realtime", "channel error or refusal"], ["realtime", "never on replaced or taken"], ["realtime", "Omitted, never null"],
+      // The TTL (spec §2.1) and what an answer WITHOUT realtime means (spec §6: absent means poll only).
+      ["realtime", "Each token lives 30 minutes"], ["realtime", "keep a joined channel until its expiresAt"],
+      ["realtime", "absent means poll only"], ["realtime", "On replaced or taken, leave the channel"],
+      ["realtime.url", "https"], ["realtime.url", "wss"], ["realtime.topic", "capture:{pairingId}"], ["realtime.topic", "realtime:{topic}"],
+      ["realtime.token", "never in a record, snapshot, log line or URL"], ["realtime.expiresAt", "epoch seconds"],
+    ];
+    let pinned = 0;
+    for (const [path, text] of PINS) {
+      const nodes = nodesAt(answer, path.split("."));
+      expect(nodes, path).toHaveLength(4);
+      for (const node of nodes) {
+        expect(node.description, `${path} states "${text}"`).toContain(text);
+        pinned++;
+      }
+    }
+    expect(pinned).toBe(PINS.length * 4);
+    expect(CAPTURE_NUDGE_REASONS.length, "premise: the server declares reasons").toBeGreaterThan(0);
   });
 
   it("finding A (2026-11-19): the beat publishes its refusals, `app_outdated` (426, court codes only) among them — a word every refusal-bearing contract admits, with no extras, distinct from the unknown code's", () => {
@@ -1724,7 +1902,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     expect(names.length, "premise: capture-schemas.ts exports").toBeGreaterThan(0);
     // The full list, not a name pattern (review fix 8): a twin named, say, CaptureLogLine trips it too.
     expect([...names].sort()).toEqual([...CAPTURE_SCHEMAS_EXPORTS].sort());
-    expect(CAPTURE_SCHEMAS_EXPORTS).toHaveLength(26 + 3 + 11 + 6 + 1 + 3 + 9);
+    expect(CAPTURE_SCHEMAS_EXPORTS).toHaveLength(26 + 2 + 3 + 11 + 6 + 1 + 3 + 9 + 1);
     // Every record-named export that is a SHAPE (a zod object or string) is a twin the parity test compares, by
     // identity — an enum is checked by its options instead, a constant by the contract's prose.
     const twins = new Map(RECORD_TWINS.map(([pointer, twin, name]) => [name, { pointer, twin }]));
@@ -1884,6 +2062,65 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       expect(parses(S.CaptureMatchdayOpen, fixture(MD_OPEN_DIR, name)), name).toBe(false);
     }
     expect(fileAdmits(MD_OPEN, "#/$defs/refusal", fixture(MD_OPEN_DIR, "refusal-valid-out-of-scope"))).toBe(true);
+  });
+
+  it("the realtime token validates against capture-matchday-realtime.v1.json: five keys, the bare match-day:{codeId} topic the real builder makes, the beat's url pattern, and a refusal that is an md_ word (push nudges, Task 9)", () => {
+    const fileAdmits = fileValidator();
+    const rt = fixture(MD_RT_DIR, "valid");
+    // The five keys, the same names and bounds as the beat answer's realtime object (the phone reuses one reader), and no more.
+    expect(Object.keys(rt).sort()).toEqual([...REALTIME_KEYS].sort());
+    expect(Object.keys(CS.CaptureMatchdayRealtime.shape).sort()).toEqual([...REALTIME_KEYS].sort());
+    expect(fileAdmits(MD_RT, "", rt)).toBe(true);
+    expect(parses(S.CaptureMatchdayRealtime, rt)).toBe(true);
+    // The url's pattern is the beat's: the file's own text, and the twin's regex (the server's guard tests the RAW configured url with it).
+    const filePattern = (rootOf(contract(MD_RT)).properties as Record<string, Json>).url!.pattern;
+    const beatPattern = contractUrlPatterns()[0];
+    expect(filePattern, "one url pattern across the two realtime contracts").toBe(beatPattern);
+    expect(new RegExp(filePattern as string).source).toBe(CS.CAPTURE_REALTIME_URL_RE.source);
+    // The topic: exactly what the real builder makes, the code id a lowercase uuid; never another family's, the joined form or a URL.
+    const codeId = "2c9d4e7a-6b1f-4a38-9e52-7d0b3a8c1f64";
+    expect(rt.topic, "premise: the fixture's topic is the builder's").toBe(matchDayTopic(codeId));
+    const topics: [topic: string, admitted: boolean][] = [
+      [matchDayTopic(codeId), true], [matchDayTopic("00000000-0000-4000-8000-000000000000"), true],
+      [`realtime:${matchDayTopic(codeId)}`, false], [captureTopic(codeId), false], [divisionTopic(codeId), false], [`fixture:${codeId}`, false],
+      [matchDayTopic(codeId.toUpperCase()), false], [matchDayTopic(codeId.slice(1)), false], [matchDayTopic(`${codeId}0`), false],
+      [matchDayTopic(codeId.replaceAll("-", "").padEnd(36, "0")), false], [matchDayTopic(`https://mdproject.supabase.co/${codeId}`), false],
+      ["match-day:", false], ["match-day", false],
+    ];
+    let admitted = 0;
+    for (const [topic, ok] of topics) {
+      const v = { ...rt, topic };
+      expect(parses(S.CaptureMatchdayRealtime, v), `${topic}: twin`).toBe(ok);
+      expect(fileAdmits(MD_RT, "", v), `${topic}: file`).toBe(ok);
+      if (ok) admitted++;
+    }
+    expect(admitted).toBe(2);
+    expect(topics).toHaveLength(13);
+    // Bounds, both ways, twin and file (as the beat's: the same five keys).
+    const cases: [field: string, value: unknown, admitted: boolean][] = [
+      ["apikey", "", false], ["apikey", "k".repeat(512), true], ["apikey", "k".repeat(513), false],
+      ["token", "", false], ["token", "t".repeat(4096), true], ["token", "t".repeat(4097), false],
+      ["expiresAt", 0, false], ["expiresAt", 1, true], ["expiresAt", 1_794_078_000.5, false], ["expiresAt", "1794078000", false],
+      ["expiresAt", 1_794_078_000_000, true],   // schema admits any integer; epoch SECONDS is pinned by the route test's exp equality
+    ];
+    for (const [field, value, ok] of cases) {
+      const v = { ...rt, [field]: value };
+      expect(parses(S.CaptureMatchdayRealtime, v), `${field} ${JSON.stringify(value).slice(0, 30)}: twin`).toBe(ok);
+      expect(fileAdmits(MD_RT, "", v), `${field} ${JSON.stringify(value).slice(0, 30)}: file`).toBe(ok);
+    }
+    // The prose carries what the phone is promised: the nudge reasons are exactly the engine's, and the token life is the route's.
+    const prose = String(contract(MD_RT).description);
+    expect(MATCH_DAY_NUDGE_REASONS.length, "PREMISE: reasons read").toBeGreaterThan(0);
+    expect(prose).toContain(`reason ${MATCH_DAY_NUDGE_REASONS.slice(0, -1).join(", ")} or ${MATCH_DAY_NUDGE_REASONS.at(-1)}`);
+    expect(prose).toContain(`up to ${MATCH_DAY_TOKEN_TTL_SECONDS / 60} minutes`);
+    expect(prose).toContain("broadcast event `nudge`");
+    // Fixtures: the refusals are the four md_ words the day read answers; the realtime word is the envelope's, never `error.code` here.
+    for (const [name, ok] of [["refusal-valid-unknown", true], ["refusal-valid-withdrawn", true], ["refusal-valid-ended", true], ["refusal-valid-not-open", true], ["refusal-invalid-realtime-word", false]] as const) {
+      expect(fileAdmits(MD_RT, "#/$defs/refusal", fixture(MD_RT_DIR, name)), name).toBe(ok);
+      expect(parses(S.CaptureMatchdayRefusal, fixture(MD_RT_DIR, name)), name).toBe(ok);
+    }
+    // A credential never rides the url: no valid fixture carries a query, userinfo or fragment, and no key is a URL's.
+    expect(String(rt.url)).not.toMatch(/[?#@]/);
   });
 
   it("the approval validates against capture-matchday-approval.v1.json: the review carries no credential, the approve sends no tie picks, and a refusal is an md_ word (MD-1 Task 6)", () => {

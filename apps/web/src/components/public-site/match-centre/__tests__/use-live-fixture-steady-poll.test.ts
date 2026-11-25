@@ -14,7 +14,7 @@ import { POLL_MS, useLiveFixture, type UseLiveFixtureOptions, type UseLiveFixtur
 import { STREAM_POLL_MS } from "@/lib/stream-session-view";
 import { LOCKED_FIXTURE_STATUSES, SETTLED_FIXTURE_STATUSES } from "@/lib/fixture-status";
 
-vi.mock("@/lib/supabase-browser", () => ({ supabaseBrowser: () => { throw new Error("no realtime in this suite"); } }));
+vi.mock("@/lib/supabase-browser", () => ({ realtimeClient: () => { throw new Error("no realtime in this suite"); } }));
 
 const NOW = 1_700_000_000_000;
 beforeEach(() => vi.useFakeTimers({ now: NOW }));

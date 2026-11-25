@@ -105,6 +105,13 @@ export async function publicPollRateLimit(req: Request): Promise<void> {
   await rateLimit(`pubv1poll:${publicClientIp(req)}`, { max: 300, windowSeconds: 60 });
 }
 
+/** Per-IP limit for the competition realtime-token door (realtime push nudges spec 2026-11-24 §4.1, plan Task 12): 120 a
+ *  minute in a bucket of its own, so a stadium behind one NAT re-minting its division tokens never spends the 60 every other
+ *  public read gets, nor the poll bucket, and the reverse. The door calls this one only. */
+export async function publicRealtimeTokenRateLimit(req: Request): Promise<void> {
+  await rateLimit(`pubv1rt:${publicClientIp(req)}`, { max: 120, windowSeconds: 60 });
+}
+
 async function cached<T>(key: string, load: () => Promise<T>): Promise<T> {
   return cachedFor(key, TTL_SECONDS, load);
 }

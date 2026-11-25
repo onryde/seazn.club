@@ -36,6 +36,8 @@ const probe = vi.hoisted(() => ({
   divisionPushes: [] as Array<{ divisionId: string; reason: string }>,
   /** The realtime endpoint never answers. */
   hangPushes: false,
+  /** Send the push through the REAL `publishDivisionUpdate` (onto a stubbed `fetch`), so its wire body is read. */
+  wire: false,
 }));
 
 const logMock = vi.hoisted(() => ({
@@ -61,14 +63,17 @@ vi.mock("@/lib/cache", async (importOriginal) => {
         : actual.cacheDel(...keys),
   };
 });
-// Recorded, never sent.
+// Recorded, never sent: never a live vendor call from a test. A score's or a schedule write's one batched `broadcast`
+// (realtime T0.2) is dropped.
 vi.mock("@/lib/realtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/realtime")>();
   return {
     ...actual,
+    broadcast: async () => {},
     publishFixtureUpdate: async () => {},
-    publishDivisionUpdate: (divisionId: string, reason: string) => {
+    publishDivisionUpdate: (divisionId: string, reason: Parameters<typeof actual.publishDivisionUpdate>[1]) => {
       probe.divisionPushes.push({ divisionId, reason });
+      if (probe.wire) return actual.publishDivisionUpdate(divisionId, reason);
       return probe.hangPushes ? new Promise<void>(() => {}) : Promise.resolve();
     },
   };
@@ -231,6 +236,9 @@ afterEach(() => {
   probe.folds = 0;
   probe.divisionPushes.length = 0;
   probe.hangPushes = false;
+  probe.wire = false;
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   for (const fn of Object.values(logMock)) fn.mockClear();
 });
 
@@ -372,6 +380,45 @@ describe.skipIf(!HAS_DB)("a deciding score refreshes stats after the response, a
     expect(areTagsStale([comp], cachedAt)).toBe(true);
     expect(probe.divisionPushes.slice(pushesBeforeClose)).toEqual([{ divisionId, reason: "score" }]);
     expect(logMock.warn).not.toHaveBeenCalled();
+  }, 60_000);
+
+  // Realtime push nudges Task 14 (D-a) — another surface of the dual publish: the stats push goes out through the real
+  // `publishDivisionUpdate`, so it carries the division's public `state_changed` AND its private twin, in ONE POST. The
+  // expected messages are the golden wire shape's (`lib/__tests__/realtime-publish.test.ts`), never read back from the
+  // module: a score is `state_changed` with reason `score`, the twin the same plus `private: true`.
+  it("the stats push is ONE POST: the division's public state_changed, then its private twin (realtime T14)", async () => {
+    const { auth, divisionId, fixtureId } = await divisionWithABoard();
+    const broadcastUrl = "https://t14-stats.example.supabase.co/realtime/v1/api/broadcast";
+    const fetchSpy = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      void input;
+      void init;
+      return new Response(null, { status: 202 });
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://t14-stats.example.supabase.co");
+    vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "service-role");
+    vi.stubEnv("REALTIME_PUBLISH", undefined);
+    probe.wire = true;
+
+    const request = await inRequestWithAfter(() =>
+      scoreEvent(auth, fixtureId, { expected_seq: 1, type: "generic.result", payload: { p1Score: 3, p2Score: 1 } }),
+    );
+    const pushesBeforeClose = probe.divisionPushes.length;
+    await request.close();
+    expect(probe.divisionPushes.slice(pushesBeforeClose), "the refresh pushed its division once").toEqual([
+      { divisionId, reason: "score" },
+    ]);
+    // The push is not awaited by the refresh (review m1): give the stubbed fetch its tick.
+    for (let i = 0; i < 50 && !fetchSpy.mock.calls.some(([input]) => String(input) === broadcastUrl); i++) await sleep(10);
+    const posts = fetchSpy.mock.calls
+      .filter(([input]) => String(input) === broadcastUrl)
+      .map(([, init]) => (JSON.parse(String(init?.body)) as { messages: Array<Record<string, unknown>> }).messages);
+    expect(posts, "ONE POST for the stats push (the score's own batch goes through the mocked broadcast)").toHaveLength(1);
+    const [publicMsg, twin, ...rest] = posts[0]!;
+    expect(rest, "anti-vacuity: exactly the public message and its twin").toEqual([]);
+    expect(publicMsg).toMatchObject({ topic: `division:${divisionId}`, event: "state_changed", payload: { reason: "score" } });
+    expect("private" in publicMsg!, "the public message carries no private key").toBe(false);
+    expect(twin).toStrictEqual({ ...publicMsg, private: true });
   }, 60_000);
 
   it("a refresh registered inside unstable_cache cannot clear the ISR tags there: it says so, and the next refresh clears them (final review m7)", async () => {

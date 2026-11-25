@@ -47,6 +47,10 @@ export const LOGGER_OPTIONS = {
     // token endpoint answers in. The channel's tokens act as the channel; none is ever a log field.
     "*.refreshToken", "*.accessToken", "*.refresh_token", "*.access_token",
     "refreshToken", "accessToken", "refresh_token", "access_token",
+    // Push nudges (spec 2026-11-24 §2.1): the capture beat answer's realtime subscriber JWT, alone or inside the realtime
+    // object (top level, and an answer logged whole one level down). The Match Day door (§3) answers the token as a bare
+    // `{token, topic, …}` `data`, so `*.token` covers it logged whole one level down (`{ data }`, `{ answer }`).
+    "token", "*.token", "realtime.token", "*.realtime.token",
   ],
 } satisfies pino.LoggerOptions;
 

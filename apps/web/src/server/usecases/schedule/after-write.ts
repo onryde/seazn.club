@@ -4,8 +4,10 @@ import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { publicFixtureCacheKey } from "@/server/public-site/fixture-doc-cache-key";
 import { publicDivisionCacheKeys } from "@/server/public-site/division-doc-cache-keys";
 import { publicHubCacheKey } from "@/server/public-site/hub-doc-cache-keys";
-import { publishDivisionUpdate, publishFixtureUpdate } from "@/lib/realtime";
+import { broadcast, divisionMessages, fixtureMessage, realtimePublishEnabled, type RealtimeMessage } from "@/lib/realtime";
 import { log } from "@/server/logger";
+import { courtPairingNudges, fireNudge, hasCourtReadableId } from "@/server/usecases/stream-sessions/nudge";
+import { matchDayNudgesFor } from "@/server/usecases/match-day-nudges";
 
 // Every schedule write invalidates both public cache layers (the same pattern
 // as scoring, doc 09 §3 / doc 12 §2) and refreshes any open boards.
@@ -22,8 +24,9 @@ export function afterScheduleWrite(
   fixtureIds: readonly string[],
   /** `fixturePushes: false` sends no per-fixture push (the DEL still drops every key, and the division push still goes).
    *  For a write whose fixtures nobody can be watching yet: a quick match's create, which starts a division its guest has
-   *  not seen (owner 2026-11-13: 30 broadcasts for six sides playing twice, measured). Every other caller leaves it. */
-  opts: { fixturePushes?: boolean } = {},
+   *  not seen (owner 2026-11-13: 30 broadcasts for six sides playing twice, measured). Every other caller leaves it.
+   *  `reason: "call"` (match-day-call.ts only) names the Match Day nudge a call sends; every other write sends `schedule`. */
+  opts: { fixturePushes?: boolean; reason?: "call" } = {},
 ): void {
   fireDivisionRevalidate(divisionId, competitionId);
   // W2 — the competition HUB document (`pub:v1:hub:{competitionId}`) carries
@@ -63,10 +66,66 @@ export function afterScheduleWrite(
     log.error({ err, keys }, "schedule: a public Redis delete failed (the write stands)");
   });
   const pushFixtures = (opts.fixturePushes ?? true) && fixtureIds.length <= SCHEDULE_FIXTURE_PUSH_CAP;
+  // Realtime push-nudges T0.2: the division message and every fixture message go out in ONE broadcast (one POST under
+  // the cap), where they used to be one POST each.
+  //
+  // T1.5: the `next-match` nudges to the courts' camera phones ride in that SAME broadcast, so a write is still one POST. Their
+  // read starts NOW — the write has committed, and the read needs nothing the DEL does — and the push only AWAITS it, so the
+  // push time is the later of the DEL and the read, never DEL + read: R10c's "never longer than PUSH_AFTER_DELETE_BOUND_MS"
+  // (1500 ms) holds because the read has its own, tighter bound (COURT_NUDGE_READ_BOUND_MS). A slow or dead pool costs the
+  // write its court nudges and nothing else. The read is made only under the cap (`pushFixtures`: past it nobody is told per
+  // fixture) and only when publishing is on (`realtimePublishEnabled`: a kill switch sends nothing, so it reads nothing).
+  //
+  // Not nudged, by design: the OLD court of a moved fixture, and a fixture cleared off its court. That phone catches up on its
+  // own poll. And a link live now nudges its court's phone whichever day the fixture is on: a nudge only makes the phone beat,
+  // and the beat decides, so a spare nudge is harmless.
+  const court = pushFixtures && realtimePublishEnabled() ? courtNudges(fixtureIds) : Promise.resolve<RealtimeMessage[]>([]);
+  // T2.3: the competition's open Match Day codes hear of the write in the same POST. That read starts now too, under the same rules
+  // (publishing on, a bound, never a second POST), and is skipped for `fixturePushes: false` — the quick match's create, whose
+  // competition has no Match Day code. Unlike the court read it is NOT held back by SCHEDULE_FIXTURE_PUSH_CAP: a whole-division
+  // apply, publish or start changes the day a Match Day screen shows, and costs one message per open code, not per fixture.
+  const matchDay = opts.fixturePushes === false ? Promise.resolve<RealtimeMessage[]>([]) : matchDayNudgesFor(competitionId, opts.reason ?? "schedule");
   sendAfterDeleteOrBound(deleted, () => {
-    void publishDivisionUpdate(divisionId, reason);
-    if (pushFixtures) for (const id of fixtureIds) void publishFixtureUpdate(id, "schedule");
+    fireNudge(
+      (async () => {
+        const nudges = await court;
+        const dayNudges = await matchDay;
+        await broadcast(
+          [...divisionMessages(divisionId, reason), ...(pushFixtures ? fixtureIds.map((id) => fixtureMessage(id, "schedule")) : []), ...nudges, ...dayNudges],
+          "schedule",
+        );
+      })().catch((err: unknown) => {
+        log.warn({ err: err instanceof Error ? err.name : "error", divisionId }, "schedule: the realtime push failed (the write stands)");
+      }),
+    );
   });
+}
+
+/**
+ * How long a schedule write's court read may take before the push goes without the court nudges. Tighter than
+ * PUSH_AFTER_DELETE_BOUND_MS (1500 ms, cache.ts) on purpose: the read runs beside the DEL, so the push is never later than the
+ * larger of the two, and 750 ms is half the DEL's bound — a healthy pool answers one indexed read in single-digit ms, so this only
+ * ever trips on a stalled pool, and then losing one nudge (the phone beats on its poll anyway) is the cheap side of the trade.
+ */
+export const COURT_NUDGE_READ_BOUND_MS = 750;
+
+/** The court nudges of a write, or [] — never rejects, and never takes longer than COURT_NUDGE_READ_BOUND_MS (the read is
+ *  abandoned, not cancelled: a pooled statement cannot be). A fixture set with nothing to read (empty, or no uuid) reads nothing
+ *  and arms no timer. */
+async function courtNudges(fixtureIds: readonly string[]): Promise<RealtimeMessage[]> {
+  if (!hasCourtReadableId(fixtureIds)) return [];
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const bound = new Promise<RealtimeMessage[]>((resolve) => {
+      timer = setTimeout(() => { resolve([]); }, COURT_NUDGE_READ_BOUND_MS);
+    });
+    return await Promise.race([courtPairingNudges(fixtureIds), bound]);
+  } catch (err) {
+    log.warn({ err: err instanceof Error ? err.name : "error" }, "schedule: the courts' next-match nudges could not be read");
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** R10d n2: a schedule write that changed MORE fixtures than this sends no

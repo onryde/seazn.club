@@ -20,11 +20,12 @@ import "server-only";
 import { EngineError } from "@seazn/engine/core";
 import { divisionScoringClosed, DIVISION_GATE_REASON } from "@/lib/division-phase";
 import { withTenant, type Tx } from "@/lib/db";
-import { publishDivisionUpdate, publishFixtureUpdate } from "@/lib/realtime";
+import { divisionMessages, fixtureMessage, publishFixtureUpdate } from "@/lib/realtime";
 import { TABLE_CUT_DRIFT_KINDS } from "@/lib/table-cut-drift";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { appendEventInTx, type CascadeWriter } from "@/server/engine-db/append-event";
 import { log } from "@/server/logger";
+import { broadcastWithMatchDay } from "./match-day-nudges";
 import { schedulePlayerStatsRefresh } from "./player-stats-refresh";
 import { invalidatePublicCache, refreshDiscipline, refreshNews } from "./scoring";
 import { lockSwissBoardAppends, markDependentSeedProposalsStale, refoldStageTable } from "./stages";
@@ -155,9 +156,9 @@ async function afterVoids(auth: AuthCtx, divisionId: string, lines: readonly str
       auth.orgId,
       lines[0]!,
       true,
+      // Push nudges T0.2/T2.3: every line's push, the division's and the open Match Day codes' go out in ONE broadcast (it was 1 + N POSTs).
       (scope) => {
-        for (const id of lines) void publishFixtureUpdate(id, "event");
-        if (scope) void publishDivisionUpdate(scope.divisionId, "score");
+        broadcastWithMatchDay(scope?.matchDay, [...lines.map((id) => fixtureMessage(id, "event")), ...(scope ? divisionMessages(scope.divisionId, "score") : [])], "score");
       },
       [...lines.slice(1), ...emptied.filter((id) => !lines.includes(id))],
     ).catch((err: unknown) => {

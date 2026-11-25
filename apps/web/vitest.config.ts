@@ -76,6 +76,11 @@ for (const key of [
   // returns early. Suites that exercise publishing stub both themselves.
   "NEXT_PUBLIC_SUPABASE_URL",
   "SUPABASE_SERVICE_ROLE_KEY",
+  // The file's kill switch (`REALTIME_PUBLISH=Off`) is for local SERVERS. Once
+  // realtime.ts read it case-insensitively (T0.2 m5) it also silenced the
+  // suites above that stub the URL and key to count real broadcasts. The two
+  // drops just above are what keeps a test off stg.
+  "REALTIME_PUBLISH",
   "BUNNY_STREAM_LIBRARY_ID",
   "BUNNY_STREAM_API_KEY",
   "BUNNY_STREAM_READONLY_KEY",

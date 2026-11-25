@@ -1,7 +1,7 @@
 // Capture QR v2 §6.3.3 — the beat answer. Pure. `beatAnswer` decides the state (first row that applies wins, the
 // CLAIM_ROWS shape); `wireBeatAnswer` puts it on the wire as capture's R5 union (`CaptureBeatAnswer`, final).
 // The use-case (T8b) sends exactly what wireBeatAnswer returns, and stores ITS pollSeconds as the answered cadence.
-import type { CaptureAutoRefusal, CaptureBeatAnswer, CaptureNext, CaptureStartedBy } from "@/server/api-v1/capture-schemas";
+import type { CaptureAutoRefusal, CaptureBeatAnswer, CaptureNext, CaptureRealtime, CaptureStartedBy } from "@/server/api-v1/capture-schemas";
 import { POLL_STARTING_SECONDS } from "../config";
 import type { WireEndReason } from "./end-reason";
 import type { ClaimOutcome } from "./pairing";
@@ -69,6 +69,10 @@ export type BeatAnswerCommon = {
   next?: CaptureNext | null;
   /** E2: a COURT code's refusal word, on the waiting answer only; absent or null → omitted. */
   autoRefusal?: CaptureAutoRefusal | null;
+  /** Push nudges (spec 2026-11-24 §2.1): the current pairing's push channel, minted by the use-case. Sent on waiting,
+   *  go-live, live and over only — never replaced or taken, whose caller no longer holds the pairing. Absent or null →
+   *  omitted (never null on the wire). It moves no other field: pollSeconds is the same with or without it. */
+  realtime?: CaptureRealtime | null;
 };
 
 /** R5: one branch per state, each strict. Fields are picked by name, so a wider caller object never leaks a key onto the
@@ -81,11 +85,13 @@ export function wireBeatAnswer(core: BeatAnswerCore, common: BeatAnswerCommon): 
     pollSeconds: core.state === "waiting" && core.starting ? POLL_STARTING_SECONDS : common.pollSeconds,
     ...(common.next != null ? { next: { label: common.next.label, scheduledStart: common.next.scheduledStart } } : {}),
   };
+  const rt = common.realtime;
+  const realtime = rt != null ? { realtime: { url: rt.url, apikey: rt.apikey, topic: rt.topic, token: rt.token, expiresAt: rt.expiresAt } } : {};
   switch (core.state) {
-    case "waiting": return { state: "waiting", ...fields, ...(common.autoRefusal != null ? { autoRefusal: common.autoRefusal } : {}) };
-    case "go-live": return { state: "go-live", sid: core.sid, startedBy: core.startedBy, ...fields };
-    case "live": return { state: "live", sid: core.sid, ...fields };
-    case "over": return { state: "over", sid: core.sid, endReason: core.endReason, ...fields };
+    case "waiting": return { state: "waiting", ...fields, ...(common.autoRefusal != null ? { autoRefusal: common.autoRefusal } : {}), ...realtime };
+    case "go-live": return { state: "go-live", sid: core.sid, startedBy: core.startedBy, ...fields, ...realtime };
+    case "live": return { state: "live", sid: core.sid, ...fields, ...realtime };
+    case "over": return { state: "over", sid: core.sid, endReason: core.endReason, ...fields, ...realtime };
     case "replaced": return { state: "replaced", ...fields };
     case "taken": return { state: "taken", ...fields };
   }

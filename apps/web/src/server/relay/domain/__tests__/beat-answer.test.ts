@@ -2,6 +2,7 @@
 // The seam: beatAnswer's core, put on the wire by wireBeatAnswer, parses with the REAL CaptureBeatAnswer union (R5,
 // final, vendored by capture at 09e87aabd) for every state. Over's endReason comes through wireEndReason (T4b).
 import { describe, expect, it } from "vitest";
+import { captureTopic } from "@/lib/realtime";
 import { CaptureBeatAnswer, CaptureStartedBy } from "@/server/api-v1/capture-schemas";
 import { StreamFailReason } from "@/server/api-v1/schemas";
 import { POLL_FAR_SECONDS, POLL_NEAR_SECONDS, POLL_STARTING_SECONDS } from "../../config";
@@ -185,9 +186,11 @@ describe("the wire (R5): wireBeatAnswer(beatAnswer(…)) parses with the real Ca
               // Exactly the branch's keys: sid / startedBy / endReason appear where the matrix says and nowhere else,
               // and the common fields ride on EVERY 2xx, replaced and taken included (ask 1). `device` is PR-2's.
               // Court stream's `next` (§5.3) rides only when the caller gives one: COMMON is a fixture code's, so it is absent.
-              expect(Object.keys(wire).sort(), wire.state).toEqual(BRANCH_KEYS.get(wire.state)!.filter((k) => k !== "device" && k !== "next" && k !== "autoRefusal"));
+              // So does `realtime` (push nudges §2.1): COMMON carries none, so no answer here has it.
+              expect(Object.keys(wire).sort(), wire.state).toEqual(BRANCH_KEYS.get(wire.state)!.filter((k) => k !== "device" && k !== "next" && k !== "autoRefusal" && k !== "realtime"));
               expect(wire, wire.state).not.toHaveProperty("next");
               expect(wire, wire.state).not.toHaveProperty("autoRefusal");
+              expect(wire, wire.state).not.toHaveProperty("realtime");
               for (const k of COMMON_KEYS) expect(wire, `${wire.state} carries ${k}`).toHaveProperty(k);
               // go-live carries the open session's own startedBy, for every CaptureStartedBy option.
               if (wire.state === "go-live") expect(wire.startedBy, label).toBe(open!.startedBy);
@@ -269,7 +272,7 @@ describe("the wire (R5): wireBeatAnswer(beatAnswer(…)) parses with the real Ca
       const wire = wireBeatAnswer(core, { ...COMMON, next: NEXT });
       expect(wire, core.state).toHaveProperty("next", NEXT);
       expect(CaptureBeatAnswer.safeParse(wire).success, core.state).toBe(true);
-      expect(Object.keys(wire).sort(), core.state).toEqual(BRANCH_KEYS.get(wire.state)!.filter((k) => k !== "device" && k !== "autoRefusal"));
+      expect(Object.keys(wire).sort(), core.state).toEqual(BRANCH_KEYS.get(wire.state)!.filter((k) => k !== "device" && k !== "autoRefusal" && k !== "realtime"));
     }
     const unscheduled = wireBeatAnswer({ state: "live", sid: S }, { ...COMMON, next: { label: "TBD", scheduledStart: null } });
     expect(unscheduled.next).toEqual({ label: "TBD", scheduledStart: null });
@@ -291,5 +294,108 @@ describe("the wire (R5): wireBeatAnswer(beatAnswer(…)) parses with the real Ca
     const wire = wireBeatAnswer({ state: "waiting", starting: false }, { ...COMMON, next: wide });
     expect(wire.next).toEqual(NEXT);
     expect(CaptureBeatAnswer.safeParse(wire).success).toBe(true);
+  });
+
+  // Realtime push nudges (spec 2026-11-24 §2.1, plan Task 4): the current pairing's push channel. The rulebook, typed from
+  // the spec: "Sent on every 2xx where the caller is the code's current pairing (waiting, go-live, live, over-with-current-
+  // pairing); never on replaced or taken (the caller no longer holds the pairing)." Omitted, never null, like `next`.
+  // The topic comes from the real builder (lib/realtime.ts captureTopic), never a retyped string.
+  const PAIRING = "7b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e";
+  const REALTIME = {
+    url: "https://fixtureproject.supabase.co", apikey: "fixture-anon-key-public", topic: captureTopic(PAIRING),
+    token: "fixture-capture-token-not-a-jwt", expiresAt: 1_790_001_800,
+  };
+  const CARRIES_REALTIME: Record<BeatAnswerCore["state"], boolean> = { waiting: true, "go-live": true, live: true, over: true, replaced: false, taken: false };
+  const withoutRealtime = (w: object): object => Object.fromEntries(Object.entries(w).filter(([k]) => k !== "realtime"));
+
+  it("realtime rides on waiting, go-live, live and over exactly as given, never on replaced or taken; every answer parses", () => {
+    let carried = 0, dropped = 0;
+    for (const core of CORES) {
+      const wire = wireBeatAnswer(core, { ...COMMON, realtime: REALTIME });
+      if (CARRIES_REALTIME[core.state]) {
+        expect(wire, core.state).toHaveProperty("realtime", REALTIME);
+        carried++;
+      } else {
+        expect(wire, `${core.state}: the caller no longer holds the pairing`).not.toHaveProperty("realtime");
+        dropped++;
+      }
+      expect(CaptureBeatAnswer.safeParse(wire).success, core.state).toBe(true);
+      expect(Object.keys(wire).sort(), core.state)
+        .toEqual(BRANCH_KEYS.get(wire.state)!.filter((k) => k !== "device" && k !== "next" && k !== "autoRefusal" && (k !== "realtime" || CARRIES_REALTIME[core.state])));
+    }
+    // Anti-vacuity: both fates reached, and every core judged.
+    expect(carried).toBe(CORES.filter((c) => CARRIES_REALTIME[c.state]).length);
+    expect(carried).toBeGreaterThan(0);
+    expect(dropped).toBeGreaterThan(0);
+    expect(carried + dropped).toBe(CORES.length);
+  });
+
+  it("the empty case: a null or absent realtime is omitted, never null, on every branch", () => {
+    let checked = 0;
+    for (const core of CORES) {
+      expect(wireBeatAnswer(core, { ...COMMON, realtime: null }), `${core.state}: null`).not.toHaveProperty("realtime");
+      expect(wireBeatAnswer(core, COMMON), `${core.state}: absent`).not.toHaveProperty("realtime");
+      checked++;
+    }
+    expect(checked).toBe(CORES.length);
+  });
+
+  it("constraint 4: realtime moves nothing else — pollSeconds (row 5's starting cadence included) and every other key are identical with and without it", () => {
+    let checked = 0;
+    for (const core of CORES) {
+      for (const pollSeconds of [POLL_NEAR_SECONDS, POLL_FAR_SECONDS]) {
+        const plain = wireBeatAnswer(core, { ...COMMON, pollSeconds });
+        const pushed = wireBeatAnswer(core, { ...COMMON, pollSeconds, realtime: REALTIME });
+        expect(pushed.pollSeconds, `${core.state} @${pollSeconds}`).toBe(plain.pollSeconds);
+        expect(withoutRealtime(pushed), `${core.state} @${pollSeconds}`).toEqual(plain);
+        checked++;
+      }
+    }
+    expect(checked).toBe(CORES.length * 2);
+    // The starting row still answers its own cadence with realtime present.
+    expect(wireBeatAnswer({ state: "waiting", starting: true }, { ...COMMON, pollSeconds: POLL_FAR_SECONDS, realtime: REALTIME }).pollSeconds).toBe(POLL_STARTING_SECONDS);
+  });
+
+  it("a wider realtime object never leaks an extra key onto the strict wire: the five fields are picked by name", () => {
+    const wide = { ...REALTIME, sub: `capture:${PAIRING}`, kid: "fixture-kid" } as typeof REALTIME;
+    let checked = 0;
+    for (const core of CORES.filter((c) => CARRIES_REALTIME[c.state])) {
+      const wire = wireBeatAnswer(core, { ...COMMON, realtime: wide });
+      expect(wire, core.state).toHaveProperty("realtime", REALTIME);
+      expect(CaptureBeatAnswer.safeParse(wire).success, core.state).toBe(true);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("second call: the same input gives the same output, and the caller's objects are neither mutated nor handed out", () => {
+    let checked = 0;
+    for (const core of CORES) {
+      const common: BeatAnswerCommon = { ...COMMON, realtime: { ...REALTIME } };
+      const before = structuredClone(common);
+      const first = wireBeatAnswer(core, common);
+      const second = wireBeatAnswer(core, common);
+      expect(second, core.state).toEqual(first);
+      expect(common, `${core.state}: input untouched`).toEqual(before);
+      if (CARRIES_REALTIME[core.state]) {
+        expect(first, core.state).toHaveProperty("realtime", REALTIME);
+        expect((first as { realtime?: unknown }).realtime, `${core.state}: a picked copy, not the caller's object`).not.toBe(common.realtime);
+      }
+      checked++;
+    }
+    expect(checked).toBe(CORES.length);
+  });
+
+  it("another surface: a court code's answer carries next, autoRefusal (waiting) and realtime together, and parses", () => {
+    let checked = 0;
+    for (const core of CORES) {
+      const wire = wireBeatAnswer(core, { ...COMMON, next: NEXT, autoRefusal: "no_credit", realtime: REALTIME });
+      expect(wire, core.state).toHaveProperty("next", NEXT);
+      if (CARRIES_REALTIME[core.state]) expect(wire, core.state).toHaveProperty("realtime", REALTIME);
+      else expect(wire, core.state).not.toHaveProperty("realtime");
+      expect(CaptureBeatAnswer.safeParse(wire).success, core.state).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(CORES.length);
   });
 });

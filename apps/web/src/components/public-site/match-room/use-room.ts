@@ -179,8 +179,10 @@ export function useRoom(initial: RoomSnapshot, token: string | null, grantRefuse
     let channel: any = null;
     (async () => {
       try {
-        const { supabaseBrowser } = await import("@/lib/supabase-browser");
-        const sb = supabaseBrowser();
+        // The LOBBY family's own client: the watch island on this page holds a fixture token, and `setAuth` is
+        // socket-wide (realtime push nudges, spec §4.2).
+        const { realtimeClient } = await import("@/lib/supabase-browser");
+        const sb = realtimeClient("lobby");
         const tok = rtTokenRef.current;
         if (!tok) return;
         await sb.realtime.setAuth(tok);

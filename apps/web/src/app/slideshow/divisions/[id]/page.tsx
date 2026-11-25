@@ -43,6 +43,8 @@ export default async function DivisionSlideshowPage({
       // console page, which the viewer can always open (a private
       // competition's public hub would 404).
       liveHref={routes.division(org.slug, competition.slug, division.slug)}
+      // The door the board asks for its private division topic (the token is fetched in the browser).
+      competitionId={division.competition_id}
       divisionIds={[id]}
       realtime={realtime}
       // competition.branding comes off the console read model (NOT emptied

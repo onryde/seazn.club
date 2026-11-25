@@ -154,11 +154,71 @@ const rt = vi.hoisted(() => {
   };
 });
 
+// Realtime push nudges (Task 13): the hub joins PRIVATE division topics on the
+// DIVISION family's client, after the competition door's token is set. The
+// client is faked here; the door module (`lib/division-realtime-auth.ts`) is
+// the REAL one, fed by `door` below through a stubbed `fetch`. `rt.log` records
+// the client calls in order, so "setAuth before any channel" is a fact read off
+// the log, not an assumption.
+const door = vi.hoisted(() => {
+  const state = {
+    calls: [] as string[],
+    /** The next answers, in order; the last one repeats. */
+    answers: [{ status: 200, token: "door-token-1", divisionIds: ["d1", "d2", "d3"] }] as {
+      status: number;
+      token?: string;
+      divisionIds?: string[];
+    }[],
+    served: 0,
+  };
+  // A plain function, not a vi.fn: the file's afterEach runs `vi.resetAllMocks()`.
+  const fetchDoor = async (input: unknown) => {
+    state.calls.push(String(input));
+    const a = state.answers[Math.min(state.served, state.answers.length - 1)]!;
+    state.served += 1;
+    // status 0: the network failed (fetch threw), no response at all.
+    if (a.status === 0) throw new TypeError("Failed to fetch");
+    if (a.status !== 200) return new Response(JSON.stringify({ ok: false }), { status: a.status });
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        data: { token: a.token, divisionIds: a.divisionIds, expiresAt: 0, url: "https://proj.supabase.co", apikey: "k" },
+      }),
+      { status: 200 },
+    );
+  };
+  const reset = (...answers: typeof state.answers) => {
+    state.calls.length = 0;
+    state.served = 0;
+    state.answers = answers.length > 0 ? answers : [{ status: 200, token: "door-token-1", divisionIds: ["d1", "d2", "d3"] }];
+  };
+  return { state, fetchDoor, reset };
+});
+const log = vi.hoisted(() => ({ entries: [] as string[], families: [] as string[] }));
 vi.mock("@/lib/supabase-browser", () => ({
-  supabaseBrowser: () => ({ channel: rt.channel }),
+  realtimeClient: (family: string) => {
+    log.families.push(family);
+    return {
+      realtime: {
+        setAuth: async (token: string) => {
+          log.entries.push(`setAuth ${token}`);
+        },
+      },
+      channel: (name: string, params?: { config?: { private?: boolean } }) => {
+        log.entries.push(`channel ${name} private=${params?.config?.private === true}`);
+        return rt.channel(name);
+      },
+    };
+  },
 }));
 
 import { fetchCompetitionHub } from "../competition-hub-data";
+import {
+  DIVISION_AUTH_BACKOFF_MS,
+  DIVISION_TOKEN_REFRESH_MS,
+  _resetDivisionRealtimeAuth,
+  _setDivisionAuthRandom,
+} from "@/lib/division-realtime-auth";
 import {
   HUB_BUILD_MARGIN_MS,
   HUB_IDLE_POLL_MS,
@@ -311,8 +371,17 @@ function mount(orgSlug: string, competitionSlug: string, initial: CompetitionHub
 
 beforeEach(() => {
   vi.useFakeTimers();
+  _resetDivisionRealtimeAuth();
+  // The backoff's jitter at its middle: every wait is exactly its rung.
+  _setDivisionAuthRandom(() => 0.5);
+  door.reset();
+  log.entries.length = 0;
+  log.families.length = 0;
+  vi.stubGlobal("fetch", door.fetchDoor);
 });
 afterEach(() => {
+  _resetDivisionRealtimeAuth();
+  vi.unstubAllGlobals();
   vi.useRealTimers();
   // `resetAllMocks`, not `clearAllMocks`. `clearAllMocks` runs `mockClear()`
   // — calls and results only — so a persistent `mockResolvedValue(...)` set
@@ -1237,5 +1306,244 @@ describe("useLiveCompetition: a division's last live match ENDS (T17)", () => {
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(HUB_POLL_MS);
     expect(rt.channels, "a channel was subscribed after unmount").toHaveLength(0);
+  });
+});
+
+// Realtime push nudges, Task 13 (spec §4.2): the hub asks the COMPETITION's
+// division door (`initial.competitionId`), sets the token on the division
+// family's client, and only then joins `division:{id}` PRIVATE. Every refusal
+// FINAL refusal (403, 404, …) means no channel and the plain poll, with nothing
+// on screen, and the door is not asked again. A TEMPORARY one (429, 5xx, the
+// network) is retried on the backoff ladder while the page polls (m2).
+describe("useLiveCompetition: the division door (realtime push nudges)", () => {
+  const ENV = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  beforeEach(() => {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "https://proj.supabase.co";
+    rt.reset();
+  });
+  afterEach(() => {
+    if (ENV === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+    else process.env.NEXT_PUBLIC_SUPABASE_URL = ENV;
+  });
+
+  const live = (...divisions: string[]) =>
+    docWith({ matches: divisions.map((d, i) => matchWith("live", "1-0", d, `f${i + 1}`)) });
+
+  it("a 200: the door is the competition's, setAuth runs first, and every channel is PRIVATE on the division client", async () => {
+    door.reset({ status: 200, token: "door-token-A", divisionIds: ["d1", "d2"] });
+    const hook = mount("o", "c", live("d1", "d2"), true);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(door.state.calls).toEqual(["/api/v1/public/competitions/c1/realtime-token"]);
+    expect(log.entries[0]).toBe("setAuth door-token-A");
+    const joins = log.entries.slice(1);
+    expect(joins.sort()).toEqual(["channel division:d1 private=true", "channel division:d2 private=true"]);
+    expect(new Set(log.families)).toEqual(new Set(["division"]));
+    expect(hook.current.transport).toBe("realtime");
+  });
+
+  for (const status of [403, 404]) {
+    it(`a ${status}: no setAuth, no channel, transport 'poll' at HUB_POLL_MS, and the poll still moves the page`, async () => {
+      door.reset({ status });
+      const spy = vi.spyOn(global, "setInterval");
+      vi.mocked(fetchCompetitionHub).mockResolvedValue(live("d1"));
+      const hook = mount("o", "c", live("d1"), true);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(door.state.calls).toHaveLength(1);
+      expect(log.entries).toEqual([]);
+      expect(rt.channels).toHaveLength(0);
+      expect(hook.current.transport).toBe("poll");
+      expect(spy.mock.calls.at(-1)?.[1]).toBe(HUB_POLL_MS);
+      await vi.advanceTimersByTimeAsync(HUB_POLL_MS);
+      expect(fetchCompetitionHub).toHaveBeenCalledTimes(1);
+      // A refused page does not keep knocking: the door is asked once for the page.
+      await vi.advanceTimersByTimeAsync(HUB_POLL_MS * 4);
+      expect(door.state.calls).toHaveLength(1);
+      spy.mockRestore();
+    });
+  }
+
+  // A kiosk that met one 503 (or a 429, or a dropped connection) at boot must not poll all day: the door is
+  // asked again at the jittered first rung, the page polls meanwhile, and it joins when the door is back.
+  for (const status of [503, 429, 0]) {
+    it(`a temporary refusal (${status === 0 ? "network failure" : status}): polls, then the retry at the first rung gets the token and JOINS`, async () => {
+      door.reset({ status }, { status: 200, token: "door-token-late", divisionIds: ["d1"] });
+      const spy = vi.spyOn(global, "setInterval");
+      vi.mocked(fetchCompetitionHub).mockResolvedValue(live("d1"));
+      const hook = mount("o", "c", live("d1"), true);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(door.state.calls).toHaveLength(1);
+      expect(log.entries).toEqual([]);
+      expect(hook.current.transport).toBe("poll");
+      expect(spy.mock.calls.at(-1)?.[1]).toBe(HUB_POLL_MS);
+
+      // The page keeps polling while the door is down.
+      await vi.advanceTimersByTimeAsync(DIVISION_AUTH_BACKOFF_MS[0] - 1);
+      expect(door.state.calls, "retried before its rung").toHaveLength(1);
+      expect(rt.channels).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(door.state.calls).toHaveLength(2);
+      expect(log.entries[0]).toBe("setAuth door-token-late");
+      expect(log.entries.slice(1)).toEqual(["channel division:d1 private=true"]);
+      expect(rt.channels.map((c) => c.name)).toEqual(["division:d1"]);
+      expect(hook.current.transport).toBe("realtime");
+      spy.mockRestore();
+    });
+  }
+
+  it("a second temporary failure goes on up the ladder (1 s, then 5 s) and a join follows the third answer", async () => {
+    door.reset({ status: 503 }, { status: 429 }, { status: 200, token: "door-token-3", divisionIds: ["d1"] });
+    const hook = mount("o", "c", live("d1"), true);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(DIVISION_AUTH_BACKOFF_MS[0]);
+    expect(door.state.calls).toHaveLength(2);
+    expect(hook.current.transport).toBe("poll");
+    await vi.advanceTimersByTimeAsync(DIVISION_AUTH_BACKOFF_MS[1] - 1);
+    expect(door.state.calls, "the second retry came before its 5 s rung").toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(door.state.calls).toHaveLength(3);
+    expect(log.entries[0]).toBe("setAuth door-token-3");
+    expect(rt.channels.map((c) => c.name)).toEqual(["division:d1"]);
+    expect(hook.current.transport).toBe("realtime");
+  });
+
+  it("a temporary refusal and then a 403 ends the retries: still polling, no more asks", async () => {
+    door.reset({ status: 503 }, { status: 403 });
+    const hook = mount("o", "c", live("d1"), true);
+    await vi.advanceTimersByTimeAsync(DIVISION_AUTH_BACKOFF_MS[0]);
+    expect(door.state.calls).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(DIVISION_AUTH_BACKOFF_MS.reduce((a, b) => a + b, 0));
+    expect(door.state.calls).toHaveLength(2);
+    expect(rt.channels).toHaveLength(0);
+    expect(hook.current.transport).toBe("poll");
+  });
+
+  it("the page going while the door is down stops the retries", async () => {
+    door.reset({ status: 503 });
+    const hook = mount("o", "c", live("d1"), true);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(DIVISION_AUTH_BACKOFF_MS[0]);
+    const asked = door.state.calls.length;
+    expect(asked).toBeGreaterThan(1);
+    hook.unmount();
+    await vi.advanceTimersByTimeAsync(DIVISION_AUTH_BACKOFF_MS.reduce((a, b) => a + b, 0) * 2);
+    expect(door.state.calls, "the door was asked after the page had unmounted").toHaveLength(asked);
+  });
+
+  it("an idle hub (nothing live) asks the door nothing; realtime={false} asks nothing either", async () => {
+    mount("o", "c", docWith({ bucket: "completed" }), true);
+    mount("o", "c", live("d1"), false);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(door.state.calls).toEqual([]);
+  });
+
+  it("a second live division needs no re-fetch: its channel joins on the token already set", async () => {
+    vi.mocked(fetchCompetitionHub).mockResolvedValueOnce(live("d1", "d2"));
+    mount("o", "c", live("d1"), true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(rt.channels.map((c) => c.name)).toEqual(["division:d1"]);
+
+    rt.channels[0]!.handlers.state_changed!();
+    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(rt.channels.map((c) => c.name)).toEqual(["division:d1", "division:d2"]);
+    expect(door.state.calls).toHaveLength(1);
+    expect(log.entries.filter((e) => e.startsWith("setAuth"))).toEqual(["setAuth door-token-1"]);
+  });
+
+  it("a live division the token does not cover is not joined, and the page polls at HUB_POLL_MS", async () => {
+    door.reset({ status: 200, token: "t", divisionIds: ["d1"] });
+    const spy = vi.spyOn(global, "setInterval");
+    const hook = mount("o", "c", live("d1", "d2"), true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(rt.channels.map((c) => c.name)).toEqual(["division:d1"]);
+    expect(hook.current.transport).toBe("poll");
+    expect(spy.mock.calls.at(-1)?.[1]).toBe(HUB_POLL_MS);
+    spy.mockRestore();
+  });
+
+  it("the token is refreshed at 50 minutes on the SAME channels (nothing is left or rejoined)", async () => {
+    door.reset(
+      { status: 200, token: "door-token-1", divisionIds: ["d1"] },
+      { status: 200, token: "door-token-2", divisionIds: ["d1"] },
+    );
+    vi.mocked(fetchCompetitionHub).mockResolvedValue(live("d1"));
+    const hook = mount("o", "c", live("d1"), true);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(DIVISION_TOKEN_REFRESH_MS - 1);
+    expect(door.state.calls).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(door.state.calls).toHaveLength(2);
+    expect(log.entries.filter((e) => e.startsWith("setAuth"))).toEqual(["setAuth door-token-1", "setAuth door-token-2"]);
+    expect(rt.channels).toHaveLength(1);
+    expect(rt.channels[0]!.unsubscribed).toBe(0);
+    expect(hook.current.transport).toBe("realtime");
+  });
+
+  it("CHANNEL_ERROR re-fetches the door after the backoff, then the failed channel is rejoined on the new token", async () => {
+    rt.setStatusFor("division:d1", "CHANNEL_ERROR");
+    door.reset(
+      { status: 200, token: "door-token-1", divisionIds: ["d1"] },
+      { status: 200, token: "door-token-2", divisionIds: ["d1"] },
+    );
+    vi.mocked(fetchCompetitionHub).mockResolvedValue(live("d1"));
+    const hook = mount("o", "c", live("d1"), true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(hook.current.transport).toBe("poll");
+
+    await vi.advanceTimersByTimeAsync(DIVISION_AUTH_BACKOFF_MS[0] - 1);
+    expect(door.state.calls).toHaveLength(1);
+    // The server would now admit it (a fresh token).
+    rt.setStatusFor("division:d1", "SUBSCRIBED");
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(door.state.calls).toHaveLength(2);
+    const d1 = rt.channels.filter((c) => c.name === "division:d1");
+    expect(d1.map((c) => c.unsubscribed)).toEqual([1, 0]); // the failed one let go, a fresh one joined
+    expect(log.entries.at(-1)).toBe("channel division:d1 private=true");
+    expect(log.entries.indexOf("setAuth door-token-2")).toBeLessThan(log.entries.lastIndexOf("channel division:d1 private=true"));
+    expect(hook.current.transport).toBe("realtime");
+  });
+
+  it("after unmount nothing is refreshed: the page asks the door no more", async () => {
+    const hook = mount("o", "c", live("d1"), true);
+    await vi.advanceTimersByTimeAsync(0);
+    hook.unmount();
+    await vi.advanceTimersByTimeAsync(2 * DIVISION_TOKEN_REFRESH_MS);
+    expect(door.state.calls).toHaveLength(1);
+  });
+
+  it("one session per page: a page whose live set grew, then unmounted, asks the door no more", async () => {
+    // Sequence case: each change of the live set re-runs the join, and every
+    // one of those must reuse the page's ONE session. A second acquire would
+    // hold a reference the unmount never hands back, and the token would keep
+    // being refreshed for a page that is gone.
+    vi.mocked(fetchCompetitionHub).mockResolvedValueOnce(live("d1", "d2"));
+    const hook = mount("o", "c", live("d1"), true);
+    await vi.advanceTimersByTimeAsync(0);
+    rt.channels[0]!.handlers.state_changed!();
+    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(rt.channels.map((c) => c.name), "premise: the live set grew").toEqual(["division:d1", "division:d2"]);
+
+    hook.unmount();
+    await vi.advanceTimersByTimeAsync(2 * DIVISION_TOKEN_REFRESH_MS);
+    expect(door.state.calls).toHaveLength(1);
+  });
+
+  it("the token never reaches the page's output or the hook's result", async () => {
+    door.reset({ status: 200, token: "door-token-SENTINEL", divisionIds: ["d1"] });
+    const hook = mount("o", "c", live("d1"), true);
+    await vi.advanceTimersByTimeAsync(0);
+    // Positive pair: the token WAS delivered — to the client, and nowhere else.
+    expect(log.entries).toContain("setAuth door-token-SENTINEL");
+    expect(hook.text()).not.toContain("SENTINEL");
+    expect(JSON.stringify(hook.current)).not.toContain("SENTINEL");
   });
 });

@@ -16,7 +16,9 @@ function fileValue(key: string): string | undefined {
 }
 
 describe("vitest env does not inherit stg Supabase from .env.local", () => {
-  for (const key of ["NEXT_PUBLIC_SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"]) {
+  // REALTIME_PUBLISH (T0.2 m5): the file's kill switch is for local servers; carried into a test it silences the
+  // suites that stub the URL and key to count real broadcasts.
+  for (const key of ["NEXT_PUBLIC_SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "REALTIME_PUBLISH"]) {
     it(`${key} is not the .env.local value`, () => {
       const fromFile = fileValue(key);
       // No file (CI) => nothing to leak; the assertion below is then trivially true.

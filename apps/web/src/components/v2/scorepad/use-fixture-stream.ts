@@ -54,8 +54,9 @@ export const supabaseRealtimeConnector: RealtimeConnector = {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let sbChannel: any = null;
     void (async () => {
-      const { supabaseBrowser } = await import("@/lib/supabase-browser");
-      const sb = supabaseBrowser();
+      // The FIXTURE family's own client (`setAuth` is socket-wide; realtime push nudges, spec §4.2).
+      const { realtimeClient } = await import("@/lib/supabase-browser");
+      const sb = realtimeClient("fixture");
       await sb.realtime.setAuth(token);
       if (cancelled) return;
       sbChannel = sb

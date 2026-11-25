@@ -286,7 +286,7 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
   // Private channel + setAuth (scorepad shape). Mint is ES256 via
   // SUPABASE_JWT_PRIVATE_KEY; Realtime Authorization SELECT on
   // realtime.messages binds topic to JWT fixture_id claim (proved 2026-09-13).
-  // Polling stays as safety net; publishFixtureUpdate still fans a public twin.
+  // Polling stays as safety net; publishFixtureUpdate sends the private message only.
   const [subscribed, setSubscribed] = useState(false);
   const realtimePurpose = options.realtimePurpose;
   const overlayKey = options.overlayKey;
@@ -318,8 +318,10 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
       }
       if (cancelled || stubHost) return;
       try {
-        const { supabaseBrowser } = await import("@/lib/supabase-browser");
-        const sb = supabaseBrowser();
+        // The FIXTURE family's own client: `setAuth` is socket-wide, and a page that also holds a division or
+        // lobby token must not have one overwrite the other (realtime push nudges, spec §4.2).
+        const { realtimeClient } = await import("@/lib/supabase-browser");
+        const sb = realtimeClient("fixture");
         await sb.realtime.setAuth(token.token);
         if (cancelled) return;
         channel = sb

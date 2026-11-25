@@ -18,6 +18,7 @@ import {
   MD_DAY_LIMIT,
   MD_FAIL_LIMIT,
   MD_OPEN_LIMIT,
+  MD_REALTIME_LIMIT,
   MD_REVIEW_LIMIT,
   rateLimit,
   type RateLimitConfig,
@@ -37,8 +38,8 @@ const REFUSED: Record<MatchDayRefusal, { status: number; message: string }> = {
 const FAILED_LOOKUP: ReadonlySet<MatchDayRefusal> = new Set(["MD_UNKNOWN", "MD_WITHDRAWN", "MD_ENDED"]);
 
 /** Which per-code bucket a route spends: the day read, an approval's review or approve, an open, a court's candidates, or a
- *  call's preview, a call or an Undo call (Task 8e). */
-export type MdBudget = "day" | "review" | "approve" | "open" | "candidates" | "call";
+ *  call's preview, a call or an Undo call (Task 8e), or the realtime-token door (push nudges, spec 2026-11-24 §3). */
+export type MdBudget = "day" | "review" | "approve" | "open" | "candidates" | "call" | "realtime";
 
 const BUDGET: Record<MdBudget, RateLimitConfig> = {
   day: MD_DAY_LIMIT,
@@ -47,6 +48,7 @@ const BUDGET: Record<MdBudget, RateLimitConfig> = {
   open: MD_OPEN_LIMIT,
   candidates: MD_CANDIDATES_LIMIT,
   call: MD_CALL_LIMIT,
+  realtime: MD_REALTIME_LIMIT,
 };
 
 /** `Authorization: Bearer md_…` resolved at `now`, or the refusal as an HttpError the v1 envelope answers

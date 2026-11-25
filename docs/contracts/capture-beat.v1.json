@@ -409,6 +409,48 @@
               ],
               "additionalProperties": false
             },
+            "realtime": {
+              "description": "Realtime push nudges (spec 2026-11-24 §2.1): the current pairing's push channel, so the phone beats at once instead of waiting out pollSeconds. Sent for the code's current pairing only, on waiting, go-live, live and over; never on replaced or taken (the caller no longer holds the pairing). Omitted, never null, when there is none, a failed mint included (a failed mint never fails the beat). Join `realtime:{topic}` with private: true and listen for the broadcast event `nudge`, payload {v, reason, at}: v epoch milliseconds, at ISO-8601, reason go-live, stop, replaced, over or next-match; an unknown reason is still a ping. A nudge carries no state: the beat answer stays the only truth and pollSeconds the cadence, and the server shortens no timeout because of a nudge. Each token lives 30 minutes. A new token rides on every current-pairing beat, so a new token is not a refresh signal: keep the joined token and swap it (setAuth) only when it has under 10 minutes left, or on a channel error or refusal. A later waiting, go-live, live or over answer WITHOUT realtime (after a failed mint, say) is no reason to leave: keep a joined channel until its expiresAt, and join nothing new without the object (absent means poll only). On replaced or taken, leave the channel: the pairing is no longer the caller's.",
+              "type": "object",
+              "properties": {
+                "url": {
+                  "description": "The Supabase project URL: https, with no userinfo, query or fragment. Derive the websocket (wss) URL from it. Public; the phone bakes in no Supabase config.",
+                  "type": "string",
+                  "pattern": "^https:\\/\\/[^\\s/?#@]+(\\/[^\\s?#]*)?$"
+                },
+                "apikey": {
+                  "description": "The Supabase project's public anon key, sent as the socket's apikey; 1 to 512 characters. Public.",
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                },
+                "topic": {
+                  "description": "The bare topic capture:{pairingId}, the pairing id a lowercase 8-4-4-4-12 uuid; the phone joins realtime:{topic}. A court pairing outlives its matches, so its topic stays the same across them.",
+                  "type": "string",
+                  "pattern": "^capture:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                },
+                "token": {
+                  "description": "The subscriber JWT for this topic only, 1 to 4096 characters. A secret: never in a record, snapshot, log line or URL.",
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "expiresAt": {
+                  "description": "When the token expires, as epoch seconds. The phone times its swap from this, never from a guess of its own clock.",
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "url",
+                "apikey",
+                "topic",
+                "token",
+                "expiresAt"
+              ],
+              "additionalProperties": false
+            },
             "state": {
               "type": "string",
               "const": "waiting"
@@ -523,6 +565,48 @@
               "required": [
                 "label",
                 "scheduledStart"
+              ],
+              "additionalProperties": false
+            },
+            "realtime": {
+              "description": "Realtime push nudges (spec 2026-11-24 §2.1): the current pairing's push channel, so the phone beats at once instead of waiting out pollSeconds. Sent for the code's current pairing only, on waiting, go-live, live and over; never on replaced or taken (the caller no longer holds the pairing). Omitted, never null, when there is none, a failed mint included (a failed mint never fails the beat). Join `realtime:{topic}` with private: true and listen for the broadcast event `nudge`, payload {v, reason, at}: v epoch milliseconds, at ISO-8601, reason go-live, stop, replaced, over or next-match; an unknown reason is still a ping. A nudge carries no state: the beat answer stays the only truth and pollSeconds the cadence, and the server shortens no timeout because of a nudge. Each token lives 30 minutes. A new token rides on every current-pairing beat, so a new token is not a refresh signal: keep the joined token and swap it (setAuth) only when it has under 10 minutes left, or on a channel error or refusal. A later waiting, go-live, live or over answer WITHOUT realtime (after a failed mint, say) is no reason to leave: keep a joined channel until its expiresAt, and join nothing new without the object (absent means poll only). On replaced or taken, leave the channel: the pairing is no longer the caller's.",
+              "type": "object",
+              "properties": {
+                "url": {
+                  "description": "The Supabase project URL: https, with no userinfo, query or fragment. Derive the websocket (wss) URL from it. Public; the phone bakes in no Supabase config.",
+                  "type": "string",
+                  "pattern": "^https:\\/\\/[^\\s/?#@]+(\\/[^\\s?#]*)?$"
+                },
+                "apikey": {
+                  "description": "The Supabase project's public anon key, sent as the socket's apikey; 1 to 512 characters. Public.",
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                },
+                "topic": {
+                  "description": "The bare topic capture:{pairingId}, the pairing id a lowercase 8-4-4-4-12 uuid; the phone joins realtime:{topic}. A court pairing outlives its matches, so its topic stays the same across them.",
+                  "type": "string",
+                  "pattern": "^capture:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                },
+                "token": {
+                  "description": "The subscriber JWT for this topic only, 1 to 4096 characters. A secret: never in a record, snapshot, log line or URL.",
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "expiresAt": {
+                  "description": "When the token expires, as epoch seconds. The phone times its swap from this, never from a guess of its own clock.",
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "url",
+                "apikey",
+                "topic",
+                "token",
+                "expiresAt"
               ],
               "additionalProperties": false
             },
@@ -647,6 +731,48 @@
               ],
               "additionalProperties": false
             },
+            "realtime": {
+              "description": "Realtime push nudges (spec 2026-11-24 §2.1): the current pairing's push channel, so the phone beats at once instead of waiting out pollSeconds. Sent for the code's current pairing only, on waiting, go-live, live and over; never on replaced or taken (the caller no longer holds the pairing). Omitted, never null, when there is none, a failed mint included (a failed mint never fails the beat). Join `realtime:{topic}` with private: true and listen for the broadcast event `nudge`, payload {v, reason, at}: v epoch milliseconds, at ISO-8601, reason go-live, stop, replaced, over or next-match; an unknown reason is still a ping. A nudge carries no state: the beat answer stays the only truth and pollSeconds the cadence, and the server shortens no timeout because of a nudge. Each token lives 30 minutes. A new token rides on every current-pairing beat, so a new token is not a refresh signal: keep the joined token and swap it (setAuth) only when it has under 10 minutes left, or on a channel error or refusal. A later waiting, go-live, live or over answer WITHOUT realtime (after a failed mint, say) is no reason to leave: keep a joined channel until its expiresAt, and join nothing new without the object (absent means poll only). On replaced or taken, leave the channel: the pairing is no longer the caller's.",
+              "type": "object",
+              "properties": {
+                "url": {
+                  "description": "The Supabase project URL: https, with no userinfo, query or fragment. Derive the websocket (wss) URL from it. Public; the phone bakes in no Supabase config.",
+                  "type": "string",
+                  "pattern": "^https:\\/\\/[^\\s/?#@]+(\\/[^\\s?#]*)?$"
+                },
+                "apikey": {
+                  "description": "The Supabase project's public anon key, sent as the socket's apikey; 1 to 512 characters. Public.",
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                },
+                "topic": {
+                  "description": "The bare topic capture:{pairingId}, the pairing id a lowercase 8-4-4-4-12 uuid; the phone joins realtime:{topic}. A court pairing outlives its matches, so its topic stays the same across them.",
+                  "type": "string",
+                  "pattern": "^capture:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                },
+                "token": {
+                  "description": "The subscriber JWT for this topic only, 1 to 4096 characters. A secret: never in a record, snapshot, log line or URL.",
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "expiresAt": {
+                  "description": "When the token expires, as epoch seconds. The phone times its swap from this, never from a guess of its own clock.",
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "url",
+                "apikey",
+                "topic",
+                "token",
+                "expiresAt"
+              ],
+              "additionalProperties": false
+            },
             "state": {
               "type": "string",
               "const": "live"
@@ -755,6 +881,48 @@
               "required": [
                 "label",
                 "scheduledStart"
+              ],
+              "additionalProperties": false
+            },
+            "realtime": {
+              "description": "Realtime push nudges (spec 2026-11-24 §2.1): the current pairing's push channel, so the phone beats at once instead of waiting out pollSeconds. Sent for the code's current pairing only, on waiting, go-live, live and over; never on replaced or taken (the caller no longer holds the pairing). Omitted, never null, when there is none, a failed mint included (a failed mint never fails the beat). Join `realtime:{topic}` with private: true and listen for the broadcast event `nudge`, payload {v, reason, at}: v epoch milliseconds, at ISO-8601, reason go-live, stop, replaced, over or next-match; an unknown reason is still a ping. A nudge carries no state: the beat answer stays the only truth and pollSeconds the cadence, and the server shortens no timeout because of a nudge. Each token lives 30 minutes. A new token rides on every current-pairing beat, so a new token is not a refresh signal: keep the joined token and swap it (setAuth) only when it has under 10 minutes left, or on a channel error or refusal. A later waiting, go-live, live or over answer WITHOUT realtime (after a failed mint, say) is no reason to leave: keep a joined channel until its expiresAt, and join nothing new without the object (absent means poll only). On replaced or taken, leave the channel: the pairing is no longer the caller's.",
+              "type": "object",
+              "properties": {
+                "url": {
+                  "description": "The Supabase project URL: https, with no userinfo, query or fragment. Derive the websocket (wss) URL from it. Public; the phone bakes in no Supabase config.",
+                  "type": "string",
+                  "pattern": "^https:\\/\\/[^\\s/?#@]+(\\/[^\\s?#]*)?$"
+                },
+                "apikey": {
+                  "description": "The Supabase project's public anon key, sent as the socket's apikey; 1 to 512 characters. Public.",
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                },
+                "topic": {
+                  "description": "The bare topic capture:{pairingId}, the pairing id a lowercase 8-4-4-4-12 uuid; the phone joins realtime:{topic}. A court pairing outlives its matches, so its topic stays the same across them.",
+                  "type": "string",
+                  "pattern": "^capture:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                },
+                "token": {
+                  "description": "The subscriber JWT for this topic only, 1 to 4096 characters. A secret: never in a record, snapshot, log line or URL.",
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "expiresAt": {
+                  "description": "When the token expires, as epoch seconds. The phone times its swap from this, never from a guess of its own clock.",
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "url",
+                "apikey",
+                "topic",
+                "token",
+                "expiresAt"
               ],
               "additionalProperties": false
             },

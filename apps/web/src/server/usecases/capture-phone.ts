@@ -24,7 +24,7 @@ import { resolveTemplate } from "@/components/overlay/template-registry";
 import { CaptureRefusalError, codeEnded } from "@/server/api-v1/capture-http";
 import {
   CaptureDescriptor, CaptureWaiting, type CaptureBeat, type CaptureBeatAnswer, type CaptureCred, type CaptureStartBody,
-  CaptureScoringLinkOk, type CaptureCourt, type CaptureStage, type CaptureStartedBy, type CaptureStartOk,
+  CaptureScoringLinkOk, type CaptureCourt, type CaptureRealtime, type CaptureStage, type CaptureStartedBy, type CaptureStartOk,
 } from "@/server/api-v1/capture-schemas";
 import type { z } from "zod";
 import { log } from "@/server/logger";
@@ -53,7 +53,8 @@ import { matchLabelOf } from "./court-stream-codes";
 import { provideDeviceLinkForPhone, type HolderVerifiedCode, type PhoneScoringLink } from "./device-links";
 import { fixtureStreamTarget, resolveAnyStreamCode, startModeFor, type ResolvedCode } from "./stream-codes";
 import { maybeAutoStart } from "./stream-auto";
-import { apply, lastConnectedSampleAt, startBroadcast, tickSession, type SessionDeps } from "./stream-sessions";
+import { apply, fireNudge, lastConnectedSampleAt, nudgePairings, startBroadcast, tickSession, type SessionDeps } from "./stream-sessions";
+import { captureRealtimeFor, realtimePairingOf } from "./capture-realtime";
 
 export type Descriptor = z.infer<typeof CaptureDescriptor>;
 
@@ -435,6 +436,8 @@ type Decided = {
   /** A court session left on an older pairing by this claim, ended phone_lost after the commit (`endReplacedCourtSession`). */
   replaced: { sid: string; pairingId: string; replacedPairingId: string } | null;
   tickSid: string | null;            // the open session this beat ticks (§6.11): its phone's beat naming it
+  /** Pairings this claim ended `replaced` (a takeover; the holder's own rescan): each is nudged `replaced` after the commit. */
+  replacedPairingIds: string[];
 };
 
 /**
@@ -535,7 +538,8 @@ function fixtureBeatScope(resolved: ResolvedCode, code: string, deps: SessionDep
  *  5. the open session ticked (§6.11) when its phone's beat names it;
  *  6. auto start (PR-2 §7.2): the current phone's beat may start the match's broadcast, once (`maybeAutoStart`) — never on
  *     the operator's own `ended` beat or a beat that stopped a session, and never failing the beat;
- *  7. the answer — `wireBeatAnswer`'s, sent exactly, its pollSeconds stored as the answered cadence.
+ *  7. the answer — `wireBeatAnswer`'s, sent exactly, its pollSeconds stored as the answered cadence; for the code's CURRENT
+ *     pairing it carries the push channel (`realtime`, push nudges §2.1), whose failed mint never fails the beat.
  */
 export async function postBeat(rawCode: string, tok: string, body: Beat, deps: SessionDeps, now: Date): Promise<BeatAnswer> {
   // The session the phone still names as running (`sid`): an ended code still answers its beat about it with `over`
@@ -575,6 +579,7 @@ export async function runBeat(scope: BeatScope, body: Beat, deps: SessionDeps, n
   }
 
   const decided = (await sql.begin(async (tx) => {
+    const replacedPairingIds: string[] = [];
     if (body.claim !== null || body.stopped !== null) {
       await tx`select id from fixture_stream_codes where id = ${scope.codeId} for update`;
     }
@@ -618,6 +623,7 @@ export async function runBeat(scope: BeatScope, body: Beat, deps: SessionDeps, n
           from fixture_stream_pairings where id = ${holder.id}
         returning id, code_id, phone, last_beat_at, answered_poll_seconds`;
       await tx`update fixture_stream_pairings set ended_at = ${now}, end_cause = 'replaced', replaced_by = ${moved!.id} where id = ${holder.id}`;
+      replacedPairingIds.push(holder.id);
       if (open && open.pairing_id === holder.id) {
         await lockOpen();
         await tx`update fixture_stream_sessions set pairing_id = ${moved!.id} where id = ${open.id}`;
@@ -627,6 +633,7 @@ export async function runBeat(scope: BeatScope, body: Beat, deps: SessionDeps, n
     }
     if (claim.result === "takeover") {
       await tx`update fixture_stream_pairings set ended_at = ${now}, end_cause = 'replaced' where id = ${holder!.id}`;
+      replacedPairingIds.push(holder!.id);
       mine = await insertMine();
       await tx`update fixture_stream_pairings set replaced_by = ${mine.id} where id = ${holder!.id}`;
       if (open && open.pairing_id === holder!.id) {
@@ -716,8 +723,12 @@ export async function runBeat(scope: BeatScope, body: Beat, deps: SessionDeps, n
     }
     // 5's subject: §6.11 "every beat from the session's phone" — the phone HOLDING the broadcast, naming its sid.
     const tickSid = held && body.sid === open!.id ? open!.id : null;
-    return { claim, callerCurrent, mine, stop, replaced, tickSid } satisfies Decided;
+    return { claim, callerCurrent, mine, stop, replaced, tickSid, replacedPairingIds } satisfies Decided;
   })) as Decided;
+
+  // Push nudges (plan T1.4): the claim has committed, so each pairing it ended is told `replaced` (its phone beats now, hears
+  // `replaced` and stops). Fire-and-forget, after the commit; it never fails or slows the beat, and the NEW pairing hears nothing.
+  if (decided.replacedPairingIds.length > 0) fireNudge(nudgePairings(decided.replacedPairingIds, "replaced", deps));
 
   if (decided.stop !== null) {
     await apply(decided.stop, (s) => (isActive(s.state) ? { type: "stop", reason: "operator_stopped" } : null), deps,
@@ -775,7 +786,22 @@ export async function runBeat(scope: BeatScope, body: Beat, deps: SessionDeps, n
   // phone is told one is starting (row 5's answer and cadence), exactly as it will be once the session's row exists.
   const core = startKicked && judged.state === "waiting" ? { state: "waiting" as const, starting: true } : judged;
   const common = await scope.answerCommon(open);
-  const answer = wireBeatAnswer(core, common);
+  // Push nudges (spec 2026-11-24 §2.1, plan T1.3): the channel goes to the code's CURRENT pairing only. "Current" is `holder`,
+  // the post-commit re-read above that the slot is judged on, and the caller must BE it (`decided.mine`): a phone still
+  // current after a desk Stop hears `over` WITH the channel; one whose own `ended` (T21) closed its pairing hears `over`
+  // without it. It moves nothing else — pollSeconds and the stored cadence are the same with or without it.
+  const servedTo = realtimePairingOf({ mineId: decided.mine?.id ?? null, holderId: holder?.id ?? null, state: core.state });
+  let realtime: CaptureRealtime | null = null;
+  if (servedTo !== null) {
+    try {
+      realtime = await captureRealtimeFor(servedTo, now, deps);
+    } catch (err) {
+      // The contract's "a failed mint never fails the beat": reported (no token exists to leak), answered without the key.
+      log.error({ err: String(err), codeId: scope.codeId }, "capture beat: the realtime mint failed — the beat is answered without realtime");
+      captureError(err, { orgId: scope.orgId, route: "capture.beat.realtime_mint", extra: { codeId: scope.codeId } });
+    }
+  }
+  const answer = wireBeatAnswer(core, { ...common, realtime });
   if (decided.mine !== null && answer.pollSeconds !== undefined) {
     await sql`update fixture_stream_pairings set answered_poll_seconds = ${answer.pollSeconds} where id = ${decided.mine.id}`;
   }

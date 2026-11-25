@@ -28,7 +28,7 @@
 //   ai-planning.ts           scheduling constraints v2 and AI: ScheduleShift, plan/repair, officials plan, joint multi-division (#350), parse preview (W5), OverrideStandings
 //   seeding-discipline.ts    seed proposals (D4a), ladder challenge, discipline and suspensions, official marks, match reports
 //   org-admin.ts             org news posts, duplicate review and merge (#404), venues and courts (D5)
-//   public.ts                public fixture summary (GET /public/fixtures/{id}), PublicOrgLive, and a fixture's Seazn video (PublicFixtureVideo)
+//   public.ts                public fixture summary (GET /public/fixtures/{id}), PublicOrgLive, and a fixture's Seazn video (PublicFixtureVideo), the competition realtime door's answer (CompetitionRealtimeToken)
 //   quick-match.ts           quick match: the guest's one create (CreateQuickMatch)
 //
 // Dependency order is strictly downward (a module imports only from the ones listed above it;
@@ -44,6 +44,8 @@ export {
   CaptureStartBody, CaptureStartOk, CaptureRefusalCode, CaptureRefusal,
   // W27 / W28 (2026-10-06).
   CAPTURE_POOL_RE, CaptureStageRole, CaptureStage, CAPTURE_STAGE_LABEL_MAX, CAPTURE_COURT_NAME_MAX, CaptureCourt, CaptureNext, CAPTURE_AUTO_REFUSALS, CaptureAutoRefusal, CAPTURE_SCORING_LINK_URL_RE, CAPTURE_MATCHDAY_WATCH_URL_RE, CaptureScoringLinkOk,
+  // Realtime push nudges (spec 2026-11-24 §2.1).
+  CaptureRealtime, CAPTURE_REALTIME_URL_RE,
   // capture-record.v1 (spec 2026-10-12, approved).
   CAPTURE_RECORD_MAX_LINES, CAPTURE_RECORD_MAX_BYTES, CAPTURE_RECORD_REF_RE, CaptureRecordLine, CaptureRecordOk,
   CaptureRecordRefusalCode, CaptureRecordRefusal, CaptureRecordSecretS2, CaptureRecordSecretS3, CaptureRecordSecretS4,
@@ -58,6 +60,8 @@ export {
   // capture-matchday-call.v1 (Task 8e).
   CaptureMatchdayCallRefusalCode, CaptureMatchdayCallReason, CaptureMatchdayCallRefusal, CaptureMatchdayCandidate,
   CaptureMatchdayCandidates, CaptureMatchdayCallRequest, CaptureMatchdayCallPreview, CaptureMatchdayCallOk, CaptureMatchdayUndoOk,
+  // capture-matchday-realtime.v1 (realtime push nudges, plan Task 9).
+  CaptureMatchdayRealtime,
 } from "../capture-schemas.ts";
 export {
   Uuid, CourtId, RequiredCourtTags, VenueId, Slug, Visibility, CompetitionStatus, DivisionStatus, StageKind,
@@ -195,7 +199,7 @@ export {
   CreateCourt, PatchCourt, PutCourtCalendar, CourtCalendar,
 } from "./org-admin.ts";
 export {
-  PublicFixtureOutcome, PublicFixtureSummarySchema, PublicFixtureSummary, PublicOrgLive, PublicFixtureVideo,
+  PublicFixtureOutcome, PublicFixtureSummarySchema, PublicFixtureSummary, PublicOrgLive, PublicFixtureVideo, CompetitionRealtimeToken,
 } from "./public.ts";
 export type {
   PublicOrgLiveT,

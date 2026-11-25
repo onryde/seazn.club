@@ -66,6 +66,8 @@ export default async function PresentDivisionPage({
       title={`${data.competition.name} · ${data.division.name}`}
       slides={slides}
       backHref={routes.publicHub(orgSlug, competitionSlug, divisionSlug)}
+      // The public kiosk passes no `divisionIds` and no `realtime`, so it polls (unchanged by realtime push nudges).
+      competitionId={data.competition.id}
       // C1 (OWNER RULING 2026-09-15): a phone gets a "made for a TV" card whose
       // Open the live page goes to the hub, filtered to this division.
       liveHref={kioskHubHref(orgSlug, competitionSlug, divisionSlug)}

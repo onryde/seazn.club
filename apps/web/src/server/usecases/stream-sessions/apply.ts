@@ -33,6 +33,7 @@ import type { SessionDeps } from "./deps";
 import { destinationRowOf, readSessionDestination, fillReplayUrl } from "./destination";
 import { persist, persistFacts } from "./persist";
 import { recordEffect, forceDestroy, releaseOutput, disablePhoneInput } from "./port-effects";
+import { fireNudge, nudgeReasonFor, nudgeSession } from "./nudge";
 
 /** M6: the states a session can still CONSUME from, i.e. not yet live — `apply` reads the org's monthly rate (a pooled
  *  read) for these alone. The domain decides a consume only from `warming`, and states only move forward. */
@@ -105,7 +106,7 @@ export async function apply(
     const cmd = typeof command === "function" ? await command(before, tx) : command;
     // T5-a: a command function that returns null read the LOCKED row and found nothing to decide (the row moved on) —
     // write nothing, run nothing. The caller that returned null knows why and acts outside the transaction.
-    if (cmd === null) return { session: before, effects: [] };
+    if (cmd === null) return { session: before, effects: [], from: before.state };
     let dec = decide(before, cmd, now);
     let applied: Command = cmd;
     if (dec.effects.some((e) => e.type === "consume_credit")) {
@@ -158,9 +159,15 @@ export async function apply(
         payload: { delta: r.delta, balanceAfter: r.balance, ledgerId: r.ledgerId, ...(r.withheld ? { reason: "refund_capped" } : {}) } });
     }
     logDecision(before, dec, now);
-    return { session: dec.next, effects: dec.effects.filter((e) => e.type !== "consume_credit" && e.type !== "refund_credit") };
-  })) as { session: Session; effects: Effect[] } | null;
+    return { session: dec.next, effects: dec.effects.filter((e) => e.type !== "consume_credit" && e.type !== "refund_credit"), from: before.state };
+  })) as { session: Session; effects: Effect[]; from: Session["state"] } | null;
   if (!outcome) return null;
+  // Push nudges (spec 2026-11-24 §2.3, plan T1.4): the move has COMMITTED, so the phone is told to beat now — after the commit (the
+  // nudge reads the pool, which must never happen inside the transaction), fire-and-forget (it never fails or slows this apply:
+  // nudgeSession cannot reject), and before the effects (a slow port must not hold the phone's wake-up). A move that changed
+  // nothing (`from === to`: a command function that returned null, an idempotent decision) is no nudge.
+  const reason = nudgeReasonFor(outcome.from, outcome.session.state);
+  if (reason !== null) fireNudge(nudgeSession(outcome.session.id, reason, deps));
   return runEffects(outcome.session, outcome.effects, deps);
 }
 

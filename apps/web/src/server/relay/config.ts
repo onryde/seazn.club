@@ -747,6 +747,10 @@ export const NOT_RESPONDING_BEATS = 3;
 export const POLL_STARTING_SECONDS = 5;
 export const POLL_NEAR_SECONDS = 10;
 export const POLL_FAR_SECONDS = 60;
+/** Push nudges (spec 2026-11-24 §2.1): how long the capture realtime token on a current pairing's beat answer lives — the
+ *  contract's "Each token lives 30 minutes" (capture-beat-realtime.test.ts pins it to that prose). NOT a cadence: it moves
+ *  no poll, silence or timeout, and a fresh token rides on every current-pairing beat. */
+export const CAPTURE_REALTIME_TTL_SECONDS = 1800;
 /** §6.6: with no session, the near cadence starts this long before `scheduled_at`. */
 export const POLL_NEAR_WINDOW_MINUTES = 30;
 /** W19 (§6.8.5): a live phone stream whose phone is gone ends after this long with no beat and no video. */

@@ -26,6 +26,7 @@ import type { CourtLinkRef, ResolvedCourtCode } from "./court-stream-codes";
 import { liveCourtLinkFor } from "./court-streams";
 import { seaznOrder, seaznWhere } from "./stream-targets";
 import { insertStreamCode, openStreamCodeTok, wipeStreamCodeTok } from "@/server/relay/secret-columns";
+import { fireNudge, nudgeCodesOver } from "./stream-sessions/nudge";
 
 /** §6.1: 12 characters of lowercase Crockford base32 (60 bits). V430's `code` check admits exactly this alphabet. */
 const CODE_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz";
@@ -196,6 +197,7 @@ export async function ensureStreamCode(auth: AuthCtx, fixtureId: string): Promis
   requireSessionEditor(auth);
   const { competitionId } = await fixtureOf(auth, fixtureId);
   await requireFeature(auth.orgId, "streaming.relay", competitionId);
+  const reissued: string[] = [];   // codes this call ended `reissued`: nudged `over` once the transaction has committed
   const outcome = await sql.begin(async (tx): Promise<StreamCodeShown | "finished"> => {
     await lockFixtureCode(tx, fixtureId);
     const finishedAt = await finishedAtOf(tx, fixtureId);
@@ -216,12 +218,16 @@ export async function ensureStreamCode(auth: AuthCtx, fixtureId: string): Promis
       if (finishedAt !== null) return "finished";
       const fresh = freshTok();
       await wipeStreamCodeTok(tx, current.id, "reissued", auth.userId);
+      reissued.push(current.id);
       return mintLocked(tx, auth, fixtureId, fresh);
     }
     if (finishedAt !== null) return "finished";
     const fresh = freshTok();
     return mintLocked(tx, auth, fixtureId, fresh);
   });
+  // Push nudges (plan T1.4): the ended code's phones are told `over`, after the commit. An EXPIRED code (above) is not: expiry is lazy.
+  // An `over` also reaches a phone whose open session still rides the ended code (C1b): harmless, the beat is the truth and answers it.
+  fireNudge(nudgeCodesOver(reissued));
   if (outcome === "finished") throw new HttpError(422, FIXTURE_FINISHED, "fixture_finished");
   return outcome;
 }
@@ -236,15 +242,23 @@ export async function reissueStreamCode(auth: AuthCtx, fixtureId: string): Promi
   requireSessionEditor(auth);
   const { competitionId } = await fixtureOf(auth, fixtureId);
   await requireFeature(auth.orgId, "streaming.relay", competitionId);
-  return sql.begin(async (tx) => {
+  const reissued: string[] = [];
+  const shown = await sql.begin(async (tx) => {
     await lockFixtureCode(tx, fixtureId);
     if ((await finishedAtOf(tx, fixtureId)) !== null) throw new HttpError(422, FIXTURE_FINISHED, "fixture_finished");
     await refuseIfCourtStreamed(tx, auth.orgId, fixtureId);
     const fresh = freshTok();
     const current = await activeCodeOf(tx, fixtureId);
-    if (current) await wipeStreamCodeTok(tx, current.id, "reissued", auth.userId);
+    if (current) {
+      await wipeStreamCodeTok(tx, current.id, "reissued", auth.userId);
+      reissued.push(current.id);
+    }
     return mintLocked(tx, auth, fixtureId, fresh);
   });
+  // Push nudges (plan T1.4): the ended code's phones are told `over`, after the commit; fire-and-forget (it cannot reject).
+  // An `over` also reaches a phone whose open session still rides the ended code (C1b): harmless, the beat is the truth and answers it.
+  fireNudge(nudgeCodesOver(reissued));
+  return shown;
 }
 
 /** The code row C1 judges, whichever its owner: a fixture (`fixture_id`) or a court link (`court_link_id`, V525). */
