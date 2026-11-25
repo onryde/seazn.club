@@ -1,5 +1,5 @@
--- V557 — a Seazn recording is offered only once Cloudflare can play it (Seazn-hosted video, Phase 4, Task 39). V554 and V555 are
--- the realtime branch's and V556 is planned there; V551, V552 and V559 (once V553) are this branch's. The tests find this file by name, never by number.
+-- V557 — a Seazn recording is offered only once Cloudflare can play it (Seazn-hosted video, Phase 4, Task 39). V554, V555 and V556 are
+-- main's realtime policies and come before it; V551, V552 and V559 (once V553) are this branch's. The tests find this file by name, never by number.
 --
 -- `seazn_locked_videos` (V541) records that the Seazn pass made a recording need a token; the pass locks every FINISHED recording at
 -- once, because signing must not wait. Locking is not playing: Cloudflare reads a finished recording `queued` or `inprogress` for a

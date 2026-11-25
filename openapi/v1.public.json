@@ -58786,7 +58786,13 @@
                                 "state",
                                 "wentLive"
                               ],
-                              "additionalProperties": false
+                              "additionalProperties": false,
+                              "examples": [
+                                {
+                                  "state": "live",
+                                  "wentLive": true
+                                }
+                              ]
                             },
                             {
                               "type": "null"
@@ -58822,7 +58828,7 @@
                       }
                     ],
                     "session": {
-                      "state": "requested",
+                      "state": "live",
                       "wentLive": true
                     }
                   },

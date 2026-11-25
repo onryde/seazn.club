@@ -36,6 +36,7 @@ import "server-only";
 // (a database error can echo a connection string: route.ts `endYoutube`).
 import { sql } from "@/lib/db";
 import { log } from "@/server/logger";
+import { fireStreamPresenceRevalidate } from "@/server/public-site/revalidate";
 import { DELETE_RECORDING_AFTER_DAYS, FINALISATION_GRACE_SECONDS, MAX_DURATION_MINUTES, SEAZN_REPLAY_CALL_TIMEOUT_MS } from "@/server/relay/config";
 import { TERMINAL_STATES, type SessionState } from "@/server/relay/domain/session";
 import type { IngestVideo } from "@/server/relay/ports";
@@ -69,7 +70,7 @@ const finished = (v: IngestVideo): boolean => playable(v) || v.state === "error"
 /** Cloudflare's state for a recording that is still being recorded: never edited (m1). */
 const RECORDING = "live-inprogress";
 
-interface SeaznInput { id: string; session_id: string; org_id: string; uid: string; state: SessionState; end_ref: Date }
+interface SeaznInput { id: string; session_id: string; org_id: string; fixture_id: string | null; uid: string; state: SessionState; end_ref: Date }
 
 /** Phase 1 review I3: when Cloudflare is to delete a Seazn recording, sent in the lock's own edit. The input's retention
  *  (DELETE_RECORDING_AFTER_DAYS, which Cloudflare counts from when the recording is READY) from the recording's CREATION, plus the
@@ -91,17 +92,23 @@ function recordedAtOf(createdAt: string): Date | null {
 }
 
 /** Task 39: write what the listing says of a locked recording's playability: set the first time it reads playable (kept while it
- *  does, so the stamp is when it was FIRST seen ready), cleared when it no longer does. */
-async function setReady(videoId: string, isPlayable: boolean, now: Date): Promise<void> {
-  await sql`
+ *  does, so the stamp is when it was FIRST seen ready), cleared when it no longer does.
+ *  Phase 4 final review m3: a change expires the fixture's public hub (`fireStreamPresenceRevalidate`, the same expiry a session going
+ *  into or out of live fires, apply.ts), because the hub's "replay" camera follows `ready_at`; without it the camera appears up to the hub
+ *  document's own window (15 s Redis, 30 s ISR) late. Fire-and-forget, after the write, only when a row changed (a second pass fires
+ *  nothing); a session whose fixture is gone (`fixture_id` null) has no card to expire. */
+async function setReady(videoId: string, isPlayable: boolean, now: Date, fixtureId: string | null): Promise<void> {
+  const changed = await sql`
     update seazn_locked_videos set ready_at = ${isPlayable ? now : null}
-     where cf_video_id = ${videoId} and (ready_at is not null) is distinct from ${isPlayable}`;
+     where cf_video_id = ${videoId} and (ready_at is not null) is distinct from ${isPlayable}
+    returning cf_video_id`;
+  if (changed.length > 0 && fixtureId !== null) void fireStreamPresenceRevalidate(fixtureId);
 }
 /** `setReady` that never throws past one recording: a failure is logged by class and answers false, so the caller counts it and the
  *  next pass retries it (and the input is not marked on a readiness it could not write). */
-async function markReady(videoId: string, isPlayable: boolean, sessionId: string, now: Date): Promise<boolean> {
+async function markReady(videoId: string, isPlayable: boolean, sessionId: string, now: Date, fixtureId: string | null): Promise<boolean> {
   try {
-    await setReady(videoId, isPlayable, now);
+    await setReady(videoId, isPlayable, now, fixtureId);
     return true;
   } catch (err) {
     log.error({ sid: sessionId, videoId, errClass: err instanceof Error ? err.name : typeof err }, "seazn pass: a recording's readiness could not be written — the next pass retries it");
@@ -129,7 +136,7 @@ export async function lockSeaznRecordings(
   const out: SeaznPassResult = { locked: 0, relocked: 0, refused: 0, failed: 0, deferred: 0 };
 
   const inputs = await sql<SeaznInput[]>`
-    select i.id, i.session_id, s.org_id, i.ingest_input_id as uid, s.state, coalesce(s.ended_at, s.created_at) as end_ref
+    select i.id, i.session_id, s.org_id, s.fixture_id, i.ingest_input_id as uid, s.state, coalesce(s.ended_at, s.created_at) as end_ref
       from fixture_stream_inputs i join fixture_stream_sessions s on s.id = i.session_id
      where s.destination_kind = 'seazn' and i.role = 'programme' and i.ingest_input_id is not null
        and i.recordings_locked_at is null and s.state in ${sql([...RECORDING_STATES])}
@@ -172,7 +179,7 @@ export async function lockSeaznRecordings(
       // Already locked and reading signed: nothing to ask. Reading unsigned, or not saying (`null`): locked again (C7), so the
       // mark rests on an echo, never a guess.
       if (known && v.signed === true) {
-        if (readyStale && !(await markReady(v.videoId, playable(v), input.session_id, opts.now))) { out.failed++; continue; }
+        if (readyStale && !(await markReady(v.videoId, playable(v), input.session_id, opts.now, input.fixture_id))) { out.failed++; continue; }
         confirmed++;
         continue;
       }
@@ -181,14 +188,17 @@ export async function lockSeaznRecordings(
         // Re-review N3: the lock shares the slice too, so it gives up at the same 4 s as the listing.
         const res = await ingest.requireSignedVideo(v.videoId, { deleteAt: seaznRecordingDeleteAt(v.createdAt, nowMs), timeoutMs: SEAZN_REPLAY_CALL_TIMEOUT_MS });
         if (res === "set" && !known) {
-          await sql`
+          const inserted = await sql`
             insert into seazn_locked_videos (cf_video_id, input_row_id, recorded_at, ready_at)
-            values (${v.videoId}, ${input.id}, ${recordedAtOf(v.createdAt)}, ${playable(v) ? opts.now : null}) on conflict (cf_video_id) do nothing`;
+            values (${v.videoId}, ${input.id}, ${recordedAtOf(v.createdAt)}, ${playable(v) ? opts.now : null}) on conflict (cf_video_id) do nothing
+            returning cf_video_id`;
+          // A recording locked already playable is a replay camera appearing too (m3).
+          if (inserted.length > 0 && playable(v) && input.fixture_id !== null) void fireStreamPresenceRevalidate(input.fixture_id);
           out.locked++;
         } else if (res === "set") {
           out.relocked++;
           log.warn({ sid: input.session_id, videoId: v.videoId, state: v.state, signed: v.signed }, "seazn pass: a locked recording read unsigned, or did not say — locked again (C7)");
-          if (readyStale) await setReady(v.videoId, playable(v), opts.now);
+          if (readyStale) await setReady(v.videoId, playable(v), opts.now, input.fixture_id);
         }
         confirmed++;   // "set" echoed true; "absent" is a recording Cloudflare no longer holds
       } catch (err) {

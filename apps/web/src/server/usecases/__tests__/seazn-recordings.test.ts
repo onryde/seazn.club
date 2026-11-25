@@ -17,8 +17,13 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/sentry", () => ({ captureError: vi.fn() }));
+vi.mock("@/server/public-site/revalidate", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/public-site/revalidate")>();
+  return { ...actual, fireStreamPresenceRevalidate: vi.fn(actual.fireStreamPresenceRevalidate) };
+});
 
 import { sql } from "@/lib/db";
+import { fireStreamPresenceRevalidate } from "@/server/public-site/revalidate";
 import { DELETE_RECORDING_AFTER_DAYS, FINALISATION_GRACE_SECONDS, MAX_DURATION_MINUTES } from "@/server/relay/config";
 import type { FakeIngest } from "@/server/relay/fakes";
 import type { SessionDeps } from "../stream-sessions";
@@ -449,6 +454,45 @@ describe.skipIf(!HAS_DB)("lockSeaznRecordings — the stream tick's Seazn pass",
     r.clock.now += 60 * SEC;
     await pass(r, [r.auth.orgId]);
     expect((await readyAts(prog.id))[b], "and an errored one stays not ready").toBeNull();
+  });
+
+  // Phase 4 final review m3: the hub's "replay" camera follows `ready_at`, so a change to it expires the fixture's public hub (the same
+  // `fireStreamPresenceRevalidate` a session going into or out of live fires) instead of waiting out the hub document's window.
+  it("m3: a recording becoming ready (locked already playable, or flipped later), and one leaving ready, expire THIS fixture's hub; a pass that changes nothing, and a not-yet-ready lock, expire nothing", async () => {
+    const spy = vi.mocked(fireStreamPresenceRevalidate);
+    const fired = async () => { await Promise.all(spy.mock.results.map((x) => x.value as Promise<void>)); return spy.mock.calls.map((c) => c[0]); };
+    const r = await rig();
+    const [f0, f1] = r.fixtureIds;
+    const sid = await live(r, f0, r.seazn);
+    const prog = await inputOf(sid, "programme");
+    const at = new Date(r.clock.now).toISOString();
+    const [queued, ready] = [vid("m3-queued"), vid("m3-ready")];
+    r.ingest.addVideo({ videoId: queued, inputId: prog.uid, createdAt: at, inProgress: false, state: "queued" });
+    spy.mockClear();
+
+    expect(await pass(r, [r.auth.orgId])).toEqual({ ...ZERO, locked: 1 });
+    expect(await fired(), "EMPTY CASE: locked but not playable yet: nothing the hub shows moved").toEqual([]);
+
+    r.clock.now += 60 * SEC;
+    r.ingest.addVideo({ videoId: ready, inputId: prog.uid, createdAt: at, inProgress: false, state: "ready" });
+    expect(await pass(r, [r.auth.orgId])).toEqual({ ...ZERO, locked: 1 });
+    expect(await fired(), "a recording locked already playable: one expiry, for the session's own fixture").toEqual([f0]);
+
+    r.clock.now += 60 * SEC;
+    r.ingest.updateVideo(queued, { state: "ready" });
+    expect(await pass(r, [r.auth.orgId])).toEqual(ZERO);
+    expect(await fired(), "queued -> ready on a later pass (the setReady write): a second expiry").toEqual([f0, f0]);
+
+    r.clock.now += 60 * SEC;
+    expect(await pass(r, [r.auth.orgId])).toEqual(ZERO);
+    expect(await fired(), "a pass that changes nothing fires nothing").toEqual([f0, f0]);
+
+    r.clock.now += 60 * SEC;
+    r.ingest.updateVideo(ready, { state: "error" });
+    expect(await pass(r, [r.auth.orgId])).toEqual(ZERO);
+    expect(await fired(), "ready -> error clears the replay camera: expired too").toEqual([f0, f0, f0]);
+    expect(f1, "PREMISE: the other fixture exists and was never named").not.toBe(f0);
+    expect((await fired()).filter((f) => f === f1), "another fixture's hub card is never expired by this session's recordings").toEqual([]);
   });
 
   it("T39: a locked recording that read unsigned again (the C7 relock) and has meanwhile become ready is stamped by the relock's own pass", async () => {

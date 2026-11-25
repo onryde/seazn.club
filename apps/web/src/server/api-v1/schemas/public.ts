@@ -127,7 +127,9 @@ export const PublicFixtureVideo = z.object({
    *  still coming from one that is not (a Go live cancelled while warming records nothing). `null`: the latest session is not a
    *  Seazn one, or there is none, or the public may not see the fixture. Absent: an answer from before this field (the page then
    *  keeps what it was told when it was drawn). */
-  session: z.object({ state: StreamSessionState, wentLive: z.boolean() }).nullable().optional(),
+  // The published example is set by hand: the generator's first-enum-value example would pair `state: "requested"` (never went live)
+  // with `wentLive: true`, which cannot happen (Phase 4 final review m1). A live answer's session is `live` and has gone live.
+  session: z.object({ state: StreamSessionState, wentLive: z.boolean() }).meta({ examples: [{ state: "live", wentLive: true }] }).nullable().optional(),
 });
 export type PublicFixtureVideo = z.infer<typeof PublicFixtureVideo>;
 
