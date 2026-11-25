@@ -130,6 +130,20 @@ describe("the chess help page's Online Chess section", () => {
     expect(section, "no 'External Play' to an organiser").not.toMatch(/external[ -]play/i);
   });
 
+  it("Pay and open: says what a refused open charges (nothing) with refusals the open really answers, and that a board waiting on a Lichess link does NOT stop it", () => {
+    const text = helpPlainText(section);
+    // The product's own words, read from its dictionary: the receipt promises a free re-open (the help repeats it), and the two refusals
+    // the help names are real answers of the open (open-round.ts: division_not_started, not_paired).
+    expect(en["onlineChess.receipt.noInvitable"], "the receipt's own promise").toMatch(/re-open round 1 for free/i);
+    expect(en["externalPlay.openRound.divisionNotStarted"], "a refusal the open answers").toMatch(/Start the division/);
+    expect(en["externalPlay.openRound.notPaired"], "a refusal the open answers").toMatch(/Pair every board/);
+    expect(text, "a refused open charges nothing, and names real refusals").toMatch(/cannot open[^.]*division has not been started[^.]*not paired[^.]*nothing is charged/i);
+    expect(text, "a board waiting on a link does not stop the open").toMatch(/has not linked Lichess does not stop the open: you pay, the round opens for the other boards, and that board waits/);
+    expect(text, "the free re-open").toMatch(/open round 1 again for free once they link/i);
+    // The false claim this replaced: a board waiting on a Lichess link is NOT a refusal.
+    expect(text, "a link-waiting board is not listed as a refusal").not.toMatch(/cannot open[^.]*(?:waiting on a|Lichess link)[^.]*nothing is charged/i);
+  });
+
   it("every bold label in the section is a string the product shows (the English dictionary's, placeholders as wildcards)", () => {
     const values = Object.values(en as Record<string, string>).filter((v) => typeof v === "string");
     // A label is a whole string, or the start of one (a quoted line that leaves out its figures: "Online Chess not paid." begins the amber

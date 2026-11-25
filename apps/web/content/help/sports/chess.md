@@ -64,7 +64,7 @@ Online Chess runs Swiss and knockout events, including play-offs, double elimina
 
 Until it is paid, the Fixtures tab shows an amber line that starts **Online Chess not paid.** and says how many players are registered, the size, and that round 1 cannot open until it is paid. Its buttons are **Pay**, followed by the credits it will take, and **Change size**. **Pay** opens a receipt with the size, the camera, what comes from this month's credits and what comes from bought credits, and the total. If you are short, the receipt offers **Buy credits**, and comes back when you do.
 
-You can also pay when you open the first round. Pressing **Open round** on an unpaid division opens the same receipt, titled **Pay and open round 1**. Pay it, and the round opens in the same step. If the round cannot open, for any reason, such as a round that is not paired or a board that is waiting on a Lichess link, nothing is charged and you see the round's own reason.
+You can also pay when you open the first round. Pressing **Open round** on an unpaid division opens the same receipt, titled **Pay and open round 1**. Pay it, and the round opens in the same step. If the round cannot open, for example because the division has not been started or a board in the round is not paired, nothing is charged and you see the reason. A board whose player has not linked Lichess does not stop the open: you pay, the round opens for the other boards, and that board waits. If no player has linked yet, the receipt says so, and you can open round 1 again for free once they link.
 
 This month's included Seazn credits are spent first, then bought credits. Included credits that are not used by the end of the month expire. Bought credits never expire.
 
