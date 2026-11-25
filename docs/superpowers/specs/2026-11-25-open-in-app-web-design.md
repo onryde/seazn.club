@@ -154,8 +154,14 @@ Seen only when the app did not take the link.
 path, verified on device. The web console's **Go live** is unchanged and stays the two-device case. A web or
 automatic start while the app is behind the browser on the same phone is **unproven** (phone session's open item
 N28; never run), so no web copy may promise it. A single-phone web Go live would need that device test first.
-Not checked here: whether a destination or credits must be set on the web before the app's Go live succeeds; the
-spike's follow-up must walk the whole one-phone path and add that step to the line if so.
+**Missing destination or credit (web call).** The server refuses the app's own Go live without them, and the app
+then says "ask the organiser", to a person who may be the organiser (phone session, from its code; not re-run on
+one phone). So when the page knows one is missing, the line beside the button names it instead, in four locales:
+"Pick a destination here first." or "You need a streaming credit first." The button stays, because pairing works
+without either and a refusal leaves the phone paired. It reuses what the panel already uses to gate its own Go
+live, with no new server call; a surface that does not hold that state (check the court sheet) shows
+"Check a destination is picked and you have a credit." The end-to-end walk after the spike covers this on one
+phone.
 
 No button on printed scorer sheets (paper) or the quick-match score redirect (nothing is shown).
 
