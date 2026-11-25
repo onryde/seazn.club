@@ -182,6 +182,83 @@ describe("the SVG word reader the scans run on", () => {
   });
 });
 
+/**
+ * Every word in a drawing with the size it is drawn at, in the picture's own units: a <text> carries font-size, an outlined
+ * heading carries data-size (art/outline.cjs), each times the scale() of every <g> around it. A word with no size, or a
+ * size this cannot read (a style rule, another kind of scaling), throws rather than passing unmeasured.
+ */
+function svgWordSizes(svg: string): { word: string; units: number }[] {
+  const out: { word: string; units: number }[] = [];
+  const scales: number[] = [1];
+  for (const m of svg.matchAll(/<(\/?)(g|text|tspan|path)\b([^>]*?)(\/?)>/g)) {
+    const [whole, close, tag, attrs, selfClosed] = m as unknown as [string, string, string, string, string];
+    if (/matrix\(|font-size\s*:/.test(attrs)) throw new Error(`a size this cannot read: ${whole}`);
+    if (tag === "g") {
+      if (close) scales.pop();
+      else if (!selfClosed) {
+        const scale = /scale\(\s*([\d.]+)\s*\)/.exec(attrs);
+        if (attrs.includes("scale(") && !scale) throw new Error(`a size this cannot read: ${whole}`);
+        scales.push(scales.at(-1)! * (scale ? Number(scale[1]) : 1));
+      }
+      continue;
+    }
+    if (close) continue;
+    if (tag === "tspan") throw new Error(`a size this cannot read: ${whole}`);
+    const outlined = /data-text="([^"]*)"/.exec(attrs)?.[1];
+    if (tag === "path" && outlined === undefined) continue;
+    const word = outlined ?? svg.slice(m.index! + whole.length, svg.indexOf("</text>", m.index));
+    const size = (tag === "path" ? /\sdata-size="([\d.]+)"/ : /\sfont-size="([\d.]+)"/).exec(attrs)?.[1];
+    if (size === undefined) throw new Error(`no size on '${word}'`);
+    out.push({ word, units: Number(size) * scales.at(-1)! });
+  }
+  return out;
+}
+
+describe("the SVG size reader the legibility check runs on", () => {
+  it("multiplies a word's size by every scale around it, and reads outlined headings", () => {
+    const svg = '<g transform="translate(1 2) scale(.5)"><g><text font-size="20">A</text></g></g><path data-text="B" data-size="30" d="M0 0"/><path d="M1 1"/>';
+    expect(svgWordSizes(svg)).toEqual([{ word: "A", units: 10 }, { word: "B", units: 30 }]);
+  });
+
+  it("refuses a word it cannot size", () => {
+    expect(() => svgWordSizes("<text>A</text>")).toThrow(/no size/);
+    expect(() => svgWordSizes('<path data-text="B" d="M0 0"/>')).toThrow(/no size/);
+    expect(() => svgWordSizes('<g transform="scale(1 2)"><text font-size="20">A</text></g>')).toThrow(/cannot read/);
+    expect(() => svgWordSizes('<text font-size="20" style="font-size:4px">A</text>')).toThrow(/cannot read/);
+  });
+});
+
+// Where each drawing's words are smallest on the screens it is checked at, typed from the layout (e2e "layout A" measures
+// the column): the wide drawing in the 44rem column, and the phone drawing on a 320px screen less the 16px gutters.
+const SHOWN_AT = { wide: 704, phone: 320 - 2 * 16 } as const;
+const MIN_WORD_PX = 11;
+
+describe("every word in the art can be read", () => {
+  it(`is drawn at ${MIN_WORD_PX}px or more: the wide drawing at ${SHOWN_AT.wide}px wide, the phone one at ${SHOWN_AT.phone}px`, () => {
+    let checked = 0;
+    const small: string[] = [];
+    for (const id of ids) {
+      for (const kind of ["wide", "phone"] as const) {
+        const drawing = BLOG_ART[id]![kind];
+        const svg = readFileSync(join(PUBLIC, drawing.src), "utf8");
+        const words = svgWordSizes(svg);
+        // Every <text> and every outlined heading was measured, none skipped.
+        const onPage = (svg.match(/<text\b/g)?.length ?? 0) + (svg.match(/data-text="/g)?.length ?? 0);
+        expect(words.length, `${drawing.src}: every word measured`).toBe(onPage);
+        expect(words.length, `${drawing.src}: anti-vacuity, words`).toBeGreaterThan(5);
+        for (const { word, units } of words) {
+          const px = (units * SHOWN_AT[kind]) / drawing.width;
+          if (px < MIN_WORD_PX) small.push(`${kind} '${word}' ${px.toFixed(1)}px`);
+          checked++;
+        }
+        console.log(`${kind} words measured: ${words.length}, smallest ${Math.min(...words.map((w) => (w.units * SHOWN_AT[kind]) / drawing.width)).toFixed(2)}px`);
+      }
+    }
+    expect(checked, "anti-vacuity: words measured").toBeGreaterThan(10);
+    expect(small).toEqual([]);
+  });
+});
+
 describe("every file the art registry names", () => {
   it("is a self-contained SVG of the declared size, within budget, that needs no web font", () => {
     let checked = 0;
