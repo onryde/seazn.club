@@ -1,6 +1,6 @@
 # Seazn Club app on the web: promote it, and "Open in app"
 
-Status: design, awaiting owner approval. The owner handed ownership of the web decisions to this session on
+Status: design, approved by the owner on 2026-11-25. The owner handed ownership of the web decisions to this session on
 2026-11-25; calls made here are marked **(web call)**. Not scheduled.
 
 Phone side: capture repo PR #73, `docs/specs/2026-11-25-open-in-app-design.md` (owner-approved).
