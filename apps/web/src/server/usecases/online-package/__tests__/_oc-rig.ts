@@ -199,11 +199,13 @@ export interface PackageState {
   credits_refunded: number; credits_forfeited: number; paid_at: Date | null; frozen_at: Date | null; refunded_at: Date | null;
   created_at: Date;
 }
-const PACKAGE_COLS = sql`id, division_id, division_name, size, cameras_paid, credits_paid, credits_refunded, credits_forfeited, paid_at,
-  frozen_at, refunded_at, created_at`;
+/** A function, never a module-scope fragment: building a fragment takes the pooled client, which throws at IMPORT when DATABASE_URL is
+ *  unset, so every suite importing this rig failed to collect instead of skipping behind its own `describe.skipIf(!HAS_DB)`. */
+const packageCols = () => sql`id, division_id, division_name, size, cameras_paid, credits_paid, credits_refunded, credits_forfeited,
+  paid_at, frozen_at, refunded_at, created_at`;
 
 export async function packageById(id: string): Promise<PackageState | null> {
-  const [p] = await sql<PackageState[]>`select ${PACKAGE_COLS} from division_online_packages where id = ${id}`;
+  const [p] = await sql<PackageState[]>`select ${packageCols()} from division_online_packages where id = ${id}`;
   return p ?? null;
 }
 
@@ -220,7 +222,7 @@ export async function orgLedgerCount(orgId: string): Promise<number> {
 
 /** Every package row a division ever had (live or refunded), oldest first. */
 export async function packagesOf(divisionId: string): Promise<PackageState[]> {
-  return sql<PackageState[]>`select ${PACKAGE_COLS} from division_online_packages where division_id = ${divisionId} order by created_at, id`;
+  return sql<PackageState[]>`select ${packageCols()} from division_online_packages where division_id = ${divisionId} order by created_at, id`;
 }
 
 /** The division's one live row (refunded_at null), asserted present. */
