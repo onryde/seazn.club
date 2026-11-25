@@ -9,6 +9,11 @@ import { siteOrigin } from "@/lib/site-origin";
 export const HELP_DESCRIPTION =
   "How to run tournaments and leagues on seazn.club — setup, registration, scheduling, scoring, sharing and billing, in plain words.";
 
+/** The format gallery's name and description (/help/formats): its page and /llms.txt both read them. */
+export const FORMAT_GALLERY_TITLE = "Format gallery";
+export const FORMAT_GALLERY_DESCRIPTION =
+  "League, knockout, groups, swiss, double elimination, americano, ladder — every tournament format explained with a diagram and a live example.";
+
 interface HelpLdPage {
   path: string;
   name: string;
