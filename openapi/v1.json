@@ -68812,6 +68812,36 @@
                   },
                   "pickAspect16x9": {
                     "type": "boolean"
+                  },
+                  "profile": {
+                    "type": "string",
+                    "enum": [
+                      "baseline",
+                      "constrained-baseline",
+                      "main",
+                      "extended",
+                      "high",
+                      "progressive-high",
+                      "constrained-high",
+                      "high10",
+                      "high422",
+                      "high444",
+                      "unknown",
+                      "***"
+                    ]
+                  },
+                  "codecLevel": {
+                    "type": "string",
+                    "pattern": "^(1b|1(\\.[1-3])?|[2-6](\\.[0-2])?|[*]{3})$"
+                  },
+                  "entropy": {
+                    "type": "string",
+                    "enum": [
+                      "cabac",
+                      "cavlc",
+                      "unknown",
+                      "***"
+                    ]
                   }
                 },
                 "required": [

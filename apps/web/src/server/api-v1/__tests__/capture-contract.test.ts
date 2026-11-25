@@ -34,6 +34,7 @@ import * as S from "../schemas";
 import { CaptureQrV2, captureQrV2Text, parseCaptureQrV2 } from "@/lib/capture-qr";
 import { CAPTURE_NUDGE_REASONS, MATCH_DAY_NUDGE_REASONS, MATCH_DAY_TOKEN_TTL_SECONDS, captureTopic, divisionTopic, matchDayTopic } from "@/lib/realtime";
 import { contractUrlPatterns } from "@/server/usecases/__tests__/_capture-realtime";
+import { H264_LEVEL_WORDS } from "./_h264-levels";
 import { PROGRAMME_PHASES } from "@/lib/relay-phase";
 import type { CfLiveEvent } from "@/server/relay/cf-live-notification";
 import type { RoundRole } from "@seazn/engine/competition";
@@ -61,7 +62,7 @@ const SHA256: Record<string, string> = {
   "capture-beat.v1.json": "2696d9d899c3870b86b50d1e90c6e760c26cb61e902ce092a79754c25400afdb",
   "capture-start.v1.json": "daf6383be934c600c6dbd439e8596f9af01f3d655578fa8b0b771d695672ad64",
   "capture-scoring-link.v1.json": "daa81ed4f907545f0fb1a8265d11011fab3b90a52d880dda8e3839f7651b5032",
-  "capture-record.v1.json": "213f766043b7682f198cc98da13e93995b6602e46533ecf60c78bf562aebd6f8",
+  "capture-record.v1.json": "9c51829e4d1e9156cdf8ac19f1335476aa128bab62eaf126b1783fa182da8405",
   // MD-1 Task 3 (capture S4 Match Day design §5, §9.3): a Match Day code's day read.
   // Task 8e (2026-11-13): + can_call, additive.
   // Task 17 (Seazn-hosted video, 2026-11-21): + live_seazn on every row, additive and required.
@@ -335,7 +336,7 @@ const DIRS: Record<string, { file: string; routes: Route[]; count: number }> = {
   "capture-beat.v1": { file: BEAT, routes: [["beat-", S.CaptureBeat, ""], ["answer-", S.CaptureBeatAnswer, "#/$defs/answer"], ["refusal-", S.CaptureRefusal, "#/$defs/refusal"]], count: 64 },
   "capture-start.v1": { file: START, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureStartOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 18 },
   "capture-scoring-link.v1": { file: SCORING, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureScoringLinkOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 20 },
-  [RECORD_DIR]: { file: RECORD, routes: [["line-", S.CaptureRecordLine, ""], ["ok-", S.CaptureRecordOk, "#/$defs/ok"], ["", S.CaptureRecordRefusal, "#/$defs/refusal"]], count: 63 },
+  [RECORD_DIR]: { file: RECORD, routes: [["line-", S.CaptureRecordLine, ""], ["ok-", S.CaptureRecordOk, "#/$defs/ok"], ["", S.CaptureRecordRefusal, "#/$defs/refusal"]], count: 68 },
   [MD_DAY_DIR]: { file: MD_DAY, routes: [["refusal-", S.CaptureMatchdayRefusal, "#/$defs/refusal"], ["", S.CaptureMatchdayDay, ""]], count: 15 },
   [MD_OPEN_DIR]: { file: MD_OPEN, routes: [["refusal-", S.CaptureMatchdayRefusal, "#/$defs/refusal"], ["", S.CaptureMatchdayOpen, ""]], count: 10 },
   [MD_APPROVAL_DIR]: {
@@ -368,11 +369,13 @@ const DIRS: Record<string, { file: string; routes: Route[]; count: number }> = {
 // ---------------------------------------------------------------------------------------------------------------
 /** Per fixture prefix: the shape's pointer and the exact count (never 0). `line-` is ONE NDJSON line (the root). */
 const RECORD_ROUTES: [prefix: string, pointer: "" | "#/$defs/ok" | "#/$defs/refusal", count: number][] = [
-  ["line-", "", 49], ["ok-", "#/$defs/ok", 6], ["", "#/$defs/refusal", 8],
+  ["line-", "", 54], ["ok-", "#/$defs/ok", 6], ["", "#/$defs/refusal", 8],
 ];
 /** Capture's `modules/capture-engine/src/scrub/allow-list.json` at capture 2b4df80 (ebac190's lists plus the seven
  *  scalars its reasons tag R-990P), list for list: the rulebook the record's keys come from, typed here and never read
- *  off the contract. A key added on capture's side is a contract bump here (the spec's §Body). */
+ *  off the contract. A key added on capture's side is a contract bump here (the spec's §Body). The one exception is
+ *  `encoder` (Task 50): the web's own addition, ahead of capture's list (capture adds the three keys to its allow-list
+ *  when it re-vendors), so it is NOT capture's at 2b4df80 — do not "correct" it against capture. */
 const ALLOW_LIST = {
   reserved: ["at", "kind", "level"],
   plain: ["action", "answer", "appVersion", "attempt", "cause", "claim", "count", "delivery", "endReason", "error", "exit",
@@ -381,6 +384,9 @@ const ALLOW_LIST = {
     "sid", "site", "slot", "source", "startFailed", "state", "status", "tag", "to", "tokenTag", "transport", "word"],
   publicUrl: ["url", "playbackUrl", "overlayUrl"],
   text: ["message", "problems"],
+  /** Task 50 (owner "yes", 2026-11-25): the encoder's H.264 profile, level and entropy coding, each narrowed by its own
+   *  reason (an enum, a level pattern, an enum), proven in the Task 50 test below. `level` stays the log level. */
+  encoder: ["profile", "codecLevel", "entropy"],
   never: ["tok", "token", "code", "passphrase", "streamKey", "streamId", "bearer", "authorization"],
   scalars: ["audioFps", "bandwidthBps", "bytes", "camera", "counted", "dropped", "egressBps", "encodeListed", "exitAtMs",
     "failed", "failures", "gapMs", "gateBps", "granted", "headroom", "held", "intervalMs", "lagGrowthMs", "lagMs", "late",
@@ -661,7 +667,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       expect(checked, `${dir}: fixtures checked`).toBe(count);
       total += checked;
     }
-    expect(total).toBe(12 + 58 + 64 + 18 + 20 + 63 + 15 + 10 + 17 + 26 + 18);
+    expect(total).toBe(12 + 58 + 64 + 18 + 20 + 68 + 15 + 10 + 17 + 26 + 18);
     expect(byFile, "fixtures checked against the published bytes").toBe(total);
     // Every ZOD_ONLY entry names a fixture that exists and was swept (a stale entry would excuse nothing, silently).
     expect(zodOnlySeen, "ZOD_ONLY fixtures swept").toBe(Object.keys(ZOD_ONLY).length);
@@ -1686,7 +1692,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       routes++;
     }
     expect(routes).toBe(3);
-    expect(names).toHaveLength(49 + 6 + 8);
+    expect(names).toHaveLength(54 + 6 + 8);
     // Every RECORD_SERVER_ONLY entry names a fixture that exists and was swept (a stale entry would excuse nothing).
     expect(secrets, "secret-shaped vectors swept").toBe(Object.keys(RECORD_SERVER_ONLY).length);
     expect(secrets).toBe(6);
@@ -1768,7 +1774,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       strings += stringsOf(line).length;
       validLines++;
     }
-    expect(validLines).toBe(25);
+    expect(validLines).toBe(27);
     expect(strings).toBeGreaterThan(validLines);
     // The bare ingest URLs W26 serves carry no credential; a masked RTMPS key or SRT passphrase is no secret either.
     let bare = 0;
@@ -1783,11 +1789,11 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
   it("capture-record.v1 keys are capture's allow-list, class for class: the line's own three, every plain/publicUrl/text/scalars key (the field kind written field_kind), no never key, no unnamed key — each class proven through ajv, counted", () => {
     const root = rootOf(contract(RECORD));
     const written = (k: string): string => (ALLOW_LIST.reserved.includes(k) ? `field_${k}` : k);
-    const lists = [ALLOW_LIST.reserved, ALLOW_LIST.plain, ALLOW_LIST.publicUrl, ALLOW_LIST.text, ALLOW_LIST.scalars];
-    const expected = [...ALLOW_LIST.reserved, ...ALLOW_LIST.plain.map(written), ...ALLOW_LIST.publicUrl, ...ALLOW_LIST.text, ...ALLOW_LIST.scalars];
+    const lists = [ALLOW_LIST.reserved, ALLOW_LIST.plain, ALLOW_LIST.publicUrl, ALLOW_LIST.text, ALLOW_LIST.scalars, ALLOW_LIST.encoder];
+    const expected = [...ALLOW_LIST.reserved, ...ALLOW_LIST.plain.map(written), ...ALLOW_LIST.publicUrl, ...ALLOW_LIST.text, ...ALLOW_LIST.scalars, ...ALLOW_LIST.encoder];
     // Premise: the lists are disjoint once `kind` is renamed, so the key count is their sum.
     expect(new Set(expected).size, "premise: disjoint lists").toBe(lists.reduce((n, l) => n + l.length, 0));
-    expect(expected).toHaveLength(3 + 48 + 3 + 2 + 48);
+    expect(expected).toHaveLength(3 + 48 + 3 + 2 + 48 + 3);
     expect(Object.keys(root.properties as Json).sort()).toEqual([...expected].sort());
     expect(root.additionalProperties).toBe(false);
     expect([...(root.required as string[])].sort()).toEqual(["at", "kind"]);
@@ -1956,6 +1962,100 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     expect(fixture(RECORD_DIR, "line-valid-bitrate").sendBufferMs, "a real SRT reading below zero").toBe(-336);
     const rtmps = fixture(RECORD_DIR, "line-valid-bitrate-rtmps");
     expect([rtmps.bandwidthBps, rtmps.sendBufferMs, rtmps.lost], "RTMPS: no bandwidth, no buffer, none lost").toEqual([null, null, 0]);
+  });
+
+  it("capture-record.v1 Task 50 (owner 'yes', 2026-11-25): profile, codecLevel and entropy are three OPTIONAL string keys — each value in its class admitted and every other refused (`level` stays the log level: \"4.1\" is no level), by the published bytes AND the twin, counted; the fixtures carry all three and every profile word", () => {
+    const root = rootOf(contract(RECORD));
+    const props = root.properties as Record<string, Json>;
+    const fileAdmits = fileValidator();
+    const base: Json = { at: "2026-10-11T21:19:03.123Z", kind: "encoder-format" };
+    // The rulebook (the brief, typed): the H.264 profile words capture's encoder reports, the level grid 1, 1b, 1.1 … 6.2,
+    // the entropy coders — each plus the scrub's mask (the `level` key's precedent).
+    const PROFILES = ["baseline", "constrained-baseline", "main", "extended", "high", "progressive-high", "constrained-high", "high10", "high422", "high444", "unknown", "***"];
+    const ENTROPY = ["cabac", "cavlc", "unknown", "***"];
+    // The levels are H.264 Table A-1's (_h264-levels.ts: level_idc 9, 10-13, 20-22, 30-32, 40-42, 50-52, 60-62, 20 levels,
+    // 1.3 included), written as capture writes them, plus the mask — not a hand grid.
+    const LEVELS = [...H264_LEVEL_WORDS, "***"];
+    expect(H264_LEVEL_WORDS, "premise: Table A-1 has 20 levels, 1b and 1.3 among them").toHaveLength(20);
+    expect(H264_LEVEL_WORDS).toEqual(expect.arrayContaining(["1b", "1.3"]));
+    // The contract tolerates the ".0" spelling of a whole level 2-6 and refuses 1.0 (pinned, so a tightening or a
+    // loosening is seen); neither is a Table A-1 word.
+    const TOLERATED_LEVELS = ["2.0", "3.0", "4.0", "5.0", "6.0"];
+    const NOT_LEVELS = ["4.7", "0", "7", "6.3", "1.0", "1.4", "4.3", "1c", "1B", "4.", ".1", "4.10", "10", "4,1", " 4.1", "high", "", "level 4.1", "**", "****"];
+    const NOT_WORDS = ["ultra", "High", "HIGH", "constrained", "progressive_high", "high 10", "", "***x", "**", "cabac ", "CABAC", "huffman", "cabc", "4.1"];
+    const NOT_STRINGS = [3, 4.1, true, false, null, {}, ["high"]];
+    const classes: [key: string, ok: string[], bad: unknown[]][] = [
+      ["profile", PROFILES, [...NOT_WORDS.filter((w) => !PROFILES.includes(w)), ...NOT_STRINGS]],
+      ["codecLevel", LEVELS, [...NOT_LEVELS, ...NOT_STRINGS]],
+      ["entropy", ENTROPY, [...NOT_WORDS.filter((w) => !ENTROPY.includes(w)), ...NOT_STRINGS]],
+    ];
+    expect(classes.map(([k]) => k)).toEqual(ALLOW_LIST.encoder);
+    let admitted = 0, refused = 0;
+    for (const [k, ok, bad] of classes) {
+      expect(props[k], `${k}: the contract lists it`).toBeDefined();
+      expect(String(props[k].description ?? "").length, `${k}: described`).toBeGreaterThan(20);
+      expect(root.required as string[], `${k}: optional`).not.toContain(k);
+      for (const v of ok) {
+        expect(fileAdmits(RECORD, "", { ...base, [k]: v }), `file: ${k} = ${JSON.stringify(v)}`).toBe(true);
+        expect(parses(S.CaptureRecordLine, { ...base, [k]: v }), `twin: ${k} = ${JSON.stringify(v)}`).toBe(true);
+        admitted++;
+      }
+      for (const v of bad) {
+        expect(fileAdmits(RECORD, "", { ...base, [k]: v }), `file: ${k} = ${JSON.stringify(v)}`).toBe(false);
+        expect(parses(S.CaptureRecordLine, { ...base, [k]: v }), `twin: ${k} = ${JSON.stringify(v)}`).toBe(false);
+        refused++;
+      }
+    }
+    expect(admitted, "anti-vacuity: admitted").toBe(PROFILES.length + LEVELS.length + ENTROPY.length);
+    expect(admitted).toBe(12 + 21 + 4);
+    for (const v of TOLERATED_LEVELS) {
+      expect(LEVELS, `${v}: not a Table A-1 word`).not.toContain(v);
+      expect(fileAdmits(RECORD, "", { ...base, codecLevel: v }), `file: codecLevel = ${v}`).toBe(true);
+      expect(parses(S.CaptureRecordLine, { ...base, codecLevel: v }), `twin: codecLevel = ${v}`).toBe(true);
+    }
+    // Every Table A-1 level is read; 1.3 (level_idc 13) is the one the brief's first grid left out.
+    expect(fileAdmits(RECORD, "", { ...base, codecLevel: "1.3" }), "file: 1.3").toBe(true);
+    expect(parses(S.CaptureRecordLine, { ...base, codecLevel: "1.3" }), "twin: 1.3").toBe(true);
+    expect(refused, "anti-vacuity: refused").toBe(classes.reduce((n, [, , bad]) => n + bad.length, 0));
+    for (const [k, ok, bad] of classes) expect([ok.length, bad.length].every((n) => n > 3), `${k}: both sides swept`).toBe(true);
+    // The progressive-high word (profile_idc 100 with constraint_set4) is its own profile, not constrained-high.
+    expect(PROFILES).toContain("progressive-high");
+    expect(PROFILES).toContain("constrained-high");
+    // All three absent, and all three present: each is optional, and they ride one line.
+    expect(fileAdmits(RECORD, "", base)).toBe(true);
+    expect(parses(S.CaptureRecordLine, { ...base, profile: "high", codecLevel: "4.1", entropy: "cabac" })).toBe(true);
+    // `level` keeps its log-level meaning: a codec level is no log level, and a log level is no codec level.
+    for (const v of ["4.1", "1b", "high", "cabac"]) {
+      expect(fileAdmits(RECORD, "", { ...base, level: v }), `file: level = ${v}`).toBe(false);
+      expect(parses(S.CaptureRecordLine, { ...base, level: v }), `twin: level = ${v}`).toBe(false);
+    }
+    for (const v of ["debug", "info", "warn", "error", "***"]) expect(fileAdmits(RECORD, "", { ...base, level: v }), `level = ${v}`).toBe(true);
+    expect(fileAdmits(RECORD, "", { ...base, codecLevel: "warn" }), "a log level is no codec level").toBe(false);
+    // The closed line stays closed beside them: a near key is refused by both.
+    for (const k of ["codec", "codec_level", "codeclevel", "level_idc", "profileIdc", "entropyMode", "Profile"]) {
+      expect(fileAdmits(RECORD, "", { ...base, [k]: "high" }), `file: ${k}`).toBe(false);
+      expect(parses(S.CaptureRecordLine, { ...base, [k]: "high" }), `twin: ${k}`).toBe(false);
+    }
+    // The fixtures: the encoder-format lines are admitted, and between them carry every profile word the brief lists
+    // except the ones the table above covers — the progressive-high one included.
+    const valid = ["line-valid-encoder-format", "line-valid-encoder-format-progressive-high"];
+    const carried = new Set<string>();
+    for (const name of valid) {
+      const line = fixture(RECORD_DIR, name);
+      expect(line.kind).toBe("encoder-format");
+      expect(fileAdmits(RECORD, "", line), `${name}: file`).toBe(true);
+      expect(parses(S.CaptureRecordLine, line), `${name}: twin`).toBe(true);
+      for (const k of ALLOW_LIST.encoder) expect(typeof line[k], `${name}: carries ${k}`).toBe("string");
+      carried.add(String(line.profile));
+    }
+    expect([...carried].sort()).toEqual(["high", "progressive-high"]);
+    const invalidNames = ["line-invalid-profile", "line-invalid-codecLevel", "line-invalid-entropy"];
+    for (const name of invalidNames) {
+      const line = fixture(RECORD_DIR, name);
+      expect(fileAdmits(RECORD, "", line), `${name}: file refuses`).toBe(false);
+      expect(parses(S.CaptureRecordLine, line), `${name}: twin refuses`).toBe(false);
+    }
+    expect(fixture(RECORD_DIR, "line-invalid-codecLevel").codecLevel).toBe("4.7");
   });
 
   it("capture-record.v1 answers: 201 is the closed {ref, kept, dropped} with an upper-case Crockford ref; every refusal word of the spec's table has a fixture the file admits; replaced is none of them (R4)", () => {

@@ -317,6 +317,19 @@ const count = () => z.number().int().min(0).optional();
 const RECORD_NARROWED_SCALARS = {
   bytes: count(), failures: count(), retryMs: count(), pickAspect16x9: z.boolean().optional(),
 };
+/** Task 50 (owner "yes", 2026-11-25): the encoder's H.264 profile, level and entropy coding, one `encoder-format` line
+ *  (and any line that wants them). `level` is the LOG level, so the codec's is `codecLevel`. Each is narrowed to its own
+ *  words and takes the scrub's mask like `level`: an unknown word is refused, not guessed. `progressive-high` is profile_idc
+ *  100 with constraint_set4, told apart from `constrained-high` by the capture app. */
+const RECORD_ENCODER_PROFILES = [
+  "baseline", "constrained-baseline", "main", "extended", "high", "progressive-high", "constrained-high", "high10",
+  "high422", "high444", "unknown", "***",
+] as const;
+const RECORD_ENCODER_KEYS = {
+  profile: z.enum(RECORD_ENCODER_PROFILES).optional(),
+  codecLevel: z.string().regex(/^(1b|1(\.[1-3])?|[2-6](\.[0-2])?|[*]{3})$/).optional(),
+  entropy: z.enum(["cabac", "cavlc", "unknown", "***"]).optional(),
+};
 const keyed = <K extends string, T extends z.ZodType>(keys: readonly K[], make: () => T): Record<K, T> =>
   Object.fromEntries(keys.map((k) => [k, make()])) as Record<K, T>;
 
@@ -341,6 +354,7 @@ const recordLineObject = z.strictObject({
   ...keyed(RECORD_TEXT_KEYS, text),
   ...keyed(RECORD_SCALAR_KEYS, scalar),
   ...RECORD_NARROWED_SCALARS,
+  ...RECORD_ENCODER_KEYS,
 });
 export const CaptureRecordLine = z.preprocess((input, ctx) => {
   if (typeof input === "object" && input !== null && Object.hasOwn(input, "__proto__")) {
