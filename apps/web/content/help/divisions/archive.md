@@ -1,6 +1,6 @@
 ---
 title: Archive and delete
-description: Hide a division you no longer need, restore it later, and what delete can and cannot do. Archived divisions that have results still count toward your plan's division limit.
+description: Hide a division you no longer need, restore it later, and see what delete can and cannot do. Archived divisions with results still count toward your division limit.
 order: 2
 related: divisions/lifecycle, divisions/settings, billing/downgrade
 ---

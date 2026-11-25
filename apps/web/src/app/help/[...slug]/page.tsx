@@ -12,6 +12,8 @@ import { CompetitionProse } from "@/components/public-site/competition-prose";
 import { HelpBreadcrumb, HelpShell } from "@/components/help/help-shell";
 import { HelpToc } from "@/components/help/help-toc";
 import { HelpRelated } from "@/components/help/help-related";
+import { JsonLd } from "@/components/seo/json-ld";
+import { helpArticleLd, helpBreadcrumbLd } from "@/lib/help-seo";
 
 // Prerendered and cached at the edge (layout.tsx): a request-time read fails the build. 300 s, because an article with a
 // plan token reads the plan table, so a changed fee shows within about ten minutes (five here, five at the edge).
@@ -32,7 +34,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;
   const article = helpArticle(slug.join("/"));
   if (!article) return {};
-  return { title: article.title, description: article.description };
+  return { title: article.title, description: article.description, alternates: { canonical: `/help/${article.slug}` } };
 }
 
 export default async function HelpArticlePage({ params }: Props) {
@@ -50,7 +52,7 @@ export default async function HelpArticlePage({ params }: Props) {
   // ONE pipeline run gives the HTML and its headings, so the "On this page" ids are the rendered ones.
   const { html, headings } = await renderHelpArticle(article, loadPricingMatrix);
   const toc = helpTocEntries(headings);
-  const sectionLabel = helpSectionLabel(article.section);
+  const trail = [{ href: `/help#${article.section}`, label: helpSectionLabel(article.section) }];
 
   // Previous/next within the section, in the section list's own order.
   const pages = helpSectionList().find((s) => s.key === article.section)?.pages ?? [];
@@ -76,9 +78,11 @@ export default async function HelpArticlePage({ params }: Props) {
   // under the lede. Rows are explicit so the order holds whatever the auto-placement would do.
   return (
     <HelpShell currentHref={href}>
+      <JsonLd data={helpArticleLd({ path: href, name: article.title, description: article.description })} />
+      <JsonLd data={helpBreadcrumbLd(trail, { path: href, name: article.title })} />
       <article className="min-[1100px]:grid min-[1100px]:grid-cols-[minmax(0,1fr)_12rem] min-[1100px]:gap-x-10">
         <header className="min-w-0 max-w-[34rem] min-[1100px]:col-start-1 min-[1100px]:row-start-1">
-          <HelpBreadcrumb trail={[{ href: `/help#${article.section}`, label: sectionLabel }]} />
+          <HelpBreadcrumb trail={trail} />
           <h1 className="mt-3 text-balance text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">{article.title}</h1>
           {article.description ? (
             <p className="mt-3 text-lg leading-relaxed text-slate-600">{article.description}</p>

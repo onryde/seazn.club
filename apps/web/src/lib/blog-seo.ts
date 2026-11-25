@@ -3,6 +3,7 @@
 import type { Metadata } from "next";
 import { breadcrumbLd, organizationLd } from "@/components/seo/json-ld";
 import { BLOG_AUTHOR, blogUrl, type BlogPostMeta } from "@/lib/blog";
+import { OG_ALT } from "@/lib/seo-meta";
 import { siteOrigin } from "@/lib/site-origin";
 
 /** The same form as help's "%s — Seazn Club Help" (app/help/layout.tsx). */
@@ -12,6 +13,8 @@ export const BLOG_INDEX_TITLE = "Seazn Club Blog — how points, tie-breaks and 
 export const BLOG_INDEX_DESCRIPTION =
   "How points, tie-breaks, draws and brackets work in Seazn, sport by sport. Written for organisers.";
 export const BLOG_FEED_PATH = "/blog/rss.xml";
+/** What a search result shows of a <title>. A post's question is never rewritten; the suffix gives way instead. */
+const BLOG_TITLE_MAX = 65;
 
 /** `<link rel="alternate" type="application/rss+xml">`: a page's own `alternates` replaces its layout's, so each page spells it. */
 const feedAlternate = { "application/rss+xml": BLOG_FEED_PATH };
@@ -21,15 +24,24 @@ export function blogIndexMetadata(): Metadata {
     title: { absolute: BLOG_INDEX_TITLE },
     description: BLOG_INDEX_DESCRIPTION,
     alternates: { canonical: "/blog", types: feedAlternate },
-    openGraph: { type: "website", siteName: "Seazn Club", title: BLOG_SITE_TITLE, description: BLOG_INDEX_DESCRIPTION, url: "/blog" },
+    openGraph: {
+      type: "website",
+      siteName: "Seazn Club",
+      title: BLOG_SITE_TITLE,
+      description: BLOG_INDEX_DESCRIPTION,
+      url: "/blog",
+      // A page's openGraph replaces the inherited one whole, the root card with it, so it is named here.
+      images: [{ url: "/opengraph-image", width: 1200, height: 630, type: "image/png", alt: OG_ALT }],
+    },
     twitter: { card: "summary_large_image", title: BLOG_SITE_TITLE, description: BLOG_INDEX_DESCRIPTION },
   };
 }
 
 export function blogPostMetadata(post: BlogPostMeta): Metadata {
   const url = blogUrl(post.slug);
+  const fits = BLOG_TITLE_TEMPLATE.replace("%s", () => post.title).length <= BLOG_TITLE_MAX;
   return {
-    title: post.title,
+    title: fits ? post.title : { absolute: post.title },
     description: post.description,
     alternates: { canonical: url, types: feedAlternate },
     openGraph: {
@@ -49,7 +61,7 @@ export function blogPostMetadata(post: BlogPostMeta): Metadata {
 /** The author is the organisation, never a person (owner, 2026-11-19). */
 const author = { "@type": "Organization", name: BLOG_AUTHOR } as const;
 
-function publisher() {
+export function publisher() {
   const org = organizationLd();
   return { "@type": org["@type"], name: org.name, url: org.url, logo: org.logo };
 }

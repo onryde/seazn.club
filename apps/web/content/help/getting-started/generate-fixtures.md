@@ -1,6 +1,6 @@
 ---
 title: Generate fixtures
-description: Turn your format and entrants into a list of matches. Generate once; if the roster changes, a league rebuilds, a knockout updates its draw and a Swiss pairs the next round.
+description: Turn your format and entrants into a list of matches. If the roster changes, a league rebuilds, a knockout updates its draw and a Swiss pairs the next round.
 order: 5
 related: getting-started/start-scoring, scheduling/board, divisions/lifecycle, scheduling/timezones
 ---
