@@ -28,7 +28,7 @@ import { StreamTemplatePicker, type TemplatePreviewData } from "../stream-templa
 import { overlayStartLabel, type OverlaySideInput } from "@/lib/overlay-model";
 import { OVERLAY_KEY_PARAM } from "@/lib/realtime-purpose";
 import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
-import { effectiveTemplateId, NO_STREAM_PREFS_READ } from "@/lib/stream-settings";
+import { effectiveDelayMs, effectiveTemplateId, NO_STREAM_PREFS_READ } from "@/lib/stream-settings";
 import type { MessageKey } from "@/lib/messages";
 import { composedSessionOpen } from "@/lib/stream-session-view";
 import { streamUrlSchema } from "@/lib/stream-url";
@@ -146,7 +146,13 @@ export function FixtureStreamPanel({
   // `.then` chain: `api()` can reject before returning, and an un-awaited
   // rejection is invisible to vitest. A failure is deliberately silent — the
   // seed below still previews.
+  // Task 49: only while a picker (so its thumbnails) can be on screen — the OBS tab, or the Phone tab's Score style row
+  // opened AND its editor placed (the relay offered, the score available, and not Camera only: otherwise the card holds no
+  // editor, whatever is stored). A closed row loads nothing: the fetch below feeds the previews and nothing else.
+  const phoneEditorPlaced = shownTab === "phone" && stream.relayEntitled && !stream.relayDisabled && stream.composedAvailable && prefs.prefs.streamMode !== "passthrough";
+  const previewsShown = shownTab === "obs" || (phoneEditorPlaced && (changing || overridden));
   useEffect(() => {
+    if (!previewsShown) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -160,7 +166,7 @@ export function FixtureStreamPanel({
     return () => {
       cancelled = true;
     };
-  }, [fixture.id]);
+  }, [fixture.id, previewsShown]);
 
   // RT: the row's OWN key rides the URL the organiser pastes into OBS — never another fixture's, and none when the page
   // minted none (the overlay then polls).
@@ -209,55 +215,53 @@ export function FixtureStreamPanel({
     />
   );
   // R2006: Ready's score card body, the Phone tab's picker and Score timing, with the default the next session would serve.
-  // Task 38: with a CLUB default set, the body opens as one compact row — "Club style: X · N s — Change for this match" — and the
-  // controls are the match's own override: open once the organiser asks (or the match already has its own), with "Use club style"
-  // writing null for both fields in ONE save. A court session takes the club's STYLE and never its timing (its default stays 0 s), so
-  // its row names the style alone and its timing default is the court's own.
+  // Task 38 + 49: the body is ALWAYS one closed row — "Club style: X · N s", or with no club default "Score: <the sport's own
+  // style> · <the default timing>" — and "Change for this match" opens the match's own override: the picker and Score timing,
+  // MOUNTED only then (no thumbnail exists while closed). The match already having its own choice keeps it open, with "Use club
+  // style" (or, with no club default, "Use the default") writing null for both fields in ONE save. A court session takes the
+  // club's STYLE and never its timing (its default stays 0 s), so its row names the style and its timing default is the court's own.
   const scoreEditor = (defaultMs: number, court: boolean) => {
     const clubTiming = !court && club.overlayDelayMs !== null;
-    const controls = (
-      <>
-        {picker("phone")}
-        <div className="mt-3 border-t border-purple-100 pt-1">
-          <ScoreTiming
-            idPrefix={`stream-timing-${fixture.id}`}
-            storedMs={prefs.prefs.overlayDelayMs}
-            defaultMs={clubTiming ? club.overlayDelayMs! : defaultMs}
-            clubDefault={clubTiming}
-            onSave={(ms) => prefs.save("overlayDelayMs", ms)}
-            saveFailed={prefs.failed === "overlayDelayMs"}
-          />
-        </div>
-      </>
-    );
     const styleSet = club.overlayTemplate !== null;
-    if (!styleSet && !clubTiming) return controls;
-    const seconds = clubTiming ? fmtDelaySeconds(locale, club.overlayDelayMs!) : "";
-    const styleLabel = styleSet ? msg(resolveTemplate(club.overlayTemplate, stream.sportKey).labelKey as MessageKey) : msg("stream.club.styleAny");
-    const rowText = styleSet && clubTiming
-      ? msg("stream.club.row", { style: styleLabel, seconds })
-      : styleSet
-        ? msg("stream.club.rowStyle", { style: styleLabel })
-        : msg("stream.club.rowTiming", { seconds });
+    const clubDefaults = styleSet || clubTiming;
+    const label = (id: string) => msg(resolveTemplate(id, stream.sportKey).labelKey as MessageKey);
+    // With no club default the row names what the NEXT stream will use — the chain the server copies at start, so the match's own
+    // style and timing once it has them (an overridden row must not name the default it no longer uses), else the sport's style and
+    // the default timing. With club defaults the row's own label says "Club …" and names the club's; the box below holds the match's.
+    const rowText = !clubDefaults
+      ? msg("stream.club.rowDefault", {
+          style: label(effectiveTemplateId({ match: prefs.prefs.overlayTemplate, club: null, sportKey: stream.sportKey })),
+          seconds: fmtDelaySeconds(locale, effectiveDelayMs({ match: prefs.prefs.overlayDelayMs, club: null, court, matchDefaultMs: defaultMs, courtDefaultMs: defaultMs })),
+        })
+      : styleSet && clubTiming
+        ? msg("stream.club.row", { style: label(club.overlayTemplate!), seconds: fmtDelaySeconds(locale, club.overlayDelayMs!) })
+        : styleSet
+          ? msg("stream.club.rowStyle", { style: label(club.overlayTemplate!) })
+          : msg("stream.club.rowTiming", { seconds: fmtDelaySeconds(locale, club.overlayDelayMs!) });
     const open = overridden || changing;
+    const overrideId = `stream-club-override-${fixture.id}${court ? "-court" : ""}`;
     return (
       <div data-testid="stream-club">
-        <div data-testid="stream-club-row" className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+        <div
+          data-testid="stream-club-row"
+          className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0"
+        >
           <span data-testid="stream-club-text" className="min-w-0 break-words text-sm font-medium text-slate-800">{rowText}</span>
           {!overridden && (
             <button
               type="button"
               data-testid="stream-club-change"
               aria-expanded={open}
+              aria-controls={overrideId}
               onClick={() => setChanging(!changing)}
               className="inline-flex min-h-11 items-center text-sm font-medium text-purple-700 underline decoration-purple-300 underline-offset-2 hover:decoration-purple-700 md:ml-auto md:min-h-9"
             >
-              {changing ? msg("stream.club.keep") : msg("stream.club.change")}
+              {changing ? msg(clubDefaults ? "stream.club.keep" : "stream.club.keepDefault") : msg("stream.club.change")}
             </button>
           )}
         </div>
         {open && (
-          <div data-testid="stream-club-override" className="mt-2 min-w-0 rounded-lg border border-purple-200 bg-purple-50/40 p-3">
+          <div id={overrideId} data-testid="stream-club-override" className="mt-2 min-w-0 rounded-lg border border-purple-200 bg-purple-50/40 p-3">
             {/* The title says the match HAS its own; it shows only once it does (a stored value), not while the organiser has only opened Change. */}
             {overridden && (
               <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -267,8 +271,18 @@ export function FixtureStreamPanel({
                 </span>
               </div>
             )}
-            {controls}
-            <p className="mt-2 text-xs text-slate-600">{msg("stream.club.overrideNote")}</p>
+            {picker("phone")}
+            <div className="mt-3 border-t border-purple-100 pt-1">
+              <ScoreTiming
+                idPrefix={`stream-timing-${fixture.id}`}
+                storedMs={prefs.prefs.overlayDelayMs}
+                defaultMs={clubTiming ? club.overlayDelayMs! : defaultMs}
+                clubDefault={clubTiming}
+                onSave={(ms) => prefs.save("overlayDelayMs", ms)}
+                saveFailed={prefs.failed === "overlayDelayMs"}
+              />
+            </div>
+            <p className="mt-2 text-xs text-slate-600">{msg(clubDefaults ? "stream.club.overrideNote" : "stream.club.overrideNoteDefault")}</p>
             {overridden && (
               <button
                 type="button"
@@ -279,7 +293,7 @@ export function FixtureStreamPanel({
                 }}
                 className="mt-1 inline-flex min-h-11 items-center text-sm font-medium text-purple-700 underline decoration-purple-300 underline-offset-2 hover:decoration-purple-700 md:min-h-9"
               >
-                {msg("stream.club.use")}
+                {msg(clubDefaults ? "stream.club.use" : "stream.club.useDefault")}
               </button>
             )}
           </div>

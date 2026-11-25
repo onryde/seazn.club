@@ -981,6 +981,18 @@ async function openReady(page: Page, path: string): Promise<void> {
   await expect(page.getByTestId("stream-go-live"), "Ready: Go live is offered").toBeEnabled({ timeout: POLL_WAIT_MS });
 }
 
+/** Task 49: the score card's Score style is ONE closed row until the organiser opens it ("Change for this match"); a match with a
+ *  style or timing of its own opens it by itself, and then there is no Change button. Opens it when it is closed — never a blind
+ *  click — and waits for the picker, so what follows reads the open box. Call it after EVERY `openReady`: a reload closes the row. */
+async function openScoreRow(page: Page): Promise<void> {
+  const row = page.getByTestId("stream-score").getByTestId("stream-club");
+  await expect(row, "the score card's Score style row").toBeVisible();
+  const change = row.getByTestId("stream-club-change");
+  // Only a CLOSED row is opened: an open one's button is "Keep …" and clicking it would close the row again.
+  if ((await change.count()) > 0 && (await change.getAttribute("aria-expanded")) === "false") await change.click();
+  await expect(row.getByTestId("stream-template-picker"), "the Score style row is open").toBeVisible();
+}
+
 const sessionModeOf = async (sid: string) =>
   (await withDb((sql) => sql<{ mode: string; start_cause: string; theme_id: string | null; overlay_delay_ms: number }[]>`
     select mode, start_cause, theme_id, overlay_delay_ms from fixture_stream_sessions where id = ${sid}`))[0];
@@ -990,13 +1002,33 @@ test("R2006 Option C: the score by default; Camera only and back; a style and ti
   const { rig, path, targetId } = await streamRig(page);
   await pairPhoneOnFixture(page, path);
   await page.setViewportSize({ width: 1280, height: 900 });
+  // The thumbnails' data is one read of the overlay route (`?preview=1`); counted from before the panel exists.
+  const previewReads: string[] = [];
+  page.on("request", (r) => {
+    if (new URL(r.url()).pathname === `/api/v1/public/fixtures/${rig.fixtureId}/overlay`) previewReads.push(r.url());
+  });
   await openReady(page, path);
 
   // 1. The DEFAULT: nothing stored — the score card (style grid + Score timing) above ONE Go live that streams the score.
   const goLive = page.getByTestId("stream-go-live");
   await expect(page.getByTestId("stream-score")).toBeVisible();
+  // Task 49: with no club default and nothing of the match's own, Score style is ONE closed row that names what the next stream uses —
+  // no picker, no thumbnails, no timing field in the page until it is opened.
+  // The row's words come from the dictionary's own template with the two slots as a pattern: a style label and a number of seconds.
+  const A = "\u0001";
+  const B = "\u0002";
+  const escaped = en("stream.club.rowDefault", { style: A, seconds: B }).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const rowPattern = new RegExp(`^${escaped.replace(A, ".+").replace(B, "\\d+\\.\\d")}$`);
+  await expect(page.getByTestId("stream-score").getByTestId("stream-club-text")).toHaveText(rowPattern);
+  expect(previewReads, "closed: the preview's overlay read was never made").toEqual([]);
+  await expect(page.getByTestId("stream-score").getByTestId("stream-club-change")).toHaveText(en("stream.club.change"));
+  await expect(page.getByTestId("stream-panel").getByTestId("stream-template-picker"), "closed: no picker in the panel").toHaveCount(0);
+  await expect(page.getByTestId("stream-panel").getByTestId("ovl-preview"), "closed: no thumbnail in the panel").toHaveCount(0);
+  await expect(page.getByTestId("stream-panel").getByTestId("stream-timing"), "closed: no timing field").toHaveCount(0);
+  await openScoreRow(page);
   await expect(page.getByTestId("stream-score").getByTestId("stream-template-picker")).toBeVisible();
   await expect(page.getByTestId("stream-score").getByTestId("stream-timing")).toBeVisible();
+  await expect.poll(() => previewReads.length, { message: "opened: the thumbnails' one overlay read is made" }).toBeGreaterThan(0);
   await expect(page.getByTestId("stream-score-unavailable"), "this deployment can run the score").toHaveCount(0);
   await expect(goLive).toHaveCount(1);
   await expect(goLive).toHaveAttribute("data-mode", "composed");
@@ -1023,6 +1055,7 @@ test("R2006 Option C: the score by default; Camera only and back; a style and ti
   await expect(goLive).toHaveAttribute("data-mode", "composed");
 
   // 4. A style: the other option; and Score timing: set 2.5, Reset to the default, set 2.5 again.
+  await openScoreRow(page); // the reload above closed the row
   const picker = page.getByTestId("stream-score").getByTestId("stream-template-picker");
   const checked = picker.locator('[role="radio"][data-template][aria-checked="true"]');
   const ids = await picker.locator('[role="radio"][data-template]').evaluateAll((els) => els.map((el) => el.getAttribute("data-template")!));
@@ -1071,6 +1104,7 @@ test("R2006 Option C: the score by default; Camera only and back; a style and ti
   expect(refusedPuts, "31 s is refused before it is sent").toBe(0);
   // Both survive a reload.
   await openReady(page, path);
+  await openScoreRow(page); // the match has its own style now, so the row opens by itself
   await expect(page.getByTestId("stream-score").getByTestId("stream-template-picker").locator('[role="radio"][data-template][aria-checked="true"]')).toHaveAttribute("data-template", other);
   await expect(page.getByTestId("stream-timing-value")).toHaveText(en("stream.timing.value", { seconds: "2.5" }));
 
@@ -1221,6 +1255,11 @@ test(`R2006 Step 3: the Phone tab's score card at ${SCORE_CARD_WIDTHS.join(", ")
     await openReady(page, path);
     await expect(card, `${width}px: the score is the default here`).toBeVisible();
     await expect(goLive).toHaveAttribute("data-mode", "composed");
+    // Task 49: the closed row first — its Change button is a real target at this width, and the page does not scroll sideways.
+    await expect(picker, `${width}px: closed, no picker`).toHaveCount(0);
+    await expectReachable(page, page.getByTestId("stream-club-change"), "Change for this match", width);
+    await expectNoHorizontalScroll(page);
+    await openScoreRow(page);
 
     // Reachable and unclipped — the default card, then with Score timing open (its input and Reset are inside).
     const ids = await options.evaluateAll((els) => els.map((el) => el.getAttribute("data-template")!));
@@ -1269,6 +1308,7 @@ test(`R2006 Step 3: the Phone tab's score card at ${SCORE_CARD_WIDTHS.join(", ")
   const width = SCORE_CARD_WIDTHS[0];
   await page.setViewportSize({ width, height: 900 });
   await openReady(page, path);
+  await openScoreRow(page);
   const ids = await options.evaluateAll((els) => els.map((el) => el.getAttribute("data-template")!));
   const before = await checked.getAttribute("data-template");
   const other = ids.find((id) => id !== before)!;
@@ -1281,6 +1321,7 @@ test(`R2006 Step 3: the Phone tab's score card at ${SCORE_CARD_WIDTHS.join(", ")
   await input.press("Enter");
   expect((await put).request().postDataJSON()).toEqual({ overlayDelayMs: 2500 });
   await openReady(page, path);
+  await openScoreRow(page);
   await expect(checked, `${width}px: the style after a reload`).toHaveAttribute("data-template", other);
   await expect(page.getByTestId("stream-timing-value"), `${width}px: 2.5 s after a reload`).toHaveText(en("stream.timing.value", { seconds: "2.5" }));
   await expect(page.getByTestId("stream-timing-default")).toHaveCount(0);
