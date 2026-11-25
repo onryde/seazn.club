@@ -66,9 +66,25 @@ const say = (locale: Locale, key: string, vars: Record<string, string | number> 
 // ---------------------------------------------------------------------------------------------------------------------
 const WORD_SRC: Record<Locale, Record<Exclude<Concept, "price">, string>> = {
   en: { credit: "credits?", plan: "plans?", upgrade: "upgrad(?:e|es|ed|ing)", size: "sizes?" },
-  es: { credit: "créditos?", plan: "planes|plan", upgrade: "mejora|mejoras|mejorar", size: "tamaños?" },
-  fr: { credit: "crédits?", plan: "forfaits?|offres?|plans?", upgrade: "passer à|mise à niveau|upgrade", size: "tailles?" },
-  nl: { credit: "credits?", plan: "abonnementen|abonnement|plannen|plan", upgrade: "upgraden|upgrade|upgrades", size: "formaten|formaat|grootte" },
+  // Every pattern here is checked against the player-facing dictionaries by the "never fire on player copy" test below. Three words are
+  // ordinary match or format copy as well, so they are matched only where they name a plan or a size:
+  //   fr "forfait" is the forfeit ("par forfait", matchCentre.status.forfeited), fr "passer à" is any "move on to" (the registration
+  //   consent), es "pasar a" is "move to the bench" (lineup), nl "formaat" is also the tournament FORMAT ("Formaat per fase").
+  // What remains: fr "votre forfait", "passer à Pro", "passez à un forfait supérieur"; es "pasar a Pro", "actualizar tu plan"; nl "dit formaat",
+  // "formaat wijzigen", never the bare label "Formaat".
+  es: {
+    credit: "créditos?",
+    plan: "planes|plan",
+    upgrade: "mejora|mejoras|mejorar|actualiz(?:a|ar)\\s+(?:tu\\s+|el\\s+|a\\s+|al\\s+)?(?:plan|Pro|Enterprise)|pasa(?:r)?\\s+a\\s+(?:Pro|Enterprise)",
+    size: "tamaños?",
+  },
+  fr: {
+    credit: "crédits?",
+    plan: "offres?|plans?|votre forfait|forfaits?\\s+(?:Community|Pro|Enterprise|Entreprise)",
+    upgrade: "pass(?:er|ez)\\s+à\\s+(?:Pro|Enterprise|Entreprise)|pass(?:er|ez)\\s+à\\s+(?:un|une|l')\\s?(?:forfait|offre)\\s+supérieure?|mise à niveau|upgrade",
+    size: "tailles?",
+  },
+  nl: { credit: "credits?", plan: "abonnementen|abonnement|plannen|plan", upgrade: "upgraden|upgrade|upgrades", size: "(?:dit|het|een|dat|ander|groter|kleiner|volgend)\\s+formaat|schaken-formaat|formaat\\s+(?:wijzigen|van)|formaten|grootte|opschalen" },
 };
 
 const BOUND_L = String.raw`(?<![\p{L}\p{N}])`;
@@ -120,6 +136,71 @@ test.describe("the player sweep's word lists", () => {
       }
     }
     expect(planted, "5 concepts x 4 locales planted").toBe(CONCEPTS.length * LOCALES.length);
+  });
+
+  test("the narrowed fr and es words still catch the plan phrasings the dictionaries use", () => {
+    // Where a word lost its bare form (fr "forfait", fr "passer à", es "pasar a") each phrasing that remains is planted from a string the
+    // dictionary says. Neither this feature nor en/nl carries an upgrade word of its own: `billing.upgradeToPro` is the nearest real
+    // sentence there. fr's size-move lines ("Passer à {size} joueurs") are SIZE copy, caught by "taille", and deliberately not upgrades.
+    const planted: { locale: Locale; key: string; concept: Concept }[] = [
+      { locale: "es", key: "billing.planChange.toPro", concept: "upgrade" },
+      { locale: "es", key: "billing.upgradeToPro", concept: "upgrade" },
+      { locale: "fr", key: "addOns.communityNotice", concept: "upgrade" },
+      { locale: "fr", key: "billing.upgradeToPro", concept: "upgrade" },
+      { locale: "fr", key: "addOns.unlimitedNotice", concept: "plan" },
+      { locale: "fr", key: "board.ai.error.upgrade", concept: "plan" },
+      { locale: "fr", key: "onlineChess.receipt.refused.plan", concept: "plan" },
+      // nl's "move up a size" line has no "formaat" in it: its size word is "opschalen" (without it the nl receipt has no size word at all).
+      { locale: "nl", key: "onlineChess.receipt.line.moveUp", concept: "size" },
+      { locale: "fr", key: "onlineChess.receipt.line.moveUp", concept: "size" },
+      { locale: "nl", key: "onlineChess.receipt.refused.plan", concept: "size" },
+      { locale: "nl", key: "onlineChess.receipt.confirm.change", concept: "size" },
+      { locale: "nl", key: "onlineChess.receipt.title.change", concept: "size" },
+    ];
+    for (const { locale, key, concept } of planted) {
+      const text = say(locale, key);
+      expect(countBy(scan(locale, text), concept), `${locale} ${key}: "${text}" must still be caught as ${concept}`).toBeGreaterThan(0);
+    }
+    // The other half: the bare "Formaat" label (the tournament format) is not a size.
+    for (const key of ["matchCentre.info.format", "info.stageFormats"]) {
+      const text = sayPub("nl", key);
+      expect(countBy(scan("nl", text), "size"), `nl public ${key}: "${text}" is the tournament format, not a size`).toBe(0);
+    }
+    // And the narrowed words stay quiet on the sentences that made them too broad: es "Pasar a titulares" (a lineup move), fr "Passer à
+    // l'application" (an AI step) are not upgrades. (The lineup is organiser-side, so the player-copy guard below cannot see it.)
+    for (const [locale, key] of [["es", "lineup.menu.toStarting"], ["es", "lineup.menu.toBench"], ["fr", "board.ai.next.apply"]] as const) {
+      const text = say(locale, key);
+      expect(countBy(scan(locale, text), "upgrade"), `${locale} ${key}: "${text}" moves a player or a step, it is not an upgrade`).toBe(0);
+    }
+    // No dictionary string uses es "actualizar ... plan" yet, so that spelling is exercised on a sentence typed here, and says so.
+    expect(countBy(scan("es", "Para seguir, actualizar tu plan."), "upgrade"), "es actualizar (a sentence typed here: the dictionary has none)").toBeGreaterThan(0);
+    expect(planted.length).toBe(12);
+  });
+
+  test("the word lists never fire on the player-facing dictionaries: forfeit is not a plan and 'move to the bench' is not an upgrade", () => {
+    // Every string of the public dictionary (the spectator pages' words) plus the player-side keys of the main one (registration, the match
+    // room, the watch page). The sweep reads the product; this reads the same words without a browser, so a pattern that would fire on
+    // copy a player CAN be shown (a forfeited match, a lineup move) fails here, not only on a page that happened to show it.
+    const PLAYER_KEYS = /^(?:externalPlay\.(?:room|watch|fixture|checkin)\.|register\.|matchCentre\.|division\.)/;
+    let scanned = 0;
+    let scannedPublic = 0;
+    const fired: string[] = [];
+    for (const locale of LOCALES) {
+      const strings = [
+        ...Object.entries(PUB[locale]).map(([k, v]) => [`public ${k}`, v] as const),
+        ...Object.entries(DICT[locale]).filter(([k]) => PLAYER_KEYS.test(k)).map(([k, v]) => [`ui ${k}`, v] as const),
+      ];
+      for (const [k, v] of strings) {
+        if (typeof v !== "string") continue;
+        scanned++;
+        if (k.startsWith("public ")) scannedPublic++;
+        for (const h of scan(locale, v)) fired.push(`${locale} ${k}: ${h.concept} "${h.text}"`);
+      }
+    }
+    // Both halves must be read: the forfeit and "Formaat" strings the narrowing is for live in the public dictionary.
+    expect(scannedPublic, "anti-vacuity: public dictionary strings read (885 a locale today)").toBeGreaterThan(LOCALES.length * 500);
+    expect(scanned - scannedPublic, "anti-vacuity: player-side strings of the main dictionary read (507 a locale today)").toBeGreaterThan(LOCALES.length * 250);
+    expect(fired, "a word that fires on player copy").toEqual([]);
   });
 
   test("every pattern matches something its locale's own dictionary says (no dead word)", () => {
@@ -293,6 +374,8 @@ test.describe("online chess: the player sweep", () => {
       receipts++;
       expect(countBy(hits, "credit"), `${locale}: the organiser's receipt says credit`).toBeGreaterThan(0);
       expect(countBy(hits, "price"), `${locale}: the organiser's receipt says the price`).toBeGreaterThan(0);
+      // The receipt's "you can move up a size until round 1 opens" line (receipt.tsx) carries the size word, so the positive scan has it too.
+      expect(countBy(hits, "size"), `${locale}: the organiser's receipt says the size`).toBeGreaterThan(0);
     }
     expect(scanned, "4 locales x 4 pages scanned").toBe(16);
     expect(receipts, "the receipt scanned in each locale").toBe(LOCALES.length);
