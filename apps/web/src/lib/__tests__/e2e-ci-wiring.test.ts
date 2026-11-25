@@ -2402,16 +2402,21 @@ describe("e2e-seazn: the one LIVE-on job runs its two files, and proves they RAN
     const files = readdirSync(WORKFLOWS).filter((f) => /\.ya?ml$/.test(f));
     const elsewhere: string[] = [];
     let inSeazn = 0;
+    let inSmoke = 0;
     for (const f of files) {
       for (const job of jobsOf(stripComments(readFileSync(join(WORKFLOWS, f), "utf8")))) {
         const sets = [...job.body.matchAll(/^\s+SEAZN_HOSTED_LIVE:/gm)].length;
         if (f === "e2e.yml" && job.name === "e2e-seazn") inSeazn += sets;
+        // T33g: the smoke job's fourth server (and the smoke process run against it) is the ONE other place: smoke step 10, a real Seazn
+        // start on the fakes, needs LIVE on, and runs nowhere else (seazn-smoke-ci-wiring.test.ts pins that pair).
+        else if (f === "ci.yml" && job.name === "smoke-e2e") inSmoke += sets;
         else if (sets > 0) elsewhere.push(`${f}:${job.name}`);
       }
     }
     expect(files.length, "anti-vacuity: the workflows were read").toBeGreaterThan(1);
     // Anti-vacuity: the sweep saw the flag where it belongs — the server's env and the runner's.
     expect(inSeazn, "e2e-seazn sets the flag on its server and its runner").toBe(2);
+    expect(inSmoke, "ci.yml's smoke job sets it on its fourth server and the smoke run against it, and nowhere else (T33g)").toBe(2);
     expect(elsewhere, "jobs other than e2e-seazn that set SEAZN_HOSTED_LIVE").toEqual([]);
   });
 

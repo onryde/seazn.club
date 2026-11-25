@@ -60,8 +60,9 @@ import { BASE, type Session, cookieHeader, newSession, check, signIn, smokeDb, t
  *    composed, BOTH inputs made (two `create_live_input` effects in the session's ledger, the camera and the programme asked
  *    for at once) and ONE Machine asked for (one `create_machine`), the programme input signed and the camera not, no output;
  *    then its Stop completes it. Two steps. Not run anywhere else — LIVE off, or no image on the server, cannot admit a Seazn
- *    start — and EXPECTED_STEPS says so. No CI smoke job runs it today (the job's servers leave LIVE off): a LIVE-on server
- *    with an image and SEAZN_VIDEO_ORIGINS (e2e-seazn's shape) is where it runs.
+ *    start — and EXPECTED_STEPS says so. CI runs it in ci.yml's smoke job (T33g): a fourth server with LIVE on, an image
+ *    and SEAZN_VIDEO_ORIGINS, this suite alone against it with the same two facts in this process, and greps that fail the job if
+ *    step 10's PASS lines, the "Seazn start run" done line or the 26-step count is missing (seazn-smoke-ci-wiring.test.ts pins it).
  * HOW THE ROW GETS THERE, AND WHY NOT BY THE MOVE. The session, its programme input, the locked recording and the replay row are
  * written by SQL, in the shape the stream tick's passes leave them (the e2e seed's shape, e2e/helpers/seazn-video-seed.ts), and
  * `encoding → playable` is the conditional update the move's poll and the Bunny webhook write. The move cannot run here: it is

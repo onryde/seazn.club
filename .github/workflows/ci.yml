@@ -2453,6 +2453,73 @@ jobs:
           done
           echo "the gate did not log ENGINE_EPOCH_FLOOR_OVERRIDDEN for generic"; cat epoch-override-server.log; exit 1
 
+      # Seazn-hosted video (Phase 4, T33g): smoke step 10 of the `seaznHosted` suite, a REAL Seazn Go live on the fake relay (both inputs, one
+      # Machine, then its Stop), ran NOWHERE. It needs a server with SEAZN_HOSTED_LIVE on, a compositor image and SEAZN_VIDEO_ORIGINS, and a
+      # smoke process told LIVE is on with the same image; no smoke server had them, and the suite counts the step only where they are
+      # (EXPECTED_STEPS), so every run was green having skipped it. The e2e-seazn job's server has all three, but not AUTH_DEV_LINKS, which smoke
+      # signs in with and which the e2e jobs deliberately leave unset (they mint tokens in the DB and skip the specs that assert link
+      # exposure), so the step cannot live there. A FOURTH server
+      # from the SAME build, with the first one's env plus the three, and the suite run alone against it. The greps are the gate, not the exit
+      # code (the composed smoke's lesson): the same suite run without the flag or the image exits 0 having left step 10 out (24 counted steps
+      # with LIVE on and no image, and 26 again with LIVE off, whose two refusal steps stand in for step 10's two), so the step's own PASS
+      # lines, the done line's "Seazn start run" and the count are what must be in the log. Never in any deployed environment's
+      # config; LIVE on only in this server's env and the smoke process's. Pinned by seazn-smoke-ci-wiring.test.ts.
+      - name: Start a fourth server with Seazn hosted video LIVE on (T33g)
+        env:
+          # Blank-but-defined, as on the other servers (see "Start server"): register() runs here too.
+          SENTRY_DSN: ""
+          NEXT_PUBLIC_SENTRY_DSN: ""
+          PORT: "3003"
+          PLACEMENT_SERVICE_HOST: localhost:50051
+          PLACEMENT_SERVICE_SECRET: ci-smoke-secret
+          LOG_LEVEL: error
+          AUTH_DEV_LINKS: "1"
+          RELAY_DRIVERS: fake
+          ENV_NAME: ci
+          # YouTube Connect: carried identically from the first server (a guard test requires every env of the first server on this one).
+          YOUTUBE_DRIVER: fake
+          YOUTUBE_REDIRECT_URI: http://localhost:3000/api/youtube/connect/callback
+          CAPTURE_QR_V2_ALWAYS: "1"
+          ONLINE_CHESS_ALWAYS: "1"
+          # THIS SERVER'S REASON TO EXIST: LIVE on (relay/config.ts `seaznHostedLive`, read per request); the bare host the smoke reaches the
+          # app on (a Seazn start refuses 503 seazn_video_unconfigured without origins); and a compositor image (a Seazn start is COMPOSED and
+          # refuses 503 composed_unavailable without one; the fake drivers never pull it).
+          SEAZN_HOSTED_LIVE: "true"
+          SEAZN_VIDEO_ORIGINS: localhost
+          RELAY_IMAGE: registry.fly.io/ci-smoke-compositor:dummy
+        run: |
+          set -eo pipefail
+          # The compiled instrumentation.js is already overlaid by "Start server" (the same tree); the copy is idempotent and keeps this step
+          # correct on its own.
+          cp -R apps/web/.next/server/. apps/web/.next/standalone/apps/web/.next/server/
+          node apps/web/.next/standalone/apps/web/server.js > seazn-smoke-server.log 2>&1 &
+          up=""
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:3003/api/health >/dev/null; then
+              echo "fourth server up after ${i} tries"; up=1; break
+            fi
+            sleep 2
+          done
+          if [ -z "$up" ]; then
+            echo "fourth server did not become healthy"; cat seazn-smoke-server.log; exit 1
+          fi
+
+      - name: Run Seazn-hosted smoke (seaznHosted against the LIVE-on server; step 10 must have RUN)
+        env:
+          SMOKE_BASE: http://localhost:3003
+          SMOKE_ONLY: seaznHosted
+          # The smoke process reads the SAME two facts the server was started with: it counts step 10 (and its two steps) only where a Seazn
+          # start can be admitted, and LIVE on also drops the two refusal steps that exist only while LIVE is off.
+          SEAZN_HOSTED_LIVE: "true"
+          RELAY_IMAGE: registry.fly.io/ci-smoke-compositor:dummy
+        run: |
+          set -o pipefail
+          npm run test:smoke 2>&1 | tee seazn-smoke.log
+          grep -F "PASS  seazn-hosted smoke: SEAZN START ON THE FAKES: a paired phone, then Go live on Seazn → 201" seazn-smoke.log
+          grep -F "PASS  seazn-hosted smoke: SEAZN START ON THE FAKES: its Stop → 200, and it completes" seazn-smoke.log
+          grep -F "seazn-hosted smoke: 26 steps (LIVE on, COST off, Seazn start run)" seazn-smoke.log
+          grep -F "PASS  seazn-hosted smoke: all 26 steps ran (ran 26)" seazn-smoke.log
+
       # Lighthouse and blog SEO against THIS job's production server (the "Start server" one, :3000). Blog P2 Task 13b; the
       # owner put them in PR #1295 because a local Lighthouse run is not reliable under machine load (Task 13 read the same
       # page at Performance 35 and 89 on one build).
@@ -2618,6 +2685,8 @@ jobs:
           cat composed-server.log || true
           echo "--- the floor-override server (engine-split 5.6) ---"
           cat epoch-override-server.log || true
+          echo "--- the Seazn-hosted LIVE-on server (T33g) ---"
+          cat seazn-smoke-server.log || true
 
       - name: Placement service logs and teardown
         if: always()
