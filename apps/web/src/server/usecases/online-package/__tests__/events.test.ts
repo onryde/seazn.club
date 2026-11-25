@@ -13,11 +13,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sent = vi.hoisted(() => ({ calls: [] as { event: string; distinctId: string; orgId?: string; properties?: Record<string, unknown> }[] }));
-const failures = vi.hoisted(() => ({ capture: false, hang: false, plan: false, logged: [] as unknown[][] }));
+const failures = vi.hoisted(() => ({ capture: false, hang: false, plan: false, failFirst: false, attempts: 0, logged: [] as unknown[][] }));
 
 vi.mock("@/lib/posthog-server", () => ({
   captureServer: vi.fn(async (a: { event: string; distinctId: string; orgId?: string; properties?: Record<string, unknown> }) => {
     if (failures.capture) throw new Error("posthog is down");
+    if (failures.failFirst && failures.attempts++ === 0) throw new Error("posthog is down for the first send only");
     if (failures.hang) return new Promise<void>(() => undefined); // a flush that never comes back
     sent.calls.push(a);
   }),
@@ -31,6 +32,7 @@ vi.mock("@/lib/entitlements", () => ({
 vi.mock("@/server/logger", () => ({ log: { error: (...a: unknown[]) => failures.logged.push(a), warn: (...a: unknown[]) => failures.logged.push(a) } }));
 
 import { EVENTS } from "@/lib/analytics-events";
+import { captureServer } from "@/lib/posthog-server";
 import { orgPlanKey } from "@/lib/entitlements";
 import { ONLINE_SIZES, type OnlineSize } from "@/lib/online-chess-package";
 import type { PayResult } from "../pay";
@@ -54,8 +56,11 @@ beforeEach(() => {
   failures.capture = false;
   failures.hang = false;
   failures.plan = false;
+  failures.failFirst = false;
+  failures.attempts = 0;
   failures.logged.length = 0;
   vi.mocked(orgPlanKey).mockClear();
+  vi.mocked(captureServer).mockClear();
 });
 
 /** A package row as the pay door leaves it: only what the builders read. */
@@ -167,6 +172,32 @@ describe("captureRefundEvents: one plan lookup per door, one event per package, 
     { size: 64, cameras: true, back: { pack: 4, monthly: 4, forfeited: 0 } },
     { size: 32, cameras: false, back: { pack: 0, monthly: 2, forfeited: 0 } },
   ] as const;
+
+  it("a hung flush holds a door with k packages for ONE bound, not k: all k sends start together and the door is let go after CAPTURE_TIMEOUT_MS", async () => {
+    vi.useFakeTimers();
+    try {
+      failures.hang = true;
+      let settled = false;
+      const done = captureRefundEvents(THREE, { orgId: ORG, actorId: USER }).then(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(CAPTURE_TIMEOUT_MS - 1);
+      expect(vi.mocked(captureServer), "every package's send has started (a sequential door would have started one)").toHaveBeenCalledTimes(THREE.length);
+      expect(settled, "inside the bound: still waiting").toBe(false);
+      await vi.advanceTimersByTimeAsync(2);
+      await done;
+      expect(settled, "ONE bound later the door is free (sequential: it would wait k x the bound)").toBe(true);
+      expect(failures.logged.filter((l) => /did not come back in time/.test(String(l[1]))), "each give-up is logged").toHaveLength(THREE.length);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("one send failing does not stop the others: the other packages' events still go out and the door resolves", async () => {
+    failures.failFirst = true;
+    await expect(captureRefundEvents(THREE, { orgId: ORG, actorId: USER })).resolves.toBeUndefined();
+    expect(vi.mocked(captureServer)).toHaveBeenCalledTimes(THREE.length);
+    expect(sent.calls, "the first failed, the other two were sent").toHaveLength(THREE.length - 1);
+    expect(failures.logged.some((l) => /the refund stands/.test(String(l[1]))), "the failure is logged").toBe(true);
+  });
 
   it("three refunded packages are three events and ONE plan lookup (not one per package)", async () => {
     await captureRefundEvents(THREE, { orgId: ORG, actorId: USER });

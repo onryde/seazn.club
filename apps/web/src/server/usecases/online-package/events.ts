@@ -190,17 +190,18 @@ export async function capturePackageEvent(kind: PackageEventKind, fact: PackageE
 
 /** The `refunded` events of one door's refunds, sent after its commit: one per package the door refunded (none when it refunded
  *  nothing). `refunded` is what `applyPackageDelete` collected. The org's plan is looked up ONCE for the door, not once per package
- *  (a competition delete can refund many). Never throws. */
+ *  (a competition delete can refund many). The sends run together, so the door is held for one bound, not one per package. Never throws. */
 export async function captureRefundEvents(refunded: readonly RefundedPackage[], a: { orgId: string; actorId: string | null }): Promise<void> {
   try {
     const facts = refundEvents(refunded, a);
     if (facts.length === 0) return;
     const plan = await planOf(a.orgId);
-    for (const fact of facts) {
-      try {
-        await send("refunded", fact, plan);
-      } catch (err) {
-        log.error({ err, kind: "refunded", orgId: a.orgId }, "online package event: the analytics capture failed; the refund stands");
+    // All at once: each send is bounded by CAPTURE_TIMEOUT_MS on its own clock, so the door waits for the slowest (one bound, ~3 s when
+    // PostHog hangs), not for k packages in turn (k x 3 s). One failing send does not stop another.
+    const settled = await Promise.allSettled(facts.map((fact) => send("refunded", fact, plan)));
+    for (const outcome of settled) {
+      if (outcome.status === "rejected") {
+        log.error({ err: outcome.reason, kind: "refunded", orgId: a.orgId }, "online package event: the analytics capture failed; the refund stands");
       }
     }
   } catch (err) {
