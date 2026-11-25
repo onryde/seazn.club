@@ -5,7 +5,8 @@
 import { describe, expect, it } from "vitest";
 import { foldedRoundOf, foldedRoundShows, foldedTally, windowRunSheet, withFoldedRounds, type PagedRunSheetRow } from "../run-sheet-paging";
 import { ROUND_PAGING_MIN_FIXTURES } from "../round-paging";
-import { roundDone, type RunSheetFixture } from "../run-sheet-groups";
+import { FIXTURE_STATUSES } from "../fixture-status";
+import { buildRunSheet, roundDone, roundUnderWay, stageRoundSections, type RunSheetFixture } from "../run-sheet-groups";
 import { stageCounts } from "../stage-card/summaries";
 
 const NOW = Date.UTC(2026, 10, 23, 12, 0);
@@ -160,7 +161,7 @@ describe("C: a big run sheet ships its open rounds and a tally of the rest", () 
 
   it("folded rounds go back among the sections by kickoff, untimed last, round breaking ties; a loaded round is not doubled", () => {
     const at = (d: number) => new Date(NOW + d * DAY).toISOString();
-    const sections = [{ round: 2, fixtures: [{ scheduled_at: at(2) }] }, { round: 5, fixtures: [{ scheduled_at: null }] }];
+    const sections = [{ round: 2, fixtures: [{ scheduled_at: at(2) }], underWay: false }, { round: 5, fixtures: [{ scheduled_at: null }], underWay: false }];
     const folded = [
       foldedRoundOf("lg", 1, [row("lg", null, 1, 1, "decided", NOW - DAY)], new Set()),
       foldedRoundOf("lg", 3, [row("lg", null, 3, 1, "scheduled", NOW + 3 * DAY)], new Set()),
@@ -170,5 +171,108 @@ describe("C: a big run sheet ships its open rounds and a tally of the rest", () 
     const merged = withFoldedRounds(sections, folded, new Set([2]));
     expect(merged.map((s) => [s.round, "folded" in s])).toEqual([[1, true], [2, false], [3, true], [4, true], [5, false]]);
     expect(withFoldedRounds([], [], new Set())).toEqual([]);
+  });
+});
+
+// Task 51 (owner 2026-11-25): a round already under way keeps its number's place when it has no kickoff times. The folded summary DOES
+// carry what the rule needs - `foldedRoundOf` answers it from the same predicate the loaded section uses (`roundUnderWay`) - so folded
+// untimed rounds follow the rule too, and the loaded and folded readings of one scene must give ONE order (`stageRoundSections` vs
+// `withFoldedRounds`). Expected orders are written from the rule, never read off the sorter.
+describe("task 51: a folded or loaded round under way keeps its place with no kickoff times", () => {
+  const none = new Set<string>();
+  // A full run-sheet row (the paging `row` carries the fields the folded tally reads; the grouping reads the rest).
+  const full = (round: number, status: string, when: number | null, extra: Partial<Row> = {}) =>
+    ({ ...row("lg", null, round, 1, status, when === null ? null : NOW + when * DAY, extra), court_name: null, court_id: null, venue_name: null, officials: [], lane: null, is_final: false, third_place: false, conditional: false }) as unknown as RunSheetFixture;
+  const section = (round: number, status: string, when: number | null) => {
+    const rows = [full(round, status, when)];
+    return { round, fixtures: rows, underWay: status !== "scheduled" };
+  };
+  const foldedOf = (round: number, status: string, when: number | null) => foldedRoundOf("lg", round, [full(round, status, when)], none);
+  const order = (merged: { round: number }[]) => merged.map((s) => s.round);
+
+  it("the empty case: no rounds, nothing to put back", () => {
+    expect(withFoldedRounds([], [], new Set<number>())).toEqual([]);
+  });
+
+  it("foldedRoundOf: under way exactly when a counted line has a result or is in play - every status swept, a bye alone is not", () => {
+    let checked = 0;
+    let underWay = 0;
+    for (const status of FIXTURE_STATUSES) {
+      expect(foldedOf(1, status, null).underWay, status).toBe(status !== "scheduled");
+      checked++;
+      if (status !== "scheduled") underWay++;
+    }
+    expect(checked, "every status swept").toBe(FIXTURE_STATUSES.length);
+    expect(underWay, "anti-vacuity: both answers are reached").toBeGreaterThan(0);
+    expect(underWay).toBeLessThan(FIXTURE_STATUSES.length);
+    const award = { kind: "award", winner: "h1", loser: null, reason: "bye" };
+    const byeOnly = foldedRoundOf("lg", 1, [row("lg", null, 1, 1, "forfeited", null, { away_entrant_id: null, outcome: award })], none);
+    expect(byeOnly.underWay, "a bye settled at the draw is no match started").toBe(false);
+    expect(foldedRoundOf("lg", 1, [], none).underWay, "no rows, nothing started").toBe(false);
+  });
+
+  // Fix round 1 (M3). INTENDED: a held (awaiting-settle) id never changes whether a round is under way, so the loaded section (no held ids)
+  // and the folded tally (which has them) are one reading. Held ids only move a settled row from "played" to "inPlay" in the tally's counts.
+  it("held changes nothing: the folded verdict is the same with every row held, with none held, and as the loaded reading, for every status", () => {
+    let checked = 0;
+    for (const status of FIXTURE_STATUSES) {
+      const rows = [full(1, status, null)];
+      const held = new Set(rows.map((r) => r.id));
+      const loaded = roundUnderWay(rows);
+      expect(foldedRoundOf("lg", 1, rows as unknown as PagedRunSheetRow[], held).underWay, `${status}: held`).toBe(loaded);
+      expect(foldedRoundOf("lg", 1, rows as unknown as PagedRunSheetRow[], none).underWay, `${status}: not held`).toBe(loaded);
+      expect(loaded, status).toBe(status !== "scheduled");
+      checked++;
+    }
+    expect(checked, "every status swept").toBe(FIXTURE_STATUSES.length);
+  });
+
+  it("folded untimed Round 1 with results sits first, ahead of a loaded timed Round 2 and a folded timed Round 3; with nothing started it goes last", () => {
+    const loaded = [section(2, "scheduled", 2)];
+    const started = withFoldedRounds(loaded, [foldedOf(1, "decided", null), foldedOf(3, "scheduled", 3)], new Set([2]));
+    expect(order(started)).toEqual([1, 2, 3]);
+    expect(started.map((s) => "folded" in s)).toEqual([true, false, true]);
+    const waiting = withFoldedRounds(loaded, [foldedOf(1, "scheduled", null), foldedOf(3, "scheduled", 3)], new Set([2]));
+    expect(order(waiting)).toEqual([2, 3, 1]);
+  });
+
+  it("a LOADED untimed round under way reads in its number's place among folded timed rounds", () => {
+    const merged = withFoldedRounds([section(1, "in_play", null)], [foldedOf(2, "scheduled", 2), foldedOf(3, "scheduled", 1)], new Set([1]));
+    expect(order(merged), "Round 1 precedes every higher round; Round 3 kicks off before Round 2 and keeps that").toEqual([1, 3, 2]);
+  });
+
+  it("the loaded reading and the folded reading of ONE scene give ONE order: the owner's four rounds, and the earlier-kicking Round 3", () => {
+    let checked = 0;
+    const scenes: { name: string; rows: RunSheetFixture[]; expected: number[] }[] = [
+      {
+        name: "owner's case",
+        rows: [full(1, "decided", null), full(1, "in_play", null), full(2, "scheduled", 2), full(3, "scheduled", 3), full(4, "scheduled", 4)],
+        expected: [1, 2, 3, 4],
+      },
+      {
+        name: "Round 3 kicks off before Round 2",
+        rows: [full(1, "decided", null), full(2, "scheduled", 4), full(3, "scheduled", 2)],
+        expected: [1, 3, 2],
+      },
+      {
+        name: "nothing started",
+        rows: [full(1, "scheduled", null), full(2, "scheduled", 4), full(3, "scheduled", 2)],
+        expected: [3, 2, 1],
+      },
+    ];
+    for (const scene of scenes) {
+      const stages = [{ id: "lg", seq: 1, kind: "league" }];
+      const blocksOf = (rows: RunSheetFixture[]) => buildRunSheet({ fixtures: rows, stages, tz: "UTC", nowMs: NOW });
+      const allLoaded = stageRoundSections(blocksOf(scene.rows), "lg").map((s) => s.round);
+      // Fold every round but the LAST one (the loaded one), as the page does for a big division.
+      const keep = Math.max(...scene.rows.map((f) => f.round_no));
+      const shipped = scene.rows.filter((f) => f.round_no === keep);
+      const foldedRounds = [...new Set(scene.rows.map((f) => f.round_no))].filter((r) => r !== keep).map((r) => foldedRoundOf("lg", r, scene.rows.filter((f) => f.round_no === r) as unknown as PagedRunSheetRow[], none));
+      const windowed = order(withFoldedRounds(stageRoundSections(blocksOf(shipped), "lg"), foldedRounds, new Set()));
+      expect(allLoaded, `${scene.name}: every round loaded`).toEqual(scene.expected);
+      expect(windowed, `${scene.name}: every round but one folded`).toEqual(scene.expected);
+      checked++;
+    }
+    expect(checked, "every scene read both ways").toBe(3);
   });
 });

@@ -403,7 +403,63 @@ export function buildRunSheet(input: RunSheetInput): RunSheetBlock[] {
 
 /** One round of a non-bracket stage as the card shows it: its rows in the order they are read. A group stage's round holds EVERY pool's
  *  matches of that round (Match Day E1 fix round 3): the rows say which pool they are (`pool_id`), the section does not. */
-export type StageRoundSection = { round: number; fixtures: RunSheetFixture[] };
+export type StageRoundSection = {
+  round: number;
+  fixtures: RunSheetFixture[];
+  /** `roundUnderWay` over the round's rows: a result or a match in play among the lines the round bar counts. Carried so `withFoldedRounds`
+   *  orders a loaded round by the very verdict that placed it here. */
+  underWay: boolean;
+};
+
+/** A round's place in the reading order: its earliest kickoff (ms, null when no row of it is timed), its number, and whether it is under way. */
+export interface RoundPlayKey {
+  round: number;
+  firstAt: number | null;
+  underWay: boolean;
+}
+
+/**
+ * Is this round already under way (task 51, owner 2026-11-25)? One of the lines the round bar counts (`countsAsMatch`: a bye is no match)
+ * has a result or is in play - `stageCounts`' played and inPlay buckets, the SAME reading the bar's "N of M done" and the stage card
+ * use, so there is no second definition of "started". A round with no counted line is not under way: the empty set has started nothing.
+ * It reads STATUS only and takes no `held` set, on purpose (fix round 1): a row awaiting its settle already has a played or open status
+ * (`needs_decision`, or a recorded `abandoned`), and `stageCounts` would only move it from "played" to "inPlay" - still under way - so
+ * a held id can never change this verdict. Taking none keeps the loaded section (which has no held ids) and the folded tally (which
+ * has) one reading, by construction; the test "held changes nothing" pins it for every status.
+ */
+export function roundUnderWay(fixtures: readonly MatchLineRow[]): boolean {
+  const { played, inPlay } = stageCounts(fixtures.filter(countsAsMatch));
+  return played + inPlay > 0;
+}
+
+/**
+ * THE one reading order of a stage's rounds - `stageRoundSections` (rows loaded) and `withFoldedRounds` (rounds folded away) both sort with it,
+ * so they cannot disagree. Rounds read in the order they are PLAYED: by earliest kickoff, round number breaking every tie, a round with
+ * no time at all after every timed one - EXCEPT a round with no time that is already under way (`underWay`): it holds its round-number
+ * place, so it reads before every round with a higher number (the owner's "why round 1 is moved down": a Round 1 being played sat under
+ * three rounds not yet drawn). Its effective kickoff is the earliest kickoff among the timed rounds that come AFTER it by number (none:
+ * the end, among the untimed). Every round's key is computed on its own (never pairwise), so the sort is a strict weak ordering by
+ * construction: (effective kickoff, round number). Timed rounds keep earliest-kickoff order, a later round that kicks off earlier leading.
+ */
+export function sortRoundsByPlay<T>(items: readonly T[], keyOf: (item: T) => RoundPlayKey): T[] {
+  const keys = items.map(keyOf);
+  const effective = keys.map((k) => {
+    if (k.firstAt !== null) return k.firstAt;
+    if (!k.underWay) return Number.POSITIVE_INFINITY;
+    let earliestAfter = Number.POSITIVE_INFINITY;
+    for (const o of keys) if (o.round > k.round && o.firstAt !== null && o.firstAt < earliestAfter) earliestAfter = o.firstAt;
+    return earliestAfter;
+  });
+  return items
+    .map((item, i) => ({ item, i }))
+    .sort((a, b) => {
+      const ea = effective[a.i]!;
+      const eb = effective[b.i]!;
+      if (ea !== eb) return ea < eb ? -1 : 1;
+      return keys[a.i]!.round - keys[b.i]!.round;
+    })
+    .map(({ item }) => item);
+}
 
 /**
  * One NON-BRACKET stage's rows from the division's blocks, as round sections: ONE per round, whatever the stage's pools - a group stage's
@@ -429,17 +485,16 @@ export function stageRoundSections(
     byRound.set(f.round_no, list);
   }
   const inOrder = inReadingOrder(poolOrder);
-  const sorted = [...byRound.entries()].map(([round, fixtures]) => ({ round, fixtures: [...fixtures].sort(inOrder) }));
-  // Rounds read in the order they are PLAYED (design/fix-ui/03: a Tour 3 that kicked off a day before Tour 1 is not "last"): by the
-  // earliest kickoff in the round, the rounds with no time at all after them, and round number to break every tie - which is
-  // also the whole order while nothing is timed yet. Sorted rows put the earliest timed one first, so that is `fixtures[0]`.
-  const earliest = (r: StageRoundSection): number => (r.fixtures[0]?.scheduled_at != null ? Date.parse(r.fixtures[0].scheduled_at) : Number.POSITIVE_INFINITY);
-  return sorted.sort((a, b) => {
-    const ea = earliest(a);
-    const eb = earliest(b);
-    if (ea !== eb) return ea < eb ? -1 : 1;
-    return a.round - b.round;
-  });
+  const sorted: StageRoundSection[] = [...byRound.entries()].map(([round, fixtures]) => ({ round, fixtures: [...fixtures].sort(inOrder), underWay: roundUnderWay(fixtures) }));
+  // Rounds read in the order they are PLAYED (design/fix-ui/03: a Tour 3 that kicked off a day before Tour 1 is not "last") - see
+  // `sortRoundsByPlay`, the order `withFoldedRounds` shares - and a round already under way keeps its number's place with no times
+  // (task 51). Sorted rows put the earliest timed one first, so the round's earliest kickoff is `fixtures[0]`'s.
+  return sortRoundsByPlay(sorted, (r) => playKey(r.round, r.fixtures[0]?.scheduled_at ?? null, r.underWay));
+}
+
+/** A round's `RoundPlayKey` from its earliest kickoff as the wire says it (an ISO string, or null when no row is timed). */
+export function playKey(round: number, firstAt: string | null, underWay: boolean): RoundPlayKey {
+  return { round, firstAt: firstAt === null ? null : Date.parse(firstAt), underWay };
 }
 
 const NO_POOL_ORDER: ReadonlyMap<string, number> = new Map();
@@ -448,9 +503,9 @@ const NO_POOL_ORDER: ReadonlyMap<string, number> = new Map();
  * One NON-BRACKET stage's rows as a single list - for a kind whose rounds are not worth a bar (the ladder, which stores each challenge
  * as a round of its own). The same reading order as inside a round: time order, the rows with no time last in the order the draw gave
  * them. A one-element list (round 0, the stage as a whole) so the caller draws it with the code that draws a round, minus the bar;
- * an empty list when the stage has no rows here.
+ * an empty list when the stage has no rows here. It carries no `underWay`: one section has no round order to place.
  */
-export function stageFlatSection(blocks: readonly RunSheetBlock[], stageId: string): StageRoundSection[] {
+export function stageFlatSection(blocks: readonly RunSheetBlock[], stageId: string): Omit<StageRoundSection, "underWay">[] {
   const fixtures = [...stageRowsOutsideBrackets(blocks, stageId)].sort(inReadingOrder(NO_POOL_ORDER));
   return fixtures.length === 0 ? [] : [{ round: 0, fixtures }];
 }
