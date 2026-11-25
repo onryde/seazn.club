@@ -7,7 +7,8 @@ import "server-only";
 //     writes the column in its own UPDATE;
 //   * the Online Chess receipt (online-package/pay.ts, spec 2026-11-23-online-chess-credits-design.md §8.4-§8.6, Task 15): the
 //     organiser answers "Fair-play camera: Yes / No" and pays, and `writeDivisionCameraChoice` writes that answer to the same setting
-//     in the payment's own transaction, so the receipt and the settings never disagree.
+//     in the payment's own transaction, so a payment always leaves the setting saying what it paid for. It writes only before any
+//     round has opened (asserted: a named 500, never POLICY_LOCKED, which no product state reaches through it).
 //
 // The rule, whichever door: only a real CHANGE of the stored value is gated and audited (a re-send of the current value never 409s
 // and leaves no row); the gate judges what PLAYERS get, the division-level EFFECTIVE policy (clearing `off` to inherit a `required`
@@ -88,8 +89,13 @@ export function cameraChoiceTarget(a: { stored: CameraPolicy | null; floor: Came
 /** The receipt's camera answer written to the division's own policy, on the caller's transaction (the pay door's privileged one:
  *  `stage_round_opens` is sealed, so `anyRoundOpened` needs it). The caller holds the `division:` lock. Reads the row `for no key
  *  update`, gates and audits through `auditDivisionCameraChange` (the division save's own rule), and writes the column only when the
- *  division-level effective policy does not already say the answer. "Has a round opened" is asked on the DATABASE clock. Answers the
- *  change it made, or null when the setting already said it. */
+ *  division-level effective policy does not already say the answer. Answers the change it made, or null when the setting already
+ *  said it.
+ *
+ *  It writes only BEFORE any round of the division has opened, and that is asserted, not assumed (Task 15 fix m1): the pay door refuses
+ *  a frozen package before it gets here, P8 freezes the package at every round's first open, and a pay-and-open pays BEFORE its own
+ *  stamp (fix I1). So no product state reaches the settings door's 409 POLICY_LOCKED through this writer, and it does not pretend to:
+ *  a round found open (on the DATABASE clock) is a named 500 that rolls the payment back, and the audit row says no round had opened. */
 export async function writeDivisionCameraChoice(
   tx: AnySql,
   a: { divisionId: string; orgId: string; actorId: string | null; cameras: boolean },
@@ -99,8 +105,14 @@ export async function writeDivisionCameraChoice(
   const to = cameraChoiceTarget({ stored: from, floor: readCameraPolicy(cur.competition_policy), cameras: a.cameras });
   if (to === undefined) return null;
   const [clock] = await tx<{ now: Date }[]>`select now() as now`;
-  const roundOpened = await anyRoundOpened(tx, a.divisionId, clock!.now);
-  await auditDivisionCameraChange(tx, { cur, to, divisionId: a.divisionId, orgId: a.orgId, actorId: a.actorId, roundOpened });
+  if (await anyRoundOpened(tx, a.divisionId, clock!.now)) {
+    throw new HttpError(
+      500,
+      `A round of division ${a.divisionId} has opened while its Online Chess package is not frozen; the camera answer was not written`,
+      "online_package_camera_after_open",
+    );
+  }
+  await auditDivisionCameraChange(tx, { cur, to, divisionId: a.divisionId, orgId: a.orgId, actorId: a.actorId, roundOpened: false });
   const written = await tx`update divisions set camera_policy = ${to} where id = ${a.divisionId} returning id`;
   if (written.length !== 1) throw new HttpError(404, "division not found");
   return { from, to };

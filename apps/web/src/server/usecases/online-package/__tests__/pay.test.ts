@@ -41,6 +41,7 @@
 //   T15c the camera-not-written post-check removed                -> "a division that does not take the answer is a named 500"
 //   T15d cameraChoiceTarget writes even when the setting says it  -> "the answer the setting already says writes nothing"
 //   T15e Yes writes `optional` instead of `required`              -> the sweep (`to`)
+//   FR4  the receipt writer's "no round has opened" assertion removed (fix m1) -> "the receipt writer meets a round already open"
 //   (lock order and the locks themselves: pay-concurrency.test.ts)
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -950,6 +951,8 @@ describe.skipIf(!HAS_DB)("payOnlinePackage: the Fair-play camera answer (Task 15
   });
 
   it("sweep: every own setting × answer - the setting written is the rulebook's, and the answer it already says writes nothing (no audit)", async () => {
+    // One floor (the competition's `off`, every rig's): this sweep proves the WRITE - the row, the audit, the package - per own setting;
+    // the floors (an inherited Optional or Required) are swept where the rule lives, purely (division-camera-choice.test.ts, 24 cases).
     let checked = 0;
     let written = 0;
     for (const own of [null, "off", "optional", "required"] as (Policy | null)[]) {
@@ -971,6 +974,24 @@ describe.skipIf(!HAS_DB)("payOnlinePackage: the Fair-play camera answer (Task 15
     }
     expect(checked).toBe(8);
     expect(written, "anti-vacuity: both kinds of case ran").toBe(4);
+  });
+
+  it("the receipt writer meets a round already open (no product state: the package is unfrozen by SQL): a named 500, nothing written - never POLICY_LOCKED (fix m1)", async () => {
+    // P8 freezes the package at every round's first open, the pay door refuses a frozen one before the camera write, and a pay-and-open
+    // pays before its own stamp (fix I1): no product path pays a camera answer after a round has opened. This stages the one state that
+    // would, so the writer's asserted precondition is reached - in both directions of the answer.
+    for (const [own, answer] of [[null, true], ["required", false]] as [Policy | null, boolean][]) {
+      const r = await rig({ size: 16, pack: 10, monthly: 0, ...(own === null ? {} : { camera: own }) });
+      const stageId = await seedStage(r, "swiss", { rounds: 3 });
+      await sql`insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by, staggered)
+                values (${stageId}, ${r.orgId}, 1, now() - interval '1 minute', ${r.userId}, false)`;
+      const before = { row: await packageRow(r.packageId), ledger: await packageLedger(r.packageId) };
+      const label = `own ${own}, answer ${answer}`;
+      const e = await refusal(confirm(r, 16, { cameras: answer }));
+      expect([e.status, e.code], label).toEqual([500, "online_package_camera_after_open"]);
+      expect([await divisionPolicy(r), (await cameraAudits(r)).length], `${label}: the setting as it was, no audit row`).toEqual([own, 0]);
+      expect({ row: await packageRow(r.packageId), ledger: await packageLedger(r.packageId) }, `${label}: the payment rolled back`).toEqual(before);
+    }
   });
 
   it("camera OFF before round 1, paid from THIS month's included credits: the camera price comes back to them - a move down at the same size", async () => {
