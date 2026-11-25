@@ -187,7 +187,7 @@ describe("every file the art registry names", () => {
     let checked = 0;
     for (const id of ids) {
       for (const drawing of [BLOG_ART[id]!.wide, BLOG_ART[id]!.phone]) {
-        expect(drawing.src, id).toMatch(/^\/help\/blog\/[a-z0-9-]+\.svg$/);
+        expect(drawing.src, id).toMatch(/^\/blog-art\/[a-z0-9-]+\.svg$/);
         const file = join(PUBLIC, drawing.src);
         expect(statSync(file).size, `${drawing.src}: bytes`).toBeLessThanOrEqual(MAX_BYTES);
         const svg = readFileSync(file, "utf8");
