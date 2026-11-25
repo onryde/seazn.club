@@ -4953,6 +4953,7 @@ export type DictionaryKey =
   | "onlineChess.receipt.credits.one"
   | "onlineChess.receipt.credits.other"
   | "onlineChess.receipt.err.generic"
+  | "onlineChess.receipt.err.unknown"
   | "onlineChess.receipt.lateEntrants"
   | "onlineChess.receipt.line.fixed"
   | "onlineChess.receipt.line.included"

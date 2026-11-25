@@ -3840,6 +3840,7 @@
   "onlineChess.receipt.buy.back": "Back",
   "onlineChess.receipt.buy.covers": "covers your shortfall",
   "onlineChess.receipt.err.generic": "The payment did not go through. Nothing was taken. Try again.",
+  "onlineChess.receipt.err.unknown": "We couldn't confirm whether the payment went through. Check your credit balance and history before you try again.",
   "onlineChess.openRound.paid.one": "Paid {count} credit. Round {round} is open.",
   "onlineChess.openRound.paid.other": "Paid {count} credits. Round {round} is open.",
   "onlineChess.openRound.moved": "Online Chess is now up to {size} players. Round {round} is open.",

@@ -3787,6 +3787,7 @@
   "onlineChess.receipt.buy.back": "Atrás",
   "onlineChess.receipt.buy.covers": "cubre lo que te falta",
   "onlineChess.receipt.err.generic": "El pago no se realizó. No se cobró nada. Inténtalo de nuevo.",
+  "onlineChess.receipt.err.unknown": "No pudimos confirmar si el pago se realizó. Revisa tu saldo de créditos y el historial antes de intentarlo de nuevo.",
   "onlineChess.openRound.paid.one": "Pagado {count} crédito. La ronda {round} está abierta.",
   "onlineChess.openRound.paid.other": "Pagados {count} créditos. La ronda {round} está abierta.",
   "onlineChess.openRound.moved": "El Ajedrez en línea ahora es de hasta {size} jugadores. La ronda {round} está abierta.",

@@ -890,7 +890,7 @@ describe("RoundFocus: an unpaid package stands the pay-and-open receipt up", () 
     const ui = renderIsland(RoundFocus, props(paired("stage-1:3", VIEW()), { ctx: paidCtx, ...o }));
     const block = () => propsOf(ui.tree().find((e) => e.type === OpenRoundBlockView)!) as unknown as Block;
     const receipt = () => ui.tree().find((e) => e.type === OpenPayReceipt);
-    const receiptProps = () => propsOf(receipt()!) as unknown as { ask: { quote: unknown; next: unknown }; divisionId: string; viewerPlan: string; buy: unknown; buyMoreHref: string; onPay(b: unknown): Promise<void>; onClose(): void };
+    const receiptProps = () => propsOf(receipt()!) as unknown as { ask: { quote: unknown; next: unknown }; divisionId: string; viewerPlan: string; buy: unknown; buyMoreHref: string; onPay(b: unknown): Promise<void>; failureWords(code: string): string | null; onClose(): void };
     return { ui, block, receipt, receiptProps };
   };
   const openAndAskToPay = async (m: ReturnType<typeof mount>) => {
@@ -964,6 +964,27 @@ describe("RoundFocus: an unpaid package stands the pay-and-open receipt up", () 
     const lines = openNoticeText(m.block().state.notice as never, VIEW(), ((k: string, v?: Record<string, string | number>) => t(k, v)) as never, ((k: string, n: number, v?: Record<string, string | number>) => pl(k, n, v)) as never);
     expect(lines).toHaveLength(1);
     expect(lines[0]).not.toMatch(/Paid/);
+  });
+
+  it("the receipt's failure words ARE the round's own: every refusal the open door names reads as the run sheet's notice for it, and no answer or another code reads none (m2, spec 8.5)", async () => {
+    const m = mount();
+    await openAndAskToPay(m);
+    const words = m.receiptProps().failureWords;
+    const NAMED: [string, string][] = [
+      ["PAYMENT_REQUIRED", "runsheet.round.err.frozen"],
+      ["ONLINE_CHESS_DISABLED", "runsheet.round.err.disabled"],
+      ["ROUND_CHANGED", "runsheet.round.err.roundChanged"],
+      ["ROUND_NOT_ONLINE", "runsheet.round.err.notOnline"],
+    ];
+    let checked = 0;
+    for (const [code, key] of NAMED) {
+      expect(words(code), code).toBe(t(key));
+      expect(openNoticeText({ kind: "failed", code } as never, VIEW(), ((k: string, v?: Record<string, string | number>) => t(k, v)) as never, ((k: string, n: number, v?: Record<string, string | number>) => pl(k, n, v)) as never), `${code}: the same sentence the run sheet says`).toEqual([t(key)]);
+      checked += 1;
+    }
+    expect(checked).toBe(4);
+    expect(words("UNKNOWN")).toBeNull();
+    expect(words("INTERNAL")).toBeNull();
   });
 
   it("a refused pay (409 changed) leaves the receipt standing for it to redraw: it rejects to the receipt, no notice, no refresh; the next confirm is sent", async () => {

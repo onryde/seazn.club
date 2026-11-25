@@ -54,6 +54,9 @@ export interface OnlineReceiptProps {
    *  here reads them. (The other Open-round warning, that a bigger size promotes the waiting list into a round they miss, needs no input: it is
    *  said whenever the pay moves the size up, whether or not anyone waits.) */
   warnings?: { noInvitable?: boolean };
+  /** The words of a refusal the ROUND itself named (Match Day: 409 changed, 402 frozen, 403 off), by the code the open answered with; null for a code it does
+   *  not name. Drawn in place of the payment sentence (spec §8.5). The division page has no round in play and passes nothing. */
+  failureWords?: (code: string) => string | null;
   /** Reads the quote for a choice (`GET /divisions/{id}/online-package`). */
   readQuote: (choice: ReceiptChoice) => Promise<ReceiptQuote>;
   /** Does what the receipt shows. Throws what the pay door threw (`payFailureOf` reads it); resolving closes the receipt. */
@@ -184,7 +187,10 @@ export function OnlineReceipt(props: OnlineReceiptProps): ReactNode {
   const failureText = ((): string | null => {
     if (state.failed === null) return null;
     if (isOnlinePackageRefusalCode(state.failed)) return onlinePackageRefusalText({ code: state.failed }, (key, vars) => msg(key as never, vars)) ?? msg("onlineChess.receipt.err.generic");
-    return msg("onlineChess.receipt.err.generic");
+    // No answer at all (offline, a proxy page, a dropped connection: `payFailureOf` reads it as UNKNOWN): the press may have reached the server, so "nothing
+    // was taken" is not ours to say - say we could not confirm, and where to look. Every other code is an ANSWER, and an answered "no" took nothing.
+    if (state.failed === "UNKNOWN") return msg("onlineChess.receipt.err.unknown");
+    return props.failureWords?.(state.failed) ?? msg("onlineChess.receipt.err.generic");
   })();
 
   return (

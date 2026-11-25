@@ -28,7 +28,7 @@ const BASE: OpenPayReceiptProps = {
 const receiptOf = (over: Partial<OpenPayReceiptProps> = {}) => {
   const ui = renderIsland(OpenPayReceipt, { ...BASE, ...over });
   const el = ui.tree().find((e) => e.type === OnlineReceipt)!;
-  return propsOf(el) as unknown as { mode: string; size: number | null; quote: { size: number } | null; facts: Record<string, unknown>; warnings?: { noInvitable?: boolean }; readQuote(c: unknown): Promise<unknown>; onConfirm: unknown; renderBuy(a: { pack: 1 | 5 | 20; size: 64 }): { type: unknown; props: Record<string, unknown> }; onClose: unknown };
+  return propsOf(el) as unknown as { mode: string; size: number | null; quote: { size: number } | null; facts: Record<string, unknown>; warnings?: { noInvitable?: boolean }; failureWords?: (code: string) => string | null; readQuote(c: unknown): Promise<unknown>; onConfirm: unknown; renderBuy(a: { pack: 1 | 5 | 20; size: 64 }): { type: unknown; props: Record<string, unknown> }; onClose: unknown };
 };
 
 describe("OpenPayReceipt: a pay-and-open receipt on the STORED size (decision 15)", () => {
@@ -108,4 +108,10 @@ describe("OpenPayReceipt: a pay-and-open receipt on the STORED size (decision 15
     expect(html(1)).not.toContain('data-testid="online-receipt-no-invitable"');
     expect(html(null)).not.toContain('data-testid="online-receipt-no-invitable"');
     expect(html(1), "premise: the receipt itself is on the page").toContain('data-mode="payAndOpen"');
-  });});
+  });
+  it("hands the receipt the round's words for a refusal as given (the Match Day caller's), and none when the caller names none", () => {
+    const failureWords = vi.fn((c: string): string | null => (c === "ROUND_CHANGED" ? "The round changed." : null));
+    expect(receiptOf({ failureWords }).failureWords).toBe(failureWords);
+    expect(receiptOf().failureWords, "the empty case: none given, none passed on").toBeUndefined();
+  });
+});

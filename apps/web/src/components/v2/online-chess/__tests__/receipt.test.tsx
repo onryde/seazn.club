@@ -416,6 +416,97 @@ describe("a double tap is one payment", () => {
   });
 });
 
+// Fix round 1 (m2): what a failed press SAYS. "Nothing was taken" is a claim about money - made only for an answer the server gave (a coded refusal).
+// A press that got NO answer (offline, a proxy page, a dropped connection: `UNKNOWN`) may have reached the server, so it says we could not confirm and
+// how to check; on Match Day a refusal the ROUND names (409 changed, 402 frozen, 403 off) is the round's own reason (spec §8.5), not a payment sentence.
+describe("a failed press: what it says (m2)", () => {
+  const failing = (err: unknown, over: Over = {}) => {
+    const onConfirm = vi.fn(async (b: PayBody): Promise<void> => { void b; throw err; });
+    return make({ size: 32, readQuote: vi.fn(async () => spec({ size: 32, monthly: 20 })), onConfirm, ...over });
+  };
+  const pressIt = async (m: ReturnType<typeof make>) => {
+    await flush();
+    await m.press("online-receipt-confirm");
+    await flush();
+  };
+  const errorText = (m: ReturnType<typeof make>) => textOfAll([m.by("online-receipt-error")!]);
+
+  it("no answer at all (a thrown network error, or an ApiV1Error with the UNKNOWN code the client gives a non-JSON body): says we could not confirm, never 'Nothing was taken'", async () => {
+    let checked = 0;
+    for (const err of [new Error("Failed to fetch"), new ApiV1Error("Bad gateway", 502, "UNKNOWN")]) {
+      const m = failing(err);
+      await pressIt(m);
+      expect(m.has("online-receipt-error"), "a sentence is drawn").toBe(true);
+      expect(propsOf(m.by("online-receipt-error")!)["data-code"]).toBe("UNKNOWN");
+      expect(errorText(m)).toBe(EN["onlineChess.receipt.err.unknown"]);
+      expect(errorText(m)).not.toContain("Nothing was taken");
+      expect(errorText(m), "it tells the organiser how to check").toMatch(/balance/i);
+      expect(errorText(m)).toMatch(/history/i);
+      expect(m.onClose, "the receipt stays open and armed").not.toHaveBeenCalled();
+      expect(propsOf(m.by("online-receipt-confirm")!).disabled).toBe(false);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a CODED refusal the server gave still says nothing was taken (an answered 'no' took nothing): a 500 INTERNAL and a malformed 409 keep the generic sentence", async () => {
+    for (const err of [new ApiV1Error("boom", 500, "INTERNAL", {}), new ApiV1Error("changed", 409, ONLINE_PACKAGE_CODES.quoteChanged, {})]) {
+      const m = failing(err);
+      await pressIt(m);
+      expect(errorText(m)).toBe(EN["onlineChess.receipt.err.generic"]);
+    }
+    expect(EN["onlineChess.receipt.err.generic"]).toContain("Nothing was taken");
+  });
+
+  it("the copy is told apart per locale: the unknown sentence exists in all four and is not the generic one", async () => {
+    const dicts = await Promise.all((["en", "es", "fr", "nl"] as const).map(async (l) => [l, (await import(`@/dictionaries/${l}/ui.json`)).default as Record<string, string>] as const));
+    let checked = 0;
+    for (const [l, d] of dicts) {
+      expect(d["onlineChess.receipt.err.unknown"], l).toBeTruthy();
+      expect(d["onlineChess.receipt.err.unknown"], `${l}: not the generic sentence`).not.toBe(d["onlineChess.receipt.err.generic"]);
+      if (l !== "en") expect(d["onlineChess.receipt.err.unknown"], `${l}: translated`).not.toBe(EN["onlineChess.receipt.err.unknown"]);
+      checked += 1;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("on Match Day a refusal the round names is the ROUND's reason: failureWords is asked with the code and its sentence is drawn in place of the payment one", async () => {
+    const words: Record<string, string> = { ROUND_CHANGED: "The round changed.", PAYMENT_REQUIRED: "Billing is paused.", ONLINE_CHESS_DISABLED: "Online chess is off.", ROUND_NOT_ONLINE: "Not an online round." };
+    let checked = 0;
+    for (const [code, sentence] of Object.entries(words)) {
+      const failureWords = vi.fn((c: string): string | null => words[c] ?? null);
+      const m = failing(new ApiV1Error("x", 409, code), { failureWords });
+      await pressIt(m);
+      expect(failureWords).toHaveBeenCalledWith(code);
+      expect(errorText(m), code).toBe(sentence);
+      expect(propsOf(m.by("online-receipt-error")!)["data-code"]).toBe(code);
+      checked += 1;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("a code the round does not name falls to the generic sentence; no answer never asks the round for a reason; a package refusal keeps the package's own words", async () => {
+    const failureWords = vi.fn((c: string): string | null => (c === "ROUND_CHANGED" ? "The round changed." : null));
+    const generic = failing(new ApiV1Error("boom", 500, "INTERNAL"), { failureWords });
+    await pressIt(generic);
+    expect(errorText(generic)).toBe(EN["onlineChess.receipt.err.generic"]);
+    const none = failing(new Error("offline"), { failureWords });
+    await pressIt(none);
+    expect(errorText(none)).toBe(EN["onlineChess.receipt.err.unknown"]);
+    expect(failureWords).not.toHaveBeenCalledWith("UNKNOWN");
+    const pkg = failing(new ApiV1Error("Need a bigger size", 422, ONLINE_PACKAGE_CODES.roundsAboveMax, { rounds: 99, max: 16 }), { failureWords });
+    await pressIt(pkg);
+    expect(failureWords).not.toHaveBeenCalledWith(ONLINE_PACKAGE_CODES.roundsAboveMax);
+    expect(errorText(pkg)).not.toBe(EN["onlineChess.receipt.err.generic"]);
+  });
+
+  it("without failureWords (the division page: no round in play) a round code is the generic sentence - the optional prop changes nothing there", async () => {
+    const m = failing(new ApiV1Error("changed", 409, "ROUND_CHANGED"));
+    await pressIt(m);
+    expect(errorText(m)).toBe(EN["onlineChess.receipt.err.generic"]);
+  });
+});
+
 describe("short balance: the confirm reads Buy credits and preselects the covering pack (ruling 8)", () => {
   // 64 with camera = 8 credits; the org holds 5 (2 + 3): 3 short, so the 5 pack covers it.
   const SHORT = spec({ size: 64, cameras: true, monthly: 2, pack: 3 });

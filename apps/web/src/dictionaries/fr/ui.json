@@ -3840,6 +3840,7 @@
   "onlineChess.receipt.buy.back": "Retour",
   "onlineChess.receipt.buy.covers": "couvre ce qui vous manque",
   "onlineChess.receipt.err.generic": "Le paiement n'a pas abouti. Rien n'a été débité. Réessayez.",
+  "onlineChess.receipt.err.unknown": "Nous n'avons pas pu confirmer si le paiement a abouti. Vérifiez votre solde de crédits et l'historique avant de réessayer.",
   "onlineChess.openRound.paid.one": "{count} crédit payé. La ronde {round} est ouverte.",
   "onlineChess.openRound.paid.other": "{count} crédits payés. La ronde {round} est ouverte.",
   "onlineChess.openRound.moved": "Les Échecs en ligne vont désormais jusqu'à {size} joueurs. La ronde {round} est ouverte.",

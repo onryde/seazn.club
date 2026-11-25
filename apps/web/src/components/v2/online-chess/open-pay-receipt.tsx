@@ -32,6 +32,8 @@ export interface OpenPayReceiptProps {
   buyMoreHref: string;
   /** The confirm: the open again, with `pay`. Resolves when the open answered (the receipt then closes); rejects with what the door threw. */
   onPay(body: PayBody): Promise<void>;
+  /** The round's own words for a refusal of the open it named (409 changed, 402 frozen, 403 off): drawn in place of the payment sentence (spec §8.5). */
+  failureWords?: (code: string) => string | null;
   onClose(): void;
 }
 
@@ -49,6 +51,7 @@ export function OpenPayReceipt(p: OpenPayReceiptProps) {
       size={size}
       quote={first}
       warnings={{ noInvitable: ask.invitable === 0 }}
+      failureWords={p.failureWords}
       readQuote={(choice: ReceiptChoice) => readPackageQuote(divisionId, choice)}
       onConfirm={p.onPay}
       renderBuy={({ pack, size: shortSize }) =>

@@ -52,7 +52,7 @@ import {
   type RoundExtendState,
 } from "../checkin-extend-ui";
 import { ConfirmDialog } from "../confirm-dialog";
-import { OpenRoundConfirmBody, openNoticeText, owedPlayers, resendNoticeText, timedBatches, type BoardSeats } from "../desk/open-round-control";
+import { OpenRoundConfirmBody, openFailureWords, openNoticeText, owedPlayers, resendNoticeText, timedBatches, type BoardSeats } from "../desk/open-round-control";
 import type { OpenRoundUiState } from "../desk/open-round-state";
 import { routes } from "@/lib/routes";
 import { useOpenRoundWith, type OpenRoundHandle } from "../desk/use-open-round";
@@ -1034,6 +1034,7 @@ export function RoundFocus(p: RoundFocusProps) {
           buy={ctx.orgId !== undefined && ctx.currency !== undefined ? { orgId: ctx.orgId, currency: ctx.currency } : null}
           buyMoreHref={routes.creditsStream(ctx.orgSlug)}
           onPay={openRound.pay}
+          failureWords={(code) => openFailureWords(code, msg)}
           onClose={openRound.closePay}
         />
       )}
