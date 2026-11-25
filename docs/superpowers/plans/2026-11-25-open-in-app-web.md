@@ -207,7 +207,7 @@ Absent (count 0): before Create; iPhone UA; Android UA at width 768 → `toBeHid
 - Produces: `streamHintKey(i: { hasDestination: boolean; hasCredit: boolean }): "openApp.stream.thenGoLive" | "openApp.stream.needDestination" | "openApp.stream.needCredit"` — destination checked first.
 - Fixture panel: `hasDestination = Boolean(p.selectedTargetId)`; `hasCredit = p.balance >= 1 || Boolean(p.restart?.free)`. No row when `p.planGate`. (A court-linked fixture shows no code, so no row.)
 - Court sheet (holds neither): always `openApp.stream.checkFirst`, followed by `thenGoLive`.
-- English: "Then tap Go live in the app." / "Pick a destination here first." / "You need a streaming credit first." / "Check a destination is picked and you have a credit."
+- English: "Then hold Go live in the app." / "Pick a destination here first." / "You need a streaming credit first." / "Check a destination is picked and you have a credit."
 
 - [ ] **Step 1: Failing tests**
 

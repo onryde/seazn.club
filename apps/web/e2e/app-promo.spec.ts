@@ -32,7 +32,7 @@ const BANDS = [
     path: "/product/streaming",
     key: "product.streaming.app",
     title: "Put the camera in your pocket",
-    line: "Scan a match or court code, tap Go live. No laptop, no capture card.",
+    line: "Scan a match or court code, then hold Go live. No laptop, no capture card.",
     before: '[data-section="camera"]',
     after: '[data-section="ticket"]',
   },

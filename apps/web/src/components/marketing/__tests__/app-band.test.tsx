@@ -41,7 +41,7 @@ const LABEL = "Seazn Club Mobile App";
 // The owner's approved English (2026-11-25), typed from the task brief: the oracle, never read back from the product.
 const APPROVED = {
   "home.app": ["Your phone is the camera and the scorer", LABEL, "Scan your organiser’s code to stream a match with the score on screen, or to score it."],
-  "product.streaming.app": ["Put the camera in your pocket", LABEL, "Scan a match or court code, tap Go live. No laptop, no capture card."],
+  "product.streaming.app": ["Put the camera in your pocket", LABEL, "Scan a match or court code, then hold Go live. No laptop, no capture card."],
   "product.matchday.app": ["One phone follows the court", LABEL, "Scan a court code once. It goes live when a match starts and stops when it ends."],
   "product.remote.app": ["Score from the app too", LABEL, "Open your organiser’s scoring link and score rally by rally. The browser pad still works."],
 } as const;
@@ -112,6 +112,66 @@ describe("the band's copy", () => {
       }
     }
     expect(checked).toBe(36);
+  });
+});
+
+// One product name (owner, 2026-11-25): every sentence that used to say "the Seazn app" names the product, with each
+// language's own article. Keys, name and articles are typed from the task brief, never read from the product.
+const NAMING_KEYS = [
+  "product.shared.appName",
+  "product.streaming.road.3.cap",
+  "product.streaming.cam.lede",
+  "sport.cricket.road.2.cap",
+  "sport.cricket.phones.lede",
+  "product.remote.meta.description",
+  "product.remote.road.2.cap",
+  "product.remote.faq.2.a",
+  "product.remote.faq.3.a",
+  "product.matchday.faq.1.a",
+];
+const ARTICLE: Record<Locale, string> = { en: "the", es: "la", fr: "la", nl: "de" };
+const OLD_NAMES = /Seazn[ -]app\b|\bapp(?:li|lication)?(?: de)? Seazn\b/i;
+
+describe("the app's one name in the marketing copy", () => {
+  it("each renamed string names the product after its article, capitalised only where it opens a sentence — counted", () => {
+    let checked = 0;
+    let opening = 0;
+    for (const lang of LOCALES) {
+      for (const key of NAMING_KEYS) {
+        const value = DICTS[lang][key]!;
+        const named = [...value.matchAll(new RegExp(`(\\S+) ${LABEL}`, "g"))];
+        expect(named.length, `${lang} ${key}: ${value}`).toBe(value.split(LABEL).length - 1);
+        expect(named.length, `${lang} ${key}: ${value}`).toBeGreaterThan(0);
+        for (const m of named) {
+          // appName is the one fragment: pages set it inside their own sentences (the sport page capitalises it there).
+          const opens = key !== "product.shared.appName" && /(^|[.!?]\s+)$/.test(value.slice(0, m.index));
+          const article = opens ? ARTICLE[lang][0]!.toUpperCase() + ARTICLE[lang].slice(1) : ARTICLE[lang];
+          expect(m[1], `${lang} ${key}: ${value}`).toBe(article);
+          if (opens) opening++;
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBe(40);
+    // Both capitalisations were really exercised.
+    expect(opening).toBeGreaterThan(0);
+    expect(opening).toBeLessThan(checked);
+  });
+
+  it("no marketing string, in any locale, still uses an old name — counted", () => {
+    // The scan's own premise: it knows each old spelling, and does not fire on the product's name.
+    for (const old of ["the Seazn app", "la app de Seazn", "l'application Seazn", "l'appli Seazn", "L'app Seazn", "de Seazn-app"]) {
+      expect(old).toMatch(OLD_NAMES);
+    }
+    expect(`la ${LABEL}`).not.toMatch(OLD_NAMES);
+    let checked = 0;
+    for (const lang of LOCALES) {
+      for (const [key, value] of Object.entries(DICTS[lang])) {
+        expect(value, `${lang} ${key}`).not.toMatch(OLD_NAMES);
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThan(4000);
   });
 });
 
