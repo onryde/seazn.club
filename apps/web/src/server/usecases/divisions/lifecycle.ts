@@ -194,16 +194,13 @@ export async function deleteDivision(auth: AuthCtx, id: string): Promise<void> {
 /** The danger zone's Online Chess facts (spec §11, final review m2 + Q7): what a refund of the division's paid, unfrozen package
  *  gives back and gives up now (`packageRefundPreview`, the refund's own split), and whether a DELETE would take it — the division
  *  is live and still deletable by delete's own rule (`deleteRefusedForStart`). Once it has started, only switching Online Chess off
- *  refunds it: archive holds the package (§11 "Division archived"). Null when no door would move money (no package, unpaid,
- *  frozen). Read-only. */
-export interface DivisionPackageRefund {
-  back: number;
-  forfeited: number;
-  onDelete: boolean;
-}
+ *  refunds it: archive holds the package (§11 "Division archived"). A paid package a round has frozen is `{ frozen: true }`: no
+ *  door refunds it (P7), and the dialogs say so (Task 15 fix round 2). Null when no money was paid (no package, unpaid).
+ *  Read-only. */
+export type DivisionPackageRefund = { back: number; forfeited: number; onDelete: boolean; frozen?: never } | { frozen: true };
 export async function divisionPackageRefund(auth: AuthCtx, id: string): Promise<DivisionPackageRefund | null> {
   const refund = await packageRefundPreview(auth.orgId, id);
-  if (refund === null) return null;
+  if (refund === null || refund.frozen === true) return refund;
   const onDelete = await withTenant(auth.orgId, async (tx) => {
     const [d] = await tx<{ status: string; archived_at: string | null; has_results: boolean }[]>`
       select status, archived_at, division_has_results(id) as has_results from divisions where id = ${id}`;

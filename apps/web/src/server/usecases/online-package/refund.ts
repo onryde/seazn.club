@@ -157,19 +157,25 @@ export async function fullRefundOf(tx: Tx, row: PackageRow): Promise<RefundResul
   return value > 0 ? backFor(tx, row, value) : { pack: 0, monthly: 0, forfeited: 0 };
 }
 
+/** What `packageRefundPreview` reads: the refund's figure, or - for a PAID package a round has frozen - only that it is frozen. */
+export type PackageRefundPreview = { back: number; forfeited: number; frozen?: never } | { frozen: true };
+
 /** What deleting `divisionId` or switching its Online play off would give back NOW (spec §11, review m2): its live package's full
- *  refund (`fullRefundOf`), as the credits that come back and the included credits of an earlier month that do not. Null when no
- *  door would move money: no package (online play off), unpaid (the row is deleted, nothing was paid) or frozen (a round has
- *  opened, P7). Read-only and lock-free: a figure to show before the organiser confirms; the door re-decides under its locks.
- *  The division is the caller's (the page proved it); a package of another org is a named 500, never a figure. */
-export async function packageRefundPreview(orgId: string, divisionId: string): Promise<{ back: number; forfeited: number } | null> {
+ *  refund (`fullRefundOf`), as the credits that come back and the included credits of an earlier month that do not. A PAID package
+ *  a round has frozen reads `{ frozen: true }` and no figure: no door refunds it (P7), and the danger zone says so (Task 15 fix
+ *  round 2, owner). Null when no door would move money and none was paid: no package (online play off) or unpaid (the row is
+ *  deleted; frozen-unpaid is V560's backfill). Read-only and lock-free: a figure to show before the organiser confirms; the door
+ *  re-decides under its locks. The division is the caller's (the page proved it); a package of another org is a named 500, never a
+ *  figure and never the fact that it is frozen. */
+export async function packageRefundPreview(orgId: string, divisionId: string): Promise<PackageRefundPreview | null> {
   return sql.begin("read only", async (tx) => {
     const row = await livePackage(tx, divisionId);
-    if (row === null || row.paidAt === null || row.frozenAt !== null) return null;
+    if (row === null || row.paidAt === null) return null;
     if (row.orgId !== orgId.toLowerCase()) {
       throw new HttpError(500, `Online Chess package ${row.id} does not belong to organisation ${orgId}; no refund was read`, "online_package_not_of_org");
     }
+    if (row.frozenAt !== null) return { frozen: true };
     const r = await fullRefundOf(tx, row);
     return { back: r.pack + r.monthly, forfeited: r.forfeited };
-  }) as Promise<{ back: number; forfeited: number } | null>;
+  }) as Promise<PackageRefundPreview | null>;
 }

@@ -1517,7 +1517,8 @@ export default async function DivisionPage({
                 // charge uses; the client is told, never asked to derive it.
                 slotHeldOnArchive={await divisionConsumesSlotOnArchive(auth, id)}
                 // A paid Online Chess package's refund, as the server reads it: the delete dialog's "credits come back" line,
-                // and archive's "switch Online Chess off to get them back" (archive holds the package). Null: no money moves.
+                // and archive's "switch Online Chess off to get them back" (archive holds the package); `{ frozen: true }` once a
+                // round has opened, and both dialogs say it is not refunded. Null: no money was paid.
                 packageRefund={await dangerPackageRefund()}
               />
             }
