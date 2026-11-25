@@ -367,6 +367,21 @@ body {
   .help-prose h3 {
     @apply scroll-mt-24;
   }
+  /* Blog posts (layout A, owner 2026-11-25). A post shares help's pipeline and `.help-prose`, but reads as an article:
+     17px at 1.7, section headings in normal case, a picture as wide as the column. Every rule needs BOTH classes, so a
+     help article never takes one (e2e/blog.spec.ts "layout A" measures both). */
+  .competition-prose.blog-prose {
+    @apply text-[17px];
+    line-height: 1.7;
+  }
+  .competition-prose.blog-prose h2 {
+    margin-top: 2.5rem;
+    letter-spacing: -0.01em;
+    @apply normal-case;
+  }
+  .competition-prose.blog-prose figure img {
+    @apply w-full;
+  }
   .competition-prose hr {
     @apply my-6 border-zinc-200;
   }

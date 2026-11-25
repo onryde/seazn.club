@@ -132,6 +132,89 @@ test.describe("signed out", () => {
   });
 });
 
+// Layout A (owner pick 2026-11-25): everything in a post's reading column is the SAME 44rem wide and starts at the same
+// left edge. Measured in the page, element by element; a kind with no element found fails (anti-vacuity), so a renamed
+// test id cannot pass by checking nothing.
+const REM = 16;
+const COLUMN_PARTS: Record<string, string> = {
+  header: '[data-testid="blog-post"] > header',
+  lede: '[data-testid="blog-post"] > header > p:first-of-type',
+  prose: ".blog-prose",
+  heading: ".blog-prose h2",
+  paragraph: ".blog-prose > p",
+  example: '[data-testid="blog-example"]',
+  diagram: '[data-testid="blog-diagram"]',
+  picture: ".blog-prose figure img",
+  handles: '[data-testid="blog-handles-it"]',
+  related: '[data-testid="blog-related"]',
+};
+const COMMON = ["header", "lede", "prose", "heading", "paragraph", "handles", "related"];
+const COLUMN_POSTS: { path: string; kinds: string[] }[] = [
+  { path: "/blog/chess-points-and-half-points", kinds: [...COMMON, "example", "picture"] },
+  { path: "/blog/how-a-ladder-works", kinds: [...COMMON, "diagram"] },
+];
+
+test.describe("layout A: one reading column", () => {
+  test.use(signedOut);
+
+  for (const width of WIDTHS) {
+    for (const { path, kinds } of COLUMN_POSTS) {
+      test(`${path} at ${width}: every part of the post is one column wide`, async ({ page }, testInfo) => {
+        await visit(page, path, width);
+        await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+        const column = Math.min(44 * REM, width - 2 * 16);
+        const left = (await page.locator(COLUMN_PARTS.header!).boundingBox())!.x;
+        let checked = 0;
+        const wrong: string[] = [];
+        for (const kind of kinds) {
+          const found = page.locator(COLUMN_PARTS[kind]!);
+          const n = await found.count();
+          expect(n, `${path}: anti-vacuity, no '${kind}' found`).toBeGreaterThan(0);
+          for (let i = 0; i < n; i++) {
+            const box = (await found.nth(i).boundingBox())!;
+            if (Math.abs(box.width - column) > 1 || Math.abs(box.x - left) > 1) {
+              wrong.push(`${kind}[${i}] x=${Math.round(box.x)} w=${Math.round(box.width)} (column x=${Math.round(left)} w=${column})`);
+            }
+            checked++;
+          }
+        }
+        testInfo.annotations.push({ type: "column-elements-checked", description: String(checked) });
+        console.log(`column check ${path} @${width}: ${checked} elements, column ${column}px`);
+        expect(checked, "anti-vacuity: elements measured").toBeGreaterThanOrEqual(kinds.length);
+        expect(wrong, `${checked} elements measured`).toEqual([]);
+        await expectNoHorizontalScroll(page);
+      });
+    }
+  }
+
+  const style = (page: Page, selector: string) =>
+    page.locator(selector).first().evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { size: s.fontSize, line: s.lineHeight, transform: s.textTransform };
+    });
+
+  test("a post's type: 17px body at 1.7, a 19px lede, section headings in normal case", async ({ page }) => {
+    await visit(page, "/blog/chess-points-and-half-points", 1280);
+    const p = await style(page, ".blog-prose > p");
+    expect(p.size).toBe("17px");
+    expect(Math.abs(parseFloat(p.line) - 17 * 1.7), `line height ${p.line}`).toBeLessThan(0.5);
+    expect((await style(page, ".blog-prose li")).size).toBe("17px");
+    expect((await style(page, COLUMN_PARTS.lede!)).size).toBe("19px");
+    expect((await style(page, ".blog-prose h2")).transform).toBe("none");
+  });
+
+  // The positive pair: `.help-prose` is shared, so a help article must still be help's own type and width.
+  test("a help article keeps help's own prose: 15px, uppercase section headings, a 34rem column", async ({ page }) => {
+    await visit(page, "/help/registration/card-payments", 1280);
+    await expect(page.locator(".help-prose")).toHaveCount(1);
+    await expect(page.locator(".blog-prose")).toHaveCount(0);
+    expect((await style(page, ".help-prose > p")).size).toBe("15px");
+    expect((await style(page, ".help-prose h2")).transform).toBe("uppercase");
+    const box = (await page.locator(".help-prose").boundingBox())!;
+    expect(Math.round(box.width)).toBe(34 * REM);
+  });
+});
+
 // The default project state is a real signed-in session (auth.setup.ts: a magic-link login, which sets BOTH cookies). The page
 // is cached and shared, so it was drawn for a stranger; the swap happens in the browser from the readable hint cookie.
 test.describe("signed in", () => {

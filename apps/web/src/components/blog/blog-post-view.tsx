@@ -3,9 +3,10 @@
 // hand it any shape.
 //
 // Frame, as help's article page: from 1100px a reading column and the "On this page" rail beside it, sticky, spanning
-// every row; below that, one column with the rail folded under the lede. The reading column is capped at 34rem
-// (about 70 characters a line of the 15px body text); the example may use the column's 44rem, so a six-column table fits at
-// 1280.
+// every row; below that, one column with the rail folded under the lede. Layout A (owner pick, 2026-11-25): the header,
+// lede, prose, headings, examples, pictures, "How Seazn handles it" and Related are all ONE 44rem column (17px body, about
+// 80 characters a line), centred below 1100. The post's type is `.blog-prose` (globals.css); help keeps its own.
+// e2e/blog.spec.ts "layout A" measures every part's width in a browser.
 import Link from "next/link";
 import { CompetitionProse } from "@/components/public-site/competition-prose";
 import { HelpToc } from "@/components/help/help-toc";
@@ -34,8 +35,8 @@ export interface BlogPostViewProps {
 
 export function BlogPostView(p: BlogPostViewProps) {
   return (
-    <article className="mx-auto min-[1100px]:grid min-[1100px]:max-w-[68rem] min-[1100px]:grid-cols-[minmax(0,44rem)_12rem] min-[1100px]:justify-center min-[1100px]:gap-x-14" data-testid="blog-post">
-      <header className="min-w-0 max-w-[34rem] min-[1100px]:col-start-1 min-[1100px]:row-start-1">
+    <article className="mx-auto max-w-[44rem] min-[1100px]:grid min-[1100px]:max-w-[68rem] min-[1100px]:grid-cols-[minmax(0,44rem)_12rem] min-[1100px]:justify-center min-[1100px]:gap-x-14" data-testid="blog-post">
+      <header className="min-w-0 min-[1100px]:col-start-1 min-[1100px]:row-start-1">
         <nav aria-label="Breadcrumb">
           <ol className="flex flex-wrap items-center gap-x-1.5 text-sm text-slate-500">
             <li>
@@ -48,7 +49,7 @@ export function BlogPostView(p: BlogPostViewProps) {
           </ol>
         </nav>
         <h1 className="mt-3 text-balance text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">{p.title}</h1>
-        <p className="mt-3 text-lg leading-relaxed text-slate-600">{p.answer}</p>
+        <p className="mt-3 text-[19px] leading-[1.6] text-slate-600">{p.answer}</p>
         <BlogByline date={p.date} dateLabel={p.dateLabel} updated={p.updated} updatedLabel={p.updatedLabel} />
       </header>
       {p.toc.length > 0 ? (
@@ -57,19 +58,17 @@ export function BlogPostView(p: BlogPostViewProps) {
           className="mt-6 min-[1100px]:sticky min-[1100px]:top-24 min-[1100px]:col-start-2 min-[1100px]:row-span-3 min-[1100px]:row-start-1 min-[1100px]:mt-1 min-[1100px]:self-start"
         />
       ) : null}
-      <div className="mt-8 min-w-0 max-w-[44rem] min-[1100px]:col-start-1 min-[1100px]:row-start-2">
+      <div className="mt-8 min-w-0 min-[1100px]:col-start-1 min-[1100px]:row-start-2">
         {p.parts.map((part, i) =>
           part.kind === "html" ? (
-            <div key={i} className="max-w-[34rem]">
-              <CompetitionProse html={part.html} className="help-prose" />
-            </div>
+            <CompetitionProse key={i} html={part.html} className="help-prose blog-prose" />
           ) : (
             <BlogExample key={i} id={part.id} result={part.result} swipeHint={p.labels.swipe} />
           ),
         )}
-        <BlogHandlesIt className="mt-10 max-w-[34rem]" {...p.handles} />
+        <BlogHandlesIt className="mt-10" {...p.handles} />
       </div>
-      <BlogRelated title={p.labels.related} posts={p.related} className="mt-12 min-w-0 max-w-[34rem] min-[1100px]:col-start-1 min-[1100px]:row-start-3" />
+      <BlogRelated title={p.labels.related} posts={p.related} className="mt-12 min-w-0 min-[1100px]:col-start-1 min-[1100px]:row-start-3" />
     </article>
   );
 }

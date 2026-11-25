@@ -210,6 +210,18 @@ describe("the post page, through the real renderer (the pilot)", () => {
   });
 });
 
+// Layout A (owner pick 2026-11-25): one 44rem reading column. The widths themselves are measured in a browser
+// (e2e/blog.spec.ts "layout A"), which runs only on pushes to main; this holds the two things a PR can check without a DOM.
+describe("layout A, as the markup declares it (pilot)", () => {
+  it("every Markdown segment is the blog's own prose, and nothing in the post is capped to help's 34rem", async () => {
+    const markup = await html(PILOT);
+    const prose = [...markup.matchAll(/class="competition-prose ([^"]*)"/g)].map((m) => m[1]!.split(" "));
+    expect(prose.length, "anti-vacuity: prose segments").toBeGreaterThan(1);
+    for (const classes of prose) expect(classes).toEqual(expect.arrayContaining(["help-prose", "blog-prose"]));
+    expect(markup).not.toContain("max-w-[34rem]");
+  });
+});
+
 describe("the post page with related posts and an update (fixtures, through the view)", () => {
   const draw = fixturePosts.find((p) => p.slug === "what-a-draw-is-worth")!;
   const related = resolveBlogRelated(draw, (s) => fixturePosts.find((p) => p.slug === s) ?? null);
