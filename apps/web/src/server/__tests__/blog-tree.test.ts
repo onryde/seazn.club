@@ -43,6 +43,7 @@ describe("the tree", () => {
     for (const p of posts) {
       const strings = [
         p.title,
+        ...(p.seoTitle === undefined ? [] : [p.seoTitle]),
         p.description,
         blogLeakText(p.markdown),
         ...artAlts(p),

@@ -2,7 +2,7 @@
 // pure function each so a test reads what a page declares without rendering it. Client-safe (no fs, no engine).
 import type { Metadata } from "next";
 import { breadcrumbLd, organizationLd } from "@/components/seo/json-ld";
-import { BLOG_AUTHOR, blogUrl, type BlogPostMeta } from "@/lib/blog";
+import { BLOG_AUTHOR, BLOG_TITLE_MAX, blogUrl, type BlogPostMeta } from "@/lib/blog";
 import { OG_ALT } from "@/lib/seo-meta";
 import { siteOrigin } from "@/lib/site-origin";
 
@@ -13,8 +13,6 @@ export const BLOG_INDEX_TITLE = "Seazn Club Blog — how points, tie-breaks and 
 export const BLOG_INDEX_DESCRIPTION =
   "How points, tie-breaks, draws and brackets work in Seazn, sport by sport. Written for organisers.";
 export const BLOG_FEED_PATH = "/blog/rss.xml";
-/** What a search result shows of a <title>. A post's question is never rewritten; the suffix gives way instead. */
-const BLOG_TITLE_MAX = 65;
 
 /** `<link rel="alternate" type="application/rss+xml">`: a page's own `alternates` replaces its layout's, so each page spells it. */
 const feedAlternate = { "application/rss+xml": BLOG_FEED_PATH };
@@ -39,9 +37,12 @@ export function blogIndexMetadata(): Metadata {
 
 export function blogPostMetadata(post: BlogPostMeta): Metadata {
   const url = blogUrl(post.slug);
-  const fits = BLOG_TITLE_TEMPLATE.replace("%s", () => post.title).length <= BLOG_TITLE_MAX;
+  // Only the <title> takes the short search title, if the post has one; the share cards below keep the question.
+  // The site suffix is added where both fit in BLOG_TITLE_MAX and gives way otherwise.
+  const searchTitle = post.seoTitle ?? post.title;
+  const fits = BLOG_TITLE_TEMPLATE.replace("%s", () => searchTitle).length <= BLOG_TITLE_MAX;
   return {
-    title: fits ? post.title : { absolute: post.title },
+    title: fits ? searchTitle : { absolute: searchTitle },
     description: post.description,
     alternates: { canonical: url, types: feedAlternate },
     openGraph: {

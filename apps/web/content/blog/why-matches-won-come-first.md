@@ -1,5 +1,6 @@
 ---
 title: Why do volleyball, badminton and tennis tables rank by matches won?
+seoTitle: Why do volleyball, badminton and tennis rank by matches won?
 description: These sports count matches won before points, so a team with more points can sit below a team that won more matches.
 date: 2026-11-23
 author: Seazn

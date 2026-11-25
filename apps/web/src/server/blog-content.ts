@@ -15,7 +15,7 @@ import { ART_LINE, ART_ONLY_TOPIC, blogArt } from "@/blog/art";
 import { FORMAT_FAMILIES } from "@/config/format-gallery";
 import { helpUrl } from "@/lib/help";
 import {
-  BLOG_AUTHOR, BLOG_DESCRIPTION_MAX, BLOG_DESCRIPTION_MIN, BLOG_HELP_MAX, BLOG_SLUG, BLOG_TOPICS,
+  BLOG_AUTHOR, BLOG_DESCRIPTION_MAX, BLOG_DESCRIPTION_MIN, BLOG_HELP_MAX, BLOG_SLUG, BLOG_TITLE_MAX, BLOG_TOPICS,
   type BlogPostMeta, type BlogTopic,
 } from "@/lib/blog";
 import type { HelpSearchRow } from "@/lib/help-search";
@@ -212,6 +212,13 @@ export function parseBlogFrontmatter(
     problems.push(...figureProblems("title", title));
   }
 
+  const seoTitle = meta.seoTitle;
+  if (seoTitle !== undefined) {
+    if (seoTitle.length < 1 || seoTitle.length > BLOG_TITLE_MAX) bad("seoTitle", `must be 1 to ${BLOG_TITLE_MAX} characters, is ${seoTitle.length}`);
+    if (seoTitle.includes("{{")) bad("seoTitle", "must not carry a token (front-matter is never resolved)");
+    problems.push(...figureProblems("seoTitle", seoTitle));
+  }
+
   const description = need("description");
   if (description !== null) {
     if (description.length < BLOG_DESCRIPTION_MIN || description.length > BLOG_DESCRIPTION_MAX) {
@@ -296,6 +303,7 @@ export function parseBlogFrontmatter(
     markdown: body,
   };
   if (updated !== undefined) post.updated = updated;
+  if (seoTitle !== undefined) post.seoTitle = seoTitle;
   return post;
 }
 

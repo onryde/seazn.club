@@ -1,5 +1,6 @@
 ---
 title: When is there a third-place match, and who shares third without one?
+seoTitle: Third-place match: when is there one, and who shares third?
 description: A knockout only separates its two beaten semi-finalists if they play each other. Without a third-place match, they share third.
 date: 2026-11-23
 author: Seazn

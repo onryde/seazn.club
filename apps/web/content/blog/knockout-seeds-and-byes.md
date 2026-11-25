@@ -1,5 +1,6 @@
 ---
 title: How are seeds placed in a knockout bracket, and who gets the byes?
+seoTitle: Knockout seeding: where do seeds go, and who gets byes?
 description: Seeds are spread so the best players meet as late as possible, and when the field does not fill the bracket, the byes go to the top seeds.
 date: 2026-11-23
 author: Seazn

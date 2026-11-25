@@ -211,18 +211,23 @@ describe("blog pages: the head of every one", () => {
   const posts = allBlogPosts();
   const template = templateOf(blogLayout.metadata);
 
-  it("each post keeps its question as the document title, with the site suffix only where both fit in 65 characters", async () => {
+  it(`each post's document title is at most ${TITLE_MAX}: its question, or its short search title; the question is shared everywhere else`, async () => {
     let checked = 0;
     const over: string[] = [];
     let suffixed = 0;
+    const short: string[] = [];
     for (const p of posts) {
-      const m = await postRoute.generateMetadata({ params: Promise.resolve({ slug: p.slug }) });
+      const params = { params: Promise.resolve({ slug: p.slug }) };
+      const m = await postRoute.generateMetadata(params);
       const title = documentTitle(m.title, template);
-      const withSuffix = `${p.title} — Seazn Club Blog`;
-      expect(title, p.slug).toBe(withSuffix.length <= TITLE_MAX ? withSuffix : p.title);
-      if (title !== p.title) suffixed++;
-      // The question is never rewritten: only the share card's title and the <title> are built from it.
+      const search = p.seoTitle ?? p.title;
+      const withSuffix = `${search} — Seazn Club Blog`;
+      expect(title, p.slug).toBe(withSuffix.length <= TITLE_MAX ? withSuffix : search);
+      if (title !== search) suffixed++;
+      if (p.seoTitle !== undefined) short.push(p.slug);
+      // The question is never rewritten: the share cards carry it whole, whatever the <title> is.
       expect((m.openGraph as { title: string }).title, p.slug).toBe(p.title);
+      expect((m.twitter as { title: string }).title, p.slug).toBe(p.title);
       expect(m.alternates?.canonical, p.slug).toBe(`/blog/${p.slug}`);
       const description = m.description!;
       expect(description.length, `${p.slug}: description`).toBeGreaterThanOrEqual(DESCRIPTION_MIN);
@@ -230,12 +235,14 @@ describe("blog pages: the head of every one", () => {
       if (title.length > TITLE_MAX) over.push(`${p.slug} (${title.length})`);
       checked++;
     }
-    console.log(`blog posts checked: ${checked}; with the suffix ${suffixed}; still over ${TITLE_MAX}: ${over.length}: ${over.join(", ")}`);
+    console.log(`blog titles checked: ${checked}; with the suffix ${suffixed}; with a short search title ${short.length}; over ${TITLE_MAX}: ${over.length}`);
     expect(checked, "anti-vacuity: posts checked").toBe(posts.length);
     expect(checked).toBeGreaterThan(0);
     expect(suffixed, "anti-vacuity: some title keeps the suffix").toBeGreaterThan(0);
-    // What is left over is exactly the posts whose own question is longer than the limit.
-    expect(over).toEqual(posts.filter((p) => p.title.length > TITLE_MAX).map((p) => `${p.slug} (${p.title.length})`));
+    expect(over).toEqual([]);
+    // A short title is only for a question that is too long: nowhere else may the <title> drift from the H1.
+    expect(short.length, "anti-vacuity: some post needs a short title").toBeGreaterThan(0);
+    expect(short).toEqual(posts.filter((p) => p.title.length > TITLE_MAX).map((p) => p.slug));
   });
 
   it("the index has a share picture, declared on the page (its openGraph replaces the inherited one)", () => {
