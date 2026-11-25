@@ -167,7 +167,7 @@ N28; never run), so no web copy may promise it. A single-phone web Go live would
 **Missing destination or credit (web call).** The server refuses the app's own Go live without them, and the app
 then says "ask the organiser", to a person who may be the organiser (phone session, from its code; not re-run on
 one phone). So when the page knows one is missing, the line beside the button names it instead, in four locales:
-"Pick a destination here first." or "You need a streaming credit first." The button stays, because pairing works
+"Pick a destination here first." or "You need a Seazn credit first." The button stays, because pairing works
 without either and a refusal leaves the phone paired. It reuses what the panel already uses to gate its own Go
 live, with no new server call; a surface that does not hold that state (check the court sheet) shows
 "Check a destination is picked and you have a credit." The end-to-end walk after the spike covers this on one

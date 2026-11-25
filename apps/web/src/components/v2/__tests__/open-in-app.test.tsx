@@ -116,7 +116,7 @@ describe("the copy", () => {
     "openApp.orScan": "or scan with another phone",
     "openApp.stream.thenGoLive": "Then hold Go live in the app.",
     "openApp.stream.needDestination": "Pick a destination here first.",
-    "openApp.stream.needCredit": "You need a streaming credit first.",
+    "openApp.stream.needCredit": "You need a Seazn credit first.",
     "openApp.stream.checkFirst": "Check a destination is picked and you have a credit.",
   };
 
