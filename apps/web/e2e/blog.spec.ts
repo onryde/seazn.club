@@ -145,6 +145,7 @@ const COLUMN_PARTS: Record<string, string> = {
   example: '[data-testid="blog-example"]',
   diagram: '[data-testid="blog-diagram"]',
   picture: ".blog-prose figure img",
+  art: '[data-testid="blog-art"] img',
   handles: '[data-testid="blog-handles-it"]',
   related: '[data-testid="blog-related"]',
 };
@@ -152,6 +153,7 @@ const COMMON = ["header", "lede", "prose", "heading", "paragraph", "handles", "r
 const COLUMN_POSTS: { path: string; kinds: string[] }[] = [
   { path: "/blog/chess-points-and-half-points", kinds: [...COMMON, "example", "picture"] },
   { path: "/blog/how-a-ladder-works", kinds: [...COMMON, "diagram"] },
+  { path: "/blog/what-you-need-to-stream-a-match", kinds: [...COMMON, "art"] },
 ];
 
 test.describe("layout A: one reading column", () => {
@@ -201,6 +203,31 @@ test.describe("layout A: one reading column", () => {
     expect((await style(page, ".blog-prose li")).size).toBe("17px");
     expect((await style(page, COLUMN_PARTS.lede!)).size).toBe("19px");
     expect((await style(page, ".blog-prose h2")).transform).toBe("none");
+  });
+
+  // The art has two drawings: the browser takes the phone one below 600px and the wide one from 600. Both must really
+  // load (a broken file keeps its reserved box, so a width check alone would pass on it).
+  test("a post's art: the phone drawing below 600px, the wide drawing from 600, each one loaded", async ({ page }) => {
+    let checked = 0;
+    for (const { width, file } of [
+      { width: 320, file: "what-you-need-to-stream-a-match-flow-phone.svg" },
+      { width: 599, file: "what-you-need-to-stream-a-match-flow-phone.svg" },
+      { width: 600, file: "what-you-need-to-stream-a-match-flow.svg" },
+      { width: 1280, file: "what-you-need-to-stream-a-match-flow.svg" },
+    ]) {
+      await visit(page, "/blog/what-you-need-to-stream-a-match", width);
+      const img = page.locator(COLUMN_PARTS.art!);
+      await img.scrollIntoViewIfNeeded();
+      const shown = () => img.evaluate((el: HTMLImageElement) => ({ file: el.currentSrc.split("/").pop(), loaded: el.complete && el.naturalWidth > 0 }));
+      await expect.poll(shown, { message: `art at ${width}` }).toEqual({ file, loaded: true });
+      // Its height follows the drawing that was picked, not the other one's reserved box.
+      const box = (await img.boundingBox())!;
+      const ratio = file.endsWith("-phone.svg") ? 1100 / 360 : 700 / 1200;
+      expect(Math.abs(box.height - box.width * ratio), `art shape at ${width}: ${Math.round(box.width)}x${Math.round(box.height)}`).toBeLessThan(2);
+      await expectNoHorizontalScroll(page);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: widths checked").toBe(4);
   });
 
   // The positive pair: `.help-prose` is shared, so a help article must still be help's own type and width.

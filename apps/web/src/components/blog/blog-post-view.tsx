@@ -15,6 +15,7 @@ import { BlogExample } from "@/components/blog/blog-example-table";
 import { BlogHandlesIt } from "@/components/blog/blog-handles-it";
 import { BlogRelated, type BlogRelatedPost } from "@/components/blog/blog-related";
 import type { HelpTocEntry } from "@/lib/help-toc";
+import { BlogArtFigure } from "@/components/blog/blog-art";
 import type { BlogPart } from "@/server/blog-render";
 
 export interface BlogPostViewProps {
@@ -62,6 +63,8 @@ export function BlogPostView(p: BlogPostViewProps) {
         {p.parts.map((part, i) =>
           part.kind === "html" ? (
             <CompetitionProse key={i} html={part.html} className="help-prose blog-prose" />
+          ) : part.kind === "art" ? (
+            <BlogArtFigure key={i} art={part.art} />
           ) : (
             <BlogExample key={i} id={part.id} result={part.result} swipeHint={p.labels.swipe} />
           ),

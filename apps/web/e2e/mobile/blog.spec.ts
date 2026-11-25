@@ -48,7 +48,8 @@ async function seriousAxe(page: Page): Promise<string[]> {
 test.describe("signed out", () => {
   test.use(signedOut);
 
-  for (const path of ["/blog", POST]) {
+  // The streaming guide is the post with art (a tall phone drawing) rather than an example table.
+  for (const path of ["/blog", POST, "/blog/what-you-need-to-stream-a-match"]) {
     test(`${path}: no horizontal scroll, nothing clipped, a tab stop on every scrolling box, axe clean`, async ({ page }) => {
       await visit(page, path);
       await expect(page.getByRole("heading", { level: 1 })).toBeVisible();

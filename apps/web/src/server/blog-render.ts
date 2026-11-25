@@ -1,13 +1,18 @@
 import "server-only";
 // A post to its parts: fact tokens resolve first (against the GOLDEN, never against build()), then the body is cut
-// at each `{{example:<id>}}` line, and every Markdown segment goes through P1's help renderer (pictures, callouts
-// and heading ids included). The example parts carry the golden's result for a blog-owned component to draw.
+// at each `{{example:<id>}}` and `{{art:<id>}}` line, and every Markdown segment goes through P1's help renderer
+// (pictures, callouts and heading ids included). The example parts carry the golden's result, and the art parts the
+// registry's picture, for a blog-owned component to draw.
+import { ART_LINE, blogArt, type BlogArt } from "@/blog/art";
 import { BLOG_GOLDENS } from "@/blog/examples/goldens";
 import type { ExampleResult } from "@/blog/examples/types";
 import type { HelpHeading } from "@/server/help-heading-ids";
 import { renderHelpArticle } from "@/server/help-content";
 
-export type BlogPart = { kind: "html"; html: string } | { kind: "example"; id: string; result: ExampleResult };
+export type BlogPart =
+  | { kind: "html"; html: string }
+  | { kind: "example"; id: string; result: ExampleResult }
+  | { kind: "art"; id: string; art: BlogArt };
 
 export interface RenderedBlogPost {
   parts: BlogPart[];
@@ -44,20 +49,30 @@ function resolveFacts(post: RenderablePost, goldens: Record<string, ExampleResul
 
 export async function renderBlogPost(post: RenderablePost, goldens: Record<string, ExampleResult> = BLOG_GOLDENS): Promise<RenderedBlogPost> {
   const resolved = resolveFacts(post, goldens);
-  const segments: (string[] | { example: string })[] = [[]];
+  const segments: (string[] | { example: string } | { art: string })[] = [[]];
   for (const [i, raw] of resolved.split("\n").entries()) {
     const m = EXAMPLE_LINE.exec(raw.trim());
+    const picture = ART_LINE.exec(raw.trim());
     if (m) {
       segments.push({ example: m[1]! }, []);
+    } else if (picture) {
+      segments.push({ art: picture[1]! }, []);
     } else if (raw.includes("{{example:")) {
       throw new Error(`${post.slug}: line ${i + 1}: an example token must stand alone on its own line`);
+    } else if (raw.includes("{{art:")) {
+      throw new Error(`${post.slug}: line ${i + 1}: an art token must stand alone on its own line`);
     } else {
       (segments[segments.length - 1] as string[]).push(raw);
     }
   }
 
-  const placed = segments.filter((s): s is { example: string } => !Array.isArray(s)).map((s) => s.example);
-  if (placed.length === 0) throw new Error(`${post.slug}: the post places no example; every post carries one`);
+  const placed = segments.flatMap((s) => ("example" in s ? [s.example] : []));
+  const pictures = segments.flatMap((s) => ("art" in s ? [s.art] : []));
+  if (placed.length === 0 && pictures.length === 0) throw new Error(`${post.slug}: the post places no example and no art; every post carries one`);
+  for (const id of pictures) {
+    if (blogArt(id) === undefined) throw new Error(`${post.slug}: there is no art '${id}'`);
+    if (pictures.filter((p) => p === id).length > 1) throw new Error(`${post.slug}: art '${id}' is placed more than once`);
+  }
   for (const id of new Set(placed)) {
     if (placed.filter((p) => p === id).length > 1) throw new Error(`${post.slug}: example '${id}' is placed more than once`);
     if (!post.examples.includes(id)) throw new Error(`${post.slug}: the body places example '${id}', which the post does not list`);
@@ -70,7 +85,11 @@ export async function renderBlogPost(post: RenderablePost, goldens: Record<strin
   const seen = new Set<string>();
   for (const seg of segments) {
     if (!Array.isArray(seg)) {
-      parts.push({ kind: "example", id: seg.example, result: goldens[seg.example]! });
+      parts.push(
+        "example" in seg
+          ? { kind: "example", id: seg.example, result: goldens[seg.example]! }
+          : { kind: "art", id: seg.art, art: blogArt(seg.art)! },
+      );
       continue;
     }
     const markdown = seg.join("\n");

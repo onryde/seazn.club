@@ -5,6 +5,7 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { FORMAT_FAMILIES } from "@/config/format-gallery";
+import { BLOG_ART } from "@/blog/art";
 import { BLOG_EXAMPLES } from "@/blog/examples";
 import { BLOG_GOLDENS } from "@/blog/examples/goldens";
 import { blogLeakText, findBlogLeaks, withoutDiagramKind } from "@/blog/leaks";
@@ -14,6 +15,9 @@ import { allHelpArticles } from "@/server/help-content";
 
 const posts: BlogPost[] = allBlogPosts();
 const EXAMPLE_LINE = /^\{\{example:([a-z0-9-]+)\}\}$/;
+const ART_TOKEN = /\{\{art:([a-z0-9-]+)\}\}/g;
+/** The names of the pictures a post places from the art registry (blog-art.test.tsx holds their files). */
+const artAlts = (p: BlogPost): string[] => [...p.markdown.matchAll(ART_TOKEN)].map((m) => BLOG_ART[m[1]!]!.alt);
 const FACT = /\{\{fact:([a-z0-9-]+)\.([A-Za-z0-9_]+)\}\}/g;
 
 /** Every string anywhere in an example's generated result (table, diagram, text, facts): a leaf-walk, so no field is skipped. */
@@ -41,6 +45,7 @@ describe("the tree", () => {
         p.title,
         p.description,
         blogLeakText(p.markdown),
+        ...artAlts(p),
         // fact values as the reader sees them, resolved
         ...[...p.markdown.matchAll(FACT)].map(([, id, key]) => String(BLOG_GOLDENS[id!]!.facts[key!])),
         ...p.examples.flatMap(exampleStrings),
@@ -90,7 +95,8 @@ describe("the tree", () => {
       }
     expect(related, "related links checked").toBeGreaterThan(0);
     // The programme is 33 posts: those written plus those planned (Task 14 deletes the planned list when the last lands).
-    expect(posts.length + BLOG_PLANNED_SLUGS.size, "posts + planned slugs").toBe(33);
+    // Streaming guides are outside that list (2026-11-25), so they are not counted into its 33.
+    expect(posts.filter((p) => p.topic !== "streaming").length + BLOG_PLANNED_SLUGS.size, "posts + planned slugs").toBe(33);
     expect(pending, "of which still to be written").toBeLessThanOrEqual(related);
     const stale = [...BLOG_PLANNED_SLUGS].filter((s) => slugs.has(s));
     expect(stale, "a planned slug that is now a post must come off the planned list").toEqual([]);
@@ -125,15 +131,16 @@ describe("the tree", () => {
     for (const p of posts) {
       const hasExample = p.examples.some((id) => BLOG_GOLDENS[id]?.table !== undefined || BLOG_GOLDENS[id]?.diagram !== undefined);
       const hasPicture = /!\[[^\]]*\]\(\/help\/blog\/[^)]+\)/.test(p.markdown);
-      expect(hasExample || hasPicture, `${p.slug}: no generated table, diagram or picture`).toBe(true);
+      expect(hasExample || hasPicture || artAlts(p).length > 0, `${p.slug}: no generated table, diagram or picture`).toBe(true);
       if (hasExample) withExample++;
     }
     expect(withExample, "posts with a generated example").toBeGreaterThan(0);
   });
 
   // Brief gate 4: every post owes one diagram OR screenshot, and a table does not count as one. A picture is a generated
-  // diagram (an example of the post whose result carries a `diagram`, which the page draws) or a `/help/blog/` screenshot.
-  it("every post carries a picture besides its table: a generated diagram or a /help/blog/ screenshot", () => {
+  // diagram (an example of the post whose result carries a `diagram`, which the page draws), a `/help/blog/` screenshot, or
+  // a drawing from the art registry.
+  it("every post carries a picture besides its table: a generated diagram, a /help/blog/ screenshot or art", () => {
     const SCREENSHOT = /!\[[^\]]*\]\(\/help\/blog\/[^)]+\)/g;
     let checked = 0;
     let diagrams = 0;
@@ -144,7 +151,7 @@ describe("the tree", () => {
       const shots = (p.markdown.match(SCREENSHOT) ?? []).length;
       diagrams += drawn;
       screenshots += shots;
-      if (drawn + shots === 0) without.push(p.slug);
+      if (drawn + shots + artAlts(p).length === 0) without.push(p.slug);
       checked++;
     }
     expect(checked, "anti-vacuity: posts checked").toBe(posts.length);
@@ -155,12 +162,13 @@ describe("the tree", () => {
     expect(without, `posts with neither a generated diagram nor a /help/blog/ picture (a table alone is not one), of ${checked} checked`).toEqual([]);
   });
 
-  it("every post renders end to end: fact tokens resolved, one example part per listed example, no brace left in the HTML", async () => {
+  it("every post renders end to end: fact tokens resolved, one example part per listed example, one art part per art line, no brace left in the HTML", async () => {
     let parts = 0;
     for (const p of posts) {
       const out = await renderBlogPost(p);
       const examples = out.parts.filter((x) => x.kind === "example");
       expect(examples.map((x) => (x.kind === "example" ? x.id : "")).sort(), p.slug).toEqual([...p.examples].sort());
+      expect(out.parts.filter((x) => x.kind === "art"), `${p.slug}: art parts`).toHaveLength(artAlts(p).length);
       for (const part of out.parts) {
         parts++;
         if (part.kind === "html") expect(part.html, p.slug).not.toContain("{{");

@@ -265,7 +265,9 @@ describe("related: slugs planned but not yet written", () => {
     expect(BLOG_PLANNED_SLUGS.size, "anti-vacuity: planned slugs").toBeGreaterThan(0);
     expect(written.length, "anti-vacuity: written posts").toBeGreaterThan(0);
     expect(written.filter((p) => BLOG_PLANNED_SLUGS.has(p.slug)).map((p) => p.slug), "a written post is no longer planned").toEqual([]);
-    expect(written.length + BLOG_PLANNED_SLUGS.size, "posts written plus planned").toBe(33);
+    // Streaming guides are outside the programme's list (2026-11-25), so they are not counted into its 33.
+    const programme = written.filter((p) => p.topic !== "streaming");
+    expect(programme.length + BLOG_PLANNED_SLUGS.size, "posts written plus planned").toBe(33);
     for (const s of BLOG_PLANNED_SLUGS) expect(s, s).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
     expect(BLOG_PLANNED_SLUGS.has("how-standings-points-work"), "the pilot is a post, not planned").toBe(false);
   });

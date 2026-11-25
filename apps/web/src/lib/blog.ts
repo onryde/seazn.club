@@ -15,6 +15,7 @@ export const BLOG_TOPICS = [
   "ladder",
   "withdrawal",
   "forfeits",
+  "streaming",
 ] as const;
 export type BlogTopic = (typeof BLOG_TOPICS)[number];
 
@@ -52,7 +53,7 @@ export interface BlogPostMeta {
   help: string;
   /** 2 to 4 other post slugs. */
   related: string[];
-  /** Example ids the body uses, each exactly once. */
+  /** Example ids the body uses, each exactly once. Empty only in a post that places art (blog/art.ts). */
   examples: string[];
 }
 
