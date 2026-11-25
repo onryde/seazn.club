@@ -9271,5 +9271,9 @@
   "divBuilder.format.drawCanRefuse": "El sorteo de la eliminatoria puede rechazarse al sembrarlo: un mejor segundo (o mejor tercero, etc.) puede compartir grupo con su rival de primera ronda. Clasifica el mismo número de cada grupo para evitarlo.",
   "runsheet.round.loading": "Cargando esta ronda…",
   "runsheet.round.loadFailed": "No se pudieron cargar los partidos de esta ronda.",
-  "runsheet.round.retry": "Reintentar"
+  "runsheet.round.retry": "Reintentar",
+  "openApp.fallback.title": "Seazn Club aún no está en este teléfono",
+  "openApp.fallback.play": "Descargar en Google Play",
+  "openApp.fallback.retry": "Después, vuelve y toca Abrir en la app otra vez",
+  "openApp.fallback.scoreInBrowser": "Anotar en el navegador"
 }

@@ -42,4 +42,25 @@ describe("proxy: the signed-in hint", () => {
     }
     expect(checked).toBe(4);
   });
+
+  // Open in app (spec 2026-11-25 §5.3): the fallback pages under /app set no cookies.
+  it("the /app fallback pages never carry a Set-Cookie, whatever the cookies say — counted", () => {
+    let checked = 0;
+    for (const path of ["/app", "/app/stream", "/app/score", "/app/day", "/app/score/"]) {
+      for (const cookie of ["seazn_session=tok", `${SESSION_HINT_COOKIE}=1`]) {
+        expect(page(path, cookie).headers.getSetCookie(), `${path} ${cookie}`).toEqual([]);
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(10);
+  });
+
+  it("a path that only looks like /app is an ordinary app page: the hint is still set — counted", () => {
+    let checked = 0;
+    for (const path of ["/apps", "/application/score", "/o/app"]) {
+      expect(hintSet(page(path, "seazn_session=tok")), path).toHaveLength(1);
+      checked += 1;
+    }
+    expect(checked).toBe(3);
+  });
 });

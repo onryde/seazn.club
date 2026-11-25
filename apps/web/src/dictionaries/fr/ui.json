@@ -9271,5 +9271,9 @@
   "divBuilder.format.drawCanRefuse": "Le tirage de la phase finale peut être refusé au placement : un meilleur deuxième (ou meilleur troisième, etc.) peut partager la poule de son adversaire du premier tour. Qualifiez le même nombre dans chaque poule pour l'éviter.",
   "runsheet.round.loading": "Chargement de ce tour…",
   "runsheet.round.loadFailed": "Les matchs de ce tour n’ont pas pu être chargés.",
-  "runsheet.round.retry": "Réessayer"
+  "runsheet.round.retry": "Réessayer",
+  "openApp.fallback.title": "Seazn Club n'est pas encore sur ce téléphone",
+  "openApp.fallback.play": "Télécharger sur Google Play",
+  "openApp.fallback.retry": "Revenez ensuite et touchez à nouveau Ouvrir dans l'application",
+  "openApp.fallback.scoreInBrowser": "Saisir le score dans le navigateur"
 }

@@ -9271,5 +9271,9 @@
   "divBuilder.format.drawCanRefuse": "De loting van de knock-outfase kan bij het plaatsen worden geweigerd: een beste nummer twee (of beste nummer drie, enzovoort) kan in dezelfde poule zitten als zijn tegenstander in de eerste ronde. Laat uit elke poule evenveel doorgaan om dit te voorkomen.",
   "runsheet.round.loading": "Deze ronde laden…",
   "runsheet.round.loadFailed": "De wedstrijden van deze ronde konden niet laden.",
-  "runsheet.round.retry": "Opnieuw"
+  "runsheet.round.retry": "Opnieuw",
+  "openApp.fallback.title": "Seazn Club staat nog niet op deze telefoon",
+  "openApp.fallback.play": "Downloaden via Google Play",
+  "openApp.fallback.retry": "Kom daarna terug en tik opnieuw op Openen in de app",
+  "openApp.fallback.scoreInBrowser": "In de browser scoren"
 }

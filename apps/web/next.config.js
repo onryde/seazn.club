@@ -171,6 +171,14 @@ const nextConfig = {
         ],
       },
       {
+        // The "Open in app" fallback pages (spec 2026-11-25 §5.3): their URL
+        // may carry a live credential, so they send no referrer at all. After
+        // the catch-all and with the same key, so it REPLACES that value.
+        // app-fallback-page.test.ts and e2e/open-in-app.spec.ts pin it.
+        source: "/app/:path*",
+        headers: [{ key: "Referrer-Policy", value: "no-referrer" }],
+      },
+      {
         // LAST: replaces the catch-all's Permissions-Policy (see above).
         source: MATCH_ROOM_SOURCE,
         headers: [
