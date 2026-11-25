@@ -39,7 +39,7 @@ export interface ReceiptFacts {
   planCap: number | null;
   held: number;
   rounds: number;
-  /** The division's camera setting says the Fair-play camera is on (P9): what a `pay` or `payAndOpen` receipt's camera answer opens at. */
+  /** The division's camera setting says the Fair-play camera is on (P9): what EVERY receipt's camera answer opens at (fix I2). */
   cameras: boolean;
   /** The paid package, when there is one. */
   paid: { size: OnlineSize; camerasPaid: boolean } | null;
@@ -62,8 +62,8 @@ export interface OnlineReceiptProps {
   /** The words of a refusal the ROUND itself named (Match Day: 409 changed, 402 frozen, 403 off), by the code the open answered with; null for a code it does
    *  not name. Drawn in place of the payment sentence (spec §8.5). The division page has no round in play and passes nothing. */
   failureWords?: (code: string) => string | null;
-  /** The camera answer to open at instead of the default (the division's setting; on `change`, the paid package's): the answer a checkout return carried
-   *  back from buying credits. */
+  /** The camera answer to open at instead of the default (the division's setting, in every mode): the answer a checkout return carried back from
+   *  buying credits. */
   cameras?: boolean;
   /** Reads the quote for a choice (`GET /divisions/{id}/online-package`). */
   readQuote: (choice: ReceiptChoice) => Promise<ReceiptQuote>;
@@ -87,7 +87,9 @@ export function OnlineReceipt(props: OnlineReceiptProps): ReactNode {
       size: props.size,
       quote: props.quote,
       paid: facts.paid,
-      cameras: props.cameras ?? (mode === "change" && facts.paid !== null ? facts.paid.camerasPaid : facts.cameras),
+      // Every mode opens at the division's SETTING, a change included (fix I2): a change opened at what was paid re-charged a camera turned
+      // off in Division settings, and re-wrote Required, on a confirm that only meant to resize. A change still quotes against what was paid (R6).
+      cameras: props.cameras ?? facts.cameras,
     }),
   );
   /** A ref, so a second tap landing on one render's handler - before the first has re-rendered `submitting` - is refused too. */

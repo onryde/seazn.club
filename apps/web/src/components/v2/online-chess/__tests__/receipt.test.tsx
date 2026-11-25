@@ -261,8 +261,10 @@ describe("change mode: a paid size moved up or down (spec 8.6)", () => {
 
 });
 
-// Task 15 (owner 2026-11-25): EVERY receipt asks "Fair-play camera: Yes / No" - a pair of radios, opening at the division's camera setting
-// (`pay`, `payAndOpen`) or the paid package's (`change`). The total follows the answer; the confirm sends it. Expected totals are the price leaf's.
+// Task 15 (owner 2026-11-25): EVERY receipt asks "Fair-play camera: Yes / No" - a pair of radios, opening at the division's camera setting in
+// EVERY mode (fix I2: a change used to open at what was paid, so a camera turned off in Division settings was re-charged, and Required
+// re-written, by a confirm that only meant to resize). A change still quotes against what was paid (R6). The total follows the answer; the
+// confirm sends it. Expected totals are the price leaf's.
 describe("the Fair-play camera answer, on every receipt (Task 15)", () => {
   const PAID = { size: 64 as OnlineSize, camerasPaid: false };
   const CH = { paid: PAID, storedSize: 64 as OnlineSize };
@@ -278,7 +280,7 @@ describe("the Fair-play camera answer, on every receipt (Task 15)", () => {
   });
   const title = (m: ReturnType<typeof make>) => propsOf(m.els()[0]!).title;
 
-  it("is on every receipt, and opens at the division's setting (pay, payAndOpen) or the PAID package's (change) - sweep", () => {
+  it("is on every receipt, and opens at the division's SETTING in every mode, a change included (fix I2) - sweep", () => {
     let n = 0;
     for (const mode of ["pay", "payAndOpen"] as const) {
       for (const cameras of [false, true]) {
@@ -289,14 +291,46 @@ describe("the Fair-play camera answer, on every receipt (Task 15)", () => {
         n += 1;
       }
     }
-    // change: the PAID package's answer, not the division's setting (the settings may have turned it off since; the package holds it)
-    for (const [paid, divisionOn] of [[PAID, true], [PAID_WITH, false]] as const) {
-      const m = make({ mode: "change", size: null, facts: { paid, storedSize: 64, cameras: divisionOn } });
-      expect(checked(m), `change ${paid.camerasPaid}`).toEqual({ yes: paid.camerasPaid, no: !paid.camerasPaid });
-      expect(m.readQuote, "the answer the package holds at its own size is no change: nothing is read").not.toHaveBeenCalled();
-      n += 1;
+    // change, from the chip (no size chosen): the SETTING, whatever was paid. Where the two agree the paid size at that answer is no change
+    // and nothing is read (R6); where they differ the receipt opens on the camera-only change the setting asks for, at the paid size.
+    for (const paid of [PAID, PAID_WITH]) {
+      for (const divisionOn of [false, true]) {
+        const label = `change: paid camera ${paid.camerasPaid}, setting ${divisionOn ? "on" : "off"}`;
+        const m = make({ mode: "change", size: null, facts: { paid, storedSize: 64, cameras: divisionOn } });
+        expect(checked(m), label).toEqual({ yes: divisionOn, no: !divisionOn });
+        if (paid.camerasPaid === divisionOn) expect(m.readQuote, `${label}: no change, nothing read`).not.toHaveBeenCalled();
+        else expect(m.readQuote, `${label}: the camera-only change, at the paid size`).toHaveBeenCalledWith({ size: 64, cameras: divisionOn });
+        n += 1;
+      }
     }
-    expect(n).toBe(6);
+    expect(n).toBe(8);
+  });
+
+  it("paid 16 WITH the camera, then Off in Division settings: Change to 32 opens at No and quotes 32-without minus what was paid; Yes re-charges no camera (fix I2)", async () => {
+    const paid16 = { size: 16 as OnlineSize, camerasPaid: true };
+    const read = vi.fn(async (c: { size: OnlineSize; cameras: boolean }) => spec({ size: c.size, cameras: c.cameras, paid: paid16, monthly: 20 }));
+    const m = make({ mode: "change", size: 32, facts: { paid: paid16, storedSize: 16, cameras: false }, readQuote: read });
+    expect(checked(m), "the setting: No").toEqual({ yes: false, no: true });
+    expect(read).toHaveBeenLastCalledWith({ size: 32, cameras: false });
+    await flush();
+    const noOwed = packagePrice(32, false) - packagePrice(16, true);
+    expect(noOwed, "premise: 32 without the camera costs what 16 with it did").toBe(0);
+    expect(m.onConfirm).not.toHaveBeenCalled();
+    answer(m, true);
+    expect(read).toHaveBeenLastCalledWith({ size: 32, cameras: true });
+    await flush();
+    const yesOwed = packagePrice(32, true) - packagePrice(16, true);
+    expect(confirmLabel(m), "Yes: the size's difference at the camera rate - the camera paid at 16 is counted").toBe(`Pay ${yesOwed} credits`);
+    await m.press("online-receipt-confirm");
+    expect(m.onConfirm).toHaveBeenCalledWith({ size: 32, expectedOwed: yesOwed, cameras: true });
+  });
+
+  it("paid WITH the camera, setting Off, the chip's change (no size): Yes at the paid size is no change - 'Choose a size', nothing to pay (R6)", async () => {
+    const m = make({ mode: "change", size: null, facts: { ...CH_WITH, cameras: false }, readQuote: readAt(PAID_WITH) });
+    answer(m, true);
+    await flush();
+    expect(confirmLabel(m)).toBe("Choose a size");
+    expect(m.has("online-receipt-row-total")).toBe(false);
   });
 
   it("pay: Yes reads the camera price, the total follows it, and the confirm sends cameras: true; No goes back to the price without it", async () => {

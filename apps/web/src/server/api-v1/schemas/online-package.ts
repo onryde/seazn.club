@@ -17,8 +17,8 @@ export const OnlineSizeS = z.literal(ONLINE_SIZES);
 export const ONLINE_MAX_OWED = Math.max(...ONLINE_SIZES.flatMap((s) => [packagePrice(s, false), packagePrice(s, true)]));
 
 /** GET /divisions/{id}/online-package: the size asked about, and the organiser's Fair-play camera answer (`cameras`, Task 15): the
- *  receipt's Yes or No, priced as given (paying writes it to the division's camera policy). Absent: the division's camera state as it
- *  stands. Query values are strings: `size` is coerced to the ladder, `cameras` is `true` or `false` (absent stays absent). */
+ *  receipt's Yes or No, priced as given (paying writes it to the division's camera policy). Absent: the division's camera SETTING as
+ *  it stands, never a camera price the package holds (Task 15 fix I2). Query values are strings: `size` is coerced to the ladder, `cameras` is `true` or `false` (absent stays absent). */
 export const OnlinePackageQuoteQuery = z.object({
   size: z.coerce.number().pipe(OnlineSizeS),
   cameras: z.enum(["true", "false"]).optional().transform((v) => (v === undefined ? undefined : v === "true")),
@@ -27,7 +27,7 @@ export type OnlinePackageQuoteQuery = z.infer<typeof OnlinePackageQuoteQuery>;
 
 /** POST /divisions/{id}/online-package: what the organiser confirmed. A size, the total the receipt showed (positive to pay,
  *  negative to return), the Fair-play camera answer the receipt showed (`cameras`: paying writes it to the division's camera policy
- *  in the same transaction; absent keeps the camera state as it stands), and — on a move down — the credits the receipt said would
+ *  in the same transaction; absent pays at the division's camera setting as it stands and writes no policy), and — on a move down — the credits the receipt said would
  *  NOT come back. Strict: the server derives the rounds and the places itself, so any other field is refused rather than ignored.
  *  The published examples are whole bodies, priced from the leaf's table (review m9: the field-by-field example put a forfeit
  *  beside a positive total, a body no receipt shows): a payment (16 with cameras), and a move down (32 with cameras paid,

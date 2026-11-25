@@ -13,7 +13,7 @@
 //   * included rounds: P1, log2(size) + 2: 16 -> 6, 32 -> 7;
 //   * the non-opening results of openRound: `OPEN_ROUND_REFUSALS` plus `already_open`, read from lib/open-round.ts.
 //
-// Mutant table (each run once by hand from a `cp` backup, the suite's total pinned (27, then 29 with review m4); all killed):
+// Mutant table (each run once by hand from a `cp` backup, the suite's total pinned (27, then 29 with review m4, 45 with Task 15 fix round 1); all killed):
 //   G1   an unpaid row opens (the cover check and the freeze dropped)  -> 15, "unpaid: 402 ..." first
 //   G2   "paid" judged by paid_at alone, not by cover                  -> the three "paid but not covering" cases
 //   G3   the gate (and its payment) moved to the top of the transaction, before the decision -> "... does not open writes no debit"
@@ -27,7 +27,13 @@
 //   G10  the pay-and-open format gate dropped (beforeCharge)            -> "pay and open on a legacy league ..."
 //   G11  `next` never offered                                           -> "Swiss rounds raised ...", "places held grown ..."
 //   G12  the payment committed on a transaction of its own (not the open's) -> "a failure AFTER the payment ... rolls it back"
-//   M4   the gate put back before the invite fan-out (the money lock held across it) -> "the org money lock is not held ..."
+//   M4   the gate put back before the invite fan-out (the money lock held across it) -> "a first open that pays nothing ..."
+//   FR1  the first open's payment put back AFTER the stamp, in the gate (Task 15 fix I1) -> "Yes on an unpaid Off division ...", "No on an
+//        unpaid Required division ..." (the stagger under the old policy), "a first open that PAYS ..."
+//   FR2  the gate ignores the payment made before the stamp (`paid`)       -> "pay and open: one debit ...", "Yes on an unpaid Off ..."
+//   FR3  a frozen row's answer drops the ignored early payment            -> "a grandfathered row ..."
+//   FR5  the no-answer quote back at the paid camera (fix I2)              -> "a camera paid for, then turned Off in Division settings ..."
+//   FR8  a next size that costs nothing more said as "0 credits more"      -> "a camera paid for, then turned Off in Division settings ..."
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeliverMessage } from "@/server/email-outbox/transport";
 import { stubOutboxEnv, type SentInvite } from "@/server/usecases/__tests__/_invite-mail";
@@ -339,6 +345,26 @@ describe.skipIf(!HAS_DB)("Open round: the payment door (Online Chess credits §7
         `The Online Chess package paid for this division (size 16) no longer covers it (the division plays ${raised} Swiss rounds and size 16 includes ${INCLUDED[16]}): size 32 costs 1 credit more`,
       );
       expect(await stampsOf(s.stageId)).toBe(0);
+    }, 120_000);
+
+    it("a camera paid for, then turned Off in Division settings, and the rounds raised: the 402's quotes are at the SETTING - the next size never re-charges the camera (fix I2)", async () => {
+      const s = await seedOnlineSwiss({ players: 4, onlinePackage: "unpaid" });
+      await payOnlinePackage(s.owner, s.divisionId, await confirmFor(s.owner, s.divisionId, 16, true));
+      expect([(await liveOf(s.divisionId)).cameras_paid, await divisionPolicyOf(s.divisionId)], "premise: paid with the camera, Required").toEqual([true, "required"]);
+      // The settings door turns it off for nothing (P19: no refund, back on is free).
+      await patchDivision(s.owner, s.divisionId, { camera_policy: "off" });
+      expect(await divisionPolicyOf(s.divisionId), "premise: the setting is Off").toBe("off");
+      await sql`update stages set config = config || ${sql.json({ rounds: INCLUDED[16] + 1 } as never)} where id = ${s.stageId}`;
+      const e = await refusal(openRound({ stageId: s.stageId, roundNo: 1, actorUserId: s.ownerUserId }));
+      expect([e.status, e.code]).toEqual([402, "ONLINE_CHESS_UNPAID"]);
+      const q = quoteIn(e);
+      expect([q.size, q.cameras, q.owed], "the stored size at the setting: the camera price is what would come back").toEqual([16, false, gcPrice(16) - gcPrice(16, true)]);
+      const next = nextIn(e);
+      expect([next?.size, next?.cameras, next?.owed], "32 at the setting, against the 16-with-camera paid").toEqual([32, false, gcPrice(32) - gcPrice(16, true)]);
+      expect(gcPrice(32) - gcPrice(16, true), "premise: 32 without the camera costs what 16 with it did").toBe(0);
+      expect(e.message, "a next size that costs nothing more says so, never '0 credits more'").toBe(
+        `The Online Chess package paid for this division (size 16) no longer covers it (the division plays ${INCLUDED[16] + 1} Swiss rounds and size 16 includes ${INCLUDED[16]}): size 32 costs nothing more`,
+      );
     }, 120_000);
 
     it("places held grown past the paid size: refused, and the next size's difference is offered", async () => {

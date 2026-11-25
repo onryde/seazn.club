@@ -29,11 +29,12 @@ import "server-only";
 //  * THE CAMERA ANSWER (Task 15, owner 2026-11-25). Every receipt asks "Fair-play camera: Yes / No" and sends the answer
 //    (`cameras`). The quote prices it as given, and the payment WRITES it to the division's own camera policy (the "Camera during
 //    online play" setting, `writeDivisionCameraChoice`: the division save's own gate and audit) on this transaction, after the
-//    package row, so the receipt and the settings never disagree and a "No" is never cheaper without the camera actually going
+//    package row, so a payment always leaves the setting saying what it paid for and a "No" is never cheaper without the camera actually going
 //    off. Turning the camera off on a package paid with it, before the freeze, is a move down: the difference comes back by P21,
 //    exactly as a smaller size's does. After the write the division is asked again (`derivedCameras`) and must say the answer, or
 //    the whole payment rolls back (a named 500: "cannot happen" once the quote has checked the answer fits). A body with no answer
-//    keeps the camera state as it stands and writes no policy.
+//    pays at the division's camera SETTING as it stands (fix I2: a camera turned off in Division settings comes back) and writes no
+//    policy.
 //  * Then the stored registration capacity follows the size down (§7.4 item 2, §11), and a move down runs the settle step (§7.5)
 //    on the same transaction, under the same money lock.
 import type { CameraPolicy } from "@/lib/camera-policy";
@@ -186,7 +187,7 @@ export async function payOnlinePackageInTx(
     returned = back.pack + back.monthly;
   }
   // The row in ONE statement (V560's CHECKs hold per statement). `cameras_paid` is the quote's camera figure: the organiser's answer,
-  // or (no answer) the state as it stands, a camera price paid before included. paid_at and paid_by keep the FIRST payment. Written only while
+  // or (no answer) the division's camera setting as it stands. paid_at and paid_by keep the FIRST payment. Written only while
   // the row is still writable (not frozen, not refunded) and asserted to be exactly that one row: the row is locked and the
   // quote refused a frozen one, so a miss is a writer that changed it on this transaction — a named 500, never a silent payment.
   const written = await tx`

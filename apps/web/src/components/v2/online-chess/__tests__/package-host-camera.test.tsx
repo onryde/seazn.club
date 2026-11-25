@@ -32,13 +32,14 @@ vi.mock("@/components/buy-stream-credits", () => ({ BuyStreamCredits: () => null
 vi.mock("@/lib/online-package-client", () => ({ payPackage: (d: string, b: PayBody) => pay(d, b), readPackageQuote: (d: string, c: unknown) => read(d, c) }));
 
 const paidAt = (size: OnlineSize, camerasPaid: boolean) => ({ size, paid: { size, camerasPaid }, frozen: false });
-const hostProps = (size: OnlineSize, camerasPaid = false): OnlinePackageHostProps => ({
+/** The division's camera SETTING defaults to what was paid (the two agree until Division settings turns a paid camera off: `setting`). */
+const hostProps = (size: OnlineSize, camerasPaid = false, setting = camerasPaid): OnlinePackageHostProps => ({
   divisionId: "div-1",
   stored: paidAt(size, camerasPaid),
   planCap: null,
   held: 3,
   rounds: 2,
-  cameras: false,
+  cameras: setting,
   viewerPlan: "pro",
   canEdit: true,
   request: null,
@@ -52,8 +53,8 @@ const flush = async () => {
 };
 
 /** The organiser's path: the host, the chip's Change size, and the receipt the host opened - rendered with the props the HOST gave it. */
-function fromTheChip(size: OnlineSize, camerasPaid = false) {
-  const host = renderIsland(OnlinePackageHost, hostProps(size, camerasPaid));
+function fromTheChip(size: OnlineSize, camerasPaid = false, setting = camerasPaid) {
+  const host = renderIsland(OnlinePackageHost, hostProps(size, camerasPaid, setting));
   const chip = host.tree().find((e) => e.type === OnlinePaidChip)!;
   (propsOf(chip).onChangeSize as () => void)();
   const opened = host.tree().find((e): e is ReactElement => e.type === OnlineReceipt);
@@ -82,7 +83,7 @@ let current: OnlineSize = 32;
 let currentCameras = false;
 
 describe("the camera answer at the already-paid size, from the paid chip's Change size (spec 8.6)", () => {
-  it("the receipt the chip opens is a change receipt with no size chosen, the answer at what the package holds, and nothing read", () => {
+  it("the receipt the chip opens is a change receipt with no size chosen, the answer at the division's setting (here what the package holds), and nothing read", () => {
     let checked = 0;
     for (const camerasPaid of [false, true]) {
       current = 64;
@@ -91,11 +92,24 @@ describe("the camera answer at the already-paid size, from the paid chip's Chang
       const r = fromTheChip(64, camerasPaid);
       expect(r.given).toMatchObject({ mode: "change", size: null, facts: { paid: { size: 64, camerasPaid } } });
       expect(r.label(), "the button waits for a choice").toBe(EN["onlineChess.receipt.confirm.choose"]);
-      expect(r.yesChecked(), `paid ${camerasPaid}: the answer the package holds`).toBe(camerasPaid);
+      expect(r.yesChecked(), `paid ${camerasPaid}: the setting, which says what the package holds`).toBe(camerasPaid);
       expect(read, "nothing is read before a choice").not.toHaveBeenCalled();
       checked += 1;
     }
     expect(checked).toBe(2);
+  });
+
+  it("paid WITH the camera, then Off in Division settings: the chip's receipt opens at the SETTING (No) and reads the camera refund at the paid size (fix I2)", async () => {
+    current = 64;
+    currentCameras = true;
+    const r = fromTheChip(64, true, false);
+    expect(r.yesChecked(), "the setting, not what was paid").toBe(false);
+    expect(read).toHaveBeenCalledWith("div-1", { size: 64, cameras: false });
+    await flush();
+    expect(r.label()).toBe(offText(packagePrice(64, true) - packagePrice(64, false)));
+    r.answer(true);
+    await flush();
+    expect(r.label(), "Yes at the paid size over a paid camera: no change (R6)").toBe(EN["onlineChess.receipt.confirm.choose"]);
   });
 
   it("Yes over a package paid without it: the quote is read for the PAID size with the camera, the total is the camera difference, the door gets cameras: true", async () => {

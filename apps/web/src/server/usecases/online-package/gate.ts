@@ -104,8 +104,9 @@ function unpaidMessage(row: PackageRow, quote: PackageQuote, next: PackageQuote 
   }
   if (row.paidAt !== null) {
     const why = refusalReason(row.size, refusalFor(row.size, { ...facts, planCap: null }, false), facts);
+    // `next` is quoted at the division's camera setting (fix I2): a camera paid for and turned off since can make it cost nothing more.
     const offer = next !== null
-      ? `size ${next.size} costs ${creditsText(next.owed)} more`
+      ? next.owed > 0 ? `size ${next.size} costs ${creditsText(next.owed)} more` : `size ${next.size} costs nothing more`
       : quote.refusal === null ? `${quote.owed} more ${quote.owed === 1 ? "credit is" : "credits are"} needed` : null;
     return `The Online Chess package paid for this division (size ${row.size}) no longer covers it${why === null ? "" : ` (${why})`}${offer === null ? "" : `: ${offer}`}`;
   }

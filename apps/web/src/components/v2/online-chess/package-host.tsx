@@ -56,7 +56,7 @@ type Open = {
   mode: ReceiptMode;
   size: OnlineSize | null;
   n: number;
-  /** The camera answer to open at (a checkout return's); absent: the receipt's own default (the division's setting, or the paid package's). */
+  /** The camera answer to open at (a checkout return's); absent: the receipt's own default (the division's setting, in every mode). */
   cameras?: boolean;
 };
 

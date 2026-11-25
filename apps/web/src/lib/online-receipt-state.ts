@@ -14,8 +14,8 @@
 //  R5. Any other failure keeps the receipt open on the same quote, with the code, and allows another press (the pay door is exactly-once by
 //      state and the confirmed total: a repeated press cannot pay twice).
 //  R6. Every receipt asks "Fair-play camera: Yes / No" (Task 15, owner 2026-11-25), and the answer is part of the choice a quote is read for (R1):
-//      the total follows it. It opens at the division's camera setting (`pay`, `payAndOpen`) or the paid package's (`change`), or at the answer a
-//      checkout return carried back. A `change` receipt opens with no size chosen and does not list the paid size (a size is changed TO another), so
+//      the total follows it. It opens at the division's camera SETTING in every mode, a change included (fix I2), or at the answer a checkout
+//      return carried back; a change is still quoted against what was PAID (No at the paid size over a paid camera is the camera refund, Yes 0). A `change` receipt opens with no size chosen and does not list the paid size (a size is changed TO another), so
 //      a camera answer with the size unchanged is quoted AT the paid size; the paid size at the paid camera state is no change at all (nothing is
 //      read, nothing can be confirmed). The answer moves with the size and on its own alike, and one confirm pays the net of both.
 import type { OnlineSize } from "@/lib/online-chess-package";
@@ -56,7 +56,7 @@ export function initialReceipt(a: {
   quote: ReceiptQuote | null;
   /** The paid package a `change` receipt changes (R6); ignored by the other modes. */
   paid?: { size: OnlineSize; camerasPaid: boolean } | null;
-  /** The camera answer the receipt opens on (R6): the division's camera setting, the paid package's, or a checkout return's. */
+  /** The camera answer the receipt opens on (R6): the division's camera setting (every mode), or a checkout return's. */
   cameras: boolean;
 }): ReceiptState {
   const paid = a.mode === "change" ? (a.paid ?? null) : null;

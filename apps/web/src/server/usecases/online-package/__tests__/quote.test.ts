@@ -32,7 +32,7 @@
 //   Q8b  precedence: below_held before frozen                    -> "refusal precedence"
 //   Q8c  precedence: rounds before rounds_above_max              -> "refusal precedence", "rounds sweep"
 //   Q8d  precedence: plan after the rounds refusals              -> "refusal precedence"
-//   Q9   cameras drop `row.camerasPaid` (no answer: a paid camera lowered) -> "paid sweep", "the camera ANSWER"
+//   Q9   no answer quoted at the paid camera, not the setting (fix I2's bug back) -> "paid sweep", "the camera ANSWER", "paid 16 WITH"
 //   Q10  cameras drop the answer `cameras`                       -> "unpaid sweep", "paid sweep", "the camera ANSWER"
 //   Q10b the answer's stage check removed (assertCameraChoiceFits) -> "an answer a stage's own policy contradicts"
 //   Q10c the stage check run without an answer                    -> "an answer a stage's own policy contradicts" (no answer)
@@ -485,9 +485,9 @@ describe.skipIf(!HAS_DB)("quoteLocked: price and what is owed", () => {
           for (const cameras of [false, true]) {
             for (const answer of [undefined, false, true]) {
               const q = await quote(r, size, { facts: { cameras }, cameras: answer });
-              // P19 as amended by Task 15: with no answer a paid camera price is kept (a size change does not drop it); the receipt's
-              // answer is what the package will be, so No returns the camera price and Yes charges it.
-              const wantCameras = answer ?? (cameras || paidCameras);
+              // Task 15 fix I2: the answer is what the package will be (No returns the camera price, Yes charges it); with no answer the
+              // quote is at the division's SETTING as it stands - never the camera a paid row holds - exactly as the receipt opens.
+              const wantCameras = answer ?? cameras;
               const price = packagePrice(size, wantCameras);
               const owed = price - packagePrice(paidSize, paidCameras);
               const label = `paid ${paidSize}/${paidCameras} → ${size} cameras ${cameras} answer ${answer}`;
@@ -522,7 +522,7 @@ describe.skipIf(!HAS_DB)("quoteLocked: price and what is owed", () => {
     expect(await quote(r, 32)).toMatchObject({ price: 2, owed: 0, take: null, back: null });
   });
 
-  it("the camera ANSWER prices exactly what it says: Yes charges the camera, No returns a paid one (a move down), no answer keeps P19", async () => {
+  it("the camera ANSWER prices exactly what it says: Yes charges the camera, No returns a paid one (a move down), no answer is the setting (fix I2)", async () => {
     // Paid at 64 WITHOUT cameras (4 credits).
     const without = await paidRig({ size: 64, cameras: false, pack: 20 });
     const base = await quote(without, 64);
@@ -534,10 +534,9 @@ describe.skipIf(!HAS_DB)("quoteLocked: price and what is owed", () => {
     expect(await quote(without, 64, { facts: { cameras: true } })).toMatchObject({ cameras: true, price: 8, owed: 4 });
     // No over a policy that is on: the answer wins (paying it writes the setting off).
     expect(await quote(without, 64, { facts: { cameras: true }, cameras: false })).toMatchObject({ cameras: false, price: 4, owed: 0 });
-    // Paid WITH cameras (8): with no answer the camera price stays, whatever the policy says (P19), and nothing is owed.
+    // Paid WITH cameras (8): the camera the setting says, or a Yes, is no change - nothing is owed.
     const withCams = await paidRig({ size: 64, cameras: true, pack: 20 });
     for (const [label, o] of [
-      ["no answer, policy off", {}],
       ["no answer, policy on", { facts: { cameras: true } }],
       ["Yes", { cameras: true }],
       ["Yes, policy on", { cameras: true, facts: { cameras: true } }],
@@ -548,6 +547,24 @@ describe.skipIf(!HAS_DB)("quoteLocked: price and what is owed", () => {
     const off = await quote(withCams, 64, { cameras: false });
     expect(off).toMatchObject({ size: 64, cameras: false, price: 4, owed: -4, take: null, back: { pack: 4, monthly: 0, forfeited: 0 }, refusal: null });
     expect(await quote(withCams, 64, { cameras: false, facts: { cameras: true } }), "the answer beats a policy that is on").toMatchObject({ owed: -4 });
+    // Fix I2: the camera paid for and then turned OFF in Division settings. No answer is the setting (off), so the quote is the camera
+    // refund, as the receipt's No (which it opens at) is - never the paid camera kept, which a confirm would have re-charged at a new size.
+    expect(await quote(withCams, 64), "no answer, policy off: the setting, the camera price back").toMatchObject({ cameras: false, price: 4, owed: -4 });
+  });
+
+  it("paid 16 WITH the camera, then the setting turned Off: a change to 32 is quoted at the setting (No) against what was paid; Yes re-charges no camera already paid (fix I2)", async () => {
+    const r = await paidRig({ size: 16, cameras: true, pack: 20 });
+    const paid = packagePrice(16, true);
+    // The setting is off (every rig's competition, the division storing nothing): the answer the receipt opens at is No.
+    expect(await quote(r, 32), "no answer = the setting = No").toMatchObject({ cameras: false, owed: packagePrice(32, false) - paid });
+    expect(await quote(r, 32, { cameras: false }), "the receipt's No: the same quote").toMatchObject({ cameras: false, owed: packagePrice(32, false) - paid });
+    expect(packagePrice(32, false) - paid, "premise: 32 without the camera costs what 16 with it did").toBe(0);
+    // Yes at 32: the size's difference at the camera rate, the camera paid at 16 counted - not the camera again on top.
+    expect(await quote(r, 32, { cameras: true }), "Yes").toMatchObject({ cameras: true, owed: packagePrice(32, true) - paid });
+    expect(packagePrice(32, true) - paid, "Yes adds only the size, not a second camera").toBeLessThan(packagePrice(32, true) - packagePrice(16, false));
+    // At the paid size: Yes is no change at all (0); the setting (No) is the camera refund.
+    expect(await quote(r, 16, { cameras: true }), "Yes at the paid size").toMatchObject({ owed: 0, take: null, back: null });
+    expect(await quote(r, 16), "the setting at the paid size").toMatchObject({ cameras: false, owed: packagePrice(16, false) - paid });
   });
 
   it("an answer a stage's own policy contradicts is refused by name (the division setting cannot carry it); no answer is never refused", async () => {

@@ -10,8 +10,8 @@ import "server-only";
 //    and at most the organiser's Fair-play camera answer (`cameras`, Task 15). The answer is priced as given because paying WRITES
 //    it to the division's own camera policy in the same transaction (pay.ts): a "No" is cheaper only because it turns the camera
 //    off. An answer the division's own policy cannot carry (a stage that sets its own camera, which no door writes today) is
-//    refused by name, never priced. With no answer, the camera state is the division's as it stands: the policy's, or a camera
-//    price already paid.
+//    refused by name, never priced. With no answer, the camera state is the division's SETTING as it stands (P9) - never a camera
+//    price a paid row holds (Task 15 fix I2): the receipt opens at the setting too, so the two quote alike.
 //  * A quote WRITES and LOCKS nothing. In particular it does not roll the month: `debitForPackage` rolls under the money lock
 //    when it pays. The balance and the split a quote shows are therefore what the org WILL hold once that roll has run, projected
 //    read-only by the stream ledger's own rule (`projectMonthlyRollDelta`, the Settings rail's projection): an org that has not
@@ -167,9 +167,11 @@ export async function quoteLocked(
 
   const now = await transactionNow(tx);
   // Task 15: the organiser's answer, when given, is the camera state the payment would leave (and write to the division's policy);
-  // the division must be able to carry it. No answer: the camera state as it stands (P9), a camera price already paid included.
+  // the division must be able to carry it. No answer: the division's camera SETTING as it stands (P9) - never the camera price a
+  // paid row holds (fix I2): a camera paid for and then turned off in Division settings is quoted off, so paying at the setting
+  // returns its price, exactly as the receipt (which opens at the setting) quotes "No".
   if (a.cameras !== undefined) await assertCameraChoiceFits(tx, a.divisionId, a.cameras);
-  const cameras = a.cameras ?? (facts.cameras || row?.camerasPaid === true);
+  const cameras = a.cameras ?? facts.cameras;
   const price = packagePrice(a.size, cameras);
   const paid = row !== null && row.paidAt !== null ? row : null;
   // Paid: the difference to what the row's own size and camera state cost (P13, P19). V560's CHECK ties `cameras_paid` to
