@@ -221,6 +221,9 @@ async function openViewer(browser: Browser, rig: Rig): Promise<Viewer> {
     check();
   });
   const native = await playsHlsNatively(page);
+  // Task 52: the pinned Chromium says "maybe" to HLS but runs hls.js (MSE), and the player takes hls.js wherever it runs: every address
+  // below is witnessed as hls.js's own request to the stand-in, not as the element's `src`.
+  expect(native, "premise: this browser is on the hls.js path").toBe(false);
   const player = page.locator('[data-testid="seazn-player"] video');
   return {
     page,

@@ -16,10 +16,28 @@
 // What this does NOT do: raise ABR's climb. Whether a fullscreen viewer then sits on 1080p still depends on ABR's bandwidth estimate
 // against the 1080p rung's advertised BANDWIDTH (the stg peak was ~10.9 Mbps, with `abrBandWidthUpFactor` 0.7): a link under ~15 Mbps
 // stays below it. The ABR factors are left as hls.js ships them until the peak is re-measured after compositor C1.
-// Safari and iOS play the master playlist themselves (seazn-playback.ts `native`): none of this applies there; the platform picks.
+// Task 52 (owner "yes", 2026-11-25): Chrome 157 says `canPlayType(HLS)` is "maybe", so it took the NATIVE path, where none of this applied,
+// and sat 3.8-8.5 s (avg ~6.5 s, about 2 segments) behind its newest buffered data. hls.js is now used wherever `Hls.isSupported()` is
+// true (seazn-playback.ts), so this config reaches Chrome, Firefox, Edge, and Safari/iOS 17.1+ (ManagedMediaSource). Only a browser hls.js
+// cannot run in, and that plays HLS itself, still has the platform choose.
+// The live edge, from the same stg measurement (session 16939105): CF's live playlist has `#EXT-X-TARGETDURATION:4`, segments
+// 3.0-3.33 s, 8 in the window, no PROGRAM-DATE-TIME. Each key is hls.js 1.7.4's (`dist/hls.d.ts` HlsConfig; defaults in `src/config.ts`):
+//   - `liveSyncDurationCount` (default 3): start, and hold, this many TARGET durations behind the live edge. 1 = about one segment
+//     (4 s here, down from 12 s on hls.js's own default). hls.js raises the target by `liveSyncOnStallIncrease` (default 1 s, at most one
+//     target duration) per stall, so a slow link backs off by itself rather than rebuffering at 1 segment forever.
+//   - `liveMaxLatencyDurationCount` (default Infinity): past this many target durations (16 s here) behind the edge, hls.js jumps back to
+//     the sync point after a stall (stream-controller.ts `synchronizeToLiveEdge`), so a viewer never drifts to 20 s+. hls.js refuses a
+//     value at or below `liveSyncDurationCount` (config.ts `mergeConfig`), and one set without the other.
+//   - `maxLiveSyncPlaybackRate` (default 1 = off): the fastest the element is played to close a gap to the sync point, 1.1x here, a gentle
+//     catch-up instead of a jump (latency-controller.ts `onTimeupdate`; it acts under `lowLatencyMode`, hls.js's default true).
 
-/** Config merged into the `new Hls({...})` options. Source: hls.js 1.7.4 `capLevelToPlayerSize` (default false). */
-export const SEAZN_HLS_PLAYER_CONFIG = { capLevelToPlayerSize: true } as const;
+/** Config merged into the `new Hls({...})` options. Sources: see above; `capLevelToPlayerSize` default false. */
+export const SEAZN_HLS_PLAYER_CONFIG = {
+  capLevelToPlayerSize: true,
+  liveSyncDurationCount: 1,
+  liveMaxLatencyDurationCount: 4,
+  maxLiveSyncPlaybackRate: 1.1,
+} as const;
 
 /**
  * The rung to start on from hls.js's own cap (`hls.autoLevelCapping`: -1 when no cap has been computed) for a manifest of `levelCount`
