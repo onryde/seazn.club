@@ -139,6 +139,9 @@ Seen only when the app did not take the link.
 - Residual risk, accepted **(web call)**: the phone's own browser history may keep the visited URL, and a synced
   profile may sync it.
 - On staging, confirm nothing at the edge injects a script into these pages.
+- Every other path under `/app` (bare `/app`, `/app/other`, deeper paths, trailing-slash forms; the games subdomain
+  included) is one catch-all route handler serving the same bare page as a 404, so none renders through the root
+  layout, whose scripts would run with the fragment intact. A real page's trailing-slash form serves that page.
 
 ### 5.4 The buttons
 
@@ -150,7 +153,7 @@ Seen only when the app did not take the link.
 | Match Day code sheet | `match-day/match-day-code-sheet.tsx` | `md_` |
 
 **One phone streams from the app (web call, on the phone session's answer, 2026-11-25).** Beside each stream
-**Open in app** button, a line in four locales: "Then tap Go live in the app." The app has its own **Go live**
+**Open in app** button, a line in four locales: "Then hold Go live in the app." The app has its own **Go live**
 (a hold, enabled once camera, mic, network and sideways checks pass); the phone session reports it as the normal
 path, verified on device. The web console's **Go live** is unchanged and stays the two-device case. A web or
 automatic start while the app is behind the browser on the same phone is **unproven** (phone session's open item

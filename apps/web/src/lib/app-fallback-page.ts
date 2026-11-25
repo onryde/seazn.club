@@ -1,5 +1,5 @@
-// The "Open in app" fallback pages, `/app/stream`, `/app/score` and `/app/day` (spec 2026-11-25 §5.3). Seen only when the
-// Android app did not take the link. THE URL FRAGMENT IS A LIVE CREDENTIAL, so this is bare HTML from a route handler —
+// The "Open in app" fallback pages, `/app/stream`, `/app/score` and `/app/day` (spec 2026-11-25 §5.3), and the answer to
+// every other path under /app. Seen only when the Android app did not take the link. THE URL FRAGMENT IS A LIVE CREDENTIAL, so this is bare HTML from a route handler —
 // no layout, so no analytics and no app bundle — and it must stay that way:
 //   * nothing is requested but the document: no external script, style, font or image — the logo and the condensed face
 //     are inline `data:` URIs (app-fallback-assets.ts) — and an empty `data:` icon so the browser does not ask for
@@ -13,7 +13,8 @@ import { DISPLAY_500_DATA_URI, DISPLAY_700_DATA_URI, LOGO_DATA_URI } from "@/lib
 import { PLAY_STORE_URL } from "@/lib/app-store";
 import { getDictionary, t, toLocale } from "@/lib/i18n";
 
-export type AppFallbackKind = "stream" | "score" | "day";
+/** The app's three links, and "stray": any other path under /app. */
+export type AppFallbackKind = "stream" | "score" | "day" | "stray";
 
 const BACK_ID = "back";
 
@@ -86,6 +87,7 @@ ${back}</main>
 </html>
 `;
   return new Response(html, {
+    status: kind === "stray" ? 404 : 200,
     headers: {
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store",

@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { test, expect, type Locator, type Page } from "@playwright/test";
+import { test, expect, type Browser, type Locator, type Page } from "@playwright/test";
 import { expectNoHorizontalScroll } from "./helpers";
 
 // Open in app (spec 2026-11-25 §5.3): the bare fallback pages under /app, as a built server serves them. Seen only when
@@ -167,6 +167,91 @@ test("each page at 320, 768 and 1280: no horizontal scroll, a thumb-sized Play b
     }
   }
   expect(checked).toBe(9);
+});
+
+// Every OTHER path under /app. Left to Next, each is the not-found page inside the root layout, which loads analytics and
+// a third-party tracking script while the fragment is still in the address. A real page's trailing-slash form
+// (next.config's skipTrailingSlashRedirect serves it as typed) may be that page. `games`: the games subdomain, where a
+// one-segment path is otherwise a game's slug.
+const STRAY_PATHS: { path: string; status: number; back: boolean; games?: true }[] = [
+  { path: "/app", status: 404, back: false },
+  { path: "/app/", status: 404, back: false },
+  { path: "/app/other", status: 404, back: false },
+  { path: "/app/other/", status: 404, back: false },
+  { path: "/app/score/deeper", status: 404, back: false },
+  { path: "/app/score/deeper/", status: 404, back: false },
+  { path: "/app/a/b/c", status: 404, back: false },
+  { path: "/app/day.json", status: 404, back: false },
+  { path: "/app", status: 404, back: false, games: true },
+  { path: "/app/stream/", status: 200, back: false },
+  { path: "/app/score/", status: 200, back: true },
+  { path: "/app/day/", status: 200, back: false },
+];
+
+/** Opens `url` in a context of its own, signed in as far as the proxy can tell, and returns what was served and every
+ *  request the page then made. */
+async function openRecorded(browser: Browser, baseURL: string, url: string, headers: Record<string, string> = {}) {
+  const context = await browser.newContext({ baseURL, extraHTTPHeaders: headers });
+  await context.addCookies([{ name: "seazn_session", value: "presence-only", url: baseURL }]);
+  const requests: { url: string; headers: Record<string, string> }[] = [];
+  const pending: Promise<void>[] = [];
+  context.on("request", (r) => {
+    pending.push(r.allHeaders().then((all) => void requests.push({ url: r.url(), headers: all })));
+  });
+  const page = await context.newPage();
+  const res = (await page.goto(url, { waitUntil: "networkidle" }))!;
+  await Promise.all(pending);
+  return { context, page, res, body: await res.text(), requests };
+}
+
+test("every other path under /app is bare: no external script, nothing but the document, no cookie, no referrer — counted", async ({
+  browser,
+  baseURL,
+}, testInfo) => {
+  // Premise: the same probe DOES see an ordinary not-found page's scripts, requests and cookie.
+  const premise = await openRecorded(browser, baseURL!, "/zz-no-such-page");
+  expect(premise.body).toMatch(/<script\b[^>]*\ssrc=/);
+  expect(premise.requests.length).toBeGreaterThan(1);
+  expect((await premise.context.cookies()).map((c) => c.name).sort()).toEqual(["seazn_session", "seazn_signed_in"]);
+  await premise.context.close();
+
+  let checked = 0;
+  for (const stray of STRAY_PATHS) {
+    const at = `${stray.path}${stray.games ? " (games host)" : ""}`;
+    const { context, page, res, body, requests } = await openRecorded(
+      browser,
+      baseURL!,
+      `${stray.path}#${SECRET}`,
+      stray.games ? { "x-forwarded-host": "games.localhost" } : {},
+    );
+    const headers = await res.allHeaders();
+    expect(res.status(), at).toBe(stray.status);
+    expect(headers["content-type"], at).toBe("text/html; charset=utf-8");
+    expect(headers["referrer-policy"], at).toBe("no-referrer");
+    expect(headers["cache-control"], at).toBe("no-store");
+    expect(headers["x-robots-tag"], at).toContain("noindex");
+    expect(await res.headerValues("set-cookie"), at).toEqual([]);
+    expect((await context.cookies()).map((c) => c.name), at).toEqual(["seazn_session"]);
+
+    // One script, the inline one: no external or analytics script, and nothing of the app bundle.
+    expect(body.match(/<script/g), at).toHaveLength(1);
+    expect(body, at).not.toMatch(/<script\b[^>]*[\s/"']src\s*=/);
+    expect(body, at).not.toContain("/_next/");
+    // The document is the only request (its icon is an inline data: URI), and none carries the fragment.
+    const asked = requests.map((r) => new URL(r.url).pathname).filter((p) => p !== "/favicon.ico");
+    expect(asked, at).toEqual([stray.path]);
+    for (const r of requests) expect(JSON.stringify(r.headers), at).not.toContain(SECRET);
+
+    // The fragment is dropped, and only a scoring page offers the way back.
+    expect(page.url(), at).toBe(`${baseURL}${stray.path}`);
+    await expect(page.getByRole("heading", { level: 1 }), at).toHaveText(TITLE);
+    await expect(page.getByTestId("score-in-browser"), at).toHaveCount(stray.back ? 1 : 0);
+    await context.close();
+    checked += 1;
+  }
+  expect(checked).toBe(12);
+  testInfo.annotations.push({ type: "paths checked", description: String(checked) });
+  console.log(`stray /app paths checked: ${checked}`);
 });
 
 /** The fonts Chromium actually drew `selector`'s text with, from the DevTools protocol: `document.fonts` says a face

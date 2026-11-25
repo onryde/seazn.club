@@ -3,7 +3,7 @@
 // document, runs one nonce'd script that drops the fragment without reading it, and sets no cookie. The sweep is over
 // the three pages, not over sports: no sport reaches them. The browser half (served headers, requests, CSP, the cascade)
 // is e2e/open-in-app.spec.ts's.
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { NextRequest } from "next/server";
 import { buildCustomRoute } from "next/dist/server/lib/router-utils/filesystem";
@@ -14,13 +14,15 @@ import { proxy } from "@/proxy";
 import { GET as dayGet } from "@/app/app/day/route";
 import { GET as scoreGet } from "@/app/app/score/route";
 import { GET as streamGet } from "@/app/app/stream/route";
+import { GET as strayGet } from "@/app/app/[[...rest]]/route";
 import en from "@/dictionaries/en/ui.json";
 import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
 
 const KINDS = ["stream", "score", "day"] as const;
-type Kind = (typeof KINDS)[number];
+/** "stray": any other path under /app, answered by the catch-all route. */
+type Kind = (typeof KINDS)[number] | "stray";
 const DICTS: Record<string, Record<string, string>> = { en, es, fr, nl };
 const LOCALES = Object.keys(DICTS);
 const KEYS = ["openApp.fallback.title", "openApp.fallback.play", "openApp.fallback.retry", "openApp.fallback.scoreInBrowser"];
@@ -41,13 +43,14 @@ const render = async (kind: Kind, headers: Record<string, string> = {}) => {
   return { res, html: await res.text() };
 };
 /** Everything in `html` that would make the browser ask for something besides the document. A `data:` URI asks for
- *  nothing, so it is the one thing a `url(` or a loading attribute may hold. */
+ *  nothing, so it is the one thing a `url(` or a loading attribute may hold. An attribute name may follow white space, a
+ *  slash, or the quote that closed the value before it: the HTML parser takes all three. */
 function outsideReferences(html: string): string[] {
   const targets = [
     ...html.matchAll(/\burl\(\s*["']?([^"')]*)/gi),
-    ...html.matchAll(/\s(?:src|poster|data|background|action|formaction|xlink:href)\s*=\s*["']?([^"'\s>]*)/gi),
+    ...html.matchAll(/[\s/"'](?:src|poster|data|background|action|formaction|xlink:href)\s*=\s*["']?([^"'\s>]*)/gi),
   ].map((m) => m[1]!);
-  const loaders = html.match(/@import|image-set\(|\ssrcset\s*=|<(?:iframe|object|embed|video|audio|source)\b|http-equiv/gi);
+  const loaders = html.match(/@import|image-set\(|[\s/"']srcset\s*=|<(?:iframe|object|embed|video|audio|source)\b|http-equiv/gi);
   return [...targets.filter((target) => !target.startsWith("data:")), ...(loaders ?? [])];
 }
 
@@ -78,7 +81,11 @@ describe("the outside-reference scan itself", () => {
       "<style>a{background:url( 'b.png' )}</style>",
       '<img src="/brand/logo.png">',
       '<img alt="" src=//x.test/a.png>',
+      // HTML also separates attributes with a slash, or with nothing after a closing quote.
+      "<img/src=//x.test/a.png>",
+      '<img alt=""src=//x.test/a.png>',
       '<img src="data:," srcset="/a.png 2x">',
+      '<img src="data:,"srcset="/a.png 2x">',
       '<style>@import "a.css";</style>',
       '<style>a{background:image-set("a.png" 1x)}</style>',
       '<iframe></iframe>',
@@ -90,7 +97,7 @@ describe("the outside-reference scan itself", () => {
       expect(outsideReferences(html), html).not.toEqual([]);
       checked += 1;
     }
-    expect(checked).toBe(11);
+    expect(checked).toBe(14);
     expect(outsideReferences('<img src="data:image/png;base64,AA//"><style>a{src:url(data:font/woff2;base64,AA)}</style>')).toEqual([]);
     expect(outsideReferences('<style>a{src:url("data:font/woff2;base64,AA")}</style><b data-testid="x">')).toEqual([]);
   });
@@ -110,6 +117,9 @@ describe("the approved look's two inlined assets", () => {
         const { html } = await render(kind, { "x-seazn-locale": locale });
         const images = html.match(/<img\b[^>]*>/g) ?? [];
         expect(images, at).toHaveLength(1);
+        // Exactly one: the browser keeps the FIRST of a repeated attribute, so a second one could pass the check below
+        // while the first is what gets fetched.
+        expect(images[0]!.match(/[\s/"']src\s*=/gi), at).toHaveLength(1);
         const src = images[0]!.match(/\ssrc="data:image\/png;base64,([A-Za-z0-9+/=]+)"/)?.[1];
         expect(src, at).toBeTruthy();
         expect(Buffer.from(src!, "base64").equals(file), at).toBe(true);
@@ -277,7 +287,7 @@ describe("the one inline script", () => {
 });
 
 describe("the real producers: proxy, then each route", () => {
-  const ROUTES: Record<Kind, (r: Request) => Promise<Response>> = { stream: streamGet, score: scoreGet, day: dayGet };
+  const ROUTES: Record<(typeof KINDS)[number], (r: Request) => Promise<Response>> = { stream: streamGet, score: scoreGet, day: dayGet };
 
   it("the nonce the proxy puts in the CSP is the one on the script, and its negotiated locale is the page's — counted", async () => {
     let checked = 0;
@@ -305,6 +315,68 @@ describe("the real producers: proxy, then each route", () => {
   });
 });
 
+// Every OTHER path under /app. Left to Next, each would be the not-found page inside the root layout, which loads
+// analytics and a third-party tracking script while the fragment is still in the address.
+const STRAY = ["/app", "/app/", "/app/other", "/app/other/", "/app/score/deeper", "/app/score/deeper/", "/app/a/b/c", "/app/day.json"];
+const SLASHED = KINDS.map((k) => `/app/${k}/`);
+
+describe("any other path under /app", () => {
+  it("nothing under app/app/ renders through a layout: route handlers only, the three pages and one catch-all — counted", () => {
+    const files = (readdirSync("src/app/app", { recursive: true, withFileTypes: true }) as import("node:fs").Dirent[])
+      .filter((e) => e.isFile())
+      .map((e) => `${e.parentPath.split("src/app/app")[1]}/${e.name}`)
+      .sort();
+    expect(files).toEqual(["/[[...rest]]/route.ts", "/day/route.ts", "/score/route.ts", "/stream/route.ts"]);
+  });
+
+  it("the catch-all serves the same bare page, as a 404: localized, nonce'd, no outside reference, no way back — counted", async () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const res = await strayGet(
+        new Request("https://seazn.club/app/other/deeper", { headers: { "x-seazn-locale": locale, "x-nonce": NONCE } }),
+      );
+      const html = await res.text();
+      expect(res.status, locale).toBe(404);
+      expect(res.headers.get("content-type"), locale).toBe("text/html; charset=utf-8");
+      expect(res.headers.get("cache-control"), locale).toBe("no-store");
+      expect(res.headers.get("x-robots-tag"), locale).toBe("noindex");
+      expect(res.headers.getSetCookie(), locale).toEqual([]);
+      expect(html, locale).toContain(`<html lang="${locale}">`);
+      expect(html, locale).toContain(`>${DICTS[locale]!["openApp.fallback.title"]}</h1>`);
+      expect(outsideReferences(html), locale).toEqual([]);
+      expect(html.match(/https?:/gi), locale).toEqual(["https:"]);
+      expect(html.match(/<script/g), locale).toHaveLength(1);
+      expect(scriptsOf(html)[0]![1], locale).toBe(` nonce="${NONCE}"`);
+      expect(html, locale).not.toContain('data-testid="score-in-browser"');
+      checked += 1;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("the catch-all's script drops the fragment without reading it, and wires nothing", async () => {
+    const { calls, button, listeners } = await run("stray", 3);
+    expect(calls).toEqual([["replaceState", null, "", "/app/stray"]]);
+    expect(button).toBeNull();
+    expect(listeners).toBe(0);
+  });
+
+  it("on the games host too, no /app path is taken for a game's slug — counted", () => {
+    const rewriteOf = (path: string, host: string) =>
+      proxy(new NextRequest(`http://localhost:3000${path}`, { headers: { "x-forwarded-host": host } })).headers.get(
+        "x-middleware-rewrite",
+      );
+    // Premise: on that host a one-segment path IS rewritten into /games, which renders through the root layout.
+    expect(rewriteOf("/chess-quest", "games.seazn.club")).toContain("/games/chess-quest");
+    expect(rewriteOf("/apps", "games.seazn.club")).toContain("/games/apps");
+    let checked = 0;
+    for (const path of [...STRAY, ...SLASHED, ...KINDS.map((k) => `/app/${k}`)]) {
+      expect(rewriteOf(path, "games.seazn.club"), path).toBeNull();
+      checked += 1;
+    }
+    expect(checked).toBe(14);
+  });
+});
+
 type HeaderRule = { source: string; headers: { key: string; value: string }[] };
 
 /** The headers next.config serves `pathname` with, resolved the way Next does (see permissions-policy-headers.test.ts). */
@@ -323,7 +395,7 @@ describe("Referrer-Policy (next.config.js)", () => {
 
   it("/app/* sends no referrer — one header, replacing the catch-all's — and keeps the other security headers — counted", async () => {
     let checked = 0;
-    for (const path of ["/app", ...KINDS.map((k) => `/app/${k}`)]) {
+    for (const path of [...STRAY, ...SLASHED, ...KINDS.map((k) => `/app/${k}`)]) {
       const headers = await servedHeaders(path);
       expect(referrerKeys(headers), path).toEqual(["Referrer-Policy"]);
       expect(headers["Referrer-Policy"], path).toBe("no-referrer");
@@ -331,7 +403,7 @@ describe("Referrer-Policy (next.config.js)", () => {
       expect(headers["X-Frame-Options"], path).toBe("SAMEORIGIN");
       checked += 1;
     }
-    expect(checked).toBe(4);
+    expect(checked).toBe(14);
   });
 
   it("every other path keeps the site's policy, including ones that only look like /app — counted", async () => {

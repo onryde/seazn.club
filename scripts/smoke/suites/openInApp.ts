@@ -46,4 +46,21 @@ export async function openInAppSuite(): Promise<void> {
       body.includes('data-testid="score-in-browser"') === (kind === "score"),
     );
   }
+
+  // Every other path under /app. Left to Next, each is the not-found page inside the root layout, whose scripts would run
+  // with the URL fragment (an app link's credential) still in the address.
+  for (const path of ["/app", "/app/", "/app/other", "/app/score/deeper/"]) {
+    const res = await fetch(`${BASE}${path}`, { redirect: "manual", headers: { cookie: "seazn_session=smoke-presence-only" } });
+    const body = await res.text();
+    check(
+      `open in app: ${path} is the bare 404, no referrer, no cookie, one inline script and nothing of the app's (status ${res.status})`,
+      res.status === 404 &&
+        res.headers.get("referrer-policy") === "no-referrer" &&
+        res.headers.getSetCookie().length === 0 &&
+        body.split("<script").length === 2 &&
+        !/<script\b[^>]*\ssrc\s*=/.test(body) &&
+        !body.includes("/_next/") &&
+        body.includes(`href="${PLAY}"`),
+    );
+  }
 }

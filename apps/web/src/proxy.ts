@@ -204,7 +204,9 @@ export function gamesHostRewrite(request: NextRequest): URL | null {
   if (!requestHostname(request).startsWith("games.")) return null;
   const { pathname } = request.nextUrl;
   if (pathname !== "/" && !GAMES_SLUG_PATH.test(pathname)) return null;
-  if (pathname === "/games") return null;
+  // Bare /app is not a game: rewritten, it renders through the root layout, analytics and all, with the URL fragment (an
+  // app link's credential) still in the address. app/app/[[...rest]]/route.ts answers it, as on every host.
+  if (pathname === "/games" || pathname === "/app") return null;
   const url = request.nextUrl.clone();
   url.pathname = pathname === "/" ? "/games" : `/games${pathname}`;
   return url;
