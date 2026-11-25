@@ -623,6 +623,10 @@ const WALKTHROUGH_SPECS: string[] = [
   // fixture servers: D12's unopened round, the organiser's open, the camera
   // preflight's cards, the game made and played at Lichess, the sweep, round 2.
   "chess-external-play.spec.ts",
+  // Online Chess credits (spec 2026-11-23): the organiser pays for a division's package - the amber pay line, the receipt in
+  // its three modes, a REAL Stripe sandbox pack bought for the shortfall, the paid chip moved up and down, and the competition
+  // page's "Not paid" flag. Like the MONEY block's specs, it puts real value through Stripe (its sandbox scene).
+  "online-chess-credits.spec.ts",
 
   // YouTube Connect (plan T20) — the whole feature on the fake YouTube port: connect through consent and the picker
   // (1280 and 320), Go live on the connected channel, the same video after a Stop and a NEW video past the grace,

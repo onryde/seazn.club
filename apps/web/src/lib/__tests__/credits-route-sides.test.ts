@@ -63,6 +63,17 @@ const CLASSIFIED: Record<string, Partial<Record<Helper, { n: number; why: string
   "components/billing-stream-credits.tsx": {
     creditsStream: { n: 2, why: "the Streaming history pager: Older appends &before=…, Latest is its pair" },
   },
+  // Online Chess packages are paid in Seazn (streaming) credits — the org_stream_credits ledger — so every "Buy more" beside a
+  // package price opens the Streaming side, by name.
+  "app/o/[orgSlug]/c/[compSlug]/d/new/page.tsx": {
+    creditsStream: { n: 1, why: "the new-division builder's Online Chess price line: Buy more credits for the package" },
+  },
+  "app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx": {
+    creditsStream: { n: 1, why: "the Division rules strip's Online Chess price line and receipt: Buy more credits for the package" },
+  },
+  "components/v2/match-day/round-focus.tsx": {
+    creditsStream: { n: 1, why: "Open round's pay receipt (an unpaid Online Chess package): Buy more credits for it" },
+  },
 };
 
 describe("Settings → Credits: which side each link opens", () => {
