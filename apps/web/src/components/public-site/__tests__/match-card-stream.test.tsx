@@ -65,6 +65,25 @@ describe("MatchCard camera (T47)", () => {
     expect(html).toContain(`id="mh-stream-${m.fixtureId}"`);
   });
 
+  // CI run 45537372073: the e2e clipping scan read `span 18px content in 16px` at every width. The dot hung 2px past the camera's own
+  // 16px box (`-right-0.5` on a 6px dot), and a box whose content overruns it is clipped content to the scan (e2e/helpers.ts
+  // `overflowingIn`), whatever paints. The dot now sits inside the camera's box: the box carries the 2px the dot used to overhang as
+  // right padding, and the dot is anchored to `right-0` of it, so it sits on the icon exactly where it did.
+  it("live: the dot sits INSIDE the camera's own box on the x axis (no negative right offset; the 2px it used to hang out is padding)", () => {
+    const html = card(hubMatch({ stream: "live" }));
+    const cam = cameraOf(html)!;
+    const box = /^<span data-testid="mh-match-stream"[^>]*class="([^"]*)"/.exec(cam)?.[1];
+    const dot = /<span data-testid="mh-match-stream-dot"[^>]*class="([^"]*)"/.exec(cam)?.[1];
+    expect(box, "the camera's own classes").toBeDefined();
+    expect(dot, "the dot's own classes").toBeDefined();
+    expect(dot!.split(/\s+/), "anchored to the box's right edge, never past it").toContain("right-0");
+    expect(dot!, "no negative right or left offset").not.toMatch(/(^|\s)-(right|left)-/);
+    expect(box!.split(/\s+/), "the box holds the 2px the dot's old overhang took").toContain("pr-0.5");
+    // Twin: the replay camera has no dot, so its box is the bare 16px icon (no padding to hold nothing).
+    const replay = cameraOf(card(hubMatch({ stream: "replay" })))!;
+    expect(/^<span data-testid="mh-match-stream"[^>]*class="([^"]*)"/.exec(replay)?.[1]).not.toContain("pr-0.5");
+  });
+
   it("replay: a slate camera with NO dot, titled and described 'Replay available'", () => {
     const m = hubMatch({ stream: "replay" });
     const html = card(m);

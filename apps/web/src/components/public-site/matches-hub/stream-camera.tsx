@@ -5,6 +5,9 @@
 //
 // The words ("Live stream" / "Replay available") are the icon's `title` AND a visually hidden span the card names as its description
 // (`aria-describedby`): the card's `aria-label` replaces its contents for a screen reader, so without that span the camera would be silent.
+// The dot hangs 2px past the icon's corner, and that 2px is the camera's own right padding (`pr-0.5`, live only): the dot is anchored to
+// `right-0` of it, so it sits on the icon exactly as `-right-0.5` put it, and the box holds it (the glyph is 2px left of the slot's edge; the dot is no longer past it). A dot outside its box made the card's clipping scan read
+// `span 18px content in 16px` (e2e/mobile/public-pages.spec.ts T47, every width).
 // The dot's pulse is `animate-stream-pulse`, switched off under `prefers-reduced-motion` in globals.css.
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
@@ -21,7 +24,7 @@ export function StreamCamera({ cue, fixtureId, dict }: { cue: StreamCue; fixture
       data-testid="mh-match-stream"
       data-stream={cue}
       title={words}
-      className={`relative inline-grid shrink-0 place-items-center ${cue === "live" ? "text-red-600" : "text-slate-500"}`}
+      className={`relative inline-grid shrink-0 place-items-center ${cue === "live" ? "pr-0.5 text-red-600" : "text-slate-500"}`}
     >
       <svg
         viewBox="0 0 24 24"
@@ -42,7 +45,7 @@ export function StreamCamera({ cue, fixtureId, dict }: { cue: StreamCue; fixture
         <span
           data-testid="mh-match-stream-dot"
           aria-hidden="true"
-          className="animate-stream-pulse absolute -right-0.5 -top-px h-1.5 w-1.5 rounded-full bg-red-600 outline outline-[1.5px] outline-surface"
+          className="animate-stream-pulse absolute right-0 -top-px h-1.5 w-1.5 rounded-full bg-red-600 outline outline-[1.5px] outline-surface"
         />
       ) : null}
       <span id={streamDescriptionId(fixtureId)} className="sr-only">
