@@ -12,7 +12,7 @@ const RESULT: ExampleResult = {
 };
 const GOLDENS = { one: RESULT, two: { facts: { n: 2 }, text: [] } } as Record<string, ExampleResult>;
 
-const post = (markdown: string, examples = ["one"], slug = "a-post") => ({ slug, markdown, examples });
+const post = (markdown: string, examples = ["one"], slug = "a-post") => ({ slug, topic: "round-robin" as const, markdown, examples });
 
 describe("fact tokens", () => {
   it("a fact token resolves to the golden's value, a number or a string, before Markdown is rendered", async () => {

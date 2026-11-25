@@ -3,9 +3,10 @@ import "server-only";
 // at each `{{example:<id>}}` and `{{art:<id>}}` line, and every Markdown segment goes through P1's help renderer
 // (pictures, callouts and heading ids included). The example parts carry the golden's result, and the art parts the
 // registry's picture, for a blog-owned component to draw.
-import { ART_LINE, blogArt, type BlogArt } from "@/blog/art";
+import { ART_LINE, ART_ONLY_TOPIC, blogArt, type BlogArt } from "@/blog/art";
 import { BLOG_GOLDENS } from "@/blog/examples/goldens";
 import type { ExampleResult } from "@/blog/examples/types";
+import type { BlogTopic } from "@/lib/blog";
 import type { HelpHeading } from "@/server/help-heading-ids";
 import { renderHelpArticle } from "@/server/help-content";
 
@@ -22,6 +23,7 @@ export interface RenderedBlogPost {
 /** The slice of a post the renderer reads; a test passes a hand-built one. */
 export interface RenderablePost {
   slug: string;
+  topic: BlogTopic;
   markdown: string;
   examples: readonly string[];
 }
@@ -68,7 +70,9 @@ export async function renderBlogPost(post: RenderablePost, goldens: Record<strin
 
   const placed = segments.flatMap((s) => ("example" in s ? [s.example] : []));
   const pictures = segments.flatMap((s) => ("art" in s ? [s.art] : []));
-  if (placed.length === 0 && pictures.length === 0) throw new Error(`${post.slug}: the post places no example and no art; every post carries one`);
+  if (placed.length === 0 && !(post.topic === ART_ONLY_TOPIC && pictures.length > 0)) {
+    throw new Error(`${post.slug}: the post places no example; every post carries one (only a '${ART_ONLY_TOPIC}' post may place art instead)`);
+  }
   for (const id of pictures) {
     if (blogArt(id) === undefined) throw new Error(`${post.slug}: there is no art '${id}'`);
     if (pictures.filter((p) => p === id).length > 1) throw new Error(`${post.slug}: art '${id}' is placed more than once`);

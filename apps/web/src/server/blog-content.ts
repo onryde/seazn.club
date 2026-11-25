@@ -11,7 +11,7 @@ import "server-only";
 import { readdirSync, readFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import { builtinModules } from "@seazn/engine/sports";
-import { ART_LINE, blogArt } from "@/blog/art";
+import { ART_LINE, ART_ONLY_TOPIC, blogArt } from "@/blog/art";
 import { FORMAT_FAMILIES } from "@/config/format-gallery";
 import { helpUrl } from "@/lib/help";
 import {
@@ -270,8 +270,8 @@ export function parseBlogFrontmatter(
   const examplesRaw = need("examples");
   const examples = examplesRaw === null ? [] : parseHelpRelated(examplesRaw);
   if (examplesRaw !== null) {
-    if (examples.length === 0 && !placesArt(body)) {
-      bad("examples", "is empty; every post carries at least one generated example, or places art ({{art:<id>}})");
+    if (examples.length === 0 && !(topic === ART_ONLY_TOPIC && placesArt(body))) {
+      bad("examples", `is empty; every post carries at least one generated example (only a '${ART_ONLY_TOPIC}' post may place art, {{art:<id>}}, instead)`);
     }
     for (const id of examples) if (!EXAMPLE_ID.test(id)) bad("examples", `'${id}' is not an example id`);
     if (new Set(examples).size !== examples.length) bad("examples", "lists an example twice");

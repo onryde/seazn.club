@@ -5,7 +5,7 @@
 //
 // The pilot is the one post on disk; the index shows no sport chips until a post names a sport (the chips' rule is a unit
 // test, src/app/blog/__tests__/blog-pages.test.tsx), so no chip is clicked here.
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { expectNoHorizontalScroll, overflowingIn } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
@@ -20,6 +20,14 @@ async function visit(page: Page, path: string, width: number) {
   const res = await page.goto(path);
   expect(res?.status(), path).toBeLessThan(400);
   await dismissCookieBanner(page);
+}
+
+/** The pixel width of the file a lazy picture loaded: scrolled to, then waited for. */
+async function naturalWidth(img: Locator): Promise<number> {
+  await img.scrollIntoViewIfNeeded();
+  const read = () => img.evaluate((el: HTMLImageElement) => (el.complete ? el.naturalWidth : 0));
+  await expect.poll(read, { message: "the picture loaded" }).toBeGreaterThan(0);
+  return read();
 }
 
 /** axe's serious and critical findings, as short lines. */
@@ -133,7 +141,7 @@ test.describe("signed out", () => {
 });
 
 // Layout A (owner pick 2026-11-25): everything in a post's reading column is the SAME 44rem wide and starts at the same
-// left edge. Measured in the page, element by element; a kind with no element found fails (anti-vacuity), so a renamed
+// left edge. A screenshot is the one exception to the width: it is never scaled up past its own pixels. Measured in the page, element by element; a kind with no element found fails (anti-vacuity), so a renamed
 // test id cannot pass by checking nothing.
 const REM = 16;
 const COLUMN_PARTS: Record<string, string> = {
@@ -152,6 +160,7 @@ const COLUMN_PARTS: Record<string, string> = {
 const COMMON = ["header", "lede", "prose", "heading", "paragraph", "handles", "related"];
 const COLUMN_POSTS: { path: string; kinds: string[] }[] = [
   { path: "/blog/chess-points-and-half-points", kinds: [...COMMON, "example", "picture"] },
+  { path: "/blog/how-standings-points-work", kinds: [...COMMON, "example", "picture"] },
   { path: "/blog/how-a-ladder-works", kinds: [...COMMON, "diagram"] },
   { path: "/blog/what-you-need-to-stream-a-match", kinds: [...COMMON, "art"] },
 ];
@@ -173,9 +182,10 @@ test.describe("layout A: one reading column", () => {
           const n = await found.count();
           expect(n, `${path}: anti-vacuity, no '${kind}' found`).toBeGreaterThan(0);
           for (let i = 0; i < n; i++) {
+            const want = kind === "picture" ? Math.min(column, await naturalWidth(found.nth(i))) : column;
             const box = (await found.nth(i).boundingBox())!;
-            if (Math.abs(box.width - column) > 1 || Math.abs(box.x - left) > 1) {
-              wrong.push(`${kind}[${i}] x=${Math.round(box.x)} w=${Math.round(box.width)} (column x=${Math.round(left)} w=${column})`);
+            if (Math.abs(box.width - want) > 1 || Math.abs(box.x - left) > 1) {
+              wrong.push(`${kind}[${i}] x=${Math.round(box.x)} w=${Math.round(box.width)} (column x=${Math.round(left)}, want w=${want})`);
             }
             checked++;
           }
@@ -188,6 +198,16 @@ test.describe("layout A: one reading column", () => {
       });
     }
   }
+
+  // The case the rule exists for: a screenshot narrower than the column. The premise is checked, so a recaptured, wider
+  // picture fails here instead of leaving the upscale untested.
+  test("a screenshot narrower than the column keeps its own width", async ({ page }) => {
+    await visit(page, "/blog/how-standings-points-work", 1280);
+    const img = page.locator(COLUMN_PARTS.picture!);
+    const natural = await naturalWidth(img);
+    expect(natural, "premise: narrower than the 44rem column").toBeLessThan(44 * REM);
+    expect(Math.abs((await img.boundingBox())!.width - natural), `drawn at its own ${natural}px`).toBeLessThanOrEqual(1);
+  });
 
   const style = (page: Page, selector: string) =>
     page.locator(selector).first().evaluate((el) => {

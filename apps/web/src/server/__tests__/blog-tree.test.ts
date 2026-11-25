@@ -137,6 +137,13 @@ describe("the tree", () => {
     expect(withExample, "posts with a generated example").toBeGreaterThan(0);
   });
 
+  it("only a streaming guide may stand on art alone: every other post lists a worked example", () => {
+    const bare = posts.filter((p) => p.examples.length === 0);
+    console.log(`blog-tree: posts with no worked example=${bare.length} of ${posts.length}`);
+    expect(bare.length, "anti-vacuity: art-only posts seen").toBeGreaterThan(0);
+    for (const p of bare) expect(p.topic, p.slug).toBe("streaming");
+  });
+
   // Brief gate 4: every post owes one diagram OR screenshot, and a table does not count as one. A picture is a generated
   // diagram (an example of the post whose result carries a `diagram`, which the page draws), a `/help/blog/` screenshot, or
   // a drawing from the art registry.

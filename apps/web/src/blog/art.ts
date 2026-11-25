@@ -5,6 +5,8 @@
 // The files are self-contained SVGs under public/help/blog: an <img> cannot load the page's fonts, so their headings are
 // drawn as outlines. blog-art.test.tsx holds every file named here (size, no outside reference, no web font, the words).
 
+import type { BlogTopic } from "@/lib/blog";
+
 export interface BlogArtDrawing {
   /** Under /help/blog/. */
   src: string;
@@ -28,6 +30,9 @@ export const BLOG_ART: Readonly<Record<string, BlogArt>> = {
     phone: { src: "/help/blog/what-you-need-to-stream-a-match-flow-phone.svg", width: 360, height: 1100 },
   },
 };
+
+/** The one topic whose post may carry art and no worked example: a how-to guide has nothing to generate. */
+export const ART_ONLY_TOPIC: BlogTopic = "streaming";
 
 /** `{{art:<id>}}` alone on a line (trim the line first). */
 export const ART_LINE = /^\{\{art:([a-z0-9-]+)\}\}$/;

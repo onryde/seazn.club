@@ -54,15 +54,16 @@ A long match drains the battery. Plug the phone in, or fix a power bank to the t
 
 What matters is **upload** speed, at the place where the tripod stands, while people are there.
 
-- The app sends 720p video at 30 frames a second. It starts at 1.5 Mbps and rises as your connection allows, **up to 3 Mbps**. At full quality, allow about **1.5 GB of data for each hour**, or about 4.5 GB for a three-hour match.
-- Run a speed test on the phone at the tripod spot. Leave plenty of room above 3 Mbps: we suggest an upload of **at least 5 Mbps** that stays there.
+- The app sends 720p video at 30 frames a second. The video starts at 1.5 Mbps and rises as your connection allows, **up to 3 Mbps**. On a weak connection the rate drops.
+- Sound and other data go with the video, so at full quality the phone uploads more than that: about 3.6 Mbps. Allow about **1.5 GB to 1.7 GB of data for each hour at full quality**, or about 4.5 GB to 5.1 GB for a three-hour match.
+- Run a speed test on the phone at the tripod spot. Leave plenty of room above 3.6 Mbps: we suggest an upload of **at least 5 Mbps** that stays there.
 - Venue Wi-Fi can be fast when the hall is empty and slow when it is full. If you cannot rely on it, use mobile data.
 - On mobile data, check your plan's allowance, including any separate limit for hotspot use.
 
 ## Set up in Seazn first
 
 1. Choose where the match streams to: your own YouTube channel. Connect the channel, or add a YouTube stream key once and pick it for any match. A phone that follows a court all day needs a connected channel.
-2. Make sure you have a Seazn credit. Each video uses one.
+2. Make sure you have a Seazn credit. Each video uses one. One credit covers one match stream, up to 3 hours: see [Seazn credits](/help/billing/match-credits).
 3. Open the match's stream code, or the court's code if one phone follows a court all day. In the Seazn Club Mobile App, open **Live Stream** and scan it.
 
 ## Five-minute check at the venue
