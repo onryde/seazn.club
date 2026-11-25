@@ -16,6 +16,7 @@ import { Uuid, CompetitionStatus } from "./common.ts";
 import { SlotLabelRef, Fixture } from "./scoring.ts";
 // The Supabase url pattern the capture and Match Day realtime objects already hold (pure zod, loads bare under strip-types).
 import { CAPTURE_REALTIME_URL_RE } from "../capture-schemas.ts";
+import { StreamSessionState } from "./streaming.ts";
 
 // ---------------------------------------------------------------------------
 // Public — GET /public/fixtures/{id}
@@ -117,10 +118,16 @@ const SignedPlayback = z.object({ src: z.url(), expiresAt: z.string().datetime()
  *  session on air, and the replay parts in recording order, each numbered by its place among them all (a part left out, past the
  *  recording host's own delete or not signable right now, leaves a gap, so a number never moves between polls). `hls` is a signed HLS manifest (the interim Cloudflare recording,
  *  recommendation 2026-11-21); `embed` is the replay host's player (Task 25). A fixture with no Seazn video, or one the
- *  public cannot see, answers `{ live: null, replay: [] }`. */
+ *  public cannot see, answers `{ live: null, replay: [], session: null }`. */
 export const PublicFixtureVideo = z.object({
   live: SignedPlayback.nullable(),
   replay: z.array(SignedPlayback.extend({ partNo: z.number().int().min(1), player: z.enum(["hls", "embed"]) })),
+  /** Seazn-hosted video Task 33g: the fixture's LATEST session when it is a Seazn one (the server's own `StreamSessionState`, never a
+   *  vocabulary of the page's), and whether it ever went live (`started_at` set): what an open page needs to tell a video that is
+   *  still coming from one that is not (a Go live cancelled while warming records nothing). `null`: the latest session is not a
+   *  Seazn one, or there is none, or the public may not see the fixture. Absent: an answer from before this field (the page then
+   *  keeps what it was told when it was drawn). */
+  session: z.object({ state: StreamSessionState, wentLive: z.boolean() }).nullable().optional(),
 });
 export type PublicFixtureVideo = z.infer<typeof PublicFixtureVideo>;
 

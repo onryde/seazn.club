@@ -18,7 +18,7 @@
 //     before the page sees it, then takes up to the ending backstop to end, and its recording follows the path above. The empty answers
 //     that follow only run it down.
 // What it never does: read the route more often, or less. The schedule (seazn-video-schedule.ts) is untouched.
-import type { PublicFixtureVideo } from "@/server/api-v1/schemas";
+import type { PublicFixtureVideo, StreamSessionState } from "@/server/api-v1/schemas";
 import { ENDING_TIMEOUT_SECONDS, SEAZN_RECORDING_LOCK_BY_SECONDS } from "@/server/relay/config";
 import { SEAZN_VIDEO_POLL_CEILING_MS, SEAZN_VIDEO_POLL_FLOOR_MS } from "./seazn-video-schedule";
 
@@ -41,6 +41,43 @@ export const showsPlayer = (video: PublicFixtureVideo): boolean => video.live !=
  *  without leaves it exactly where it was, so a run of empty answers can only run it down. */
 export function holdAfterAnswer(until: number | null, video: PublicFixtureVideo, nowMs: number): number | null {
   return showsPlayer(video) ? nowMs + SEAZN_VIDEO_HOLD_MS : until;
+}
+
+/** What the held box is waiting for, as the latest session's state says (Task 33g): the LIVE video, the REPLAY, or nothing. */
+export type Coming = "live" | "replay" | null;
+
+/** Where each of the server's session states leaves a page that is waiting. A `Record` over the server's own `StreamSessionState`, so a
+ *  state added there is a type error here until it is placed: `up` is a session on its way up or on air (a live comes next: the ladder
+ *  of `ACTIVE_STATES` up to `live`), `after` one being stopped or over (a recording comes next, but ONLY if it ever went live: the
+ *  session domain fills no replay for one that never broadcast, session.ts `replayFill`). `failed` is `after`: the recording pass locks a
+ *  failed session's recording too (seazn-recordings.ts), and one that went live may have one. */
+const COMING_AFTER: Record<StreamSessionState, "up" | "after"> = {
+  requested: "up", provisioning: "up", warming: "up", live: "up", ending: "after", completed: "after", failed: "after",
+};
+
+/** What is coming, from the answer's `session` (Task 33g, T33f review m1): a Go live cancelled while warming, or one missed entirely,
+ *  must not leave an open page saying "will start shortly". `null` (no Seazn session is the latest, or none) is nothing coming. */
+export function comingOf(session: NonNullable<PublicFixtureVideo["session"]> | null): Coming {
+  if (session === null) return null;
+  if (COMING_AFTER[session.state] === "up") return "live";
+  return session.wentLive ? "replay" : null;
+}
+
+/** The island's wait: whether the held box's line says the live is coming (and keeps the delay row), and until when it holds. */
+export interface Wait {
+  liveNext: boolean;
+  holdUntil: number | null;
+}
+
+/** The wait after an answer. A player on screen: the live line is spent and the hold starts afresh (`holdAfterAnswer`). Otherwise the
+ *  answer's `session` decides, on EVERY read, never only the first render's hint: a live coming picks the live line, a replay coming the
+ *  replay line (the hold runs on as it was: the box goes once), and NOTHING coming (a cancelled or missed Go live that recorded nothing)
+ *  lets the box and its line go now. An answer that names no session (one from before the field) leaves the wait as it was. */
+export function waitAfterAnswer(wait: Wait, video: PublicFixtureVideo, nowMs: number): Wait {
+  if (showsPlayer(video)) return { liveNext: false, holdUntil: holdAfterAnswer(wait.holdUntil, video, nowMs) };
+  if (video.session === undefined) return wait;
+  const coming = comingOf(video.session);
+  return coming === null ? { liveNext: false, holdUntil: null } : { liveNext: coming === "live", holdUntil: wait.holdUntil };
 }
 
 /** The page's `holdUntil` (an ISO instant) as ms; absent, or not a date, is no wait: a NaN must never hold a box for ever. */

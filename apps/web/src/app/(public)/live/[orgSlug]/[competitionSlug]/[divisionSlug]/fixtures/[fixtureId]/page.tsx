@@ -490,7 +490,8 @@ export default async function FixturePage({ params }: Props) {
               // `holdUntil` (re-capture R2): a session warming or just stopped keeps the box, with its line, through empty answers until
               // then. `replayParts` (re-capture R1): two or more recordings keep the picker's row from this render, so no tab row arrives late.
               // `liveExpected` (Task 33c): a live comes next, so the held box keeps the live player's delay line row too, and (Task 33f)
-              // its line says the live video is coming rather than the replay.
+              // its line says the live video is coming rather than the replay. These are hints as of THIS render (Task 33g): from the first
+              // read on, the island follows the video route's own `session`, so a cancelled or missed Go live clears them.
               <SeaznVideoIsland
                 fixtureId={fixture.id}
                 labels={seaznVideoLabels(dict)}

@@ -26,6 +26,10 @@
 //     is being made ready). Both lines are laid over the frame, so either fits the same box. The wait is the page's (`holdUntil`) or
 //     starts when a player was on screen and leaves (seazn-video-hold.ts has the rules). The box goes ONCE, when the wait runs out; it
 //     is never dropped and drawn again between reads.
+//     FOLLOWING THE SESSION (Task 33g, T33f review m1): the page's hint is the FIRST render's only. Every answer carries the latest
+//     session's state (`session`), and `waitAfterAnswer` re-derives the line and the hold from it on every read: a Go live cancelled
+//     while warming, or missed whole, no longer leaves "will start shortly" up for the rest of the warming hold, and a session that
+//     ended without ever going live (nothing is coming) lets the box go at once. An answer with no `session` (an older route) changes nothing.
 //   - the box also holds the picker's row, invisible, when the page knows the replay has two or more parts (`replayParts`, re-capture
 //     R1), so the real picker takes its place with no shift.
 //
@@ -39,7 +43,7 @@ import type { PublicFixtureVideo } from "@/server/api-v1/schemas";
 import { SEAZN_LIVE_DELAY_SECONDS } from "@/server/relay/config";
 import { SEAZN_PLAYER_FRAME, SeaznPlayer } from "./seazn-player";
 import { SeaznReplayFrame } from "./seazn-replay-frame";
-import { holdAfterAnswer, holdWait, parseHold, showsPlayer } from "./seazn-video-hold";
+import { holdWait, parseHold, showsPlayer, waitAfterAnswer, type Wait } from "./seazn-video-hold";
 import type { SeaznVideoLabels } from "./seazn-video-labels";
 import { startVideoPoll, type VideoPoll } from "./seazn-video-poll";
 import { BadVideoAnswer, beaconVideoReport, createVideoReporter, type PlayerFatal } from "./seazn-video-report";
@@ -66,6 +70,12 @@ export function asPublicFixtureVideo(raw: unknown): PublicFixtureVideo {
   const { live, replay } = raw;
   if (live !== null && !isSigned(live)) throw new BadVideoAnswer("seazn video: bad live source");
   if (!Array.isArray(replay) || !replay.every(isPart)) throw new BadVideoAnswer("seazn video: bad replay parts");
+  // Task 33g: absent (an answer from before the field), null, or the latest Seazn session's state and whether it ever went live. Only the
+  // SHAPE is held here: a state this build does not know is never a dropped answer (the player in it still plays); `comingOf` reads it as a session that is over.
+  const { session } = raw;
+  if (session !== undefined && session !== null && !(isObject(session) && typeof session.state === "string" && typeof session.wentLive === "boolean")) {
+    throw new BadVideoAnswer("seazn video: bad session");
+  }
   return raw as unknown as PublicFixtureVideo;
 }
 
@@ -299,13 +309,13 @@ export function SeaznVideoIsland({
   liveExpected = false,
 }: SeaznVideoIslandProps) {
   const [video, setVideo] = useState<PublicFixtureVideo | null>(initial ?? null);
-  // Task 33c: whether the held box keeps the delay line's row, and (Task 33f) whether its line says the live video or the replay is
-  // coming. From the PROPS for the first render (the server markup and the hydrated one agree); the first answer that shows a player
-  // clears it for good, so the box a Stop leaves behind says the replay.
-  const [liveNext, setLiveNext] = useState(liveExpected);
-  // The wait, as an instant (ms), or null: from the page's plan at first, then from the answers (`holdAfterAnswer`). Taken from the PROPS
-  // alone for the first render, never from the clock, so the server markup and the hydrated one agree.
-  const [holdUntil, setHoldUntil] = useState<number | null>(() => parseHold(holdFromPlan));
+  // The wait (seazn-video-hold.ts `Wait`), from the page's plan at first and from EVERY answer after (`waitAfterAnswer`; Task 33g: an
+  // open page follows the latest session through a Stop, a cancel or a missed live, not only the render it was drawn from).
+  //   - `liveNext` (Task 33c, 33f): whether the held box keeps the delay line's row and its line says the live video is coming, or the replay.
+  //   - `holdUntil`: until when (ms) an empty answer is a wait, or null.
+  // Taken from the PROPS alone for the first render, never from the clock, so the server markup and the hydrated one agree.
+  const [wait, setWait] = useState<Wait>(() => ({ liveNext: liveExpected, holdUntil: parseHold(holdFromPlan) }));
+  const { liveNext, holdUntil } = wait;
   const [epoch, setEpoch] = useState(0);
   const pollRef = useRef<VideoPoll | null>(null);
   // One reporter per page view (Task 25): a player's failure once per address, a failed read once per kind, each sent to our server as a
@@ -323,8 +333,7 @@ export function SeaznVideoIsland({
       fetchVideo: (signal) => fetchSeaznVideo(fixtureId, endpoint, signal),
       onVideo: (next, { rebuild }) => {
         setVideo(next);
-        if (showsPlayer(next)) setLiveNext(false);
-        setHoldUntil((until) => holdAfterAnswer(until, next, Date.now()));
+        setWait((w) => waitAfterAnswer(w, next, Date.now()));
         if (rebuild) setEpoch((e) => e + 1);
       },
       settledAtMs,
@@ -343,7 +352,7 @@ export function SeaznVideoIsland({
   // page drew that has already run out (an old cached page) lets go at once: the line goes, the reserved box stays for the first answer.
   useEffect(() => {
     if (holdUntil === null) return;
-    const timer = setTimeout(() => setHoldUntil(null), holdWait(holdUntil, Date.now()));
+    const timer = setTimeout(() => setWait((w) => ({ ...w, holdUntil: null })), holdWait(holdUntil, Date.now()));
     return () => clearTimeout(timer);
   }, [holdUntil]);
 

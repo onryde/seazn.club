@@ -26,8 +26,8 @@ import { BASE, type Session, cookieHeader, newSession, check, signIn, smokeDb, t
  * 3c. THE CLUB DEFAULTS (Phase 4, Task 38, V558) — GET /orgs/{id}/stream-defaults reads nothing set; PUT writes field by field (a
  *    body naming only the timing leaves the style) at a rising revision; an empty body, an unknown template and a delay outside
  *    0–30 s are each 400 and write nothing. Both modes. Left at { bar, 4500 }: step 10's Seazn session copies exactly that.
- * 4. NO-STORE — the public video route answers `private, no-store` with `{ live: null, replay: [] }`, for this match (no
- *    video) and for an id that names no match.
+ * 4. NO-STORE — the public video route answers `private, no-store` with `{ live: null, replay: [], session: null }` (Task 33g: no
+ *    Seazn session to follow), for this match (no video) and for an id that names no match.
  *
  * Phase 2 (Task 28): one recording of this match, through the replay swap (G-B, Task 25), read by the REAL public route:
  * 5. INTERIM — the recording is locked but Cloudflare cannot play it yet (`ready_at` null, Task 39): the route lists NO part. Once the
@@ -285,7 +285,7 @@ export async function seaznHostedSuite(): Promise<void> {
     type Part = { partNo?: unknown; player?: unknown; src?: unknown; expiresAt?: unknown };
     const video = async (id: string) => {
       const res = await fetch(`${BASE}/api/v1/public/fixtures/${id}/video`);
-      const body = (await res.json().catch(() => null)) as { ok?: boolean; data?: { live?: unknown; replay?: unknown } } | null;
+      const body = (await res.json().catch(() => null)) as { ok?: boolean; data?: { live?: unknown; replay?: unknown; session?: unknown } } | null;
       const raw = body?.data?.replay;
       const replay: Part[] | null = Array.isArray(raw) ? (raw as Part[]) : null;
       return { status: res.status, cache: res.headers.get("cache-control"), data: body?.data, replay };
@@ -293,8 +293,8 @@ export async function seaznHostedSuite(): Promise<void> {
     for (const [what, id] of [["this match", fx.fixtureId], ["an id that names no match", randomUUID()]] as const) {
       const r = await video(id);
       step(
-        `GET the public video of ${what} → 200, private, no-store, { live: null, replay: [] } (got ${r.status}, ${String(r.cache)})`,
-        r.status === 200 && r.cache === "private, no-store" && r.data?.live === null && Array.isArray(r.data?.replay) && r.data.replay.length === 0,
+        `GET the public video of ${what} → 200, private, no-store, { live: null, replay: [], session: null } (got ${r.status}, ${String(r.cache)}, session ${JSON.stringify(r.data?.session)})`,
+        r.status === 200 && r.cache === "private, no-store" && r.data?.live === null && Array.isArray(r.data?.replay) && r.data.replay.length === 0 && r.data.session === null,
       );
     }
 

@@ -12,6 +12,9 @@ import "server-only";
 //
 // `live`: the fixture's LATEST session (by creation), when it is a Seazn session in state `live` — its programme input's signed
 // HLS (`signLivePlayback`). Warming, ending, ended, or an external destination: no live.
+// `session` (Task 33g, T33f review m1): the same latest session's own `state` and whether it ever went live (`started_at` set), when it is
+// a Seazn session; null for a session of another kind, none, or a fixture the public may not see. It rides EVERY answer, the empty one
+// too, so an open page can follow a Stop, a cancel (a Go live stopped while warming records nothing) or a live it missed.
 // `replay`: every recording of the fixture's ENDED Seazn sessions, one part each (domain/replay-parts.ts holds the rules):
 //   * the replay host's copy (Task 25): a recording the replay move made `playable` (`fixture_video_replays`, Task 24) is an
 //     `embed` part, its src the host's signed player URL (`signedEmbed`, REPLAY_EMBED_TOKEN_TTL_SECONDS), IN PLACE of its interim
@@ -50,7 +53,7 @@ import "server-only";
 // in an error. The privileged `sql` client: fixture_stream_*, seazn_locked_videos and fixture_video_replays are FORCE RLS with no
 // policy (V410, V541, V542), the stream pattern (parts.ts).
 import { sql } from "@/lib/db";
-import type { PublicFixtureVideo } from "@/server/api-v1/schemas";
+import type { PublicFixtureVideo, StreamSessionState } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
 import { REPLAY_EMBED_TOKEN_TTL_SECONDS, SEAZN_TOKEN_FAILURE_CACHE_SECONDS } from "@/server/relay/config";
 import { relayDrivers } from "@/server/relay/drivers";
@@ -65,7 +68,7 @@ export type { PublicFixtureVideo };
  *  production signs through this process's relay, its one token cache (Task 13) and its replay driver. */
 export type VideoDeps = PlaybackDeps & { replay?: ReplayHost };
 
-const EMPTY = (): PublicFixtureVideo => ({ live: null, replay: [] });
+const EMPTY = (): PublicFixtureVideo => ({ live: null, replay: [], session: null });
 /** A fixture id is a uuid; anything else names no fixture, and is answered before it reaches a query (22P02 would be a 500). */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -86,7 +89,7 @@ export async function seaznFixtureVideoForOrg(orgId: string, fixtureId: string, 
   return own ? videoOf(fixtureId, orgId, now, playback) : EMPTY();
 }
 
-interface LatestSession { id: string; state: string; destination_kind: string; programme_uid: string | null }
+interface LatestSession { id: string; state: StreamSessionState; destination_kind: string; programme_uid: string | null; went_live: boolean }
 
 /** What a rejected mint is logged as: its class alone. A message could quote a request, and a request can carry a token. */
 const errorClass = (e: unknown): string => (e instanceof Error ? e.name : typeof e);
@@ -146,7 +149,7 @@ async function videoOf(fixtureId: string, orgId: string | null, now: Date, playb
   // The programme input is the session's lowest programme slot (readFirstInput's row), read for its uid alone: nothing
   // sealed is opened on a viewer's request.
   const [latest] = await sql<LatestSession[]>`
-    select s.id, s.state, s.destination_kind,
+    select s.id, s.state, s.destination_kind, s.started_at is not null as went_live,
            (select i.ingest_input_id from fixture_stream_inputs i
              where i.session_id = s.id and i.role = 'programme' order by i.slot asc limit 1) as programme_uid
       from fixture_stream_sessions s
@@ -155,13 +158,16 @@ async function videoOf(fixtureId: string, orgId: string | null, now: Date, playb
      limit 1`;
   const parts = await listedParts(fixtureId, orgId, now);
 
+  // Task 33g: what the open page needs to follow the session (its own state, never a new vocabulary), for a Seazn session only: a
+  // session of another kind is not this player's to wait for (the page's plan reads `latest_kind` the same way).
+  const session: PublicFixtureVideo["session"] = latest !== undefined && latest.destination_kind === "seazn" ? { state: latest.state, wentLive: latest.went_live } : null;
   const onAir = latest !== undefined && latest.destination_kind === "seazn" && latest.state === "live";
   const liveUid = onAir ? latest.programme_uid : null;
   if (onAir && liveUid === null) {
     // A live Seazn session has a provisioned programme input; one without a uid has nothing to sign, so it shows no live.
     log.warn({ sessionId: latest.id }, "seazn video: a live Seazn session has no programme input uid; no live is shown");
   }
-  if (liveUid === null && parts.length === 0) return EMPTY();
+  if (liveUid === null && parts.length === 0) return { ...EMPTY(), session };
 
   const interim = parts.filter((p) => p.player === "hls");
   // The relay is built only for a live or an interim part; the replay host only for an embed part.
@@ -196,5 +202,5 @@ async function videoOf(fixtureId: string, orgId: string | null, now: Date, playb
       );
     }
   });
-  return { live, replay };
+  return { live, replay, session };
 }

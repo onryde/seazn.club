@@ -9,14 +9,15 @@
 import { describe, expect, it } from "vitest";
 import { PublicFixtureVideo } from "@/server/api-v1/schemas";
 import { ENDING_TIMEOUT_SECONDS, FINALISATION_GRACE_SECONDS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS, STREAM_TICK_PERIOD_SECONDS } from "@/server/relay/config";
-import { SEAZN_RECORDING_SHOWN_BY_MS, SEAZN_VIDEO_HOLD_MS, holdAfterAnswer, holdWait, parseHold, showsPlayer } from "../seazn-video-hold";
+import { ACTIVE_STATES, TERMINAL_STATES, type SessionState } from "@/server/relay/domain/session";
+import { SEAZN_RECORDING_SHOWN_BY_MS, SEAZN_VIDEO_HOLD_MS, type Wait, comingOf, holdAfterAnswer, holdWait, parseHold, showsPlayer, waitAfterAnswer } from "../seazn-video-hold";
 import { SEAZN_VIDEO_POLL_CEILING_MS, SEAZN_VIDEO_POLL_FLOOR_MS } from "../seazn-video-schedule";
 
 const NOW = Date.parse("2026-11-22T12:00:00.000Z");
 const signed = (name: string) => ({ src: `https://playback.fake.invalid/tok-${name}/manifest/video.m3u8`, expiresAt: new Date(NOW + 3_600_000).toISOString() });
 const part = (partNo: number, player: "hls" | "embed" = "hls") => ({ partNo, player, ...signed(`p${partNo}`) });
-const answer = (v: { live?: ReturnType<typeof signed> | null; replay?: ReturnType<typeof part>[] }): PublicFixtureVideo =>
-  PublicFixtureVideo.parse({ live: v.live ?? null, replay: v.replay ?? [] });
+const answer = (v: { live?: ReturnType<typeof signed> | null; replay?: ReturnType<typeof part>[]; session?: { state: SessionState; wentLive: boolean } | null }): PublicFixtureVideo =>
+  PublicFixtureVideo.parse({ live: v.live ?? null, replay: v.replay ?? [], ...(v.session === undefined ? {} : { session: v.session }) });
 
 // What a viewer waits for after a Stop, from the real path: Cloudflare finishes the recording a hold after the input goes, the next tick
 // firing locks it (one whole period on the slowest deployment), and the island's next read carries it (one read at the schedule's ceiling).
@@ -89,5 +90,96 @@ describe("holdWait: when the box lets go", () => {
     expect(holdWait(NOW, NOW), "exactly now").toBe(0);
     expect(holdWait(NOW - 1, NOW), "a ms ago").toBe(0);
     expect(holdWait(NOW - 10 * 60_000, NOW), "ten minutes ago").toBe(0);
+  });
+});
+
+// Task 33g (T33f review m1): an open page follows the latest session's state on EVERY read. `liveNext` froze at the render and cleared only
+// when a player mounted, so a Go live cancelled while warming (or missed whole: a hidden tab, a live shorter than one read) kept saying
+// "will start shortly" for up to the whole warming hold. The expected values come from the SERVER's own lists of states.
+describe("comingOf: what the held box waits for, from the latest session", () => {
+  // The server's ladder: a live comes next while the session is on its way up or on air, i.e. every active state up to and including `live`.
+  const LADDER = ACTIVE_STATES.slice(0, ACTIVE_STATES.indexOf("live") + 1);
+  const STATES: readonly SessionState[] = [...ACTIVE_STATES, ...TERMINAL_STATES];
+
+  it("EMPTY CASE FIRST: no Seazn session (null) is nothing coming", () => {
+    expect(comingOf(null)).toBeNull();
+  });
+
+  it("SWEEP every state of the server × never went live / went live: the live while up or on air; after it, the replay only if it ever went live", () => {
+    let checked = 0;
+    let live = 0, replay = 0, nothing = 0;
+    for (const state of STATES) {
+      for (const wentLive of [false, true]) {
+        const want = LADDER.includes(state) ? "live" : wentLive ? "replay" : null;
+        expect(comingOf({ state, wentLive }), `${state}, ${wentLive ? "went live" : "never went live"}`).toBe(want);
+        if (want === "live") live++;
+        else if (want === "replay") replay++;
+        else nothing++;
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: 7 states × 2").toBe(14);
+    expect(STATES, "every state of the server's lists, once").toHaveLength(7);
+    // 4 states up or on air (both ways) = 8 live; the 3 after it: went live = 3 replay, never = 3 nothing.
+    expect([live, replay, nothing]).toEqual([LADDER.length * 2, STATES.length - LADDER.length, STATES.length - LADDER.length]);
+  });
+});
+
+describe("waitAfterAnswer: the wait follows the answer, never only the render", () => {
+  const UNTIL = NOW + 10 * 60_000;
+  const warming: Wait = { liveNext: true, holdUntil: UNTIL };
+  const s = (state: SessionState, wentLive: boolean) => ({ state, wentLive });
+  const step = (w: Wait, v: PublicFixtureVideo, at = NOW) => waitAfterAnswer(w, v, at);
+
+  it("EMPTY CASE FIRST: an answer that names no session (one from before the field) leaves the wait exactly as it was", () => {
+    expect(step(warming, answer({}))).toEqual(warming);
+    expect(step({ liveNext: false, holdUntil: null }, answer({}))).toEqual({ liveNext: false, holdUntil: null });
+  });
+
+  it("a player on screen: the live line is spent and the hold starts afresh, whatever the session says", () => {
+    for (const session of [undefined, null, s("warming", false), s("live", true), s("completed", true)] as const) {
+      for (const v of [answer({ live: signed("l"), session }), answer({ replay: [part(1)], session }), answer({ replay: [part(1, "embed")], session })]) {
+        expect(step(warming, v), `${JSON.stringify(session)}`).toEqual({ liveNext: false, holdUntil: NOW + SEAZN_VIDEO_HOLD_MS });
+      }
+    }
+  });
+
+  it("warming → CANCELLED: the line and the hold go at the first read that says the session ended without ever going live", () => {
+    expect(step(warming, answer({ session: s("warming", false) })), "still warming").toEqual(warming);
+    expect(step(warming, answer({ session: s("completed", false) })), "cancelled").toEqual({ liveNext: false, holdUntil: null });
+    expect(step(warming, answer({ session: s("ending", false) })), "being cancelled").toEqual({ liveNext: false, holdUntil: null });
+    expect(step(warming, answer({ session: s("failed", false) })), "failed before going live").toEqual({ liveNext: false, holdUntil: null });
+  });
+
+  it("warming → live → ended: the live line, then the player, then (after a stop) the replay line with the hold kept, then the recording", () => {
+    let w = step(warming, answer({ session: s("warming", false) }));
+    expect(w).toEqual(warming);
+    w = step(w, answer({ live: signed("l"), session: s("live", true) }), NOW + 30_000);
+    expect(w).toEqual({ liveNext: false, holdUntil: NOW + 30_000 + SEAZN_VIDEO_HOLD_MS });
+    w = step(w, answer({ session: s("ending", true) }), NOW + 60_000);
+    expect(w, "stopped: the replay is coming, the hold runs on from the player's read").toEqual({ liveNext: false, holdUntil: NOW + 30_000 + SEAZN_VIDEO_HOLD_MS });
+    w = step(w, answer({ session: s("completed", true) }), NOW + 90_000);
+    expect(w).toEqual({ liveNext: false, holdUntil: NOW + 30_000 + SEAZN_VIDEO_HOLD_MS });
+    w = step(w, answer({ replay: [part(1)], session: s("completed", true) }), NOW + 120_000);
+    expect(w, "the recording: a player again").toEqual({ liveNext: false, holdUntil: NOW + 120_000 + SEAZN_VIDEO_HOLD_MS });
+  });
+
+  it("a live MISSED whole (a hidden tab, or a live shorter than one read): warming, then ended having gone live → the replay line, not the live one, hold kept", () => {
+    const w = step(warming, answer({ session: s("completed", true) }));
+    expect(w).toEqual({ liveNext: false, holdUntil: UNTIL });
+  });
+
+  it("ended WITHOUT a recording coming vs WITH one: never went live lets the box go; went live keeps it for the replay", () => {
+    expect(step({ liveNext: false, holdUntil: UNTIL }, answer({ session: s("completed", false) }))).toEqual({ liveNext: false, holdUntil: null });
+    expect(step({ liveNext: false, holdUntil: UNTIL }, answer({ session: s("completed", true) }))).toEqual({ liveNext: false, holdUntil: UNTIL });
+  });
+
+  it("a second Go live warming (null → warming): the live line comes back where a hold is on, and a hold that had run out is NOT restarted (the box goes once)", () => {
+    expect(step({ liveNext: false, holdUntil: UNTIL }, answer({ session: s("warming", false) }))).toEqual({ liveNext: true, holdUntil: UNTIL });
+    expect(step({ liveNext: false, holdUntil: null }, answer({ session: s("warming", false) }))).toEqual({ liveNext: true, holdUntil: null });
+  });
+
+  it("a session that is not Seazn's (null) is nothing coming", () => {
+    expect(step(warming, answer({ session: null }))).toEqual({ liveNext: false, holdUntil: null });
   });
 });

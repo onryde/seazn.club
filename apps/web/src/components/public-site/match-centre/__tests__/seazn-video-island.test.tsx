@@ -29,7 +29,7 @@ import publicEn from "@/dictionaries/en/public.json";
 import publicEs from "@/dictionaries/es/public.json";
 import publicFr from "@/dictionaries/fr/public.json";
 import publicNl from "@/dictionaries/nl/public.json";
-import { PublicFixtureVideo } from "@/server/api-v1/schemas";
+import { PublicFixtureVideo, StreamSessionState } from "@/server/api-v1/schemas";
 import { ReplayParts, SeaznVideoIsland, SeaznVideoStage, asPublicFixtureVideo, fetchSeaznVideo, nextPartIndex, playerKey, seaznVideoUrl } from "../seazn-video-island";
 import { SeaznPlayer } from "../seazn-player";
 import { SeaznReplayFrame } from "../seazn-replay-frame";
@@ -471,6 +471,89 @@ describe("Task 33f: the held box says whether the live video or the replay is co
     });
     expect(steps, "anti-vacuity: every step looked at").toEqual(["server", "live", "stopped", "recording"]);
   });
+
+  // Task 33g (T33f review m1): the page follows the latest session's state on every read. `session` is the route's own answer.
+  const at = (state: string, wentLive: boolean) => ({ ...EMPTY, session: { state, wentLive } });
+  const slotOf = (out: string): string | null => /<p data-testid="seazn-video-delay-reserved"[^>]*>(.*?)<\/p>/.exec(out)?.[1] ?? null;
+  const PAGE_DRAWN_WARMING = { reserve: true, liveExpected: true, holdUntil: until, activeUntil: new Date(NOW + 60 * MIN).toISOString() };
+
+  it("mounted, a page drawn WARMING, then the Go live is CANCELLED: the live line and its box are gone at the first read that says so (before the hold would have run out)", async () => {
+    const seen: string[] = [];
+    await mounted(PAGE_DRAWN_WARMING, [at("warming", false), at("warming", false), at("completed", false), at("completed", false)], async (now, nextRead) => {
+      const look = (step: string, want: { box: boolean; status: string[]; row: boolean }) => {
+        const out = now();
+        expect(out.includes('data-testid="seazn-video-starting"'), `${step}: the held box`).toBe(want.box);
+        expect(statusLines(out), `${step}: the line`).toEqual(want.status);
+        expect(slotOf(out) !== null, `${step}: the held delay row`).toBe(want.row);
+        seen.push(step);
+      };
+      look("server markup", { box: true, status: [OWNER_LIVE_LINE], row: true });
+      await nextRead();
+      look("read 1: warming", { box: true, status: [OWNER_LIVE_LINE], row: true });
+      await nextRead();
+      look("read 2: warming still", { box: true, status: [OWNER_LIVE_LINE], row: true });
+      await nextRead();
+      look("read 3: cancelled — it never went live, nothing is coming", { box: false, status: [], row: false });
+      expect(now(), "and the island draws nothing at all").toBe("");
+      await nextRead();
+      look("read 4: nothing more", { box: false, status: [], row: false });
+    });
+    expect(seen, "anti-vacuity: every step looked at").toHaveLength(5);
+  });
+
+  it("mounted, a page drawn warming whose live was MISSED whole (the next read it sees says the session already ended, having gone live): the REPLAY line replaces the live one, then the recording", async () => {
+    await mounted(PAGE_DRAWN_WARMING, [at("warming", false), at("completed", true), { live: null, replay: [part(1)], session: { state: "completed", wentLive: true } }], async (now, nextRead) => {
+      expect(statusLines(now()), "server markup").toEqual([OWNER_LIVE_LINE]);
+      await nextRead();
+      expect(statusLines(now()), "read 1: warming").toEqual([OWNER_LIVE_LINE]);
+      await nextRead();
+      expect(now(), "read 2: ended — the box holds, for the recording that is coming").toContain('data-testid="seazn-video-starting"');
+      expect(statusLines(now()), "read 2: the replay line, never the live one").toEqual([OWNER_REPLAY_LINE]);
+      expect(slotOf(now()), "read 2: and no live row held for it").toBeNull();
+      await nextRead();
+      expect(now(), "read 3: the recording").toContain('data-testid="seazn-player"');
+      expect(statusLines(now())).toEqual([]);
+    });
+  });
+
+  it("mounted, warming → live → stop → ended (it went live): the live line, the player, then the replay line through `ending` and `completed`", async () => {
+    const seen: (string | null)[] = [];
+    await mounted(PAGE_DRAWN_WARMING, [at("warming", false), { live: signed("live"), replay: [], session: { state: "live", wentLive: true } }, at("ending", true), at("completed", true)], async (now, nextRead) => {
+      const line = () => (seen.push(statusLines(now())[0] ?? null), statusLines(now())[0] ?? null);
+      expect(line(), "server markup").toBe(OWNER_LIVE_LINE);
+      await nextRead();
+      expect(line(), "read 1: warming").toBe(OWNER_LIVE_LINE);
+      await nextRead();
+      expect(line(), "read 2: live").toBeNull();
+      expect(now()).toContain('data-testid="seazn-player"');
+      await nextRead();
+      expect(line(), "read 3: ending").toBe(OWNER_REPLAY_LINE);
+      await nextRead();
+      expect(line(), "read 4: completed, a recording is coming").toBe(OWNER_REPLAY_LINE);
+    });
+    expect(seen, "anti-vacuity").toEqual([OWNER_LIVE_LINE, OWNER_LIVE_LINE, null, OWNER_REPLAY_LINE, OWNER_REPLAY_LINE]);
+  });
+
+  it("mounted, a Stop with a cancel in it (`ending`, never went live) and a session of ANOTHER kind (session null) each let the held box go at once", async () => {
+    for (const [name, second] of [["ending, never live", at("ending", false)], ["no Seazn session", { ...EMPTY, session: null }]] as const) {
+      await mounted({ reserve: true, holdUntil: until }, [at("completed", true), second], async (now, nextRead) => {
+        expect(statusLines(now()), `${name}: server markup (the replay)`).toEqual([OWNER_REPLAY_LINE]);
+        await nextRead();
+        expect(statusLines(now()), `${name}: read 1, a recording is coming`).toEqual([OWNER_REPLAY_LINE]);
+        await nextRead();
+        expect(now(), `${name}: read 2, nothing is coming`).toBe("");
+      });
+    }
+  });
+
+  it("an answer that names no session (the route before this field) keeps the page's hint: the live line stays through empty reads, as T33f drew it", async () => {
+    await mounted(PAGE_DRAWN_WARMING, [EMPTY, EMPTY], async (now, nextRead) => {
+      await nextRead();
+      expect(statusLines(now())).toEqual([OWNER_LIVE_LINE]);
+      await nextRead();
+      expect(statusLines(now())).toEqual([OWNER_LIVE_LINE]);
+    });
+  });
 });
 
 describe("the island: replay parts (the interim Cloudflare recording)", () => {
@@ -659,7 +742,7 @@ describe("the route: URL, the read, and a guard on what comes back", () => {
   describe("asPublicFixtureVideo", () => {
     const valid = answer({ live: signed("live"), replay: [part(2), part(5, "embed")] });
     it("accepts the answers the route's schema accepts (a live with parts, and the empty answer) and hands them back as they came", () => {
-      for (const ok of [valid, { live: null, replay: [] }]) {
+      for (const ok of [valid, { live: null, replay: [] }, { live: null, replay: [], session: null }, ...StreamSessionState.options.flatMap((state) => [false, true].map((wentLive) => ({ live: null, replay: [], session: { state, wentLive } })))]) {
         expect(PublicFixtureVideo.safeParse(ok).success, "premise: the route's schema accepts it").toBe(true);
         expect(asPublicFixtureVideo(ok)).toEqual(ok);
       }
@@ -678,7 +761,16 @@ describe("the route: URL, the read, and a guard on what comes back", () => {
       ["a part number 0", { live: null, replay: [{ ...part(1), partNo: 0 }] }],
       ["a part number 1.5", { live: null, replay: [{ ...part(1), partNo: 1.5 }] }],
       ["a part with no src", { live: null, replay: [{ partNo: 1, player: "hls", expiresAt: "2026-11-21T13:00:00.000Z" }] }],
+      ["a session that is a string", { live: null, replay: [], session: "live" }],
+      ["a session with no wentLive", { live: null, replay: [], session: { state: "live" } }],
+      ["a session whose wentLive is not a boolean", { live: null, replay: [], session: { state: "live", wentLive: "yes" } }],
+      ["a session whose state is not a string", { live: null, replay: [], session: { state: 1, wentLive: true } }],
     ];
+    it("a session state this build does not know is still an answer (its player plays); only the shape is held", () => {
+      const future = { live: null, replay: [], session: { state: "a-later-state", wentLive: true } };
+      expect(PublicFixtureVideo.safeParse(future).success, "premise: the schema names the states it knows").toBe(false);
+      expect(asPublicFixtureVideo(future)).toEqual(future);
+    });
     it.each(bad)("rejects %s", (_name, value) => {
       expect(() => asPublicFixtureVideo(value)).toThrow(/video/);
     });
@@ -689,7 +781,7 @@ describe("the route: URL, the read, and a guard on what comes back", () => {
         checked++;
       }
       expect(checked).toBe(bad.length);
-      expect(checked).toBeGreaterThanOrEqual(12);
+      expect(checked).toBeGreaterThanOrEqual(16);
     });
   });
 });

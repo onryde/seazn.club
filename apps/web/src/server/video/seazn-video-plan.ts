@@ -49,7 +49,9 @@ import "server-only";
 // way up or live (every active state up to `live`: the route answers a live only in `live`, seazn-live.ts). The live player carries one
 // more row, its delay line, so the box the island holds keeps that row, invisible, and the live arrives with no shift. Never while it is
 // being stopped or after (a recording comes next, which has no line), nor for an unstarted fixture (arm 3: no box is held there). The
-// same flag picks the held box's line (Task 33f): the live video is coming while it is set, else the replay.
+// same flag picks the held box's line (Task 33f): the live video is coming while it is set, else the replay. It is the FIRST render's
+// hint only (Task 33g): the island re-derives the line and the hold from the video route's `session` on every read (seazn-video-hold.ts
+// `waitAfterAnswer`), so a Go live cancelled or missed after the page was drawn no longer keeps it.
 //
 // And the island's poll hints (Phase 1 re-review N1): an empty answer holds the 30 s floor while the match is hot, else backs off to
 // 60 s. `kickoffAt` is the fixture's `scheduled_at` (the island checks the hour either side of it on the viewer's clock, so a page

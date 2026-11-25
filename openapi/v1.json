@@ -70403,7 +70403,7 @@
     },
     "/api/v1/fixtures/{id}/video": {
       "get": {
-        "summary": "The organiser's Seazn-hosted video of a fixture (the signed-in member's session only; Match Day's stream preview): the same body as the public route — `live`, while the fixture's latest stream session is on air to Seazn, and `replay`, its finished recordings in recording order — each a signed playback URL (the token is a path segment) with the time its token expires, read for this organisation's own fixture whatever its competition's visibility. Any member of the fixture's organisation reads it, a viewer included. Never key-reachable: a signed address is a bearer credential. A signed-in user who is not a member of the fixture's organisation, an unknown id and a malformed one all answer the same 404. Served `Cache-Control: private, no-store`, varying on Cookie and Authorization. A fixture with no Seazn video answers `{ live: null, replay: [] }`",
+        "summary": "The organiser's Seazn-hosted video of a fixture (the signed-in member's session only; Match Day's stream preview): the same body as the public route — `live`, while the fixture's latest stream session is on air to Seazn, and `replay`, its finished recordings in recording order — each a signed playback URL (the token is a path segment) with the time its token expires, read for this organisation's own fixture whatever its competition's visibility. Any member of the fixture's organisation reads it, a viewer included. Never key-reachable: a signed address is a bearer credential. A signed-in user who is not a member of the fixture's organisation, an unknown id and a malformed one all answer the same 404. Served `Cache-Control: private, no-store`, varying on Cookie and Authorization. `session` is the fixture's latest stream session when it is a Seazn one — its `state` and whether it ever went live (`wentLive`), so an open page can follow a Stop or a cancel — else null. A fixture with no Seazn video answers `{ live: null, replay: [], session: null }`",
         "tags": [
           "fixtures"
         ],
@@ -70499,6 +70499,38 @@
                             ],
                             "additionalProperties": false
                           }
+                        },
+                        "session": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "state": {
+                                  "type": "string",
+                                  "enum": [
+                                    "requested",
+                                    "provisioning",
+                                    "warming",
+                                    "live",
+                                    "ending",
+                                    "completed",
+                                    "failed"
+                                  ]
+                                },
+                                "wentLive": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "state",
+                                "wentLive"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -70527,7 +70559,11 @@
                         "partNo": 1,
                         "player": "hls"
                       }
-                    ]
+                    ],
+                    "session": {
+                      "state": "requested",
+                      "wentLive": true
+                    }
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -112245,7 +112281,7 @@
     },
     "/api/v1/public/fixtures/{id}/video": {
       "get": {
-        "summary": "A fixture's Seazn-hosted video for the match page's player: `live`, while the fixture's latest stream session is on air to Seazn, and `replay`, its finished recordings in recording order, each numbered by its place among them all (one past the recording host's own delete, or one that cannot be signed right now, is left out and leaves a gap); each a signed playback URL (the token is a path segment) with the time its token expires. Answered `Cache-Control: private, no-store`. A fixture with no Seazn video, or one the public cannot see, answers `{ live: null, replay: [] }`",
+        "summary": "A fixture's Seazn-hosted video for the match page's player: `live`, while the fixture's latest stream session is on air to Seazn, and `replay`, its finished recordings in recording order, each numbered by its place among them all (one past the recording host's own delete, or one that cannot be signed right now, is left out and leaves a gap); each a signed playback URL (the token is a path segment) with the time its token expires. Answered `Cache-Control: private, no-store`. A fixture with no Seazn video, or one the public cannot see, answers `{ live: null, replay: [], session: null }`; `session` is the fixture's latest stream session when it is a Seazn one (its `state` and whether it ever went live, `wentLive`), so an open page can follow a Stop or a cancel",
         "tags": [
           "public"
         ],
@@ -112340,6 +112376,38 @@
                             ],
                             "additionalProperties": false
                           }
+                        },
+                        "session": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "state": {
+                                  "type": "string",
+                                  "enum": [
+                                    "requested",
+                                    "provisioning",
+                                    "warming",
+                                    "live",
+                                    "ending",
+                                    "completed",
+                                    "failed"
+                                  ]
+                                },
+                                "wentLive": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "state",
+                                "wentLive"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -112368,7 +112436,11 @@
                         "partNo": 1,
                         "player": "hls"
                       }
-                    ]
+                    ],
+                    "session": {
+                      "state": "requested",
+                      "wentLive": true
+                    }
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }

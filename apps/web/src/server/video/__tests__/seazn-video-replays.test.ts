@@ -55,7 +55,10 @@ const EMBED = /^https:\/\/embed\.fake\.invalid\/embed\/1\/([^/?]+)\?token=([0-9a
 const PLAY = /^https:\/\/playback\.fake\.invalid\/([^/?]+)\/manifest\/video\.m3u8$/;
 /** The embed token's life (plan B8: 1 h), typed here. */
 const EMBED_TTL_SECONDS = 3600;
-const EMPTY = { live: null, replay: [] };
+/** What a fixture whose one Seazn session went live and ended answers with no part to play (Task 33g: `session` is the latest session's
+ *  own state, which the page follows). NONE: nobody's session, or one the public may not see. */
+const EMPTY = { live: null, replay: [], session: { state: "completed", wentLive: true } };
+const NONE = { live: null, replay: [], session: null };
 
 installSeaznEnv("t25-video-replays");
 afterEach(() => { setReplayDriverForTest(null); __resetReplayHostLogForTests(); entriesFault.dropPending = false; });
@@ -269,11 +272,11 @@ describe.skipIf(!HAS_DB)("Task 25 — the replay host's copy replaces the interi
     const at = t0 + 16 * MIN;
     const [{ competition_id }] = await sql<{ competition_id: string }[]>`select d.competition_id from fixtures f join divisions d on d.id = f.division_id where f.id = ${f}`;
     await sql`update competitions set visibility = 'private' where id = ${competition_id}`;
-    expect(await read(w, f, at), "private: nothing for the public").toEqual(EMPTY);
+    expect(await read(w, f, at), "private: nothing for the public").toEqual(NONE);
     expect(await seaznReplayPartNos(f, new Date(at))).toEqual([]);
     expect(shape(await readOrg(w, f, at)), "the organiser still sees it").toEqual([[1, "embed", guid]]);
     const other = await seaznRig();
-    expect(await seaznFixtureVideoForOrg(other.auth.orgId, f, new Date(at), { ingest: w.ingest, tokenCache: createPlaybackTokenCache(), replay: w.host }), "another org").toEqual(EMPTY);
+    expect(await seaznFixtureVideoForOrg(other.auth.orgId, f, new Date(at), { ingest: w.ingest, tokenCache: createPlaybackTokenCache(), replay: w.host }), "another org").toEqual(NONE);
     await sql`update competitions set visibility = 'unlisted' where id = ${competition_id}`;
     expect(shape(await read(w, f, at)), "unlisted: the public's again").toEqual([[1, "embed", guid]]);
   });
@@ -462,7 +465,7 @@ describe.skipIf(!HAS_DB)("Task 39 — offered only when playable; a reconnect is
   it("EMPTY CASE FIRST, then each state: queued and inprogress and error are LOCKED and offered as no part; ready is offered on the very next pass, inside the grace; a second pass changes nothing", async () => {
     const w = await world();
     const f = w.fixtureIds[0];
-    expect(await read(w, f, w.deps.now().getTime()), "no recording at all").toEqual(EMPTY);
+    expect(await read(w, f, w.deps.now().getTime()), "no recording at all (and no session yet)").toEqual(NONE);
     const states = [...TRIP, "error", "ready"] as const;
     const s = await endedWith(w, f, states.map((state) => ({ state })));
     const [queued, inprogress, errored, ready] = s.ids as [string, string, string, string];

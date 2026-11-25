@@ -393,7 +393,7 @@ for (const width of [320, 768, 1280] as const) {
           expect(before.lineFits, `T33f: the replay line fits its frame at ${width}`).toBe(true);
           expect(before.frame, "and the box").not.toBeNull();
           const answer = (await (await firstRead).json()) as { data: { live: unknown; replay: unknown[] } };
-          expect(answer.data, "premise: the first answer has nothing to play").toEqual({ live: null, replay: [] });
+          expect(answer.data, "premise: the first answer has nothing to play, from a session that went live and ended").toEqual({ live: null, replay: [], session: { state: "completed", wentLive: true } });
           const read = await seaznGeometry(page);
           expect(read.line, "the empty answer does not collapse the box: the line is still there").toBe(REPLAY_COMING);
           samePlace("the box across the first read", before.frame, read.frame);
@@ -541,6 +541,67 @@ test.describe("the Seazn player over time (1280)", () => {
           .toBe(true);
         expect(stub.requests.filter((u) => /\/seg0\.ts$/.test(u) && !/\/refreshed-\d+\//.test(u)), "and none under the first token").toEqual([]);
       }
+    } finally {
+      await finishSeaznMatch(m);
+    }
+  });
+
+  // Task 33g (T33f review m1): an OPEN page follows the latest session's state. The page is drawn while a Go live warms and says the live
+  // video will start shortly; the island's reads then carry the session itself (`session` in the route's answer), so a Go live that is
+  // CANCELLED (stopped before it ever went live: nothing is coming) clears the line at the very next read, instead of keeping it for the
+  // rest of the plan's warming hold (up to ~14 minutes). The cancel here is the row the real Stop leaves (finishSeaznMatch: completed, its
+  // `started_at` never set; the producer is proved in vitest, seazn-video.test.ts "the latest session decides").
+  test("an open page drawn while a Go live warms loses the 'will start shortly' line, and its box, at the next read after the Go live is CANCELLED — without a reload", async ({ page }) => {
+    test.setTimeout(SEAZN_SEED_MS + SEAZN_NAV_MS + ONE_RE_READ_MS);
+    const m = await seedSeaznMatch(page, { name: `Seazn Cancelled ${TAG}` });
+    try {
+      const server = await (await page.request.get(m.publicPath)).text();
+      expect(heldLinesIn(server), "the page is drawn while warming: the LIVE video is coming, and only that").toEqual([LIVE_COMING]);
+      await page.goto(m.publicPath);
+      await dismissCookieBanner(page);
+      const starting = page.getByTestId("seazn-video-starting");
+      await expect(starting, "the open page holds the box for the live").toBeVisible();
+      await expect(starting.getByRole("status"), "with the live line").toHaveText(LIVE_COMING);
+      await page.evaluate(() => { (window as unknown as { __seaznSameDocument: boolean }).__seaznSameDocument = true; });
+
+      await finishSeaznMatch(m);
+      const [row] = await withDb((sql) => sql<{ state: string; started: boolean }[]>`select state, started_at is not null as started from fixture_stream_sessions where id = ${m.sessionId}`);
+      expect(row, "premise: the cancelled session is over and never went live").toEqual({ state: "completed", started: false });
+      await expect(starting, "the next read says it ended without going live: the box and its line are gone").toHaveCount(0, { timeout: ONE_RE_READ_MS });
+      await expect(page.getByText(LIVE_COMING), "and the live line is nowhere on the page").toHaveCount(0);
+      await expect(page.getByTestId("seazn-video"), "no player was drawn").toHaveCount(0);
+      await expect(page.getByTestId("mc-court-card"), "the match page itself is still there").toBeVisible();
+      expect(await page.evaluate(() => (window as unknown as { __seaznSameDocument?: boolean }).__seaznSameDocument), "and nothing reloaded").toBe(true);
+    } finally {
+      await finishSeaznMatch(m);
+    }
+  });
+
+  // The sibling: the live is MISSED whole (a hidden tab, or a live shorter than one read). The open page, drawn while warming, next hears
+  // that the session went live and has already ended: no live is coming any more, but a recording is, so the line turns from the live
+  // video's to the replay's (the box stays), and the recording, once locked, plays in it.
+  test("an open page drawn while a Go live warms turns from the live line to the replay line when the live is missed whole, and then plays the recording", async ({ page }) => {
+    test.setTimeout(SEAZN_SEED_MS + SEAZN_NAV_MS + 2 * ONE_RE_READ_MS);
+    const m = await seedSeaznMatch(page, { name: `Seazn Missed ${TAG}` });
+    try {
+      await stubFakePlaybackHost(page);
+      await page.goto(m.publicPath);
+      await dismissCookieBanner(page);
+      const starting = page.getByTestId("seazn-video-starting");
+      await expect(starting.getByRole("status"), "drawn while warming: the live line").toHaveText(LIVE_COMING);
+      await page.evaluate(() => { (window as unknown as { __seaznSameDocument: boolean }).__seaznSameDocument = true; });
+
+      // The whole live happens between two of the island's reads: it goes live and ends again, its recording not locked yet.
+      await goLive(m);
+      await finishSeaznMatch(m);
+      await expect(starting.getByRole("status"), "the next read: it went live and ended, so the REPLAY is what is coming").toHaveText(REPLAY_COMING, { timeout: ONE_RE_READ_MS });
+      await expect(page.getByTestId("seazn-video-delay-reserved"), "and no row is held for a live line").toHaveCount(0);
+      await expect(page.getByTestId("seazn-video"), "still no player").toHaveCount(0);
+
+      const [recording] = await lockRecordings(m, 1);
+      await expect(seaznPlayer(page), "a later read plays the recording in the held box's place").toHaveAttribute("data-src", signedAddressPattern(recording!), { timeout: ONE_RE_READ_MS });
+      await expect(starting, "the line went with the box").toHaveCount(0);
+      expect(await page.evaluate(() => (window as unknown as { __seaznSameDocument?: boolean }).__seaznSameDocument), "and nothing reloaded").toBe(true);
     } finally {
       await finishSeaznMatch(m);
     }
