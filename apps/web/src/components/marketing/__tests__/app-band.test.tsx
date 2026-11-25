@@ -43,7 +43,7 @@ const APPROVED = {
   "home.app": ["Your phone is the camera and the scorer", LABEL, "Scan your organiser’s code to stream a match with the score on screen, or to score it."],
   "product.streaming.app": ["Put the camera in your pocket", LABEL, "Scan a match or court code, then hold Go live. No laptop, no capture card."],
   "product.matchday.app": ["One phone follows the court", LABEL, "Scan a court code once. It goes live when a match starts and stops when it ends."],
-  "product.remote.app": ["Score from the app too", LABEL, "Open your organiser’s scoring link and score rally by rally. The browser pad still works."],
+  "product.remote.app": ["Score from the app too", LABEL, "Scan your organiser’s scoring code and score every point, ball or goal. The browser pad still works."],
 } as const;
 type Prefix = keyof typeof APPROVED;
 
@@ -130,7 +130,7 @@ const NAMING_KEYS = [
   "product.matchday.faq.1.a",
 ];
 const ARTICLE: Record<Locale, string> = { en: "the", es: "la", fr: "la", nl: "de" };
-const OLD_NAMES = /Seazn[ -]app\b|\bapp(?:li|lication)?(?: de)? Seazn\b/i;
+const OLD_NAMES = /Seazn(?: Club)?[ -]app\b|\bapp(?:li|lication)?(?: de)? Seazn\b/i;
 
 describe("the app's one name in the marketing copy", () => {
   it("each renamed string names the product after its article, capitalised only where it opens a sentence — counted", () => {
@@ -160,7 +160,7 @@ describe("the app's one name in the marketing copy", () => {
 
   it("no marketing string, in any locale, still uses an old name — counted", () => {
     // The scan's own premise: it knows each old spelling, and does not fire on the product's name.
-    for (const old of ["the Seazn app", "la app de Seazn", "l'application Seazn", "l'appli Seazn", "L'app Seazn", "de Seazn-app"]) {
+    for (const old of ["the Seazn app", "la app de Seazn", "l'application Seazn", "l'appli Seazn", "L'app Seazn", "de Seazn-app", "the Seazn Club app", "la app Seazn Club", "l'app Seazn Club", "de Seazn Club-app"]) {
       expect(old).toMatch(OLD_NAMES);
     }
     expect(`la ${LABEL}`).not.toMatch(OLD_NAMES);
@@ -172,6 +172,27 @@ describe("the app's one name in the marketing copy", () => {
       }
     }
     expect(checked).toBeGreaterThan(4000);
+  });
+
+  // The marketing copy is not the only place a person reads the name: the product's own screens and the help say it too.
+  it("no other dictionary and no help article uses an old name — counted", () => {
+    const old: string[] = [];
+    let strings = 0;
+    for (const lang of LOCALES) {
+      const dir = join(__dirname, "../../../dictionaries", lang);
+      for (const file of readdirSync(dir).filter((f) => f.endsWith(".json"))) {
+        for (const [key, value] of Object.entries(JSON.parse(readFileSync(join(dir, file), "utf8")) as Record<string, unknown>)) {
+          if (OLD_NAMES.test(JSON.stringify(value))) old.push(`${lang}/${file} ${key}`);
+          strings++;
+        }
+      }
+    }
+    const help = join(__dirname, "../../../../content/help");
+    const articles = readdirSync(help, { recursive: true, encoding: "utf8" }).filter((f) => f.endsWith(".md"));
+    for (const file of articles) if (OLD_NAMES.test(readFileSync(join(help, file), "utf8"))) old.push(`help/${file}`);
+    expect(old).toEqual([]);
+    expect(strings).toBeGreaterThan(20_000);
+    expect(articles.length).toBeGreaterThan(50);
   });
 });
 

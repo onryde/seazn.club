@@ -99,7 +99,7 @@ each `title`/`line` pair. Approved English:
 | Home | Seazn Club Mobile App | Your phone is the camera and the scorer | Scan your organiser’s code to stream a match with the score on screen, or to score it. |
 | Streaming | Seazn Club Mobile App | Put the camera in your pocket | Scan a match or court code, then hold Go live. No laptop, no capture card. |
 | Match day | Seazn Club Mobile App | One phone follows the court | Scan a court code once. It goes live when a match starts and stops when it ends. |
-| Remote scoring | Seazn Club Mobile App | Score from the app too | Open your organiser’s scoring link and score rally by rally. The browser pad still works. |
+| Remote scoring | Seazn Club Mobile App | Score from the app too | Scan your organiser’s scoring code and score every point, ball or goal. The browser pad still works. |
 
 Footer: badge centred above the bottom bar, with "Seazn Club Mobile App for Android. Google Play and the Google Play logo
 are trademarks of Google LLC." Remote scoring's band goes after the hero section (which holds the live demo).

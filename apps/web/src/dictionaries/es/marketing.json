@@ -256,7 +256,7 @@
   "product.matchday.app.line": "Escanea una vez el código de la pista. Emite en directo cuando empieza un partido y para cuando termina.",
   "product.remote.app.title": "Anota también desde la app",
   "product.remote.app.label": "Seazn Club Mobile App",
-  "product.remote.app.line": "Abre el enlace de anotación de tu organizador y anota punto a punto. El marcador del navegador sigue funcionando.",
+  "product.remote.app.line": "Escanea el código de anotación de tu organizador y anota cada punto, bola o gol. El marcador del navegador sigue funcionando.",
   "discovery.inPlay": "En juego",
   "discovery.badge.live": "En directo",
   "discovery.badge.featured": "Destacado",

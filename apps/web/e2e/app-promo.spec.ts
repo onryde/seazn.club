@@ -48,7 +48,7 @@ const BANDS = [
     path: "/product/remote-scoring",
     key: "product.remote.app",
     title: "Score from the app too",
-    line: "Open your organiser’s scoring link and score rally by rally. The browser pad still works.",
+    line: "Scan your organiser’s scoring code and score every point, ball or goal. The browser pad still works.",
     before: '[data-section="hero"]',
     after: '[data-section="road"]',
   },
