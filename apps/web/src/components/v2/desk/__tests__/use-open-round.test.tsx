@@ -244,7 +244,7 @@ describe("useOpenRoundWith - the presses follow THIS round", () => {
 describe("useOpenRoundWith - the receipt an unpaid open stands up", () => {
   const QUOTE = quoteOf({ size: 64, held: 41, rounds: 5 });
   const unpaid = () => new ApiV1Error("Pay first", 402, ONLINE_PACKAGE_CODES.unpaid, { quote: QUOTE, next: null, invitable: 3 } as unknown as Record<string, unknown>);
-  const BODY = { size: 64 as const, expectedOwed: 4 };
+  const BODY = { size: 64 as const, expectedOwed: 4, cameras: false };
   const standUp = async () => {
     const m = mount(VIEW({ stageId: "stage-Z", roundNo: 1 }));
     m.handle().ask();

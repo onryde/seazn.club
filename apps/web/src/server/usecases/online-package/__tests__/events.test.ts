@@ -75,7 +75,7 @@ function paid(a: {
   back?: { pack: number; monthly: number; forfeited: number } | null; applied?: boolean;
 }): PayResult {
   const quote = { size: a.size, cameras: a.cameras, owed: a.owed, take: a.take ?? null, back: a.back ?? null, refusal: null } as unknown as PackageQuote;
-  return { applied: a.applied ?? true, quote, package: row(a.size, a.cameras), capacityLoweredTo: null };
+  return { applied: a.applied ?? true, quote, package: row(a.size, a.cameras), capacityLoweredTo: null, cameraPolicy: null };
 }
 const CTX = { orgId: ORG, actorId: USER, paidBefore: false, atRoundOne: false };
 

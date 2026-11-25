@@ -381,7 +381,7 @@ describe("openRoundRunner - the unpaid answer and the pay-and-open", () => {
     let answer!: (v: unknown) => void;
     const post = vi.fn(() => new Promise((r) => (answer = r)));
     const runner = openRoundRunner({ dispatch, post, refresh });
-    const body = { size: 64 as const, expectedOwed: 4 };
+    const body = { size: 64 as const, expectedOwed: 4, cameras: false };
     const first = runner.payOpen("s1", 1, body);
     await expect(runner.payOpen("s1", 1, body), "a second press while one is out").rejects.toThrow();
     expect(post).toHaveBeenCalledTimes(1);
@@ -398,10 +398,10 @@ describe("openRoundRunner - the unpaid answer and the pay-and-open", () => {
     const changed = new ApiV1Error("Changed", 409, ONLINE_PACKAGE_CODES.quoteChanged, { quote: ASK.quote } as unknown as Record<string, unknown>);
     const post = vi.fn().mockRejectedValueOnce(changed).mockResolvedValueOnce(OPENED);
     const runner = openRoundRunner({ dispatch, post, refresh });
-    await expect(runner.payOpen("s1", 1, { size: 64, expectedOwed: 4 })).rejects.toBe(changed);
+    await expect(runner.payOpen("s1", 1, { size: 64, expectedOwed: 4, cameras: false })).rejects.toBe(changed);
     expect(dispatch.mock.calls.map((c) => c[0].type)).toEqual(["pay", "payFailed"]);
     expect(refresh).not.toHaveBeenCalled();
-    await runner.payOpen("s1", 1, { size: 64, expectedOwed: 4 }); // the runner is free again
+    await runner.payOpen("s1", 1, { size: 64, expectedOwed: 4, cameras: false }); // the runner is free again
     expect(post).toHaveBeenCalledTimes(2);
   });
 });

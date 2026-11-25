@@ -298,12 +298,24 @@ describe("division page: the checkout return's receipt request (?oc=pay) - the r
     expect(checked, "anti-vacuity").toBe(5);
   });
 
-  it("the camera intent the route writes (`&cameras=1`) reaches the host's request; only the exact `1`, never without oc=pay (fix round 3)", async () => {
+  it("the camera answer the route writes (`&cameras=1` Yes, `&cameras=0` No - Task 15) reaches the host's request; only those exact two, never without oc=pay", async () => {
     offered();
-    const withCameras = { ...tailOf(32), cameras: "1" };
-    expect(await receiptFor(withCameras), "the route's address with the intent").toEqual({ size: 32, key: SESSION, cameras: true });
-    for (const bad of ["0", "true", "", "11"]) expect(await receiptFor({ ...withCameras, cameras: bad }), JSON.stringify(bad)).toEqual({ size: 32, key: SESSION });
-    expect(await receiptFor({ tab: "fixtures", cameras: "1" }), "an intent alone opens nothing").toBeNull();
+    // relay-checkout/route.ts writes `&cameras=${body.cameras ? 1 : 0}` whenever the receipt sent an answer, so `0` is the No answer, not noise.
+    const written = [["1", true], ["0", false]] as const;
+    let checked = 0;
+    for (const [param, cameras] of written) {
+      expect(await receiptFor({ ...tailOf(32), cameras: param }), `the route's address with cameras=${param}`).toStrictEqual({ size: 32, key: SESSION, cameras });
+      expect(await receiptFor({ tab: "fixtures", cameras: param }), `cameras=${param} alone opens nothing`).toBeNull();
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(2);
+    // Anything else is not an answer: the request carries no `cameras` key at all (the receipt opens on the division's setting).
+    let dropped = 0;
+    for (const bad of ["true", "false", "", "11", "01", "00", " 1", "yes"]) {
+      expect(await receiptFor({ ...tailOf(32), cameras: bad }), JSON.stringify(bad)).toStrictEqual({ size: 32, key: SESSION });
+      dropped++;
+    }
+    expect(dropped, "anti-vacuity").toBe(8);
   });
 
   it("anything but a clean oc=pay opens nothing, and a size off the ladder is dropped (the receipt still opens, on the stored size)", async () => {
