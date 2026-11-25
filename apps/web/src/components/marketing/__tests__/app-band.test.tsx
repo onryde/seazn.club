@@ -177,13 +177,14 @@ describe("the app's one name in the marketing copy", () => {
   // The marketing copy is not the only place a person reads the name: the product's own screens and the help say it too.
   it("no other dictionary and no help article uses an old name — counted", () => {
     const old: string[] = [];
-    let strings = 0;
+    // Counted per locale: one total floor would still pass with whole locales unread.
+    const strings: Record<string, number> = {};
     for (const lang of LOCALES) {
       const dir = join(__dirname, "../../../dictionaries", lang);
       for (const file of readdirSync(dir).filter((f) => f.endsWith(".json"))) {
         for (const [key, value] of Object.entries(JSON.parse(readFileSync(join(dir, file), "utf8")) as Record<string, unknown>)) {
           if (OLD_NAMES.test(JSON.stringify(value))) old.push(`${lang}/${file} ${key}`);
-          strings++;
+          strings[lang] = (strings[lang] ?? 0) + 1;
         }
       }
     }
@@ -191,7 +192,7 @@ describe("the app's one name in the marketing copy", () => {
     const articles = readdirSync(help, { recursive: true, encoding: "utf8" }).filter((f) => f.endsWith(".md"));
     for (const file of articles) if (OLD_NAMES.test(readFileSync(join(help, file), "utf8"))) old.push(`help/${file}`);
     expect(old).toEqual([]);
-    expect(strings).toBeGreaterThan(20_000);
+    for (const lang of ["en", "es", "fr", "nl"]) expect(strings[lang] ?? 0, `${lang} strings read`).toBeGreaterThan(10_000);
     expect(articles.length).toBeGreaterThan(50);
   });
 });
