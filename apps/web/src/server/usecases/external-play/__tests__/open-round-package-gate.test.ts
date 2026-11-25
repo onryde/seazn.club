@@ -117,6 +117,7 @@ import { createCompetition } from "../../competitions";
 import { createDivision } from "../../divisions";
 import { onlinePackageQuote, payOnlinePackage, type PackageQuote } from "../../online-package";
 import { orgMoneyLockKey } from "../../stream-credits";
+import { CAMERA_POLICY_CHANGED } from "@/server/external-play/camera-policy";
 import { withdrawEntrantCascade } from "../../withdrawal";
 import { backendPid, pollWaitersBehind } from "./_lock-waiters";
 import {
@@ -163,12 +164,21 @@ const takenFor = async (packageId: string): Promise<number> =>
   (await packageLedger(packageId)).reduce((n, r) => n - r.delta, 0);
 
 /** What the organiser's receipt shows for `size`, and the pay-and-open body confirming it. */
-async function confirmFor(owner: AuthCtx, divisionId: string, size: OnlineSize) {
-  const shown = await onlinePackageQuote(owner, divisionId, size);
+async function confirmFor(owner: AuthCtx, divisionId: string, size: OnlineSize, cameras?: boolean) {
+  const shown = await onlinePackageQuote(owner, divisionId, size, cameras);
   expect(shown.refusal, `premise: ${size} can be bought`).toBeNull();
   expect(shown.take, `premise: the balance covers ${size}`).not.toBeNull();
-  return { size, expectedOwed: shown.owed };
+  return { size, expectedOwed: shown.owed, ...(cameras === undefined ? {} : { cameras }) };
 }
+
+/** The division's own camera setting, its CAMERA_POLICY_CHANGED audit rows, and the stamp's stored `staggered` flag. */
+const divisionPolicyOf = async (divisionId: string): Promise<string | null> =>
+  (await sql<{ p: string | null }[]>`select camera_policy as p from divisions where id = ${divisionId}`)[0]!.p;
+const cameraAuditsOf = async (divisionId: string) =>
+  sql<{ payload: Record<string, unknown> }[]>`
+    select payload from competition_events where type = ${CAMERA_POLICY_CHANGED} and payload->>'divisionId' = ${divisionId}`;
+const staggeredOf = async (stageId: string): Promise<boolean[]> =>
+  (await sql<{ staggered: boolean }[]>`select staggered from stage_round_opens where stage_id = ${stageId} order by round_no`).map((r) => r.staggered);
 
 /** An online division whose first stage is a KNOCKOUT of `players` linked players, Generated and Started, its package UNPAID. */
 async function seedOnlineKnockout(players: number) {
@@ -748,17 +758,32 @@ describe.skipIf(!HAS_DB)("Open round: the payment door (Online Chess credits §7
       expect([p.paid_at, p.frozen_at, p.credits_paid], "unpaid and changeable, as before the press").toEqual([null, null, 0]);
     }, 120_000);
 
-    it("the org money lock is not held while the invites fan out: it is taken last, after them (review m4)", async () => {
-      const s = await seedOnlineSwiss({ players: 4, onlinePackage: "unpaid" });
-      const body = await confirmFor(s.owner, s.divisionId, 16);
+    /** Another transaction asks for the org's money lock while the open is attaching its first board: was it free? */
+    const moneyLockDuringFanOut = (orgId: string): boolean[] => {
       const free: boolean[] = [];
-      // Another transaction asks for the org's money lock while the open is attaching its first board.
       race.duringAttach = async () => {
         free.push(await sql.begin(async (t) =>
-          (await t<{ got: boolean }[]>`select pg_try_advisory_xact_lock(hashtext(${orgMoneyLockKey(s.orgId)})) as got`)[0]!.got));
+          (await t<{ got: boolean }[]>`select pg_try_advisory_xact_lock(hashtext(${orgMoneyLockKey(orgId)})) as got`)[0]!.got));
       };
-      const r = await openRound({ stageId: s.stageId, roundNo: 1, actorUserId: s.ownerUserId, pay: body });
+      return free;
+    };
+
+    it("a first open that pays nothing (paid beforehand): the org money lock is free while the invites fan out - the cover and the freeze take it last (review m4)", async () => {
+      const s = await seedOnlineSwiss({ players: 4, onlinePackage: "unpaid" });
+      await payOnlinePackage(s.owner, s.divisionId, await confirmFor(s.owner, s.divisionId, 16));
+      const free = moneyLockDuringFanOut(s.orgId);
+      const r = await openRound({ stageId: s.stageId, roundNo: 1, actorUserId: s.ownerUserId });
       expect(free, "the fan-out ran, and the money lock was free during it").toEqual([true]);
+      expect(r.opened).toBe(true);
+      expect((await liveOf(s.divisionId)).frozen_at, "frozen at the end of the same open").not.toBeNull();
+    }, 120_000);
+
+    it("a first open that PAYS: the payment is taken before the stamp (Task 15 fix I1), so on that one press the money lock is held across the fan-out", async () => {
+      const s = await seedOnlineSwiss({ players: 4, onlinePackage: "unpaid" });
+      const body = await confirmFor(s.owner, s.divisionId, 16);
+      const free = moneyLockDuringFanOut(s.orgId);
+      const r = await openRound({ stageId: s.stageId, roundNo: 1, actorUserId: s.ownerUserId, pay: body });
+      expect(free, "the fan-out ran with the payment already made: the lock was held").toEqual([false]);
       expect(r.opened).toBe(true);
       const p = await liveOf(s.divisionId);
       expect([p.paid_at !== null, p.frozen_at !== null, await takenFor(p.id)], "paid and frozen at the end of the same open").toEqual([true, true, gcPrice(16)]);
@@ -870,6 +895,58 @@ describe.skipIf(!HAS_DB)("Open round: the payment door (Online Chess credits §7
     expect([e.status, e.code]).toEqual([500, "online_package_missing"]);
     expect(await stampsOf(s.stageId)).toBe(0);
   }, 120_000);
+
+  // Task 15 fix round 1, I1 (controller ruling: option b): the camera answer of a pay-and-open is the policy the ROUND opens under. The
+  // payment and its camera write run BEFORE the stamp and before the stagger decision, so (a) "has a round opened" is honestly no
+  // when the answer is written - a Yes on an Off division used to meet its own stamp and be refused 409 POLICY_LOCKED - and (b) the
+  // stamp's `staggered` follows the answer. Expected values from the spec, never from the code: §3.2.1 "an `off` round is one batch;
+  // required and optional stagger"; P19 (Task 15) "Yes on a division whose camera is off writes Required; No writes Off".
+  describe("the camera answer on a pay-and-open is the round's policy (Task 15 fix I1)", () => {
+    it("Yes on an unpaid Off division: opens, the division is Required, the round staggered; a second press takes nothing and writes nothing", async () => {
+      const s = await seedOnlineSwiss({ players: 4, onlinePackage: "unpaid" });
+      expect(await divisionPolicyOf(s.divisionId), "premise: the division inherits the competition's off").toBeNull();
+      const body = await confirmFor(s.owner, s.divisionId, 16, true);
+      expect(body.expectedOwed, "premise: 16 WITH the camera").toBe(gcPrice(16, true));
+      const r = await openRound({ stageId: s.stageId, roundNo: 1, actorUserId: s.ownerUserId, pay: body });
+      expect(r.opened, "the Yes is written before the stamp, so no round has opened yet: no POLICY_LOCKED").toBe(true);
+      if (r.opened) expect(r.payment).toEqual({ applied: true, credits: gcPrice(16, true), size: 16, capacityLoweredTo: null });
+      expect(await divisionPolicyOf(s.divisionId), "P19: Yes writes Required").toBe("required");
+      expect(await staggeredOf(s.stageId), "§3.2.1: a Required round staggers").toEqual([true]);
+      const audits = await cameraAuditsOf(s.divisionId);
+      expect(audits.map((a) => [a.payload.from, a.payload.to, a.payload.roundOpened]), "one audit row, written before any round opened")
+        .toEqual([[null, "required", false]]);
+      const p = await liveOf(s.divisionId);
+      expect([p.cameras_paid, p.frozen_at !== null, await takenFor(p.id)]).toEqual([true, true, gcPrice(16, true)]);
+
+      // The second press of the same receipt (a double click, a second tab): the round is open and every seat invited.
+      const ledgerBefore = await ledgerCount(s.orgId);
+      const again = await openRound({ stageId: s.stageId, roundNo: 1, actorUserId: s.ownerUserId, pay: body });
+      expect(again.opened ? "opened" : again.reason, "nothing left to open").toBe("already_open");
+      expect(await ledgerCount(s.orgId), "no second debit").toBe(ledgerBefore);
+      expect([await stampsOf(s.stageId), await staggeredOf(s.stageId)], "one stamp, its flag as stored").toEqual([1, [true]]);
+      expect([await divisionPolicyOf(s.divisionId), (await cameraAuditsOf(s.divisionId)).length], "nothing written again").toEqual(["required", 1]);
+    }, 180_000);
+
+    it("No on an unpaid Required division (review m5): opens, the division is Off, and the round is NOT staggered", async () => {
+      const s = await seedOnlineSwiss({ players: 4, onlinePackage: "unpaid", cameraPolicy: "required" });
+      const body = await confirmFor(s.owner, s.divisionId, 16, false);
+      expect(body.expectedOwed, "premise: 16 WITHOUT the camera").toBe(gcPrice(16));
+      const r = await openRound({ stageId: s.stageId, roundNo: 1, actorUserId: s.ownerUserId, pay: body });
+      expect(r.opened).toBe(true);
+      expect(await divisionPolicyOf(s.divisionId), "P19: No writes Off").toBe("off");
+      expect(await staggeredOf(s.stageId), "§3.2.1: an Off round is one batch - decided under the answer, not the policy before it").toEqual([false]);
+      const p = await liveOf(s.divisionId);
+      expect([p.cameras_paid, p.frozen_at !== null, await takenFor(p.id)]).toEqual([false, true, gcPrice(16)]);
+    }, 180_000);
+
+    it("No on an unpaid Off division (the empty case: the setting already says it): opens, nothing written, one batch", async () => {
+      const s = await seedOnlineSwiss({ players: 4, onlinePackage: "unpaid" });
+      const r = await openRound({ stageId: s.stageId, roundNo: 1, actorUserId: s.ownerUserId, pay: await confirmFor(s.owner, s.divisionId, 16, false) });
+      expect(r.opened).toBe(true);
+      expect([await divisionPolicyOf(s.divisionId), (await cameraAuditsOf(s.divisionId)).length], "nothing to write, no audit row").toEqual([null, 0]);
+      expect(await staggeredOf(s.stageId)).toEqual([false]);
+    }, 180_000);
+  });
 
   describe("sequences", () => {
     it("after a full refund (online switched off, then on again): the new package is asked again, and pays and opens", async () => {

@@ -74,7 +74,7 @@ import { assertCompetitionNotFrozen } from "../entitlement-freeze";
 import { assertOnlineChessOffered } from "./online-chess-flag";
 import { getLimit } from "@/lib/entitlements";
 import { streamMonthlyRate } from "../stream-credits";
-import { capturePackageEvent, gateFirstOpen, promoteWaitlistAfterMoveUp, type PackageEvent, type PayInput } from "../online-package";
+import { capturePackageEvent, gateFirstOpen, payAtOpen, promoteWaitlistAfterMoveUp, type PackageEvent, type PayInput } from "../online-package";
 import { isPlayableFixtureStatus } from "./preflight";
 import {
   bridgeTakesInvites,
@@ -535,11 +535,20 @@ export async function openRound(
           ).some((r) => !rearmed.has(r.fixture_id) && isPlayableFixtureStatus(r.status))
         : true;
 
+    // Online Chess credits §7.6 + Task 15 fix I1 (controller ruling, option b): a pay-and-open of a round's FIRST open (no stamp yet,
+    // so this press opens it) pays HERE - before the stamp and before the stagger decision below - because the receipt's camera answer
+    // is the policy the round opens under: `staggerNow` reads it, and "has a round opened" is honestly no when it is written (a Yes
+    // written after the stamp met this very round and was refused POLICY_LOCKED). A re-stamp of an opened round pays in the gate,
+    // last, as before: its package is frozen (P8), so it pays nothing, and a press that turns out to open nothing never reaches it.
+    const paidFirst = !existing && a.pay !== undefined
+      ? await payAtOpen(tx, { orgId: st.orgId, divisionId: st.divisionId, userId: a.actorUserId, pay: a.pay }, money)
+      : undefined;
+
     let open: RoundOpenRow;
     let kind: "opened" | "reopened" | "reinvited";
     let retireBoards: string[] = [];
     // Spec §3.2.1: whether this round's check-in runs in timed batches is decided HERE, ONCE, at the round's first open, from the
-    // camera policy of that moment, and stored: an `off` round spends no vendor calls so it is one batch; required and optional
+    // camera policy of that moment (a pay-and-open's camera answer included: it was written above), and stored: an `off` round spends no vendor calls so it is one batch; required and optional
     // stagger. A re-stamp (the organiser's re-open, D17's re-arm) KEEPS the stored flag and never asks the policy again
     // (final review I1, owner-approved 2026-10-25): the screen words its confirmation from that stored flag ("the last group
     // opens {span} minutes from now"), and a later downgrade must not move a board's open time underneath a player who was told it.
@@ -713,16 +722,18 @@ export async function openRound(
     }
 
     // Online Chess credits §7.6: this press opens something (the 'nothing' answer is above, and pays nothing), so the package is asked
-    // - LAST, after the invite fan-out and still on this transaction (review m4): the org money lock is taken here and held only for
-    // the payment and the freeze, never across the attaches and the queued mail, so a stream of the same org is not kept waiting on it.
-    // The lock order stays `division:` -> the bridge rows -> the org money lock -> the package row. Frozen: nothing asked (a round
-    // opened before, or the grandfathered row). Otherwise a paid package that covers the division, paid here when the organiser
-    // confirmed `pay`, or 402 ONLINE_CHESS_UNPAID with the quote; then the freeze (P8). Any refusal - here, or anywhere above - rolls
-    // the whole open back, the queued invites with it: they are sent only after the commit.
+    // - LAST, after the invite fan-out and still on this transaction (review m4): an open that pays nothing takes the org money lock
+    // here, for the cover and the freeze, never across the attaches and the queued mail, so a stream of the same org is not kept
+    // waiting on it. (A first open that pays took it above, before the stamp: Task 15 fix I1.) The lock order stays `division:` -> the
+    // bridge rows -> the org money lock -> the package row -> the division row. Frozen: nothing asked (a round opened before, or the
+    // grandfathered row). Otherwise a paid package that covers the division as it now stands, or 402 ONLINE_CHESS_UNPAID with the
+    // quote; then the freeze (P8). Any refusal - here, or anywhere above - rolls the whole open back, the payment and the queued
+    // invites with it: they are sent only after the commit.
     // `invitable`: the boards of the round no link holds back - what the 402 tells the receipt, so it can warn that paying opens a round nobody
     // is invited to (the SAME fact as the skips this open reports: `heldBoards`, read once above).
     const invitable = boards.filter((b) => !heldBoards.has(b.f.fixtureId)).length;
-    const gate = await gateFirstOpen(tx, { orgId: st.orgId, divisionId: st.divisionId, userId: a.actorUserId, pay: a.pay, invitable }, money);
+    const who = { orgId: st.orgId, divisionId: st.divisionId, userId: a.actorUserId, invitable };
+    const gate = await gateFirstOpen(tx, paidFirst !== undefined ? { ...who, paid: paidFirst } : { ...who, pay: a.pay }, money);
     return {
       kind, open, claims, queueFailed: [...queueFailed], retireBoards: [...new Set(retireBoards)], closedSkips: [...closedSkips, ...heldReport()],
       movedUp: gate.movedUp, payment: gate.payment, packageEvent: gate.event,

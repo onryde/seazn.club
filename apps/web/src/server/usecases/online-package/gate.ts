@@ -2,8 +2,14 @@ import "server-only";
 // server/usecases/online-package/gate.ts — the payment door at "Open round" (spec 2026-11-23-online-chess-credits-design.md §7.6
 // "openRound" and "Pay and open", §8.5; decisions 12 and 15; P8, P18, P20). Asked by `openRound` INSIDE its transaction, under the
 // `division:` lock it already holds, only once the open has decided it will open something (a press that opens nothing writes
-// nothing, so it must pay nothing), and LAST - after the invites are attached and queued (review m4), so the org money lock this
-// takes is held for the payment and the freeze alone, never across the fan-out:
+// nothing, so it must pay nothing). Two halves:
+//
+//  * `payAtOpen`, the confirmed receipt's payment and its camera answer, on a round's FIRST open: BEFORE the stamp (Task 15 fix I1),
+//    because the answer is the policy the round opens under (the stamp's `staggered` is decided from it) and "has a round opened"
+//    must be honestly no when it is written. On that one press per division the org money lock is held across the invite fan-out.
+//  * `gateFirstOpen`, LAST - after the invites are attached and queued (review m4): the cover and the freeze, and the payment itself
+//    when the press re-opens a round that was stamped before (it is frozen, so it pays nothing). An open that pays nothing takes the
+//    org money lock for the cover and the freeze alone, never across the fan-out:
 //
 //  * A FROZEN row asks nothing. A round of this division has opened before (P8), or the row is the backfill's grandfathered one
 //    (frozen, never paid): every later open of every round goes through with nothing asked, whatever the balance and whatever the
@@ -13,16 +19,18 @@ import "server-only";
 //    cameras), or the open is refused 402 ONLINE_CHESS_UNPAID carrying the quote for the STORED size (decision 15: the organiser chose
 //    it; it is never silently re-picked) and, when that size is itself refused, the smallest size that would hold the division - and
 //    `invitable`, how many boards of the round the press would invite (the receipt warns when it is 0).
-//  * `pay` (the organiser confirmed the receipt that 402 showed): the payment runs FIRST, on this transaction (`payOnlinePackageInTx`:
-//    the org money lock, the row lock, the quote under them, the debit), then the cover is asked again of the row it left. The debit,
+//  * `pay` (the organiser confirmed the receipt that 402 showed): the payment runs on this transaction (`payOnlinePackageInTx`: the
+//    org money lock, the row lock, the quote under them, the debit, the camera answer), then the cover is asked of the row it left. The debit,
 //    the stamp and the freeze commit together or not at all: a refusal in the open before the gate, in the gate, or at the commit
 //    rolls the payment back with the round (and the queued invites with it: they are sent after the commit).
 //  * Then the package FREEZES (P8), on the database clock, in a statement V560's CHECK holds: `paid_at` is set before or with
 //    `frozen_at` (frozen and unpaid is only ever the backfill's row).
 //
-// The locks, in the spec's order: the caller's `division:` lock (then the bridge rows its fan-out takes), then the org money lock,
-// then the package row `for update`. The
-// money facts the transaction cannot read (the plan's monthly rate, the plan's entrant cap) are read by the caller BEFORE it
+// The locks, in the spec's order (§7.3): the caller's `division:` lock (then the bridge rows it reads and holds), then the org money
+// lock, then the package row `for update`, then - when a camera answer writes the setting - the division row (`for no key update`,
+// the tail). A first open that pays writes its invites' bridge rows after those, still under its `division:` lock: every other taker
+// of the org money lock that reaches this division's bridge rows (a division or competition delete's cascade) holds that lock first,
+// so the two never wait on each other in the opposite order. The money facts the transaction cannot read (the plan's monthly rate, the plan's entrant cap) are read by the caller BEFORE it
 // (lib/db.ts forbids a pooled read inside one) and passed in as `money`.
 import type { Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
@@ -117,61 +125,84 @@ async function liveOrRefuse(tx: Tx, divisionId: string, forUpdate: boolean): Pro
   return row;
 }
 
+/** What a payment riding on an open did: `movedUp` (P18: the caller promotes the waitlist after its commit), the answer's `payment`, and
+ *  the analytics `event` to send after the commit (null when nothing was paid). */
+export type OpenPayment = { movedUp: boolean; payment: OpenRoundPayment; event: PackageEvent | null };
+
+/** A frozen row ignores a `pay`: nothing moved, nothing taken, reported at the size it stands at. */
+const ignoredPayment = (row: PackageRow): OpenRoundPayment => ({ applied: false, credits: 0, size: row.size, capacityLoweredTo: null });
+
+/** The PAYMENT half of the gate: the confirmed receipt paid on the open's transaction (the caller holds the `division:` lock), the
+ *  camera answer written with it. `openRound` calls it on a round's FIRST open BEFORE it stamps the round (Task 15 fix I1, controller
+ *  ruling option b): the camera answer is the policy the round opens under - the stamp's `staggered` is decided from it, and "has a
+ *  round opened" is honestly no when the answer is written (a Yes written after the stamp met its own round and was refused). A frozen
+ *  row asks nothing and ignores the `pay`. The cover check and the freeze stay LAST, in `gateFirstOpen`, which is handed this result. */
+export async function payAtOpen(
+  tx: Tx,
+  a: { orgId: string; divisionId: string; userId: string; pay: PayInput },
+  money: GateMoney,
+): Promise<OpenPayment> {
+  const first = await liveOrRefuse(tx, a.divisionId, false);
+  if (first.frozenAt !== null) return { movedUp: false, payment: ignoredPayment(first), event: null };
+  await lockOrg(tx, a.orgId);
+  const before = await liveOrRefuse(tx, a.divisionId, true);
+  const facts = await readPackageFacts(tx, a.divisionId, money.planCap);
+  // The pay door's own gates on a charge, but only the one an open has not already asked: the flag and the billing freeze were
+  // asked by `openRound` before its transaction; the stage kinds online play runs (P16) are asked here, under the lock.
+  const refusedKind = await refusedStageKind(tx, a.divisionId);
+  const paid = await payOnlinePackageInTx(tx, { orgId: a.orgId, divisionId: a.divisionId, userId: a.userId, ...a.pay }, facts, {
+    rate: money.rate,
+    beforeCharge: () => {
+      if (refusedKind !== null) throw formatNotSupported(refusedKind);
+    },
+  });
+  return {
+    movedUp: paid.applied && paid.package.size > before.size,
+    payment: {
+      applied: paid.applied,
+      // The pay door's quote is the one it acted on: its owed was debited (> 0) or returned (< 0). Not applied, nothing moved.
+      credits: paid.applied ? paid.quote.owed : 0,
+      size: paid.package.size,
+      capacityLoweredTo: paid.capacityLoweredTo,
+    },
+    event: payEvent(paid, { orgId: a.orgId, actorId: a.userId, paidBefore: before.paidAt !== null, atRoundOne: true }),
+  };
+}
+
 /** The first open's gate, on `openRound`'s transaction (the caller holds the `division:` lock). Frozen: nothing asked. Otherwise the
- *  optional payment, then the cover asked of the row as it stands (402 ONLINE_CHESS_UNPAID when it does not cover), then the freeze. */
+ *  optional payment (`pay`, made here; or `paid`, made earlier on the same transaction by `payAtOpen`), then the cover asked of the
+ *  row and the division as they NOW stand (402 ONLINE_CHESS_UNPAID when it does not cover), then the freeze. */
 export async function gateFirstOpen(
   tx: Tx,
   a: {
     orgId: string;
     divisionId: string;
     userId: string;
-    pay?: PayInput;
     /** The boards of the round this press would invite: those not held for a Lichess link (`lichessHeldBoards`, the fact the open's own
      *  `lichess_unlinked` / `lichess_reconnect` skips come from). Counted by the caller, which reads the links through the pool; carried on
      *  the 402 so the receipt can warn that paying opens a round nobody is invited to (decision: ruling 3). */
     invitable: number;
-  },
+  } & (
+    | { pay?: PayInput; paid?: never }
+    /** The payment `payAtOpen` already made on this transaction (a round's first open pays before its stamp): one press pays once. */
+    | { pay?: never; paid: OpenPayment }
+  ),
   money: GateMoney,
 ): Promise<GateResult> {
   // Frozen is for good (V560: a frozen row is never refunded, and nothing un-freezes one), so an unlocked read under the division
   // lock settles it - and a later open never touches the org money lock.
   const first = await liveOrRefuse(tx, a.divisionId, false);
   if (first.frozenAt !== null) {
-    const ignored = a.pay === undefined ? null : { applied: false, credits: 0, size: first.size, capacityLoweredTo: null };
-    return { asked: false, movedUp: false, payment: ignored, event: null };
+    const payment = a.paid?.payment ?? (a.pay === undefined ? null : ignoredPayment(first));
+    return { asked: false, movedUp: false, payment, event: null };
   }
 
   await lockOrg(tx, a.orgId);
-  const before = await liveOrRefuse(tx, a.divisionId, true);
-  const facts = await readPackageFacts(tx, a.divisionId, money.planCap);
-  let movedUp = false;
-  let payment: OpenRoundPayment | null = null;
-  let event: PackageEvent | null = null;
-  if (a.pay !== undefined) {
-    // The pay door's own gates on a charge, but only the one an open has not already asked: the flag and the billing freeze were
-    // asked by `openRound` before its transaction; the stage kinds online play runs (P16) are asked here, under the lock.
-    const refusedKind = await refusedStageKind(tx, a.divisionId);
-    const paid = await payOnlinePackageInTx(tx, { orgId: a.orgId, divisionId: a.divisionId, userId: a.userId, ...a.pay }, facts, {
-      rate: money.rate,
-      beforeCharge: () => {
-        if (refusedKind !== null) throw formatNotSupported(refusedKind);
-      },
-    });
-    movedUp = paid.applied && paid.package.size > before.size;
-    payment = {
-      applied: paid.applied,
-      // The pay door's quote is the one it acted on: its owed was debited (> 0) or returned (< 0). Not applied, nothing moved.
-      credits: paid.applied ? paid.quote.owed : 0,
-      size: paid.package.size,
-      capacityLoweredTo: paid.capacityLoweredTo,
-    };
-    event = payEvent(paid, { orgId: a.orgId, actorId: a.userId, paidBefore: before.paidAt !== null, atRoundOne: true });
-  }
-
+  const paid = a.paid ?? (a.pay === undefined ? null : await payAtOpen(tx, { ...a, pay: a.pay }, money));
   const row = await liveOrRefuse(tx, a.divisionId, true);
   // A payment's camera answer may have just written the division's camera policy (Task 15): the cover is asked of the division as
-  // it NOW stands, so its facts are read again after a `pay`. (Places held and rounds do not move here; the camera can.)
-  const standing = a.pay === undefined ? facts : await readPackageFacts(tx, a.divisionId, money.planCap);
+  // it NOW stands, after any payment. (Places held and rounds do not move here; the camera can.)
+  const standing = await readPackageFacts(tx, a.divisionId, money.planCap);
   const quote = await quoteLocked(tx, { orgId: a.orgId, divisionId: a.divisionId, size: row.size, rate: money.rate }, standing);
   if (!quote.covers) {
     const fits = quote.refusal === null ? null : smallestHolding(standing);
@@ -181,7 +212,7 @@ export async function gateFirstOpen(
     throw new HttpError(402, unpaidMessage(row, quote, next, standing), ONLINE_PACKAGE_CODES.unpaid, { quote, next, invitable: a.invitable });
   }
   await freezeOnlinePackage(tx, row.id);
-  return { asked: true, movedUp, payment, event };
+  return { asked: true, movedUp: paid?.movedUp ?? false, payment: paid?.payment ?? null, event: paid?.event ?? null };
 }
 
 /** P8: the package freezes at the first open of any round, on the transaction's clock. Only a PAID, live, not yet frozen row (V560:
