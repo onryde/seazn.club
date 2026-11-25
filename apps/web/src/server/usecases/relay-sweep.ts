@@ -741,7 +741,7 @@ export async function sweepStreamSessions(
   //    long stretch at another. THE RULE: a sample's reading holds from its own instant until the NEXT sample of the SAME source (a poll
   //    never cuts a beat's span; its fps is null anyway), and the last one of a source until the session's `ended_at`; a HEARTBEAT's span
   //    is at most SAMPLE_BEAT_SPAN_MAX_SECONDS (three missed beats: a Machine that went quiet is not measured by its last word), never
-  //    negative (a sample after `ended_at` holds 0). Each average is sum(value x span) / sum(span) over the samples that HAVE the value,
+  //    negative, and no span of any sample runs past `ended_at` (a sample after it holds 0). Each average is sum(value x span) / sum(span) over the samples that HAVE the value,
   //    and a figure with no time under it at all (one reading at the session's last instant) falls back to the plain mean of what
   //    there is. `count`, the min and the max are not weighted. `stalls` still COUNTS stalled samples (it counts events, which time
   //    cannot weight); `stallSeconds` is the time the stalled HEARTBEAT readings held (the relay's own series, so concurrent sources
@@ -766,6 +766,7 @@ export async function sweepStreamSessions(
               from (select p.session_id, p.source, p.fps, p.bitrate_kbps, p.ingest_state,
                            greatest(0, extract(epoch from (
                              least(coalesce(lead(p.sampled_at) over (partition by p.session_id, p.source order by p.sampled_at, p.id), e.ended_at),
+                                   e.ended_at,
                                    case when p.source = 'heartbeat' then p.sampled_at + make_interval(secs => ${SAMPLE_BEAT_SPAN_MAX_SECONDS}::float8) else 'infinity'::timestamptz end)
                              - p.sampled_at)))::float8 as span_s
                       from fixture_stream_samples p

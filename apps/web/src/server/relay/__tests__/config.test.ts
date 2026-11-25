@@ -937,6 +937,9 @@ describe("T44 — SAMPLES_PER_SESSION_CAP holds a full session at the edge beat'
   const wrangler = JSON.parse(readFileSync(resolve(import.meta.dirname, "../../../../../cron-worker/wrangler.json"), "utf8")) as Wrangler;
 
   it("the edge beat's least gap is the compositor's `phase_beat_gap_ms` = `resume_after_ms`, 1 000 ms (compositor crates/domain config.rs: \"one beat a second at most\"), and is under the cadence", () => {
+    // Source of the 1 000: compositor crates/domain/src/config.rs ~L411-423, `Thresholds::phase_beat_gap_ms()` = `resume_after_ms`
+    // ("1 000 ms today: one beat a second at most"), read at compositor origin/main 73c9c2ff. A literal pin: the compositor repo is not
+    // readable from CI, so a change there is a change here (record only).
     expect(config.RELAY_EDGE_BEAT_MIN_GAP_MS).toBe(1_000);
     expect(config.RELAY_EDGE_BEAT_MIN_GAP_MS, "an edge beat comes before the cadence's").toBeLessThan(config.RELAY_HEARTBEAT_INTERVAL_MS);
   });

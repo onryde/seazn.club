@@ -1326,12 +1326,17 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
       expect(sum.stallSeconds, "no heartbeat was stalled").toBe(0);
     });
 
-    it("a sample stamped AFTER the session's end holds no time (never a negative weight): its reading does not move the average", async () => {
-      // The 60 fps beat holds the 15 s to the next beat (the cap); the 30 fps one is 10 s past the end, so it holds 0.
-      const sum = await summarise([{ at: 5, fps: 60, kbps: 6000 }, { at: 5 + CAP_S, fps: 30, kbps: 3000 }], 5 + CAP_S - 5);
-      expect(sum.fpsAvg).toBe(60);
-      expect(sum.bitrateAvg).toBe(6000);
-      expect(sum).toMatchObject({ count: 2, fpsMin: 30, fpsMax: 60 });
+    it("no span runs past the session's end, and a sample stamped AFTER it holds no time (never a negative weight)", async () => {
+      // A 60 fps at 0 s holds 4 s to B; B (30 fps, 4 s) would hold the 15 s to C under the cap, but the session ended at 10 s, so it
+      // holds 6 s; C (90 fps) is stamped 9 s past the end, so it holds 0. Worked by hand: (60*4 + 30*6) / 10 = 42 and (6000*4 + 3000*6) / 10 = 4200.
+      const sum = await summarise([
+        { at: 0, fps: 60, kbps: 6000 }, { at: 4, fps: 30, kbps: 3000 }, { at: 4 + CAP_S, fps: 90, kbps: 9000 },
+      ], 10);
+      expect(sum.fpsAvg).toBeCloseTo((60 * 4 + 30 * 6) / 10, 9);
+      expect(sum.bitrateAvg).toBeCloseTo((6000 * 4 + 3000 * 6) / 10, 9);
+      // The differential: B's span left unclipped (the cap's 15 s) would read (60*4 + 30*15) / 19.
+      expect(sum.fpsAvg).not.toBeCloseTo((60 * 4 + 30 * CAP_S) / (4 + CAP_S), 3);
+      expect(sum).toMatchObject({ count: 3, fpsMin: 30, fpsMax: 90 });
     });
 
     it("a lone reading with no time under it (it is the session's last instant) is its own average — never a division by zero or a null", async () => {
