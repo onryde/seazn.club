@@ -27,7 +27,7 @@ import { routes } from "../src/lib/routes";
 import publicEn from "../src/dictionaries/en/public.json" with { type: "json" };
 import { SEAZN_VIDEO_POLL_FLOOR_MS } from "../src/components/public-site/match-centre/seazn-video-schedule";
 import { SEAZN_TOKEN_REFRESH_BEFORE_SECONDS } from "../src/server/relay/config";
-import { finishSeaznMatch, goLive, lockRecordings, forceHlsJs, playsHlsNatively, seedSeaznMatch, signedAddressPattern, STUB_LADDER_HEIGHTS, stubFakePlaybackHost, stubRungWidth } from "./helpers/seazn-video-seed";
+import { elementSaysHlsPlayable, finishSeaznMatch, goLive, lockRecordings, forceHlsJs, playsHlsNatively, seedSeaznMatch, signedAddressPattern, STUB_LADDER_HEIGHTS, stubFakePlaybackHost, stubRungWidth } from "./helpers/seazn-video-seed";
 
 const SPONSOR_HOST = "sponsor-s10.example";
 /** A realistic long title sponsor (AGENTS.md: a 43-character name is what found the last phone overflow). */
@@ -316,7 +316,11 @@ for (const width of [320, 768, 1280] as const) {
         // The player's address reached the browser's player: hls.js asks the stand-in for the manifest at once (no media: loading waits for
         // the first play), a browser that plays HLS itself holds the address as the element's own src.
         if (await playsHlsNatively(page)) await expect(video).toHaveAttribute("src", address!);
-        else await expect.poll(() => stub.requests, { message: "hls.js asked the signed address for its manifest" }).toContain(address!);
+        else {
+          await expect.poll(() => stub.requests, { message: "hls.js asked the signed address for its manifest" }).toContain(address!);
+          // Task 52: hls.js owns the element (a MediaSource object URL), the signed address is never its own src, whatever canPlayType says.
+          expect(await video.getAttribute("src"), "hls.js, not the browser's own player, holds the element").not.toBe(address);
+        }
         // Mobile-first: the page never scrolls sideways, and the player sits inside the viewport at its 16:9 stage (200 px floor).
         await expectNoHorizontalScroll(page);
         const box = await page.getByTestId("seazn-player").boundingBox();
@@ -418,8 +422,8 @@ for (const width of [320, 768, 1280] as const) {
 
 // Task 42: the rung hls.js STARTS on is the cap hls.js computes for the player's box, not the lowest. Three boxes (a 320 phone at 3x, a
 // 768 tablet at 1x, a 1280 laptop at 3x), the master playlist a five-rung ladder with CODECS; the page is a real server's, the host the
-// browser's stand-in. The page is FORCED onto hls.js (`forceHlsJs`: the pinned Chromium says "maybe" to HLS and would take the native
-// path, where none of this runs, and a case that took it would pass on nothing). The expected rung is hls.js's documented cap rule
+// browser's stand-in. The page is FORCED onto hls.js (`forceHlsJs`: since Task 52 the pinned Chromium takes hls.js anyway; the force keeps
+// the case on it for a browser that would not, so it never passes on the native path, where none of this runs). The expected rung is hls.js's documented cap rule
 // (cap-level-controller.ts getMaxLevelByMediaSize: the first rung whose width OR height reaches max(box w, h) x dpr, else the top)
 // applied to the ladder and the box the browser laid out, never the player's code.
 for (const [width, deviceScaleFactor] of [[320, 3], [768, 1], [1280, 3]] as const) {
@@ -436,7 +440,8 @@ for (const [width, deviceScaleFactor] of [[320, 3], [768, 1], [1280, 3]] as cons
         await dismissCookieBanner(page);
         const video = seaznPlayer(page);
         await expect(video).toBeVisible({ timeout: ONE_RE_READ_MS });
-        expect(await playsHlsNatively(page), "premise: the page is on the hls.js path (forceHlsJs took)").toBe(false);
+        expect(await elementSaysHlsPlayable(page), "premise: forceHlsJs took (the element says HLS is not playable)").toBe(false);
+        expect(await playsHlsNatively(page), "premise: and the page is on the hls.js path").toBe(false);
         const address = (await video.getAttribute("data-src"))!;
         // The master is read at once; media (and so a rung) only from the first play.
         await expect.poll(() => stub.requests, { message: "hls.js read the master playlist" }).toContain(address);
@@ -607,8 +612,8 @@ test.describe("the Seazn player over time (1280)", () => {
     }
   });
 
-  // The T15 seam on the hls.js path, witnessed in CI: the test above takes whichever path this Chromium has, and the pinned build answers
-  // "maybe" to HLS (the native path, where a refresh is a `video.src` re-point and hls.js never runs). Forced onto hls.js here, so the
+  // The T15 seam on the hls.js path, witnessed in CI: the test above takes whichever path this browser has (since Task 52 hls.js wherever it
+  // runs, the native path only where it cannot, where a refresh is a `video.src` re-point and hls.js never runs). Forced onto hls.js here, so the
   // per-request token rewrite is what is proved: one manifest load under the first token, then, after a refresh, a segment asked for
   // under the NEWEST token. (The stand-in answers the segment with a playlist, which hls.js will not accept: that failure comes after the
   // request this asserts, and nothing here follows it.)
@@ -635,7 +640,8 @@ test.describe("the Seazn player over time (1280)", () => {
       await dismissCookieBanner(page);
       const video = seaznPlayer(page);
       await expect(video).toBeVisible({ timeout: ONE_RE_READ_MS });
-      expect(await playsHlsNatively(page), "premise: the page is on the hls.js path (forceHlsJs took)").toBe(false);
+      expect(await elementSaysHlsPlayable(page), "premise: forceHlsJs took (the element says HLS is not playable)").toBe(false);
+      expect(await playsHlsNatively(page), "premise: and the page is on the hls.js path").toBe(false);
       const first = (await video.getAttribute("data-src"))!;
       expect(first, "premise: the first address is the unrefreshed one").not.toMatch(/\/refreshed-\d+\//);
       await expect.poll(() => stub.requests, { message: "hls.js loaded the manifest under the first token" }).toContain(first);

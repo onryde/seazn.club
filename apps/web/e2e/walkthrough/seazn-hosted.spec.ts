@@ -220,19 +220,17 @@ async function openViewer(browser: Browser, rig: Rig): Promise<Viewer> {
     new MutationObserver(check).observe(document.body, { childList: true, subtree: true });
     check();
   });
-  const native = await playsHlsNatively(page);
-  const player = page.locator('[data-testid="seazn-player"] video');
+  // Task 52: the pinned Chromium says "maybe" to HLS but runs hls.js (MSE), and the player takes hls.js wherever it runs: every address
+  // below is witnessed as hls.js's own request to the stand-in, not as the element's `src`.
+  expect(await playsHlsNatively(page), "premise: this browser is on the hls.js path").toBe(false);
   return {
     page,
     reads: () => reads,
     neverFailed: () => page.evaluate(() => (window as unknown as { __seaznUnavailableSeen?: boolean }).__seaznUnavailableSeen === false),
     sameDocument: () => page.evaluate(() => (window as unknown as { __seaznSameDocument?: boolean }).__seaznSameDocument === true),
     // The address reached the browser's player, not just the attribute: hls.js asks the stand-in for the manifest at once (no media:
-    // `preload="none"`), and a browser that plays HLS itself holds it as the element's own src (public-fixture.spec.ts's two paths).
-    reached: (uid) => async () =>
-      native
-        ? signedAddressPattern(uid).test((await player.getAttribute("src", { timeout: 1_000 }).catch(() => null)) ?? "")
-        : stub.requests.some((u) => signedAddressPattern(uid).test(u)),
+    // `preload="none"`), which a native element would not do.
+    reached: (uid) => async () => stub.requests.some((u) => signedAddressPattern(uid).test(u)),
   };
 }
 

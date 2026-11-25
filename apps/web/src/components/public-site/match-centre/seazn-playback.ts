@@ -2,9 +2,13 @@
 // (apps/web vitest has no DOM, and an effect that re-ran on every address would rebuild the picture), so it is a controller made
 // once per element: `setSource(src)` for every address the island hands over, `dispose()` when the element goes.
 //
-//   - A browser that plays HLS itself (`canPlayType`: Safari, iOS, and now some Chrome) is given the address through `video.src`
-//     and never loads hls.js. Everything else gets hls.js, loaded on demand (the bundle is not paid by the pages that play none),
-//     as a worker-less instance (`enableWorker: false`).
+//   - Which path a controller takes is decided ONCE, at its first address, by asking hls.js (`Hls.isSupported()`: MSE, or iOS 17.1+'s
+//     ManagedMediaSource), and never by `canPlayType`: Chrome answers "maybe" to HLS and its native player sat ~2 segments (about 6.5 s,
+//     stg 2026-11-25) behind the newest data, with none of SEAZN_HLS_PLAYER_CONFIG applying. So hls.js is used wherever it runs, loaded on
+//     demand (the bundle is not paid by the pages that play none), as a worker-less instance (`enableWorker: false`), and the browser's
+//     own player is only for a browser hls.js cannot run in that plays HLS itself (or whose hls.js bundle will not load: that one is
+//     `onDegraded`, a report with no rebuild, because the viewer is playing, just at the native player's delay). The decision is
+//     made before any `src` is written, so one element never has both an MSE source and an address of its own.
 //   - The address carries its token in the path and the token lapses (a Cloudflare HLS is not assumed to outlive it), so the island
 //     hands over a fresh address before then. On hls.js that is NOT a reload: a `loadSource` of a different address detaches and
 //     re-attaches the media (hls.ts 551-560, buffer-controller.ts 604-609), which empties the buffer, resets the time and leaves the
@@ -12,7 +16,7 @@
 //     token segment of every later request (playlist reloads, renditions, segments) for the newest one (seazn-signed-address.ts).
 //     The picture, the buffer and the play state are untouched, and `destroy()` is only for the element going away. One controller
 //     is one video: a different video (live, a part) is a different player, which the island keys, so it is a fresh element.
-//   - A browser that plays HLS itself has no request hook, so there a refresh is a re-point of `video.src` that resumes where the
+//   - On the native path there is no request hook, so a refresh is a re-point of `video.src` that resumes where the
 //     viewer was and keeps playing; a LIVE source (`duration` Infinity) resumes at its live edge, because the old time is a position
 //     in a timeline the new load does not have.
 //   - No MEDIA is fetched until the viewer presses play: a page that is only visited streams no video (Cloudflare bills what it
@@ -73,8 +77,17 @@ function positionOf(video: HTMLVideoElement): number | null {
   return Number.isFinite(t) && t > 0 ? t : null;
 }
 
-export function createPlayback(video: HTMLVideoElement, { onFatal }: { onFatal: (failure: PlaybackFailure) => void }): Playback {
-  const native = video.canPlayType(HLS_MIME) !== "";
+/** How the controller reaches the element: decided once, from hls.js's own answer (see the header). `none`: neither player can run. */
+type Path = "hls" | "native" | "none";
+
+export interface PlaybackHandlers {
+  onFatal: (failure: PlaybackFailure) => void;
+  /** The player still plays, but not the way it was meant to: hls.js's bundle would not load, so a browser that plays HLS itself is on its
+   *  own player (and its own, longer, delay behind live). Reported by the island, never a reason to rebuild. Codes only (`PlaybackFailure`). */
+  onDegraded?: (failure: PlaybackFailure) => void;
+}
+
+export function createPlayback(video: HTMLVideoElement, { onFatal, onDegraded }: PlaybackHandlers): Playback {
   let disposed = false;
   /** The viewer has pressed play at least once: from then on a load starts by itself. */
   let started = false;
@@ -83,9 +96,15 @@ export function createPlayback(video: HTMLVideoElement, { onFatal }: { onFatal: 
   let loaded = false;
   /** The newest token, and the host it is for: what `xhrSetup` puts on every request. */
   let held: SignedAddress | null = null;
+  let HlsCtor: typeof Hls | null = null;
   let hls: Hls | null = null;
-  let hlsReady: Promise<Hls | null> | null = null;
+  let deciding: Promise<void> | null = null;
+  let path: Path | null = null;
   let resume: { at: number | null; playing: boolean; listener: () => void } | null = null;
+  /** The newest address written to `video.src` (native path). */
+  let nativeSrc: string | null = null;
+  /** The newest address the hls.js path has handled: an address is handled (and an unreadable one reported) once. */
+  let handledHls: string | null = null;
 
   /** The manifest has been parsed: the rungs are known, so a load can begin. */
   let parsed = false;
@@ -109,56 +128,85 @@ export function createPlayback(video: HTMLVideoElement, { onFatal }: { onFatal: 
     if (hls && parsed) beginLoad(hls);
   };
   const onError = () => onFatal(failure("element", { mediaCode: mediaCodeOf(video.error?.code) }));
-  if (native) video.addEventListener("error", onError);
-  else video.addEventListener("play", onPlay);
+  // Listening from the start: a play pressed while the bundle is still arriving must still start the fetch once the manifest has parsed.
+  // A controller that ends on the native path drops it (decide), as it never had one.
+  video.addEventListener("play", onPlay);
 
-  function ensureHls(): Promise<Hls | null> {
-    hlsReady ??= import("hls.js")
-      .then(({ default: HlsCtor }) => {
-        if (disposed) return null;
-        if (!HlsCtor.isSupported()) {
-          onFatal(failure("unsupported"));
-          return null;
+  /** The one decision (see the header). The bundle is asked for once; its answer, or its absence, picks the path. */
+  function decide(): Promise<void> {
+    deciding ??= import("hls.js")
+      .then(({ default: Ctor }) => {
+        if (disposed) return;
+        if (Ctor.isSupported()) {
+          HlsCtor = Ctor;
+          path = "hls";
+          return;
         }
-        const h = new HlsCtor({
-          enableWorker: false,
-          // The rung is capped to the box (seazn-player-config.ts).
-          ...SEAZN_HLS_PLAYER_CONFIG,
-          // Never self-starting: the first fetch is `beginLoad`'s, once the viewer has pressed play and the rungs are known.
-          autoStartLoad: false,
-          // The request is opened here (hls.js skips its own `open` once the element is open), under the token held NOW.
-          xhrSetup: (xhr, url) => xhr.open("GET", held === null ? url : withToken(url, held), true),
-        });
-        h.attachMedia(video);
-        h.on(HlsCtor.Events.MANIFEST_PARSED, () => {
-          parsed = true;
-          if (started) beginLoad(h);
-        });
-        h.on(HlsCtor.Events.ERROR, (_event, data) => {
-          if (data.fatal) onFatal(hlsFailureOf(data));
-        });
-        hls = h;
-        return h;
+        settleWithoutHls("unsupported");
       })
       .catch(() => {
-        onFatal(failure("bundle"));
-        return null;
+        if (!disposed) settleWithoutHls("bundle");
       });
-    return hlsReady;
+    return deciding;
   }
 
-  async function loadHls(): Promise<void> {
-    const h = await ensureHls();
-    if (h === null || disposed) return;
-    const src = wanted;
-    // A newer address may have been asked for while the bundle loaded: it is the one in `wanted`, and one load serves them all. After
-    // that load a newer address is only a token (`held`), never a second load.
-    if (src === null || loaded) return;
+  /** hls.js will not run (or did not load): the browser's own player if it plays HLS, else the failure, said once. */
+  function settleWithoutHls(why: "unsupported" | "bundle"): void {
+    if (video.canPlayType(HLS_MIME) !== "") {
+      path = "native";
+      video.removeEventListener("play", onPlay);
+      video.addEventListener("error", onError);
+      // Playing on, but the viewer is on the browser's own player: say so (the island reports it; nothing is rebuilt).
+      if (why === "bundle") onDegraded?.(failure("bundle"));
+      return;
+    }
+    path = "none";
+    onFatal(failure(why));
+  }
+
+  function buildHls(Ctor: typeof Hls): Hls {
+    const h = new Ctor({
+      enableWorker: false,
+      // The rung is capped to the box, and the picture sits about one segment behind live (seazn-player-config.ts).
+      ...SEAZN_HLS_PLAYER_CONFIG,
+      // Never self-starting: the first fetch is `beginLoad`'s, once the viewer has pressed play and the rungs are known.
+      autoStartLoad: false,
+      // The request is opened here (hls.js skips its own `open` once the element is open), under the token held NOW.
+      xhrSetup: (xhr, url) => xhr.open("GET", held === null ? url : withToken(url, held), true),
+    });
+    h.attachMedia(video);
+    h.on(Ctor.Events.MANIFEST_PARSED, () => {
+      parsed = true;
+      if (started) beginLoad(h);
+    });
+    h.on(Ctor.Events.ERROR, (_event, data) => {
+      if (data.fatal) onFatal(hlsFailureOf(data));
+    });
+    return h;
+  }
+
+  function applyHls(src: string): void {
+    // The token is read from the address, so an address that has none is a signer that changed shape: say so now, not at the first
+    // refresh (when the old token lapses and the picture dies an hour in).
+    if (src === handledHls) return;
+    handledHls = src;
+    const signed = parseSignedAddress(src);
+    if (signed === null) {
+      onFatal(failure("unsigned"));
+      return;
+    }
+    held = signed;
+    // One load serves every address asked for before it ran; after it a newer address is only a token (`held`), never a second load.
+    if (loaded || HlsCtor === null) return;
+    hls ??= buildHls(HlsCtor);
     loaded = true;
-    h.loadSource(src);
+    hls.loadSource(src);
   }
 
   function loadNative(src: string): void {
+    if (src === nativeSrc) return;
+    const first = nativeSrc === null;
+    nativeSrc = src;
     // A swap asked for twice before the first one's metadata arrived keeps the position the viewer actually had.
     // A live source has no time to go back to: the new load's timeline is its own, so it resumes at the live edge (no seek).
     const keep = resume ?? { at: video.duration === Infinity ? null : positionOf(video), playing: !video.paused && !video.ended };
@@ -173,6 +221,8 @@ export function createPlayback(video: HTMLVideoElement, { onFatal }: { onFatal: 
       },
     };
     video.src = src;
+    // A play pressed while the bundle was still on its way (so before this element had a source) is not lost: start it now.
+    if (first && started) void video.play().catch(() => {});
     if (pending.at !== null || pending.playing) {
       resume = pending;
       video.addEventListener("loadedmetadata", pending.listener);
@@ -181,23 +231,26 @@ export function createPlayback(video: HTMLVideoElement, { onFatal }: { onFatal: 
     }
   }
 
+  /** Hands the newest address to whichever path was chosen. */
+  function apply(): void {
+    if (disposed || wanted === null) return;
+    try {
+      if (path === "native") loadNative(wanted);
+      else if (path === "hls") applyHls(wanted);
+    } catch {
+      // `new Hls` (a config it refuses) or `attachMedia` threw: hls.js cannot run here. Say so once, as an unsupported browser, and stop.
+      path = "none";
+      onFatal(failure("unsupported"));
+    }
+  }
+
   return {
     setSource(src) {
       if (disposed || src === wanted) return;
       wanted = src;
-      if (native) {
-        loadNative(src);
-        return;
-      }
-      // The token is read from the address, so an address that has none is a signer that changed shape: say so now, not at the first
-      // refresh (when the old token lapses and the picture dies an hour in).
-      const signed = parseSignedAddress(src);
-      if (signed === null) {
-        onFatal(failure("unsigned"));
-        return;
-      }
-      held = signed;
-      void loadHls();
+      // Once the path is chosen a refresh is handled in the same tick (the token swap and the re-point are not to wait on a promise).
+      if (path !== null) apply();
+      else void decide().then(apply);
     },
     dispose() {
       if (disposed) return;

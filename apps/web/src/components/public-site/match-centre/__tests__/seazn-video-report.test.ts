@@ -149,6 +149,28 @@ describe("createVideoReporter — once per address, never the address", () => {
     expect(expectNoUrl(sent)).toBe(FORBIDDEN.length);
   });
 
+  it("Task 52: a player on the browser's own player because hls.js would not load is reported ONCE per address as `bundle`, and a later give-up on the same address still is", () => {
+    const { sent, r } = reporter();
+    const bundle: PlaybackFailure = { reason: "bundle", hlsType: null, hlsDetails: null, httpStatus: null, mediaCode: null };
+    const gaveUp: PlaybackFailure = { reason: "element", hlsType: null, hlsDetails: null, httpStatus: null, mediaCode: 3 };
+    const fatal = (failure: PlaybackFailure) => ({ address: addr(TOKEN_A), source: "live" as const, partNo: null, player: "hls" as const, failure });
+    r.degraded(FIXTURE, fatal(bundle));
+    r.degraded(FIXTURE, fatal(bundle));
+    expect(sent, "once per address").toEqual([
+      { stage: "player", fixtureId: FIXTURE, source: "live", partNo: null, player: "hls", reason: "bundle", hlsType: null, hlsDetails: null, httpStatus: null, mediaCode: null },
+    ]);
+    r.player(FIXTURE, fatal(gaveUp));
+    r.player(FIXTURE, fatal(gaveUp));
+    expect(sent.map((x) => x.reason), "the degraded report did not use up the address's give-up report").toEqual(["bundle", "element"]);
+    let parsed = 0;
+    for (const report of sent) {
+      expect(ClientReport.safeParse(JSON.parse(videoReportRequest(report).body)).success, "the route's own schema takes it").toBe(true);
+      parsed++;
+    }
+    expect(parsed).toBe(2);
+    expect(expectNoUrl(sent)).toBe(FORBIDDEN.length);
+  });
+
   it("the route: once per kind of failure (a status, a network failure, a timeout, a bad answer), whatever the backoff retries", async () => {
     const { sent, r } = reporter();
     const http503 = new ApiError("Request failed (503)", 503);
