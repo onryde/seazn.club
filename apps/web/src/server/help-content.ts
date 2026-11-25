@@ -19,6 +19,7 @@ import { rehypeHelpHeadingIds, type HelpHeading } from "@/server/help-heading-id
 import { HELP_PUBLIC_ROOT, rehypeHelpFigures } from "@/server/help-figures";
 import { rehypeHelpCallouts } from "@/server/help-callouts";
 import { rehypeHelpScrollBoxes } from "@/server/help-scroll-boxes";
+import { rehypeBlogStackedTables } from "@/server/blog-table-stack";
 import type { HelpSectionEntry } from "@/lib/help";
 
 export const HELP_ROOT = join(process.cwd(), "content", "help");
@@ -81,7 +82,7 @@ export const HELP_SCHEMA: SanitizeSchema = {
   protocols: { href: ["http", "https", "mailto"], src: ["no-remote-src"] },
 };
 
-function buildPipeline(publicRoot: string) {
+function buildPipeline(publicRoot: string, stackTables = false) {
   return unified()
     .use(remarkParse)
     .use(remarkGfm)
@@ -98,15 +99,20 @@ function buildPipeline(publicRoot: string) {
     .use(rehypeHelpFigures, { publicRoot })
     .use(rehypeHelpCallouts)
     .use(rehypeHelpScrollBoxes)
+    // A blog post's tables only (blog-table-stack.ts); off, the step is not added and help's tables stay as they are.
+    .use(stackTables ? [rehypeBlogStackedTables] : [])
     .use(rehypeHelpHeadingIds)
     .use(rehypeStringify);
 }
 
 const pipeline = buildPipeline(HELP_PUBLIC_ROOT);
+const stackedPipeline = buildPipeline(HELP_PUBLIC_ROOT, true);
 
 export interface HelpRenderOptions {
   /** Directory that holds `help/<section>/<file>.webp`; defaults to `public/`. A seam for tests. */
   publicRoot?: string;
+  /** Mark each table up to stack into cards on a narrow phone: the blog's posts only (blog-table-stack.ts). */
+  stackTables?: boolean;
 }
 
 /** One run of the pipeline: the HTML and the heading list that run wrote into it. */
@@ -117,7 +123,7 @@ async function renderHelp(
 ): Promise<{ html: string; headings: HelpHeading[] }> {
   // Plan tokens need the plan table; Online Chess tokens come from the price leaf and always resolve (help-tokens.ts).
   const resolved = resolveOnlineTokens(matrix ? resolveHelpTokens(markdown, matrix) : markdown);
-  const run = options.publicRoot ? buildPipeline(options.publicRoot) : pipeline;
+  const run = options.publicRoot ? buildPipeline(options.publicRoot, options.stackTables) : options.stackTables ? stackedPipeline : pipeline;
   const file = await run.process(resolved);
   const headings = file.data.helpHeadings;
   // The heading step always sets this; a pipeline that stops doing so must fail loudly, not return [].
@@ -163,9 +169,10 @@ export async function helpHeadings(markdown: string, options: HelpRenderOptions 
 export async function renderHelpArticle(
   article: Pick<HelpArticle, "markdown">,
   loadMatrix: () => Promise<MatrixData>,
+  options: Pick<HelpRenderOptions, "stackTables"> = {},
 ): Promise<{ html: string; headings: HelpHeading[] }> {
-  if (!hasHelpTokens(article.markdown)) return renderHelp(article.markdown, undefined, {});
-  return renderHelp(article.markdown, await loadMatrix(), {});
+  if (!hasHelpTokens(article.markdown)) return renderHelp(article.markdown, undefined, options);
+  return renderHelp(article.markdown, await loadMatrix(), options);
 }
 
 /** renderHelpArticle's HTML alone. */
