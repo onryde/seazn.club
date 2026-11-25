@@ -33,6 +33,7 @@ import type { RoomSnapshot } from "../src/components/public-site/match-room/room
 import { apiJson, createStageAndGenerate, linkLichessBySql, linkPersonToUserBySql, TAG, withDb } from "./helpers";
 import { mintMatchRoomLink } from "./match-room-link";
 import { ENDED_BADLY_STATUSES, LIVE_STATUSES, type OutboxStatus } from "../src/server/email-outbox/constants";
+import { sizeFor } from "../src/lib/online-chess-package";
 
 /** The room's own copy, read from the dictionary rather than retyped. */
 export const uiEn = JSON.parse(
@@ -585,11 +586,17 @@ export async function seedOnlineRound(
     visibility: "public",
   });
   expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+  // Online Chess credits: a division created online is a package of a SIZE, and the entrants door refuses past it (422
+  // ONLINE_SIZE_FULL). Absent, the create opens it at 16, so a round of more players is created at the smallest size that holds
+  // them - the leaf's own `sizeFor`, as the organiser's size select offers it.
+  const size = sizeFor(names.length);
+  if (size === null) throw new Error(`seedOnlineRound: ${names.length} players is past the largest Online Chess size`);
   const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
     name: "Open Rapid",
     sport_key: "boardgame",
     variant_key: "classical",
     config: { variant: "classical", onlinePlay: "lichess", clock: opts.clock ?? CLOCK },
+    online_size: size,
   });
   expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
   const divisionId = div.data!.id;
