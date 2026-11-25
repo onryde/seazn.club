@@ -890,16 +890,16 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
       insert into division_online_packages (org_id, division_id, division_name, size, cameras_paid, credits_paid, paid_at, paid_by)
       values (${r.auth.orgId}, null, 'Pay Open', 32, false, 2, now(), gen_random_uuid()) returning id`;
     await sql`
-      insert into org_stream_credits (org_id, delta, reason, bucket, online_package_id, balance_after)
-      values (${r.auth.orgId}, -2, 'consume', 'monthly', ${pkg!.id}, 0)`;
+      insert into org_stream_credits (org_id, delta, reason, bucket, online_package_id, package_size, balance_after)
+      values (${r.auth.orgId}, -2, 'consume', 'monthly', ${pkg!.id}, 32, 0)`;
     expect((await currentSession(r.auth, r.fixtureId, r.deps))!.creditUsed, "a package consume names no session").toBe(false);
     r.tick(STREAM_POLL_MS);
     const live = (await currentSession(r.auth, r.fixtureId, r.deps))!;
     expect(live).toMatchObject({ id: a.sessionId, state: "live", creditUsed: true });
     // a package's return must not net the session's own consume out either
     await sql`
-      insert into org_stream_credits (org_id, delta, reason, bucket, online_package_id, balance_after)
-      values (${r.auth.orgId}, 2, 'refund', 'monthly', ${pkg!.id}, 0)`;
+      insert into org_stream_credits (org_id, delta, reason, bucket, online_package_id, package_size, balance_after)
+      values (${r.auth.orgId}, 2, 'refund', 'monthly', ${pkg!.id}, 32, 0)`;
     expect((await currentSession(r.auth, r.fixtureId, r.deps))!.creditUsed, "the package's refund is not this session's").toBe(true);
   });
 

@@ -10,8 +10,9 @@
 --    org_stream_credits.package_size: the package's size (the ladder) AT THE TIME of the row, written once at insert by the
 --    package writer (the target size of a payment or a move down; the size refunded by a full refund), so the credit history
 --    reads "up to 32" from the row itself and an earlier row never changes when the package is resized later (a package's size
---    is NOT derivable from a debit: 2 credits is 32 players without cameras and 16 with). Null on every row that names no package
---    and on a package row written before the column existed; the readers fall back to the package's live size for those.
+--    is NOT derivable from a debit: 2 credits is 32 players without cameras and 16 with). Set on EVERY package row and on no
+--    other (a biconditional CHECK): both package writers are handed the size (ledger.ts debitForPackage / refundForPackage), and
+--    the column comes in this same statement as online_package_id, so no package row was ever written without one.
 -- 2. stream_pack_reversals: the durable record THAT a pack's card payment was refunded or disputed, one row per intent, so
 --    a refunded package can settle a claw-back that fell short (§7.5). It is not a debt. Money state: sealed exactly as
 --    org_stream_credits is (V410): RLS forced, no policy, no grant to app_user; exempt by name in scripts/rls-exempt.ts.
@@ -27,10 +28,11 @@ alter table org_stream_credits
   -- added by this same statement, so it is null on all of them.
   add constraint org_stream_credits_package_row_check
     check (online_package_id is null or (reason in ('consume', 'refund') and created_by is null)),
-  -- The size is a package row's and is on the ladder (division_online_packages_size_check's own set): null, or a ladder size
-  -- on a row that names a package. Every existing row passes: the column is added by this same statement, so it is null on all.
+  -- A row names a package exactly when it carries a size, and the size is on the ladder (division_online_packages_size_check's
+  -- own set). Every existing row passes: both columns are added by this same statement, so both are null on all of them.
   add constraint org_stream_credits_package_size_check
-    check (package_size is null or (online_package_id is not null and package_size in (16, 32, 64, 128, 256)));
+    check ((online_package_id is null) = (package_size is null)
+           and (package_size is null or package_size in (16, 32, 64, 128, 256)));
 -- Partial, V425's shape for session_id: only package rows are ever looked up by package (the package's own ledger read,
 -- and the foreign key's check when an unpaid row is deleted).
 create index org_stream_credits_online_package_id

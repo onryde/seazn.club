@@ -598,7 +598,7 @@ describe.skipIf(!HAS_DB)("returnableFor and refundForPackage", () => {
     expect(await inTx((tx) => returnableFor(tx, { orgId: r.orgId, packageId: r.packageId }, LAST_MONTH))).toEqual({ pack: 1, monthlyThisMonth: 0, monthlyExpired: 3 });
     const before = await rowIds(r.orgId);
     // @ts-expect-error — refundForPackage takes no clock
-    await expect(inTx((tx) => refundForPackage(tx, { orgId: r.orgId, packageId: r.packageId, pack: 0, monthly: 1 }, LAST_MONTH)))
+    await expect(inTx((tx) => refundForPackage(tx, { orgId: r.orgId, packageId: r.packageId, pack: 0, monthly: 1, size: 16 }, LAST_MONTH)))
       .rejects.toMatchObject({ status: 500, code: "online_package_return_exceeds_debit" });
     expect(await rowsSince(r.orgId, before), "nothing returned to monthly").toEqual([]);
     // The bought credit still returns (P21: a bought credit never expires).

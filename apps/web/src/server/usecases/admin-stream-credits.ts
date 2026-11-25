@@ -39,8 +39,8 @@ export interface StreamCreditLedgerRow {
    *  division reads under its new name in every ledger), only when the package belongs to THIS org — V560 does not make the package's org
    *  the ledger row's, so the join checks it. Null for a row with no package, or one whose package is not this org's. */
   divisionName: string | null;
-  /** The package's size at the time of the row (V561 `package_size`; the package's own size now for a row written before the column),
-   *  only when the package belongs to THIS org. Null for a row with no package, or one whose package is not this org's. */
+  /** The package's size at the time of the row (V561 `package_size`, on every package row and no other), only when the package belongs
+   *  to THIS org. Null for a row with no package, or one whose package is not this org's. */
   packageSize: number | null;
   /** ISO-8601, UTC. */
   createdAt: string;
@@ -53,7 +53,7 @@ export async function streamCreditsForOrg(orgId: string): Promise<{ balance: num
     online_package_id: string | null; division_name: string | null; package_size: number | null;
   }[]>`
     select c.id, c.reason, c.delta, c.balance_after, c.note, c.created_by, u.email, c.session_id, c.created_at,
-           c.online_package_id, coalesce(pd.name, p.division_name) as division_name, coalesce(c.package_size, p.size) as package_size
+           c.online_package_id, coalesce(pd.name, p.division_name) as division_name, case when p.id is not null then c.package_size end as package_size
       from org_stream_credits c
       left join users u on u.id = c.created_by
       left join division_online_packages p on p.id = c.online_package_id and p.org_id = c.org_id

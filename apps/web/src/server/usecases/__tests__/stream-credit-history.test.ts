@@ -479,18 +479,19 @@ describe.skipIf(!HAS_DB)("listStreamCreditHistory — every writer's row, throug
     for (const leaked of [a.auth.userId!, p.auth.userId!, pkgA!.id, intent]) expect(wire, "no payer, package id or payment intent leaves the reader").not.toContain(leaked);
   });
 
-  it("a package row written before the size column (package_size null) reads the package's own size; a row that has one never does (H27-H29)", async () => {
+  it("a package row reads the size it was written at, never the package's size now (H27-H29)", async () => {
     const o = await ocOrg();
     const div = await ocDivision(o, await ocCompetition(o), { name: "Legacy Open" });
     await pay(o, div.id, 64);
     const [pkg] = await sql<{ id: string }[]>`select id from division_online_packages where division_id = ${div.id}`;
-    // the same package at 64 now; a row written at 16 (the size it had when it was written) and one with no size at all
+    // the same package at 64 now; a row written at 16 (the size it had when it was written). A row with no size cannot be written:
+    // V561's CHECK asks a size of every package row (schema.test.ts).
     await sql`
       insert into org_stream_credits (org_id, delta, reason, bucket, online_package_id, package_size, balance_after)
-      values (${o.orgId}, -1, 'consume', 'monthly', ${pkg!.id}, 16, 0), (${o.orgId}, -1, 'consume', 'monthly', ${pkg!.id}, null, 0)`;
+      values (${o.orgId}, -1, 'consume', 'monthly', ${pkg!.id}, 16, 0)`;
     const rows = (await listStreamCreditHistory(o.auth, o.orgId, { limit: 100 })).rows.filter((r) => r.kind.startsWith("onlinePackage"));
     const bySize = rows.map((r) => r.onlinePackage!.size).sort((x, y) => x - y);
-    expect(bySize, "the real payment (64), the row written at 16, and the row with no size reading the package's 64").toEqual([16, 64, 64]);
+    expect(bySize, "the real payment (64) and the row written at 16").toEqual([16, 64]);
     expect(captureErrorMock).not.toHaveBeenCalled();
   });
 
@@ -502,8 +503,8 @@ describe.skipIf(!HAS_DB)("listStreamCreditHistory — every writer's row, throug
     const [bPkg] = await sql<{ id: string }[]>`select id from division_online_packages where division_id = ${bDiv.id}`;
     // V560/V561 do not make the package's org the ledger row's: only the reader's join stands between A's page and B's division.
     await sql`
-      insert into org_stream_credits (org_id, delta, reason, bucket, online_package_id, balance_after)
-      values (${a.orgId}, -1, 'consume', 'monthly', ${bPkg!.id}, 0)`;
+      insert into org_stream_credits (org_id, delta, reason, bucket, online_package_id, package_size, balance_after)
+      values (${a.orgId}, -1, 'consume', 'monthly', ${bPkg!.id}, 16, 0)`;
     const asA = await listStreamCreditHistory(a.auth, a.orgId);
     expect(asA.rows, "anti-vacuity: the crossed row was read").toHaveLength(1);
     expect(asA.rows[0]!.kind).toBe("other");

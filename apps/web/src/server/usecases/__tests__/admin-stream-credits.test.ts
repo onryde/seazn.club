@@ -8,11 +8,11 @@
 //   R6 limit          drop `limit ${STREAM_CREDIT_LEDGER_LIMIT}`                        → "the newest … rows"
 //   R7 package join   drop `and p.org_id = c.org_id` from the package join                → "an Online Chess package row names its package and division — a package of another org names none"
 //   R8 package field  drop `online_package_id` / `division_name` from the mapped row      → same test
-//   R10 size          `coalesce(c.package_size, p.size)` → `p.size`                         → same test (the upgrade row says 32)
+//   R10 size          `c.package_size` → `p.size`                                          → same test (the upgrade row says 32)
 //   R13 live name     `coalesce(pd.name, p.division_name)` → `p.division_name`              → same test (the renamed division's rows read the new name)
 //   R14 snapshot first `coalesce(p.division_name, pd.name)` (snapshot over the live name)     → same test
 //   R15 live only     `pd.name` alone (a deleted division loses its name)                    → same test (the rows after the delete)
-//   R11 size fallback `coalesce(c.package_size, p.size)` → `c.package_size`                 → same test (the row with no size reads null)
+//   R11 size gate     `case when p.id is not null then c.package_size end` → `c.package_size` → same test (the crossed row's size reads null)
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
@@ -157,16 +157,14 @@ describe.skipIf(!HAS_DB)("streamCreditsForOrg — the staff panel's read", () =>
     const od = await ocDivision(other, otherComp, { name: "Somebody Else Open" });
     await pay(other, od.id, 16);
     const [foreign] = await sql<{ id: string }[]>`select id from division_online_packages where division_id = ${od.id}`;
-    // a package row written before the size column (package_size null) reads the package's own size, and one that has a size never does
+    // each row reads the size it was written at, never the package's size now (V561: every package row carries one)
     await pay(other, od.id, 64);   // the other org's package is at 64 now
+    const sizes = (await streamCreditsForOrg(other.orgId)).rows.filter((r) => r.onlinePackageId === foreign!.id).map((r) => r.packageSize).sort((x, y) => x! - y!);
+    expect(sizes, "the 16 it was paid at and the 64 it moved up to").toEqual([16, 64]);
+    // the crossed row carries a size of its own (V561's CHECK asks one of every package row); the reader still prints none
     await sql`
       insert into org_stream_credits (org_id, delta, reason, bucket, online_package_id, package_size, balance_after)
-      values (${other.orgId}, -1, 'consume', 'monthly', ${foreign!.id}, null, 0)`;
-    const legacy = (await streamCreditsForOrg(other.orgId)).rows.filter((r) => r.onlinePackageId === foreign!.id).map((r) => r.packageSize).sort((x, y) => x! - y!);
-    expect(legacy, "the 16 and the 64 it was paid at, and the row with no size reading the package's 64").toEqual([16, 64, 64]);
-    await sql`
-      insert into org_stream_credits (org_id, delta, reason, bucket, online_package_id, balance_after)
-      values (${o.orgId}, -1, 'consume', 'monthly', ${foreign!.id}, 0)`;
+      values (${o.orgId}, -1, 'consume', 'monthly', ${foreign!.id}, 16, 0)`;
     read = await streamCreditsForOrg(o.orgId);
     const crossed = read.rows.find((r) => r.onlinePackageId === foreign!.id);
     expect(crossed, "the crossed row is listed").toBeDefined();

@@ -313,8 +313,8 @@ describe.skipIf(!HAS_DB)("getStreamCreditsTab", () => {
       insert into division_online_packages (org_id, division_id, division_name, size, cameras_paid, credits_paid, paid_at, paid_by)
       values (${r.orgId}, null, 'Gone Open', 16, false, 1, now() - interval '70 days', gen_random_uuid()) returning id`;
     await sql`
-      insert into org_stream_credits (org_id, delta, reason, bucket, online_package_id, balance_after)
-      values (${r.orgId}, 1, 'refund', 'monthly', ${pkg!.id}, 0)`;
+      insert into org_stream_credits (org_id, delta, reason, bucket, online_package_id, package_size, balance_after)
+      values (${r.orgId}, 1, 'refund', 'monthly', ${pkg!.id}, 16, 0)`;
     const view = await getStreamCreditsTab(auth(r.orgId), r.orgId);
     expect(view.freeUsed, "the stream's free credit is still used").toBe(1);
   });
@@ -326,12 +326,12 @@ describe.skipIf(!HAS_DB)("getStreamCreditsTab", () => {
       values (${r.orgId}, null, 'Old Open', 16, false, 1, now() - interval '70 days', gen_random_uuid()) returning id`;
     // A package's consume dated well before the UTC month began: hand-written because a clock cannot be moved under the writer.
     await sql`
-      insert into org_stream_credits (org_id, delta, reason, bucket, online_package_id, balance_after, created_at)
-      values (${r.orgId}, -1, 'consume', 'monthly', ${pkg!.id}, 0, now() - interval '70 days')`;
+      insert into org_stream_credits (org_id, delta, reason, bucket, online_package_id, package_size, balance_after, created_at)
+      values (${r.orgId}, -1, 'consume', 'monthly', ${pkg!.id}, 16, 0, now() - interval '70 days')`;
     expect((await getStreamCreditsTab(auth(r.orgId), r.orgId)).freeUsed, "last month's").toBe(0);
     await sql`
-      insert into org_stream_credits (org_id, delta, reason, bucket, online_package_id, balance_after)
-      values (${r.orgId}, -1, 'consume', 'monthly', ${pkg!.id}, 0)`;
+      insert into org_stream_credits (org_id, delta, reason, bucket, online_package_id, package_size, balance_after)
+      values (${r.orgId}, -1, 'consume', 'monthly', ${pkg!.id}, 16, 0)`;
     expect((await getStreamCreditsTab(auth(r.orgId), r.orgId)).freeUsed, "this month's").toBe(1);
   });
 });

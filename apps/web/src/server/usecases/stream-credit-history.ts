@@ -153,7 +153,7 @@ export interface StreamHistoryFixture {
 
 /** The Online Chess package a row moved for: the division as the organiser knows it (its live name, else the name the package
  *  kept when the division was deleted), the size the package had AT THE TIME OF THE ROW (V561 `package_size`, written at insert by
- *  the package writer; the package's size now only for a row written before the column), and the competition when the division
+ *  the package writer, on every package row), and the competition when the division
  *  still exists. The UI formats the label — the words around the names are dictionary copy. */
 export interface StreamHistoryPackage {
   divisionName: string;
@@ -311,7 +311,7 @@ export async function listStreamCreditHistory(
            c.online_package_id as ledger_package_id, p.id as package_id, (c.created_at = p.paid_at) as package_first_payment,
            (p.refunded_at is not null and c.created_at = p.refunded_at) as package_full_refund,
            (c.stripe_payment_intent_id is not null) as has_payment_intent,
-           coalesce(pd.name, p.division_name) as package_division_name, coalesce(c.package_size, p.size) as package_size, pcomp.name as package_comp_name
+           coalesce(pd.name, p.division_name) as package_division_name, case when p.id is not null then c.package_size end as package_size, pcomp.name as package_comp_name
       from org_stream_credits c
       join organizations o on o.id = c.org_id
       left join fixture_stream_sessions s on s.id = c.session_id and s.org_id = c.org_id
