@@ -988,7 +988,8 @@ async function openScoreRow(page: Page): Promise<void> {
   const row = page.getByTestId("stream-score").getByTestId("stream-club");
   await expect(row, "the score card's Score style row").toBeVisible();
   const change = row.getByTestId("stream-club-change");
-  if (await change.count()) await change.click();
+  // Only a CLOSED row is opened: an open one's button is "Keep …" and clicking it would close the row again.
+  if ((await change.count()) > 0 && (await change.getAttribute("aria-expanded")) === "false") await change.click();
   await expect(row.getByTestId("stream-template-picker"), "the Score style row is open").toBeVisible();
 }
 
@@ -1001,6 +1002,11 @@ test("R2006 Option C: the score by default; Camera only and back; a style and ti
   const { rig, path, targetId } = await streamRig(page);
   await pairPhoneOnFixture(page, path);
   await page.setViewportSize({ width: 1280, height: 900 });
+  // The thumbnails' data is one read of the overlay route (`?preview=1`); counted from before the panel exists.
+  const previewReads: string[] = [];
+  page.on("request", (r) => {
+    if (new URL(r.url()).pathname === `/api/v1/public/fixtures/${rig.fixtureId}/overlay`) previewReads.push(r.url());
+  });
   await openReady(page, path);
 
   // 1. The DEFAULT: nothing stored — the score card (style grid + Score timing) above ONE Go live that streams the score.
@@ -1008,7 +1014,13 @@ test("R2006 Option C: the score by default; Camera only and back; a style and ti
   await expect(page.getByTestId("stream-score")).toBeVisible();
   // Task 49: with no club default and nothing of the match's own, Score style is ONE closed row that names what the next stream uses —
   // no picker, no thumbnails, no timing field in the page until it is opened.
-  await expect(page.getByTestId("stream-score").getByTestId("stream-club-text")).toContainText(en("stream.template.title"));
+  // The row's words come from the dictionary's own template with the two slots as a pattern: a style label and a number of seconds.
+  const A = "\u0001";
+  const B = "\u0002";
+  const escaped = en("stream.club.rowDefault", { style: A, seconds: B }).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const rowPattern = new RegExp(`^${escaped.replace(A, ".+").replace(B, "\\d+\\.\\d")}$`);
+  await expect(page.getByTestId("stream-score").getByTestId("stream-club-text")).toHaveText(rowPattern);
+  expect(previewReads, "closed: the preview's overlay read was never made").toEqual([]);
   await expect(page.getByTestId("stream-score").getByTestId("stream-club-change")).toHaveText(en("stream.club.change"));
   await expect(page.getByTestId("stream-panel").getByTestId("stream-template-picker"), "closed: no picker in the panel").toHaveCount(0);
   await expect(page.getByTestId("stream-panel").getByTestId("ovl-preview"), "closed: no thumbnail in the panel").toHaveCount(0);
@@ -1016,6 +1028,7 @@ test("R2006 Option C: the score by default; Camera only and back; a style and ti
   await openScoreRow(page);
   await expect(page.getByTestId("stream-score").getByTestId("stream-template-picker")).toBeVisible();
   await expect(page.getByTestId("stream-score").getByTestId("stream-timing")).toBeVisible();
+  await expect.poll(() => previewReads.length, { message: "opened: the thumbnails' one overlay read is made" }).toBeGreaterThan(0);
   await expect(page.getByTestId("stream-score-unavailable"), "this deployment can run the score").toHaveCount(0);
   await expect(goLive).toHaveCount(1);
   await expect(goLive).toHaveAttribute("data-mode", "composed");

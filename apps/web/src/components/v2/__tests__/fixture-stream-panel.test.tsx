@@ -7380,6 +7380,23 @@ describe("the preview's fetch is the read-only door", () => {
     expect(fetchOverlayFixture, "closing re-fetches nothing").toHaveBeenCalledTimes(1);
   });
 
+  // Review m2: the gate follows whether a picker can be on screen, not just whether something is stored.
+  it("Task 49: a stored override fetches nothing when the card holds no editor (Camera only; the score unavailable; the relay not offered)", () => {
+    const stored = { [FIXTURE.id]: { streamMode: null, overlayTemplate: "bar", overlayDelayMs: null, revision: 1 } };
+    let checked = 0;
+    for (const [name, o] of [
+      ["Camera only", { relayEntitled: true, composedAvailable: true, streamPrefs: { [FIXTURE.id]: { ...stored[FIXTURE.id]!, streamMode: "passthrough" } } }],
+      ["score unavailable", { relayEntitled: true, composedAvailable: false, streamPrefs: stored }],
+      ["relay not offered", { relayEntitled: false, composedAvailable: false, streamPrefs: stored }],
+    ] as const) {
+      fetchOverlayFixture.mockClear();
+      openPanel(o);
+      expect(fetchOverlayFixture, name).not.toHaveBeenCalled();
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
   it("Task 49: a match with its OWN style opens the row at once, so it does fetch", () => {
     openPanel({ relayEntitled: true, composedAvailable: true, streamPrefs: { [FIXTURE.id]: { streamMode: null, overlayTemplate: "bar", overlayDelayMs: null, revision: 1 } } });
     expect(fetchOverlayFixture).toHaveBeenCalledTimes(1);
@@ -7511,8 +7528,9 @@ describe("Task 38: the match panel's club row, the override box and Use club sty
     const island = withClub(NONE, { overlayTemplate: mine.id, overlayDelayMs: 2500 });
     const t = editor(island);
     expect(byTestId(t, "stream-club-override-tag")).toBeDefined();
-    expect(textAt(t, "stream-club-text"), "the row names what the way back returns to").toBe(
-      m("stream.club.rowDefault", { style: DEFAULT_LABEL, seconds: (RELAY_OVERLAY_DELAY_DEFAULT_MS / 1000).toFixed(1) }),
+    // I1 (review): the row names what the NEXT stream uses — the match's own style and 2.5 s, never the default it has left.
+    expect(textAt(t, "stream-club-text"), "the row names what the stream will use").toBe(
+      m("stream.club.rowDefault", { style: m(resolveTemplate(mine.id, "football").labelKey as MessageKey), seconds: "2.5" }),
     );
     expect(textAt(t, "stream-club-use")).toBe(m("stream.club.useDefault"));
     apiV1.mockClear();
@@ -7521,6 +7539,82 @@ describe("Task 38: the match panel's club row, the override box and Use club sty
     expect(puts).toHaveLength(1);
     expect(puts[0]![1]!.json).toEqual({ overlayTemplate: null, overlayDelayMs: null });
     expect(byTestId(editor(island), "stream-club-override"), "the row alone again").toBeUndefined();
+  });
+
+  // I1 (review): the row's words follow the SEQUENCE a match goes through — default -> style only -> back -> timing only -> both
+  // -> back — each state read from the row the organiser sees. Expected words come from the registry and the dictionary; the
+  // seconds are typed from the rulebook (the match's stored 2.5 s, else the default: 3.1 s for a match, 0 s for a court).
+  describe.each([false, true])("I1 sequence (court: %s)", (court) => {
+    // football offers two themes: the club's style (OTHER) is the non-default one, so the no-club match picks OTHER and the club match
+    // picks the sport's default — each a real change from where it starts.
+    const mine = OTHER;
+    const mineLabel = m(resolveTemplate(mine.id, "football").labelKey as MessageKey);
+    const defSecs = court ? "0.0" : (RELAY_OVERLAY_DELAY_DEFAULT_MS / 1000).toFixed(1);
+    const rows = (island: ReturnType<typeof openPanel>) => textAt(editor(island, court), "stream-club-text");
+    const pick = (island: ReturnType<typeof openPanel>, id: string) =>
+      (propsOf(editor(island, court).find((el) => el.type === StreamTemplatePicker)!).onPick as (id: string) => void)(id);
+    const setTiming = (island: ReturnType<typeof openPanel>, ms: number | null) => timingProps(editor(island, court)).onSave(ms);
+    const putsOf = () => apiV1.mock.calls.filter(([url, o]) => url.endsWith("/stream-settings") && o?.method === "PUT");
+
+    it("premise: the picks below are real changes", () => {
+      expect(mine.id).not.toBe(defaultTemplateFor("football"));
+      expect(defaultTemplateFor("football")).not.toBe(OTHER.id);
+    });
+
+    it("no club default: the row reads the effective style and timing at every step, and Use the default returns to the default values", () => {
+      answerSettingsLikeTheRoute({ streamMode: null, overlayTemplate: null, overlayDelayMs: null }, [2, 3, 4, 5, 6]);
+      const island = withClub(NONE);
+      const rowOf = (style: string, seconds: string) => m("stream.club.rowDefault", { style, seconds });
+      let checked = 0;
+      const is = (want: string, why: string) => { expect(rows(island), why).toBe(want); checked++; };
+      is(rowOf(DEFAULT_LABEL, defSecs), "default");
+      click(byTestId(editor(island, court), "stream-club-change"));
+      is(rowOf(DEFAULT_LABEL, defSecs), "opened, nothing chosen yet: still the default");
+      pick(island, mine.id);
+      is(rowOf(mineLabel, defSecs), "style only: the match's style, the default timing");
+      click(byTestId(editor(island, court), "stream-club-use"));
+      is(rowOf(DEFAULT_LABEL, defSecs), "use the default: back to the default style and timing");
+      click(byTestId(editor(island, court), "stream-club-change"));
+      setTiming(island, 2500);
+      is(rowOf(DEFAULT_LABEL, "2.5"), "timing only: the default style, the match's 2.5 s");
+      pick(island, mine.id);
+      is(rowOf(mineLabel, "2.5"), "both: the match's style and 2.5 s");
+      apiV1.mockClear();
+      click(byTestId(editor(island, court), "stream-club-use"));
+      is(rowOf(DEFAULT_LABEL, defSecs), "use the default again: the default values");
+      expect(putsOf().map(([, o]) => o!.json), "one request, both fields null").toEqual([{ overlayTemplate: null, overlayDelayMs: null }]);
+      expect(checked, "every step was read").toBe(7);
+    });
+
+    it("club defaults: the row keeps naming the CLUB's (its label says so); the box holds the match's own, and Use club style returns to the club's", () => {
+      answerSettingsLikeTheRoute({ streamMode: null, overlayTemplate: null, overlayDelayMs: null }, [2, 3, 4, 5, 6]);
+      const own = defaultTemplateFor("football");
+      const island = withClub(CLUB);
+      const clubRow = court ? m("stream.club.rowStyle", { style: OTHER_LABEL }) : m("stream.club.row", { style: OTHER_LABEL, seconds: "4.5" });
+      const picked = () => propsOf(editor(island, court).find((el) => el.type === StreamTemplatePicker)!).selected;
+      const shownMs = () => timingProps(editor(island, court)).storedMs;
+      let checked = 0;
+      const club = (why: string) => { expect(rows(island), why).toBe(clubRow); checked++; };
+      club("club default");
+      click(byTestId(editor(island, court), "stream-club-change"));
+      expect(picked(), "opened on the club's style").toBe(OTHER.id);
+      pick(island, own);
+      club("style only");
+      expect(picked(), "the box: the match's style").toBe(own);
+      expect(shownMs(), "timing untouched").toBeNull();
+      setTiming(island, 2500);
+      club("both");
+      expect(shownMs(), "the box: the match's 2.5 s").toBe(2500);
+      click(byTestId(editor(island, court), "stream-club-use"));
+      club("use club style");
+      click(byTestId(editor(island, court), "stream-club-change"));
+      expect(picked(), "back on the club's style").toBe(OTHER.id);
+      expect(shownMs(), "back to none").toBeNull();
+      setTiming(island, 2500);
+      club("timing only");
+      expect(picked(), "timing only: the style is still the club's").toBe(OTHER.id);
+      expect(checked, "every step was read").toBe(5);
+    });
   });
 
   it("the picker's pick is the MATCH's own: PUT { overlayTemplate } alone, the box opens as an override, and Go live now carries that style", () => {

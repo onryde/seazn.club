@@ -28,7 +28,7 @@ import { StreamTemplatePicker, type TemplatePreviewData } from "../stream-templa
 import { overlayStartLabel, type OverlaySideInput } from "@/lib/overlay-model";
 import { OVERLAY_KEY_PARAM } from "@/lib/realtime-purpose";
 import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
-import { effectiveTemplateId, NO_STREAM_PREFS_READ } from "@/lib/stream-settings";
+import { effectiveDelayMs, effectiveTemplateId, NO_STREAM_PREFS_READ } from "@/lib/stream-settings";
 import type { MessageKey } from "@/lib/messages";
 import { composedSessionOpen } from "@/lib/stream-session-view";
 import { streamUrlSchema } from "@/lib/stream-url";
@@ -147,8 +147,10 @@ export function FixtureStreamPanel({
   // rejection is invisible to vitest. A failure is deliberately silent — the
   // seed below still previews.
   // Task 49: only while a picker (so its thumbnails) can be on screen — the OBS tab, or the Phone tab's Score style row
-  // opened. A closed row loads nothing: the fetch below feeds the previews and nothing else.
-  const previewsShown = shownTab === "obs" || changing || overridden;
+  // opened AND its editor placed (the relay offered, the score available, and not Camera only: otherwise the card holds no
+  // editor, whatever is stored). A closed row loads nothing: the fetch below feeds the previews and nothing else.
+  const phoneEditorPlaced = shownTab === "phone" && stream.relayEntitled && !stream.relayDisabled && stream.composedAvailable && prefs.prefs.streamMode !== "passthrough";
+  const previewsShown = shownTab === "obs" || (phoneEditorPlaced && (changing || overridden));
   useEffect(() => {
     if (!previewsShown) return;
     let cancelled = false;
@@ -223,12 +225,13 @@ export function FixtureStreamPanel({
     const styleSet = club.overlayTemplate !== null;
     const clubDefaults = styleSet || clubTiming;
     const label = (id: string) => msg(resolveTemplate(id, stream.sportKey).labelKey as MessageKey);
-    // The row names what the NEXT stream uses with no choice of this match's: the same chain the server copies at start
-    // (`effectiveTemplateId` with no match style), and the default timing the editor below shows.
+    // With no club default the row names what the NEXT stream will use — the chain the server copies at start, so the match's own
+    // style and timing once it has them (an overridden row must not name the default it no longer uses), else the sport's style and
+    // the default timing. With club defaults the row's own label says "Club …" and names the club's; the box below holds the match's.
     const rowText = !clubDefaults
       ? msg("stream.club.rowDefault", {
-          style: label(effectiveTemplateId({ match: null, club: null, sportKey: stream.sportKey })),
-          seconds: fmtDelaySeconds(locale, defaultMs),
+          style: label(effectiveTemplateId({ match: prefs.prefs.overlayTemplate, club: null, sportKey: stream.sportKey })),
+          seconds: fmtDelaySeconds(locale, effectiveDelayMs({ match: prefs.prefs.overlayDelayMs, club: null, court, matchDefaultMs: defaultMs, courtDefaultMs: defaultMs })),
         })
       : styleSet && clubTiming
         ? msg("stream.club.row", { style: label(club.overlayTemplate!), seconds: fmtDelaySeconds(locale, club.overlayDelayMs!) })
