@@ -421,7 +421,7 @@
   "staffDisputeAlert.outcome.won": "Ganada — se ha quitado la marca de disputa y la organización conserva su plan o pase.",
   "staffDisputeAlert.outcome.downgraded": "Perdida — la organización se ha degradado automáticamente a Community. No hay transferencia que revertir en un cargo de plataforma.",
   "staffDisputeAlert.outcome.revoked": "Perdida — el {kind} se ha revocado y la competición vuelve al cupo del plan.",
-  "staffDisputeAlert.outcome.creditsClawedBack": "Perdida — los créditos Seazn comprados con este cargo se han revocado, hasta el saldo disponible. Los créditos ya gastados en retransmisiones en directo no se pueden revertir.",
+  "staffDisputeAlert.outcome.creditsClawedBack": "Perdida — los créditos Seazn comprados con este cargo se han revocado, hasta el saldo disponible. Los créditos ya gastados no se pueden revertir.",
   "staffDisputeAlert.outcome.closed": "Cerrada — revisa la disputa en Stripe.",
   "staffDisputeAlert.kind.entryFee": "cuota de inscripción",
   "staffDisputeAlert.entry.title": "Cuota de inscripción en disputa",
