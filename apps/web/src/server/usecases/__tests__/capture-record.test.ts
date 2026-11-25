@@ -378,6 +378,39 @@ describe.skipIf(!HAS_DB)("postCaptureRecord (spec 2026-10-12)", () => {
     expect((await records(r.fixtureId))[0]).toMatchObject({ kept_lines: lines.length, dropped_lines: 0, invalid_lines: 0 });
   });
 
+  it("Task 50 (owner 'yes', 2026-11-25): an `encoder-format` line (profile, codecLevel, entropy) after a pair is KEPT and stored whole; a bad profile, a bad codecLevel (\"4.7\"), a bad entropy and a codec level written under `level` are each DROPPED as unreadable, counted in invalid_lines, never stored — and the pair's window still runs on past them", async () => {
+    const r = await captureRig();
+    const dir = resolve(import.meta.dirname, "../../../../../../docs/contracts/fixtures/capture-record.v1");
+    const read = (f: string) => JSON.parse(readFileSync(resolve(dir, `${f}.json`), "utf8")) as Record<string, unknown>;
+    const withNote = (line: Record<string, unknown>, note: string) => ({ ...line, message: note });
+    const goodLines = [
+      withNote(read("line-valid-encoder-format"), "enc high"),
+      withNote(read("line-valid-encoder-format-progressive-high"), "enc progressive-high"),
+    ];
+    const badLines = [
+      withNote(read("line-invalid-profile"), "BAD-PROFILE"),
+      withNote(read("line-invalid-codecLevel"), "BAD-CODEC-LEVEL"),
+      withNote(read("line-invalid-entropy"), "BAD-ENTROPY"),
+      { at: AT, kind: "encoder-format", level: "4.1", message: "BAD-LEVEL" },
+    ];
+    // Premise: the good ones carry the three keys, so a screen that stripped them would be seen below.
+    for (const l of goodLines) expect(Object.keys(l)).toEqual(expect.arrayContaining(["profile", "codecLevel", "entropy"]));
+    // An unreadable line closes the open window (the record's rule, as the 413 test above), so a phone's next line is a new
+    // pair: each bad line is followed by one, and the window the last pair opens takes the device line after it.
+    const after = deviceLine("after the bad ones");
+    const lines = [pairLine(r.tok), goodLines[0]!, badLines[0]!, pairLine(r.tok, "pair 2"), goodLines[1]!, badLines[1]!,
+      pairLine(r.tok, "pair 3"), badLines[2]!, pairLine(r.tok, "pair 4"), badLines[3]!, pairLine(r.tok, "pair 5"), after];
+    const keptLines = lines.filter((l) => !badLines.includes(l as never));
+    expect(keptLines).toHaveLength(8);
+    const answer = await postCaptureRecord(r.code, r.tok, post(ndjson(lines)), r.now());
+    expect(answer).toMatchObject({ kept: 8, dropped: 4 });
+    const [row] = await records(r.fixtureId);
+    expect(row).toMatchObject({ received_lines: 12, kept_lines: 8, dropped_lines: 4, invalid_lines: 4 });
+    expect(row!.lines.split("\n")).toEqual(keptLines.map((l) => JSON.stringify(l)));
+    expect(row!.lines, "kept whole, the three keys stored").toContain('"codecLevel":"4.1"');
+    for (const leaked of ["BAD-PROFILE", "BAD-CODEC-LEVEL", "BAD-ENTROPY", "BAD-LEVEL"]) expect(row!.lines, leaked).not.toContain(leaked);
+  });
+
   it("Q7 CORRECTED by capture (2026-10-12): a non-fatal `engine-error` closes nothing — the no-sid line after it is STORED; after the fatal path's `ended {reason: \"fatal-error\", wasLive}` the next one is DROPPED — and a second record of the same lines answers the same", async () => {
     const r = await captureRig();
     const lines = [

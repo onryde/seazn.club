@@ -99,11 +99,11 @@ describe("screenRecordLine (§5 under owner ruling RL): the allow-list, then S1�
         server++;
       } else expect.fail(`${name}: an unrouted line fixture`);
     }
-    expect(valid).toBe(25);
-    expect(invalid).toBe(17);
+    expect(valid).toBe(27);
+    expect(invalid).toBe(20);
     expect(secret).toBe(6);
     expect(server).toBe(1);
-    expect(valid + invalid + secret + server).toBe(49);
+    expect(valid + invalid + secret + server).toBe(54);
   });
 
   it("S1 is the SENDING Bearer: its vector is ok under another Bearer (a plain word), and dropped as S1 under its own", () => {
@@ -251,6 +251,44 @@ describe("screenRecordLine (§5 under owner ruling RL): the allow-list, then S1�
       lines++;
     }
     expect(lines).toBe(3);
+  });
+
+  it("Task 50 (owner 'yes', 2026-11-25): an `encoder-format` line carrying profile, codecLevel and entropy is ok and kept whole — every profile word, the level grid and the mask included; a bad profile, codecLevel or entropy is unreadable (dropped as shape), and `level` still means the log level (\"4.1\" there is unreadable) — counted", () => {
+    const base = { at: "2026-10-11T21:19:03.123Z", kind: "encoder-format" };
+    const PROFILES = ["baseline", "constrained-baseline", "main", "extended", "high", "progressive-high", "constrained-high", "high10", "high422", "high444", "unknown", "***"];
+    const LEVELS = ["1", "1b", "1.1", "1.2", "2", "2.1", "2.2", "3", "3.1", "3.2", "4", "4.1", "4.2", "5", "5.1", "5.2", "6", "6.1", "6.2", "***"];
+    const ENTROPY = ["cabac", "cavlc", "unknown", "***"];
+    let ok = 0, unreadable = 0;
+    const verdict = (line: Record<string, unknown>, want: boolean, why: string): void => {
+      const r = screenRecordLine(JSON.stringify(line), OTHER_TOK);
+      expect(r.ok, why).toBe(want);
+      if (!r.ok) expect(r, why).toEqual({ ok: false, why: "shape" });
+      else {
+        expect(r.line, `${why}: kept whole`).toEqual(line);
+        expect(JSON.parse(r.text), `${why}: stored whole`).toEqual(line);
+      }
+      expect(fileReads(line), `the file agrees: ${why}`).toBe(want);
+      if (want) ok++; else unreadable++;
+    };
+    for (const v of PROFILES) verdict({ ...base, profile: v }, true, `profile ${v}`);
+    for (const v of LEVELS) verdict({ ...base, codecLevel: v }, true, `codecLevel ${v}`);
+    for (const v of ENTROPY) verdict({ ...base, entropy: v }, true, `entropy ${v}`);
+    for (const v of ["ultra", "High", "", 3, null]) verdict({ ...base, profile: v }, false, `profile ${JSON.stringify(v)}`);
+    for (const v of ["4.7", "7", "0", "1c", 4.1, null]) verdict({ ...base, codecLevel: v }, false, `codecLevel ${JSON.stringify(v)}`);
+    for (const v of ["huffman", "CABAC", "", true, null]) verdict({ ...base, entropy: v }, false, `entropy ${JSON.stringify(v)}`);
+    for (const v of ["4.1", "1b", "high", "cabac"]) verdict({ ...base, level: v }, false, `level ${v}`);
+    expect(ok, "anti-vacuity: lines read").toBe(12 + 20 + 4);
+    expect(unreadable, "anti-vacuity: lines unreadable").toBe(5 + 6 + 5 + 4);
+    // The three fixtures as capture writes them, whole (the valid pair), and the three bad ones dropped.
+    for (const name of ["line-valid-encoder-format", "line-valid-encoder-format-progressive-high"]) {
+      const value = fixture(name);
+      const r = screenRecordLine(JSON.stringify(value), OTHER_TOK);
+      expect(r.ok, name).toBe(true);
+      if (r.ok) expect(r.line, `${name}: kept whole`).toEqual(value);
+    }
+    for (const name of ["line-invalid-profile", "line-invalid-codecLevel", "line-invalid-entropy"]) {
+      expect(screenRecordLine(JSON.stringify(fixture(name)), OTHER_TOK), name).toEqual({ ok: false, why: "shape" });
+    }
   });
 
   it("review fix 1 (PR #943): a key named twice is unreadable — JSON.parse keeps the LAST value, so a first, secret-shaped value would pass a screen of the parsed object; escaped key spellings are the same key — counted", () => {

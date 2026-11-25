@@ -1602,6 +1602,39 @@
           "type": "null"
         }
       ]
+    },
+    "profile": {
+      "description": "The H.264 profile the phone's encoder is producing (Task 50, owner 2026-11-25; carried by the `encoder-format` line): baseline, constrained-baseline, main, extended, high, progressive-high (profile_idc 100 with constraint_set4), constrained-high, high10, high422, high444, or unknown when the encoder does not say; the mask *** is native's answer to a value it does not vet. Optional: a line without it is as valid as ever. Any other word is refused, and the whole line is dropped.",
+      "type": "string",
+      "enum": [
+        "baseline",
+        "constrained-baseline",
+        "main",
+        "extended",
+        "high",
+        "progressive-high",
+        "constrained-high",
+        "high10",
+        "high422",
+        "high444",
+        "unknown",
+        "***"
+      ]
+    },
+    "codecLevel": {
+      "description": "The H.264 level the phone's encoder is producing (Task 50, owner 2026-11-25), as the level's own number written as a string: 1, 1b, 1.1, 1.2, 2, 2.1, 2.2, 3, 3.1, 3.2, 4, 4.1, 4.2, 5, 5.1, 5.2, 6, 6.1 or 6.2 (pattern ^(1b|[1-6](\\.[0-2])?)$), or the mask ***. Named codecLevel because `level` is the log level (an enum). Optional. Any other string, and any non-string, is refused, and the whole line is dropped.",
+      "type": "string",
+      "pattern": "^(1b|[1-6](\\.[0-2])?|[*]{3})$"
+    },
+    "entropy": {
+      "description": "The H.264 entropy coding the phone's encoder is producing (Task 50, owner 2026-11-25): cabac, cavlc, or unknown when the encoder does not say; the mask *** is native's answer to a value it does not vet. Optional. Any other word is refused, and the whole line is dropped.",
+      "type": "string",
+      "enum": [
+        "cabac",
+        "cavlc",
+        "unknown",
+        "***"
+      ]
     }
   },
   "required": [
