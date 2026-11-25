@@ -11,7 +11,7 @@ import { sportLabel } from "@/lib/scoring-vocab";
 import { variantWord } from "@/lib/variant-label-keys";
 import { pointsLineDict, rulesLineDict } from "@/lib/rules-line";
 import { requireDivisionPage } from "@/server/page-auth";
-import { getDivision, listVariantOptions } from "@/server/usecases/divisions";
+import { divisionPackageRefund, getDivision, listVariantOptions, type DivisionPackageRefund } from "@/server/usecases/divisions";
 import { divisionConsumesSlotOnArchive } from "@/server/usecases/division-slots";
 import { getCompetition } from "@/server/usecases/competitions";
 import {
@@ -770,6 +770,19 @@ export default async function DivisionPage({
     }
   }
 
+  // The danger zone's Online Chess line (spec 2026-11-23 §11; final review m2 + Q7): what a refund of the division's paid, unfrozen
+  // package gives back, read by the refund's own split, and whether a delete would take it. Asked only where the danger zone
+  // renders (the settings tab of an editor's page), never flag-gated (the delete's refund is not). A courtesy beside the buttons: a
+  // read that throws is logged and the zone renders without the line - the delete and the switch-off still refund.
+  const dangerPackageRefund = async (): Promise<DivisionPackageRefund | null> => {
+    try {
+      return await divisionPackageRefund(auth, id);
+    } catch (err) {
+      log.error({ err, divisionId: id }, "online chess package: reading the danger zone's refund failed; the zone renders without it");
+      return null;
+    }
+  };
+
   // FMT5: the Division rules card's Format button and the chip naming the format, an editor's on the fixtures tab only. The
   // offer is the new-division builder's own (the sport's templates over its engine kinds, less what this division's kinds
   // cannot play), keeping the stored format in it even where it is retired. Locked is "a result exists", the one predicate
@@ -1503,6 +1516,9 @@ export default async function DivisionPage({
                 // else pays for. Answered by the SQL predicate the quota
                 // charge uses; the client is told, never asked to derive it.
                 slotHeldOnArchive={await divisionConsumesSlotOnArchive(auth, id)}
+                // A paid Online Chess package's refund, as the server reads it: the delete dialog's "credits come back" line,
+                // and archive's "switch Online Chess off to get them back" (archive holds the package). Null: no money moves.
+                packageRefund={await dangerPackageRefund()}
               />
             }
           />

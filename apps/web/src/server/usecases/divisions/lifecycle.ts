@@ -5,7 +5,9 @@ import { HttpError } from "@/lib/errors";
 import { assertWithinLimit, getLimit } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { expireCompetitionShell } from "@/server/public-site/revalidate";
-import { applyPackageDelete, captureRefundEvents, planPackageDelete, type PackageDeletePlan, type RefundedPackage } from "../online-package";
+import {
+  applyPackageDelete, captureRefundEvents, packageRefundPreview, planPackageDelete, type PackageDeletePlan, type RefundedPackage,
+} from "../online-package";
 import { type DivisionRow, COLS } from "./types";
 import { assertCompetitionNotEnded } from "./helpers";
 
@@ -59,6 +61,12 @@ async function assertRegistrationClosed(
       "REGISTRATION_OPEN",
     );
   }
+}
+
+/** Delete's refusal of a live (unarchived) division, DIVISION_HAS_RESULTS: it left setup or it recorded a result. ONE rule for
+ *  the delete and for the danger zone's read of whether a delete would refund (`divisionPackageRefund`). */
+function deleteRefusedForStart(status: string, hasResults: boolean): boolean {
+  return status !== "setup" || hasResults;
 }
 
 /**
@@ -123,7 +131,7 @@ export async function deleteDivision(auth: AuthCtx, id: string): Promise<void> {
           "ARCHIVE_COOL_OFF",
         );
       }
-    } else if (division.status !== "setup" || has_results) {
+    } else if (deleteRefusedForStart(division.status, has_results)) {
       // Broader than the SLOT rule (V354) deliberately: this destroys data, so
       // a division that merely LEFT setup is protected too. The slot rule
       // charges only for real results, because publishing a misconfigured
@@ -181,6 +189,28 @@ export async function deleteDivision(auth: AuthCtx, id: string): Promise<void> {
   if (deleted.archived_at === null) {
     await expireCompetitionShell(auth.orgId, { competitionId: deleted.competition_id, divisionId: id });
   }
+}
+
+/** The danger zone's Online Chess facts (spec §11, final review m2 + Q7): what a refund of the division's paid, unfrozen package
+ *  gives back and gives up now (`packageRefundPreview`, the refund's own split), and whether a DELETE would take it — the division
+ *  is live and still deletable by delete's own rule (`deleteRefusedForStart`). Once it has started, only switching Online Chess off
+ *  refunds it: archive holds the package (§11 "Division archived"). Null when no door would move money (no package, unpaid,
+ *  frozen). Read-only. */
+export interface DivisionPackageRefund {
+  back: number;
+  forfeited: number;
+  onDelete: boolean;
+}
+export async function divisionPackageRefund(auth: AuthCtx, id: string): Promise<DivisionPackageRefund | null> {
+  const refund = await packageRefundPreview(auth.orgId, id);
+  if (refund === null) return null;
+  const onDelete = await withTenant(auth.orgId, async (tx) => {
+    const [d] = await tx<{ status: string; archived_at: string | null; has_results: boolean }[]>`
+      select status, archived_at, division_has_results(id) as has_results from divisions where id = ${id}`;
+    if (!d) throw new HttpError(404, "division not found");
+    return d.archived_at === null && !deleteRefusedForStart(d.status, d.has_results);
+  });
+  return { ...refund, onDelete };
 }
 
 /** Archive: hide from console/public/quota, restorable. Idempotent. */

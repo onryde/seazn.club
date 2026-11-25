@@ -17,14 +17,14 @@ import "server-only";
 //    ascending division id, then the org money lock (only when there is money to return), then each package row `for update`.
 //    Paid and unfrozen: refunded. Unpaid: the row is DELETED (§7.1: there is no "closed, unpaid" state). Frozen: left as it is.
 //    Never flag-gated.
-import type { Tx } from "@/lib/db";
+import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { OnlineSize } from "@/lib/online-chess-package";
 import { lockDivisionForCap } from "@/server/external-play/online-entrant-cap";
 import { lockOrg } from "@/server/usecases/stream-credits";
 import { refundForPackage } from "./ledger";
 import { backFor } from "./quote";
-import { livePackageById } from "./read";
+import { livePackage, livePackageById } from "./read";
 import { settleReversals } from "./settle";
 import type { PackageRow } from "./types";
 
@@ -130,8 +130,7 @@ export async function refundOnlinePackageLocked(tx: Tx, row: PackageRow): Promis
   if (now.paidAt === null) {
     throw new HttpError(500, `Online Chess package ${row.id} was never paid; there is nothing to refund`, "online_package_unpaid");
   }
-  const value = now.creditsPaid - now.creditsRefunded - now.creditsForfeited;
-  const back = value > 0 ? await backFor(tx, now, value) : { pack: 0, monthly: 0, forfeited: 0 };
+  const back = await fullRefundOf(tx, now);
   // The return first: it refuses a refunded or frozen row and a return its ledger cannot account for, before any row is written.
   await refundForPackage(tx, { orgId: now.orgId, packageId: now.id, pack: back.pack, monthly: back.monthly, size: now.size });
   const returned = back.pack + back.monthly;
@@ -147,4 +146,30 @@ export async function refundOnlinePackageLocked(tx: Tx, row: PackageRow): Promis
   }
   await settleReversals(tx, now.orgId);
   return { pack: back.pack, monthly: back.monthly, forfeited: back.forfeited };
+}
+
+/** What a FULL refund of `row` gives back and gives up, read now (§7.4 item 4): the row's value net of what a move down already
+ *  returned or forfeited, split by `backFor` (the quote's own P21 order: bought credits, then this month's included, and only then
+ *  the included credits of an earlier month, which are forfeited). ONE authority for the refund itself and for the figure the
+ *  danger zone shows before it (`packageRefundPreview`). The caller has decided the row is paid, unfrozen and unrefunded. */
+export async function fullRefundOf(tx: Tx, row: PackageRow): Promise<RefundResult> {
+  const value = row.creditsPaid - row.creditsRefunded - row.creditsForfeited;
+  return value > 0 ? backFor(tx, row, value) : { pack: 0, monthly: 0, forfeited: 0 };
+}
+
+/** What deleting `divisionId` or switching its Online play off would give back NOW (spec §11, review m2): its live package's full
+ *  refund (`fullRefundOf`), as the credits that come back and the included credits of an earlier month that do not. Null when no
+ *  door would move money: no package (online play off), unpaid (the row is deleted, nothing was paid) or frozen (a round has
+ *  opened, P7). Read-only and lock-free: a figure to show before the organiser confirms; the door re-decides under its locks.
+ *  The division is the caller's (the page proved it); a package of another org is a named 500, never a figure. */
+export async function packageRefundPreview(orgId: string, divisionId: string): Promise<{ back: number; forfeited: number } | null> {
+  return sql.begin("read only", async (tx) => {
+    const row = await livePackage(tx, divisionId);
+    if (row === null || row.paidAt === null || row.frozenAt !== null) return null;
+    if (row.orgId !== orgId.toLowerCase()) {
+      throw new HttpError(500, `Online Chess package ${row.id} does not belong to organisation ${orgId}; no refund was read`, "online_package_not_of_org");
+    }
+    const r = await fullRefundOf(tx, row);
+    return { back: r.pack + r.monthly, forfeited: r.forfeited };
+  }) as Promise<{ back: number; forfeited: number } | null>;
 }

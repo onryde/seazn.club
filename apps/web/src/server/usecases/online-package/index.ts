@@ -17,7 +17,8 @@
 //              optional pay-and-open, then a paid package that covers the division (402 ONLINE_CHESS_UNPAID), then the freeze (P8)
 //   settle.ts  settleReversals — after a package returns credits, take what a reversed pack still owes (§7.5)
 //   refund.ts  refundOnlinePackageLocked / planPackageDelete / applyPackageDelete — the full refund, and the package half of the
-//              division delete, the competition delete and online play switched off (prelude plans, epilogue applies)
+//              division delete, the competition delete and online play switched off (prelude plans, epilogue applies);
+//              fullRefundOf / packageRefundPreview — what a full refund gives back, and the danger zone's read of it before a door
 //   events.ts  capturePackageEvent / payEvent / refundEvents - the package's PostHog events (bought, resized, refunded), sent after the commit
 //   unpaid.ts  listUnpaidOnlineDivisions - the divisions of a competition that still owe their package (the competition page's "Not paid" flag)
 //   view.ts    onlinePackageView — the facts the Division rules strip draws its size select, price line and format refusal from: the
