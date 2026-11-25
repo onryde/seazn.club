@@ -52,7 +52,7 @@ Each size includes the Swiss rounds shown, so you do not count rounds yourself. 
 | {{online:row:4:size}} | {{online:row:4:rounds}} | {{online:row:4:price}} | {{online:row:4:cameras}} |
 | {{online:row:5:size}} | {{online:row:5:rounds}} | {{online:row:5:price}} | {{online:row:5:cameras}} |
 
-The **Fair-play camera** doubles the price. It counts as paid when the camera is optional or required on any stage of the division. Knockout, play-off and tie-break games are always included. If the division plays more Swiss rounds than its size includes, choose the next size up. The largest size is {{online:largest}} players, and it includes up to {{online:row:5:rounds}} Swiss rounds.
+The **Fair-play camera** doubles the price. It is charged when the camera setting that applies to any stage of the division is optional or required. The nearest setting that is set wins: a stage that sets nothing takes the division's, and a division that sets nothing takes the competition's, so a division set to off has no camera even when the competition requires one. Before the division has a stage, its own setting counts. Knockout, play-off and tie-break games are always included. If the division plays more Swiss rounds than its size includes, choose the next size up. The largest size is {{online:largest}} players, and it includes up to {{online:row:5:rounds}} Swiss rounds.
 
 Under the menu, a line shows the price and says **Nothing is spent here. It is paid for before round 1 opens.** Your plan can limit which sizes you can pick, and a size that is too small for the players already entered is marked in the menu.
 
@@ -64,7 +64,7 @@ Online Chess runs Swiss and knockout events, including play-offs, double elimina
 
 Until it is paid, the Fixtures tab shows an amber line that starts **Online Chess not paid.** and says how many players are registered, the size, and that round 1 cannot open until it is paid. Its buttons are **Pay**, followed by the credits it will take, and **Change size**. **Pay** opens a receipt with the size, the camera, what comes from this month's credits and what comes from bought credits, and the total. If you are short, the receipt offers **Buy credits**, and comes back when you do.
 
-You can also pay when you open the first round. Pressing **Open round** on an unpaid division opens the same receipt, titled **Pay and open round 1**. Pay it, and the round opens in the same step. If nothing is charged, nothing opens.
+You can also pay when you open the first round. Pressing **Open round** on an unpaid division opens the same receipt, titled **Pay and open round 1**. Pay it, and the round opens in the same step. If the round cannot open, for any reason, such as a round that is not paired or a board that is waiting on a Lichess link, nothing is charged and you see the round's own reason.
 
 This month's included Seazn credits are spent first, then bought credits. Included credits that are not used by the end of the month expire. Bought credits never expire.
 

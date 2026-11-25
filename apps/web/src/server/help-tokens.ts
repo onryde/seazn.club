@@ -80,7 +80,6 @@ export function stripHelpTokens(text: string): string {
 // does a leftover `{{online:` after resolving: a near miss never ships as raw text. The row index, not the size, is the argument, so a
 // table written with these tokens types no figure at all; a test pins that the table has one row per size of the ladder.
 // ---------------------------------------------------------------------------------------------------------------------
-const ONLINE_OPEN = "{{online:";
 const ONLINE_TOKEN = /\{\{online:([a-z0-9:]+)\}\}/g;
 const ONLINE_FIELDS = ["size", "price", "cameras", "rounds"] as const;
 
@@ -98,11 +97,6 @@ function onlineFigure(name: string): number | null {
     case "rounds": return includedRounds(size);
     default: return null;
   }
-}
-
-/** True when the Markdown carries an Online Chess token, or something that tries to be one. */
-export function hasOnlineTokens(markdown: string): boolean {
-  return markdown.includes(ONLINE_OPEN);
 }
 
 /** Every `{{online:...}}` token in the Markdown rendered from the price leaf; a near miss throws naming it. */
