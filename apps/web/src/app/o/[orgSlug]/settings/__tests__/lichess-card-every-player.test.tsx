@@ -1,7 +1,9 @@
 // Settings → Account: the "Link Lichess account" card is shown to EVERY signed-in player (owner 2026-11-18). Linking is
 // the player's own — they can do it before any club offers online chess, so a club's PostHog flag `online-chess` no
 // longer decides whether the card renders (it used to: T20, flag OFF or PostHog throwing rendered none, unless the
-// player was already linked). The page asks the flag nothing, and hands the card no club, so its link starts none.
+// player was already linked). For a club that streams the page asks the flag nothing; for one that does not, the Settings
+// rail's credits read falls back to the flag (the credits are one pool) and asks it for the CLUB - (orgId, orgId), never the
+// player. Either way the card is handed no club, so its link starts none.
 //
 // Drives the REAL page (an async server component, so `prerender`) with PostHog doubled at its boundary — a call to it is
 // a defect now, so the double counts them. Same page harness as preferences-tab.test.tsx: islands stubbed to markers, `sql`
@@ -101,7 +103,7 @@ const ORG = {
 };
 
 const STREAMING_FEATURES: ReadonlySet<string> = new Set(["streaming.overlay", "streaming.relay"]);
-/** Anti-vacuity for "the flag is never asked": the rail's credits read really ran as far as the streaming offer, the one question
+/** Anti-vacuity for "the flag is never asked" (a club that streams): the rail's credits read really ran as far as the streaming offer, the one question
  *  that would otherwise fall back to the flag - so its silence is the page's doing, not a rail that never rendered. */
 const railAskedStreaming = () => hasFeature.mock.calls.some(([orgId, key]) => orgId === ORG.id && key === "streaming.overlay");
 
@@ -168,14 +170,14 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe("Settings → Account: the Lichess card is shown to every signed-in player, whatever the club's flag says", () => {
+describe("Settings → Account: the Lichess card is shown to every signed-in player, whatever the club's flag says (for a club that streams, the flag is never asked)", () => {
   /** The override the suite runs under, plus every state of the flag: none of them may decide the card. */
   const WORLDS: readonly { label: string; arm: () => void }[] = [
     { label: "override ON", arm: () => undefined },
     ...FLAG_STATES.map((s) => ({ label: s.label, arm: () => flagIs(s) })),
   ];
 
-  it("not linked: the card renders in every flag world, handed no club, and the flag is never asked", async () => {
+  it("not linked, for a club that streams: the card renders in every flag world, handed no club, and the flag is never asked", async () => {
     let checked = 0;
     for (const w of WORLDS) {
       w.arm();
@@ -219,13 +221,42 @@ describe("Settings → Account: the Lichess card is shown to every signed-in pla
     expect(await render("account"), "a full grant: nothing to re-consent").toContain('data-reconsent="false"');
   });
 
-  it("another tab does not show the card (it is the account tab's), and asks the flag nothing", async () => {
+  it("another tab does not show the card (it is the account tab's), and for a club that streams asks the flag nothing", async () => {
     flagIs(FLAG_STATES[0]!);
     const html = await render("organization");
     expect(html).toContain(ORG.name);
     expect(html).not.toContain('data-testid="lichess-card"');
     expect(railAskedStreaming(), "the rail's credits read reached the streaming offer").toBe(true);
     expect(isServerFeatureEnabled).not.toHaveBeenCalled();
+  });
+});
+
+// Task 15 fix round 1 (carry-over from the CI-fix review): the world the suite above does not cover - a club that does NOT stream
+// (`streaming.*` off). The rail's credits read then asks the Online Chess flag (the credits are one pool: stream-credits-tab.ts), so
+// the flag IS asked - and it must be asked about the CLUB, never about the player reading their own account.
+describe("Settings → Account, a club that does not stream: the card still renders with no club, and the flag is asked only for the club", () => {
+  it("in every flag world: the card is there, handed no club; every flag ask is (orgId, orgId), never the user", async () => {
+    let worlds = 0;
+    let asks = 0;
+    for (const s of FLAG_STATES) {
+      flagIs(s);
+      hasFeature.mockReset().mockResolvedValue(false); // no streaming.*, nothing else either
+      const html = await render("account");
+      expect(html, s.label).toContain("owner@example.com");
+      expect(html, s.label).toContain('data-testid="lichess-card"');
+      expect(html, `${s.label}: the card's own props, no club`).toContain('data-props="configured,linkedUsername,needsReconsent"');
+      expect(html, `${s.label}: the card is handed no club to start at`).not.toContain("orgSlug");
+      const calls = isServerFeatureEnabled.mock.calls as [string, string, { orgId?: string } | undefined][];
+      expect(calls.length, `${s.label}: anti-vacuity - a club that does not stream does ask the flag`).toBeGreaterThan(0);
+      for (const [flag, distinctId, opts] of calls) {
+        expect([flag, distinctId, opts?.orgId], `${s.label}: the club's ask`).toEqual(["online-chess", ORG.id, ORG.id]);
+        expect(distinctId, `${s.label}: never the player`).not.toBe("u1");
+        asks += 1;
+      }
+      worlds += 1;
+    }
+    expect(worlds).toBe(FLAG_STATES.length);
+    expect(asks, "anti-vacuity: asks were judged").toBeGreaterThanOrEqual(FLAG_STATES.length);
   });
 });
 
