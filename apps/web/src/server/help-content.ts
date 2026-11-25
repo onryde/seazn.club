@@ -14,7 +14,7 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import type { Options as SanitizeSchema } from "rehype-sanitize";
 import rehypeStringify from "rehype-stringify";
 import type { MatrixData } from "@/lib/pricing-matrix";
-import { hasHelpTokens, resolveHelpTokens } from "@/server/help-tokens";
+import { hasHelpTokens, resolveHelpTokens, resolveOnlineTokens } from "@/server/help-tokens";
 import { rehypeHelpHeadingIds, type HelpHeading } from "@/server/help-heading-ids";
 import { HELP_PUBLIC_ROOT, rehypeHelpFigures } from "@/server/help-figures";
 import { rehypeHelpCallouts } from "@/server/help-callouts";
@@ -115,7 +115,8 @@ async function renderHelp(
   matrix: MatrixData | undefined,
   options: HelpRenderOptions,
 ): Promise<{ html: string; headings: HelpHeading[] }> {
-  const resolved = matrix ? resolveHelpTokens(markdown, matrix) : markdown;
+  // Plan tokens need the plan table; Online Chess tokens come from the price leaf and always resolve (help-tokens.ts).
+  const resolved = resolveOnlineTokens(matrix ? resolveHelpTokens(markdown, matrix) : markdown);
   const run = options.publicRoot ? buildPipeline(options.publicRoot) : pipeline;
   const file = await run.process(resolved);
   const headings = file.data.helpHeadings;
@@ -256,7 +257,7 @@ export function helpNav(): { section: string; label: string; articles: HelpArtic
  * otherwise they stay as written (the search-index route passes none).
  */
 export function helpPlainText(markdown: string, matrix?: MatrixData): string {
-  return (matrix ? resolveHelpTokens(markdown, matrix) : markdown)
+  return resolveOnlineTokens(matrix ? resolveHelpTokens(markdown, matrix) : markdown)
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
     .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")

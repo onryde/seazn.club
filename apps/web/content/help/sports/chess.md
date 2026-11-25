@@ -34,6 +34,60 @@ For a draw, press **Draw / no result**. It asks **How did it end?** with **Draw 
 
 One tap decides the game, so a wrong tap matters. Press **Take back** on the ribbon to undo it. See [fixing a mistake](/help/scoring/corrections).
 
+## Online Chess: sizes and credits
+
+Online Chess plays your division's games on Lichess, on a Seazn board. You pay for it once, before the first round, with [Seazn credits](/help/billing/match-credits). Players never see a price or a credit.
+
+### Turn it on and choose a size
+
+In **Division rules**, on the division's Fixtures tab, set **Online Chess** to **Lichess**. A **Players, up to** menu appears under it. The size is the most players who can enter, and it becomes the division's registration limit. A new online division opens at the smallest size that holds the players already entered.
+
+Each size includes the Swiss rounds shown, so you do not count rounds yourself. The price is the same on every plan and for every time control: classical costs what rapid and blitz cost.
+
+| Players, up to | Swiss rounds included | Seazn credits | With the Fair-play camera |
+| --- | --- | --- | --- |
+| {{online:row:1:size}} | {{online:row:1:rounds}} | {{online:row:1:price}} | {{online:row:1:cameras}} |
+| {{online:row:2:size}} | {{online:row:2:rounds}} | {{online:row:2:price}} | {{online:row:2:cameras}} |
+| {{online:row:3:size}} | {{online:row:3:rounds}} | {{online:row:3:price}} | {{online:row:3:cameras}} |
+| {{online:row:4:size}} | {{online:row:4:rounds}} | {{online:row:4:price}} | {{online:row:4:cameras}} |
+| {{online:row:5:size}} | {{online:row:5:rounds}} | {{online:row:5:price}} | {{online:row:5:cameras}} |
+
+The **Fair-play camera** doubles the price. It counts as paid when the camera is optional or required on any stage of the division. Knockout, play-off and tie-break games are always included. If the division plays more Swiss rounds than its size includes, choose the next size up. The largest size is {{online:largest}} players, and it includes up to {{online:row:5:rounds}} Swiss rounds.
+
+Under the menu, a line shows the price and says **Nothing is spent here. It is paid for before round 1 opens.** Your plan can limit which sizes you can pick, and a size that is too small for the players already entered is marked in the menu.
+
+### Swiss and knockout only
+
+Online Chess runs Swiss and knockout events, including play-offs, double elimination and tie-breaks. League, group and ladder formats cannot play online. The format picker marks them **Not available for Online Chess**, and a division that holds one cannot turn Online Chess on.
+
+### Pay for it
+
+Until it is paid, the Fixtures tab shows an amber line that starts **Online Chess not paid.** and says how many players are registered, the size, and that round 1 cannot open until it is paid. Its buttons are **Pay**, followed by the credits it will take, and **Change size**. **Pay** opens a receipt with the size, the camera, what comes from this month's credits and what comes from bought credits, and the total. If you are short, the receipt offers **Buy credits**, and comes back when you do.
+
+You can also pay when you open the first round. Pressing **Open round** on an unpaid division opens the same receipt, titled **Pay and open round 1**. Pay it, and the round opens in the same step. If nothing is charged, nothing opens.
+
+This month's included Seazn credits are spent first, then bought credits. Included credits that are not used by the end of the month expire. Bought credits never expire.
+
+An unpaid division can still be started and scored by hand. Only opening an online round needs the payment.
+
+### Change the size until round 1
+
+Until a round of the division opens, you can change the size from the amber line, or from the line that shows the size once it is paid.
+
+- Moving up charges the difference. Anyone on the waiting list is promoted into the room the new size makes.
+- Moving down returns the difference. Bought credits come back in full. Included credits come back only if their month has not ended. The receipt shows what is returned and what is **Not returned**.
+- Adding the camera charges the difference. Turning the camera off later returns nothing, and turning it back on costs nothing more.
+
+Once any round of the division has opened, the size is fixed. Nothing is refunded for places you did not fill. Adding Swiss rounds after round 1 stays free.
+
+### Refunds
+
+A paid package is refunded automatically, with no button to press, when you delete the division or the competition, or switch Online Chess off, before any round has opened. Switching off asks **Switch off Online Chess?** and the answer is **Switch off and refund**. The credits you bought and this month's included credits go back to your balance, and the page says how many came back and how many included credits from an earlier month were not returned.
+
+After a round has opened nothing comes back. Switching off then says **A round has opened, so this event is running. Switching off stops online play and no credits come back.**
+
+Every payment, size change and refund appears in **Credit history** on the **Seazn credits** side of **Settings** > **Credits**, in rows that start **Online Chess:** and name the division and its size.
+
 ## Online chess: adding time to check-in
 
 On a division that plays its chess online, players check in before each game. If a board is slow to fill, you can give it more time from [Match Day](/help/scheduling/match-day): on the board's own panel, on its row in the round panel's waiting list, or for the whole round from the round panel.

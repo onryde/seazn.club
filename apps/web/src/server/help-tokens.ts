@@ -16,6 +16,7 @@
 //  - Prices and currency amounts are not rendered by this token. There is no
 //    single right rendering for them (currency, billing interval, tax), so a
 //    price stays typed until a task decides that.
+import { ONLINE_SIZES, includedRounds, packagePrice } from "@/lib/online-chess-package";
 import type { MatrixData } from "@/lib/pricing-matrix";
 
 const TOKEN_OPEN = "{{plan:";
@@ -63,4 +64,63 @@ export function resolveHelpTokens(markdown: string, matrix: MatrixData): string 
  */
 export function stripHelpTokens(text: string): string {
   return text.replace(/\{\{plan:[^}]*\}\}/g, "").replace(/ {2,}/g, " ").trim();
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Online Chess figures: `{{online:...}}` (spec 2026-11-23-online-chess-credits-design.md §15; plan Task 13 carry (3)).
+//
+// The sizes, their prices and the Swiss rounds each includes are the price leaf's (lib/online-chess-package.ts: import-free, no
+// database), so unlike a plan token these need no plan table and resolve wherever help is rendered, prerendered pages included.
+//
+//   {{online:largest}} / {{online:smallest}}                the ends of the ladder (players)
+//   {{online:row:<i>:<field>}}   i = 1..ONLINE_SIZES.length, counted from 1 as the help table prints its rows;
+//                                field = size | price (credits) | cameras (credits with the Fair-play camera) | rounds (Swiss rounds included)
+//
+// A token that is not exactly one of those THROWS, naming it (a hole where a price belongs is worse than a failed render), and so
+// does a leftover `{{online:` after resolving: a near miss never ships as raw text. The row index, not the size, is the argument, so a
+// table written with these tokens types no figure at all; a test pins that the table has one row per size of the ladder.
+// ---------------------------------------------------------------------------------------------------------------------
+const ONLINE_OPEN = "{{online:";
+const ONLINE_TOKEN = /\{\{online:([a-z0-9:]+)\}\}/g;
+const ONLINE_FIELDS = ["size", "price", "cameras", "rounds"] as const;
+
+function onlineFigure(name: string): number | null {
+  if (name === "largest") return ONLINE_SIZES[ONLINE_SIZES.length - 1]!;
+  if (name === "smallest") return ONLINE_SIZES[0]!;
+  const m = /^row:([0-9]+):([a-z]+)$/.exec(name);
+  if (!m) return null;
+  const size = ONLINE_SIZES[Number(m[1]) - 1];
+  if (size === undefined) return null;
+  switch (m[2] as (typeof ONLINE_FIELDS)[number]) {
+    case "size": return size;
+    case "price": return packagePrice(size, false);
+    case "cameras": return packagePrice(size, true);
+    case "rounds": return includedRounds(size);
+    default: return null;
+  }
+}
+
+/** True when the Markdown carries an Online Chess token, or something that tries to be one. */
+export function hasOnlineTokens(markdown: string): boolean {
+  return markdown.includes(ONLINE_OPEN);
+}
+
+/** Every `{{online:...}}` token in the Markdown rendered from the price leaf; a near miss throws naming it. */
+export function resolveOnlineTokens(markdown: string): string {
+  const out = markdown.replace(ONLINE_TOKEN, (token, name: string) => {
+    const figure = onlineFigure(name);
+    if (figure === null) {
+      throw new Error(
+        `help token ${token}: not an Online Chess figure (expected {{online:largest}}, {{online:smallest}} or {{online:row:<1-${ONLINE_SIZES.length}>:<${ONLINE_FIELDS.join("|")}>}})`,
+      );
+    }
+    return String(figure);
+  });
+  // Anything still looking like a token is a near miss and must not ship as raw text: a missing brace (`{{online:row:1:size}`), a
+  // space or a capital (`{{ online:...}}`, `{{Online:...}}`), an empty name.
+  const stray = /\{\{\s*online\s*:/i.exec(out);
+  if (stray) {
+    throw new Error(`help token malformed near '${out.slice(stray.index, stray.index + 60)}': expected an Online Chess token such as {{online:row:1:price}}`);
+  }
+  return out;
 }
