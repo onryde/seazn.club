@@ -14,6 +14,8 @@ import { ONLINE_SIZES, sizeFor } from "@/lib/online-chess-package";
 import { countOnlineHeld } from "@/server/external-play/online-entrant-cap";
 import { seedBoardgameSport } from "@/server/usecases/__tests__/_external-play-seed";
 import { seedRegistration } from "@/server/usecases/__tests__/_registration-fixtures";
+// The stream target a session needs: enc-boundary.test.ts r3 refuses the sealed column's NAME outside server/relay/**, so the relay rig writes it.
+import { rigTarget } from "@/server/relay/__tests__/_session-rig";
 import { SUPERUSER_ONLY } from "../../../../../../../scripts/rls-exempt.ts";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -380,13 +382,11 @@ describe.skipIf(!HAS_DB)("V560 + V561 online chess packages: schema", () => {
       const org = await seedOrg();
       const div = await seedDivision(org);
       const [pkg] = await insertPackage(sql, org, { ...PAID_32, divisionId: div.id, divisionName: div.name });
-      const [target] = await sql<{ id: string }[]>`
-        insert into org_stream_targets (org_id, kind, label, rtmp_enc)
-        values (${org}, 'youtube', 'Club channel', ${Buffer.from("not-a-real-envelope")}) returning id`;
+      const targetId = await rigTarget(org, "Club channel");
       const [session] = await sql<{ id: string }[]>`
         insert into fixture_stream_sessions (org_id, mode, state, target_id, created_by, sport_key, competition_id, division_id,
                                              entitlement_via_override)
-        values (${org}, 'passthrough', 'requested', ${target!.id}, ${randomUUID()}, 'boardgame', ${div.competitionId}, ${div.id}, true)
+        values (${org}, 'passthrough', 'requested', ${targetId}, ${randomUUID()}, 'boardgame', ${div.competitionId}, ${div.id}, true)
         returning id`;
       return { org, div, pkgId: pkg!.id, sessionId: session!.id };
     }
