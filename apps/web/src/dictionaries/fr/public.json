@@ -860,7 +860,7 @@
   "seaznVideo.part": "Partie {n}",
   "seaznVideo.startingLive": "La vidéo en direct commencera ici dans un instant",
   "seaznVideo.startingReplay": "Le replay sera prêt ici dans quelques minutes",
-  "seaznVideo.delay": "La vidéo a environ {min} à {max} secondes de retard sur l'action en direct.",
+  "seaznVideo.delay": "La vidéo a environ {seconds} secondes de retard sur l'action en direct.",
   "paging.search.label": "Trouver une équipe",
   "paging.search.clear": "Effacer",
   "paging.search.none": "Aucune équipe ne s’appelle « {query} »",

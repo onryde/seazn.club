@@ -100,7 +100,7 @@ const REGION = "ph-no-capture mt-4 border-t border-white/10 pt-4";
  *  court card's quiet-line ink (the "Updated {seconds}s ago" line under this slot), measured above WCAG AA on `bg-court`. */
 const DELAY_LINE = "mt-2 text-xs text-court-muted";
 const delayText = (labels: SeaznVideoLabels): string =>
-  interpolate(labels.delay, { min: SEAZN_LIVE_DELAY_SECONDS.min, max: SEAZN_LIVE_DELAY_SECONDS.max });
+  interpolate(labels.delay, { seconds: SEAZN_LIVE_DELAY_SECONDS });
 /** The picker's row, and a part's pill by whether it is the selected one: one authority for their geometry, so the row the box holds
  *  (re-capture R1) is the real one's size, to the pixel, however many parts wrap. */
 const PICKER_ROW = "mb-3 flex flex-wrap gap-2";

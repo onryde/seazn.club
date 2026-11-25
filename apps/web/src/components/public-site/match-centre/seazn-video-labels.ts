@@ -17,7 +17,7 @@ export interface SeaznVideoLabels {
   startingLive: string;
   /** The held box's one quiet line while a REPLAY is what comes next (Task 33f: the stream has stopped, its recording is not ready). */
   startingReplay: string;
-  /** The line under the LIVE player only (Task 33c), a template: `{min}` and `{max}` are `SEAZN_LIVE_DELAY_SECONDS`'s. */
+  /** The line under the LIVE player only (Task 33c), a template: `{seconds}` is `SEAZN_LIVE_DELAY_SECONDS`. */
   delay: string;
 }
 

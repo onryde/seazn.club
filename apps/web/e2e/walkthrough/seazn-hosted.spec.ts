@@ -80,7 +80,7 @@ const ui = (key: string) => copy(EN_UI, key);
 const pub = (key: string) => copy(EN_PUBLIC, key);
 /** Task 33c: the owner's words, literal (2026-11-23, "the live action" 2026-11-24), never rebuilt from the code under test's template
  *  and constant (T33c review m2), so a wrong figure or a wrong word reds here. */
-const DELAY_LINE = "Video runs about 15–20 seconds behind the live action.";
+const DELAY_LINE = "Video runs about 25 seconds behind the live action."; // owner 2026-11-25
 /** Owner 2026-11-23: Seazn's own destination is called "Seazn Hosted", a brand in every locale. Literal for the same reason. */
 const SEAZN_BRAND = "Seazn Hosted";
 /** Task 33f (owner 'Ok', 2026-11-24): the held box's one line names the video that is coming: a live on its way up, or the replay of a
