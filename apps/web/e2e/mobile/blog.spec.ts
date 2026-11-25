@@ -14,6 +14,7 @@ import { expect, test, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { expectNoHorizontalScroll, overflowingIn } from "../helpers";
 import { dismissCookieBanner } from "../scorepad-a11y-kit";
+import { CHECKLIST_POST, expectChecklist } from "../blog-checklist";
 import { projectViewport } from "./_shared";
 
 const POST = "/blog/how-standings-points-work";
@@ -48,8 +49,8 @@ async function seriousAxe(page: Page): Promise<string[]> {
 test.describe("signed out", () => {
   test.use(signedOut);
 
-  // The streaming guide is the post with art (a tall phone drawing) rather than an example table.
-  for (const path of ["/blog", POST, "/blog/what-you-need-to-stream-a-match"]) {
+  // The streaming guide is the post with art (a tall phone drawing) and a Markdown checklist rather than an example table.
+  for (const path of ["/blog", POST, CHECKLIST_POST]) {
     test(`${path}: no horizontal scroll, nothing clipped, a tab stop on every scrolling box, axe clean`, async ({ page }) => {
       await visit(page, path);
       await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
@@ -60,6 +61,12 @@ test.describe("signed out", () => {
       expect(await seriousAxe(page)).toEqual([]);
     });
   }
+
+  test("the streaming guide's checklist: a card per row on a phone, an ordinary table on a tablet", async ({ page }) => {
+    await visit(page, CHECKLIST_POST);
+    await expectChecklist(page, width());
+    await expectNoHorizontalScroll(page);
+  });
 
   test("the example table is a focusable, named region that fits the page column, scrolling inside itself", async ({ page }) => {
     await visit(page, POST);

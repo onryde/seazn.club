@@ -9,6 +9,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { expectNoHorizontalScroll, overflowingIn } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
+import { CHECKLIST_POST, expectChecklist } from "./blog-checklist";
 
 const POST = "/blog/how-standings-points-work";
 const WIDTHS = [1280, 768, 320] as const;
@@ -40,7 +41,7 @@ test.describe("signed out", () => {
   test.use(signedOut);
 
   for (const width of WIDTHS) {
-    for (const path of ["/blog", POST]) {
+    for (const path of ["/blog", POST, CHECKLIST_POST]) {
       test(`${path} at ${width}: no horizontal page scroll, nothing clipped, axe finds nothing serious`, async ({ page }) => {
         await visit(page, path, width);
         await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
@@ -69,6 +70,14 @@ test.describe("signed out", () => {
     // The hint that it swipes is there below md.
     await expect(page.getByText("Swipe sideways to see the whole table")).toBeVisible();
   });
+
+  for (const width of WIDTHS) {
+    test(`the streaming guide's checklist at ${width}: a card per row below 480, an ordinary table from there`, async ({ page }) => {
+      await visit(page, CHECKLIST_POST, width);
+      await expectChecklist(page, width);
+      await expectNoHorizontalScroll(page);
+    });
+  }
 
   test("1280: the article, then the 'On this page' rail on its right, which marks and scrolls to a section", async ({ page }) => {
     await visit(page, POST, 1280);
