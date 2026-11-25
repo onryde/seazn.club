@@ -179,7 +179,6 @@ describe("C: a big run sheet ships its open rounds and a tally of the rest", () 
 // untimed rounds follow the rule too, and the loaded and folded readings of one scene must give ONE order (`stageRoundSections` vs
 // `withFoldedRounds`). Expected orders are written from the rule, never read off the sorter.
 describe("task 51: a folded or loaded round under way keeps its place with no kickoff times", () => {
-  const at = (d: number) => new Date(NOW + d * DAY).toISOString();
   const none = new Set<string>();
   // A full run-sheet row (the paging `row` carries the fields the folded tally reads; the grouping reads the rest).
   const full = (round: number, status: string, when: number | null, extra: Partial<Row> = {}) =>
