@@ -61,7 +61,9 @@ afterAll(async () => {
 type Seeded = Awaited<ReturnType<typeof seedOnlineChessRoundWithRankedBoard>>;
 
 /** The handle the panel shares for the round on screen: nothing is pressed in this test, so every press is a no-op. */
-const HANDLE: OpenRoundHandle = { state: initialOpenRoundUi(), ask: () => {}, cancel: () => {}, open: () => {}, resend: () => {} };
+const HANDLE: OpenRoundHandle = {
+  state: initialOpenRoundUi(), ask: () => {}, cancel: () => {}, open: () => {}, resend: () => {}, pay: async () => {}, closePay: () => {},
+};
 
 /** The page's own hand-off: the view for the division, as plain data across the server -> client boundary, then the column's
  *  check-in hero drawing it (the hero is what the Arbiter Panel mounts for a round that is open; no boards on screen needed). */
