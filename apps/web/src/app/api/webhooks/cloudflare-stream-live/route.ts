@@ -50,7 +50,9 @@ export async function POST(req: Request): Promise<NextResponse> {
       log.debug({ inputUid: n.inputUid, event: n.event }, "cloudflare-live-webhook: an input this deployment does not own — ignored");
     } else {
       // One line per handled event: the input, the event, the session and the outcome only, never a header, the body or the secret.
-      log.info({ inputUid: n.inputUid, event: n.event, sessionId: "sessionId" in r ? r.sessionId : null, outcome: r.outcome }, "cloudflare-live-webhook: notification handled");
+      // Task 45: `edge` when the event raised the session's phone-live edge counter (a camera re-connection nudging the relay).
+      log.info({ inputUid: n.inputUid, event: n.event, sessionId: "sessionId" in r ? r.sessionId : null, outcome: r.outcome,
+        ...(r.outcome === "recorded" && r.edge !== undefined ? { edge: r.edge } : {}) }, "cloudflare-live-webhook: notification handled");
     }
     return NextResponse.json({ received: true, outcome: r.outcome });
   } catch (err) {

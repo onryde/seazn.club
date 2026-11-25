@@ -12,7 +12,8 @@
 //     (`seazn_unavailable` → the court's stored `no_destination`), the live match running on; on again, the same match starts;
 //   - a Seazn court session has no YouTube broadcast, so the court's deferred YouTube end answers `not_court_broadcast` and calls
 //     YouTube not at all;
-//   - T47: the hub's camera icon reads `destination_kind = 'seazn'` off the match's session, court-started or not: live while it is up.
+//   - T47: the hub's camera icon reads `destination_kind = 'seazn'` off the match's session, court-started or not: live while it is up;
+//   - T45: Cloudflare's camera re-connect raises the phone-live edge of the match whose input it is, and of no other match.
 //
 // ONE SPORT, on purpose (TEST-STRATEGY rule 6): the destination layer never reads a sport rule; the day rides `generic`.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -55,7 +56,7 @@ import { linkCourtStream, setCourtStream } from "../court-streams";
 import { grantCredits } from "../stream-credits";
 import { lockSeaznRecordings } from "../seazn-recordings";
 import { discoverSeaznRecordings, moveSeaznRecordings, type SeaznReplayDeps } from "../seazn-replays";
-import { currentSession, heartbeat, stopSession, type SessionDeps } from "../stream-sessions";
+import { currentSession, heartbeat, recordLiveNotification, stopSession, type SessionDeps } from "../stream-sessions";
 import { runCourtBroadcastEnd } from "../stream-sessions/court-end";
 import { override, phoneId } from "./_capture-rig";
 import { at, place, seedDay, setStatus, type Day } from "./_match-day-seed";
@@ -255,6 +256,58 @@ describe.skipIf(!HAS_DB)("a court streams to Seazn", () => {
       select i.ingest_input_id from seazn_locked_videos v join fixture_stream_inputs i on i.id = v.input_row_id where v.cf_video_id = ${cf}`)[0]!.ingest_input_id;
     expect(await lockedOf(rowsA[0]!.cf_video_id), "A's part came off A's programme input").toBe(progA);
     expect(await lockedOf(rowsB[0]!.cf_video_id), "B's part came off B's programme input").toBe(progB);
+  });
+
+  it("T45: a court match's camera coming back nudges THAT match's relay only — A's re-connect raises A's counter; after the handover A's (ending) re-connect moves nothing, B's first connect is no edge, and B's own return raises B's alone", async () => {
+    const cameraOf = async (sid: string) => (await inputsOf(sid)).find((i) => i.role === "camera")!.ingest_input_id;
+    const edgeOf = async (sid: string) =>
+      (await sql<{ e: number | null }[]>`select phone_live_edge as e from fixture_stream_sessions where id = ${sid}`)[0]!.e;
+    /** What the match's relay reads: its Machine's heartbeat reply. */
+    const relayReads = async (sid: string) => {
+      const reply = await heartbeat(sid, runner.created.find((c) => c.sessionId === sid)!.jobToken, { state: "playing" }, deps);
+      return (reply as { phoneLiveEdge?: number | null }).phoneLiveEdge;
+    };
+    const cf = (uid: string, event: "connected" | "disconnected", sec: number) => recordLiveNotification(
+      { inputUid: uid, event: `live_input.${event}`, word: event, reason: null, at: new Date(at(0).getTime() + sec * SEC) }, clock());
+
+    const sidA = await startedLive(A, 0);
+    const camA = await cameraOf(sidA);
+    await beat(P, { sid: sidA, state: "publishing" });
+    expect(await relayReads(sidA), "PREMISE: the court phone's first live sets A's counter at 0").toBe(0);
+    expect(await cf(camA, "connected", 1), "A's first connect").not.toHaveProperty("edge");
+    await cf(camA, "disconnected", 30);
+    expect(await cf(camA, "connected", 40), "A's return").toMatchObject({ outcome: "recorded", sessionId: sidA, edge: 1 });
+    expect(await relayReads(sidA)).toBe(1);
+
+    // The handover (the test above's sequence): B is created, A ends.
+    await streamOn(B);
+    await decide(A, 10);
+    atMin(11);
+    await kickoff(B, 11);
+    await beat(P, { sid: sidA, state: "publishing" });
+    const sidB = (await sessionsOf(B)).at(-1)?.id;
+    if (sidB === undefined || sidB === sidA) throw new Error("PREMISE: B started");
+    expect(["ending", "completed"], "PREMISE: A is over or going").toContain((await sessionRow(sidA)).state);
+    const camB = await cameraOf(sidB);
+    expect(camB, "PREMISE: B has its own camera input").not.toBe(camA);
+    // The handover beat came after 11 silent minutes, so the PHONE's own silence rule may have raised A's counter on it (while A
+    // was still up): A's value is read here, after the handover, and must not move from it.
+    const aAtHandover = await edgeOf(sidA);
+    expect(aAtHandover, "PREMISE: A's counter exists, at least the 1 of its return").toBeGreaterThanOrEqual(1);
+
+    await cf(camA, "disconnected", 11 * 60);
+    const late = await cf(camA, "connected", 11 * 60 + 5);
+    expect(late, "A's re-connect after the handover: recorded").toMatchObject({ outcome: "recorded", sessionId: sidA });
+    expect(late, "… and no edge").not.toHaveProperty("edge");
+    expect(await edgeOf(sidA), "A's counter stands").toBe(aAtHandover);
+    expect(await cf(camB, "connected", 11 * 60 + 6), "B's first connect").not.toHaveProperty("edge");
+    await machinePlays(sidB);
+    await beat(P, { sid: sidB, state: "publishing" });
+    expect(await relayReads(sidB), "PREMISE: B's own counter starts at 0 (per session)").toBe(0);
+    await cf(camB, "disconnected", 12 * 60);
+    expect(await cf(camB, "connected", 12 * 60 + 9), "B's return").toMatchObject({ outcome: "recorded", sessionId: sidB, edge: 1 });
+    expect(await relayReads(sidB)).toBe(1);
+    expect(await edgeOf(sidA), "A untouched by B's return").toBe(aAtHandover);
   });
 
   it("the org's Seazn switch (or the deployment's flag) goes off mid-court-day: the session that is up continues, the next match's auto start is refused (stored as the court's no_destination), the live match runs on; back on, the same match starts", async () => {

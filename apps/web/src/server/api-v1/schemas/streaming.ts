@@ -673,6 +673,7 @@ export const RelayHeartbeatReply = z.object({
   desiredState: z.enum(["live", "ending"]),
   /** Owed 108 fix (b): the session's PHONE-LIVE EDGE counter (V476; domain/phone-live.ts) — bumped once each time the phone goes
    *  from not-live back to live after it had been live, so a relay waiting out its reconnect back-off can reconnect at once.
+   *  Task 45: Cloudflare's camera RE-connection raises it too (usecases/stream-sessions/live-notification.ts `reconnectNudge`).
    *  The relay acts once per INCREASE. Monotonic for the life of the session and stored, never remembered. 0 at the first-ever
    *  live (no outage to recover from). Absent — web omits it, and a reader treats null the same — when the session has no phone,
    *  or its phone has not been live yet: unknown. */
