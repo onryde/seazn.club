@@ -322,7 +322,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   const origin = clientOrigin();
   const codeHint = streamHintKey(
     streamHintNeeds({
-      sessionOpen: state === "provisioning" || state === "warming" || state === "live" || state === "ending",
+      state,
       selectedTargetId: p.selectedTargetId,
       balance: p.balance,
       freeRestart: Boolean(p.restart?.free),
