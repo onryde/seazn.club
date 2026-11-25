@@ -30,7 +30,7 @@ import {
   type PayBody, type ReceiptMode, type ReceiptQuote, type ReceiptSizeRow,
 } from "@/lib/online-receipt";
 import {
-  initialReceipt, pressBody, readOwed, receiptReducer, shownQuote, wantedOf, type ReceiptChoice,
+  frozenOf, initialReceipt, pressBody, readOwed, receiptReducer, shownQuote, wantedOf, type ReceiptChoice,
 } from "@/lib/online-receipt-state";
 import type { StreamPackSize } from "@/lib/stream-credit-packs";
 import type { ViewerPlan } from "@/lib/viewer-plan";
@@ -192,8 +192,9 @@ export function OnlineReceipt(props: OnlineReceiptProps): ReactNode {
         paid: facts.paid,
       })
     : [];
-  // From round 1 the camera is fixed, like the size (spec 8.7): the server's `frozen` refusal shows the answer and takes no pick.
-  const cameraFixed = state.quote !== null && state.quote.refusal === "frozen";
+  // From round 1 the size and the camera are fixed (spec 8.7, R7): the server's `frozen` refusal - read on open, or the 409 of a round that opened in
+  // another tab - shows the answer and the size and takes no pick (the reducer ignores one too).
+  const fixed = frozenOf(state);
 
   // ---- the credits chooser of a short balance -------------------------------------------------------------------------------------------
   if (state.view === "buy" && confirm.kind === "buy" && renderBuy !== undefined) {
@@ -253,7 +254,7 @@ export function OnlineReceipt(props: OnlineReceiptProps): ReactNode {
           on={state.cameras}
           // Only while the Yes can be confirmed (fix round 3 m1): a note over a "Choose a size" button promised a write that no press makes.
           turnsOn={state.cameras && !facts.cameras && want !== null}
-          disabled={submitting || cameraFixed}
+          disabled={submitting || fixed}
           onPick={(on) => dispatch({ type: "cameras", on })}
         />
 
@@ -266,7 +267,7 @@ export function OnlineReceipt(props: OnlineReceiptProps): ReactNode {
                 row={row}
                 mode={mode}
                 checked={state.size === row.size}
-                disabled={submitting}
+                disabled={submitting || fixed}
                 held={facts.held}
                 rounds={facts.rounds}
                 viewerPlan={facts.viewerPlan}

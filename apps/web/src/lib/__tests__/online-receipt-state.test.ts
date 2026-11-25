@@ -3,8 +3,10 @@
 // their mind, press twice, find the price moved, find the balance short.
 import { describe, expect, it } from "vitest";
 import { packagePrice, type OnlineSize } from "@/lib/online-chess-package";
+import { ONLINE_PACKAGE_CODES } from "@/lib/online-chess-package";
+import { payFailureOf } from "@/lib/online-receipt";
 import {
-  initialReceipt, pressBody, readOwed, receiptReducer, shownQuote, wantedOf, type ReceiptAction, type ReceiptChoice, type ReceiptState,
+  frozenOf, initialReceipt, pressBody, readOwed, receiptReducer, shownQuote, wantedOf, type ReceiptAction, type ReceiptChoice, type ReceiptState,
 } from "@/lib/online-receipt-state";
 import { quoteOf } from "./_receipt-quote";
 
@@ -169,6 +171,87 @@ describe("R3: a 409 redraws with the fresh quote; nothing is taken until the org
   it("choosing something else clears the price-changed line", () => {
     const s = run(open(32), read(32), { type: "submit" }, { type: "settled", failure: { kind: "changed", quote: moved } }, { type: "pick", size: 64 });
     expect(s.changed).toBe(false);
+  });
+});
+
+// R7. The refusal the server answers a pay with when a round opened in another tab is the SAME 409 ONLINE_QUOTE_CHANGED as a moved price
+// (pay.ts `quoteChanged`: one code, the fresh quote in its body, whose `refusal` is "frozen"): there is no frozen code to branch on, so the
+// state reads the quote. The package is then closed for good (spec 8.7): the receipt says so instead of "the price changed", and takes no
+// further size or camera pick. Driven through the real reader of the wire error (`payFailureOf`), never a hand-built PayFailure.
+describe("R7: a 409 that says a round has opened freezes the receipt: no 'price changed', no further pick", () => {
+  /** What the pay door throws (ApiV1Error-shaped: `code`, `extra`) when the package was frozen under the press. */
+  const wire = (quote: ReturnType<typeof quoteOf>) => ({ code: ONLINE_PACKAGE_CODES.quoteChanged, extra: { quote } });
+  const MODES = {
+    pay: () => open(32),
+    payAndOpen: () => initialReceipt({ mode: "payAndOpen", size: 32, quote: null, cameras: false, setting: false }),
+    change: () => initialReceipt({ mode: "change", size: 32, quote: null, paid: { size: 16, camerasPaid: false }, cameras: false, setting: false }),
+  } as const;
+  const paidAt16 = { size: 16 as OnlineSize, camerasPaid: false };
+
+  /** The receipt as the organiser reaches it: a size chosen, its quote read, the press sent, the server's 409 settled through the real reader. */
+  function pressedAndFrozen(mode: keyof typeof MODES): ReceiptState {
+    const paid = mode === "change" ? paidAt16 : undefined;
+    const frozen = quoteOf({ size: 32, monthly: 50, refusal: "frozen", ...(paid ? { paid } : {}) });
+    const failure = payFailureOf(wire(frozen));
+    expect(failure.kind, "premise: the 409 body is a quote the server's own schema reads").toBe("changed");
+    return run(MODES[mode](), { type: "read", choice: { size: 32, cameras: false }, quote: quoteOf({ size: 32, monthly: 50, ...(paid ? { paid } : {}) }) }, { type: "submit" }, { type: "settled", failure });
+  }
+
+  it("the receipt does not say the price changed (it did not), and shows the refused quote it can no longer confirm", () => {
+    let checked = 0;
+    for (const mode of Object.keys(MODES) as (keyof typeof MODES)[]) {
+      const s = pressedAndFrozen(mode);
+      expect(s.submitting, mode).toBe(false);
+      expect(frozenOf(s), `${mode}: frozen`).toBe(true);
+      expect(s.changed, `${mode}: nothing about a price moving`).toBe(false);
+      expect(shownQuote(s)?.refusal, `${mode}: the refusal is on screen`).toBe("frozen");
+      expect(pressBody(s), `${mode}: nothing to confirm`).toBeNull();
+      checked += 1;
+    }
+    expect(checked, "pay, payAndOpen, change").toBe(3);
+  });
+
+  it("a size or camera pick after the freeze does nothing: the state is the very same object", () => {
+    let checked = 0;
+    for (const mode of Object.keys(MODES) as (keyof typeof MODES)[]) {
+      const s = pressedAndFrozen(mode);
+      expect(receiptReducer(s, { type: "pick", size: 64 }), `${mode}: pick`).toBe(s);
+      expect(receiptReducer(s, { type: "cameras", on: true }), `${mode}: cameras`).toBe(s);
+      expect(readOwed(s), `${mode}: no read is owed for a locked choice`).toBeNull();
+      checked += 1;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("the freeze is also learned from an ordinary read (the receipt opened after the round did): the same lock", () => {
+    const s = run(open(32), { type: "read", choice: { size: 32, cameras: false }, quote: quoteOf({ size: 32, monthly: 50, refusal: "frozen" }) });
+    expect(frozenOf(s)).toBe(true);
+    expect(receiptReducer(s, { type: "pick", size: 64 })).toBe(s);
+    expect(receiptReducer(s, { type: "cameras", on: true })).toBe(s);
+  });
+
+  it("frozen is the package's, not one choice's: a frozen quote in hand for another camera answer still locks the receipt", () => {
+    // The 402's quote priced the stored size WITHOUT the camera; the receipt opens on Yes (a checkout return's answer): the quote is not on
+    // screen for it, but a closed package is closed at every size and answer.
+    const q = quoteOf({ size: 32, cameras: false, monthly: 50, refusal: "frozen" });
+    const s = initialReceipt({ mode: "payAndOpen", size: 32, quote: q, cameras: true, setting: true });
+    expect(shownQuote(s), "premise: that quote is not the one on screen for this answer").toBeNull();
+    expect(frozenOf(s)).toBe(true);
+    expect(receiptReducer(s, { type: "pick", size: 64 })).toBe(s);
+    expect(receiptReducer(s, { type: "cameras", on: false })).toBe(s);
+  });
+
+  it("the other pair: a 409 over a moved price (and a refusal that is not frozen) is NOT frozen - the choice stays open and the price line still shows", () => {
+    const moved = run(open(32), read(32), { type: "submit" }, { type: "settled", failure: payFailureOf(wire(quoteOf({ size: 32, cameras: true, monthly: 50 }))) });
+    expect(frozenOf(moved)).toBe(false);
+    expect(moved.changed).toBe(true);
+    expect(receiptReducer(moved, { type: "pick", size: 64 }).size).toBe(64);
+    // a size refused for another reason (it cannot hold the places held) is a size to move away from, not a closed package
+    const held = run(open(16), read(16), { type: "submit" }, { type: "settled", failure: payFailureOf(wire(quoteOf({ size: 16, monthly: 50, refusal: "below_held", held: 20 }))) });
+    expect(frozenOf(held)).toBe(false);
+    expect(receiptReducer(held, { type: "pick", size: 64 }).size).toBe(64);
+    expect(frozenOf(open(32))).toBe(false);
+    expect(frozenOf(run(open(32), read(32)))).toBe(false);
   });
 });
 

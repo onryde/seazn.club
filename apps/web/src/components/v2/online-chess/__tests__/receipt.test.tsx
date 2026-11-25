@@ -665,6 +665,71 @@ describe("409 ONLINE_QUOTE_CHANGED: redraw, say so, take nothing until the organ
   });
 });
 
+// A round opened in another tab while this receipt sat open: the pay door answers the SAME 409 ONLINE_QUOTE_CHANGED as a moved price, with a
+// fresh quote whose `refusal` is "frozen" (pay.ts `quoteChanged`). The receipt then says what happened - a round has opened, the size and the
+// camera can no longer change - and not "the price changed"; every size and camera choice and the confirm are off, in every mode.
+describe("409 with a frozen quote: a round opened in another tab (spec 8.7)", () => {
+  const PAID = { size: 32 as OnlineSize, camerasPaid: false };
+  const CASES: { mode: ReceiptMode; size: OnlineSize; facts: Over["facts"]; paid?: { size: OnlineSize; camerasPaid: boolean } }[] = [
+    { mode: "pay", size: 64, facts: {} },
+    { mode: "payAndOpen", size: 64, facts: { storedSize: 64 } },
+    { mode: "change", size: 64, facts: { paid: PAID, storedSize: 32 }, paid: PAID },
+  ];
+
+  function pressedOver409(c: (typeof CASES)[number]) {
+    const first = spec({ size: c.size, monthly: 20, pack: 20, ...(c.paid ? { paid: c.paid } : {}) });
+    const frozen = spec({ size: c.size, monthly: 20, pack: 20, refusal: "frozen", ...(c.paid ? { paid: c.paid } : {}) });
+    const onConfirm = vi.fn(async (): Promise<void> => {
+      throw new ApiV1Error("changed", 409, ONLINE_PACKAGE_CODES.quoteChanged, { quote: frozen });
+    });
+    return make({ mode: c.mode, size: c.size, facts: c.facts, readQuote: vi.fn(async () => first), onConfirm });
+  }
+
+  it("says a round has opened and not that the price changed; the sizes, the camera answer and the confirm are all off", async () => {
+    let checked = 0;
+    let sizeRadios = 0;
+    for (const c of CASES) {
+      const m = pressedOver409(c);
+      await flush();
+      expect(propsOf(m.by("online-receipt-confirm")!).disabled, `${c.mode}: premise, payable before the press`).toBe(false);
+      await m.press("online-receipt-confirm");
+      await flush();
+      expect(m.onConfirm, `${c.mode}: the press was sent once`).toHaveBeenCalledTimes(1);
+      expect(m.onClose, `${c.mode}: still open`).not.toHaveBeenCalled();
+      expect(m.has("online-receipt-changed"), `${c.mode}: no "price changed" for a price that did not change`).toBe(false);
+      expect(m.by("online-receipt-refused") && propsOf(m.by("online-receipt-refused")!)["data-refusal"], `${c.mode}: the frozen refusal`).toBe("frozen");
+      expect(textOfAll([m.by("online-receipt-refused")!]), c.mode).toBe(EN["onlineChess.receipt.refused.frozen"]);
+      expect(propsOf(m.by("online-receipt-confirm")!).disabled, `${c.mode}: nothing to confirm`).toBe(true);
+      expect(propsOf(m.by("online-receipt-cameras")!).disabled, `${c.mode}: camera group`).toBe(true);
+      expect(propsOf(m.by("online-receipt-cameras-yes")!).disabled, `${c.mode}: camera yes`).toBe(true);
+      expect(propsOf(m.by("online-receipt-cameras-no")!).disabled, `${c.mode}: camera no`).toBe(true);
+      for (const size of ONLINE_SIZES.filter((z) => m.has(`online-receipt-size-${z}`))) {
+        expect(propsOf(m.by(`online-receipt-size-${size}`)!).disabled, `${c.mode}: size ${size} is off`).toBe(true);
+        sizeRadios += 1;
+      }
+      checked += 1;
+    }
+    expect(checked, "pay, payAndOpen, change").toBe(3);
+    expect(sizeRadios, "payAndOpen and change list sizes: the sweep reached radios").toBeGreaterThanOrEqual(8);
+  });
+
+  it("the other pair: a 409 over a moved price keeps the price-changed line and leaves every size and the camera pickable", async () => {
+    const first = spec({ size: 64, monthly: 20, pack: 20, paid: PAID });
+    const fresh = spec({ size: 64, cameras: true, monthly: 20, pack: 20, paid: PAID });
+    const onConfirm = vi.fn(async (): Promise<void> => {
+      throw new ApiV1Error("changed", 409, ONLINE_PACKAGE_CODES.quoteChanged, { quote: fresh });
+    });
+    const m = make({ mode: "change", size: 64, facts: { paid: PAID, storedSize: 32 }, readQuote: vi.fn(async () => first), onConfirm });
+    await flush();
+    await m.press("online-receipt-confirm");
+    await flush();
+    expect(m.has("online-receipt-changed")).toBe(true);
+    expect(m.has("online-receipt-refused")).toBe(false);
+    expect(propsOf(m.by("online-receipt-size-128")!).disabled).toBe(false);
+    expect(propsOf(m.by("online-receipt-cameras-no")!).disabled).toBe(false);
+  });
+});
+
 describe("a double tap is one payment", () => {
   it("two presses before the first settles call onConfirm once (the in-flight guard is a ref)", async () => {
     let release: () => void = () => {};

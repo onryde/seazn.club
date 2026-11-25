@@ -18,6 +18,11 @@
 //      return carried back; a change is still quoted against what was PAID (No at the paid size over a paid camera is the camera refund, Yes 0). A `change` receipt opens with no size chosen and does not list the paid size (a size is changed TO another), so
 //      a camera answer with the size unchanged is quoted AT the paid size; the paid size at the paid camera state is no change at all (nothing is
 //      read, nothing can be confirmed). The answer moves with the size and on its own alike, and one confirm pays the net of both.
+//  R7. A quote that says `frozen` (a round has opened: spec 8.7) closes the receipt's choices for good: no size or camera pick moves it
+//      (`frozenOf`), and the 409 that carried it does not say "the price changed" - it did not, the package closed under the press. The
+//      server answers that 409 with the SAME code as a moved price (`ONLINE_QUOTE_CHANGED`, the fresh quote in its body); the quote's
+//      `refusal` is the only thing that tells the two apart, so the state reads it there. Frozen is a fact of the package, not of one
+//      choice: the quote of any size or answer carries it, so it is read off the last quote that arrived, not the one on screen.
 import type { OnlineSize } from "@/lib/online-chess-package";
 import { confirmOf, payBodyOf, shortQuoteOf, type PayBody, type PayFailure, type ReceiptMode, type ReceiptQuote } from "@/lib/online-receipt";
 
@@ -109,6 +114,13 @@ export function wantedOf(s: ReceiptState): ReceiptChoice | null {
   return { size, cameras: s.cameras };
 }
 
+/** Whether a round has opened (R7): the last quote that arrived says the package is frozen. Size and camera answer are then fixed, like the
+ *  paid package itself (spec 8.7). A refusal for any other reason (a size too small for the places held, off the plan) is a size to move away
+ *  from, not a closed package, and leaves the choice open. */
+export function frozenOf(s: ReceiptState): boolean {
+  return s.quote !== null && s.quote.refusal === "frozen";
+}
+
 /** The quote ON SCREEN (R1): the last one that arrived, only while it answers the choice now wanted. */
 export function shownQuote(s: ReceiptState): ReceiptQuote | null {
   return same(s.quoteFor, wantedOf(s)) ? s.quote : null;
@@ -124,11 +136,12 @@ export function receiptReducer(s: ReceiptState, a: ReceiptAction): ReceiptState 
   switch (a.type) {
     case "pick":
       // R1: the new size's figures are not the old one's. A picked size while a confirm is in flight is ignored (the press is on its way).
-      if (s.submitting || s.size === a.size) return s;
+      // R7: and nothing is picked once a round has opened.
+      if (s.submitting || frozenOf(s) || s.size === a.size) return s;
       return { ...s, size: a.size, changed: false, failed: null, view: "receipt" };
     case "cameras":
       // R6: the answer is part of the choice (R1: its figures are not the other answer's). Ignored while a confirm is in flight.
-      if (s.submitting || s.cameras === a.on) return s;
+      if (s.submitting || frozenOf(s) || s.cameras === a.on) return s;
       return { ...s, cameras: a.on, changed: false, failed: null, view: "receipt" };
     case "read": {
       // R1: an answer for a choice nobody wants any more is dropped, and so is one whose own size is not the size it was read for.
@@ -153,7 +166,8 @@ export function receiptReducer(s: ReceiptState, a: ReceiptAction): ReceiptState 
         // R3: the figures the server holds now. The size AND the camera answer follow the quote's own (the server priced what it was sent - or,
         // for an unpaid Open round's 402, the division as it stands), so the receipt shows it at once, with the price-changed line.
         const choice: ReceiptChoice = { size: f.quote.size, cameras: f.quote.cameras };
-        return { ...s, submitting: false, size: f.quote.size, cameras: f.quote.cameras, quote: f.quote, quoteFor: choice, readFailedFor: null, changed: true, failed: null };
+        // R7: a quote that says `frozen` is not a price that moved: the receipt says a round has opened (its refusal sentence), not "price changed".
+        return { ...s, submitting: false, size: f.quote.size, cameras: f.quote.cameras, quote: f.quote, quoteFor: choice, readFailedFor: null, changed: f.quote.refusal !== "frozen", failed: null };
       }
       if (f.kind === "noCredits") {
         // R4
