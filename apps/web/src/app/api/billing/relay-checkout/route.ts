@@ -37,11 +37,13 @@ const pack = z.union([z.literal(1), z.literal(5), z.literal(20)]);
  *  `returnTo: "division"` (an Online Chess division's own page, the receipt reopened — spec 2026-11-23 §7.6, §8.4). Three
  *  strict objects in a union, so a body that names two — or none — matches none and is a 400: the route never has to
  *  pick which return the buyer meant. `size` exists on the division arm alone and only from the ladder: it is an
- *  upgrade's target riding in the return address (§8.4), never a price, and never a free-text value in a URL. */
+ *  upgrade's target riding in the return address (§8.4), never a price, and never a free-text value in a URL. `cameras` is the
+ *  same kind of rider: the literal `true` only, the intent "this purchase was for the camera of a paid package", so the return can
+ *  reopen that receipt (a camera add is quoted AT the paid size, which names nothing to pay on its own). */
 const schema = z.union([
   z.object({ orgId: z.string().uuid(), fixtureId: z.string().uuid(), pack }).strict(),
   z.object({ orgId: z.string().uuid(), pack, returnTo: z.literal("settings") }).strict(),
-  z.object({ orgId: z.string().uuid(), pack, returnTo: z.literal("division"), divisionId: z.string().uuid(), size: OnlineSizeS.optional() }).strict(),
+  z.object({ orgId: z.string().uuid(), pack, returnTo: z.literal("division"), divisionId: z.string().uuid(), size: OnlineSizeS.optional(), cameras: z.literal(true).optional() }).strict(),
 ]);
 
 /** Why this org cannot buy a pack for PHONE STREAMING, or null when it can: the refusal the route answers with unless Online
@@ -156,9 +158,9 @@ export async function POST(req: Request) {
          where d.id = ${body.divisionId} and o.id = ${orgId}`;
       if (!dv) throw new HttpError(404, "division not found");
       competitionId = dv.competition_id;
-      // `oc=pay` reopens the receipt; `size` (an upgrade's target, from the ladder) rides last. The division page reconciles
+      // `oc=pay` reopens the receipt; `size` (an upgrade's target, from the ladder) rides next, then `cameras=1` (the camera intent) last. The division page reconciles
       // `session_id` before it reads the balance.
-      landing = `${routes.division(dv.org_slug, dv.comp_slug, dv.div_slug, "fixtures")}&oc=pay&checkout=success&session_id={CHECKOUT_SESSION_ID}${body.size !== undefined ? `&size=${body.size}` : ""}`;
+      landing = `${routes.division(dv.org_slug, dv.comp_slug, dv.div_slug, "fixtures")}&oc=pay&checkout=success&session_id={CHECKOUT_SESSION_ID}${body.size !== undefined ? `&size=${body.size}` : ""}${body.cameras === true ? "&cameras=1" : ""}`;
     } else {
       // The slug of the RESOLVED org (`orgId`, equal to the body's by the check above — never the body's own), so the
       // return can only ever land on the buyer's own Credits tab. The tab reconciles `session_id` before it reads.

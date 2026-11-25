@@ -200,14 +200,15 @@ describe.skipIf(!HAS_DB)("returnTo: \"division\" — the division's own page, or
     expect(sizeless.status).toBe(200);
     const q0 = queryOf(lastArgs().returnUrl);
     expect(q0, "the address the page receives").toEqual({ tab: "fixtures", oc: "pay", checkout: "success", session_id: "{CHECKOUT_SESSION_ID}" });
-    expect(onlineReceiptRequest(q0), "no size in the address: the receipt reopens on the stored size").toEqual({ size: null });
+    // `{CHECKOUT_SESSION_ID}` is Stripe's placeholder, not yet a session: it is no key until Stripe fills it in, so the key is "".
+    expect(onlineReceiptRequest(q0), "no size in the address: the receipt reopens on the stored size").toEqual({ size: null, key: "" });
     let parsed = 0;
     for (const size of LADDER) {
       createRelayCheckoutMock.mockClear();
       expect((await post({ orgId: s.o.orgId, pack: 20, returnTo: "division", divisionId: s.divisionId, size })).status).toBe(200);
       const q = queryOf(lastArgs().returnUrl);
       expect(q.size, "premise: the route wrote the size").toBe(String(size));
-      expect(onlineReceiptRequest(q), `size ${size}`).toEqual({ size });
+      expect(onlineReceiptRequest(q), `size ${size}`).toEqual({ size, key: "" });
       parsed += 1;
     }
     expect(parsed, "anti-vacuity: every ladder size went through the parser").toBe(LADDER.length);
@@ -215,6 +216,34 @@ describe.skipIf(!HAS_DB)("returnTo: \"division\" — the division's own page, or
     createRelayCheckoutMock.mockClear();
     expect((await post({ orgId: s.o.orgId, pack: 5, returnTo: "settings" })).status).toBe(200);
     expect(onlineReceiptRequest(queryOf(lastArgs().returnUrl)), "the settings return opens no receipt").toBeNull();
+  });
+
+  // Fix round 3: the CAMERA of a paid package, bought with a short balance, must come back to a receipt. The body carries `cameras: true`; the route writes
+  // `&cameras=1` after the size; the page's own parser reads it back. Producer through consumer, no hand-built URL.
+  it("a camera purchase's return carries `cameras=1` after the size, and the page's parser reads the intent back; no intent writes none; the intent is the division arm's alone and only `true`", async () => {
+    const s = await scene();
+    signIn(s.o.orgId, s.o.auth.userId!);
+    const queryOf = (returnUrl: string) => Object.fromEntries(new URL(returnUrl).searchParams);
+    const base = `/o/${s.orgSlug}/c/${s.compSlug}/d/${s.divSlug}?${TAIL}`;
+    let read = 0;
+    for (const size of LADDER) {
+      createRelayCheckoutMock.mockClear();
+      expect((await post({ orgId: s.o.orgId, pack: 5, returnTo: "division", divisionId: s.divisionId, size, cameras: true })).status).toBe(200);
+      expect(lastArgs().returnUrl.endsWith(`${base}&size=${size}&cameras=1`), `size ${size}: size, then the intent, last`).toBe(true);
+      expect(onlineReceiptRequest(queryOf(lastArgs().returnUrl)), `size ${size}`).toEqual({ size, key: "", cameras: true });
+      read += 1;
+    }
+    expect(read, "anti-vacuity: every ladder size carried the intent through the parser").toBe(LADDER.length);
+    createRelayCheckoutMock.mockClear();
+    expect((await post({ orgId: s.o.orgId, pack: 5, returnTo: "division", divisionId: s.divisionId, size: 64 })).status).toBe(200);
+    expect(lastArgs().returnUrl, "no intent, no key").not.toContain("cameras");
+    // only the literal `true`, only on the division arm
+    createRelayCheckoutMock.mockClear();
+    for (const bad of [false, "1", 1, "true", null]) {
+      expect((await post({ orgId: s.o.orgId, pack: 5, returnTo: "division", divisionId: s.divisionId, size: 64, cameras: bad })).status, JSON.stringify(bad)).toBe(400);
+    }
+    expect((await post({ orgId: s.o.orgId, pack: 5, returnTo: "settings", cameras: true })).status, "the settings arm takes no intent").toBe(400);
+    expect(createRelayCheckoutMock, "Stripe is never reached by a refused body").not.toHaveBeenCalled();
   });
 
   it("the division return is behind the Online Chess flag, whatever streaming says: flag off is a 403 ONLINE_CHESS_DISABLED before any lookup, streaming on or off; flag on sells; it is asked once", async () => {

@@ -298,6 +298,14 @@ describe("division page: the checkout return's receipt request (?oc=pay) - the r
     expect(checked, "anti-vacuity").toBe(5);
   });
 
+  it("the camera intent the route writes (`&cameras=1`) reaches the host's request; only the exact `1`, never without oc=pay (fix round 3)", async () => {
+    offered();
+    const withCameras = { ...tailOf(32), cameras: "1" };
+    expect(await receiptFor(withCameras), "the route's address with the intent").toEqual({ size: 32, key: SESSION, cameras: true });
+    for (const bad of ["0", "true", "", "11"]) expect(await receiptFor({ ...withCameras, cameras: bad }), JSON.stringify(bad)).toEqual({ size: 32, key: SESSION });
+    expect(await receiptFor({ tab: "fixtures", cameras: "1" }), "an intent alone opens nothing").toBeNull();
+  });
+
   it("anything but a clean oc=pay opens nothing, and a size off the ladder is dropped (the receipt still opens, on the stored size)", async () => {
     offered();
     expect(await receiptFor({ tab: "fixtures" }), "a plain visit").toBeNull();

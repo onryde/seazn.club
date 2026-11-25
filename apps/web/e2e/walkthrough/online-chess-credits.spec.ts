@@ -342,6 +342,7 @@ test.describe("Online Chess credits: the organiser pays", () => {
     await expect(receipt(page)).toHaveAttribute("data-mode", "change");
     await expect(confirm(page), "nothing chosen yet").toHaveText(uiEn["onlineChess.receipt.confirm.choose"]!);
     await page.getByTestId("online-receipt-cameras").check();
+    await expect(page.getByText(uiEn["onlineChess.receipt.cameras.paid"]!), "the 'is paid' line is not said while the organiser is still deciding").toHaveCount(0);
     await expect(receipt(page), "the camera is quoted AT the paid size").toHaveAttribute("data-size", String(small));
     await expect(page.getByTestId("online-receipt-row-total")).toContainText(credits(camera.owed));
     await expect(confirm(page)).toHaveText(fill(camera.owed === 1 ? "onlineChess.payLine.pay.one" : "onlineChess.payLine.pay.other", { count: camera.owed }));
@@ -349,6 +350,8 @@ test.describe("Online Chess credits: the organiser pays", () => {
     await expect(receipt(page)).toHaveCount(0, { timeout: 30_000 });
     const after = await packageRow(r.divisionId);
     expect([after.size, after.cameras_paid], "the camera is paid, the size did not move").toEqual([small, true]);
+    // Spec 8.6: "Fair-play camera is paid. Turn it on in Division rules." is said AFTER the payment, on the page (the receipt has closed) - never while deciding.
+    await expect(page.getByTestId("online-package-notice")).toHaveText(uiEn["onlineChess.receipt.cameras.paid"]!);
     expect(await balanceOf(page, r.divisionId), "exactly the camera difference left the balance").toBe(beforeCamera - camera.owed);
     // Paid with cameras: the change receipt no longer offers the box.
     await page.getByTestId("online-paid-chip-change").click();

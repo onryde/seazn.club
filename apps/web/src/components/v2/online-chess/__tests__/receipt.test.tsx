@@ -280,7 +280,7 @@ describe("change mode: a paid size moved up or down (spec 8.6)", () => {
     expect(confirmLabel(m)).toBe(`Pay ${CAMERA_DIFF()} credits`);
     expect(textOfAll([m.by("online-receipt-row-total")!])).toBe(`Total ${CAMERA_DIFF()} credits`);
     expect(propsOf(m.els()[0]!).title, "it is not a move UP to the size it already is").toBe("Add the Fair-play camera");
-    expect(textOfAll([m.by("online-receipt-cameras-paid")!])).toBe("Fair-play camera is paid. Turn it on in Division rules.");
+    expect(m.has("online-receipt-cameras-paid"), "fix round 3: the 'is paid' line is not said while the organiser is still deciding (spec 8.6: after payment, on the page)").toBe(false);
     await m.press("online-receipt-confirm");
     expect(m.onConfirm).toHaveBeenCalledWith({ size: 64, expectedOwed: CAMERA_DIFF(), addCameras: true });
   });
@@ -310,6 +310,56 @@ describe("change mode: a paid size moved up or down (spec 8.6)", () => {
     expect(propsOf(m.els()[0]!).title).toBe("Move up to 128 players");
     await m.press("online-receipt-confirm");
     expect(m.onConfirm).toHaveBeenCalledWith({ size: 128, expectedOwed: packagePrice(128, true) - packagePrice(64, false), addCameras: true });
+  });
+
+  // Fix round 3: a short balance for the camera add. The buy chooser's return must name the camera intent, or the return page has nothing to reopen.
+  it("a SHORT balance for the camera add: the button reads Buy credits, and the chooser is handed the paid size WITH the camera intent", async () => {
+    const short = (c: { size: OnlineSize; addCameras: boolean }) => spec({ size: c.size, cameras: c.addCameras, paid: PAID, monthly: 0, pack: 0 });
+    const renderBuy = vi.fn(() => null);
+    const m = make({ mode: "change", size: null, facts: CH, readQuote: vi.fn(async (c) => short(c)), renderBuy });
+    tick(m, true);
+    await flush();
+    expect(confirmLabel(m)).toBe("Buy credits");
+    await m.press("online-receipt-confirm");
+    expect(renderBuy).toHaveBeenLastCalledWith({ pack: 5, size: 64, addCameras: true });
+  });
+
+  it("a move up WITH the camera that comes up short hands the chooser that size and the intent; the same move without the camera hands the intent false", async () => {
+    const renderBuy = vi.fn(() => null);
+    const read = vi.fn(async (c: { size: OnlineSize; addCameras: boolean }) => spec({ size: c.size, cameras: c.addCameras, paid: PAID, monthly: 0, pack: 0 }));
+    const m = make({ mode: "change", size: null, facts: CH, readQuote: read, renderBuy });
+    m.pick(128);
+    await flush();
+    await m.press("online-receipt-confirm");
+    // owed 4 (128 without the camera, 8, less the paid 4) is 4 short: the 5 pack; with the camera it is 16 - 4 = 12 short: the 20 pack
+    expect(packagePrice(128, false) - packagePrice(64, false), "premise: 4 owed").toBe(4);
+    expect(packagePrice(128, true) - packagePrice(64, false), "premise: 12 owed").toBe(12);
+    expect(renderBuy).toHaveBeenLastCalledWith({ pack: 5, size: 128, addCameras: false });
+    await m.press("online-receipt-back");
+    tick(m, true);
+    await flush();
+    await m.press("online-receipt-confirm");
+    expect(renderBuy).toHaveBeenLastCalledWith({ pack: 20, size: 128, addCameras: true });
+  });
+
+  it("a receipt opened WITH the camera intent (the return from buying credits for it) starts on the paid size with the box ticked and the quote read at once", async () => {
+    cameraRead.mockClear();
+    const m = make({ mode: "change", size: 64, addCameras: true, facts: CH, readQuote: cameraRead });
+    expect(cameraRead).toHaveBeenCalledWith({ size: 64, addCameras: true });
+    await flush();
+    expect(propsOf(m.by("online-receipt-cameras")!).checked, "the box is ticked").toBe(true);
+    expect(confirmLabel(m)).toBe(`Pay ${CAMERA_DIFF()} credits`);
+    expect(propsOf(m.els()[0]!).title).toBe("Add the Fair-play camera");
+    await m.press("online-receipt-confirm");
+    expect(m.onConfirm).toHaveBeenCalledWith({ size: 64, expectedOwed: CAMERA_DIFF(), addCameras: true });
+  });
+
+  it("the camera intent is ignored where there is no camera to add: a package paid WITH cameras, an unpaid package, a pay receipt", () => {
+    const paidWith = make({ mode: "change", size: 64, addCameras: true, facts: { paid: { size: 64, camerasPaid: true }, storedSize: 64 } });
+    expect(paidWith.has("online-receipt-cameras")).toBe(false);
+    expect(paidWith.readQuote).toHaveBeenCalledWith({ size: 64, addCameras: false });
+    const pay = make({ mode: "pay", size: 64, addCameras: true });
+    expect(pay.readQuote).toHaveBeenCalledWith({ size: 64, addCameras: false });
   });
 
   it("no camera checkbox where the camera is already paid, or the package is not paid yet", () => {
@@ -535,7 +585,7 @@ describe("short balance: the confirm reads Buy credits and preselects the coveri
     const m = make({ readQuote: vi.fn(async () => SHORT), renderBuy: renderBuy as OnlineReceiptProps["renderBuy"] });
     await flush();
     await m.press("online-receipt-confirm");
-    expect(renderBuy).toHaveBeenCalledWith({ pack: 5, size: 64 });
+    expect(renderBuy).toHaveBeenCalledWith({ pack: 5, size: 64, addCameras: false });
     expect(propsOf(m.by("buy-stub")!)["data-pack"]).toBe(5);
     expect(root(m)["data-view"]).toBe("buy");
     expect(m.text()).toContain("You are 3 credits short. Pick a pack to cover them");
@@ -553,7 +603,7 @@ describe("short balance: the confirm reads Buy credits and preselects the coveri
     m.pick(64);
     await flush();
     await m.press("online-receipt-confirm");
-    expect(renderBuy).toHaveBeenCalledWith({ pack: 5, size: 64 });
+    expect(renderBuy).toHaveBeenCalledWith({ pack: 5, size: 64, addCameras: false });
   });
 
   it("the covering pack follows the shortfall of 8: 1 short is the 1 pack, 5 short the 5 pack, 6 short the 20 pack (sweep)", async () => {
@@ -564,7 +614,7 @@ describe("short balance: the confirm reads Buy credits and preselects the coveri
       const m = make({ readQuote: vi.fn(async () => q), renderBuy });
       await flush();
       await m.press("online-receipt-confirm");
-      expect(renderBuy, `balance ${balance}`).toHaveBeenCalledWith({ pack, size: 64 });
+      expect(renderBuy, `balance ${balance}`).toHaveBeenCalledWith({ pack, size: 64, addCameras: false });
       checked += 1;
     }
     expect(checked).toBe(5);

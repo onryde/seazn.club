@@ -50,17 +50,22 @@ export interface OnlinePackageHostProps {
   buyMoreHref: string;
 }
 
-type Open = { mode: ReceiptMode; size: OnlineSize | null; n: number };
+type Open = { mode: ReceiptMode; size: OnlineSize | null; n: number; /** Open with the camera box ticked (the return from buying credits for it). */ addCameras?: true };
 
 /** The receipt a checkout return asks for: a first payment reopens on the stored size, an upgrade on the size the address named. Nothing to open
  *  for a package that does not exist or is frozen - nor for a PAID package the address has nothing left to say to: `?oc=pay&size=N` stays in the
  *  address after the buyer pays, so a reload (or the next visit by that address) meets a package paid at the size it names (an upgrade done), or names
- *  none (a first payment done). A `change` receipt there would owe nothing. A request that names a DIFFERENT size is a genuine move and opens. */
+ *  none (a first payment done). A `change` receipt there would owe nothing. A request that names a DIFFERENT size is a genuine move and opens.
+ *
+ *  The one exception at the paid size is the CAMERA: an add is quoted AT the paid size, so a short-balance purchase for it comes back naming the paid
+ *  size - and `cameras=1`, the intent (the address cannot say it any other way). That reopens the camera receipt, on the paid size with the box ticked,
+ *  for a package paid WITHOUT cameras. Once the camera is paid the intent is spent: the same address is a finished arrival and opens nothing (m4). */
 function openForReturn(stored: OnlinePackageHostProps["stored"], request: OnlineReceiptRequest, n: number): Open | null {
   if (stored === null || stored.frozen) return null;
   if (stored.paid === null) return { mode: "pay", size: request.size ?? stored.size, n };
-  if (request.size === null || request.size === stored.paid.size) return null;
-  return { mode: "change", size: request.size, n };
+  const camera = request.cameras === true && !stored.paid.camerasPaid;
+  if (request.size === null || request.size === stored.paid.size) return camera ? { mode: "change", size: stored.paid.size, n, addCameras: true } : null;
+  return { mode: "change", size: request.size, n, ...(camera ? { addCameras: true as const } : {}) };
 }
 
 export function OnlinePackageHost(p: OnlinePackageHostProps): ReactNode {
@@ -94,7 +99,12 @@ export function OnlinePackageHost(p: OnlinePackageHostProps): ReactNode {
   const onConfirm = useCallback(
     async (body: PayBody): Promise<void> => {
       const result = await payPackage(divisionId, body);
-      setNotice(result.capacityLoweredTo === null ? null : msg("onlineChess.capacityLowered", { size: result.capacityLoweredTo }));
+      // Spec 8.6: "Fair-play camera is paid. Turn it on in Division rules." is said AFTER the payment (the receipt has closed by now), on the page.
+      const said = [
+        result.capacityLoweredTo === null ? null : msg("onlineChess.capacityLowered", { size: result.capacityLoweredTo }),
+        result.applied && body.addCameras === true ? msg("onlineChess.receipt.cameras.paid") : null,
+      ].filter((line): line is string => line !== null);
+      setNotice(said.length === 0 ? null : said.join(" "));
       router.refresh();
     },
     [divisionId, msg, router],
@@ -132,16 +142,17 @@ export function OnlinePackageHost(p: OnlinePackageHostProps): ReactNode {
           mode={open.mode}
           facts={{ planCap: p.planCap, held: p.held, rounds: p.rounds, cameras: p.cameras, paid: stored.paid, storedSize: stored.size, viewerPlan: p.viewerPlan }}
           size={open.size}
+          addCameras={open.addCameras}
           quote={null}
           readQuote={readQuote}
           onConfirm={onConfirm}
-          renderBuy={({ pack, size }) =>
+          renderBuy={({ pack, size, addCameras }) =>
             p.buy === null ? (
               <a href={p.buyMoreHref} className="font-medium text-purple-700 underline" data-testid="online-receipt-buy-link">
                 {msg("stream.phone.buyMore")}
               </a>
             ) : (
-              <BuyStreamCredits orgId={p.buy.orgId} currency={p.buy.currency} preselect={pack} returnTo={{ divisionId, size }} />
+              <BuyStreamCredits orgId={p.buy.orgId} currency={p.buy.currency} preselect={pack} returnTo={{ divisionId, size, ...(addCameras ? { cameras: true as const } : {}) }} />
             )
           }
           onClose={() => setOpen(null)}

@@ -57,12 +57,15 @@ export interface OnlineReceiptProps {
   /** The words of a refusal the ROUND itself named (Match Day: 409 changed, 402 frozen, 403 off), by the code the open answered with; null for a code it does
    *  not name. Drawn in place of the payment sentence (spec §8.5). The division page has no round in play and passes nothing. */
   failureWords?: (code: string) => string | null;
+  /** Open with the camera box ticked (`change` over a package paid without cameras; ignored elsewhere): the return from buying credits for the camera. The
+   *  caller names the paid size in `size`. */
+  addCameras?: boolean;
   /** Reads the quote for a choice (`GET /divisions/{id}/online-package`). */
   readQuote: (choice: ReceiptChoice) => Promise<ReceiptQuote>;
   /** Does what the receipt shows. Throws what the pay door threw (`payFailureOf` reads it); resolving closes the receipt. */
   onConfirm: (body: PayBody) => Promise<void>;
   /** The credits chooser of a short balance, drawn in place of the receipt: the smallest covering pack is preselected by the caller. */
-  renderBuy?: (a: { pack: StreamPackSize; size: OnlineSize }) => ReactNode;
+  renderBuy?: (a: { pack: StreamPackSize; size: OnlineSize; addCameras: boolean }) => ReactNode;
   onClose: () => void;
 }
 
@@ -73,7 +76,9 @@ export function OnlineReceipt(props: OnlineReceiptProps): ReactNode {
   const msg = useMsg();
   const plural = useMsgPlural();
   const locale = useLocaleOrDefault();
-  const [state, dispatch] = useReducer(receiptReducer, undefined, () => initialReceipt({ mode, size: props.size, quote: props.quote, paidSize: facts.paid?.size ?? null }));
+  const [state, dispatch] = useReducer(receiptReducer, undefined, () =>
+    initialReceipt({ mode, size: props.size, quote: props.quote, paidSize: facts.paid?.size ?? null, addCameras: props.addCameras === true && facts.paid !== null && !facts.paid.camerasPaid }),
+  );
   /** A ref, so a second tap landing on one render's handler - before the first has re-rendered `submitting` - is refused too. */
   const pressing = useRef(false);
   /** The latest `readQuote`, read through a ref so a caller's fresh function every render cannot re-run the read below (it would fetch for ever:
@@ -180,7 +185,7 @@ export function OnlineReceipt(props: OnlineReceiptProps): ReactNode {
       >
         <div className="space-y-3" data-testid="online-receipt" data-mode={mode} data-view="buy">
           <p className="text-slate-700">{plural("onlineChess.receipt.buy.line", confirm.shortBy, { count: confirm.shortBy })}</p>
-          {renderBuy({ pack: confirm.pack, size: state.size ?? facts.storedSize })}
+          {renderBuy({ pack: confirm.pack, size: state.size ?? facts.storedSize, addCameras: state.addCameras })}
         </div>
       </Modal>
     );
@@ -356,7 +361,6 @@ export function OnlineReceipt(props: OnlineReceiptProps): ReactNode {
         <div className="space-y-0.5 text-xs text-slate-600">
           {confirm.kind !== "moveDown" && <p>{msg("onlineChess.receipt.line.included")}</p>}
           <p>{mode === "payAndOpen" ? msg("onlineChess.receipt.line.fixed") : msg("onlineChess.receipt.line.moveUp")}</p>
-          {canAddCameras && state.addCameras && <p data-testid="online-receipt-cameras-paid">{msg("onlineChess.receipt.cameras.paid")}</p>}
         </div>
       </div>
     </Modal>

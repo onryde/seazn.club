@@ -48,7 +48,7 @@ const mount = (over: Partial<OnlinePackageHostProps> = {}) => renderIsland(Onlin
 type Host = ReturnType<typeof mount>;
 const find = (h: Host, type: unknown): ReactElement | undefined => h.tree().find((e) => e.type === type);
 const receipt = (h: Host) => find(h, OnlineReceipt);
-const receiptProps = (h: Host) => propsOf(receipt(h)!) as unknown as { mode: string; size: OnlineSize | null; facts: Record<string, unknown>; onClose: () => void; onConfirm: (b: PayBody) => Promise<void>; renderBuy: (a: { pack: 1 | 5 | 20; size: OnlineSize }) => ReactElement };
+const receiptProps = (h: Host) => propsOf(receipt(h)!) as unknown as { addCameras?: boolean; mode: string; size: OnlineSize | null; facts: Record<string, unknown>; onClose: () => void; onConfirm: (b: PayBody) => Promise<void>; renderBuy: (a: { pack: 1 | 5 | 20; size: OnlineSize }) => ReactElement };
 const flush = async () => {
   for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
 };
@@ -247,6 +247,60 @@ describe("the checkout return (?oc=pay): opens once per arrival, however the pag
   });
 });
 
+// Fix round 3: the CAMERA of a paid package, bought with a short balance, comes back as `?oc=pay&size=<paid size>&cameras=1`. The paid size alone names
+// nothing to pay (m4: it opens nothing), so the intent is what reopens the receipt - on the paid size with the camera box ticked - until the camera is
+// paid; once it is (`camerasPaid`), the same address is a finished arrival and a reload opens nothing (m4 holds).
+describe("the checkout return for the CAMERA of a paid package (the intent rides `cameras=1`)", () => {
+  const PAID_WITH_CAMERA = { ...PAID, paid: { size: 32 as OnlineSize, camerasPaid: true } };
+
+  it("paid WITHOUT cameras + the intent: a change receipt on the PAID size with the camera ticked - whether the address names the paid size or none", () => {
+    for (const request of [{ size: 32 as OnlineSize, key: "cs_a", cameras: true as const }, { size: null, key: "cs_a", cameras: true as const }]) {
+      const r = receiptProps(mount({ stored: PAID, request }));
+      expect(r, JSON.stringify(request)).toMatchObject({ mode: "change", size: 32, addCameras: true, facts: { paid: { size: 32, camerasPaid: false } } });
+    }
+  });
+
+  it("a move WITH the camera (the address names another size): the change receipt opens on THAT size with the camera ticked", () => {
+    expect(receiptProps(mount({ stored: PAID, request: { size: 128, key: "cs_a", cameras: true } }))).toMatchObject({ mode: "change", size: 128, addCameras: true });
+  });
+
+  it("m4 holds: no intent over a paid package at the paid size opens nothing, and a MOVE without the intent opens a receipt with the box off", () => {
+    expect(receipt(mount({ stored: PAID, request: { size: 32, key: "cs_a" } })), "the reload after paying").toBeUndefined();
+    expect(receiptProps(mount({ stored: PAID, request: { size: 128, key: "cs_a" } }))).toMatchObject({ mode: "change", size: 128 });
+    expect(receiptProps(mount({ stored: PAID, request: { size: 128, key: "cs_a" } })).addCameras, "no intent, box off").toBeUndefined();
+  });
+
+  it("the camera already paid: the same address opens nothing at the paid size (the reload after the purchase), and a move opens WITHOUT the intent", () => {
+    expect(receipt(mount({ stored: PAID_WITH_CAMERA, request: { size: 32, key: "cs_a", cameras: true } })), "reload after a completed camera purchase").toBeUndefined();
+    expect(receipt(mount({ stored: PAID_WITH_CAMERA, request: { size: null, key: "cs_a", cameras: true } }))).toBeUndefined();
+    const moved = receiptProps(mount({ stored: PAID_WITH_CAMERA, request: { size: 128, key: "cs_a", cameras: true } }));
+    expect(moved).toMatchObject({ mode: "change", size: 128 });
+    expect(moved.addCameras, "nothing to add: the package has the camera").toBeUndefined();
+  });
+
+  it("an UNPAID package ignores the intent (there is nothing to add a camera to): the pay receipt opens as before, with no seeded box", () => {
+    const r = receiptProps(mount({ request: { size: 128, key: "cs_a", cameras: true } }));
+    expect(r).toMatchObject({ mode: "pay", size: 128 });
+    expect(r.addCameras).toBeUndefined();
+  });
+
+  it("frozen and missing packages open nothing, intent or not", () => {
+    for (const stored of [FROZEN_PAID, GRANDFATHERED, null]) expect(receipt(mount({ stored, request: { size: null, key: "cs_a", cameras: true } })), String(stored?.size)).toBeUndefined();
+  });
+
+  it("sweep: at every paid size, the paid size + intent opens the camera receipt on THAT size; once the camera is paid it opens nothing", () => {
+    let checked = 0;
+    for (const size of ONLINE_SIZES) {
+      const without = { size, paid: { size, camerasPaid: false }, frozen: false };
+      const withCam = { size, paid: { size, camerasPaid: true }, frozen: false };
+      expect(receiptProps(mount({ stored: without, request: { size, key: "cs_a", cameras: true } })), `paid ${size}`).toMatchObject({ mode: "change", size, addCameras: true });
+      expect(receipt(mount({ stored: withCam, request: { size, key: "cs_a", cameras: true } })), `paid ${size}, camera paid`).toBeUndefined();
+      checked += 1;
+    }
+    expect(checked).toBe(ONLINE_SIZES.length);
+  });
+});
+
 describe("what a confirm does", () => {
   const BODY: PayBody = { size: 64, expectedOwed: 4 };
 
@@ -277,6 +331,39 @@ describe("what a confirm does", () => {
     await receiptProps(h).onConfirm({ size: 64, expectedOwed: 2 });
     await flush();
     expect(h.tree().find((e) => propsOf(e)["data-testid"] === "online-package-notice"), "the next move that lowers nothing clears the line").toBeUndefined();
+  });
+});
+
+// Fix round 3: spec 8.6 puts "Fair-play camera is paid. Turn it on in Division rules." AFTER payment. The receipt closes on success, so the host says it on the page.
+describe("after a camera payment the page says where to turn the camera on (spec 8.6)", () => {
+  const SAYS = EN["onlineChess.receipt.cameras.paid"]!;
+  const noteOf = (h: Host) => h.tree().find((e) => propsOf(e)["data-testid"] === "online-package-notice");
+
+  it("a paid-and-applied payment that included the camera shows the line; one that did not shows none; the next payment without it clears it (sequence)", async () => {
+    const h = mount({ stored: PAID });
+    expect(noteOf(h), "before any payment").toBeUndefined();
+    await (propsOf(find(h, OnlinePaidChip)!).onChangeSize as () => void)();
+    await receiptProps(h).onConfirm({ size: 32, expectedOwed: 1, addCameras: true });
+    await flush();
+    expect(String(propsOf(noteOf(h)!).children)).toBe(SAYS);
+    (propsOf(find(h, OnlinePaidChip)!).onChangeSize as () => void)();
+    await receiptProps(h).onConfirm({ size: 64, expectedOwed: 4 });
+    await flush();
+    expect(noteOf(h), "a payment without the camera says nothing about it").toBeUndefined();
+  });
+
+  it("nothing is said when the door did not apply the payment (the camera was already paid), and a lowered capacity is said beside it", async () => {
+    pay.mockResolvedValueOnce({ applied: false, capacityLoweredTo: null });
+    const h = mount({ stored: PAID });
+    (propsOf(find(h, OnlinePaidChip)!).onChangeSize as () => void)();
+    await receiptProps(h).onConfirm({ size: 32, expectedOwed: 0, addCameras: true });
+    await flush();
+    expect(noteOf(h), "applied: false").toBeUndefined();
+    pay.mockResolvedValueOnce({ applied: true, capacityLoweredTo: 16 });
+    (propsOf(find(h, OnlinePaidChip)!).onChangeSize as () => void)();
+    await receiptProps(h).onConfirm({ size: 16, expectedOwed: -1, addCameras: true });
+    await flush();
+    expect(String(propsOf(noteOf(h)!).children)).toBe(`${fill(EN["onlineChess.capacityLowered"]!, { size: 16 })} ${SAYS}`);
   });
 });
 

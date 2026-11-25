@@ -42,7 +42,7 @@ type BuyError = "owner" | "unknown";
 
 /** Where Stripe sends the buyer back to. Absent: Settings → Credits (the default). An Online Chess division's receipt (spec 2026-11-23 §8.4): the division's
  *  Fixtures tab with the receipt reopened - `size` is the size the receipt was on, riding in the return address. */
-export type BuyReturn = { divisionId: string; size?: OnlineSize };
+export type BuyReturn = { divisionId: string; size?: OnlineSize; /** The purchase is for the camera of a paid package: the return reopens that receipt. */ cameras?: true };
 
 export function BuyStreamCredits({
   orgId,
@@ -91,7 +91,7 @@ export function BuyStreamCredits({
     const result = await fetchRelayCheckoutClientSecret(
       returnTo === undefined
         ? { orgId, pack, returnTo: "settings" }
-        : { orgId, pack, returnTo: "division", divisionId: returnTo.divisionId, ...(returnTo.size === undefined ? {} : { size: returnTo.size }) },
+        : { orgId, pack, returnTo: "division", divisionId: returnTo.divisionId, ...(returnTo.size === undefined ? {} : { size: returnTo.size }), ...(returnTo.cameras === true ? { cameras: true as const } : {}) },
     );
     setBusy(false);
     if (result.ok) {

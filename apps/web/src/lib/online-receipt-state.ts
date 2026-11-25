@@ -45,14 +45,23 @@ export interface ReceiptState {
   view: "receipt" | "buy";
 }
 
-export function initialReceipt(a: { mode: ReceiptMode; size: OnlineSize | null; quote: ReceiptQuote | null; paidSize?: OnlineSize | null }): ReceiptState {
+export function initialReceipt(a: {
+  mode: ReceiptMode;
+  size: OnlineSize | null;
+  quote: ReceiptQuote | null;
+  paidSize?: OnlineSize | null;
+  /** The camera box starts ticked: the return from buying credits for the camera of a paid package (`size` is then the paid size, R6). Only on a
+   *  `change` receipt over a paid package; anywhere else there is no camera to add and the intent is dropped. */
+  addCameras?: boolean;
+}): ReceiptState {
+  const paidSize = a.mode === "change" ? (a.paidSize ?? null) : null;
   return {
     mode: a.mode,
-    paidSize: a.mode === "change" ? (a.paidSize ?? null) : null,
+    paidSize,
     size: a.size,
-    addCameras: false,
+    addCameras: paidSize !== null && a.addCameras === true,
     quote: a.quote,
-    quoteFor: a.quote !== null && a.size !== null && a.quote.size === a.size ? { size: a.size, addCameras: false } : null,
+    quoteFor: a.quote !== null && a.size !== null && a.quote.size === a.size ? { size: a.size, addCameras: paidSize !== null && a.addCameras === true } : null,
     readFailedFor: null,
     submitting: false,
     changed: false,

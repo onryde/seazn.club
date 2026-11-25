@@ -65,3 +65,26 @@ describe("onlineReceiptRequest: oc=pay reopens the receipt", () => {
     expect(checked).toBe(11);
   });
 });
+
+// Fix round 3: a short-balance purchase for the CAMERA of a paid package comes back with the intent in the address (`cameras=1`), so the page can
+// reopen the camera receipt - the size alone is the paid size, which names nothing to pay.
+describe("onlineReceiptRequest: the camera intent rides the return (`cameras=1`)", () => {
+  it("cameras=1 is the intent, beside the size; absent otherwise (the key is not even present)", () => {
+    expect(onlineReceiptRequest({ oc: "pay", size: "64", cameras: "1" })).toEqual({ size: 64, key: "", cameras: true });
+    expect(onlineReceiptRequest({ oc: "pay", cameras: "1" })).toEqual({ size: null, key: "", cameras: true });
+    const plain = onlineReceiptRequest({ oc: "pay", size: "64" })!;
+    expect("cameras" in plain, "no intent is no key").toBe(false);
+  });
+
+  it("only the exact `1` is the intent (sweep over the ways it can be spelled)", () => {
+    const not = ["0", "", "true", "yes", "01", "1 ", " 1", "1.0", "on", "TRUE"];
+    for (const raw of not) expect("cameras" in onlineReceiptRequest({ oc: "pay", size: "64", cameras: raw })!, JSON.stringify(raw)).toBe(false);
+    for (const raw of [["1"], ["1", "1"], 1, true, undefined, null]) expect("cameras" in onlineReceiptRequest({ oc: "pay", size: "64", cameras: raw })!, JSON.stringify(raw)).toBe(false);
+    expect(not.length + 6, "anti-vacuity: every spelling was checked").toBe(16);
+  });
+
+  it("a camera intent without oc=pay opens nothing (it is the receipt's, never a page's own switch)", () => {
+    expect(onlineReceiptRequest({ cameras: "1" })).toBeNull();
+    expect(onlineReceiptRequest({ size: "64", cameras: "1" })).toBeNull();
+  });
+});

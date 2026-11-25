@@ -225,7 +225,7 @@ describe("BuyStreamCredits", () => {
 // The seam: the request names `returnTo: "division"` with the division and the receipt's size (so Stripe returns the buyer to that division with
 // the receipt reopened), and the covering pack is marked and focused - nothing is bought until a tile is tapped.
 describe("BuyStreamCredits from an Online Chess receipt", () => {
-  const openDivision = (over: { returnTo?: { divisionId: string; size?: 16 | 32 | 64 | 128 | 256 }; preselect?: 1 | 5 | 20 } = {}) =>
+  const openDivision = (over: { returnTo?: { divisionId: string; size?: 16 | 32 | 64 | 128 | 256; cameras?: true }; preselect?: 1 | 5 | 20 } = {}) =>
     renderIsland(BuyStreamCredits, { orgId: "org-1", currency: "gbp" as const, ...over });
 
   it("a tap asks the route for a DIVISION return: org, pack, returnTo, the division and the size, and no fixture", async () => {
@@ -234,6 +234,17 @@ describe("BuyStreamCredits from an Online Chess receipt", () => {
     await flush();
     expect(checkout.fetch).toHaveBeenCalledTimes(1);
     expect(checkout.fetch).toHaveBeenCalledWith({ orgId: "org-1", pack: 5, returnTo: "division", divisionId: "div-1", size: 64 });
+  });
+
+  it("a camera purchase carries the intent in the body (`cameras: true`) beside the paid size; no intent sends no `cameras` key at all", async () => {
+    const island = openDivision({ returnTo: { divisionId: "div-1", size: 64, cameras: true }, preselect: 5 });
+    tap(island as never, 5);
+    await flush();
+    expect(checkout.fetch).toHaveBeenLastCalledWith({ orgId: "org-1", pack: 5, returnTo: "division", divisionId: "div-1", size: 64, cameras: true });
+    const plain = openDivision({ returnTo: { divisionId: "div-1", size: 64 }, preselect: 5 });
+    tap(plain as never, 5);
+    await flush();
+    expect("cameras" in (checkout.fetch.mock.calls.at(-1)![0] as object), "no camera intent: no key").toBe(false);
   });
 
   it("a first payment sends no size (it is stored on the unpaid row)", async () => {

@@ -283,4 +283,15 @@ describe("R6: adding the camera to a paid package is a change AT the paid size",
     expect(submitting.submitting).toBe(true);
     expect(run(submitting, { type: "cameras", on: false })).toBe(submitting);
   });
+
+  it("seeded with the camera intent (the return from buying credits for it): the paid size and the box on, a read owed at once; only on a change receipt over a paid package", () => {
+    const seeded = initialReceipt({ mode: "change", size: 64, quote: null, paidSize: 64, addCameras: true });
+    expect(wantedOf(seeded)).toEqual({ size: 64, addCameras: true });
+    expect(readOwed(seeded)).toEqual({ size: 64, addCameras: true });
+    for (const [label, s] of [
+      ["pay mode", initialReceipt({ mode: "pay", size: 64, quote: null, paidSize: 64, addCameras: true })],
+      ["no paid size", initialReceipt({ mode: "change", size: 64, quote: null, paidSize: null, addCameras: true })],
+      ["intent off", initialReceipt({ mode: "change", size: 64, quote: null, paidSize: 64, addCameras: false })],
+    ] as const) expect(wantedOf(s)?.addCameras, label).toBe(false);
+  });
 });
